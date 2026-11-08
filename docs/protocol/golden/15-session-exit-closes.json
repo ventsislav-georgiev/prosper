@@ -1,6 +1,7 @@
 {
   "id": "15-session-exit-closes",
   "about": "The session's program exits (a shell runs the typed exit; a cat reads the ^D after it): the server sends 0x12 exit and closes. The format pins the close only: pty output of no fixed frame count comes before the 0x12.",
+  "requires_op": "create",
   "mutating": true,
   "cleanup": [
     "04 00000018 7b226e616d65223a22676f6c64656e2d3737362d3135227d"

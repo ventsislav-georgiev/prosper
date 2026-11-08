@@ -1826,7 +1826,11 @@ enum DchCommand {
         var args = ["-E"]
         if attach { args.append("-f") }
         if let name, !name.isEmpty { args += ["-n", name] }
-        args += command
+        // #803: "--" ends dch's flags, so a create's command ["-kl"] runs as a command instead
+        // of killing every session. Only with a command: dch reads "-E -n x --" exactly as
+        // "-E -n x" (dch.c main: "--" breaks the flag loop, inner_argc 0 either way), and the
+        // bare form keeps an attach's argv as it always was.
+        if !command.isEmpty { args += ["--"] + command }
         return args
     }
 

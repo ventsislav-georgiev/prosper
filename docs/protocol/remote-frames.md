@@ -31,10 +31,13 @@ The conformance set in [`golden/`](golden/) runs against any server: see
 - A minor bump only adds: new optional keys, new frames, new `ops` names. A client ignores
   keys and `ops` it does not know.
 - A major bump breaks. A client that reads a newer major than its own refuses the host
-  (shows it as unsupported and sends nothing else). A 0x08 reply with no `proto` is a
-  pre-#776 Prosper, which is 1.0.
-- The client sends no version today (the 0x08 request payload is empty and ignored), so a
-  server has nothing to refuse on yet. See [Known gaps and open questions](#known-gaps-and-open-questions) (M2, Q1).
+  (shows it as unsupported and sends nothing else); the phone does so since TestFlight
+  build 162 (Q5). A 0x08 reply with no `proto` is a pre-#776 Prosper, which is 1.0.
+- A client states its own version in the 0x08 request as `{"proto": "<major>.<minor>"}`; the
+  phone sends `{"proto": "1.0"}` since TestFlight build 162 (Q1). `dch serve` answers a newer
+  major than its own with 0x13 instead of 0x18. Prosper ignores the request payload, so it
+  refuses nobody (see [M2](#known-gaps)). A request with no `proto` (an empty payload, an older
+  phone) is 1.0.
 
 ## Framing
 
@@ -63,6 +66,11 @@ Every frame, in both directions:
   close; other servers may, and a client must not rely on it. This is a guard, not a size
   anyone should send: the phone does send a pasted photo as one 0x0a (17 MB for a 4032 px PNG)
   and a big paste as one 0x10.
+- **Core control requests stay under 64 KiB.** A client keeps every core-subset control
+  request (0x01, 0x02, 0x03, 0x04, 0x06, 0x08, 0x09, 0x2e) under 64 KiB (`64 << 10`). A server
+  may answer a larger one with `0x13 {"message": "frame too large"}` and close; `dch serve`
+  does. 0x10 data and the Mac-only frames are bounded only by the server's own receive guard
+  (Prosper's is the 256 MiB above, `maxRequestFrame`).
 
 ## Connections
 
@@ -78,28 +86,33 @@ Every frame, in both directions:
     at once: a server handles a connection's frames in the order they arrive. The phone
     sends 0x0a and then the ctrl-V 0x10 without waiting for the 0x14, and Prosper sets the
     pasteboard before it reads the next frame.
-  - 0x08 → 0x18, 0x03 → 0x11 and 0x09 → 0x19 never answer 0x13 (except the frame-too-large
-    guard: a frame of any type over it gets 0x13 then a close, see [Framing](#framing)), so they
-    may be pipelined with each other.
+  - 0x08 → 0x18, 0x03 → 0x11 and 0x09 → 0x19 never answer 0x13, so they may be pipelined
+    with each other. The exceptions: `dch serve` answers a 0x08 that states a newer major
+    `proto` with 0x13 (see [Versioning](#versioning)), and a frame over a size guard may get
+    0x13 then a close: Prosper's receive guard on any type, the 64 KiB core-request limit on
+    `dch serve` (see [Framing](#framing)).
   - Prosper answers 0x03, 0x04 and 0x06 at once, in the order they arrive; 0x09 too on a
     connection that has not attached.
   - These replies can trail replies to frames sent after them: 0x08 (Prosper waits up to
     0.25 s for a dch version probe), 0x09 on an attached connection (it reads dch's screen
-    off the connection), and every `ops`-gated request (Mac-only frames run off the
-    connection too).
+    off the connection), and every `ops`-gated request but 0x02 and 0x0a (Mac-only frames run
+    off the connection too). 0x0a is gated yet answered at once, before the next frame is
+    read; 0x02 gets no reply (its session's output follows).
   - The phone sends one request per connection.
 - **One in flight.** These Mac-only requests allow one in flight per connection: 0x0b-0x0f,
   0x15, 0x16, 0x1e, 0x1f, 0x22-0x26, 0x28, 0x29, 0x2c, 0x2d. Another of them while one is in
   flight gets `0x13 {"message": "busy with an earlier request"}` at once, ahead of the first
   one's reply. The others are never refused as busy:
-  - the base frames, 0x0a putClipboard and 0x17 putClipboardText are answered even while a
-    request is in flight;
+  - the base frames, 0x02 create, 0x0a putClipboard and 0x17 putClipboardText are handled even
+    while a request is in flight;
   - a second 0x2e on a connection that is already watching is ignored (no reply);
   - a 0x2e on a connection that attached, chatted, uploaded or has a request in flight gets
     `0x13 {"message": "watch needs its own connection"}`.
 - **Unknown frame types are ignored**: no reply, the connection stays open. A client tells an
   old server by a missing reply (the phone gives 0x08 two seconds).
-- Everything malformed is a 0x13 reply, or for the base frames, as listed, except a length
+- Everything malformed is a 0x13 reply, except for the base frames, 0x02 create and 0x0a
+  putClipboard, which answer as each one's section says (0x01 and 0x02 fall back to their
+  defaults, 0x04 and 0x06 answer 0x14, 0x0a answers 0x14, see [M11](#known-gaps)), and a length
   over the receive guard, which closes.
 - **When Prosper closes a connection.** A client must expect a close at any time. Only 0x12
   exit means the session ended; every other close is a refusal, a dropped link or the
@@ -140,15 +153,21 @@ when its op is listed**, so a server answers exactly what it advertises and need
 rest.
 
 Two base-range frames are capabilities too: `create` (0x02) and `paste_image` (0x0a). A server
-lists each when it serves it. Older Prosper served both without listing them, so a client gates
+lists each when it serves it. Older Prosper served them without listing them, so a client gates
 them like this:
 - **new session (0x02)**: allowed when `server` is `"prosper"` or absent, or `create` is in
-  `ops`;
-- **image paste (0x0a)**: allowed when `server` is `"prosper"` or absent (an older Prosper), or
-  `paste_image` is in `ops`.
+  `ops`. Every Prosper that answers 0x08 serves 0x02 (both first shipped in v2.123.0).
+- **image paste (0x0a)**: allowed when `server` is `"prosper"` or absent, or `paste_image` is in
+  `ops`. "Absent" is not exact here: no released Prosper sends `server` before v2.174.0, and
+  0x0a first shipped in v2.134.0, so a Prosper from v2.123.0 to v2.133.x passes this gate yet
+  ignores 0x0a (an unknown frame type). Nothing hangs: the phone sends 0x0a without waiting
+  for its 0x14 and then the ctrl-V, so on such a Mac the image is dropped and the ctrl-V pastes
+  whatever the Mac's clipboard already held.
 
 Prosper lists both, always (#800). `dch serve` lists `create` only with `--allow-create`, and
-`paste_image` only once it supports 0x0a.
+`paste_image` only once it supports 0x0a; the two are independent. On Prosper, neither "Run
+commands from iPhone" nor clipboard sync limits 0x02 or 0x0a: those settings gate only the
+`commands` and `clipboard` frames.
 
 Prosper's ops and their frames:
 
@@ -202,7 +221,9 @@ A **dch server** serves the core subset; everything else is Mac-only and absent 
 
 ### 0x08 machineInfo → 0x18 machineInfoResp
 
-Request: empty (any payload is ignored). Reply: one 0x18, never an error.
+Request: empty, `{}` or `{"proto": string}` (see [Versioning](#versioning)). Prosper ignores the
+payload. Reply: one 0x18; `dch serve` answers 0x13 instead when `proto` states a newer major than
+its own. Prosper never answers 0x08 with an error.
 
 | Key | Type | Required | Meaning |
 |-----|------|----------|---------|
@@ -224,7 +245,8 @@ Example (Prosper, clipboard sync off, no model, commands off, no watch):
          "sidekick", "create", "paste_image"]}
 ```
 
-A `dch serve` without `--allow-create` lists neither `create` nor `paste_image`.
+A `dch serve` without `--allow-create` does not list `create`; it lists `paste_image` only once
+it supports 0x0a, whatever `--allow-create` says.
 
 ### 0x03 list → 0x11 listResp
 
@@ -249,8 +271,9 @@ A payload that is not a JSON array is an error on the phone (it keeps its rows).
 
 The live list, pushed (#765). On a connection of its own.
 
-Request: empty, `{}` or `{"device_id": string}`. Prosper keys streams by `device_id`, else by
-the peer's address.
+Request: empty, `{}` or `{"device_id": string}`. `device_id` is optional: without it the server
+keys the stream by the peer's address for the per-device stream cap, as Prosper does. The phone
+sends it (Q8).
 
 Errors, each a 0x13 and the stream does not open:
 - the payload is not a JSON object: `malformed watch request: send {}`;
@@ -278,11 +301,18 @@ A watch stream does not count as an attached client for Prosper's keep-awake.
 ### 0x01 attach, 0x02 create, and the attached connection
 
 Requests:
-- 0x01 attach: `{"name": string, "cols": int, "rows": int}`. dch's `-n` is attach-or-create:
-  an attach to a session whose master is gone starts it again.
+- 0x01 attach: `{"name": string, "cols": int, "rows": int}`. On Prosper, and on `dch serve`
+  with `--allow-create`, it is attach-or-create (dch's `-n`): an attach to a name with no live
+  session, a session whose master is gone included, starts it. `dch serve` without
+  `--allow-create` answers an attach to a name not in its list with 0x13
+  `{"message": "no session named <name> …"}` and starts nothing. A client that wants a new
+  session sends 0x02 where `create` is listed.
 - 0x02 create: `{"name"?: string, "command": [string], "cols": int, "rows": int}`. No name: dch
-  picks one. `command` empty: the default shell.
-- `cols`/`rows` default to 80×24 when missing.
+  picks one. `command` empty: the default shell. The command is never read as flags: Prosper
+  spawns `dch -E [-n <name>] -- <command...>` (#803), so `["-kl"]` runs a program named `-kl`.
+  A nameless create gets its name from dch, and 1.0 does not announce it: the client learns it
+  from its next 0x11 list or from the watch stream (a later minor may add a key that carries it).
+- `cols`/`rows` set the session's initial window size; 80×24 when missing.
 
 The connection then carries one session:
 - **Redraw on attach.** The server's first 0x10 bytes are a full repaint of the session's
@@ -293,13 +323,19 @@ The connection then carries one session:
 - 0x05 resize `{"cols": int, "rows": int}`: the session's window size (80×24 for a missing key).
   No reply.
 - 0x07 redraw (empty): force a repaint (Prosper shrinks the pty a row and restores it). No reply.
+- 0x05 and 0x07 on a connection that has not attached are ignored: no reply, no error (Prosper:
+  there is no pty to size or repaint).
 - 0x09 snapshot (empty) → 0x19 snapshotResp: raw ANSI of the session's current screen from
-  dch's VT mirror, with the caret appended as `ESC[row;colH` when known. **Empty = no mirror**
-  (and always empty on a connection that has not attached); the client keeps what it has.
-  0x09 never answers 0x13 (except the frame-too-large guard, which answers any type with 0x13
-  then a close, see [Framing](#framing)): a server with no screen to offer sends an empty 0x19.
+  dch's VT mirror (the output of `dch --read --ansi`), with the caret appended as
+  `ESC[row;colH` when known. Prosper and `dch serve` (Q4) answer it the same way. **Empty**
+  only when there is no mirror (a lite build, a master that predates dch 1.2) or on a
+  connection that has not attached; the client keeps what it has. 0x09 never answers 0x13
+  (a frame-too-large 0x13 aside, see [Framing](#framing)): a server with no screen to offer
+  sends an empty 0x19.
 - 0x12 exit `{"code": int}`: the session's client exited; the server then closes (the FIN
-  follows the frame).
+  follows the frame). `code` is the exit status of the dch client the server ran, not of the
+  session's program: a create of `exit 3` can report 0. No golden fixture asserts a code (the
+  format cannot express it).
 - The client detaches by closing the TCP connection. The session lives on.
 - One client per session: the newest attach to a session retires the server's older
   connections attached to it (Prosper).
@@ -318,6 +354,8 @@ The connection then carries one session:
   payload or an unknown name still answers 0x14: dch's result is not reported.
 - 0x06 rename `{"name": string, "alias": string}` → 0x14 (empty). `alias` `""` (or missing)
   clears it. Always 0x14, as kill.
+- Both keep this in 1.0, `dch serve` included (Q2): failure is not reported, and 0x13 is only
+  for a name starting with `-`.
 
 ## Mac-only frames (Prosper)
 
@@ -374,8 +412,10 @@ never a host with sessions someone uses.
 15 assumes the session runs a shell (dch's default command) that reads input once it has
 started: it is a smoke check of exit and close. A shell whose rc files discard type-ahead, or
 stay silent past the step's 5 s, fails it falsely. 16 checks the same close without typing: a
-0x02 create with `"command": ["/bin/sh", "-c", "exit 3"]`. It needs `create` in `ops`
-(`requires_op`), so a `dch serve` without `--allow-create` skips it.
+0x02 create with `"command": ["/bin/sh", "-c", "exit 3"]`. 12, 14, 15 and 16 each start a new
+session, so each needs `create` in `ops` (`requires_op`): a `dch serve` without `--allow-create`
+refuses an attach to an unknown name (see [0x01 attach](#0x01-attach-0x02-create-and-the-attached-connection)),
+and the runner skips all four there.
 
 Not in the set, because the format cannot express them: the 0x12 frame before 15's and 16's close (pty
 output of no fixed frame count comes first, and `expect` takes the next frame), and attach on
@@ -441,8 +481,9 @@ rules above; each item is either a known limit of the code or a decision still o
   clipboard frames. listResp, historyResp (thousands of pinned records), snapshotResp,
   commandsResp, modelsResp and chatDelta are sent unchecked; one over 8 MiB makes the phone
   drop the connection.
-- **M2. Version refusal is one-sided.** The 0x08 request carries no version, so only the client
-  can refuse a newer major. A server cannot refuse a newer client.
+- **M2. Prosper refuses no client version.** The phone states `{"proto": "1.0"}` in 0x08 and
+  `dch serve` refuses a newer major (Q1), but Prosper ignores the payload, so a newer-major
+  client is answered as a 1.0 one.
 - **M3. `create` advertising** (resolved, #800). Prosper lists `create` since #800; an older
   Prosper serves 0x02 without listing it, which the client rule in
   [`ops`](#ops-what-a-client-may-send) covers (`server` `"prosper"` or absent allows it).
@@ -451,7 +492,8 @@ rules above; each item is either a known limit of the code or a decision still o
   no `paste_image`, so the phone hides its paste-image key there. 0x07 and 0x09 stay base
   frames in the core subset.
 - **M5. kill and rename never report failure.** 0x04 and 0x06 answer an empty 0x14 even for a
-  malformed request or an unknown session; only a name starting with `-` gets 0x13.
+  malformed request or an unknown session; only a name starting with `-` gets 0x13. Kept in
+  1.0 for every server (Q2).
 - **M6. The watch stream's sidekick frame.** Prosper sends `0x14 {"sidekick"}` on every stream
   (it always lists `sidekick`). This spec makes it conditional on `sidekick` in `ops`, so a dch
   server need not invent one.
@@ -523,20 +565,21 @@ gap above or the item says so.
   confirmation*; dch agrees ([Q9](#open-questions)).
 - **Whois unavailable** (tailscaled down or its LocalAPI unreachable), *pending operator
   confirmation*: fail closed by default, so the peer is refused as above and `dch serve` logs a
-  line. `--whois-optional` (name not final) relaxes it: the peer is accepted and a warning is
-  logged.
+  line. `--whois-optional` (name not final) relaxes only a per-peer whois failure: that peer is
+  accepted and a warning is logged. It never relaxes startup: `dch serve` always needs the host
+  owner (`Self.UserID`) when it starts, and refuses to start without it.
 
 ### Open questions
 
 | Id | Question | Asked of |
 |----|----------|----------|
-| Q1 | Should clients send `{"proto": "1.0"}` in the 0x08 request, so a server can refuse a newer major with 0x13 (Prosper ignores the payload today, so this is compatible)? (M2) | dch, prosper-ios |
-| Q2 | Should `dch serve` keep kill and rename's empty 0x14, or answer 0x13 on failure (fixtures 07 and 08 would then allow either)? (M5) | dch |
+| Q1 | Should clients send `{"proto": "1.0"}` in the 0x08 request, so a server can refuse a newer major with 0x13 (Prosper ignores the payload today, so this is compatible)? (M2) **Answered: yes.** `dch serve` accepts `{"proto": "1.0"}` and answers 0x13 to a newer major; the phone sends `{"proto": "1.0"}` since TestFlight build 162; see [Versioning](#versioning). | dch, prosper-ios |
+| Q2 | Should `dch serve` keep kill and rename's empty 0x14, or answer 0x13 on failure (fixtures 07 and 08 would then allow either)? (M5) **Answered: keep the empty 0x14** in 1.0 (0x13 only for a name starting with `-`); see [0x04 kill, 0x06 rename](#0x04-kill-0x06-rename). | dch |
 | Q3 | Should Prosper list `create` in `ops`, so the phone gates 0x02 the same way on every server? (M3) **Answered: yes** (#800); see [`ops`](#ops-what-a-client-may-send). | Prosper, prosper-ios |
-| Q4 | May `dch serve` answer 0x09 with an empty 0x19 when it has no screen read to offer? | dch |
-| Q5 | The phone ignores `proto` today. It should refuse a host whose major is above 1. | prosper-ios |
+| Q4 | May `dch serve` answer 0x09 with an empty 0x19 when it has no screen read to offer? **Answered:** it answers from dch's VT mirror (as `dch --read --ansi`) with the caret appended; an empty 0x19 only with no mirror (lite build) or on a connection that has not attached; never 0x13 (a frame-too-large 0x13 aside). See [0x01 attach, 0x02 create](#0x01-attach-0x02-create-and-the-attached-connection). | dch |
+| Q5 | The phone ignores `proto` today. It should refuse a host whose major is above 1. **Answered:** it does since TestFlight build 162; see [Versioning](#versioning). | prosper-ios |
 | Q6 | Gate the phone's paste-image (0x0a) on an op, since a dch host has no Mac clipboard? (M4) **Resolved** (#800): on `paste_image`, or a Prosper server; see [`ops`](#ops-what-a-client-may-send). | prosper-ios |
 | Q7 | Gate "new session" on `create` for `server: "dch"` until Q3 is settled? (M3) **Resolved** (#800): on `create`, or a Prosper server; see [`ops`](#ops-what-a-client-may-send). | prosper-ios |
-| Q8 | The phone's 0x2e client is not on its main branch yet: confirm it sends `{"device_id"}`. | prosper-ios |
+| Q8 | The phone's 0x2e client is not on its main branch yet: confirm it sends `{"device_id"}`. **Answered: yes** (prosper-ios confirmed); see [0x2e watch](#0x2e-watch-gate-watch). | prosper-ios |
 | Q9 | How does a `dch serve` operator allow a tagged peer node (a flag naming tags, or none in 1.0)? Working default, *pending operator confirmation*: tagged peers are refused in 1.0, no flag; dch agrees. | dch, operator |
 | Q10 | Prosper and `dch serve` on the same Mac both want `<tailscale ip>:8771`; the second bind fails. Should `dch serve` take another port there, and how would the phone find it? Working default, *pending operator confirmation*: `dch serve` refuses to start when `<tailscale ip>:8771` is taken ("Prosper already serves this Mac"); no alternate port in 1.0; dch agrees. | dch, prosper-ios |

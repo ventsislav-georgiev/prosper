@@ -28,8 +28,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     override func setUpWithError() throws {
         let script = tempDir("golden-dch").appendingPathComponent("fake-dch")
-        // dch's spawn args are -E [-f] [-n name] [command...] (DchCommand.spawnArgs).
-        try ("#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; *) break;; esac; done\n"
+        // dch's spawn args are -E [-f] [-n name] [-- command...] (DchCommand.spawnArgs).
+        try ("#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; --) shift; break;; *) break;; esac; done\n"
             + "[ $# -gt 0 ] && exec \"$@\"\nprintf '\\033[2J\\033[Hgolden repaint\\r\\n'\nexec /bin/cat\n")
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
@@ -152,6 +152,29 @@ final class RemoteFramesGoldenTests: XCTestCase {
                 XCTAssertEqual(out, "PASS\n", "run.py, resize unanswered")
             }
         }
+    }
+
+    /// #803: dch serve without --allow-create refuses an attach to an unknown name, so 12, 14 and
+    /// 15 (each attach starts a session) need "create" as 16 does. run.py --mutating against a
+    /// server whose 0x08 lists no "create" skips all four and sends no attach or create.
+    func testFixturesThatStartASessionNeedCreate() throws {
+        let ids = ["12-attach-redraws", "14-attach-twice-ignored", "15-session-exit-closes", "16-create-exit-closes"]
+        let dir = tempDir("golden-803-fixtures")
+        for id in ids {
+            let src = try goldenDir().appendingPathComponent("\(id).json")
+            let fx = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: src)) as? [String: Any])
+            XCTAssertEqual(fx["requires_op"] as? String, "create", id)
+            try FileManager.default.copyItem(at: src, to: dir.appendingPathComponent("\(id).json"))
+        }
+        let fake = try FakeServer(machineInfo: ["device_id": "d", "hostname": "h", "name": "h", "server": "dch",
+                                                "os": "Linux 6.8", "proto": "1.0", "ops": ["watch"]])
+        defer { fake.stop() }
+        let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(fake.port)",
+                                          "--mutating", "--fixtures", dir.path])
+        XCTAssertEqual(status, 0, text)
+        for id in ids { XCTAssertTrue(text.contains("SKIP \(id): 'create' not in ops"), text) }
+        XCTAssertFalse(text.contains("PASS") || text.contains("FAIL"), text)
+        XCTAssertEqual(fake.seen.all, [["08"]], "only the handshake reached the server")
     }
 
     /// QA #625 INFO-R3-4: a session that keeps drawing and never exits fails fixture 15's
@@ -417,6 +440,36 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertEqual(f.0, DchFrame.exit)
         XCTAssertEqual((try JSONSerialization.jsonObject(with: f.1) as? [String: Any])?["code"] as? Int, 0)
         XCTAssertTrue(try c.closed(), "then the FIN")
+    }
+
+    /// #803: a create's command reaches dch after "--", so ["-kl"] is a command, never dch's
+    /// kill-all flag; a create with no command (and an attach) gets no "--". A stand-in dch
+    /// records its argv, one word per line, and exits.
+    func testCreateCommandFollowsDashDash() throws {
+        let script = tempDir("golden-803").appendingPathComponent("argv-dch")
+        try "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$0.argv\"\nexit 0\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        DchCommand.dchPathOverride = script.path
+        let cases: [(UInt8, [String: Any], [String])] = [
+            (DchFrame.create, ["name": "golden-803", "command": ["-kl"], "cols": 80, "rows": 24],
+             ["-E", "-n", "golden-803", "--", "-kl"]),
+            (DchFrame.create, ["name": "golden-803-bare", "cols": 80, "rows": 24], ["-E", "-n", "golden-803-bare"]),
+            (DchFrame.create, ["name": "golden-803-empty", "command": [String](), "cols": 80, "rows": 24],
+             ["-E", "-n", "golden-803-empty"]),
+            (DchFrame.attach, ["name": "golden-803-attach", "cols": 80, "rows": 24], ["-E", "-f", "-n", "golden-803-attach"]),
+        ]
+        for (type, body, want) in cases {
+            try? FileManager.default.removeItem(atPath: script.path + ".argv")
+            let c = try Client(port: port)
+            try c.send(DchFrame.encode(type, json: body))
+            var f = try c.frame()
+            while f.0 == DchFrame.data { f = try c.frame() }
+            XCTAssertEqual(f.0, DchFrame.exit, "\(body)")
+            XCTAssertTrue(try c.closed(), "\(body)")
+            let argv = try String(contentsOfFile: script.path + ".argv", encoding: .utf8)
+            XCTAssertEqual(argv.split(separator: "\n", omittingEmptySubsequences: false).dropLast().map(String.init),
+                           want, "\(body)")
+        }
     }
 
     /// Once closed, a connection reads nothing more: a valid list frame ingested after close()
@@ -715,7 +768,11 @@ private final class FakeServer: @unchecked Sendable {
     let port: UInt16
     private let stopped = OSAllocatedUnfairLock(initialState: false)
 
-    init(resizeReply: Data? = nil, redrawForever: Bool = false, pacedReplies: TimeInterval? = nil) throws {
+    /// Every frame type it read, in order (#803).
+    let seen = Recorder()
+
+    init(resizeReply: Data? = nil, redrawForever: Bool = false, pacedReplies: TimeInterval? = nil,
+         machineInfo: [String: Any]? = nil) throws {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -729,7 +786,8 @@ private final class FakeServer: @unchecked Sendable {
         }
         guard fd >= 0, ok else { Darwin.close(fd); throw Client.Failure.connect }
         port = UInt16(bigEndian: addr.sin_port)
-        let stopped = stopped
+        let stopped = stopped, seen = seen
+        let info = machineInfo.map { DchFrame.encode(DchFrame.machineInfoResp, json: $0) }
         Thread.detachNewThread {
             defer { Darwin.close(fd) }
             while !stopped.withLock({ $0 }) {
@@ -739,6 +797,8 @@ private final class FakeServer: @unchecked Sendable {
                 guard s >= 0 else { continue }
                 let peer = Client(fd: s)
                 while let (type, _) = try? peer.frame() {
+                    seen.add([String(format: "%02x", type)])
+                    if type == DchFrame.machineInfo, let info { try? peer.send(info) }
                     if type == DchFrame.attach, redrawForever {
                         while !stopped.withLock({ $0 }), (try? peer.send(DchFrame.encode(DchFrame.data, [0x78]))) != nil {
                             usleep(50_000)

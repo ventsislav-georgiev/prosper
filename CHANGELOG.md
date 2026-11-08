@@ -51,6 +51,10 @@ tag from the now-released section and put it on the new top draft.
   macOS version, its name and the protocol version, so the phone can label a host and later
   work with dch-only hosts such as a Linux machine. The protocol is written down in
   `docs/protocol/remote-frames.md`, with sample frames any server can be checked against. (#776)
+- A new session started from your iPhone with a command that begins with "-" now runs that
+  command. Before, dch read it as its own options, so `-kl` would have closed every session.
+  The protocol notes now cover what a `dch serve` host refuses and how big a request may be.
+  (#803)
 
 ## v2.173.0
 

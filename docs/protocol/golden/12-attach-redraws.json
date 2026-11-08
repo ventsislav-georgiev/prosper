@@ -1,6 +1,7 @@
 {
   "id": "12-attach-redraws",
   "about": "0x01 attach: the first 0x10 bytes are the repaint; resize gets no reply (only 0x10 output may follow).",
+  "requires_op": "create",
   "mutating": true,
   "cleanup": [
     "04 00000015 7b226e616d65223a22676f6c64656e2d373736227d"
