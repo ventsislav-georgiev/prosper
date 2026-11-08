@@ -53,6 +53,21 @@ final class AgentsWindow {
         model.setVisible(win.occlusionState.contains(.visible))
     }
 
+    /// #797: the status menu's "Agent Sessions…" item; its action opens `shared`. #805 (QA #629 R2):
+    /// built here, not by MenuBarController, so a test checks the wiring with no status item.
+    static func menuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Agent Sessions\u{2026}", action: #selector(MenuTarget.open(_:)), keyEquivalent: "")
+        item.target = MenuTarget.shared
+        return item
+    }
+
+    /// The item's target: NSMenuItem holds it weakly, so one lives for the app.
+    @MainActor
+    private final class MenuTarget: NSObject {
+        static let shared = MenuTarget()
+        @objc func open(_ sender: Any?) { AgentsWindow.shared.show() }
+    }
+
     /// The window, built but not shown (tests render it offscreen from here).
     static func makeWindow(_ model: AgentWindowModel) -> AgentsNSWindow {
         let hosting = NSHostingController(rootView: Themed { AgentWindowRootView(model: model) })

@@ -74,6 +74,59 @@ final class AgentWindowInteractionTests: XCTestCase {
     Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel
     """#
 
+    /// #805: a live capture, verbatim: `dch --read` of a private 100x40 session, Claude Code 2.1.318
+    /// (Haiku, --safe-mode), caret on the empty Other row (work/805/cap/05-caret-on-other-empty.txt).
+    /// The focused empty row keeps its placeholder (dimmed in --ansi), typing replaces it and
+    /// deleting back to empty brings it back (captures 06-10); the footer names ctrl+g only there.
+    static let live05 = #"""
+
+     ▐▛███▛█   Claude Code v2.1.318
+    ▝▜██████▀  Haiku 5.5 · Claude Team
+     ▝▝   ▝▝   ~/personal/.prosper-supervisor/work/805/cap
+
+    ⚠ Safe mode: all customizations are disabled (CLAUDE.md, skills, plugins, hooks, MCP, agents, and
+      more)
+      Restart without --safe-mode to re-enable
+
+    ▎ Auto mode is now Claude Code's default permission mode.
+    ▎ Auto mode lets Claude handle permission prompts automatically. Claude checks each tool call for
+    ▎ risky actions and prompt injection before executing, runs the ones it assesses as lower-risk, and
+    ▎ blocks the rest.
+    ▎ https://code.claude.com/docs/en/permission-modes
+
+    ❯ Call the AskUserQuestion tool now with exactly one single-select question 'Which fruit?' (header
+      'Fruit') and 3 options: Apple (description 'A red fruit'), Banana (description 'A yellow fruit'),
+      Cherry (description 'A small fruit'). Do nothing else.
+    ────────────────────────────────────────────────────────────────────────────────────────────────────
+     ☐ Fruit
+
+    Which fruit?
+
+      1. Apple
+         A red fruit
+      2. Banana
+         A yellow fruit
+      3. Cherry
+         A small fruit
+    ❯ 4. Type something.
+    ────────────────────────────────────────────────────────────────────────────────────────────────────
+      5. Chat about this
+
+    Enter to select · ↑/↓ to navigate · ctrl+g to edit in VS Code · Esc to cancel
+    """#
+
+    /// The live capture drawn from a state: the caret on `caret`, the Other row showing `typed`.
+    static func liveScreen(caret: Int, typed: String = "") -> String {
+        live05.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            for d in 1...4 where line.dropFirst(2).hasPrefix("\(d). ") {
+                return (caret == d ? "❯ " : "  ") + (d == 4 && !typed.isEmpty ? "4. \(typed)" : String(line.dropFirst(2)))
+            }
+            return caret == 4 ? String(line) : line.replacingOccurrences(of: " · ctrl+g to edit in VS Code", with: "")
+        }.joined(separator: "\n")
+    }
+
+    static let liveAsk = ask("Which fruit?", [("Apple", "A red fruit"), ("Banana", "A yellow fruit"), ("Cherry", "A small fruit")])
+
     /// A Claude Code permission dialog in the #475 probe layout.
     static func permission(_ options: [String] = ["Yes", "No, and tell Claude what to do differently (esc)"],
                            body: [String] = ["   rm -rf .build", "   Clean the build tree"]) -> String {
@@ -100,7 +153,7 @@ final class AgentWindowInteractionTests: XCTestCase {
     // MARK: - A small Claude Code form simulation behind dch
 
     final class FormSim: @unchecked Sendable {
-        enum Kind { case multi, single, preview, plain(String) }
+        enum Kind { case multi, single, live, preview, plain(String) }
         let lock = NSLock()
         let kind: Kind
         var checked = [false, false, false, false]
@@ -125,6 +178,7 @@ final class AgentWindowInteractionTests: XCTestCase {
             switch kind {
             case .multi: return multiScreen(checked, caret: caret, question: question ?? "Which colors?")
             case .single: return singleScreen(caret: caret ?? 1, typed: typed, question: question ?? "Which color?")
+            case .live: return liveScreen(caret: caret ?? 1, typed: typed)
             case .preview: return previewScreen(caret: caret ?? 1)
             case .plain(let s): return s
             }
@@ -140,8 +194,8 @@ final class AgentWindowInteractionTests: XCTestCase {
             case (.multi, "down"), (.multi, "up"):
                 let i = Self.order.firstIndex(where: { $0 == caret })!
                 caret = Self.order[min(max(i + (k == "down" ? 1 : -1), 0), Self.order.count - 1)]
-            case (.single, "down"): caret = min((caret ?? 1) + 1, 5)
-            case (.single, "up"): caret = max((caret ?? 1) - 1, 1)
+            case (.single, "down"), (.live, "down"): caret = min((caret ?? 1) + 1, 5)
+            case (.single, "up"), (.live, "up"): caret = max((caret ?? 1) - 1, 1)
             case (.multi, "enter"): if caret == nil { gone = true; status = "working" }
             case (_, "enter"): gone = true; status = "working"
             default: break
@@ -155,7 +209,7 @@ final class AgentWindowInteractionTests: XCTestCase {
             switch kind {
             case .multi: if let d = Int(t), (1...4).contains(d) { checked[d - 1].toggle() }
             case .preview: if let d = Int(t), (1...3).contains(d) { caret = d }
-            case .single: if caret == 4 { typed += t } else if Int(t) != nil { gone = true; status = "working" }
+            case .single, .live: if caret == 4 { typed += t } else if Int(t) != nil { gone = true; status = "working" }
             case .plain: gone = true; status = "working"
             }
         }
@@ -423,6 +477,65 @@ final class AgentWindowInteractionTests: XCTestCase {
                        .failed(AgentWindowText.changed))
         XCTAssertEqual(g.log, ["down", "down", "down"])
         XCTAssertEqual(g.typed, "Te")
+    }
+
+    /// #805 (QA #629 R2 item 1): an answer inside the placeholder ("some", "Type", "thing.") is in
+    /// "Typesomething." before the row redraws. A row still showing the placeholder never confirms
+    /// the text, so no Enter; once the row shows it, the answer goes through.
+    func testAgentWindowOtherAnswerInsideThePlaceholderWaitsForTheRow() throws {
+        let fixtures: [(String, FormSim.Kind, String)] = [("single", .single, Self.singleScreen(caret: 4)),
+                                                          ("live", .live, Self.liveScreen(caret: 4))]
+        for (name, kind, e) in fixtures {
+            for text in ["some", "Type", "thing."] {
+                // The text never lands: the row keeps its placeholder.
+                let f = FormSim(kind)
+                f.caret = 4
+                f.afterKey = { s in if s.log.last?.hasPrefix("send") == true { s.typed = "" } }
+                XCTAssertEqual(driver(f.io).other(try screen(e), digit: 4, text: text), .failed(AgentWindowText.unconfirmed),
+                               "\(name) \(text)")
+                XCTAssertEqual(f.log, ["send \(text)"], "\(name) \(text): no Enter on the placeholder")
+                // It lands: answered.
+                let g = FormSim(kind)
+                g.caret = 4
+                XCTAssertEqual(driver(g.io).other(try screen(e), digit: 4, text: text), .done, "\(name) \(text)")
+                XCTAssertEqual(g.log, ["send \(text)", "enter"], "\(name) \(text)")
+            }
+        }
+    }
+
+    /// #805 (QA #629 R2 item 2): the Other path against the live capture (`live05`): the focused
+    /// empty row reads "Type something.", so the gate lets the text in, and the typed row confirms it.
+    /// Before #805 the capture did not parse at all (its footer was over isFooter's cap), so the
+    /// walk's last arrow never confirmed and every Other answer from another row was refused.
+    @MainActor
+    func testAgentWindowOtherTypesAndEntersOnTheLiveCapture() throws {
+        XCTAssertEqual(Self.liveScreen(caret: 4), Self.live05, "the fixture's own state is the capture, verbatim")
+        let s = try screen(Self.live05)
+        XCTAssertEqual(s.caret, 4)
+        XCTAssertNil(s.checked)
+        XCTAssertEqual(s.prompt.options.map(\.label), ["Apple", "Banana", "Cherry", "Type something.", "Chat about this"])
+        XCTAssertTrue(Self.liveAsk.matches(s))
+        // The caret on Other adds "ctrl+g to edit in VS Code" to the footer (77 characters): still the footer.
+        XCTAssertNotNil(AgentPrompt.parse(Self.live05), "the island card reads it too")
+        XCTAssertTrue(AgentPrompt.isFooter("Enter to select · ↑/↓ to navigate · ctrl+g to edit in VS Code · Esc to cancel"))
+        XCTAssertFalse(AgentPrompt.isFooter("Enter to select · ↑/↓ to navigate · ctrl+g to edit in VS Code · Esc to cancel it"))
+        XCTAssertFalse(AgentPrompt.isFooter("Output: press Enter to select a file, then the arrows · Esc to cancel"),
+                       "a long line only containing it keeps the cap")
+        for caret in [1, 4] {
+            guard case .prompt(let w) = AgentWindowPanel.classify(Self.liveScreen(caret: caret), ask: Self.liveAsk) else {
+                return XCTFail("caret \(caret)")
+            }
+            XCTAssertEqual(w.other?.digit, 4, "caret \(caret): Other offered")
+            XCTAssertEqual(w.buttons.map(\.digit), [1, 2, 3, 5])
+        }
+        let f = FormSim(.live)
+        XCTAssertEqual(driver(f.io).other(try screen(Self.liveScreen(caret: 1)), digit: 4, text: "Kiwi please"), .done)
+        XCTAssertEqual(f.log, ["down", "down", "down", "send Kiwi please", "enter"])
+        // Already on the empty row (the capture itself), and back to empty after deleting (captures 07, 09: the same screen).
+        let g = FormSim(.live)
+        g.caret = 4
+        XCTAssertEqual(driver(g.io).other(try screen(Self.live05), digit: 4, text: "Kiwi please"), .done)
+        XCTAssertEqual(g.log, ["send Kiwi please", "enter"])
     }
 
     // MARK: - Messages
@@ -1166,8 +1279,10 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(AgentsWindow.title, "Agent Sessions")
     }
 
-    /// #626 INFO-7: the status menu's "Agent Sessions…" item opens AgentsWindow.shared. Built on a
-    /// private status bar; the shared window's seams swapped for the test, so nothing goes on screen.
+    /// #626 INFO-7: the status menu's "Agent Sessions…" item opens AgentsWindow.shared. #805
+    /// (QA #629 R2): the item comes from AgentsWindow.menuItem, the builder MenuBarController
+    /// uses, so no status item, registry, defaults or observer is made; the shared window's
+    /// seams are swapped for the test, so nothing goes on screen.
     @MainActor
     func testAgentWindowStatusMenuItemOpensTheAgentsWindow() throws {
         let w = AgentsWindow.shared
@@ -1186,14 +1301,13 @@ final class AgentWindowInteractionTests: XCTestCase {
             win.model = m
             return win
         }
-        // The item's target is weak: the controller stays alive through the click.
-        let bar = MenuBarController(onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {}, onCheckForUpdates: {},
-                                    onRerunSetup: {}, onRestart: {}, onQuit: {}, statusBar: NSStatusBar())
-        let item = try XCTUnwrap(bar.buildMenu().items.first { $0.title == "Agent Sessions\u{2026}" })
+        let item = AgentsWindow.menuItem()
+        XCTAssertEqual(item.title, "Agent Sessions\u{2026}")
         let action = try XCTUnwrap(item.action)
-        XCTAssertTrue(item.target === bar)
-        XCTAssertTrue(NSApplication.shared.sendAction(action, to: item.target, from: item))
-        withExtendedLifetime(bar) {}
+        // The item's target is weak: it must outlive the menu on its own.
+        let target = try XCTUnwrap(item.target)
+        XCTAssertTrue(AgentsWindow.menuItem().target === target, "one target for every item")
+        XCTAssertTrue(NSApplication.shared.sendAction(action, to: target, from: item))
         XCTAssertEqual(presented, 1)
         let win = try XCTUnwrap(w.window)
         XCTAssertTrue(w.model?.interaction.controller === c)

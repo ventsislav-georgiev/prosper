@@ -12,7 +12,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private let agentStatusItem: NSMenuItem
     private let agentItem: NSMenuItem
     /// #797: "Agent Sessions…" opens the Agents window; hidden while Agent Island is off.
-    private let agentsWindowItem = NSMenuItem(title: "Agent Sessions\u{2026}", action: nil, keyEquivalent: "")
+    /// Built and wired by AgentsWindow.menuItem (#805: tested there, no status item).
+    private let agentsWindowItem: NSMenuItem
     private let runnerItem: NSMenuItem
     private let clipboardOpenItem: NSMenuItem
     private let settingsItem: NSMenuItem
@@ -79,6 +80,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         agentStatusItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         agentStatusItem.isEnabled = false
         agentStatusItem.isHidden = true
+        agentsWindowItem = AgentsWindow.menuItem()
         agentItem = NSMenuItem(
             title: "Coding Agent\u{2026}",
             action: nil,
@@ -294,8 +296,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         agentItem.isHidden = !Preferences.agentEnabled
         addReused(agentItem, to: menu)
 
-        agentsWindowItem.action = #selector(openAgentsWindowSelected)
-        agentsWindowItem.target = self
         agentsWindowItem.isHidden = AgentIslandController.shared.store == nil
         addReused(agentsWindowItem, to: menu)
 
@@ -433,10 +433,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func openCodingAgentSelected() {
         ChatWindow.shared.show()
-    }
-
-    @objc private func openAgentsWindowSelected() {
-        AgentsWindow.shared.show()
     }
 
     /// Toggles inline completions for the focused app by writing an explicit

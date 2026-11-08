@@ -585,9 +585,13 @@ extension AgentPrompt {
     /// any length: Claude Code appends hints ("· ctrl+x ctrl+k twice to stop
     /// background ag…" while a background agent runs) and cuts at screen width.
     /// One only containing it keeps the 64-character cap.
+    /// #805: so does a form footer, "Enter to select · … · Esc to cancel", at any length: with the
+    /// caret on an AskUserQuestion's Other row Claude Code 2.1.318 adds "· ctrl+g to edit in VS Code ·"
+    /// (77 characters; live capture), and the whole form read as no prompt.
     static func isFooter(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces).lowercased()
         return t.hasPrefix("esc to cancel") || (t.count <= 64 && t.contains("esc to cancel"))
+            || (t.hasPrefix("enter to select · ") && t.hasSuffix(" · esc to cancel"))
     }
 
     /// "[ ] Staging", "[✔] Prod", "☐ Local": a multi-select row.

@@ -305,12 +305,16 @@ struct AgentWindowDriver: Sendable {
     /// The Other row of a single-select form ("Type something."): the caret walks to it, the
     /// one-line text is typed (the row must then show it), then Enter. QA #629 INFO-5: typed only
     /// into the empty row (its "Type something." placeholder), never after text already there.
+    /// #805: Claude Code 2.1.318 keeps that placeholder (dimmed) on the focused empty row, before
+    /// any typing and after deleting back to empty (live capture), so the gate is the placeholder.
+    /// The row shows the text only once it is no longer the placeholder: "some" or "Type" is in
+    /// "Typesomething." before the row redraws.
     func other(_ e: AgentPromptScreen, digit k: Int, text: String) -> AgentWindowOutcome {
         let p = e.prompt
         let flat = { (t: String) in t.filter { !$0.isWhitespace } }
         let row = { (s: AgentPromptScreen) in s.prompt.options.first { $0.digit == k }.map { flat(([$0.label] + $0.detail).joined()) } }
-        let shows = { (s: AgentPromptScreen) -> Bool in row(s)?.contains(flat(text)) ?? false }
         let empty = { (s: AgentPromptScreen) -> Bool in row(s).map { ["Typesomething.", "Typesomething"].contains($0) } ?? false }
+        let shows = { (s: AgentPromptScreen) -> Bool in !empty(s) && (row(s)?.contains(flat(text)) ?? false) }
         var caret = e.caret
         for _ in 0..<(p.options.count + 1) {
             guard let c = caret, c != k else { break }
