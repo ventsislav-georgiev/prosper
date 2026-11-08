@@ -3,11 +3,11 @@
   "about": "The session's program exits (a shell runs the typed exit; a cat reads the ^D after it): the server sends 0x12 exit and closes. The format pins the close only: pty output of no fixed frame count comes before the 0x12.",
   "mutating": true,
   "cleanup": [
-    "04 00000015 7b226e616d65223a22676f6c64656e2d373736227d"
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3737362d3135227d"
   ],
   "steps": [
     {
-      "send": "01 00000029 7b226e616d65223a22676f6c64656e2d373736222c22636f6c73223a38302c22726f7773223a32347d"
+      "send": "01 0000002c 7b226e616d65223a22676f6c64656e2d3737362d3135222c22636f6c73223a38302c22726f7773223a32347d"
     },
     {
       "expect": {

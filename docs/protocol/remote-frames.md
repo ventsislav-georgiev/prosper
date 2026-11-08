@@ -72,8 +72,14 @@ Every frame, in both directions:
   but a client must not assume replies come back in the order it sent the requests:
   - A client must not pipeline two requests whose replies can share a type. 0x13 answers
     every error and 0x14 answers kill, rename, 0x0a, 0x17 and most `ops` verbs, so after
-    one of those a client waits for its reply before it sends the next. Requests whose
-    replies differ in type (0x08 → 0x18, 0x03 → 0x11, 0x09 → 0x19) may be pipelined.
+    one of those a client waits for its reply before it sends another request that gets a
+    reply.
+  - Frames that get no reply (0x10 input, 0x05 resize, 0x07 redraw) may follow any request
+    at once: a server handles a connection's frames in the order they arrive. The phone
+    sends 0x0a and then the ctrl-V 0x10 without waiting for the 0x14, and Prosper sets the
+    pasteboard before it reads the next frame.
+  - 0x08 → 0x18, 0x03 → 0x11 and 0x09 → 0x19 never answer 0x13, so they may be pipelined
+    with each other.
   - Prosper answers 0x03, 0x04 and 0x06 at once, in the order they arrive; 0x09 too on a
     connection that has not attached.
   - These replies can trail replies to frames sent after them: 0x08 (Prosper waits up to
@@ -264,6 +270,7 @@ The connection then carries one session:
 - 0x09 snapshot (empty) → 0x19 snapshotResp: raw ANSI of the session's current screen from
   dch's VT mirror, with the caret appended as `ESC[row;colH` when known. **Empty = no mirror**
   (and always empty on a connection that has not attached); the client keeps what it has.
+  0x09 never answers 0x13: a server with no screen to offer sends an empty 0x19.
 - 0x12 exit `{"code": int}`: the session's client exited; the server then closes (the FIN
   follows the frame).
 - The client detaches by closing the TCP connection. The session lives on.
@@ -331,9 +338,15 @@ python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
 07 (kill runs `dch -k`), 08 (rename runs `dch -m`), both on a name no session should have, and
-12, 14 and 15 (each attach starts a session `golden-776`, and each cleanup kills it; 15 ends it
-by typing `exit` and ^D into it). Run `--mutating` only against a test server, never a host
-with sessions someone uses.
+12, 14 and 15 (each attach starts a session, `golden-776`, `golden-776-14` and `golden-776-15`,
+and each cleanup kills its own; 15 ends it by typing `exit` and ^D into it). Run `--mutating`
+only against a test server, never a host with sessions someone uses.
+
+15 assumes the session runs a shell (dch's default command) that reads input once it has
+started: it is a smoke check of exit and close. A shell whose rc files discard type-ahead, or
+stay silent past the step's 5 s, fails it falsely. Once `create` is in `ops` ([Q3](#open-questions)),
+15 should become a 0x02 create with `"command": ["/bin/sh", "-c", "exit 3"]`, which needs no
+typing.
 
 Not in the set, because the format cannot express them: the 0x12 frame before 15's close (pty
 output of no fixed frame count comes first, and `expect` takes the next frame), and attach on
@@ -359,9 +372,10 @@ One JSON object per file:
 
 A step is one of:
 - `{"send": "<hex>"}`: these bytes, as one write. Whitespace in hex is ignored.
-- `{"expect": <frame>}`: the next frame, within 5 s, must match.
-- `{"expect_close": true}`: the server closes the connection within 5 s (EOF or reset). Bytes
-  that arrive before the close are ignored.
+- `{"expect": <frame>}`: the next frame, whole within 5 s of the step's start, must match.
+- `{"expect_close": true}`: the server closes the connection within 5 s of the step's start
+  (EOF or reset). Bytes that arrive before the close are ignored, but do not extend the 5 s:
+  a session that keeps drawing and never closes fails the step.
 - `{"expect_quiet": <seconds>}`: for that long, no frame other than 0x10 arrives and the
   connection stays open (0x10 is pty output, which may come at any time on an attached
   connection). Pins "no reply".
@@ -458,9 +472,10 @@ Prosper differs today, the gap above or the item says so.
   whois user is one of those (a number is compared with `UserProfile.ID`, a login with
   `UserProfile.LoginName`).
 - **Tagged peers** are refused. How to allow one explicitly is still open ([Q9](#open-questions)).
-- **Whois unavailable** (tailscaled down or its LocalAPI unreachable): fail closed by default,
-  so the peer is refused as above and `dch serve` logs a line. `--whois-optional` relaxes it:
-  the peer is accepted and a warning is logged.
+- **Whois unavailable** (tailscaled down or its LocalAPI unreachable), *pending operator
+  confirmation*: fail closed by default, so the peer is refused as above and `dch serve` logs a
+  line. `--whois-optional` (name not final) relaxes it: the peer is accepted and a warning is
+  logged.
 
 ### Open questions
 
@@ -475,4 +490,9 @@ Prosper differs today, the gap above or the item says so.
 | Q7 | Gate "new session" on `create` for `server: "dch"` until Q3 is settled? (M3) | prosper-ios |
 | Q8 | The phone's 0x2e client is not on its main branch yet: confirm it sends `{"device_id"}`. | prosper-ios |
 | Q9 | How does a `dch serve` operator allow a tagged peer node (a flag naming tags, or none in 1.0)? | dch, operator |
-| Q10 | Prosper and `dch serve` on the same Mac both want `<tailscale ip>:8771`; the second bind fails. Should `dch serve` take another port there, and how would the phone find it? | dch, prosper-ios |
+| Q10 | Prosper and `dch serve` on the same Mac both want `<tailscale ip>:8771`; the second bind fails. Should `dch serve` take another port there, and how would the phone find it? Working default, pending the operator: `dch serve` refuses to start on a Mac Prosper serves ("Prosper already serves this Mac"); no second port in 1.0. | dch, prosper-ios |
+| Q11 | `tailscale ip -4` is on `PATH` but fails or prints nothing (tailscaled stopped, logged out, NeedsLogin): fall back to the 100.64.0.0/10 scan, or count it as no address found and refuse to start? | dch |
+| Q12 | The bind itself fails (EADDRINUSE: Prosper or another `dch serve` on `<ip>:8771`): exit, or retry? | dch |
+| Q13 | `--bind` on a non-tailnet address: does it relax the 100.64.0.0/10 peer gate or the owner check (as written, both refuse every non-tailnet peer, so such a bind admits nobody)? Is a wildcard (`--bind 0.0.0.0`) allowed? | dch |
+| Q14 | `--allow-user` on an untagged host: rejected, a replacement for the `Self.UserID` check, or extra users on top of it? | dch |
+| Q15 | `--allow-user <login>`: is the `LoginName` match exact or case-insensitive? | dch |

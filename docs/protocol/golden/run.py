@@ -82,19 +82,33 @@ def shape_ok(shape, v, path="$"):
 
 
 class Conn:
+    """One connection. Every wait ends at `self.end`, one deadline per step (arm() sets it),
+    so a server that keeps sending cannot stretch a step past its timeout (QA #625 INFO-R3-4)."""
+
     def __init__(self, addr, timeout):
         self.s = socket.create_connection(addr, timeout=timeout)
-        self.s.settimeout(timeout)
         self.timeout = timeout
         self.buf = b""
+        self.arm()
+
+    def arm(self, secs=None):
+        self.end = time.monotonic() + (self.timeout if secs is None else secs)
+
+    def _recv(self):
+        left = self.end - time.monotonic()
+        if left <= 0:
+            raise socket.timeout
+        self.s.settimeout(left)
+        return self.s.recv(1 << 16)
 
     def send(self, data):
+        self.s.settimeout(self.timeout)
         self.s.sendall(data)
 
     def _fill(self, n):
         while len(self.buf) < n:
             try:
-                chunk = self.s.recv(1 << 16)
+                chunk = self._recv()
             except socket.timeout:
                 raise TimedOut("timed out waiting for a frame")
             if not chunk:
@@ -116,7 +130,7 @@ class Conn:
     def closed(self):
         """True once the server closes (EOF or reset); bytes before the close are ignored."""
         try:
-            while self.s.recv(1 << 16):
+            while self._recv():
                 pass
             return True
         except socket.timeout:
@@ -126,17 +140,14 @@ class Conn:
 
     def quiet(self, secs):
         """Nothing but 0x10 output for `secs` seconds: any other frame is a reply that should not come."""
-        end = time.monotonic() + secs
+        self.arm(secs)
         try:
-            while (left := end - time.monotonic()) > 0:
-                self.s.settimeout(max(left, 0.01))
+            while True:
                 t, payload = self.frame()
                 if t != 0x10:
                     raise Fail(f"want no reply, got 0x{t:02x} {payload[:80]!r}")
         except TimedOut:
             pass
-        finally:
-            self.s.settimeout(self.timeout)
 
     def close(self):
         self.s.close()
@@ -162,6 +173,7 @@ def run(fx, addr, timeout):
     c = Conn(addr, timeout)
     try:
         for step in fx["steps"]:
+            c.arm()
             if "send" in step:
                 c.send(unhex(step["send"]))
             elif "expect" in step:

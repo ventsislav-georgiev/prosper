@@ -85,6 +85,10 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertTrue(calls.contains(["-k", "golden-776-no-such-session"]), "\(calls)")
         XCTAssertTrue(calls.contains(["-m", "golden-776-no-such-session", ""]), "\(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776"]), "the attach fixture's cleanup: \(calls)")
+        // QA #625 INFO-R3-6: 14 and 15 own their session names, so a dying master of one fixture's
+        // session cannot reach the next fixture.
+        XCTAssertTrue(calls.contains(["-k", "golden-776-14"]), "14's cleanup: \(calls)")
+        XCTAssertTrue(calls.contains(["-k", "golden-776-15"]), "15's cleanup: \(calls)")
         XCTAssertFalse(calls.contains { $0.contains("-golden-776") }, "13: a dash name never reaches dch: \(calls)")
     }
 
@@ -144,6 +148,55 @@ final class RemoteFramesGoldenTests: XCTestCase {
                 XCTAssertEqual(out, "PASS\n", "run.py, resize unanswered")
             }
         }
+    }
+
+    /// QA #625 INFO-R3-4: a session that keeps drawing and never exits fails fixture 15's
+    /// expect_close in both runners within the step's deadline (1 s here), not one recv timeout
+    /// after the last byte, i.e. never. Hard bounds: run.py is SIGKILLed after 15 s, and the Swift
+    /// runner runs off this thread and is given 15 s before the fake is stopped under it.
+    func testBothRunnersFailExpectCloseWhenTheSessionKeepsDrawing() throws {
+        let fx = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: try goldenDir().appendingPathComponent("15-session-exit-closes.json"))) as? [String: Any])
+        let fake = try FakeServer(redrawForever: true)
+        defer { fake.stop() }
+
+        let result = OSAllocatedUnfairLock(initialState: "")
+        let done = DispatchSemaphore(value: 0)
+        let started = Date(), port = fake.port
+        Thread.detachNewThread { [self] in
+            let r: String
+            do { try run(fx, port: port, timeout: 1); r = "PASS" } catch { r = "FAIL \(error)" }
+            result.withLock { $0 = r }
+            done.signal()
+        }
+        if done.wait(timeout: .now() + 15) == .timedOut {
+            XCTFail("the Swift runner hung on a session that keeps drawing")
+            fake.stop()   // ends the stream and closes the socket, so the thread can finish
+            _ = done.wait(timeout: .now() + 10)
+        }
+        let swiftSecs = Date().timeIntervalSince(started)
+        XCTAssertEqual(result.withLock { $0 }, "FAIL the server did not close the connection", "the Swift runner")
+        XCTAssertLessThan(swiftSecs, 4, "one 1 s deadline for the step, not per read")
+
+        let code = """
+            import json, sys
+            sys.path.insert(0, sys.argv[1])
+            import run
+            try:
+                run.run(json.loads(sys.argv[2]), ("127.0.0.1", int(sys.argv[3])), 1)
+                print("PASS")
+            except run.Fail as e:
+                print("FAIL", e)
+            """
+        let fxJSON = String(decoding: try JSONSerialization.data(withJSONObject: fx), as: UTF8.self)
+        let pyFake = try FakeServer(redrawForever: true)   // its own, whatever the Swift half did to `fake`
+        defer { pyFake.stop() }
+        let pyStart = Date()
+        let (status, out) = try python(["-B", "-c", code, try goldenDir().path, fxJSON, "\(pyFake.port)"], kill: 15)
+        let pySecs = Date().timeIntervalSince(pyStart)
+        XCTAssertEqual(status, 0, "run.py was killed (it hung): \(out)")
+        XCTAssertEqual(out, "FAIL the server did not close the connection\n", "run.py")
+        XCTAssertLessThan(pySecs, 5, "one 1 s deadline for the step, not per read")
     }
 
     /// QA #625 INFO-7: the Swift checker and run.py's shape_ok agree, a trailing newline included
@@ -276,7 +329,12 @@ final class RemoteFramesGoldenTests: XCTestCase {
     func testHalfCloseDropsAPendingReply() throws {
         let slow = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
                                     allowPeer: { _ in true },
-                                    configure: { c in c.ops.binary = { Thread.sleep(forTimeInterval: 1); return nil } })
+                                    configure: { c in
+                                        c.ops.binary = { Thread.sleep(forTimeInterval: 1); return nil }
+                                        // QA #625 INFO-R3-6: 0x08 reads these; never the live Preferences.
+                                        c.clipboard.enabled = { false }
+                                        c.commands.enabled = { false }
+                                    })
         defer { slow.stop(); _ = slow.isRunning; slow.queue.sync {} }
         try slow.start()
         let c = try Client(port: try XCTUnwrap(slow.boundPort))
@@ -285,6 +343,19 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertThrowsError(try c.frame(timeout: 2), "the FIN closes the connection before the 0x18") {
             XCTAssertEqual($0 as? Client.Failure, .closed)
         }
+    }
+
+    /// QA #625 INFO-R3-6: attach on a watch connection, over the wire, is refused with the
+    /// spec's text, "watch connections cannot attach or create" (golden can't express it).
+    func testAttachOnAWatchConnectionIsRefusedWithItsMessage() throws {
+        let c = try Client(port: port)
+        try c.send(DchFrame.encode(DchFrame.watch, Array("{}".utf8)))
+        XCTAssertEqual(try c.frame().0, DchFrame.listResp, "the watch snapshot")
+        try c.send(DchFrame.encode(DchFrame.attach, json: ["name": "golden-776-watch", "cols": 80, "rows": 24]))
+        var f = try c.frame()
+        while f.0 != DchFrame.error { f = try c.frame() }   // the frames before it depend on other ops
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: f.1) as? [String: Any])?["message"] as? String,
+                       "watch connections cannot attach or create")
     }
 
     /// The session's program exits: 0x12 exit {"code"} reaches the wire, then the close. Golden 15
@@ -373,8 +444,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
         return Self.golden
     }
 
-    /// /usr/bin/python3 -I with `args`: exit status and stdout+stderr. Killed (its own pid) after 60 s.
-    private func python(_ args: [String]) throws -> (Int32, String) {
+    /// /usr/bin/python3 -I with `args`: exit status and stdout+stderr. Killed (its own pid) after `kill` s.
+    private func python(_ args: [String], kill: TimeInterval = 60) throws -> (Int32, String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         p.arguments = ["-I"] + args
@@ -384,7 +455,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         try p.run()
         let pid = p.processIdentifier
         let killer = DispatchWorkItem { if p.isRunning { Darwin.kill(pid, SIGKILL) } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: killer)
+        DispatchQueue.global().asyncAfter(deadline: .now() + kill, execute: killer)
         let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         p.waitUntilExit()
         killer.cancel()
@@ -400,24 +471,25 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     private struct Mismatch: Error, CustomStringConvertible { let description: String }
 
-    private func run(_ fx: [String: Any], port: UInt16? = nil) throws {
+    /// One deadline per step, `timeout` (the spec's 5 s), as run.py.
+    private func run(_ fx: [String: Any], port: UInt16? = nil, timeout: TimeInterval = 5) throws {
         let c = try Client(port: port ?? self.port)
         for step in fx["steps"] as? [[String: Any]] ?? [] {
             if let hex = step["send"] as? String {
                 try c.send(Self.unhex(hex))
             } else if let want = step["expect"] as? [String: Any] {
-                let (type, payload) = try c.frame()
+                let (type, payload) = try c.frame(timeout: timeout)
                 if let why = Self.check(want, type, payload) { throw Mismatch(description: why) }
             } else if let secs = (step["expect_quiet"] as? NSNumber)?.doubleValue {
                 // Nothing but 0x10 pty output for `secs`: any other frame is a reply that should not come.
                 let end = Date() + secs
-                while end.timeIntervalSinceNow > 0 {
+                while true {
                     let f: (UInt8, Data)
-                    do { f = try c.frame(timeout: max(end.timeIntervalSinceNow, 0.01)) } catch Client.Failure.timeout { break }
+                    do { f = try c.frame(until: end) } catch Client.Failure.timeout { break }
                     guard f.0 == DchFrame.data else { throw Mismatch(description: "want no reply, got \(String(format: "%02x", f.0))") }
                 }
             } else if step["expect_close"] as? Bool == true {
-                guard try c.closed() else { throw Mismatch(description: "the server did not close the connection") }
+                guard try c.closed(timeout: timeout) else { throw Mismatch(description: "the server did not close the connection") }
             }
         }
     }
@@ -540,12 +612,16 @@ private final class Client {
         }
     }
 
-    /// False on EOF; throws on timeout.
-    private func fill(_ n: Int, timeout: TimeInterval) throws -> Bool {
-        var tv = timeval(tv_sec: Int(timeout), tv_usec: Int32((timeout - floor(timeout)) * 1e6))
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    /// False on EOF; throws on timeout. QA #625 INFO-R3-4: `end` bounds the whole wait, as run.py's
+    /// per-step deadline, so a server that keeps sending cannot stretch it.
+    private func fill(_ n: Int, until end: Date) throws -> Bool {
         var chunk = [UInt8](repeating: 0, count: 1 << 16)
         while buf.count < n {
+            let left = end.timeIntervalSinceNow
+            guard left > 0 else { throw Failure.timeout }
+            // at least 1 ms: a zero timeval waits forever
+            var tv = timeval(tv_sec: Int(left), tv_usec: Int32(max((left - floor(left)) * 1e6, 1000)))
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
             let got = recv(fd, &chunk, chunk.count, 0)
             if got == 0 || (got < 0 && errno == ECONNRESET) { return false }
             if got < 0 { throw Failure.timeout }
@@ -556,20 +632,26 @@ private final class Client {
 
     /// The next frame; every frame must be within the server's 8 MiB send limit.
     func frame(timeout: TimeInterval = 5) throws -> (UInt8, Data) {
-        guard try fill(5, timeout: timeout) else { throw Failure.closed }
+        try frame(until: Date() + timeout)
+    }
+
+    func frame(until end: Date) throws -> (UInt8, Data) {
+        guard try fill(5, until: end) else { throw Failure.closed }
         let b = [UInt8](buf.prefix(5))
         let n = Int(b[1]) << 24 | Int(b[2]) << 16 | Int(b[3]) << 8 | Int(b[4])
         guard n <= DchFrame.maxFrame else { throw Failure.oversize }
-        guard try fill(5 + n, timeout: timeout) else { throw Failure.closed }
+        guard try fill(5 + n, until: end) else { throw Failure.closed }
         let payload = buf.subdata(in: buf.startIndex + 5..<buf.startIndex + 5 + n)
         buf.removeFirst(5 + n)
         return (b[0], payload)
     }
 
-    /// True once the server closed (EOF or reset) within `timeout`, as run.py: bytes before the close are ignored.
+    /// True once the server closed (EOF or reset) within `timeout`, as run.py: bytes before the close
+    /// are ignored and do not extend it.
     func closed(timeout: TimeInterval = 5) throws -> Bool {
+        let end = Date() + timeout
         do {
-            while try fill(buf.count + 1, timeout: timeout) {}
+            while try fill(buf.count + 1, until: end) {}
             return true
         } catch Failure.timeout { return false }
     }
@@ -578,11 +660,13 @@ private final class Client {
 /// QA #625 INFO-R2: a loopback fake that speaks just enough of the protocol for fixture 12:
 /// attach answers one 0x10, resize answers `resizeReply` (nil: nothing). One connection at a
 /// time, 127.0.0.1 on a kernel-picked port, until stop().
+/// QA #625 INFO-R3-4: `redrawForever` makes attach answer a 0x10 every 50 ms instead, never
+/// reading or closing again, until the client goes or stop() (a session that keeps drawing).
 private final class FakeServer: @unchecked Sendable {
     let port: UInt16
     private let stopped = OSAllocatedUnfairLock(initialState: false)
 
-    init(resizeReply: Data?) throws {
+    init(resizeReply: Data? = nil, redrawForever: Bool = false) throws {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -606,6 +690,12 @@ private final class FakeServer: @unchecked Sendable {
                 guard s >= 0 else { continue }
                 let peer = Client(fd: s)
                 while let (type, _) = try? peer.frame() {
+                    if type == DchFrame.attach, redrawForever {
+                        while !stopped.withLock({ $0 }), (try? peer.send(DchFrame.encode(DchFrame.data, [0x78]))) != nil {
+                            usleep(50_000)
+                        }
+                        break
+                    }
                     if type == DchFrame.attach { try? peer.send(DchFrame.encode(DchFrame.data, [0x78])) }
                     if type == DchFrame.resize, let resizeReply { try? peer.send(resizeReply) }
                 }
