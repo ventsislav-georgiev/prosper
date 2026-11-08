@@ -1,0 +1,17 @@
+{
+  "id": "16-create-exit-closes",
+  "about": "0x02 create runs the given command; it exits at once (exit 3), so the server sends 0x12 exit and closes. Needs no typing, unlike 15. The format pins the close only.",
+  "requires_op": "create",
+  "mutating": true,
+  "cleanup": [
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3737362d3136227d"
+  ],
+  "steps": [
+    {
+      "send": "02 00000050 7b226e616d65223a22676f6c64656e2d3737362d3136222c22636f6d6d616e64223a5b222f62696e2f7368222c222d63222c22657869742033225d2c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect_close": true
+    }
+  ]
+}

@@ -89,7 +89,11 @@ enum DchFrame {
 
     /// #591: the requests beyond the original set this Mac answers, in machineInfoResp's
     /// "ops" (an older phone ignores the key; a newer one hides what an older Mac lacks).
-    static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put", "sidekick"]
+    /// #800: "create" (0x02) and "paste_image" (0x0a) too, always: this Mac serves both
+    /// unconditionally (0x0a sets the pasteboard whatever clipboard sync says), and a client
+    /// gates them on these names for a server that may not (dch serve).
+    static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put", "sidekick",
+                      "create", "paste_image"]
 
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set

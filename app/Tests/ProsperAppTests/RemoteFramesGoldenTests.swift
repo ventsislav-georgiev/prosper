@@ -8,7 +8,8 @@ import XCTest
 /// #776: docs/protocol/golden's fixtures against a real DchSessionServer on 127.0.0.1, on a
 /// kernel-picked port, so Prosper's CI holds the server to the spec any server must pass.
 /// Fakes only: the list, kill and rename are recorders, the watch hub is fed by hand, and
-/// attach runs a shell script that prints a repaint and echoes, never dch. Never 8771,
+/// attach runs a shell script that prints a repaint and echoes, never dch (#800: a create that
+/// names a command runs that command instead, as dch would). Never 8771,
 /// never the Tailscale address, and `onReady` is a no-op so no real dch client is swept.
 final class RemoteFramesGoldenTests: XCTestCase {
 
@@ -27,7 +28,9 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     override func setUpWithError() throws {
         let script = tempDir("golden-dch").appendingPathComponent("fake-dch")
-        try "#!/bin/sh\nprintf '\\033[2J\\033[Hgolden repaint\\r\\n'\nexec /bin/cat\n"
+        // dch's spawn args are -E [-f] [-n name] [command...] (DchCommand.spawnArgs).
+        try ("#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; *) break;; esac; done\n"
+            + "[ $# -gt 0 ] && exec \"$@\"\nprintf '\\033[2J\\033[Hgolden repaint\\r\\n'\nexec /bin/cat\n")
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         DchCommand.dchPathOverride = script.path
@@ -67,7 +70,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
     func testEveryGoldenFixturePassesAgainstTheServer() throws {
         let files = try FileManager.default.contentsOfDirectory(at: try goldenDir(), includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-        XCTAssertGreaterThanOrEqual(files.count, 15, "the fixtures are read from \(Self.golden.path)")
+        XCTAssertGreaterThanOrEqual(files.count, 16, "the fixtures are read from \(Self.golden.path)")
         let ops = try handshakeOps()
         XCTAssertTrue(ops.contains("watch"), "the hub has a list, so every requires_op fixture runs")
         for file in files {
@@ -89,6 +92,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         // session cannot reach the next fixture.
         XCTAssertTrue(calls.contains(["-k", "golden-776-14"]), "14's cleanup: \(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776-15"]), "15's cleanup: \(calls)")
+        XCTAssertTrue(calls.contains(["-k", "golden-776-16"]), "16's cleanup: \(calls)")
         XCTAssertFalse(calls.contains { $0.contains("-golden-776") }, "13: a dash name never reaches dch: \(calls)")
     }
 
@@ -103,12 +107,12 @@ final class RemoteFramesGoldenTests: XCTestCase {
     }
 
     /// QA #625 INFO-6: without --mutating, run.py runs nothing that reaches dch on the server:
-    /// 07 (kill), 08 (rename), 12, 14 and 15 (attach) are skipped, the read-only rest passes.
+    /// 07 (kill), 08 (rename), 12, 14 and 15 (attach), 16 (create) are skipped, the read-only rest passes.
     func testPythonRunnerSkipsMutatingFixturesByDefault() throws {
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)"])
         XCTAssertEqual(status, 0, text)
         for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws", "14-attach-twice-ignored",
-                   "15-session-exit-closes"] {
+                   "15-session-exit-closes", "16-create-exit-closes"] {
             XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
         }
         XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)
@@ -199,6 +203,38 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertLessThan(pySecs, 5, "one 1 s deadline for the step, not per read")
     }
 
+    /// QA #627 INFO-4: both runners arm the deadline per step, not once per connection. A fake
+    /// answers the 0x08 with two 0x14s, each 0.9 s after the last (0.6 of the 1.5 s step timeout):
+    /// every expect step gets its frame in time, while one deadline from the connect expires
+    /// before the second (1.8 s > 1.5 s). Mutants: run.py without run()'s c.arm(), the Swift
+    /// runner with `end` hoisted out of the step loop; each fails here.
+    func testBothRunnersArmTheDeadlinePerStep() throws {
+        let fx: [String: Any] = ["id": "per-step", "steps": [["send": "08 00000000"],
+                                                             ["expect": ["type": "14"]], ["expect": ["type": "14"]]]]
+        let fake = try FakeServer(pacedReplies: 0.9)
+        defer { fake.stop() }
+        var swift = "PASS"
+        do { try run(fx, port: fake.port, timeout: 1.5) } catch { swift = "FAIL \(error)" }
+        XCTAssertEqual(swift, "PASS", "the Swift runner")
+
+        let code = """
+            import json, sys
+            sys.path.insert(0, sys.argv[1])
+            import run
+            try:
+                run.run(json.loads(sys.argv[2]), ("127.0.0.1", int(sys.argv[3])), 1.5)
+                print("PASS")
+            except run.Fail as e:
+                print("FAIL", e)
+            """
+        let fxJSON = String(decoding: try JSONSerialization.data(withJSONObject: fx), as: UTF8.self)
+        let pyFake = try FakeServer(pacedReplies: 0.9)
+        defer { pyFake.stop() }
+        let (status, out) = try python(["-B", "-c", code, try goldenDir().path, fxJSON, "\(pyFake.port)"], kill: 15)
+        XCTAssertEqual(status, 0, out)
+        XCTAssertEqual(out, "PASS\n", "run.py")
+    }
+
     /// QA #625 INFO-7: the Swift checker and run.py's shape_ok agree, a trailing newline included
     /// (both reject it: ICU's `$` alone would accept "idle\n").
     func testSwiftAndPythonShapeChecksAgree() throws {
@@ -229,6 +265,17 @@ final class RemoteFramesGoldenTests: XCTestCase {
     }
 
     // MARK: - 0x08's 1.0 keys
+
+    /// #800: "create" and "paste_image" are always listed: 0x02 and 0x0a are served whatever the
+    /// clipboard, chat, commands and watch flags say.
+    func testMachineInfoListsCreateAndPasteImageAlways() {
+        for flag in [false, true] {
+            let ops = DchFrame.machineInfo(deviceID: "d", hostname: "h", wakeId: nil, clipboard: flag, chat: flag,
+                                           commands: flag, reviveNoMessage: flag, watch: flag)["ops"] as? [String] ?? []
+            XCTAssertTrue(ops.contains("create"), "\(ops)")
+            XCTAssertTrue(ops.contains("paste_image"), "\(ops)")
+        }
+    }
 
     func testMachineInfoCarriesServerOsNameAndProto() throws {
         let info = DchFrame.machineInfo(deviceID: "id", hostname: "Studio", wakeId: nil)
@@ -475,10 +522,11 @@ final class RemoteFramesGoldenTests: XCTestCase {
     private func run(_ fx: [String: Any], port: UInt16? = nil, timeout: TimeInterval = 5) throws {
         let c = try Client(port: port ?? self.port)
         for step in fx["steps"] as? [[String: Any]] ?? [] {
+            let end = Date() + timeout   // per step, as run.py's c.arm() (QA #627 INFO-4)
             if let hex = step["send"] as? String {
                 try c.send(Self.unhex(hex))
             } else if let want = step["expect"] as? [String: Any] {
-                let (type, payload) = try c.frame(timeout: timeout)
+                let (type, payload) = try c.frame(until: end)
                 if let why = Self.check(want, type, payload) { throw Mismatch(description: why) }
             } else if let secs = (step["expect_quiet"] as? NSNumber)?.doubleValue {
                 // Nothing but 0x10 pty output for `secs`: any other frame is a reply that should not come.
@@ -489,7 +537,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
                     guard f.0 == DchFrame.data else { throw Mismatch(description: "want no reply, got \(String(format: "%02x", f.0))") }
                 }
             } else if step["expect_close"] as? Bool == true {
-                guard try c.closed(timeout: timeout) else { throw Mismatch(description: "the server did not close the connection") }
+                guard try c.closed(timeout: end.timeIntervalSinceNow) else { throw Mismatch(description: "the server did not close the connection") }
             }
         }
     }
@@ -662,11 +710,12 @@ private final class Client {
 /// time, 127.0.0.1 on a kernel-picked port, until stop().
 /// QA #625 INFO-R3-4: `redrawForever` makes attach answer a 0x10 every 50 ms instead, never
 /// reading or closing again, until the client goes or stop() (a session that keeps drawing).
+/// QA #627 INFO-4: `pacedReplies` answers any frame with two empty 0x14s, each that many seconds after the last.
 private final class FakeServer: @unchecked Sendable {
     let port: UInt16
     private let stopped = OSAllocatedUnfairLock(initialState: false)
 
-    init(resizeReply: Data? = nil, redrawForever: Bool = false) throws {
+    init(resizeReply: Data? = nil, redrawForever: Bool = false, pacedReplies: TimeInterval? = nil) throws {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -698,6 +747,12 @@ private final class FakeServer: @unchecked Sendable {
                     }
                     if type == DchFrame.attach { try? peer.send(DchFrame.encode(DchFrame.data, [0x78])) }
                     if type == DchFrame.resize, let resizeReply { try? peer.send(resizeReply) }
+                    if let pacedReplies {
+                        for _ in 0..<2 {
+                            usleep(UInt32(pacedReplies * 1e6))
+                            try? peer.send(DchFrame.encode(DchFrame.ok, []))
+                        }
+                    }
                 }
             }
         }
