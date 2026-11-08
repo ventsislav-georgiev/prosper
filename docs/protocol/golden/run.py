@@ -6,7 +6,8 @@ Python 3 stdlib only. See ../remote-frames.md, "Golden frames", for the fixture 
     python3 run.py HOST:PORT [--mutating] [--fixtures DIR] [--timeout SECONDS]
 
 Exit 0 when every fixture that applies passes, 1 on any failure, 2 on bad usage or a host
-that refuses the handshake.
+that refuses the handshake. Without --mutating, fixtures marked "mutating" (07 kill, 08 rename,
+12 attach: each runs dch on the server) are skipped and reported as SKIP.
 """
 import argparse
 import glob
@@ -16,12 +17,17 @@ import re
 import socket
 import struct
 import sys
+import time
 
 MAX_SEND = 8 << 20     # the server's send limit, the phone's maxFrame
 MAJOR = 1              # this runner's proto major
 
 
 class Fail(Exception):
+    pass
+
+
+class TimedOut(Fail):
     pass
 
 
@@ -79,6 +85,7 @@ class Conn:
     def __init__(self, addr, timeout):
         self.s = socket.create_connection(addr, timeout=timeout)
         self.s.settimeout(timeout)
+        self.timeout = timeout
         self.buf = b""
 
     def send(self, data):
@@ -89,7 +96,7 @@ class Conn:
             try:
                 chunk = self.s.recv(1 << 16)
             except socket.timeout:
-                raise Fail("timed out waiting for a frame")
+                raise TimedOut("timed out waiting for a frame")
             if not chunk:
                 return False
             self.buf += chunk
@@ -116,6 +123,20 @@ class Conn:
             return False
         except (ConnectionResetError, BrokenPipeError):
             return True
+
+    def quiet(self, secs):
+        """Nothing but 0x10 output for `secs` seconds: any other frame is a reply that should not come."""
+        end = time.monotonic() + secs
+        try:
+            while (left := end - time.monotonic()) > 0:
+                self.s.settimeout(max(left, 0.01))
+                t, payload = self.frame()
+                if t != 0x10:
+                    raise Fail(f"want no reply, got 0x{t:02x} {payload[:80]!r}")
+        except TimedOut:
+            pass
+        finally:
+            self.s.settimeout(self.timeout)
 
     def close(self):
         self.s.close()
@@ -147,6 +168,8 @@ def run(fx, addr, timeout):
                 why = check_frame(step["expect"], *c.frame())
                 if why:
                     raise Fail(why)
+            elif "expect_quiet" in step:
+                c.quiet(float(step["expect_quiet"]))
             elif step.get("expect_close"):
                 if not c.closed():
                     raise Fail("the server did not close the connection")

@@ -1,6 +1,7 @@
 {
   "id": "07-kill-unknown-name",
-  "about": "0x04 answers an empty 0x14, whatever dch made of the name.",
+  "about": "0x04 answers an empty 0x14, whatever dch made of the name. Mutating: it runs dch -k on a name no session should have.",
+  "mutating": true,
   "steps": [
     {
       "send": "04 00000025 7b226e616d65223a22676f6c64656e2d3737362d6e6f2d737563682d73657373696f6e227d"

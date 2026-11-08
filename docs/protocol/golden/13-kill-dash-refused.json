@@ -1,0 +1,17 @@
+{
+  "id": "13-kill-dash-refused",
+  "about": "0x04 with a name starting with - answers 0x13 and kills nothing (dch would read the name as a flag).",
+  "steps": [
+    {
+      "send": "04 00000016 7b226e616d65223a222d676f6c64656e2d373736227d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~.+"
+        }
+      }
+    }
+  ]
+}

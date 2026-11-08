@@ -116,10 +116,10 @@ enum DchFrame {
     static let proto = "1.0"
 
     /// #776: machineInfoResp's "os": "macOS 27.0", the patch only when it is not 0.
-    static let osName: String = {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "macOS \(v.majorVersion).\(v.minorVersion)" + (v.patchVersion > 0 ? ".\(v.patchVersion)" : "")
-    }()
+    static let osName = osLabel(ProcessInfo.processInfo.operatingSystemVersion)
+    static func osLabel(_ v: OperatingSystemVersion) -> String {
+        "macOS \(v.majorVersion).\(v.minorVersion)" + (v.patchVersion > 0 ? ".\(v.patchVersion)" : "")
+    }
 
     /// Encode one frame. DATA payloads can be large; control payloads are tiny.
     static func encode(_ type: UInt8, _ payload: [UInt8]) -> Data {
@@ -197,6 +197,11 @@ final class DchConnection: @unchecked Sendable {
     var rename: (String, String) -> Void = { DchCommand.setAlias($0, alias: $1) }
     /// #765: the island's list cache and the watch streams, server-wide; nil = always fork.
     var watch: DchWatchHub?
+    /// QA #625 F1: attach/create's pty (exe, args, cols, rows, onOutput, onExit); tests make it
+    /// throw as a failed forkpty does.
+    var spawn: (String, [String], Int, Int, @escaping ([UInt8]) -> Void, @escaping (Int32) -> Void) throws -> PtyChild = {
+        try PtyChild(exe: $0, args: $1, env: DchCommand.childEnv(), cols: $2, rows: $3, onOutput: $4, onExit: $5)
+    }
     /// #765 J16: the list frame's dch fork when the island has no list; tests count it.
     var listSessions: () -> [DchListRow] = { DchCommand.listSessions() }
     /// #765: this connection is a watch stream (not a keep-awake client). On `queue`.
@@ -228,7 +233,7 @@ final class DchConnection: @unchecked Sendable {
     }
 
     /// #776: `last`, a frame that must reach the client before the FIN (the receive guard's
-    /// error): sent as the final message, and the cancel waits for its completion (5 s at
+    /// error, QA #625 F1 a failed spawn's): sent as the final message, and the cancel waits for its completion (5 s at
     /// most), as startSession's exit frame. Once closed nothing is read, handled or sent.
     func close(after last: Data? = nil) {
         guard !closed else { return }
@@ -551,6 +556,9 @@ final class DchConnection: @unchecked Sendable {
         }
     }
 
+    /// QA #625 F1: a failed spawn's 0x13, shown on the phone as written.
+    static let spawnFailed = "Could not start the session: the Mac could not open a terminal."
+
     private func startSession(type: UInt8, payload: Data) {
         guard pty == nil else { return }  // one session per connection
         // #617 fix round 1: never on a connection that carried an upload (see `uploaded`).
@@ -567,10 +575,9 @@ final class DchConnection: @unchecked Sendable {
 
         let args = DchCommand.spawnArgs(name: name, command: command, attach: type == DchFrame.attach)
         do {
-            let child = try PtyChild(
-                exe: DchCommand.dchPath, args: args, env: DchCommand.childEnv(),
-                cols: cols, rows: rows,
-                onOutput: { [weak self] bytes in
+            let child = try spawn(
+                DchCommand.dchPath, args, cols, rows,
+                { [weak self] bytes in
                     // Blocking send = real backpressure. This runs on PtyChild's pump
                     // thread, so waiting here stalls the pty read; the pty kernel buffer
                     // then fills and the inner app's write() throttles — no unbounded
@@ -591,7 +598,7 @@ final class DchConnection: @unchecked Sendable {
                         self.queue.async { self.close() }
                     }
                 },
-                onExit: { [weak self] code in
+                { [weak self] code in
                     guard let self else { return }
                     // QA #606 F1: the session ended; the phone relists on the exit frame.
                     self.queue.async { self.watch?.changed() }
@@ -618,8 +625,11 @@ final class DchConnection: @unchecked Sendable {
             // otherwise have killed a working client for nothing.
             if let name, !name.isEmpty { onAttach(ObjectIdentifier(self), name) }
         } catch {
-            send(DchFrame.encode(DchFrame.error, json: ["message": "\(error)"]))
-            close()
+            // QA #625 F1: the error goes before the FIN (an immediate cancel dropped it), and the
+            // close discards whatever the client pipelined behind the attach. forkpty is the only
+            // throw: the Mac is out of ptys or processes.
+            log.error("dch server: spawn failed: \(String(describing: error), privacy: .public)")
+            close(after: DchControlOps.error(Self.spawnFailed))
         }
     }
 }

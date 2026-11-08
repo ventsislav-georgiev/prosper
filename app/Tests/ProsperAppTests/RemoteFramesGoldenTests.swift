@@ -65,9 +65,9 @@ final class RemoteFramesGoldenTests: XCTestCase {
     // MARK: - Golden fixtures
 
     func testEveryGoldenFixturePassesAgainstTheServer() throws {
-        let files = try FileManager.default.contentsOfDirectory(at: Self.golden, includingPropertiesForKeys: nil)
+        let files = try FileManager.default.contentsOfDirectory(at: try goldenDir(), includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-        XCTAssertGreaterThanOrEqual(files.count, 12, "the fixtures are read from \(Self.golden.path)")
+        XCTAssertGreaterThanOrEqual(files.count, 13, "the fixtures are read from \(Self.golden.path)")
         let ops = try handshakeOps()
         XCTAssertTrue(ops.contains("watch"), "the hub has a list, so every requires_op fixture runs")
         for file in files {
@@ -85,28 +85,46 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertTrue(calls.contains(["-k", "golden-776-no-such-session"]), "\(calls)")
         XCTAssertTrue(calls.contains(["-m", "golden-776-no-such-session", ""]), "\(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776"]), "the attach fixture's cleanup: \(calls)")
+        XCTAssertFalse(calls.contains { $0.contains("-golden-776") }, "13: a dash name never reaches dch: \(calls)")
     }
 
     /// The runner dch CI uses, against the same server: it must read the fixtures as this test does.
     func testPythonRunnerPassesAgainstTheServer() throws {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        p.arguments = ["-I", Self.golden.appendingPathComponent("run.py").path, "127.0.0.1:\(port)", "--mutating"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = out
-        try p.run()
-        let pid = p.processIdentifier
-        let killer = DispatchWorkItem { if p.isRunning { Darwin.kill(pid, SIGKILL) } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: killer)
-        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        p.waitUntilExit()
-        killer.cancel()
-        XCTAssertEqual(p.terminationStatus, 0, text)
+        let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)", "--mutating"])
+        XCTAssertEqual(status, 0, text)
         XCTAssertTrue(text.contains("server=prosper proto=1.0"), text)
         XCTAssertFalse(text.contains("SKIP"), text)
         XCTAssertFalse(text.contains("FAIL"), text)
         XCTAssertTrue(text.contains("OK (0 failed)"), text)
+    }
+
+    /// QA #625 INFO-6: without --mutating, run.py runs nothing that reaches dch on the server:
+    /// 07 (kill), 08 (rename) and 12 (attach) are skipped, the read-only rest passes.
+    func testPythonRunnerSkipsMutatingFixturesByDefault() throws {
+        let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)"])
+        XCTAssertEqual(status, 0, text)
+        for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws"] {
+            XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
+        }
+        XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)
+        XCTAssertFalse(text.contains("FAIL"), text)
+        XCTAssertEqual(ran.all, [], "no kill or rename reached the server's dch")
+    }
+
+    /// QA #625 INFO-7: the Swift checker and run.py's shape_ok agree, a trailing newline included
+    /// (both reject it: ICU's `$` alone would accept "idle\n").
+    func testSwiftAndPythonShapeChecksAgree() throws {
+        let json = #"[["string~idle","idle"],["string~idle","idle\n"],["string~idle","idler"],["string~.+",""],"#
+            + #"["int",1],["int",1.5],["int",true],["number",1.5],["bool",true],["bool",0],"#
+            + #"[{"name":"string"},{"name":1}],[{"?a":"int"},{}],[["string"],["a",2]],[[],[1]]]"#
+        let cases = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[Any]])
+        let swift = cases.map { Self.mismatch($0[0], $0[1]) == nil }
+        XCTAssertEqual(swift, [true, false, false, false, true, false, false, true, true, false, false, true, false, true])
+        let code = "import json,sys; sys.path.insert(0, sys.argv[1]); import run; "
+            + "print(json.dumps([run.shape_ok(s, v) is None for s, v in json.loads(sys.argv[2])]))"
+        let (status, out) = try python(["-B", "-c", code, try goldenDir().path, json])
+        XCTAssertEqual(status, 0, out)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: Data(out.utf8)) as? [Bool], swift, out)
     }
 
     /// The shape check rejects what it should: a wrong-typed key, a missing one, a regex miss.
@@ -118,6 +136,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertNotNil(Self.mismatch([row], [["name": "a", "agents": true]]))
         XCTAssertNotNil(Self.mismatch(["proto": "string~1\\.[0-9]+"], ["proto": "2.0"]))
         XCTAssertNotNil(Self.mismatch(["n": "int"], ["n": 1.5]))
+        XCTAssertNotNil(Self.mismatch("string~idle", "idle\n"), "a trailing newline fails, as in run.py")
         XCTAssertNil(Self.mismatch(["n": "number"], ["n": 1.5]))
     }
 
@@ -130,11 +149,19 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertEqual(info["proto"] as? String, "1.0")
         XCTAssertEqual(info["os"] as? String, DchFrame.osName)
         XCTAssertNotNil(DchFrame.osName.range(of: #"^macOS [0-9]+\.[0-9]+(\.[0-9]+)?$"#, options: .regularExpression), DchFrame.osName)
+        XCTAssertEqual(DchFrame.osName, DchFrame.osLabel(ProcessInfo.processInfo.operatingSystemVersion))
         // Added only: the keys an older phone reads are as before.
         XCTAssertEqual(info["device_id"] as? String, "id")
         XCTAssertEqual(info["hostname"] as? String, "Studio")
         XCTAssertEqual(info["ops"] as? [String], DchFrame.ops)
         XCTAssertNil(info["wakeId"])
+    }
+
+    /// QA #625 INFO-8: "os" drops a zero patch and keeps a non-zero one.
+    func testOsLabelDropsAZeroPatch() {
+        XCTAssertEqual(DchFrame.osLabel(OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0)), "macOS 15.0")
+        XCTAssertEqual(DchFrame.osLabel(OperatingSystemVersion(majorVersion: 27, minorVersion: 1, patchVersion: 0)), "macOS 27.1")
+        XCTAssertEqual(DchFrame.osLabel(OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 1)), "macOS 15.0.1")
     }
 
     /// The handshake over the wire: device_id present (the phone's decodeMachineInfo needs it), proto 1.x.
@@ -164,6 +191,44 @@ final class RemoteFramesGoldenTests: XCTestCase {
             XCTAssertEqual($0 as? Client.Failure, .closed)
         }
         XCTAssertTrue(try c.closed(timeout: 2))
+    }
+
+    /// QA #625 INFO-1: the default peer gate takes IPv4 in 100.64.0.0/10 only; IPv6 fails closed,
+    /// Tailscale's own fd7a:115c:a1e0::/48 and a v4-mapped CGNAT address included.
+    func testPeerGateRefusesIPv6AndAddressesOutsideTheRange() throws {
+        func peer(_ host: NWEndpoint.Host) -> Bool {
+            DchSessionServer.isTailscalePeer(NWConnection(to: .hostPort(host: host, port: 9), using: .tcp))
+        }
+        XCTAssertTrue(peer(.ipv4(try XCTUnwrap(IPv4Address("100.100.1.2")))))
+        XCTAssertFalse(peer(.ipv4(try XCTUnwrap(IPv4Address("100.128.0.1")))))
+        XCTAssertFalse(peer(.ipv4(try XCTUnwrap(IPv4Address("127.0.0.1")))))
+        XCTAssertFalse(peer(.ipv6(try XCTUnwrap(IPv6Address("fd7a:115c:a1e0::1")))))
+        XCTAssertFalse(peer(.ipv6(try XCTUnwrap(IPv6Address("::ffff:100.100.1.2")))))
+        XCTAssertFalse(peer(.ipv6(.loopback)))
+    }
+
+    /// QA #625 F1: a failed spawn's 0x13 reaches the wire before the close (it is the final
+    /// message), with user copy, and a frame pipelined behind the attach is never answered.
+    func testFailedSpawnSendsItsErrorBeforeTheClose() throws {
+        let failing = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                       allowPeer: { _ in true },
+                                       configure: { c in
+                                           c.listSessions = { [] }
+                                           c.spawn = { _, _, _, _, _, _ in throw PtyChild.PtyError.forkFailed }
+                                       })
+        defer { failing.stop(); _ = failing.isRunning; failing.queue.sync {} }
+        try failing.start()
+        let c = try Client(port: try XCTUnwrap(failing.boundPort))
+        try c.send(DchFrame.encode(DchFrame.attach, json: ["name": "golden-776", "cols": 80, "rows": 24])
+                   + DchFrame.encode(DchFrame.list, []))
+        let (type, payload) = try c.frame()
+        XCTAssertEqual(type, DchFrame.error)
+        let message = (try JSONSerialization.jsonObject(with: payload) as? [String: Any])?["message"] as? String
+        XCTAssertEqual(message, DchConnection.spawnFailed)
+        XCTAssertEqual(message, "Could not start the session: the Mac could not open a terminal.")
+        XCTAssertThrowsError(try c.frame(), "then the close, and no 0x11 for the pipelined list") {
+            XCTAssertEqual($0 as? Client.Failure, .closed)
+        }
     }
 
     /// Once closed, a connection reads nothing more: a valid list frame ingested after close()
@@ -227,6 +292,35 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     // MARK: - Fixture runner
 
+    /// QA #625 INFO-10: the fixtures live in the repo's docs/protocol, beside app/. Missing
+    /// (an app/-only copy), the tests fail saying so rather than on a file error.
+    private func goldenDir() throws -> URL {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: Self.golden.path, isDirectory: &isDir), isDir.boolValue else {
+            throw Mismatch(description: "docs/protocol/golden is missing at \(Self.golden.path): the golden tests read the spec's "
+                + "fixtures from the repo checkout. A copy of app/ alone lacks them; copy docs/protocol beside app/.")
+        }
+        return Self.golden
+    }
+
+    /// /usr/bin/python3 -I with `args`: exit status and stdout+stderr. Killed (its own pid) after 60 s.
+    private func python(_ args: [String]) throws -> (Int32, String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        p.arguments = ["-I"] + args
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = out
+        try p.run()
+        let pid = p.processIdentifier
+        let killer = DispatchWorkItem { if p.isRunning { Darwin.kill(pid, SIGKILL) } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: killer)
+        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        p.waitUntilExit()
+        killer.cancel()
+        return (p.terminationStatus, text)
+    }
+
     private func handshakeOps() throws -> Set<String> {
         let c = try Client(port: port)
         try c.send(Data([0x08, 0, 0, 0, 0]))
@@ -244,6 +338,14 @@ final class RemoteFramesGoldenTests: XCTestCase {
             } else if let want = step["expect"] as? [String: Any] {
                 let (type, payload) = try c.frame()
                 if let why = Self.check(want, type, payload) { throw Mismatch(description: why) }
+            } else if let secs = (step["expect_quiet"] as? NSNumber)?.doubleValue {
+                // Nothing but 0x10 pty output for `secs`: any other frame is a reply that should not come.
+                let end = Date() + secs
+                while end.timeIntervalSinceNow > 0 {
+                    let f: (UInt8, Data)
+                    do { f = try c.frame(timeout: max(end.timeIntervalSinceNow, 0.01)) } catch Client.Failure.timeout { break }
+                    guard f.0 == DchFrame.data else { throw Mismatch(description: "want no reply, got \(String(format: "%02x", f.0))") }
+                }
             } else if step["expect_close"] as? Bool == true {
                 guard try c.closed() else { throw Mismatch(description: "the server did not close the connection") }
             }
@@ -282,8 +384,11 @@ final class RemoteFramesGoldenTests: XCTestCase {
             default: return "\(path): unknown shape \(s)"
             }
             guard ok else { return "\(path): want \(parts[0]), got \(v)" }
+            // NSRegularExpression (ICU), the same on every Foundation (String.range(of:) is not): its
+            // `$` also matches before a final newline, so `\z` ends the match where re.fullmatch does.
             if parts.count == 2, let str = v as? String,
-               str.range(of: "^(?:\(parts[1]))$", options: .regularExpression) == nil {
+               (try? NSRegularExpression(pattern: "^(?:\(parts[1]))\\z"))?
+                   .firstMatch(in: str, range: NSRange(str.startIndex..., in: str)) == nil {
                 return "\(path): \(str) does not match \(parts[1])"
             }
             return nil

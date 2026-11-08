@@ -542,12 +542,8 @@ final class DchSessionServer: @unchecked Sendable {
             return isCGNAT(v4.rawValue.withUnsafeBytes { raw in
                 in_addr(s_addr: raw.load(as: UInt32.self))
             })
-        case .ipv6(let v6):
-            // Tailscale also peers over IPv6; if it's a v4-mapped CGNAT addr accept,
-            // else accept any address (the bind already constrained us to the TS iface).
-            _ = v6
-            return true
         default:
+            // QA #625 INFO-1: IPv6 included, fail closed. The bind is IPv4 only (no IPv6 in proto 1.0).
             return false
         }
     }

@@ -1,6 +1,7 @@
 {
   "id": "08-rename-unknown-name",
-  "about": "0x06 answers an empty 0x14.",
+  "about": "0x06 answers an empty 0x14. Mutating: it runs dch -m on a name no session should have.",
+  "mutating": true,
   "steps": [
     {
       "send": "06 00000030 7b226e616d65223a22676f6c64656e2d3737362d6e6f2d737563682d73657373696f6e222c22616c696173223a22227d"
