@@ -351,6 +351,12 @@ The connection then carries one session:
   `{"message": "Could not start the session: ..."}`, then close; the 0x13 is sent as the last
   frame before the FIN. Frames the client sent after the attach on that connection are
   discarded.
+- A 0x13 in answer to the attach or create (or any 0x13 followed by the server's FIN) is
+  terminal for that connection: the client shows the message and does not reconnect to the
+  same name on its own (a user action may retry). It is not a dropped link; an automatic
+  reconnect would usually get the same 0x13. A 0x13 answering a later control frame on a live
+  session (a refused kill, "busy with an earlier request", a kind that needs its own
+  connection) is not terminal: the session stays attached.
 - 0x10 on a connection with no session (and no upload) is dropped.
 
 ### 0x04 kill, 0x06 rename
