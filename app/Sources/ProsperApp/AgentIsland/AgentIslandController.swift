@@ -1032,17 +1032,36 @@ final class AgentIslandController {
     /// the guard re-reads and sends at most the one digit; a key in flight sends nothing.
     func answer(_ s: AgentSession, _ p: AgentPrompt, _ o: AgentPromptOption) {
         guard let gen = beginHuman(s, p) else { return }
-        let key = s.key, io = io
+        let key = s.key, io = io, at = clickAt(key)
         queue.async { [weak self] in
             let r = AgentPrompt.answer(key, digit: o.digit, expected: p, io: io)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    self?.inFlight.remove(key)
+                    guard let self else { return }
+                    self.inFlight.remove(key)
                     // sent: the next poll shows the new state
-                    if r == .changed { self?.setCard(.changed, key, gen) }
+                    guard r == .changed else { return }
+                    self.setCard(.changed, key, gen)
+                    if let at { self.recheckStaleClick(key, p, at) }
                 }
             }
         }
+    }
+
+    /// The `at` of the hold beginHuman just left (nil: Always allow holds nothing here).
+    private func clickAt(_ key: AgentSessionKey) -> Date? {
+        if case .human(_, _, let at) = autoAllow[key] { return at }
+        return nil
+    }
+
+    /// QA #622 INFO-2: a click on a stale card sent nothing (the screen no longer showed its
+    /// prompt): the prompt printed before the click (C) went unread, as the click took the row's
+    /// activity then as seen. Untouched since the click: read once more (after the poll floor);
+    /// C gets its own full check, while the clicked prompt (a re-wrap too) or none stays the human's.
+    private func recheckStaleClick(_ key: AgentSessionKey, _ p: AgentPrompt, _ at: Date) {
+        guard case .human(let left, _, let t) = autoAllow[key], left == p, t == at else { return }
+        autoAllow[key] = .human(left: p, seen: -1, at: at)   // -1: no row's activity, so it reads
+        recheckHuman()
     }
 
     /// #798: the Agents window acting on a session (an answer, a key sequence, a message, an

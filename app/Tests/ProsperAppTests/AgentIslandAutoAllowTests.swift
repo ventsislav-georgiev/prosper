@@ -1100,6 +1100,24 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(d.calls.count, 2, "not checked again")
     }
 
+    /// QA #622 INFO-1: a click while the row is left to dch is the human's: Needs input goes out
+    /// at once, and the wait's end, with dch's auto_allowed moved meanwhile, checks nothing.
+    @MainActor func testAClickWhileStoodDownIsTheHumans() throws {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
+        list(c, row(.blocked))
+        drain(c)
+        XCTAssertEqual(r.timers.count, 1, "stood down, the wait armed")
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.bash3))
+        c.answer(row(.blocked), p, p.options[2])   // No
+        XCTAssertEqual(r.lastState, .blocked, "the human's row: Needs input now")
+        drain(c)
+        XCTAssertEqual(f.sends, ["3"])
+        XCTAssertEqual(list(c, row(.blocked, allowed: Self.dchAnswer)), [.blocked])
+        fire(c, r)
+        XCTAssertEqual(d.calls, [["--build"], ["--config"]], "the wait's end checks nothing")
+        XCTAssertEqual(f.sends, ["3"])
+    }
+
     /// dch answered and a new prompt is already up when the wait ends: that one is left to dch too.
     @MainActor func testANewPromptAfterDchsAnswerIsStoodDownAgain() {
         let f = FakeIO(Self.bash3), (c, r) = controller(f), d = FakeDch(c)
@@ -1668,6 +1686,40 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         drain(c)
         XCTAssertEqual(f.sends, ["1", "2"], "the human's No stands")
         XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .blocked, "the human's row")
+    }
+
+    /// QA #622 INFO-2: the human clicks B's stale card after C printed (its re-read still on the
+    /// floor timer): the click sends nothing, and C is read and checked like any new prompt:
+    /// a plain permission is answered, one the rules refuse stays the human's.
+    @MainActor func testAStaleCardClickStillChecksThePromptThatReplacedIt() throws {
+        let b = try XCTUnwrap(AgentPrompt.parse(Self.neverAnswered[0].1))
+        for (screen, sends) in [(Self.bash2, ["1"]), (Self.neverAnswered[1].1, []), (Self.subagentBash(), [])] {
+            let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+            XCTAssertEqual(c.store?.cards[key], .prompt(b), "B's card is up")
+            f.set(screen)
+            tick(c, .blocked, activity: 2)   // C printed, inside the floor
+            c.answer(session(.blocked, activity: 2), b, b.options[2])
+            drain(c)
+            XCTAssertEqual(f.sends, [], "the stale click sends nothing")
+            r.now += AgentPollGate.floor
+            fire(c, r)
+            drain(c)
+            drain(c)
+            XCTAssertEqual(f.sends, sends, "C checked")
+            if sends.isEmpty { XCTAssertEqual(r.lastState, .blocked, "the human's") }
+        }
+        // The click sent nothing with B still on screen (not blocked at the click): B stays the human's.
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+        f.lock.withLock { f.status = "working" }
+        c.answer(session(.blocked), b, b.options[2])
+        drain(c)
+        f.lock.withLock { f.status = "blocked" }
+        r.now += AgentPollGate.floor
+        fire(c, r)
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, [])
+        XCTAssertEqual(r.lastState, .blocked)
     }
 
     /// QA #620 INFO-1: B's card was read for this activity before its check took the row down;
