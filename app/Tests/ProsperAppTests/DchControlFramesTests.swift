@@ -506,6 +506,14 @@ final class DchControlFramesTests: XCTestCase {
             (try dch("exit 3"), rename, DchControlOps.error("Couldn't rename a: dch exited 3")),
             (dir.appendingPathComponent("missing").path, rename, DchControlOps.error("Couldn't rename a: dch could not be run")),
             ("/usr/bin/false", Data("{}".utf8), DchFrame.encode(DchFrame.ok, [])),
+            // #815: a long name is echoed capped at 64 Characters + "…".
+            (try dch("exit 1"), Data(#"{"name":"\#(String(repeating: "x", count: 64) + String(repeating: "y", count: 136))","alias":"b"}"#.utf8),
+             DchControlOps.error("Couldn't rename \(String(repeating: "x", count: 64))…: dch exited 1")),
+            // #815: exactly 64 Characters is echoed whole; so is a 30-Character, 100-byte name.
+            (try dch("exit 1"), Data(#"{"name":"\#(String(repeating: "z", count: 64))","alias":"b"}"#.utf8),
+             DchControlOps.error("Couldn't rename \(String(repeating: "z", count: 64)): dch exited 1")),
+            (try dch("exit 1"), Data(#"{"name":"\#(String(repeating: "é", count: 20) + String(repeating: "😀", count: 10))","alias":"b"}"#.utf8),
+             DchControlOps.error("Couldn't rename \(String(repeating: "é", count: 20) + String(repeating: "😀", count: 10)): dch exited 1")),
             ("/usr/bin/false", Data("not json".utf8), DchFrame.encode(DchFrame.ok, [])),
         ] {
             DchCommand.dchPathOverride = path

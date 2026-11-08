@@ -2029,7 +2029,8 @@ enum DchCommand {
         let r = runCapturingBoth(args: ["-m", name, alias])
         guard r.status != 0 else { return nil }
         let line = r.err.split(whereSeparator: \.isNewline).first.map { String($0.prefix(120)) }
-        return "Couldn't rename \(name): \(line ?? (r.status < 0 ? "dch could not be run" : "dch exited \(r.status)"))"
+        let shown = name.count > 64 ? String(name.prefix(64)) + "…" : name
+        return "Couldn't rename \(shown): \(line ?? (r.status < 0 ? "dch could not be run" : "dch exited \(r.status)"))"
     }
 
     private static func runCapturing(args: [String]) -> String {

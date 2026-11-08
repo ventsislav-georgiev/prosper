@@ -76,7 +76,8 @@ tag from the now-released section and put it on the new top draft.
   Remote Terminal's settings now say why a device was refused, and when port 8771 is taken
   (say by `dch serve`) or this Mac has no Tailscale address. (#777, #812)
 - Renaming a session from your iPhone now reports when dch refuses it (say the session has just
-  ended), instead of answering that it worked. (#811)
+  ended), instead of answering that it worked; a very long name is shortened in that message.
+  (#811, #815)
 - With Always allow on, clicking an island card whose prompt was already gone now lets Always
   allow check the prompt that replaced it, instead of leaving that one waiting for you until
   Claude Code printed again. Prompts from hooks or ask rules are still left to you. (#795)
