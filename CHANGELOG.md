@@ -33,12 +33,20 @@ tag from the now-released section and put it on the new top draft.
   one before stays yours: Always allow no longer types "1" after your choice. (#794)
 - New Agent Sessions window: every coding agent session in one place. Sessions waiting for
   you are on top, then the Agent Island groups and recent history. Selecting one shows its
-  Claude Code conversation, read-only, beside the list: messages, tool calls, diffs and
-  subagents. "Open in terminal" (or Return) jumps to the session. Open it from the button next
+  Claude Code conversation beside the list: messages, tool calls, diffs and subagents.
+  "Open in terminal" (or Return) jumps to the session. Open it from the button next
   to the session count in the Agent Island header, or "Agent Sessions…" in the menu bar menu.
   It adds no polling of its own and reads nothing while closed or hidden; when it cannot show a
   session reliably, it says why and offers "Open in terminal". The island header no longer
   shows an idle count, so the counts that need you stay clear of the notch. (#797)
+- You can now talk to a session from the Agent Sessions window, without opening its terminal.
+  Type a message when Claude is idle (Return sends, Shift-Return adds a line), or interrupt it
+  while it works. Permission prompts and Claude's questions get buttons, including
+  multiple-choice questions, questions with previews, and a typed answer of your own. Every
+  key is checked against a fresh read of the screen first, and a question is checked against
+  the conversation. Anything Prosper cannot read or confirm says why and offers "Open in
+  terminal". An answer from the window counts as your own click, so Always allow never types
+  over it. (#798)
 - Remote Terminal hosts now tell the phone which server they run (Prosper or dch), the host's
   macOS version, its name and the protocol version, so the phone can label a host and later
   work with dch-only hosts such as a Linux machine. The protocol is written down in

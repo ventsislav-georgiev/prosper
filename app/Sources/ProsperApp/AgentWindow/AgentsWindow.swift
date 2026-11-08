@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// #797 Agent window D1: the "Agents" window. A sidebar of every dch session (fed by
+// #797 Agent window D1: the "Agent Sessions" window. A sidebar of every dch session (fed by
 // Agent Island's store, no new fork or poll) and the selected session's read-only
 // conversation (spike A). Built on open and torn down on close, like
 // MarketplaceWindow: a closed window leaves no view, model, timer or watch behind.
@@ -14,19 +14,27 @@ final class AgentsWindow {
     private(set) var model: AgentWindowModel?
     private var observers: [NSObjectProtocol] = []
     var isOpen: Bool { window != nil }
+    static let title = "Agent Sessions"
+
+    // Seams (QA #626 INFO-7: show and teardown run in tests with a window never put on screen).
+    var island: () -> AgentIslandController = { .shared }
+    var build: (AgentWindowModel) -> NSWindow = { AgentsWindow.makeWindow($0) }
+    var present: (NSWindow) -> Void = { win in
+        DockPolicy.windowDidShow(win)
+        NSApp.activate(ignoringOtherApps: true)
+        win.makeKeyAndOrderFront(nil)
+    }
+    var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
 
     func show() {
-        if let window {
-            DockPolicy.windowDidShow(window)
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
-        let island = AgentIslandController.shared
+        if let window { return present(window) }
+        let island = island()
         let model = AgentWindowModel()
+        model.interaction.controller = island
         model.bind(island.store)
         island.onStoreChanged = { [weak model, weak island] in model?.bind(island?.store) }
-        let win = Self.makeWindow(model)
+        island.onHoldChanged = { [weak model] in model?.interaction.holdChanged() }
+        let win = build(model)
         window = win
         self.model = model
 
@@ -41,9 +49,7 @@ final class AgentsWindow {
                 MainActor.assumeIsolated { model?.setVisible(win.occlusionState.contains(.visible)) }
             },
         ]
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        present(win)
         model.setVisible(win.occlusionState.contains(.visible))
     }
 
@@ -52,7 +58,7 @@ final class AgentsWindow {
         let hosting = NSHostingController(rootView: Themed { AgentWindowRootView(model: model) })
         let win = AgentsNSWindow(contentViewController: hosting)
         win.model = model
-        win.title = "Agents"
+        win.title = title
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         win.titlebarAppearsTransparent = true
         win.identifier = NSUserInterfaceItemIdentifier("prosper.agentsWindow")
@@ -73,16 +79,21 @@ final class AgentsWindow {
         model?.close()
         model = nil
         window = nil
-        AgentIslandController.shared.onStoreChanged = nil
-        DockPolicy.windowDidHide(win)
+        let island = island()
+        island.onStoreChanged = nil
+        island.onHoldChanged = nil
+        dismissed(win)
         DispatchQueue.main.async { win.contentViewController = nil }
     }
 }
 
-/// ⌘W closes; up/down move the selection and Return opens it in the terminal, from
-/// anywhere in the window (D1 has no text input to steal them from).
+/// ⌘W closes; up/down move the selection and Return opens it in the terminal while
+/// the sidebar has the focus (QA #626 INFO-2): the last click landed in it and Tab has
+/// not moved on since. A text field or the input box keeps every key.
 final class AgentsNSWindow: NSWindow {
     weak var model: AgentWindowModel?
+    /// The last click was in the sidebar (where the window starts).
+    var sidebarFocused = true
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "w" {
@@ -93,7 +104,9 @@ final class AgentsNSWindow: NSWindow {
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .keyDown, let model, Self.handle(event, model) { return }
+        if event.type == .leftMouseDown { sidebarFocused = event.locationInWindow.x < sz(290) }
+        if event.type == .keyDown, event.keyCode == 48 { sidebarFocused = false }   // Tab: focus moves on
+        if event.type == .keyDown, sidebarFocused, !(firstResponder is NSText), let model, Self.handle(event, model) { return }
         super.sendEvent(event)
     }
 
@@ -103,7 +116,7 @@ final class AgentsNSWindow: NSWindow {
         switch event.keyCode {
         case 126: model.move(-1)                   // up
         case 125: model.move(1)                    // down
-        case 36, 76: model.openSelected()          // Return, keypad Enter
+        case 36, 76: return model.openSelected()   // Return, keypad Enter; a History row passes on
         default: return false
         }
         return true
@@ -125,6 +138,18 @@ struct AgentWindowRootView: View {
     var scrolls = true
 
     var body: some View {
+        // QA #626 INFO-6: the island off is the window's only message.
+        if !model.hasStore {
+            AgentEmptyState(icon: "rectangle.dashed", title: "Agent Island is off",
+                            detail: "Turn on Agent Island in Settings › Extensions to list your dch sessions here.")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Neon.bgBottom)
+        } else {
+            split
+        }
+    }
+
+    var split: some View {
         HStack(spacing: 0) {
             AgentSidebarView(model: model)
                 .frame(width: sz(290))
@@ -144,7 +169,8 @@ struct AgentSidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: sz(6)) {
-                Text("Agents").font(Neon.font(13, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                Text(AgentsWindow.title).font(Neon.font(13, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
                 let n = model.sections.filter { $0.title != "History" }.reduce(0) { $0 + $1.rows.count }
                 if n > 0 {
@@ -290,6 +316,9 @@ struct AgentDetailView: View {
                                     ownsLifecycle: false)
                     .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                     .clipped()
+                Rectangle().fill(Neon.stroke).frame(height: 1)
+                // #798: the prompt pinned at the bottom, the input box under it.
+                AgentInteractionPane(model: model.interaction, session: s, open: { model.openSelected() })
             }
         } else if let row = model.selectedRow, let r = row.record {
             AgentHistoryDetail(row: row, record: r, store: model.store, resume: { model.resumeSelected() })
@@ -422,5 +451,281 @@ struct AgentResumeButton: View {
                 Text(status).font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
             }
         }
+    }
+}
+
+// MARK: - #798: the input box, interrupt and prompt answers
+
+/// Under the conversation: the prompt panel (pinned), the last action's notice, the input box.
+struct AgentInteractionPane: View {
+    @ObservedObject var model: AgentWindowInteraction
+    let session: AgentSession
+    let open: () -> Void
+
+    var canSend: Bool {
+        (session.state == .idle || session.state == .done) && !model.busy && AgentWindowDriver.message(model.draft) != nil
+    }
+
+    var placeholder: String {
+        switch session.state {
+        case .blocked: "Answer the prompt above first"
+        case .working: "Claude is working. Type now, send when it's done"
+        case .idle, .done: "Message Claude. Return sends, Shift-Return adds a line"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(8)) {
+            AgentPromptPanel(model: model, open: open)
+            if let n = model.notice { AgentActionNotice(text: n, open: open) }
+            HStack(alignment: .bottom, spacing: sz(8)) {
+                ZStack(alignment: .topLeading) {
+                    AgentComposerField(text: $model.draft, onSubmit: { if canSend { model.send() } })
+                    if model.draft.isEmpty {
+                        Text(placeholder).font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
+                            .lineLimit(1).padding(.horizontal, sz(9)).padding(.vertical, sz(7))
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(height: sz(60))
+                .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.bgBottom))
+                .overlay(RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke, lineWidth: 1))
+                VStack(spacing: sz(6)) {
+                    if session.state == .working {
+                        AgentPillButton(title: "Interrupt", icon: "stop.fill", tint: Neon.magenta, enabled: !model.busy) {
+                            model.interrupt()
+                        }
+                        .help("Press Esc in the session")
+                    }
+                    AgentPillButton(title: "Send", icon: "arrow.up", tint: Neon.blue, enabled: canSend) { model.send() }
+                }
+            }
+        }
+        .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Neon.card)
+    }
+}
+
+struct AgentPillButton: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    var enabled = true
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: icon).font(Neon.font(11, weight: .semibold)).foregroundStyle(tint)
+                .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
+                .background(Capsule().fill(tint.opacity(0.12)))
+                .overlay(Capsule().stroke(tint.opacity(0.45), lineWidth: 1))
+                .contentShape(Capsule())
+                .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
+    }
+}
+
+/// Why the window did not (or could not confirm it did) act, with the way out.
+struct AgentActionNotice: View {
+    let text: String
+    let open: () -> Void
+    var body: some View {
+        HStack(alignment: .center, spacing: sz(8)) {
+            Image(systemName: "exclamationmark.triangle.fill").font(Neon.font(11)).foregroundStyle(AgentState.blocked.color)
+            Text(text).font(Neon.font(11.5)).foregroundStyle(Neon.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: sz(4))
+            OpenInTerminalButton(action: open, compact: true)
+        }
+    }
+}
+
+struct AgentPromptPanel: View {
+    @ObservedObject var model: AgentWindowInteraction
+    let open: () -> Void
+
+    var body: some View {
+        switch model.panel {
+        case .none:
+            EmptyView()
+        case .reading:
+            status("ellipsis.circle", "Reading the prompt…")
+        case .held:
+            status("checkmark.shield", AgentWindowText.held)
+        case .terminal(let why, let tail):
+            VStack(alignment: .leading, spacing: sz(6)) {
+                AgentActionNotice(text: why, open: open)
+                screenLines(Array(tail.suffix(4)))
+            }
+        case .prompt(let w):
+            prompt(w)
+        }
+    }
+
+    func status(_ icon: String, _ text: String) -> some View {
+        HStack(spacing: sz(6)) {
+            Image(systemName: icon).foregroundStyle(Neon.textSecondary)
+            Text(text).foregroundStyle(Neon.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .font(Neon.font(11.5))
+    }
+
+    func screenLines(_ lines: [String]) -> some View {
+        Text(lines.map(AgentPrompt.visible).joined(separator: "\n"))
+            .font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textSecondary)
+            .lineLimit(Self.contextLines).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    static let contextLines = 8
+
+    func prompt(_ w: AgentWindowPrompt) -> some View {
+        let p = w.screen.prompt
+        let context = p.context.filter { !AgentPrompt.isChipLine($0) }
+        return VStack(alignment: .leading, spacing: sz(6)) {
+            if !context.isEmpty { screenLines(context) }
+            Text(AgentPrompt.visible(p.question)).font(Neon.font(12.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            if w.kind == .preview, !p.preview.isEmpty { screenLines(p.preview) }
+            ForEach(w.buttons, id: \.digit) { o in option(w, o) }
+            if let other = w.other {
+                HStack(spacing: sz(8)) {
+                    Text("\(other.digit).").font(Neon.font(11.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Neon.textSecondary)
+                    TextField("Your own answer", text: $model.otherText)
+                        .textFieldStyle(.roundedBorder).font(Neon.font(12))
+                        .onSubmit { model.sendOther() }
+                    AgentPillButton(title: "Answer", icon: "arrow.up", tint: Neon.blue,
+                                    enabled: !model.busy && AgentWindowDriver.otherText(model.otherText) != nil) {
+                        model.sendOther()
+                    }
+                }
+            }
+            if w.kind == .multi {
+                HStack {
+                    Spacer(minLength: 0)
+                    AgentPillButton(title: "Submit", icon: "checkmark", tint: Neon.blue,
+                                    enabled: !model.busy && !w.enabled.isEmpty) {
+                        model.submitPicks()
+                    }
+                }
+            }
+            if !w.caption.isEmpty {
+                Text(w.caption.joined(separator: " ")).font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    func option(_ w: AgentWindowPrompt, _ o: AgentPromptOption) -> some View {
+        let on = w.enabled.contains(o.digit) && !model.busy
+        let ticked = model.picks.contains(o.digit)
+        return Button {
+            switch w.kind {
+            case .choose: model.answer(o)
+            case .preview: model.choosePreview(o)
+            case .multi: if ticked { model.picks.remove(o.digit) } else { model.picks.insert(o.digit) }
+            }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
+                if w.kind == .multi {
+                    Image(systemName: ticked ? "checkmark.square.fill" : "square")
+                        .font(Neon.font(12)).foregroundStyle(ticked ? Neon.blue : Neon.textSecondary)
+                } else {
+                    Text("\(o.digit).").font(Neon.font(11.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Neon.textSecondary)
+                }
+                VStack(alignment: .leading, spacing: sz(2)) {
+                    Text(AgentPrompt.visible(o.label)).font(Neon.font(12, weight: .medium))
+                        .foregroundStyle(o.style(first: o.digit == 1) == .deny ? Neon.magenta : Neon.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !o.detail.isEmpty {
+                        Text(o.detail.map(AgentPrompt.visible).joined(separator: " ")).font(Neon.font(10.5))
+                            .foregroundStyle(Neon.textSecondary).lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 0)
+                if w.kind == .preview, w.screen.caret == o.digit {
+                    Text("previewed").font(Neon.font(9.5)).foregroundStyle(Neon.textSecondary)
+                }
+            }
+            .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: sz(7)).fill(Neon.cardHi))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!on)
+        .opacity(on ? 1 : 0.45)
+    }
+}
+
+/// The input box: an NSTextView, so Return sends and Shift-Return adds a line, and the
+/// window's sidebar keys never reach it (`firstResponder is NSText`).
+struct AgentComposerField: NSViewRepresentable {
+    @Binding var text: String
+    var onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let tv = AgentComposerTextView(frame: .zero)
+        tv.isRichText = false
+        tv.allowsUndo = true
+        tv.drawsBackground = false
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.isAutomaticTextReplacementEnabled = false
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+        tv.textContainer?.widthTracksTextView = true
+        tv.textContainerInset = NSSize(width: sz(4), height: sz(6))
+        tv.delegate = context.coordinator
+        tv.setAccessibilityLabel("Message Claude")
+        let sv = NSScrollView()
+        sv.documentView = tv
+        sv.hasVerticalScroller = true
+        sv.autohidesScrollers = true
+        sv.drawsBackground = false
+        sv.borderType = .noBorder
+        return sv
+    }
+
+    func updateNSView(_ sv: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let tv = sv.documentView as? AgentComposerTextView else { return }
+        if tv.string != text { tv.string = text }
+        tv.font = .systemFont(ofSize: sz(12))
+        tv.textColor = NSColor(Neon.textPrimary)
+        tv.insertionPointColor = NSColor(Neon.textPrimary)
+        tv.onSubmit = { context.coordinator.parent.onSubmit() }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: AgentComposerField
+        init(_ parent: AgentComposerField) { self.parent = parent }
+        func textDidChange(_ n: Notification) {
+            guard let tv = n.object as? NSTextView else { return }
+            parent.text = tv.string
+        }
+    }
+}
+
+final class AgentComposerTextView: NSTextView {
+    var onSubmit: () -> Void = {}
+
+    /// Return or keypad Enter alone sends; Shift-Return adds a line; an IME's marked text keeps Return.
+    override func keyDown(with event: NSEvent) {
+        let mods = event.modifierFlags.intersection([.shift, .command, .option, .control])
+        if event.keyCode == 36 || event.keyCode == 76, !hasMarkedText() {
+            if mods.isEmpty { return onSubmit() }
+            if mods == .shift { return insertNewlineIgnoringFieldEditor(nil) }
+        }
+        super.keyDown(with: event)
     }
 }

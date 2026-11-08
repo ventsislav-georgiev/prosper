@@ -112,8 +112,10 @@ final class AgentWindowD1Tests: XCTestCase {
 
     func testAgentWindowMappingKeepsOnlyAWellFormedIdAndAbsoluteJsonlPath() {
         let json = #"""
-        [{"name":"ok","claude_session_id":"0b7c2f3e-aaaa-bbbb-cccc-0123456789ab","transcript_path":"/Users/x/.claude/projects/p/0b7c.jsonl"},
-         {"name":"camel","claudeSessionId":"abc","transcriptPath":"/a/b.jsonl"},
+        [{"name":"ok","claude_session_id":"0b7c2f3e-aaaa-bbbb-cccc-0123456789ab","transcript_path":"/Users/x/.claude/projects/p/0b7c2f3e-aaaa-bbbb-cccc-0123456789ab.jsonl"},
+         {"name":"camel","claudeSessionId":"abc","transcriptPath":"/a/abc.jsonl"},
+         {"name":"other","claude_session_id":"abc","transcript_path":"/a/abd.jsonl"},
+         {"name":"prefix","claude_session_id":"abc","transcript_path":"/a/xabc.jsonl"},
          {"name":"rel","claude_session_id":"abc","transcript_path":"p/0b7c.jsonl"},
          {"name":"dots","claude_session_id":"abc","transcript_path":"/a/../etc/x.jsonl"},
          {"name":"ext","claude_session_id":"abc","transcript_path":"/a/b.json"},
@@ -124,7 +126,7 @@ final class AgentWindowD1Tests: XCTestCase {
         """#
         let m = AgentTranscriptMapping.parse(Data(json.utf8))
         XCTAssertEqual(Set(m.keys), ["ok", "camel"])
-        XCTAssertEqual(m["ok"]?.path, "/Users/x/.claude/projects/p/0b7c.jsonl")
+        XCTAssertEqual(m["ok"]?.path, "/Users/x/.claude/projects/p/0b7c2f3e-aaaa-bbbb-cccc-0123456789ab.jsonl")
         XCTAssertEqual(AgentTranscriptMapping.parse(Data("{\"name\":1}".utf8)), [:], "not an array: nothing")
         XCTAssertEqual(AgentTranscriptMapping.parse(Data()), [:])
     }
@@ -236,10 +238,14 @@ final class AgentWindowD1Tests: XCTestCase {
         m.move(-2)
         XCTAssertEqual(t.tail?.path, a.path)
         XCTAssertTrue(t.running)
-        // The selected session ends: its row goes, nothing stays tailed.
+        // The selected session ends: its row goes, nothing stays tailed. QA #626 INFO-4:
+        // nothing is selected (the hint), never another conversation.
         st.sessions = [session("b", .idle, ago: 50, path: b.path)]
-        XCTAssertEqual(m.selection, .live(AgentSessionKey(dir: "/tmp/dch-test", name: "b")),
-                       "the next first row is picked, never the ended one")
+        XCTAssertNil(m.selection, "the ended row leaves nothing selected")
+        XCTAssertFalse(t.running)
+        st.sessions = [session("b", .idle, ago: 40, path: b.path), session("c", .idle, ago: 30)]
+        XCTAssertNil(m.selection, "only the window's first fill picks the first row")
+        m.select(.live(AgentSessionKey(dir: "/tmp/dch-test", name: "b")))
         XCTAssertEqual(t.tail?.path, b.path)
         m.select(nil)
         XCTAssertFalse(t.running, "deselect stops it")
@@ -429,7 +435,13 @@ final class AgentWindowD1Tests: XCTestCase {
         XCTAssertEqual(jobs.count, 1, "the poll's read is in flight")
         m.loadEarlier()
         XCTAssertEqual(jobs.count, 1, "no page read while a poll is in flight")
+        XCTAssertTrue(m.earlierAgain, "QA #626 INFO-3: the click is queued, never dropped")
+        jobs.removeFirst()()   // the poll lands (main inline), then the queued page is handed off
+        XCTAssertFalse(m.earlierAgain)
+        XCTAssertEqual(jobs.count, 1, "the queued page read runs after the poll, alone")
+        let afterPoll = m.blocks.count
         drain()
+        XCTAssertGreaterThan(m.blocks.count, afterPoll, "the queued page landed")
         let size = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber).uint64Value
         XCTAssertEqual(m.tail?.offset, size, "the offset moved forward to the end")
         XCTAssertEqual(Set(texts()).count, texts().count, "no line read twice: \(texts())")

@@ -151,6 +151,23 @@ struct AgentPromptIO: Sendable {
     var read: @Sendable (AgentSessionKey) -> String
     var status: @Sendable (AgentSessionKey) -> String
     var send: @Sendable (AgentSessionKey, String) -> Void
+    /// #798: named keys, `dch --keys <name> <key>…` (encoded by the master for the app's
+    /// keyboard mode: esc, enter, up, down). Defaults send nothing (tests opt in).
+    var keys: @Sendable (AgentSessionKey, [String]) -> Void = { _, _ in }
+    /// #798: one message, `dch --say <name> --json -- <text>`: one bracketed paste, then
+    /// Enter once Claude Code's composer shows it. dch's JSON line; "" when it timed out.
+    var say: @Sendable (AgentSessionKey, String) -> String = { _, _ in "" }
+}
+
+/// #798: a prompt as the Agents window drives it: the parse, plus where its caret is
+/// and, on a multi-select form, which boxes are ticked. Neither is in the prompt's
+/// identity (`sameDialog`), so the island's compare is unchanged.
+struct AgentPromptScreen: Equatable {
+    var prompt: AgentPrompt
+    /// The option the "❯" caret is on; nil when it is on a multi-select's Submit row.
+    var caret: Int?
+    /// A multi-select form: the ticked state of each box option, options 1… in order.
+    var checked: [Bool]?
 }
 
 enum AgentPromptAnswer: Equatable { case sent, changed }
@@ -177,7 +194,17 @@ extension AgentPrompt {
     /// under it (else the detail could be a shell prompt). A preview form
     /// (`splitPreview`) is parsed on its left column; it ends in a rule, an
     /// unnumbered "Chat about this" and its own footer (`isPreviewFooter`).
-    static func parse(_ screen: String) -> AgentPrompt? {
+    static func parse(_ screen: String) -> AgentPrompt? { parseScreen(screen, multi: false)?.prompt }
+
+    /// #798: `parse` with the caret, or else a multi-select form: options 1…n are boxes
+    /// ("[ ] Red", "[✔] Red", "☐ Red"), labels without the box; then at most the form's
+    /// own unboxed tail ("Chat about this"); a "Submit" row (a "❯ Submit" when focused)
+    /// as the last box option's last line. Every other rule of `parse` holds.
+    static func screen(_ screen: String) -> AgentPromptScreen? {
+        parseScreen(screen, multi: false) ?? parseScreen(screen, multi: true)
+    }
+
+    private static func parseScreen(_ screen: String, multi: Bool) -> AgentPromptScreen? {
         let raw = screen.split(separator: "\n", omittingEmptySubsequences: false)
         // QA #370 F1, QA #377 R1: a "N. … ┌──┐" row that is no box top
         // (scrollback, a command, an option label) is parsed as before #526,
@@ -186,17 +213,18 @@ extension AgentPrompt {
         // its top sits above the dialog's top rule (a whole box in scrollback,
         // QA #382 G1-a): one inside the dialog is a preview form with a broken
         // tail (Notes and "Chat about this" gone), never a card.
-        if let t = previewTop(raw), let s = splitPreview(raw, t) {
-            return parse(s.left, form: (s.preview, s.notes)) ?? parse(raw, form: nil, boxTop: t.row)
+        if !multi, let t = previewTop(raw), let s = splitPreview(raw, t) {
+            return parse(s.left, form: (s.preview, s.notes), multi: false)
+                ?? parse(raw, form: nil, boxTop: t.row, multi: false)
         }
-        return parse(raw, form: nil)
+        return parse(raw, form: nil, multi: multi)
     }
 
     /// `parse` on screen rows; `form` is a split preview form's box lines and
     /// notes, its rows `raw` already cut to the left column. `boxTop`: nil
     /// unless the dialog's top rule is seen below that row.
     private static func parse(_ raw: [Substring], form: (preview: [String], notes: [String])?,
-                              boxTop: Int? = nil) -> AgentPrompt? {
+                              boxTop: Int? = nil, multi: Bool) -> AgentPromptScreen? {
         let lines = unframe(raw)
         guard let last = lines.lastIndex(where: { option($0) != nil }) else { return nil }
         var found: [(digit: Int, label: String, caret: Bool, detail: [String])] = []
@@ -236,8 +264,25 @@ extension AgentPrompt {
             }
             i -= 1
         }
-        guard found.last?.digit == 1, found.count >= 2, found.filter(\.caret).count == 1,
-              !found.contains(where: { isCheckbox($0.label) }) else { return nil }
+        guard found.last?.digit == 1, found.count >= 2 else { return nil }
+        var checked: [Bool]?
+        if multi {
+            // #798: boxes first (at least two), then only unboxed options; the Submit row.
+            found.reverse()
+            let n = found.prefix(while: { isCheckbox($0.label) }).count
+            guard n >= 2, !found[n...].contains(where: { isCheckbox($0.label) }),
+                  let submit = found[n - 1].detail.last, let focused = submitRow(submit) else { return nil }
+            found[n - 1].detail.removeLast()
+            let boxes = found[..<n].map { checkbox($0.label) }
+            guard !boxes.contains(where: { $0 == nil }),
+                  found.filter(\.caret).count == (focused ? 0 : 1) else { return nil }
+            for k in 0..<n { found[k].label = boxes[k]!.label }
+            checked = boxes.map { $0!.ticked }
+            found.reverse()
+        } else {
+            guard found.filter(\.caret).count == 1, !found.contains(where: { isCheckbox($0.label) }) else { return nil }
+        }
+        let caret = found.first(where: \.caret)?.digit
         // i is now the line above option 1.
         // A frame: Claude Code draws its frames (top rule, dashed command or diff
         // frame, 1.x box) at screen column 0 or 1, everything they frame from
@@ -309,7 +354,7 @@ extension AgentPrompt {
                   indent(up) >= 2, indent(down) >= 2 else { return nil }
             return ""
         }
-        return AgentPrompt(
+        let prompt = AgentPrompt(
             question: question, context: dedent(kept),
             options: found.reversed().map { o in
                 let (label, hint) = splitHint(o.label)
@@ -318,6 +363,31 @@ extension AgentPrompt {
             preview: form?.preview ?? [], notes: form?.notes ?? [],
             // Off the screen top: the dialog's own top rule is not on screen.
             topFound: j >= 0)
+        return AgentPromptScreen(prompt: prompt, caret: caret, checked: checked)
+    }
+
+    /// #798: a multi-select's Submit row, trimmed: "Submit" (false) or "❯ Submit" (focused, true).
+    static func submitRow(_ line: String) -> Bool? {
+        if line == "Submit" { return false }
+        guard line.first == "❯", line.dropFirst().drop(while: \.isWhitespace) == "Submit" else { return nil }
+        return true
+    }
+
+    /// #798: "[ ] Red" -> ("Red", false), "[✔] Red" / "[x] Red" / "☒ Red" -> ("Red", true). nil for
+    /// any other box (an unknown mark fails the parse) or no label after it.
+    static func checkbox(_ label: String) -> (label: String, ticked: Bool)? {
+        let c = Array(label)
+        let (ticked, rest): (Bool?, ArraySlice<Character>)
+        if c.count >= 3, c[0] == "[", c[2] == "]" {
+            ticked = c[1] == " " ? false : "✔✓xX×".contains(c[1]) ? true : nil
+            rest = c[3...]
+        } else if let f = c.first, "☐☑☒".contains(f) {
+            ticked = f != "☐"
+            rest = c[1...]
+        } else { return nil }
+        guard let ticked, rest.first == " " else { return nil }
+        let l = String(rest).trimmingCharacters(in: .whitespaces)
+        return l.isEmpty ? nil : (l, ticked)
     }
 
     /// The last `maxContext` non-blank, non-rule lines.

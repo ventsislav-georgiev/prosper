@@ -25,7 +25,9 @@ enum AgentTranscriptMapping {
                   let path = (o["transcript_path"] ?? o["transcriptPath"]) as? String,
                   !sid.isEmpty, sid.count <= 64, sid.allSatisfy({ $0.isASCII && ($0.isHexDigit || $0 == "-") }),
                   path.hasPrefix("/"), path.hasSuffix(".jsonl"), path.utf8.count <= 4096,
-                  !path.contains("\0"), !path.split(separator: "/").contains("..")
+                  !path.contains("\0"), !path.split(separator: "/").contains(".."),
+                  // QA #626 INFO-5: dch names `<config>/projects/<dir>/<sessionId>.jsonl`, so the file is that id's.
+                  (path as NSString).lastPathComponent == "\(sid).jsonl"
             else { continue }
             out[name] = Entry(sessionID: sid, path: path)
         }
@@ -137,6 +139,11 @@ final class AgentWindowModel: ObservableObject {
     private(set) var closed = false
     private var subscription: AnyCancellable?
     private(set) var clock: Timer?
+    /// QA #626 INFO-4: the first row is picked once, on the window's first fill; a selected
+    /// session that ends leaves nothing selected (the hint), never another conversation.
+    private var filled = false
+    /// #798: the input box, interrupt and prompt answers for the selected live session.
+    let interaction = AgentWindowInteraction()
 
     // Seams.
     var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
@@ -152,7 +159,14 @@ final class AgentWindowModel: ObservableObject {
     /// Counts sidebar rebuilds (tests: nothing rebuilds after close).
     private(set) var refreshes = 0
 
-    init() {}
+    private var askSubscription: AnyCancellable?
+
+    init() {
+        // #798: the transcript's pending AskUserQuestion is what a question form is checked against.
+        askSubscription = transcript.$pendingAsk.sink { [weak self] ask in
+            MainActor.assumeIsolated { self?.interaction.ask = ask }
+        }
+    }
 
     /// Follows `store` (nil: the island is off). Called on open and whenever the
     /// island rebuilds its store. The sidebar fills once the window is visible.
@@ -192,7 +206,10 @@ final class AgentWindowModel: ObservableObject {
         if new != sections { sections = new }
         // The selected row gone (the session ended): nothing selected, nothing tailing.
         if let sel = selection, row(sel) == nil { select(nil) } else { follow() }
-        if selection == nil, let first = rows.first { select(first.id) }
+        if !filled, let first = rows.first {
+            filled = true
+            if selection == nil { select(first.id) }
+        }
     }
 
     var rows: [AgentSidebar.Row] { sections.flatMap(\.rows) }
@@ -212,10 +229,13 @@ final class AgentWindowModel: ObservableObject {
         select(ids[min(max(i + delta, 0), ids.count - 1)])
     }
 
-    /// Return and the "Open in terminal" buttons: a live session only.
-    func openSelected() {
-        guard let s = selectedRow?.session else { return }
+    /// Return and the "Open in terminal" buttons: a live session only. False: nothing
+    /// to open (a History row, none), so Return passes on (QA #626 INFO-2).
+    @discardableResult
+    func openSelected() -> Bool {
+        guard let s = selectedRow?.session else { return false }
         openSession(s)
+        return true
     }
 
     func resumeSelected() {
@@ -244,7 +264,9 @@ final class AgentWindowModel: ObservableObject {
         setVisible(false)
         closed = true
         subscription = nil
+        askSubscription = nil
         transcript.stop()
+        interaction.follow(nil)
     }
 
     /// The transcript model follows the selection: a visible live session runs, any
@@ -252,9 +274,12 @@ final class AgentWindowModel: ObservableObject {
     private func follow() {
         guard visible, !closed, let s = selectedRow?.session else {
             if transcript.running { transcript.stop() }
+            interaction.follow(nil)
             return
         }
         transcript.update(AgentSidebar.source(s))
         transcript.start()
+        interaction.ask = transcript.pendingAsk   // this session's, never the last one's
+        interaction.follow(s)
     }
 }

@@ -1031,19 +1031,8 @@ final class AgentIslandController {
     /// The buttons go at once, so a second click can never queue a second key;
     /// the guard re-reads and sends at most the one digit; a key in flight sends nothing.
     func answer(_ s: AgentSession, _ p: AgentPrompt, _ o: AgentPromptOption) {
-        guard let store, inFlight.insert(s.key).inserted else { return }
-        store.cards[s.key] = nil
-        // QA #620 INFO-1: the prompt a human clicks is the human's: a re-read still seeing it (or one
-        // in flight) never checks it, and the next prompt is a fresh check.
-        // QA #620 INFO-2: from any state: a pending verify (.answered) or stand-down (.dch) timer
-        // finds its state gone and does nothing, so it never types "1" after the human's answer;
-        // the dropped hold goes out as Needs input now (what that timer did on finding the click).
-        if let was = autoAllow[s.key] {
-            autoAllow[s.key] = .human(left: p, seen: activity(s.key), at: now())
-            if case .human = was {} else { publish() }
-        }
-        let key = s.key, gen = bump(key), io = io
-        layout()
+        guard let gen = beginHuman(s, p) else { return }
+        let key = s.key, io = io
         queue.async { [weak self] in
             let r = AgentPrompt.answer(key, digit: o.digit, expected: p, io: io)
             DispatchQueue.main.async {
@@ -1054,6 +1043,58 @@ final class AgentIslandController {
                 }
             }
         }
+    }
+
+    /// #798: the Agents window acting on a session (an answer, a key sequence, a message, an
+    /// interrupt) is the human's click, on the island click's own path: one action per session
+    /// at a time (none while an island click or an Always allow check holds it), the card goes,
+    /// and a prompt it answers is left to the human (#791/#794). `run` gets the dch IO off main
+    /// (never on the poll queue: a sequence may take seconds); `done` gets its result on main.
+    /// False: something else holds the session (or the island is off), nothing ran.
+    @discardableResult
+    func humanAction<R: Sendable>(_ s: AgentSession, prompt: AgentPrompt?,
+                                  run: @escaping @Sendable (AgentPromptIO) -> R,
+                                  done: @escaping @MainActor @Sendable (R) -> Void) -> Bool {
+        guard beginHuman(s, prompt) != nil else { return false }
+        let key = s.key, io = io
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let r = run(io)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.inFlight.remove(key)
+                    done(r)
+                }
+            }
+        }
+        return true
+    }
+
+    /// #798: an island click, a window action or an Always allow check holds the session, or
+    /// Always allow is still deciding its prompt (checking, answered, left to dch): the window
+    /// shows no buttons, as the island shows no card.
+    func heldByAutoAllow(_ key: AgentSessionKey) -> Bool {
+        if inFlight.contains(key) { return true }
+        guard let a = autoAllow[key] else { return false }
+        if case .human = a { return false }
+        return true
+    }
+
+    /// The click's bookkeeping, on main; nil when the session is already in flight.
+    private func beginHuman(_ s: AgentSession, _ p: AgentPrompt?) -> Int? {
+        guard let store, inFlight.insert(s.key).inserted else { return nil }
+        store.cards[s.key] = nil
+        // QA #620 INFO-1: the prompt a human clicks is the human's: a re-read still seeing it (or one
+        // in flight) never checks it, and the next prompt is a fresh check.
+        // QA #620 INFO-2: from any state: a pending verify (.answered) or stand-down (.dch) timer
+        // finds its state gone and does nothing, so it never types "1" after the human's answer;
+        // the dropped hold goes out as Needs input now (what that timer did on finding the click).
+        if let was = autoAllow[s.key] {
+            autoAllow[s.key] = .human(left: p, seen: activity(s.key), at: now())
+            if case .human = was {} else { publish() }
+        }
+        let gen = bump(s.key)
+        layout()
+        return gen
     }
 
     private func setCard(_ card: AgentCard, _ key: AgentSessionKey, _ gen: Int) {
@@ -1313,7 +1354,12 @@ final class AgentIslandController {
 
     private func publish() {
         if let store { onSessions?(published(deferred ?? store.sessions)) }
+        onHoldChanged?()
     }
+
+    /// #798: told whenever a hold may have changed (publish), so the Agents window reads a
+    /// prompt once Always allow leaves it to the human.
+    var onHoldChanged: (@MainActor () -> Void)?
 
     // MARK: - Jump
 
@@ -1600,14 +1646,31 @@ extension AgentPromptIO {
     static let live = live { DchCommand.runIsland(args: $0, env: $1) ?? Data() }
 
     /// `run` gets the argv and env; tests pass a recorder.
-    static func live(run: @escaping @Sendable ([String], [String: String]) -> Data) -> AgentPromptIO {
+    static func live(run: @escaping @Sendable ([String], [String: String]) -> Data,
+                     say: @escaping @Sendable ([String], [String: String]) -> Data = liveSay) -> AgentPromptIO {
         @Sendable func dch(_ args: [String], _ key: AgentSessionKey) -> String {
             String(decoding: run(args, AgentIsland.listEnv(dir: key.dir)), as: UTF8.self)
         }
         return AgentPromptIO(
             read: { dch(["--read", $0.name], $0) },
             status: { dch(["--status", $0.name], $0) },
-            send: { _ = dch(["--send", $0.name, $1], $0) })
+            send: { _ = dch(["--send", $0.name, $1], $0) },
+            keys: { _ = dch(["--keys", $0.name] + $1, $0) },
+            say: { key, text in
+                String(decoding: say(["--say", key.name, "--json", "--", text], AgentIsland.listEnv(dir: key.dir)),
+                       as: UTF8.self)
+            })
+    }
+
+    /// #798: `--say` waits up to 30 s for the paste to land, then re-presses Enter up to 5 times
+    /// 5 s apart (dch's DCH_AGENT_LAND_MS and retry), so it gets more than the island's 4 s.
+    static let sayTimeout: TimeInterval = 70
+
+    static func liveSay(_ args: [String], _ env: [String: String]) -> Data {
+        let path = DchCommand.dchPath   // on the caller's thread
+        return DchCommand.bounded(sayTimeout) { onPid in
+            DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: onPid).out
+        } ?? Data()
     }
 }
 

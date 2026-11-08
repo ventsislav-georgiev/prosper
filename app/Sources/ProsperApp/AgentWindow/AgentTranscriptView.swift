@@ -21,11 +21,15 @@ struct AgentTranscriptView: View {
                 TerminalFirstView(reason: reason, openTerminal: openTerminal) { model.showAnyway = true }
             } else {
                 if case .waiting(let hint) = model.mode { TranscriptHint(text: hint) }
+                // QA #626 INFO-1: block ids restart at 0 per file, so the list's view state
+                // (folds, "Show all") is keyed by the session and the model's generation too.
                 if scrolls {
                     ScrollView { LazyVStack(alignment: .leading, spacing: sz(10)) { rows } .padding(sz(14)) }
                         .defaultScrollAnchor(.bottom)
+                        .id(model.viewIdentity)
                 } else {
                     VStack(alignment: .leading, spacing: sz(10)) { rows }.padding(sz(14))
+                        .id(model.viewIdentity)
                 }
             }
         }

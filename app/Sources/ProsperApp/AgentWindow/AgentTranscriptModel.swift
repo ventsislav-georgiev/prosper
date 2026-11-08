@@ -124,6 +124,16 @@ struct TranscriptAssembler {
         return a.counts().values.reduce(TierCounts(), +)
     }
 
+    /// #798: the newest AskUserQuestion call of the main thread still waiting on its result:
+    /// the questions the Agents window cross-checks a question form on screen against.
+    var pendingAsk: AgentAskInput? {
+        for id in pendingOrder.reversed() {
+            guard let p = pending[id], p.thread == nil, p.name == AgentAskInput.toolName else { continue }
+            return AgentAskInput.parse(p.input, id: id)
+        }
+        return nil
+    }
+
     /// The last block still waits on a tool (a long Bash, a subagent at work): a quiet
     /// file then is expected, not stale. A subagent counts while its Agent/Task call
     /// is open or one of its own steps is.
@@ -295,6 +305,8 @@ final class AgentTranscriptModel: ObservableObject {
     @Published private(set) var olderAvailable = false
     /// The newest entry's working directory (the window header's project line).
     @Published private(set) var cwd: String?
+    /// #798: the pending AskUserQuestion's input (questions, options, multiSelect), nil when none.
+    @Published private(set) var pendingAsk: AgentAskInput?
     /// "Show the conversation anyway" over a terminal-first reason. Per session:
     /// #797 (c) resets it when another session is selected.
     @Published var showAnyway = false
@@ -317,9 +329,14 @@ final class AgentTranscriptModel: ObservableObject {
     /// Bumped whenever the tail or the assembler is replaced (open, close, stop): a
     /// result started before is dropped, never applied to another file or session.
     private(set) var generation = 0
+    /// QA #626 INFO-1: what the list's view state is keyed by (block ids restart at 0 per file).
+    struct ViewIdentity: Hashable { let key: AgentSessionKey?; let generation: Int }
+    var viewIdentity: ViewIdentity { ViewIdentity(key: source?.key, generation: generation) }
     /// One read in flight per generation; a poll asked for meanwhile runs after it.
     private(set) var busy = false
     private var pollAgain = false
+    /// QA #626 INFO-3: a "Load earlier" asked for while a read is in flight runs after it.
+    private(set) var earlierAgain = false
 
     // Seams.
     var now: () -> Date = Date.init
@@ -342,6 +359,7 @@ final class AgentTranscriptModel: ObservableObject {
             nullSince = nil
             showAnyway = false
         }
+        defer { syncAsk() }
         if !Self.dchSupportsMapping(s.dchVersion) {
             close()
         } else if let path = s.transcriptPath, !path.isEmpty, s.sessionId != nil {
@@ -457,13 +475,17 @@ final class AgentTranscriptModel: ObservableObject {
         if r.more || pollAgain {
             pollAgain = false
             poll()
+        } else if earlierAgain {
+            earlierAgain = false
+            loadEarlier()
         }
     }
 
     /// Rule 9 paging: decode the page before the earliest loaded line, while the
     /// per-session block bound has room. Read, decoded and prepended off main.
     func loadEarlier() {
-        guard running, let t = tail, !atHistoryCap, !busy else { return }
+        guard running, let t = tail, !atHistoryCap else { return }
+        guard !busy else { earlierAgain = true; return }
         busy = true
         let gen = generation
         let job = TranscriptHandoff(value: (t, assembler, fresh()))
@@ -488,12 +510,15 @@ final class AgentTranscriptModel: ObservableObject {
     }
 
     /// Lazy expand: the full text of a capped clip, re-read from its line off main.
+    /// QA #626 INFO-1: a result landing after the session or file changed (a new
+    /// generation) is dropped, never shown under another session's block.
     func fullText(_ c: Clip) async -> String? {
         guard c.capped, let r = c.source, let t = tail else { return nil }
-        let run = offMain
-        return await withCheckedContinuation { k in
+        let run = offMain, gen = generation
+        let text = await withCheckedContinuation { k in
             run { k.resume(returning: t.read(r).flatMap { TranscriptDecoder.fullText(line: $0, clip: c) }) }
         }
+        return gen == generation ? text : nil
     }
 
     /// The block bound is full: older history stays in the terminal.
@@ -518,6 +543,7 @@ final class AgentTranscriptModel: ObservableObject {
         generation += 1
         busy = false
         pollAgain = false
+        earlierAgain = false
     }
 
     private func open(_ path: String) {
@@ -550,9 +576,18 @@ final class AgentTranscriptModel: ObservableObject {
         blocks = assembler.blocks
         hiddenCount = assembler.hiddenTotal
         cwd = assembler.cwd
+        syncAsk()
         olderAvailable = (tail?.earliestLoaded ?? 0) > 0 || assembler.dropped > 0
         banner = assembler.latestVersion.map(ClaudeCodeCompat.isNewer) == true ? ClaudeCodeCompat.newerBanner : nil
         evaluate()
+    }
+
+    /// The pending AskUserQuestion counts only while the current source maps to the
+    /// open file: another session, a missing mapping or a stopped view has none, so a
+    /// question form is never cross-checked against a question it was not asked.
+    private func syncAsk() {
+        let ask = running && tail != nil && source?.transcriptPath == tail?.path ? assembler.pendingAsk : nil
+        if ask != pendingAsk { pendingAsk = ask }
     }
 
     private func evaluate() {
