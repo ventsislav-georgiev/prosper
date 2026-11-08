@@ -20,7 +20,8 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   [M10](#known-gaps). No IPv6 in 1.0.
 - Prosper drops every peer whose address is not an IPv4 address in 100.64.0.0/10, IPv6
   included, before it reads a byte (the client sees a close).
-- A server must never bind a wider address than its Tailscale one. See
+- A server must never bind a wider address than its Tailscale one on its own; `dch serve`
+  binds another only when its operator names it (`--bind`). See
   [Decided defaults](#decided-defaults-for-dch-serve) for the rules `dch serve` follows.
 
 ## Versioning
@@ -69,14 +70,17 @@ Every frame, in both directions:
   An attach, a create and a watch own their connection for its life.
 - **Replies are matched by type, not by order.** Requests may be pipelined on one connection,
   but a client must not assume replies come back in the order it sent the requests:
-  - Prosper answers 0x03, 0x04, 0x06, and 0x09 on a connection that has not attached at once,
-    in the order they arrive.
+  - A client must not pipeline two requests whose replies can share a type. 0x13 answers
+    every error and 0x14 answers kill, rename, 0x0a, 0x17 and most `ops` verbs, so after
+    one of those a client waits for its reply before it sends the next. Requests whose
+    replies differ in type (0x08 → 0x18, 0x03 → 0x11, 0x09 → 0x19) may be pipelined.
+  - Prosper answers 0x03, 0x04 and 0x06 at once, in the order they arrive; 0x09 too on a
+    connection that has not attached.
   - These replies can trail replies to frames sent after them: 0x08 (Prosper waits up to
     0.25 s for a dch version probe), 0x09 on an attached connection (it reads dch's screen
     off the connection), and every `ops`-gated request (Mac-only frames run off the
     connection too).
-  - Kill and rename both answer an empty 0x14, so a client that pipelines them tells the
-    replies apart only by that arrival order. The phone sends one request per connection.
+  - The phone sends one request per connection.
 - **One in flight.** These Mac-only requests allow one in flight per connection: 0x0b-0x0f,
   0x15, 0x16, 0x1e, 0x1f, 0x22-0x26, 0x28, 0x29, 0x2c, 0x2d. Another of them while one is in
   flight gets `0x13 {"message": "busy with an earlier request"}` at once, ahead of the first
@@ -91,20 +95,28 @@ Every frame, in both directions:
 - Everything malformed is a 0x13 reply, or for the base frames, as listed, except a length
   over the receive guard, which closes.
 - **When Prosper closes a connection.** A client must expect a close at any time. Only 0x12
-  exit means the session ended; every other close is a refusal or a dropped link. Prosper
-  closes:
+  exit means the session ended; every other close is a refusal, a dropped link or the
+  client's own FIN. Prosper closes:
   - on a length prefix over the receive guard (0x13 `frame too large` first);
   - after 0x12 exit (the FIN follows the frame);
   - when an attach or create fails to spawn (0x13 first, see below);
   - when another connection attaches to the same session (the newest wins; no frame);
   - when an attached session's output has not been taken by the socket for 20 s;
-  - when a 0x16 data chunk has not been taken by the socket for 60 s;
-  - on a watch stream: a fifth stream of the same device, 32 frames unsent, or the server
-    losing its list;
+  - when a frame of a 0x16 reply (the 0x1a header or a 0x10 chunk) has not been taken by
+    the socket for 60 s;
+  - on a watch stream: when a fifth stream of the same device opens (the device's oldest
+    stream is closed), when 32 frames are unsent, or when the server loses its list;
   - during a 0x23 clipboardUpload, when the Mac's user cancels the incoming item;
   - when the server stops (Remote Terminal turned off; a failed listener alone closes no
     connection);
-  - at once, for a peer outside 100.64.0.0/10 (no frame is read or sent).
+  - at once, for a peer outside 100.64.0.0/10 (no frame is read or sent);
+  - at once, for a connection that reaches a listener Prosper has just replaced (a race
+    while it rebinds; no frame is read or sent);
+  - **at once, when the client closes its sending side** (its FIN, a half-close with
+    `shutdown(SHUT_WR)` included). Replies still pending then are dropped: 0x08's (it can
+    wait up to 0.25 s), 0x09's on an attached connection, any `ops`-gated one. A reply
+    Prosper sent just before the FIN can be lost too. **A client must not half-close before
+    it has read every reply it waits for.**
 
 ## Replies every frame shares
 
@@ -314,13 +326,19 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08 and 12, which run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14, 15: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
 07 (kill runs `dch -k`), 08 (rename runs `dch -m`), both on a name no session should have, and
-12 (attach starts a session `golden-776`, then its cleanup kills it). Run `--mutating` only
-against a test server, never a host with sessions someone uses.
+12, 14 and 15 (each attach starts a session `golden-776`, and each cleanup kills it; 15 ends it
+by typing `exit` and ^D into it). Run `--mutating` only against a test server, never a host
+with sessions someone uses.
+
+Not in the set, because the format cannot express them: the 0x12 frame before 15's close (pty
+output of no fixed frame count comes first, and `expect` takes the next frame), and attach on
+a watch connection (the frame between the snapshot and the 0x13 depends on a second op,
+`sidekick`, and `requires_op` names one). Prosper's unit tests pin both.
 
 It exits 0 when every fixture that applies passes. Prosper's CI runs the same files against an
 in-process server with fakes for dch (`RemoteFramesGoldenTests`); that test fails with a clear
@@ -413,15 +431,36 @@ rules above; each item is either a known limit of the code or a decision still o
 ### Decided defaults for `dch serve`
 
 Answers already given to the dch team. They are the defaults `dch serve` builds to; where
-Prosper differs today, the gap above says so.
+Prosper differs today, the gap above or the item says so.
 
-- Bind the host's Tailscale IPv4 address only. Without one, refuse to start.
-- Accept peers only from 100.64.0.0/10.
-- No IPv6 in 1.0.
-- The owner check (#777) compares the whois `UserProfile.ID` of the peer with the host's
+- **Bind address.** `dch serve` binds one IPv4 address, port 8771:
+  - by default the host's Tailscale IPv4: the first line of `tailscale ip -4` when the
+    `tailscale` CLI is on `PATH`, else the first IPv4 address in 100.64.0.0/10 on any
+    interface, as Prosper finds it (which carries [M10](#known-gaps) over);
+  - `--bind <ipv4>` overrides it. `dch serve` then logs a warning when that address is not a
+    tailnet one: not printed by `tailscale ip -4`, or, without the CLI, outside
+    100.64.0.0/10;
+  - with no address found and no `--bind`, it refuses to start (Prosper instead retries with
+    backoff; the phone sees no difference: nothing listens either way).
+- Accept peers only from 100.64.0.0/10. No IPv6 in 1.0.
+- **A refused peer gets no frame.** Every refusal (the address, the owner check, a tagged
+  peer, whois unavailable) is decided right after accept, before a byte is read, and the
+  server closes the connection: no frame is read or sent. This is what Prosper does with a
+  peer outside 100.64.0.0/10 (`DchSessionServer.accept`: `allowPeer` is false, so the
+  connection, never started, is cancelled). The client's connect succeeds, then it sees
+  EOF or a reset, and a request it already sent gets no reply. A client cannot tell this
+  from a dropped link.
+- **The owner check** (#777) compares the peer's whois `UserProfile.ID` with the host's
   `Self.UserID`, not login names.
-- Tagged nodes are refused unless explicitly allowed.
-- Whois unavailable: fail closed and log a line, behind a flag. This default may still change.
+- **A tagged host**, *pending operator confirmation*. No user owns a tagged host: its
+  `Self.UserID` is the tagged-devices identity. `dch serve` refuses to start there unless given
+  `--allow-user <login or numeric user id>`, repeatable. It then accepts only peers whose
+  whois user is one of those (a number is compared with `UserProfile.ID`, a login with
+  `UserProfile.LoginName`).
+- **Tagged peers** are refused. How to allow one explicitly is still open ([Q9](#open-questions)).
+- **Whois unavailable** (tailscaled down or its LocalAPI unreachable): fail closed by default,
+  so the peer is refused as above and `dch serve` logs a line. `--whois-optional` relaxes it:
+  the peer is accepted and a warning is logged.
 
 ### Open questions
 
@@ -435,3 +474,5 @@ Prosper differs today, the gap above says so.
 | Q6 | Gate the phone's paste-image (0x0a) on an op, since a dch host has no Mac clipboard? (M4) | prosper-ios |
 | Q7 | Gate "new session" on `create` for `server: "dch"` until Q3 is settled? (M3) | prosper-ios |
 | Q8 | The phone's 0x2e client is not on its main branch yet: confirm it sends `{"device_id"}`. | prosper-ios |
+| Q9 | How does a `dch serve` operator allow a tagged peer node (a flag naming tags, or none in 1.0)? | dch, operator |
+| Q10 | Prosper and `dch serve` on the same Mac both want `<tailscale ip>:8771`; the second bind fails. Should `dch serve` take another port there, and how would the phone find it? | dch, prosper-ios |

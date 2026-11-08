@@ -1,0 +1,25 @@
+{
+  "id": "14-attach-twice-ignored",
+  "about": "A second 0x01 attach on an attached connection is ignored: no reply, and the connection stays open (only 0x10 output may follow).",
+  "mutating": true,
+  "cleanup": [
+    "04 00000015 7b226e616d65223a22676f6c64656e2d373736227d"
+  ],
+  "steps": [
+    {
+      "send": "01 00000029 7b226e616d65223a22676f6c64656e2d373736222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect": {
+        "type": "10",
+        "nonempty": true
+      }
+    },
+    {
+      "send": "01 00000029 7b226e616d65223a22676f6c64656e2d373736222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect_quiet": 1
+    }
+  ]
+}

@@ -67,7 +67,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
     func testEveryGoldenFixturePassesAgainstTheServer() throws {
         let files = try FileManager.default.contentsOfDirectory(at: try goldenDir(), includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-        XCTAssertGreaterThanOrEqual(files.count, 13, "the fixtures are read from \(Self.golden.path)")
+        XCTAssertGreaterThanOrEqual(files.count, 15, "the fixtures are read from \(Self.golden.path)")
         let ops = try handshakeOps()
         XCTAssertTrue(ops.contains("watch"), "the hub has a list, so every requires_op fixture runs")
         for file in files {
@@ -99,16 +99,51 @@ final class RemoteFramesGoldenTests: XCTestCase {
     }
 
     /// QA #625 INFO-6: without --mutating, run.py runs nothing that reaches dch on the server:
-    /// 07 (kill), 08 (rename) and 12 (attach) are skipped, the read-only rest passes.
+    /// 07 (kill), 08 (rename), 12, 14 and 15 (attach) are skipped, the read-only rest passes.
     func testPythonRunnerSkipsMutatingFixturesByDefault() throws {
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)"])
         XCTAssertEqual(status, 0, text)
-        for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws"] {
+        for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws", "14-attach-twice-ignored",
+                   "15-session-exit-closes"] {
             XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
         }
         XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)
         XCTAssertFalse(text.contains("FAIL"), text)
         XCTAssertEqual(ran.all, [], "no kill or rename reached the server's dch")
+    }
+
+    /// QA #625 INFO-R2: fixture 12's expect_quiet catches a server that answers resize (an empty
+    /// 0x14, the likeliest wrong reply): both runners fail it against a loopback fake that does,
+    /// and pass it against the same fake when resize gets no reply.
+    func testBothRunnersFailFixture12WhenResizeIsAnswered() throws {
+        let fx = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: try goldenDir().appendingPathComponent("12-attach-redraws.json"))) as? [String: Any])
+        let code = """
+            import json, sys
+            sys.path.insert(0, sys.argv[1])
+            import run
+            try:
+                run.run(json.loads(sys.argv[2]), ("127.0.0.1", int(sys.argv[3])), 5)
+                print("PASS")
+            except run.Fail as e:
+                print("FAIL", e)
+            """
+        let fxJSON = String(decoding: try JSONSerialization.data(withJSONObject: fx), as: UTF8.self)
+        for answered in [false, true] {
+            let fake = try FakeServer(resizeReply: answered ? DchFrame.encode(DchFrame.ok, []) : nil)
+            defer { fake.stop() }
+            var swift = "PASS"
+            do { try run(fx, port: fake.port) } catch { swift = "FAIL \(error)" }
+            let (status, out) = try python(["-B", "-c", code, try goldenDir().path, fxJSON, "\(fake.port)"])
+            XCTAssertEqual(status, 0, out)
+            if answered {
+                XCTAssertEqual(swift, "FAIL want no reply, got 14", "the Swift runner")
+                XCTAssertTrue(out.hasPrefix("FAIL want no reply, got 0x14"), "run.py: \(out)")
+            } else {
+                XCTAssertEqual(swift, "PASS", "the Swift runner, resize unanswered")
+                XCTAssertEqual(out, "PASS\n", "run.py, resize unanswered")
+            }
+        }
     }
 
     /// QA #625 INFO-7: the Swift checker and run.py's shape_ok agree, a trailing newline included
@@ -209,11 +244,13 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     /// QA #625 F1: a failed spawn's 0x13 reaches the wire before the close (it is the final
     /// message), with user copy, and a frame pipelined behind the attach is never answered.
+    /// QA #625 INFO-R1: nor handled: close() empties the buffer, so drain() stops at the attach.
     func testFailedSpawnSendsItsErrorBeforeTheClose() throws {
+        let lists = Recorder()
         let failing = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
                                        allowPeer: { _ in true },
                                        configure: { c in
-                                           c.listSessions = { [] }
+                                           c.listSessions = { lists.add(["list"]); return [] }
                                            c.spawn = { _, _, _, _, _, _ in throw PtyChild.PtyError.forkFailed }
                                        })
         defer { failing.stop(); _ = failing.isRunning; failing.queue.sync {} }
@@ -229,6 +266,39 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertThrowsError(try c.frame(), "then the close, and no 0x11 for the pipelined list") {
             XCTAssertEqual($0 as? Client.Failure, .closed)
         }
+        failing.queue.sync {}   // drain() ran before the close reached the wire; this only orders the read
+        XCTAssertEqual(lists.all, [], "the list pipelined behind the failed attach is never handled")
+    }
+
+    /// QA #625 F1-R2: today's behaviour, pinned so that answering after a client's FIN is a
+    /// deliberate spec change. The client sends 0x08 and shuts its write side; the reply waits
+    /// for a dch probe (made slow here; 0.25 s at most), the FIN closes first, no 0x18 comes.
+    func testHalfCloseDropsAPendingReply() throws {
+        let slow = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                    allowPeer: { _ in true },
+                                    configure: { c in c.ops.binary = { Thread.sleep(forTimeInterval: 1); return nil } })
+        defer { slow.stop(); _ = slow.isRunning; slow.queue.sync {} }
+        try slow.start()
+        let c = try Client(port: try XCTUnwrap(slow.boundPort))
+        try c.send(Data([0x08, 0, 0, 0, 0]))
+        c.shutdownWrite()
+        XCTAssertThrowsError(try c.frame(timeout: 2), "the FIN closes the connection before the 0x18") {
+            XCTAssertEqual($0 as? Client.Failure, .closed)
+        }
+    }
+
+    /// The session's program exits: 0x12 exit {"code"} reaches the wire, then the close. Golden 15
+    /// pins the close only (its pty output has no fixed frame count); this pins the 0x12.
+    func testSessionExitSendsExitBeforeTheClose() throws {
+        let c = try Client(port: port)
+        try c.send(DchFrame.encode(DchFrame.attach, json: ["name": "golden-776-exit", "cols": 80, "rows": 24]))
+        XCTAssertEqual(try c.frame().0, DchFrame.data, "the repaint")
+        try c.send(DchFrame.encode(DchFrame.data, Array("exit\r\u{04}".utf8)))   // the fake's cat reads the ^D: EOF
+        var f = try c.frame()
+        while f.0 == DchFrame.data { f = try c.frame() }
+        XCTAssertEqual(f.0, DchFrame.exit)
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: f.1) as? [String: Any])?["code"] as? Int, 0)
+        XCTAssertTrue(try c.closed(), "then the FIN")
     }
 
     /// Once closed, a connection reads nothing more: a valid list frame ingested after close()
@@ -330,8 +400,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     private struct Mismatch: Error, CustomStringConvertible { let description: String }
 
-    private func run(_ fx: [String: Any]) throws {
-        let c = try Client(port: port)
+    private func run(_ fx: [String: Any], port: UInt16? = nil) throws {
+        let c = try Client(port: port ?? self.port)
         for step in fx["steps"] as? [[String: Any]] ?? [] {
             if let hex = step["send"] as? String {
                 try c.send(Self.unhex(hex))
@@ -447,7 +517,17 @@ private final class Client {
         guard fd >= 0, ok else { Darwin.close(fd); throw Failure.connect }
     }
 
+    /// An accepted socket (FakeServer's side).
+    init(fd: Int32) {
+        self.fd = fd
+        var one: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+    }
+
     deinit { Darwin.close(fd) }
+
+    /// A half-close: the server reads EOF, the socket still reads.
+    func shutdownWrite() { Darwin.shutdown(fd, SHUT_WR) }
 
     func send(_ data: Data) throws {
         try data.withUnsafeBytes { raw in
@@ -493,6 +573,47 @@ private final class Client {
             return true
         } catch Failure.timeout { return false }
     }
+}
+
+/// QA #625 INFO-R2: a loopback fake that speaks just enough of the protocol for fixture 12:
+/// attach answers one 0x10, resize answers `resizeReply` (nil: nothing). One connection at a
+/// time, 127.0.0.1 on a kernel-picked port, until stop().
+private final class FakeServer: @unchecked Sendable {
+    let port: UInt16
+    private let stopped = OSAllocatedUnfairLock(initialState: false)
+
+    init(resizeReply: Data?) throws {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let ok = withUnsafeMutablePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, len) == 0 && listen(fd, 4) == 0 && getsockname(fd, $0, &len) == 0
+            }
+        }
+        guard fd >= 0, ok else { Darwin.close(fd); throw Client.Failure.connect }
+        port = UInt16(bigEndian: addr.sin_port)
+        let stopped = stopped
+        Thread.detachNewThread {
+            defer { Darwin.close(fd) }
+            while !stopped.withLock({ $0 }) {
+                var p = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                guard poll(&p, 1, 100) > 0 else { continue }
+                let s = accept(fd, nil, nil)
+                guard s >= 0 else { continue }
+                let peer = Client(fd: s)
+                while let (type, _) = try? peer.frame() {
+                    if type == DchFrame.attach { try? peer.send(DchFrame.encode(DchFrame.data, [0x78])) }
+                    if type == DchFrame.resize, let resizeReply { try? peer.send(resizeReply) }
+                }
+            }
+        }
+    }
+
+    func stop() { stopped.withLock { $0 = true } }
 }
 
 private final class Recorder: @unchecked Sendable {

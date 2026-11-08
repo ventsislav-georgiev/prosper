@@ -7,7 +7,7 @@ Python 3 stdlib only. See ../remote-frames.md, "Golden frames", for the fixture 
 
 Exit 0 when every fixture that applies passes, 1 on any failure, 2 on bad usage or a host
 that refuses the handshake. Without --mutating, fixtures marked "mutating" (07 kill, 08 rename,
-12 attach: each runs dch on the server) are skipped and reported as SKIP.
+12, 14 and 15 attach: each runs dch on the server) are skipped and reported as SKIP.
 """
 import argparse
 import glob
