@@ -20,12 +20,13 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.174.0 *(unreleased)*
 
-- Ships dch 1.33.0 (was 1.28.6). dch now has a config file (`dch --config`) with its own
+- Ships dch 1.33.1 (was 1.28.6). dch now has a config file (`dch --config`) with its own
   auto-allow for permission prompts, off unless you turn it on; it never answers a prompt
   raised by your hooks or "ask" rules, however long the rule. When it is on, Prosper's
   Always allow stands down for those sessions (#792). `dch --ls-json` also reports each
   session's Claude Code session id and transcript path, for the agent window to come.
-  A dch attach whose terminal closes while output is still unread no longer hangs on exit.
+  A dch attach whose terminal closes while output is still unread no longer hangs on exit, and
+  attaching no longer drops output the session had not shown yet.
   Codex sessions started by dch get their own Codex app server when your Codex supports it,
   so agent peers can talk to them. A new dch setting, `detach_key`, picks what `Ctrl-\` does
   in an attached terminal, and the `dch -l` picker has a new look. dch can now serve its
