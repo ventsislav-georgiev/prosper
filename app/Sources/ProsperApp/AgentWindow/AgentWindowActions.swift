@@ -85,7 +85,8 @@ enum AgentWindowText {
     static let unreadable = "Prosper can't read this prompt. Open in terminal"
     static let mismatch = "The prompt on screen doesn't match the conversation. Open in terminal"
     static let unchecked = "Prosper can't check this form against the conversation. Open in terminal"
-    static let held = "Always allow is checking this prompt…"
+    /// QA #629 INFO-6: one text for every hold (an island click, an Always allow check or answer, dch's own).
+    static let held = "This prompt is being answered or checked elsewhere…"
     static let oneLine = "Your own answer must be one line of plain text"
 }
 
@@ -112,11 +113,15 @@ struct AgentWindowDriver: Sendable {
 
     // MARK: Message
 
-    /// The message as sent: CRLF and CR to LF, trimmed; nil when nothing is left.
+    /// The message as sent: CRLF and CR to LF, every other control character (C0 with ESC,
+    /// DEL, C1) dropped but LF and tab, which a bracketed paste keeps as text; trimmed; nil when
+    /// nothing is left. QA #629 INFO-1: an ESC[201~ would end dch's paste early and type the rest as keys.
     static func message(_ text: String) -> String? {
         let t = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? nil : t
+        let kept = String(String.UnicodeScalarView(t.unicodeScalars.filter {
+            $0 == "\n" || $0 == "\t" || $0.properties.generalCategory != .control
+        })).trimmingCharacters(in: .whitespacesAndNewlines)
+        return kept.isEmpty ? nil : kept
     }
 
     /// One message, only while dch says idle or done: `--say` types it as one bracketed paste
@@ -172,9 +177,11 @@ struct AgentWindowDriver: Sendable {
     // MARK: Interrupt
 
     /// Esc while dch says working; confirmed by dch leaving working or a new "Interrupted" on screen.
+    /// QA #629 INFO-2: the status is asked last, right before the key: a prompt raised during
+    /// the read is blocked, and an Esc there would answer it "No".
     func interrupt() -> AgentWindowOutcome {
-        guard status() == "working" else { return .failed(AgentWindowText.notWorking) }
         let before = Self.count("Interrupted", in: io.read(key))
+        guard status() == "working" else { return .failed(AgentWindowText.notWorking) }
         io.keys(key, ["esc"])
         for _ in 0..<confirmReads {
             pause(confirmStep)
@@ -296,13 +303,14 @@ struct AgentWindowDriver: Sendable {
     }
 
     /// The Other row of a single-select form ("Type something."): the caret walks to it, the
-    /// one-line text is typed (the row must then show it), then Enter.
+    /// one-line text is typed (the row must then show it), then Enter. QA #629 INFO-5: typed only
+    /// into the empty row (its "Type something." placeholder), never after text already there.
     func other(_ e: AgentPromptScreen, digit k: Int, text: String) -> AgentWindowOutcome {
         let p = e.prompt
         let flat = { (t: String) in t.filter { !$0.isWhitespace } }
-        let shows = { (s: AgentPromptScreen) -> Bool in
-            s.prompt.options.first { $0.digit == k }.map { flat(([$0.label] + $0.detail).joined()).contains(flat(text)) } ?? false
-        }
+        let row = { (s: AgentPromptScreen) in s.prompt.options.first { $0.digit == k }.map { flat(([$0.label] + $0.detail).joined()) } }
+        let shows = { (s: AgentPromptScreen) -> Bool in row(s)?.contains(flat(text)) ?? false }
+        let empty = { (s: AgentPromptScreen) -> Bool in row(s).map { ["Typesomething.", "Typesomething"].contains($0) } ?? false }
         var caret = e.caret
         for _ in 0..<(p.options.count + 1) {
             guard let c = caret, c != k else { break }
@@ -318,7 +326,7 @@ struct AgentWindowDriver: Sendable {
             guard r == .done else { return Self.outcome(r) }
         }
         guard caret == k else { return .failed(AgentWindowText.unconfirmed) }
-        let typed = key(ready: { Self.same($0.prompt, p, other: k) && $0.checked == nil && $0.caret == k && !shows($0) },
+        let typed = key(ready: { Self.same($0.prompt, p, other: k) && $0.checked == nil && $0.caret == k && empty($0) },
                         send: { io.send(key, text) },
                         after: { s in
                             guard let s else { return nil }
@@ -583,8 +591,10 @@ final class AgentWindowInteraction: ObservableObject {
         let ok = controller.humanAction(s, prompt: prompt, run: run) { [weak self] r in
             guard let self else { return }
             self.busy = false
+            // QA #629 INFO-3: a confirmed send clears its own session's draft, selected or not.
+            if r == .done { sent?() }
             guard self.session?.key == key else { return }
-            if case .failed(let why) = r { self.notice = why } else { sent?() }
+            if case .failed(let why) = r { self.notice = why }
             if prompt != nil {
                 self.screen = nil
                 self.afterAction = true

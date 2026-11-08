@@ -784,10 +784,11 @@ extension AgentIsland {
         return trimmed.isEmpty ? "session" : String(trimmed)
     }
 
-    /// `--spawn <name> [launch argv]`; the name is free of the dir's live
-    /// sessions and records (a record of that name would be overwritten).
+    /// `--spawn <name> -- [launch argv]`; the name is free of the dir's live
+    /// sessions and records (a record of that name would be overwritten). QA #629
+    /// sweep: "--" so a setting's command starting with "-" is never a dch flag.
     static func newSessionArgs(folder: String, command: [String], taken: Set<String>) -> [String] {
-        ["--spawn", freeName(sessionName(folder: folder), taken: taken)] + command
+        ["--spawn", freeName(sessionName(folder: folder), taken: taken), "--"] + command
     }
 
     /// --spawn passes its env to the session: a Claude Code identity in it

@@ -1641,8 +1641,9 @@ enum GhosttyEventSender {
 extension AgentPromptIO {
     /// Every call runs with DCH_SOCKET_DIR = the session's own dir, never the
     /// Remote Terminal env. `--read` is the plain visible screen; `--send` types
-    /// its text as raw bytes with no Enter. Each call is bounded (#477): a timed-out
-    /// read or status is empty, so a card reads as changed and nothing is sent.
+    /// its text as raw bytes with no Enter, after "--" (QA #629 F1: else dch parses a
+    /// leading "-" as its own flag, and "-kl" kills every session). Each call is bounded
+    /// (#477): a timed-out read or status is empty, so a card reads as changed and nothing is sent.
     static let live = live { DchCommand.runIsland(args: $0, env: $1) ?? Data() }
 
     /// `run` gets the argv and env; tests pass a recorder.
@@ -1654,7 +1655,7 @@ extension AgentPromptIO {
         return AgentPromptIO(
             read: { dch(["--read", $0.name], $0) },
             status: { dch(["--status", $0.name], $0) },
-            send: { _ = dch(["--send", $0.name, $1], $0) },
+            send: { _ = dch(["--send", $0.name, "--", $1], $0) },
             keys: { _ = dch(["--keys", $0.name] + $1, $0) },
             say: { key, text in
                 String(decoding: say(["--say", key.name, "--json", "--", text], AgentIsland.listEnv(dir: key.dir)),

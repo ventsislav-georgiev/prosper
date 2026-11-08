@@ -1776,7 +1776,9 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.sessionName(folder: "/"), "session")
         XCTAssertEqual(AgentIsland.freeName("app", taken: ["app", "app-2"]), "app-3")
         XCTAssertEqual(AgentIsland.freeName("app", taken: ["app-2"]), "app")
-        XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", command: ["claude"], taken: ["app"]), ["--spawn", "app-2", "claude"])
+        XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", command: ["claude"], taken: ["app"]), ["--spawn", "app-2", "--", "claude"])
+        // QA #629 sweep: a setting's command starting with "-" stays the command, after "--".
+        XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", command: ["-kl"], taken: []), ["--spawn", "app", "--", "-kl"])
     }
 
     func testSpawnEnvDropsTheClaudeCodeIdentity() {
@@ -2045,7 +2047,7 @@ final class AgentIslandControlsTests: XCTestCase {
         press(sub.items[0])
         settle(c) { !f.args.isEmpty }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(f.args, [["--spawn", "app-3", "/opt/homebrew/bin/headroom", "wrap", "claude", "--chrome"]],
+        XCTAssertEqual(f.args, [["--spawn", "app-3", "--", "/opt/homebrew/bin/headroom", "wrap", "claude", "--chrome"]],
                        "app is live and app-2 a record: app-3; no --resume")
         XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "/opt/homebrew/bin/headroom wrap claude --chrome",
                        "#606: a real source is stored")
@@ -2076,7 +2078,7 @@ final class AgentIslandControlsTests: XCTestCase {
         press(sub.items[0])
         settle(c) { !f.args.isEmpty }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(f.args, [["--spawn", "My-Repo", "claude"]])
+        XCTAssertEqual(f.args, [["--spawn", "My-Repo", "--", "claude"]])
         XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, "/picked/My Repo")
         XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"),
                      "#606: no source: claude, and nothing stored")
@@ -2095,7 +2097,7 @@ final class AgentIslandControlsTests: XCTestCase {
         Preferences.agentIslandNewSessionCommand = "headroom wrap claude --chrome 'my x' --continue"
         c.newSession(in: "/a")
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, "no inference: at once")
-        XCTAssertEqual(f.args, [["--spawn", "a-2", "headroom", "wrap", "claude", "--chrome", "my x", "--continue"]])
+        XCTAssertEqual(f.args, [["--spawn", "a-2", "--", "headroom", "wrap", "claude", "--chrome", "my x", "--continue"]])
         XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome 'my x' --continue", "never rewritten")
         f.release.signal()
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "a-2")) }
@@ -2116,13 +2118,13 @@ final class AgentIslandControlsTests: XCTestCase {
         c.newSession(in: "/x/proj")
         settle(c) { !f.args.isEmpty }
         XCTAssertEqual(seen.lock.withLock { seen.calls.map(\.1) }, [["a", "b"]], "the poller's live sessions")
-        XCTAssertEqual(f.args, [["--spawn", "proj", "headroom", "wrap", "claude", "--chrome"]], "the live record, stripped")
+        XCTAssertEqual(f.args, [["--spawn", "proj", "--", "headroom", "wrap", "claude", "--chrome"]], "the live record, stripped")
         XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome")
         f.release.signal()
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "proj")) }
         c.newSession(in: "/x/two")
         settle(c) { f.args.count == 2 }
-        XCTAssertEqual(f.args.last, ["--spawn", "two", "headroom", "wrap", "claude", "--chrome"], "stored: no second inference")
+        XCTAssertEqual(f.args.last, ["--spawn", "two", "--", "headroom", "wrap", "claude", "--chrome"], "stored: no second inference")
         XCTAssertEqual(seen.count, 1)
         f.release.signal()
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "two")) }

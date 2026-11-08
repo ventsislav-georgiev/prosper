@@ -406,6 +406,25 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(AgentWindowDriver.otherText("  Teal "), "Teal")
     }
 
+    /// QA #629 INFO-5: Other types only into the empty row ("Type something."), never after text
+    /// already there ("Te" + "Teal" = "TeTeal"): refused before the text, with nothing typed.
+    func testAgentWindowOtherTypesOnlyIntoTheEmptyRow() throws {
+        let f = FormSim(.single)
+        f.caret = 4
+        f.typed = "Te"
+        XCTAssertEqual(driver(f.io).other(try screen(Self.singleScreen(caret: 4)), digit: 4, text: "Teal"),
+                       .failed(AgentWindowText.changed))
+        XCTAssertEqual(f.log, [], "nothing typed after the row's own text")
+        XCTAssertEqual(f.typed, "Te")
+        // Text appears in the row during the walk: the walk ends, the text is not typed.
+        let g = FormSim(.single)
+        g.afterKey = { s in if s.caret == 4 { s.typed = "Te" } }
+        XCTAssertEqual(driver(g.io).other(try screen(Self.singleScreen(caret: 1)), digit: 4, text: "Teal"),
+                       .failed(AgentWindowText.changed))
+        XCTAssertEqual(g.log, ["down", "down", "down"])
+        XCTAssertEqual(g.typed, "Te")
+    }
+
     // MARK: - Messages
 
     final class MessageFake: @unchecked Sendable {
@@ -442,6 +461,24 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(AgentWindowDriver.message("a\r\nb\rc\n"), "a\nb\nc")
         XCTAssertNil(AgentWindowDriver.message(" \n\t"))
         XCTAssertEqual(AgentWindowDriver.count(AgentWindowDriver.head("ab  cd"), in: "x a b\n  cd y abcd"), 2)
+    }
+
+    /// QA #629 INFO-1: a message keeps LF and tab (plain text inside dch's bracketed paste) and
+    /// drops every other control character: ESC[201~ would end the paste early and the rest
+    /// would arrive as keystrokes; C1 CSI (U+009B), DEL and NUL go too.
+    @MainActor
+    func testAgentWindowMessageDropsControlCharacters() {
+        XCTAssertEqual(AgentWindowDriver.message("a\u{1B}[201~b\u{7}c\u{9B}d\u{7F}e\u{0}f\tg\r\nh"), "a[201~bcdef\tg\nh")
+        XCTAssertNil(AgentWindowDriver.message("\u{1B}\u{3}\n"), "nothing but controls: nothing to send")
+        XCTAssertEqual(AgentWindowDriver.message("👩‍💻 o\u{200B}k"), "👩‍💻 o\u{200B}k", "only controls go: ZWJ emoji and format characters stay")
+        let f = MessageFake(statuses: ["idle", "working"])
+        let i = interaction(controller(f.io, autoAllow: false))
+        i.follow(session(.idle))
+        i.draft = "fix it\u{1B}[201~\u{1B}[A\nthen test"
+        i.send()
+        until("sent") { !i.busy }
+        XCTAssertEqual(f.says, ["fix it[201~[A\nthen test"], "what --say gets has no ESC")
+        XCTAssertEqual(i.draft, "")
     }
 
     func testAgentWindowRefusesAMessageUnlessIdleOrDone() {
@@ -485,6 +522,22 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(driver(k.io).interrupt(), .done)
     }
 
+    /// QA #629 INFO-2: dch's status is asked last, right before the Esc: a prompt raised while
+    /// the screen was read gets no Esc (it would answer "No").
+    func testAgentWindowInterruptAsksTheStatusRightBeforeTheKey() {
+        let f = FormSim(.plain(Self.permission()))
+        f.status = "working"
+        f.afterRead = { $0.status = "blocked" }
+        XCTAssertEqual(driver(f.io).interrupt(), .failed(AgentWindowText.notWorking))
+        XCTAssertEqual(f.log, [], "no Esc into the prompt")
+        XCTAssertEqual(f.reads, 1)
+        let g = FormSim(.plain(Self.permission()))
+        g.status = "working"
+        g.afterKey = { $0.status = "idle" }
+        XCTAssertEqual(driver(g.io).interrupt(), .done)
+        XCTAssertEqual(g.log, ["esc"])
+    }
+
     func testAgentWindowLiveIOCallsKeysAndSayWithTheSessionEnv() {
         final class Rec: @unchecked Sendable { var calls: [[String]] = [] }
         let r = Rec(), l = Rec()
@@ -500,6 +553,41 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(r.calls, [["--keys", "s", "esc"]])
         XCTAssertEqual(l.calls, [["--say", "s", "--json", "--", "-a\nb"]], "the text after --, so a leading dash is text")
         XCTAssertGreaterThan(AgentPromptIO.sayTimeout, 30 + 25, "dch's land wait and Enter retries fit")
+    }
+
+    /// QA #629 F1: the live argv of every verb. `--send` carries free Other text, and dch
+    /// parses anything before "--" as its own flags ("-kl" kills every session, "-m" clears
+    /// an alias), so the text always goes after "--", even text that is itself "--".
+    func testAgentWindowLiveSendPutsTheTextAfterDashDash() {
+        final class Rec: @unchecked Sendable { let lock = NSLock(); var calls: [[String]] = [] }
+        let r = Rec()
+        let io = AgentPromptIO.live(run: { args, _ in r.lock.withLock { r.calls.append(args) }; return Data() },
+                                    say: { args, _ in r.lock.withLock { r.calls.append(args) }; return Data() })
+        for t in ["-kl", "--", "-m x", "3"] { io.send(Self.key, t) }
+        io.keys(Self.key, ["down", "enter"])
+        _ = io.say(Self.key, "-kl")
+        _ = io.read(Self.key)
+        _ = io.status(Self.key)
+        XCTAssertEqual(r.calls, [["--send", "s", "--", "-kl"], ["--send", "s", "--", "--"], ["--send", "s", "--", "-m x"],
+                                 ["--send", "s", "--", "3"], ["--keys", "s", "down", "enter"],
+                                 ["--say", "s", "--json", "--", "-kl"], ["--read", "s"], ["--status", "s"]])
+        // The Other path end to end: the typed text reaches dch only after "--".
+        let f = FormSim(.single)
+        f.caret = 4
+        r.lock.withLock { r.calls = [] }
+        let rec = AgentPromptIO.live(run: { args, env in
+            r.lock.withLock { r.calls.append(args) }
+            switch args[0] {
+            case "--read": return Data(f.io.read(Self.key).utf8)
+            case "--status": return Data(f.io.status(Self.key).utf8)
+            case "--send": f.io.send(Self.key, args.last ?? "")
+            case "--keys": f.io.keys(Self.key, Array(args[2...]))
+            default: break
+            }
+            return Data()
+        })
+        XCTAssertEqual(driver(rec).other(try! screen(Self.singleScreen(caret: 4)), digit: 4, text: "-kl"), .done)
+        XCTAssertEqual(r.calls.filter { $0[0] == "--send" || $0[0] == "--keys" }, [["--send", "s", "--", "-kl"], ["--keys", "s", "enter"]])
     }
 
     // MARK: - Through the controller: the window's click is the human's
@@ -794,6 +882,33 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(i.draft, "later")
     }
 
+    /// QA #629 INFO-3: a confirmed message clears its own session's draft even when the
+    /// selection moved during the send, so Return back on that row cannot send it twice.
+    @MainActor
+    func testAgentWindowAConfirmedMessageClearsItsDraftAfterARowSwitch() {
+        let f = MessageFake(statuses: ["idle", "working"])
+        let gate = DispatchSemaphore(value: 0)
+        let io = AgentPromptIO(read: f.io.read, status: f.io.status, send: f.io.send, keys: f.io.keys,
+                               say: { k, t in gate.wait(); return f.io.say(k, t) })
+        let i = interaction(controller(io, autoAllow: false))
+        let other = AgentSession(key: AgentSessionKey(dir: "/tmp/dch-test", name: "t"), alias: "", activity: 1, state: .idle, agents: 0)
+        i.follow(session(.idle))
+        i.draft = "hello"
+        i.send()
+        XCTAssertTrue(i.busy)
+        i.follow(other)
+        i.draft = "for t"
+        gate.signal()
+        until("sent") { !i.busy }
+        XCTAssertNil(i.notice)
+        XCTAssertEqual(i.draft, "for t", "the other row's draft is its own")
+        i.follow(session(.idle))
+        XCTAssertEqual(i.draft, "", "the sent session's draft is cleared")
+        i.send()
+        XCTAssertFalse(i.busy)
+        XCTAssertEqual(f.says, ["hello"], "sent once")
+    }
+
     @MainActor
     func testAgentWindowInterruptGoesThroughTheController() {
         let f = MessageFake(statuses: ["working", "idle"])
@@ -1049,6 +1164,42 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertNil(model.interaction.session, "the interaction let go of the session")
         XCTAssertFalse(win.isVisible, "never on screen")
         XCTAssertEqual(AgentsWindow.title, "Agent Sessions")
+    }
+
+    /// #626 INFO-7: the status menu's "Agent Sessions…" item opens AgentsWindow.shared. Built on a
+    /// private status bar; the shared window's seams swapped for the test, so nothing goes on screen.
+    @MainActor
+    func testAgentWindowStatusMenuItemOpensTheAgentsWindow() throws {
+        let w = AgentsWindow.shared
+        XCTAssertFalse(w.isOpen)
+        let (island, build, present, dismissed) = (w.island, w.build, w.present, w.dismissed)
+        defer { (w.island, w.build, w.present, w.dismissed) = (island, build, present, dismissed) }
+        let c = controller(FormSim(.plain("")).io, autoAllow: false)
+        var presented = 0
+        w.island = { c }
+        w.present = { _ in presented += 1 }
+        w.dismissed = { _ in }
+        w.build = { m in
+            let win = AgentsNSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled, .closable],
+                                     backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            win.model = m
+            return win
+        }
+        // The item's target is weak: the controller stays alive through the click.
+        let bar = MenuBarController(onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {}, onCheckForUpdates: {},
+                                    onRerunSetup: {}, onRestart: {}, onQuit: {}, statusBar: NSStatusBar())
+        let item = try XCTUnwrap(bar.buildMenu().items.first { $0.title == "Agent Sessions\u{2026}" })
+        let action = try XCTUnwrap(item.action)
+        XCTAssertTrue(item.target === bar)
+        XCTAssertTrue(NSApplication.shared.sendAction(action, to: item.target, from: item))
+        withExtendedLifetime(bar) {}
+        XCTAssertEqual(presented, 1)
+        let win = try XCTUnwrap(w.window)
+        XCTAssertTrue(w.model?.interaction.controller === c)
+        win.close()
+        XCTAssertFalse(w.isOpen)
+        XCTAssertFalse(win.isVisible, "never on screen")
     }
 
     // MARK: - Offscreen renders: input box and every prompt kind

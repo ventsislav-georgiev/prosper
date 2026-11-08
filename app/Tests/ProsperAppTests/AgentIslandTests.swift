@@ -913,7 +913,7 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(io.read(key), "out")
         XCTAssertEqual(io.status(key), "out")
         io.send(key, "2")
-        XCTAssertEqual(r.calls.map(\.0), [["--read", "my sess"], ["--status", "my sess"], ["--send", "my sess", "2"]])
+        XCTAssertEqual(r.calls.map(\.0), [["--read", "my sess"], ["--status", "my sess"], ["--send", "my sess", "--", "2"]])
         for (_, env) in r.calls {
             XCTAssertEqual(env["DCH_SOCKET_DIR"], "/x/dch dir")
             XCTAssertNil(env["DCH_SESSION"])

@@ -43,10 +43,10 @@ tag from the now-released section and put it on the new top draft.
   Type a message when Claude is idle (Return sends, Shift-Return adds a line), or interrupt it
   while it works. Permission prompts and Claude's questions get buttons, including
   multiple-choice questions, questions with previews, and a typed answer of your own. Every
-  key is checked against a fresh read of the screen first, and a question is checked against
-  the conversation. Anything Prosper cannot read or confirm says why and offers "Open in
-  terminal". An answer from the window counts as your own click, so Always allow never types
-  over it. (#798)
+  key that answers a prompt is checked against a fresh read of the screen first, and a
+  question is checked against the conversation. Anything Prosper cannot read or confirm says
+  why and offers "Open in terminal". An answer from the window counts as your own click, so
+  Always allow never types over it. (#798)
 - Remote Terminal hosts now tell the phone which server they run (Prosper or dch), the host's
   macOS version, its name and the protocol version, so the phone can label a host and later
   work with dch-only hosts such as a Linux machine. The protocol is written down in
