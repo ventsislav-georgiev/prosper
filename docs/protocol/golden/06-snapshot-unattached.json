@@ -1,0 +1,15 @@
+{
+  "id": "06-snapshot-unattached",
+  "about": "0x09 before any attach answers an empty 0x19.",
+  "steps": [
+    {
+      "send": "09 00000000"
+    },
+    {
+      "expect": {
+        "type": "19",
+        "payload": ""
+      }
+    }
+  ]
+}

@@ -31,6 +31,10 @@ tag from the now-released section and put it on the new top draft.
   you is never answered. (#791)
 - A prompt you answer yourself while Always allow is still confirming its own answer to the
   one before stays yours: Always allow no longer types "1" after your choice. (#794)
+- Remote Terminal hosts now tell the phone which server they run (Prosper or dch), the host's
+  macOS version, its name and the protocol version, so the phone can label a host and later
+  work with dch-only hosts such as a Linux machine. The protocol is written down in
+  `docs/protocol/remote-frames.md`, with sample frames any server can be checked against. (#776)
 
 ## v2.173.0
 

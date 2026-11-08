@@ -1,0 +1,25 @@
+{
+  "id": "10-watch-snapshot",
+  "about": "0x2e {device_id} opens the stream with the whole list as 0x11.",
+  "requires_op": "watch",
+  "steps": [
+    {
+      "send": "2e 0000001a 7b226465766963655f6964223a22676f6c64656e2d373736227d"
+    },
+    {
+      "expect": {
+        "type": "11",
+        "json": [
+          {
+            "name": "string",
+            "?alias": "string",
+            "?state": "string~working|idle|blocked|done",
+            "?agents": "int",
+            "?meta": "object",
+            "?meta_epoch": "int"
+          }
+        ]
+      }
+    }
+  ]
+}

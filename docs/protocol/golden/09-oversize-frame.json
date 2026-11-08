@@ -1,0 +1,12 @@
+{
+  "id": "09-oversize-frame",
+  "about": "A length prefix over 256 MiB closes the connection (an error frame before the close is allowed, not required).",
+  "steps": [
+    {
+      "send": "10 10000001"
+    },
+    {
+      "expect_close": true
+    }
+  ]
+}

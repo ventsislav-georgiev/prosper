@@ -1,0 +1,39 @@
+{
+  "id": "04-list-pipelined",
+  "about": "Two frames in one write get two replies, in order.",
+  "steps": [
+    {
+      "send": "03 00000000 03 00000000"
+    },
+    {
+      "expect": {
+        "type": "11",
+        "json": [
+          {
+            "name": "string",
+            "?alias": "string",
+            "?state": "string~working|idle|blocked|done",
+            "?agents": "int",
+            "?meta": "object",
+            "?meta_epoch": "int"
+          }
+        ]
+      }
+    },
+    {
+      "expect": {
+        "type": "11",
+        "json": [
+          {
+            "name": "string",
+            "?alias": "string",
+            "?state": "string~working|idle|blocked|done",
+            "?agents": "int",
+            "?meta": "object",
+            "?meta_epoch": "int"
+          }
+        ]
+      }
+    }
+  ]
+}

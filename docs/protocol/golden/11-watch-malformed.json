@@ -1,0 +1,18 @@
+{
+  "id": "11-watch-malformed",
+  "about": "0x2e with a payload that is not a JSON object answers 0x13.",
+  "requires_op": "watch",
+  "steps": [
+    {
+      "send": "2e 00000002 5b5d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~.+"
+        }
+      }
+    }
+  ]
+}

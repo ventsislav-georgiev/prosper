@@ -1,0 +1,27 @@
+{
+  "id": "03-list-split",
+  "about": "A frame split across writes (header in two parts) is reassembled.",
+  "steps": [
+    {
+      "send": "03 0000"
+    },
+    {
+      "send": "0000"
+    },
+    {
+      "expect": {
+        "type": "11",
+        "json": [
+          {
+            "name": "string",
+            "?alias": "string",
+            "?state": "string~working|idle|blocked|done",
+            "?agents": "int",
+            "?meta": "object",
+            "?meta_epoch": "int"
+          }
+        ]
+      }
+    }
+  ]
+}

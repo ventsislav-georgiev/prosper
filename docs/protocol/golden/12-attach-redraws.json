@@ -1,0 +1,22 @@
+{
+  "id": "12-attach-redraws",
+  "about": "0x01 attach: the first 0x10 bytes are the repaint; resize gets no reply.",
+  "mutating": true,
+  "cleanup": [
+    "04 00000015 7b226e616d65223a22676f6c64656e2d373736227d"
+  ],
+  "steps": [
+    {
+      "send": "01 00000029 7b226e616d65223a22676f6c64656e2d373736222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect": {
+        "type": "10",
+        "nonempty": true
+      }
+    },
+    {
+      "send": "05 00000016 7b22636f6c73223a3130302c22726f7773223a33307d"
+    }
+  ]
+}

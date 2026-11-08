@@ -122,6 +122,9 @@ final class DchSessionServer: @unchecked Sendable {
     private let bindPort: UInt16
     private let retryBase: Double
     private let onReady: @Sendable () -> Void
+    /// #776: the golden-frame test's loopback peer and its fakes on every accepted connection.
+    private let allowPeer: @Sendable (NWConnection) -> Bool
+    private let configure: @Sendable (DchConnection) -> Void
 
     // Keep-awake: while any client is attached — OR a detached session is still
     // producing output — the Mac must not sleep mid-command. A single repeating
@@ -148,15 +151,22 @@ final class DchSessionServer: @unchecked Sendable {
          // Detach any dch client left behind by a previous Prosper (crash / force quit).
          // Those clients still hold a pty and keep reporting ITS window size to the
          // master, which narrows the session for whoever attaches next.
-         onReady: @escaping @Sendable () -> Void = { DchCommand.sweepOrphanedClients() }) {
+         onReady: @escaping @Sendable () -> Void = { DchCommand.sweepOrphanedClients() },
+         allowPeer: @escaping @Sendable (NWConnection) -> Bool = { DchSessionServer.isTailscalePeer($0) },
+         configure: @escaping @Sendable (DchConnection) -> Void = { _ in }) {
         self.bindHost = bindHost
         self.bindPort = port
         self.retryBase = retryBase
         self.onReady = onReady
+        self.allowPeer = allowPeer
+        self.configure = configure
     }
 
     /// Never call from `lifecycle`.
     var isRunning: Bool { lifecycle.sync { listener != nil } }
+
+    /// #776: the port the listener holds once ready (a test binds port 0). Never call from `lifecycle`.
+    var boundPort: UInt16? { lifecycle.sync { listener?.port?.rawValue } }
 
     /// 2, 4, 8 … seconds (for base 2), capped at 60.
     static func retryDelay(attempt: Int, base: Double = 2) -> Double {
@@ -334,7 +344,7 @@ final class DchSessionServer: @unchecked Sendable {
 
     private func accept(_ conn: NWConnection) {
         // Belt-and-suspenders source-IP gate (the bind already restricts us).
-        if !Self.isTailscalePeer(conn) {
+        if !allowPeer(conn) {
             log.error("dch server: rejecting non-Tailscale peer")
             conn.cancel()
             return
@@ -348,6 +358,7 @@ final class DchSessionServer: @unchecked Sendable {
             },
             onAttach: { [weak self] id, name in self?.retireOlderClients(of: name, keep: id) })
         handler.watch = watch
+        configure(handler)
         connections[ObjectIdentifier(handler)] = handler
         handler.start()
         // QA #606 INFO-2: a watch stream takes this ~60 s hold too (no frame says "watch" yet),
@@ -523,7 +534,7 @@ final class DchSessionServer: @unchecked Sendable {
         return nil
     }
 
-    private static func isTailscalePeer(_ conn: NWConnection) -> Bool {
+    static func isTailscalePeer(_ conn: NWConnection) -> Bool {
         guard case let .hostPort(host, _) = conn.currentPath?.remoteEndpoint ?? conn.endpoint
         else { return false }
         switch host {

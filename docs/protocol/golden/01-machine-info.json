@@ -1,0 +1,26 @@
+{
+  "id": "01-machine-info",
+  "about": "0x08 answers one 0x18 with device_id, hostname, ops, server, os, name and a 1.x proto.",
+  "steps": [
+    {
+      "send": "08 00000000"
+    },
+    {
+      "expect": {
+        "type": "18",
+        "json": {
+          "device_id": "string~.+",
+          "hostname": "string",
+          "ops": [
+            "string"
+          ],
+          "server": "string~prosper|dch",
+          "os": "string~.+",
+          "name": "string",
+          "proto": "string~1\\.[0-9]+",
+          "?wakeId": "string"
+        }
+      }
+    }
+  ]
+}

@@ -63,7 +63,7 @@ enum DchFrame {
     static let exit: UInt8     = 0x12 // {code}
     static let error: UInt8    = 0x13 // {message}
     static let ok: UInt8       = 0x14 // (empty) ack for kill, rename, putClipboard; {names} for #591's verbs
-    static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?, ops}
+    static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?, ops, server, os, name, proto}
     static let snapshotResp: UInt8 = 0x19 // raw ANSI screen from dch's VT mirror (empty = unavailable)
     static let historyResp: UInt8 = 0x1b // [{name, alias?, end, last_seen, started, runtime, cwd?, command?, takes, pinned?}]
     static let libraryResp: UInt8 = 0x1c // {etag, unchanged: true} | {etag, snippets, quicklinks, errors?}
@@ -104,10 +104,22 @@ enum DchFrame {
                             watch: Bool = false) -> [String: Any] {
         var all = ops + (reviveNoMessage ? ["revive_no_message"] : []) + (clipboard ? ["clipboard", "clipboard_max_side"] : [])
         all += (chat ? ["chat"] : []) + (commands ? ["commands"] : []) + (watch ? ["watch"] : [])
-        var info: [String: Any] = ["device_id": deviceID, "hostname": hostname, "ops": all]
+        // #776: server, os, name and proto (docs/protocol/remote-frames.md). Added keys only, so an
+        // older phone reads the same. `hostname` already carries the computer name, so `name` is it.
+        var info: [String: Any] = ["device_id": deviceID, "hostname": hostname, "ops": all,
+                                   "server": "prosper", "os": osName, "name": hostname, "proto": proto]
         if let wakeId { info["wakeId"] = wakeId }
         return info
     }
+
+    /// #776: the remote-frames.md version this Mac speaks. A client refuses a newer major, so it stays 1.x.
+    static let proto = "1.0"
+
+    /// #776: machineInfoResp's "os": "macOS 27.0", the patch only when it is not 0.
+    static let osName: String = {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return "macOS \(v.majorVersion).\(v.minorVersion)" + (v.patchVersion > 0 ? ".\(v.patchVersion)" : "")
+    }()
 
     /// Encode one frame. DATA payloads can be large; control payloads are tiny.
     static func encode(_ type: UInt8, _ payload: [UInt8]) -> Data {
@@ -215,16 +227,28 @@ final class DchConnection: @unchecked Sendable {
         receive()
     }
 
-    func close() {
+    /// #776: `last`, a frame that must reach the client before the FIN (the receive guard's
+    /// error): sent as the final message, and the cancel waits for its completion (5 s at
+    /// most), as startSession's exit frame. Once closed nothing is read, handled or sent.
+    func close(after last: Data? = nil) {
         guard !closed else { return }
         closed = true
+        buffer.removeAll()
         pty?.terminate()       // kill the dch client → master daemon survives
         pty = nil
         upload?.cancel()       // #617: a dropped upload discards its partial item
         chatTask?.cancel()     // #618: a dropped chat stops its generation
         commandTask?.cancel()  // #619: its reply is dropped (a handler already running finishes)
         watch?.remove(ObjectIdentifier(self))   // #765: its timers go with it
-        conn.cancel()
+        if let last, sendOverride == nil {
+            // A failed send completes too; the failsafe covers one that never does. cancel() is idempotent.
+            let conn = conn
+            conn.send(content: last, contentContext: .finalMessage, completion: .contentProcessed { _ in conn.cancel() })
+            queue.asyncAfter(deadline: .now() + 5) { conn.cancel() }
+        } else {
+            if let last { sendOverride?(last) }
+            conn.cancel()
+        }
         onClose(ObjectIdentifier(self))
     }
 
@@ -245,6 +269,7 @@ final class DchConnection: @unchecked Sendable {
 
     /// Raw socket bytes, on `queue`; a test seam too (#617 fix round 1).
     func ingest(_ data: Data) {
+        guard !closed else { return }   // #776: nothing is read past a close (the receive guard's included)
         buffer.append(data)
         drain()
     }
@@ -258,9 +283,9 @@ final class DchConnection: @unchecked Sendable {
                 return (Int(b[0]) << 24) | (Int(b[1]) << 16) | (Int(b[2]) << 8) | Int(b[3])
             }
             // #617: a length past maxRequestFrame is garbage, whatever the frame type.
+            // #776: its error goes before the FIN (an immediate cancel dropped it on the wire).
             guard len <= DchFrame.maxRequestFrame else {
-                send(DchControlOps.error("frame too large"))
-                return close()
+                return close(after: DchControlOps.error("frame too large"))
             }
             guard buffer.count >= 5 + len else { return }   // wait for the rest
             let payload = buffer.subdata(in: buffer.index(buffer.startIndex, offsetBy: 5)..<buffer.index(buffer.startIndex, offsetBy: 5 + len))

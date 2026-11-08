@@ -33,7 +33,10 @@ demo/
 *.pem
 eddsa_priv*
 app/*.log
-docs/
+# docs/ is local notes, except the remote-frames spec other servers and clients build against (#776).
+docs/*
+!docs/protocol/
+app/docs/
 scripts/AppIcon-1024.png
 
 # Signing / notarization secrets (never commit)

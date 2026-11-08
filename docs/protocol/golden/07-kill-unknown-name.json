@@ -1,0 +1,15 @@
+{
+  "id": "07-kill-unknown-name",
+  "about": "0x04 answers an empty 0x14, whatever dch made of the name.",
+  "steps": [
+    {
+      "send": "04 00000025 7b226e616d65223a22676f6c64656e2d3737362d6e6f2d737563682d73657373696f6e227d"
+    },
+    {
+      "expect": {
+        "type": "14",
+        "payload": ""
+      }
+    }
+  ]
+}

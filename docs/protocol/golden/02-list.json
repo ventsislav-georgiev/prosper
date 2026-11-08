@@ -1,0 +1,24 @@
+{
+  "id": "02-list",
+  "about": "0x03 answers one 0x11: an array of session rows.",
+  "steps": [
+    {
+      "send": "03 00000000"
+    },
+    {
+      "expect": {
+        "type": "11",
+        "json": [
+          {
+            "name": "string",
+            "?alias": "string",
+            "?state": "string~working|idle|blocked|done",
+            "?agents": "int",
+            "?meta": "object",
+            "?meta_epoch": "int"
+          }
+        ]
+      }
+    }
+  ]
+}
