@@ -602,7 +602,10 @@ struct AgentPromptPanel: View {
         let p = w.screen.prompt
         let context = p.context.filter { !AgentPrompt.isChipLine($0) }
         return VStack(alignment: .leading, spacing: sz(6)) {
-            if !context.isEmpty { screenLines(context) }
+            // #802: why a plan approval's approve rows are off, with the way out.
+            if let why = w.why { AgentActionNotice(text: why, open: open) }
+            // #802: an approvable plan shows the transcript's plan (checked against the screen), whole.
+            if let plan = w.plan { planText(plan) } else if !context.isEmpty { screenLines(context) }
             Text(AgentPrompt.visible(p.question)).font(Neon.font(12.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             if w.kind == .preview, !p.preview.isEmpty { screenLines(p.preview) }
@@ -611,15 +614,19 @@ struct AgentPromptPanel: View {
                 HStack(spacing: sz(8)) {
                     Text("\(other.digit).").font(Neon.font(11.5, weight: .semibold).monospacedDigit())
                         .foregroundStyle(Neon.textSecondary)
-                    TextField("Your own answer", text: $model.otherText)
+                    // #802: on a multi-select the text goes with Submit (and ticks its box there).
+                    TextField(w.kind == .multi ? "Your own answer (optional)" : "Your own answer", text: $model.otherText)
                         .textFieldStyle(.roundedBorder).font(Neon.font(12))
-                        .onSubmit { model.sendOther() }
-                    AgentPillButton(title: "Answer", icon: "arrow.up", tint: Neon.blue,
-                                    enabled: !model.busy && AgentWindowDriver.otherText(model.otherText) != nil) {
-                        model.sendOther()
+                        .onSubmit { if w.kind == .multi { model.submitPicks() } else { model.sendOther() } }
+                    if w.kind != .multi {
+                        AgentPillButton(title: "Answer", icon: "arrow.up", tint: Neon.blue,
+                                        enabled: !model.busy && AgentWindowDriver.otherText(model.otherText) != nil) {
+                            model.sendOther()
+                        }
                     }
                 }
             }
+            if let chat = w.chat { option(w, chat) }
             if w.kind == .multi {
                 HStack {
                     Spacer(minLength: 0)
@@ -636,10 +643,34 @@ struct AgentPromptPanel: View {
         }
     }
 
+    /// #802: the transcript's plan, scrolled in a box (a plan is often longer than the pane).
+    func planText(_ plan: String) -> some View {
+        ScrollView {
+            Text(Self.planDisplay(plan))
+                .font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textPrimary)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(sz(8))
+        }
+        .frame(height: sz(Self.planHeight))
+        .background(RoundedRectangle(cornerRadius: sz(7)).fill(Neon.bgBottom))
+        .overlay(RoundedRectangle(cornerRadius: sz(7)).stroke(Neon.stroke, lineWidth: 1))
+    }
+
+    static let planHeight: CGFloat = 150
+
+    /// The plan as shown: the transcript's text, which the screen check cannot vouch for character by
+    /// character (the renderer may drop what it can't draw), so every hidden character is escaped
+    /// (⟨U+202E⟩). Line by line: a newline is no hidden character here.
+    static func planDisplay(_ plan: String) -> String {
+        plan.components(separatedBy: "\n").map(AgentPrompt.visible).joined(separator: "\n")
+    }
+
     func option(_ w: AgentWindowPrompt, _ o: AgentPromptOption) -> some View {
-        let on = w.enabled.contains(o.digit) && !model.busy
+        let isChat = o.digit == w.chat?.digit
+        let on = (w.enabled.contains(o.digit) || isChat) && !model.busy
         let ticked = model.picks.contains(o.digit)
         return Button {
+            if isChat { return model.chat() }
             switch w.kind {
             case .choose: model.answer(o)
             case .preview: model.choosePreview(o)
@@ -647,7 +678,7 @@ struct AgentPromptPanel: View {
             }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
-                if w.kind == .multi {
+                if w.kind == .multi, !isChat {
                     Image(systemName: ticked ? "checkmark.square.fill" : "square")
                         .font(Neon.font(12)).foregroundStyle(ticked ? Neon.blue : Neon.textSecondary)
                 } else {

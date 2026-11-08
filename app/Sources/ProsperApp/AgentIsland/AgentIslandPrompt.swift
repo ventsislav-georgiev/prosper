@@ -168,6 +168,8 @@ struct AgentPromptScreen: Equatable {
     var caret: Int?
     /// A multi-select form: the ticked state of each box option, options 1… in order.
     var checked: [Bool]?
+    /// #802: the dialog's footer line, trimmed ("ctrl+g to edit in … · <plan file>"); nil when none.
+    var footer: String? = nil
 }
 
 enum AgentPromptAnswer: Equatable { case sent, changed }
@@ -297,9 +299,14 @@ extension AgentPrompt {
         // has its full-width rule above "Chat about this", so a short rule in
         // its question is never the widest. Not the widest line: screen lines in
         // the fixtures run past their frames. (`extent`, `width`: above.)
+        // #802: Claude Code 2.1.318 draws the plan approval's top rule at column 2; a rule there
+        // is a frame only with the plan title as the first line under it (its inner rules stay
+        // text: the flat plan compare drops them).
         func isFrame(_ k: Int) -> Bool {
-            isRule(lines[k]) && raw[k].prefix(while: { $0.isWhitespace || $0 == "│" }).count <= 1
-                && extent(raw[k]) + frameSlack >= width
+            guard isRule(lines[k]), extent(raw[k]) + frameSlack >= width else { return false }
+            let lead = raw[k].prefix(while: { $0.isWhitespace || $0 == "│" }).count
+            return lead <= 1 || (lead == 2 && lines[(k + 1)...].first(where: { !isBlank($0) })?
+                .trimmingCharacters(in: .whitespaces) == "Ready to code?")
         }
         while i >= 0, isBlank(lines[i]) || isFrame(i) { i -= 1 }
         guard i >= 0 else { return nil }
@@ -363,7 +370,8 @@ extension AgentPrompt {
             preview: form?.preview ?? [], notes: form?.notes ?? [],
             // Off the screen top: the dialog's own top rule is not on screen.
             topFound: j >= 0)
-        return AgentPromptScreen(prompt: prompt, caret: caret, checked: checked)
+        let footer = form == nil ? after.last.flatMap { isFooter($0) ? $0.trimmingCharacters(in: .whitespaces) : nil } : nil
+        return AgentPromptScreen(prompt: prompt, caret: caret, checked: checked, footer: footer)
     }
 
     /// #798: a multi-select's Submit row, trimmed: "Submit" (false) or "❯ Submit" (focused, true).
@@ -588,10 +596,25 @@ extension AgentPrompt {
     /// #805: so does a form footer, "Enter to select · … · Esc to cancel", at any length: with the
     /// caret on an AskUserQuestion's Other row Claude Code 2.1.318 adds "· ctrl+g to edit in VS Code ·"
     /// (77 characters; live capture), and the whole form read as no prompt.
+    /// #802: so does the plan approval's last line (`planFooterPath`); Claude Code 2.1.318 draws
+    /// no "Esc to cancel" under a plan. Not any other ctrl+g line: the composer shows a bare
+    /// "ctrl+g to edit in <editor>" hint under a wrapped draft.
     static func isFooter(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces).lowercased()
         return t.hasPrefix("esc to cancel") || (t.count <= 64 && t.contains("esc to cancel"))
             || (t.hasPrefix("enter to select · ") && t.hasSuffix(" · esc to cancel"))
+            || planFooterPath(line) != nil
+    }
+
+    /// #802: the plan approval's footer, "ctrl+g to edit in <editor> · <plan file>.md", then
+    /// optionally " · ✓ Plan saved!" (Claude Code 2.1.318's bundle): the plan file's path as
+    /// shown. nil for any other line. With no editor detected the plan dialog has no footer.
+    static func planFooterPath(_ line: String) -> String? {
+        let parts = line.trimmingCharacters(in: .whitespaces).components(separatedBy: " · ")
+        let lead = "ctrl+g to edit in "
+        guard parts.count == 2 || (parts.count == 3 && parts[2] == "✓ Plan saved!"),
+              parts[0].hasPrefix(lead), parts[0].count > lead.count, parts[1].hasSuffix(".md") else { return nil }
+        return parts[1]
     }
 
     /// "[ ] Staging", "[✔] Prod", "☐ Local": a multi-select row.

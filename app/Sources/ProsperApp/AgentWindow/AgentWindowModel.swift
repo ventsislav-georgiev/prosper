@@ -160,11 +160,16 @@ final class AgentWindowModel: ObservableObject {
     private(set) var refreshes = 0
 
     private var askSubscription: AnyCancellable?
+    private var planSubscription: AnyCancellable?
 
     init() {
         // #798: the transcript's pending AskUserQuestion is what a question form is checked against.
         askSubscription = transcript.$pendingAsk.sink { [weak self] ask in
             MainActor.assumeIsolated { self?.interaction.ask = ask }
+        }
+        // #802: and the pending ExitPlanMode is what a plan approval is checked against.
+        planSubscription = transcript.$pendingPlan.sink { [weak self] plan in
+            MainActor.assumeIsolated { self?.interaction.plan = plan }
         }
     }
 
@@ -280,6 +285,7 @@ final class AgentWindowModel: ObservableObject {
         transcript.update(AgentSidebar.source(s))
         transcript.start()
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
+        interaction.plan = transcript.pendingPlan
         interaction.follow(s)
     }
 }

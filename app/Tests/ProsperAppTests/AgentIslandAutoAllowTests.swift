@@ -31,6 +31,11 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         ("plan approval", dialog("Would you like to proceed?",
                                  ["Yes, and use auto mode", "Yes, manually approve edits", "No, keep planning"],
                                  title: "Ready to code?", body: [" Here is Claude's plan:", "   Add the parser."])),
+        // #802: Claude Code 2.1.318's real plan approval, which parses since isFooter takes its ctrl+g line.
+        ("plan approval, 2.1.318 layout", AgentWindowInteractionTests.planScreen(caret: 1)),
+        ("plan approval, 2.1.318, bypass row", AgentWindowInteractionTests.planScreen(caret: 1, rows: [
+            "Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session", "Yes, manually approve edits",
+            "No, keep planning"])),
         ("trust folder", dialog("Quick safety check: Is this a project you created or one you trust?",
                                 ["Yes, I trust this folder", "No, exit"], title: "Accessing workspace:",
                                 body: [" /Users/probe/proj"])),

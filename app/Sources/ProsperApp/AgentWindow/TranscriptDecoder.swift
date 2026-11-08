@@ -166,6 +166,9 @@ struct DecodedEntry {
     var sidechain: String?
     /// The working directory the entry was written in (the header's project line).
     var cwd: String?
+    /// #802: a plan_mode attachment's plan file (absolute path), the plan a pending ExitPlanMode
+    /// shows; nil on every other entry and on a subagent's.
+    var planFile: String?
     var items: [Item] = []
 }
 
@@ -219,7 +222,11 @@ enum TranscriptDecoder {
         case "user": e.items = user(o, source: source, cap: cap)
         case "assistant": e.items = assistant(o, source: source, cap: cap)
         case "system": e.items = system(o, source: source, cap: cap)
-        case "attachment": e.items = attachment(o, cap: cap)
+        case "attachment":
+            e.items = attachment(o, cap: cap)
+            let a = K.obj(o, "attachment")
+            if K.str(a, "type") == "plan_mode", !K.bool(a, "isSubAgent"),
+               let f = K.str(a, "planFilePath"), f.hasPrefix("/"), f.count <= 1024 { e.planFile = f }
         default: e.items = [unrecognized(type.isEmpty ? "no type" : type, o)]
         }
         return e

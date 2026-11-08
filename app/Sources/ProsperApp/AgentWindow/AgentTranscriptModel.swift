@@ -43,6 +43,8 @@ struct TranscriptAssembler {
     private(set) var latestVersion: String?
     /// The newest entry's working directory: the header's project line.
     private(set) var cwd: String?
+    /// #802: the newest main-thread plan_mode attachment's plan file.
+    private(set) var planFile: String?
     private var lastVersion = "unknown"
     private(set) var nextID = 0
 
@@ -60,6 +62,7 @@ struct TranscriptAssembler {
         let v = e.version.map { ClaudeCodeCompat.sanitized($0) } ?? lastVersion
         lastVersion = v
         if let c = e.cwd { cwd = c }
+        if e.sidechain == nil, let f = e.planFile { planFile = f }
         if v != "unknown", latestVersion.map({ !DchCommand.isAtLeast(ClaudeCodeCompat.parts($0), ClaudeCodeCompat.parts(v)) }) ?? true {
             latestVersion = v
         }
@@ -134,6 +137,16 @@ struct TranscriptAssembler {
         return nil
     }
 
+    /// #802: the newest ExitPlanMode call of the main thread still waiting on its result: the
+    /// plan the Agents window checks a plan approval on screen against.
+    var pendingPlan: AgentPlanInput? {
+        for id in pendingOrder.reversed() {
+            guard let p = pending[id], p.thread == nil, p.name == AgentPlanInput.toolName else { continue }
+            return AgentPlanInput.parse(p.input, id: id, file: planFile)
+        }
+        return nil
+    }
+
     /// The last block still waits on a tool (a long Bash, a subagent at work): a quiet
     /// file then is expected, not stale. A subagent counts while its Agent/Task call
     /// is open or one of its own steps is.
@@ -181,6 +194,7 @@ struct TranscriptAssembler {
         // ponytail: same arbitrary eviction as add(); only paging uses orphans.
         while orphans.count > maxPending { orphans.remove(at: orphans.startIndex) }
         for (v, n) in page.hiddenCounts { hiddenCounts[v, default: 0] += n }
+        if planFile == nil { planFile = page.planFile }
     }
 
     // MARK: private
@@ -307,6 +321,8 @@ final class AgentTranscriptModel: ObservableObject {
     @Published private(set) var cwd: String?
     /// #798: the pending AskUserQuestion's input (questions, options, multiSelect), nil when none.
     @Published private(set) var pendingAsk: AgentAskInput?
+    /// #802: the pending ExitPlanMode's plan, nil when none.
+    @Published private(set) var pendingPlan: AgentPlanInput?
     /// "Show the conversation anyway" over a terminal-first reason. Per session:
     /// #797 (c) resets it when another session is selected.
     @Published var showAnyway = false
@@ -586,8 +602,10 @@ final class AgentTranscriptModel: ObservableObject {
     /// open file: another session, a missing mapping or a stopped view has none, so a
     /// question form is never cross-checked against a question it was not asked.
     private func syncAsk() {
-        let ask = running && tail != nil && source?.transcriptPath == tail?.path ? assembler.pendingAsk : nil
+        let mapped = running && tail != nil && source?.transcriptPath == tail?.path
+        let ask = mapped ? assembler.pendingAsk : nil, plan = mapped ? assembler.pendingPlan : nil
         if ask != pendingAsk { pendingAsk = ask }
+        if plan != pendingPlan { pendingPlan = plan }
     }
 
     private func evaluate() {

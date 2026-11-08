@@ -69,6 +69,161 @@ struct AgentAskInput: Equatable, Sendable {
     }
 }
 
+/// #802: the ExitPlanMode call Claude Code is waiting on: the plan a plan approval on screen is
+/// checked against. Its tool_use input's "plan" when it carries one; Claude Code 2.1.318 sends
+/// `{}` and keeps the plan in ~/.claude/plans/<slug>.md, named by the transcript's newest
+/// main-thread plan_mode attachment (`file`), read at every check (`text(footer:)`).
+struct AgentPlanInput: Equatable, Sendable {
+    static let toolName = "ExitPlanMode"
+    let id: String
+    /// The call's own "plan"; nil when it carries none (then `file` is the plan).
+    let plan: String?
+    var file: String?
+    /// The home whose .claude/plans a plan file must be in. Seam: tests pass a temp dir.
+    var home: String = NSHomeDirectory()
+    /// A plan file over this is not read (Claude Code's plans are a few KiB).
+    static let maxFileBytes = 256 * 1024
+
+    static func parse(_ input: [String: Any], id: String, file: String? = nil) -> AgentPlanInput? {
+        if let plan = input["plan"] as? String, !plan.isEmpty { return AgentPlanInput(id: id, plan: plan) }
+        return file.map { AgentPlanInput(id: id, plan: nil, file: $0) }
+    }
+
+    /// The plan to compare with the screen: the call's own, or the plan file read now, only when
+    /// it is the one the dialog's last line names ("ctrl+g to edit in <editor> · <path>"). nil
+    /// when the footer is missing or names another file, or the file fails `read`.
+    func text(footer: String?) -> String? {
+        if let plan { return plan }
+        guard let file, let path = Self.clean(file), let shown = footer.flatMap(AgentPrompt.planFooterPath),
+              Self.clean(shown.hasPrefix("~/") ? home + shown.dropFirst() : shown) == path else { return nil }
+        return Self.read(path, root: home + "/.claude/plans")
+    }
+
+    /// An absolute path with "." and empty components dropped; nil when relative or holding "..".
+    static func clean(_ path: String) -> String? {
+        guard path.hasPrefix("/") else { return nil }
+        let parts = path.split(separator: "/").filter { $0 != "." }
+        guard !parts.contains("..") else { return nil }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    /// The plan file's text: `path` strictly under `root`, no symlink at any component from "/"
+    /// (lstat), a regular file of at most `maxFileBytes`, valid UTF-8, the file opened being the
+    /// one checked (O_NOFOLLOW, same device and inode). nil on any miss.
+    static func read(_ path: String, root: String) -> String? {
+        guard let path = clean(path), let root = clean(root), path.hasPrefix(root + "/") else { return nil }
+        var st = stat(), prefix = ""
+        for c in path.split(separator: "/") {
+            prefix += "/" + c
+            guard lstat(prefix, &st) == 0, (st.st_mode & S_IFMT) != S_IFLNK else { return nil }
+        }
+        guard (st.st_mode & S_IFMT) == S_IFREG, st.st_size <= maxFileBytes else { return nil }
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var ft = stat()
+        guard fstat(fd, &ft) == 0, ft.st_dev == st.st_dev, ft.st_ino == st.st_ino, (ft.st_mode & S_IFMT) == S_IFREG
+        else { return nil }
+        var data = Data(), buf = [UInt8](repeating: 0, count: 64 * 1024)
+        while data.count <= maxFileBytes {
+            let n = Darwin.read(fd, &buf, buf.count)
+            guard n >= 0 else { return nil }
+            if n == 0 { break }
+            data.append(buf, count: n)
+        }
+        guard data.count <= maxFileBytes, let s = String(data: data, encoding: .utf8), !s.isEmpty else { return nil }
+        return s
+    }
+
+    /// The plan as compared with the screen, which shows it rendered as markdown: code fence
+    /// lines go (the renderer draws no fence), then every whitespace, markdown markup character
+    /// and renderer glyph (bullets, box drawing, block elements), the same on both sides.
+    /// Every letter, digit and other punctuation is compared, in order.
+    /// ponytail: a link, a table alignment row or HTML the renderer redraws reads as a mismatch,
+    /// which fails closed (Open in terminal); add renderer rules from a live capture if they bite.
+    static func flat(_ lines: [String]) -> String {
+        let kept = lines.flatMap { $0.components(separatedBy: .newlines) }
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }
+        return String(String.UnicodeScalarView(kept.joined().unicodeScalars.filter { u in
+            !(u.properties.isWhitespace || markup.contains(u) || (0x2500...0x259F).contains(u.value))
+        }))
+    }
+
+    private static let markup = Set("#*_`>|-~[]\\•◦▪▫‣·".unicodeScalars)
+}
+
+/// #802: Claude Code's plan approval ("Ready to code?", 2.1.318). The window approves only from
+/// rows it knows by their on-screen label, only after the plan on screen matched the transcript's.
+enum AgentPlanForm {
+    static let title = "Ready to code?"
+    static let lead = "Here is Claude's plan:"
+    static let question = "Claude has written up a plan and is ready to execute. Would you like to proceed?"
+    /// The approve rows the window offers: each keeps the conversation and leaves plan mode for
+    /// a mode the human picks by its name.
+    static let approve = ["Yes, auto-accept edits", "Yes, manually approve edits", "Yes, and use auto mode"]
+    /// Known rows left to the terminal: clearing the context, bypass permissions ("Yes, and switch to …").
+    static let terminal = ["Yes, clear context", "Yes, and switch to"]
+    /// Known "No" rows: the feedback row (its label or its placeholder, with or without its hint) and Ultraplan.
+    static let no = ["No, keep planning", "Tell Claude what to change", "No, refine with Ultraplan in a cloud session"]
+    static let feedbackHint = "shift+tab to approve with this feedback"
+
+    enum Row: Equatable { case approve, terminal, no, unknown }
+
+    static func flat(_ s: String) -> String { s.filter { !$0.isWhitespace } }
+
+    /// A row by its label and detail lines, all whitespace dropped (a narrow pty wraps anywhere).
+    static func row(_ o: AgentPromptOption) -> Row {
+        let t = flat(([o.label] + o.detail).joined())
+        if o.hint == nil, approve.map(flat).contains(t) { return .approve }
+        if terminal.map(flat).contains(where: t.hasPrefix) { return .terminal }
+        let hint = flat(feedbackHint)
+        if no.map(flat).contains(where: { t == $0 || t == $0 + hint }) { return .no }
+        return .unknown
+    }
+
+    struct Verdict: Equatable {
+        /// The approve rows' digits; empty when any check failed.
+        var approve: Set<Int> = []
+        /// Why nothing is approved from the window.
+        var why: String?
+        /// The transcript's plan, shown in the window, when the rows are offered.
+        var plan: String?
+    }
+
+    /// nil: not a plan approval (none of its title, lead line, question or approve rows).
+    /// Else the approve rows, or no rows and why: the transcript's plan is missing; the title,
+    /// lead or question is not Claude Code's; a hidden character or the top off the screen; a
+    /// row Prosper does not know; the plan file unreadable or not the one the footer names; the
+    /// plan on screen is not the transcript's (or only its head);
+    /// the caret on a row a digit would type into (the feedback row).
+    static func check(_ s: AgentPromptScreen, plan: AgentPlanInput?) -> Verdict? {
+        let p = s.prompt
+        let lead = p.context.firstIndex { flat($0) == flat(Self.lead) }
+        // Any one of them makes it a plan approval: a renamed part then fails a check below.
+        guard lead != nil || p.context.contains(where: { flat($0) == flat(title) }) || flat(p.question) == flat(question)
+                || p.options.contains(where: { row($0) == .approve }) else { return nil }
+        func no(_ why: String) -> Verdict { Verdict(why: why) }
+        guard let plan else { return no(AgentWindowText.planUnchecked) }
+        guard let lead, flat(p.context[..<lead].joined()) == flat(title), flat(p.question) == flat(question) else {
+            return no(AgentWindowText.planLayout)
+        }
+        guard !p.hasHiddenCharacters, p.topFound else { return no(AgentWindowText.planUnsafe) }
+        guard !p.options.contains(where: { row($0) == .unknown }) else { return no(AgentWindowText.planRow) }
+        // Read now, never kept: the file is what Claude Code runs; its dialog must name it.
+        guard let text = plan.text(footer: s.footer) else { return no(AgentWindowText.planFile) }
+        let shown = AgentPlanInput.flat(Array(p.context[(lead + 1)...])), want = AgentPlanInput.flat([text])
+        guard shown == want else {
+            return no(!shown.isEmpty && want.hasPrefix(shown) ? AgentWindowText.planCut : AgentWindowText.planMismatch)
+        }
+        // A digit on the feedback row (an input row) is typed into it, never an answer.
+        guard let c = s.caret, let on = p.options.first(where: { $0.digit == c }), [.approve, .terminal].contains(row(on)) else {
+            return no(AgentWindowText.planCaret)
+        }
+        let rows = Set(p.options.filter { row($0) == .approve }.map(\.digit))
+        return rows.isEmpty ? no(AgentWindowText.planRow) : Verdict(approve: rows, plan: text)
+    }
+}
+
 /// What the window says when it cannot act. Every one leaves the text where it was.
 enum AgentWindowText {
     static let changed = "The prompt changed. Open in terminal"
@@ -90,6 +245,17 @@ enum AgentWindowText {
     static let oneLine = "Your own answer must be one line of plain text"
     /// #810: Claude Code shows "Type something." on the empty Other row, so that answer never shows as typed.
     static let placeholder = "Your own answer can't be Claude Code's \"Type something.\" placeholder"
+    // #802: why a plan approval has no approve rows in the window.
+    static let planUnchecked = "Prosper can't check this plan against the conversation. Open in terminal to approve"
+    static let planLayout = "Prosper doesn't know this plan prompt's layout. Open in terminal to approve"
+    static let planUnsafe = "This plan has hidden characters or its top is off the screen. Open in terminal to approve"
+    static let planRow = "This plan prompt has a choice Prosper doesn't know. Open in terminal to approve"
+    static let planMismatch = "The plan on screen doesn't match the conversation. Open in terminal to approve"
+    static let planFile = "Prosper can't read this plan's file, or the prompt names another one. Open in terminal to approve"
+    static let planCut = "Only part of the plan fits on screen. Open in terminal to approve"
+    static let planCaret = "Claude's selection is on the feedback row. Open in terminal to approve"
+    /// The plan rows the window never answers, shown under the rows.
+    static let planTerminal = "Clearing the context and bypass permissions are chosen in the terminal"
 }
 
 enum AgentWindowOutcome: Equatable, Sendable {
@@ -244,17 +410,60 @@ struct AgentWindowDriver: Sendable {
         }
     }
 
+    /// The rows the arrows move through, top to bottom: a multi-select's boxes, its Submit row
+    /// (nil), then its unboxed rows ("Chat about this"); every other form's options in order.
+    static func order(_ s: AgentPromptScreen) -> [Int?] {
+        let digits = s.prompt.options.map(\.digit)
+        guard let n = s.checked?.count else { return digits }
+        return digits.prefix(n).map { $0 } + [nil] + digits.dropFirst(n).map { $0 }
+    }
+
+    /// #802: arrows from `from` to `to` along `order`, one at a time. Before each: the form `holds`
+    /// with the caret where planned; after it: the caret on the next row (the same row waits).
+    func walk(_ from: Int?, to: Int?, order: [Int?], holds: @escaping (AgentPromptScreen) -> Bool) -> Step {
+        guard var i = order.firstIndex(of: from), let t = order.firstIndex(of: to) else { return .unconfirmed }
+        while i != t {
+            let c = order[i], down = i < t, next = order[down ? i + 1 : i - 1]
+            let r = key(ready: { holds($0) && $0.caret == c },
+                        send: { io.keys(key, [down ? "down" : "up"]) },
+                        after: { s in
+                            guard let s else { return nil }
+                            guard holds(s) else { return false }
+                            return s.caret == next ? true : s.caret == c ? nil : false
+                        })
+            guard r == .done else { return r }
+            i += down ? 1 : -1
+        }
+        return .done
+    }
+
     /// Multi-select: each box whose state differs from `picks` gets its digit (a digit toggles),
     /// the caret walks to the Submit row, then Enter. Each key verified before and after.
-    func multi(_ e: AgentPromptScreen, picks: Set<Int>) -> AgentWindowOutcome {
+    /// #802: `other`, the Other row's typed answer: after the toggles the caret walks to that row,
+    /// the text is typed only into the empty row (its "Type something" placeholder) and must show
+    /// there with the row's box ticked (Claude Code ticks it on typing), then Submit. A digit is
+    /// never sent while the caret is on the Other row: Claude Code types it there as text.
+    func multi(_ e: AgentPromptScreen, picks: Set<Int>, other: (digit: Int, text: String)? = nil) -> AgentWindowOutcome {
         guard var checked = e.checked else { return .failed(AgentWindowText.changed) }
-        let n = checked.count, p = e.prompt
+        // #810's rule here too: the placeholder as the answer never confirms and stays in the row.
+        if let o = other, Self.isPlaceholder(o.text) { return .failed(AgentWindowText.placeholder) }
+        let n = checked.count, p = e.prompt, k = other?.digit, order = Self.order(e)
+        let input = p.options.first { Self.isPlaceholder($0.label) }?.digit
+        let (empty, shows) = Self.otherRow(k ?? 0, text: other?.text ?? "")
         var caret = e.caret
-        for d in 1...n where checked[d - 1] != picks.contains(d) {
+        let toggles = (1...n).filter { $0 != k && checked[$0 - 1] != picks.contains($0) }
+        // Off the Other row first, one row up, when a digit must be sent.
+        if !toggles.isEmpty, let i = input, caret == i, let at = order.firstIndex(of: i), at > 0 {
+            let now = checked, up = order[at - 1]
+            let r = walk(i, to: up, order: order, holds: { Self.same($0.prompt, p) && $0.checked == now })
+            guard r == .done else { return Self.outcome(r) }
+            caret = up
+        }
+        for d in toggles {
             var want = checked
             want[d - 1].toggle()
             let now = checked
-            let r = key(ready: { Self.same($0.prompt, p) && $0.checked == now },
+            let r = key(ready: { Self.same($0.prompt, p) && $0.checked == now && ($0.caret != input || input == nil) },
                         send: { io.send(key, String(d)) },
                         after: { s in
                             guard let s else { return nil }
@@ -265,25 +474,50 @@ struct AgentWindowDriver: Sendable {
             guard r == .done else { return Self.outcome(r) }
             checked = want
         }
-        // To Submit: down from a box option (the last one's next row is Submit), up from below it.
-        for _ in 0..<(p.options.count + 2) {
-            guard let c = caret else { break }
-            let down = c <= n, next: Int? = down ? (c == n ? nil : c + 1) : (c == n + 1 ? nil : c - 1)
+        if let o = other {
             let now = checked
-            let r = key(ready: { Self.same($0.prompt, p) && $0.checked == now && $0.caret == c },
-                        send: { io.keys(key, [down ? "down" : "up"]) },
-                        after: { s in
-                            guard let s else { return nil }
-                            guard Self.same(s.prompt, p), s.checked == now else { return false }
-                            if s.caret == next { caret = next; return true }
-                            return s.caret == c ? nil : false
-                        })
-            guard r == .done else { return Self.outcome(r) }
+            var ticked = now
+            ticked[o.digit - 1] = true
+            let w = walk(caret, to: o.digit, order: order, holds: { Self.same($0.prompt, p, other: k) && $0.checked == now })
+            guard w == .done else { return Self.outcome(w) }
+            let typed = key(ready: { Self.same($0.prompt, p, other: k) && $0.checked == now && $0.caret == o.digit && empty($0) },
+                            send: { io.send(key, o.text) },
+                            after: { s in
+                                guard let s else { return nil }
+                                guard Self.same(s.prompt, p, other: k), s.caret == o.digit else { return false }
+                                return shows(s) && s.checked == ticked ? true : nil
+                            })
+            guard typed == .done else { return Self.outcome(typed) }
+            checked = ticked
+            caret = o.digit
         }
-        guard caret == nil else { return .failed(AgentWindowText.unconfirmed) }
         let final = checked
-        return Self.outcome(key(ready: { Self.same($0.prompt, p) && $0.checked == final && $0.caret == nil },
-                                send: { io.keys(key, ["enter"]) }, after: Self.left(p)))
+        let holds = { (s: AgentPromptScreen) in Self.same(s.prompt, p, other: k) && s.checked == final && (k == nil || shows(s)) }
+        let w = walk(caret, to: nil, order: order, holds: holds)
+        guard w == .done else { return Self.outcome(w) }
+        return Self.outcome(key(ready: { holds($0) && $0.caret == nil }, send: { io.keys(key, ["enter"]) },
+                                after: Self.left(p, other: k)))
+    }
+
+    /// #802: "Chat about this" (a single or multi-select question form): the caret walks to the
+    /// row (Claude Code draws it under a rule, outside the options, reached by "down" from the
+    /// last one), each arrow verified with the form and its boxes as planned, then Enter.
+    func chat(_ e: AgentPromptScreen, digit c: Int) -> AgentWindowOutcome {
+        let p = e.prompt, boxes = e.checked
+        let holds = { (s: AgentPromptScreen) in Self.same(s.prompt, p) && s.checked == boxes }
+        let w = walk(e.caret, to: c, order: Self.order(e), holds: holds)
+        guard w == .done else { return Self.outcome(w) }
+        return Self.outcome(key(ready: { holds($0) && $0.caret == c }, send: { io.keys(key, ["enter"]) }, after: Self.left(p)))
+    }
+
+    /// #802: a plan approval's approve row (AgentPlanForm): its digit, only while the whole dialog
+    /// (the plan included) is the one checked against the transcript and the caret is where it
+    /// was planned (on a Yes row: a digit on the feedback row is typed into it). After: the
+    /// dialog is gone.
+    func approve(_ e: AgentPromptScreen, digit d: Int) -> AgentWindowOutcome {
+        let p = e.prompt, c = e.caret
+        return Self.outcome(key(ready: { $0.prompt.sameDialog(p) && $0.checked == nil && $0.caret == c && $0.footer == e.footer },
+                                send: { io.send(key, String(d)) }, after: Self.left(p)))
     }
 
     /// Preview form (#526): the digit moves the focus (and the preview), Enter answers.
@@ -313,10 +547,7 @@ struct AgentWindowDriver: Sendable {
     /// "Typesomething." before the row redraws.
     func other(_ e: AgentPromptScreen, digit k: Int, text: String) -> AgentWindowOutcome {
         let p = e.prompt
-        let flat = { (t: String) in t.filter { !$0.isWhitespace } }
-        let row = { (s: AgentPromptScreen) in s.prompt.options.first { $0.digit == k }.map { flat(([$0.label] + $0.detail).joined()) } }
-        let empty = { (s: AgentPromptScreen) -> Bool in row(s).map(Self.isPlaceholder) ?? false }
-        let shows = { (s: AgentPromptScreen) -> Bool in !empty(s) && (row(s)?.contains(flat(text)) ?? false) }
+        let (empty, shows) = Self.otherRow(k, text: text)
         // #810: the placeholder as the answer would be typed but never confirmed, and stay in the row.
         guard !Self.isPlaceholder(text) else { return .failed(AgentWindowText.placeholder) }
         var caret = e.caret
@@ -344,6 +575,18 @@ struct AgentWindowDriver: Sendable {
         guard typed == .done else { return Self.outcome(typed) }
         return Self.outcome(key(ready: { Self.same($0.prompt, p, other: k) && $0.caret == k && shows($0) },
                                 send: { io.keys(key, ["enter"]) }, after: Self.left(p, other: k)))
+    }
+
+    /// The Other row `k`: empty (its placeholder, any whitespace), and showing `text` (once it is no
+    /// longer the placeholder: "some" or "Type" is in "Typesomething." before the row redraws).
+    static func otherRow(_ k: Int, text: String)
+        -> (empty: @Sendable (AgentPromptScreen) -> Bool, shows: @Sendable (AgentPromptScreen) -> Bool) {
+        let flat = { @Sendable (t: String) in t.filter { !$0.isWhitespace } }
+        let row = { @Sendable (s: AgentPromptScreen) in
+            s.prompt.options.first { $0.digit == k }.map { flat(([$0.label] + $0.detail).joined()) }
+        }
+        let empty = { @Sendable (s: AgentPromptScreen) -> Bool in row(s).map(isPlaceholder) ?? false }
+        return (empty, { s in !empty(s) && (row(s)?.contains(flat(text)) ?? false) })
     }
 
     /// Other text the window types: one line, printable, at most 500 characters.
@@ -375,9 +618,11 @@ enum AgentWindowPanel: Equatable {
     /// The panel for a blocked session's screen. `ask`: the transcript's pending
     /// AskUserQuestion. A question form (header chips) that does not match it shows no
     /// buttons. Without it, a single-select form keeps the island card's digit answers
-    /// and the new key sequences (multi-select, preview, Other) stay off.
+    /// and the new key sequences (multi-select, preview, Other, Chat about this) stay off.
+    /// #802 `plan`: the transcript's pending ExitPlanMode; a plan approval offers its approve
+    /// rows only when AgentPlanForm.check passes, else shows why.
     @MainActor
-    static func classify(_ screen: String, ask: AgentAskInput?) -> AgentWindowPanel {
+    static func classify(_ screen: String, ask: AgentAskInput?, plan: AgentPlanInput? = nil) -> AgentWindowPanel {
         guard let s = AgentPrompt.screen(screen) else { return .terminal(AgentWindowText.unreadable, AgentPrompt.tail(screen)) }
         let p = s.prompt, tail = AgentPrompt.tail(screen)
         let question = p.context.last.map(AgentPrompt.isChipLine) ?? false
@@ -385,21 +630,35 @@ enum AgentWindowPanel: Equatable {
         let review = p.options.map(\.label) == ["Submit answers", "Cancel"]
         if question, !review, let ask, !ask.matches(s) { return .terminal(AgentWindowText.mismatch, tail) }
         let safe = !p.hasHiddenCharacters && p.topFound
+        // #802: the rows a matched, safe question form answers by key sequences: its empty Other
+        // row (typed text) and "Chat about this" (a walk and Enter), both after the asked options.
+        let asked = ask.map { $0.asked(s) } ?? 0
+        let checked = question && !review && ask != nil && safe
+        let other = checked ? p.options.first { $0.digit > asked && AgentWindowDriver.isPlaceholder($0.label) } : nil
+        let chat = checked
+            ? p.options.first { $0.digit > asked && $0.detail.isEmpty && AgentPlanForm.flat($0.label) == "Chataboutthis" } : nil
         if s.checked != nil || !p.preview.isEmpty {
-            guard let ask, question else { return .terminal(AgentWindowText.unchecked, tail) }
-            let n = ask.asked(s)
-            let rows = p.options.filter { $0.digit <= n }
-            return .prompt(AgentWindowPrompt(kind: s.checked != nil ? .multi : .preview, screen: s, buttons: rows,
+            guard ask != nil, question else { return .terminal(AgentWindowText.unchecked, tail) }
+            let rows = p.options.filter { $0.digit <= asked }
+            let multi = s.checked != nil
+            return .prompt(AgentWindowPrompt(kind: multi ? .multi : .preview, screen: s, buttons: rows,
                                              enabled: safe ? Set(rows.map(\.digit)) : [], caption: safe ? [] : p.layout.caption,
-                                             other: nil))
+                                             other: multi ? other : nil, chat: multi ? chat : nil))
         }
         // A single choice: the island card's own rule decides each button (AgentPrompt.answer asks it again).
-        let other = question && !review && ask != nil && safe
-            ? p.options.first { AgentWindowDriver.isPlaceholder($0.label) } : nil
-        let rows = p.options.filter { $0.digit != other?.digit }
-        return .prompt(AgentWindowPrompt(kind: .choose, screen: s, buttons: rows,
-                                         enabled: Set(rows.filter { p.isEnabled($0) }.map(\.digit)),
-                                         caption: p.layout.caption, other: other))
+        let rows = p.options.filter { $0.digit != other?.digit && $0.digit != chat?.digit }
+        let enabled = Set(rows.filter { p.isEnabled($0) }.map(\.digit))
+        // #802: a plan approval offers only its checked approve rows. The island rule's own rows stay
+        // off: "No, keep planning" is an input row (feedback is typed in the terminal), and a row the
+        // rule enables by its label alone may be one Prosper doesn't know.
+        if !question, let v = AgentPlanForm.check(s, plan: plan) {
+            let terminal = p.options.contains { AgentPlanForm.row($0) == .terminal }
+            return .prompt(AgentWindowPrompt(kind: .choose, screen: s, buttons: rows, enabled: v.approve,
+                                             caption: !v.approve.isEmpty && terminal ? [AgentWindowText.planTerminal] : [],
+                                             other: nil, approve: v.approve, plan: v.plan, why: v.why))
+        }
+        return .prompt(AgentWindowPrompt(kind: .choose, screen: s, buttons: rows, enabled: enabled,
+                                         caption: p.layout.caption, other: other, chat: chat))
     }
 }
 
@@ -414,6 +673,13 @@ struct AgentWindowPrompt: Equatable {
     let caption: [String]
     /// The Other row a typed answer goes to, when offered.
     let other: AgentPromptOption?
+    /// #802: the "Chat about this" row, answered by a walk and Enter, when offered.
+    var chat: AgentPromptOption?
+    /// #802: a plan approval's approve rows (AgentWindowDriver.approve), the transcript's plan
+    /// shown above them, and why none is offered.
+    var approve: Set<Int> = []
+    var plan: String?
+    var why: String?
 }
 
 // MARK: - The window's interaction model
@@ -445,6 +711,10 @@ final class AgentWindowInteraction: ObservableObject {
     /// The pending AskUserQuestion of the selected session's transcript.
     var ask: AgentAskInput? {
         didSet { if ask != oldValue { reclassify() } }
+    }
+    /// #802: the pending ExitPlanMode of the selected session's transcript.
+    var plan: AgentPlanInput? {
+        didSet { if plan != oldValue { reclassify() } }
     }
 
     // Seams.
@@ -522,7 +792,7 @@ final class AgentWindowInteraction: ObservableObject {
 
     private func reclassify() {
         guard let screen, session?.state == .blocked, !held else { return }
-        var p = AgentWindowPanel.classify(screen, ask: ask)
+        var p = AgentWindowPanel.classify(screen, ask: ask, plan: plan)
         if afterAction, p == .terminal(AgentWindowText.unreadable, AgentPrompt.tail(screen)) { p = .none }
         if case .prompt(let w) = p, w.kind == .multi, let c = w.screen.checked {
             picks = Set(c.indices.filter { c[$0] }.map { $0 + 1 })
@@ -537,6 +807,11 @@ final class AgentWindowInteraction: ObservableObject {
     /// A single choice: the island click's own guard (re-read, sameDialog, blocked, one digit).
     func answer(_ o: AgentPromptOption) {
         guard case .prompt(let w) = panel, w.kind == .choose, w.enabled.contains(o.digit), let s = session else { return }
+        // #802: a plan's approve row: the driver's checked digit, not the island rule (which keeps mode changes off).
+        if w.approve.contains(o.digit) {
+            let d = driver(s), e = w.screen
+            return act(s, prompt: e.prompt) { io in d(io).approve(e, digit: o.digit) }
+        }
         let key = s.key, p = w.screen.prompt
         act(s, prompt: p) { io in
             AgentPrompt.answer(key, digit: o.digit, expected: p, io: io) == .sent ? .done : .failed(AgentWindowText.changed)
@@ -555,13 +830,29 @@ final class AgentWindowInteraction: ObservableObject {
         // A form the island rule must not answer (hidden characters, no top rule) has
         // every box off; Submit there would untick the screen's boxes and send an empty answer.
         guard case .prompt(let w) = panel, w.kind == .multi, !w.enabled.isEmpty, let s = session else { return }
-        let picks = picks.intersection(w.enabled), d = driver(s), e = w.screen
-        act(s, prompt: e.prompt) { io in d(io).multi(e, picks: picks) }
+        // #802: the Other row's text, when typed: the same one-line rules as a single choice's.
+        var other: (digit: Int, text: String)?
+        if let o = w.other, !otherText.trimmingCharacters(in: .whitespaces).isEmpty {
+            guard let text = AgentWindowDriver.otherText(otherText) else {
+                notice = AgentWindowDriver.isPlaceholder(otherText) ? AgentWindowText.placeholder : AgentWindowText.oneLine
+                return
+            }
+            other = (o.digit, text)
+        }
+        let picks = picks.intersection(w.enabled), d = driver(s), e = w.screen, typed = other
+        act(s, prompt: e.prompt) { io in d(io).multi(e, picks: picks, other: typed) }
     }
 
-    /// The Other row: the typed answer.
+    /// #802: "Chat about this".
+    func chat() {
+        guard case .prompt(let w) = panel, let c = w.chat, let s = session else { return }
+        let d = driver(s), e = w.screen
+        act(s, prompt: e.prompt) { io in d(io).chat(e, digit: c.digit) }
+    }
+
+    /// The Other row of a single choice: the typed answer.
     func sendOther() {
-        guard case .prompt(let w) = panel, let o = w.other, let s = session else { return }
+        guard case .prompt(let w) = panel, w.kind == .choose, let o = w.other, let s = session else { return }
         guard let text = AgentWindowDriver.otherText(otherText) else {
             notice = AgentWindowDriver.isPlaceholder(otherText) ? AgentWindowText.placeholder : AgentWindowText.oneLine
             return

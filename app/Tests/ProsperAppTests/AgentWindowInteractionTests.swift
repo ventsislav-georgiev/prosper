@@ -15,7 +15,7 @@ final class AgentWindowInteractionTests: XCTestCase {
     // MARK: - Fixtures (Claude Code 2.1.3xx layouts, as in AgentIslandPromptTests)
 
     /// S7 run-8: AskUserQuestion multiSelect, drawn from a state.
-    static func multiScreen(_ checked: [Bool], caret: Int?, question: String = "Which colors?") -> String {
+    static func multiScreen(_ checked: [Bool], caret: Int?, question: String = "Which colors?", typed: String = "") -> String {
         let names = ["Red", "Green", "Blue"]
         let mark = { (i: Int) in caret == i ? "❯" : " " }
         var l = ["❯ Use the AskUserQuestion tool with multiSelect set to true to ask me 'Which colors?' with options",
@@ -24,7 +24,7 @@ final class AgentWindowInteractionTests: XCTestCase {
             l.append("\(mark(i + 1)) \(i + 1). [\(checked[i] ? "✔" : " ")] \(names[i])")
             l.append("         \(names[i])")
         }
-        l.append("\(mark(4)) 4. [\(checked[3] ? "✔" : " ")] Type something")
+        l.append("\(mark(4)) 4. [\(checked[3] ? "✔" : " ")] \(typed.isEmpty ? "Type something" : typed)")
         l.append(caret == nil ? "   ❯ Submit" : "     Submit")
         l += [rule, "\(mark(5)) 5. Chat about this", "", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
         return l.joined(separator: "\n")
@@ -138,6 +138,10 @@ final class AgentWindowInteractionTests: XCTestCase {
     static let plan = permission(["Yes, and use auto mode", "Yes, manually approve edits", "No, keep planning"],
                                  body: [" Here is Claude's plan:", "   Add the parser."])
 
+    /// A permission prompt Always allow leaves to the human (no plain "Yes"), its mode changes off.
+    static let modeSwitch = permission(["Yes, and switch to auto mode", "Yes, allow all edits during this session (shift+tab)",
+                                        "No, and tell Claude what to do differently (esc)"])
+
     static let idleScreen = "⏺ Done.\n\n" + rule + "\n❯ \n" + rule + "\n  ? for shortcuts"
 
     static func ask(_ q: String, _ options: [(String, String)], multi: Bool = false) -> AgentAskInput {
@@ -153,7 +157,7 @@ final class AgentWindowInteractionTests: XCTestCase {
     // MARK: - A small Claude Code form simulation behind dch
 
     final class FormSim: @unchecked Sendable {
-        enum Kind { case multi, single, live, preview, plain(String) }
+        enum Kind { case multi, single, live, preview, plan, plain(String) }
         let lock = NSLock()
         let kind: Kind
         var checked = [false, false, false, false]
@@ -170,16 +174,28 @@ final class AgentWindowInteractionTests: XCTestCase {
         var afterKey: ((FormSim) -> Void)?
         /// Runs after each read with the lock held (the screen returned is the one before it).
         var afterRead: ((FormSim) -> Void)?
+        /// #802: a multi-select's Other row ticks its box when text is typed (Claude Code 2.1.318); false: it does not.
+        var autoTick = true
+        /// #802: the plan approval's rows and rendered plan; `typed` is its feedback row's text.
+        var planRows = AgentWindowInteractionTests.planRows
+        var planLines = AgentWindowInteractionTests.planShown
+        var planFooter = AgentWindowInteractionTests.planFooter
+        /// The plan row a digit approved.
+        var approved: Int?
+        /// #802: a slow redraw: an arrow's move shows only after this many more reads.
+        var lag = 0
+        private var lagged: (caret: Int?, reads: Int)?
 
         init(_ kind: Kind) { self.kind = kind }
 
         private func screen() -> String {
             if gone { return AgentWindowInteractionTests.idleScreen }
             switch kind {
-            case .multi: return multiScreen(checked, caret: caret, question: question ?? "Which colors?")
+            case .multi: return multiScreen(checked, caret: caret, question: question ?? "Which colors?", typed: typed)
             case .single: return singleScreen(caret: caret ?? 1, typed: typed, question: question ?? "Which color?")
             case .live: return liveScreen(caret: caret ?? 1, typed: typed)
             case .preview: return previewScreen(caret: caret ?? 1)
+            case .plan: return planScreen(caret: caret ?? 1, rows: planRows, plan: planLines, feedback: typed, footer: planFooter)
             case .plain(let s): return s
             }
         }
@@ -193,10 +209,14 @@ final class AgentWindowInteractionTests: XCTestCase {
             switch (kind, k) {
             case (.multi, "down"), (.multi, "up"):
                 let i = Self.order.firstIndex(where: { $0 == caret })!
-                caret = Self.order[min(max(i + (k == "down" ? 1 : -1), 0), Self.order.count - 1)]
+                let to = Self.order[min(max(i + (k == "down" ? 1 : -1), 0), Self.order.count - 1)]
+                if lag > 0 { lagged = (to, lag) } else { caret = to }
             case (.single, "down"), (.live, "down"): caret = min((caret ?? 1) + 1, 5)
             case (.single, "up"), (.live, "up"): caret = max((caret ?? 1) - 1, 1)
-            case (.multi, "enter"): if caret == nil { gone = true; status = "working" }
+            case (.plan, "down"): caret = min((caret ?? 1) + 1, planRows.count)
+            case (.plan, "up"): caret = max((caret ?? 1) - 1, 1)
+            // Submit, or "Chat about this" (5).
+            case (.multi, "enter"): if caret == nil || caret == 5 { gone = true; status = "working" }
             case (_, "enter"): gone = true; status = "working"
             default: break
             }
@@ -207,10 +227,20 @@ final class AgentWindowInteractionTests: XCTestCase {
             defer { afterKey?(self) }
             guard !deaf else { return }
             switch kind {
-            case .multi: if let d = Int(t), (1...4).contains(d) { checked[d - 1].toggle() }
+            // #802: the Other row (4) is an input row: every key there is text, and text ticks its box.
+            case .multi:
+                if caret == 4 {
+                    typed += t
+                    if autoTick { checked[3] = !typed.isEmpty }
+                } else if let d = Int(t), (1...4).contains(d) { checked[d - 1].toggle() }
             case .preview: if let d = Int(t), (1...3).contains(d) { caret = d }
             case .single, .live: if caret == 4 { typed += t } else if Int(t) != nil { gone = true; status = "working" }
             case .plain: gone = true; status = "working"
+            // The feedback row (the last) is an input row: a digit there is text.
+            case .plan:
+                if caret == planRows.count { typed += t } else if let d = Int(t), (1..<planRows.count).contains(d) {
+                    approved = d; gone = true; status = "working"
+                }
             }
         }
 
@@ -219,6 +249,10 @@ final class AgentWindowInteractionTests: XCTestCase {
                               self.lock.withLock {
                                   self.reads += 1
                                   let s = self.screen()
+                                  if let l = self.lagged {
+                                      self.lagged = l.reads > 1 ? (l.caret, l.reads - 1) : nil
+                                      if l.reads == 1 { self.caret = l.caret }
+                                  }
                                   self.afterRead?(self)
                                   return s
                               }
@@ -304,9 +338,11 @@ final class AgentWindowInteractionTests: XCTestCase {
         }
         XCTAssertEqual(single.kind, .choose)
         XCTAssertEqual(single.other?.digit, 4, "the Other row takes typed text")
-        XCTAssertEqual(single.buttons.map(\.digit), [1, 2, 3, 5])
+        XCTAssertEqual(single.buttons.map(\.digit), [1, 2, 3])
+        XCTAssertEqual(single.chat?.digit, 5, "#802: Chat about this is a walk and Enter, not its digit")
         guard case .prompt(let noAsk) = AgentWindowPanel.classify(Self.singleScreen(caret: 1), ask: nil) else { return XCTFail() }
         XCTAssertNil(noAsk.other, "no transcript: the island card's digits only, no new sequence")
+        XCTAssertNil(noAsk.chat)
         XCTAssertEqual(noAsk.buttons.map(\.digit), [1, 2, 3, 4, 5])
 
         XCTAssertEqual(AgentWindowPanel.classify(Self.singleScreen(caret: 1), ask: Self.multiAsk),
@@ -315,19 +351,29 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(AgentWindowPanel.classify(multi, ask: nil), .terminal(AgentWindowText.unchecked, AgentPrompt.tail(multi)))
         guard case .prompt(let m) = AgentWindowPanel.classify(multi, ask: Self.multiAsk) else { return XCTFail() }
         XCTAssertEqual(m.kind, .multi)
-        XCTAssertEqual(m.buttons.map(\.digit), [1, 2, 3], "the asked options; Other and Chat stay in the terminal")
+        XCTAssertEqual(m.buttons.map(\.digit), [1, 2, 3], "the asked options")
+        XCTAssertEqual(m.other?.digit, 4, "#802: Other takes typed text")
+        XCTAssertEqual(m.chat?.digit, 5)
         let preview = Self.previewScreen(caret: 1)
         XCTAssertEqual(AgentWindowPanel.classify(preview, ask: nil), .terminal(AgentWindowText.unchecked, AgentPrompt.tail(preview)))
         guard case .prompt(let p) = AgentWindowPanel.classify(preview, ask: Self.previewAsk) else { return XCTFail() }
         XCTAssertEqual(p.kind, .preview)
         XCTAssertEqual(p.enabled, [1, 2, 3])
+        XCTAssertNil(p.other)
+        XCTAssertNil(p.chat, "the preview form's Chat row stays in the terminal: it has no digit to verify")
 
         guard case .prompt(let perm) = AgentWindowPanel.classify(Self.permission(), ask: Self.singleAsk) else { return XCTFail() }
         XCTAssertEqual(perm.kind, .choose, "a permission prompt is never cross-checked")
         XCTAssertEqual(perm.enabled, [1, 2])
+        guard case .prompt(let mode) = AgentWindowPanel.classify(Self.modeSwitch, ask: nil) else { return XCTFail() }
+        XCTAssertEqual(mode.enabled, [3], "the island card's rule: mode changes stay off")
+        XCTAssertFalse(mode.caption.isEmpty)
+        XCTAssertNil(mode.why, "not a plan approval")
+        // #802: a plan approval offers only checked approve rows; no transcript plan: none, and why.
         guard case .prompt(let plan) = AgentWindowPanel.classify(Self.plan, ask: nil) else { return XCTFail() }
-        XCTAssertEqual(plan.enabled, [3], "the island card's rule: mode changes stay off")
-        XCTAssertFalse(plan.caption.isEmpty)
+        XCTAssertEqual(plan.enabled, [], "not even the island rule's No row")
+        XCTAssertEqual(plan.why, AgentWindowText.planUnchecked)
+        XCTAssertEqual(plan.approve, [])
 
         XCTAssertEqual(AgentWindowPanel.classify(Self.idleScreen, ask: nil),
                        .terminal(AgentWindowText.unreadable, AgentPrompt.tail(Self.idleScreen)))
@@ -541,7 +587,8 @@ final class AgentWindowInteractionTests: XCTestCase {
                 return XCTFail("caret \(caret)")
             }
             XCTAssertEqual(w.other?.digit, 4, "caret \(caret): Other offered")
-            XCTAssertEqual(w.buttons.map(\.digit), [1, 2, 3, 5])
+            XCTAssertEqual(w.buttons.map(\.digit), [1, 2, 3])
+            XCTAssertEqual(w.chat?.digit, 5)
         }
         let f = FormSim(.live)
         XCTAssertEqual(driver(f.io).other(try screen(Self.liveScreen(caret: 1)), digit: 4, text: "Kiwi please"), .done)
@@ -754,11 +801,11 @@ final class AgentWindowInteractionTests: XCTestCase {
 
     @MainActor
     func testAgentWindowAnswersThroughTheIslandsClickPathAndLeavesThePromptToTheHuman() throws {
-        let f = FormSim(.plain(Self.plan))
+        let f = FormSim(.plain(Self.modeSwitch))
         let c = controller(f.io)
         c.store?.sessions = [session(.blocked)]
         c.checkAutoAllow()
-        until("Always allow leaves the plan to the human") { !c.heldByAutoAllow(Self.key) }
+        until("Always allow leaves the prompt to the human") { !c.heldByAutoAllow(Self.key) }
         let i = interaction(c)
         i.follow(session(.blocked))
         guard case .prompt(let w) = i.panel else { return XCTFail("\(i.panel)") }
@@ -869,12 +916,12 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(d.log, [], "dch: no key from Prosper")
 
         // human: Always allow left the prompt to the human; the window shows its buttons.
-        let h = FormSim(.plain(Self.plan))
+        let h = FormSim(.plain(Self.modeSwitch))
         let ch = controller(h.io)
         ch.store?.sessions = [session(.blocked)]
         ch.checkAutoAllow()
         settle(ch)
-        XCTAssertEqual(h.log, [], "a plan is never Always allow's")
+        XCTAssertEqual(h.log, [], "no plain Yes: never Always allow's")
         XCTAssertFalse(ch.heldByAutoAllow(Self.key), "the human's: no hold")
         let ih = interaction(ch)
         ih.follow(session(.blocked))
@@ -884,7 +931,7 @@ final class AgentWindowInteractionTests: XCTestCase {
 
     @MainActor
     func testAgentWindowAnActionWhileAnIslandClickIsInFlightSendsNothing() throws {
-        let f = FormSim(.plain(Self.plan))
+        let f = FormSim(.plain(Self.modeSwitch))
         let c = controller(f.io, autoAllow: false)
         c.store?.sessions = [session(.blocked)]
         let i = interaction(c)
@@ -1407,6 +1454,10 @@ final class AgentWindowInteractionTests: XCTestCase {
             ("ask-multi", .blocked, Self.multiScreen([true, false, true, false], caret: 1), Self.multiAsk, "", false),
             ("ask-preview", .blocked, Self.previewScreen(caret: 2), Self.previewAsk, "", false),
             ("fallback-mismatch", .blocked, Self.singleScreen(caret: 1), Self.multiAsk, "", false),
+            // #802: plan approval (rows offered, and the fallback), the multi-select Other answer, Chat about this.
+            ("plan-approve", .blocked, Self.planScreen(caret: 1), nil, "", false),
+            ("plan-fallback", .blocked, Self.planScreen(caret: 3), nil, "", false),
+            ("ask-multi-other", .blocked, Self.multiScreen([true, false, false, false], caret: 1), Self.multiAsk, "", false),
             ("fallback-unreadable", .blocked, Self.idleScreen, nil, "", false),
             ("notice", .idle, nil, nil, "Keep this text", true),
         ]
@@ -1424,9 +1475,15 @@ final class AgentWindowInteractionTests: XCTestCase {
                                                      say: { _, _ in "" }), autoAllow: false)
                     let i = interaction(c)
                     i.ask = ask
+                    if name.hasPrefix("plan-") { i.plan = Self.planInput }
                     let s = session(state)
                     i.follow(s)
+                    if name == "ask-multi-other" { i.otherText = "Teal, and a darker shade if there is one" }
                     i.draft = draft
+                    if name == "plan-approve" || name == "plan-fallback" {
+                        guard case .prompt(let w) = i.panel else { return XCTFail("\(name): \(i.panel)") }
+                        XCTAssertEqual(w.approve.isEmpty, name == "plan-fallback", name)
+                    }
                     if notice {
                         i.send()
                         until("the notice") { !i.busy }
