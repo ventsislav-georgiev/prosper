@@ -66,6 +66,14 @@ tag from the now-released section and put it on the new top draft.
   command. Before, dch read it as its own options, so `-kl` would have closed every session.
   The protocol notes now cover what a `dch serve` host refuses and how big a request may be.
   (#803)
+- Remote Terminal now lets in only your own Tailscale devices. Before, any device on your
+  tailnet could connect, including devices shared into it. Prosper asks Tailscale who each
+  device belongs to before reading anything from it; other people's devices, tagged devices
+  and devices Tailscale doesn't know are refused. If Tailscale on this Mac isn't answering,
+  devices are refused too, unless you turn on "Allow when Tailscale isn't answering" in
+  Settings, which lets any device that can reach this Mac in while Tailscale isn't answering.
+  Remote Terminal's settings now say why a device was refused, and when port 8771 is taken
+  (say by `dch serve`) or this Mac has no Tailscale address. (#777)
 
 ## v2.173.0
 

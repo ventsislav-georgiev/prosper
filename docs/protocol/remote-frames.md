@@ -20,6 +20,8 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   [M10](#known-gaps). No IPv6 in 1.0.
 - Prosper drops every peer whose address is not an IPv4 address in 100.64.0.0/10, IPv6
   included, before it reads a byte (the client sees a close).
+- Prosper then lets in only the host owner's own devices: the owner check (#777, see
+  [Decided defaults](#decided-defaults-for-dch-serve)), also before it reads a byte.
 - A server must never bind a wider address than its Tailscale one on its own; `dch serve`
   binds another only when its operator names it (`--bind`). See
   [Decided defaults](#decided-defaults-for-dch-serve) for the rules `dch serve` follows.
@@ -130,6 +132,8 @@ Every frame, in both directions:
   - when the server stops (Remote Terminal turned off; a failed listener alone closes no
     connection);
   - at once, for a peer outside 100.64.0.0/10 (no frame is read or sent);
+  - once the owner check refuses the peer (#777; at most 2 s after accept, no frame is read
+    or sent);
   - at once, for a connection that reaches a listener Prosper has just replaced (a race
     while it rebinds; no frame is read or sent);
   - **at once, when the client closes its sending side** (its FIN, a half-close with
@@ -502,10 +506,10 @@ rules above; each item is either a known limit of the code or a decision still o
 - **M6. The watch stream's sidekick frame.** Prosper sends `0x14 {"sidekick"}` on every stream
   (it always lists `sidekick`). This spec makes it conditional on `sidekick` in `ops`, so a dch
   server need not invent one.
-- **M7. Any tailnet peer is trusted.** Prosper checks the peer's address (IPv4 in
-  100.64.0.0/10; IPv6 is refused), not who it is: every device on the tailnet, including
-  nodes shared into it, can connect. The owner check (#777, Tailscale whois per connection)
-  closes this; see [Decided defaults](#decided-defaults-for-dch-serve).
+- **M7. Any tailnet peer is trusted** (resolved, #777). Prosper checked only the peer's
+  address, so every device on the tailnet, nodes shared into it included, could connect. Since
+  #777 it runs the owner check on every connection; see
+  [Decided defaults](#decided-defaults-for-dch-serve).
 - **M8. `hostname` is not a DNS name on Prosper.** It carries the computer name, the same value as
   `name`. A dch server sends `gethostname()`.
 - **M9. Replies can trail.** Prosper's 0x08 reply waits up to 0.25 s for a dch version probe,
@@ -547,20 +551,67 @@ gap above or the item says so.
     restarts it (systemd `After=`/`Wants=tailscaled.service`, `Restart=on-failure`,
     `RestartSec=5`; launchd `KeepAlive`) (dch, was Q12);
   - when `<tailscale ip>:8771` is taken (Prosper serves that Mac, say), it refuses to start;
-    there is no alternate port in 1.0. *Pending operator confirmation*; dch agrees
+    there is no alternate port in 1.0. Prosper, finding the port taken (by `dch serve`, say),
+    keeps retrying and says so in Remote Terminal's settings ("Port 8771 on your Tailscale
+    address is in use (dch serve?)"). *Pending operator confirmation*; dch agrees
     ([Q10](#open-questions)).
 - Accept peers only from 100.64.0.0/10. No IPv6 in 1.0.
 - **A refused peer gets no frame.** Every refusal (the address, the owner check, a tagged
   peer, whois unavailable) is decided right after accept, before a byte is read, and the
-  server closes the connection: no frame is read or sent. This is what Prosper does with a
-  peer outside 100.64.0.0/10 (`DchSessionServer.accept`: `allowPeer` is false, so the
-  connection, never started, is cancelled). The client's connect succeeds, then it sees
-  EOF or a reset, and a request it already sent gets no reply. A client cannot tell this
-  from a dropped link.
+  server closes the connection: no frame is read or sent. Prosper does this for every one of
+  them (`DchSessionServer.accept`: a peer `allowPeer` refuses is cancelled at once; any other
+  connection is not started until the owner check answers, and is cancelled when it refuses).
+  The client's connect succeeds, then it sees EOF or a reset, and a request it already sent
+  gets no reply. A client cannot tell this from a dropped link.
 - **The owner check** (#777) compares the peer's whois `UserProfile.ID` with the host's
-  `Self.UserID`, not login names.
+  `Self.UserID`, not login names. Trust is per node: every process on an owner's device, other
+  local users on an owner's Mac included, and every LAN host behind an owner's subnet router
+  gets in; `dch serve` is the same. Prosper (`DchOwnerCheck`) and `dch serve` (v1.33.1) share
+  these rules:
+  - ask the `tailscale` CLI: `tailscale status --json --peers=false` for the host,
+    `tailscale whois --json <ip>` for the peer;
+  - refuse this host's own addresses (any local user or app can connect from them, and whois
+    would name the host's owner) with no whois, and the host's own node when whois names it.
+    Loopback is left to the address gate;
+  - treat a node as tagged when it has `Tags` or its user is `tagged-devices`;
+  - refuse a peer whois does not know, and one whois fails for (or answers unreadably) while
+    `tailscale status` works: Tailscale is answering and cannot vouch for it;
+  - refuse a whois answer with no `Node`. Once the host's node id is known, Prosper and dch
+    v1.33.1 also refuse a `Node` with no `StableID` (v1.33.0 needs a numeric `Node.ID`);
+  - remember a refusal Tailscale answered for 30 s, asking nothing for that address meanwhile.
+
+  Where they differ:
+  - **The host's own node.** Prosper matches status `Self.ID` with whois `Node.StableID`, as
+    strings. `dch serve` v1.33.0 parses both `Self.ID` and whois `Node.ID` as digits, which only
+    some self-hosted control servers give (on tailscale.com `Self.ID` is a `n...CNTRL` string); since
+    v1.33.1 (dch #088) it compares `StableID` strings like Prosper.
+  - **The host's state.** Prosper reads the host from `tailscale status` on every decision and
+    requires `BackendState` `Running`; a host that answers anything else (`Starting` after
+    wake, `NeedsLogin`, `Stopped`) is refused as answering, never relaxed, and not remembered,
+    so the next connection asks again. `dch serve` reads the host owner once at startup and
+    checks no `BackendState`.
+  - **Which CLI.** Prosper tries `/Applications/Tailscale.app/Contents/MacOS/Tailscale` (the App
+    Store and standalone apps), `/opt/homebrew/bin/tailscale`, `/usr/local/bin/tailscale`
+    (Homebrew's tailscaled) and `/opt/local/bin/tailscale` (MacPorts) in that order, and uses
+    the first whose status answers `Running`: an installed app with its daemon off hands over
+    to a running Homebrew tailscaled. `dch serve` uses the first `tailscale` on its `PATH` (then
+    `/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), else the app's, whether or not it answers.
+  - **The bound.** Prosper bounds each decision at 2 s. A timeout before `tailscale status`
+    answered counts as not answering; one after it (whois hung) is refused as answering. Prosper
+    does not remember a timeout.
+  - **Repeats.** Prosper also remembers an allowed owner's device for 30 s, and connections
+    from an address whose check is in flight wait for that check (one whois per phone burst of
+    handshake, watch and attach); `dch serve` asks again per connection.
+
+  Prosper logs one line per cause (not per connection) and shows the last refusal in Remote
+  Terminal's settings ("Couldn't verify 100.64.0.1: Tailscale isn't answering (...). Turning on
+  "Allow when Tailscale isn't answering" would let it in."), cleared when an owner's device next
+  connects. `dch serve --check-peer <ip>` prints the decision for one address; Prosper has no
+  such dry run.
 - **A tagged host**, *pending operator confirmation*. No user owns a tagged host: its
-  `Self.UserID` is the tagged-devices identity. `dch serve` refuses to start there unless given
+  `Self.UserID` is the tagged-devices identity. Prosper has no `--allow-user`: on a tagged host
+  it refuses every peer, with "this Mac is a tagged Tailscale device, so no user owns it" in its
+  settings. `dch serve` refuses to start there unless given
   `--allow-user <login or numeric user id>`, repeatable. It then accepts only peers whose
   whois user is one of those: a number is compared exactly with `UserProfile.ID`, a login with
   `UserProfile.LoginName`, ASCII case-insensitively. The docs recommend ids (dch, was Q15).
@@ -570,9 +621,16 @@ gap above or the item says so.
   confirmation*; dch agrees ([Q9](#open-questions)).
 - **Whois unavailable** (tailscaled down or its LocalAPI unreachable), *pending operator
   confirmation*: fail closed by default, so the peer is refused as above and `dch serve` logs a
-  line. `--whois-optional` (name not final) relaxes only a per-peer whois failure: that peer is
-  accepted and a warning is logged. It never relaxes startup: `dch serve` always needs the host
-  owner (`Self.UserID`) when it starts, and refuses to start without it.
+  line. `--whois-optional` relaxes only Tailscale not answering (whois and status both fail):
+  that peer is accepted and a warning is logged. It never relaxes a whois failure while status
+  works, nor startup: `dch serve` always needs the host owner (`Self.UserID`) when it starts,
+  and refuses to start without it. Prosper's equivalent is the setting "Allow when Tailscale
+  isn't answering" (off by default; key `remoteAllowWhenTailscaleDown`): it covers no CLI
+  installed, every CLI failing to start or to reach tailscaled, and the 2 s bound passing
+  before `tailscale status` answered. While it is on and Tailscale isn't answering, any peer
+  that passed the address gate gets in unverified, another user's or a tagged one included.
+  Prosper has no startup check: it asks for the host owner per decision, so the same setting
+  covers it.
 
 ### Open questions
 

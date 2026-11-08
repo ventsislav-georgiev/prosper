@@ -417,6 +417,8 @@ enum Preferences {
         static let clipboardSyncWithPhone = "clipboardSyncWithPhone"
         // #619: run allowlisted palette commands from the iPhone. Per Mac.
         static let runCommandsFromPhone = "runCommandsFromPhone"
+        // #777: let a peer in when Tailscale isn't answering. Per Mac.
+        static let remoteAllowWhenTailscaleDown = "remoteAllowWhenTailscaleDown"
         // #523: post dch session states to the Worker for the iPhone Live Activity.
         static let liveStatusEnabled = "liveStatusEnabled"
         // #523: POST /activate succeeded for this Mac on the signed-in account.
@@ -1095,6 +1097,14 @@ enum Preferences {
     static var runCommandsFromPhone: Bool {
         get { defaults.bool(forKey: Keys.runCommandsFromPhone) }
         set { defaults.set(newValue, forKey: Keys.runCommandsFromPhone) }
+    }
+
+    /// #777 "Allow when Tailscale isn't answering". Off by default (absent = off): a peer is
+    /// refused while Tailscale can't be asked. On lets it in; every answer Tailscale gives
+    /// (another user, a tagged device, a device it can't vouch for) is still refused.
+    static var remoteAllowWhenTailscaleDown: Bool {
+        get { defaults.bool(forKey: Keys.remoteAllowWhenTailscaleDown) }
+        set { defaults.set(newValue, forKey: Keys.remoteAllowWhenTailscaleDown) }
     }
 
     /// #617's gate: the phone's clipboard ops exist only while history AND the toggle are on.

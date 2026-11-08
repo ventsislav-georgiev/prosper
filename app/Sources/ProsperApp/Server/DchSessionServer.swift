@@ -17,6 +17,9 @@ import os.log
 ///      server refuses to start (fail safe — never bind to 0.0.0.0).
 ///   2. Belt-and-suspenders: every accepted connection's peer IP must also fall in
 ///      the Tailscale CGNAT range 100.64.0.0/10, else it's dropped.
+///   3. #777: Tailscale whois must say the peer belongs to this Mac's own Tailscale user
+///      (`DchOwnerCheck`), decided before the connection starts, so a refused peer is
+///      closed with no byte read.
 /// No auth tokens, no TLS — Tailscale is the trust boundary.
 /// Pure keep-awake decision, extracted from `DchSessionServer` so the grace /
 /// activity branching is unit-testable without an `NWListener` or live XPC. The
@@ -88,8 +91,13 @@ enum KeepAwakePolicy {
     }
 }
 
-final class DchSessionServer: @unchecked Sendable {
+final class DchSessionServer: ObservableObject, @unchecked Sendable {
     static let shared = DchSessionServer()
+
+    /// QA #633 INFO 2: why the listener is not up while it retries (the port taken, say by
+    /// `dch serve`, or no Tailscale address); nil while it listens or is off. Main thread only;
+    /// Remote Terminal's settings show it beside the owner check's refusals.
+    @Published private(set) var bindStatus: String?
 
     /// Fixed port so the app connects deterministically (no discovery step).
     /// ponytail: hard-coded; advertise via Bonjour/MagicDNS SRV if it ever clashes.
@@ -124,6 +132,8 @@ final class DchSessionServer: @unchecked Sendable {
     private let onReady: @Sendable () -> Void
     /// #776: the golden-frame test's loopback peer and its fakes on every accepted connection.
     private let allowPeer: @Sendable (NWConnection) -> Bool
+    /// #777: whois per peer. A test that lets loopback through `allowPeer` passes a fake here.
+    private let owner: DchOwnerCheck
     private let configure: @Sendable (DchConnection) -> Void
 
     // Keep-awake: while any client is attached — OR a detached session is still
@@ -153,12 +163,14 @@ final class DchSessionServer: @unchecked Sendable {
          // master, which narrows the session for whoever attaches next.
          onReady: @escaping @Sendable () -> Void = { DchCommand.sweepOrphanedClients() },
          allowPeer: @escaping @Sendable (NWConnection) -> Bool = { DchSessionServer.isTailscalePeer($0) },
+         owner: DchOwnerCheck = .shared,
          configure: @escaping @Sendable (DchConnection) -> Void = { _ in }) {
         self.bindHost = bindHost
         self.bindPort = port
         self.retryBase = retryBase
         self.onReady = onReady
         self.allowPeer = allowPeer
+        self.owner = owner
         self.configure = configure
     }
 
@@ -197,6 +209,7 @@ final class DchSessionServer: @unchecked Sendable {
         do {
             guard let host = bindHost() else {
                 logFailure("dch server: no Tailscale address — refusing to bind")
+                setBindStatus(Self.bindStatusText(nil, port: bindPort))
                 throw ServerError.noTailscale
             }
             let listener = try makeListener(host: host)
@@ -258,16 +271,34 @@ final class DchSessionServer: @unchecked Sendable {
             guard listener === l else { return }
             log.info("dch server ready on port \(self.bindPort)")
             retryAttempt = 0
+            setBindStatus(nil)
             queue.async(execute: onReady)   // the sweep runs ps + a 0.3 s sleep: not here
         case .failed(let e):
             logFailure("dch server failed on port \(bindPort): \(String(describing: e))")
             l.cancel()
             if listener === l {
                 listener = nil
+                setBindStatus(Self.bindStatusText(e, port: bindPort))
                 scheduleRetry()
             }
             sem?.signal()
         default: break
+        }
+    }
+
+    private func setBindStatus(_ text: String?) {
+        DispatchQueue.main.async { if self.bindStatus != text { self.bindStatus = text } }
+    }
+
+    /// The settings line for a listener that is not up: `error` nil means no Tailscale address.
+    static func bindStatusText(_ error: NWError?, port: UInt16) -> String {
+        switch error {
+        case nil:
+            return "No Tailscale address on this Mac; Remote Terminal starts when Tailscale connects."
+        case .posix(.EADDRINUSE)?:
+            return "Port \(port) on your Tailscale address is in use (dch serve?). Remote Terminal keeps retrying."
+        case let e?:
+            return "Remote Terminal couldn't listen on port \(port) (\(e)). It keeps retrying."
         }
     }
 
@@ -309,6 +340,7 @@ final class DchSessionServer: @unchecked Sendable {
             listener?.cancel()
             listener = nil
         }
+        setBindStatus(nil)
         queue.async { [weak self] in
             guard let self else { return }
             self.connections.values.forEach { $0.close() }
@@ -344,11 +376,25 @@ final class DchSessionServer: @unchecked Sendable {
 
     private func accept(_ conn: NWConnection) {
         // Belt-and-suspenders source-IP gate (the bind already restricts us).
-        if !allowPeer(conn) {
+        guard allowPeer(conn), let ip = Self.peerAddress(conn) else {
             log.error("dch server: rejecting non-Tailscale peer")
             conn.cancel()
             return
         }
+        // #777: the owner check. The connection is not started until it allows, so a refused
+        // peer is cancelled with no byte read and no frame sent. It logs and reports its refusals.
+        owner.check(ip) { [weak self] verdict in
+            guard let self else { conn.cancel(); return }
+            self.queue.async {
+                // A check that finishes after stop() must not add a connection stop() never closes.
+                guard verdict.allowed, self.isRunning else { conn.cancel(); return }
+                self.admit(conn)
+            }
+        }
+    }
+
+    /// On `queue`, once the owner check allowed the peer.
+    private func admit(_ conn: NWConnection) {
         let handler = DchConnection(
             conn: conn, queue: queue, log: log,
             onClose: { [weak self] id in
@@ -532,6 +578,12 @@ final class DchSessionServer: @unchecked Sendable {
             return String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         }
         return nil
+    }
+
+    /// #777: the peer's IPv4 address as whois takes it; nil for anything else.
+    static func peerAddress(_ conn: NWConnection) -> String? {
+        guard case let .hostPort(.ipv4(v4), _) = conn.currentPath?.remoteEndpoint ?? conn.endpoint else { return nil }
+        return v4.rawValue.map { String($0) }.joined(separator: ".")
     }
 
     static func isTailscalePeer(_ conn: NWConnection) -> Bool {

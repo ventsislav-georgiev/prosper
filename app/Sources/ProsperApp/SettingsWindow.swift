@@ -352,6 +352,12 @@ final class SettingsModel: ObservableObject {
         runCommandsFromPhone = on
         Preferences.runCommandsFromPhone = on
     }
+    /// #777 "Allow when Tailscale isn't answering"; read per connection by DchOwnerCheck.
+    @Published var allowWhenTailscaleDown: Bool
+    func setAllowWhenTailscaleDown(_ on: Bool) {
+        allowWhenTailscaleDown = on
+        Preferences.remoteAllowWhenTailscaleDown = on
+    }
     /// #523 "Live status on iPhone": off posts offline and stops, on posts the list.
     @Published var liveStatusEnabled: Bool
     func setLiveStatus(_ on: Bool) {
@@ -496,6 +502,7 @@ final class SettingsModel: ObservableObject {
         isolateRemoteSessions = Preferences.isolateRemoteSessions
         clipboardSyncWithPhone = Preferences.clipboardSyncWithPhone
         runCommandsFromPhone = Preferences.runCommandsFromPhone
+        allowWhenTailscaleDown = Preferences.remoteAllowWhenTailscaleDown
         liveStatusEnabled = Preferences.liveStatusEnabled
         mcpServers = Preferences.mcpServers
         hooks = Preferences.hooks
@@ -1282,6 +1289,8 @@ private struct GeneralPane: View {
                 NeonDivider()
                 RunCommandsToggle(model: model)
                 NeonDivider()
+                RemoteTerminalStatusRows(model: model)
+                NeonDivider()
                 NeonRow("Live status on iPhone", subtitle: liveStatusNote) {
                     Toggle("", isOn: Binding(
                         get: { SupporterClient.shared.isSignedIn && model.liveStatusEnabled },
@@ -1354,6 +1363,40 @@ struct RunCommandsToggle: View {
             get: { model.runCommandsFromPhone },
             set: { model.setRunCommandsFromPhone($0) }))
             .disabled(!model.remoteTerminalEnabled)
+    }
+}
+
+/// #777: why the phone can't get in: the listener not up (QA #633 INFO 2, e.g. dch serve holds
+/// the port) and the owner check's last refusal (DchOwnerCheck.status); then the one relaxation,
+/// let a device in while Tailscale isn't answering. Off by default.
+struct RemoteTerminalStatusRows: View {
+    @ObservedObject var model: SettingsModel
+    @ObservedObject var check = DchOwnerCheck.shared
+    @ObservedObject var server = DchSessionServer.shared
+
+    var body: some View {
+        if model.remoteTerminalEnabled {
+            ForEach([server.bindStatus, check.status].compactMap { $0 }, id: \.self) { status in
+                HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Neon.magenta)
+                    Text(status)
+                        .font(Neon.font(12))
+                        .foregroundStyle(Neon.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                NeonDivider()
+            }
+        }
+        NeonRow("Allow when Tailscale isn't answering",
+                subtitle: "Only your own Tailscale devices may connect. While Tailscale on this Mac isn't answering, no device can be checked, so all are refused. With this on, any device that can reach this Mac over Tailscale gets in during that time, other people's and tagged devices included.") {
+            Toggle("", isOn: Binding(
+                get: { model.allowWhenTailscaleDown },
+                set: { model.setAllowWhenTailscaleDown($0) }))
+                .labelsHidden()
+        }
+        .disabled(!model.remoteTerminalEnabled)
     }
 }
 

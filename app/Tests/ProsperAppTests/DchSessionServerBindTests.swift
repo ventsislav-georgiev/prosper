@@ -109,6 +109,32 @@ final class DchSessionServerBindTests: XCTestCase {
         XCTAssertTrue(eventually { !portHeld(port) }, "stop() must free the port")
     }
 
+    /// QA #633 INFO 2: a taken port (dch serve on the same Mac, here a test socket) shows in
+    /// Remote Terminal's settings, not only in the log; the bind that follows clears it.
+    func testTakenPortShowsABindStatusUntilTheBindSucceeds() throws {
+        let port = try holdPort()
+        let s = server(port: port, retryBase: 60)
+        try s.start()
+        XCTAssertFalse(s.isRunning)
+        let want = "Port \(port) on your Tailscale address is in use (dch serve?). Remote Terminal keeps retrying."
+        XCTAssertTrue(onMain { s.bindStatus == want }, "\(s.bindStatus ?? "nil")")
+        releasePort()
+        try s.start()
+        XCTAssertTrue(s.isRunning)
+        XCTAssertTrue(onMain { s.bindStatus == nil }, "a listening server shows no bind status")
+        XCTAssertEqual(DchSessionServer.bindStatusText(nil, port: 8771),
+                       "No Tailscale address on this Mac; Remote Terminal starts when Tailscale connects.")
+        XCTAssertEqual(DchSessionServer.bindStatusText(.posix(.EADDRINUSE), port: 8771),
+                       "Port 8771 on your Tailscale address is in use (dch serve?). Remote Terminal keeps retrying.")
+    }
+
+    /// `bindStatus` is set from main.async: spin main's run loop while waiting (this runs on main).
+    private func onMain(_ seconds: Double = 5, _ cond: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end, !cond() { RunLoop.main.run(until: Date() + 0.02) }
+        return cond()
+    }
+
     /// The orphan sweep (production onReady) runs once per listener that comes up.
     func testOnReadyRunsOncePerReadyListener() throws {
         let readies = Counter()

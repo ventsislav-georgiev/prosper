@@ -25,6 +25,19 @@ final class RemoteFramesGoldenTests: XCTestCase {
     private var server: DchSessionServer!
     private var port: UInt16 = 0
     private let ran = Recorder()
+    /// #777: the addresses the setUp server's owner check asked whois about.
+    private let asked = Recorder()
+
+    /// #777: an owner check whose whois fake answers `peer` (a throw: whois unavailable) for every
+    /// address, the host being user 1. The default is the phone on a personal tailnet: user 1 too.
+    /// Loopback passes `allowPeer: { _ in true }` only, so it is checked like any tailnet peer.
+    private static func owner(_ peer: @escaping @Sendable () throws -> TailscaleNode? = { TailscaleNode(userID: 1, name: "iphone") },
+                      asked: Recorder? = nil, relax: Bool = false) -> DchOwnerCheck {
+        DchOwnerCheck(whois: { ip, _ in
+            asked?.add([ip])
+            return TailscaleWhois(host: TailscaleNode(userID: 1, name: "mac"), peer: try peer())
+        }, allowWhenDown: { relax })
+    }
 
     override func setUpWithError() throws {
         let script = tempDir("golden-dch").appendingPathComponent("fake-dch")
@@ -37,6 +50,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let ran = ran, rows = Self.rows
         server = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
                                   allowPeer: { _ in true },
+                                  owner: Self.owner(asked: asked),
                                   configure: { c in
                                       c.listSessions = { rows }
                                       c.kill = { ran.add(["-k", $0]) }
@@ -334,6 +348,99 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertEqual(info["server"] as? String, "prosper")
     }
 
+    // MARK: - Owner check (#777)
+
+    /// The phone on a personal tailnet: every golden fixture above runs through the owner check,
+    /// whose whois fake answers the host's own user. This pins that the check ran (and passed).
+    func testThePhonePathRunsThroughTheOwnerCheck() throws {
+        let c = try Client(port: port)
+        try c.send(Data([0x08, 0, 0, 0, 0]))
+        XCTAssertEqual(try c.frame().0, DchFrame.machineInfoResp)
+        XCTAssertEqual(asked.all.last, ["127.0.0.1"], "whois was asked about the peer's address")
+    }
+
+    /// A refused peer is decided before a byte is read: while whois is pending the connection is
+    /// not started (a pipelined 0x08 and 0x03 get nothing, no handler exists), and once whois
+    /// refuses it the server closes it with no frame. Then the same for every refusal cause.
+    func testRefusedPeerGetsNoFrameAndIsClosed() throws {
+        let release = DispatchSemaphore(value: 0)
+        let handlers = Recorder()
+        let pending = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                       allowPeer: { _ in true },
+                                       owner: Self.owner({
+                                           release.wait()
+                                           return TailscaleNode(userID: 2, login: "bob@example.com", name: "bobs-phone")
+                                       }),
+                                       configure: { c in
+                                           handlers.add(["configured"])
+                                           c.listSessions = { handlers.add(["list"]); return [] }
+                                       })
+        defer { release.signal(); release.signal(); pending.stop(); _ = pending.isRunning; pending.queue.sync {} }
+        try pending.start()
+        let c = try Client(port: try XCTUnwrap(pending.boundPort))
+        try c.send(Data([0x08, 0, 0, 0, 0]) + DchFrame.encode(DchFrame.list, []))
+        // One byte only: a server that read anything would have drained it and close with EOF.
+        let one = try Client(port: try XCTUnwrap(pending.boundPort))
+        try one.send(Data([0x08]))
+        XCTAssertThrowsError(try c.frame(timeout: 0.5), "nothing is read or answered while whois is pending") {
+            XCTAssertEqual($0 as? Client.Failure, .timeout)
+        }
+        XCTAssertEqual(handlers.all, [], "no connection handler before the owner check allows")
+        release.signal()
+        release.signal()
+        XCTAssertThrowsError(try c.frame(timeout: 5), "refused: closed with no frame") {
+            XCTAssertEqual($0 as? Client.Failure, .closed)
+        }
+        XCTAssertEqual(one.closedByReset(), true,
+                       "closed with our one byte still unread (a reset, not EOF): no byte was read")
+        pending.queue.sync {}
+        XCTAssertEqual(handlers.all, [], "the refused peer never got a handler")
+
+        let causes: [(String, @Sendable () throws -> TailscaleNode?)] = [
+            ("tagged peer", { TailscaleNode(userID: 1, name: "exit-node", tagged: true) }),
+            ("unknown peer", { nil }),
+            ("tailscale not answering", { throw WhoisUnavailable(cause: "Tailscale isn't installed") }),
+            ("whois unusable", { throw WhoisUnusable(cause: "tailscale whois failed (boom)") }),
+        ]
+        for (name, peer) in causes {
+            let s = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                     allowPeer: { _ in true }, owner: Self.owner(peer),
+                                     configure: { _ in handlers.add([name]) })
+            defer { s.stop(); _ = s.isRunning; s.queue.sync {} }
+            try s.start()
+            let c = try Client(port: try XCTUnwrap(s.boundPort))
+            try? c.send(Data([0x08, 0, 0, 0, 0]))
+            XCTAssertThrowsError(try c.frame(timeout: 5), name) { XCTAssertEqual($0 as? Client.Failure, .closed, name) }
+        }
+        XCTAssertEqual(handlers.all, [])
+    }
+
+    /// "Allow when Tailscale isn't answering" on: Tailscale not answering lets the peer in (the
+    /// handshake is answered); another user is still closed with no frame.
+    func testRelaxSettingLetsAnUnverifiedPeerIn() throws {
+        let relaxed = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                       allowPeer: { _ in true },
+                                       owner: Self.owner({ throw WhoisUnavailable(cause: "Tailscale isn't installed") }, relax: true),
+                                       configure: { c in
+                                           c.clipboard.enabled = { false }
+                                           c.commands.enabled = { false }
+                                       })
+        defer { relaxed.stop(); _ = relaxed.isRunning; relaxed.queue.sync {} }
+        try relaxed.start()
+        let c = try Client(port: try XCTUnwrap(relaxed.boundPort))
+        try c.send(Data([0x08, 0, 0, 0, 0]))
+        XCTAssertEqual(try c.frame().0, DchFrame.machineInfoResp)
+
+        let other = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                     allowPeer: { _ in true },
+                                     owner: Self.owner({ TailscaleNode(userID: 2, name: "bob") }, relax: true))
+        defer { other.stop(); _ = other.isRunning; other.queue.sync {} }
+        try other.start()
+        let o = try Client(port: try XCTUnwrap(other.boundPort))
+        try? o.send(Data([0x08, 0, 0, 0, 0]))
+        XCTAssertThrowsError(try o.frame(timeout: 5)) { XCTAssertEqual($0 as? Client.Failure, .closed) }
+    }
+
     // MARK: - Peer gate and close (review round 2)
 
     /// The production peer gate, through the init's DEFAULT allowPeer: 127.0.0.1 is outside
@@ -371,7 +478,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
     func testFailedSpawnSendsItsErrorBeforeTheClose() throws {
         let lists = Recorder()
         let failing = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
-                                       allowPeer: { _ in true },
+                                       allowPeer: { _ in true }, owner: Self.owner(),
                                        configure: { c in
                                            c.listSessions = { lists.add(["list"]); return [] }
                                            c.spawn = { _, _, _, _, _, _ in throw PtyChild.PtyError.forkFailed }
@@ -398,7 +505,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
     /// for a dch probe (made slow here; 0.25 s at most), the FIN closes first, no 0x18 comes.
     func testHalfCloseDropsAPendingReply() throws {
         let slow = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
-                                    allowPeer: { _ in true },
+                                    allowPeer: { _ in true }, owner: Self.owner(),
                                     configure: { c in
                                         c.ops.binary = { Thread.sleep(forTimeInterval: 1); return nil }
                                         // QA #625 INFO-R3-6: 0x08 reads these; never the live Preferences.
@@ -745,6 +852,17 @@ private final class Client {
         let payload = buf.subdata(in: buf.startIndex + 5..<buf.startIndex + 5 + n)
         buf.removeFirst(5 + n)
         return (b[0], payload)
+    }
+
+    /// #777: how the server ended the connection, with no byte ever sent to us: a reset (it closed
+    /// with our bytes unread in its socket) or EOF (it had read them). nil: a byte came, or nothing within `timeout`.
+    func closedByReset(timeout: TimeInterval = 5) -> Bool? {
+        var tv = timeval(tv_sec: Int(timeout), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        var b: UInt8 = 0
+        let got = recv(fd, &b, 1, 0)
+        if got == 0 { return false }
+        return got < 0 && errno == ECONNRESET ? true : nil
     }
 
     /// True once the server closed (EOF or reset) within `timeout`, as run.py: bytes before the close
