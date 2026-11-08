@@ -67,7 +67,7 @@ Every frame, in both directions:
   anyone should send: the phone does send a pasted photo as one 0x0a (17 MB for a 4032 px PNG)
   and a big paste as one 0x10.
 - **Core control requests stay under 64 KiB.** A client keeps every core-subset control
-  request (0x01, 0x02, 0x03, 0x04, 0x06, 0x08, 0x09, 0x2e) under 64 KiB (`64 << 10`). A server
+  request (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x2e) under 64 KiB (`64 << 10`). A server
   may answer a larger one with `0x13 {"message": "frame too large"}` and close; `dch serve`
   does. 0x10 data and the Mac-only frames are bounded only by the server's own receive guard
   (Prosper's is the 256 MiB above, `maxRequestFrame`).
@@ -328,8 +328,10 @@ The connection then carries one session:
 - 0x09 snapshot (empty) → 0x19 snapshotResp: raw ANSI of the session's current screen from
   dch's VT mirror (the output of `dch --read --ansi`), with the caret appended as
   `ESC[row;colH` when known. Prosper and `dch serve` (Q4) answer it the same way. **Empty**
-  only when there is no mirror (a lite build, a master that predates dch 1.2) or on a
-  connection that has not attached; the client keeps what it has. 0x09 never answers 0x13
+  when the server has no screen to offer, for example: no mirror (a lite build, a master that
+  predates dch 1.2), a connection that has not attached, an attached create with no session
+  name (Prosper), or a `dch --read` that fails or prints nothing (Prosper). The client keeps
+  what it has. 0x09 never answers 0x13
   (a frame-too-large 0x13 aside, see [Framing](#framing)): a server with no screen to offer
   sends an empty 0x19.
 - 0x12 exit `{"code": int}`: the session's client exited; the server then closes (the FIN
@@ -350,12 +352,14 @@ The connection then carries one session:
 ### 0x04 kill, 0x06 rename
 
 - 0x04 kill `{"name": string}` → 0x14 (empty). Ends the session (`dch -k`). A name starting
-  with `-` → 0x13 `a session name starting with - can't be passed to dch`. A malformed
+  with `-` → 0x13 `a session name starting with - can't be passed to dch` (both servers). A malformed
   payload or an unknown name still answers 0x14: dch's result is not reported.
 - 0x06 rename `{"name": string, "alias": string}` → 0x14 (empty). `alias` `""` (or missing)
-  clears it. Always 0x14, as kill.
+  clears it. Always 0x14, as kill. A name starting with `-`: `dch serve` answers 0x13 as for
+  kill; Prosper answers 0x14, since it runs `dch -m <name> <alias>` and `-m` takes the next two
+  arguments verbatim, so such a name is harmless there.
 - Both keep this in 1.0, `dch serve` included (Q2): failure is not reported, and 0x13 is only
-  for a name starting with `-`.
+  for a name starting with `-` (kill on both servers, rename on `dch serve` only).
 
 ## Mac-only frames (Prosper)
 
@@ -492,8 +496,9 @@ rules above; each item is either a known limit of the code or a decision still o
   no `paste_image`, so the phone hides its paste-image key there. 0x07 and 0x09 stay base
   frames in the core subset.
 - **M5. kill and rename never report failure.** 0x04 and 0x06 answer an empty 0x14 even for a
-  malformed request or an unknown session; only a name starting with `-` gets 0x13. Kept in
-  1.0 for every server (Q2).
+  malformed request or an unknown session; only a name starting with `-` gets 0x13 (kill on
+  both servers, rename on `dch serve` only: Prosper's rename answers 0x14). Kept in 1.0 for
+  every server (Q2).
 - **M6. The watch stream's sidekick frame.** Prosper sends `0x14 {"sidekick"}` on every stream
   (it always lists `sidekick`). This spec makes it conditional on `sidekick` in `ops`, so a dch
   server need not invent one.
@@ -576,7 +581,7 @@ gap above or the item says so.
 | Q1 | Should clients send `{"proto": "1.0"}` in the 0x08 request, so a server can refuse a newer major with 0x13 (Prosper ignores the payload today, so this is compatible)? (M2) **Answered: yes.** `dch serve` accepts `{"proto": "1.0"}` and answers 0x13 to a newer major; the phone sends `{"proto": "1.0"}` since TestFlight build 162; see [Versioning](#versioning). | dch, prosper-ios |
 | Q2 | Should `dch serve` keep kill and rename's empty 0x14, or answer 0x13 on failure (fixtures 07 and 08 would then allow either)? (M5) **Answered: keep the empty 0x14** in 1.0 (0x13 only for a name starting with `-`); see [0x04 kill, 0x06 rename](#0x04-kill-0x06-rename). | dch |
 | Q3 | Should Prosper list `create` in `ops`, so the phone gates 0x02 the same way on every server? (M3) **Answered: yes** (#800); see [`ops`](#ops-what-a-client-may-send). | Prosper, prosper-ios |
-| Q4 | May `dch serve` answer 0x09 with an empty 0x19 when it has no screen read to offer? **Answered:** it answers from dch's VT mirror (as `dch --read --ansi`) with the caret appended; an empty 0x19 only with no mirror (lite build) or on a connection that has not attached; never 0x13 (a frame-too-large 0x13 aside). See [0x01 attach, 0x02 create](#0x01-attach-0x02-create-and-the-attached-connection). | dch |
+| Q4 | May `dch serve` answer 0x09 with an empty 0x19 when it has no screen read to offer? **Answered:** it answers from dch's VT mirror (as `dch --read --ansi`) with the caret appended; an empty 0x19 only when it has no screen to offer (for example no mirror in a lite build, or a connection that has not attached; Prosper also for an attached nameless create or a failed `dch --read`); never 0x13 (a frame-too-large 0x13 aside). See [0x01 attach, 0x02 create](#0x01-attach-0x02-create-and-the-attached-connection). | dch |
 | Q5 | The phone ignores `proto` today. It should refuse a host whose major is above 1. **Answered:** it does since TestFlight build 162; see [Versioning](#versioning). | prosper-ios |
 | Q6 | Gate the phone's paste-image (0x0a) on an op, since a dch host has no Mac clipboard? (M4) **Resolved** (#800): on `paste_image`, or a Prosper server; see [`ops`](#ops-what-a-client-may-send). | prosper-ios |
 | Q7 | Gate "new session" on `create` for `server: "dch"` until Q3 is settled? (M3) **Resolved** (#800): on `create`, or a Prosper server; see [`ops`](#ops-what-a-client-may-send). | prosper-ios |

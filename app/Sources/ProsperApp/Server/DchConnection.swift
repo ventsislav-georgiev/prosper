@@ -496,7 +496,7 @@ final class DchConnection: @unchecked Sendable {
         guard pty == nil, !inFlight, !uploaded, !chatted else { return send(DchControlOps.error("watch needs its own connection")) }
         let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
         guard let o else { return send(DchControlOps.error("malformed watch request: send {}")) }
-        // The phone sends {}: its tailnet address stands for its device_id.
+        // The phone sends {"device_id"} (Q8); a {} client's tailnet address stands for its device_id.
         var device = o["device_id"] as? String ?? ""
         if device.isEmpty, case let .hostPort(host, _) = conn.endpoint { device = "\(host)" }
         watching = true
