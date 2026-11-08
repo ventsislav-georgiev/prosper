@@ -58,6 +58,8 @@ struct AgentIslandGeometry: Equatable {
     static let historyHeaderHeight: CGFloat = 26
     static let closedRadii = (top: CGFloat(6), bottom: CGFloat(14))
     static let openRadii = (top: CGFloat(19), bottom: CGFloat(24))
+    /// The header's side padding: lines its ends up with the row glyphs.
+    static let headerPad = openRadii.top + 10
 
     /// The ears are square: as wide as the bar is tall.
     var earWidth: CGFloat { barHeight }
@@ -736,8 +738,8 @@ struct AgentIslandView: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
-        .help("Agents window")
-        .accessibilityLabel("Open the Agents window")
+        .help("Agent Sessions")
+        .accessibilityLabel("Agent Sessions")
     }
 
     /// #579: the line over the rows: the inline Restart all question (Restart,
@@ -897,29 +899,45 @@ struct AgentIslandView: View {
 
     /// Count on the left of the notch, per-state counts on its right.
     private var header: some View {
-        let s = store.summary
-        return HStack(spacing: 0) {
-            Text(s.total == 1 ? "1 session" : "\(s.total) sessions")
+        HStack(spacing: 0) {
+            headerLeft
+            Spacer(minLength: g.notchWidth + 8)
+            headerRight
+        }
+        .padding(.horizontal, AgentIslandGeometry.headerPad)   // lines up with the row glyphs
+    }
+
+    /// QA #626 F1: the Agent Sessions button sits here, left of the notch: the
+    /// right group has no room for it. Each group fits its half beside a 185 pt
+    /// notch, (expandedWidth - notch) / 2 - headerPad (AgentIslandTests pins it).
+    var headerLeft: some View {
+        let total = store.summary.total
+        return HStack(spacing: 8) {
+            Text(total == 1 ? "1 session" : "\(total) sessions")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.9))
-            Spacer(minLength: g.notchWidth + 8)
-            HStack(spacing: 10) {
-                ForEach(AgentState.allCases, id: \.self) { st in
-                    if let n = s.counts[st], n > 0 {
-                        HStack(spacing: 3) {
-                            Text(st.glyph).font(.system(size: 10, weight: .bold)).foregroundStyle(st.color)
-                            Text("\(n)").font(.system(size: 11, weight: .medium).monospacedDigit())
-                                .foregroundStyle(Color.white.opacity(0.7))
-                        }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(n) \(st.label.lowercased())")
-                    }
-                }
-                agentsWindowButton   // #797
-                controlsButton   // #579: at the right end, on every tab
-            }
+            agentsWindowButton   // #797
         }
-        .padding(.horizontal, AgentIslandGeometry.openRadii.top + 10)   // lines up with the row glyphs
+    }
+
+    var headerRight: some View {
+        let s = store.summary
+        // QA #626 F1: idle has no count here and the spacing is 6, else four
+        // states (132 pt) overran the 118.5 pt right of a 185 pt notch.
+        return HStack(spacing: 6) {
+            ForEach(AgentState.allCases, id: \.self) { st in
+                if st != .idle, let n = s.counts[st], n > 0 {
+                    HStack(spacing: 3) {
+                        Text(st.glyph).font(.system(size: 10, weight: .bold)).foregroundStyle(st.color)
+                        Text("\(n)").font(.system(size: 11, weight: .medium).monospacedDigit())
+                            .foregroundStyle(Color.white.opacity(0.7))
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(n) \(st.label.lowercased())")
+                }
+            }
+            controlsButton   // #579: at the right end, on every tab
+        }
     }
 
     /// #571: "Sessions (n)  Sidekicks (n)", plain text buttons; the shown one bright.

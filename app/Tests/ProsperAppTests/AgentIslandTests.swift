@@ -2308,6 +2308,59 @@ final class AgentIslandTests: XCTestCase {
         }
     }
 
+    /// QA #626 F1: on a 185 pt notch each header group fits its half, measured
+    /// offscreen (a windowless NSHostingView): the right group (every state, two-digit
+    /// counts, the "⋯") right of the notch, the left ("N sessions", the Agent
+    /// Sessions button) left of it. Room = (expandedWidth - notch) / 2 - headerPad.
+    @MainActor
+    func testHeaderGroupsFitBesideTheNotch() {
+        let g = notched
+        let room = (AgentIslandGeometry.expandedWidth - g.notchWidth) / 2 - AgentIslandGeometry.headerPad
+        XCTAssertEqual(room, 118.5)
+        for n in [1, 88] {   // monospaced digits: 88 is any two-digit count
+            let store = AgentIslandStore(geometry: g)
+            store.sessions = AgentState.allCases.flatMap { st in (0..<n).map { session("\(st)-\($0)", st) } }
+            store.expanded = true
+            let view = AgentIslandView(store: store)
+            let right = NSHostingView(rootView: view.headerRight.fixedSize()).fittingSize.width
+            let left = NSHostingView(rootView: view.headerLeft.fixedSize()).fittingSize.width
+            FileHandle.standardError.write(Data("QA626 fit n=\(n): left \(left) right \(right) room \(room)\n".utf8))
+            XCTAssertLessThanOrEqual(right, room, "\(n) per state: the right group runs under the notch")
+            XCTAssertLessThanOrEqual(left, room, "\(store.summary.total) sessions: the left group runs under the notch")
+        }
+    }
+
+    /// QA #626 F1: the expanded island, notched and not, at UI scale 0.7 / 0.85 / 1.0,
+    /// dark and light (the island forces dark, so the pairs match), one session per
+    /// state and 88 per state. Offscreen (ImageRenderer); PROSPER_RENDER_DIR keeps them.
+    @MainActor
+    func testRendersTheHeaderOffscreen() throws {
+        let plain = AgentIslandGeometry.make(
+            frame: CGRect(x: 0, y: 0, width: 2560, height: 1440),
+            visibleFrame: CGRect(x: 0, y: 0, width: 2560, height: 1415), topLeft: nil, topRight: nil, safeTop: 0)
+        let out = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) } ?? tempDir()
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for (gname, g) in [("notched", notched), ("plain", plain)] {
+            for n in [1, 88] {
+                let store = AgentIslandStore(geometry: g)
+                store.sessions = AgentState.allCases.flatMap { st in (0..<n).map { session("\(st)-\($0)", st) } }
+                store.expanded = true
+                for scale: CGFloat in [0.7, 0.85, 1.0] {
+                    ThemeRuntime.scale = scale
+                    for (sname, scheme) in [("dark", ColorScheme.dark), ("light", ColorScheme.light)] {
+                        let r = ImageRenderer(content: AgentIslandView(store: store).padding(20)
+                            .background(Color(white: 0.75)).environment(\.colorScheme, scheme))
+                        r.scale = 2
+                        let cg = try XCTUnwrap(r.cgImage)
+                        let png = try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
+                        try png.write(to: out.appendingPathComponent("island-header-\(gname)-x\(n)-\(sname)-\(scale).png"))
+                    }
+                }
+            }
+        }
+    }
+
     /// #506 (c): rows with PR chips and merged counts, worst cases included, stay
     /// inside the island at every audited UI scale. The island's sizes are fixed
     /// (nothing follows ThemeRuntime.scale), so every scale renders the same
