@@ -365,11 +365,13 @@ The connection then carries one session:
   with `-` → 0x13 `a session name starting with - can't be passed to dch` (both servers). A malformed
   payload or an unknown name still answers 0x14: dch's result is not reported.
 - 0x06 rename `{"name": string, "alias": string}` → 0x14 (empty). `alias` `""` (or missing)
-  clears it. Always 0x14, as kill. A name starting with `-`: `dch serve` answers 0x13 as for
+  clears it. Always 0x14 on `dch serve`, as kill. A name starting with `-`: `dch serve` answers 0x13 as for
   kill; Prosper answers 0x14, since it runs `dch -m <name> <alias>` and `-m` takes the next two
-  arguments verbatim, so such a name is harmless there.
-- Both keep this in 1.0, `dch serve` included (Q2): failure is not reported, and 0x13 is only
-  for a name starting with `-` (kill on both servers, rename on `dch serve` only).
+  arguments verbatim, so such a name is harmless there. Prosper (#811) answers 0x13 when
+  `dch -m` exits non-zero or cannot run (`Couldn't rename <name>: <dch's first stderr line>`,
+  for example an unknown or just-exited session); a malformed payload still answers 0x14.
+- `dch serve` keeps this in 1.0 (Q2): failure is not reported, and 0x13 is only for a name
+  starting with `-`. Prosper's kill does not report failure either; a client handles a 0x13 to either frame.
 
 ## Mac-only frames (Prosper)
 
@@ -458,6 +460,7 @@ A step is one of:
 - `{"expect": <frame>}`: the next frame, whole within 5 s of the step's start, must match.
   The 5 s is armed again at every step, not once per connection (both runners; Prosper's
   tests pin it).
+- `{"expect_one_of": [<frame>, ...]}`: as `expect`, and the frame must match one of them.
 - `{"expect_close": true}`: the server closes the connection within 5 s of the step's start
   (EOF or reset). Bytes that arrive before the close are ignored, but do not extend the 5 s:
   a session that keeps drawing and never closes fails the step.
@@ -507,8 +510,8 @@ rules above; each item is either a known limit of the code or a decision still o
   frames in the core subset.
 - **M5. kill and rename never report failure.** 0x04 and 0x06 answer an empty 0x14 even for a
   malformed request or an unknown session; only a name starting with `-` gets 0x13 (kill on
-  both servers, rename on `dch serve` only: Prosper's rename answers 0x14). Kept in 1.0 for
-  every server (Q2).
+  both servers, rename on `dch serve` only). Kept in 1.0 for `dch serve` (Q2); Prosper's rename
+  answers 0x13 when `dch -m` fails (#811), so fixture 08 accepts either.
 - **M6. The watch stream's sidekick frame.** Prosper sends `0x14 {"sidekick"}` on every stream
   (it always lists `sidekick`). This spec makes it conditional on `sidekick` in `ops`, so a dch
   server need not invent one.

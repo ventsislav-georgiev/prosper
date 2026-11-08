@@ -180,6 +180,11 @@ def run(fx, addr, timeout):
                 why = check_frame(step["expect"], *c.frame())
                 if why:
                     raise Fail(why)
+            elif "expect_one_of" in step:
+                got = c.frame()
+                whys = [check_frame(w, *got) for w in step["expect_one_of"]]
+                if all(whys):
+                    raise Fail("; or ".join(whys))
             elif "expect_quiet" in step:
                 c.quiet(float(step["expect_quiet"]))
             elif step.get("expect_close"):

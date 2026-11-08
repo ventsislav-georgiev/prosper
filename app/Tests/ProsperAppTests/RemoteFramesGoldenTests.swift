@@ -54,7 +54,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
                                   configure: { c in
                                       c.listSessions = { rows }
                                       c.kill = { ran.add(["-k", $0]) }
-                                      c.rename = { ran.add(["-m", $0, $1]) }
+                                      c.rename = { ran.add(["-m", $0, $1]); return nil }
                                       c.clipboard.enabled = { false }
                                       c.commands.enabled = { false }
                                   })
@@ -165,6 +165,45 @@ final class RemoteFramesGoldenTests: XCTestCase {
                 XCTAssertEqual(swift, "PASS", "the Swift runner, resize unanswered")
                 XCTAssertEqual(out, "PASS\n", "run.py, resize unanswered")
             }
+        }
+    }
+
+    /// #811: fixture 08 takes dch serve's empty 0x14 or Prosper's 0x13 when `dch -m` refuses the
+    /// name (the setUp server's rename takes it). Both runners pass a refusing Prosper, and fail it
+    /// once the 0x13 choice is dropped: expect_one_of matches one of its frames, not any frame.
+    func testBothRunnersTakeEitherRenameReplyInFixture08() throws {
+        var fx = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: try goldenDir().appendingPathComponent("08-rename-unknown-name.json"))) as? [String: Any])
+        let refusing = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                        allowPeer: { _ in true }, owner: Self.owner(),
+                                        configure: { c in c.rename = { n, _ in "Couldn't rename \(n): no session: \(n)" } })
+        try refusing.start()
+        defer { refusing.stop(); refusing.queue.sync {} }
+        let port = try XCTUnwrap(refusing.boundPort)
+        let code = """
+            import json, sys
+            sys.path.insert(0, sys.argv[1])
+            import run
+            try:
+                run.run(json.loads(sys.argv[2]), ("127.0.0.1", int(sys.argv[3])), 5)
+                print("PASS")
+            except run.Fail as e:
+                print("FAIL", e)
+            """
+        for dropRefusal in [false, true] {
+            if dropRefusal {
+                var steps = try XCTUnwrap(fx["steps"] as? [[String: Any]])
+                steps[1]["expect_one_of"] = [(steps[1]["expect_one_of"] as? [Any])?.first as Any]
+                fx["steps"] = steps
+            }
+            let fxJSON = String(decoding: try JSONSerialization.data(withJSONObject: fx), as: UTF8.self)
+            var swift = "PASS"
+            do { try run(fx, port: port) } catch { swift = "FAIL \(error)" }
+            let (status, out) = try python(["-B", "-c", code, try goldenDir().path, fxJSON, "\(port)"])
+            XCTAssertEqual(status, 0, out)
+            XCTAssertEqual(swift.hasPrefix("FAIL"), dropRefusal, "the Swift runner: \(swift)")
+            XCTAssertEqual(out.hasPrefix("FAIL"), dropRefusal, "run.py: \(out)")
+            XCTAssertEqual(out.hasPrefix("PASS"), !dropRefusal, "run.py: \(out)")
         }
     }
 
@@ -688,6 +727,10 @@ final class RemoteFramesGoldenTests: XCTestCase {
             } else if let want = step["expect"] as? [String: Any] {
                 let (type, payload) = try c.frame(until: end)
                 if let why = Self.check(want, type, payload) { throw Mismatch(description: why) }
+            } else if let wants = step["expect_one_of"] as? [[String: Any]] {
+                let (type, payload) = try c.frame(until: end)
+                let whys = wants.compactMap { Self.check($0, type, payload) }
+                if whys.count == wants.count { throw Mismatch(description: whys.joined(separator: "; or ")) }
             } else if let secs = (step["expect_quiet"] as? NSNumber)?.doubleValue {
                 // Nothing but 0x10 pty output for `secs`: any other frame is a reply that should not come.
                 let end = Date() + secs

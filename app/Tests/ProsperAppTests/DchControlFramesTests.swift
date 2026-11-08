@@ -480,6 +480,41 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(killed.lock.withLock { killed.all }, [Data("a".utf8)], "only the normal name reaches -k")
     }
 
+    /// #811 (QA #636 INFO-1): rename answers 0x14 only when `dch -m` exits 0; a refusal is a
+    /// one-line 0x13 (dch's first stderr line, else its exit status), as is a dch that can't
+    /// start. A malformed request still answers 0x14 and runs nothing (spec, M5). Stand-in dchs only.
+    func testRenameAnswersErrorWhenDchRefusesIt() throws {
+        let queue = DispatchQueue(label: "test.dchconn")
+        let conn = DchConnection(conn: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), queue: queue,
+                                 log: Logger(subsystem: "test", category: "dch"), onClose: { _ in })
+        let frames = Frames()
+        conn.sendOverride = { frame in frames.lock.withLock { frames.all.append(frame) } }
+        conn.ops = ops(Fake())
+        defer { DchCommand.dchPathOverride = nil }
+        let dir = tempDir()
+        func dch(_ body: String) throws -> String {
+            let path = dir.appendingPathComponent("dch-\(UUID().uuidString.prefix(8))").path
+            try "#!/bin/sh\n\(body)\n".write(toFile: path, atomically: true, encoding: .utf8)
+            XCTAssertEqual(chmod(path, 0o755), 0)
+            return path
+        }
+        let rename = Data(#"{"name":"a","alias":"b"}"#.utf8)
+        for (path, payload, want) in [
+            (try dch("[ \"$1 $2 $3\" = '-m a b' ] || exit 9"), rename, DchFrame.encode(DchFrame.ok, [])),
+            (try dch("echo \"no session 'a'\" >&2; echo second >&2; exit 1"), rename,
+             DchControlOps.error("Couldn't rename a: no session 'a'")),
+            (try dch("exit 3"), rename, DchControlOps.error("Couldn't rename a: dch exited 3")),
+            (dir.appendingPathComponent("missing").path, rename, DchControlOps.error("Couldn't rename a: dch could not be run")),
+            ("/usr/bin/false", Data("{}".utf8), DchFrame.encode(DchFrame.ok, [])),
+            ("/usr/bin/false", Data("not json".utf8), DchFrame.encode(DchFrame.ok, [])),
+        ] {
+            DchCommand.dchPathOverride = path
+            frames.lock.withLock { frames.all = [] }
+            queue.sync { conn.handle(type: DchFrame.rename, payload: payload) }
+            XCTAssertEqual(frames.lock.withLock { frames.all }, [want], "\(path) \(String(decoding: payload, as: UTF8.self))")
+        }
+    }
+
     /// Unstubbed under XCTest: no control binary, so every verb is refused before any dch fork.
     func testUnstubbedOpsRefuseUnderXCTest() {
         let o = DchControlOps()

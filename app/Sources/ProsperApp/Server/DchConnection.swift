@@ -198,7 +198,8 @@ final class DchConnection: @unchecked Sendable {
     /// #627: the kill frame's `dch -k <name>`; tests set a recorder so no real dch runs.
     var kill: (String) -> Void = { DchCommand.kill($0) }
     /// QA #606 F1: the rename frame's `dch -m <name> <alias>`; tests set a recorder.
-    var rename: (String, String) -> Void = { DchCommand.setAlias($0, alias: $1) }
+    /// #811: nil when dch took it, else the 0x13 message.
+    var rename: (String, String) -> String? = { DchCommand.setAlias($0, alias: $1) }
     /// #765: the island's list cache and the watch streams, server-wide; nil = always fork.
     var watch: DchWatchHub?
     /// QA #625 F1: attach/create's pty (exe, args, cols, rows, onOutput, onExit); tests make it
@@ -363,8 +364,10 @@ final class DchConnection: @unchecked Sendable {
             send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.rename:
             if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
-               let n = o["name"] as? String {
-                rename(n, o["alias"] as? String ?? "")
+               let n = o["name"] as? String,
+               let message = rename(n, o["alias"] as? String ?? "") {
+                // #811 (QA #636 INFO-1): dch refused it (a just-exited session exits 1); a malformed request stays 0x14 (spec).
+                return send(DchControlOps.error(message))
             }
             send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.attach, DchFrame.create:
@@ -1905,7 +1908,7 @@ enum DchCommand {
     /// screen bytes. Older dch rejects the flag and older masters report nothing —
     /// both fall back to the screen alone.
     static func readScreen(_ name: String) -> Data {
-        let (screen, err) = runCapturingBoth(args: ["--read", name, "--ansi", "--cursor"])
+        let (screen, err, _) = runCapturingBoth(args: ["--read", name, "--ansi", "--cursor"])
         guard !screen.isEmpty else { return runCapturingData(args: ["--read", name, "--ansi"]) }
         guard let cup = cursorCUP(err) else { return screen }
         return screen + Data(cup.utf8)
@@ -2020,9 +2023,13 @@ enum DchCommand {
         _ = runCapturing(args: ["-k", name])
     }
 
-    /// Set (or clear, when empty) a session's display alias.
-    static func setAlias(_ name: String, alias: String) {
-        _ = runCapturing(args: ["-m", name, alias])
+    /// Set (or clear, when empty) a session's display alias. #811: nil on exit 0, else one
+    /// line for the phone: dch's first stderr line, or its exit status.
+    static func setAlias(_ name: String, alias: String) -> String? {
+        let r = runCapturingBoth(args: ["-m", name, alias])
+        guard r.status != 0 else { return nil }
+        let line = r.err.split(whereSeparator: \.isNewline).first.map { String($0.prefix(120)) }
+        return "Couldn't rename \(name): \(line ?? (r.status < 0 ? "dch could not be run" : "dch exited \(r.status)"))"
     }
 
     private static func runCapturing(args: [String]) -> String {
@@ -2038,12 +2045,11 @@ enum DchCommand {
 
     /// Same as `runCapturingData`, plus stderr as text — `--read --cursor` reports the
     /// caret there so it can't corrupt the screen on stdout.
-    private static func runCapturingBoth(args: [String]) -> (out: Data, err: String) {
+    private static func runCapturingBoth(args: [String]) -> (out: Data, err: String, status: Int32) {
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "DCH_SESSION")
         env["DCH_SOCKET_DIR"] = remoteSocketDir()
-        let r = runCapturingBoth(args: args, env: env)
-        return (r.out, r.err)
+        return runCapturingBoth(args: args, env: env)
     }
 
     /// Run dch with exactly `env` — #474 lists each socket dir with its own

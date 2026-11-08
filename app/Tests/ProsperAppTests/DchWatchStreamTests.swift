@@ -344,7 +344,7 @@ final class DchWatchStreamTests: XCTestCase {
         conn.listSessions = { frames.lock.withLock { frames.forks += 1 }; return [DchListRow(name: "forked", alias: "", activityEpoch: 1, state: "idle", agents: 0)] }
         conn.sendOverride = { f in frames.lock.withLock { frames.all.append(f) } }
         conn.kill = { n in frames.lock.withLock { frames.ran.append(["-k", n]) } }
-        conn.rename = { n, a in frames.lock.withLock { frames.ran.append(["-m", n, a]) } }
+        conn.rename = { n, a in frames.lock.withLock { frames.ran.append(["-m", n, a]) }; return nil }
         var ops = DchControlOps()   // no binary: every verb refused, nothing forked
         ops.binary = { nil }
         ops.read = { _, _, _ in nil }

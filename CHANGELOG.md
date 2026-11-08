@@ -74,6 +74,8 @@ tag from the now-released section and put it on the new top draft.
   Settings, which lets any device that can reach this Mac in while Tailscale isn't answering.
   Remote Terminal's settings now say why a device was refused, and when port 8771 is taken
   (say by `dch serve`) or this Mac has no Tailscale address. (#777, #812)
+- Renaming a session from your iPhone now reports when dch refuses it (say the session has just
+  ended), instead of answering that it worked. (#811)
 
 ## v2.173.0
 
