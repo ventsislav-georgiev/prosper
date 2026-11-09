@@ -5093,3 +5093,163 @@ final class AgentIslandControlsTests: XCTestCase {
         }
     }
 }
+
+// MARK: - #829 Phase 1: the window's Kill, Restart/Stop refusals, History freshness
+
+extension AgentIslandControlsTests {
+    /// The window's Kill: `-k <name>` on the row's key with no island question state; it cuts
+    /// through the row's Stop; never a second Kill; refused (and said) under any other job.
+    @MainActor
+    func testWindowKillRunsDashKWithoutTheIslandsQuestion() throws {
+        let f = FakeProc()
+        let a = session("a", version: "1.24.0")
+        let c = opened(f, [a, session("-x", version: "1.24.0")])
+        let store = try XCTUnwrap(c.store)
+        XCTAssertFalse(c.kill(session("-x")), "a name dch reads as a flag: nothing")
+        XCTAssertFalse(c.kill(session("gone")), "not live: nothing")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        f.progress = #"{"name":"a","phase":"pausing"}"# + "\n"
+        XCTAssertTrue(c.stop(a))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        settle(c) { store.actions[a.key] == "Pausing…" }
+        XCTAssertTrue(c.kill(a), "a Kill cuts through the row's Stop")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--stop", "a", "--json"], ["-k", "a"]])
+        XCTAssertEqual(f.lock.withLock { f.launches.map(\.dir) }, ["/d", "/d"], "the row's dir env")
+        XCTAssertNil(store.confirmingKill, "the island's question state is untouched")
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killingText)
+        XCTAssertFalse(c.kill(a), "never a second Kill")
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killingText)
+        f.output = "killed: a\n"
+        f.release.signal()
+        f.release.signal()
+        settle(c) { store.actions[a.key] == "Killed" && !c.runner.isBusy(a.key) }
+        XCTAssertEqual(store.actions[a.key], "Killed")
+        // A job a Kill may not cut through (a Resume of a record with the row's key): refused, said.
+        f.progress = ""
+        c.resume(record("a"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertFalse(c.kill(a))
+        XCTAssertEqual(store.actions[a.key], AgentIsland.killBusyText)
+        XCTAssertEqual(f.args.count, 3)
+        f.release.signal()
+        settle(c) { store.actions[a.key] != AgentIsland.killBusyText }
+        XCTAssertNil(store.actions[a.key], "the refusal goes with the job")
+    }
+
+    /// Restart and Stop return whether they started; the window's call (sayBusy) says a busy
+    /// refusal on the row, over nothing or a refusal only; the island's stays silent.
+    @MainActor
+    func testRestartAndStopSayWhenABusyRowRefusesThem() throws {
+        let f = FakeProc()
+        let a = session("a", version: "1.24.0")
+        let c = opened(f, [a, session("-x", version: "1.24.0"), session("old", version: "1.23.0")])
+        let store = try XCTUnwrap(c.store)
+        c.resume(record("a"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertNil(store.actions[a.key])
+        XCTAssertFalse(c.restart(a))
+        XCTAssertFalse(c.stop(a))
+        XCTAssertNil(store.actions[a.key], "the island's own call: silent, as before")
+        XCTAssertFalse(c.restart(a, sayBusy: true))
+        XCTAssertEqual(store.actions[a.key], AgentIsland.restartBusyText)
+        XCTAssertFalse(c.stop(a, sayBusy: true))
+        XCTAssertEqual(store.actions[a.key], AgentIsland.stopBusyText, "a refusal replaces a refusal")
+        XCTAssertEqual(f.args.count, 1, "refused: never launched")
+        f.release.signal()
+        settle(c) { store.actions[a.key] == nil }
+        XCTAssertNil(store.actions[a.key], "the refusal goes once the job that refused it ends")
+        XCTAssertTrue(c.stop(a))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(store.actions[a.key], AgentIsland.stoppingText)
+        XCTAssertFalse(c.restart(a, sayBusy: true))
+        XCTAssertEqual(store.actions[a.key], AgentIsland.stoppingText, "a running text stays: the window's input lock reads it")
+        f.output = #"{"name":"a","result":"ok","reason":"","detail":"","session_id":""}"# + "\n"
+        f.release.signal()
+        settle(c) { store.actions[a.key] != AgentIsland.stoppingText }
+        let outcome = store.actions[a.key]
+        XCTAssertNotNil(outcome)
+        XCTAssertTrue(c.runner.start(a.key, path: "/fake/dch", args: ["--send", "a", "hi"], env: { [:] }) { _ in })
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, "the phone verb launched (its args are recorded)")
+        XCTAssertFalse(c.stop(a, sayBusy: true))
+        XCTAssertEqual(store.actions[a.key], outcome, "an outcome outlives a refusal")
+        XCTAssertFalse(c.restart(session("-x"), sayBusy: true), "a '-' name: nothing, and nothing said")
+        XCTAssertFalse(c.stop(session("old", version: "1.23.0"), sayBusy: true), "an old master: nothing")
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "-x")])
+        XCTAssertNil(store.actions[AgentSessionKey(dir: "/d", name: "old")])
+        XCTAssertEqual(f.args.count, 3, "the phone verb only")
+        f.release.signal()
+    }
+
+    /// G0b (a): the window showing reads History once, on the edge only.
+    @MainActor
+    func testWindowShowingReadsHistoryOnceOnTheEdge() {
+        let f = FakeProc(), reads = Reads()
+        let c = controller(f, reads)
+        c.store?.sessions = [session("a")]
+        c.windowWatching = true
+        settle(c) { reads.count == 1 }
+        XCTAssertEqual(reads.count, 1)
+        c.windowWatching = true
+        settle(c)
+        XCTAssertEqual(reads.count, 1, "already watching: no second read")
+        c.windowWatching = false
+        settle(c)
+        XCTAssertEqual(reads.count, 1, "hiding reads nothing")
+        c.windowWatching = true
+        settle(c) { reads.count == 2 }
+        XCTAssertEqual(reads.count, 2)
+    }
+
+    /// G0b (b): while the window watches, any session leaving re-reads History once; closed,
+    /// only the last one (#581); arrivals and quiet ticks never.
+    @MainActor
+    func testASessionLeavingWhileTheWindowWatchesReadsHistoryOnce() {
+        let f = FakeProc(), reads = Reads(), dir = tempDir()
+        let c = controller(f, reads, dirs: [dir.path])
+        c.store = nil
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        let g = notched
+        c.currentGeometry = { g }
+        let path = dir.path
+        c.makePoller = { Self.sockPoller(path) }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        func sock(_ name: String, _ on: Bool) {
+            let url = dir.appendingPathComponent("\(name).sock")
+            if on { FileManager.default.createFile(atPath: url.path, contents: nil) } else { try? FileManager.default.removeItem(at: url) }
+        }
+        func live(_ n: Int) { settle(c) { c.store?.sessions.count == n }; XCTAssertEqual(c.store?.sessions.count, n) }
+        sock("a", true)
+        sock("b", true)
+        c.extLive = true
+        c.reload()
+        live(2)
+        settle(c) { reads.count == 1 }
+        XCTAssertEqual(reads.count, 1, "the launch read")
+        sock("b", false)
+        live(1)
+        settle(c)
+        XCTAssertEqual(reads.count, 1, "no window: one of two leaving reads nothing (#581's rule)")
+        c.windowWatching = true
+        settle(c) { reads.count == 2 }
+        XCTAssertEqual(reads.count, 2, "the window showing")
+        sock("b", true)
+        live(2)
+        settle(c)
+        XCTAssertEqual(reads.count, 2, "a session arriving reads nothing")
+        sock("b", false)
+        live(1)
+        settle(c) { reads.count == 3 }
+        XCTAssertEqual(reads.count, 3, "watching: the one that left, once")
+        Thread.sleep(forTimeInterval: 1.2)
+        settle(c)
+        XCTAssertEqual(reads.count, 3, "quiet ticks read nothing")
+        c.windowWatching = false
+        sock("a", false)
+        live(0)
+        settle(c) { reads.count == 4 }
+        XCTAssertEqual(reads.count, 4, "the last one gone: #581's read, as before")
+        XCTAssertEqual(f.args, [], "reads only, no verb")
+    }
+}

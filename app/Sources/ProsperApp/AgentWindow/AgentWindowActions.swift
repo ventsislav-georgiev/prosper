@@ -803,6 +803,8 @@ final class AgentWindowInteraction: ObservableObject {
     var controller: AgentIslandController?
     var pause: @Sendable (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     var readQueue: (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) }
+    /// #829 (spec 3.5): a session's row text, read at each action. nil: the controller's store.
+    var rowText: ((AgentSessionKey) -> String?)?
 
     var draft: String {
         get { session.flatMap { drafts[$0.key] } ?? "" }
@@ -972,8 +974,16 @@ final class AgentWindowInteraction: ObservableObject {
     }
 
     /// Through the controller's human-click path; on a result, one fresh read refreshes the panel.
+    /// #829 (spec 3.5): every write (send, interrupt, each prompt answer) passes here, so while a
+    /// Restart or Stop's running text shows on the row (dch types into Claude's composer) nothing
+    /// reaches the pty and the notice says why.
     private func act(_ s: AgentSession, prompt: AgentPrompt?, run: @escaping @Sendable (AgentPromptIO) -> AgentWindowOutcome,
                      sent: (@MainActor () -> Void)? = nil) {
+        let row = if let rowText { rowText(s.key) } else { controller?.store?.actions[s.key] }
+        if let lock = AgentWindowControls.lock(row) {
+            notice = AgentWindowControls.lockPlaceholder(lock)
+            return
+        }
         guard let controller, !busy else { return }
         notice = nil
         busy = true

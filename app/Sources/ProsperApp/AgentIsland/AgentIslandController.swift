@@ -120,8 +120,12 @@ final class AgentIslandController {
     var onRowDetails: (@MainActor () -> Void)?
     /// #797: the Agents window is open and visible. It reads the store, so a list
     /// where only activity moved goes in as while expanded, not held back.
+    /// #829 G0b: and one History read on the edge to visible, so the window never opens on a stale History.
     var windowWatching = false {
-        didSet { if windowWatching { flushDeferred() } }
+        didSet {
+            if windowWatching { flushDeferred() }
+            if windowWatching, !oldValue { refreshHistory() }
+        }
     }
     /// #797: the store was built or dropped (the Agents window rebinds).
     var onStoreChanged: (@MainActor () -> Void)?
@@ -249,7 +253,7 @@ final class AgentIslandController {
             return
         }
         deferred = nil
-        let wasLive = !store.sessions.isEmpty
+        let was = Set(store.sessions.map(\.key))
         store.sessions = sessions
         checkAutoAllow()   // #751: decided before the list is published
         publish()
@@ -265,7 +269,9 @@ final class AgentIslandController {
         // island. On that edge only, never per tick.
         // ponytail: with no history yet the collapsed ear hides for the ~100 ms the
         // read takes, then shows; keep the island up meanwhile if that ever flickers.
-        if wasLive, sessions.isEmpty { refreshHistory() }
+        // #829 G0b: while the window watches, any session leaving (it ended by itself, or a
+        // terminal killed it) is that edge too, so its record reaches the window's History.
+        if !was.isEmpty, sessions.isEmpty || windowWatching && !was.isSubset(of: live) { refreshHistory() }
         refreshCards()
         layout()
     }
@@ -555,13 +561,30 @@ final class AgentIslandController {
 
     /// A row's Restart agent: `--restart <name> --include-agents -f`, even when
     /// current. A busy row refuses. Its result (a skip included) is the row's text.
-    func restart(_ s: AgentSession) {
-        guard let store, case .ok(let dch) = store.restartGate else { return }
+    /// #829: false when nothing started; with `sayBusy` (the window's call) a busy row says so
+    /// (refuseBusy). The island's own call stays silent, as before.
+    @discardableResult
+    func restart(_ s: AgentSession, sayBusy: Bool = false) -> Bool {
+        guard let store, case .ok(let dch) = store.restartGate, let args = AgentIsland.restartArgs(s.name) else { return false }
         let key = s.key
-        run(key, dch: dch, args: AgentIsland.restartArgs(s.name), running: AgentIsland.restartingText,
-            bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) { [weak self] r in
+        let started = run(key, dch: dch, args: args, running: AgentIsland.restartingText,
+                          bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) {
+            [weak self] r in
             self?.setRow(key, AgentIsland.rowText(r, name: key.name, .restart))
         }
+        if !started, sayBusy { refuseBusy(key, AgentIsland.restartBusyText) }
+        return started
+    }
+
+    /// #829: a Restart or Stop a busy row refused: the row says so, but only over nothing or
+    /// another refusal. A running text says what runs (and the window's input lock reads it);
+    /// an outcome ("Killed") outlives the refusal. Goes once the job that refused it ends.
+    private func refuseBusy(_ key: AgentSessionKey, _ text: String) {
+        if let now = store?.actions[key], ![AgentIsland.restartBusyText, AgentIsland.stopBusyText, AgentIsland.killBusyText].contains(now) {
+            return
+        }
+        store?.actions[key] = text
+        clearRefusal(key, text)
     }
 
     // MARK: - Stop (#580)
@@ -569,14 +592,20 @@ final class AgentIslandController {
     /// A row's Stop: `--stop <name> --json`, only on a master at 1.24.0 or
     /// later. A busy row (or its dir under an "all" job) refuses. The ended
     /// session shows in History after one re-read.
-    func stop(_ s: AgentSession) {
-        guard let store, case .ok(let dch) = store.restartGate, AgentIsland.canStop(s) else { return }
+    /// #829: false when nothing started; with `sayBusy` (the window's call) a busy row says so.
+    @discardableResult
+    func stop(_ s: AgentSession, sayBusy: Bool = false) -> Bool {
+        guard let store, case .ok(let dch) = store.restartGate, AgentIsland.canStop(s),
+              let args = AgentIsland.stopArgs([s.name]) else { return false }
         let key = s.key
-        run(key, dch: dch, args: AgentIsland.stopArgs([s.name]), running: AgentIsland.stoppingText,
-            bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) { [weak self] r in
+        let started = run(key, dch: dch, args: args, running: AgentIsland.stoppingText,
+                          bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) {
+            [weak self] r in
             self?.setRow(key, AgentIsland.rowText(r, name: key.name, .stop))
             self?.refreshHistory()
         }
+        if !started, sayBusy { refuseBusy(key, AgentIsland.stopBusyText) }
+        return started
     }
 
     /// The "⋯" menu's Stop all in <tab>, or (#744 `global`) Stop all: only asks (the inline line).
@@ -640,9 +669,21 @@ final class AgentIslandController {
         guard let store, store.confirmingKill != nil else { return }
         let target = store.killTarget
         store.confirmingKill = nil
-        guard yes, let target, case .ok(let dch) = store.resumeGate else { return layout() }
-        if !killRow(target, dch: dch, done: { _ in }) { refuseKill(target.key) }
+        guard yes, let target, store.resumeGate.isOK else { return layout() }
+        kill(target)
+    }
+
+    /// #829 G3: one row's Kill with no question state of the island's (the window asks its
+    /// own): `dch -k <name>` on the row if it is still live. It cuts through the row's Stop or
+    /// Restart; any other job refuses it, and the row says so. False: nothing started.
+    @discardableResult
+    func kill(_ s: AgentSession) -> Bool {
+        guard let store, case .ok(let dch) = store.resumeGate, AgentIsland.killArgs(s.name) != nil,
+              let live = store.sessions.first(where: { $0.key == s.key }) else { return false }
+        let started = killRow(live, dch: dch, done: { _ in })
+        if !started { refuseKill(live.key) }
         layout()
+        return started
     }
 
     /// A Kill a busy row refused: the row says so, unless it reads "Killing…" (a Kill
@@ -650,18 +691,20 @@ final class AgentIslandController {
     private func refuseKill(_ key: AgentSessionKey) {
         guard store?.actions[key] != AgentIsland.killingText else { return }
         store?.actions[key] = AgentIsland.killBusyText
-        clearRefusal(key)
+        clearRefusal(key, AgentIsland.killBusyText)
     }
 
     /// #749 (QA #572 INFO-R2): the refusal goes once the job that refused it ended, which
     /// may be one the island does not show (the phone's, a History row's, a New session).
     /// Checked each second while the row still says it; jobs are bounded, so is this.
     /// #750 (QA #576 INFO-1): busy as a Kill sees it; a Stop or Restart since would not refuse one.
-    private func clearRefusal(_ key: AgentSessionKey) {
+    /// #829: `text` is the refusal shown (a Kill's, or a Restart's or Stop's: busy as any job sees it).
+    private func clearRefusal(_ key: AgentSessionKey, _ text: String) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, let store = self.store, store.actions[key] == AgentIsland.killBusyText else { return }
-                if self.runner.isKillBusy(key) { return self.clearRefusal(key) }   // #750 (QA #576 INFO-1)
+                guard let self, let store = self.store, store.actions[key] == text else { return }
+                let kill = text == AgentIsland.killBusyText
+                if kill ? self.runner.isKillBusy(key) : self.runner.isBusy(key) { return self.clearRefusal(key, text) }   // #750 (QA #576 INFO-1)
                 store.actions[key] = nil
                 self.layout()
             }

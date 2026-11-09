@@ -293,14 +293,20 @@ enum AgentIsland {
         !split.sidekicks.isEmpty && (tab || split.primary.isEmpty)
     }
 
-    /// 12s, 4m, 2h, 3d — whole units, rounded down. Nothing for an unknown time.
+    /// 12s, 4m, 2h, 3d, 1y — whole units, rounded down. Nothing for an unknown time.
+    /// #829 (QA #660 note 4): years past 364 days, capped at 99, so no age is wider than
+    /// `ageWidest` and the window's fixed age slot always fits it.
     static func age(_ seconds: TimeInterval) -> String {
-        let s = max(0, Int(seconds))
+        let s = max(0, Int(min(seconds, 1e15)))
         if s < 60 { return "\(s)s" }
         if s < 3600 { return "\(s / 60)m" }
         if s < 86400 { return "\(s / 3600)h" }
-        return "\(s / 86400)d"
+        if s < 365 * 86400 { return "\(s / 86400)d" }
+        return "\(min(s / (365 * 86400), 99))y"
     }
+
+    /// The widest age `age` can return ("364d"), as a template of the same characters.
+    static let ageWidest = "000d"
 
     static func age(of s: AgentSession, now: TimeInterval) -> String {
         s.activity > 0 ? age(now - s.activity) : ""

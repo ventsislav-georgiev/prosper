@@ -229,18 +229,24 @@ struct AgentSidebarView: View {
                                             AgentSidebarRowView(row: row, selected: model.selection == row.id)
                                         }
                                         .buttonStyle(.plain)
+                                        .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks)
+                                            if let s = row.session, let store = model.store {
+                                                AgentSessionMenuItems(store: store, session: s) { model.ask($0, s) }
+                                            }
+                                        }
                                         .id(row.id)
                                     }
                                 }
                             }
                         }
-                        .padding(.horizontal, sz(8)).padding(.bottom, sz(12))
+                        .padding(.horizontal, sz(8)).padding(.bottom, sz(12) + AgentWindowControls.stripHeight)   // #829: the dir strip's room
                     }
                     .onChange(of: model.selection) { _, id in if let id { proxy.scrollTo(id) } }
                 }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .bottom) { if let store = model.store { AgentDirStatusStrip(store: store) } }   // #829 G0
     }
 }
 
@@ -302,9 +308,10 @@ struct AgentSidebarRowView: View {
                         .lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: sz(4))
                     if !row.age.isEmpty {
-                        // #828: a three-character slot, so "9s" -> "10s" never re-truncates the title.
+                        // #828: a fixed slot, so "9s" -> "10s" never re-truncates the title; #829 (QA #660
+                        // note 4): the widest age the formatter returns, so "120d" fits it too.
                         ZStack(alignment: .trailing) {
-                            Text("00m").hidden()
+                            Text(AgentIsland.ageWidest).hidden()
                             Text(row.age).foregroundStyle(Neon.textSecondary)
                         }
                         .font(Neon.font(10).monospacedDigit())
@@ -375,16 +382,28 @@ struct AgentDetailView: View {
         if let row = model.selectedRow, let s = row.session {
             VStack(spacing: 0) {
                 AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
-                                   level: $model.verbosity, todos: transcript.todos, todosOpen: $transcript.todosOpen)
+                                   level: $model.verbosity, todos: transcript.todos, todosOpen: $transcript.todosOpen,
+                                   store: model.store, ask: { model.ask($0, s) })
                 if let store = model.store { AgentNoticeLine(store: store, key: s.key) }
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
                                     ownsLifecycle: false, level: model.verbosity)
                     .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                     .clipped()
+                    .overlay(alignment: .top) {   // #829 R5: over the conversation, so nothing moves
+                        if let c = model.confirming, let asked = model.confirmingSession {
+                            AgentConfirmStrip(text: AgentWindowControls.question(c.verb, asked),
+                                              action: AgentWindowControls.confirmTitle(c.verb),
+                                              confirm: { model.confirm(true) }, cancel: { model.confirm(false) })
+                        }
+                    }
                 Rectangle().fill(Neon.stroke).frame(height: 1)
-                // #798: the prompt pinned at the bottom, the input box under it.
-                AgentInteractionPane(model: model.interaction, session: s, open: { model.openSelected() })
+                // #798: the prompt pinned at the bottom, the input box under it. #829: locked while a Restart or Stop types.
+                if let store = model.store {
+                    AgentLockedInteraction(store: store, model: model.interaction, session: s, open: { model.openSelected() })
+                } else {
+                    AgentInteractionPane(model: model.interaction, session: s, open: { model.openSelected() })
+                }
             }
         } else if let row = model.selectedRow, let r = row.record {
             AgentHistoryDetail(row: row, record: r, store: model.store, resume: { model.resumeSelected() })
@@ -405,6 +424,9 @@ struct AgentSessionHeader: View {
     var level: Binding<AgentVerbosity> = .constant(.default)
     var todos: AgentTodos?
     var todosOpen: Binding<Bool> = .constant(false)
+    /// #829: the "⋯" menu's store (its gates) and its ask.
+    var store: AgentIslandStore?
+    var ask: (AgentWindowVerb) -> Void = { _ in }
 
     var project: String {
         if let cwd { return (cwd as NSString).abbreviatingWithTildeInPath }
@@ -462,7 +484,10 @@ struct AgentSessionHeader: View {
             Spacer(minLength: sz(8))
             AgentVerbosityPicker(level: level, style: picker)
             // #822's Terminal view pill goes here, between the picker and the button.
-            OpenInTerminalButton(action: open, compact: compact)
+            HStack(spacing: sz(6)) {   // #829: the "⋯" sits close to the button, always last, fixed size
+                OpenInTerminalButton(action: open, compact: compact)
+                AgentSessionMenuButton(store: store, session: session, ask: ask)
+            }
         }
     }
 }
@@ -592,12 +617,13 @@ struct AgentStateChip: View {
     }
 }
 
-/// The island's inline note for the row ("Attach command copied", "Attached in tmux/ssh…").
+/// The island's inline note for the row ("Attach command copied", "Attached in tmux/ssh…"),
+/// #829 G0: else the row's action text ("Stopping…", "Restarted", a failure), as the island row.
 struct AgentNoticeLine: View {
     @ObservedObject var store: AgentIslandStore
     let key: AgentSessionKey
     var body: some View {
-        if let text = store.notices[key] {
+        if let text = AgentWindowControls.notice(store, key) {
             HStack(spacing: sz(6)) {
                 Image(systemName: "info.circle").foregroundStyle(Neon.blue)
                 Text(text).foregroundStyle(Neon.textSecondary)
@@ -664,15 +690,19 @@ struct AgentInteractionPane: View {
     @ObservedObject var model: AgentWindowInteraction
     let session: AgentSession
     let open: () -> Void
+    /// #829 (spec 3.5): a Restart or Stop's running text on this session; nil: none.
+    var lock: String?
 
     var canSend: Bool {
-        (session.state == .idle || session.state == .done) && !model.busy && AgentWindowDriver.message(model.draft) != nil
+        (session.state == .idle || session.state == .done) && !model.busy && lock == nil
+            && AgentWindowDriver.message(model.draft) != nil
     }
 
-    var canInterrupt: Bool { session.state == .working && !model.busy }
+    var canInterrupt: Bool { session.state == .working && !model.busy && lock == nil }
 
     var placeholder: String {
-        switch session.state {
+        if let lock { return AgentWindowControls.lockPlaceholder(lock) }
+        return switch session.state {
         case .blocked: "Answer the prompt above first"
         case .working: "Claude is working. Type now, send when it's done"
         case .idle, .done: "Message Claude. Return sends, Shift-Return adds a line"
@@ -681,7 +711,7 @@ struct AgentInteractionPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(8)) {
-            AgentPromptPanel(model: model, open: open)
+            AgentPromptPanel(model: model, open: open).disabled(lock != nil)
             if let n = model.notice { AgentActionNotice(text: n, open: open) }
             HStack(alignment: .bottom, spacing: sz(8)) {
                 ZStack(alignment: .topLeading) {

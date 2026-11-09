@@ -18,7 +18,19 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.174.0 *(unreleased)*
+## v2.175.0 *(unreleased)*
+
+- Agent Sessions window: a live session's "⋯" header menu and its sidebar row's right-click menu
+  offer Restart agent, Stop and Kill, with the island's rules and reasons; the window asks first in
+  a line over the conversation. A stopped or killed session's selection moves to its History row.
+  While a Restart or Stop runs, the row shows it ("Restarting…", "Stopping…") in place of the state,
+  the result shows under the header, and Send, Interrupt and prompt answers wait until it is done.
+  Results for a whole folder (Stop all, Kill all, Restart all) show in a fixed line at the bottom of
+  the sidebar. History re-reads when the window opens and when a session ends while it is open.
+  Right arrow with nothing selected unfolds the first folded section. Ages past 364 days read in
+  years, here and on the island (#829).
+
+## v2.174.0
 
 - Ships dch 1.39.0 (was 1.28.6). A Claude Code plan waiting for approval now reads as
   waiting for you instead of working or idle. dch now has a config file (`dch --config`) with its own

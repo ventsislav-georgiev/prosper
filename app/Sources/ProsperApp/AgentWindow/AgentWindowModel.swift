@@ -78,8 +78,10 @@ enum AgentSidebar {
     /// "Needs you" first (blocked before done, newest first), then the island's own
     /// Sessions / Sidekicks split in its sort order, then History. A session sits in
     /// one group only; empty groups are left out.
+    /// #829 G0: `actions` are the island's row texts; a running one replaces the state word.
     static func sections(sessions: [AgentSession], history: [DchHistoryRecord], sort: AgentIslandSort,
-                         sidekickPattern: String, details: AgentIslandRowDetails, now: TimeInterval) -> [Section] {
+                         sidekickPattern: String, details: AgentIslandRowDetails, now: TimeInterval,
+                         actions: [AgentSessionKey: String] = [:]) -> [Section] {
         let needs = sessions.filter(needsYou).sorted {
             if $0.state != $1.state { return $0.state < $1.state }
             if $0.activity != $1.activity { return $0.activity > $1.activity }
@@ -88,15 +90,17 @@ enum AgentSidebar {
         let rest = AgentIsland.split(AgentIsland.sorted(sessions.filter { !needsYou($0) }, by: sort), pattern: sidekickPattern)
         var out: [Section] = []
         func add(_ title: String, _ rows: [Row]) { if !rows.isEmpty { out.append(Section(title: title, rows: rows)) } }
-        add(needsYouTitle, needs.map { row($0, details: details, now: now) })
-        add("Sessions", rest.primary.map { row($0, details: details, now: now) })
-        add("Sidekicks", rest.sidekicks.map { row($0, details: details, now: now) })
+        let live = { (s: AgentSession) in row(s, details: details, now: now, action: actions[s.key]) }
+        add(needsYouTitle, needs.map(live))
+        add("Sessions", rest.primary.map(live))
+        add("Sidekicks", rest.sidekicks.map(live))
         add("History", AgentIsland.cappedHistory(history).map { row($0, now: now) })
         return out
     }
 
-    static func row(_ s: AgentSession, details: AgentIslandRowDetails, now: TimeInterval) -> Row {
-        var parts = [s.state.label]
+    static func row(_ s: AgentSession, details: AgentIslandRowDetails, now: TimeInterval, action: String? = nil) -> Row {
+        // #829 G0: "Stopping…", "Pausing…" while a Restart or Stop runs (from the island or the window).
+        var parts = [AgentWindowControls.lock(action) ?? s.state.label]
         if details.agents, s.agents > 0 { parts.append(s.agents == 1 ? "1 agent" : "\(AgentIsland.count(s.agents)) agents") }
         if let merged = AgentIsland.mergedLabel(s.meta, show: details) { parts.append(merged) }
         let (chips, more) = AgentIsland.prChips(s.meta, show: details, budget: .infinity)
@@ -169,6 +173,16 @@ final class AgentWindowModel: ObservableObject {
     /// (it holds activity-only lists back while nothing shows them).
     var onVisible: (Bool) -> Void = { AgentIslandController.shared.windowWatching = $0 }
     var ageInterval: TimeInterval = 30
+    /// #829: Restart agent, Stop and Kill: the island's controller methods (its gates, runner
+    /// keys, busy refusal and row texts). True: the job started.
+    var restartSession: (AgentSession) -> Bool = { AgentIslandController.shared.restart($0, sayBusy: true) }
+    var stopSession: (AgentSession) -> Bool = { AgentIslandController.shared.stop($0, sayBusy: true) }
+    var killSession: (AgentSession) -> Bool = { AgentIslandController.shared.kill($0) }
+    /// #829 (R5): the question the confirm strip shows; dropped by a selection change.
+    @Published private(set) var confirming: AgentWindowConfirm?
+    /// #829 G2: a Stop or Kill the window started: once its live row is gone and a History
+    /// record of that key ended since, that row is selected. One-shot; any manual selection drops it.
+    private(set) var following: (key: AgentSessionKey, at: TimeInterval)?
     /// Counts sidebar rebuilds (tests: nothing rebuilds after close).
     private(set) var refreshes = 0
 
@@ -195,15 +209,15 @@ final class AgentWindowModel: ObservableObject {
         subscription = nil
         guard let store else {
             sections = []
-            select(nil)
+            select(nil, manual: false)
             return
         }
         // @Published sends on willSet with the new value, so the values are used as given.
         subscription = store.$sessions.combineLatest(store.$history, store.$sort, store.$sidekickPattern)
-            .combineLatest(store.$details)
-            .sink { [weak self] v, details in
+            .combineLatest(store.$details, store.$actions)
+            .sink { [weak self] v, details, actions in
                 MainActor.assumeIsolated {
-                    self?.refresh(sessions: v.0, history: v.1, sort: v.2, pattern: v.3, details: details)
+                    self?.refresh(sessions: v.0, history: v.1, sort: v.2, pattern: v.3, details: details, actions: actions)
                 }
             }
     }
@@ -211,23 +225,26 @@ final class AgentWindowModel: ObservableObject {
     /// Rebuilds the sidebar from the store's current values (the age clock's tick).
     func refresh() {
         guard let s = store else { return }
-        refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details)
+        refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
+                actions: s.actions)
     }
 
     private func refresh(sessions: [AgentSession], history: [DchHistoryRecord], sort: AgentIslandSort,
-                         pattern: String, details: AgentIslandRowDetails) {
+                         pattern: String, details: AgentIslandRowDetails, actions: [AgentSessionKey: String]) {
         // Hidden or closed: nothing is rebuilt; showing again reads the store afresh.
         guard visible, !closed else { return }
         refreshes += 1
         let new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
-                                        details: details, now: now())
+                                        details: details, now: now(), actions: actions)
         if new != sections { sections = new }
-        // The selected row gone (the session ended): nothing selected, nothing tailing.
-        if let sel = selection, row(sel) == nil { select(nil) } else { follow() }
+        // The selected row gone (the session ended): nothing selected, nothing tailing; #829 G2:
+        // unless it is followed to its History row (straight there, never through nothing).
+        let gone = selection.map { row($0) == nil } ?? false
+        if !followToHistory() { if gone { select(nil, manual: false) } else { follow() } }
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
             filled = true
-            if selection == nil, let first = navigableIDs.first { select(first) }
+            if selection == nil, let first = navigableIDs.first { select(first, manual: false) }
         }
     }
 
@@ -249,7 +266,15 @@ final class AgentWindowModel: ObservableObject {
 
     /// Left / right arrows: fold or unfold the selected row's section.
     func collapseSelected(_ on: Bool) {
-        guard let sel = selection, let s = sections.first(where: { $0.rows.contains { $0.id == sel } }) else { return }
+        guard let sel = selection, let s = sections.first(where: { $0.rows.contains { $0.id == sel } }) else {
+            // QA #660 note 1: Right with nothing selected and nothing shown unfolds the first
+            // folded section; then (or when rows show) it selects the first shown row.
+            if !on, selection == nil {
+                if navigableIDs.isEmpty, let s = sections.first(where: { isCollapsed($0.title) }) { setCollapsed(s.title, false) }
+                move(1)
+            }
+            return
+        }
         setCollapsed(s.title, on)
     }
 
@@ -259,8 +284,14 @@ final class AgentWindowModel: ObservableObject {
         sections.flatMap { s in isCollapsed(s.title) ? s.rows.filter { $0.id == selection } : s.rows }.map(\.id)
     }
 
-    func select(_ id: AgentSidebar.RowID?) {
-        if selection != id { selection = id }
+    /// `manual`: the human's pick (a click, a key, a menu); it drops a pending follow-to-History.
+    /// Any change of row drops the confirm strip's question (R5).
+    func select(_ id: AgentSidebar.RowID?, manual: Bool = true) {
+        if manual { following = nil }
+        if selection != id {
+            selection = id
+            confirming = nil
+        }
         follow()
     }
 
@@ -284,6 +315,45 @@ final class AgentWindowModel: ObservableObject {
     func resumeSelected() {
         guard let r = selectedRow?.record else { return }
         resume(r)
+    }
+
+    // MARK: #829 Restart agent, Stop, Kill (ask, then act)
+
+    /// A header "⋯" or row context-menu item: selects the row first (R6), then asks.
+    func ask(_ verb: AgentWindowVerb, _ s: AgentSession) {
+        select(.live(s.key))
+        confirming = AgentWindowConfirm(verb: verb, key: s.key)
+    }
+
+    /// The asked session as it is now (nil: it ended).
+    var confirmingSession: AgentSession? {
+        confirming.flatMap { c in store?.sessions.first { $0.key == c.key } }
+    }
+
+    /// The strip's answer. The session is re-resolved by key now: gone, nothing runs.
+    func confirm(_ yes: Bool) {
+        guard let c = confirming else { return }
+        let s = confirmingSession
+        confirming = nil
+        guard yes, let s else { return }
+        switch c.verb {
+        case .restart: _ = restartSession(s)
+        case .stop: if stopSession(s) { following = (s.key, now()) }
+        case .kill: if killSession(s) { following = (s.key, now()) }
+        }
+    }
+
+    /// G2: the followed session's live row is gone and a History record of its key ended
+    /// since the Stop or Kill (dch writes a record each minute: 65 s of slack): select it.
+    /// Dropped after the Stop's bound.
+    private func followToHistory() -> Bool {
+        guard let f = following else { return false }
+        if now() - f.at > DchActionRunner.restartBound { following = nil; return false }
+        guard row(.live(f.key)) == nil,
+              let h = rows.first(where: { $0.record?.key == f.key && ($0.record?.lastSeen ?? 0) >= f.at - 65 }) else { return false }
+        following = nil
+        select(h.id, manual: false)
+        return true
     }
 
     func setVisible(_ v: Bool) {
