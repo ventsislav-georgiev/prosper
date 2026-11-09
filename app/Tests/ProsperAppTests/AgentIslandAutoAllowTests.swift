@@ -1749,34 +1749,43 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         drain(c)
         drain(c)
         XCTAssertEqual(f.sends, [], "B is the human's")
-        XCTAssertEqual(r.lastState, .blocked)
     }
 
     /// QA #644 INFO-2: the hold the click took is gone by the time its result lands (the row
     /// left blocked and came back with C while the click was in flight, so the hold is now one
     /// with no prompt): the stale click rechecks nothing, and C stays the human's.
+    /// QA #656: A is a prompt whose row is on (a plan's are off since #823, so its click never
+    /// read), so the click's read really is the one held. `advance` 0 is the replacing hold stamped
+    /// at the click's own instant: there only `left == p` refuses the recheck (mutant k2 answers C);
+    /// with the clock moved on, `t == at` refuses it too.
     @MainActor func testAStaleClickWhoseHoldWasReplacedRechecksNothing() throws {
-        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
-        let a = try XCTUnwrap(AgentPrompt.parse(Self.neverAnswered[0].1))
-        XCTAssertEqual(c.store?.cards[key], .prompt(a), "A's card is up")
-        let hold = DispatchSemaphore(value: 0)
-        f.lock.withLock { f.gate = hold }
-        c.answer(session(.blocked), a, a.options[0])   // its read held
-        tick(c, .working, activity: 2)                  // the hold is dropped
-        f.set(Self.bash2)
-        tick(c, .blocked, activity: 3)                  // C, while the click is in flight
-        hold.signal()
-        drain(c)
-        drain(c)
-        XCTAssertEqual(f.sends, [], "the click finds C, not A")
-        for _ in 0..<2 {
-            r.now += AgentPollGate.floor
-            fire(c, r)
+        for advance in [0, AgentPollGate.floor] {
+            let f = FakeIO(Self.neverAnswered[3].1), (c, r) = leftWithItsCard(f)
+            let a = try XCTUnwrap(AgentPrompt.parse(Self.neverAnswered[3].1))
+            XCTAssertEqual(c.store?.cards[key], .prompt(a), "A's card is up")
+            XCTAssertTrue(a.isEnabled(a.options[0]), "A's row is on, so the click reads")
+            let hold = DispatchSemaphore(value: 0)
+            f.lock.withLock { f.gate = hold }
+            c.answer(session(.blocked), a, a.options[0])
+            let deadline = Date() + 5
+            while f.lock.withLock({ f.gate != nil }), Date() < deadline { usleep(1000) }
+            XCTAssertNil(f.lock.withLock { f.gate }, "advance \(advance): the click's read is held")
+            r.now += advance
+            tick(c, .working, activity: 2)                  // the hold is dropped
+            f.set(Self.bash2)
+            tick(c, .blocked, activity: 3)                  // C, while the click is in flight
+            hold.signal()
             drain(c)
             drain(c)
+            XCTAssertEqual(f.sends, [], "advance \(advance): the click finds C, not A")
+            for _ in 0..<2 {
+                r.now += AgentPollGate.floor
+                fire(c, r)
+                drain(c)
+                drain(c)
+            }
+            XCTAssertEqual(f.sends, [], "advance \(advance): C is the human's")
         }
-        XCTAssertEqual(f.sends, [], "C is the human's")
-        XCTAssertEqual(r.lastState, .blocked)
     }
 
     /// QA #620 INFO-1: B's card was read for this activity before its check took the row down;

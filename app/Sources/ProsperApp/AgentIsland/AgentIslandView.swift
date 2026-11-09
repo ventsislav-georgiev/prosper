@@ -1242,7 +1242,7 @@ struct AgentCardLayout: Equatable {
     static let previewFloor: CGFloat = 7
 
     static let previewCaption = "Previews are answered in the terminal"
-    static let planCaption = "Plans are answered in the Agents window or the terminal"
+    static let planCaption = "Plans are answered in the Agent Sessions window or the terminal"
     static let tooLongCaption = "Too long to show in full, open the terminal to approve"
     static let hiddenCaption = "Hidden characters in this prompt, open the terminal to approve"
     static let offTopCaption = "The top of this prompt is off screen, open the terminal to approve"

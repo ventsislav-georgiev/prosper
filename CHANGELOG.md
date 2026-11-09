@@ -104,6 +104,10 @@ tag from the now-released section and put it on the new top draft.
   a subagent, and shows the todo list as a small "Todos 3/7" chip. Focused shows only your prompt,
   a one-line summary of the steps (with any errors) and Claude's reply. Verbose shows everything,
   expanded. Switch in the window header or with Option-Command-1, 2 and 3. (#821)
+- A question whose top has scrolled off the terminal no longer types a "No, ..." click into the
+  Other row's text: with the terminal's highlighted row on Other, nothing is sent. An approve
+  click in the Agent Sessions window after the plan left the conversation now says so instead
+  of doing nothing. (#825)
 
 ## v2.173.0
 

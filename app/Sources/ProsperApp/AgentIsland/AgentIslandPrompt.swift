@@ -178,7 +178,8 @@ struct AgentPromptScreen: Equatable {
 extension AgentPromptScreen {
     /// #818: the caret is on a row where a digit is typed as text instead of answering: a
     /// question form's Other row (its "Type something." placeholder, or typed text: the row right
-    /// above "Chat about this" on a form under header chips), a plan's feedback row (it carries
+    /// above "Chat about this"; #825: chip line or not, so a form whose top scrolled off fails
+    /// closed), a plan's feedback row (it carries
     /// "shift+tab to approve with this feedback"), or any row while the footer shows Claude Code's
     /// "ctrl+g to edit in …" (2.1.318 adds it under a question form only with the caret on Other,
     /// live05; a plan footer always has it). No caret: true.
@@ -188,7 +189,7 @@ extension AgentPromptScreen {
         if AgentWindowDriver.isPlaceholder(o.label) || footer?.contains("ctrl+g to edit in") == true
             || flat(([o.label] + o.detail).joined()).hasSuffix(flat(AgentPlanForm.feedbackHint)) { return true }
         let chat = prompt.options.first { flat($0.label) == "Chataboutthis" }?.digit
-        return prompt.context.last.map(AgentPrompt.isChipLine) == true && chat == c + 1
+        return chat == c + 1
     }
 }
 

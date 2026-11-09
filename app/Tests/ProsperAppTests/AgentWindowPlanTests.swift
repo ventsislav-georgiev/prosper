@@ -209,6 +209,8 @@ final class AgentWindowPlanTests: XCTestCase {
     /// included, in the live layout and the older permission layout alike, and says why.
     @MainActor
     func testAgentWindowPlanApprovalTheIslandAllowsNothingAndEnablesNoModeChange() throws {
+        // QA #653 INFO-2 (#825): the window's own name, as its title and the CHANGELOG say it.
+        XCTAssertEqual(AgentCardLayout.planCaption, "Plans are answered in the Agent Sessions window or the terminal")
         let bypass = ["Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session",
                       "Yes, manually approve edits", "No, keep planning"]
         for rows in [T.planRows, T.planRowsClear, bypass, ["Yes, and use auto mode", "Yes, manually approve edits", "No, keep planning"]] {
@@ -560,6 +562,34 @@ final class AgentWindowPlanTests: XCTestCase {
         XCTAssertEqual(j.notice, AgentWindowText.changed)
         guard case .prompt(let again) = j.panel else { return XCTFail("\(j.panel)") }
         XCTAssertEqual(again.why, AgentWindowText.planMismatch, "re-read: the new plan is checked again")
+    }
+
+    /// QA #653 INFO-5 (#825): the transcript's plan input goes while the panel still shows its
+    /// approve rows (the re-read after a refused click in flight): an approve click sends nothing
+    /// and says why, never silently.
+    @MainActor
+    func testAgentWindowPlanApproveWithThePlanInputGoneSaysSo() throws {
+        let g = FormSim(.plan)
+        let d = t.controller(g.io, autoAllow: false)
+        let j = t.interaction(d)
+        j.plan = T.planInput
+        j.follow(t.session(.blocked))
+        guard case .prompt(let v) = j.panel else { return XCTFail("\(j.panel)") }
+        XCTAssertEqual(v.approve, [1, 2])
+        var reads: [@Sendable () -> Void] = []
+        j.readQueue = { reads.append($0) }               // the re-read stays in flight
+        g.lock.withLock { g.planLines = T.planShown + ["Then delete the tests."] }
+        j.answer(v.buttons[1])
+        t.until("refused") { !j.busy }
+        XCTAssertEqual(j.notice, AgentWindowText.changed)
+        XCTAssertEqual(reads.count, 1, "the re-read is in flight")
+        guard case .prompt(let still) = j.panel else { return XCTFail("\(j.panel)") }
+        XCTAssertEqual(still.approve, [1, 2], "the rows are still drawn")
+        j.plan = nil
+        j.answer(still.buttons[1])
+        XCTAssertFalse(j.busy, "nothing goes")
+        XCTAssertEqual(j.notice, AgentWindowText.planUnchecked)
+        XCTAssertEqual(g.log, [])
     }
 
     /// Round 2: only the main thread's ExitPlanMode is the plan a screen is checked against; a

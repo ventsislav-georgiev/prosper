@@ -890,7 +890,8 @@ final class AgentWindowInteraction: ObservableObject {
         guard case .prompt(let w) = panel, w.kind == .choose, w.enabled.contains(o.digit), let s = session else { return }
         // #802: a plan's approve row: the driver's checked digit, not the island rule (which keeps mode changes off).
         if w.approve.contains(o.digit) {
-            guard let plan, let shown = w.plan else { return }
+            // QA #653 INFO-5: the transcript's plan went while the panel still shows its rows.
+            guard let plan, let shown = w.plan else { notice = AgentWindowText.planUnchecked; return }
             let d = driver(s), e = w.screen
             return act(s, prompt: e.prompt) { io in d(io).approve(e, digit: o.digit, plan: plan, shown: shown) }
         }

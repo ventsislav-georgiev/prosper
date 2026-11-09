@@ -668,6 +668,33 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(g.log, [])
     }
 
+    /// QA #653 INFO-1 (#825): a short pty with the form's top rule (and its header chips) scrolled
+    /// off, and Other text typed in the terminal before the card drew. The "No, …" row stays on
+    /// with the top off; a click on it would type its digit into Other. The caret above "Chat about
+    /// this" is an input row chip line or not, so nothing is sent.
+    func testIslandAnswerSendsNothingWithTheCaretOnTypedOtherAndTheTopOffTheScreen() throws {
+        func screen(caret: Int) -> String {
+            let mark = { (i: Int) in caret == i ? "❯" : " " }
+            return ["Which color?", "",
+                    "\(mark(1)) 1. Red", "     Choose red", "\(mark(2)) 2. No, skip the color", "     Pick none",
+                    "\(mark(3)) 3. Kiwi", Self.rule, "\(mark(4)) 4. Chat about this", "",
+                    "Enter to select · ↑/↓ to navigate · Esc to cancel"].joined(separator: "\n")
+        }
+        let shown = try XCTUnwrap(AgentPrompt.parse(screen(caret: 1)))
+        XCTAssertFalse(shown.topFound, "the top is off the screen")
+        XCTAssertFalse(shown.context.last.map(AgentPrompt.isChipLine) ?? false, "no chip line")
+        let no = try XCTUnwrap(shown.options.first { $0.label.hasPrefix("No,") })
+        XCTAssertTrue(shown.isEnabled(no), "the deny row stays on")
+        XCTAssertTrue(try XCTUnwrap(AgentPrompt.screen(screen(caret: 3))).caretOnInput)
+        let f = FormSim(.plain(screen(caret: 3)))
+        XCTAssertEqual(AgentPrompt.answer(Self.key, digit: no.digit, expected: shown, io: f.io), .changed)
+        XCTAssertEqual(f.log, [], "nothing typed into Other")
+        // Control: the caret on Red, the No click answers.
+        let g = FormSim(.plain(screen(caret: 1)))
+        XCTAssertEqual(AgentPrompt.answer(Self.key, digit: no.digit, expected: shown, io: g.io), .sent)
+        XCTAssertEqual(g.log, ["send 2"])
+    }
+
     /// A screen that a test swaps between the window drawing its panel and the click.
     final class ScreenBox: @unchecked Sendable {
         let lock = NSLock()
