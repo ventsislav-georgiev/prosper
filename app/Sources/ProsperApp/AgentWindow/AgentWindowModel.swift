@@ -67,6 +67,9 @@ enum AgentSidebar {
     }
 
     static let needsYouTitle = "Needs you"
+    /// #828: the sections a header click folds away. Needs you never folds: it is the list of
+    /// sessions waiting on the human.
+    static let collapsible: Set<String> = ["Sessions", "Sidekicks", "History"]
 
     /// Waiting for the human: blocked on a prompt, or done (the turn is over and the
     /// next message is theirs). Working and idle sessions are not.
@@ -149,6 +152,11 @@ final class AgentWindowModel: ObservableObject {
     @Published var verbosity = Preferences.agentWindowVerbosity {
         didSet { if verbosity != oldValue { Preferences.agentWindowVerbosity = verbosity } }
     }
+    /// #828: the folded sidebar sections (titles), per Mac across window close and relaunch.
+    /// Folding hides rows only: the selection, its transcript and Return stay as they were.
+    @Published private(set) var collapsed = Preferences.agentWindowCollapsedSections {
+        didSet { if collapsed != oldValue { Preferences.agentWindowCollapsedSections = collapsed } }
+    }
 
     // Seams.
     var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
@@ -216,9 +224,10 @@ final class AgentWindowModel: ObservableObject {
         if new != sections { sections = new }
         // The selected row gone (the session ended): nothing selected, nothing tailing.
         if let sel = selection, row(sel) == nil { select(nil) } else { follow() }
-        if !filled, let first = rows.first {
+        // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
+        if !filled, !rows.isEmpty {
             filled = true
-            if selection == nil { select(first.id) }
+            if selection == nil, let first = navigableIDs.first { select(first) }
         }
     }
 
@@ -226,14 +235,38 @@ final class AgentWindowModel: ObservableObject {
     func row(_ id: AgentSidebar.RowID) -> AgentSidebar.Row? { rows.first { $0.id == id } }
     var selectedRow: AgentSidebar.Row? { selection.flatMap(row) }
 
+    func isCollapsed(_ title: String) -> Bool {
+        AgentSidebar.collapsible.contains(title) && collapsed.contains(title)
+    }
+
+    /// Folds or unfolds `title` (a header click); a section that never folds is left alone.
+    func setCollapsed(_ title: String, _ on: Bool) {
+        guard AgentSidebar.collapsible.contains(title) else { return }
+        if on { collapsed.insert(title) } else { collapsed.remove(title) }
+    }
+
+    func toggleCollapsed(_ title: String) { setCollapsed(title, !isCollapsed(title)) }
+
+    /// Left / right arrows: fold or unfold the selected row's section.
+    func collapseSelected(_ on: Bool) {
+        guard let sel = selection, let s = sections.first(where: { $0.rows.contains { $0.id == sel } }) else { return }
+        setCollapsed(s.title, on)
+    }
+
+    /// The rows up/down walk: the shown ones, plus the selection where it sits when its
+    /// section is folded (so a move goes to its neighbour, never into a folded section).
+    var navigableIDs: [AgentSidebar.RowID] {
+        sections.flatMap { s in isCollapsed(s.title) ? s.rows.filter { $0.id == selection } : s.rows }.map(\.id)
+    }
+
     func select(_ id: AgentSidebar.RowID?) {
         if selection != id { selection = id }
         follow()
     }
 
-    /// Up/down: the next or previous row across groups, clamped; from none, the first.
+    /// Up/down: the next or previous shown row across groups, clamped; from none, the first.
     func move(_ delta: Int) {
-        let ids = rows.map(\.id)
+        let ids = navigableIDs
         guard !ids.isEmpty else { return }
         guard let sel = selection, let i = ids.firstIndex(of: sel) else { return select(ids[0]) }
         select(ids[min(max(i + delta, 0), ids.count - 1)])

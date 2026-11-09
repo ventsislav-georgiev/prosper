@@ -108,6 +108,11 @@ tag from the now-released section and put it on the new top draft.
   with the tasks still open. Focused shows only your prompt, a one-line count of the tool steps
   (with any errors) and Claude's reply. Verbose shows everything, expanded. Switch in the window
   header or with Option-Command-1, 2 and 3. (#821)
+- Agent Sessions window: the Sessions, Sidekicks and History headers fold and unfold (click
+  them, or Left and Right on the selected row), remembered per Mac. Send and Interrupt share one
+  fixed column, so the message box no longer changes width when Claude starts or stops working,
+  and state, age and History status changes no longer move what sits next to them. Text you
+  pasted into Claude Code shows without its pasted_content tags. (#828)
 - A click on a question whose top has scrolled off the terminal, or whose Other text reads
   "Chat about this", no longer types the click's digit into the Other field: with the terminal's
   highlighted row on Other, nothing is sent. An approve

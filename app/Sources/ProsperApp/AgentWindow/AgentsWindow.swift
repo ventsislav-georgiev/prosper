@@ -136,12 +136,14 @@ final class AgentsNSWindow: NSWindow {
         super.sendEvent(event)
     }
 
-    /// Plain up, down and Return only; anything with a modifier passes through.
+    /// Plain up, down, left, right and Return only; anything with a modifier passes through.
     @MainActor static func handle(_ event: NSEvent, _ model: AgentWindowModel) -> Bool {
         guard event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return false }
         switch event.keyCode {
         case 126: model.move(-1)                   // up
         case 125: model.move(1)                    // down
+        case 123: model.collapseSelected(true)     // #828 left: fold the selection's section
+        case 124: model.collapseSelected(false)    // right: unfold it
         case 36, 76: return model.openSelected()   // Return, keypad Enter; a History row passes on
         default: return false
         }
@@ -215,13 +217,20 @@ struct AgentSidebarView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: sz(2)) {
                             ForEach(model.sections) { section in
-                                AgentSectionHeader(title: section.title, count: section.rows.count)
-                                ForEach(section.rows) { row in
-                                    Button { model.select(row.id) } label: {
-                                        AgentSidebarRowView(row: row, selected: model.selection == row.id)
+                                // #828: Sessions, Sidekicks and History fold on a header click
+                                // (remembered per Mac); a folded section keeps its selection.
+                                let folded = model.isCollapsed(section.title)
+                                AgentSectionHeader(title: section.title, count: section.rows.count, collapsed: folded,
+                                                   toggle: AgentSidebar.collapsible.contains(section.title)
+                                                       ? { model.toggleCollapsed(section.title) } : nil)
+                                if !folded {
+                                    ForEach(section.rows) { row in
+                                        Button { model.select(row.id) } label: {
+                                            AgentSidebarRowView(row: row, selected: model.selection == row.id)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .id(row.id)
                                     }
-                                    .buttonStyle(.plain)
-                                    .id(row.id)
                                 }
                             }
                         }
@@ -238,10 +247,33 @@ struct AgentSidebarView: View {
 struct AgentSectionHeader: View {
     let title: String
     let count: Int
+    /// #828: folded (rows hidden; the count stays).
+    var collapsed = false
+    /// #828: nil for a section that never folds (Needs you): no chevron, no button.
+    var toggle: (() -> Void)?
+
     var body: some View {
+        if let toggle {
+            Button(action: toggle) { content }
+                .buttonStyle(.plain)
+                .help(collapsed ? "Show \(title)" : "Hide \(title)")
+                .accessibilityLabel("\(title), \(count)")
+                .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
+        } else {
+            content
+        }
+    }
+
+    var content: some View {
         HStack(spacing: sz(5)) {
             if title == AgentSidebar.needsYouTitle {
                 Circle().fill(AgentState.blocked.color).frame(width: sz(5), height: sz(5))
+            }
+            if toggle != nil {
+                // Rotated, not swapped: one glyph in one fixed box, so the title never moves.
+                Image(systemName: "chevron.right").font(Neon.font(8, weight: .bold)).foregroundStyle(Neon.textSecondary)
+                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                    .frame(width: sz(9), height: sz(9))
             }
             Text(title.uppercased()).font(Neon.font(9.5, weight: .bold)).tracking(0.8)
                 .foregroundStyle(title == AgentSidebar.needsYouTitle ? AgentState.blocked.color : Neon.textSecondary)
@@ -249,6 +281,7 @@ struct AgentSectionHeader: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, sz(8)).padding(.top, sz(12)).padding(.bottom, sz(4))
+        .contentShape(Rectangle())
     }
 }
 
@@ -269,7 +302,13 @@ struct AgentSidebarRowView: View {
                         .lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: sz(4))
                     if !row.age.isEmpty {
-                        Text(row.age).font(Neon.font(10).monospacedDigit()).foregroundStyle(Neon.textSecondary)
+                        // #828: a three-character slot, so "9s" -> "10s" never re-truncates the title.
+                        ZStack(alignment: .trailing) {
+                            Text("00m").hidden()
+                            Text(row.age).foregroundStyle(Neon.textSecondary)
+                        }
+                        .font(Neon.font(10).monospacedDigit())
+                        .fixedSize()
                     }
                 }
                 // The PR chips whole, else their count, else none: never a cut-off chip.
@@ -531,14 +570,24 @@ struct AgentTodosList: View {
 
 struct AgentStateChip: View {
     let state: AgentState
+    /// #828: the slot is the widest state's, so a state change never moves the title, the
+    /// picker or the button (nor flips the header to its compact form); the capsule hugs its text.
     var body: some View {
-        HStack(spacing: sz(4)) {
-            Text(state.glyph).font(Neon.font(9, weight: .bold))
-            Text(state.label).font(Neon.font(10, weight: .semibold))
+        ZStack(alignment: .leading) {
+            ForEach(AgentState.allCases, id: \.self) { chip($0).hidden() }
+            chip(state)
         }
-        .foregroundStyle(agentStateColor(state))
+        .fixedSize()
+    }
+
+    func chip(_ s: AgentState) -> some View {
+        HStack(spacing: sz(4)) {
+            Text(s.glyph).font(Neon.font(9, weight: .bold))
+            Text(s.label).font(Neon.font(10, weight: .semibold))
+        }
+        .foregroundStyle(agentStateColor(s))
         .padding(.horizontal, sz(7)).padding(.vertical, sz(2))
-        .background(Capsule().fill(agentStateColor(state).opacity(0.14)))
+        .background(Capsule().fill(agentStateColor(s).opacity(0.14)))
         .fixedSize()
     }
 }
@@ -600,9 +649,10 @@ struct AgentResumeButton: View {
             }
             .buttonStyle(.plain)
             .disabled(!store.resumeGate.isOK)
-            if let status = store.historyActions[record.id] {
-                Text(status).font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
-            }
+            // #828: the line is always there, so a status arriving never re-centres the detail.
+            let status = store.historyActions[record.id]
+            Text(status ?? " ").font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
+                .accessibilityHidden(status == nil)
         }
     }
 }
@@ -618,6 +668,8 @@ struct AgentInteractionPane: View {
     var canSend: Bool {
         (session.state == .idle || session.state == .done) && !model.busy && AgentWindowDriver.message(model.draft) != nil
     }
+
+    var canInterrupt: Bool { session.state == .working && !model.busy }
 
     var placeholder: String {
         switch session.state {
@@ -643,15 +695,8 @@ struct AgentInteractionPane: View {
                 .frame(height: sz(60))
                 .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.bgBottom))
                 .overlay(RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke, lineWidth: 1))
-                VStack(spacing: sz(6)) {
-                    if session.state == .working {
-                        AgentPillButton(title: "Interrupt", icon: "stop.fill", tint: Neon.magenta, enabled: !model.busy) {
-                            model.interrupt()
-                        }
-                        .help("Press Esc in the session")
-                    }
-                    AgentPillButton(title: "Send", icon: "arrow.up", tint: Neon.blue, enabled: canSend) { model.send() }
-                }
+                AgentSendColumn(canInterrupt: canInterrupt, canSend: canSend,
+                                interrupt: { model.interrupt() }, send: { model.send() })
             }
         }
         .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
@@ -660,20 +705,43 @@ struct AgentInteractionPane: View {
     }
 }
 
+/// #828: Interrupt over Send in one fixed column. Both are always there and stretch to the
+/// wider one's width; Interrupt only dims when Claude is not working, so the input box
+/// beside the column never changes width.
+struct AgentSendColumn: View {
+    let canInterrupt: Bool
+    let canSend: Bool
+    let interrupt: () -> Void
+    let send: () -> Void
+    var body: some View {
+        VStack(spacing: sz(6)) {
+            AgentPillButton(title: "Interrupt", icon: "stop.fill", tint: Neon.magenta, enabled: canInterrupt, fill: true,
+                            action: interrupt)
+                .help("Press Esc in the session")
+            AgentPillButton(title: "Send", icon: "arrow.up", tint: Neon.blue, enabled: canSend, fill: true, action: send)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
 struct AgentPillButton: View {
     let title: String
     let icon: String
     let tint: Color
     var enabled = true
+    /// #828: stretch to the width its container offers (equal-width button columns).
+    var fill = false
     let action: () -> Void
     var body: some View {
         Button(action: action) {
             Label(title, systemImage: icon).font(Neon.font(11, weight: .semibold)).foregroundStyle(tint)
+                .fixedSize()
                 .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
+                .frame(maxWidth: fill ? .infinity : nil)
                 .background(Capsule().fill(tint.opacity(0.12)))
                 .overlay(Capsule().stroke(tint.opacity(0.45), lineWidth: 1))
                 .contentShape(Capsule())
-                .fixedSize()
+                .fixedSize(horizontal: !fill, vertical: true)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)

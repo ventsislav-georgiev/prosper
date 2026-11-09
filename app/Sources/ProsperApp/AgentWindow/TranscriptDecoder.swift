@@ -264,7 +264,7 @@ enum TranscriptDecoder {
         }
         if let s = content as? String {
             if let c = command(s) { return [.block(c, .specific)] }
-            return s.isBlank ? [.hidden("user/empty")] : [.block(.user(Clip(s, cap: cap, source: source)), .specific)]
+            return s.isBlank ? [.hidden("user/empty")] : [.block(.user(Clip(unwrapPasted(s), cap: cap, source: source)), .specific)]
         }
         guard let parts = content as? [Any] else { return [unrecognized("user without content", o)] }
         var items: [DecodedEntry.Item] = []
@@ -284,7 +284,7 @@ enum TranscriptDecoder {
             }
         }
         if let c = command(text) { items.insert(.block(c, .specific), at: 0) }
-        else if !text.isBlank { items.insert(.block(.user(Clip(text, cap: cap, source: source)), .specific), at: 0) }
+        else if !text.isBlank { items.insert(.block(.user(Clip(unwrapPasted(text), cap: cap, source: source)), .specific), at: 0) }
         return items.isEmpty ? [.hidden("user/empty")] : items
     }
 
@@ -335,7 +335,7 @@ enum TranscriptDecoder {
         let a = TranscriptKeys.obj(o, "attachment")
         // A prompt typed while the agent worked: the one attachment the user wrote.
         if TranscriptKeys.str(a, "type") == "queued_command", let p = TranscriptKeys.str(a, "prompt"), !p.isBlank {
-            return [.block(.user(Clip(p, cap: cap)), .specific)]
+            return [.block(.user(Clip(unwrapPasted(p), cap: cap)), .specific)]
         }
         return [.hidden("attachment")]
     }
@@ -357,6 +357,17 @@ enum TranscriptDecoder {
         guard let a = s.range(of: "<\(name)>"), let b = s.range(of: "</\(name)>", range: a.upperBound..<s.endIndex) else { return nil }
         return s[a.upperBound..<b.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// #828: Claude Code wraps a paste in `<pasted_content id="k3x9">` … `</pasted_content id="k3x9">`
+    /// (the closer repeats a random id). Each matched pair becomes its text: no tags, no id. A
+    /// shape this does not know (no closer, another id, other attributes) stays as written.
+    static func unwrapPasted(_ s: String) -> String {
+        guard s.contains("<pasted_content") else { return s }
+        return pastedPair.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$2")
+    }
+
+    private static let pastedPair = try! NSRegularExpression(
+        pattern: #"<pasted_content id="([A-Za-z0-9_-]{1,64})">\n?([\s\S]*?)\n?</pasted_content id="\1">"#)
 
     /// `<local-command-stdout>x</local-command-stdout>` → `x`: Claude Code's wrapper tags
     /// around notices and tool errors. Only for those two; user and model text stay as written.

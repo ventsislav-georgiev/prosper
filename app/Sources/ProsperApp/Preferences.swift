@@ -445,6 +445,8 @@ enum Preferences {
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         // #821: the Agent Sessions window's verbosity (AgentVerbosity); per Mac, so not in SyncedKeys.
         static let agentWindowVerbosity = "agentWindowVerbosity"
+        // #828: the Agent Sessions window's collapsed sidebar sections (titles); per Mac, not in SyncedKeys.
+        static let agentWindowCollapsedSections = "agentWindowCollapsedSections"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1151,6 +1153,12 @@ enum Preferences {
     static var agentWindowVerbosity: AgentVerbosity {
         get { AgentVerbosity(raw: defaults.string(forKey: Keys.agentWindowVerbosity)) }
         set { defaults.set(newValue.rawValue, forKey: Keys.agentWindowVerbosity) }
+    }
+
+    /// #828: the sidebar sections collapsed in the Agent Sessions window; unset reads as none.
+    static var agentWindowCollapsedSections: Set<String> {
+        get { Set(defaults.stringArray(forKey: Keys.agentWindowCollapsedSections) ?? []) }
+        set { defaults.set(newValue.sorted(), forKey: Keys.agentWindowCollapsedSections) }
     }
 
     /// Agent Island's terminal raw value (`AgentTerminal`); unset or uninstalled
