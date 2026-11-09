@@ -695,6 +695,17 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(g.log, ["send 2"])
     }
 
+    /// QA #658 INFO-1 (#826): Other's typed text reads exactly "Chat about this", no ctrl+g footer.
+    /// The real "Chat about this" row is the bottom one, so the caret on Other is an input row.
+    func testCaretOnInputWithOtherTypedAsChatAboutThis() throws {
+        let screen = ["Which color?", "",
+                      "  1. Red", "  2. Kiwi", "❯ 3. Chat about this", Self.rule, "  4. Chat about this", "",
+                      "Enter to select · ↑/↓ to navigate · Esc to cancel"].joined(separator: "\n")
+        let s = try XCTUnwrap(AgentPrompt.screen(screen))
+        XCTAssertEqual(s.caret, 3)
+        XCTAssertTrue(s.caretOnInput, "the caret on typed Other")
+    }
+
     /// A screen that a test swaps between the window drawing its panel and the click.
     final class ScreenBox: @unchecked Sendable {
         let lock = NSLock()

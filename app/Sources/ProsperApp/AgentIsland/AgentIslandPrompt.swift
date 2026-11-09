@@ -188,7 +188,8 @@ extension AgentPromptScreen {
         guard let c = caret, let o = prompt.options.first(where: { $0.digit == c }) else { return true }
         if AgentWindowDriver.isPlaceholder(o.label) || footer?.contains("ctrl+g to edit in") == true
             || flat(([o.label] + o.detail).joined()).hasSuffix(flat(AgentPlanForm.feedbackHint)) { return true }
-        let chat = prompt.options.first { flat($0.label) == "Chataboutthis" }?.digit
+        // QA #658: typed Other text can read "Chat about this"; the real row is the last one.
+        let chat = prompt.options.last { flat($0.label) == "Chataboutthis" }?.digit
         return chat == c + 1
     }
 }
