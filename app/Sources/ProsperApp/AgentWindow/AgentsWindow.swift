@@ -509,7 +509,11 @@ struct AgentTodosList: View {
 
     private var list: some View {
         VStack(alignment: .leading, spacing: sz(2)) {
-            ForEach(Array(todos.items.enumerated()), id: \.offset) { _, t in
+            if todos.partial {
+                Text("Tasks from the loaded part of the transcript only")
+                    .font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
+            }
+            ForEach(Array(todos.rows.enumerated()), id: \.offset) { _, t in
                 HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
                     Image(systemName: t.status == "completed" ? "checkmark.circle.fill"
                           : t.status == "in_progress" ? "circle.dotted" : "circle")

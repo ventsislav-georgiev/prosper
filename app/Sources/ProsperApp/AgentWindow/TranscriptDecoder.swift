@@ -89,6 +89,9 @@ struct TranscriptBlock: Identifiable, Equatable, Sendable {
     var droppedChildren = 0
     /// #821: a tool call still waiting on its result (a one-line row says "running").
     var pending = false
+    /// #821: a todo/task card the chip does not stand for (refused, or an update to a task the
+    /// chip never placed): Default shows it.
+    var listShown = false
     var failed: Bool { if case .failed = body { true } else { false } }
     /// Tier 2 because something was not recognized (see `TierCounts.degraded`).
     var degraded: Bool {

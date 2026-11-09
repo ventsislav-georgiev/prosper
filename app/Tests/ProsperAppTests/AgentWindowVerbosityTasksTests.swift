@@ -50,13 +50,13 @@ extension AgentWindowD1Tests {
                                         .init(text: "Write the toggle tests", status: "in_progress", id: "2")])
         XCTAssertEqual(a.todos?.label, "Todos 1/2")
         let blocks = a.blocks
-        // Default: no Task card but the refused update (it failed); Verbose keeps every card.
+        // Default: no Task card but the two refused updates (success false, is_error); Verbose keeps every card.
         let def = tags(TranscriptVerbosity.project(blocks, level: .default))
-        XCTAssertEqual(def.filter { $0.contains("(Task") }, ["line:card(TaskUpdate)"])
+        XCTAssertEqual(def.filter { $0.contains("(Task") }, ["line:card(TaskUpdate)", "line:card(TaskUpdate)"])
         XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .verbose)).filter { $0.contains("(Task") }.count, 11)
-        // Focused: three tool steps (Bash, the refused update, the Agent call), one error.
+        // Focused: four tool steps (Bash, the two refused updates, the Agent call), one error.
         XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .focused)),
-                       ["block:user", "summary:3/0/1:1", "block:assistant"])
+                       ["block:user", "summary:4/0/1:1", "block:assistant"])
         let w = assemble(try fixtureLines("2.1.318/d-todowrite.jsonl")[...])
         XCTAssertEqual(w.todos?.label, "Todos 1/3", "the refused rewrite in between changed nothing")
         XCTAssertEqual(w.todos?.items.map(\.text), ["Add the toggle", "Write the tests", "Update the docs"])
@@ -73,7 +73,7 @@ extension AgentWindowD1Tests {
         ].map(line)
         for (name, lines) in [("c-tasks", try fixtureLines("2.1.318/c-tasks.jsonl")),
                               ("d-todowrite", try fixtureLines("2.1.318/d-todowrite.jsonl")), ("drift", drift)] {
-            let whole = assemble(lines[...]).todos
+            let whole = assemble(lines[...]).todos, wholeShown = assemble(lines[...]).blocks.filter(\.listShown).count
             if name != "drift" { XCTAssertNotNil(whole, name) }
             var checked = 0
             for i in 0...lines.count {
@@ -83,6 +83,7 @@ extension AgentWindowD1Tests {
                     a.prepend(assemble(lines[i..<j]))
                     a.prepend(assemble(lines[..<i]))
                     XCTAssertEqual(a.todos, whole, "\(name) split at \(i), \(j)")
+                    XCTAssertEqual(a.blocks.filter(\.listShown).count, wholeShown, "\(name) shown cards at \(i), \(j)")
                     checked += 1
                 }
             }
@@ -335,4 +336,156 @@ extension AgentWindowD1Tests {
         XCTAssertNil(m.todos)
         XCTAssertFalse(m.todosOpen, "no list, nothing open: the next list starts closed")
     }
+
+    // MARK: Round 2c, F1: the count is the whole list's; the open list starts with the open tasks
+
+    func testVerbosityTodosCountTheWholeListAndDrawOpenTasksFirst() {
+        let creates: [[String: Any]] = (1...60).flatMap { taskCreate("c\($0)", "task \($0)", n: $0) }
+        let done: [[String: Any]] = (1...52).flatMap { taskUpdate("u\($0)", ["taskId": String($0), "status": "completed"]) }
+        let t = asm(creates + done + taskUpdate("p", ["taskId": "58", "status": "in_progress"])).todos
+        XCTAssertEqual(t?.items.count, 60)
+        XCTAssertEqual(t?.label, "Todos 52/60", "not the first 50's 50/50")
+        XCTAssertEqual(t?.rows.count, AgentTodos.maxRows)
+        XCTAssertEqual(t?.rows.prefix(9).compactMap { $0.id }, ["53", "54", "55", "56", "57", "58", "59", "60", "52"],
+                       "the 8 open tasks, then the newest completed")
+        XCTAssertEqual(t?.rows.last?.id, "11")
+        // A TodoWrite list longer than the rows: counted whole too.
+        let long = (0..<60).map { ["content": "t\($0)", "status": $0 < 3 ? "completed" : "pending"] }
+        XCTAssertEqual(asm([toolUse("w", "TodoWrite", ["todos": long]), toolResult("w", "ok")]).todos?.label, "Todos 3/60")
+    }
+
+    // MARK: Round 2c, F2: Claude Code's task store first, the transcript as the fallback
+
+    func writeStore(_ dir: URL, _ tasks: [(id: String, subject: String, status: String)], hidden: [String] = []) throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("9".utf8).write(to: dir.appendingPathComponent(".highwatermark"))
+        try Data().write(to: dir.appendingPathComponent(".lock"))
+        for t in tasks {
+            var o: [String: Any] = ["id": t.id, "subject": t.subject, "description": "d", "status": t.status, "blocks": [], "blockedBy": []]
+            if hidden.contains(t.id) { o["metadata"] = ["_internal": true] }
+            try JSONSerialization.data(withJSONObject: o).write(to: dir.appendingPathComponent("\(t.id).json"))
+        }
+    }
+
+    func testVerbosityTodosFromAPageOfUpdatesOnlyShowNoCountAndKeepTheCards() {
+        let early = taskCreate("c1", "one", n: 1) + taskCreate("c2", "two", n: 2) + taskCreate("c3", "three", n: 3)
+        let late = taskUpdate("u1", ["taskId": "1", "status": "completed"]) + taskUpdate("u2", ["taskId": "2", "status": "in_progress"])
+            + taskCreate("c4", "four", n: 4) + [say("Done.")]   // a turn of hidden cards alone draws its last one
+        // A fresh open: only the last page, no task store.
+        var a = asm(late)
+        a.fromStart = false
+        XCTAssertEqual(a.todos?.label, "Todos", "a list it cannot count shows no count")
+        XCTAssertEqual(a.todos?.items.map(\.text), ["four"])
+        XCTAssertTrue(a.todos?.partial == true)
+        XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") },
+                       ["line:card(TaskUpdate)", "line:card(TaskUpdate)"], "the updates it could not place stay visible")
+        // Paged back to the start: the whole list, counted, and the cards fold into the chip.
+        a.prepend(asm(early))
+        a.fromStart = true
+        XCTAssertEqual(a.todos?.label, "Todos 1/4")
+        XCTAssertFalse(a.todos?.partial == true)
+        XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") }, [])
+        // Not from the start, but the list was set whole since (a clear): counted.
+        var b = asm(taskCreate("c1", "one", n: 1) + taskUpdate("u1", ["taskId": "1", "status": "completed"]) + taskCreate("c2", "two", n: 2))
+        b.fromStart = false
+        XCTAssertEqual(b.todos?.label, "Todos 0/1")
+        // The event cap went past the oldest: no count either.
+        var c = asm((0..<2_001).flatMap { (i: Int) -> [[String: Any]] in taskUpdate("u\(i)", ["taskId": "9", "status": "completed"]) } + taskCreate("c1", "one", n: 1))
+        XCTAssertTrue(c.todosTrimmed)
+        XCTAssertEqual(c.todos?.label, "Todos")
+        c.fromStart = true
+        XCTAssertEqual(c.todos?.label, "Todos")
+    }
+
+    func testVerbosityTaskStoreIsTheListAndBadFilesFallBack() throws {
+        let dir = tempDir().appendingPathComponent("tasks/s")
+        let events = taskCreate("c1", "one", n: 1) + taskCreate("c2", "two", n: 2) + taskUpdate("u9", ["taskId": "9", "status": "completed"])
+            + [say("Done.")]
+        var a = asm(events)
+        XCTAssertEqual(a.todos?.label, "Todos 0/2")
+        XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") }, ["line:card(TaskUpdate)"])
+        // The store disagrees with the transcript (a task made elsewhere, a status the file never saw): the store wins.
+        try writeStore(dir, [("10", "ten", "pending"), ("2", "two", "completed"), ("9", "nine", "in_progress"), ("3", "hidden", "pending")],
+                       hidden: ["3"])
+        a.setTaskStore(AgentTaskStore.read(dir))
+        XCTAssertEqual(a.todos?.items, [.init(text: "two", status: "completed", id: "2"), .init(text: "nine", status: "in_progress", id: "9"),
+                                        .init(text: "ten", status: "pending", id: "10")], "by id, internal tasks left out")
+        XCTAssertEqual(a.todos?.label, "Todos 1/3")
+        XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") }, [],
+                       "the store stands for the update the transcript could not place")
+        // A bad file is skipped.
+        try Data("{not json".utf8).write(to: dir.appendingPathComponent("11.json"))
+        try JSONSerialization.data(withJSONObject: ["id": "12", "subject": "x", "status": "deleted"]).write(to: dir.appendingPathComponent("12.json"))
+        XCTAssertEqual(AgentTaskStore.read(dir)?.count, 3)
+        // Every task completed, or none left (Claude Code reset it): no chip, whatever the transcript says.
+        a.setTaskStore([.init(text: "two", status: "completed", id: "2")])
+        XCTAssertNil(a.todos)
+        a.setTaskStore([])
+        XCTAssertNil(a.todos)
+        // No store, or only files that do not parse (drift): the transcript again.
+        let bad = tempDir().appendingPathComponent("tasks/bad")
+        try FileManager.default.createDirectory(at: bad, withIntermediateDirectories: true)
+        try Data("[]".utf8).write(to: bad.appendingPathComponent("1.json"))
+        XCTAssertNil(AgentTaskStore.read(bad))
+        XCTAssertNil(AgentTaskStore.read(tempDir().appendingPathComponent("none")))
+        a.setTaskStore(AgentTaskStore.read(bad))
+        XCTAssertEqual(a.todos?.label, "Todos 0/2")
+        // A TodoWrite list is not in the store: the transcript's.
+        var w = asm(events + [toolUse("t", "TodoWrite", ["todos": [["content": "a", "status": "pending"]]]), toolResult("t", "ok")])
+        w.setTaskStore(AgentTaskStore.read(dir))
+        XCTAssertEqual(w.todos?.items.map(\.text), ["a"])
+    }
+
+    func testVerbosityTaskStoreDirectoryFollowsTheTranscript() {
+        func dir(_ path: String, _ id: String) -> String? {
+            AgentTaskStore.directory(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0",
+                                                           dchState: "idle", sessionId: id, transcriptPath: path))?.path
+        }
+        XCTAssertEqual(dir("/Users/example/.claude/projects/-Users-example-project/abc-1.jsonl", "abc-1"), "/Users/example/.claude/tasks/abc-1")
+        XCTAssertEqual(dir("/tmp/cfg/projects/p/x.jsonl", "a.b/c_d"), "/tmp/cfg/tasks/a-b-c_d", "Claude Code's sanitizing")
+        XCTAssertNil(dir("/tmp/elsewhere/x.jsonl", "x"))
+        XCTAssertNil(dir("/tmp/cfg/projects/p/x.jsonl", ""))
+    }
+
+    @MainActor
+    func testVerbosityModelReadsTheStoreWithListEventsAndCountsOnlyFromTheStart() throws {
+        let root = tempDir()
+        let url = root.appendingPathComponent("s.jsonl"), store = root.appendingPathComponent("tasks/s")
+        let early = taskCreate("c1", "one", n: 1) + taskCreate("c2", "two", n: 2) + (0..<40).map { say("filler line \($0) " + String(repeating: "x", count: 200)) }
+        try write(url, early + taskUpdate("u1", ["taskId": "1", "status": "completed"]) + taskCreate("c3", "three", n: 3))
+        let m = AgentTranscriptModel()
+        m.offMain = { $0() }
+        m.makeWatch = { _, _ in NSObject() }
+        m.tickInterval = 3600
+        m.pageBytes = 4_096
+        var storeDir: URL? = nil
+        m.taskStoreDirectory = { _ in storeDir }
+        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0", dchState: "idle",
+                                       sessionId: "s", transcriptPath: url.path))
+        m.start()
+        defer { m.stop() }
+        XCTAssertTrue(m.olderAvailable)
+        XCTAssertEqual(m.todos?.label, "Todos", "the last page alone (an update it cannot place, one create): no count")
+        while m.olderAvailable { m.loadEarlier() }
+        XCTAssertEqual(m.todos?.label, "Todos 1/3", "paged back to the first line: counted")
+        // The store: read with the next list event (Claude Code writes it before the result line).
+        storeDir = store
+        try writeStore(store, [("1", "one", "completed"), ("2", "two", "in_progress"), ("3", "three", "pending"), ("4", "four", "pending")])
+        try append(url, (taskUpdate("u2", ["taskId": "2", "status": "in_progress"]) + taskCreate("c4", "four", n: 4)).map(line).reduce(Data(), +))
+        m.poll()
+        XCTAssertEqual(m.todos?.label, "Todos 1/4")
+        // A change with no list event in the file (another session on a shared list) waits for the next one.
+        try writeStore(store, [("4", "four", "completed")])   // #4 done; the others unchanged
+        m.poll()
+        XCTAssertEqual(m.todos?.label, "Todos 1/4")
+        try append(url, (taskUpdate("u4", ["taskId": "4", "status": "completed"]) + [say("Done.")]).map(line).reduce(Data(), +))
+        m.poll()
+        XCTAssertEqual(m.todos?.label, "Todos 2/4")
+        // A fresh open reads it at once (another session and back), though the last page alone could not count.
+        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "t"), dchVersion: "1.30.0", dchState: "idle",
+                                       sessionId: "t", transcriptPath: url.path))
+        XCTAssertTrue(m.olderAvailable)
+        XCTAssertEqual(m.todos?.label, "Todos 2/4")
+    }
 }
+

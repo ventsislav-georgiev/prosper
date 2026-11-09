@@ -49,6 +49,20 @@ struct TranscriptAssembler {
     private(set) var todoEvents: [AgentTodos.Event] = []
     /// ponytail: the oldest events go past this; a session with thousands of list calls only.
     static let maxTodoEvents = 4_000
+    /// The events, folded (redone on every list result and on paging).
+    private(set) var folded = AgentTodos.Folded()
+    /// Events went past the cap: the oldest are gone.
+    private(set) var todosTrimmed = false
+    /// The main thread's list calls: tool use id → block id (whose `listShown` the fold sets).
+    private var todoCards: [String: Int] = [:]
+    /// Claude Code's task store for the session (`AgentTaskStore`), set by the model's reads;
+    /// nil: none readable, the transcript stands in.
+    private(set) var taskStore: [AgentTodos.Item]?
+    /// The store was read for this assembler; `todoSerial` counts list events added since it began.
+    private(set) var storeRead = false
+    private(set) var todoSerial = 0
+    /// The loaded lines start at the file's first line (the model sets it from the tail).
+    var fromStart = true
     private var lastVersion = "unknown"
     private(set) var nextID = 0
 
@@ -61,8 +75,21 @@ struct TranscriptAssembler {
     private var agentTitles: [String: String] = [:]
 
     var hiddenTotal: Int { hiddenCounts.values.reduce(0, +) }
-    /// #821: Default's chip.
-    var todos: AgentTodos? { AgentTodos.fold(todoEvents) }
+    /// #821: Default's chip. A TodoWrite list comes from the transcript; tasks from Claude Code's
+    /// store when there is one, else from the transcript, with a count only when the events
+    /// reach the file's start (or the list was set whole since).
+    var todos: AgentTodos? {
+        if !folded.write, let s = taskStore { return AgentTodos.chip(s) }
+        return AgentTodos.chip(folded.items, partial: !(folded.known || (fromStart && !todosTrimmed)))
+    }
+
+    mutating func setTaskStore(_ s: [AgentTodos.Item]?) {
+        storeRead = true
+        guard s != taskStore else { return }
+        let had = taskStore != nil
+        taskStore = s
+        if had != (s != nil) { markTodoCards() }
+    }
 
     mutating func add(_ e: DecodedEntry, source: Range<UInt64>?) {
         let v = e.version.map { ClaudeCodeCompat.sanitized($0) } ?? lastVersion
@@ -80,10 +107,12 @@ struct TranscriptAssembler {
                 if case .compaction(nil, nil, let summary?) = body, mergeSummary(summary, sidechain: e.sidechain) { continue }
                 append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source), sidechain: e.sidechain)
             case .toolUse(let id, let name, let input):
-                if let id, e.sidechain == nil, let op = AgentTodos.op(name: name, input: input) { addTodo(.call(id, op)) }
+                let op = id != nil && e.sidechain == nil ? AgentTodos.op(name: name, input: input) : nil
+                if let id, let op { addTodo(.call(id, op)) }
                 let (body, tier) = ToolRenderer.render(name: name, input: input, result: nil)
                 let loc = append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source, pending: id != nil),
                                  sidechain: e.sidechain)
+                if let id, op != nil { todoCards[id] = loc.block }
                 guard let id else { continue }
                 pending[id] = Pending(block: loc.block, thread: loc.thread, name: name, input: input)
                 pendingOrder.append(id)
@@ -94,6 +123,7 @@ struct TranscriptAssembler {
                 // A list call's result, or one whose call is on an earlier page (it may be one).
                 if let id, pending[id].map({ AgentTodos.toolNames.contains($0.name) }) ?? true {
                     addTodo(AgentTodos.result(id, r))
+                    refold()
                 }
                 if let id, let p = pending.removeValue(forKey: id) {
                     pendingOrder.removeAll { $0 == id }
@@ -182,7 +212,8 @@ struct TranscriptAssembler {
         let shift = floor - page.nextID
         func renumber(_ b: TranscriptBlock) -> TranscriptBlock {
             var b = TranscriptBlock(id: b.id + shift, body: b.body, tier: b.tier, version: b.version,
-                                    source: b.source, children: b.children, droppedChildren: b.droppedChildren, pending: b.pending)
+                                    source: b.source, children: b.children, droppedChildren: b.droppedChildren, pending: b.pending,
+                                    listShown: b.listShown)
             b.children = b.children.map(renumber)
             return b
         }
@@ -212,18 +243,44 @@ struct TranscriptAssembler {
         for (v, n) in page.hiddenCounts { hiddenCounts[v, default: 0] += n }
         if planFile == nil { planFile = page.planFile }
         todoEvents = page.todoEvents + todoEvents
+        todosTrimmed = todosTrimmed || page.todosTrimmed
         trimTodos()
+        for (id, b) in page.todoCards { todoCards[id] = b + shift }
+        // Always re-marked: the page's cards carry what the page alone could place.
+        folded = AgentTodos.fold(todoEvents)
+        markTodoCards()
     }
 
     // MARK: private
 
     private mutating func addTodo(_ e: AgentTodos.Event) {
+        todoSerial += 1
         todoEvents.append(e)
         trimTodos()
     }
 
     private mutating func trimTodos() {
-        if todoEvents.count > Self.maxTodoEvents { todoEvents.removeFirst(todoEvents.count - Self.maxTodoEvents) }
+        guard todoEvents.count > Self.maxTodoEvents else { return }
+        todoEvents.removeFirst(todoEvents.count - Self.maxTodoEvents)
+        todosTrimmed = true
+        // ponytail: drops arbitrary cards past the bound; their blocks are long gone by then.
+        while todoCards.count > Self.maxTodoEvents { todoCards.remove(at: todoCards.startIndex) }
+    }
+
+    private mutating func refold() {
+        let f = AgentTodos.fold(todoEvents)
+        guard f != folded else { return }
+        folded = f
+        markTodoCards()
+    }
+
+    /// Default shows a refused list card, and an update the fold could not place while no task
+    /// store stands for it.
+    private mutating func markTodoCards() {
+        for (id, b) in todoCards {
+            let shown = folded.refused.contains(id) || (taskStore == nil && folded.unplaced.contains(id))
+            update(b, thread: nil) { if $0.listShown != shown { $0.listShown = shown } }
+        }
     }
 
     private mutating func take() -> Int { defer { nextID += 1 }; return nextID }
@@ -393,6 +450,8 @@ final class AgentTranscriptModel: ObservableObject {
     var pageBytes: UInt64 = 1 << 20
     var maxBlocks = 2_000
     var tickInterval: TimeInterval = 2
+    /// #821: where Claude Code keeps the session's tasks (tests point it at a temp dir).
+    var taskStoreDirectory: (AgentTranscriptSource) -> URL? = AgentTaskStore.directory
     private(set) var watchArms = 0
 
     var counts: [String: TierCounts] { assembler.counts() }
@@ -464,9 +523,10 @@ final class AgentTranscriptModel: ObservableObject {
         guard !busy else { pollAgain = true; return }
         busy = true
         let gen = generation, pageBytes = pageBytes
+        let store = source.flatMap { $0.transcriptPath == t.path ? taskStoreDirectory($0) : nil }
         let job = TranscriptHandoff(value: (t, assembler, fresh()))
         offMain { [weak self] in
-            let r = Self.read(job.value.0, into: job.value.1, fresh: job.value.2, pageBytes: pageBytes)
+            let r = Self.read(job.value.0, into: job.value.1, fresh: job.value.2, pageBytes: pageBytes, store: store)
             Self.onMain { self?.finishPoll(r, gen) }
         }
     }
@@ -484,7 +544,7 @@ final class AgentTranscriptModel: ObservableObject {
 
     /// The IO half of `poll`: no main-actor state, only the values handed in.
     nonisolated static func read(_ t0: TranscriptTail, into a0: TranscriptAssembler, fresh: TranscriptAssembler,
-                                 pageBytes: UInt64) -> TranscriptHandoff<PollResult> {
+                                 pageBytes: UInt64, store: URL? = nil) -> TranscriptHandoff<PollResult> {
         var r = PollResult(tail: t0, assembler: a0)
         var reopens = 0
         loop: while true {
@@ -507,6 +567,13 @@ final class AgentTranscriptModel: ObservableObject {
                 break loop
             }
         }
+        // #821: on the first read and when list events came in: Claude Code writes the store before
+        // the result line. ponytail: about 90 µs a task file, so not every tick; a change from
+        // outside this transcript (a shared list) shows with the next list event.
+        if let store, !r.assembler.storeRead || r.assembler.todoSerial != a0.todoSerial {
+            r.assembler.setTaskStore(AgentTaskStore.read(store))
+        }
+        r.assembler.fromStart = r.tail.earliestLoaded == 0
         return TranscriptHandoff(value: r)
     }
 
@@ -543,6 +610,7 @@ final class AgentTranscriptModel: ObservableObject {
             var (t, a, page) = job.value
             for l in t.previousPage() { page.add(TranscriptDecoder.decode(l), source: l.range) }
             a.prepend(page)
+            a.fromStart = t.earliestLoaded == 0
             let done = TranscriptHandoff(value: (t, a))
             Self.onMain { self?.finishEarlier(done, gen) }
         }

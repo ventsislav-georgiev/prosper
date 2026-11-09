@@ -362,8 +362,9 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         let row = try XCTUnwrap(m.selectedRow), s = try XCTUnwrap(row.session)
         let todos = AgentTodos(items: (0..<7).map { .init(text: "task \($0)", status: $0 < 3 ? "completed" : "pending") })
-        // QA #657 INFO-1: an open list of 40 (it scrolls past about 8 rows).
-        let long = AgentTodos(items: (0..<40).map { .init(text: "task \($0) with a longer description", status: $0 < 3 ? "completed" : "pending") })
+        // QA #657 INFO-1: an open list of 60 (it scrolls past about 8 rows), seen in part (round 2c: no count, a note).
+        let long = AgentTodos(items: (0..<60).map { .init(text: "task \($0) with a longer description", status: $0 < 3 ? "completed" : "pending") },
+                              partial: true)
         var audit: [String] = [], heights: [String] = []
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale

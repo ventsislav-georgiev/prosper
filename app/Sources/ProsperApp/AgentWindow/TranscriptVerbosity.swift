@@ -52,12 +52,28 @@ struct AgentTodos: Equatable, Sendable {
         /// The task's id (TaskCreate); nil for a TodoWrite item.
         var id: String? = nil
     }
+    /// The whole list, in creation order.
     var items: [Item]
+    /// Seen in the loaded part of the transcript only (no task store, history not loaded):
+    /// the count is unknown, so the chip shows none.
+    var partial = false
     /// The cards the chip stands for: hidden at Default and Focused unless they failed.
     static let toolNames: Set<String> = ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]
+    /// The opened list draws at most this many rows; the count is always the whole list's.
+    static let maxRows = 50
 
     var done: Int { items.filter { $0.status == "completed" }.count }
-    var label: String { "Todos \(done)/\(items.count)" }
+    var label: String { partial ? "Todos" : "Todos \(done)/\(items.count)" }
+    /// The opened list: open tasks first (creation order), then completed ones, newest first.
+    var rows: [Item] {
+        Array((items.filter { $0.status != "completed" } + items.filter { $0.status == "completed" }.reversed()).prefix(Self.maxRows))
+    }
+
+    /// The chip for a list: none when it is empty or every item is completed (Claude Code
+    /// resets such a list).
+    static func chip(_ items: [Item], partial: Bool = false) -> AgentTodos? {
+        items.allSatisfy { $0.status == "completed" } ? nil : AgentTodos(items: items, partial: partial)
+    }
 
     /// nil when the input is not a list of todos (drift) or the list is empty: no chip.
     static func parse(_ input: [String: Any]) -> AgentTodos? {
@@ -65,7 +81,7 @@ struct AgentTodos: Equatable, Sendable {
             guard let t = TranscriptKeys.str(o, "content") ?? TranscriptKeys.str(o, "activeForm"), !t.isBlank else { return nil }
             return Item(text: String(t.prefix(TranscriptDecoder.fieldCap)), status: TranscriptKeys.str(o, "status") ?? "pending")
         }
-        return items.isEmpty ? nil : AgentTodos(items: Array(items.prefix(50)))
+        return items.isEmpty ? nil : AgentTodos(items: items)
     }
 
     // MARK: The list as a fold over the file
@@ -109,35 +125,93 @@ struct AgentTodos: Equatable, Sendable {
         return .result(id, ok: !r.isError && (K.get(x, "success") as? Bool) != false, taskId: taskId)
     }
 
+    /// What the fold knows after the events.
+    struct Folded: Equatable, Sendable {
+        var items: [Item] = []
+        /// The list was set whole at some point (a TodoWrite, or a clear): from there it is exact.
+        var known = false
+        /// The last call that changed the list was a TodoWrite (Claude Code's task store does
+        /// not hold that list).
+        var write = false
+        /// Refused calls (is_error or success false): their cards stay visible.
+        var refused: Set<String> = []
+        /// Updates to a task the events never created: the fold could not place them.
+        var unplaced: Set<String> = []
+    }
+
     /// The list after `events`, the way Claude Code keeps it: a call counts once its result is
     /// in and did not fail (a rejected TodoWrite keeps the old list), and a list whose every
     /// item is completed is cleared.
     /// ponytail: Claude Code clears completed tasks after 5 s, not at once; a TaskCreate within
     /// those 5 s keeps the old ones there and starts afresh here. Timestamps if that matters.
-    static func fold(_ events: [Event]) -> AgentTodos? {
-        var calls: [String: Op] = [:], items: [Item] = []
+    static func fold(_ events: [Event]) -> Folded {
+        var calls: [String: Op] = [:], f = Folded()
         for e in events {
             switch e {
             case .call(let id, let op): calls[id] = op
             case .result(let id, let ok, let taskId):
-                guard let op = calls.removeValue(forKey: id), ok else { continue }
+                guard let op = calls.removeValue(forKey: id) else { continue }
+                guard ok else { f.refused.insert(id); continue }
+                f.write = false
                 switch op {
-                case .write(let list): items = list?.items ?? []
+                case .write(let list):
+                    f.items = list?.items ?? []
+                    (f.known, f.write) = (true, true)
                 case .create(let subject):
                     // No id in the result (drift): shown, but no update can reach it.
                     let tid = taskId ?? "use:" + id
-                    items.removeAll { $0.id == tid }
-                    items.append(Item(text: subject, status: "pending", id: tid))
+                    f.items.removeAll { $0.id == tid }
+                    f.items.append(Item(text: subject, status: "pending", id: tid))
                 case .update(let tid, let status, let subject):
-                    guard let i = items.firstIndex(where: { $0.id == tid }) else { continue }
-                    if status == "deleted" { items.remove(at: i); break }
-                    if let status { items[i].status = status }
-                    if let subject { items[i].text = subject }
+                    guard let i = f.items.firstIndex(where: { $0.id == tid }) else { f.unplaced.insert(id); continue }
+                    if status == "deleted" { f.items.remove(at: i); break }
+                    if let status { f.items[i].status = status }
+                    if let subject { f.items[i].text = subject }
                 }
-                if items.allSatisfy({ $0.status == "completed" }) { items = [] }
+                if !f.items.isEmpty, f.items.allSatisfy({ $0.status == "completed" }) { (f.items, f.known) = ([], true) }
             }
         }
-        return items.isEmpty ? nil : AgentTodos(items: Array(items.prefix(50)))
+        return f
+    }
+}
+
+/// #821 (QA #657 F2): Claude Code's own task list, `<config>/tasks/<list id>/<id>.json`, read
+/// only. A session's list id is its session id unless CLAUDE_CODE_TASK_LIST_ID is set or the
+/// session is in a team (Prosper cannot see either; those lists fall back to the transcript).
+enum AgentTaskStore {
+    /// `<config>/projects/<slug>/<file>.jsonl` → `<config>/tasks/<session id>`; nil for a
+    /// transcript somewhere else.
+    static func directory(_ s: AgentTranscriptSource) -> URL? {
+        guard let path = s.transcriptPath, let id = s.sessionId, !id.isEmpty else { return nil }
+        let projects = URL(fileURLWithPath: path).deletingLastPathComponent().deletingLastPathComponent()
+        guard projects.lastPathComponent == "projects" else { return nil }
+        // Claude Code's own sanitizing of a list id.
+        let name = String(id.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "_" || $0 == "-" ? Character($0) : "-" })
+        return projects.deletingLastPathComponent().appendingPathComponent("tasks").appendingPathComponent(name)
+    }
+
+    static let maxFiles = 1_000
+    static let maxFileBytes = 64 << 10
+
+    /// The tasks by id; nil when there is no directory, it cannot be read, or none of its task
+    /// files parse (drift): the transcript is the fallback. A bad file is skipped.
+    static func read(_ dir: URL) -> [AgentTodos.Item]? {
+        typealias K = TranscriptKeys
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
+        let files = names.filter { !$0.hasPrefix(".") && $0.hasSuffix(".json") }.prefix(maxFiles)
+        var items: [(Int, AgentTodos.Item)] = [], parsed = 0
+        for f in files {
+            guard let d = FileManager.default.contents(atPath: dir.appendingPathComponent(f).path), d.count <= maxFileBytes,
+                  let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+                  let id = K.str(o, "id"), let subject = K.str(o, "subject"),
+                  let status = K.str(o, "status"), ["pending", "in_progress", "completed"].contains(status) else { continue }
+            parsed += 1
+            // TaskList leaves these out too.
+            if K.get(K.obj(o, "metadata"), "_internal") as? Bool == true { continue }
+            items.append((Int(id) ?? .max, AgentTodos.Item(text: String(subject.prefix(TranscriptDecoder.fieldCap)), status: status, id: id)))
+        }
+        if parsed == 0 && !files.isEmpty { return nil }
+        return items.sorted { $0.0 < $1.0 }.map(\.1)
     }
 }
 
@@ -217,12 +291,13 @@ enum TranscriptVerbosity {
         }
     }
 
-    /// Thinking, and the todo/task cards (the header's chip stands for them), unless they failed.
+    /// Thinking, and the todo/task cards (the header's chip stands for them), unless they failed
+    /// or the chip could not place them (`listShown`).
     /// An unknown entry's card (the only one with `raw`) is titled "Unrecognized entry (…)".
     static func hiddenAtDefault(_ b: TranscriptBlock) -> Bool {
         switch b.body {
         case .thinking: true
-        case .card(let title, _, _, _, let err): AgentTodos.toolNames.contains(title) && !err
+        case .card(let title, _, _, _, let err): AgentTodos.toolNames.contains(title) && !err && !b.listShown
         default: false
         }
     }
