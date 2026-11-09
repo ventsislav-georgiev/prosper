@@ -87,6 +87,8 @@ struct TranscriptBlock: Identifiable, Equatable, Sendable {
     /// Sidechain (subagent) entries nest under their `.thread` block.
     var children: [TranscriptBlock] = []
     var droppedChildren = 0
+    /// #821: a tool call still waiting on its result (a one-line row says "running").
+    var pending = false
     var failed: Bool { if case .failed = body { true } else { false } }
     /// Tier 2 because something was not recognized (see `TierCounts.degraded`).
     var degraded: Bool {

@@ -43,7 +43,7 @@ extension AgentWindowD1Tests {
         return asm(es).blocks
     }
 
-    /// One short tag per row: "block:user", "line:bash", "thread:2:3", "summary:9/1/1:1".
+    /// One short tag per row: "block:user", "line:bash", "thread:2:3", "summary:4/1/1:1".
     func tags(_ rows: [TranscriptRow]) -> [String] {
         rows.map { r in
             switch r.kind {
@@ -95,13 +95,13 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .default)),
                        ["block:user", "block:assistant", "line:bash", "line:diff", "line:search", "line:card(Agent)",
                         "thread:2:3", "line:unknown", "block:assistant"])
-        // Focused: the prompt, one summary (9 steps, 1 edit, 1 error) carrying the error, the final reply.
+        // Focused: the prompt, one summary (4 tool steps, 1 edit, 1 error) carrying the error, the final reply.
         let focused = TranscriptVerbosity.project(blocks, level: .focused)
-        XCTAssertEqual(tags(focused), ["block:user", "summary:9/1/1:1", "block:assistant"])
+        XCTAssertEqual(tags(focused), ["block:user", "summary:4/1/1:1", "block:assistant"])
         guard focused.count == 3, case .summary(let s, let kids, let errors) = focused[1].kind, case .block(let final) = focused[2].kind else {
             return XCTFail("shape")
         }
-        XCTAssertEqual(s.label, "9 steps · 1 edit · 1 error")
+        XCTAssertEqual(s.label, "4 steps · 1 edit · 1 error")
         XCTAssertEqual(tags(errors), ["line:diff"])
         XCTAssertEqual(final.body, .assistant(Clip("Done: the build passes.", cap: 100)), "the final text, not the one between steps")
         XCTAssertEqual(tags(kids), Array(tags(TranscriptVerbosity.project(blocks, level: .default)).dropFirst().dropLast()),
@@ -126,7 +126,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(e?.earlier, 2)
         // Focused lifts it into the summary's error lines too.
         let f = TranscriptVerbosity.project(verbosityTurn(threadSteps: 6, errorStep: 0), level: .focused)
-        XCTAssertEqual(tags(f)[1], "summary:9/1/2:2")
+        XCTAssertEqual(tags(f)[1], "summary:4/1/2:2")
     }
 
     func testVerbosityOneLineRowsSayWhatHappened() {
@@ -159,7 +159,7 @@ extension AgentWindowD1Tests {
         ]).blocks
         XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .default)),
                        ["block:user", "line:card(ShellV2)", "line:unknown", "line:unknown"])
-        XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .focused)), ["block:user", "summary:3/0/0:0"])
+        XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .focused)), ["block:user", "summary:1/0/0:0"])
         XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .verbose)),
                        ["block:user", "block:card(ShellV2)", "block:unknown", "block:unknown"], "Verbose keeps the raw cards")
         // A page that starts mid-turn with thinking only still shows something at every level.
@@ -227,24 +227,32 @@ extension AgentWindowD1Tests {
         let list: (Int) -> [String: Any] = { done in
             ["todos": (0..<7).map { ["content": "task \($0)", "status": $0 < done ? "completed" : $0 == done ? "in_progress" : "pending"] }]
         }
+        let side: [String: Any] = ["isSidechain": true, "agentId": "q"]
         var a = asm([toolUse("t1", "TodoWrite", list(1)), toolResult("t1", "ok"),
                      toolUse("t2", "TodoWrite", list(3)), toolResult("t2", "ok"),
-                     toolUse("t3", "TodoWrite", ["todos": [["content": "sub", "status": "pending"]]], ["isSidechain": true, "agentId": "q"])])
+                     toolUse("t3", "TodoWrite", ["todos": [["content": "sub", "status": "pending"]]], side), toolResult("t3", "ok", side)])
         XCTAssertEqual(a.todos?.label, "Todos 3/7", "the newest main-thread list; a subagent's is not the session's")
         XCTAssertEqual(a.todos?.items.count, 7)
         // Drift: a list that does not parse clears the chip rather than show an older list.
-        a.add(TranscriptDecoder.decode(line: line(toolUse("t4", "TodoWrite", ["todos": "not a list"]))), source: nil)
+        for e in [toolUse("t4", "TodoWrite", ["todos": "not a list"]), toolResult("t4", "ok")] {
+            a.add(TranscriptDecoder.decode(line: line(e)), source: nil)
+        }
         XCTAssertNil(a.todos)
         XCTAssertNil(AgentTodos.parse(["todos": []]))
         XCTAssertNil(AgentTodos.parse(["items": [["content": "x"]]]))
         XCTAssertEqual(AgentTodos.parse(["todos": [["activeForm": "Doing", "status": 7], ["content": " "], "junk"]])?.label, "Todos 0/1")
         // Paging: an earlier page's list counts only while this page has none.
         var later = asm([say("hi")])
-        later.prepend(asm([toolUse("t1", "TodoWrite", list(2))]))
+        later.prepend(asm([toolUse("t1", "TodoWrite", list(2)), toolResult("t1", "ok")]))
         XCTAssertEqual(later.todos?.label, "Todos 2/7")
-        var newer = asm([toolUse("t9", "TodoWrite", list(5))])
-        newer.prepend(asm([toolUse("t1", "TodoWrite", list(2))]))
+        var newer = asm([toolUse("t9", "TodoWrite", list(5)), toolResult("t9", "ok")])
+        newer.prepend(asm([toolUse("t1", "TodoWrite", list(2)), toolResult("t1", "ok")]))
         XCTAssertEqual(newer.todos?.label, "Todos 5/7")
+        // QA #657 INFO-8: the newest list did not parse; an older page loaded later never brings
+        // the older list back.
+        var drift = asm([toolUse("t9", "TodoWrite", ["todos": "not a list"]), toolResult("t9", "ok")])
+        drift.prepend(asm([toolUse("t1", "TodoWrite", list(2)), toolResult("t1", "ok")]))
+        XCTAssertNil(drift.todos)
     }
 
     @MainActor
@@ -354,6 +362,8 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         let row = try XCTUnwrap(m.selectedRow), s = try XCTUnwrap(row.session)
         let todos = AgentTodos(items: (0..<7).map { .init(text: "task \($0)", status: $0 < 3 ? "completed" : "pending") })
+        // QA #657 INFO-1: an open list of 40 (it scrolls past about 8 rows).
+        let long = AgentTodos(items: (0..<40).map { .init(text: "task \($0) with a longer description", status: $0 < 3 ? "completed" : "pending") })
         var audit: [String] = [], heights: [String] = []
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
@@ -372,18 +382,22 @@ extension AgentWindowD1Tests {
                 XCTAssertLessThanOrEqual(narrow - icons + menu, room, "the menu variant fits with room for #822 at \(scale) × \(w)")
                 if w >= 800 { XCTAssertLessThanOrEqual(narrow, room, "the icon variant fits with room for #822 at \(scale) × \(w)") }
                 for level in AgentVerbosity.allCases {
+                  for open in [false, true] {
                     let h = AgentSessionHeader(row: row, session: s, cwd: "/Users/user/project/app/Sources", open: {},
-                                               level: .constant(level), todos: todos)
+                                               level: .constant(level), todos: open ? long : todos, todosOpen: .constant(open))
                     // The header's own height at this width (the window stacks it at its natural height).
                     let fit = NSHostingView(rootView: h.frame(width: room)).fittingSize.height
-                    heights.append(String(format: "%@ %.0f×%.2f h=%.1f", level.rawValue, w, scale, fit))
-                    XCTAssertLessThanOrEqual(fit, 100 * scale, "header \(level) at \(scale) × \(w) stays about as tall as before")
+                    heights.append(String(format: "%@%@ %.0f×%.2f h=%.1f", level.rawValue, open ? " open" : "", w, scale, fit))
+                    let listRoom = open && level == .default ? AgentTodosList.maxHeight + sz(8) : 0
+                    XCTAssertLessThanOrEqual(fit, 100 * scale + listRoom, "header \(level) open \(open) at \(scale) × \(w) stays about as tall as before")
+                    if open && level == .default { XCTAssertGreaterThan(fit, 100 * scale, "the open list shows") }
                     let size = CGSize(width: room, height: fit)
                     let rep = try render(h, size: size, dark: true)
-                    try save(rep, "verbosity-header-\(level)-\(scale)-\(Int(w))")
+                    try save(rep, "verbosity-header-\(level)\(open ? "-open" : "")-\(scale)-\(Int(w))")
                     XCTAssertGreaterThan(ink(rep), 50)
                     XCTAssertEqual(overflow(rep, content: size, canvas: CGSize(width: size.width + 24, height: size.height + 24)),
-                                   0, "header \(level) at \(scale) × \(w)")
+                                   0, "header \(level) open \(open) at \(scale) × \(w)")
+                  }
                 }
                 audit.append(String(format: "scale %.2f width %4.0f room %6.1f | labels %5.1f icons %5.1f menu %4.1f | open %5.1f "
                                     + "compact %4.1f chip %4.1f todos %4.1f | need: icon variant %6.1f, menu variant %6.1f", scale, w * scale, room,

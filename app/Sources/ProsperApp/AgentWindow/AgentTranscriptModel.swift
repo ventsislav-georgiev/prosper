@@ -45,9 +45,10 @@ struct TranscriptAssembler {
     private(set) var cwd: String?
     /// #802: the newest main-thread plan_mode attachment's plan file.
     private(set) var planFile: String?
-    /// #821: the newest main-thread TodoWrite list (nil when that list did not parse).
-    private(set) var todos: AgentTodos?
-    private var sawTodos = false
+    /// #821: the main thread's todo/task calls and results in file order (the chip's list).
+    private(set) var todoEvents: [AgentTodos.Event] = []
+    /// ponytail: the oldest events go past this; a session with thousands of list calls only.
+    static let maxTodoEvents = 4_000
     private var lastVersion = "unknown"
     private(set) var nextID = 0
 
@@ -60,6 +61,8 @@ struct TranscriptAssembler {
     private var agentTitles: [String: String] = [:]
 
     var hiddenTotal: Int { hiddenCounts.values.reduce(0, +) }
+    /// #821: Default's chip.
+    var todos: AgentTodos? { AgentTodos.fold(todoEvents) }
 
     mutating func add(_ e: DecodedEntry, source: Range<UInt64>?) {
         let v = e.version.map { ClaudeCodeCompat.sanitized($0) } ?? lastVersion
@@ -77,18 +80,25 @@ struct TranscriptAssembler {
                 if case .compaction(nil, nil, let summary?) = body, mergeSummary(summary, sidechain: e.sidechain) { continue }
                 append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source), sidechain: e.sidechain)
             case .toolUse(let id, let name, let input):
-                if name == AgentTodos.toolName, e.sidechain == nil { todos = AgentTodos.parse(input); sawTodos = true }
+                if let id, e.sidechain == nil, let op = AgentTodos.op(name: name, input: input) { addTodo(.call(id, op)) }
                 let (body, tier) = ToolRenderer.render(name: name, input: input, result: nil)
-                let loc = append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source),
+                let loc = append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source, pending: id != nil),
                                  sidechain: e.sidechain)
                 guard let id else { continue }
                 pending[id] = Pending(block: loc.block, thread: loc.thread, name: name, input: input)
                 pendingOrder.append(id)
+                // Bounds the calls still open. A dropped call keeps reading "running": nothing in
+                // the file says it ended (Claude Code writes a result for every call it ends).
                 if pendingOrder.count > maxPending { pending[pendingOrder.removeFirst()] = nil }
             case .toolResult(let id, let r):
+                // A list call's result, or one whose call is on an earlier page (it may be one).
+                if let id, pending[id].map({ AgentTodos.toolNames.contains($0.name) }) ?? true {
+                    addTodo(AgentTodos.result(id, r))
+                }
                 if let id, let p = pending.removeValue(forKey: id) {
+                    pendingOrder.removeAll { $0 == id }
                     let (body, tier) = ToolRenderer.render(name: p.name, input: p.input, result: r)
-                    update(p.block, thread: p.thread) { $0.body = body; $0.tier = tier }
+                    update(p.block, thread: p.thread) { $0.body = body; $0.tier = tier; $0.pending = false }
                     if let agent = TranscriptKeys.str(r.extra as? [String: Any], "agentId") {
                         let title = TranscriptKeys.str(p.input, "description") ?? p.name
                         agentTitles[agent] = title
@@ -172,7 +182,7 @@ struct TranscriptAssembler {
         let shift = floor - page.nextID
         func renumber(_ b: TranscriptBlock) -> TranscriptBlock {
             var b = TranscriptBlock(id: b.id + shift, body: b.body, tier: b.tier, version: b.version,
-                                    source: b.source, children: b.children, droppedChildren: b.droppedChildren)
+                                    source: b.source, children: b.children, droppedChildren: b.droppedChildren, pending: b.pending)
             b.children = b.children.map(renumber)
             return b
         }
@@ -184,9 +194,11 @@ struct TranscriptAssembler {
                 if p.thread != nil, let j = front[i].children.firstIndex(where: { $0.id == p.block + shift }) {
                     front[i].children[j].body = body
                     front[i].children[j].tier = tier
+                    front[i].children[j].pending = false
                 } else if p.thread == nil {
                     front[i].body = body
                     front[i].tier = tier
+                    front[i].pending = false
                 }
             }
             remove(o.block, thread: o.thread)
@@ -199,10 +211,20 @@ struct TranscriptAssembler {
         while orphans.count > maxPending { orphans.remove(at: orphans.startIndex) }
         for (v, n) in page.hiddenCounts { hiddenCounts[v, default: 0] += n }
         if planFile == nil { planFile = page.planFile }
-        if !sawTodos { (todos, sawTodos) = (page.todos, page.sawTodos) }
+        todoEvents = page.todoEvents + todoEvents
+        trimTodos()
     }
 
     // MARK: private
+
+    private mutating func addTodo(_ e: AgentTodos.Event) {
+        todoEvents.append(e)
+        trimTodos()
+    }
+
+    private mutating func trimTodos() {
+        if todoEvents.count > Self.maxTodoEvents { todoEvents.removeFirst(todoEvents.count - Self.maxTodoEvents) }
+    }
 
     private mutating func take() -> Int { defer { nextID += 1 }; return nextID }
 
@@ -328,10 +350,12 @@ final class AgentTranscriptModel: ObservableObject {
     @Published private(set) var pendingAsk: AgentAskInput?
     /// #802: the pending ExitPlanMode's plan, nil when none.
     @Published private(set) var pendingPlan: AgentPlanInput?
-    /// #821: the newest TodoWrite list (Default's chip), and whether the last block waits on
+    /// #821: the session's todo list (Default's chip), and whether the last block waits on
     /// a tool (Focused's "Working" summary).
     @Published private(set) var todos: AgentTodos?
     @Published private(set) var toolPending = false
+    /// #821: the chip's list is open. Per session, like `showAnyway`.
+    @Published var todosOpen = false
     /// "Show the conversation anyway" over a terminal-first reason. Per session:
     /// #797 (c) resets it when another session is selected.
     @Published var showAnyway = false
@@ -383,6 +407,7 @@ final class AgentTranscriptModel: ObservableObject {
             close()
             nullSince = nil
             showAnyway = false
+            todosOpen = false
         }
         defer { syncAsk() }
         if !Self.dchSupportsMapping(s.dchVersion) {
@@ -601,7 +626,9 @@ final class AgentTranscriptModel: ObservableObject {
         blocks = assembler.blocks
         hiddenCount = assembler.hiddenTotal
         cwd = assembler.cwd
-        todos = assembler.todos
+        let t = assembler.todos
+        if t != todos { todos = t }
+        if t == nil { todosOpen = false }
         toolPending = assembler.toolPending
         syncAsk()
         olderAvailable = (tail?.earliestLoaded ?? 0) > 0 || assembler.dropped > 0

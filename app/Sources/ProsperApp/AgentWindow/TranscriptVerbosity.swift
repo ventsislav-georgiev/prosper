@@ -42,14 +42,19 @@ enum AgentVerbosity: String, CaseIterable, Sendable {
     var shortcut: String { "⌥⌘\(keyCode - 17)" }
 }
 
-/// The newest main-thread TodoWrite list: Default's "Todos 3/7" chip.
+/// Default's "Todos 3/7" chip: the session's main-thread todo list. Claude Code 2.1.223+ keeps
+/// it with TaskCreate / TaskUpdate (TodoWrite only under CLAUDE_CODE_ENABLE_TASKS=false); both
+/// feed this one list.
 struct AgentTodos: Equatable, Sendable {
     struct Item: Equatable, Sendable {
         var text: String
         var status: String
+        /// The task's id (TaskCreate); nil for a TodoWrite item.
+        var id: String? = nil
     }
     var items: [Item]
-    static let toolName = "TodoWrite"
+    /// The cards the chip stands for: hidden at Default and Focused unless they failed.
+    static let toolNames: Set<String> = ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"]
 
     var done: Int { items.filter { $0.status == "completed" }.count }
     var label: String { "Todos \(done)/\(items.count)" }
@@ -59,6 +64,78 @@ struct AgentTodos: Equatable, Sendable {
         let items = (TranscriptKeys.arr(input, "todos") ?? []).compactMap { $0 as? [String: Any] }.compactMap { o -> Item? in
             guard let t = TranscriptKeys.str(o, "content") ?? TranscriptKeys.str(o, "activeForm"), !t.isBlank else { return nil }
             return Item(text: String(t.prefix(TranscriptDecoder.fieldCap)), status: TranscriptKeys.str(o, "status") ?? "pending")
+        }
+        return items.isEmpty ? nil : AgentTodos(items: Array(items.prefix(50)))
+    }
+
+    // MARK: The list as a fold over the file
+    // The assembler keeps every main-thread list call and result as an event, in file order,
+    // and an earlier page's events go in front: the list after any paging is the list after
+    // reading the whole file, by construction.
+
+    enum Op: Equatable, Sendable {
+        /// TodoWrite: the whole list (nil: the input did not parse, drift).
+        case write(AgentTodos?)
+        case create(subject: String)
+        case update(taskId: String, status: String?, subject: String?)
+    }
+
+    enum Event: Equatable, Sendable {
+        case call(String, Op)
+        /// A tool result: `ok` false when it failed; `taskId` is the id a TaskCreate got.
+        case result(String, ok: Bool, taskId: String?)
+    }
+
+    /// nil for every tool that does not change the list (TaskList and TaskGet only read it).
+    static func op(name: String, input: [String: Any]) -> Op? {
+        typealias K = TranscriptKeys
+        let subject = K.str(input, "subject").flatMap { $0.isBlank ? nil : String($0.prefix(TranscriptDecoder.fieldCap)) }
+        switch name {
+        case "TodoWrite": return .write(parse(input))
+        case "TaskCreate": return subject.map { .create(subject: $0) }
+        case "TaskUpdate": return K.str(input, "taskId").map { .update(taskId: $0, status: K.str(input, "status"), subject: subject) }
+        default: return nil
+        }
+    }
+
+    /// Claude Code answers a TaskCreate with "Task #N created successfully: …" and
+    /// `toolUseResult.task.id`; a TaskUpdate it refused carries `success: false`.
+    static func result(_ id: String, _ r: ToolResultInfo) -> Event {
+        typealias K = TranscriptKeys
+        let x = r.extra as? [String: Any]
+        var taskId = K.str(K.obj(x, "task"), "id")
+        if taskId == nil, r.text.text.hasPrefix("Task #"),
+           let n = r.text.text.dropFirst(6).split(separator: " ", maxSplits: 1).first { taskId = String(n) }
+        return .result(id, ok: !r.isError && (K.get(x, "success") as? Bool) != false, taskId: taskId)
+    }
+
+    /// The list after `events`, the way Claude Code keeps it: a call counts once its result is
+    /// in and did not fail (a rejected TodoWrite keeps the old list), and a list whose every
+    /// item is completed is cleared.
+    /// ponytail: Claude Code clears completed tasks after 5 s, not at once; a TaskCreate within
+    /// those 5 s keeps the old ones there and starts afresh here. Timestamps if that matters.
+    static func fold(_ events: [Event]) -> AgentTodos? {
+        var calls: [String: Op] = [:], items: [Item] = []
+        for e in events {
+            switch e {
+            case .call(let id, let op): calls[id] = op
+            case .result(let id, let ok, let taskId):
+                guard let op = calls.removeValue(forKey: id), ok else { continue }
+                switch op {
+                case .write(let list): items = list?.items ?? []
+                case .create(let subject):
+                    // No id in the result (drift): shown, but no update can reach it.
+                    let tid = taskId ?? "use:" + id
+                    items.removeAll { $0.id == tid }
+                    items.append(Item(text: subject, status: "pending", id: tid))
+                case .update(let tid, let status, let subject):
+                    guard let i = items.firstIndex(where: { $0.id == tid }) else { continue }
+                    if status == "deleted" { items.remove(at: i); break }
+                    if let status { items[i].status = status }
+                    if let subject { items[i].text = subject }
+                }
+                if items.allSatisfy({ $0.status == "completed" }) { items = [] }
+            }
         }
         return items.isEmpty ? nil : AgentTodos(items: Array(items.prefix(50)))
     }
@@ -73,7 +150,7 @@ struct TurnSummary: Equatable, Sendable {
 
     var label: String {
         if working { return steps > 0 ? "Working · " + plural(steps, "step") : "Working" }
-        return ([plural(steps, "step")] + (edits > 0 ? [plural(edits, "edit")] : []) + (errors > 0 ? [plural(errors, "error")] : []))
+        return ([steps > 0 ? plural(steps, "step") : "No tool steps"] + (edits > 0 ? [plural(edits, "edit")] : []) + (errors > 0 ? [plural(errors, "error")] : []))
             .joined(separator: " · ")
     }
 }
@@ -140,11 +217,12 @@ enum TranscriptVerbosity {
         }
     }
 
-    /// Thinking, and the TodoWrite card (the header's chip stands for it), unless it failed.
+    /// Thinking, and the todo/task cards (the header's chip stands for them), unless they failed.
+    /// An unknown entry's card (the only one with `raw`) is titled "Unrecognized entry (…)".
     static func hiddenAtDefault(_ b: TranscriptBlock) -> Bool {
         switch b.body {
         case .thinking: true
-        case .card(let title, _, _, _, let err): title == AgentTodos.toolName && !err
+        case .card(let title, _, _, _, let err): AgentTodos.toolNames.contains(title) && !err
         default: false
         }
     }
@@ -162,20 +240,31 @@ enum TranscriptVerbosity {
         if !children.isEmpty || working {
             let errors = steps.flatMap(errorBlocks)
             let edits = steps.filter { if case .diff = $0.body { true } else { false } }.count
-            let s = TurnSummary(steps: steps.count, edits: edits, errors: errors.count, working: working)
+            let s = TurnSummary(steps: steps.filter(isToolStep).count, edits: edits, errors: errors.count, working: working)
             rows.append(TranscriptRow(id: "s\(t[0].id)", kind: .summary(s, children: children, errors: errors.map(line))))
         }
         if let final { rows.append(full(final)) }
         return rows
     }
 
+    /// A tool call the summary counts: not thinking, text, an image, a notice, an unknown entry
+    /// or a card the chip stands for. A subagent counts once, as its Agent call.
+    static func isToolStep(_ b: TranscriptBlock) -> Bool {
+        switch b.body {
+        case .bash, .diff, .read, .search: true
+        case .card(_, _, _, let raw, _): raw == nil && !hiddenAtDefault(b)
+        default: false
+        }
+    }
+
     // MARK: Errors and lines
 
+    /// What Claude Code flagged (`is_error`), never a guess from the text: a notice is never an
+    /// error ("No errors found"); Claude Code writes its system errors (`api_error`) without text.
     static func isError(_ b: TranscriptBlock) -> Bool {
         switch b.body {
         case .bash(_, _, _, let e), .diff(_, _, _, _, let e), .card(_, _, _, _, let e): e
         case .read(_, let d): d?.hasPrefix("error:") == true
-        case .notice(let t): t.localizedCaseInsensitiveContains("error")
         default: false
         }
     }
@@ -224,6 +313,8 @@ enum TranscriptVerbosity {
         case .failed(let reason, _): l = Line(icon: "exclamationmark.triangle", title: reason, expandable: false)
         }
         l.error = isError(b)
+        // Still waiting on its result: no "no matches" or "+a −d" as if it were done.
+        if b.pending { l.status = "running" }
         return l
     }
 

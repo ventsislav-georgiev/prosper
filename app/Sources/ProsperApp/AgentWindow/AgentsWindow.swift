@@ -336,7 +336,7 @@ struct AgentDetailView: View {
         if let row = model.selectedRow, let s = row.session {
             VStack(spacing: 0) {
                 AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
-                                   level: $model.verbosity, todos: transcript.todos)
+                                   level: $model.verbosity, todos: transcript.todos, todosOpen: $transcript.todosOpen)
                 if let store = model.store { AgentNoticeLine(store: store, key: s.key) }
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
@@ -361,10 +361,11 @@ struct AgentSessionHeader: View {
     let session: AgentSession
     let cwd: String?
     let open: () -> Void
-    /// #821: the window's verbosity, and the newest TodoWrite list (Default's chip).
+    /// #821: the window's verbosity, the session's todo list (Default's chip) and whether
+    /// its list is open (the transcript model's, reset on a session switch).
     var level: Binding<AgentVerbosity> = .constant(.default)
     var todos: AgentTodos?
-    @State private var todosOpen = false
+    var todosOpen: Binding<Bool> = .constant(false)
 
     var project: String {
         if let cwd { return (cwd as NSString).abbreviatingWithTildeInPath }
@@ -392,16 +393,16 @@ struct AgentSessionHeader: View {
                     .layoutPriority(-1)
                 }
                 Spacer(minLength: 0)
-                if let todos = shownTodos { AgentTodosChip(todos: todos, open: $todosOpen) }
+                if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
             }
-            if todosOpen, let todos = shownTodos { AgentTodosList(todos: todos) }
+            if todosOpen.wrappedValue, let todos = shownTodos { AgentTodosList(todos: todos) }
         }
         .padding(.horizontal, sz(16)).padding(.top, sz(30)).padding(.bottom, sz(12))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Neon.card)
     }
 
-    /// Focused hides todos; Verbose draws the TodoWrite card in the conversation instead.
+    /// Focused hides todos; Verbose draws the todo/task cards in the conversation instead.
     var shownTodos: AgentTodos? { level.wrappedValue == .default ? todos : nil }
 
     /// Widest first: the labelled picker and button, the icon button, the icon picker, a menu.
@@ -498,7 +499,15 @@ struct AgentTodosChip: View {
 
 struct AgentTodosList: View {
     let todos: AgentTodos
+    /// About 8 one-line rows; a longer list scrolls, so it never pushes the prompt pane off-screen.
+    static var maxHeight: CGFloat { sz(8 * 16) }
     var body: some View {
+        ScrollView { list }
+            .frame(maxHeight: Self.maxHeight)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var list: some View {
         VStack(alignment: .leading, spacing: sz(2)) {
             ForEach(Array(todos.items.enumerated()), id: \.offset) { _, t in
                 HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
@@ -512,6 +521,7 @@ struct AgentTodosList: View {
             }
         }
         .padding(.top, sz(2))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
