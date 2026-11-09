@@ -236,6 +236,8 @@ enum AgentWindowText {
     static let notClaude = "Claude isn't running in this session. Open in terminal"
     static let notSubmitted = "The message is in Claude's input but wasn't sent. Open in terminal"
     static let notWorking = "Claude isn't working, so there's nothing to interrupt"
+    /// #820: a prompt on screen that dch reported as idle or working (a message could pick a row, Esc answers it).
+    static let promptShown = "Claude is showing a prompt. Open in terminal to answer it"
     static let busy = "Another answer is in flight. Try again in a moment"
     static let unreadable = "Prosper can't read this prompt. Open in terminal"
     static let mismatch = "The prompt on screen doesn't match the conversation. Open in terminal"
@@ -292,16 +294,29 @@ struct AgentWindowDriver: Sendable {
         return kept.isEmpty ? nil : kept
     }
 
-    /// One message, only while dch says idle or done: `--say` types it as one bracketed paste
-    /// and presses Enter once Claude's composer shows it. Confirmed by a read: Claude started
-    /// working (or asks something), or the message's head shows on screen more often than before.
+    /// #820: why a message or an Esc must not go out over this screen read, nil when it may.
+    /// dch can say idle or working over a prompt it misreads (1.35.0 over a plan approval): a
+    /// pasted digit can pick a row there and Esc answers it "No". So the screen read right before
+    /// the key decides: a prompt Prosper parses refuses; an empty read (dch timed out) fails closed.
+    /// dch's `--say` pastes and presses Enter in one call, so this one read covers both.
+    static func refusal(_ screen: String) -> String? {
+        if screen.isEmpty { return AgentWindowText.unconfirmed }
+        return AgentPrompt.screen(screen) != nil ? AgentWindowText.promptShown : nil
+    }
+
+    /// One message, only while dch says idle or done and the screen shows no prompt (`refusal`):
+    /// `--say` types it as one bracketed paste and presses Enter once Claude's composer shows it.
+    /// Confirmed by a read: Claude started working (or asks something), or the message's head
+    /// shows on screen more often than before.
     func send(_ text: String) -> AgentWindowOutcome {
         let st = status()
         guard st == "idle" || st == "done" else {
             return .failed(st == "working" ? AgentWindowText.working
                            : st == "blocked" ? AgentWindowText.blocked : AgentWindowText.noStatus)
         }
-        let head = Self.head(text), before = Self.count(head, in: io.read(key))
+        let shown = io.read(key)
+        if let why = Self.refusal(shown) { return .failed(why) }
+        let head = Self.head(text), before = Self.count(head, in: shown)
         let reply = Self.sayReply(io.say(key, text))
         switch (reply?.result, reply?.reason) {
         case ("ok"?, _): break
@@ -344,11 +359,14 @@ struct AgentWindowDriver: Sendable {
 
     // MARK: Interrupt
 
-    /// Esc while dch says working; confirmed by dch leaving working or a new "Interrupted" on screen.
+    /// Esc while dch says working and the screen shows no prompt (`refusal`); confirmed by dch
+    /// leaving working or a new "Interrupted" on screen.
     /// QA #629 INFO-2: the status is asked last, right before the key: a prompt raised during
     /// the read is blocked, and an Esc there would answer it "No".
     func interrupt() -> AgentWindowOutcome {
-        let before = Self.count("Interrupted", in: io.read(key))
+        let shown = io.read(key)
+        if let why = Self.refusal(shown) { return .failed(why) }
+        let before = Self.count("Interrupted", in: shown)
         guard status() == "working" else { return .failed(AgentWindowText.notWorking) }
         io.keys(key, ["esc"])
         for _ in 0..<confirmReads {
@@ -445,6 +463,8 @@ struct AgentWindowDriver: Sendable {
     /// never sent while the caret is on the Other row: Claude Code types it there as text.
     func multi(_ e: AgentPromptScreen, picks: Set<Int>, other: (digit: Int, text: String)? = nil) -> AgentWindowOutcome {
         guard var checked = e.checked else { return .failed(AgentWindowText.changed) }
+        // QA #649 INFO 5: an Other row without a box (after the boxes) has no ticked state to plan.
+        guard (other?.digit ?? 1) <= checked.count else { return .failed(AgentWindowText.unchecked) }
         // #810's rule here too: the placeholder as the answer never confirms and stays in the row.
         if let o = other, Self.isPlaceholder(o.text) { return .failed(AgentWindowText.placeholder) }
         let n = checked.count, p = e.prompt, k = other?.digit, order = Self.order(e)

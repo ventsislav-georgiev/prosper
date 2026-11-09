@@ -83,12 +83,15 @@ tag from the now-released section and put it on the new top draft.
   allow check the prompt that replaced it, instead of leaving that one waiting for you until
   Claude Code printed again. Prompts from hooks or ask rules are still left to you. (#795)
 - You can now approve Claude's plan from the Agent Sessions window: "Yes, auto-accept edits",
-  "Yes, manually approve edits" or "Yes, and use auto mode". They show only when the plan on
-  screen matches the one in the conversation and every choice is one Prosper knows by name;
-  otherwise the window says why and offers "Open in terminal". Clearing the context and
-  bypassing permissions stay in the terminal. Multiple-choice questions also take a typed
-  answer of your own with Submit, and "Chat about this" works from the window. Always allow
-  never answers a plan. (#802)
+  "Yes, manually approve edits" or "Yes, and use auto mode". They show only when Claude Code
+  names the plan file under the plan (it does once it finds an editor), the plan on screen
+  matches that file, and every choice is one Prosper knows by name; otherwise the window says
+  why and offers "Open in terminal". Clearing the context and bypassing permissions stay in
+  the terminal. Multiple-choice questions also take a typed answer of your own with Submit,
+  and "Chat about this" works from the window. Always allow never answers a plan. (#802)
+- The Agent Sessions window's message box and Interrupt no longer act when the screen shows a
+  prompt dch hasn't reported as one: a typed "1" could pick a row there, and Esc would answer
+  it "No". The window says Claude is showing a prompt and offers "Open in terminal". (#820)
 
 ## v2.173.0
 

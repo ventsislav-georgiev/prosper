@@ -600,6 +600,26 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(g.log, ["send Kiwi please", "enter"])
     }
 
+    /// QA #649 INFO 5: a multi-select whose Other row has no box (it follows the boxes and the
+    /// Submit row) passes classify and offers that row; Submit with typed text must send nothing,
+    /// not index the boxes past their end (an app crash).
+    @MainActor
+    func testAgentWindowMultiSelectUnboxedOtherRowSendsNothing() throws {
+        let text = ["❯ Use the AskUserQuestion tool with multiSelect set to true to ask me 'Which colors?'", Self.rule,
+                    "←  ☐ Colors  ✔ Submit  →", "", "Which colors?", "",
+                    "❯ 1. [ ] Red", "         Red", "  2. [ ] Green", "         Green", "  3. [ ] Blue", "         Blue",
+                    "     Submit", "  4. Type something", Self.rule, "  5. Chat about this", "",
+                    "Enter to select · ↑/↓ to navigate · Esc to cancel"].joined(separator: "\n")
+        guard case .prompt(let w) = AgentWindowPanel.classify(text, ask: Self.multiAsk) else { return XCTFail("not a prompt") }
+        XCTAssertEqual(w.kind, .multi)
+        XCTAssertEqual(w.other?.digit, 4, "the unboxed Other row is offered")
+        for picks: Set<Int> in [[], [1]] {
+            let f = FormSim(.plain(text))
+            XCTAssertEqual(driver(f.io).multi(w.screen, picks: picks, other: (4, "Teal")), .failed(AgentWindowText.unchecked))
+            XCTAssertEqual(f.log, [], "\(picks): nothing sent")
+        }
+    }
+
     // MARK: - Messages
 
     final class MessageFake: @unchecked Sendable {
@@ -609,7 +629,8 @@ final class AgentWindowInteractionTests: XCTestCase {
         var reply: String
         var says: [String] = []
         var keys: [[String]] = []
-        init(statuses: [String], screens: [String] = [""], reply: String = #"{"name":"s","result":"ok","reason":"","detail":""}"#) {
+        /// #820: the first read is the one before the message or Esc: Claude's composer, no prompt.
+        init(statuses: [String], screens: [String] = [AgentWindowInteractionTests.idleScreen], reply: String = #"{"name":"s","result":"ok","reason":"","detail":""}"#) {
             (self.statuses, self.screens, self.reply) = (statuses, screens, reply)
         }
         private func next(_ a: inout [String]) -> String { a.count > 1 ? a.removeFirst() : a[0] }
@@ -629,7 +650,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(f.says, [text], "one --say call: the newlines stay inside one message")
         let g = MessageFake(statuses: ["done"])
         XCTAssertEqual(driver(g.io).send("hi"), .failed(AgentWindowText.unconfirmed), "idle again with no echo: not confirmed")
-        let h = MessageFake(statuses: ["idle"], screens: ["", "", "> Fix the build please now and then"])
+        let h = MessageFake(statuses: ["idle"], screens: [Self.idleScreen, "", "> Fix the build please now and then"])
         XCTAssertEqual(driver(h.io).send("Fix the build please now and then"), .done, "the head shows on screen")
         let k = MessageFake(statuses: ["idle", "blocked"])
         XCTAssertEqual(driver(k.io).send("go"), .done, "a prompt after the message: it was taken")
@@ -693,24 +714,79 @@ final class AgentWindowInteractionTests: XCTestCase {
         let h = MessageFake(statuses: ["working"])
         XCTAssertEqual(driver(h.io).interrupt(), .failed(AgentWindowText.unconfirmed))
         XCTAssertEqual(h.keys, [["esc"]])
-        let k = MessageFake(statuses: ["working"], screens: ["", "", "⎿  Interrupted · What should Claude do instead?"])
+        let k = MessageFake(statuses: ["working"], screens: [Self.idleScreen, "", "⎿  Interrupted · What should Claude do instead?"])
         XCTAssertEqual(driver(k.io).interrupt(), .done)
     }
 
     /// QA #629 INFO-2: dch's status is asked last, right before the Esc: a prompt raised while
     /// the screen was read gets no Esc (it would answer "No").
     func testAgentWindowInterruptAsksTheStatusRightBeforeTheKey() {
-        let f = FormSim(.plain(Self.permission()))
+        let f = FormSim(.plain(Self.idleScreen))
         f.status = "working"
         f.afterRead = { $0.status = "blocked" }
         XCTAssertEqual(driver(f.io).interrupt(), .failed(AgentWindowText.notWorking))
         XCTAssertEqual(f.log, [], "no Esc into the prompt")
         XCTAssertEqual(f.reads, 1)
-        let g = FormSim(.plain(Self.permission()))
+        let g = FormSim(.plain(Self.idleScreen))
         g.status = "working"
         g.afterKey = { $0.status = "idle" }
         XCTAssertEqual(driver(g.io).interrupt(), .done)
         XCTAssertEqual(g.log, ["esc"])
+    }
+
+    /// #820: dch can say idle or working over a prompt it misreads (1.35.0 over Claude Code
+    /// 2.1.318's plan approval). A pasted "1" could approve the plan, an Esc rejects it: the
+    /// screen read right before the paste or the Esc must hold no prompt, and must have been read.
+    func testAgentWindowMessageAndInterruptSendNothingOverAPromptDchMissed() {
+        let prompts = [("plan", Self.planScreen(caret: 1)), ("plan-feedback-row", Self.planScreen(caret: 3)),
+                       ("ask-live", Self.liveScreen(caret: 1)), ("ask-other-row", Self.liveScreen(caret: 4)),
+                       ("ask-multi", Self.multiScreen([false, true, false, false], caret: 1)),
+                       ("ask-preview", Self.previewScreen(caret: 1)), ("permission", Self.permission())]
+        for (name, screen) in prompts {
+            for st in ["idle", "done"] {
+                let f = MessageFake(statuses: [st, "working"], screens: [screen])
+                XCTAssertEqual(driver(f.io).send("1"), .failed(AgentWindowText.promptShown), "\(name) \(st)")
+                XCTAssertEqual(f.says, [], "\(name) \(st): nothing pasted")
+            }
+            let g = MessageFake(statuses: ["working", "idle"], screens: [screen])
+            XCTAssertEqual(driver(g.io).interrupt(), .failed(AgentWindowText.promptShown), name)
+            XCTAssertEqual(g.keys, [], "\(name): no Esc")
+        }
+        // Fail closed: no read (dch timed out) sends nothing either.
+        let f = MessageFake(statuses: ["idle", "working"], screens: [""])
+        XCTAssertEqual(driver(f.io).send("1"), .failed(AgentWindowText.unconfirmed))
+        XCTAssertEqual(f.says, [])
+        let g = MessageFake(statuses: ["working", "idle"], screens: [""])
+        XCTAssertEqual(driver(g.io).interrupt(), .failed(AgentWindowText.unconfirmed))
+        XCTAssertEqual(g.keys, [])
+        // The live capture after the plan's Esc (#819 capture 05, Claude's composer): sent.
+        let after = ["✻ Brewed for 7s · done 9:38 PM", Self.rule, "❯ ", Self.rule, "  ⏸ plan mode on (shift+tab to cycle)"]
+            .joined(separator: "\n")
+        let h = MessageFake(statuses: ["idle", "working"], screens: [after])
+        XCTAssertEqual(driver(h.io).send("1"), .done)
+        XCTAssertEqual(h.says, ["1"])
+    }
+
+    /// #820 through the window: the list and dch say idle, the screen holds a plan approval. The
+    /// notice says why (with Open in terminal) and the draft stays.
+    @MainActor
+    func testAgentWindowMessageOverAMissedPromptShowsWhyAndKeepsTheDraft() {
+        let f = MessageFake(statuses: ["idle", "working"], screens: [Self.planScreen(caret: 1)])
+        let i = interaction(controller(f.io, autoAllow: false))
+        i.follow(session(.idle))
+        i.draft = "1"
+        i.send()
+        until("refused") { !i.busy }
+        XCTAssertEqual(i.notice, AgentWindowText.promptShown)
+        XCTAssertEqual(i.draft, "1")
+        XCTAssertEqual(f.says, [])
+        let g = MessageFake(statuses: ["working", "working"], screens: [Self.planScreen(caret: 1)])
+        let k = interaction(controller(g.io, autoAllow: false))
+        k.follow(session(.working))
+        k.interrupt()
+        until("refused") { !k.busy }
+        XCTAssertEqual(k.notice, AgentWindowText.promptShown)
+        XCTAssertEqual(g.keys, [])
     }
 
     func testAgentWindowLiveIOCallsKeysAndSayWithTheSessionEnv() {
