@@ -1,17 +1,27 @@
 import SwiftUI
 
 // #829 Phase 1: the window's live-session lifecycle (Restart agent, Stop, Kill) and the island's
-// results shown in the window. Every action is the island controller's own method (its gates,
-// runner keys, busy refusal and row texts); the window adds the asking and nothing else.
+// results shown in the window. Phase 2: a History row's Resume, Resume (no message), Pin/Unpin and
+// Remove from History. Every action is the island controller's own method (its gates, runner keys,
+// busy refusal and row texts); the window adds the asking and nothing else.
 
 enum AgentWindowVerb: Equatable {
     case restart, stop, kill
+    /// #829 Phase 2: a History record's.
+    case resume, resumeNoMessage, pin, remove
 }
 
 /// The confirm strip's question: what, on which session (by key; re-resolved at the answer).
+/// `.remove`'s key is a History record's id (it can equal a live key, #580).
 struct AgentWindowConfirm: Equatable {
     let verb: AgentWindowVerb
     let key: AgentSessionKey
+}
+
+/// QA #665 INFO-6: an answer that ran nothing because a gate closed since the question: why, on that row.
+struct AgentWindowRefusal: Equatable {
+    let id: AgentSidebar.RowID
+    let text: String
 }
 
 enum AgentWindowMenuEntry: Equatable {
@@ -42,6 +52,68 @@ enum AgentWindowControls {
         return out
     }
 
+    /// #829 G6-G8: a History row's context menu and its detail buttons: the island row's items and
+    /// gates (AgentIslandView.historyDrawn: absent while a gate refuses, nothing for a name dch
+    /// would read as a flag). Remove asks, so it carries an ellipsis; on a pinned record it stays,
+    /// off, saying why (the island hides its X).
+    @MainActor
+    static func historyMenu(_ r: DchHistoryRecord, store: AgentIslandStore) -> [AgentWindowMenuEntry] {
+        var out: [AgentWindowMenuEntry] = []
+        let ok = AgentIsland.passable(r.name)
+        if ok, store.resumeGate.isOK { out.append(.item(AgentIsland.resumeLabel, enabled: true, verb: .resume)) }
+        if ok, store.reviveNoMessageGate.isOK { out.append(.item(AgentIsland.resumeNoMessageLabel, enabled: true, verb: .resumeNoMessage)) }
+        if ok, store.historyEditGate.isOK {
+            let older = AgentIsland.older(r, in: store.history)
+            if !out.isEmpty { out.append(.divider) }
+            out.append(.item(AgentIsland.editLabel(r.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel, older: older.count),
+                             enabled: true, verb: .pin))
+            out.append(r.pinned ? .item(removePinnedTitle, enabled: false, verb: .remove)
+                : .item(AgentIsland.editLabel(AgentIsland.removeLabel, older: older.filter { !$0.pinned }.count) + "…",
+                        enabled: true, verb: .remove))
+        }
+        if let why = store.resumeGate.refusal { out.append(.note("Resume \(why)")) }
+        return out
+    }
+
+    static let removePinnedTitle = AgentIsland.label(AgentIsland.removeLabel, needs: "unpin it first")
+
+    /// The entry for `verb` in `entries`: on (nil), or why not. A live row's: the gate's note ("Not
+    /// run: Controls <refusal>"), else the off item's own title ("Not run: Stop (restart this session
+    /// first)"). A History row's (`absent`, its verb's own reason): the off item's title, else `absent`.
+    static func notRun(_ entries: [AgentWindowMenuEntry], _ verb: AgentWindowVerb, absent: String? = nil) -> String? {
+        var title: String?
+        for case .item(let t, let enabled, let v) in entries where v == verb {
+            if enabled { return nil }
+            title = t
+        }
+        if let absent { return "Not run: " + (title ?? absent) }
+        var note: String?
+        for case .note(let why) in entries { note = why }
+        return "Not run: " + (note ?? title ?? AgentWindowControls.unavailable)
+    }
+
+    static let unavailable = "not available for this session"
+
+    /// A History verb the menu leaves out: its label with its gate's reason ("Pin (needs dch 1.25.0)").
+    @MainActor
+    static func historyOff(_ v: AgentWindowVerb, _ r: DchHistoryRecord, store: AgentIslandStore) -> String {
+        let (label, gate): (String, DchCommand.Gate) = switch v {
+        case .resumeNoMessage: (AgentIsland.resumeNoMessageLabel, store.reviveNoMessageGate)
+        case .pin: (r.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel, store.historyEditGate)
+        case .remove: (AgentIsland.removeLabel, store.historyEditGate)
+        default: (AgentIsland.resumeLabel, store.resumeGate)
+        }
+        return AgentIsland.label(label, needs: gate.refusal ?? unavailable)
+    }
+
+    /// G8: the strip's line for Remove from History, naming the record; its Claude id when it has one,
+    /// so the conversation stays reachable by hand.
+    static func removeQuestion(_ r: DchHistoryRecord) -> String {
+        let sid = r.agent?.sessionID ?? ""
+        return "Remove \(r.title) from History? Resume won't be able to bring it back. Its Claude Code conversation stays on disk."
+            + (sid.isEmpty ? "" : " (claude --resume \(sid))")
+    }
+
     static let blockedSentence = " It's waiting on a prompt: answer it first."
 
     /// The strip's line, naming the session by title.
@@ -55,6 +127,8 @@ enum AgentWindowControls {
             return "Stop \(s.title)? Claude Code is paused and the session ends. Resume it later from History." + blocked
         case .kill:
             return AgentIsland.killQuestion(s.title)
+        case .resume, .resumeNoMessage, .pin, .remove:
+            return ""   // History verbs: removeQuestion; the rest never ask
         }
     }
 
@@ -63,6 +137,10 @@ enum AgentWindowControls {
         case .restart: "Restart"
         case .stop: "Stop"
         case .kill: "Kill"
+        case .remove: "Remove"
+        case .resume: AgentIsland.resumeLabel
+        case .resumeNoMessage: AgentIsland.resumeNoMessageLabel
+        case .pin: AgentIsland.pinLabel
         }
     }
 
@@ -84,7 +162,7 @@ enum AgentWindowControls {
         store.notices[key] ?? store.actions[key]
     }
 
-    /// The dir strip's fixed height (shown or not, the sidebar's list reserves it).
+    /// The dir strip's fixed height (shown or not, the sidebar keeps its slot under the list).
     static var stripHeight: CGFloat { sz(24) }
 }
 
@@ -97,11 +175,27 @@ struct AgentSessionMenuItems: View {
     let session: AgentSession
     let ask: (AgentWindowVerb) -> Void
 
+    var body: some View { AgentMenuEntries(entries: AgentWindowControls.menu(session, store: store), act: ask) }
+}
+
+/// #829 Phase 2: a History row's context menu.
+struct AgentHistoryMenuItems: View {
+    @ObservedObject var store: AgentIslandStore
+    let record: DchHistoryRecord
+    let act: (AgentWindowVerb) -> Void
+
+    var body: some View { AgentMenuEntries(entries: AgentWindowControls.historyMenu(record, store: store), act: act) }
+}
+
+struct AgentMenuEntries: View {
+    let entries: [AgentWindowMenuEntry]
+    let act: (AgentWindowVerb) -> Void
+
     var body: some View {
-        ForEach(Array(AgentWindowControls.menu(session, store: store).enumerated()), id: \.offset) { _, e in
+        ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
             switch e {
             case .item(let title, let enabled, let verb):
-                Button(title) { ask(verb) }.disabled(!enabled)
+                Button(title) { act(verb) }.disabled(!enabled)
             case .divider:
                 Divider()
             case .note(let text):
@@ -152,13 +246,14 @@ struct AgentConfirmStrip: View {
                 Image(systemName: "exclamationmark.triangle.fill").font(Neon.font(11)).foregroundStyle(AgentState.blocked.color)
                 Text(text).font(Neon.font(11.5)).foregroundStyle(Neon.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)   // G8: the "claude --resume <id>" can be copied
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack(spacing: sz(8)) {
                 AgentPillButton(title: "Cancel", icon: "xmark", tint: Neon.textSecondary, action: cancel)
                     .keyboardShortcut(.cancelAction)
+                // QA #665 INFO-2: VoiceOver reads the verb; the question is the Text above.
                 AgentPillButton(title: action, icon: "exclamationmark.octagon", tint: Neon.magenta, action: confirm)
-                    .accessibilityLabel(text)
             }
         }
         .padding(.horizontal, sz(16)).padding(.vertical, sz(8))
@@ -171,25 +266,53 @@ struct AgentConfirmStrip: View {
 }
 
 /// G0: every dir's last dir-wide line (Restart all, Stop all, Kill all tallies, edit failures,
-/// a failed New session) at the bottom of the sidebar; nothing while there is none. One line of
-/// a fixed height, drawn over the list's reserved bottom, so it never moves a row.
+/// a failed New session) at the bottom of the sidebar; nothing while there is none. One line in
+/// a fixed slot under the list (QA #665 INFO-4/5: not over it, so the last row and a row the
+/// keys scroll to stay above it); shown or not, the slot is the same height, so no row moves.
 struct AgentDirStatusStrip: View {
     @ObservedObject var store: AgentIslandStore
 
     var body: some View {
         let text = store.dirStatus
-        if !text.isEmpty {
-            HStack(spacing: sz(6)) {
+        ZStack {
+            if !text.isEmpty {
+                HStack(spacing: sz(6)) {
+                    Image(systemName: "info.circle").foregroundStyle(Neon.blue)
+                    Text(text).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 0)
+                }
+                .font(Neon.font(10.5))
+                .padding(.horizontal, sz(14))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .top) { Rectangle().fill(Neon.stroke).frame(height: 1) }
+                .help(text)
+            }
+        }
+        .frame(height: AgentWindowControls.stripHeight)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// The island's inline note for the row ("Attach command copied", "Attached in tmux/ssh…"),
+/// #829 G0: else the row's action text ("Stopping…", "Restarted", a failure), as the island row;
+/// QA #665 INFO-6: an answer the window refused wins. QA #665 INFO-1: drawn over the
+/// conversation's top (with the confirm strip), never in the column, so it moves nothing.
+struct AgentNoticeLine: View {
+    @ObservedObject var store: AgentIslandStore
+    let key: AgentSessionKey
+    var refusal: String?
+    var body: some View {
+        if let text = refusal ?? AgentWindowControls.notice(store, key) {
+            HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
                 Image(systemName: "info.circle").foregroundStyle(Neon.blue)
-                Text(text).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail)
+                Text(text).foregroundStyle(Neon.textSecondary).lineLimit(3)
                 Spacer(minLength: 0)
             }
-            .font(Neon.font(10.5))
-            .padding(.horizontal, sz(14))
-            .frame(height: AgentWindowControls.stripHeight)
-            .frame(maxWidth: .infinity)
-            .background(Neon.sidebar)
-            .overlay(alignment: .top) { Rectangle().fill(Neon.stroke).frame(height: 1) }
+            .font(Neon.font(11))
+            .padding(.horizontal, sz(16)).padding(.vertical, sz(6))
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .background(Neon.card)
+            .overlay(alignment: .bottom) { Rectangle().fill(Neon.stroke).frame(height: 1) }
             .help(text)
         }
     }

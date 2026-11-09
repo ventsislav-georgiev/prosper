@@ -229,9 +229,11 @@ struct AgentSidebarView: View {
                                             AgentSidebarRowView(row: row, selected: model.selection == row.id)
                                         }
                                         .buttonStyle(.plain)
-                                        .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks)
+                                        .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
                                             if let s = row.session, let store = model.store {
                                                 AgentSessionMenuItems(store: store, session: s) { model.ask($0, s) }
+                                            } else if let r = row.record, let store = model.store {
+                                                AgentHistoryMenuItems(store: store, record: r) { model.act($0, r) }
                                             }
                                         }
                                         .id(row.id)
@@ -239,14 +241,16 @@ struct AgentSidebarView: View {
                                 }
                             }
                         }
-                        .padding(.horizontal, sz(8)).padding(.bottom, sz(12) + AgentWindowControls.stripHeight)   // #829: the dir strip's room
+                        .padding(.horizontal, sz(8)).padding(.bottom, sz(12))
                     }
                     .onChange(of: model.selection) { _, id in if let id { proxy.scrollTo(id) } }
                 }
             }
+            Spacer(minLength: 0)
+            // #829 G0: the dir strip's fixed slot under the list (QA #665 INFO-4/5: the list ends above it).
+            if let store = model.store { AgentDirStatusStrip(store: store) }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .overlay(alignment: .bottom) { if let store = model.store { AgentDirStatusStrip(store: store) } }   // #829 G0
     }
 }
 
@@ -297,10 +301,16 @@ struct AgentSidebarRowView: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
-            Text(row.state?.glyph ?? "○")
-                .font(Neon.font(11, weight: .bold))
-                .foregroundStyle(row.state == nil ? Neon.textSecondary.opacity(0.6) : agentStateColor(row.state))
-                .frame(width: sz(14))
+            Group {   // #829 G7: a pinned History record's glyph, in the same slot
+                if row.record?.pinned == true {
+                    Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(Neon.textSecondary)
+                } else {
+                    Text(row.state?.glyph ?? "○")
+                        .font(Neon.font(11, weight: .bold))
+                        .foregroundStyle(row.state == nil ? Neon.textSecondary.opacity(0.6) : agentStateColor(row.state))
+                }
+            }
+            .frame(width: sz(14))
             VStack(alignment: .leading, spacing: sz(3)) {
                 HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
                     Text(row.title).font(Neon.font(12.5, weight: .medium))
@@ -334,7 +344,8 @@ struct AgentSidebarRowView: View {
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([row.title, row.detail, row.age.isEmpty ? nil : "\(row.age) ago"].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail,
+                             row.age.isEmpty ? nil : "\(row.age) ago"].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -384,17 +395,17 @@ struct AgentDetailView: View {
                 AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
                                    level: $model.verbosity, todos: transcript.todos, todosOpen: $transcript.todosOpen,
                                    store: model.store, ask: { model.ask($0, s) })
-                if let store = model.store { AgentNoticeLine(store: store, key: s.key) }
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
                                     ownsLifecycle: false, level: model.verbosity)
                     .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                     .clipped()
-                    .overlay(alignment: .top) {   // #829 R5: over the conversation, so nothing moves
-                        if let c = model.confirming, let asked = model.confirmingSession {
-                            AgentConfirmStrip(text: AgentWindowControls.question(c.verb, asked),
-                                              action: AgentWindowControls.confirmTitle(c.verb),
-                                              confirm: { model.confirm(true) }, cancel: { model.confirm(false) })
+                    .overlay(alignment: .top) {   // #829 R5, QA #665 INFO-1: over the conversation, so nothing moves
+                        VStack(spacing: 0) {
+                            if let store = model.store {
+                                AgentNoticeLine(store: store, key: s.key, refusal: model.refusalText(row.id))
+                            }
+                            confirmStrip
                         }
                     }
                 Rectangle().fill(Neon.stroke).frame(height: 1)
@@ -406,10 +417,24 @@ struct AgentDetailView: View {
                 }
             }
         } else if let row = model.selectedRow, let r = row.record {
-            AgentHistoryDetail(row: row, record: r, store: model.store, resume: { model.resumeSelected() })
+            AgentHistoryDetail(row: row, record: r, store: model.store, refusal: model.refusalText(row.id),
+                               act: { model.act($0, r) })
+                .overlay(alignment: .top) { confirmStrip }   // #829 G8: Remove asks, over the pane's top
         } else {
             AgentEmptyState(icon: "sidebar.left", title: "Select a session",
                             detail: "Up and down move through the list; Return opens it in the terminal.")
+        }
+    }
+
+    /// R5: the question, re-read from the store each draw (a gone session or record draws none).
+    @ViewBuilder var confirmStrip: some View {
+        if let c = model.confirming {
+            let text = model.confirmingSession.map { AgentWindowControls.question(c.verb, $0) }
+                ?? model.confirmingRecord.map(AgentWindowControls.removeQuestion)
+            if let text {
+                AgentConfirmStrip(text: text, action: AgentWindowControls.confirmTitle(c.verb),
+                                  confirm: { model.confirm(true) }, cancel: { model.confirm(false) })
+            }
         }
     }
 }
@@ -617,30 +642,13 @@ struct AgentStateChip: View {
     }
 }
 
-/// The island's inline note for the row ("Attach command copied", "Attached in tmux/ssh…"),
-/// #829 G0: else the row's action text ("Stopping…", "Restarted", a failure), as the island row.
-struct AgentNoticeLine: View {
-    @ObservedObject var store: AgentIslandStore
-    let key: AgentSessionKey
-    var body: some View {
-        if let text = AgentWindowControls.notice(store, key) {
-            HStack(spacing: sz(6)) {
-                Image(systemName: "info.circle").foregroundStyle(Neon.blue)
-                Text(text).foregroundStyle(Neon.textSecondary)
-                Spacer(minLength: 0)
-            }
-            .font(Neon.font(11))
-            .padding(.horizontal, sz(16)).padding(.vertical, sz(6))
-            .background(Neon.card)
-        }
-    }
-}
-
 struct AgentHistoryDetail: View {
     let row: AgentSidebar.Row
     let record: DchHistoryRecord
     let store: AgentIslandStore?
-    let resume: () -> Void
+    /// QA #665 INFO-6: a Remove the window refused at the answer, shown on the status line.
+    var refusal: String?
+    let act: (AgentWindowVerb) -> Void
 
     var body: some View {
         VStack(spacing: sz(10)) {
@@ -652,34 +660,69 @@ struct AgentHistoryDetail: View {
                 Text((record.cwd as NSString).abbreviatingWithTildeInPath).font(Neon.font(11, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.middle)
             }
-            if let store { AgentResumeButton(store: store, record: record, resume: resume) }
+            if let store { AgentHistoryButtons(store: store, record: record, refusal: refusal, act: act) }
         }
         .padding(sz(24))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-/// Resume through the island (its gate, its status line).
-struct AgentResumeButton: View {
+/// #829 G6-G8: Resume, Resume (no message), Pin/Unpin and Remove from History… through the island
+/// (its gates, its status line). Every button is always drawn, in a fixed slot (off while its gate
+/// refuses, its reason in the help), so a gate or a pin never moves a neighbour.
+struct AgentHistoryButtons: View {
     @ObservedObject var store: AgentIslandStore
     let record: DchHistoryRecord
-    let resume: () -> Void
+    var refusal: String?
+    let act: (AgentWindowVerb) -> Void
+
     var body: some View {
+        let entries = AgentWindowControls.historyMenu(record, store: store)
         VStack(spacing: sz(6)) {
-            Button(action: resume) {
-                Label("Resume", systemImage: "play.fill").font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.blue)
-                    .padding(.horizontal, sz(12)).padding(.vertical, sz(5))
-                    .background(Capsule().fill(Neon.blue.opacity(0.12)))
-                    .overlay(Capsule().stroke(Neon.blue.opacity(0.45), lineWidth: 1))
-                    .fixedSize()
+            HStack(spacing: sz(8)) {
+                button(entries, .resume, AgentIsland.resumeLabel, icon: "play.fill", tint: Neon.blue)
+                button(entries, .resumeNoMessage, AgentIsland.resumeNoMessageLabel, icon: "play", tint: Neon.textSecondary)
             }
-            .buttonStyle(.plain)
-            .disabled(!store.resumeGate.isOK)
+            HStack(spacing: sz(8)) {
+                // Pin and Unpin share one slot, the wider one's.
+                ZStack {
+                    pill(AgentIsland.unpinLabel, icon: "pin.slash", tint: Neon.textSecondary, on: true) {}.hidden()
+                    pill(AgentIsland.pinLabel, icon: "pin", tint: Neon.textSecondary, on: true) {}.hidden()
+                    button(entries, .pin, record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel,
+                           icon: record.pinned ? "pin.slash" : "pin", tint: Neon.textSecondary)
+                }
+                button(entries, .remove, AgentIsland.removeLabel + "…", icon: "xmark", tint: Neon.magenta)
+            }
             // #828: the line is always there, so a status arriving never re-centres the detail.
-            let status = store.historyActions[record.id]
-            Text(status ?? " ").font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
-                .accessibilityHidden(status == nil)
+            let status = refusal ?? store.historyActions[record.id]
+            // Two real lines' room (lineLimit's reservesSpace came out 2 pt short of a wrapped status at 1.0).
+            ZStack {
+                Text(" \n ").hidden()
+                Text(status ?? " ").foregroundStyle(Neon.textSecondary)
+                    .lineLimit(2).multilineTextAlignment(.center)
+                    .accessibilityHidden(status == nil)
+            }
+            .font(Neon.font(10.5))
         }
+    }
+
+    /// The menu's item for `verb` as a button: its title as help (the older records, why it is off).
+    private func button(_ entries: [AgentWindowMenuEntry], _ verb: AgentWindowVerb, _ title: String, icon: String,
+                        tint: Color) -> some View {
+        let item = entries.lazy.compactMap { e -> (String, Bool)? in
+            if case .item(let t, let on, let v) = e, v == verb { return (t, on) }
+            return nil
+        }.first
+        let on = item?.1 ?? false
+        // Absent from the menu (a gate refused): the label with the gate's reason ("Pin (needs dch 1.25.0)").
+        let help = item?.0 ?? AgentWindowControls.historyOff(verb, record, store: store)
+        return pill(title, icon: icon, tint: tint, on: on) { act(verb) }
+            .help(help)
+            .accessibilityLabel(help)
+    }
+
+    private func pill(_ title: String, icon: String, tint: Color, on: Bool, _ action: @escaping () -> Void) -> some View {
+        AgentPillButton(title: title, icon: icon, tint: tint, enabled: on, action: action)
     }
 }
 

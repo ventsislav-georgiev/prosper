@@ -279,9 +279,9 @@ extension AgentIsland {
     // MARK: - Restart (#579)
 
     static let restartingText = "Restarting…"
-    /// #829: a row's Restart or Stop a busy row refused (the island's was silent; the window says so).
-    static let restartBusyText = "Restart not run: another action is running on this session"
-    static let stopBusyText = "Stop not run: another action is running on this session"
+    /// #829: a row's Restart or Stop a busy row refused (the island's was silent; the window says so), worded like killBusyText (QA #665 INFO-2).
+    static let restartBusyText = "Restart not run: another job is running"
+    static let stopBusyText = "Stop not run: another job is running"
     static let restartAllRunningText = "Restarting stale agents…"
     static let restartLabel = "Restart agent"
     static let restartAllLabel = "Restart stale agents"

@@ -167,8 +167,14 @@ final class AgentWindowModel: ObservableObject {
     /// Open in terminal: the island's row click (focus the attached terminal, else
     /// open one, else copy the attach command).
     var openSession: (AgentSession) -> Void = { AgentIslandController.shared.jump($0) }
+    /// The island controller the History verbs go to (tests: one with a fake runner).
+    var island: () -> AgentIslandController = { .shared }
     /// A History row's Resume: the island's.
-    var resume: (DchHistoryRecord) -> Void = { AgentIslandController.shared.resume($0) }
+    lazy var resume: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resume($0) }
+    /// #829 G6-G8: Resume (no message), Pin/Unpin and Remove from History: the island's.
+    lazy var resumeNoMessage: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resume($0, noMessage: true) }
+    lazy var pinRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().pin($0) }
+    lazy var removeRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().remove($0) }
     /// Told when the window shows or hides, so the island keeps the store current
     /// (it holds activity-only lists back while nothing shows them).
     var onVisible: (Bool) -> Void = { AgentIslandController.shared.windowWatching = $0 }
@@ -180,9 +186,19 @@ final class AgentWindowModel: ObservableObject {
     var killSession: (AgentSession) -> Bool = { AgentIslandController.shared.kill($0) }
     /// #829 (R5): the question the confirm strip shows; dropped by a selection change.
     @Published private(set) var confirming: AgentWindowConfirm?
+    /// QA #665 INFO-6: an answer a gate refused since the question; dropped by a selection change or the next ask.
+    @Published private(set) var refusal: AgentWindowRefusal?
     /// #829 G2: a Stop or Kill the window started: once its live row is gone and a History
     /// record of that key ended since, that row is selected. One-shot; any manual selection drops it.
-    private(set) var following: (key: AgentSessionKey, at: TimeInterval)?
+    private(set) var following: (key: AgentSessionKey, at: TimeInterval)? {
+        didSet { if following == nil { held = nil } }
+    }
+    /// QA #665 INFO-8: the followed session's last live row. Its row gone before its record lands,
+    /// the selection stays on it (the pane keeps showing it) until the record lands or the bound passes.
+    private var held: AgentSidebar.Row?
+    /// #829 G8: a record the window removed (its id): once its row is gone, the next History row
+    /// is selected (else the previous, else none), never through nothing. A manual pick drops it.
+    private(set) var removing: AgentSessionKey?
     /// Counts sidebar rebuilds (tests: nothing rebuilds after close).
     private(set) var refreshes = 0
 
@@ -236,11 +252,23 @@ final class AgentWindowModel: ObservableObject {
         refreshes += 1
         let new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
                                         details: details, now: now(), actions: actions)
+        let old = sections
+        if let f = following, let r = new.lazy.flatMap(\.rows).first(where: { $0.id == .live(f.key) }) { held = r }
         if new != sections { sections = new }
         // The selected row gone (the session ended): nothing selected, nothing tailing; #829 G2:
-        // unless it is followed to its History row (straight there, never through nothing).
-        let gone = selection.map { row($0) == nil } ?? false
-        if !followToHistory() { if gone { select(nil, manual: false) } else { follow() } }
+        // unless it is followed to its History row (straight there, never through nothing; held
+        // on the ended session until then). G8: a removed record's row hands on to its neighbour.
+        if !followToHistory() {
+            if case .history(let id)? = selection, id == removing, row(.history(id)) == nil {
+                removing = nil
+                select(Self.neighbour(of: id, old: old, new: new), manual: false)
+            } else if selection != nil, selectedRow == nil {
+                select(nil, manual: false)
+            } else {
+                follow()
+            }
+        }
+        if confirming != nil, confirmingSession == nil, confirmingRecord == nil { confirming = nil }
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
             filled = true
@@ -250,7 +278,18 @@ final class AgentWindowModel: ObservableObject {
 
     var rows: [AgentSidebar.Row] { sections.flatMap(\.rows) }
     func row(_ id: AgentSidebar.RowID) -> AgentSidebar.Row? { rows.first { $0.id == id } }
-    var selectedRow: AgentSidebar.Row? { selection.flatMap(row) }
+    /// QA #665 INFO-8: a followed session whose row left reads as its last row until its record lands.
+    var selectedRow: AgentSidebar.Row? { selection.flatMap { row($0) ?? (held?.id == $0 ? held : nil) } }
+
+    /// G8: the History row after `id` in `old` that is still there, else the one before, else the
+    /// first History row left; nil when History is empty.
+    static func neighbour(of id: AgentSessionKey, old: [AgentSidebar.Section],
+                          new: [AgentSidebar.Section]) -> AgentSidebar.RowID? {
+        let was = old.first { $0.title == "History" }?.rows.map(\.id) ?? []
+        let now = new.first { $0.title == "History" }?.rows.map(\.id) ?? []
+        guard let i = was.firstIndex(of: .history(id)) else { return now.first }
+        return was[(i + 1)...].first { now.contains($0) } ?? was[..<i].reversed().first { now.contains($0) } ?? now.first
+    }
 
     func isCollapsed(_ title: String) -> Bool {
         AgentSidebar.collapsible.contains(title) && collapsed.contains(title)
@@ -287,10 +326,11 @@ final class AgentWindowModel: ObservableObject {
     /// `manual`: the human's pick (a click, a key, a menu); it drops a pending follow-to-History.
     /// Any change of row drops the confirm strip's question (R5).
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true) {
-        if manual { following = nil }
+        if manual { following = nil; removing = nil }
         if selection != id {
             selection = id
             confirming = nil
+            refusal = nil
         }
         follow()
     }
@@ -312,36 +352,76 @@ final class AgentWindowModel: ObservableObject {
         return true
     }
 
-    func resumeSelected() {
-        guard let r = selectedRow?.record else { return }
-        resume(r)
-    }
-
     // MARK: #829 Restart agent, Stop, Kill (ask, then act)
 
     /// A header "⋯" or row context-menu item: selects the row first (R6), then asks.
     func ask(_ verb: AgentWindowVerb, _ s: AgentSession) {
         select(.live(s.key))
+        refusal = nil
         confirming = AgentWindowConfirm(verb: verb, key: s.key)
+    }
+
+    /// #829 G6-G8: a History row's context menu or detail button: selects the row first (R6).
+    /// Resume, Resume (no message) and Pin/Unpin act at once (the island does not ask); Remove asks.
+    func act(_ verb: AgentWindowVerb, _ r: DchHistoryRecord) {
+        select(.history(r.id))
+        refusal = nil
+        switch verb {
+        case .resume: resume(r)
+        case .resumeNoMessage: resumeNoMessage(r)
+        case .pin: pinRecord(r)
+        case .remove: confirming = AgentWindowConfirm(verb: .remove, key: r.id)
+        case .restart, .stop, .kill: break
+        }
     }
 
     /// The asked session as it is now (nil: it ended).
     var confirmingSession: AgentSession? {
-        confirming.flatMap { c in store?.sessions.first { $0.key == c.key } }
+        confirming.flatMap { c in c.verb == .remove ? nil : store?.sessions.first { $0.key == c.key } }
     }
 
-    /// The strip's answer. The session is re-resolved by key now: gone, nothing runs.
+    /// The asked History record as it is now (nil: it went).
+    var confirmingRecord: DchHistoryRecord? {
+        confirming.flatMap { c in c.verb == .remove ? store?.history.first { $0.id == c.key } : nil }
+    }
+
+    /// The strip's answer. The session (or record) is re-resolved by key now: gone, nothing runs;
+    /// QA #665 INFO-6: its gate closed since the question, nothing runs and the row says why.
     func confirm(_ yes: Bool) {
-        guard let c = confirming else { return }
-        let s = confirmingSession
+        guard let c = confirming, let store else { confirming = nil; return }
+        let s = confirmingSession, r = confirmingRecord
         confirming = nil
-        guard yes, let s else { return }
+        guard yes else { return }
+        if let r {
+            if let why = AgentWindowControls.notRun(AgentWindowControls.historyMenu(r, store: store), .remove,
+                                                    absent: AgentWindowControls.historyOff(.remove, r, store: store)) {
+                refusal = AgentWindowRefusal(id: .history(r.id), text: why)
+                return
+            }
+            removing = r.id
+            removeRecord(r)
+            return
+        }
+        guard let s else { return }
+        if let why = AgentWindowControls.notRun(AgentWindowControls.menu(s, store: store), c.verb) {
+            refusal = AgentWindowRefusal(id: .live(s.key), text: why)
+            return
+        }
         switch c.verb {
         case .restart: _ = restartSession(s)
-        case .stop: if stopSession(s) { following = (s.key, now()) }
-        case .kill: if killSession(s) { following = (s.key, now()) }
+        case .stop: if stopSession(s) { startFollowing(s) }
+        case .kill: if killSession(s) { startFollowing(s) }
+        case .resume, .resumeNoMessage, .pin, .remove: break
         }
     }
+
+    private func startFollowing(_ s: AgentSession) {
+        following = (s.key, now())
+        held = row(.live(s.key))
+    }
+
+    /// The refusal for the row `id`, if any.
+    func refusalText(_ id: AgentSidebar.RowID) -> String? { refusal?.id == id ? refusal?.text : nil }
 
     /// G2: the followed session's live row is gone and a History record of its key ended
     /// since the Stop or Kill (dch writes a record each minute: 65 s of slack): select it.

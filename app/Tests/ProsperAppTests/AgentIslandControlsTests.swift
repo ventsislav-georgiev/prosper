@@ -5155,6 +5155,9 @@ extension AgentIslandControlsTests {
         XCTAssertEqual(store.actions[a.key], AgentIsland.restartBusyText)
         XCTAssertFalse(c.stop(a, sayBusy: true))
         XCTAssertEqual(store.actions[a.key], AgentIsland.stopBusyText, "a refusal replaces a refusal")
+        // QA #665 INFO-2: worded like Kill's refusal.
+        XCTAssertEqual(AgentIsland.restartBusyText, "Restart not run: another job is running")
+        XCTAssertEqual(AgentIsland.stopBusyText, "Stop not run: another job is running")
         XCTAssertEqual(f.args.count, 1, "refused: never launched")
         f.release.signal()
         settle(c) { store.actions[a.key] == nil }
@@ -5251,5 +5254,55 @@ extension AgentIslandControlsTests {
         settle(c) { reads.count == 4 }
         XCTAssertEqual(reads.count, 4, "the last one gone: #581's read, as before")
         XCTAssertEqual(f.args, [], "reads only, no verb")
+    }
+}
+
+extension AgentIslandControlsTests {
+    /// #829 Phase 2: the window's History verbs reach the island's controller methods and their
+    /// dch args (FakeProc, no dch): Resume, Resume (no message) with --no-message, Pin, and
+    /// Remove (--forget) only after the window's question.
+    @MainActor
+    func testWindowHistoryVerbsRunTheIslandsDchArgs() throws {
+        let f = FakeProc(), reads = Reads()
+        var r = record("h")
+        r.file = "h"
+        reads.records = [r]
+        let c = controller(f, reads, dch: Self.v1283)
+        c.store?.sessions = [session("live")]   // the island opens on a live row (History is read on open)
+        c.setExpanded(true)
+        settle(c) { c.store?.controlDch != nil && c.store?.history.count == 1 }
+        let store = try XCTUnwrap(c.store)
+        let rec = try XCTUnwrap(store.history.first)
+        let m = AgentWindowModel()
+        m.island = { c }
+        m.onVisible = { _ in }
+        m.bind(store)
+        m.setVisible(true)
+        defer { m.close() }
+        func run(_ verb: AgentWindowVerb) -> [String] {
+            m.act(verb, rec)
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, "\(verb) launched")
+            let args = f.args.last ?? []
+            f.release.signal()
+            settle(c) { !c.runner.isBusy(rec.id) }
+            return args
+        }
+        let quiet = run(.resumeNoMessage)
+        XCTAssertEqual(quiet.first, "--revive")
+        XCTAssertTrue(quiet.contains("--no-message"), "\(quiet)")
+        let loud = run(.resume)
+        XCTAssertEqual(loud.first, "--revive")
+        XCTAssertFalse(loud.contains("--no-message"), "\(loud)")
+        XCTAssertEqual(run(.pin).first, "--pin")
+        let before = f.args.count
+        m.act(.remove, rec)
+        settle(c)
+        XCTAssertEqual(f.args.count, before, "Remove asks first: nothing launched")
+        m.confirm(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last?.first, "--forget")
+        XCTAssertFalse(f.args.last?.contains("-f") ?? true, "never -f")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(rec.id) }
     }
 }

@@ -24,11 +24,19 @@ tag from the now-released section and put it on the new top draft.
   offer Restart agent, Stop and Kill, with the island's rules and reasons; the window asks first in
   a line over the conversation. A stopped or killed session's selection moves to its History row.
   While a Restart or Stop runs, the row shows it ("Restarting…", "Stopping…") in place of the state,
-  the result shows under the header, and Send, Interrupt and prompt answers wait until it is done.
+  the result shows under the header, and Send, Interrupt and prompt answers are refused until it is done.
   Results for a whole folder (Stop all, Kill all, Restart all) show in a fixed line at the bottom of
-  the sidebar. History re-reads when the window opens and when a session ends while it is open.
+  the sidebar. History re-reads when the window shows and when a session ends while it is open.
   Right arrow with nothing selected unfolds the first folded section. Ages past 364 days read in
   years, here and on the island (#829).
+- Agent Sessions window: History rows get Resume, Resume (no message), Pin/Unpin and Remove from
+  History, in the row's right-click menu and as buttons in the History pane, with the island's
+  rules and wording. Remove asks first, names the record and shows its `claude --resume <id>`
+  (the Claude Code conversation stays on disk); the selection then moves to the next History row.
+  A pinned row shows a pin. The result line and the History buttons no longer move anything when
+  they change, and the folder line sits in its own slot under the list. An answer whose dch
+  support went away since the question says why instead of doing nothing, and a stopped or killed
+  session stays selected until its History row arrives (#829).
 - Ships dch 1.40.0 (was 1.39.0). When a newer `dch -a` takes a remote session over, the older
   attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

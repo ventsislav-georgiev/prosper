@@ -21,11 +21,17 @@ extension AgentWindowD1Tests {
     @MainActor
     final class Calls {
         var all: [(verb: AgentWindowVerb, session: AgentSession)] = []
+        /// #829 Phase 2: the History seams.
+        var records: [(verb: AgentWindowVerb, record: DchHistoryRecord)] = []
         var started = true
         func wire(_ m: AgentWindowModel) {
             m.restartSession = { self.all.append((.restart, $0)); return self.started }
             m.stopSession = { self.all.append((.stop, $0)); return self.started }
             m.killSession = { self.all.append((.kill, $0)); return self.started }
+            m.resume = { self.records.append((.resume, $0)) }
+            m.resumeNoMessage = { self.records.append((.resumeNoMessage, $0)) }
+            m.pinRecord = { self.records.append((.pin, $0)) }
+            m.removeRecord = { self.records.append((.remove, $0)) }
         }
     }
 
@@ -70,6 +76,7 @@ extension AgentWindowD1Tests {
     @MainActor
     func testAgentWindowAsksThenActsOnTheAskedSessionOnly() throws {
         let st = store([session("a", .working), session("b", .blocked)])
+        st.controlDch = bin([1, 38, 0])   // QA #665 INFO-6: the answer checks the gates again (masters at 1.30.0)
         let m = windowModel(st)
         let calls = Calls()
         calls.wire(m)
@@ -127,6 +134,7 @@ extension AgentWindowD1Tests {
     @MainActor
     func testAgentWindowFollowsAStoppedOrKilledSessionToItsHistoryRow() throws {
         let st = store([session("a", .idle), session("b", .idle)], history: [record("a", ago: 7200)])
+        st.controlDch = bin([1, 38, 0])
         let m = windowModel(st)
         let calls = Calls()
         calls.wire(m)
@@ -140,14 +148,16 @@ extension AgentWindowD1Tests {
         let sub = m.$selection.dropFirst().sink { seen.append($0) }
         defer { sub.cancel() }
         st.sessions = [b]
-        XCTAssertNil(m.selection, "the row went and only an older record of its name is there: nothing yet")
+        // QA #665 INFO-8: the row went before its record: the selection holds on the ended session.
+        XCTAssertEqual(m.selection, .live(a.key), "the row went and only an older record of its name is there: held")
+        XCTAssertEqual(m.selectedRow?.session?.key, a.key, "the pane keeps the session's last row")
         st.history = [record("other", ago: 0), record("a", ago: 7200)]
-        XCTAssertNil(m.selection, "another session's new record: not followed")
+        XCTAssertEqual(m.selection, .live(a.key), "another session's new record: not followed, still held")
         XCTAssertNotNil(m.following)
         st.history = [record("a", ago: 0), record("a", ago: 7200)]
         XCTAssertEqual(m.selection, .history(a.key), "its new record: selected")
         XCTAssertNil(m.following, "one-shot")
-        XCTAssertEqual(seen, [nil, .history(a.key)])
+        XCTAssertEqual(seen, [.history(a.key)], "never through nothing")
 
         // The record read landing before the row leaves: straight to it, no empty pane between.
         st.sessions = [a, b]
@@ -191,6 +201,32 @@ extension AgentWindowD1Tests {
         st.history = [record("a", ago: -DchActionRunner.restartBound)]
         XCTAssertNil(m.following)
         XCTAssertNil(m.selection, "too late to follow")
+
+        // QA #665 INFO-8: held, the bound passing with no record lets go (nothing selected), and a
+        // manual pick while held drops the hold at once.
+        m.now = { Self.now }
+        st.sessions = [a, b]
+        st.history = []
+        m.ask(.kill, a)
+        m.confirm(true)
+        st.sessions = [b]
+        XCTAssertEqual(m.selection, .live(a.key), "held")
+        m.now = { Self.now + DchActionRunner.restartBound + 1 }
+        m.refresh()
+        XCTAssertNil(m.following)
+        XCTAssertNil(m.selection, "the bound passed with no record: let go")
+        XCTAssertNil(m.selectedRow)
+        m.now = { Self.now }
+        st.sessions = [a, b]
+        m.ask(.kill, a)
+        m.confirm(true)
+        st.sessions = [b]
+        m.select(.live(b.key))
+        st.sessions = [a, b]
+        st.sessions = [b]
+        XCTAssertEqual(m.selection, .live(b.key))
+        m.select(.live(a.key))
+        XCTAssertNil(m.selectedRow, "no follow, no hold: a gone row reads as nothing")
     }
 
     // MARK: G0: the island's row and dir texts
@@ -406,13 +442,31 @@ extension AgentWindowD1Tests {
                 XCTAssertFalse(drows.isEmpty)
                 XCTAssertGreaterThan(CGFloat(drows.min() ?? 0) / k, size.height - AgentWindowControls.stripHeight - 2,
                                      "only the sidebar's bottom line changed (\(label) \(scale))")
+                // QA #665 INFO-1: a row text (a busy refusal, then a running text) shows over the
+                // conversation's top: one band changes and nothing under it moves.
+                st.actions[s.key] = AgentIsland.restartBusyText
+                let refused = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
+                try save(refused, "829p2-window-refusal-\(label)-\(scale)")
+                XCTAssertEqual(overflow(refused, content: size, canvas: canvas), 0, "\(label) \(scale)")
+                let band = diffRows(plain, refused)
+                XCTAssertFalse(band.isEmpty, "the refusal shows (\(label) \(scale))")
+                XCTAssertGreaterThan(CGFloat(band.min() ?? 0) / k, 60 * scale, "the header stays put (\(label) \(scale))")
+                XCTAssertLessThan(CGFloat((band.max() ?? 0) - (band.min() ?? 0)) / k, 40 * scale,
+                                  "one line's band, the transcript under it unmoved (\(label) \(scale))")
+                st.actions[s.key] = "Pausing…"
+                let locked = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
+                try save(locked, "829-window-locked-\(label)-\(scale)")
+                st.actions = [:]
+                // The detail pane's columns: the notice band and the locked input box change, nothing between.
+                let x0 = Int((sz(290) + 2) * k), inputTop = Int((size.height - 120 * scale) * k)
+                let moved = (0..<locked.pixelsHigh).filter { y in
+                    (y < (band.min() ?? 0) - 1 || y > (band.max() ?? 0) + 1) && y < inputTop
+                        && stride(from: x0, to: locked.pixelsWide - Int(24 * k), by: 2).contains { x in
+                            plain.colorAt(x: x, y: y) != locked.colorAt(x: x, y: y)
+                        }
+                }
+                XCTAssertEqual(moved, [], "locked: the conversation did not move (\(label) \(scale))")
             }
-            // The running text in the notice line, the sidebar and the locked input box.
-            st.actions[s.key] = "Pausing…"
-            let locked = try render(AgentWindowRootView(model: m, scrolls: false), size: CGSize(width: 1000 * scale, height: 680 * scale),
-                                    dark: true)
-            try save(locked, "829-window-locked-\(scale)")
-            st.actions = [:]
             // The header at the narrowest pane: the "⋯" fits every variant without overflow.
             let room = 640 * scale - sz(290) - 1
             let header = AgentSessionHeader(row: try XCTUnwrap(m.selectedRow), session: s, cwd: "/Users/example/projects/prosper",
@@ -552,5 +606,500 @@ extension AgentWindowInteractionTests {
         i.send()
         until("sent") { !i.busy }
         XCTAssertEqual(f.says, ["hello"])
+    }
+}
+
+/// #829 Phase 2: a History row's Resume, Resume (no message), Pin/Unpin and Remove from History from
+/// the window (the island's gates, titles and controller calls; Remove asks on the Phase 1 strip),
+/// the selection after a removal, and QA #665's notes on Phase 1. Offscreen only, every seam stubbed.
+extension AgentWindowD1Tests {
+    func hkey(_ name: String) -> AgentSessionKey { AgentSessionKey(dir: "/tmp/dch-test", name: name) }
+
+    func pinned(_ r: DchHistoryRecord) -> DchHistoryRecord {
+        var r = r
+        r.pinned = true
+        return r
+    }
+
+    /// An older record of `name` a cold start moved aside (#743): same key, its own file.
+    func aside(_ name: String, ago: TimeInterval, pinned: Bool = false) -> DchHistoryRecord {
+        var r = record(name, ago: ago)
+        r.file = "\(name).\(Int(Self.now - ago))"
+        r.pinned = pinned
+        return r
+    }
+
+    func bin(_ v: [Int]) -> DchCommand.Binary { DchCommand.Binary(path: "/fake/dch", version: v) }
+
+    // MARK: G6-G8 menu: the island's gates and titles
+
+    @MainActor
+    func testAgentWindowHistoryMenuUsesTheIslandsGatesAndTitles() throws {
+        let h = record("h"), dash = record("-x")
+        let st = store([], history: [h, dash])
+        st.controlDch = nil
+        let why = try XCTUnwrap(st.resumeGate.refusal)
+        XCTAssertEqual(AgentWindowControls.historyMenu(h, store: st), [.note("Resume \(why)")],
+                       "no control dch: nothing drawn (as the island), the reason as a note")
+        st.controlDch = bin([1, 24, 1])
+        XCTAssertEqual(AgentWindowControls.historyMenu(h, store: st), [.item("Resume", enabled: true, verb: .resume)],
+                       "1.24: Resume only (no message needs 1.27.0, pin and remove 1.25.0)")
+        st.controlDch = bin([1, 25, 0])
+        XCTAssertEqual(AgentWindowControls.historyMenu(h, store: st), [
+            .item("Resume", enabled: true, verb: .resume), .divider,
+            .item("Pin", enabled: true, verb: .pin), .item("Remove from History…", enabled: true, verb: .remove),
+        ])
+        st.controlDch = bin([1, 27, 0])
+        let all: [AgentWindowMenuEntry] = [
+            .item("Resume", enabled: true, verb: .resume), .item("Resume (no message)", enabled: true, verb: .resumeNoMessage),
+            .divider, .item("Pin", enabled: true, verb: .pin), .item("Remove from History…", enabled: true, verb: .remove),
+        ]
+        XCTAssertEqual(AgentWindowControls.historyMenu(h, store: st), all, "Remove asks: an ellipsis; the rest act at once")
+        XCTAssertEqual(AgentWindowControls.historyMenu(dash, store: st), [], "#627: a name dch reads as a flag gets nothing")
+        XCTAssertEqual(AgentWindowControls.historyMenu(pinned(h), store: st), [
+            .item("Resume", enabled: true, verb: .resume), .item("Resume (no message)", enabled: true, verb: .resumeNoMessage),
+            .divider, .item("Unpin", enabled: true, verb: .pin),
+            .item("Remove from History (unpin it first)", enabled: false, verb: .remove),
+        ], "pinned: Unpin, and Remove stays, off, saying why")
+        // #743: folded older records, counted as the island counts them (Remove: the unpinned ones).
+        st.history = [h, aside("h", ago: 9000), aside("h", ago: 9500, pinned: true)]
+        let menu = AgentWindowControls.historyMenu(h, store: st)
+        XCTAssertEqual(menu[3], .item("Pin (also 2 older records of this name)", enabled: true, verb: .pin))
+        XCTAssertEqual(menu[4], .item("Remove from History (also 1 older record of this name)…", enabled: true, verb: .remove))
+        // A live master newer than the control dch closes the gates, as in the island.
+        st.sessions = [ctlSession("live", version: "1.30.0")]
+        XCTAssertFalse(AgentWindowControls.historyMenu(h, store: st).contains { if case .item(_, _, .pin) = $0 { true } else { false } })
+        // notRun: on, an off item's title, a gate's note.
+        XCTAssertNil(AgentWindowControls.notRun(all, .remove))
+        XCTAssertEqual(AgentWindowControls.notRun(AgentWindowControls.historyMenu(pinned(h), store: store([], history: [h]).with(bin([1, 27, 0]))), .remove),
+                       "Not run: Remove from History (unpin it first)")
+        XCTAssertEqual(AgentWindowControls.notRun([.note("Resume \(why)")], .remove), "Not run: Resume \(why)")
+        XCTAssertEqual(AgentWindowControls.notRun([.note("Resume \(why)")], .remove, absent: "Remove from History (\(why))"),
+                       "Not run: Remove from History (\(why))", "a History verb: its own reason, not Resume's")
+        st.sessions = []
+        st.controlDch = bin([1, 24, 1])
+        XCTAssertEqual(AgentWindowControls.historyOff(.pin, h, store: st), "Pin (needs dch 1.25.0)")
+        XCTAssertEqual(AgentWindowControls.historyOff(.pin, pinned(h), store: st), "Unpin (needs dch 1.25.0)")
+        XCTAssertEqual(AgentWindowControls.historyOff(.resumeNoMessage, h, store: st), "Resume (no message) (needs dch 1.27.0)")
+        XCTAssertEqual(AgentWindowControls.historyOff(.resume, dash, store: st), "Resume (not available for this session)")
+    }
+
+    // MARK: G6-G8: act through the island; Remove asks
+
+    @MainActor
+    func testAgentWindowHistoryActsThroughTheIslandAndAsksBeforeRemoving() throws {
+        var h = record("h")
+        h.agent = DchHistoryRecord.Agent(kind: "claude", sessionID: "0b7c2f3e-aaaa-bbbb-cccc-0123456789ab")
+        let g = record("g", ago: 7200)
+        // "h" is live again too: its record's id equals the live key (#580); the question must not mix them.
+        let st = store([session("h", .idle)], history: [h, g])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        let calls = Calls()
+        calls.wire(m)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.history(g.id))
+        m.act(.resume, h)
+        XCTAssertEqual(m.selection, .history(h.id), "R6: the row is selected first")
+        m.act(.resumeNoMessage, h)
+        m.act(.pin, h)
+        XCTAssertEqual(calls.records.map(\.verb), [.resume, .resumeNoMessage, .pin], "no question for these (as the island)")
+        XCTAssertTrue(calls.records.allSatisfy { $0.record == h })
+        XCTAssertNil(m.confirming)
+        XCTAssertTrue(calls.all.isEmpty)
+        // Remove asks, naming the record, with its Claude id.
+        m.act(.remove, h)
+        XCTAssertEqual(m.confirming, AgentWindowConfirm(verb: .remove, key: h.id))
+        XCTAssertNil(m.confirmingSession, "the live session of the same key is not the asked thing")
+        XCTAssertEqual(m.confirmingRecord, h)
+        XCTAssertEqual(AgentWindowControls.removeQuestion(h),
+                       "Remove h from History? Resume won't be able to bring it back. Its Claude Code conversation stays on disk."
+                           + " (claude --resume 0b7c2f3e-aaaa-bbbb-cccc-0123456789ab)")
+        XCTAssertFalse(AgentWindowControls.removeQuestion(g).contains("--resume"), "no id: no command")
+        XCTAssertEqual(AgentWindowControls.confirmTitle(.remove), "Remove")
+        XCTAssertEqual(calls.records.count, 3, "asking runs nothing")
+        m.confirm(false)
+        XCTAssertNil(m.confirming)
+        XCTAssertEqual(calls.records.count, 3, "Cancel runs nothing")
+        m.act(.remove, h)
+        m.select(.history(g.id))
+        XCTAssertNil(m.confirming, "another row picked: the strip goes")
+        m.act(.remove, h)
+        m.confirm(true)
+        XCTAssertEqual(calls.records.last?.verb, .remove)
+        XCTAssertEqual(calls.records.last?.record, h)
+        XCTAssertTrue(calls.all.isEmpty, "never a live verb on the live session of that name")
+        // Re-resolved at the answer: gone, nothing runs.
+        m.act(.remove, g)
+        m.setVisible(false)
+        st.history = [h]
+        m.confirm(true)
+        XCTAssertEqual(calls.records.count, 4, "the record went before the answer: nothing runs")
+        m.setVisible(true)
+        st.history = [h, g]
+        m.act(.remove, g)
+        st.history = [h]
+        XCTAssertNil(m.confirming, "the asked record gone from the list drops the strip")
+        // QA #665 INFO-6 for Remove: pinned (or the gate closed) since the question: nothing runs, the row says why.
+        st.history = [h, g]
+        m.act(.remove, g)
+        st.history = [h, pinned(g)]
+        m.confirm(true)
+        XCTAssertEqual(calls.records.count, 4)
+        XCTAssertEqual(m.refusalText(.history(g.id)), "Not run: Remove from History (unpin it first)")
+        XCTAssertNil(m.refusalText(.history(h.id)), "on that row only")
+        st.history = [h, g]
+        m.act(.remove, g)
+        XCTAssertNil(m.refusal, "the next question drops it")
+        st.controlDch = bin([1, 24, 1])
+        m.confirm(true)
+        XCTAssertEqual(calls.records.count, 4)
+        XCTAssertEqual(m.refusalText(.history(g.id)), "Not run: Remove from History (\(try XCTUnwrap(st.historyEditGate.refusal)))",
+                       "the edit gate's reason")
+        m.select(.history(h.id))
+        XCTAssertNil(m.refusal, "a selection change drops it")
+    }
+
+    // MARK: QA #665 INFO-6: a live answer whose gate closed says why
+
+    @MainActor
+    func testAgentWindowAnswerSaysWhyWhenAGateClosedSinceTheQuestion() throws {
+        let a = ctlSession("a", version: "1.24.0"), old = ctlSession("old", version: "1.24.0")
+        let st = store([a, old])
+        st.controlDch = Self.v1241
+        let m = windowModel(st)
+        let calls = Calls()
+        calls.wire(m)
+        m.setVisible(true)
+        defer { m.close() }
+        m.ask(.restart, a)
+        st.controlDch = Self.v1240
+        m.confirm(true)
+        XCTAssertTrue(calls.all.isEmpty, "the gate closed: nothing runs")
+        XCTAssertEqual(m.refusalText(.live(a.key)), "Not run: Restart agent (needs dch 1.24.1)")
+        st.controlDch = nil
+        m.ask(.kill, a)
+        XCTAssertNil(m.refusal, "a new question drops it")
+        m.confirm(true)
+        let why = try XCTUnwrap(st.resumeGate.refusal)
+        XCTAssertEqual(m.refusalText(.live(a.key)), "Not run: Controls \(why)", "the gate's own reason")
+        // A master that dropped under 1.24.0 since the question (a restarted session on an old dch).
+        st.controlDch = Self.v1241
+        m.ask(.stop, old)
+        st.sessions = [a, ctlSession("old", version: "1.23.0")]
+        m.confirm(true)
+        XCTAssertEqual(m.refusalText(.live(old.key)), "Not run: \(AgentIsland.stopOldMasterLabel)")
+        XCTAssertTrue(calls.all.isEmpty)
+        // The notice line shows it over the row's text.
+        st.actions[old.key] = "Restarted"
+        XCTAssertEqual(NSHostingView(rootView: AgentNoticeLine(store: st, key: old.key, refusal: m.refusalText(.live(old.key)))).fittingSize.height,
+                       NSHostingView(rootView: AgentNoticeLine(store: st, key: old.key)).fittingSize.height, accuracy: 1)
+        m.ask(.stop, a)
+        m.confirm(true)
+        XCTAssertEqual(calls.all.map(\.verb), [.stop], "gates open: it runs")
+        XCTAssertNil(m.refusal)
+    }
+
+    // MARK: G8: the selection after a removal
+
+    @MainActor
+    func testAgentWindowRemovalMovesTheSelectionToTheNextHistoryRow() throws {
+        let h1 = record("h1", ago: 100), h2 = record("h2", ago: 200), h3 = record("h3", ago: 300)
+        let st = store([session("live", .idle)], history: [h1, h2, h3])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        let calls = Calls()
+        calls.wire(m)
+        m.setVisible(true)
+        defer { m.close() }
+        var seen: [AgentSidebar.RowID?] = []
+        let sub = m.$selection.dropFirst().sink { seen.append($0) }
+        defer { sub.cancel() }
+        m.act(.remove, h2)
+        m.confirm(true)
+        XCTAssertEqual(m.removing, h2.id)
+        st.history = [h1, h2, h3]   // a re-read with the row still there (a failed forget): stays
+        XCTAssertEqual(m.selection, .history(h2.id))
+        seen = []
+        st.history = [h1, h3]
+        XCTAssertEqual(m.selection, .history(h3.id), "the next row")
+        XCTAssertEqual(seen, [.history(h3.id)], "one change, never through nothing")
+        XCTAssertNil(m.removing, "one-shot")
+        m.act(.remove, h3)
+        m.confirm(true)
+        seen = []
+        st.history = [h1]
+        XCTAssertEqual(m.selection, .history(h1.id), "the last one: the previous row")
+        XCTAssertEqual(seen, [.history(h1.id)])
+        // The next row went too (another remove landed in the same read): the one after it, else before.
+        st.history = [h1, h2, h3, record("h4", ago: 400)]
+        m.act(.remove, h2)
+        m.confirm(true)
+        st.history = [h1, record("h4", ago: 400)]
+        XCTAssertEqual(m.selection, .history(hkey("h4")), "the next row still there")
+        // The only History row: nothing selected (the live rows are not History).
+        st.history = [h1]
+        m.act(.remove, h1)
+        m.confirm(true)
+        st.history = []
+        XCTAssertNil(m.selection, "no History row left: nothing")
+        // A manual pick drops the hand-on.
+        st.history = [h1, h2]
+        m.act(.remove, h1)
+        m.confirm(true)
+        m.select(.history(h1.id))
+        XCTAssertNil(m.removing)
+        st.history = [h2]
+        XCTAssertNil(m.selection, "the record left without a window removal: today's rule")
+        // A record removed elsewhere (the island) while selected: today's rule too.
+        st.history = [h1, h2]
+        m.select(.history(h1.id))
+        st.history = [h2]
+        XCTAssertNil(m.selection)
+        XCTAssertEqual(calls.records.filter { $0.verb == .remove }.map(\.record.name), ["h2", "h3", "h2", "h1", "h1"])
+        // neighbour() on its own: after, else before, else the first left.
+        let sec = { (ids: [String]) in [AgentSidebar.Section(title: "History", rows: ids.map { self.record($0) }.map { AgentSidebar.row($0, now: Self.now) })] }
+        XCTAssertEqual(AgentWindowModel.neighbour(of: hkey("b"), old: sec(["a", "b", "c"]), new: sec(["a", "c"])), .history(hkey("c")))
+        XCTAssertEqual(AgentWindowModel.neighbour(of: hkey("b"), old: sec(["a", "b", "c"]), new: sec(["a"])), .history(hkey("a")))
+        XCTAssertEqual(AgentWindowModel.neighbour(of: hkey("b"), old: sec(["a", "b", "c"]), new: sec(["z"])), .history(hkey("z")))
+        XCTAssertNil(AgentWindowModel.neighbour(of: hkey("b"), old: sec(["b"]), new: []))
+        // The previous row is not always the first one left.
+        XCTAssertEqual(AgentWindowModel.neighbour(of: hkey("d"), old: sec(["a", "b", "c", "d"]), new: sec(["a", "b", "c"])),
+                       .history(hkey("c")))
+    }
+
+    @MainActor
+    func testAgentWindowRemovingTheLastOfManyHistoryRowsSelectsTheOneBeforeIt() throws {
+        let h1 = record("h1", ago: 100), h2 = record("h2", ago: 200), h3 = record("h3", ago: 300)
+        let st = store([], history: [h1, h2, h3])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        Calls().wire(m)
+        m.setVisible(true)
+        defer { m.close() }
+        m.act(.remove, h3)
+        m.confirm(true)
+        st.history = [h1, h2]
+        XCTAssertEqual(m.selection, .history(h2.id), "the row just before it, not the first")
+    }
+
+    // MARK: A question whose session or record left is dropped for good
+
+    @MainActor
+    func testAgentWindowQuestionWhoseSessionOrRecordLeftDoesNotComeBack() throws {
+        let a = session("a", .idle), b = session("b", .idle), g = record("g", ago: 7200)
+        let st = store([a, b], history: [g])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        let calls = Calls()
+        calls.wire(m)
+        m.setVisible(true)
+        defer { m.close() }
+        m.ask(.stop, a)
+        st.sessions = [b]
+        m.refresh()
+        st.sessions = [a, b]   // an island Restart keeps the key
+        XCTAssertNil(m.confirming, "the question went with its session; the same key back does not bring it")
+        m.confirm(true)
+        XCTAssertTrue(calls.all.isEmpty, "nothing runs")
+        m.act(.remove, g)
+        st.history = []
+        m.refresh()
+        st.history = [g]
+        XCTAssertNil(m.confirming, "the question went with its record")
+        m.confirm(true)
+        XCTAssertTrue(calls.records.isEmpty, "nothing runs")
+    }
+
+    // MARK: QA #665 INFO-8: the held row is the last one seen
+
+    @MainActor
+    func testAgentWindowHeldRowIsTheLastLiveRowSeenBeforeItLeft() throws {
+        let a = session("a", .idle), b = session("b", .idle)
+        let st = store([a, b])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        Calls().wire(m)
+        m.setVisible(true)
+        defer { m.close() }
+        m.ask(.stop, a)
+        m.confirm(true)
+        XCTAssertNotNil(m.following)
+        st.actions[a.key] = AgentIsland.stoppingText
+        st.sessions = [b]
+        XCTAssertEqual(m.selection, .live(a.key), "held")
+        XCTAssertEqual(m.selectedRow?.detail, AgentIsland.stoppingText, "the row as last seen, not as at the Stop")
+        st.history = [record("a", ago: 0)]
+        XCTAssertEqual(m.selection, .history(a.key))
+    }
+}
+
+extension AgentWindowD1Tests {
+    // MARK: QA #665 INFO-4/5: the dir strip never covers a row the keys select
+
+    @MainActor
+    func testAgentWindowKeysKeepTheSelectedRowAboveTheDirStrip() throws {
+        let pref = "agentWindowCollapsedSections"
+        let saved = Preferences.defaults.object(forKey: pref)
+        let savedScale = ThemeRuntime.scale
+        defer { Preferences.defaults.set(saved, forKey: pref); ThemeRuntime.scale = savedScale }
+        Preferences.defaults.removeObject(forKey: pref)
+        let st = store([session("a", .idle), session("b", .working)],
+                       history: (0..<24).map { record("h\($0)", ago: TimeInterval(100 + $0)) })
+        st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")] = "Restart all: 2 restarted"
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            // The sidebar at the window's minimum height: the list scrolls.
+            let size = CGSize(width: sz(290), height: 420 * scale)
+            m.select(m.rows.first?.id)
+            let host = NSHostingView(rootView: AgentSidebarView(model: m).frame(width: size.width, height: size.height)
+                .background(Neon.sidebar).environment(\.colorScheme, .dark))
+            host.frame = CGRect(origin: .zero, size: size)
+            // In a window that is never shown (never ordered front, never key), so the list's scrollTo can act.
+            let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            win.contentView = host
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            // The list's scroll view ends above the strip's slot: whatever it scrolls to is above it.
+            func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrollViews) }
+            let sv = try XCTUnwrap(scrollViews(host).first, "the list scrolls")
+            let r = sv.convert(sv.bounds, to: host)
+            let bottom = host.isFlipped ? r.maxY : host.bounds.height - r.minY
+            XCTAssertLessThanOrEqual(bottom, size.height - AgentWindowControls.stripHeight + 0.5, "the list ends above the strip at \(scale)")
+            for _ in m.rows { m.move(1) }   // the keys' path: down to the last row, scrolled to by the list
+            XCTAssertEqual(m.selection, m.rows.last?.id)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            host.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let k = CGFloat(rep.pixelsHigh) / size.height
+            // The selected row's 2 pt blue bar, inset sz(7) from the row's top and bottom.
+            // Neon.blue (0.13, 0.80, 1.0): bright cyan; the card, text and glyphs are dark or grey.
+            let x = Int((sz(8) + 1) * k)
+            func bar(_ c: NSColor?) -> Bool {
+                guard let c = c?.usingColorSpace(.sRGB) else { return false }
+                return c.blueComponent > 0.75 && c.redComponent < 0.45 && c.blueComponent - c.redComponent > 0.4
+            }
+            let ys = (0..<rep.pixelsHigh).filter { bar(rep.colorAt(x: x, y: $0)) }
+            try save(rep, "829p2-sidebar-keys-last-\(scale)")
+            XCTAssertFalse(ys.isEmpty, "the selected last row is on screen at \(scale)")
+            let stripTop = (size.height - AgentWindowControls.stripHeight) * k
+            XCTAssertLessThanOrEqual(CGFloat(ys.max() ?? .max) + sz(7) * k, stripTop + 1,
+                                     "the last row ends above the dir strip at \(scale)")
+            win.contentView = nil
+            XCTAssertGreaterThan(ink(try render(AgentDirStatusStrip(store: st),
+                                                size: CGSize(width: size.width, height: AgentWindowControls.stripHeight),
+                                                dark: true)), 10, "the strip shows")
+        }
+    }
+
+    // MARK: G6-G8: the History detail's buttons hold fixed slots
+
+    @MainActor
+    func testAgentWindowHistoryDetailHoldsItsButtonsInFixedSlots() throws {
+        let savedScale = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = savedScale }
+        var h = record("old-spike", ago: 7200)
+        h.agent = DchHistoryRecord.Agent(kind: "claude", sessionID: "0b7c2f3e-aaaa-bbbb-cccc-0123456789ab", name: "spike: agent window")
+        let g = record("cdv2", ago: 86_400 * 2)
+        let st = store([session("prosper", .working, ago: 40)], history: [h, g])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        let calls = Calls()
+        calls.wire(m)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.history(h.id))
+        func diffRows(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, from x0: Int) -> [Int] {
+            (0..<a.pixelsHigh).filter { y in
+                stride(from: x0, to: a.pixelsWide, by: 2).contains { a.colorAt(x: $0, y: y) != b.colorAt(x: $0, y: y) }
+            }
+        }
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            // One size whatever the record's state or the gates: no state moves a neighbour.
+            func fit(_ r: DchHistoryRecord, _ status: String? = nil) -> CGSize {
+                NSHostingView(rootView: AgentHistoryButtons(store: st, record: r, refusal: status, act: { _ in })).fittingSize
+            }
+            let base = fit(h)
+            XCTAssertEqual(fit(pinned(h)), base, "Pin and Unpin share a slot at \(scale)")
+            // Row 1 sets the width, so equal sizes alone miss a re-centred row 2: the Remove pill
+            // (dimmed on a pinned record) must keep its right edge when Pin turns into Unpin.
+            let un = try render(AgentHistoryButtons(store: st, record: h, act: { _ in }), size: base, dark: true, margin: 0)
+            let pi = try render(AgentHistoryButtons(store: st, record: pinned(h), act: { _ in }), size: base, dark: true, margin: 0)
+            func rightEdges(_ rep: NSBitmapImageRep) -> [Int] {
+                let bg = rep.colorAt(x: 0, y: rep.pixelsHigh - 1)
+                return (0..<rep.pixelsHigh).map { y in
+                    (0..<rep.pixelsWide).last { rep.colorAt(x: $0, y: y) != bg } ?? -1
+                }
+            }
+            // Rows whose ink reaches past the centre are the Remove pill's (the pin glyphs stay left of it).
+            let half = un.pixelsWide / 2
+            let (eu, ep) = (rightEdges(un), rightEdges(pi))
+            let far = eu.indices.filter { eu[$0] > half || ep[$0] > half }
+            XCTAssertFalse(far.isEmpty)
+            // 1 px: the dimmed (pinned) capsule's anti-aliased curve; a re-centred row moves it ~10 px.
+            XCTAssertLessThanOrEqual(far.map { abs(ep[$0] - eu[$0]) }.max() ?? 0, 1,
+                                     "Remove holds its place when Pin turns into Unpin at \(scale)")
+            XCTAssertEqual(fit(h, "Not run: Remove from History (unpin it first)"), base, "a status keeps the line's room at \(scale)")
+            // At the pane's width a long status wraps: blank, one line and two lines take one height.
+            func tall(_ status: String?) -> CGFloat {
+                NSHostingView(rootView: AgentHistoryButtons(store: st, record: h, refusal: status, act: { _ in })
+                    .frame(width: base.width)).fittingSize.height
+            }
+            XCTAssertEqual(tall(String(repeating: "Not run: Remove from History (needs dch 1.25.0). ", count: 4)), tall(nil),
+                           "the status line reserves its two lines at \(scale)")
+            st.controlDch = nil
+            XCTAssertEqual(fit(h), base, "every button drawn while the gates refuse at \(scale)")
+            st.controlDch = bin([1, 38, 0])
+            for (label, size) in [("min", CGSize(width: 640 * scale, height: 420 * scale)),
+                                  ("default", CGSize(width: 1000 * scale, height: 680 * scale))] {
+                let canvas = CGSize(width: size.width + 24, height: size.height + 24)
+                let tag = "\(label)-\(scale)"
+                let plain = try render(AgentWindowRootView(model: m), size: size, dark: true)
+                try save(plain, "829p2-history-\(tag)")
+                XCTAssertEqual(overflow(plain, content: size, canvas: canvas), 0, tag)
+                let k = CGFloat(plain.pixelsWide) / canvas.width, x0 = Int((sz(290) + 2) * k)
+                st.history = [pinned(h), g]
+                let pin = try render(AgentWindowRootView(model: m), size: size, dark: true)
+                try save(pin, "829p2-history-pinned-\(tag)")
+                XCTAssertEqual(overflow(pin, content: size, canvas: canvas), 0, tag)
+                let prow = diffRows(plain, pin, from: x0)
+                XCTAssertFalse(prow.isEmpty, "Unpin shows (\(tag))")
+                XCTAssertLessThan(CGFloat((prow.max() ?? 0) - (prow.min() ?? 0)) / k, 30 * scale,
+                                  "only the Pin/Remove row changed (\(tag))")
+                st.history = [h, g]
+                st.controlDch = nil
+                let off = try render(AgentWindowRootView(model: m), size: size, dark: true)
+                try save(off, "829p2-history-gated-\(tag)")
+                st.controlDch = bin([1, 38, 0])
+                let orow = diffRows(plain, off, from: x0)
+                XCTAssertLessThan(CGFloat((orow.max() ?? 0) - (orow.min() ?? 0)) / k, 60 * scale,
+                                  "gates off: the two button rows dim in place (\(tag))")
+                m.act(.remove, h)
+                let ask = try render(AgentWindowRootView(model: m), size: size, dark: true)
+                try save(ask, "829p2-history-remove-confirm-\(tag)")
+                m.confirm(false)
+                XCTAssertEqual(overflow(ask, content: size, canvas: canvas), 0, tag)
+                let arow = diffRows(plain, ask, from: x0)
+                XCTAssertFalse(arow.isEmpty)
+                XCTAssertLessThan(CGFloat(arow.max() ?? 0) / k, size.height * 0.5, "the strip is over the pane's top only (\(tag))")
+            }
+        }
+        XCTAssertTrue(calls.records.isEmpty, "rendering and Cancel ran nothing")
+    }
+}
+
+extension AgentIslandStore {
+    /// Test sugar: the store with a control dch.
+    @MainActor
+    func with(_ dch: DchCommand.Binary) -> AgentIslandStore {
+        controlDch = dch
+        return self
     }
 }
