@@ -1727,6 +1727,58 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(r.lastState, .blocked)
     }
 
+    /// QA #644 INFO-2: the same with a plain Bash B, one Always allow would answer: the stale
+    /// click's re-read finds B still on screen and leaves it to the human; it is never checked.
+    @MainActor func testAStaleClickOnAPlainPromptStillOnScreenNeverAnswersIt() throws {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+        f.set(Self.bash2)
+        tick(c, .blocked, activity: 2)   // B replaced A, inside the floor
+        c.refreshCards()
+        drain(c)
+        let b = try XCTUnwrap(AgentPrompt.parse(Self.bash2))
+        XCTAssertEqual(c.store?.cards[key], .prompt(b), "B's card is up")
+        f.lock.withLock { f.status = "working" }
+        c.answer(session(.blocked, activity: 2), b, b.options[1])
+        c.queue.sync {}                  // the click's read: not blocked, sends nothing
+        f.lock.withLock { f.status = "blocked" }   // B on screen again before anything rechecks
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, [], "the stale click answers nothing")
+        r.now += AgentPollGate.floor
+        fire(c, r)
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, [], "B is the human's")
+        XCTAssertEqual(r.lastState, .blocked)
+    }
+
+    /// QA #644 INFO-2: the hold the click took is gone by the time its result lands (the row
+    /// left blocked and came back with C while the click was in flight, so the hold is now one
+    /// with no prompt): the stale click rechecks nothing, and C stays the human's.
+    @MainActor func testAStaleClickWhoseHoldWasReplacedRechecksNothing() throws {
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+        let a = try XCTUnwrap(AgentPrompt.parse(Self.neverAnswered[0].1))
+        XCTAssertEqual(c.store?.cards[key], .prompt(a), "A's card is up")
+        let hold = DispatchSemaphore(value: 0)
+        f.lock.withLock { f.gate = hold }
+        c.answer(session(.blocked), a, a.options[0])   // its read held
+        tick(c, .working, activity: 2)                  // the hold is dropped
+        f.set(Self.bash2)
+        tick(c, .blocked, activity: 3)                  // C, while the click is in flight
+        hold.signal()
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, [], "the click finds C, not A")
+        for _ in 0..<2 {
+            r.now += AgentPollGate.floor
+            fire(c, r)
+            drain(c)
+            drain(c)
+        }
+        XCTAssertEqual(f.sends, [], "C is the human's")
+        XCTAssertEqual(r.lastState, .blocked)
+    }
+
     /// QA #620 INFO-1: B's card was read for this activity before its check took the row down;
     /// the check leaves B to the human, and the card is read again and shown.
     @MainActor func testAHeldCheckLeftToTheHumanShowsTheCardAgain() throws {
