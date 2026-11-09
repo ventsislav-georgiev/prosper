@@ -115,7 +115,18 @@ final class AgentsNSWindow: NSWindow {
             performClose(nil)
             return true
         }
+        if let model, let v = Self.verbosity(for: event) {
+            model.verbosity = v
+            return true
+        }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// #821: ⌥⌘1 / ⌥⌘2 / ⌥⌘3 pick Focused / Default / Verbose (no app menu item uses them).
+    static func verbosity(for event: NSEvent) -> AgentVerbosity? {
+        guard event.type == .keyDown,
+              event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command, .option] else { return nil }
+        return AgentVerbosity.allCases.first { $0.keyCode == event.keyCode }
     }
 
     override func sendEvent(_ event: NSEvent) {
@@ -324,11 +335,12 @@ struct AgentDetailView: View {
     var body: some View {
         if let row = model.selectedRow, let s = row.session {
             VStack(spacing: 0) {
-                AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() })
+                AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
+                                   level: $model.verbosity, todos: transcript.todos)
                 if let store = model.store { AgentNoticeLine(store: store, key: s.key) }
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
-                                    ownsLifecycle: false)
+                                    ownsLifecycle: false, level: model.verbosity)
                     .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                     .clipped()
                 Rectangle().fill(Neon.stroke).frame(height: 1)
@@ -349,6 +361,10 @@ struct AgentSessionHeader: View {
     let session: AgentSession
     let cwd: String?
     let open: () -> Void
+    /// #821: the window's verbosity, and the newest TodoWrite list (Default's chip).
+    var level: Binding<AgentVerbosity> = .constant(.default)
+    var todos: AgentTodos?
+    @State private var todosOpen = false
 
     var project: String {
         if let cwd { return (cwd as NSString).abbreviatingWithTildeInPath }
@@ -357,11 +373,8 @@ struct AgentSessionHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(4)) {
-            // The whole title and the labelled button when they fit, else the icon button.
-            ViewThatFits(in: .horizontal) {
-                titleLine(compact: false)
-                titleLine(compact: true)
-            }
+            // The whole title and the labelled controls when they fit, else smaller ones.
+            titleLines
             HStack(spacing: sz(6)) {
                 Image(systemName: "folder").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
                 Text(project).font(Neon.font(11, design: .monospaced)).foregroundStyle(Neon.textSecondary)
@@ -369,25 +382,136 @@ struct AgentSessionHeader: View {
                 let extra = [row.detail.split(separator: " · ").dropFirst().joined(separator: " · "),
                              row.age.isEmpty ? "" : "\(row.age) ago"].filter { !$0.isEmpty }
                 if !extra.isEmpty {
-                    Text("· " + extra.joined(separator: " · ")).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
-                        .lineLimit(1).layoutPriority(-1)
+                    // Whole or not at all: a squeezed low-priority Text overshot the line by a
+                    // fraction of a point next to the #821 todo chip.
+                    ViewThatFits(in: .horizontal) {
+                        Text("· " + extra.joined(separator: " · ")).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
+                            .lineLimit(1)
+                        Color.clear.frame(width: 0, height: 0)
+                    }
+                    .layoutPriority(-1)
                 }
                 Spacer(minLength: 0)
+                if let todos = shownTodos { AgentTodosChip(todos: todos, open: $todosOpen) }
             }
+            if todosOpen, let todos = shownTodos { AgentTodosList(todos: todos) }
         }
         .padding(.horizontal, sz(16)).padding(.top, sz(30)).padding(.bottom, sz(12))
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Neon.card)
     }
 
-    func titleLine(compact: Bool) -> some View {
+    /// Focused hides todos; Verbose draws the TodoWrite card in the conversation instead.
+    var shownTodos: AgentTodos? { level.wrappedValue == .default ? todos : nil }
+
+    /// Widest first: the labelled picker and button, the icon button, the icon picker, a menu.
+    @ViewBuilder var titleLines: some View {
+        ViewThatFits(in: .horizontal) {
+            titleLine(picker: .labels, compact: false)
+            titleLine(picker: .labels, compact: true)
+            titleLine(picker: .icons, compact: true)
+            titleLine(picker: .menu, compact: true)
+        }
+    }
+
+    func titleLine(picker: AgentVerbosityPicker.Style, compact: Bool) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
             Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
             AgentStateChip(state: session.state)
             Spacer(minLength: sz(8))
+            AgentVerbosityPicker(level: level, style: picker)
+            // #822's Terminal view pill goes here, between the picker and the button.
             OpenInTerminalButton(action: open, compact: compact)
         }
+    }
+}
+
+/// #821: Focused | Default | Verbose. Plain buttons in a capsule, not a segmented Picker:
+/// segmented controls ignore ThemeRuntime.scale (they clip below 1.0).
+struct AgentVerbosityPicker: View {
+    enum Style { case labels, icons, menu }
+    @Binding var level: AgentVerbosity
+    var style = Style.labels
+
+    var body: some View {
+        if style == .menu {
+            Menu {
+                ForEach(AgentVerbosity.allCases, id: \.self) { v in
+                    Button("\(v.title) (\(v.shortcut))") { level = v }
+                }
+            } label: {
+                Image(systemName: level.icon).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .fixedSize()
+            .help("\(level.title) view")
+            .accessibilityLabel("View: \(level.title)")
+        } else {
+            HStack(spacing: 0) {
+                ForEach(AgentVerbosity.allCases, id: \.self) { v in
+                    Button { level = v } label: {
+                        Group {
+                            if style == .icons { Image(systemName: v.icon) } else { Text(v.title) }
+                        }
+                        .font(Neon.font(10.5, weight: .medium))
+                        .foregroundStyle(v == level ? Neon.textPrimary : Neon.textSecondary)
+                        .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
+                        .background(Capsule().fill(v == level ? Neon.blue.opacity(0.2) : .clear))
+                        .contentShape(Capsule())
+                        .fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(v.title) view (\(v.shortcut))")
+                    .accessibilityLabel("\(v.title) view")
+                    .accessibilityAddTraits(v == level ? .isSelected : [])
+                }
+            }
+            .padding(sz(2))
+            .overlay(Capsule().stroke(Neon.stroke, lineWidth: 1))
+            .fixedSize()
+        }
+    }
+}
+
+/// #821 (Q4): Default's one-line todo chip; a click opens the list under the header.
+struct AgentTodosChip: View {
+    let todos: AgentTodos
+    @Binding var open: Bool
+    var body: some View {
+        Button { open.toggle() } label: {
+            HStack(spacing: sz(4)) {
+                Image(systemName: open ? "chevron.down" : "checklist")
+                Text(todos.label)
+            }
+            .font(Neon.font(10.5, weight: .medium)).foregroundStyle(Neon.textSecondary)
+            .padding(.horizontal, sz(7)).padding(.vertical, sz(2))
+            .background(Capsule().fill(Neon.bgBottom.opacity(0.6)))
+            .overlay(Capsule().stroke(Neon.stroke, lineWidth: 1))
+            .contentShape(Capsule())
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(todos.label), \(open ? "hide" : "show") the list")
+    }
+}
+
+struct AgentTodosList: View {
+    let todos: AgentTodos
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(2)) {
+            ForEach(Array(todos.items.enumerated()), id: \.offset) { _, t in
+                HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
+                    Image(systemName: t.status == "completed" ? "checkmark.circle.fill"
+                          : t.status == "in_progress" ? "circle.dotted" : "circle")
+                        .foregroundStyle(t.status == "completed" ? Neon.terminal : t.status == "in_progress" ? Neon.blue : Neon.textSecondary)
+                    Text(t.text).foregroundStyle(t.status == "completed" ? Neon.textSecondary : Neon.textPrimary)
+                        .strikethrough(t.status == "completed").lineLimit(2)
+                }
+                .font(Neon.font(11))
+            }
+        }
+        .padding(.top, sz(2))
     }
 }
 

@@ -13,6 +13,8 @@ struct AgentTranscriptView: View {
     /// Standalone, the view starts and stops the model on appear and disappear. The
     /// Agents window passes false: it owns start/stop (selection, close, hide).
     var ownsLifecycle = true
+    /// #821: how much of each turn shows (the window passes its one global level).
+    var level: AgentVerbosity = .default
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,13 +25,15 @@ struct AgentTranscriptView: View {
                 if case .waiting(let hint) = model.mode { TranscriptHint(text: hint) }
                 // QA #626 INFO-1: block ids restart at 0 per file, so the list's view state
                 // (folds, "Show all") is keyed by the session and the model's generation too.
+                // #821: and by the level, so a switch starts every fold as that level draws it.
+                let identity: [AnyHashable] = [model.viewIdentity, level]
                 if scrolls {
                     ScrollView { LazyVStack(alignment: .leading, spacing: sz(10)) { rows } .padding(sz(14)) }
                         .defaultScrollAnchor(.bottom)
-                        .id(model.viewIdentity)
+                        .id(identity)
                 } else {
                     VStack(alignment: .leading, spacing: sz(10)) { rows }.padding(sz(14))
-                        .id(model.viewIdentity)
+                        .id(identity)
                 }
             }
         }
@@ -48,10 +52,10 @@ struct AgentTranscriptView: View {
             }
             .buttonStyle(.plain).foregroundStyle(Neon.blue)
         }
-        ForEach(model.blocks) { b in
-            TranscriptBlockView(block: b, expand: { await model.fullText($0) })
+        ForEach(TranscriptVerbosity.project(model.blocks, level: level, working: model.toolPending)) { r in
+            TranscriptRowView(row: r, level: level, expand: { await model.fullText($0) })
         }
-        if model.hiddenCount > 0 {
+        if level == .verbose && model.hiddenCount > 0 {
             Text(plural(model.hiddenCount, "internal entry", "internal entries") + " hidden")
                 .font(Neon.font(10)).foregroundStyle(Neon.textSecondary.opacity(0.7))
         }
@@ -102,6 +106,77 @@ struct TerminalFirstView: View {
         }
         .padding(sz(24))
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - #821 rows
+
+/// A projected row: a block as today, one line that opens today's card, a subagent's tail,
+/// or a Focused turn's summary.
+struct TranscriptRowView: View {
+    let row: TranscriptRow
+    let level: AgentVerbosity
+    var expand: (Clip) async -> String? = { _ in nil }
+    @State private var open = false
+
+    var body: some View {
+        switch row.kind {
+        case .block(let b):
+            TranscriptBlockView(block: b, expanded: level == .verbose, expand: expand)
+        case .line(let b):
+            let l = TranscriptVerbosity.lineSummary(b)
+            VStack(alignment: .leading, spacing: sz(6)) {
+                Button { open.toggle() } label: { TranscriptLineLabel(line: l, open: open) }
+                    .buttonStyle(.plain).disabled(!l.expandable)
+                if open { TranscriptBlockView(block: b, expand: expand) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case .thread(let b, let earlier, let children):
+            VStack(alignment: .leading, spacing: sz(6)) {
+                if case .thread(_, let title) = b.body {
+                    ToolHeader(icon: "person.2", title: "Subagent", detail: title == "Subagent" ? nil : title)
+                }
+                if earlier > 0 {
+                    Text(plural(earlier, "earlier step") + " not shown").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
+                }
+                ForEach(children) { AnyView(TranscriptRowView(row: $0, level: level, expand: expand)) }
+            }
+            .padding(.leading, sz(10))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) { Rectangle().fill(Neon.indigo.opacity(0.6)).frame(width: 2) }
+        case .summary(let s, let children, let errors):
+            VStack(alignment: .leading, spacing: sz(6)) {
+                Button { open.toggle() } label: {
+                    TranscriptLineLabel(line: .init(icon: s.working ? "hourglass" : "list.bullet", title: s.label), open: open)
+                }
+                .buttonStyle(.plain)
+                ForEach(open ? children : errors) { AnyView(TranscriptRowView(row: $0, level: level, expand: expand)) }
+                    .padding(.leading, sz(14))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct TranscriptLineLabel: View {
+    let line: TranscriptVerbosity.Line
+    let open: Bool
+    var body: some View {
+        let tint = line.error ? Neon.magenta : Neon.textSecondary
+        HStack(spacing: sz(6)) {
+            Image(systemName: open ? "chevron.down" : "chevron.right").font(Neon.font(8, weight: .bold))
+                .foregroundStyle(Neon.textSecondary).opacity(line.expandable ? 1 : 0)
+            Image(systemName: line.icon).foregroundStyle(line.error ? Neon.magenta : Neon.blue)
+            Text(line.title).font(Neon.font(11, weight: .semibold))
+                .foregroundStyle(line.error ? Neon.magenta : Neon.textPrimary).lineLimit(1)
+            if let d = line.detail, !d.isEmpty {
+                Text(d).font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textSecondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            if let st = line.status { Text(st).font(Neon.font(10)).foregroundStyle(tint).lineLimit(1).layoutPriority(1) }
+        }
+        .font(Neon.font(11))
+        .contentShape(Rectangle())
     }
 }
 
@@ -311,10 +386,6 @@ private struct OpenInTerminalLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         if compact { configuration.icon } else { Label(configuration) }
     }
-}
-
-private func plural(_ n: Int, _ word: String, _ many: String? = nil) -> String {
-    "\(n) \(n == 1 ? word : many ?? word + "s")"
 }
 
 /// Inline Markdown for model text, with links only for http/https. Model output is

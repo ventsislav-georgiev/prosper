@@ -45,6 +45,9 @@ struct TranscriptAssembler {
     private(set) var cwd: String?
     /// #802: the newest main-thread plan_mode attachment's plan file.
     private(set) var planFile: String?
+    /// #821: the newest main-thread TodoWrite list (nil when that list did not parse).
+    private(set) var todos: AgentTodos?
+    private var sawTodos = false
     private var lastVersion = "unknown"
     private(set) var nextID = 0
 
@@ -74,6 +77,7 @@ struct TranscriptAssembler {
                 if case .compaction(nil, nil, let summary?) = body, mergeSummary(summary, sidechain: e.sidechain) { continue }
                 append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source), sidechain: e.sidechain)
             case .toolUse(let id, let name, let input):
+                if name == AgentTodos.toolName, e.sidechain == nil { todos = AgentTodos.parse(input); sawTodos = true }
                 let (body, tier) = ToolRenderer.render(name: name, input: input, result: nil)
                 let loc = append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source),
                                  sidechain: e.sidechain)
@@ -195,6 +199,7 @@ struct TranscriptAssembler {
         while orphans.count > maxPending { orphans.remove(at: orphans.startIndex) }
         for (v, n) in page.hiddenCounts { hiddenCounts[v, default: 0] += n }
         if planFile == nil { planFile = page.planFile }
+        if !sawTodos { (todos, sawTodos) = (page.todos, page.sawTodos) }
     }
 
     // MARK: private
@@ -323,6 +328,10 @@ final class AgentTranscriptModel: ObservableObject {
     @Published private(set) var pendingAsk: AgentAskInput?
     /// #802: the pending ExitPlanMode's plan, nil when none.
     @Published private(set) var pendingPlan: AgentPlanInput?
+    /// #821: the newest TodoWrite list (Default's chip), and whether the last block waits on
+    /// a tool (Focused's "Working" summary).
+    @Published private(set) var todos: AgentTodos?
+    @Published private(set) var toolPending = false
     /// "Show the conversation anyway" over a terminal-first reason. Per session:
     /// #797 (c) resets it when another session is selected.
     @Published var showAnyway = false
@@ -592,6 +601,8 @@ final class AgentTranscriptModel: ObservableObject {
         blocks = assembler.blocks
         hiddenCount = assembler.hiddenTotal
         cwd = assembler.cwd
+        todos = assembler.todos
+        toolPending = assembler.toolPending
         syncAsk()
         olderAvailable = (tail?.earliestLoaded ?? 0) > 0 || assembler.dropped > 0
         banner = assembler.latestVersion.map(ClaudeCodeCompat.isNewer) == true ? ClaudeCodeCompat.newerBanner : nil

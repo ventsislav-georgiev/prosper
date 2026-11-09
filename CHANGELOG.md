@@ -99,6 +99,11 @@ tag from the now-released section and put it on the new top draft.
   window or the terminal. "Chat about this" is off on the card, and no answer is sent while the
   terminal's highlighted row is a text field (a question's "Other" or the plan's feedback row),
   where Claude Code would type the digit instead of answering. (#818, #823)
+- Agent Sessions window: choose how much of a conversation you see. Default (the new standard)
+  shows each tool step as one line you can click open, hides thinking, keeps the last 3 steps of
+  a subagent, and shows the todo list as a small "Todos 3/7" chip. Focused shows only your prompt,
+  a one-line summary of the steps (with any errors) and Claude's reply. Verbose shows everything,
+  expanded. Switch in the window header or with Option-Command-1, 2 and 3. (#821)
 
 ## v2.173.0
 

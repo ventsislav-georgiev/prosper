@@ -443,6 +443,8 @@ enum Preferences {
         static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
+        // #821: the Agent Sessions window's verbosity (AgentVerbosity); per Mac, so not in SyncedKeys.
+        static let agentWindowVerbosity = "agentWindowVerbosity"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1143,6 +1145,12 @@ enum Preferences {
     static var agentIslandClick: String? {
         get { defaults.string(forKey: Keys.agentIslandClick) }
         set { defaults.set(newValue, forKey: Keys.agentIslandClick) }
+    }
+
+    /// #821: the Agent Sessions window's one verbosity level; unset or unknown reads as Default.
+    static var agentWindowVerbosity: AgentVerbosity {
+        get { AgentVerbosity(raw: defaults.string(forKey: Keys.agentWindowVerbosity)) }
+        set { defaults.set(newValue.rawValue, forKey: Keys.agentWindowVerbosity) }
     }
 
     /// Agent Island's terminal raw value (`AgentTerminal`); unset or uninstalled

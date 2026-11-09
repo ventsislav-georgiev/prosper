@@ -144,6 +144,11 @@ final class AgentWindowModel: ObservableObject {
     private var filled = false
     /// #798: the input box, interrupt and prompt answers for the selected live session.
     let interaction = AgentWindowInteraction()
+    /// #821: how much of the conversation shows: one level for the window, per Mac. A switch
+    /// only re-projects the blocks already in memory (no read, no new file IO).
+    @Published var verbosity = Preferences.agentWindowVerbosity {
+        didSet { if verbosity != oldValue { Preferences.agentWindowVerbosity = verbosity } }
+    }
 
     // Seams.
     var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
