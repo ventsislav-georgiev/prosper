@@ -601,8 +601,9 @@ final class AgentWindowInteractionTests: XCTestCase {
     }
 
     /// QA #649 INFO 5: a multi-select whose Other row has no box (it follows the boxes and the
-    /// Submit row) passes classify and offers that row; Submit with typed text must send nothing,
-    /// not index the boxes past their end (an app crash).
+    /// Submit row): Submit with typed text must send nothing, not index the boxes past their end
+    /// (an app crash). QA #651 INFO-3 (#818): classify no longer offers that row as a typed answer;
+    /// the driver's guard stays as defense in depth.
     @MainActor
     func testAgentWindowMultiSelectUnboxedOtherRowSendsNothing() throws {
         let text = ["❯ Use the AskUserQuestion tool with multiSelect set to true to ask me 'Which colors?'", Self.rule,
@@ -612,11 +613,130 @@ final class AgentWindowInteractionTests: XCTestCase {
                     "Enter to select · ↑/↓ to navigate · Esc to cancel"].joined(separator: "\n")
         guard case .prompt(let w) = AgentWindowPanel.classify(text, ask: Self.multiAsk) else { return XCTFail("not a prompt") }
         XCTAssertEqual(w.kind, .multi)
-        XCTAssertEqual(w.other?.digit, 4, "the unboxed Other row is offered")
+        XCTAssertNil(w.other, "the unboxed Other row is not offered")
+        XCTAssertEqual(w.buttons.map(\.digit), [1, 2, 3])
+        XCTAssertEqual(w.chat?.digit, 5, "Chat about this still is")
+        // The boxed Other row of the same form still is.
+        guard case .prompt(let boxed) = AgentWindowPanel.classify(Self.multiScreen([false, false, false, false], caret: 1),
+                                                                  ask: Self.multiAsk) else { return XCTFail("not a prompt") }
+        XCTAssertEqual(boxed.other?.digit, 4)
         for picks: Set<Int> in [[], [1]] {
             let f = FormSim(.plain(text))
             XCTAssertEqual(driver(f.io).multi(w.screen, picks: picks, other: (4, "Teal")), .failed(AgentWindowText.unchecked))
             XCTAssertEqual(f.log, [], "\(picks): nothing sent")
+        }
+    }
+
+    /// #818 Q4: with the caret on an input row Claude Code types a digit into the row as text, so
+    /// `AgentPrompt.answer` (the island card, the window's single choice) re-reads the caret and
+    /// sends nothing there. The live capture, then each rule of `caretOnInput` alone.
+    func testIslandAnswerSendsNothingWithTheCaretOnAnInputRow() throws {
+        let noChat = { (s: String) -> String in
+            let t = s.replacingOccurrences(of: "\n" + Self.rule + "\n  5. Chat about this", with: "")
+            XCTAssertNotEqual(t, s, "the Chat about this row taken off")
+            return t
+        }
+        func answer(_ now: String, _ expected: String) throws -> (AgentPromptAnswer, [String]) {
+            let f = FormSim(.plain(now))
+            return (AgentPrompt.answer(Self.key, digit: 1, expected: try XCTUnwrap(AgentPrompt.parse(expected)), io: f.io), f.log)
+        }
+        let cases: [(String, String, String)] = [
+            ("live05: the placeholder, the ctrl+g footer, above Chat about this", Self.live05, Self.liveScreen(caret: 1)),
+            ("typed text above Chat about this, no ctrl+g footer",
+             Self.singleScreen(caret: 4, typed: "Kiwi"), Self.singleScreen(caret: 1, typed: "Kiwi")),
+            ("the placeholder alone", noChat(Self.singleScreen(caret: 4)), noChat(Self.singleScreen(caret: 1))),
+            ("the ctrl+g footer alone", noChat(Self.liveScreen(caret: 4, typed: "Kiwi")), noChat(Self.liveScreen(caret: 1, typed: "Kiwi"))),
+        ]
+        for (name, now, expected) in cases {
+            let (r, log) = try answer(now, expected)
+            XCTAssertEqual(r, .changed, name)
+            XCTAssertEqual(log, [], "\(name): nothing typed into the row")
+            // The same dialog with the caret on an answer row: the digit goes.
+            XCTAssertEqual(try answer(expected, expected).0, .sent, "\(name), caret on 1")
+        }
+        // The plan feedback row (its hint), with no ctrl+g footer: the island never answers a plan
+        // (#823), so the rule is pinned on the read itself.
+        let rows = AgentWindowInteractionTests.planRowsClear
+        XCTAssertTrue(try XCTUnwrap(AgentPrompt.screen(Self.planScreen(caret: 4, rows: rows, footer: "Esc to cancel"))).caretOnInput)
+        XCTAssertFalse(try XCTUnwrap(AgentPrompt.screen(Self.planScreen(caret: 1, rows: rows, footer: "Esc to cancel"))).caretOnInput)
+        // Through the live form: the caret on Other, a click on 1 types nothing.
+        let g = FormSim(.live)
+        g.caret = 4
+        XCTAssertEqual(AgentPrompt.answer(Self.key, digit: 1, expected: try XCTUnwrap(AgentPrompt.parse(Self.liveScreen(caret: 1))),
+                                          io: g.io), .changed)
+        XCTAssertEqual(g.typed, "")
+        XCTAssertEqual(g.log, [])
+    }
+
+    /// A screen that a test swaps between the window drawing its panel and the click.
+    final class ScreenBox: @unchecked Sendable {
+        let lock = NSLock()
+        private var screen: String
+        private(set) var sent: [String] = []
+        init(_ screen: String) { self.screen = screen }
+        func set(_ s: String) { lock.withLock { screen = s } }
+        var io: AgentPromptIO {
+            AgentPromptIO(read: { _ in self.lock.withLock { self.screen } }, status: { _ in "blocked" },
+                          send: { _, t in self.lock.withLock { self.sent.append(t) } })
+        }
+    }
+
+    /// Supervisor review h2 (#818): a fresh read with no caret, or with the caret on no known row,
+    /// never lets a digit go. The parse needs exactly one caret, on an option, so through
+    /// `answer` (the island card, the window's single choice) such a read is no prompt at all;
+    /// `caretOnInput` itself is pinned on hand-built reads (no caret, a caret on digit 9).
+    @MainActor
+    func testIslandAnswerSendsNothingWithNoCaretOrACaretOnNoRow() throws {
+        let shown = Self.permission(), bare = shown.replacingOccurrences(of: "❯", with: " ")
+        XCTAssertNotEqual(bare, shown)
+        let p = try XCTUnwrap(AgentPrompt.parse(shown))
+        XCTAssertNil(AgentPrompt.screen(bare), "no caret: no prompt")
+        // The island card: no caret sends nothing; the caret on row 1 sends the digit.
+        let f = FormSim(.plain(bare))
+        XCTAssertEqual(AgentPrompt.answer(Self.key, digit: 1, expected: p, io: f.io), .changed)
+        XCTAssertEqual(f.log, [])
+        let ok = FormSim(.plain(shown))
+        XCTAssertEqual(AgentPrompt.answer(Self.key, digit: 1, expected: p, io: ok.io), .sent)
+        XCTAssertEqual(ok.log, ["send 1"])
+        // The rule itself.
+        let s = try XCTUnwrap(AgentPrompt.screen(shown))
+        XCTAssertFalse(s.caretOnInput, "the caret on row 1")
+        for caret: Int? in [nil, 9] {
+            var r = s
+            r.caret = caret
+            XCTAssertTrue(r.caretOnInput, "caret \(String(describing: caret))")
+        }
+        // The window's single choice: drawn with the caret on row 1, clicked after the caret went.
+        for (now, sent) in [(bare, [String]()), (shown, ["1"])] {
+            let box = ScreenBox(shown)
+            let i = interaction(controller(box.io, autoAllow: false))
+            i.follow(session(.blocked))
+            guard case .prompt(let w) = i.panel else { return XCTFail("\(i.panel)") }
+            XCTAssertTrue(w.enabled.contains(1))
+            box.set(now)
+            i.answer(w.buttons[0])
+            until("answered") { !i.busy }
+            XCTAssertEqual(box.sent, sent, now == bare ? "no caret" : "control")
+            if now == bare { XCTAssertEqual(i.notice, AgentWindowText.changed) }
+        }
+    }
+
+    /// #818 Q3: Claude Code draws "Chat about this" outside the form's numbered rows, so its digit
+    /// answers nothing: the island card (and the window's single choice without the ask) keeps it off.
+    @MainActor
+    func testIslandCardKeepsChatAboutThisOff() throws {
+        for text in [Self.singleScreen(caret: 1), Self.liveScreen(caret: 1)] {
+            let p = try XCTUnwrap(AgentPrompt.parse(text))
+            let chat = try XCTUnwrap(p.options.last)
+            XCTAssertEqual(chat.label, "Chat about this")
+            XCTAssertFalse(p.isEnabled(chat))
+            XCTAssertTrue(p.isEnabled(p.options[0]))
+            let f = FormSim(.plain(text))
+            XCTAssertEqual(AgentPrompt.answer(Self.key, digit: chat.digit, expected: p, io: f.io), .changed)
+            XCTAssertEqual(f.log, [])
+            guard case .prompt(let w) = AgentWindowPanel.classify(text, ask: nil) else { return XCTFail("not a prompt") }
+            XCTAssertFalse(w.enabled.contains(chat.digit))
+            XCTAssertNil(w.chat, "no walk without the ask")
         }
     }
 

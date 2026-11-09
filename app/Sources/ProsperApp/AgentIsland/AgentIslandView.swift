@@ -1223,6 +1223,10 @@ struct AgentCardLayout: Equatable {
     /// change is off anyway (`isModeChange`), so never here.
     let tooWide: Set<Int>
     let hidden: Bool
+    /// #823: a plan approval (`AgentPlanForm.isPlan`): every row off, the Agents window or the
+    /// terminal answers it (a digit on the feedback row is typed into it; "No, keep planning"
+    /// with no feedback does nothing in Claude Code 2.1.318).
+    let isPlan: Bool
     /// #526: a preview form's preview rows as drawn (hidden characters escaped,
     /// clipped with "…" below the floor, capped at `maxContext` plus "… N more
     /// lines"), all in `previewFont`, `previewLine` tall each. Empty without one.
@@ -1238,6 +1242,7 @@ struct AgentCardLayout: Equatable {
     static let previewFloor: CGFloat = 7
 
     static let previewCaption = "Previews are answered in the terminal"
+    static let planCaption = "Plans are answered in the Agents window or the terminal"
     static let tooLongCaption = "Too long to show in full, open the terminal to approve"
     static let hiddenCaption = "Hidden characters in this prompt, open the terminal to approve"
     static let offTopCaption = "The top of this prompt is off screen, open the terminal to approve"
@@ -1261,13 +1266,14 @@ struct AgentCardLayout: Equatable {
         }
         (self.labels, self.details, self.tooWide) = (labels, details, tooWide)
         hidden = p.hasHiddenCharacters
+        isPlan = AgentPlanForm.isPlan(p)
         (preview, previewFont) = Self.previewRows(p.preview)
         previewLine = (CTFontGetAscent(previewFont) + CTFontGetDescent(previewFont) + CTFontGetLeading(previewFont))
             .rounded(.up)
         // Several apply: hidden characters win, then the off-screen top, then a
-        // preview form, then too long, then a mode change.
+        // preview form, then a plan, then too long, then a mode change.
         let why = hidden ? Self.hiddenCaption : !p.topFound ? Self.offTopCaption
-            : !p.preview.isEmpty ? Self.previewCaption
+            : !p.preview.isEmpty ? Self.previewCaption : isPlan ? Self.planCaption
             : (isOverCap || !tooWide.isEmpty) ? Self.tooLongCaption
             : p.options.contains(where: { $0.isModeChange && $0.style(first: false) != .deny }) ? Self.modeCaption : nil
         caption = why.map { G.wrap($0, G.questionFont, G.cardInner) } ?? []
@@ -1276,8 +1282,10 @@ struct AgentCardLayout: Equatable {
     /// The one rule (W1 item 6): the card's buttons and `AgentPrompt.answer` both
     /// ask this. A "No…" option is always on, a mode change always off (OQ-45).
     /// A preview form is all off, "No…" too: there a digit only moves the focus (#526).
+    /// #823: so is a plan approval. #818: "Chat about this" is always off: Claude Code draws it
+    /// outside the form's numbered rows, so its digit is no answer (the Agents window walks to it).
     func isEnabled(_ o: AgentPromptOption) -> Bool {
-        preview.isEmpty
+        preview.isEmpty && !isPlan && AgentPlanForm.flat(o.label) != "Chataboutthis"
             && (o.style(first: false) == .deny || !(isOverCap || hidden || tooWide.contains(o.digit) || o.isModeChange))
     }
 

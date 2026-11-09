@@ -205,8 +205,8 @@ final class AgentWindowPlanTests: XCTestCase {
     /// Round 2: the island now parses the real plan dialog. Always allow sends nothing on it (directly
     /// and through the controller), and the island card enables no mode-change row. Round 3: with
     /// the live layout's top found, its context (title to the rule above the question) is over the
-    /// card's cap even for a one-line plan, so only a "No…" row is on; a short dialog in the older
-    /// permission layout pins the mode rule itself.
+    /// card's cap even for a one-line plan. #823: the card enables no plan row at all, "No…" rows
+    /// included, in the live layout and the older permission layout alike, and says why.
     @MainActor
     func testAgentWindowPlanApprovalTheIslandAllowsNothingAndEnablesNoModeChange() throws {
         let bypass = ["Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session",
@@ -218,9 +218,10 @@ final class AgentWindowPlanTests: XCTestCase {
             XCTAssertTrue(p.topFound)
             XCTAssertTrue(p.isOverCap, "\(rows), \(plan.count) plan lines")
             XCTAssertNil(p.allowYes, "\(rows)")
-            let no = rows.filter { $0.hasPrefix("No,") }
-            XCTAssertEqual(p.options.filter { p.isEnabled($0) }.map(\.label), no,
-                           "the island card: only a No row (\(rows), \(plan.count) plan lines)")
+            XCTAssertEqual(p.options.filter { p.isEnabled($0) }.map(\.label), [],
+                           "the island card: no plan row (\(rows), \(plan.count) plan lines)")
+            XCTAssertEqual(p.layout.caption.joined().filter { !$0.isWhitespace },
+                           AgentCardLayout.planCaption.filter { !$0.isWhitespace }, "\(rows)")
             let f = FormSim(.plan)
             f.planRows = rows
             f.planLines = plan
@@ -237,12 +238,12 @@ final class AgentWindowPlanTests: XCTestCase {
             XCTAssertEqual(g.log, [], "Always allow on, through the controller (\(rows))")
             XCTAssertFalse(c.heldByAutoAllow(T.key))
           }
-          // Under the cap: every Yes row of a plan is a mode change, off by that rule alone.
+          // Under the cap, in the older permission layout: still no row, the plan caption (not the mode one).
           let short = try XCTUnwrap(AgentPrompt.parse(T.permission(rows, body: [" Here is Claude's plan:", "   Add the parser."])))
           XCTAssertFalse(short.isOverCap)
-          XCTAssertEqual(short.options.filter { short.isEnabled($0) }.map(\.label), rows.filter { !$0.hasPrefix("Yes") }, "\(rows)")
+          XCTAssertEqual(short.options.filter { short.isEnabled($0) }.map(\.label), [], "\(rows)")
           XCTAssertEqual(short.layout.caption.joined().filter { !$0.isWhitespace },
-                         AgentCardLayout.modeCaption.filter { !$0.isWhitespace }, "the mode rule, nothing else (\(rows))")
+                         AgentCardLayout.planCaption.filter { !$0.isWhitespace }, "the plan rule (\(rows))")
         }
     }
 
@@ -417,35 +418,109 @@ final class AgentWindowPlanTests: XCTestCase {
 
     func testAgentWindowPlanApproveSendsTheDigitOnlyOnTheCheckedDialog() throws {
         let f = FormSim(.plan)
-        XCTAssertEqual(driver(f.io).approve(try screen(T.planScreen(caret: 1)), digit: 2), .done)
+        XCTAssertEqual(driver(f.io).approve(try screen(T.planScreen(caret: 1)), digit: 2, plan: T.planInput, shown: T.planMarkdown), .done)
         XCTAssertEqual(f.log, ["send 2"])
         XCTAssertEqual(f.approved, 2)
         // Round 3: the footer names another plan file after the check: nothing sent.
         let o = FormSim(.plan)
         o.planFooter = "ctrl+g to edit in VS Code · ~/.claude/plans/other-plan.md"
-        XCTAssertEqual(driver(o.io).approve(try screen(T.planScreen(caret: 1)), digit: 2), .failed(AgentWindowText.changed))
+        XCTAssertEqual(driver(o.io).approve(try screen(T.planScreen(caret: 1)), digit: 2, plan: T.planInput, shown: T.planMarkdown), .failed(AgentWindowText.changed))
         XCTAssertEqual(o.log, [])
         // The plan changed after the check: nothing sent.
         let g = FormSim(.plan)
         g.planLines = T.planShown + ["Then delete the tests."]
-        XCTAssertEqual(driver(g.io).approve(try screen(T.planScreen(caret: 1)), digit: 2), .failed(AgentWindowText.changed))
+        XCTAssertEqual(driver(g.io).approve(try screen(T.planScreen(caret: 1)), digit: 2, plan: T.planInput, shown: T.planMarkdown), .failed(AgentWindowText.changed))
         XCTAssertEqual(g.log, [])
         // The caret moved to the feedback row: the digit would be typed there.
         let h = FormSim(.plan)
         h.caret = 3
-        XCTAssertEqual(driver(h.io).approve(try screen(T.planScreen(caret: 1)), digit: 2), .failed(AgentWindowText.changed))
+        XCTAssertEqual(driver(h.io).approve(try screen(T.planScreen(caret: 1)), digit: 2, plan: T.planInput, shown: T.planMarkdown), .failed(AgentWindowText.changed))
         XCTAssertEqual(h.log, [])
         XCTAssertEqual(h.typed, "")
         // Taken but nothing changes: unconfirmed, one key only.
         let k = FormSim(.plan)
         k.deaf = true
-        XCTAssertEqual(driver(k.io).approve(try screen(T.planScreen(caret: 1)), digit: 1), .failed(AgentWindowText.unconfirmed))
+        XCTAssertEqual(driver(k.io).approve(try screen(T.planScreen(caret: 1)), digit: 1, plan: T.planInput, shown: T.planMarkdown), .failed(AgentWindowText.unconfirmed))
         XCTAssertEqual(k.log, ["send 1"])
         // dch must say blocked.
         let m = FormSim(.plan)
         m.status = "working"
-        XCTAssertEqual(driver(m.io).approve(try screen(T.planScreen(caret: 1)), digit: 2), .failed(AgentWindowText.changed))
+        XCTAssertEqual(driver(m.io).approve(try screen(T.planScreen(caret: 1)), digit: 2, plan: T.planInput, shown: T.planMarkdown), .failed(AgentWindowText.changed))
         XCTAssertEqual(m.log, [])
+    }
+
+    /// #824 (1): approve() runs the whole check again right before the key, the plan file read
+    /// again: an edit made outside ctrl+g after the window drew sends nothing, even one the
+    /// screen compare cannot see (the plan must still be the text the window showed).
+    func testAgentWindowPlanApproveReReadsThePlanFileBeforeTheKey() throws {
+        let (home, file) = try planHome()
+        let input = AgentPlanInput(id: "toolu_p", plan: nil, file: file, home: home)
+        let e = try screen(T.planScreen(caret: 1))
+        let f = FormSim(.plan)
+        XCTAssertEqual(driver(f.io).approve(e, digit: 2, plan: input, shown: T.planMarkdown), .done)
+        XCTAssertEqual(f.log, ["send 2"])
+        for (name, text) in [("a step changed", T.planMarkdown.replacingOccurrences(of: "Verify its", with: "Delete its")),
+                             ("an edit the screen compare drops", T.planMarkdown.replacingOccurrences(of: "Verify its", with: "Verify  **its**"))] {
+            try Data(text.utf8).write(to: URL(fileURLWithPath: file))
+            let g = FormSim(.plan)
+            XCTAssertEqual(driver(g.io).approve(e, digit: 2, plan: input, shown: T.planMarkdown), .failed(AgentWindowText.changed), name)
+            XCTAssertEqual(g.log, [], name)
+        }
+        XCTAssertEqual(AgentPlanInput.flat([T.planMarkdown.replacingOccurrences(of: "Verify its", with: "Verify  **its**")]),
+                       AgentPlanInput.flat([T.planMarkdown]), "the second edit passes the screen compare: only `shown` stops it")
+    }
+
+    /// #824 (2), QA #649 INFO 2: the compare maps only what Claude Code 2.1.318's render changes.
+    /// ">" and "-"/"~" (the reported pairs) and the other formerly dropped characters are compared.
+    @MainActor
+    func testAgentWindowPlanCompareKeepsWhatTheRenderKeeps() throws {
+        let flat = { (s: String) in AgentPlanInput.flat([s]) }
+        XCTAssertNotEqual(flat("echo hi > hello.txt"), flat("echo hi   hello.txt"))
+        XCTAssertNotEqual(flat("re-run the tests"), flat("re~run the tests"))
+        for (a, b) in [("echo hi > hello.txt", "echo hi   hello.txt"), ("- Verify its contents", "~ Verify its contents")] {
+            let shown = T.planShown.map { $0 == a ? b : $0 }
+            XCTAssertNotEqual(shown, T.planShown, a)
+            XCTAssertEqual(try prompt(T.planScreen(caret: 1, plan: shown), plan: T.planInput).why, AgentWindowText.planMismatch, b)
+        }
+        for (a, b) in [("see issue #12", "see issue 12"), ("a | b", "a b"), ("[x] done", "x done"), ("C:\\temp", "C:temp"),
+                       ("~/plans", "/plans"), ("a -> b", "a - b"), ("+ item", "- item")] {
+            XCTAssertNotEqual(flat(a), flat(b), a)
+        }
+        // Mapped as the render draws it (headings, fences, links, tables: QA's capture); the rest is
+        // still dropped because no capture shows it (list markers, blockquote, emphasis, escapes).
+        for (md, shown) in [("## Steps", "Steps"), ("```bash", ""), ("[docs](https://example.com)", "docs (https://example.com)"),
+                            ("| a | b |", "│ a │ b │"), ("|---|:--:|", "├───┼───┤"), ("* item", "- item"),
+                            ("> quoted", "▎ quoted"), ("\\*literal\\*", "*literal*"), ("~~old~~", "old"), ("---", ""),
+                            ("**bold** and `code`", "bold and code")] {
+            XCTAssertEqual(flat(md), flat(shown), md)
+        }
+        // The live capture still matches (every existing plan test does too).
+        XCTAssertEqual(AgentPlanInput.flat(T.planShown), AgentPlanInput.flat([T.planMarkdown]))
+    }
+
+    /// #823 / #818 Q2: the island card answers no plan row. A digit with the caret on the feedback
+    /// row is typed into it, and "No, keep planning" with no feedback does nothing in 2.1.318.
+    func testIslandCardAnswersNoPlanRow() throws {
+        // The live layout, the caret on the "No, keep planning" feedback row: nothing sent or typed.
+        let f = FormSim(.plan)
+        f.planRows = T.planRowsClear
+        f.caret = 4
+        let p = try XCTUnwrap(AgentPrompt.parse(T.planScreen(caret: 1, rows: T.planRowsClear)))
+        for d in 1...4 {
+            XCTAssertEqual(AgentPrompt.answer(T.key, digit: d, expected: p, io: f.io), .changed, "\(d)")
+        }
+        XCTAssertEqual(f.log, [])
+        XCTAssertEqual(f.typed, "")
+        // The older layout, no ctrl+g footer, the caret on a Yes row: its "No, keep planning" was on.
+        let q = try XCTUnwrap(AgentPrompt.parse(T.plan))
+        XCTAssertEqual(q.options.filter { q.isEnabled($0) }, [])
+        let g = FormSim(.plain(T.plan))
+        XCTAssertEqual(AgentPrompt.answer(T.key, digit: 3, expected: q, io: g.io), .changed)
+        XCTAssertEqual(g.log, [])
+        // Not a plan: unchanged.
+        let h = FormSim(.plain(T.permission()))
+        XCTAssertEqual(AgentPrompt.answer(T.key, digit: 2, expected: try XCTUnwrap(AgentPrompt.parse(T.permission())), io: h.io), .sent)
+        XCTAssertEqual(h.log, ["send 2"])
     }
 
     @MainActor

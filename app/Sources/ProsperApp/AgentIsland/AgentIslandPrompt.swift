@@ -175,6 +175,23 @@ struct AgentPromptScreen: Equatable {
     var footer: String? = nil
 }
 
+extension AgentPromptScreen {
+    /// #818: the caret is on a row where a digit is typed as text instead of answering: a
+    /// question form's Other row (its "Type something." placeholder, or typed text: the row right
+    /// above "Chat about this" on a form under header chips), a plan's feedback row (it carries
+    /// "shift+tab to approve with this feedback"), or any row while the footer shows Claude Code's
+    /// "ctrl+g to edit in …" (2.1.318 adds it under a question form only with the caret on Other,
+    /// live05; a plan footer always has it). No caret: true.
+    var caretOnInput: Bool {
+        let flat = AgentPlanForm.flat
+        guard let c = caret, let o = prompt.options.first(where: { $0.digit == c }) else { return true }
+        if AgentWindowDriver.isPlaceholder(o.label) || footer?.contains("ctrl+g to edit in") == true
+            || flat(([o.label] + o.detail).joined()).hasSuffix(flat(AgentPlanForm.feedbackHint)) { return true }
+        let chat = prompt.options.first { flat($0.label) == "Chataboutthis" }?.digit
+        return prompt.context.last.map(AgentPrompt.isChipLine) == true && chat == c + 1
+    }
+}
+
 enum AgentPromptAnswer: Equatable { case sent, changed }
 
 extension AgentPrompt {
@@ -662,11 +679,14 @@ extension AgentPrompt {
     /// Never on a preview form (#526): there a digit only moves the focus (and
     /// the preview); Enter answers, and the island never sends Enter.
     /// #754: `stillOn` is asked last, after the dch calls, right before the send.
+    /// #818: the re-read's caret must not be on an input row (`caretOnInput`): there Claude Code
+    /// types the digit into the row as text, and nothing is answered.
     static func answer(_ key: AgentSessionKey, digit: Int, expected: AgentPrompt,
                        io: AgentPromptIO, card: Bool = true, stillOn: () -> Bool = { true }) -> AgentPromptAnswer {
         guard (1...9).contains(digit), expected.preview.isEmpty,
               expected.options.contains(where: { $0.digit == digit && (!card || expected.isEnabled($0)) }),
-              let now = parse(io.read(key)), now.sameDialog(expected),
+              let read = parseScreen(io.read(key), multi: false), !read.caretOnInput,
+              case let now = read.prompt, now.sameDialog(expected),
               io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked",
               stillOn()
         else { return .changed }

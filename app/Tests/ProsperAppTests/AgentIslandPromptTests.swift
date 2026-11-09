@@ -288,8 +288,8 @@ final class AgentIslandPromptTests: XCTestCase {
              "ci layer runs."], [], []])
         XCTAssertEqual(AgentPrompt.card(screen: secOneScreen), .prompt(p))
         XCTAssertEqual(try prompt(altered(secOneScreen, "\n" + secOneTitle, "")), p, "the same screen without the title rule")
-        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, false, true, true],
-                       "descriptions wider than a row: the existing too-long rule")
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, false, false, true, false],
+                       "descriptions wider than a row: the existing too-long rule; Chat about this off (#818)")
         XCTAssertEqual(p.layout.caption.joined(), AgentCardLayout.tooLongCaption)
         let mixed = try prompt(altered(askFourScreen, "Which deployment target?", "Which table?\n│ a │ b │"))
         XCTAssertEqual(mixed.question, "Which table? │ a │ b │", "a bar on some rows only is the question's own text")
@@ -1615,7 +1615,7 @@ final class AgentIslandPromptTests: XCTestCase {
             XCTAssertEqual(p.options.map(\.label), ["Red", "Green", "Blue", "Type something.", "Chat about this"], why)
             XCTAssertEqual(p.options.map(\.detail), [["Choose red"], ["Choose green"], ["Choose blue"], [], []], why)
             XCTAssertTrue(p.topFound, why)
-            XCTAssertEqual(p.options.map { p.isEnabled($0) }, Array(repeating: true, count: 5), why)
+            XCTAssertEqual(p.options.map { p.isEnabled($0) }, [true, true, true, true, false], "\(why): Chat about this off (#818)")
             let f = FakeDch()
             f.screen = screen
             XCTAssertEqual(f.answer(2, expected: p), .sent, why)
@@ -1978,7 +1978,7 @@ final class AgentIslandPromptTests: XCTestCase {
         XCTAssertEqual(p.question, "Which color should the release banner use on the dark theme?")
         XCTAssertEqual(p.context, ["☐ Color"])
         XCTAssertEqual(p.layout.question.joined(separator: " "), p.question, "wrapped at a space")
-        XCTAssertEqual(p.options.map { p.isEnabled($0) }, Array(repeating: true, count: 5))
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [true, true, true, true, false], "Chat about this off (#818)")
         let f = FakeDch()
         f.screen = screen
         XCTAssertEqual(f.answer(2, expected: p), .sent)

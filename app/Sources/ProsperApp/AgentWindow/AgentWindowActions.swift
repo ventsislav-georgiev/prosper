@@ -135,21 +135,40 @@ struct AgentPlanInput: Equatable, Sendable {
         return s
     }
 
-    /// The plan as compared with the screen, which shows it rendered as markdown: code fence
-    /// lines go (the renderer draws no fence), then every whitespace, markdown markup character
-    /// and renderer glyph (bullets, box drawing, block elements), the same on both sides.
-    /// Every letter, digit and other punctuation is compared, in order.
-    /// ponytail: a link, a table alignment row or HTML the renderer redraws reads as a mismatch,
-    /// which fails closed (Open in terminal); add renderer rules from a live capture if they bite.
+    /// The plan as compared with the screen, which shows it rendered as markdown. Only what
+    /// Claude Code 2.1.318's render is seen to change is mapped, the same on both sides (code
+    /// shows verbatim on screen, so it maps alike): code fence lines go; a heading's "#"s go; a
+    /// table's "|" rows lose their bars and its alignment row goes (the render box-draws it);
+    /// "[docs](url)" reads "docs (url)". Then whitespace and box drawing / block elements go.
+    /// #824: kept and compared: "#", ">", "|", "-", a single "~", "[", "]" and "\\" anywhere else.
+    /// ponytail: not proven from a capture, so still dropped: a line's leading "- " list marker
+    /// ("-" bullets stay, a "*" list may be redrawn as one), blockquote ">", a thematic break line, "*", "_",
+    /// "`" (bold, italic, inline code), "~~" (strikethrough), a backslash escape's "\\", the
+    /// bullet glyphs "•◦▪▫‣·". Anything else the render redraws reads as a mismatch, which fails
+    /// closed (Open in terminal); add rules from a live capture if one bites.
     static func flat(_ lines: [String]) -> String {
-        let kept = lines.flatMap { $0.components(separatedBy: .newlines) }
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }
-        return String(String.UnicodeScalarView(kept.joined().unicodeScalars.filter { u in
+        var out = ""
+        for raw in lines.flatMap({ $0.components(separatedBy: .newlines) }) {
+            var l = String(raw.drop(while: \.isWhitespace))
+            if l.hasPrefix("```") { continue }
+            if l.first == "|" {
+                if l.allSatisfy({ "|:- \t".contains($0) }) { continue }
+                l.removeAll { $0 == "|" }
+            }
+            let marks = l.filter { "-*_".contains($0) }
+            if marks.count >= 3, l.allSatisfy({ "-*_ \t".contains($0) }) { continue }
+            l = l.replacing(#/^(?:>[ \t]*)*(?:#{1,6}(?:[ \t]+|$)|-[ \t]+)?/#, with: "")
+            l = l.replacing(#/\[([^\]]*)\]\(([^)\s]*)\)/#) { "\($0.1) (\($0.2))" }
+            l = l.replacing("~~", with: "")
+            l = l.replacing(#/\\([!-\/:-@\[-`{-~])/#) { String($0.1) }
+            out += l
+        }
+        return String(String.UnicodeScalarView(out.unicodeScalars.filter { u in
             !(u.properties.isWhitespace || markup.contains(u) || (0x2500...0x259F).contains(u.value))
         }))
     }
 
-    private static let markup = Set("#*_`>|-~[]\\•◦▪▫‣·".unicodeScalars)
+    private static let markup = Set("*_`•◦▪▫‣·".unicodeScalars)
 }
 
 /// #802: Claude Code's plan approval ("Ready to code?", 2.1.318). The window approves only from
@@ -170,6 +189,13 @@ enum AgentPlanForm {
     enum Row: Equatable { case approve, terminal, no, unknown }
 
     static func flat(_ s: String) -> String { s.filter { !$0.isWhitespace } }
+
+    /// A plan approval: any one of its title, lead line, question or approve rows (a renamed part
+    /// then fails a `check`). The island card answers none of its rows (#823).
+    static func isPlan(_ p: AgentPrompt) -> Bool {
+        p.context.contains { flat($0) == flat(lead) || flat($0) == flat(title) } || flat(p.question) == flat(question)
+            || p.options.contains { row($0) == .approve }
+    }
 
     /// A row by its label and detail lines, all whitespace dropped (a narrow pty wraps anywhere).
     static func row(_ o: AgentPromptOption) -> Row {
@@ -198,10 +224,8 @@ enum AgentPlanForm {
     /// the caret on a row a digit would type into (the feedback row).
     static func check(_ s: AgentPromptScreen, plan: AgentPlanInput?) -> Verdict? {
         let p = s.prompt
+        guard isPlan(p) else { return nil }
         let lead = p.context.firstIndex { flat($0) == flat(Self.lead) }
-        // Any one of them makes it a plan approval: a renamed part then fails a check below.
-        guard lead != nil || p.context.contains(where: { flat($0) == flat(title) }) || flat(p.question) == flat(question)
-                || p.options.contains(where: { row($0) == .approve }) else { return nil }
         func no(_ why: String) -> Verdict { Verdict(why: why) }
         guard let plan else { return no(AgentWindowText.planUnchecked) }
         guard let lead, flat(p.context[..<lead].joined()) == flat(title), flat(p.question) == flat(question) else {
@@ -257,9 +281,9 @@ enum AgentWindowText {
     static let planMismatch = "The plan on screen doesn't match the conversation. Open in terminal to approve"
     static let planFile = "Prosper can't read this plan's file, or the prompt names another one. Open in terminal to approve"
     static let planCut = "Only part of the plan fits on screen. Open in terminal to approve"
-    static let planCaret = "Claude's selection is on the feedback row. Open in terminal to approve"
+    static let planCaret = "The terminal's highlighted row is the feedback row. Open in terminal to approve"
     /// The plan rows the window never answers, shown under the rows.
-    static let planTerminal = "Clearing the context and bypass permissions are chosen in the terminal"
+    static let planTerminal = "Clearing the context and bypassing permissions are chosen in the terminal"
 }
 
 enum AgentWindowOutcome: Equatable, Sendable {
@@ -561,9 +585,15 @@ struct AgentWindowDriver: Sendable {
     /// (the plan included) is the one checked against the transcript and the caret is where it
     /// was planned (on a Yes row: a digit on the feedback row is typed into it). After: the
     /// dialog is gone.
-    func approve(_ e: AgentPromptScreen, digit d: Int) -> AgentWindowOutcome {
+    /// #824: right before the key the whole check runs again on the fresh read, the plan file
+    /// read again, and the plan it passes with must be `shown`, the text the window drew: an
+    /// edit made outside ctrl+g after the window drew sends nothing.
+    func approve(_ e: AgentPromptScreen, digit d: Int, plan: AgentPlanInput, shown: String) -> AgentWindowOutcome {
         let p = e.prompt, c = e.caret
-        return Self.outcome(key(ready: { $0.prompt.sameDialog(p) && $0.checked == nil && $0.caret == c && $0.footer == e.footer },
+        return Self.outcome(key(ready: { s in
+                                    s.prompt.sameDialog(p) && s.checked == nil && s.caret == c && s.footer == e.footer
+                                        && AgentPlanForm.check(s, plan: plan).map { $0.approve.contains(d) && $0.plan == shown } == true
+                                },
                                 send: { io.send(key, String(d)) }, after: Self.left(p)))
     }
 
@@ -681,7 +711,11 @@ enum AgentWindowPanel: Equatable {
         // row (typed text) and "Chat about this" (a walk and Enter), both after the asked options.
         let asked = ask.map { $0.asked(s) } ?? 0
         let checked = question && !review && ask != nil && safe
-        let other = checked ? p.options.first { $0.digit > asked && AgentWindowDriver.isPlaceholder($0.label) } : nil
+        // QA #651 INFO-3: a multi-select's Other must be one of its boxes; one after the Submit row
+        // has no ticked state to plan (`multi` refuses it too), so it is not offered at all.
+        let boxes = s.checked?.count ?? p.options.count
+        let other = checked
+            ? p.options.first { $0.digit > asked && $0.digit <= boxes && AgentWindowDriver.isPlaceholder($0.label) } : nil
         let chat = checked
             ? p.options.first { $0.digit > asked && $0.detail.isEmpty && AgentPlanForm.flat($0.label) == "Chataboutthis" } : nil
         if s.checked != nil || !p.preview.isEmpty {
@@ -856,8 +890,9 @@ final class AgentWindowInteraction: ObservableObject {
         guard case .prompt(let w) = panel, w.kind == .choose, w.enabled.contains(o.digit), let s = session else { return }
         // #802: a plan's approve row: the driver's checked digit, not the island rule (which keeps mode changes off).
         if w.approve.contains(o.digit) {
+            guard let plan, let shown = w.plan else { return }
             let d = driver(s), e = w.screen
-            return act(s, prompt: e.prompt) { io in d(io).approve(e, digit: o.digit) }
+            return act(s, prompt: e.prompt) { io in d(io).approve(e, digit: o.digit, plan: plan, shown: shown) }
         }
         let key = s.key, p = w.screen.prompt
         act(s, prompt: p) { io in

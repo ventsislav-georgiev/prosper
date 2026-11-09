@@ -92,6 +92,13 @@ tag from the now-released section and put it on the new top draft.
 - The Agent Sessions window's message box and Interrupt no longer act when the screen shows a
   prompt dch hasn't reported as one: a typed "1" could pick a row there, and Esc would answer
   it "No". The window says Claude is showing a prompt and offers "Open in terminal". (#820)
+- Approving a plan from the Agent Sessions window reads the plan file again right before the
+  key and sends nothing if it changed since the window showed it; the plan is also compared
+  with more of its punctuation. (#824)
+- The Agent Island no longer answers a plan approval; its card says to use the Agent Sessions
+  window or the terminal. "Chat about this" is off on the card, and no answer is sent while the
+  terminal's highlighted row is a text field (a question's "Other" or the plan's feedback row),
+  where Claude Code would type the digit instead of answering. (#818, #823)
 
 ## v2.173.0
 
