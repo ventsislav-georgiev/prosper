@@ -39,6 +39,9 @@ tag from the now-released section and put it on the new top draft.
   session stays in view until its History row arrives (about a minute at most); meanwhile Open in
   terminal, Return, its "⋯" menu and the input box are off. Remove from History says when it also
   removes older records of that name (#829).
+- Extensions: a `host.shell.run` that times out now stops the shell and everything it started
+  (the whole process group, forced after 1 s) instead of leaving it running, and shell output
+  (`> cmd` and `host.shell.run`) is capped at 1 MiB with a "[output truncated at 1 MiB]" marker (#833).
 - Ships dch 1.40.0 (was 1.39.0). When a newer `dch -a` takes a remote session over, the older
   attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

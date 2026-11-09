@@ -73,33 +73,91 @@ enum AppLauncher {
 }
 
 /// Runs a shell command (`> <cmd>`) via `/bin/zsh -c` and captures output.
+///
+/// Cancellation-aware (#833): `ExtensionHost.awaitSync` cancels the task on timeout, and
+/// the cancel kills zsh's whole process group (TERM, SIGKILL after 1 s), so neither zsh
+/// nor anything it started outlives the extension's timeout.
 enum ShellRunner {
+    /// Captured output stops at 1 MiB. Past the cap the pipe is still read and discarded,
+    /// not killed: a `> cmd` has no timeout and must finish its side effects, and a child
+    /// writing into a full pipe would block forever.
+    static let outputCap = 1 << 20
+    static let truncationMarker = "[output truncated at 1 MiB]"
+    /// Tests never run a real login shell (it sources the operator's zprofile).
+    static let shellFlag = NSClassFromString("XCTestCase") == nil ? "-lc" : "-c"
+
     static func run(_ command: String) async -> String {
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmd.isEmpty else { return "" }
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                // Login shell (`-l`): sources /etc/zprofile (path_helper adds
-                // /usr/local/bin) and ~/.zprofile (e.g. `brew shellenv` adds
-                // /opt/homebrew/bin). A GUI app launched by LaunchServices only
-                // inherits PATH=/usr/bin:/bin:/usr/sbin:/sbin, so without this a
-                // bare `code`, `cursor`, `gh`, etc. is not found.
-                process.arguments = ["-lc", cmd]
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = pipe
-                do {
-                    try process.run()
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    process.waitUntilExit()
-                    let out = String(data: data, encoding: .utf8) ?? ""
-                    continuation.resume(returning: out.trimmingCharacters(in: .whitespacesAndNewlines))
-                } catch {
-                    continuation.resume(returning: "error: \(error.localizedDescription)")
+        let job = Job()
+        // The kill makes the read below hit EOF, so the single resume still runs: a cancel
+        // racing a normal exit can neither double-resume nor leak the continuation.
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(returning: job.execute(cmd))
                 }
             }
+        } onCancel: {
+            job.cancel()
+        }
+    }
+
+    private final class Job: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pid: pid_t = 0
+        private var cancelled = false
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            let pid = self.pid
+            lock.unlock()
+            // Foundation spawns the child as its own group leader (ProcessGroupKillTests).
+            if pid > 0 { CodexHarness.killGroup(pid, grace: 1) }
+        }
+
+        func execute(_ cmd: String) -> String {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            // Login shell (`-l`): sources /etc/zprofile (path_helper adds
+            // /usr/local/bin) and ~/.zprofile (e.g. `brew shellenv` adds
+            // /opt/homebrew/bin). A GUI app launched by LaunchServices only
+            // inherits PATH=/usr/bin:/bin:/usr/sbin:/sbin, so without this a
+            // bare `code`, `cursor`, `gh`, etc. is not found.
+            process.arguments = [ShellRunner.shellFlag, cmd]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+            // Spawn under the lock so a cancel either sees the pid or stops the spawn.
+            lock.lock()
+            guard !cancelled else { lock.unlock(); return "" }
+            do {
+                try process.run()
+            } catch {
+                lock.unlock()
+                return "error: \(error.localizedDescription)"
+            }
+            pid = process.processIdentifier
+            lock.unlock()
+
+            var data = Data()
+            var truncated = false
+            let reader = pipe.fileHandleForReading
+            while true {
+                let chunk = reader.availableData   // blocks until data or EOF
+                if chunk.isEmpty { break }
+                let room = ShellRunner.outputCap - data.count
+                if chunk.count > room { truncated = true }
+                data.append(chunk.prefix(room))
+            }
+            process.waitUntilExit()
+            lock.lock()
+            pid = 0   // reaped: a late cancel must not signal a recycled pid
+            lock.unlock()
+            // decoding (not String(data:)): a cap cut inside a UTF-8 sequence must not blank the output.
+            let out = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return truncated ? out + "\n" + ShellRunner.truncationMarker : out
         }
     }
 }
