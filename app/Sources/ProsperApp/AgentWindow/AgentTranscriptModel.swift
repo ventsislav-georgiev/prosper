@@ -77,7 +77,7 @@ struct TranscriptAssembler {
     var hiddenTotal: Int { hiddenCounts.values.reduce(0, +) }
     /// #821: Default's chip. A TodoWrite list comes from the transcript; tasks from Claude Code's
     /// store when there is one, else from the transcript, with a count only when the events
-    /// reach the file's start (or the list was set whole since).
+    /// reach the file's start (or a TodoWrite set the list whole since).
     var todos: AgentTodos? {
         if !folded.write, let s = taskStore { return AgentTodos.chip(s) }
         return AgentTodos.chip(folded.items, partial: !(folded.known || (fromStart && !todosTrimmed)))
@@ -450,6 +450,9 @@ final class AgentTranscriptModel: ObservableObject {
     var pageBytes: UInt64 = 1 << 20
     var maxBlocks = 2_000
     var tickInterval: TimeInterval = 2
+    /// #821 (QA #657 r3 INFO-5): a poll with new lines re-reads the task store at most this often.
+    var storeRefresh: TimeInterval = 5
+    private var lastStoreRead: Date?
     /// #821: where Claude Code keeps the session's tasks (tests point it at a temp dir).
     var taskStoreDirectory: (AgentTranscriptSource) -> URL? = AgentTaskStore.directory
     private(set) var watchArms = 0
@@ -524,9 +527,10 @@ final class AgentTranscriptModel: ObservableObject {
         busy = true
         let gen = generation, pageBytes = pageBytes
         let store = source.flatMap { $0.transcriptPath == t.path ? taskStoreDirectory($0) : nil }
+        let due = lastStoreRead.map { now().timeIntervalSince($0) >= storeRefresh } ?? true
         let job = TranscriptHandoff(value: (t, assembler, fresh()))
         offMain { [weak self] in
-            let r = Self.read(job.value.0, into: job.value.1, fresh: job.value.2, pageBytes: pageBytes, store: store)
+            let r = Self.read(job.value.0, into: job.value.1, fresh: job.value.2, pageBytes: pageBytes, store: store, storeDue: due)
             Self.onMain { self?.finishPoll(r, gen) }
         }
     }
@@ -540,11 +544,13 @@ final class AgentTranscriptModel: ObservableObject {
         /// Replaced or shrunk: the watch re-arms on the new file.
         var reopened = false
         var more = false
+        /// The task store was read.
+        var readStore = false
     }
 
     /// The IO half of `poll`: no main-actor state, only the values handed in.
     nonisolated static func read(_ t0: TranscriptTail, into a0: TranscriptAssembler, fresh: TranscriptAssembler,
-                                 pageBytes: UInt64, store: URL? = nil) -> TranscriptHandoff<PollResult> {
+                                 pageBytes: UInt64, store: URL? = nil, storeDue: Bool = false) -> TranscriptHandoff<PollResult> {
         var r = PollResult(tail: t0, assembler: a0)
         var reopens = 0
         loop: while true {
@@ -567,11 +573,13 @@ final class AgentTranscriptModel: ObservableObject {
                 break loop
             }
         }
-        // #821: on the first read and when list events came in: Claude Code writes the store before
-        // the result line. ponytail: about 90 µs a task file, so not every tick; a change from
-        // outside this transcript (a shared list) shows with the next list event.
-        if let store, !r.assembler.storeRead || r.assembler.todoSerial != a0.todoSerial {
+        // #821: on the first read and when list events came in (Claude Code writes the store before
+        // the result line), and on new lines at most every `storeRefresh` (tasks changed with no
+        // list call in this transcript). ponytail: about 90 µs a task file, so not every tick; a
+        // change while the file is quiet shows with its next lines.
+        if let store, !r.assembler.storeRead || r.assembler.todoSerial != a0.todoSerial || (r.grew && storeDue) {
             r.assembler.setTaskStore(AgentTaskStore.read(store))
+            r.readStore = true
         }
         r.assembler.fromStart = r.tail.earliestLoaded == 0
         return TranscriptHandoff(value: r)
@@ -586,6 +594,7 @@ final class AgentTranscriptModel: ObservableObject {
         if r.reopened { watch = nil }
         if let m = r.missing { missing = m }
         if r.grew { lastGrowth = now() }
+        if r.readStore { lastStoreRead = now() }
         if running, watch == nil, !missing { arm(r.tail.path) }
         publish()
         if let v = assembler.latestVersion { TranscriptCanary.runIfNew(version: v, path: r.tail.path) }

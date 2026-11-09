@@ -128,7 +128,9 @@ struct AgentTodos: Equatable, Sendable {
     /// What the fold knows after the events.
     struct Folded: Equatable, Sendable {
         var items: [Item] = []
-        /// The list was set whole at some point (a TodoWrite, or a clear): from there it is exact.
+        /// A TodoWrite set the list whole at some point: from there it is exact. A clear does not
+        /// count: the fold clears when every LOADED task is completed, which on a partial page is
+        /// not Claude Code's clear (QA #657 r3 F1).
         var known = false
         /// The last call that changed the list was a TodoWrite (Claude Code's task store does
         /// not hold that list).
@@ -168,7 +170,7 @@ struct AgentTodos: Equatable, Sendable {
                     if let status { f.items[i].status = status }
                     if let subject { f.items[i].text = subject }
                 }
-                if !f.items.isEmpty, f.items.allSatisfy({ $0.status == "completed" }) { (f.items, f.known) = ([], true) }
+                if !f.items.isEmpty, f.items.allSatisfy({ $0.status == "completed" }) { f.items = [] }
             }
         }
         return f
@@ -194,14 +196,16 @@ enum AgentTaskStore {
     static let maxFileBytes = 64 << 10
 
     /// The tasks by id; nil when there is no directory, it cannot be read, or none of its task
-    /// files parse (drift): the transcript is the fallback. A bad file is skipped.
-    static func read(_ dir: URL) -> [AgentTodos.Item]? {
+    /// files parse (drift): the transcript is the fallback. A bad file is skipped. Past
+    /// `maxFiles` the lowest ids are read.
+    static func read(_ dir: URL, limit: Int = maxFiles) -> [AgentTodos.Item]? {
         typealias K = TranscriptKeys
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
-        let files = names.filter { !$0.hasPrefix(".") && $0.hasSuffix(".json") }.prefix(maxFiles)
+        let files = names.filter { !$0.hasPrefix(".") && $0.hasSuffix(".json") }
+            .map { (Int($0.dropLast(5)) ?? .max, $0) }.sorted { $0 < $1 }.prefix(limit).map(\.1)
         var items: [(Int, AgentTodos.Item)] = [], parsed = 0
         for f in files {
-            guard let d = FileManager.default.contents(atPath: dir.appendingPathComponent(f).path), d.count <= maxFileBytes,
+            guard let d = regularFile(dir.appendingPathComponent(f).path, max: maxFileBytes),
                   let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
                   let id = K.str(o, "id"), let subject = K.str(o, "subject"),
                   let status = K.str(o, "status"), ["pending", "in_progress", "completed"].contains(status) else { continue }
@@ -212,6 +216,18 @@ enum AgentTaskStore {
         }
         if parsed == 0 && !files.isEmpty { return nil }
         return items.sorted { $0.0 < $1.0 }.map(\.1)
+    }
+
+    /// A regular file's bytes, at most `max`; nil for anything else. Never follows a symlink, and
+    /// a FIFO opens without blocking (then fails the regular-file check): the io queue never waits.
+    static func regularFile(_ path: String, max: Int) -> Data? {
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW)
+        guard fd >= 0 else { return nil }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= max,
+              let d = try? h.read(upToCount: max + 1), d.count <= max else { return nil }
+        return d
     }
 }
 

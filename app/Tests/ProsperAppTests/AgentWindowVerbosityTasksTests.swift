@@ -78,10 +78,16 @@ extension AgentWindowD1Tests {
             var checked = 0
             for i in 0...lines.count {
                 for j in i...lines.count {
-                    // Newest page first, then the earlier ones, as "Load earlier" does.
+                    // Newest page first, then the earlier ones, as "Load earlier" does. Before the
+                    // first line is in, the chip shows the whole file's count or none (QA #657 r3 F1).
                     var a = assemble(lines[j...])
+                    a.fromStart = j == 0
+                    XCTAssertTrue([nil, "Todos", whole?.label].contains(a.todos?.label), "\(name) page \(j)...: \(a.todos?.label ?? "nil")")
                     a.prepend(assemble(lines[i..<j]))
+                    a.fromStart = i == 0
+                    XCTAssertTrue([nil, "Todos", whole?.label].contains(a.todos?.label), "\(name) pages \(i)...: \(a.todos?.label ?? "nil")")
                     a.prepend(assemble(lines[..<i]))
+                    a.fromStart = true
                     XCTAssertEqual(a.todos, whole, "\(name) split at \(i), \(j)")
                     XCTAssertEqual(a.blocks.filter(\.listShown).count, wholeShown, "\(name) shown cards at \(i), \(j)")
                     checked += 1
@@ -340,8 +346,8 @@ extension AgentWindowD1Tests {
     // MARK: Round 2c, F1: the count is the whole list's; the open list starts with the open tasks
 
     func testVerbosityTodosCountTheWholeListAndDrawOpenTasksFirst() {
-        let creates: [[String: Any]] = (1...60).flatMap { taskCreate("c\($0)", "task \($0)", n: $0) }
-        let done: [[String: Any]] = (1...52).flatMap { taskUpdate("u\($0)", ["taskId": String($0), "status": "completed"]) }
+        let creates: [[String: Any]] = (1...60).flatMap { (i: Int) in taskCreate("c\(i)", "task \(i)", n: i) }
+        let done: [[String: Any]] = (1...52).flatMap { (i: Int) in taskUpdate("u\(i)", ["taskId": String(i), "status": "completed"]) }
         let t = asm(creates + done + taskUpdate("p", ["taskId": "58", "status": "in_progress"])).todos
         XCTAssertEqual(t?.items.count, 60)
         XCTAssertEqual(t?.label, "Todos 52/60", "not the first 50's 50/50")
@@ -385,10 +391,28 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(a.todos?.label, "Todos 1/4")
         XCTAssertFalse(a.todos?.partial == true)
         XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") }, [])
-        // Not from the start, but the list was set whole since (a clear): counted.
-        var b = asm(taskCreate("c1", "one", n: 1) + taskUpdate("u1", ["taskId": "1", "status": "completed"]) + taskCreate("c2", "two", n: 2))
+        // QA #657 r3 F1: every LOADED task completed is not Claude Code's clear (it resets only
+        // when every task in its list is): the page after it still shows no count. Here #9 and
+        // #10 are open further back; Claude Code's list is 9/12.
+        let page = taskUpdate("u9", ["taskId": "9", "status": "in_progress"]) + taskCreate("c11", "eleven", n: 11)
+            + taskUpdate("u11", ["taskId": "11", "status": "completed"]) + taskCreate("c12", "twelve", n: 12)
+        var b = asm(page)
         b.fromStart = false
+        XCTAssertEqual(b.todos?.label, "Todos")
+        XCTAssertEqual(b.todos?.items.map(\.text), ["twelve"])
+        b = asm(taskCreate("c1", "one", n: 1) + taskUpdate("u1", ["taskId": "1", "status": "completed"]) + taskCreate("c2", "two", n: 2))
+        b.fromStart = false
+        XCTAssertEqual(b.todos?.label, "Todos", "a clear inside the page counts nothing")
+        // From the start the same clear is Claude Code's: the chip goes, the next create counts.
+        b.fromStart = true
         XCTAssertEqual(b.todos?.label, "Todos 0/1")
+        b = asm(taskCreate("c1", "one", n: 1) + taskUpdate("u1", ["taskId": "1", "status": "completed"]))
+        XCTAssertNil(b.todos)
+        // A TodoWrite sets the whole list: counted on any page.
+        b = asm(page + [toolUse("w", "TodoWrite", ["todos": [["content": "a", "status": "completed"], ["content": "b", "status": "pending"]]]),
+                        toolResult("w", "ok")])
+        b.fromStart = false
+        XCTAssertEqual(b.todos?.label, "Todos 1/2")
         // The event cap went past the oldest: no count either.
         var c = asm((0..<2_001).flatMap { (i: Int) -> [[String: Any]] in taskUpdate("u\(i)", ["taskId": "9", "status": "completed"]) } + taskCreate("c1", "one", n: 1))
         XCTAssertTrue(c.todosTrimmed)
@@ -434,6 +458,36 @@ extension AgentWindowD1Tests {
         var w = asm(events + [toolUse("t", "TodoWrite", ["todos": [["content": "a", "status": "pending"]]]), toolResult("t", "ok")])
         w.setTaskStore(AgentTaskStore.read(dir))
         XCTAssertEqual(w.todos?.items.map(\.text), ["a"])
+    }
+
+    // MARK: Round 2d (QA #657 r3 INFO-2): only regular files, bounded, the lowest ids
+
+    func testVerbosityTaskStoreReadsOnlyRegularFilesWithinTheCap() throws {
+        let root = tempDir(), dir = root.appendingPathComponent("tasks/s")
+        try writeStore(dir, [("1", "one", "pending"), ("2", "two", "pending"), ("10", "ten", "pending")])
+        try writeStore(root.appendingPathComponent("elsewhere"), [("4", "outside", "pending")])
+        // A symlink to a task file outside the directory: not followed.
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("4.json"),
+                                                   withDestinationURL: root.appendingPathComponent("elsewhere/4.json"))
+        // Over 64 KiB: skipped (its size comes from fstat, before any read).
+        try JSONSerialization.data(withJSONObject: ["id": "5", "subject": "big", "status": "pending",
+                                                    "description": String(repeating: "x", count: AgentTaskStore.maxFileBytes)])
+            .write(to: dir.appendingPathComponent("5.json"))
+        // A FIFO: skipped without blocking the read (a blocking open would wait for a writer forever).
+        let fifo = dir.appendingPathComponent("6.json").path
+        XCTAssertEqual(mkfifo(fifo, 0o644), 0)
+        final class Got: @unchecked Sendable { var items: [AgentTodos.Item]? }   // written before the signal, read after
+        let got = Got(), done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async { got.items = AgentTaskStore.read(dir); done.signal() }
+        if done.wait(timeout: .now() + 5) == .timedOut {
+            XCTFail("the read blocked on the FIFO")
+            let w = open(fifo, O_WRONLY | O_NONBLOCK)   // let the stuck open return
+            if w >= 0 { close(w) }
+            done.wait()
+        }
+        XCTAssertEqual(got.items?.compactMap { $0.id }, ["1", "2", "10"])
+        // Past the cap, the lowest ids by number (not "10" before "2", not readdir order).
+        XCTAssertEqual(AgentTaskStore.read(dir, limit: 2)?.compactMap { $0.id }, ["1", "2"])
     }
 
     func testVerbosityTaskStoreDirectoryFollowsTheTranscript() {
@@ -486,6 +540,53 @@ extension AgentWindowD1Tests {
                                        sessionId: "t", transcriptPath: url.path))
         XCTAssertTrue(m.olderAvailable)
         XCTAssertEqual(m.todos?.label, "Todos 2/4")
+    }
+
+    /// QA #657 r3 INFO-5: tasks can change with no list call in this transcript (a subagent, a
+    /// shared list); a poll with new lines re-reads the store, at most every `storeRefresh`.
+    @MainActor
+    func testVerbosityModelRereadsTheStoreOnNewLinesAtMostEveryFiveSeconds() throws {
+        let root = tempDir()
+        let url = root.appendingPathComponent("s.jsonl"), store = root.appendingPathComponent("tasks/s")
+        try write(url, taskCreate("c1", "one", n: 1) + taskCreate("c2", "two", n: 2))
+        try writeStore(store, [("1", "one", "pending"), ("2", "two", "pending")])
+        let m = AgentTranscriptModel()
+        m.offMain = { $0() }
+        m.makeWatch = { _, _ in NSObject() }
+        m.tickInterval = 3600
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        m.now = { clock }
+        m.taskStoreDirectory = { _ in store }
+        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0", dchState: "idle",
+                                       sessionId: "s", transcriptPath: url.path))
+        m.start()
+        defer { m.stop() }
+        XCTAssertEqual(m.todos?.label, "Todos 0/2", "read on open")
+        let quiet = { (text: String) in try self.append(url, self.line(self.say(text))) }
+        // A subagent finishes #1: no list call in this file. Within 5 s of the last read: not yet.
+        try writeStore(store, [("1", "one", "completed"), ("2", "two", "pending")])
+        clock += 4
+        try quiet("working")
+        m.poll()
+        XCTAssertEqual(m.todos?.label, "Todos 0/2")
+        // 5 s on but no new lines: not read either.
+        clock += 2
+        m.poll()
+        XCTAssertEqual(m.todos?.label, "Todos 0/2")
+        // New lines past 5 s: read.
+        try quiet("still working")
+        m.poll()
+        XCTAssertEqual(m.todos?.label, "Todos 1/2")
+        // And the 5 s count again from that read.
+        try writeStore(store, [("1", "one", "completed"), ("2", "two", "in_progress"), ("3", "three", "pending")])
+        clock += 1
+        try quiet("more")
+        m.poll()
+        XCTAssertEqual(m.todos?.label, "Todos 1/2")
+        clock += 5
+        try quiet("more again")
+        m.poll()
+        XCTAssertEqual(m.todos?.label, "Todos 1/3")
     }
 }
 
