@@ -1282,3 +1282,77 @@ extension AgentWindowD1Tests {
                            + " Their Claude Code conversations stay on disk. (claude --resume 0b7c2f3e-aaaa-bbbb-cccc-0123456789ab)")
     }
 }
+
+extension AgentWindowD1Tests {
+    /// Hosts `view` in a window that is never shown (never ordered front, never key) and lays it out.
+    @MainActor
+    private func hosted<V: View>(_ view: V, _ size: CGSize) -> (NSWindow, NSHostingView<V>) {
+        let host = NSHostingView(rootView: view)
+        host.frame = CGRect(origin: .zero, size: size)
+        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        win.contentView = host
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        return (win, host)
+    }
+
+    @MainActor
+    private func views<T: NSView>(_ v: NSView, _ t: T.Type) -> [T] { ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { views($0, t) } }
+
+    /// QA #668 INFO-2/3/4: an ended session's held row reads ended everywhere: the transcript's Open in
+    /// terminal is off, the input field neither edits nor reads as editable, the chip says "Ended". No slot moves.
+    @MainActor
+    func testAgentWindowEndedHeldRowReadsEndedEverywhere() throws {
+        let st = store([session("a", .working), session("b", .idle)])
+        st.controlDch = bin([1, 38, 0])
+        let (m, a) = try heldModel(st, opened: { _ in })
+        defer { m.close() }
+        XCTAssertTrue(m.selectionIsHeld)
+        let row = try XCTUnwrap(m.selectedRow)
+        // INFO-4: the header's chip says Ended, not the last live state; its width never moves.
+        func header(_ ended: Bool) -> AgentSessionHeader {
+            AgentSessionHeader(row: row, session: a, cwd: "/tmp/p", open: {}, store: st, ended: ended)
+        }
+        XCTAssertEqual(header(true).stateChip.label, AgentStateChip.endedLabel)
+        XCTAssertEqual(AgentStateChip.endedLabel, "Ended")
+        XCTAssertEqual(header(false).stateChip.label, "Working", "live: the state")
+        func width(_ c: AgentStateChip) -> CGFloat { NSHostingView(rootView: c).fittingSize.width }
+        let slot = width(AgentStateChip(state: .working))
+        for s in AgentState.allCases {
+            XCTAssertEqual(AgentStateChip(state: s).label, s.label)
+            XCTAssertEqual(AgentStateChip(state: s, ended: true).label, "Ended", "\(s)")
+            XCTAssertEqual(width(AgentStateChip(state: s, ended: true)), slot, accuracy: 0.5, "\(s): the slot stays")
+        }
+        // INFO-2: the terminal-first state's Open in terminal: off for an ended session, on for a live one.
+        XCTAssertFalse(TerminalFirstView(reason: "r", openTerminal: {}, ended: true).openEnabled, "ended: off")
+        XCTAssertTrue(TerminalFirstView(reason: "r", openTerminal: {}).openEnabled, "live: on")
+        // Through the transcript view (a fresh model is terminal-first, "No session selected"): only the
+        // button dims, so the ended render differs from the live one, and two live renders match.
+        func render(_ ended: Bool) throws -> Data {
+            let r = ImageRenderer(content: AgentTranscriptView(model: AgentTranscriptModel(), scrolls: false, openTerminal: {},
+                                                               ownsLifecycle: false, ended: ended)
+                .frame(width: 520).background(Neon.bgBottom).environment(\.colorScheme, .dark))
+            r.scale = 1
+            let cg = try XCTUnwrap(r.cgImage)
+            return try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
+        }
+        XCTAssertEqual(try render(false), try render(false), "control: a render is stable")
+        XCTAssertNotEqual(try render(true), try render(false), "ended: the button draws dimmed")
+        // INFO-3: the input field: not editable (nor selectable) when ended, in the same slot.
+        func field(_ ended: Bool) throws -> (AgentComposerTextView, CGFloat) {
+            let i = AgentWindowInteraction()
+            let (win, host) = hosted(AgentInteractionPane(model: i, session: a, open: {}, ended: ended).frame(width: 600),
+                                     CGSize(width: 600, height: 200))
+            defer { win.close() }
+            let tv = try XCTUnwrap(views(host, AgentComposerTextView.self).first)
+            return (tv, host.fittingSize.height)
+        }
+        let (dead, deadHeight) = try field(true)
+        let (live, liveHeight) = try field(false)
+        XCTAssertFalse(dead.isEditable, "ended: typing is dropped, so the field takes none")
+        XCTAssertFalse(dead.isSelectable)
+        XCTAssertTrue(live.isEditable, "live: it edits")
+        XCTAssertEqual(deadHeight, liveHeight, accuracy: 0.5, "the pane keeps its size")
+    }
+}

@@ -402,7 +402,7 @@ struct AgentDetailView: View {
                                    store: model.store, ask: { model.ask($0, s) }, ended: ended)
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
-                                    ownsLifecycle: false, level: model.verbosity)
+                                    ownsLifecycle: false, level: model.verbosity, ended: ended)
                     .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                     .clipped()
                     .overlay(alignment: .top) {   // #829 R5, QA #665 INFO-1: over the conversation, so nothing moves
@@ -461,6 +461,8 @@ struct AgentSessionHeader: View {
     var ended = false
     /// The "⋯" menu's store: none for an ended session, so it offers nothing and is disabled.
     var menuStore: AgentIslandStore? { ended ? nil : store }
+    /// QA #668 INFO-4: the state chip reads "Ended" for an ended session, in the same slot.
+    var stateChip: AgentStateChip { AgentStateChip(state: session.state, ended: ended) }
 
     var project: String {
         if let cwd { return (cwd as NSString).abbreviatingWithTildeInPath }
@@ -514,7 +516,7 @@ struct AgentSessionHeader: View {
         HStack(alignment: .center, spacing: sz(8)) {
             Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
-            AgentStateChip(state: session.state)
+            stateChip
             Spacer(minLength: sz(8))
             AgentVerbosityPicker(level: level, style: picker)
             // #822's Terminal view pill goes here, between the picker and the button.
@@ -630,24 +632,30 @@ struct AgentTodosList: View {
 
 struct AgentStateChip: View {
     let state: AgentState
-    /// #828: the slot is the widest state's, so a state change never moves the title, the
+    /// QA #668 INFO-4: the session ended (the window's held row): "Ended", not its last live state.
+    var ended = false
+    static let endedLabel = "Ended"
+    /// The chip's words (and VoiceOver's).
+    var label: String { ended ? Self.endedLabel : state.label }
+    /// #828: the slot is the widest state's (Ended included), so a state change never moves the title, the
     /// picker or the button (nor flips the header to its compact form); the capsule hugs its text.
     var body: some View {
         ZStack(alignment: .leading) {
-            ForEach(AgentState.allCases, id: \.self) { chip($0).hidden() }
-            chip(state)
+            ForEach(AgentState.allCases, id: \.self) { chip($0.glyph, $0.label, agentStateColor($0)).hidden() }
+            chip("●", Self.endedLabel, Neon.textSecondary).hidden()
+            if ended { chip("●", label, Neon.textSecondary) } else { chip(state.glyph, label, agentStateColor(state)) }
         }
         .fixedSize()
     }
 
-    func chip(_ s: AgentState) -> some View {
+    func chip(_ glyph: String, _ label: String, _ color: Color) -> some View {
         HStack(spacing: sz(4)) {
-            Text(s.glyph).font(Neon.font(9, weight: .bold))
-            Text(s.label).font(Neon.font(10, weight: .semibold))
+            Text(glyph).font(Neon.font(9, weight: .bold))
+            Text(label).font(Neon.font(10, weight: .semibold))
         }
-        .foregroundStyle(agentStateColor(s))
+        .foregroundStyle(color)
         .padding(.horizontal, sz(7)).padding(.vertical, sz(2))
-        .background(Capsule().fill(agentStateColor(s).opacity(0.14)))
+        .background(Capsule().fill(color.opacity(0.14)))
         .fixedSize()
     }
 }
@@ -773,7 +781,9 @@ struct AgentInteractionPane: View {
             if let n = model.notice { AgentActionNotice(text: n, open: open) }
             HStack(alignment: .bottom, spacing: sz(8)) {
                 ZStack(alignment: .topLeading) {
-                    AgentComposerField(text: $model.draft, onSubmit: { if canSend { model.send() } })
+                    // QA #668 INFO-3: an ended session's field neither edits nor reads as editable; same slot.
+                    AgentComposerField(text: $model.draft, onSubmit: { if canSend { model.send() } }, editable: !ended)
+                        .disabled(ended)
                     if model.draft.isEmpty {
                         Text(placeholder).font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
                             .lineLimit(1).padding(.horizontal, sz(9)).padding(.vertical, sz(7))
@@ -1009,6 +1019,8 @@ struct AgentPromptPanel: View {
 struct AgentComposerField: NSViewRepresentable {
     @Binding var text: String
     var onSubmit: () -> Void
+    /// QA #668 INFO-3: false for an ended session (NSTextView ignores SwiftUI's .disabled).
+    var editable = true
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -1044,6 +1056,9 @@ struct AgentComposerField: NSViewRepresentable {
         tv.textColor = NSColor(Neon.textPrimary)
         tv.insertionPointColor = NSColor(Neon.textPrimary)
         tv.onSubmit = { context.coordinator.parent.onSubmit() }
+        // Selectable first: a false isSelectable clears isEditable, a true isEditable sets isSelectable.
+        tv.isSelectable = editable
+        tv.isEditable = editable
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

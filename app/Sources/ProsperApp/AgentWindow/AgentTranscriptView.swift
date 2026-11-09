@@ -15,12 +15,14 @@ struct AgentTranscriptView: View {
     var ownsLifecycle = true
     /// #821: how much of each turn shows (the window passes its one global level).
     var level: AgentVerbosity = .default
+    /// QA #668 INFO-2: the session ended (the window's held row): Open in terminal is off, in its slot.
+    var ended = false
 
     var body: some View {
         VStack(spacing: 0) {
             if let b = model.banner { TranscriptBanner(text: b) }
             if case .terminalFirst(let reason) = model.mode, !model.showAnyway {
-                TerminalFirstView(reason: reason, openTerminal: openTerminal) { model.showAnyway = true }
+                TerminalFirstView(reason: reason, openTerminal: openTerminal, ended: ended) { model.showAnyway = true }
             } else {
                 if case .waiting(let hint) = model.mode { TranscriptHint(text: hint) }
                 // QA #626 INFO-1: block ids restart at 0 per file, so the list's view state
@@ -93,6 +95,9 @@ struct TranscriptHint: View {
 struct TerminalFirstView: View {
     let reason: String
     var openTerminal: (() -> Void)?
+    /// QA #668 INFO-2: an ended session: the button stays, dimmed and off, as the header's.
+    var ended = false
+    var openEnabled: Bool { !ended }
     var showConversation: () -> Void = {}
     var body: some View {
         VStack(spacing: sz(10)) {
@@ -100,7 +105,7 @@ struct TerminalFirstView: View {
             Text("Opens in the terminal").font(Neon.font(14, weight: .semibold)).foregroundStyle(Neon.textPrimary)
             Text(reason).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-            if let openTerminal { OpenInTerminalButton(action: openTerminal) }
+            if let openTerminal { OpenInTerminalButton(action: openTerminal).disabled(!openEnabled).opacity(openEnabled ? 1 : 0.45) }
             Button("Show the conversation anyway", action: showConversation)
                 .buttonStyle(.plain).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.blue)
         }

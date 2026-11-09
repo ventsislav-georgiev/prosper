@@ -36,8 +36,8 @@ tag from the now-released section and put it on the new top draft.
   A pinned row shows a pin. The result line and the History buttons no longer move anything when
   they change, and the folder line sits in its own slot under the list. An answer whose dch
   support went away since the question says why instead of doing nothing. A stopped or killed
-  session stays in view until its History row arrives (about a minute at most); meanwhile Open in
-  terminal, Return, its "⋯" menu and the input box are off. Remove from History says when it also
+  session stays in view until its History row arrives (about a minute at most); meanwhile it reads
+  Ended, and Open in terminal, Return, its "⋯" menu and the input box are off. Remove from History says when it also
   removes older records of that name (#829).
 - Extensions: a `host.shell.run` that times out now stops the shell and everything it started
   (the whole process group, forced after 1 s) instead of leaving it running, and shell output
