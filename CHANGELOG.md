@@ -20,7 +20,7 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.174.0 *(unreleased)*
 
-- Ships dch 1.36.1 (was 1.28.6). A Claude Code plan waiting for approval now reads as
+- Ships dch 1.37.0 (was 1.28.6). A Claude Code plan waiting for approval now reads as
   waiting for you instead of working or idle. dch now has a config file (`dch --config`) with its own
   auto-allow for permission prompts, off unless you turn it on; it never answers a prompt
   raised by your hooks or "ask" rules, however long the rule. When it is on, Prosper's
