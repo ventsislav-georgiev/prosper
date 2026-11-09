@@ -20,7 +20,7 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.174.0 *(unreleased)*
 
-- Ships dch 1.37.0 (was 1.28.6). A Claude Code plan waiting for approval now reads as
+- Ships dch 1.38.0 (was 1.28.6). A Claude Code plan waiting for approval now reads as
   waiting for you instead of working or idle. dch now has a config file (`dch --config`) with its own
   auto-allow for permission prompts, off unless you turn it on; it never answers a prompt
   raised by your hooks or "ask" rules, however long the rule. When it is on, Prosper's
@@ -32,7 +32,7 @@ tag from the now-released section and put it on the new top draft.
   so agent peers can talk to them. A new dch setting, `detach_key`, picks what `Ctrl-\` does
   in an attached terminal, and the `dch -l` picker has a new look. dch can now serve its
   sessions to the Prosper iPhone app from a Linux or Mac machine without Prosper
-  (`dch serve`, off unless you run it), and attach to sessions on your other Macs and dch
+  (`dch serve`, off unless you run it; it tells a device it refuses why), and attach to sessions on your other Macs and dch
   hosts over Tailscale (`dch -a host:name`, `dch --ls --remote`).
 - Always allow now checks a prompt that replaces one it left to you while the session is
   still waiting, such as the next of several queued subagent prompts. The prompt left to
