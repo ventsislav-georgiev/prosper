@@ -29,6 +29,10 @@ tag from the now-released section and put it on the new top draft.
   the sidebar. History re-reads when the window opens and when a session ends while it is open.
   Right arrow with nothing selected unfolds the first folded section. Ages past 364 days read in
   years, here and on the island (#829).
+- Ships dch 1.40.0 (was 1.39.0). When a newer `dch -a` takes a remote session over, the older
+  attach now says another client attached and ends, instead of a plain link loss. `dch -a`
+  exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
+  neither is retried. A remote attach can ask for recent scrollback above the screen.
 
 ## v2.174.0
 
