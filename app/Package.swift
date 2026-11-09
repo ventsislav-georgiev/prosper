@@ -55,6 +55,16 @@ let package = Package(
             url: "https://github.com/dduan/TOMLDecoder",
             from: "0.4.0"
         ),
+        // #822: the Agent Sessions window's terminal (GhosttyTerminal over a static
+        // libghostty xcframework, an 81 MB artifact). Our fork = upstream
+        // 2.2.2026110702 + Lakr233/libghostty-spm#105, which finds the resource
+        // bundle in Contents/Resources (SwiftPM's native Bundle.module looks only
+        // at the .app root and traps). Exact: weekly builds of Ghostty main; bump
+        // deliberately, and back to upstream once #105 ships in a release.
+        .package(
+            url: "https://github.com/ventsislav-georgiev/libghostty-spm",
+            exact: "2.2.2026110702-prosper.1"
+        ),
         // NOTE: opt-out usage analytics POST directly to the Aptabase EU endpoint via
         // URLSession (Analytics/AnalyticsService.swift) — no SDK dependency. The SDK
         // stamped "sent" on enqueue with no cross-launch persistence, so an offline
@@ -105,6 +115,7 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "TOMLDecoder", package: "TOMLDecoder"),
+                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
                 "LuaRuntime",
                 "ProsperHelperProtocol",
                 "StatsCore",

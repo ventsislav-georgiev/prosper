@@ -19,9 +19,9 @@ export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
 # inherits the export above. ponytail: back to the default backend once a
 # vtool check on its product reads the host SDK; the flag is deprecated.
 if [[ "$PROFILE" == "release" ]]; then
-  swift build --build-system native -c release
+  swift build --build-system native --disable-keychain -c release
 else
-  swift build --build-system native
+  swift build --build-system native --disable-keychain
 fi
 
 # The linker records the SDK it linked against (LC_BUILD_VERSION sdk) and AppKit

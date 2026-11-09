@@ -66,6 +66,9 @@ fi
 if [[ -f "$ROOT/scripts/MenuBarIcon.png" ]]; then
   cp "$ROOT/scripts/MenuBarIcon.png" "$APP/Contents/Resources/MenuBarIcon.png"
 fi
+# Third-party notices (#822: the terminal's MIT licences). The standard About
+# panel (orderFrontStandardAboutPanel) shows Contents/Resources/Credits.rtf.
+cp "$ROOT/scripts/Credits.rtf" "$APP/Contents/Resources/Credits.rtf"
 
 # Bundled system extensions (calc, …). These live in the package source tree;
 # ExtensionRegistry loads them from Contents/Resources/extensions via
