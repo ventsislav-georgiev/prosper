@@ -107,11 +107,15 @@ enum AgentWindowControls {
     }
 
     /// G8: the strip's line for Remove from History, naming the record; its Claude id when it has one,
-    /// so the conversation stays reachable by hand.
-    static func removeQuestion(_ r: DchHistoryRecord) -> String {
+    /// so the conversation stays reachable by hand. QA #668 INFO-5: the forget also folds the name's
+    /// older unpinned records (#743, the menu item's count), so the line says so.
+    static func removeQuestion(_ r: DchHistoryRecord, in history: [DchHistoryRecord] = []) -> String {
         let sid = r.agent?.sessionID ?? ""
-        return "Remove \(r.title) from History? Resume won't be able to bring it back. Its Claude Code conversation stays on disk."
-            + (sid.isEmpty ? "" : " (claude --resume \(sid))")
+        let n = AgentIsland.older(r, in: history).filter { !$0.pinned }.count
+        let what = n == 0 ? "\(r.title) from History? Resume won't be able to bring it back. Its Claude Code conversation stays"
+            : "\(r.title) and its \(n) older record\(n == 1 ? "" : "s") from History? Resume won't be able to bring them back."
+                + " Their Claude Code conversations stay"
+        return "Remove \(what) on disk." + (sid.isEmpty ? "" : " (claude --resume \(sid))")
     }
 
     static let blockedSentence = " It's waiting on a prompt: answer it first."

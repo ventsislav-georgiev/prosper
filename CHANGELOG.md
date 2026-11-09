@@ -35,8 +35,10 @@ tag from the now-released section and put it on the new top draft.
   (the Claude Code conversation stays on disk); the selection then moves to the next History row.
   A pinned row shows a pin. The result line and the History buttons no longer move anything when
   they change, and the folder line sits in its own slot under the list. An answer whose dch
-  support went away since the question says why instead of doing nothing, and a stopped or killed
-  session stays selected until its History row arrives (#829).
+  support went away since the question says why instead of doing nothing. A stopped or killed
+  session stays in view until its History row arrives (about a minute at most); meanwhile Open in
+  terminal, Return, its "⋯" menu and the input box are off. Remove from History says when it also
+  removes older records of that name (#829).
 - Ships dch 1.40.0 (was 1.39.0). When a newer `dch -a` takes a remote session over, the older
   attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

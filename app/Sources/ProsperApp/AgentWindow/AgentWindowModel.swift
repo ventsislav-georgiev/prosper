@@ -191,11 +191,16 @@ final class AgentWindowModel: ObservableObject {
     /// #829 G2: a Stop or Kill the window started: once its live row is gone and a History
     /// record of that key ended since, that row is selected. One-shot; any manual selection drops it.
     private(set) var following: (key: AgentSessionKey, at: TimeInterval)? {
-        didSet { if following == nil { held = nil } }
+        didSet { if following == nil { held = nil; heldSince = nil } }
     }
     /// QA #665 INFO-8: the followed session's last live row. Its row gone before its record lands,
     /// the selection stays on it (the pane keeps showing it) until the record lands or the bound passes.
+    /// QA #668 F1: display only (nothing opens, sends or asks on it), and for `recordSlack` at most.
     private var held: AgentSidebar.Row?
+    /// When the followed session's live row was first seen gone (the hold's start).
+    private var heldSince: TimeInterval?
+    /// dch writes a record each minute: a Stop or Kill's record has ended by then, with slack.
+    static let recordSlack: TimeInterval = 65
     /// #829 G8: a record the window removed (its id): once its row is gone, the next History row
     /// is selected (else the previous, else none), never through nothing. A manual pick drops it.
     private(set) var removing: AgentSessionKey?
@@ -280,6 +285,8 @@ final class AgentWindowModel: ObservableObject {
     func row(_ id: AgentSidebar.RowID) -> AgentSidebar.Row? { rows.first { $0.id == id } }
     /// QA #665 INFO-8: a followed session whose row left reads as its last row until its record lands.
     var selectedRow: AgentSidebar.Row? { selection.flatMap { row($0) ?? (held?.id == $0 ? held : nil) } }
+    /// QA #668 F1: the selection resolves only through the hold: the session ended, so its pane is display-only.
+    var selectionIsHeld: Bool { selection.map { row($0) == nil && held?.id == $0 } ?? false }
 
     /// G8: the History row after `id` in `old` that is still there, else the one before, else the
     /// first History row left; nil when History is empty.
@@ -344,10 +351,11 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// Return and the "Open in terminal" buttons: a live session only. False: nothing
-    /// to open (a History row, none), so Return passes on (QA #626 INFO-2).
+    /// to open (a History row, none), so Return passes on (QA #626 INFO-2). QA #668 F1: nor an ended
+    /// session's held row (`dch -n <name>` would start a new session of that name).
     @discardableResult
     func openSelected() -> Bool {
-        guard let s = selectedRow?.session else { return false }
+        guard !selectionIsHeld, let s = selectedRow?.session else { return false }
         openSession(s)
         return true
     }
@@ -356,6 +364,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// A header "⋯" or row context-menu item: selects the row first (R6), then asks.
     func ask(_ verb: AgentWindowVerb, _ s: AgentSession) {
+        if selectionIsHeld, selection == .live(s.key) { return }   // QA #668 F1: it ended, nothing to ask
         select(.live(s.key))
         refusal = nil
         confirming = AgentWindowConfirm(verb: verb, key: s.key)
@@ -425,12 +434,19 @@ final class AgentWindowModel: ObservableObject {
 
     /// G2: the followed session's live row is gone and a History record of its key ended
     /// since the Stop or Kill (dch writes a record each minute: 65 s of slack): select it.
-    /// Dropped after the Stop's bound.
+    /// Dropped after the Stop's bound. QA #668 F1: no record `recordSlack` after the row left (history
+    /// off, a failed record write): the hold lets go and nothing is selected.
     private func followToHistory() -> Bool {
         guard let f = following else { return false }
         if now() - f.at > DchActionRunner.restartBound { following = nil; return false }
-        guard row(.live(f.key)) == nil,
-              let h = rows.first(where: { $0.record?.key == f.key && ($0.record?.lastSeen ?? 0) >= f.at - 65 }) else { return false }
+        guard row(.live(f.key)) == nil else { return false }
+        guard let h = rows.first(where: { $0.record?.key == f.key && ($0.record?.lastSeen ?? 0) >= f.at - Self.recordSlack })
+        else {
+            let since = heldSince ?? now()
+            heldSince = since
+            if now() - since > Self.recordSlack { following = nil }
+            return false
+        }
         following = nil
         select(h.id, manual: false)
         return true
@@ -474,6 +490,6 @@ final class AgentWindowModel: ObservableObject {
         transcript.start()
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
         interaction.plan = transcript.pendingPlan
-        interaction.follow(s)
+        interaction.follow(selectionIsHeld ? nil : s)   // QA #668 F1: an ended session takes no input
     }
 }

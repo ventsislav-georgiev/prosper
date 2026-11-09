@@ -1103,3 +1103,182 @@ extension AgentIslandStore {
         return self
     }
 }
+
+/// QA #668 F1: a Stop/Kill's held row is display-only and lasts the record slack at most; INFO-5.
+extension AgentWindowD1Tests {
+    /// The window model of `st` after a window Stop of "a" whose live row then left with no record.
+    @MainActor
+    private func heldModel(_ st: AgentIslandStore, opened: @escaping (AgentSession) -> Void) throws -> (AgentWindowModel, AgentSession) {
+        let m = windowModel(st, opened: opened)
+        Calls().wire(m)
+        m.setVisible(true)
+        let a = try XCTUnwrap(st.sessions.first { $0.name == "a" })
+        m.ask(.stop, a)
+        m.confirm(true)
+        st.sessions = st.sessions.filter { $0.name != "a" }
+        return (m, a)
+    }
+
+    @MainActor
+    func testAgentWindowHeldRowOfAnEndedSessionIsDisplayOnly() throws {
+        let st = store([session("a", .idle), session("b", .idle)])
+        st.controlDch = bin([1, 38, 0])
+        var opened: [AgentSessionKey] = []
+        // The interaction goes through a controller over a fake pty: a send that starts would be busy.
+        let f = AgentWindowInteractionTests.MessageFake(statuses: ["idle", "working"])
+        let c = AgentIslandController()
+        c.io = f.io
+        c.showsPanel = false
+        c.store = AgentIslandStore(geometry: Self.geometry)
+        c.autoAllowOn = { false }
+        c.after = { _, _ in }
+        c.onSessions = { _ in }
+        let m = windowModel(st, opened: { opened.append($0.key) })
+        m.interaction.controller = c
+        m.interaction.pause = { _ in }
+        m.interaction.readQueue = { $0() }
+        let calls = Calls()
+        calls.wire(m)
+        m.setVisible(true)
+        defer { m.close() }
+        let a = try XCTUnwrap(st.sessions.first { $0.name == "a" })
+        m.select(.live(a.key))
+        XCTAssertFalse(m.selectionIsHeld)
+        XCTAssertTrue(m.openSelected(), "live: Return opens it")
+        XCTAssertEqual(opened, [a.key])
+        XCTAssertEqual(m.interaction.session?.key, a.key, "live: the input box is its")
+        let detail = AgentDetailView(model: m, transcript: m.transcript, scrolls: false)
+        XCTAssertTrue(detail.inputStore === st, "live: the locked input (Restart/Stop text)")
+        m.ask(.stop, a)
+        m.confirm(true)
+        st.sessions = [session("b", .idle)]   // its row left, no record (history off, a failed record write)
+        XCTAssertEqual(m.selection, .live(a.key), "held: the pane keeps showing it")
+        XCTAssertEqual(m.selectedRow?.session?.key, a.key)
+        XCTAssertTrue(m.selectionIsHeld)
+        // Return / Open in terminal: nothing runs (`dch -n a` would start a new session named a).
+        XCTAssertFalse(m.openSelected(), "Return passes on")
+        XCTAssertEqual(opened, [a.key], "the openSession seam ran nothing")
+        // Send, Interrupt and the prompt answers: no session to write to.
+        XCTAssertNil(m.interaction.session, "the input box follows nothing")
+        m.interaction.draft = "hello"
+        m.interaction.send()
+        m.interaction.interrupt()
+        XCTAssertFalse(m.interaction.busy, "nothing started")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        XCTAssertEqual(f.lock.withLock { f.says.count + f.keys.count }, 0, "nothing reaches the pty")
+        for s in [a, AgentSession(key: a.key, alias: "", activity: 1, state: .working, agents: 0)] {
+            m.interaction.follow(nil)
+            let pane = AgentInteractionPane(model: m.interaction, session: s, open: {}, ended: true)
+            XCTAssertFalse(pane.canSend, "\(s.state)")
+            XCTAssertFalse(pane.canInterrupt, "\(s.state)")
+            XCTAssertEqual(pane.placeholder, AgentInteractionPane.endedPlaceholder)
+        }
+        // A typed draft on the idle session (drafts are per followed session): only `ended` keeps Send off.
+        let typed = AgentWindowInteraction()
+        typed.follow(a)
+        typed.draft = "hello"
+        XCTAssertFalse(AgentInteractionPane(model: typed, session: a, open: {}, ended: true).canSend)
+        XCTAssertTrue(AgentInteractionPane(model: typed, session: a, open: {}, ended: false).canSend, "control")
+        // The detail pane builds the plain, ended input (no lock store), never the live locked one.
+        XCTAssertNil(detail.inputStore, "held: the plain pane with ended")
+        // The "⋯" (and any ask for it): no question, nothing to confirm, the follow stays.
+        for verb: AgentWindowVerb in [.restart, .stop, .kill] {
+            m.ask(verb, a)
+            XCTAssertNil(m.confirming, "\(verb): nothing asked on an ended session")
+            m.confirm(true)
+        }
+        XCTAssertEqual(calls.all.map(\.verb), [.stop], "only the first Stop ran")
+        XCTAssertNotNil(m.following, "an ask refused is no manual pick")
+        XCTAssertEqual(m.selection, .live(a.key))
+        // The header's controls keep their slots (off, never removed).
+        let row = try XCTUnwrap(m.selectedRow)
+        func height(_ ended: Bool) -> CGFloat {
+            NSHostingView(rootView: AgentSessionHeader(row: row, session: a, cwd: "/tmp/p", open: {}, store: st, ended: ended)
+                .frame(width: 900)).fittingSize.height
+        }
+        XCTAssertEqual(height(true), height(false), accuracy: 0.5)
+        // The "⋯": no store for the ended row (no items, disabled); the live row's has items.
+        func header(_ ended: Bool) -> AgentSessionHeader {
+            AgentSessionHeader(row: row, session: a, cwd: "/tmp/p", open: {}, store: st, ended: ended)
+        }
+        XCTAssertNil(header(true).menuStore, "held: the menu offers nothing")
+        XCTAssertTrue(header(false).menuStore === st)
+        XCTAssertFalse(AgentWindowControls.menu(a, store: st).isEmpty, "live: Restart/Stop/Kill")
+        // Its record lands: the History row, as before.
+        st.history = [record("a", ago: 0)]
+        XCTAssertEqual(m.selection, .history(a.key))
+        XCTAssertFalse(m.selectionIsHeld)
+        XCTAssertFalse(m.openSelected())
+        XCTAssertEqual(opened, [a.key])
+        // A held session whose live row is back (an island restart of that name): live again, opens.
+        st.sessions = [a, session("b", .idle)]
+        m.select(.live(a.key))
+        XCTAssertTrue(m.openSelected())
+    }
+
+    @MainActor
+    func testAgentWindowHoldLetsGoWhenNoRecordLandsWithinTheSlack() throws {
+        XCTAssertEqual(AgentWindowModel.recordSlack, 65)
+        var t = Self.now
+        let st = store([session("a", .idle), session("b", .idle)])
+        st.controlDch = bin([1, 38, 0])
+        let (m, a) = try heldModel(st, opened: { _ in })
+        defer { m.close() }
+        m.now = { t }
+        XCTAssertTrue(m.selectionIsHeld)
+        t = Self.now + 60
+        m.refresh()
+        XCTAssertEqual(m.selection, .live(a.key), "inside the slack: held")
+        t = Self.now + 66
+        m.refresh()
+        XCTAssertNil(m.selection, "no record 65 s on: nothing selected, as before Phase 2")
+        XCTAssertNil(m.following)
+        XCTAssertNil(m.selectedRow)
+        XCTAssertFalse(m.selectionIsHeld)
+        st.history = [record("a", ago: -66)]
+        XCTAssertNil(m.selection, "a record after the hold let go is not followed")
+
+        // A record at 30 s: followed (unchanged).
+        t = Self.now
+        st.history = []
+        st.sessions = [a, session("b", .idle)]
+        m.ask(.kill, a)
+        m.confirm(true)
+        st.sessions = [session("b", .idle)]
+        t = Self.now + 30
+        st.history = [record("a", ago: -30)]
+        XCTAssertEqual(m.selection, .history(a.key))
+
+        // A slow Stop: the slack runs from the row leaving, not from the click.
+        t = Self.now
+        st.history = []
+        st.sessions = [a, session("b", .idle)]
+        m.ask(.stop, a)
+        m.confirm(true)
+        t = Self.now + 100
+        st.sessions = [session("b", .idle)]
+        XCTAssertEqual(m.selection, .live(a.key), "the row just left: held")
+        t = Self.now + 160
+        m.refresh()
+        XCTAssertEqual(m.selection, .live(a.key), "60 s since it left: held")
+        t = Self.now + 166
+        m.refresh()
+        XCTAssertNil(m.selection, "66 s since it left: let go")
+    }
+
+    @MainActor
+    func testAgentWindowRemoveQuestionCountsTheOlderUnpinnedRecords() {
+        let h = record("h"), other = record("other")
+        XCTAssertEqual(AgentWindowControls.removeQuestion(h, in: [h, other, aside("h", ago: 9500, pinned: true)]),
+                       "Remove h from History? Resume won't be able to bring it back. Its Claude Code conversation stays on disk.",
+                       "no older unpinned record: one record named")
+        XCTAssertEqual(AgentWindowControls.removeQuestion(h, in: [h, aside("h", ago: 9000), aside("h", ago: 9500, pinned: true)]),
+                       "Remove h and its 1 older record from History? Resume won't be able to bring them back."
+                           + " Their Claude Code conversations stay on disk.")
+        var g = record("h")
+        g.agent = DchHistoryRecord.Agent(kind: "claude", sessionID: "0b7c2f3e-aaaa-bbbb-cccc-0123456789ab")
+        XCTAssertEqual(AgentWindowControls.removeQuestion(g, in: [g, aside("h", ago: 9000), aside("h", ago: 9200)]),
+                       "Remove h and its 2 older records from History? Resume won't be able to bring them back."
+                           + " Their Claude Code conversations stay on disk. (claude --resume 0b7c2f3e-aaaa-bbbb-cccc-0123456789ab)")
+    }
+}

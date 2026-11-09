@@ -389,12 +389,17 @@ struct AgentDetailView: View {
     /// False for offscreen evidence (no ScrollView).
     var scrolls = true
 
+    /// QA #668 F1: the input box's lock store; nil for an ended session's held row (the plain, ended pane).
+    var inputStore: AgentIslandStore? { model.selectionIsHeld ? nil : model.store }
+
     var body: some View {
         if let row = model.selectedRow, let s = row.session {
+            // QA #668 F1: an ended session's held row is display-only.
+            let ended = model.selectionIsHeld
             VStack(spacing: 0) {
                 AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
                                    level: $model.verbosity, todos: transcript.todos, todosOpen: $transcript.todosOpen,
-                                   store: model.store, ask: { model.ask($0, s) })
+                                   store: model.store, ask: { model.ask($0, s) }, ended: ended)
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
                                     ownsLifecycle: false, level: model.verbosity)
@@ -410,10 +415,10 @@ struct AgentDetailView: View {
                     }
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 // #798: the prompt pinned at the bottom, the input box under it. #829: locked while a Restart or Stop types.
-                if let store = model.store {
+                if let store = inputStore {
                     AgentLockedInteraction(store: store, model: model.interaction, session: s, open: { model.openSelected() })
                 } else {
-                    AgentInteractionPane(model: model.interaction, session: s, open: { model.openSelected() })
+                    AgentInteractionPane(model: model.interaction, session: s, open: { model.openSelected() }, ended: ended)
                 }
             }
         } else if let row = model.selectedRow, let r = row.record {
@@ -430,7 +435,7 @@ struct AgentDetailView: View {
     @ViewBuilder var confirmStrip: some View {
         if let c = model.confirming {
             let text = model.confirmingSession.map { AgentWindowControls.question(c.verb, $0) }
-                ?? model.confirmingRecord.map(AgentWindowControls.removeQuestion)
+                ?? model.confirmingRecord.map { AgentWindowControls.removeQuestion($0, in: model.store?.history ?? []) }
             if let text {
                 AgentConfirmStrip(text: text, action: AgentWindowControls.confirmTitle(c.verb),
                                   confirm: { model.confirm(true) }, cancel: { model.confirm(false) })
@@ -452,6 +457,10 @@ struct AgentSessionHeader: View {
     /// #829: the "⋯" menu's store (its gates) and its ask.
     var store: AgentIslandStore?
     var ask: (AgentWindowVerb) -> Void = { _ in }
+    /// QA #668 F1: the session ended (a held row): Open in terminal and the "⋯" are off, in their slots.
+    var ended = false
+    /// The "⋯" menu's store: none for an ended session, so it offers nothing and is disabled.
+    var menuStore: AgentIslandStore? { ended ? nil : store }
 
     var project: String {
         if let cwd { return (cwd as NSString).abbreviatingWithTildeInPath }
@@ -511,7 +520,8 @@ struct AgentSessionHeader: View {
             // #822's Terminal view pill goes here, between the picker and the button.
             HStack(spacing: sz(6)) {   // #829: the "⋯" sits close to the button, always last, fixed size
                 OpenInTerminalButton(action: open, compact: compact)
-                AgentSessionMenuButton(store: store, session: session, ask: ask)
+                    .disabled(ended).opacity(ended ? 0.45 : 1)
+                AgentSessionMenuButton(store: menuStore, session: session, ask: ask)
             }
         }
     }
@@ -735,15 +745,20 @@ struct AgentInteractionPane: View {
     let open: () -> Void
     /// #829 (spec 3.5): a Restart or Stop's running text on this session; nil: none.
     var lock: String?
+    /// QA #668 F1: the session ended (a held row): nothing is sent, interrupted or answered.
+    var ended = false
 
     var canSend: Bool {
-        (session.state == .idle || session.state == .done) && !model.busy && lock == nil
+        (session.state == .idle || session.state == .done) && !model.busy && lock == nil && !ended
             && AgentWindowDriver.message(model.draft) != nil
     }
 
-    var canInterrupt: Bool { session.state == .working && !model.busy && lock == nil }
+    var canInterrupt: Bool { session.state == .working && !model.busy && lock == nil && !ended }
+
+    static let endedPlaceholder = "This session ended"
 
     var placeholder: String {
+        if ended { return Self.endedPlaceholder }
         if let lock { return AgentWindowControls.lockPlaceholder(lock) }
         return switch session.state {
         case .blocked: "Answer the prompt above first"
@@ -754,7 +769,7 @@ struct AgentInteractionPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(8)) {
-            AgentPromptPanel(model: model, open: open).disabled(lock != nil)
+            AgentPromptPanel(model: model, open: open).disabled(lock != nil || ended)
             if let n = model.notice { AgentActionNotice(text: n, open: open) }
             HStack(alignment: .bottom, spacing: sz(8)) {
                 ZStack(alignment: .topLeading) {
