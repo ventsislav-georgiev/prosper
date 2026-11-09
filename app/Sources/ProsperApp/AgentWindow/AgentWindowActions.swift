@@ -233,6 +233,8 @@ enum AgentWindowText {
     static let noStatus = "dch didn't say what the session is doing. Open in terminal"
     static let draft = "Claude's input already holds a draft. Open in terminal"
     static let noScreen = "This dch can't confirm a message. Open in terminal"
+    /// QA #651 INFO-2: no terminal mirror (dch-lite), so no screen to check before the Esc.
+    static let noScreenInterrupt = "This dch can't confirm an interrupt. Open in terminal"
     static let notClaude = "Claude isn't running in this session. Open in terminal"
     static let notSubmitted = "The message is in Claude's input but wasn't sent. Open in terminal"
     static let notWorking = "Claude isn't working, so there's nothing to interrupt"
@@ -299,9 +301,34 @@ struct AgentWindowDriver: Sendable {
     /// pasted digit can pick a row there and Esc answers it "No". So the screen read right before
     /// the key decides: a prompt Prosper parses refuses; an empty read (dch timed out) fails closed.
     /// dch's `--say` pastes and presses Enter in one call, so this one read covers both.
+    /// QA #651 F1: also a prompt Prosper does not parse (a plan approval with no footer, no
+    /// editor detected): below Claude Code's composer, if one is on screen, a "❯" caret on a
+    /// numbered row ("❯ 1. Yes") or the plan's question line (dch #092's rule).
     static func refusal(_ screen: String) -> String? {
         if screen.isEmpty { return AgentWindowText.unconfirmed }
-        return AgentPrompt.screen(screen) != nil ? AgentWindowText.promptShown : nil
+        return AgentPrompt.screen(screen) != nil || promptTail(screen) ? AgentWindowText.promptShown : nil
+    }
+
+    /// QA #651 F1: the screen below Claude Code's composer (or all of it, with none) holds a caret
+    /// option row or "Claude has written up a plan". The composer is a "❯" line at column 0
+    /// right under a rule with a rule further down: a draft typed there ("❯ 1. fix the build")
+    /// is text, never a row. Claude Code hides the composer while a dialog shows, and a dialog
+    /// row under a rule (a focused "❯ 5. Chat about this") has no rule below it.
+    static func promptTail(_ screen: String) -> Bool {
+        let lines = AgentPrompt.unframe(screen.split(separator: "\n", omittingEmptySubsequences: false))
+        let composer = lines.indices.last { k in
+            k > 0 && AgentPrompt.isRule(lines[k - 1]) && lines[k].first == "❯"
+                && lines[(k + 1)...].contains(where: AgentPrompt.isRule)
+        }
+        return lines[((composer ?? -1) + 1)...].contains { l in
+            AgentPrompt.option(l)?.caret == true
+                || l.trimmingCharacters(in: .whitespaces).hasPrefix("Claude has written up a plan")
+        }
+    }
+
+    /// `refusal` for the read before a key; an empty one names a dch with no mirror (`lite`).
+    func refusal(_ shown: String, lite: String) -> String? {
+        shown.isEmpty && io.noMirror(key) ? lite : Self.refusal(shown)
     }
 
     /// One message, only while dch says idle or done and the screen shows no prompt (`refusal`):
@@ -315,7 +342,7 @@ struct AgentWindowDriver: Sendable {
                            : st == "blocked" ? AgentWindowText.blocked : AgentWindowText.noStatus)
         }
         let shown = io.read(key)
-        if let why = Self.refusal(shown) { return .failed(why) }
+        if let why = refusal(shown, lite: AgentWindowText.noScreen) { return .failed(why) }
         let head = Self.head(text), before = Self.count(head, in: shown)
         let reply = Self.sayReply(io.say(key, text))
         switch (reply?.result, reply?.reason) {
@@ -365,7 +392,7 @@ struct AgentWindowDriver: Sendable {
     /// the read is blocked, and an Esc there would answer it "No".
     func interrupt() -> AgentWindowOutcome {
         let shown = io.read(key)
-        if let why = Self.refusal(shown) { return .failed(why) }
+        if let why = refusal(shown, lite: AgentWindowText.noScreenInterrupt) { return .failed(why) }
         let before = Self.count("Interrupted", in: shown)
         guard status() == "working" else { return .failed(AgentWindowText.notWorking) }
         io.keys(key, ["esc"])

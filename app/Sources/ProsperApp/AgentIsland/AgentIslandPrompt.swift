@@ -157,6 +157,9 @@ struct AgentPromptIO: Sendable {
     /// #798: one message, `dch --say <name> --json -- <text>`: one bracketed paste, then
     /// Enter once Claude Code's composer shows it. dch's JSON line; "" when it timed out.
     var say: @Sendable (AgentSessionKey, String) -> String = { _, _ in "" }
+    /// QA #651 INFO-2: true when dch says the session has no terminal mirror (dch-lite or
+    /// DCH_NO_VT: `--read` exits 3), so every read is empty. Asked only after an empty read.
+    var noMirror: @Sendable (AgentSessionKey) -> Bool = { _ in false }
 }
 
 /// #798: a prompt as the Agents window drives it: the parse, plus where its caret is

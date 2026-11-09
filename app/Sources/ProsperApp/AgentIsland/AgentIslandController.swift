@@ -1667,7 +1667,8 @@ extension AgentPromptIO {
 
     /// `run` gets the argv and env; tests pass a recorder.
     static func live(run: @escaping @Sendable ([String], [String: String]) -> Data,
-                     say: @escaping @Sendable ([String], [String: String]) -> Data = liveSay) -> AgentPromptIO {
+                     say: @escaping @Sendable ([String], [String: String]) -> Data = liveSay,
+                     noMirror: @escaping @Sendable ([String], [String: String]) -> Bool = liveNoMirror) -> AgentPromptIO {
         @Sendable func dch(_ args: [String], _ key: AgentSessionKey) -> String {
             String(decoding: run(args, AgentIsland.listEnv(dir: key.dir)), as: UTF8.self)
         }
@@ -1679,7 +1680,17 @@ extension AgentPromptIO {
             say: { key, text in
                 String(decoding: say(["--say", key.name, "--json", "--", text], AgentIsland.listEnv(dir: key.dir)),
                        as: UTF8.self)
-            })
+            },
+            noMirror: { noMirror(["--read", $0.name], AgentIsland.listEnv(dir: $0.dir)) })
+    }
+
+    /// QA #651 INFO-2: dch's `--read` exits 3 when the session has no terminal mirror; a
+    /// timed-out or failed call is not that (the caller then fails closed as unconfirmed).
+    static func liveNoMirror(_ args: [String], _ env: [String: String]) -> Bool {
+        let path = DchCommand.dchPath   // on the caller's thread
+        return DchCommand.bounded(DchCommand.islandTimeout) { onPid in
+            Data(DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: onPid).status == 3 ? [1] : [])
+        } == Data([1])
     }
 
     /// #798: `--say` waits up to 30 s for the paste to land, then re-presses Enter up to 5 times

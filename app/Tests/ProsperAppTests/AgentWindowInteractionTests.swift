@@ -629,6 +629,9 @@ final class AgentWindowInteractionTests: XCTestCase {
         var reply: String
         var says: [String] = []
         var keys: [[String]] = []
+        /// QA #651 INFO-2: what `noMirror` answers (dch-lite: true), and how often it was asked.
+        var lite = false
+        var mirrorAsks = 0
         /// #820: the first read is the one before the message or Esc: Claude's composer, no prompt.
         init(statuses: [String], screens: [String] = [AgentWindowInteractionTests.idleScreen], reply: String = #"{"name":"s","result":"ok","reason":"","detail":""}"#) {
             (self.statuses, self.screens, self.reply) = (statuses, screens, reply)
@@ -639,7 +642,8 @@ final class AgentWindowInteractionTests: XCTestCase {
                           status: { _ in self.lock.withLock { self.next(&self.statuses) } },
                           send: { _, _ in XCTFail("a message never goes through --send") },
                           keys: { _, k in self.lock.withLock { self.keys.append(k) } },
-                          say: { _, t in self.lock.withLock { self.says.append(t); return self.reply } })
+                          say: { _, t in self.lock.withLock { self.says.append(t); return self.reply } },
+                          noMirror: { _ in self.lock.withLock { self.mirrorAsks += 1; return self.lite } })
         }
     }
 
@@ -765,6 +769,85 @@ final class AgentWindowInteractionTests: XCTestCase {
         let h = MessageFake(statuses: ["idle", "working"], screens: [after])
         XCTAssertEqual(driver(h.io).send("1"), .done)
         XCTAssertEqual(h.says, ["1"])
+    }
+
+    /// QA #651 F1: a plan approval with no footer (no editor detected) is no parsed prompt, and
+    /// dch before 1.36.1 says working over it: the caret row or the plan's question still
+    /// refuses, so no paste picks a row and no Esc rejects the plan, whatever the status.
+    func testAgentWindowMessageAndInterruptSendNothingOverAnUnparsedPlan() {
+        let plan = Self.planScreen(caret: 1, footer: nil)
+        XCTAssertNil(AgentPrompt.screen(plan), "the parse's contract stays: approve() needs the footer")
+        // Each check alone: the question line renamed (the caret row), no caret drawn (the question).
+        let noQuestion = plan.replacingOccurrences(of: "Claude has written up a plan and is ready to execute. ", with: "")
+        let noCaret = Self.planScreen(caret: 0, footer: nil)
+        for (name, screen) in [("plan", plan), ("caret-row", noQuestion), ("plan-question", noCaret)] {
+            XCTAssertNil(AgentPrompt.screen(screen), name)
+            XCTAssertEqual(AgentWindowDriver.refusal(screen), AgentWindowText.promptShown, name)
+            for st in ["idle", "done", "working"] {
+                let f = MessageFake(statuses: [st, "working"], screens: [screen])
+                XCTAssertNotEqual(driver(f.io).send("1"), .done, "\(name) \(st)")
+                XCTAssertEqual(f.says, [], "\(name) \(st): nothing pasted")
+                XCTAssertEqual(f.keys, [], "\(name) \(st)")
+                let g = MessageFake(statuses: [st, "idle"], screens: [screen])
+                XCTAssertEqual(driver(g.io).interrupt(), .failed(AgentWindowText.promptShown), "\(name) \(st)")
+                XCTAssertEqual(g.keys, [], "\(name) \(st): no Esc")
+                XCTAssertEqual(g.says, [], "\(name) \(st)")
+            }
+            let f = MessageFake(statuses: ["idle", "working"], screens: [screen])
+            XCTAssertEqual(driver(f.io).send("1"), .failed(AgentWindowText.promptShown), name)
+        }
+    }
+
+    /// QA #651 F1: Claude Code's composer holding a draft that starts with a digit ("❯ 1. fix
+    /// the build", under a rule, closed by a rule) is typed text, never a caret row: sent. So is
+    /// such a message echoed in the transcript above the composer, and the plan's question quoted there.
+    func testAgentWindowComposerDraftWithADigitStillSends() {
+        let draft = ["⏺ Done.", "", Self.rule, "❯ 1. fix the build", "  2. then run the tests", Self.rule, "  ? for shortcuts"]
+        let echo = ["❯ 1. fix the build", "", "  Claude has written up a plan, the dialog said.", "", Self.rule, "❯ ", Self.rule,
+                    "  ⏸ plan mode on (shift+tab to cycle)"]
+        for (name, lines) in [("draft", draft), ("echo", echo)] {
+            let screen = lines.joined(separator: "\n")
+            XCTAssertNil(AgentWindowDriver.refusal(screen), name)
+            let f = MessageFake(statuses: ["idle", "working"], screens: [screen])
+            XCTAssertEqual(driver(f.io).send("go"), .done, name)
+            XCTAssertEqual(f.says, ["go"], name)
+            let g = MessageFake(statuses: ["working", "idle"], screens: [screen])
+            XCTAssertEqual(driver(g.io).interrupt(), .done, name)
+            XCTAssertEqual(g.keys, [["esc"]], name)
+        }
+        // A focused "Chat about this" row right under a rule, with no rule below it, is a dialog row.
+        let chat = [Self.rule, "❯ 5. Chat about this"].joined(separator: "\n")
+        XCTAssertEqual(AgentWindowDriver.refusal(chat), AgentWindowText.promptShown)
+    }
+
+    /// QA #651 INFO-2: on a dch with no terminal mirror (dch-lite) every read is empty. Still
+    /// nothing is sent, but the window says why: noScreen, not "Couldn't confirm". A full dch
+    /// whose read timed out still reads unconfirmed. The mirror is asked only after an empty read.
+    func testAgentWindowNoMirrorSaysSoAndSendsNothing() {
+        for lite in [true, false] {
+            let f = MessageFake(statuses: ["idle", "working"], screens: [""])
+            f.lite = lite
+            XCTAssertEqual(driver(f.io).send("1"), .failed(lite ? AgentWindowText.noScreen : AgentWindowText.unconfirmed))
+            XCTAssertEqual(f.says, [])
+            let g = MessageFake(statuses: ["working", "idle"], screens: [""])
+            g.lite = lite
+            XCTAssertEqual(driver(g.io).interrupt(),
+                           .failed(lite ? AgentWindowText.noScreenInterrupt : AgentWindowText.unconfirmed))
+            XCTAssertEqual(g.keys, [])
+        }
+        let h = MessageFake(statuses: ["idle", "working"])
+        h.lite = true
+        XCTAssertEqual(driver(h.io).send("go"), .done, "a screen read: the mirror is not asked")
+        XCTAssertEqual(h.mirrorAsks, 0)
+        // Live: the probe is `--read <name>` with the session's env; exit 3 alone means no mirror.
+        final class Rec: @unchecked Sendable { let lock = NSLock(); var calls: [[String]] = [] }
+        let r = Rec()
+        let io = AgentPromptIO.live(run: { _, _ in Data() }, say: { _, _ in Data() }, noMirror: { args, env in
+            XCTAssertEqual(env["DCH_SOCKET_DIR"], "/tmp/dch-test")
+            r.lock.withLock { r.calls.append(args) }; return true
+        })
+        XCTAssertTrue(io.noMirror(Self.key))
+        XCTAssertEqual(r.calls, [["--read", "s"]])
     }
 
     /// #820 through the window: the list and dch say idle, the screen holds a plan approval. The
