@@ -20,7 +20,7 @@ tag from the now-released section and put it on the new top draft.
 
 ## v2.174.0 *(unreleased)*
 
-- Ships dch 1.38.0 (was 1.28.6). A Claude Code plan waiting for approval now reads as
+- Ships dch 1.39.0 (was 1.28.6). A Claude Code plan waiting for approval now reads as
   waiting for you instead of working or idle. dch now has a config file (`dch --config`) with its own
   auto-allow for permission prompts, off unless you turn it on; it never answers a prompt
   raised by your hooks or "ask" rules, however long the rule. When it is on, Prosper's
@@ -30,7 +30,9 @@ tag from the now-released section and put it on the new top draft.
   attaching no longer drops output the session had not shown yet.
   Codex sessions started by dch get their own Codex app server when your Codex supports it,
   so agent peers can talk to them. A new dch setting, `detach_key`, picks what `Ctrl-\` does
-  in an attached terminal, and the `dch -l` picker has a new look. dch can now serve its
+  in an attached terminal, and the `dch -l` picker has a new look, a "/" filter, Claude session names on
+  History rows, and reopens where you left it. When one session is attached in two terminals, the
+  pane you focus sets its size (`focus_resize = false` turns that off). dch can now serve its
   sessions to the Prosper iPhone app from a Linux or Mac machine without Prosper
   (`dch serve`, off unless you run it; it tells a device it refuses why), and attach to sessions on your other Macs and dch
   hosts over Tailscale (`dch -a host:name`, `dch --ls --remote`).
