@@ -85,7 +85,8 @@ end
 -- Run one script and render its captured output as a compact result row —
 -- same shape as the shell extension's output (see shell/init.lua).
 local function run_script(s)
-    local out = host.shell.run(s.command)
+    -- keep_running: a script outliving the host timeout finishes ("runs to completion").
+    local out = host.shell.run(s.command, { keep_running = true })
     out = trim(out or "")
     return host.ui.render(host.ui.list{
         title = s.name,

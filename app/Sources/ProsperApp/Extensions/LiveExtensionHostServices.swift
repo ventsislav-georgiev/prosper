@@ -112,7 +112,11 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     // MARK: Shell
 
     func shellRun(_ command: String) async -> String {
-        await ShellRunner.run(command)
+        await shellRunCapped(command).text
+    }
+
+    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool) {
+        await ShellRunner.run(command, cap: ShellRunner.hostOutputCap)
     }
 
     // MARK: Process control — the shared guard seam (see KillProcessSupport)

@@ -1,4 +1,5 @@
 import XCTest
+import LuaRuntime
 @testable import ProsperApp
 
 /// #833: `host.shell.run` goes through `ExtensionHost.awaitSync` → `ShellRunner.run`. A timeout
@@ -25,7 +26,7 @@ final class ShellRunnerTests: XCTestCase {
         XCTAssertEqual(pids.count, 2, "expected the zsh pid and the sleep pid")
         for pid in pids where !waitGone(pid, timeout: 2) {
             XCTFail("pid \(pid) outlived the timeout by 2 s")
-            kill(pid, SIGKILL)   // our own recorded pid: don't leak it past the failure
+            _ = killIfReal(pid, group: false)   // our own recorded pid: don't leak it past the failure
         }
     }
 
@@ -80,5 +81,86 @@ final class ShellRunnerTests: XCTestCase {
             guard let out else { return XCTFail("run \(i) never resumed") }
             XCTAssertTrue(out == "" || out == "\(i)", "run \(i): \(out)")
         }
+    }
+
+    func testExactlyCapBytesHaveNoMarker() async {
+        let out = await ShellRunner.run("/usr/bin/head -c \(ShellRunner.outputCap) /dev/zero | /usr/bin/tr '\\0' y")
+        XCTAssertEqual(out.utf8.count, ShellRunner.outputCap)
+        XCTAssertFalse(out.contains(ShellRunner.truncationMarker))
+    }
+
+    /// QA #671 INFO-3: invalid UTF-8 (a cap cut inside a sequence, or a stray byte) shows
+    /// U+FFFD instead of blanking the whole output.
+    func testSplitOrInvalidUTF8GivesReplacementNotBlank() async {
+        let split = await ShellRunner.run(
+            "/usr/bin/head -c \(ShellRunner.outputCap - 1) /dev/zero | /usr/bin/tr '\\0' y; printf '\\303\\251'")
+        XCTAssertTrue(split.hasSuffix("y\u{FFFD}\n" + ShellRunner.truncationMarker))
+        let stray = await ShellRunner.run("printf 'ok\\377'")
+        XCTAssertEqual(stray, "ok\u{FFFD}")
+    }
+
+    // MARK: host.shell.run through the Lua bridge and the live services (QA #671 F1/F2)
+
+    /// Runs `body` (Lua defining `t()`) on a fresh VM with the live host services, off main
+    /// like the extension lane, and returns t()'s first result.
+    private func hostShell(_ body: String, callTimeout: TimeInterval) throws -> String? {
+        let lua = try LuaRuntime()
+        try ExtensionHost(extensionID: "com.test.shell", services: LiveExtensionHostServices.shared,
+                          callTimeout: callTimeout).install(into: lua)
+        try lua.run(body)
+        nonisolated(unsafe) var result: Result<String?, Error> = .success(nil)
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            result = Result { try lua.callGlobal("t") }
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + callTimeout + 30) == .success else {
+            XCTFail("host.shell.run did not return"); return nil
+        }
+        return try result.get()
+    }
+
+    /// F1: keep_running hands control back at the timeout and leaves the command running.
+    func testKeepRunningOutlivesTheTimeoutUnkilled() throws {
+        let file = tempDir().appendingPathComponent("pid").path
+        let out = try hostShell("""
+            function t()
+                local s = host.shell.run([[echo $$ > '\(file)'; exec /bin/sleep 30]], { keep_running = true })
+                return s
+            end
+            """, callTimeout: 1)
+        XCTAssertEqual(out, "", "the timeout returns control with empty output")
+        let pid = try XCTUnwrap(parsePid(try? String(contentsOfFile: file, encoding: .utf8)))
+        defer { _ = killIfReal(pid, group: false) }   // our own recorded pid
+        usleep(2_500_000)   // past killGroup's 1 s grace, had a kill been sent
+        XCTAssertEqual(kill(pid, 0), 0, "keep_running command \(pid) was killed")
+    }
+
+    /// F2: a >5 MB JSON file read through host.shell.run decodes; nothing marks the text.
+    func testHostShellReadsLargeJSONIntact() throws {
+        let file = tempDir().appendingPathComponent("big.json")
+        let items = (0..<70_000).map { #"{"id":\#($0),"url":"https://example.com/\#($0)","title":"bookmark number \#($0)"}"# }
+        try Data(("{\"items\":[" + items.joined(separator: ",") + "]}").utf8).write(to: file)
+        XCTAssertGreaterThan(try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int ?? 0, 5_000_000)
+        let out = try hostShell("""
+            function t()
+                local s, truncated = host.shell.run([[cat '\(file.path)']])
+                local j = host.json.decode(s)
+                return tostring(truncated) .. ":" .. tostring(j and #j.items)
+            end
+            """, callTimeout: 20)
+        XCTAssertEqual(out, "nil:70000")
+    }
+
+    /// F2: past the 64 MiB host cap the text is cut, unmarked, and the second return is true.
+    func testHostShellCapIsReportedAsSecondReturn() throws {
+        let out = try hostShell("""
+            function t()
+                local s, truncated = host.shell.run("/usr/bin/yes | /usr/bin/head -c 70000000")
+                return tostring(truncated) .. ":" .. #s .. ":" .. tostring(s:find("truncated", 1, true))
+            end
+            """, callTimeout: 30)
+        // 64 MiB of "y\n" ends on a newline, which the trim drops.
+        XCTAssertEqual(out, "true:\((64 << 20) - 1):nil")   // pinned: 64 MiB, not the constant
     }
 }

@@ -15,8 +15,8 @@ local AUTOMATION_HINT =
 local AUTOMATION_URL =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
 
-local function sh(cmd)
-    local out = host.shell.run(cmd) or ""
+local function sh(cmd, opts)
+    local out = host.shell.run(cmd, opts) or ""
     return (out:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
@@ -139,7 +139,8 @@ function toggles_eject()
 
     -- ONE shell call with the ejects joined: each eject takes seconds and
     -- host.shell.run is time-boxed per call, so N calls is N timeouts to lose.
-    local out = sh(table.concat(cmds, "; ") .. " 2>&1")
+    -- keep_running: a timeout must not abort the ejects still queued in the chain.
+    local out = sh(table.concat(cmds, "; ") .. " 2>&1", { keep_running = true })
     local failed = {}
     for _, id in ipairs(ids) do
         if not out:find(id .. " ejected", 1, true) then failed[#failed + 1] = id end

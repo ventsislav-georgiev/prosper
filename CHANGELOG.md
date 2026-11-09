@@ -36,12 +36,18 @@ tag from the now-released section and put it on the new top draft.
   A pinned row shows a pin. The result line and the History buttons no longer move anything when
   they change, and the folder line sits in its own slot under the list. An answer whose dch
   support went away since the question says why instead of doing nothing. A stopped or killed
-  session stays in view until its History row arrives (about a minute at most); meanwhile it reads
-  Ended, and Open in terminal, Return, its "⋯" menu and the input box are off. Remove from History says when it also
-  removes older records of that name (#829).
+  session stays in view until its History row arrives (about a minute at most); meanwhile it
+  reads Ended, and Open in terminal, Return, its "⋯" menu and the input box are off. Remove from
+  History says when it also removes older records of that name (#829).
 - Extensions: a `host.shell.run` that times out now stops the shell and everything it started
-  (the whole process group, forced after 1 s) instead of leaving it running, and shell output
-  (`> cmd` and `host.shell.run`) is capped at 1 MiB with a "[output truncated at 1 MiB]" marker (#833).
+  (the whole process group, forced after 1 s) instead of leaving it running. Calls that must
+  finish opt out with `host.shell.run(cmd, { keep_running = true })`: control returns at the
+  timeout and the command runs on; the built-in Homebrew upgrade, Scripts, the shell extension,
+  disk eject and the Alfred snippets import use it. `host.shell.run` output is capped at 64 MiB,
+  with a second return value of `true` when the cap was hit (the text is never marked, so large
+  bookmark imports still decode); `> cmd` output stops at 1 MiB with an "[output truncated at
+  1 MiB]" line. Shell output with invalid UTF-8 now shows replacement characters instead of
+  coming back empty (#833).
 - Ships dch 1.40.0 (was 1.39.0). When a newer `dch -a` takes a remote session over, the older
   attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

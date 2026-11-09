@@ -21,7 +21,8 @@ function shell_run(query)
     local cmd = trim((query:gsub("^%s*[!>]+%s*", "")))
     if cmd == "" then return nil end
 
-    local out = host.shell.run(cmd)
+    -- keep_running: a user command outliving the host timeout still finishes, like `> cmd`.
+    local out = host.shell.run(cmd, { keep_running = true })
     if out == nil then out = "" end
     out = trim(out)
 

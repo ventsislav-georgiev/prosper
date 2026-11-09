@@ -280,10 +280,12 @@ end
 
 local function import_alfredsnippets(path)
     local tmp = "/tmp/prosper-migration-" .. tostring(host.time())
-    host.shell.run("mkdir -p " .. q(tmp) .. " && ditto -x -k " .. q(path) .. " " .. q(tmp) .. " 2>/dev/null")
+    -- keep_running: never leave a half-extracted export or a half-deleted tmp dir.
+    host.shell.run("mkdir -p " .. q(tmp) .. " && ditto -x -k " .. q(path) .. " " .. q(tmp) .. " 2>/dev/null",
+        { keep_running = true })
     local collection = path:match("([^/]+)%.alfredsnippets$") or "Alfred"
     local items = alfred_snippets_in(tmp, collection)
-    host.shell.run("rm -rf " .. q(tmp))
+    host.shell.run("rm -rf " .. q(tmp), { keep_running = true })
     if #items == 0 then
         host.alert.show("No snippets found in that file")
         return

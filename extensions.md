@@ -371,7 +371,7 @@ For an **untrusted, non-system** extension every side-effecting call is an inert
 
 ### System-only calls
 
-- `host.shell.run(...)` — arbitrary command execution
+- `host.shell.run(cmd [, { keep_running = true }])` → output, truncated — arbitrary command execution through the login shell (stdout + stderr, trimmed). Output is capped at 64 MiB; `truncated` is `true` when the cap was hit, else `nil` (the text itself is never marked). On the host call timeout the command's whole process group is killed and `""` is returned; with `keep_running = true` the call still returns `""` at the timeout but the command runs on to completion (for upgrades, user scripts, file moves).
 - `host.fs.read(path)` → string | nil — arbitrary-path file read
 - `host.fallback.*` — fallback-search provider list/save/mode/import ([`fallback-search`](app/Sources/ProsperApp/Resources/extensions/fallback-search/) owns the settings UI; per-keystroke row building is native)
 - the coding agent and destructive file ops (trash)

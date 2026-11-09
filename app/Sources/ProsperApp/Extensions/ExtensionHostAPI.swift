@@ -19,6 +19,8 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func llmChat(_ prompt: String) async -> String
     // Shell (user-permissioned).
     func shellRun(_ command: String) async -> String
+    /// host.shell.run: output plus whether it hit the cap (never marked in the text).
+    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool)
     // Process control (privileged). Both route through `KillProcessSupport`, the
     // one place the refusal rules live — `processKill` re-checks them itself, so
     // an extension can never reach a signal past a guard.
@@ -215,6 +217,11 @@ protocol ExtensionHostServices: AnyObject, Sendable {
 }
 
 extension ExtensionHostServices {
+    /// Default (test fakes): the plain shellRun, never truncated.
+    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool) {
+        (await shellRun(command), false)
+    }
+
     /// Default: no application index (test / minimal hosts). The live host
     /// (`LiveExtensionHostServices`) overrides this with a real `AppIndex` search.
     func appsSearch(_ query: String) -> String { "[]" }
@@ -487,9 +494,17 @@ struct ExtensionHost {
         if privileged {
             lua.register("__h_shell_run") { rt in
                 let cmd = rt.stringArgument(1) ?? ""
-                let out = ExtensionHost.awaitSync(timeout: timeout) { await services.shellRun(cmd) }
-                rt.push(out ?? "")
-                return 1
+                // keep_running: the timeout hands control back to Lua without killing the
+                // command (brew upgrade, scripts), as before #833. Default kills the group.
+                let keepRunning = rt.boolArgument(2) ?? false
+                let out = ExtensionHost.awaitSync(timeout: timeout, cancelOnTimeout: !keepRunning) {
+                    await services.shellRunCapped(cmd)
+                }
+                rt.push(out?.text ?? "")
+                // Second return: true when the output hit the cap, nil otherwise.
+                guard out?.truncated == true else { return 1 }
+                rt.push(true)
+                return 2
             }
         } else {
             lua.register("__h_shell_run") { rt in
@@ -998,6 +1013,7 @@ struct ExtensionHost {
     local _timer_schedule   = __h_timer_schedule
     local _timer_cancel     = __h_timer_cancel
     local _log              = __h_log
+    local _shell_run        = __h_shell_run
     local _fallback_save    = __h_fallback_save
     local _fallback_mode_set = __h_fallback_mode_set
     host = {
@@ -1011,7 +1027,10 @@ struct ExtensionHost {
             translate = __h_llm_translate,
             chat      = __h_llm_chat,
         },
-        shell  = { run = __h_shell_run },
+        -- run(cmd [, { keep_running = true }]) -> output, truncated (true | nil)
+        shell  = { run = function(cmd, opts)
+            return _shell_run(cmd, type(opts) == "table" and opts.keep_running == true)
+        end },
         -- Process control. refusal(pid) -> nil when the kill is allowed, else the
         -- reason; kill(pid, force) -> nil when the signal was sent, else the reason.
         -- The rules live natively (KillProcessSupport) and kill re-checks them.
@@ -1802,7 +1821,9 @@ struct ExtensionHost {
     /// URLSession async API and structured `Task.sleep` backoff honor cancellation,
     /// so the leaf work actually stops; a non-cancellation-aware op still runs to
     /// completion but its result is discarded (cancel is then a harmless no-op).
-    static func awaitSync<T>(timeout: TimeInterval, _ op: @escaping @Sendable () async -> T) -> T? {
+    /// `cancelOnTimeout: false` abandons instead (host.shell.run's keep_running).
+    static func awaitSync<T>(timeout: TimeInterval, cancelOnTimeout: Bool = true,
+                             _ op: @escaping @Sendable () async -> T) -> T? {
         let sem = DispatchSemaphore(value: 0)
         let box = ResultBox<T>()
         let task = Task.detached {
@@ -1811,7 +1832,7 @@ struct ExtensionHost {
             sem.signal()
         }
         if sem.wait(timeout: .now() + timeout) == .success { return box.get() }
-        task.cancel()
+        if cancelOnTimeout { task.cancel() }
         return nil
     }
 

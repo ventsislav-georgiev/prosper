@@ -76,26 +76,36 @@ enum AppLauncher {
 ///
 /// Cancellation-aware (#833): `ExtensionHost.awaitSync` cancels the task on timeout, and
 /// the cancel kills zsh's whole process group (TERM, SIGKILL after 1 s), so neither zsh
-/// nor anything it started outlives the extension's timeout.
+/// nor anything it started outlives the extension's timeout (unless the call opts out
+/// with `keep_running`).
 enum ShellRunner {
-    /// Captured output stops at 1 MiB. Past the cap the pipe is still read and discarded,
+    /// Captured output stops at the cap. Past it the pipe is still read and discarded,
     /// not killed: a `> cmd` has no timeout and must finish its side effects, and a child
-    /// writing into a full pipe would block forever.
+    /// writing into a full pipe would block forever. `> cmd` is read by a human: 1 MiB
+    /// plus the marker. host.shell.run output is parsed (bookmarks JSON), so its cap is a
+    /// memory guard only and truncation is reported as a flag, never in the text.
     static let outputCap = 1 << 20
+    static let hostOutputCap = 64 << 20
     static let truncationMarker = "[output truncated at 1 MiB]"
     /// Tests never run a real login shell (it sources the operator's zprofile).
     static let shellFlag = NSClassFromString("XCTestCase") == nil ? "-lc" : "-c"
 
+    /// `> cmd`: 1 MiB, marker appended on truncation.
     static func run(_ command: String) async -> String {
+        let r = await run(command, cap: outputCap)
+        return r.truncated ? r.text + "\n" + truncationMarker : r.text
+    }
+
+    static func run(_ command: String, cap: Int) async -> (text: String, truncated: Bool) {
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cmd.isEmpty else { return "" }
+        guard !cmd.isEmpty else { return ("", false) }
         let job = Job()
         // The kill makes the read below hit EOF, so the single resume still runs: a cancel
         // racing a normal exit can neither double-resume nor leak the continuation.
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: job.execute(cmd))
+                    continuation.resume(returning: job.execute(cmd, cap: cap))
                 }
             }
         } onCancel: {
@@ -117,7 +127,7 @@ enum ShellRunner {
             if pid > 0 { CodexHarness.killGroup(pid, grace: 1) }
         }
 
-        func execute(_ cmd: String) -> String {
+        func execute(_ cmd: String, cap: Int) -> (text: String, truncated: Bool) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             // Login shell (`-l`): sources /etc/zprofile (path_helper adds
@@ -131,12 +141,12 @@ enum ShellRunner {
             process.standardError = pipe
             // Spawn under the lock so a cancel either sees the pid or stops the spawn.
             lock.lock()
-            guard !cancelled else { lock.unlock(); return "" }
+            guard !cancelled else { lock.unlock(); return ("", false) }
             do {
                 try process.run()
             } catch {
                 lock.unlock()
-                return "error: \(error.localizedDescription)"
+                return ("error: \(error.localizedDescription)", false)
             }
             pid = process.processIdentifier
             lock.unlock()
@@ -147,7 +157,7 @@ enum ShellRunner {
             while true {
                 let chunk = reader.availableData   // blocks until data or EOF
                 if chunk.isEmpty { break }
-                let room = ShellRunner.outputCap - data.count
+                let room = cap - data.count
                 if chunk.count > room { truncated = true }
                 data.append(chunk.prefix(room))
             }
@@ -156,8 +166,7 @@ enum ShellRunner {
             pid = 0   // reaped: a late cancel must not signal a recycled pid
             lock.unlock()
             // decoding (not String(data:)): a cap cut inside a UTF-8 sequence must not blank the output.
-            let out = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            return truncated ? out + "\n" + ShellRunner.truncationMarker : out
+            return (String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines), truncated)
         }
     }
 }

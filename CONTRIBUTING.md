@@ -116,7 +116,7 @@ Useful optional command fields: `keywords` (launcher discovery), `prefix` (e.g. 
 
 - `host.clipboard.{read,write,history}`
 - `host.llm.{complete,translate}` — `translate(text, target [, source])` returns a structured table `{ primary, detected, candidates = { { text=, label=, note= }, … } }` (or nil on empty/failed translation), ready to feed result views
-- `host.shell.run`
+- `host.shell.run(cmd [, { keep_running = true }])` → output, truncated (64 MiB cap; killed at the call timeout unless `keep_running`)
 - `host.window.{frame,set,open,close}` — `frame()`/`set(x,y,w,h)` are focused-window geometry (move/resize) via Accessibility: `frame()` returns the window rect and its screen's visible frame, `set` repositions it. `open(node)` opens a standalone host-rendered window from a declarative `host.ui.*` node (e.g. `host.ui.converter`); `close()` dismisses it (used by form/dialog submit handlers)
 - `host.http.{request,get,post}` — outbound HTTP with **built-in retry + exponential backoff** on transient failures (no response / 5xx / 408 / 429); http/https only, time-boxed, response capped at 5 MB. Returns `{ status, body, headers, ok, json }`.
 - `host.prefs.{get,set}`
