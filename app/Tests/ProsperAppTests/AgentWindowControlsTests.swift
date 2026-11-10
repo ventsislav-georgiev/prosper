@@ -309,6 +309,7 @@ extension AgentWindowD1Tests {
         Preferences.defaults.set(["Sessions", "Sidekicks", "History"], forKey: pref)
         var opened: [String] = []
         let m = windowModel(foldStore(), opened: { opened.append($0.name) })
+        showTranscript(m)   // #822: Return opens the terminal app in Transcript mode
         m.setVisible(true)
         defer { m.close() }
         XCTAssertNil(m.selection)
@@ -1134,6 +1135,7 @@ extension AgentWindowD1Tests {
         c.after = { _, _ in }
         c.onSessions = { _ in }
         let m = windowModel(st, opened: { opened.append($0.key) })
+        showTranscript(m)   // #822: the input box is Transcript mode's
         m.interaction.controller = c
         m.interaction.pause = { _ in }
         m.interaction.readQueue = { $0() }

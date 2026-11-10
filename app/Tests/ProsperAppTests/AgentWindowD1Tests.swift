@@ -256,6 +256,7 @@ final class AgentWindowD1Tests: XCTestCase {
         var opened: [String] = []
         let st = store([session("one", .working, ago: 1), session("two", .idle, ago: 2)], history: [record("h")])
         let m = windowModel(st, opened: { opened.append($0.name) })
+        showTranscript(m)   // #822: Return opens the terminal app in Transcript mode
         m.setVisible(true)
         defer { m.close() }
         let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],

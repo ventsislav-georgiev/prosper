@@ -1470,6 +1470,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         m.interaction.controller = c
         m.interaction.readQueue = { $0() }
         m.bind(st)
+        showTranscript(m)   // #822: the prompt panel is Transcript mode's
         XCTAssertEqual(f.reads, 0, "hidden: nothing read")
         m.setVisible(true)
         XCTAssertEqual(m.transcript.pendingAsk?.id, "toolu_9")
@@ -1521,6 +1522,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         m.ageInterval = 3600
         m.transcript.offMain = { $0() }
         m.bind(st)
+        showTranscript(m)   // #822: the input box and the sidebar's Return are Transcript mode's
         m.setVisible(true)
         defer { m.close() }
         let first = m.selection

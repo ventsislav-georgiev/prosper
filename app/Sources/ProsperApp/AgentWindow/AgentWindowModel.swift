@@ -161,6 +161,15 @@ final class AgentWindowModel: ObservableObject {
     @Published private(set) var collapsed = Preferences.agentWindowCollapsedSections {
         didSet { if collapsed != oldValue { Preferences.agentWindowCollapsedSections = collapsed } }
     }
+    /// #822: the selected session's live terminal. One per window model, like `transcript`
+    /// (a split pane brings its own model); attached only by `follow`.
+    let terminal = AgentTerminalController()
+    /// #822: a live session opens in Terminal (operator, 2026-11-10). These are the ones the human
+    /// switched to Transcript ("<dir>\t<name>"), newest first, per Mac; a later session that reuses
+    /// a name inherits the choice.
+    @Published private(set) var transcriptKeys = Preferences.agentWindowTranscriptSessions {
+        didSet { if transcriptKeys != oldValue { Preferences.agentWindowTranscriptSessions = transcriptKeys } }
+    }
 
     // Seams.
     var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
@@ -211,6 +220,7 @@ final class AgentWindowModel: ObservableObject {
     private var planSubscription: AnyCancellable?
 
     init() {
+        terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
         // #798: the transcript's pending AskUserQuestion is what a question form is checked against.
         askSubscription = transcript.$pendingAsk.sink { [weak self] ask in
             MainActor.assumeIsolated { self?.interaction.ask = ask }
@@ -360,6 +370,38 @@ final class AgentWindowModel: ObservableObject {
         return true
     }
 
+    // MARK: #822 Transcript | Terminal
+
+    nonisolated static func terminalKey(_ k: AgentSessionKey) -> String { "\(k.dir)\t\(k.name)" }
+
+    func mode(_ s: AgentSession) -> AgentPaneMode {
+        transcriptKeys.contains(Self.terminalKey(s.key)) ? .transcript : .terminal
+    }
+
+    /// The detail pane's mode: a row with nothing to attach (History, an ended session's held row,
+    /// none) is Transcript and remembers nothing, so no terminal card shows where no terminal can be.
+    var paneMode: AgentPaneMode {
+        guard !selectionIsHeld, let s = selectedRow?.session else { return .transcript }
+        return mode(s)
+    }
+
+    func setMode(_ m: AgentPaneMode, for s: AgentSession) {
+        guard !(selectionIsHeld && selection == .live(s.key)) else { return }   // ended: nothing to remember
+        let k = Self.terminalKey(s.key)
+        var keys = transcriptKeys.filter { $0 != k }
+        if m == .transcript { keys.insert(k, at: 0) }
+        transcriptKeys = Array(keys.prefix(64))
+        follow()
+    }
+
+    /// ⌘T and the header toggle: the selected live session's other mode. False: nothing to toggle.
+    @discardableResult
+    func toggleMode() -> Bool {
+        guard !selectionIsHeld, let s = selectedRow?.session else { return false }
+        setMode(mode(s) == .terminal ? .transcript : .terminal, for: s)
+        return true
+    }
+
     // MARK: #829 Restart agent, Stop, Kill (ask, then act)
 
     /// A header "⋯" or row context-menu item: selects the row first (R6), then asks.
@@ -476,20 +518,31 @@ final class AgentWindowModel: ObservableObject {
         askSubscription = nil
         transcript.stop()
         interaction.follow(nil)
+        terminal.attach(nil)
     }
 
     /// The transcript model follows the selection: a visible live session runs, any
     /// other state is stopped (one model, so at most one transcript is ever tailed).
+    /// #822: the terminal attaches to a visible, selected, live (not held) session in Terminal
+    /// mode and detaches on anything else. The transcript runs in both modes: the header's cwd and
+    /// todos come from it, so a toggle never changes the header.
     private func follow() {
         guard visible, !closed, let s = selectedRow?.session else {
             if transcript.running { transcript.stop() }
             interaction.follow(nil)
+            terminal.attach(nil)
             return
         }
         transcript.update(AgentSidebar.source(s))
         transcript.start()
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
         interaction.plan = transcript.pendingPlan
-        interaction.follow(selectionIsHeld ? nil : s)   // QA #668 F1: an ended session takes no input
+        let terminalMode = paneMode == .terminal
+        // QA #668 F1: an ended session takes no input; #822: Terminal mode has no input box (the terminal is the input).
+        interaction.follow(selectionIsHeld || terminalMode ? nil : s)
+        terminal.attach(terminalMode ? s.key : nil)   // paneMode is Transcript for a held row
     }
 }
+
+/// #822: the detail pane's two views of a live session.
+enum AgentPaneMode: Equatable { case transcript, terminal }

@@ -667,6 +667,7 @@ final class AgentWindowPlanTests: XCTestCase {
         m.interaction.controller = c
         m.interaction.readQueue = { $0() }
         m.bind(st)
+        showTranscript(m)   // #822: the prompt panel is Transcript mode's
         m.setVisible(true)
         XCTAssertEqual(m.transcript.pendingPlan, T.planInput)
         XCTAssertEqual(m.interaction.plan, T.planInput)
@@ -675,6 +676,7 @@ final class AgentWindowPlanTests: XCTestCase {
         // Another session with no transcript: no plan, no approve row.
         let bKey = AgentSessionKey(dir: "/tmp/dch-test", name: "b")
         st.sessions = [st.sessions[0], AgentSession(key: bKey, alias: "", activity: 0, state: .blocked, agents: 0, version: "1.30.0")]
+        showTranscript(m, [st.sessions[1]])
         m.select(try XCTUnwrap(m.rows.first { $0.session?.key == bKey }?.id))
         XCTAssertNil(m.interaction.plan)
         m.select(try XCTUnwrap(m.rows.first { $0.session?.key == T.key }?.id))

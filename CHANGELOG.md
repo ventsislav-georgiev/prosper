@@ -48,6 +48,24 @@ tag from the now-released section and put it on the new top draft.
   bookmark imports still decode); `> cmd` output stops at 1 MiB with an "[output truncated at
   1 MiB]" line. Shell output with invalid UTF-8 now shows replacement characters instead of
   coming back empty (#833).
+- Agent Sessions window: a live session now opens in its real terminal by default, inside the
+  window: the same dch session Ghostty would attach to, drawn by libghostty, with full keyboard
+  input (Esc, Tab, ⇧Return, ⌃C and arrows reach Claude), IME and Option-composed characters, ⌘C/⌘V
+  (sanitized, bracketed when the program asks; an image pastes as ^V), programs' clipboard copies
+  (OSC 52), ⌘-click links (web and mail only), ⌘F find with ⌘G / ⇧⌘G, and VoiceOver reading the
+  screen. A Transcript | Terminal toggle in the header (⌘T) switches to the transcript view;
+  sessions switched to Transcript are remembered per session name on this Mac. History rows show the
+  transcript; so does an ended session, with the toggle off and a tooltip saying why. In Terminal
+  mode the terminal runs to the window's bottom (no input box or prompt panel), a toggle moves
+  neither the header nor the sidebar, and resizes reach the session once, debounced. The terminal
+  attaches only while the window shows that session, reattaches once if it is detached elsewhere,
+  and says why when it cannot attach (refused, opened on another device, ended) with Reattach /
+  Retry. The verbosity picker (⌥⌘1-3) is off in Terminal mode. ⌘↑ / ⌘↓ go to the previous / next
+  session, except in a text field (#822).
+- Prosper now bundles Ghostty's terminal library (libghostty, through libghostty-spm) for the Agent
+  Sessions terminal, so the download is about 4 MB (10%) bigger. The app's credits list libghostty
+  and the libraries inside it (FreeType, libpng, zlib, Oniguruma, Wuffs, simdutf, Highway, stb,
+  libxev, libvaxis, z2d and others), each under its own license (#822).
 - Remote Terminal: the remote-frames protocol is 1.1 and learns "ctl": a dch client can run
   `dch --read`, `--send`, `--run`, `--keys`, `--follow`, `--status`, `-k`, `-m`, `-d`, `--history`,
   `--pin`, `--unpin`, `--forget`, `--stop`, `--say`, `--spawn` and `--revive` against this Mac's

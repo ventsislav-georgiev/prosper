@@ -105,21 +105,80 @@ final class AgentsWindow {
 /// ⌘W closes; up/down move the selection and Return opens it in the terminal while
 /// the sidebar has the focus (QA #626 INFO-2): the last click landed in it and Tab has
 /// not moved on since. A text field or the input box keeps every key.
+/// #822: so does the terminal, except the window's own shortcuts (`route`).
 final class AgentsNSWindow: NSWindow {
     weak var model: AgentWindowModel?
     /// The last click was in the sidebar (where the window starts).
     var sidebarFocused = true
 
+    /// #822 (spec 5.3): who gets a key.
+    enum KeyRoute: Equatable {
+        case close, toggleMode, verbosity(AgentVerbosity), session(Int), find, findNext(Bool)
+        /// Up, down, left, right, Return for the sidebar (sendEvent).
+        case sidebar
+        /// The window's, doing nothing here (⌥⌘1/2/3 in Terminal mode).
+        case swallow
+        case pass
+    }
+
+    enum ResponderKind { case text, terminal, other }
+
+    var responderKind: ResponderKind {
+        if firstResponder is NSText { return .text }
+        return firstResponder is AgentTerminalHostView ? .terminal : .other
+    }
+
+    /// Pure: the event, the first responder's kind, the sidebar focus and the pane's mode.
+    /// ⌘W, ⌘T, ⌥⌘1/2/3, ⌘F, ⌘G, ⇧⌘G go to the window; ⌘↑/⌘↓ (previous / next session) too,
+    /// except in a text view, where they move to its start and end (QA #669). Plain arrows and
+    /// Return go to the sidebar only while it has the focus and nothing that types does.
+    /// Everything else (Esc, Tab, ⌃C, arrows, Return) reaches the first responder.
+    static func route(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool) -> KeyRoute {
+        guard event.type == .keyDown else { return .pass }
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if mods.contains(.command), key == "w" { return .close }
+        if let v = verbosity(for: event) { return terminalMode ? .swallow : .verbosity(v) }
+        if mods == [.command] {
+            switch key {
+            case "t": return .toggleMode
+            case "f": return terminalMode ? .find : .pass
+            case "g": return terminalMode ? .findNext(true) : .pass
+            default: break
+            }
+            if event.keyCode == 126 || event.keyCode == 125 {
+                return responder == .text ? .pass : .session(event.keyCode == 126 ? -1 : 1)
+            }
+        }
+        if mods == [.command, .shift], key == "g" { return terminalMode ? .findNext(false) : .pass }
+        if mods.isEmpty, sidebarFocused, responder == .other, [126, 125, 123, 124, 36, 76].contains(event.keyCode) {
+            return .sidebar
+        }
+        return .pass
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "w" {
-            performClose(nil)
-            return true
+        guard let model else {
+            if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "w" {
+                performClose(nil)
+                return true
+            }
+            return super.performKeyEquivalent(with: event)
         }
-        if let model, let v = Self.verbosity(for: event) {
-            model.verbosity = v
-            return true
+        switch Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
+                          terminalMode: model.paneMode == .terminal) {
+        case .close: performClose(nil)
+        case .verbosity(let v): model.verbosity = v
+        case .toggleMode:
+            guard model.toggleMode() else { return super.performKeyEquivalent(with: event) }
+            if model.paneMode == .terminal { model.terminal.focus() }
+        case .session(let d): model.move(d)
+        case .find: model.terminal.openFind()
+        case .findNext(let forward): model.terminal.findNext(forward)
+        case .swallow: break
+        case .sidebar, .pass: return super.performKeyEquivalent(with: event)
         }
-        return super.performKeyEquivalent(with: event)
+        return true
     }
 
     /// #821: ⌥⌘1 / ⌥⌘2 / ⌥⌘3 pick Focused / Default / Verbose (no app menu item uses them).
@@ -130,9 +189,14 @@ final class AgentsNSWindow: NSWindow {
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown { sidebarFocused = event.locationInWindow.x < sz(290) }
-        if event.type == .keyDown, event.keyCode == 48 { sidebarFocused = false }   // Tab: focus moves on
-        if event.type == .keyDown, sidebarFocused, !(firstResponder is NSText), let model, Self.handle(event, model) { return }
+        if event.type == .leftMouseDown {
+            sidebarFocused = event.locationInWindow.x < sz(290)
+            // #822: a sidebar click takes the keys from the terminal, so the arrows select again.
+            if sidebarFocused, responderKind == .terminal { makeFirstResponder(nil) }
+        }
+        if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
+        if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
+                                 terminalMode: model.paneMode == .terminal) == .sidebar, Self.handle(event, model) { return }
         super.sendEvent(event)
     }
 
@@ -144,7 +208,12 @@ final class AgentsNSWindow: NSWindow {
         case 125: model.move(1)                    // down
         case 123: model.collapseSelected(true)     // #828 left: fold the selection's section
         case 124: model.collapseSelected(false)    // right: unfold it
-        case 36, 76: return model.openSelected()   // Return, keypad Enter; a History row passes on
+        case 36, 76:   // Return, keypad Enter; a History row passes on
+            // #822: in Terminal mode the keys go into the terminal instead of opening Ghostty.
+            guard model.paneMode == .terminal, !model.selectionIsHeld, model.selectedRow?.session != nil else {
+                return model.openSelected()
+            }
+            model.terminal.focus()
         default: return false
         }
         return true
@@ -396,29 +465,21 @@ struct AgentDetailView: View {
         if let row = model.selectedRow, let s = row.session {
             // QA #668 F1: an ended session's held row is display-only.
             let ended = model.selectionIsHeld
+            let mode = model.paneMode
             VStack(spacing: 0) {
                 AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
-                                   level: $model.verbosity, todos: transcript.todos, todosOpen: $transcript.todosOpen,
-                                   store: model.store, ask: { model.ask($0, s) }, ended: ended)
+                                   level: $model.verbosity, todos: transcript.todos,
+                                   todosOpen: mode == .terminal ? floatingTodos : $transcript.todosOpen,
+                                   store: model.store, ask: { model.ask($0, s) }, ended: ended,
+                                   mode: mode, setMode: { m in
+                                       model.setMode(m, for: s)
+                                       if m == .terminal { model.terminal.focus() }
+                                   })
                 Rectangle().fill(Neon.stroke).frame(height: 1)
-                AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
-                                    ownsLifecycle: false, level: model.verbosity, ended: ended)
-                    .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
-                    .clipped()
-                    .overlay(alignment: .top) {   // #829 R5, QA #665 INFO-1: over the conversation, so nothing moves
-                        VStack(spacing: 0) {
-                            if let store = model.store {
-                                AgentNoticeLine(store: store, key: s.key, refusal: model.refusalText(row.id))
-                            }
-                            confirmStrip
-                        }
-                    }
-                Rectangle().fill(Neon.stroke).frame(height: 1)
-                // #798: the prompt pinned at the bottom, the input box under it. #829: locked while a Restart or Stop types.
-                if let store = inputStore {
-                    AgentLockedInteraction(store: store, model: model.interaction, session: s, open: { model.openSelected() })
+                if mode == .terminal {
+                    terminalPane(row, s)
                 } else {
-                    AgentInteractionPane(model: model.interaction, session: s, open: { model.openSelected() }, ended: ended)
+                    transcriptPane(row, s, ended: ended)
                 }
             }
         } else if let row = model.selectedRow, let r = row.record {
@@ -429,6 +490,55 @@ struct AgentDetailView: View {
             AgentEmptyState(icon: "sidebar.left", title: "Select a session",
                             detail: "Up and down move through the list; Return opens it in the terminal.")
         }
+    }
+
+    @ViewBuilder func transcriptPane(_ row: AgentSidebar.Row, _ s: AgentSession, ended: Bool) -> some View {
+        AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
+                            ownsLifecycle: false, level: model.verbosity, ended: ended)
+            .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+            .clipped()
+            .overlay(alignment: .top) { overTop(row, s) }   // #829 R5, QA #665 INFO-1: over the conversation, so nothing moves
+        Rectangle().fill(Neon.stroke).frame(height: 1)
+        // #798: the prompt pinned at the bottom, the input box under it. #829: locked while a Restart or Stop types.
+        if let store = inputStore {
+            AgentLockedInteraction(store: store, model: model.interaction, session: s, open: { model.openSelected() })
+        } else {
+            AgentInteractionPane(model: model.interaction, session: s, open: { model.openSelected() }, ended: ended)
+        }
+    }
+
+    /// #822 (spec 5.4): the terminal to the window's bottom, no prompt panel or input box (the terminal
+    /// is both). The notice, the question and the todo list float over its top, so nothing that
+    /// changes with state ever resizes it.
+    func terminalPane(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
+        AgentTerminalPane(controller: model.terminal, open: { model.openSelected() })
+            .frame(minHeight: 0, maxHeight: .infinity)
+            .overlay(alignment: .top) {
+                VStack(spacing: 0) {
+                    overTop(row, s)
+                    if transcript.todosOpen, model.verbosity == .default, let todos = transcript.todos {
+                        AgentTodosList(todos: todos)
+                            .padding(.horizontal, sz(16)).padding(.bottom, sz(8))
+                            .background(Neon.card)
+                            .overlay(alignment: .bottom) { Rectangle().fill(Neon.stroke).frame(height: 1) }
+                    }
+                }
+            }
+    }
+
+    func overTop(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
+        VStack(spacing: 0) {
+            if let store = model.store {
+                AgentNoticeLine(store: store, key: s.key, refusal: model.refusalText(row.id))
+            }
+            confirmStrip
+        }
+    }
+
+    /// Terminal mode: the header's todo chip opens the list over the terminal, never inside the header
+    /// (the header keeps its height, the terminal its grid).
+    var floatingTodos: Binding<Bool> {
+        Binding(get: { false }, set: { [transcript] _ in transcript.todosOpen.toggle() })
     }
 
     /// R5: the question, re-read from the store each draw (a gone session or record draws none).
@@ -463,6 +573,9 @@ struct AgentSessionHeader: View {
     var menuStore: AgentIslandStore? { ended ? nil : store }
     /// QA #668 INFO-4: the state chip reads "Ended" for an ended session, in the same slot.
     var stateChip: AgentStateChip { AgentStateChip(state: session.state, ended: ended) }
+    /// #822: Transcript | Terminal (the window passes `setMode`; without it there is no toggle).
+    var mode = AgentPaneMode.transcript
+    var setMode: ((AgentPaneMode) -> Void)?
 
     var project: String {
         if let cwd { return (cwd as NSString).abbreviatingWithTildeInPath }
@@ -518,8 +631,13 @@ struct AgentSessionHeader: View {
                 .lineLimit(1).truncationMode(.middle)
             stateChip
             Spacer(minLength: sz(8))
-            AgentVerbosityPicker(level: level, style: picker)
-            // #822's Terminal view pill goes here, between the picker and the button.
+            AgentVerbosityPicker(level: level, style: picker)   // #822: in its slot, off in Terminal mode
+                .disabled(mode == .terminal).opacity(mode == .terminal ? 0.45 : 1)
+            if let setMode {
+                AgentPaneModeToggle(mode: mode, style: picker, set: setMode,
+                                    off: ended ? AgentPaneModeToggle.endedReason : nil)
+                    .disabled(ended).opacity(ended ? 0.45 : 1)
+            }
             HStack(spacing: sz(6)) {   // #829: the "⋯" sits close to the button, always last, fixed size
                 OpenInTerminalButton(action: open, compact: compact)
                     .disabled(ended).opacity(ended ? 0.45 : 1)
@@ -567,6 +685,59 @@ struct AgentVerbosityPicker: View {
                     .help("\(v.title) view (\(v.shortcut))")
                     .accessibilityLabel("\(v.title) view")
                     .accessibilityAddTraits(v == level ? .isSelected : [])
+                }
+            }
+            .padding(sz(2))
+            .overlay(Capsule().stroke(Neon.stroke, lineWidth: 1))
+            .fixedSize()
+        }
+    }
+}
+
+/// #822: Transcript | Terminal, built like AgentVerbosityPicker (same tiers). Every label keeps its
+/// width whichever is on, so a toggle never moves a neighbour.
+struct AgentPaneModeToggle: View {
+    let mode: AgentPaneMode
+    var style = AgentVerbosityPicker.Style.labels
+    let set: (AgentPaneMode) -> Void
+    /// Why there is no terminal to show (an ended session); the caller disables the toggle.
+    var off: String?
+
+    static let endedReason = "This session ended: there is no terminal to attach to"
+    static let modes: [(mode: AgentPaneMode, title: String, icon: String)] = [
+        (.transcript, "Transcript", "text.bubble"), (.terminal, "Terminal", "terminal"),
+    ]
+
+    var body: some View {
+        if style == .menu {
+            Menu {
+                ForEach(Self.modes, id: \.title) { m in Button("\(m.title) (⌘T)") { set(m.mode) } }
+            } label: {
+                Image(systemName: mode == .terminal ? "terminal" : "text.bubble")
+                    .font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .fixedSize()
+            .help(off ?? "Transcript or terminal (⌘T)")
+            .accessibilityLabel("Showing: \(mode == .terminal ? "Terminal" : "Transcript")")
+        } else {
+            HStack(spacing: 0) {
+                ForEach(Self.modes, id: \.title) { m in
+                    Button { if m.mode != mode { set(m.mode) } } label: {
+                        Group {
+                            if style == .icons { Image(systemName: m.icon) } else { Text(m.title) }
+                        }
+                        .font(Neon.font(10.5, weight: .medium))
+                        .foregroundStyle(m.mode == mode ? Neon.textPrimary : Neon.textSecondary)
+                        .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
+                        .background(Capsule().fill(m.mode == mode ? Neon.blue.opacity(0.2) : .clear))
+                        .contentShape(Capsule())
+                        .fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                    .help(off ?? "\(m.title) (⌘T)")
+                    .accessibilityLabel(m.title)
+                    .accessibilityAddTraits(m.mode == mode ? .isSelected : [])
                 }
             }
             .padding(sz(2))

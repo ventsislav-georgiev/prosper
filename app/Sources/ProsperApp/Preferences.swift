@@ -447,6 +447,8 @@ enum Preferences {
         static let agentWindowVerbosity = "agentWindowVerbosity"
         // #828: the Agent Sessions window's collapsed sidebar sections (titles); per Mac, not in SyncedKeys.
         static let agentWindowCollapsedSections = "agentWindowCollapsedSections"
+        // #822: sessions the Agent Sessions window shows as Transcript, not the default Terminal ("<dir>\t<name>"); per Mac, not in SyncedKeys.
+        static let agentWindowTranscriptSessions = "agentWindowTranscriptSessions"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1159,6 +1161,12 @@ enum Preferences {
     static var agentWindowCollapsedSections: Set<String> {
         get { Set(defaults.stringArray(forKey: Keys.agentWindowCollapsedSections) ?? []) }
         set { defaults.set(newValue.sorted(), forKey: Keys.agentWindowCollapsedSections) }
+    }
+
+    /// #822: the sessions the human switched to Transcript, newest first, at most 64; unset reads as none.
+    static var agentWindowTranscriptSessions: [String] {
+        get { defaults.stringArray(forKey: Keys.agentWindowTranscriptSessions) ?? [] }
+        set { defaults.set(newValue, forKey: Keys.agentWindowTranscriptSessions) }
     }
 
     /// Agent Island's terminal raw value (`AgentTerminal`); unset or uninstalled
