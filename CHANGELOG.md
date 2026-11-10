@@ -78,7 +78,7 @@ tag from the now-released section and put it on the new top draft.
   "ctl-cancel"), and the connection stays open for its next request until 300 s idle. Same gate as
   attach (peer address and owner check); `--spawn` may name a starting directory. `--xray` is
   allowlisted, and offered once the bundled dch has it. (#838)
-- Ships dch 1.42.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.43.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -91,6 +91,11 @@ tag from the now-released section and put it on the new top draft.
 - dch 1.42.0: a remote `ctl` request can be cancelled, and a connection stays open for the next
   request instead of closing after each one. `dch --run` into a Claude Code session goes through
   its composer and never waits: while Claude is still starting it exits 1.
+- dch 1.43.0: a shell session keeps a ring of its recent output, split at prompts by OSC 133 marks
+  (`dch --shell-init` prints the shell setup), for the coming X-ray view; Prosper does not read it
+  yet. The ring is on by default: up to 2 MiB of plain shell output per session, held in dch's memory
+  only (never on disk) and readable only by the same user; `xray_ring 0` in dch's config turns it off.
+  The ring survives `dch --restart` (#846).
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. It works for a typed keyword, the `sn`
