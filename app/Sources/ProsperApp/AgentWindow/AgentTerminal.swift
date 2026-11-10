@@ -49,6 +49,7 @@ struct AgentTerminalIO: Sendable {
 /// The renderer's callbacks. Any thread: libghostty calls write off main.
 struct AgentTerminalScreenEvents: Sendable {
     let write: @Sendable (Data) -> Void
+    /// The grid the renderer now parses at; the client starts once it is the view's.
     let resize: @Sendable (_ cols: Int, _ rows: Int) -> Void
     let backlog: @Sendable (Bool) -> Void
 }
@@ -179,12 +180,18 @@ final class AgentTerminalController: ObservableObject {
     /// The view's grid, and the size the pty last got.
     private(set) var grid: (cols: Int, rows: Int)?
     private(set) var sentSize: (cols: Int, rows: Int)?
+    /// The grid the current screen last reported from its parser (libghostty's IO thread runs the
+    /// resize just after it reports). The client starts only once this equals `grid`, so dch's attach
+    /// replay is parsed at the size it was drawn for.
+    private(set) var screenGrid: (cols: Int, rows: Int)?
+    /// `screenWait` ran out on this screen: start at the view's grid without its report.
+    private var screenWaitOver = false
     private var child: AgentTerminalChild?
     private var inbox: AgentTerminalInbox?
     let writer = AgentTerminalWriter()
     /// One automatic reattach per attach (an exit 0 while the session is live).
     private var reattached = false
-    private var generation = 0
+    private(set) var generation = 0
     private var resizeGeneration = 0
     private var backlogged = false
     /// The view is in a live resize: the size goes out once, at its end.
@@ -196,6 +203,8 @@ final class AgentTerminalController: ObservableObject {
 
     static let resizeDebounce: TimeInterval = 0.15
     static let revealAfter: TimeInterval = 0.3
+    /// The longest the client waits for the screen to report the view's grid; then it starts anyway.
+    static let screenWait: TimeInterval = 0.5
     static let noticeFor: TimeInterval = 2
     static let focusResizeDch = [1, 39, 0]
 
@@ -243,12 +252,14 @@ final class AgentTerminalController: ObservableObject {
         begin()
     }
 
-    /// A fresh screen; the client starts as soon as the grid is known (at once when it already is).
+    /// A fresh screen; the client starts once it parses at the view's grid (see gridChanged).
     private func begin() {
         generation += 1
         let gen = generation
         backlogged = false
         sentSize = nil
+        screenGrid = nil
+        screenWaitOver = false
         let events = AgentTerminalScreenEvents(
             write: { [writer] in writer.send([UInt8]($0)) },
             resize: { [weak self] cols, rows in
@@ -261,11 +272,19 @@ final class AgentTerminalController: ObservableObject {
         phase = .attaching
         revealed = false
         after(Self.revealAfter) { [weak self] in if self?.generation == gen { self?.revealed = true } }
+        // A report that never comes, or never matches (rounding, a grid that kept moving), must not
+        // leave the pane on "attaching".
+        after(Self.screenWait) { [weak self] in
+            guard let self, self.generation == gen else { return }
+            self.screenWaitOver = true
+            self.start()
+        }
         if grid != nil { start() }
     }
 
     private func start() {
-        guard let key, let grid, child == nil, phase == .attaching else { return }
+        guard let key, let grid, child == nil, phase == .attaching,
+              screenWaitOver || screenGrid.map({ $0 == grid }) == true else { return }
         let box = AgentTerminalInbox()
         inbox = box
         let req = request(key, grid.cols, grid.rows)
@@ -322,10 +341,20 @@ final class AgentTerminalController: ObservableObject {
         if !on, let inbox { drain(inbox) }
     }
 
-    /// The view's grid (cols x rows). The first one starts the client; later ones reach the pty after
-    /// a 150 ms trailing debounce, or once at the end of a live resize (one WINCH, one re-render).
+    /// The view's grid (cols x rows, `gen` nil) or the screen's report of the grid its parser now runs
+    /// at (`gen`). The client starts once the two agree, or `screenWait` after the screen began.
+    /// #844: dch adopts the spawn size at attach and replays its screen drawn for it (dch
+    /// attach.c:719-729, master.c:3358-3367); parsed at the new surface's creation grid (46x16 for
+    /// 720x420 pt on 2x) that replay came out wrapped and torn.
+    /// The screen's report never sizes the pty: it trails the view's (46x16 after 101x26).
+    /// Later view grids reach the pty after a 150 ms trailing debounce, or once at the end of a live
+    /// resize (one WINCH, one re-render).
     func gridChanged(cols: Int, rows: Int, generation gen: Int? = nil) {
         guard cols > 0, rows > 0, gen.map({ $0 == generation }) ?? true else { return }
+        guard gen == nil else {
+            screenGrid = (cols, rows)
+            return start()
+        }
         grid = (cols, rows)
         guard child != nil else { return start() }
         resizeGeneration += 1
@@ -563,9 +592,9 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     func terminalDidAttachSurface(_ surface: TerminalSurface) { self.surface = surface }
     func terminalDidDetachSurface() { surface = nil }
 
-    /// The grid as laid out, on main right after the surface took its pixel size. The in-memory
-    /// session's own report (IO thread) can first carry a size from before the backing scale
-    /// landed (720x420 pt on 2x: 46x16, then 101x26); this one starts the client at the real grid.
+    /// The grid as laid out, on main right after the surface took its pixel size: the only size the pty
+    /// gets. The in-memory session's own report (IO thread) trails it on every new surface (720x420 pt
+    /// on 2x: 46x16, then 101x26 ~25 ms later); the client starts once that report reaches this grid.
     func terminalDidResize(_ size: TerminalGridMetrics) {
         owner?.gridChanged(cols: Int(size.columns), rows: Int(size.rows))
     }

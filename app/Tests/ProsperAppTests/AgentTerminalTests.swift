@@ -79,6 +79,9 @@ final class AgentTerminalTests: XCTestCase {
         var live = true
         var opened: [URL] = []
         var refuse: Error?
+        /// A new screen reports the view's grid as its own at once, as libghostty's surface does from
+        /// its IO thread once it runs at that grid. Off for the tests of that hand-off.
+        var screenReports = true
 
         init(version: [Int]? = [1, 40, 0]) {
             c.request = { AgentTerminalSpawn.local($0, cols: $1, rows: $2, dch: "/opt/example/bin/dch", env: ["HOME": "/Users/example"]) }
@@ -93,6 +96,7 @@ final class AgentTerminalTests: XCTestCase {
             c.makeScreen = { [unowned self] in
                 let s = FakeScreen($0)
                 screens.append(s)
+                if screenReports, let g = c.grid { c.gridChanged(cols: g.cols, rows: g.rows, generation: c.generation) }
                 return s
             }
             c.after = { [clock] in clock.schedule($0, $1) }
@@ -103,6 +107,12 @@ final class AgentTerminalTests: XCTestCase {
 
         var child: FakeChild? { children.last }
         var screen: FakeScreen? { screens.last }
+
+        /// The view lays out at cols x rows and the screen's parser runs at it: the client starts.
+        func grid(_ cols: Int, _ rows: Int) {
+            c.gridChanged(cols: cols, rows: rows)
+            c.gridChanged(cols: cols, rows: rows, generation: c.generation)
+        }
     }
 
     @MainActor
@@ -146,7 +156,7 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertTrue(rig.requests.isEmpty, "no client before the grid is known")
         c.gridChanged(cols: 0, rows: 24)
         XCTAssertTrue(rig.requests.isEmpty, "an empty grid is no grid")
-        c.gridChanged(cols: 100, rows: 30)
+        rig.grid(100, 30)
         XCTAssertEqual(rig.requests.count, 1)
         XCTAssertEqual(rig.requests.first.map { [$0.cols, $0.rows] }, [100, 30], "spawned at the view's grid")
         XCTAssertEqual(rig.child?.ran, 1)
@@ -175,7 +185,7 @@ final class AgentTerminalTests: XCTestCase {
         let rig = Rig()
         let c = rig.c
         c.attach(Self.key)
-        c.gridChanged(cols: 80, rows: 24)
+        rig.grid(80, 24)
         XCTAssertFalse(c.revealed, "background only until bytes arrive")
         let io = rig.ios[0]
         let done = expectation(description: "pumped")
@@ -240,7 +250,7 @@ final class AgentTerminalTests: XCTestCase {
         let rig = Rig()
         let c = rig.c
         c.attach(Self.key)
-        c.gridChanged(cols: 80, rows: 24)
+        rig.grid(80, 24)
         let screen = try! XCTUnwrap(rig.screen)
         screen.events.backlog(true)
         spin()
@@ -261,7 +271,7 @@ final class AgentTerminalTests: XCTestCase {
         let rig = Rig()
         let c = rig.c
         c.attach(Self.key)
-        c.gridChanged(cols: 80, rows: 24)
+        rig.grid(80, 24)
         let child = try! XCTUnwrap(rig.child)
         c.gridChanged(cols: 81, rows: 24)
         c.gridChanged(cols: 82, rows: 25)
@@ -291,13 +301,124 @@ final class AgentTerminalTests: XCTestCase {
         c.detach()
     }
 
+    /// #844: dch adopts the attaching client's size and replays its screen drawn for it (attach.c:719-729,
+    /// master.c:3358-3367). So the client starts only once the screen parses at the view's grid, a late
+    /// report of the surface's creation grid never sizes the pty, and nothing more is sent: the attach is
+    /// the one WINCH, on the first attach, on a switch and on the way back.
+    @MainActor
+    func testTheClientStartsOnceTheScreenRunsAtTheViewsGridAndSendsNothingMore() throws {
+        let rig = Rig()
+        rig.screenReports = false
+        let c = rig.c
+        c.attach(Self.key)
+        let first = try XCTUnwrap(rig.screen)
+        c.gridChanged(cols: 101, rows: 26)
+        XCTAssertTrue(rig.requests.isEmpty, "the view's grid alone: the surface still parses at its creation grid")
+        first.events.resize(46, 16)
+        spin()
+        XCTAssertTrue(rig.requests.isEmpty, "the creation grid is not the view's")
+        first.events.resize(101, 26)
+        spin()
+        XCTAssertEqual(rig.requests.map { [$0.cols, $0.rows] }, [[101, 26]], "one client, at the pane's grid")
+        first.events.resize(46, 16)   // a late report of the creation grid (the operator's 46x16 pane)
+        spin()
+        rig.ios[0].output(Array("\u{1b}[H\u{1b}[Jalpha replay".utf8))
+        spin()
+        XCTAssertEqual(String(decoding: first.fed, as: UTF8.self), "\u{1b}[H\u{1b}[Jalpha replay", "the replay reaches the screen")
+        rig.clock.advance(1)
+        XCTAssertEqual(rig.child?.resizes, [], "the screen's report never sizes the pty")
+        XCTAssertEqual(rig.child?.redraws, 0, "no jiggle: the attach was the one WINCH")
+        XCTAssertEqual(c.grid.map { [$0.cols, $0.rows] }, [101, 26])
+        // A switch: the grid holds, and the new client waits for the new screen.
+        c.attach(AgentSessionKey(dir: Self.key.dir, name: "beta"))
+        XCTAssertEqual(rig.children[0].terminated, 1)
+        let second = try XCTUnwrap(rig.screen)
+        XCTAssertEqual(rig.requests.count, 1, "the new surface has not reported yet")
+        c.gridChanged(cols: 101, rows: 26)   // the new surface lays out first, at the same grid
+        XCTAssertEqual(rig.requests.count, 1, "the old screen's grid is no word on the new one")
+        first.events.resize(101, 26)
+        spin()
+        XCTAssertEqual(rig.requests.count, 1, "the old screen's report is stale")
+        second.events.resize(46, 16)
+        spin()
+        XCTAssertEqual(rig.requests.count, 1)
+        second.events.resize(101, 26)
+        spin()
+        XCTAssertEqual(rig.requests.map { [$0.cols, $0.rows] }, [[101, 26], [101, 26]])
+        XCTAssertEqual(rig.requests.last?.args, ["-E", "-a", "beta"])
+        rig.ios[1].output(Array("beta replay".utf8))
+        spin()
+        XCTAssertEqual(String(decoding: second.fed, as: UTF8.self), "beta replay")
+        // And back: alpha's replay again, on a fresh screen.
+        c.attach(Self.key)
+        c.gridChanged(cols: 101, rows: 26)
+        XCTAssertEqual(rig.requests.count, 2)
+        try XCTUnwrap(rig.screen).events.resize(101, 26)
+        spin()
+        XCTAssertEqual(rig.requests.map(\.args), [["-E", "-a", "alpha"], ["-E", "-a", "beta"], ["-E", "-a", "alpha"]])
+        rig.ios[2].output(Array("alpha again".utf8))
+        spin()
+        XCTAssertEqual(String(decoding: rig.screen?.fed ?? [], as: UTF8.self), "alpha again")
+        rig.clock.advance(1)
+        XCTAssertEqual(rig.children.map(\.resizes), [[], [], []], "no duplicate sends")
+        XCTAssertEqual(rig.children.map(\.redraws), [0, 0, 0])
+        // A live resize still sends once, at its end.
+        c.liveResizeStarted()
+        for w in 102...130 { c.gridChanged(cols: w, rows: 30) }
+        rig.clock.advance(1)
+        XCTAssertEqual(rig.child?.resizes, [])
+        c.liveResizeEnded()
+        rig.clock.advance(1)
+        XCTAssertEqual(rig.child?.resizes, [[130, 30]])
+        c.detach()
+    }
+
+    /// The screen's report is a wait, not a gate: one that never comes or never matches the view's grid
+    /// starts the client at the view's grid 500 ms after that screen began, never sooner, and a stale
+    /// screen's timer starts nothing.
+    @MainActor
+    func testTheClientStartsAnywayWhenTheScreenNeverReportsTheViewsGrid() throws {
+        let rig = Rig()
+        rig.screenReports = false
+        let c = rig.c
+        c.attach(Self.key)
+        c.gridChanged(cols: 101, rows: 26)
+        try XCTUnwrap(rig.screen).events.resize(100, 26)   // rounded differently
+        spin()
+        rig.clock.advance(0.49)
+        XCTAssertTrue(rig.requests.isEmpty, "still waiting for the screen")
+        rig.clock.advance(0.02)
+        XCTAssertEqual(rig.requests.map { [$0.cols, $0.rows] }, [[101, 26]], "started anyway, at the view's grid")
+        rig.clock.advance(1)
+        XCTAssertEqual(rig.requests.count, 1)
+        // A switch 300 ms into the wait: alpha's timer runs out on beta's screen and starts nothing.
+        c.attach(AgentSessionKey(dir: Self.key.dir, name: "beta"))
+        rig.clock.advance(0.3)
+        c.attach(AgentSessionKey(dir: Self.key.dir, name: "gamma"))
+        rig.clock.advance(0.25)
+        XCTAssertEqual(rig.requests.count, 1, "beta's timer is not gamma's")
+        rig.clock.advance(0.3)
+        XCTAssertEqual(rig.requests.last?.args, ["-E", "-a", "gamma"])
+        XCTAssertEqual(rig.requests.count, 2)
+        // No grid yet when the wait runs out: the client starts with the first one.
+        let late = Rig()
+        late.screenReports = false
+        late.c.attach(Self.key)
+        late.clock.advance(1)
+        XCTAssertTrue(late.requests.isEmpty, "no client before the grid is known")
+        late.c.gridChanged(cols: 90, rows: 20)
+        XCTAssertEqual(late.requests.map { [$0.cols, $0.rows] }, [[90, 20]])
+        c.detach()
+        late.c.detach()
+    }
+
     @MainActor
     func testFocusInJigglesOnlyForAClientOlderThan139() {
         for (version, redraws) in [([1, 38, 9], 1), ([1, 39, 0], 0), ([1, 40, 0], 0), (nil, 0)] as [([Int]?, Int)] {
             let rig = Rig(version: version)
             rig.c.attach(Self.key)
             rig.c.focusIn()
-            rig.c.gridChanged(cols: 80, rows: 24)
+            rig.grid(80, 24)
             wait("version probed") { rig.c.focusJiggle == (redraws == 1) }
             spin()
             rig.c.focusIn()
@@ -313,7 +434,7 @@ final class AgentTerminalTests: XCTestCase {
         let rig = Rig()
         let c = rig.c
         c.attach(Self.key)
-        c.gridChanged(cols: 80, rows: 24)
+        rig.grid(80, 24)
         rig.ios[0].output(Array("before".utf8))
         spin()
         XCTAssertTrue(c.revealed)
@@ -380,7 +501,7 @@ final class AgentTerminalTests: XCTestCase {
         let rig = Rig()
         rig.refuse = Boom()
         rig.c.attach(Self.key)
-        rig.c.gridChanged(cols: 80, rows: 24)
+        rig.grid(80, 24)
         XCTAssertEqual(rig.c.phase, .failed("Couldn't open the terminal: no such file"))
         rig.refuse = nil
         rig.c.retry()
@@ -699,6 +820,57 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertFalse(v.rig.c.findOpen)
         XCTAssertNil(v.rig.c.findTotal)
         XCTAssertTrue(v.window.firstResponder === v.host, "closing find gives the keys back to the terminal")
+    }
+
+    /// dch's attach replay for a cols x rows pane (vt_restore_blob, master.c:1801+): home, erase, one line
+    /// per row filling all but the last column, the cursor parked. Parsed at any other grid it wraps.
+    static func replay(_ tag: String, _ cols: Int, _ rows: Int) -> String {
+        let lines = (0..<rows - 1).map { r in
+            let head = "\(tag) row \(r) "
+            return head + String(repeating: "x", count: max(0, cols - 2 - head.count)) + "|"
+        }
+        return "\u{1b}[H\u{1b}[J" + lines.joined(separator: "\r\n") + "\u{1b}[0m\u{1b}[\(rows);1H"
+    }
+
+    /// #844, the operator's "switching on and off sessions does not redraw their latest state": the
+    /// replay a fake dch sends right after the spawn shows whole on a real libghostty surface (never
+    /// shown) at the first attach, on a switch and on the way back, and the pty gets no other size.
+    @MainActor
+    func testTheAttachReplayShowsWholeOnARealSurfaceAndAfterASwitch() throws {
+        let rig = Rig()
+        let fake = rig.c.spawn
+        rig.c.spawn = { req, io in
+            let child = try fake(req, io)
+            let bytes = Array(Self.replay(req.args.last ?? "", req.cols, req.rows).utf8)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.002) { io.output(bytes) }
+            return child
+        }
+        let v = ViewRig(rig)
+        v.start()
+        defer { v.tearDown() }
+        func shows(_ tag: String, clients: Int) {
+            wait("\(tag) attached") { rig.requests.count == clients }
+            let req = rig.requests[clients - 1]
+            XCTAssertEqual(req.args.last, tag)
+            var lines: [String] = []
+            wait("\(tag)'s replay whole") {
+                v.session?.waitForPendingOutput()
+                lines = (v.session?.readViewportText() ?? "").components(separatedBy: "\n")
+                return (0..<req.rows - 1).allSatisfy { r in r < lines.count && lines[r].hasPrefix("\(tag) row \(r) ") && lines[r].hasSuffix("|") }
+            }
+            XCTAssertEqual(lines.count, req.rows, "parsed at the grid it was drawn for")
+            XCTAssertEqual(rig.c.grid.map { [$0.cols, $0.rows] }, [req.cols, req.rows])
+        }
+        shows("alpha", clients: 1)
+        rig.c.attach(AgentSessionKey(dir: Self.key.dir, name: "beta"))
+        v.host.show(rig.c.screen as? AgentGhosttyScreen)   // what the pane's updateNSView does
+        shows("beta", clients: 2)
+        rig.c.attach(Self.key)
+        v.host.show(rig.c.screen as? AgentGhosttyScreen)
+        shows("alpha", clients: 3)
+        spin(0.3)
+        XCTAssertEqual(rig.children.map(\.resizes), [[], [], []], "the attach is the only size dch gets")
+        XCTAssertEqual(rig.children.map(\.redraws), [0, 0, 0])
     }
 
     /// A real pty, the program /bin/cat (never dch): keys in, the tty's echo and cat's copy out.

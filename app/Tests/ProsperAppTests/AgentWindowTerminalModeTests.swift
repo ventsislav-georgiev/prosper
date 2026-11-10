@@ -28,7 +28,11 @@ extension AgentWindowD1Tests {
             log.children.append(c)
             return c
         }
-        m.terminal.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+        m.terminal.makeScreen = { [weak t = m.terminal] events in
+            // The screen runs at the view's grid at once (libghostty reports it from its IO thread).
+            if let t, let g = t.grid { t.gridChanged(cols: g.cols, rows: g.rows, generation: t.generation) }
+            return AgentTerminalTests.FakeScreen(events)
+        }
         m.terminal.after = { _, _ in }
         m.terminal.clientVersion = { _ in [1, 40, 0] }
         m.terminal.gridChanged(cols: 80, rows: 24)
