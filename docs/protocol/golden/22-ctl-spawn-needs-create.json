@@ -1,6 +1,6 @@
 {
   "id": "22-ctl-spawn-needs-create",
-  "about": "With create off (no create in ops), ctl --spawn answers 0x13 and starts nothing.",
+  "about": "With create off (no create in ops), ctl --spawn answers 0x13 and starts nothing, then the FIN (#841, dch 1.42).",
   "requires_op": "ctl",
   "unless_op": "create",
   "steps": [
@@ -14,6 +14,9 @@
           "message": "string~.+"
         }
       }
+    },
+    {
+      "expect_close": true
     }
   ]
 }

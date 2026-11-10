@@ -1,0 +1,44 @@
+{
+  "id": "28-ctl-busy",
+  "about": "A 0x30 while this connection's ctl runs is 0x13 {\"code\": \"busy\", ...}, byte for byte, and nothing closes: the running one goes on, and a 0x34 still cancels it (dch's golden 42).",
+  "requires_op": [
+    "ctl-cancel",
+    "create"
+  ],
+  "mutating": true,
+  "setup": [
+    "02 00000066 7b226e616d65223a22676f6c64656e2d3834312d3238222c22636f6d6d616e64223a5b222f62696e2f7368222c222d63222c226563686f20676f6c64656e2d3834312d32383b206578656320636174225d2c22636f6c73223a38302c22726f7773223a32347d"
+  ],
+  "cleanup": [
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3834312d3238227d"
+  ],
+  "steps": [
+    {
+      "send": "30 00000025 7b2261726776223a5b222d2d666f6c6c6f77222c22676f6c64656e2d3834312d3238225d7d"
+    },
+    {
+      "expect": {
+        "type": "31",
+        "nonempty": true
+      }
+    },
+    {
+      "send": "30 00000023 7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3834312d3238225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b22636f6465223a2262757379222c226d657373616765223a22612063746c20697320616c72656164792072756e6e696e67206f6e207468697320636f6e6e656374696f6e227d"
+      }
+    },
+    {
+      "send": "34 00000000"
+    },
+    {
+      "expect": {
+        "type": "33",
+        "payload": "7b2265786974223a322c22776879223a2263616e63656c227d"
+      }
+    }
+  ]
+}

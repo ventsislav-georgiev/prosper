@@ -185,6 +185,7 @@ final class DchCtlTests: XCTestCase {
             (["--read", ""], "invalid session name"), (["--read", "a/b"], "invalid session name"),
             (["--read", "a\u{1b}[2J"], "invalid session name"), (["--read", "a\u{7f}"], "invalid session name"),
             (["--read", "a\u{85}"], "invalid session name"), (["--read", "a\u{202e}b"], "invalid session name"),
+            (["--read", "a\u{2066}b"], "invalid session name"), (["--read", "a\u{2069}"], "invalid session name"),
             (["--read", String(repeating: "n", count: 256)], "invalid session name"),
         ]
         for (argv, why) in refused { XCTAssertEqual(DchCtl.refusal(argv, create: true), why, "\(argv)") }
@@ -324,6 +325,7 @@ final class DchCtlTests: XCTestCase {
     }
 
     /// amendment 3: while the gate is off, a well-formed --xray is one 0x13 and runs nothing; on, it runs.
+    /// #841: that 0x13 is a refusal, so the FIN follows it (dch 1.42 golden 32).
     func testXrayIsRefusedWhileTheHostLacksIt() throws {
         let f = try fake("printf '%s\\n' \"$@\" > \"$D/argv\"; printf '{\"chapter\":0}\\n'")
         let r = rig(f.path)
@@ -333,13 +335,33 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(all(r).count, 1)
         XCTAssertEqual(Self.object(finals(r).first)["message"] as? String, DchCtl.xrayOff)
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.dir.appendingPathComponent("argv").path), "nothing ran")
-        XCTAssertTrue(wait(2) { !r.queue.sync { r.conn.inFlight } }, "the slot is free again")
-        r.conn.ctl.xray = { true }
-        send(r, Self.ctl(["--xray", "alpha", "--chapter", "0", "--json"]))
-        XCTAssertTrue(wait(5) { finals(r).count == 2 })
-        XCTAssertEqual(Self.object(finals(r).last) as NSDictionary, ["exit": 0] as NSDictionary)
-        XCTAssertEqual(bytes(r, DchFrame.ctlStdout), Data("{\"chapter\":0}\n".utf8))
+        XCTAssertTrue(wait(2) { r.closes.count == 1 }, "the FIN follows the refusal")
+        let on = rig(f.path)
+        on.conn.ctl.xray = { true }
+        send(on, Self.ctl(["--xray", "alpha", "--chapter", "0", "--json"]))
+        XCTAssertTrue(wait(5) { finals(on).count == 1 })
+        XCTAssertEqual(Self.object(finals(on).last) as NSDictionary, ["exit": 0] as NSDictionary)
+        XCTAssertEqual(on.closes.count, 0, "a ctl that ran leaves the connection warm")
+        XCTAssertEqual(bytes(on, DchFrame.ctlStdout), Data("{\"chapter\":0}\n".utf8))
         XCTAssertEqual(try String(contentsOf: f.dir.appendingPathComponent("argv"), encoding: .utf8), "--xray\nalpha\n--chapter\n0\n--json\n")
+    }
+
+    /// #841 (QA #680 INFO-6): dch serve refuses --xray first, whatever follows (rframe.c ctl_check),
+    /// so with the gate off a malformed --xray gets "not supported", not its shape error, then the FIN.
+    func testXrayNotSupportedComesBeforeItsShapeError() throws {
+        for argv in [["--xray"], ["--xray", "alpha"], ["--xray", "-alpha", "--json"], ["--xray", "alpha", "--json", "--bogus"]] {
+            let r = rig("/nonexistent/dch")
+            r.conn.ctl.xray = { false }
+            send(r, Self.ctl(argv))
+            XCTAssertTrue(wait(5) { r.closes.count == 1 }, "\(argv)")
+            XCTAssertEqual(all(r).count, 1, "\(argv)")
+            XCTAssertEqual(Self.object(all(r).first)["message"] as? String, DchCtl.xrayOff, "\(argv)")
+        }
+        let on = rig("/nonexistent/dch")
+        on.conn.ctl.xray = { true }
+        send(on, Self.ctl(["--xray", "alpha"]))
+        XCTAssertTrue(wait(5) { on.closes.count == 1 })
+        XCTAssertEqual(Self.object(all(on).first)["message"] as? String, "--xray needs --json", "with the gate on, its shape")
     }
 
     /// amendment 3: --xray --follow streams with no timeout and no cap; a close sends SIGTERM, as for --follow.
@@ -440,16 +462,43 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(finals(r).count, 1)
     }
 
-    /// Review round 1: a timeout that fires after dch was reaped, before its output drained (a child
-    /// still holds the pipe), ends with dch's own exit, not "timeout".
+    /// Review round 1: a timeout that fires after dch was reaped while a child still holds the pipe
+    /// ends nothing: the request ends with dch's own exit, not "timeout". #841 review: 2 s of timeout
+    /// for a shell that exits at once (0.3 s fired first under full-suite load); the child holds the
+    /// pipe 5 s, well past it.
     func testATimeoutAfterTheExitEndsWithTheRealExit() throws {
-        let f = try fake("/bin/sleep 1 & echo $! > \"$D/kid\"; echo done; exit 0")
-        let r = rig(f.path, timeout: 0.3)
+        let f = try fake("/bin/sleep 5 & echo $! > \"$D/kid\"; echo done; exit 0")
+        let r = rig(f.path, timeout: 2)
+        let start = Date()
         send(r, Self.ctl(["--status", "alpha"]))
         XCTAssertTrue(wait(10) { !finals(r).isEmpty })
         XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 0] as NSDictionary)
         XCTAssertEqual(bytes(r, DchFrame.ctlStdout), Data("done\n".utf8))
+        usleep(useconds_t(max(0, 2.5 - Date().timeIntervalSince(start)) * 1_000_000))   // the timeout has passed
+        XCTAssertEqual(Darwin.kill(try XCTUnwrap(pid(f.dir, "kid")), 0), 0, "the child still holds the pipe")
         XCTAssertEqual(finals(r).count, 1)
+    }
+
+    /// #841 (QA #680 INFO-3): as dch 1.42 serve's ctl_read, the request ends at dch's reap: a process
+    /// dch started that keeps the pipe open holds neither the 0x33 nor the slot, and what dch wrote
+    /// before it exited still goes out first. --follow (no timeout) too.
+    func testTheReapEndsTheRequestWhateverHoldsThePipe() throws {
+        let f = try fake("/bin/sleep 30 & echo $! >> \"$D/kid\"; /usr/bin/head -c 70000 /dev/zero | /usr/bin/tr '\\0' a; echo done; exit 4")
+        let kidFile = f.dir.appendingPathComponent("kid")
+        let kids: @Sendable () -> [pid_t] = { (try? String(contentsOf: kidFile, encoding: .utf8))?
+            .split(separator: "\n").compactMap { pid_t($0) } ?? [] }
+        addTeardownBlock { for k in kids() where k > 1 && Darwin.kill(k, 0) == 0 { Darwin.kill(k, SIGKILL) } }   // the leftovers it started
+        for argv in [["--status", "alpha"], ["--follow", "alpha"]] {
+            let r = rig(f.path)
+            let start = Date()
+            send(r, Self.ctl(argv))
+            XCTAssertTrue(wait(5) { finals(r).count == 1 }, "\(argv)")
+            XCTAssertLessThan(Date().timeIntervalSince(start), 5, "\(argv)")
+            XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 4] as NSDictionary, "\(argv)")
+            XCTAssertEqual(bytes(r, DchFrame.ctlStdout), Data(String(repeating: "a", count: 70000).utf8) + Data("done\n".utf8), "\(argv)")
+            XCTAssertTrue(wait(2) { !r.queue.sync { r.conn.inFlight } }, "\(argv): the slot is free")
+        }
+        XCTAssertEqual(kids().count, 2)
     }
 
     /// --follow has neither the timeout nor the cap; the client's close sends dch SIGTERM and nothing after.
@@ -515,7 +564,8 @@ final class DchCtlTests: XCTestCase {
         for v in ["--say", "--stop", "--revive"] { XCTAssertEqual(ops.timeout(of: v), 660, v) }
         for v in ["--read", "--send", "--run", "--keys", "--status", "-k", "-m", "-d", "--spawn", "--history",
                   "--pin", "--unpin", "--forget"] { XCTAssertEqual(ops.timeout(of: v), 60, v) }
-        let f = try fake("/bin/sleep 1; printf ok")
+        // --status outlives its 0.3 s by far, so a timeout late under load still lands first (#841 review).
+        let f = try fake("[ \"$1\" = --status ] && exec /bin/sleep 5; /bin/sleep 1; printf ok")
         let r = rig(f.path, timeout: 0.3, agentTimeout: 20)
         for (argv, want) in [(["--stop", "alpha", "--json"], ["exit": 0]), (["--status", "alpha"], ["exit": 2, "why": "timeout"]),
                              (["--revive", "alpha", "--json"], ["exit": 0]), (["--say", "alpha", "--json", "--", "hi"], ["exit": 0])] as [([String], [String: Any])] {
@@ -536,22 +586,23 @@ final class DchCtlTests: XCTestCase {
     }
 
     /// One ctl at a time per connection: another meanwhile is answered "busy" at once and runs nothing.
+    /// #841: dch 1.42 serve's coded busy, byte for byte (its golden 42), and nothing closes.
     func testASecondCtlWhileOneRunsIsBusy() throws {
         let f = try fake("echo x >> \"$D/runs\"; while [ ! -e \"$D/go\" ]; do /bin/sleep 0.05; done; printf done")
         let r = rig(f.path)
         send(r, Self.ctl(["--status", "alpha"]))
         XCTAssertTrue(wait(5) { FileManager.default.fileExists(atPath: f.dir.appendingPathComponent("runs").path) })
         send(r, Self.ctl(["--status", "beta"]))
-        send(r, DchFrame.encode(DchFrame.history, []))
+        send(r, Self.ctl(["--bogus", "beta"]))   // busy before any check, as serve's ctl_action
         let busy = finals(r)
-        XCTAssertEqual(busy.count, 2)
-        for b in busy {
-            XCTAssertEqual(Self.type(b), DchFrame.error)
-            XCTAssertEqual(Self.object(b)["message"] as? String, "busy with an earlier request")
-        }
+        XCTAssertEqual(busy, [DchCtl.busy, DchCtl.busy])
+        XCTAssertEqual(DchCtl.busy, RemoteFramesGoldenTests.unhex(
+            "13 00000047 7b22636f6465223a2262757379222c226d657373616765223a22612063746c20697320616c72656164792072756e6e696e67206f6e207468697320636f6e6e656374696f6e227d"),
+                       "dch serve.c BUSY_JSON")
+        XCTAssertEqual(r.closes.count, 0, "busy closes nothing")
         try Data().write(to: f.dir.appendingPathComponent("go"))
         XCTAssertTrue(wait(5) { finals(r).count == 3 })
-        XCTAssertEqual(finals(r).dropFirst(2).first.map(Self.type), DchFrame.ctlExit)
+        XCTAssertEqual(finals(r).dropFirst(2).first.map(Self.type), DchFrame.ctlExit, "the running one went on")
         send(r, Self.ctl(["--status", "gamma"]))
         XCTAssertTrue(wait(5) { finals(r).count == 4 }, "free again once the first ended")
         XCTAssertEqual(try String(contentsOf: f.dir.appendingPathComponent("runs"), encoding: .utf8), "x\nx\n")
@@ -559,8 +610,8 @@ final class DchCtlTests: XCTestCase {
 
     // MARK: - Amendment 4: 0x34 cancel, warm reuse, idle close
 
-    /// 0x34 SIGTERMs dch; the request still ends with its one 0x33, now {"exit": dch's, "why": "cancel"},
-    /// after whatever dch wrote on the way out.
+    /// 0x34 SIGTERMs dch; the request still ends with its one 0x33. #841, as dch 1.42 serve (its golden
+    /// 41): {"exit": 2, "why": "cancel"} whatever dch exits with, and nothing dch writes after the 0x34.
     func testCancelSIGTERMsAndEndsWithWhyCancel() throws {
         let f = try fake("""
             echo $$ > "$D/pid"; trap 'printf bye; exit 7' TERM
@@ -571,14 +622,62 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
         send(r, DchFrame.encode(DchFrame.ctlCancel, []))
         XCTAssertTrue(wait(5) { !finals(r).isEmpty })
-        XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 7, "why": "cancel"] as NSDictionary)
-        XCTAssertEqual(bytes(r, DchFrame.ctlStdout), Data("working\nbye".utf8))
+        XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "cancel"] as NSDictionary)
+        XCTAssertEqual(bytes(r, DchFrame.ctlStdout), Data("working\n".utf8), "no output after the 0x34")
         XCTAssertTrue(dead(pid(f.dir, "pid")))
         send(r, DchFrame.encode(DchFrame.ctlCancel, []))
         usleep(300_000)
         XCTAssertEqual(finals(r).count, 1, "exactly one final; a second 0x34 is late and ignored")
         XCTAssertEqual(Self.type(try XCTUnwrap(all(r).last)), DchFrame.ctlExit)
         XCTAssertEqual(r.closes.count, 0, "the connection stays open")
+    }
+
+    /// #841: a dch that outlives its 0x34's SIGTERM gets SIGKILL on its whole group 2 s later (serve's
+    /// CTL_GRACE_MS), not sooner; a second 0x34 meanwhile sends nothing more, and the timeout passing
+    /// meanwhile changes nothing (one why per request, serve's ctl_tick).
+    func testCancelEscalatesToSIGKILLOfTheGroupAfter2s() throws {
+        let f = try fake("""
+            echo $$ > "$D/pid"; /bin/sleep 30 & echo $! > "$D/kid"
+            trap 'echo term >> "$D/sig"' TERM
+            printf 'working\\n'; while :; do /bin/sleep 0.05; done
+            """)
+        // The timeout lands inside the 2 s grace if dch prints within 1.5 s of its spawn (#841 review: load).
+        let r = rig(f.path, timeout: 1.5)
+        send(r, Self.ctl(["--read", "alpha"]))
+        let script = pid(f.dir, "pid"), kid = pid(f.dir, "kid")
+        XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
+        let start = Date()
+        send(r, DchFrame.encode(DchFrame.ctlCancel, []))
+        XCTAssertTrue(wait(1.5) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
+        XCTAssertEqual(Darwin.kill(try XCTUnwrap(script), 0), 0, "alive inside the grace")
+        // After the trap ran: two SIGTERMs sent back to back coalesce into one pending signal.
+        send(r, DchFrame.encode(DchFrame.ctlCancel, []))
+        usleep(300_000)
+        XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n", "one SIGTERM")
+        XCTAssertEqual(finals(r).count, 0)
+        XCTAssertTrue(dead(script), "SIGKILLed")
+        XCTAssertTrue(dead(kid), "its group too")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9)
+        XCTAssertTrue(wait(5) { finals(r).count == 1 })
+        XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "cancel"] as NSDictionary)
+    }
+
+    /// #841: a 0x34 that lands before the spawn (the --xray probe still running) runs nothing and ends the
+    /// request with the cancel 0x33.
+    func testACancelBeforeTheSpawnRunsNothing() throws {
+        let f = try fake("printf '%s\\n' \"$@\" > \"$D/argv\"; echo $$ > \"$D/pid\"; while :; do /bin/sleep 0.05; done")
+        let r = rig(f.path)
+        let probing = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+        r.conn.ctl.xray = { probing.signal(); release.wait(); return true }
+        send(r, Self.ctl(["--xray", "alpha", "--follow", "--json"]))
+        XCTAssertEqual(probing.wait(timeout: .now() + 5), .success)
+        send(r, DchFrame.encode(DchFrame.ctlCancel, []))
+        release.signal()
+        XCTAssertTrue(wait(5) { finals(r).count == 1 })
+        XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "cancel"] as NSDictionary)
+        usleep(300_000)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.dir.appendingPathComponent("argv").path), "nothing ran")
+        XCTAssertEqual(r.closes.count, 0)
     }
 
     /// A 0x34 with nothing running, or after the 0x33, gets no frame; after a 0x33 the same
@@ -649,10 +748,9 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(cold.closes.count, 0, "a connection that never sent a 0x30 is not warm")
     }
 
-    /// Every refusal is one 0x13 and runs nothing: the dch is never even chosen.
-    func testRefusalsRunNothing() throws {
-        let reached = Recorder()
-        let r = rig("/nonexistent/dch", reached: reached)
+    /// Every refusal is one 0x13 and runs nothing: the dch is never even chosen. #841, as dch 1.42
+    /// serve: the FIN follows it, on a fresh connection and on a warm one.
+    func testRefusalsRunNothingAndClose() throws {
         let missing = tempDir("ctl-missing").appendingPathComponent("nope").path
         let bad: [Data] = [
             DchFrame.encode(DchFrame.ctl, Array("not json".utf8)), DchFrame.encode(DchFrame.ctl, []),
@@ -663,19 +761,39 @@ final class DchCtlTests: XCTestCase {
             Self.ctl(["--forget", "alpha", "-f"]), Self.ctl(["--read", "otherhost:alpha"]),
         ]
         for (i, frame) in bad.enumerated() {
+            let reached = Recorder()
+            let r = rig("/nonexistent/dch", reached: reached)
             send(r, frame)
-            guard all(r).count == i + 1 else { return XCTFail("\(i): one reply each, got \(all(r).count) in all") }
-            XCTAssertEqual(Self.type(all(r)[i]), DchFrame.error, "\(i)")
+            XCTAssertEqual(all(r).count, 1, "\(i): one reply")
+            XCTAssertEqual(all(r).first.map(Self.type), DchFrame.error, "\(i)")
+            XCTAssertNil(Self.object(all(r).first)["code"], "\(i): uncoded, as serve's")
+            XCTAssertEqual(r.closes.count, 1, "\(i): then the FIN")
+            XCTAssertEqual(reached.count, 0, "\(i)")
+            XCTAssertFalse(r.queue.sync { r.conn.inFlight }, "\(i)")
+            if i == 12 { XCTAssertEqual(Self.object(all(r).first)["message"] as? String, DchCtl.noDirectory) }
+            if i == 14 { XCTAssertEqual(Self.object(all(r).first)["message"] as? String, DchCtl.localOnly) }
         }
-        XCTAssertEqual(Self.object(all(r).dropFirst(12).first)["message"] as? String, DchCtl.noDirectory)
-        XCTAssertEqual(Self.object(all(r).dropFirst(14).first)["message"] as? String, DchCtl.localOnly)
-        XCTAssertEqual(reached.count, 0)
-        XCTAssertFalse(r.queue.sync { r.conn.inFlight })
-        // A dch that cannot start: one 0x13, and the connection is free again.
+        // A dch that cannot start: one 0x13, then the FIN.
+        let r = rig("/nonexistent/dch")
         send(r, Self.ctl(["--status", "alpha"]))
-        XCTAssertTrue(wait(5) { all(r).count == bad.count + 1 })
+        XCTAssertTrue(wait(5) { r.closes.count == 1 })
+        XCTAssertEqual(all(r).count, 1)
         XCTAssertEqual(Self.object(all(r).last)["message"] as? String, "dch could not be run")
-        XCTAssertTrue(wait(2) { !r.queue.sync { r.conn.inFlight } })
+        XCTAssertFalse(r.queue.sync { r.conn.inFlight })
+        // No dch at all: the same.
+        let none = rig(nil)
+        send(none, Self.ctl(["--status", "alpha"]))
+        XCTAssertEqual(Self.object(all(none).last)["message"] as? String, "dch is not available on this Mac")
+        XCTAssertEqual(none.closes.count, 1)
+        // A warm connection too (serve: closing is set before every 0x30 that does not run).
+        let f = try fake("printf ok")
+        let warm = rig(f.path)
+        send(warm, Self.ctl(["--status", "alpha"]))
+        XCTAssertTrue(wait(5) { finals(warm).count == 1 })
+        XCTAssertEqual(warm.closes.count, 0)
+        send(warm, Self.ctl(["--read", "-alpha"]))
+        XCTAssertEqual(Self.object(all(warm).last)["message"] as? String, DchControlOps.dashNameRefusal)
+        XCTAssertEqual(warm.closes.count, 1)
     }
 
     /// "Run commands from iPhone" gates only 0x28/0x29: ctl's mutating verbs follow attach input
@@ -696,29 +814,161 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(ops.contains("ctl"), "listed whatever the commands setting says")
     }
 
-    /// --spawn, --revive and 0x02 share one create gate, and "create" leaves ops with it.
+    /// --spawn, --revive and 0x02 share one create gate, and "create" leaves ops with it. #841 (QA #680
+    /// INFO-8): the Mac-only 0x0c revive and 0x0d restart start processes too, so they follow it.
     func testCreateGateCoversSpawnReviveAndCreate() throws {
         let f = try fake("printf '%s\\n' \"$1\" >> \"$D/ran\"")
-        let r = rig(f.path)
-        r.conn.createAllowed = { false }
         for argv in [["--spawn", "alpha", "--", "/bin/sh"], ["--revive", "alpha", "--json"]] {
+            let r = rig(f.path)
+            r.conn.createAllowed = { false }
             send(r, Self.ctl(argv))
             XCTAssertEqual(Self.object(all(r).last)["message"] as? String, DchCtl.createOff, "\(argv)")
+            XCTAssertEqual(r.closes.count, 1, "\(argv): a refusal, then the FIN")
         }
+        let r = rig(f.path)
+        r.conn.createAllowed = { false }
         send(r, DchFrame.encode(DchFrame.create, json: ["name": "alpha", "command": ["/bin/sh"]]))
         XCTAssertEqual(Self.object(all(r).last)["message"] as? String, DchCtl.createOff, "0x02 too")
         XCTAssertNil(r.conn.attachedSession, "nothing attached")
+        for (frame, json) in [(DchFrame.revive, ["name": "alpha"]), (DchFrame.restart, ["names": ["alpha"]])] as [(UInt8, [String: Any])] {
+            let n = all(r).count
+            send(r, DchFrame.encode(frame, json: json))
+            XCTAssertEqual(all(r).count, n + 1, "answered at once, before any dch is looked at")
+            XCTAssertEqual(Self.object(all(r).last)["message"] as? String, DchCtl.createOff, "\(frame)")
+            XCTAssertFalse(r.queue.sync { r.conn.inFlight })
+        }
+        XCTAssertEqual(r.closes.count, 0, "a Mac-only refusal closes nothing")
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.dir.appendingPathComponent("ran").path))
         let off = DchFrame.machineInfo(deviceID: "d", hostname: "h", wakeId: nil, create: false)["ops"] as? [String] ?? []
         XCTAssertFalse(off.contains("create"))
         XCTAssertTrue(off.contains("ctl"))
-        r.conn.createAllowed = { true }
+        let on = rig(f.path)
+        for (frame, json) in [(DchFrame.revive, ["name": "alpha"]), (DchFrame.restart, ["names": ["alpha"]])] as [(UInt8, [String: Any])] {
+            let n = finals(on).count
+            send(on, DchFrame.encode(frame, json: json))
+            XCTAssertTrue(wait(5) { finals(on).count == n + 1 })
+            XCTAssertNotEqual(Self.object(finals(on).last)["message"] as? String, DchCtl.createOff, "create on: past the gate (\(frame))")
+        }
         for argv in [["--spawn", "alpha", "--", "/bin/sh"], ["--revive", "alpha", "--json"]] {
-            let n = finals(r).count
-            send(r, Self.ctl(argv))
-            XCTAssertTrue(wait(5) { finals(r).count == n + 1 })
-            XCTAssertEqual(finals(r).last.map(Self.type), DchFrame.ctlExit, "\(argv)")
+            let n = finals(on).count
+            send(on, Self.ctl(argv))
+            XCTAssertTrue(wait(5) { finals(on).count == n + 1 })
+            XCTAssertEqual(finals(on).last.map(Self.type), DchFrame.ctlExit, "\(argv)")
         }
         XCTAssertEqual(try String(contentsOf: f.dir.appendingPathComponent("ran"), encoding: .utf8), "--spawn\n--revive\n")
+    }
+
+    // MARK: - #841: dch 1.42 serve's connection rules
+
+    /// A ctl connection, running or warm, takes 0x08, 0x03, 0x30 and 0x34 only; anything else is one
+    /// 0x13 "a ctl connection takes only ctl frames", then the FIN, and is not handled. QA #680 INFO-2:
+    /// a 0x2e there is refused, so no watch stream lives on a connection the ctl idle check closes.
+    func testACtlConnectionTakesOnlyCtlFrames() throws {
+        let f = try fake("[ \"$1\" = --follow ] && { echo $$ > \"$D/pid\"; while :; do /bin/sleep 0.05; done; }; printf ok")
+        func warm() -> Rig {
+            let r = rig(f.path)
+            send(r, Self.ctl(["--status", "alpha"]))
+            XCTAssertTrue(wait(5) { finals(r).count == 1 })
+            return r
+        }
+        let r = warm()
+        send(r, DchFrame.encode(DchFrame.machineInfo, []))
+        XCTAssertTrue(wait(5) { all(r).contains { Self.type($0) == DchFrame.machineInfoResp } }, "0x08")
+        send(r, DchFrame.encode(DchFrame.list, []))
+        XCTAssertTrue(wait(5) { all(r).contains { Self.type($0) == DchFrame.listResp } }, "0x03")
+        send(r, DchFrame.encode(DchFrame.ctlCancel, []))
+        XCTAssertEqual(r.closes.count, 0)
+        let kills = Recorder()
+        let others: [Data] = [
+            DchFrame.encode(DchFrame.watch, json: [:]), DchFrame.encode(DchFrame.attach, json: ["name": "alpha"]),
+            DchFrame.encode(DchFrame.create, json: ["name": "alpha"]), DchFrame.encode(DchFrame.kill, json: ["name": "alpha"]),
+            DchFrame.encode(DchFrame.rename, json: ["name": "alpha", "alias": "A"]), DchFrame.encode(DchFrame.snapshot, []),
+            DchFrame.encode(DchFrame.history, []), DchFrame.encode(DchFrame.data, [0x61]), DchFrame.encode(DchFrame.resize, json: [:]),
+            DchFrame.encode(0x7f, []),
+        ]
+        for frame in others {
+            let w = warm()
+            w.conn.kill = { _ in kills.add() }
+            w.conn.rename = { _, _ in kills.add(); return nil }
+            send(w, frame)
+            XCTAssertEqual(all(w).count, 3, "one reply: \(Self.type(frame))")
+            XCTAssertEqual(Self.object(all(w).last)["message"] as? String, DchCtl.ctlOnly, "\(Self.type(frame))")
+            XCTAssertEqual(w.closes.count, 1, "then the FIN: \(Self.type(frame))")
+            XCTAssertFalse(w.conn.watching)
+            XCTAssertNil(w.conn.attachedSession)
+        }
+        XCTAssertEqual(kills.count, 0, "nothing handled")
+        // While the ctl runs: the refusal closes, and the close ends the ctl.
+        let running = rig(f.path)
+        send(running, Self.ctl(["--follow", "alpha"]))
+        let script = pid(f.dir, "pid")
+        send(running, DchFrame.encode(DchFrame.history, []))
+        XCTAssertEqual(Self.object(all(running).last)["message"] as? String, DchCtl.ctlOnly)
+        XCTAssertEqual(running.closes.count, 1)
+        XCTAssertTrue(dead(script))
+        // A connection that never ran a ctl is not one: a refused 0x30 closes it before anything else matters.
+        let cold = rig(f.path)
+        send(cold, DchFrame.encode(DchFrame.ctlCancel, []))
+        send(cold, DchFrame.encode(DchFrame.snapshot, []))
+        XCTAssertEqual(all(cold).map(Self.type), [DchFrame.snapshotResp])
+    }
+
+    /// serve's on_ctl: a 0x30 on an attached or watch connection, or beside a Mac-only request in flight,
+    /// is one 0x13 "ctl needs its own connection"; nothing runs, nothing closes, no idle check is armed.
+    func testCtlNeedsItsOwnConnection() throws {
+        let f = try fake("printf '%s\\n' \"$1\" >> \"$D/ran\"")
+        // A watch stream.
+        let w = rig(f.path)
+        let hub = DchWatchHub(schedule: DchWatchHub.schedule(on: w.queue))
+        hub.remoteDir = { "/ctl-test" }
+        hub.sidekick = { DchSidekickOps.Value(pattern: "", updated: 0) }
+        w.queue.sync { hub.island(DchWatchHub.Cache(dir: "/ctl-test", rows: [])) }
+        w.conn.watch = hub
+        w.conn.ctlIdle = 0.3
+        send(w, DchFrame.encode(DchFrame.watch, json: [:]))
+        XCTAssertTrue(w.queue.sync { w.conn.watching })
+        let n = all(w).count
+        send(w, Self.ctl(["--status", "alpha"]))
+        XCTAssertEqual(all(w).count, n + 1)
+        XCTAssertEqual(Self.object(all(w).last)["message"] as? String, DchCtl.ownConnection)
+        // An attached connection (a pty running /bin/cat, never dch).
+        let a = rig(f.path)
+        a.conn.ctlIdle = 0.3
+        a.conn.spawn = { _, _, cols, rows, out, exit in
+            try PtyChild(exe: "/bin/cat", args: [], env: ["PATH": "/usr/bin:/bin"], cols: cols, rows: rows, onOutput: out, onExit: exit)
+        }
+        send(a, DchFrame.encode(DchFrame.attach, json: ["name": "alpha"]))
+        XCTAssertEqual(a.conn.attachedSession, "alpha")
+        send(a, Self.ctl(["--status", "alpha"]))
+        XCTAssertEqual(Self.object(all(a).last)["message"] as? String, DchCtl.ownConnection)
+        // A Mac-only request in flight (its dch lookup held).
+        let m = rig(f.path)
+        let held = DispatchSemaphore(value: 0), asked = DispatchSemaphore(value: 0)
+        m.conn.ops.binary = { asked.signal(); held.wait(); return nil }
+        send(m, DchFrame.encode(DchFrame.history, []))
+        XCTAssertEqual(asked.wait(timeout: .now() + 5), .success)
+        send(m, Self.ctl(["--status", "alpha"]))
+        XCTAssertEqual(all(m).count, 1)
+        XCTAssertEqual(Self.object(all(m).last)["message"] as? String, DchCtl.ownConnection)
+        held.signal()
+        XCTAssertTrue(wait(5) { all(m).count == 2 }, "the history request still gets its reply")
+        usleep(1_500_000)
+        for c in [w, a, m] { XCTAssertEqual(c.closes.count, 0, "no close, no idle check") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.dir.appendingPathComponent("ran").path), "nothing ran")
+    }
+
+    /// The idle re-check waits at least 1 s: with a 0 s idle and a ctl running it ticks once a second,
+    /// never in a loop on the connection's queue.
+    func testTheIdleCheckNeverSpins() throws {
+        let f = try fake("while [ ! -e \"$D/go\" ]; do /bin/sleep 0.05; done; printf ok")
+        let r = rig(f.path), ticks = Recorder()
+        r.conn.ctlIdle = 0
+        r.conn.clock = { ticks.add(); return Date() }
+        send(r, Self.ctl(["--status", "alpha"]))
+        usleep(1_500_000)
+        XCTAssertLessThan(ticks.count, 10, "a tick a second while it runs")
+        XCTAssertEqual(r.closes.count, 0, "running: not idle")
+        try Data().write(to: f.dir.appendingPathComponent("go"))
+        XCTAssertTrue(wait(5) { r.closes.count == 1 }, "idle once it ended")
     }
 }

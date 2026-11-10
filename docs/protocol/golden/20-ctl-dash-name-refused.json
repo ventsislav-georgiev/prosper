@@ -1,6 +1,6 @@
 {
   "id": "20-ctl-dash-name-refused",
-  "about": "A session name starting with - fails name_ok: 0x13, nothing runs (dch would read it as a flag).",
+  "about": "A session name starting with - fails name_ok: 0x13, nothing runs (dch would read it as a flag), then the FIN (#841, dch 1.42).",
   "requires_op": "ctl",
   "steps": [
     {
@@ -13,6 +13,9 @@
           "message": "string~.+"
         }
       }
+    },
+    {
+      "expect_close": true
     }
   ]
 }

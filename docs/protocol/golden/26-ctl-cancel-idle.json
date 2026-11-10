@@ -1,0 +1,40 @@
+{
+  "id": "26-ctl-cancel-idle",
+  "about": "A 0x34 (cancel) with no ctl running is ignored, and the connection still takes a 0x30: --read of a session the setup creates, 0x31, then 0x33 (dch's golden 40).",
+  "requires_op": [
+    "ctl-cancel",
+    "create"
+  ],
+  "mutating": true,
+  "setup": [
+    "02 00000066 7b226e616d65223a22676f6c64656e2d3834312d3236222c22636f6d6d616e64223a5b222f62696e2f7368222c222d63222c226563686f20676f6c64656e2d3834312d32363b206578656320636174225d2c22636f6c73223a38302c22726f7773223a32347d"
+  ],
+  "cleanup": [
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3834312d3236227d"
+  ],
+  "steps": [
+    {
+      "send": "34 00000000"
+    },
+    {
+      "expect_quiet": 0.3
+    },
+    {
+      "send": "30 00000023 7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3834312d3236225d7d"
+    },
+    {
+      "expect": {
+        "type": "31",
+        "nonempty": true
+      }
+    },
+    {
+      "expect": {
+        "type": "33",
+        "json": {
+          "exit": "int"
+        }
+      }
+    }
+  ]
+}

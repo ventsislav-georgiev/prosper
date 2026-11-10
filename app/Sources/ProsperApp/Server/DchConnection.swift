@@ -79,7 +79,7 @@ enum DchFrame {
     static let ctlStdout: UInt8 = 0x31  // raw bytes: a chunk of the ctl's dch stdout
     static let ctlStderr: UInt8 = 0x32  // raw bytes: a chunk of its stderr
     static let ctlExit: UInt8 = 0x33    // {exit, why?: "cap"|"timeout"|"cancel"}: always a ran ctl's last frame
-    static let ctlCancel: UInt8 = 0x34  // (empty) C→S: SIGTERM the running ctl's dch; "ctl-cancel" in ops
+    static let ctlCancel: UInt8 = 0x34  // (empty) C→S: cut the running ctl (SIGTERM, SIGKILL 2 s later); "ctl-cancel" in ops
 
     /// QA #606 F1: the requests that change the list. After one, the list frame forks until
     /// the island has caught up (DchWatchHub.changed).
@@ -225,8 +225,10 @@ final class DchConnection: @unchecked Sendable {
     var createAllowed: @Sendable () -> Bool = { true }
     /// #838: this connection's running ctl; closing kills its child. On `queue`.
     private var ctlJob: DchCtlJob?
-    /// #838 amendment 4: a connection that sent a 0x30 closes after `ctlIdle` with no frame from the
-    /// client, no request running and no attach. `clock` is a seam for tests. On `queue`.
+    /// #841: a ctl ran on this connection (running or warm): it takes only ctl frames from then on. On `queue`.
+    private var ctlConnection = false
+    /// #838 amendment 4: a connection that ran a 0x30 closes after `ctlIdle` with no frame from the
+    /// client and no ctl running (#841: it never attaches or watches). `clock` is a seam for tests. On `queue`.
     var ctlIdle: TimeInterval = 300
     var clock: @Sendable () -> Date = { Date() }
     private var lastActive = Date.distantPast
@@ -339,9 +341,8 @@ final class DchConnection: @unchecked Sendable {
         idleArmed = false
         guard !closed else { return }
         let quiet = clock().timeIntervalSince(lastActive)
-        let busy = inFlight || pty != nil
-        if !busy, quiet >= ctlIdle { return close() }
-        armIdle(after: busy ? ctlIdle : ctlIdle - quiet)
+        if !inFlight, quiet >= ctlIdle { return close() }
+        armIdle(after: inFlight ? ctlIdle : ctlIdle - quiet)
     }
 
     private func send(_ frame: Data) {
@@ -387,6 +388,11 @@ final class DchConnection: @unchecked Sendable {
     }
 
     func handle(type: UInt8, payload: Data) {
+        // #841, dch 1.42 serve.c on_frame: a ctl connection (running or warm) stays one. Its frames are
+        // read while the ctl runs, so an attach, watch or request there would mix into the ctl's stream.
+        if ctlConnection, ![DchFrame.machineInfo, DchFrame.list, DchFrame.ctl, DchFrame.ctlCancel].contains(type) {
+            return close(after: DchControlOps.error(DchCtl.ctlOnly))
+        }
         // QA #606 F1: once a list-changing request ran (for #591's verbs: was sent off, then
         // again on the reply), the list frame forks until the island has the change.
         defer { if DchFrame.listChanging.contains(type) { watch?.changed() } }
@@ -518,6 +524,11 @@ final class DchConnection: @unchecked Sendable {
             // already started is not cancelled when the connection closes: a restart
             // the phone started finishes, and its reply is dropped by !closed below.
             guard !closed else { return }
+            // #841 (QA #680 INFO-8): revive and restart start processes, so they follow the create gate
+            // as 0x02 and ctl's --spawn and --revive do (dch serve: CTL_CREATE, and no attach that would start one).
+            if [DchFrame.revive, DchFrame.restart].contains(type), !createAllowed() {
+                return send(DchControlOps.error(DchCtl.createOff))
+            }
             guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
             inFlight = true
             let ops = ops, library = library, clipboard = clipboard, sidekick = sidekick
@@ -539,28 +550,49 @@ final class DchConnection: @unchecked Sendable {
     }
 
     /// #838: 0x30 → its dch's 0x31/0x32 chunks, then 0x33; or one 0x13 and nothing runs. Checked
-    /// here, run off this queue. One in flight per connection, as #591's verbs: another meanwhile
-    /// gets "busy with an earlier request". Ungated by any setting, as attach input, kill and rename.
+    /// here, run off this queue. Ungated by any setting, as attach input, kill and rename.
+    /// #841, as dch 1.42 serve: one ctl at a time per connection, another meanwhile gets DchCtl.busy and
+    /// nothing closes; any other refusal is the last frame, 0x13 then the FIN (a warm connection too).
     private func startCtl(_ payload: Data) {
         guard !closed else { return }
-        armIdle(after: ctlIdle)
-        guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
+        guard pty == nil, !watching, ctlJob != nil || !inFlight else { return send(DchControlOps.error(DchCtl.ownConnection)) }
+        guard ctlJob == nil else { return send(DchCtl.busy) }
         let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
         guard let argv = o?["argv"] as? [String] else {
-            return send(DchControlOps.error("malformed ctl request: send {\"argv\": [verb, name, ...]}"))
+            return close(after: DchControlOps.error("malformed ctl request: send {\"argv\": [verb, name, ...]}"))
         }
-        if let why = DchCtl.refusal(argv, create: createAllowed()) ?? DchCtl.cwdRefusal(o?["cwd"], verb: argv[0]) {
-            return send(DchControlOps.error(why))
+        let ctl = ctl, create = createAllowed(), cwd = o?["cwd"] as? String
+        let cwdWhy = DchCtl.cwdRefusal(o?["cwd"], verb: argv.first ?? "")
+        // (dch path, refusal). serve refuses --xray before any shape (rframe.c ctl_check): its probe
+        // may take seconds, so an --xray is vetted off this queue, every other 0x30 here.
+        let vet: @Sendable () -> (String?, String?) = {
+            if argv.first == "--xray", !ctl.xray() { return (nil, DchCtl.xrayOff) }
+            if let why = DchCtl.refusal(argv, create: create) ?? cwdWhy { return (nil, why) }
+            return ctl.path().map { ($0, nil) } ?? (nil, "dch is not available on this Mac")
         }
-        guard let path = ctl.path() else { return send(DchControlOps.error("dch is not available on this Mac")) }
+        let vetted = argv.first == "--xray" ? nil : vet()
+        if let why = vetted?.1 { return close(after: DchControlOps.error(why)) }
+        ctlConnection = true
         inFlight = true
-        let job = DchCtlJob(), ctl = ctl, cwd = o?["cwd"] as? String
+        armIdle(after: ctlIdle)
+        let job = DchCtlJob()
         ctlJob = job
         DispatchQueue.global(qos: .userInitiated).async {
-            // The version probe may take seconds: here, never on `queue`.
-            if argv[0] == "--xray", !ctl.xray() { return self.finalReply(DchControlOps.error(DchCtl.xrayOff)) }
+            let (path, why) = vetted ?? vet()
+            guard let path else { return self.ctlFinal(DchControlOps.error(why ?? "")) }
             job.run(path: path, argv: argv, env: ctl.env(), cwd: cwd, follow: DchCtl.follows(argv), cap: ctl.cap,
-                    timeout: ctl.timeout(of: argv[0]), send: { self.sendStreamed($0) }, reply: { self.finalReply($0) })
+                    timeout: ctl.timeout(of: argv[0]), send: { self.sendStreamed($0) }, reply: { self.ctlFinal($0) })
+        }
+    }
+
+    /// #841: a ctl's final frame. A 0x33 leaves the connection warm; a 0x13 (dch could not run, an
+    /// --xray refused) is a refusal, so the FIN follows it, as dch serve.
+    private func ctlFinal(_ frame: Data) {
+        guard frame.first == DchFrame.error else { return finalReply(frame) }
+        queue.async {
+            self.inFlight = false
+            self.ctlJob = nil
+            self.close(after: frame)
         }
     }
 

@@ -42,8 +42,9 @@ final class RemoteFramesGoldenTests: XCTestCase {
     override func setUpWithError() throws {
         let script = tempDir("golden-dch").appendingPathComponent("fake-dch")
         // dch's spawn args are -E [-f] [-n name] [-- command...] (DchCommand.spawnArgs). #838: a ctl --read
-        // prints a screen, as dch's would.
-        try ("#!/bin/sh\n[ \"$1\" = --read ] && { printf 'golden screen of %s\\n' \"$2\"; exit 0; }\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; --) shift; break;; *) break;; esac; done\n"
+        // prints a screen, as dch's would. #841: a ctl --follow prints a frame and runs until it is ended.
+        try ("#!/bin/sh\n[ \"$1\" = --read ] && { printf 'golden screen of %s\\n' \"$2\"; exit 0; }\n"
+            + "[ \"$1\" = --follow ] && { printf 'golden follow of %s\\n' \"$2\"; exec /bin/sleep 30; }\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; --) shift; break;; *) break;; esac; done\n"
             + "[ $# -gt 0 ] && exec \"$@\"\nprintf '\\033[2J\\033[Hgolden repaint\\r\\n'\nexec /bin/cat\n")
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
@@ -105,6 +106,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertEqual(skipped, Self.createOffOnly)
         let calls = ran.all
         XCTAssertTrue(calls.contains(["-k", "golden-838-18"]), "18's cleanup: \(calls)")
+        for n in 26...29 { XCTAssertTrue(calls.contains(["-k", "golden-841-\(n)"]), "\(n)'s cleanup: \(calls)") }
         XCTAssertTrue(calls.contains(["-k", "golden-776-no-such-session"]), "\(calls)")
         XCTAssertTrue(calls.contains(["-m", "golden-776-no-such-session", ""]), "\(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776"]), "the attach fixture's cleanup: \(calls)")
@@ -135,7 +137,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)"])
         XCTAssertEqual(status, 0, text)
         for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws", "14-attach-twice-ignored",
-                   "15-session-exit-closes", "16-create-exit-closes", "18-ctl-read-round-trip"] {
+                   "15-session-exit-closes", "16-create-exit-closes", "18-ctl-read-round-trip"] + Self.cancelSet {
             XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
         }
         XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)
@@ -275,16 +277,16 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let dir = tempDir("golden-838-fixtures")
         let files = try FileManager.default.contentsOfDirectory(at: try goldenDir(), includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.contains("-ctl-") }
-        XCTAssertEqual(files.count, 9, "17-25")
+        XCTAssertEqual(files.count, 14, "17-30")
         for f in files { try FileManager.default.copyItem(at: f, to: dir.appendingPathComponent(f.lastPathComponent)) }
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)",
                                           "--mutating", "--fixtures", dir.path])
         XCTAssertEqual(status, 0, text)
         for id in ["17-ctl-listed-with-proto-1-1", "19-ctl-unlisted-flag-refused", "20-ctl-dash-name-refused",
-                   "21-ctl-short-argv-refused", "25-ctl-colon-name-refused"] + Self.createOffOnly {
+                   "21-ctl-short-argv-refused", "25-ctl-colon-name-refused", "30-ctl-xray-refused"] + Self.createOffOnly {
             XCTAssertTrue(text.contains("PASS \(id)"), text)
         }
-        for id in ["18-ctl-read-round-trip", "24-ctl-spawn-cwd-missing"] {
+        for id in ["18-ctl-read-round-trip", "24-ctl-spawn-cwd-missing"] + Self.cancelSet {
             XCTAssertTrue(text.contains("SKIP \(id): 'create' not in ops"), text)
         }
         for id in Self.createOffOnly {
@@ -775,6 +777,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     /// #838: the fixtures that apply only where create is off.
     private static let createOffOnly = ["22-ctl-spawn-needs-create", "23-ctl-revive-needs-create"]
+    /// #841: dch 1.42's cancel, busy and ctl-only set; each setup creates its session, so each needs create.
+    private static let cancelSet = ["26-ctl-cancel-idle", "27-ctl-cancel", "28-ctl-busy", "29-ctl-only-ctl-frames"]
 
     /// #838: "requires_op" is one op or an array of them.
     private static func requiredOps(_ fx: [String: Any]) -> [String] {

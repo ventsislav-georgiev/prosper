@@ -35,6 +35,14 @@ enum DchCtl {
     static let noDirectory = "no such directory"
     static let xrayOff = "xray not supported by this host"
     static let localOnly = "a session name with ':' is local only"
+    /// #841, dch 1.42 serve's words: a 0x30 on an attached or watch connection (or beside another request), no close.
+    static let ownConnection = "ctl needs its own connection"
+    /// #841: anything but 0x08, 0x03, 0x30 or 0x34 on a ctl connection (running or warm), then the FIN.
+    static let ctlOnly = "a ctl connection takes only ctl frames"
+    /// #841: a 0x30 while this connection's ctl runs; the connection stays open. serve.c's BUSY_JSON byte for byte.
+    static let busy = DchFrame.encode(DchFrame.error, Array(#"{"code":"busy","message":"a ctl is already running on this connection"}"#.utf8))
+    /// #841: serve's CTL_GRACE_MS: a 0x34's SIGTERM, then SIGKILL to the group this long after.
+    static let cancelGrace: TimeInterval = 2
     /// dch's CTL_ARGV_MAX.
     static let argvMax = 1024
 
@@ -249,34 +257,38 @@ enum DchCtl {
         return nil
     }
 
+    /// #841: keys sorted, so {"exit":2,"why":"cancel"} is dch serve's bytes (its goldens compare them).
     static func exitFrame(_ code: Int32, why: String? = nil) -> Data {
         var o: [String: Any] = ["exit": Int(code)]
         if let why { o["why"] = why }
-        return DchFrame.encode(DchFrame.ctlExit, json: o)
+        return DchFrame.encode(DchFrame.ctlExit, [UInt8]((try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])) ?? Data()))
     }
 }
 
 /// #838: one ctl request's dch child. Its stdout and stderr go out as 0x31/0x32 chunks, then one
-/// final frame: 0x33 with dch's exit (why "cancel" after a 0x34), 0x33 {"exit": 2, "why"} once the
-/// cap or timeout killed it, or 0x13 when dch could not start. `cancel` (the connection closed) sends dch SIGTERM only, and
+/// final frame: 0x33 with dch's exit, 0x33 {"exit": 2, "why"} once the cap, the timeout or a 0x34
+/// cut it, or 0x13 when dch could not start. `cancel` (the connection closed) sends dch SIGTERM only, and
 /// nothing more: --stop and --say answer it by leaving the session running with their resume
 /// message. The cap and timeout kill is ShellRunner's: SIGTERM to the child's whole process group
 /// (Foundation makes it the leader), SIGKILL to the group after 1 s.
 final class DchCtlJob: @unchecked Sendable {
     enum Stop { case none, term, killGroup }
 
-    private let lock = NSLock()      // pid, ended
+    private let lock = NSLock()      // pid, ended, cancelled
     private let sendLock = NSLock()  // chunks, then the one final frame
     private var pid: pid_t = 0
     private var ended = false
     private var cancelled = false
     private var sent = 0
+    /// #841: written once dch is reaped, so the pump stops waiting on a pipe a leftover writer holds.
+    private let wake = Pipe()
 
-    /// Ends the request once: true for the one caller that did. `running`: only while dch is not
-    /// yet reaped (the timeout: a dch that exited in time ends with its own exit, not "timeout").
+    /// Ends the request once: true for the one caller that did. `running` (the timeout): only while
+    /// dch is not yet reaped (one that exited in time ends with its own exit) and not cut by a 0x34
+    /// (serve's ctl_tick: one why per request).
     private func end(_ stop: Stop, running: Bool = false) -> Bool {
         let pid: pid_t? = lock.withLock {
-            guard !ended, !(running && self.pid == 0) else { return nil }
+            guard !ended, !(running && (self.pid == 0 || cancelled)) else { return nil }
             ended = true
             return self.pid
         }
@@ -292,15 +304,20 @@ final class DchCtlJob: @unchecked Sendable {
 
     func cancel() { _ = end(.term) }
 
-    /// 0x34 (amendment 4): SIGTERM dch, once; its exit then ends the request with 0x33 why "cancel".
-    /// Nothing once the request has ended (a late 0x34).
+    /// 0x34, as dch 1.42 serve's ctl_cut "cancel": nothing more is forwarded, dch gets SIGTERM and,
+    /// still unreaped `DchCtl.cancelGrace` later, its group SIGKILL; once reaped the request ends with
+    /// 0x33 {"exit": 2, "why": "cancel"}. Nothing once it ended or was already cancelled (a late 0x34).
     func cancelRequest() {
         let pid: pid_t? = lock.withLock {
             guard !ended, !cancelled else { return nil }
             cancelled = true
             return self.pid
         }
-        if let pid, pid > 0 { Darwin.kill(pid, SIGTERM) }
+        guard let pid, pid > 0 else { return }   // before the spawn: run() sees `cancelled` and runs nothing
+        Darwin.kill(pid, SIGTERM)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + DchCtl.cancelGrace) {
+            self.lock.withLock { if self.pid == pid, CodexHarness.mayKillGroup(pid) { Darwin.kill(-pid, SIGKILL) } }
+        }
     }
 
     /// Blocks its thread (never the connection's queue) until dch exits or is killed.
@@ -315,52 +332,79 @@ final class DchCtlJob: @unchecked Sendable {
         p.standardOutput = out
         p.standardError = err
         p.standardInput = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
+        let exited = DispatchSemaphore(value: 0), poke = wake.fileHandleForWriting.fileDescriptor
         // Cleared once reaped: a late kill must not signal a recycled pid.
-        p.terminationHandler = { [lock] _ in lock.withLock { self.pid = 0 }; exited.signal() }
+        p.terminationHandler = { [lock] _ in
+            lock.withLock { self.pid = 0 }
+            var b: UInt8 = 0
+            _ = Darwin.write(poke, &b, 1)
+            exited.signal()
+        }
         lock.lock()   // a cancel either sees the pid or stops the spawn
         guard !ended else { lock.unlock(); return }
+        if cancelled {   // a 0x34 that came before the spawn: nothing runs
+            ended = true
+            lock.unlock()
+            return reply(DchCtl.exitFrame(2, why: "cancel"))
+        }
         do { try p.run() } catch {
             lock.unlock()
             if end(.none) { reply(DchControlOps.error("dch could not be run")) }
             return
         }
         pid = p.processIdentifier
-        let early = cancelled   // a 0x34 that came before the spawn
         lock.unlock()
-        if early { Darwin.kill(p.processIdentifier, SIGTERM) }
         if !follow {
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
                 guard self.end(.killGroup, running: true) else { return }
                 self.sendLock.withLock { reply(DchCtl.exitFrame(2, why: "timeout")) }
             }
         }
-        let readers = DispatchGroup()
-        for (handle, type) in [(err.fileHandleForReading, DchFrame.ctlStderr), (out.fileHandleForReading, DchFrame.ctlStdout)] {
-            readers.enter()
-            DispatchQueue.global(qos: .userInitiated).async {
-                // Each chunk goes out as it comes (--say/--stop/--revive stream progress). Read to EOF
-                // even after the end: a child writing into a full pipe would never exit.
-                while case let chunk = handle.availableData, !chunk.isEmpty {
-                    self.deliver(type, chunk, follow: follow, cap: cap, send: send, reply: reply)
-                }
-                readers.leave()
-            }
-        }
-        readers.wait()
+        pump([(out.fileHandleForReading, DchFrame.ctlStdout), (err.fileHandleForReading, DchFrame.ctlStderr)],
+             follow: follow, cap: cap, send: send, reply: reply)
         exited.wait()
         let code = p.terminationReason == .uncaughtSignal ? 128 + p.terminationStatus : p.terminationStatus
-        let why = lock.withLock { cancelled } ? "cancel" : nil
-        sendLock.withLock { if end(.none) { reply(DchCtl.exitFrame(code, why: why)) } }
+        let frame = lock.withLock { cancelled } ? DchCtl.exitFrame(2, why: "cancel") : DchCtl.exitFrame(code)
+        sendLock.withLock { if end(.none) { reply(frame) } }
+    }
+
+    /// #841 (QA #680 INFO-3): dch's stdout and stderr, each chunk as it comes (--say/--stop/--revive
+    /// stream progress), as dch 1.42 serve's ctl_read: once dch is reaped an empty pipe is done, so a
+    /// leftover writer (a process dch started that kept the pipe) holds neither the 0x33 nor the slot.
+    /// Until the reap the pipes are read even after the end (dropped), so a child writing into a full
+    /// pipe still exits.
+    private func pump(_ pipes: [(FileHandle, UInt8)], follow: Bool, cap: Int,
+                      send: (Data) -> Bool, reply: (Data) -> Void) {
+        var open = pipes.map { (fd: $0.0.fileDescriptor, type: $0.1) }
+        let woken = wake.fileHandleForReading.fileDescriptor
+        for fd in open.map(\.fd) { _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) }
+        var buf = [UInt8](repeating: 0, count: 1 << 16)
+        while !open.isEmpty {
+            let reaped = lock.withLock { pid == 0 }
+            if !reaped {
+                var fds = (open.map(\.fd) + [woken]).map { pollfd(fd: $0, events: Int16(POLLIN), revents: 0) }
+                _ = poll(&fds, nfds_t(fds.count), -1)
+            }
+            open = open.filter { p in
+                for _ in 0..<16 {   // one pass, then the reap is checked again
+                    let n = Darwin.read(p.fd, &buf, buf.count)
+                    if n > 0 { deliver(p.type, Data(buf[..<n]), follow: follow, cap: cap, send: send, reply: reply); continue }
+                    if n < 0, errno == EINTR { continue }
+                    return n < 0 && errno == EAGAIN && !reaped   // EOF, or empty after the reap: done
+                }
+                // shortcut: after the reap one 1 MiB pass per pipe; a leftover writer still filling it is cut off there.
+                return !reaped
+            }
+        }
     }
 
     /// One chunk, in order with the final frame. A non-follow verb stops at `cap` bytes: what fits
-    /// goes out, then the kill and 0x33 cap; nothing after.
+    /// goes out, then the kill and 0x33 cap; nothing after. Nothing after a 0x34 either.
     private func deliver(_ type: UInt8, _ chunk: Data, follow: Bool, cap: Int,
                          send: (Data) -> Bool, reply: (Data) -> Void) {
         sendLock.lock()
         defer { sendLock.unlock() }
-        guard !lock.withLock({ ended }) else { return }
+        guard !lock.withLock({ ended || cancelled }) else { return }
         if !follow, sent + chunk.count > cap {
             if cap > sent { _ = send(DchFrame.encode(type, [UInt8](chunk.prefix(cap - sent)))) }
             sent = cap

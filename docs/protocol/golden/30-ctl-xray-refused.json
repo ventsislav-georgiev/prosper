@@ -1,0 +1,20 @@
+{
+  "id": "30-ctl-xray-refused",
+  "about": "Without xray in ops, --xray is refused before its shape is checked (here it lacks --json): 0x13 \"xray not supported by this host\", then the FIN (dch's golden 32).",
+  "requires_op": "ctl",
+  "unless_op": "xray",
+  "steps": [
+    {
+      "send": "30 00000023 7b2261726776223a5b222d2d78726179222c22676f6c64656e2d3834312d3330225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a2278726179206e6f7420737570706f72746564206279207468697320686f7374227d"
+      }
+    },
+    {
+      "expect_close": true
+    }
+  ]
+}

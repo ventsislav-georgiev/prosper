@@ -3,8 +3,8 @@
 This is the wire contract between a remote-terminal **server** (Prosper's `DchSessionServer`
 today, `dch serve` later) and its **clients** (the Prosper iPhone app, `dch` as a client). It
 describes what Prosper's server does as of v2.174.0 (#776: the 0x08 keys `server`, `os`,
-`name` and `proto`, and this document), #800 (the `create` and `paste_image` ops) and #838 (the
-`ctl` op, 1.1). The code is in `app/Sources/ProsperApp/Server/DchConnection.swift` (`DchFrame`,
+`name` and `proto`, and this document), #800 (the `create` and `paste_image` ops), #838 (the
+`ctl` op, 1.1) and #841 (the 1.1 amendment of 2026-11-10, dch serve 1.42.0's ctl connection rules). The code is in `app/Sources/ProsperApp/Server/DchConnection.swift` (`DchFrame`,
 `DchConnection`), `DchCtl.swift` and `DchSessionServer.swift`.
 
 The conformance set in [`golden/`](golden/) runs against any server: see
@@ -34,6 +34,15 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   [0x30 ctl](#0x30-ctl-gate-ctl)), the `ctl-cancel` op (frame 0x34) and the `xray` op for ctl's
   `--xray`. A client tells a server that serves them by `ctl`, `ctl-cancel` and `xray` in `ops`,
   never by `proto`.
+- **1.1 amendment, 2026-11-10** (#841, with dch #118 / dch 1.42.0): the ctl connection rules of
+  `dch serve` 1.42.0, still `proto` `"1.1"`. A 0x30 while the connection's ctl runs gets the coded
+  `0x13 {"code": "busy", ...}` and nothing closes; every other refused 0x30 is a 0x13 and then the
+  FIN; a ctl connection (running or warm) takes only 0x08, 0x03, 0x30 and 0x34; a 0x30 on an
+  attached or watch connection is refused; a 0x34 ends the ctl with `{"exit": 2, "why": "cancel"}`
+  (SIGTERM, SIGKILL 2 s later) and forwards nothing after it; the request ends at dch's reap. See
+  [0x30 ctl](#0x30-ctl-gate-ctl). An amendment, not 1.2: `dch serve` 1.42.0 speaks these rules as
+  `"1.1"` (serve.c's hello), a client gates 0x34 and a second 0x30 on the `ctl-cancel` token, and
+  the only added key (`code` on the busy 0x13) is optional to a client.
 - A minor bump only adds: new optional keys, new frames, new `ops` names. A client ignores
   keys and `ops` it does not know.
 - A major bump breaks. A client that reads a newer major than its own refuses the host
@@ -108,8 +117,10 @@ Every frame, in both directions:
 - **One in flight.** These Mac-only requests allow one in flight per connection: 0x0b-0x0f,
   0x15, 0x16, 0x1e, 0x1f, 0x22-0x26, 0x28, 0x29, 0x2c, 0x2d. Another of them while one is in
   flight gets `0x13 {"message": "busy with an earlier request"}` at once, ahead of the first
-  one's reply. 0x30 ctl allows one in flight per connection too, answered the same way; on
-  Prosper it shares the Mac-only requests' slot (a 0x0b while a ctl runs is busy, and the reverse). The others are never refused as busy:
+  one's reply. 0x30 ctl allows one in flight per connection too, answered with `dch serve`'s coded
+  busy instead (see [0x30 ctl](#0x30-ctl-gate-ctl)); a 0x30 while a Mac-only request is in flight
+  gets `ctl needs its own connection`, and a Mac-only request on a ctl connection is refused and
+  closed (a ctl connection takes only ctl frames). The others are never refused as busy:
   - the base frames, 0x02 create, 0x0a putClipboard and 0x17 putClipboardText are handled even
     while a request is in flight;
   - a second 0x2e on a connection that is already watching is ignored (no reply);
@@ -127,6 +138,9 @@ Every frame, in both directions:
   - on a length prefix over the receive guard (0x13 `frame too large` first);
   - after 0x12 exit (the FIN follows the frame);
   - when an attach or create fails to spawn (0x13 first, see below);
+  - after a refused 0x30 (0x13 first; not a busy one), after any frame but 0x08, 0x03, 0x30 and
+    0x34 on a ctl connection (0x13 `a ctl connection takes only ctl frames` first), and when a
+    warm ctl connection has been idle for 300 s (#841, see [0x30 ctl](#0x30-ctl-gate-ctl));
   - when another connection attaches to the same session (the newest wins; no frame);
   - when an attached session's output has not been taken by the socket for 20 s;
   - when a frame of a 0x16 reply (the 0x1a header or a 0x10 chunk) has not been taken by
@@ -400,10 +414,12 @@ Request: `0x30 {"argv": [string, ...], "cwd"?: string}`.
   existing directory on the host. Without it the child runs in the host user's home directory.
 - Other keys are ignored (a minor version may add some).
 
-Cancel: `0x34` (empty payload, client to server; `ctl-cancel` in `ops`). The server sends the
-running ctl's dch one SIGTERM; dch's exit then ends the request as usual, with
-`0x33 {"exit": <dch's>, "why": "cancel"}`. Output dch writes on its way out still arrives first.
-A 0x34 with no ctl running, or after the 0x33 went out, is ignored: no frame.
+Cancel: `0x34` (empty payload, client to server; `ctl-cancel` in `ops`). As `dch serve` 1.42.0
+(amendment 2026-11-10): the server forwards nothing more of the running ctl's output, sends its dch
+SIGTERM and, if that dch has not exited 2 s later, SIGKILL (Prosper: to its whole process group);
+once dch exits the request ends with `0x33 {"exit": 2, "why": "cancel"}` whatever dch's own exit
+was. A 0x34 with no ctl running, a second one, or one after the 0x33 went out, is ignored: no
+frame. (1.1 before the amendment: dch's own exit, and the output it wrote on its way out.)
 
 Replies, all server to client:
 
@@ -412,9 +428,9 @@ Replies, all server to client:
 | 0x31 | ctlStdout | raw bytes: the next chunk of dch's stdout |
 | 0x32 | ctlStderr | raw bytes: the next chunk of dch's stderr |
 | 0x33 | ctlExit | `{"exit": int, "why"?: "cap" \| "timeout" \| "cancel"}`: always the last frame of a ctl that ran |
-| 0x13 | error | `{"message": string}`: refused, nothing ran (or dch could not be started) |
+| 0x13 | error | `{"message": string}`: refused, nothing ran (or dch could not be started), then the FIN; or `{"code": "busy", "message": string}`, the connection stays open |
 
-A ctl gets exactly one of: one 0x13, or any number of 0x31/0x32 chunks then exactly one 0x33. `exit` is
+A ctl gets exactly one of: one 0x13 (then the FIN), or any number of 0x31/0x32 chunks then exactly one 0x33. `exit` is
 dch's own exit status (Prosper: 128 + the signal for a dch killed by a signal); `why` is present
 only when the server ended it (below). The two streams come from two pipes, so a 0x31 and a 0x32
 may arrive in another order than dch wrote them; each stream's own bytes stay in order.
@@ -477,11 +493,14 @@ The rules behind it:
   placeholder set out of reach until a dch release ships `--xray`, so it is off today). Without
   it, a well-formed `--xray` gets `0x13 xray not supported by this host` and nothing runs.
 
-Refusals, each a single 0x13 (nothing runs, the connection stays open). Prosper's messages:
+Refusals, each a single 0x13 and nothing runs. Since the amendment of 2026-11-10 (`dch serve`
+1.42.0) every one but the first two is followed by the server's FIN, on a warm connection too.
+Prosper's messages:
 
 | Cause | `message` |
 |-------|-----------|
-| another ctl, or a Mac-only request, in flight | `busy with an earlier request` |
+| another ctl running on this connection | `{"code": "busy", "message": "a ctl is already running on this connection"}`, byte for byte as `dch serve`; no close |
+| an attached or watch connection, or a Mac-only request in flight | `ctl needs its own connection` (both servers); no close |
 | not a JSON object with an `argv` array of strings | `malformed ctl request: send {"argv": [verb, name, ...]}` |
 | fewer than 2 elements | `ctl needs a verb and its arguments` |
 | more than 1024 elements | `too many arguments` |
@@ -499,8 +518,12 @@ Refusals, each a single 0x13 (nothing runs, the connection stays open). Prosper'
 | `--xray` without `xray` in `ops` | `xray not supported by this host` |
 | `--xray` shapes | `--xray needs --json`, `--ref takes 1-256 bytes of text with no control characters`, `--scope takes session, project or all`, `--chapter takes an anchor: 1-128 of A-Z a-z 0-9 : _ . -`, `--budget-ms takes a whole number from 50 to 300`, `--xray takes one of --ref, --follow, --chapter`, `--scope goes with --ref`, … |
 | dch could not be started | `dch could not be run` |
+| no dch on this Mac | `dch is not available on this Mac` |
 
-Only `no such directory` and the `:` message are fixed by the spec; the rest are Prosper's words, shown to the user
+`--xray` is checked first (as `dch serve`, which refuses it whatever follows): with `xray` off a
+malformed `--xray` gets `xray not supported by this host`, not its shape error.
+
+Only `no such directory`, the `:` message, the busy payload and the two connection messages are fixed by the spec; the rest are Prosper's words, shown to the user
 as written.
 
 **Streaming.** The server sends each chunk of dch's output as dch writes it, never buffered to
@@ -520,19 +543,26 @@ for an agent, and a client shows it as it comes.
   its real exit code) or the client closes the connection (below). The server reads dch's pipe
   only as fast as the socket takes the frames, so a slow client slows dch rather than filling the
   server's memory.
+- **dch's exit ends the request** (amendment 2026-11-10, as `dch serve`'s ctl_read): once dch is
+  reaped the server sends what is left in its pipes and then the 0x33. A process dch started
+  that still holds a pipe holds neither the 0x33 nor the connection's ctl slot.
 - **The client closes** while a ctl runs (any verb, `--follow` and `--xray --follow` included): the server sends its dch
   child one SIGTERM and nothing more (no SIGKILL after it), and sends no frame. `--stop` and
   `--say` answer the SIGTERM by leaving the session running and typing their resume message, so
   they get the time they need.
 
-**Connections.** One ctl in flight per connection: another 0x30 while one runs gets
-`0x13 busy with an earlier request` at once and runs nothing (see [Connections](#connections)).
-After its 0x33 the same connection takes the next 0x30 (warm reuse). A `--follow` (or `--xray
---follow`) holds its slot until it ends. A ctl may share a connection with an attach (its frames
-are distinct from 0x10). Closing the connection sends a running ctl's child SIGTERM (above). A
-connection that has sent a 0x30 is closed by the server once it has been idle for **300 s**:
-no frame from the client and no reply from the server for 300 s, no request running and no
-attach.
+**Connections.** One ctl in flight per connection: another 0x30 while one runs gets the busy
+0x13 at once and runs nothing; the running one goes on, and a 0x34 still cancels it. After its
+0x33 the same connection takes the next 0x30 (warm reuse). A `--follow` (or `--xray --follow`)
+holds its slot until it ends. Since the amendment of 2026-11-10 a ctl connection stays one: once a
+ctl has run on it (running or warm) it takes only 0x08, 0x03, 0x30 and 0x34; any other frame
+(an attach, a watch, a kill, a Mac-only request, 0x10 input, an unknown type) gets `0x13 {"message":
+"a ctl connection takes only ctl frames"}`, is not handled, and the FIN follows (a running ctl
+is ended as on a close). The reverse holds too: a 0x30 on an attached or watch connection is
+refused (above). Closing the connection sends a running ctl's child SIGTERM (above). A connection
+a ctl ran on is closed by the server once it has been idle for **300 s**: no frame from the
+client and no reply from the server for 300 s, and no ctl running. (1.1 before the amendment
+let a ctl share a connection with an attach.)
 
 **The gate.** The same as attach: the peer address and owner check, decided before any byte is
 read (see [Transport and trust](#transport-and-trust)); a refused peer's 0x30 is never read. No
@@ -591,7 +621,7 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14, 15, 16, 18: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
@@ -599,8 +629,9 @@ Without `--mutating` the runner skips, and prints as SKIP, every fixture marked 
 12, 14 and 15 (each attach starts a session, `golden-776`, `golden-776-14` and `golden-776-15`,
 and each cleanup kills its own; 15 ends it by typing `exit` and ^D into it), 16 (a 0x02
 create of `golden-776-16`, killed by its cleanup), and 18 (its setup creates `golden-838-18`,
-then reads it with ctl `--read`; its cleanup kills it). Run `--mutating` only against a test
-server, never a host with sessions someone uses.
+then reads it with ctl `--read`; its cleanup kills it), and 26-29 (each setup creates its own
+`golden-841-<n>` and each cleanup kills it). Run `--mutating` only against a test server, never a
+host with sessions someone uses.
 
 17-25 are the `ctl` set (#838), each `requires_op` `ctl`: 17 a server listing `ctl` speaks proto
 1.1 or later; 18 a `--read` round trip (0x31, then 0x33); 19 a flag off the verb's allowlist,
@@ -608,7 +639,17 @@ server, never a host with sessions someone uses.
 `--revive` refused while `create` is not in `ops` (`unless_op`, so they run only against a
 server with create off: a `dch serve` without `--allow-create`, or Prosper's test server with
 its create seam off); 24 `--spawn` with a `cwd` that does not exist (needs `create` too); 25 a
-name with `:` (`a session name with ':' is local only`). A conforming server runs nothing for 19-25.
+name with `:` (`a session name with ':' is local only`). A conforming server runs nothing for 19-25,
+and since the amendment of 2026-11-10 closes the connection after each of their 0x13s.
+
+26-30 follow `dch serve` 1.42.0 (#841; its goldens 40-42 and 32): 26 a 0x34 with no ctl running
+is ignored and the connection still runs a 0x30; 27 a 0x34 during a `--follow` ends it with
+`{"exit":2,"why":"cancel"}` byte for byte, a second 0x34 is ignored and the warm connection runs
+the next 0x30; 28 a 0x30 during a `--follow` gets the busy 0x13 byte for byte, and a 0x34 then
+cancels the running one; 29 a 0x09 on a warm ctl connection gets `a ctl connection takes only ctl
+frames` and the FIN; 30 (`unless_op` `xray`) a malformed `--xray` gets `xray not supported by this
+host` and the FIN. 26-29 `requires_op` `ctl-cancel` and `create`. dch's 43 (the 300 s idle close)
+needs the server's idle lowered, which a runner cannot do; Prosper's unit tests pin it.
 
 15 assumes the session runs a shell (dch's default command) that reads input once it has
 started: it is a smoke check of exit and close. A shell whose rc files discard type-ahead, or

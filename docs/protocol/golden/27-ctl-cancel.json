@@ -1,0 +1,58 @@
+{
+  "id": "27-ctl-cancel",
+  "about": "0x34 mid-run (a --follow): 0x33 {\"exit\": 2, \"why\": \"cancel\"}, byte for byte. A 0x34 after that 0x33 is ignored, and the warm connection runs the next 0x30 (dch's golden 41).",
+  "requires_op": [
+    "ctl-cancel",
+    "create"
+  ],
+  "mutating": true,
+  "setup": [
+    "02 00000066 7b226e616d65223a22676f6c64656e2d3834312d3237222c22636f6d6d616e64223a5b222f62696e2f7368222c222d63222c226563686f20676f6c64656e2d3834312d32373b206578656320636174225d2c22636f6c73223a38302c22726f7773223a32347d"
+  ],
+  "cleanup": [
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3834312d3237227d"
+  ],
+  "steps": [
+    {
+      "send": "30 00000025 7b2261726776223a5b222d2d666f6c6c6f77222c22676f6c64656e2d3834312d3237225d7d"
+    },
+    {
+      "expect": {
+        "type": "31",
+        "nonempty": true
+      }
+    },
+    {
+      "send": "34 00000000"
+    },
+    {
+      "expect": {
+        "type": "33",
+        "payload": "7b2265786974223a322c22776879223a2263616e63656c227d"
+      }
+    },
+    {
+      "send": "34 00000000"
+    },
+    {
+      "expect_quiet": 0.3
+    },
+    {
+      "send": "30 00000023 7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3834312d3237225d7d"
+    },
+    {
+      "expect": {
+        "type": "31",
+        "nonempty": true
+      }
+    },
+    {
+      "expect": {
+        "type": "33",
+        "json": {
+          "exit": "int"
+        }
+      }
+    }
+  ]
+}

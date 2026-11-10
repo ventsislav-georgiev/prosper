@@ -1,6 +1,6 @@
 {
   "id": "23-ctl-revive-needs-create",
-  "about": "With create off, ctl --revive (it starts a process) answers 0x13 and revives nothing.",
+  "about": "With create off, ctl --revive (it starts a process) answers 0x13 and revives nothing, then the FIN (#841, dch 1.42).",
   "requires_op": "ctl",
   "unless_op": "create",
   "steps": [
@@ -14,6 +14,9 @@
           "message": "string~.+"
         }
       }
+    },
+    {
+      "expect_close": true
     }
   ]
 }

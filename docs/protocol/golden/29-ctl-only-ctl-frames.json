@@ -1,0 +1,48 @@
+{
+  "id": "29-ctl-only-ctl-frames",
+  "about": "A ctl connection (here warm, after its 0x33) takes only 0x08, 0x03, 0x30 and 0x34: a 0x09 snapshot is 0x13 \"a ctl connection takes only ctl frames\", then the FIN.",
+  "requires_op": [
+    "ctl-cancel",
+    "create"
+  ],
+  "mutating": true,
+  "setup": [
+    "02 00000066 7b226e616d65223a22676f6c64656e2d3834312d3239222c22636f6d6d616e64223a5b222f62696e2f7368222c222d63222c226563686f20676f6c64656e2d3834312d32393b206578656320636174225d2c22636f6c73223a38302c22726f7773223a32347d"
+  ],
+  "cleanup": [
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3834312d3239227d"
+  ],
+  "steps": [
+    {
+      "send": "30 00000023 7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3834312d3239225d7d"
+    },
+    {
+      "expect": {
+        "type": "31",
+        "nonempty": true
+      }
+    },
+    {
+      "expect": {
+        "type": "33",
+        "json": {
+          "exit": "int"
+        }
+      }
+    },
+    {
+      "send": "09 00000000"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~a ctl connection takes only ctl frames"
+        }
+      }
+    },
+    {
+      "expect_close": true
+    }
+  ]
+}

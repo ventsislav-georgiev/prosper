@@ -78,6 +78,13 @@ tag from the now-released section and put it on the new top draft.
   "ctl-cancel"), and the connection stays open for its next request until 300 s idle. Same gate as
   attach (peer address and owner check); `--spawn` may name a starting directory. `--xray` is
   allowlisted, and offered once the bundled dch has it. (#838)
+- Remote Terminal: Prosper's "ctl" now answers the way dch 1.42.0's serve does (#841). A refused
+  request gets its reason and then the connection closes; a second request while one runs gets
+  "busy" and the connection stays. A connection that ran a ctl takes only ctl frames, and a ctl on a
+  connection that is attached or watching is refused. A cancelled request ends with exit 2 "cancel",
+  nothing it printed after the cancel is sent, and dch and everything it started are killed 2 s
+  after the cancel if they have not exited. A request ends as soon as dch exits, even when a process
+  it started still holds its output open. `--xray` is refused first when this Mac's dch lacks it.
 - Ships dch 1.43.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

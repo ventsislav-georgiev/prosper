@@ -1,6 +1,6 @@
 {
   "id": "24-ctl-spawn-cwd-missing",
-  "about": "ctl --spawn with a cwd that is not an existing directory answers 0x13 \"no such directory\" and starts nothing.",
+  "about": "ctl --spawn with a cwd that is not an existing directory answers 0x13 \"no such directory\" and starts nothing, then the FIN (#841, dch 1.42).",
   "requires_op": [
     "ctl",
     "create"
@@ -16,6 +16,9 @@
           "message": "string~no such directory"
         }
       }
+    },
+    {
+      "expect_close": true
     }
   ]
 }
