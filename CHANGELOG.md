@@ -85,7 +85,7 @@ tag from the now-released section and put it on the new top draft.
   nothing it printed after the cancel is sent, and dch and everything it started are killed 2 s
   after the cancel if they have not exited. A request ends as soon as dch exits, even when a process
   it started still holds its output open. `--xray` is refused first when this Mac's dch lacks it.
-- Ships dch 1.43.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.44.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -103,6 +103,10 @@ tag from the now-released section and put it on the new top draft.
   yet. The ring is on by default: up to 2 MiB of plain shell output per session, held in dch's memory
   only (never on disk) and readable only by the same user; `xray_ring 0` in dch's config turns it off.
   The ring survives `dch --restart` (#846).
+- dch 1.44.0: `dch --xray <name> --json` prints a session's chapters as JSON: a Claude Code session's
+  transcript chapters, or a shell session's commands split at prompts. `<name>` can also be an agent
+  id or a History record. `dch --xray <name> --clear --json` empties a live shell's ring. Prosper
+  does not read it yet, and its Remote Terminal still refuses `--xray` (#849).
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
