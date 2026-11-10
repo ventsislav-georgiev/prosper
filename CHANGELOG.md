@@ -48,7 +48,7 @@ tag from the now-released section and put it on the new top draft.
   bookmark imports still decode); `> cmd` output stops at 1 MiB with an "[output truncated at
   1 MiB]" line. Shell output with invalid UTF-8 now shows replacement characters instead of
   coming back empty (#833).
-- Ships dch 1.41.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.42.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -58,6 +58,9 @@ tag from the now-released section and put it on the new top draft.
   leaks into the session as typed text. New sessions default to FORCE_HYPERLINK=1, so Claude Code
   keeps its statusline links. dch serve gains the remote `ctl` op, which runs allowlisted verbs on a
   host; a session name containing ':' is refused there, so a host never relays on to a third one.
+- dch 1.42.0: a remote `ctl` request can be cancelled, and a connection stays open for the next
+  request instead of closing after each one. `dch --run` into a Claude Code session goes through
+  its composer and never waits: while Claude is still starting it exits 1.
 
 ## v2.174.0
 
