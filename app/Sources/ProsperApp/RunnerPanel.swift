@@ -271,6 +271,17 @@ final class RunnerPanel {
             }
             return
         }
+        // #842: an `sn` row whose snippet asks for {argument} values (value = name or
+        // phone id): the palette closes, the fill-in panel asks, the app before it gets the text.
+        if id == SnippetExpander.fillInActionID {
+            dismiss()
+            if let hit = PhoneSnippetStore.lookup(path) {
+                let expander = SnippetExpander.shared
+                expander.insert(hit, context: expander.context(for: hit), target: previousApp?.processIdentifier,
+                                bundleId: previousApp?.bundleIdentifier)
+            }
+            return
+        }
         // Custom (non `file.*`) action id: dispatch it back to the extension that
         // built the row — `FileActions.perform` would silently drop it. The handler
         // is the command handler suffixed `_action`, receiving (actionID, value, "{}").

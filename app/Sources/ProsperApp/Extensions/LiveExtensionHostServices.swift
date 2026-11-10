@@ -306,7 +306,14 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     // MARK: Snippets (native store + placeholder engine)
 
     func snippetsAll() -> String {
-        encodeSnippets(SnippetStore.all())
+        // #842: `arguments` = inserting it asks for {argument} values (the palette offers the fill-in).
+        let all = SnippetStore.all()
+        let lookup = SnippetExpander.snippetLookup(all, PhoneSnippetStore.live.sets())
+        let arr = all.map { hit in
+            Self.snippetDict(hit).merging(
+                ["arguments": !SnippetExpander.fillInFields(hit, snippetByKeyword: lookup).isEmpty]) { $1 }
+        }
+        return Self.jsonString(arr) ?? "[]"
     }
 
     func snippetGet(name: String) -> String? {
@@ -379,13 +386,16 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// #731: the phones' read-only sets, newest first, for the palette and Settings:
     /// [{device_id, device, count, updated, snippets: [{id, name, keyword, text, group}]}].
     func snippetsPhone() -> String {
-        Self.jsonString(PhoneSnippetStore.live.sets().map { device, set in
+        let sets = PhoneSnippetStore.live.sets()
+        let lookup = SnippetExpander.snippetLookup(SnippetStore.all(), sets)
+        return Self.jsonString(sets.map { device, set in
             [
                 "device_id": device, "device": set.label, "count": set.snippets.count,
                 "updated": Date(timeIntervalSince1970: set.updated).formatted(date: .abbreviated, time: .shortened),
                 "snippets": set.snippets.map {
                     ["id": PhoneSnippetStore.id(device: device, name: $0.name), "name": $0.name,
-                     "keyword": $0.keyword ?? "", "text": $0.text, "group": $0.group ?? ""]
+                     "keyword": $0.keyword ?? "", "text": $0.text, "group": $0.group ?? "",
+                     "arguments": !PlaceholderEngine.arguments(in: $0.text, snippetByKeyword: lookup).isEmpty]
                 },
             ] as [String: Any]
         }) ?? "[]"
@@ -507,12 +517,6 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         ]
     }
 
-    private func encodeSnippets(_ hits: [SnippetHit]) -> String {
-        let arr = hits.map(Self.snippetDict)
-        guard let data = try? JSONSerialization.data(withJSONObject: arr),
-              let json = String(data: data, encoding: .utf8) else { return "[]" }
-        return json
-    }
 
     // MARK: File finder (Spotlight via FileSearchEngine / NSMetadataQuery)
 

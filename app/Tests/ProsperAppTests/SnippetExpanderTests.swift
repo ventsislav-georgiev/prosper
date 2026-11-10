@@ -3,7 +3,7 @@ import XCTest
 
 /// Covers the pure expansion planner `SnippetExpander.plan` — backspace counts,
 /// `{cursor}` left-arrow math, word-boundary delimiter re-append, rich routing,
-/// and the required-argument bail-out.
+/// and the `{argument}` fill-in request (#842; the flow itself is SnippetFillInTests).
 final class SnippetExpanderTests: XCTestCase {
 
     private func lookup(_ hits: [SnippetHit]) -> (String) -> SnippetHit? {
@@ -54,12 +54,13 @@ final class SnippetExpanderTests: XCTestCase {
         XCTAssertEqual(d, .insertRich(name: "R", backspaces: 1))
     }
 
-    func testRequiredArgumentBailsOut() {
+    func testRequiredArgumentAsksForIt() {
         let hit = SnippetHit(name: "A", keyword: ";a", text: "Hi {argument}")
         let d = SnippetExpander.plan(
             buffer: ";a", keywords: [(";a", "A")],
             lookup: lookup([hit]), context: PlaceholderContext(), wordBoundaryMode: false)
-        XCTAssertEqual(d, .needsArguments(name: "A"))
+        // #842: the trigger 'a' goes through to the field, so the whole keyword (2) is erased on submit.
+        XCTAssertEqual(d, .needsArguments(name: "A", backspaces: 2, delimiter: ""))
     }
 
     func testSatisfiedArgumentExpands() {
@@ -72,11 +73,12 @@ final class SnippetExpanderTests: XCTestCase {
         XCTAssertEqual(d, .insertPlain(name: "A", backspaces: 1, insertText: "Hi there", leftArrows: 0))
     }
 
-    func testDefaultedArgumentExpandsWithoutInput() {
+    func testDefaultedArgumentAsksToo() {
+        // #842: a default prefills the field; it still asks (TextExpander fill-in parity).
         let hit = SnippetHit(name: "A", keyword: ";a", text: "Hi {argument default=\"x\"}")
         let d = SnippetExpander.plan(
             buffer: ";a", keywords: [(";a", "A")],
             lookup: lookup([hit]), context: PlaceholderContext(), wordBoundaryMode: false)
-        XCTAssertEqual(d, .insertPlain(name: "A", backspaces: 1, insertText: "Hi x", leftArrows: 0))
+        XCTAssertEqual(d, .needsArguments(name: "A", backspaces: 2, delimiter: ""))
     }
 }

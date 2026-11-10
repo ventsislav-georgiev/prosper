@@ -137,4 +137,23 @@ do
     end
 end
 
+-- ── #842: a snippet asking for {argument} values carries the native fill-in action ──
+do
+    local g, e = fresh{
+        { name = "greet", keyword = ";;hi", text = "Hi {argument name=\"who\"}", expanded = "Hi ", arguments = true },
+        { name = "addr", keyword = ";;addr", text = "1 Loop", expanded = "1 Infinite Loop" },
+    }
+    e.host.snippets.phone = function()
+        return { { device_id = "dev-CD34", device = "Desk", count = 1, updated = "Nov 10, 2026",
+                   snippets = { { id = "\1phone\1dev-CD34\1sig", name = "sig", keyword = "ps",
+                                  text = "Bye {argument}", arguments = true } } } }
+    end
+    local out = g.snippets_run("sn")
+    h.eq(#out.items, 3, "both Mac snippets and the phone one list")
+    h.eq(out.items[1].actions[1].id, "snippets.fill", "a snippet with arguments gets the fill-in action")
+    h.eq(out.items[1].actions[1].value, "greet", "keyed by the snippet name")
+    h.eq(out.items[2].actions, nil, "a snippet without arguments keeps the plain Enter-pastes row")
+    h.eq(out.items[3].actions[1].value, "\1phone\1dev-CD34\1sig", "a phone snippet is keyed by its id")
+end
+
 print("ok snippets")

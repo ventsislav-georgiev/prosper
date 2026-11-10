@@ -91,6 +91,13 @@ tag from the now-released section and put it on the new top draft.
 - dch 1.42.0: a remote `ctl` request can be cancelled, and a connection stays open for the next
   request instead of closing after each one. `dch --run` into a Claude Code session goes through
   its composer and never waits: while Claude is still starting it exits 1.
+- Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
+  name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
+  on, and Insert stays off while a required field is empty. It works for a typed keyword, the `sn`
+  palette and a bound Shortcuts hotkey, for plain and rich-text snippets, and asks for the arguments of an
+  embedded {snippet:…} in the same panel. A typed keyword stays as typed until you submit, and stays on
+  cancel; either way focus goes back to the app you typed in. Nothing is inserted if another app took
+  focus meanwhile. The panel never opens in a password field, and macOS Text Replacements never ask (#842).
 
 ## v2.174.0
 

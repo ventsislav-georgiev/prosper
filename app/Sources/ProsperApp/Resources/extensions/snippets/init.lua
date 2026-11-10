@@ -31,6 +31,16 @@ local function text_replacements()
     return host.snippets.replacements and host.snippets.replacements() or {}
 end
 
+-- #842: a snippet with {argument} fields gets a native row action: Enter closes the
+-- palette, a fill-in panel asks for the values, then the text goes to the prior app.
+local function fill_in(item, key, asks)
+    if asks then
+        item.actions = { { id = "snippets.fill", title = "Fill In & Insert",
+                           icon = "character.cursor.ibeam", value = key } }
+    end
+    return item
+end
+
 -- Build the "Add Snippet" form node (reused by the opener and the validation
 -- re-render path so typed values survive a failed submit). The body is a
 -- multi-line `textarea`; rich (RTF) authoring lives in Settings → Snippets.
@@ -119,12 +129,12 @@ function snippets_run(query)
             local resolved = host.snippets.expand(s.name)
             if resolved == nil or #resolved == 0 then resolved = s.text end
             local kw = (s.keyword and #s.keyword > 0) and ("  ·  " .. s.keyword) or ""
-            items[#items + 1] = {
+            items[#items + 1] = fill_in({
                 id = tostring(#items),
                 title = resolved,
                 subtitle = s.name .. kw,
                 icon = "text.append",
-            }
+            }, s.name, s.arguments)
         end
     end
     -- #731: then each phone's snippets, read-only, labelled with the device; the phone's
@@ -140,13 +150,13 @@ function snippets_run(query)
                 if resolved == nil or #resolved == 0 then resolved = p.text end
                 local kw = (p.keyword and #p.keyword > 0) and ("  ·  " .. p.keyword) or ""
                 local grp = (p.group and #p.group > 0) and ("  ·  " .. p.group) or ""
-                items[#items + 1] = {
+                items[#items + 1] = fill_in({
                     id = tostring(#items),
                     title = resolved,
                     subtitle = p.name .. kw .. grp,
                     icon = "iphone",
                     accessory = set.device,
-                }
+                }, p.id, p.arguments)
             end
         end
     end
@@ -211,6 +221,7 @@ function settings_render(section_id, state)
             .. "Keywords can't contain spaces or quotes. Use a symbol prefix (e.g. ;;addr) so everyday "
             .. "words don't trigger. Placeholders: {cursor} {clipboard} {date} {date +1d} {time} {uuid} "
             .. "{snippet:keyword} {argument} — with modifiers like {clipboard | uppercase}. "
+            .. "A snippet with {argument name=\"to\"} (or default=\"…\") asks for its values before it inserts. "
             .. "macOS Text Replacements are read-only here: they come after your snippets and your "
             .. "iPhone's, and are typed exactly as written.",
         rows = {

@@ -50,19 +50,35 @@ enum PlaceholderEngine {
     }
 
     /// The `{argument …}` slots a template declares, de-duplicated by name in
-    /// first-seen order. Drives the palette's pre-insertion prompt.
-    static func arguments(in template: String) -> [ArgumentSpec] {
+    /// first-seen order (the first occurrence's default wins). Slots inside an
+    /// embedded `{snippet:keyword}` (looked up through `snippetByKeyword`, as
+    /// `render` does) are collected where the embed sits. Drives the fill-in panel.
+    static func arguments(in template: String,
+                          snippetByKeyword: (String) -> String? = { _ in nil }) -> [ArgumentSpec] {
         var seen = Set<String>()
         var specs: [ArgumentSpec] = []
+        collectArguments(template, snippetByKeyword, depth: 0, &seen, &specs)
+        return specs
+    }
+
+    private static func collectArguments(_ template: String, _ snippetByKeyword: (String) -> String?,
+                                         depth: Int, _ seen: inout Set<String>, _ specs: inout [ArgumentSpec]) {
         forEachToken(template) { raw in
             let (name, spec, _) = split(raw)
-            guard name.lowercased() == "argument" else { return }
-            let parsed = parseArgument(spec)
-            guard !seen.contains(parsed.name) else { return }
-            seen.insert(parsed.name)
-            specs.append(parsed)
+            switch name.lowercased() {
+            case "argument":
+                let parsed = parseArgument(spec)
+                guard !seen.contains(parsed.name) else { return }
+                seen.insert(parsed.name)
+                specs.append(parsed)
+            case "snippet":
+                let key = spec.trimmingCharacters(in: .whitespaces)
+                guard depth < maxRecursionDepth, !key.isEmpty, let nested = snippetByKeyword(key) else { return }
+                collectArguments(nested, snippetByKeyword, depth: depth + 1, &seen, &specs)
+            default:
+                break
+            }
         }
-        return specs
     }
 
     /// Set of built-in placeholder names (everything else is a candidate for an
