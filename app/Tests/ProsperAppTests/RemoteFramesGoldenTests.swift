@@ -41,8 +41,9 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     override func setUpWithError() throws {
         let script = tempDir("golden-dch").appendingPathComponent("fake-dch")
-        // dch's spawn args are -E [-f] [-n name] [-- command...] (DchCommand.spawnArgs).
-        try ("#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; --) shift; break;; *) break;; esac; done\n"
+        // dch's spawn args are -E [-f] [-n name] [-- command...] (DchCommand.spawnArgs). #838: a ctl --read
+        // prints a screen, as dch's would.
+        try ("#!/bin/sh\n[ \"$1\" = --read ] && { printf 'golden screen of %s\\n' \"$2\"; exit 0; }\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; --) shift; break;; *) break;; esac; done\n"
             + "[ $# -gt 0 ] && exec \"$@\"\nprintf '\\033[2J\\033[Hgolden repaint\\r\\n'\nexec /bin/cat\n")
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
@@ -87,10 +88,13 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(files.count, 16, "the fixtures are read from \(Self.golden.path)")
         let ops = try handshakeOps()
         XCTAssertTrue(ops.contains("watch"), "the hub has a list, so every requires_op fixture runs")
+        var skipped: [String] = []
         for file in files {
             let fx = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
             let id = fx["id"] as? String ?? file.lastPathComponent
-            if let op = fx["requires_op"] as? String { XCTAssertTrue(ops.contains(op), "\(id) would be skipped") }
+            for op in Self.requiredOps(fx) { XCTAssertTrue(ops.contains(op), "\(id) would be skipped") }
+            // #838: 22 and 23 run only where create is off (testCtlFixturesAgainstAServerWithCreateOff).
+            if let op = fx["unless_op"] as? String, ops.contains(op) { skipped.append(id); continue }
             do { try run(fx) } catch { XCTFail("\(id): \(error)") }
             for hex in fx["cleanup"] as? [String] ?? [] {
                 let c = try Client(port: port)
@@ -98,7 +102,9 @@ final class RemoteFramesGoldenTests: XCTestCase {
                 _ = try c.frame()
             }
         }
+        XCTAssertEqual(skipped, Self.createOffOnly)
         let calls = ran.all
+        XCTAssertTrue(calls.contains(["-k", "golden-838-18"]), "18's cleanup: \(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776-no-such-session"]), "\(calls)")
         XCTAssertTrue(calls.contains(["-m", "golden-776-no-such-session", ""]), "\(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776"]), "the attach fixture's cleanup: \(calls)")
@@ -114,8 +120,11 @@ final class RemoteFramesGoldenTests: XCTestCase {
     func testPythonRunnerPassesAgainstTheServer() throws {
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)", "--mutating"])
         XCTAssertEqual(status, 0, text)
-        XCTAssertTrue(text.contains("server=prosper proto=1.0"), text)
-        XCTAssertFalse(text.contains("SKIP"), text)
+        XCTAssertTrue(text.contains("server=prosper proto=1.1"), text)
+        // #838: only the create-off fixtures skip on a server that allows create.
+        XCTAssertEqual(text.components(separatedBy: "SKIP").count - 1, Self.createOffOnly.count, text)
+        for id in Self.createOffOnly { XCTAssertTrue(text.contains("SKIP \(id): 'create' in ops"), text) }
+        XCTAssertTrue(text.contains("PASS 18-ctl-read-round-trip"), text)
         XCTAssertFalse(text.contains("FAIL"), text)
         XCTAssertTrue(text.contains("OK (0 failed)"), text)
     }
@@ -126,7 +135,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)"])
         XCTAssertEqual(status, 0, text)
         for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws", "14-attach-twice-ignored",
-                   "15-session-exit-closes", "16-create-exit-closes"] {
+                   "15-session-exit-closes", "16-create-exit-closes", "18-ctl-read-round-trip"] {
             XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
         }
         XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)
@@ -228,6 +237,62 @@ final class RemoteFramesGoldenTests: XCTestCase {
         for id in ids { XCTAssertTrue(text.contains("SKIP \(id): 'create' not in ops"), text) }
         XCTAssertFalse(text.contains("PASS") || text.contains("FAIL"), text)
         XCTAssertEqual(fake.seen.all, [["08"]], "only the handshake reached the server")
+    }
+
+    /// #838: ctl sits behind the same gate as attach: a peer the owner check refuses gets no frame and
+    /// its 0x30 is never read, so no dch is chosen or run.
+    func testARefusedPeersCtlRunsNothing() throws {
+        let reached = Recorder()
+        let refusing = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                        allowPeer: { _ in true },
+                                        owner: Self.owner({ TailscaleNode(userID: 2, login: "bob@example.com", name: "bobs-phone") }),
+                                        configure: { c in c.ctl.path = { reached.add(["ctl"]); return "/bin/echo" } })
+        try refusing.start()
+        defer { refusing.stop(); _ = refusing.isRunning; refusing.queue.sync {} }
+        let c = try Client(port: try XCTUnwrap(refusing.boundPort))
+        try c.send(DchFrame.encode(DchFrame.ctl, json: ["argv": ["--read", "alpha"]]))
+        XCTAssertThrowsError(try c.frame(timeout: 5), "refused: closed with no frame") {
+            XCTAssertEqual($0 as? Client.Failure, .closed)
+        }
+        refusing.queue.sync {}
+        XCTAssertEqual(reached.all, [])
+    }
+
+    /// #838: a server with create off (dch serve without --allow-create; on Prosper only through the
+    /// createAllowed seam): no "create" in ops, so 22 and 23 run and pass in both runners, 18 and 24
+    /// (they need create) skip, and no ctl gets as far as choosing a dch.
+    func testCtlFixturesAgainstAServerWithCreateOff() throws {
+        let reached = Recorder()
+        let off = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                   allowPeer: { _ in true }, owner: Self.owner(),
+                                   configure: { c in
+                                       c.createAllowed = { false }
+                                       c.ctl.path = { reached.add(["ctl"]); return nil }
+                                   })
+        try off.start()
+        defer { off.stop(); off.queue.sync {} }
+        let port = try XCTUnwrap(off.boundPort)
+        let dir = tempDir("golden-838-fixtures")
+        let files = try FileManager.default.contentsOfDirectory(at: try goldenDir(), includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.contains("-ctl-") }
+        XCTAssertEqual(files.count, 9, "17-25")
+        for f in files { try FileManager.default.copyItem(at: f, to: dir.appendingPathComponent(f.lastPathComponent)) }
+        let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)",
+                                          "--mutating", "--fixtures", dir.path])
+        XCTAssertEqual(status, 0, text)
+        for id in ["17-ctl-listed-with-proto-1-1", "19-ctl-unlisted-flag-refused", "20-ctl-dash-name-refused",
+                   "21-ctl-short-argv-refused", "25-ctl-colon-name-refused"] + Self.createOffOnly {
+            XCTAssertTrue(text.contains("PASS \(id)"), text)
+        }
+        for id in ["18-ctl-read-round-trip", "24-ctl-spawn-cwd-missing"] {
+            XCTAssertTrue(text.contains("SKIP \(id): 'create' not in ops"), text)
+        }
+        for id in Self.createOffOnly {
+            let fx = try XCTUnwrap(try JSONSerialization.jsonObject(
+                with: Data(contentsOf: try goldenDir().appendingPathComponent("\(id).json"))) as? [String: Any])
+            XCTAssertNoThrow(try run(fx, port: port), id)
+        }
+        XCTAssertEqual(reached.all, [], "every refusal comes before the dch is chosen")
     }
 
     /// QA #625 INFO-R3-4: a session that keeps drawing and never exits fails fixture 15's
@@ -357,7 +422,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let info = DchFrame.machineInfo(deviceID: "id", hostname: "Studio", wakeId: nil)
         XCTAssertEqual(info["server"] as? String, "prosper")
         XCTAssertEqual(info["name"] as? String, "Studio", "the computer name, as hostname")
-        XCTAssertEqual(info["proto"] as? String, "1.0")
+        XCTAssertEqual(info["proto"] as? String, "1.1")
         XCTAssertEqual(info["os"] as? String, DchFrame.osName)
         XCTAssertNotNil(DchFrame.osName.range(of: #"^macOS [0-9]+\.[0-9]+(\.[0-9]+)?$"#, options: .regularExpression), DchFrame.osName)
         XCTAssertEqual(DchFrame.osName, DchFrame.osLabel(ProcessInfo.processInfo.operatingSystemVersion))
@@ -708,6 +773,14 @@ final class RemoteFramesGoldenTests: XCTestCase {
         return (p.terminationStatus, text)
     }
 
+    /// #838: the fixtures that apply only where create is off.
+    private static let createOffOnly = ["22-ctl-spawn-needs-create", "23-ctl-revive-needs-create"]
+
+    /// #838: "requires_op" is one op or an array of them.
+    private static func requiredOps(_ fx: [String: Any]) -> [String] {
+        (fx["requires_op"] as? [String]) ?? (fx["requires_op"] as? String).map { [$0] } ?? []
+    }
+
     private func handshakeOps() throws -> Set<String> {
         let c = try Client(port: port)
         try c.send(Data([0x08, 0, 0, 0, 0]))
@@ -719,6 +792,11 @@ final class RemoteFramesGoldenTests: XCTestCase {
 
     /// One deadline per step, `timeout` (the spec's 5 s), as run.py.
     private func run(_ fx: [String: Any], port: UInt16? = nil, timeout: TimeInterval = 5) throws {
+        for hex in fx["setup"] as? [String] ?? [] {   // #838: each on a fresh connection, one frame read
+            let s = try Client(port: port ?? self.port)
+            try s.send(Self.unhex(hex))
+            _ = try s.frame(timeout: timeout)
+        }
         let c = try Client(port: port ?? self.port)
         for step in fx["steps"] as? [[String: Any]] ?? [] {
             let end = Date() + timeout   // per step, as run.py's c.arm() (QA #627 INFO-4)

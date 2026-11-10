@@ -1,0 +1,18 @@
+{
+  "id": "20-ctl-dash-name-refused",
+  "about": "A session name starting with - fails name_ok: 0x13, nothing runs (dch would read it as a flag).",
+  "requires_op": "ctl",
+  "steps": [
+    {
+      "send": "30 00000021 7b2261726776223a5b222d2d72656164222c222d676f6c64656e2d383338225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~.+"
+        }
+      }
+    }
+  ]
+}

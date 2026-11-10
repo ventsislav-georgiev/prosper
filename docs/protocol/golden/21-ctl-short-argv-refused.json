@@ -1,0 +1,18 @@
+{
+  "id": "21-ctl-short-argv-refused",
+  "about": "argv needs at least two elements: a lone verb answers 0x13 and runs nothing.",
+  "requires_op": "ctl",
+  "steps": [
+    {
+      "send": "30 00000015 7b2261726776223a5b222d2d737461747573225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~.+"
+        }
+      }
+    }
+  ]
+}

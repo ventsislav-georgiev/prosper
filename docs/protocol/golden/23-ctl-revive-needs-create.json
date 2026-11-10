@@ -1,0 +1,19 @@
+{
+  "id": "23-ctl-revive-needs-create",
+  "about": "With create off, ctl --revive (it starts a process) answers 0x13 and revives nothing.",
+  "requires_op": "ctl",
+  "unless_op": "create",
+  "steps": [
+    {
+      "send": "30 0000002e 7b2261726776223a5b222d2d726576697665222c22676f6c64656e2d3833382d3233222c222d2d6a736f6e225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~.+"
+        }
+      }
+    }
+  ]
+}

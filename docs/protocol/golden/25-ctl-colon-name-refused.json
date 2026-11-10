@@ -1,0 +1,18 @@
+{
+  "id": "25-ctl-colon-name-refused",
+  "about": "A session name with ':' is local only (dch would read it as host:name and dial on with this host's identity): 0x13, nothing runs.",
+  "requires_op": "ctl",
+  "steps": [
+    {
+      "send": "30 00000029 7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3833382d32353a6f74686572225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~a session name with ':' is local only"
+        }
+      }
+    }
+  ]
+}

@@ -7,7 +7,8 @@ Python 3 stdlib only. See ../remote-frames.md, "Golden frames", for the fixture 
 
 Exit 0 when every fixture that applies passes, 1 on any failure, 2 on bad usage or a host
 that refuses the handshake. Without --mutating, fixtures marked "mutating" (07 kill, 08 rename,
-12, 14 and 15 attach, 16 create: each runs dch on the server) are skipped and reported as SKIP.
+12, 14 and 15 attach, 16 create, 18 ctl --read after a create: each runs dch on the server) are
+skipped and reported as SKIP.
 """
 import argparse
 import glob
@@ -169,7 +170,33 @@ def check_frame(want, t, payload):
     return None
 
 
+def one_frame(addr, timeout, hx):
+    """Send `hx` on a fresh connection, read one frame, close: a setup or cleanup step."""
+    c = Conn(addr, timeout)
+    try:
+        c.send(unhex(hx))
+        return c.frame()
+    finally:
+        c.close()
+
+
+def skip_reason(fx, ops):
+    """Why a fixture does not apply to a server with these ops, else None."""
+    need = fx.get("requires_op") or []
+    for op in [need] if isinstance(need, str) else need:
+        if op not in ops:
+            return f"{op!r} not in ops"
+    if fx.get("unless_op") in ops:
+        return f"{fx['unless_op']!r} in ops"
+    return None
+
+
 def run(fx, addr, timeout):
+    for hx in fx.get("setup", []):
+        try:
+            one_frame(addr, timeout, hx)
+        except (Fail, OSError) as e:
+            raise Fail(f"setup: {e}")
     c = Conn(addr, timeout)
     try:
         for step in fx["steps"]:
@@ -232,9 +259,9 @@ def main(argv=None):
     for path in sorted(glob.glob(os.path.join(a.fixtures, "*.json"))):
         with open(path) as f:
             fx = json.load(f)
-        op = fx.get("requires_op")
-        if op and op not in ops:
-            print(f"SKIP {fx['id']}: {op!r} not in ops")
+        why = skip_reason(fx, ops)
+        if why:
+            print(f"SKIP {fx['id']}: {why}")
             continue
         if fx.get("mutating") and not a.mutating:
             print(f"SKIP {fx['id']}: mutating (pass --mutating)")
@@ -248,10 +275,7 @@ def main(argv=None):
         finally:
             for hx in fx.get("cleanup", []):
                 try:
-                    c = Conn(addr, a.timeout)
-                    c.send(unhex(hx))
-                    c.frame()
-                    c.close()
+                    one_frame(addr, a.timeout, hx)
                 except (Fail, OSError):
                     pass
     print("FAILED" if failed else "OK", f"({failed} failed)")

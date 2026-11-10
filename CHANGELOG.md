@@ -48,6 +48,18 @@ tag from the now-released section and put it on the new top draft.
   bookmark imports still decode); `> cmd` output stops at 1 MiB with an "[output truncated at
   1 MiB]" line. Shell output with invalid UTF-8 now shows replacement characters instead of
   coming back empty (#833).
+- Remote Terminal: the remote-frames protocol is 1.1 and learns "ctl": a dch client can run
+  `dch --read`, `--send`, `--run`, `--keys`, `--follow`, `--status`, `-k`, `-m`, `-d`, `--history`,
+  `--pin`, `--unpin`, `--forget`, `--stop`, `--say`, `--spawn` and `--revive` against this Mac's
+  sessions (`dch <verb> mac:name`). Prosper runs its own dch with the argv, never through a shell,
+  behind a per-verb and per-flag allowlist (dch 1.41.0's) and dch serve's session-name rule; a name
+  with `:` is refused, so a request never relays on to a third host; output streams back as it
+  comes. `--say`, `--stop` and `--revive` stop after 660 s and every other verb but `--follow` after
+  60 s, each at 8 MiB of output; `--follow` has no output cap and runs until the session ends or the
+  client hangs up (dch then gets SIGTERM). A client can cancel a running request (the hello lists
+  "ctl-cancel"), and the connection stays open for its next request until 300 s idle. Same gate as
+  attach (peer address and owner check); `--spawn` may name a starting directory. `--xray` is
+  allowlisted, and offered once the bundled dch has it. (#838)
 - Ships dch 1.42.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

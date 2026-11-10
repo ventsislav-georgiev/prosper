@@ -1,0 +1,34 @@
+{
+  "id": "18-ctl-read-round-trip",
+  "about": "ctl --read of a session the setup creates: its screen as 0x31 stdout, then 0x33 with dch's exit (0; the format checks an int).",
+  "requires_op": [
+    "ctl",
+    "create"
+  ],
+  "mutating": true,
+  "setup": [
+    "02 00000066 7b226e616d65223a22676f6c64656e2d3833382d3138222c22636f6d6d616e64223a5b222f62696e2f7368222c222d63222c226563686f20676f6c64656e2d3833382d31383b206578656320636174225d2c22636f6c73223a38302c22726f7773223a32347d"
+  ],
+  "cleanup": [
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3833382d3138227d"
+  ],
+  "steps": [
+    {
+      "send": "30 0000002c 7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3833382d3138222c222d2d616e7369225d7d"
+    },
+    {
+      "expect": {
+        "type": "31",
+        "nonempty": true
+      }
+    },
+    {
+      "expect": {
+        "type": "33",
+        "json": {
+          "exit": "int"
+        }
+      }
+    }
+  ]
+}

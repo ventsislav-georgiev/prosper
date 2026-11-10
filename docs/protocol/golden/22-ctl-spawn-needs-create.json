@@ -1,0 +1,19 @@
+{
+  "id": "22-ctl-spawn-needs-create",
+  "about": "With create off (no create in ops), ctl --spawn answers 0x13 and starts nothing.",
+  "requires_op": "ctl",
+  "unless_op": "create",
+  "steps": [
+    {
+      "send": "30 00000033 7b2261726776223a5b222d2d737061776e222c22676f6c64656e2d3833382d3232222c222d2d222c222f62696e2f7368225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~.+"
+        }
+      }
+    }
+  ]
+}

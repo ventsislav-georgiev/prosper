@@ -56,6 +56,8 @@ enum DchFrame {
     // #765: the phone's push stream instead of its list poll (5-30 s live, 15-120 s in battery saver;
     // DchWatchHub), only while "watch" is in ops.
     static let watch: UInt8 = 0x2e  // {} → listResp, ok {sidekick}, then listResp | ok {sidekick} | ok {} … | error
+    // #838: dch's control verbs run by this Mac's dch (DchCtl), only while "ctl" is in ops (always).
+    static let ctl: UInt8 = 0x30  // {argv: [verb, name, …]} → ctlStdout…/ctlStderr…, then ctlExit | error
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
@@ -74,6 +76,10 @@ enum DchFrame {
     static let modelsResp: UInt8 = 0x27 // [{id, name, loaded}] (empty: no local model on disk)
     static let commandsResp: UInt8 = 0x2a  // [{id, title, subtitle?, ext, argument?, icon?}]
     static let commandResult: UInt8 = 0x2b // {text, detail?}
+    static let ctlStdout: UInt8 = 0x31  // raw bytes: a chunk of the ctl's dch stdout
+    static let ctlStderr: UInt8 = 0x32  // raw bytes: a chunk of its stderr
+    static let ctlExit: UInt8 = 0x33    // {exit, why?: "cap"|"timeout"|"cancel"}: always a ran ctl's last frame
+    static let ctlCancel: UInt8 = 0x34  // (empty) C→S: SIGTERM the running ctl's dch; "ctl-cancel" in ops
 
     /// QA #606 F1: the requests that change the list. After one, the list frame forks until
     /// the island has caught up (DchWatchHub.changed).
@@ -92,8 +98,9 @@ enum DchFrame {
     /// #800: "create" (0x02) and "paste_image" (0x0a) too, always: this Mac serves both
     /// unconditionally (0x0a sets the pasteboard whatever clipboard sync says), and a client
     /// gates them on these names for a server that may not (dch serve).
+    /// #838: "ctl" (0x30) too, always, and "ctl-cancel" (0x34).
     static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put", "sidekick",
-                      "create", "paste_image"]
+                      "create", "paste_image", "ctl", "ctl-cancel"]
 
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
@@ -105,9 +112,11 @@ enum DchFrame {
     /// #765: "watch" only while Agent Island lists Remote Terminal's dir (DchWatchHub.available).
     static func machineInfo(deviceID: String, hostname: String, wakeId: String?, clipboard: Bool = false,
                             chat: Bool = false, commands: Bool = false, reviveNoMessage: Bool = false,
-                            watch: Bool = false) -> [String: Any] {
-        var all = ops + (reviveNoMessage ? ["revive_no_message"] : []) + (clipboard ? ["clipboard", "clipboard_max_side"] : [])
-        all += (chat ? ["chat"] : []) + (commands ? ["commands"] : []) + (watch ? ["watch"] : [])
+                            watch: Bool = false, create: Bool = true, xray: Bool = false) -> [String: Any] {
+        // #838: `create` is DchConnection.createAllowed, a seam (this Mac always allows create);
+        // "xray" only while the dch ctl runs has --xray (DchCtlOps.xray).
+        var all = ops.filter { create || $0 != "create" } + (reviveNoMessage ? ["revive_no_message"] : []) + (clipboard ? ["clipboard", "clipboard_max_side"] : [])
+        all += (chat ? ["chat"] : []) + (commands ? ["commands"] : []) + (watch ? ["watch"] : []) + (xray ? ["xray"] : [])
         // #776: server, os, name and proto (docs/protocol/remote-frames.md). Added keys only, so an
         // older phone reads the same. `hostname` already carries the computer name, so `name` is it.
         var info: [String: Any] = ["device_id": deviceID, "hostname": hostname, "ops": all,
@@ -117,7 +126,7 @@ enum DchFrame {
     }
 
     /// #776: the remote-frames.md version this Mac speaks. A client refuses a newer major, so it stays 1.x.
-    static let proto = "1.0"
+    static let proto = "1.1"   // #838: 1.1 adds "ctl"
 
     /// #776: machineInfoResp's "os": "macOS 27.0", the patch only when it is not 0.
     static let osName = osLabel(ProcessInfo.processInfo.operatingSystemVersion)
@@ -209,6 +218,19 @@ final class DchConnection: @unchecked Sendable {
     }
     /// #765 J16: the list frame's dch fork when the island has no list; tests count it.
     var listSessions: () -> [DchListRow] = { DchCommand.listSessions() }
+    /// #838: the ctl request's dch, its timeout and cap; tests point it at a fake.
+    var ctl = DchCtlOps()
+    /// #838: the one gate 0x02 create and ctl's --spawn and --revive share, and "create" in ops. This Mac always
+    /// allows create (no setting); a seam so tests can serve as a dch serve without --allow-create does.
+    var createAllowed: @Sendable () -> Bool = { true }
+    /// #838: this connection's running ctl; closing kills its child. On `queue`.
+    private var ctlJob: DchCtlJob?
+    /// #838 amendment 4: a connection that sent a 0x30 closes after `ctlIdle` with no frame from the
+    /// client, no request running and no attach. `clock` is a seam for tests. On `queue`.
+    var ctlIdle: TimeInterval = 300
+    var clock: @Sendable () -> Date = { Date() }
+    private var lastActive = Date.distantPast
+    private var idleArmed = false
     /// #765: this connection is a watch stream (not a keep-awake client). On `queue`.
     private(set) var watching = false
     /// QA #462 M3: a history/control request of this connection awaits its reply. On `queue`.
@@ -249,6 +271,7 @@ final class DchConnection: @unchecked Sendable {
         upload?.cancel()       // #617: a dropped upload discards its partial item
         chatTask?.cancel()     // #618: a dropped chat stops its generation
         commandTask?.cancel()  // #619: its reply is dropped (a handler already running finishes)
+        ctlJob?.cancel()       // #838: kills its dch's process group (a --follow ends here)
         watch?.remove(ObjectIdentifier(self))   // #765: its timers go with it
         if let last, sendOverride == nil {
             // A failed send completes too; the failsafe covers one that never does. cancel() is idempotent.
@@ -300,8 +323,25 @@ final class DchConnection: @unchecked Sendable {
             guard buffer.count >= 5 + len else { return }   // wait for the rest
             let payload = buffer.subdata(in: buffer.index(buffer.startIndex, offsetBy: 5)..<buffer.index(buffer.startIndex, offsetBy: 5 + len))
             buffer.removeSubrange(buffer.startIndex..<buffer.index(buffer.startIndex, offsetBy: 5 + len))
+            lastActive = clock()
             handle(type: type, payload: payload)
         }
+    }
+
+    private func armIdle(after delay: TimeInterval) {
+        guard !idleArmed, !closed else { return }
+        idleArmed = true
+        queue.asyncAfter(deadline: .now() + max(delay, 1)) { [weak self] in self?.idleTick() }
+    }
+
+    /// The warm ctl connection's idle check (amendment 4). On `queue`; re-arms itself until it closes.
+    func idleTick() {
+        idleArmed = false
+        guard !closed else { return }
+        let quiet = clock().timeIntervalSince(lastActive)
+        let busy = inFlight || pty != nil
+        if !busy, quiet >= ctlIdle { return close() }
+        armIdle(after: busy ? ctlIdle : ctlIdle - quiet)
     }
 
     private func send(_ frame: Data) {
@@ -320,6 +360,8 @@ final class DchConnection: @unchecked Sendable {
             self.upload = nil
             self.chatTask = nil
             self.commandTask = nil
+            self.ctlJob = nil
+            self.lastActive = self.clock()   // a warm connection's idle time starts at its reply
             if !self.closed { self.send(frame) }
         }
     }
@@ -417,22 +459,23 @@ final class DchConnection: @unchecked Sendable {
             let wakeId = LiveExtensionHostServices.currentWakeId, clip = clipboard.enabled()
             clipboard.log(.default, "machineInfo: clipboard \(clip ? "advertised" : "not advertised")")   // #701
             let chat = chat.available, commands = commands.enabled(), ops = ops, watch = watch?.available() ?? false
+            let create = createAllowed(), ctl = ctl
             // #704: the phone gives up after 2 s and a cold probe can take 4 s per hung
             // candidate, so the reply waits at most 0.25 s for it (a cached probe is a stat
             // per candidate). Past that it goes without the bit; the probe runs on and fills
             // probedVersion's cache, timeouts included, for the next handshake.
             let answered = OSAllocatedUnfairLock(initialState: false)
-            let answer: @Sendable (Bool) -> Void = { revive in
+            let answer: @Sendable (Bool, Bool) -> Void = { revive, xray in
                 guard answered.withLock({ done in defer { done = true }; return !done }) else { return }
                 let frame = DchFrame.encode(DchFrame.machineInfoResp, json: DchFrame.machineInfo(
                     deviceID: deviceID, hostname: hostname, wakeId: wakeId, clipboard: clip, chat: chat,
-                    commands: commands, reviveNoMessage: revive, watch: watch))
+                    commands: commands, reviveNoMessage: revive, watch: watch, create: create, xray: xray))
                 self.queue.async { if !self.closed { self.send(frame) } }
             }
             DispatchQueue.global(qos: .userInitiated).async {
-                answer(DchCommand.gate(ops.binary(), masters: [], minimum: AgentIsland.reviveNoMessageMinimum).isOK)
+                answer(DchCommand.gate(ops.binary(), masters: [], minimum: AgentIsland.reviveNoMessageMinimum).isOK, ctl.xray())
             }
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.25) { answer(false) }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.25) { answer(false, false) }
         case DchFrame.models, DchFrame.chat:
             // #618: one request per connection, as clipboardUpload; a chat's deltas come
             // back in order on `queue`, then the one final reply.
@@ -460,6 +503,10 @@ final class DchConnection: @unchecked Sendable {
             let commands = commands
             let reply: DchControlOps.Reply = { self.finalReply($0) }
             commandTask = Task { await commands.handle(type, payload, reply: reply) }
+        case DchFrame.ctl:
+            startCtl(payload)
+        case DchFrame.ctlCancel:
+            ctlJob?.cancelRequest()   // a 0x34 with no ctl running, or after its 0x33: ignored, no frame
         case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library,
              DchFrame.putPhoneSnippets, DchFrame.sidekickSync, DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
              DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:
@@ -488,6 +535,32 @@ final class DchConnection: @unchecked Sendable {
             }
         default:
             break
+        }
+    }
+
+    /// #838: 0x30 → its dch's 0x31/0x32 chunks, then 0x33; or one 0x13 and nothing runs. Checked
+    /// here, run off this queue. One in flight per connection, as #591's verbs: another meanwhile
+    /// gets "busy with an earlier request". Ungated by any setting, as attach input, kill and rename.
+    private func startCtl(_ payload: Data) {
+        guard !closed else { return }
+        armIdle(after: ctlIdle)
+        guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
+        let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+        guard let argv = o?["argv"] as? [String] else {
+            return send(DchControlOps.error("malformed ctl request: send {\"argv\": [verb, name, ...]}"))
+        }
+        if let why = DchCtl.refusal(argv, create: createAllowed()) ?? DchCtl.cwdRefusal(o?["cwd"], verb: argv[0]) {
+            return send(DchControlOps.error(why))
+        }
+        guard let path = ctl.path() else { return send(DchControlOps.error("dch is not available on this Mac")) }
+        inFlight = true
+        let job = DchCtlJob(), ctl = ctl, cwd = o?["cwd"] as? String
+        ctlJob = job
+        DispatchQueue.global(qos: .userInitiated).async {
+            // The version probe may take seconds: here, never on `queue`.
+            if argv[0] == "--xray", !ctl.xray() { return self.finalReply(DchControlOps.error(DchCtl.xrayOff)) }
+            job.run(path: path, argv: argv, env: ctl.env(), cwd: cwd, follow: DchCtl.follows(argv), cap: ctl.cap,
+                    timeout: ctl.timeout(of: argv[0]), send: { self.sendStreamed($0) }, reply: { self.finalReply($0) })
         }
     }
 
@@ -568,6 +641,8 @@ final class DchConnection: @unchecked Sendable {
 
     private func startSession(type: UInt8, payload: Data) {
         guard pty == nil else { return }  // one session per connection
+        // #838: ctl's --spawn and --revive share this gate; always open on this Mac (dch serve's words without --allow-create).
+        guard type != DchFrame.create || createAllowed() else { return send(DchControlOps.error(DchCtl.createOff)) }
         // #617 fix round 1: never on a connection that carried an upload (see `uploaded`).
         // #618: nor on one that chatted. #765: nor on a watch stream.
         guard !uploaded, !chatted, !watching else {
@@ -2052,10 +2127,15 @@ enum DchCommand {
     /// Same as `runCapturingData`, plus stderr as text — `--read --cursor` reports the
     /// caret there so it can't corrupt the screen on stdout.
     private static func runCapturingBoth(args: [String]) -> (out: Data, err: String, status: Int32) {
+        runCapturingBoth(args: args, env: remoteEnv())
+    }
+
+    /// Remote Terminal's one-shot dch env (list, kill, rename, --read; #838's ctl): its one dir, no DCH_SESSION.
+    static func remoteEnv() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "DCH_SESSION")
         env["DCH_SOCKET_DIR"] = remoteSocketDir()
-        return runCapturingBoth(args: args, env: env)
+        return env
     }
 
     /// Run dch with exactly `env` — #474 lists each socket dir with its own

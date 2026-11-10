@@ -1,0 +1,21 @@
+{
+  "id": "24-ctl-spawn-cwd-missing",
+  "about": "ctl --spawn with a cwd that is not an existing directory answers 0x13 \"no such directory\" and starts nothing.",
+  "requires_op": [
+    "ctl",
+    "create"
+  ],
+  "steps": [
+    {
+      "send": "30 00000059 7b2261726776223a5b222d2d737061776e222c22676f6c64656e2d3833382d3234222c222d2d222c222f62696e2f7368225d2c22637764223a222f676f6c64656e2d3833382d6e6f2d737563682d6469726563746f7279227d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~no such directory"
+        }
+      }
+    }
+  ]
+}

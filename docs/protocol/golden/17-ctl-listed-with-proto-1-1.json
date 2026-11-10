@@ -1,0 +1,21 @@
+{
+  "id": "17-ctl-listed-with-proto-1-1",
+  "about": "A server that lists ctl (0x30-0x33) speaks proto 1.1 or later: ctl is a 1.1 addition.",
+  "requires_op": "ctl",
+  "steps": [
+    {
+      "send": "08 00000000"
+    },
+    {
+      "expect": {
+        "type": "18",
+        "json": {
+          "proto": "string~1\\.[1-9][0-9]*",
+          "ops": [
+            "string"
+          ]
+        }
+      }
+    }
+  ]
+}

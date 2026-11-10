@@ -1,0 +1,18 @@
+{
+  "id": "19-ctl-unlisted-flag-refused",
+  "about": "A flag not on the verb's allowlist (--config after --read) answers 0x13 and runs nothing.",
+  "requires_op": "ctl",
+  "steps": [
+    {
+      "send": "30 0000002e 7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3833382d3139222c222d2d636f6e666967225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~.+"
+        }
+      }
+    }
+  ]
+}

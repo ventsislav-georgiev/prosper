@@ -1,11 +1,11 @@
-# Remote frames protocol, version 1.0
+# Remote frames protocol, version 1.1
 
 This is the wire contract between a remote-terminal **server** (Prosper's `DchSessionServer`
 today, `dch serve` later) and its **clients** (the Prosper iPhone app, `dch` as a client). It
 describes what Prosper's server does as of v2.174.0 (#776: the 0x08 keys `server`, `os`,
-`name` and `proto`, and this document) and #800 (the `create` and `paste_image` ops). The code is in
-`app/Sources/ProsperApp/Server/DchConnection.swift` (`DchFrame`, `DchConnection`) and
-`DchSessionServer.swift`.
+`name` and `proto`, and this document), #800 (the `create` and `paste_image` ops) and #838 (the
+`ctl` op, 1.1). The code is in `app/Sources/ProsperApp/Server/DchConnection.swift` (`DchFrame`,
+`DchConnection`), `DchCtl.swift` and `DchSessionServer.swift`.
 
 The conformance set in [`golden/`](golden/) runs against any server: see
 [Golden frames](#golden-frames).
@@ -29,7 +29,11 @@ The conformance set in [`golden/`](golden/) runs against any server: see
 ## Versioning
 
 - The server states its version in the 0x08 reply as `proto`: `"<major>.<minor>"`, decimal.
-  This document is `1.0`.
+  This document is `1.1`.
+- Changes: 1.1 (#838, with dch #114 / dch 1.41.0) adds the `ctl` op, frames 0x30-0x33 (see
+  [0x30 ctl](#0x30-ctl-gate-ctl)), the `ctl-cancel` op (frame 0x34) and the `xray` op for ctl's
+  `--xray`. A client tells a server that serves them by `ctl`, `ctl-cancel` and `xray` in `ops`,
+  never by `proto`.
 - A minor bump only adds: new optional keys, new frames, new `ops` names. A client ignores
   keys and `ops` it does not know.
 - A major bump breaks. A client that reads a newer major than its own refuses the host
@@ -55,7 +59,7 @@ Every frame, in both directions:
 - Control payloads are UTF-8 JSON (an object or an array, per frame). An empty payload is
   length 0. A server must accept a JSON request as length 0, `{}` or the documented object,
   as each frame below says.
-- Data payloads (0x10, 0x19, 0x0a) are raw bytes.
+- Data payloads (0x10, 0x19, 0x0a, 0x31, 0x32) are raw bytes.
 - Frames may arrive split across TCP reads or several to a read; both sides reassemble.
 - **Send limit: 8 MiB** (`8 << 20`) per frame, the phone's `ProsperTransport.maxFrame`. The
   phone closes the connection on a longer length prefix. Prosper enforces this on the frames
@@ -69,7 +73,7 @@ Every frame, in both directions:
   anyone should send: the phone does send a pasted photo as one 0x0a (17 MB for a 4032 px PNG)
   and a big paste as one 0x10.
 - **Core control requests stay under 64 KiB.** A client keeps every core-subset control
-  request (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x2e) under 64 KiB (`64 << 10`). A server
+  request (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x2e, 0x30) under 64 KiB (`64 << 10`). A server
   may answer a larger one with `0x13 {"message": "frame too large"}` and close; `dch serve`
   does. 0x10 data and the Mac-only frames are bounded only by the server's own receive guard
   (Prosper's is the 256 MiB above, `maxRequestFrame`).
@@ -98,13 +102,14 @@ Every frame, in both directions:
   - These replies can trail replies to frames sent after them: 0x08 (Prosper waits up to
     0.25 s for a dch version probe), 0x09 on an attached connection (it reads dch's screen
     off the connection), and every `ops`-gated request but 0x02 and 0x0a (Mac-only frames run
-    off the connection too). 0x0a is gated yet answered at once, before the next frame is
-    read; 0x02 gets no reply (its session's output follows).
+    off the connection too, as does 0x30 ctl). 0x0a is gated yet answered at once, before the
+    next frame is read; 0x02 gets no reply (its session's output follows).
   - The phone sends one request per connection.
 - **One in flight.** These Mac-only requests allow one in flight per connection: 0x0b-0x0f,
   0x15, 0x16, 0x1e, 0x1f, 0x22-0x26, 0x28, 0x29, 0x2c, 0x2d. Another of them while one is in
   flight gets `0x13 {"message": "busy with an earlier request"}` at once, ahead of the first
-  one's reply. The others are never refused as busy:
+  one's reply. 0x30 ctl allows one in flight per connection too, answered the same way; on
+  Prosper it shares the Mac-only requests' slot (a 0x0b while a ctl runs is busy, and the reverse). The others are never refused as busy:
   - the base frames, 0x02 create, 0x0a putClipboard and 0x17 putClipboardText are handled even
     while a request is in flight;
   - a second 0x2e on a connection that is already watching is ignored (no reply);
@@ -194,6 +199,9 @@ Prosper's ops and their frames:
 | `watch` | 0x2e | while Agent Island lists Remote Terminal's socket dir |
 | `create` | 0x02 | always (dch serve: only with `--allow-create`) |
 | `paste_image` | 0x0a | always (dch serve: only once it supports 0x0a) |
+| `ctl` | 0x30 (replies 0x31, 0x32, 0x33) | always, since #838 (dch serve: 1.41.0+) |
+| `ctl-cancel` | 0x34 | always, since #838 (dch serve: the release after 1.41.0) |
+| `xray` | 0x30 with `--xray` | while the dch that ctl runs has `--xray` (Prosper: its version gate, off until a dch release has it) |
 
 ## Core subset and Mac-only frames
 
@@ -218,6 +226,11 @@ A **dch server** serves the core subset; everything else is Mac-only and absent 
 | 0x06 | rename | C→S | yes | base |
 | 0x13 | error | S→C | yes | |
 | 0x14 | ok | S→C | yes | |
+| 0x30 | ctl | C→S | yes (1.1) | `ctl` |
+| 0x31 | ctlStdout | S→C | yes (1.1) | |
+| 0x32 | ctlStderr | S→C | yes (1.1) | |
+| 0x33 | ctlExit | S→C | yes (1.1) | |
+| 0x34 | ctlCancel | C→S | yes (1.1) | `ctl-cancel` |
 | 0x0a | putClipboard | C→S | no (Mac) | `paste_image` (or `server` `"prosper"`/absent) |
 | 0x0b-0x0f, 0x15-0x17, 0x1a-0x1f, 0x20-0x2d | see below | | no (Mac) | per `ops` |
 
@@ -237,16 +250,16 @@ its own. Prosper never answers 0x08 with an error.
 | `server` | string | yes (1.0) | `"prosper"` or `"dch"`. |
 | `os` | string | yes (1.0) | Human-readable OS and version: `"macOS 27.0"`, `"Linux 6.8"`. |
 | `name` | string | yes (1.0) | Display name. Prosper: the computer name (equal to `hostname`). |
-| `proto` | string | yes (1.0) | `"1.0"`. See [Versioning](#versioning). |
+| `proto` | string | yes (1.0) | `"1.1"` (`"1.0"` before #838). See [Versioning](#versioning). |
 | `wakeId` | string | no | Prosper's remote-wake id, only while remote wake is set up. **A dch server leaves it absent.** |
 
 Example (Prosper, clipboard sync off, no model, commands off, no watch):
 
 ```json
 {"device_id": "3f9a…", "hostname": "Studio", "name": "Studio", "server": "prosper",
- "os": "macOS 27.0", "proto": "1.0",
+ "os": "macOS 27.0", "proto": "1.1",
  "ops": ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put",
-         "sidekick", "create", "paste_image"]}
+         "sidekick", "create", "paste_image", "ctl"]}
 ```
 
 A `dch serve` without `--allow-create` does not list `create`; it lists `paste_image` only once
@@ -373,6 +386,169 @@ The connection then carries one session:
 - `dch serve` keeps this in 1.0 (Q2): failure is not reported, and 0x13 is only for a name
   starting with `-`. Prosper's kill does not report failure either; a client handles a 0x13 to either frame.
 
+### 0x30 ctl (gate: `ctl`)
+
+Since 1.1 (#838; dch serve 1.41.0, dch #114). Runs one of dch's control verbs on the host, as
+the host's own dch, and streams its output back: what a dch client sends for
+`dch <verb> host:name …`.
+
+Request: `0x30 {"argv": [string, ...], "cwd"?: string}`.
+- `argv` is dch's argv minus the program, with the host-local session name (never `host:name`).
+  The server runs its own dch with exactly that argv, never through a shell (Prosper: the dch its
+  attach runs, the bundled one first), in the same socket dir as list, kill and rename.
+- `cwd`, for `--spawn` only: the directory the new session starts in. An absolute path to an
+  existing directory on the host. Without it the child runs in the host user's home directory.
+- Other keys are ignored (a minor version may add some).
+
+Cancel: `0x34` (empty payload, client to server; `ctl-cancel` in `ops`). The server sends the
+running ctl's dch one SIGTERM; dch's exit then ends the request as usual, with
+`0x33 {"exit": <dch's>, "why": "cancel"}`. Output dch writes on its way out still arrives first.
+A 0x34 with no ctl running, or after the 0x33 went out, is ignored: no frame.
+
+Replies, all server to client:
+
+| Type | Name | Payload |
+|------|------|---------|
+| 0x31 | ctlStdout | raw bytes: the next chunk of dch's stdout |
+| 0x32 | ctlStderr | raw bytes: the next chunk of dch's stderr |
+| 0x33 | ctlExit | `{"exit": int, "why"?: "cap" \| "timeout" \| "cancel"}`: always the last frame of a ctl that ran |
+| 0x13 | error | `{"message": string}`: refused, nothing ran (or dch could not be started) |
+
+A ctl gets exactly one of: one 0x13, or any number of 0x31/0x32 chunks then exactly one 0x33. `exit` is
+dch's own exit status (Prosper: 128 + the signal for a dch killed by a signal); `why` is present
+only when the server ended it (below). The two streams come from two pipes, so a 0x31 and a 0x32
+may arrive in another order than dch wrote them; each stream's own bytes stay in order.
+
+**The allowlist.** Per verb and per flag; anything not in this table is refused with 0x13 and
+nothing runs. `<name>` is a session name; `--json`, `--ansi`, `--cursor`, `--no-message` may
+appear in any order after the name.
+
+| Verb (`argv[0]`) | Rest of `argv` | Notes |
+|------------------|----------------|-------|
+| `--read` | `<name> [--ansi] [--cursor] [--recent [N]]` | a word after `--recent` that starts with a digit is `N`: 1-5 digits, 1-65535 |
+| `--send`, `--run` | `<name> [--] <text...>` | |
+| `--keys` | `<name> [--] <key...>` | |
+| `--follow` | `<name>` | streams; no cap, no timeout |
+| `--status` | `<name>` | |
+| `-k`, `-d` | `<name>` | |
+| `-m` | `<name> <alias>` | the alias is required (it may be `""`) and taken verbatim |
+| `--spawn` | `<name> [--] [cmd...]`, and `"cwd"` | create gate |
+| `--revive` | `<name> [--as <new>] [--no-message] --json` | create gate; never `--all` |
+| `--history` | `--json` | no name |
+| `--pin`, `--unpin` | `<name>... --json` | |
+| `--forget` | `<name>... --json` or `--all --json` | never both, never `-f` |
+| `--stop` | `<name>... --json` | no `--all` |
+| `--say` | `<name> --json -- <text...>` | the `--` is required |
+| `--xray` | `<name> --json` | only with `xray` in `ops` (below) |
+| `--xray` | `<name> --ref <text> [--scope session\|project\|all] [--full] [--budget-ms <n>] --json` | NDJSON on 0x31; 60 s (dch's own 10 s cap normally ends it first) |
+| `--xray` | `<name> --follow --json` | streams; no cap, no timeout |
+| `--xray` | `<name> --chapter <anchor> --json` | `<anchor>` as `--xray --json` gives it |
+
+The rules behind it:
+- `argv` has 2 to 1024 elements (dch's `CTL_ARGV_MAX`), every one a string.
+- Every name (each `<name>`, and `--as`'s `<new>`) passes dch serve's `name_ok`: non-empty, at
+  most 255 bytes, no leading `-`, no `/`, no control character (C0, DEL, C1, U+202A-U+202E,
+  U+2066-U+2069), and not `serve` (dch's `ctl_name`).
+- **No `:` in a name** (each `<name>`, and `--as`'s `<new>`): dch reads a name with `:` as
+  `host:name` and dials that host with the serving host's identity, a relay. Free text (the words
+  of `--send`, `--run`, `--keys`, `--say`, `--spawn`'s command, `--ref`'s text) and `-m`'s alias
+  may contain `:`.
+- `--json` is required wherever the table lists it (dch's `CTL_JSON`).
+- A flag is a word that starts with `-` and is longer than `-` (dch's own test). dch keeps
+  reading flags after a verb's name until `--` or the first word that is not a flag, so every
+  flag in that run is checked: `--send x -k y` would kill `y`, and is refused. After `--`, or the
+  first plain word, of `--send`, `--run`, `--keys`, `--spawn` and `--say`, every word is text or
+  the command and is never read as a flag.
+- Never `--config`, `serve`, `-h`/`--help`, `-f`, `--size`, `--env`, `--all` (but `--forget
+  --all`), or any verb or flag not listed.
+- `--xray`'s flags may come in any order, each once: `--json` always, and at most one of `--ref`,
+  `--follow`, `--chapter`; `--scope`, `--full` and `--budget-ms` only with `--ref`. The values:
+  `--ref`'s text is 1-256 bytes of UTF-8 with no control character (C0, DEL, C1, U+200E, U+200F,
+  U+202A-U+202E, U+2066-U+2069); `--scope` is exactly `session`, `project` or `all`;
+  `--chapter`'s anchor is 1-128 bytes of `A-Z a-z 0-9 : _ . -`; `--budget-ms` is a whole number
+  from 50 to 300 (ASCII digits). The value after one of these flags is always its value, even
+  when it starts with `-`. No `--xray` flag takes a path. dch caps `--xray`'s own output (4 MiB
+  for `--ref`, 1 MiB for `--chapter`); the 8 MiB ctl cap below stays the outer bound.
+- **The create gate.** `--spawn` and `--revive` start a process, so they need `create` in `ops`,
+  the same gate as 0x02 create. Prosper always allows create; `dch serve` only with
+  `--allow-create`. `--xray` is read-only and not behind it.
+- **The xray gate.** `--xray` runs only where the server lists `xray` in `ops`: Prosper lists it
+  while the dch ctl runs answers `--version` with at least its minimum (`DchCtl.xrayMinDch`, a
+  placeholder set out of reach until a dch release ships `--xray`, so it is off today). Without
+  it, a well-formed `--xray` gets `0x13 xray not supported by this host` and nothing runs.
+
+Refusals, each a single 0x13 (nothing runs, the connection stays open). Prosper's messages:
+
+| Cause | `message` |
+|-------|-----------|
+| another ctl, or a Mac-only request, in flight | `busy with an earlier request` |
+| not a JSON object with an `argv` array of strings | `malformed ctl request: send {"argv": [verb, name, ...]}` |
+| fewer than 2 elements | `ctl needs a verb and its arguments` |
+| more than 1024 elements | `too many arguments` |
+| a verb not in the table | `ctl does not run <verb>` |
+| `--spawn` or `--revive` with create off | `creating sessions is off on this host` |
+| a name starting with `-` | `a session name starting with - can't be passed to dch` (0x04's) |
+| any other name `name_ok` refuses, or `serve` | `invalid session name` |
+| a name with `:` | `a session name with ':' is local only` (both servers) |
+| no `--json` where the table needs it | `<verb> needs --json` |
+| a bad `--recent` count | `--recent wants 1..65535 lines` |
+| a flag not listed for the verb | `ctl does not allow <flag> with <verb>` |
+| other words a verb does not take | one line naming the verb (`--status takes nothing after the session name`, `--say needs -- before its text`, …) |
+| `cwd` not an absolute path to an existing directory | `no such directory` (both servers) |
+| `cwd` with a verb other than `--spawn` | `cwd is only for --spawn` |
+| `--xray` without `xray` in `ops` | `xray not supported by this host` |
+| `--xray` shapes | `--xray needs --json`, `--ref takes 1-256 bytes of text with no control characters`, `--scope takes session, project or all`, `--chapter takes an anchor: 1-128 of A-Z a-z 0-9 : _ . -`, `--budget-ms takes a whole number from 50 to 300`, `--xray takes one of --ref, --follow, --chapter`, `--scope goes with --ref`, … |
+| dch could not be started | `dch could not be run` |
+
+Only `no such directory` and the `:` message are fixed by the spec; the rest are Prosper's words, shown to the user
+as written.
+
+**Streaming.** The server sends each chunk of dch's output as dch writes it, never buffered to
+the exit: `--say`, `--stop` and `--revive` write NDJSON progress (with `--json`) while they wait
+for an agent, and a client shows it as it comes.
+
+**Limits.**
+- Every ctl but `--follow` and `--xray --follow`: at most **8 MiB** of stdout and stderr together, and a timeout:
+  **660 s** for `--say`, `--stop` and `--revive` (dch's own 600 s wait for an idle agent,
+  `DCH_AGENT_TIMEOUT_MS`, plus a margin), **60 s** for every other verb (dch #112's composer gate
+  on `--run` can take ~30 s plus 5 s of re-presses). On either, the server kills its child and
+  sends `0x33 {"exit": 2, "why": "cap"}` or `0x33 {"exit": 2, "why": "timeout"}`. Prosper's
+  kill: SIGTERM to the child's whole process group, then SIGKILL to the group after a 1 s grace.
+  Prosper sends output up to exactly 8 MiB, then the 0x33; no 0x31 or 0x32 follows it.
+- Every 0x31 and 0x32 is within the 8 MiB send limit.
+- **`--follow`** and **`--xray --follow`** have neither limit. Each streams 0x31 until the session ends (dch exits: 0x33 with
+  its real exit code) or the client closes the connection (below). The server reads dch's pipe
+  only as fast as the socket takes the frames, so a slow client slows dch rather than filling the
+  server's memory.
+- **The client closes** while a ctl runs (any verb, `--follow` and `--xray --follow` included): the server sends its dch
+  child one SIGTERM and nothing more (no SIGKILL after it), and sends no frame. `--stop` and
+  `--say` answer the SIGTERM by leaving the session running and typing their resume message, so
+  they get the time they need.
+
+**Connections.** One ctl in flight per connection: another 0x30 while one runs gets
+`0x13 busy with an earlier request` at once and runs nothing (see [Connections](#connections)).
+After its 0x33 the same connection takes the next 0x30 (warm reuse). A `--follow` (or `--xray
+--follow`) holds its slot until it ends. A ctl may share a connection with an attach (its frames
+are distinct from 0x10). Closing the connection sends a running ctl's child SIGTERM (above). A
+connection that has sent a 0x30 is closed by the server once it has been idle for **300 s**:
+no frame from the client and no reply from the server for 300 s, no request running and no
+attach.
+
+**The gate.** The same as attach: the peer address and owner check, decided before any byte is
+read (see [Transport and trust](#transport-and-trust)); a refused peer's 0x30 is never read. No
+other setting gates ctl on Prosper. "Run commands from iPhone" gates only the `commands` frames
+(0x28, 0x29); attach input (0x10), 0x04 kill and 0x06 rename are gated by nothing else, and
+ctl's verbs that type into a session (`--send`, `--run`, `--keys`, `--say`) or change one (`-k`,
+`-m`, `-d`, `--stop`, `--pin`, `--unpin`, `--forget`) follow them. `--spawn` and `--revive` follow
+create.
+
+**The dch client** (dch's, noted here for the reader): for `host:name` it exits 0-3 with the
+host dch's own code; 4 when the host refused the connection (the gate); 6 when the host lacks the
+op (`dch: <host>: does not support <verb> (needs dch serve 1.41+)`, or
+`(needs dch serve --allow-create)` for `--spawn`); 7 unreachable (`dch: <host>: unreachable:
+<why>`); 1 on a 0x13 (`dch: <host>: <reason>`). `-a` keeps the 1.40 codes. The client refuses
+a flag that is not allowlisted before it connects.
+
 ## Mac-only frames (Prosper)
 
 Each is sent only while its op is listed and gets exactly one final reply (0x13 on any
@@ -415,15 +591,24 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14, 15, 16: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14, 15, 16, 18: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
 07 (kill runs `dch -k`), 08 (rename runs `dch -m`), both on a name no session should have, and
 12, 14 and 15 (each attach starts a session, `golden-776`, `golden-776-14` and `golden-776-15`,
-and each cleanup kills its own; 15 ends it by typing `exit` and ^D into it), and 16 (a 0x02
-create of `golden-776-16`, killed by its cleanup). Run `--mutating` only against a test server,
-never a host with sessions someone uses.
+and each cleanup kills its own; 15 ends it by typing `exit` and ^D into it), 16 (a 0x02
+create of `golden-776-16`, killed by its cleanup), and 18 (its setup creates `golden-838-18`,
+then reads it with ctl `--read`; its cleanup kills it). Run `--mutating` only against a test
+server, never a host with sessions someone uses.
+
+17-25 are the `ctl` set (#838), each `requires_op` `ctl`: 17 a server listing `ctl` speaks proto
+1.1 or later; 18 a `--read` round trip (0x31, then 0x33); 19 a flag off the verb's allowlist,
+20 a name starting with `-`, 21 a one-element `argv`, each a 0x13; 22 `--spawn` and 23
+`--revive` refused while `create` is not in `ops` (`unless_op`, so they run only against a
+server with create off: a `dch serve` without `--allow-create`, or Prosper's test server with
+its create seam off); 24 `--spawn` with a `cwd` that does not exist (needs `create` too); 25 a
+name with `:` (`a session name with ':' is local only`). A conforming server runs nothing for 19-25.
 
 15 assumes the session runs a shell (dch's default command) that reads input once it has
 started: it is a smoke check of exit and close. A shell whose rc files discard type-ahead, or
@@ -433,10 +618,11 @@ session, so each needs `create` in `ops` (`requires_op`): a `dch serve` without 
 refuses an attach to an unknown name (see [0x01 attach](#0x01-attach-0x02-create-and-the-attached-connection)),
 and the runner skips all four there.
 
-Not in the set, because the format cannot express them: the 0x12 frame before 15's and 16's close (pty
-output of no fixed frame count comes first, and `expect` takes the next frame), and attach on
+Not in the set: the 0x12 frame before 15's and 16's close (pty output of no fixed frame count
+comes first, and `expect` takes the next frame, so the format cannot express it), and attach on
 a watch connection (the frame between the snapshot and the 0x13 depends on a second op,
-`sidekick`, and `requires_op` names one). Prosper's unit tests pin both.
+`sidekick`; since #838 an op list in `requires_op` and `unless_op` could split it into two
+fixtures, not written yet). Prosper's unit tests pin both.
 
 It exits 0 when every fixture that applies passes. Prosper's CI runs the same files against an
 in-process server with fakes for dch (`RemoteFramesGoldenTests`); that test fails with a clear
@@ -450,8 +636,10 @@ One JSON object per file:
 |-----|---------|
 | `id` | Name for the report. |
 | `about` | What it pins. |
-| `requires_op` | Run only when the server's 0x08 `ops` lists it. |
+| `requires_op` | Run only when the server's 0x08 `ops` lists it: one op, or an array of ops that must all be listed. |
+| `unless_op` | Run only when the server's 0x08 `ops` does not list it (#838). |
 | `mutating` | Changes server state: run only with `--mutating`. |
+| `setup` | Hex frames, each sent on a fresh connection before the steps; one reply frame is read, then that connection closes (#838). A setup that gets no frame fails the fixture. |
 | `cleanup` | Hex frames sent on a fresh connection after the fixture, pass or fail. |
 | `steps` | In order, on one connection. |
 
