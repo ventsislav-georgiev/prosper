@@ -189,6 +189,26 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(named["runtime"] as? Int, 50)
     }
 
+    /// #839: dch 1.40.1's sender form goes to the phone as its old "signal N" (an
+    /// older phone matches it exactly) plus "end_from", the program only; never the pid.
+    func testHistoryWireNormalizesASignalSender() {
+        func wire(_ end: String) -> [String: Any] {
+            DchControlOps.historyWire(DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "s"), started: 10, ended: 60, end: end), now: 100)
+        }
+        let sent = wire("signal 15 from 4242 /usr/bin/pkill -f claude --resume")
+        XCTAssertEqual(sent["end"] as? String, "signal 15")
+        XCTAssertEqual(sent["end_from"] as? String, "pkill")
+        let bare = wire("signal 9 from 4242")
+        XCTAssertEqual(bare["end"] as? String, "signal 9")
+        XCTAssertFalse(bare.keys.contains("end_from"))
+        for end in ["signal 15", "signal 9", "exit 0", "exit 1", "killed", "stopped", "vanished", "",
+                    "signal x from 3 cmd", "signal 15 from x cmd", "sig 15 from 1 x"] {
+            let o = wire(end)
+            XCTAssertEqual(o["end"] as? String, end, end)
+            XCTAssertFalse(o.keys.contains("end_from"), end)
+        }
+    }
+
     func testHistoryIsCappedLikeTheTab() {
         let f = Fake()
         f.hist["/d"] = Self.hist((0..<60).map { ["name": "s\($0)", "updated": Self.now - Double($0), "end": "killed"] as [String: Any] })

@@ -202,11 +202,7 @@ extension AgentIsland {
     /// #839: dch 1.40.1's "signal N from <pid>[ <cmd>]" reads as "signal N" plus
     /// " from <basename of the cmd's program>"; the pid is never shown.
     static func endLabel(_ end: String) -> String {
-        let p = end.split(separator: " ", maxSplits: 4, omittingEmptySubsequences: false)
-        if p.count >= 4, p[0] == "signal", Int(p[1]) != nil, p[2] == "from", Int(p[3]) != nil {
-            let program = p.count == 5 ? p[4].split(separator: " ").first.map { (String($0) as NSString).lastPathComponent } : nil
-            return endLabel("signal " + p[1]) + (program.map { " from " + $0 } ?? "")
-        }
+        if let s = signalSender(end) { return endLabel(s.end) + (s.from.map { " from " + $0 } ?? "") }
         switch end {
         case "", "vanished": return "vanished"
         case "killed": return "closed"
@@ -217,6 +213,15 @@ extension AgentIsland {
             if end.hasPrefix("exit ") { return "exited (\(end.dropFirst(5)))" }
             return end
         }
+    }
+
+    /// #839: dch 1.40.1's "signal N from <pid>[ <cmd>]" as its old "signal N" and the
+    /// basename of the cmd's program (nil with no cmd); nil for any other end.
+    static func signalSender(_ end: String) -> (end: String, from: String?)? {
+        let p = end.split(separator: " ", maxSplits: 4, omittingEmptySubsequences: false)
+        guard p.count >= 4, p[0] == "signal", Int(p[1]) != nil, p[2] == "from", Int(p[3]) != nil else { return nil }
+        let program = p.count == 5 ? p[4].split(separator: " ").first.map { (String($0) as NSString).lastPathComponent } : nil
+        return ("signal " + p[1], program)
     }
 
     /// #585: dch's own `--revive --all` rule (rv_all_takes, dch 1.24.1): an

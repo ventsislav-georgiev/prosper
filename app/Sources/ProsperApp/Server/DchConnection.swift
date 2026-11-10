@@ -1140,6 +1140,11 @@ struct DchControlOps: Sendable {
         if !r.argv.isEmpty { o["command"] = r.argv }
         if let a = r.agent?.name, !a.isEmpty { o["agent_name"] = a }   // #592: the phone's title fallback
         if r.pinned { o["pinned"] = true }   // #620: only when pinned, so an older phone sees no new key
+        // #839: the phone matches "signal N" exactly; the sender's program rides in end_from, never its pid.
+        if let s = AgentIsland.signalSender(r.end) {
+            o["end"] = s.end
+            if let from = s.from { o["end_from"] = from }
+        }
         return o
     }
 

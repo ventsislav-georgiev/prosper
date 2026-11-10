@@ -166,7 +166,7 @@ final class AgentIslandControlsTests: XCTestCase {
             // Malformed: as before.
             ("signal x from", "crashed (signal x from)"), ("signal 15 from", "crashed (signal 15 from)"),
             ("signal 15 from x cmd", "crashed (signal 15 from x cmd)"), ("signal 15 to 3 cmd", "crashed (signal 15 to 3 cmd)"),
-            ("signal x from 3 cmd", "crashed (signal x from 3 cmd)"),
+            ("signal x from 3 cmd", "crashed (signal x from 3 cmd)"), ("sig 15 from 1 x", "sig 15 from 1 x"),
         ]
         for (end, label) in table { XCTAssertEqual(AgentIsland.endLabel(end), label, end) }
         // #580: a real 1.24.0 record after `dch --stop s1`.

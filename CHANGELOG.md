@@ -52,13 +52,12 @@ tag from the now-released section and put it on the new top draft.
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
-- dch 1.40.1 to 1.41.0: a session that dies of a signal now records who sent it, and
-  the Agent Island reads it: "ended (signal 15) from pkill" for a TERM, HUP or INT, and "crashed
-  (signal 9) from kill" for other signals. The sender's pid is never shown (#839). A
-  terminal focus report split across reads no longer leaks into the session as typed text. New
-  sessions default to FORCE_HYPERLINK=1, so Claude Code keeps its statusline links. dch serve
-  gains the remote `ctl` op, which runs allowlisted verbs on a host; a session name containing ':'
-  is refused there, so a host never relays on to a third one.
+- dch 1.40.1 to 1.41.0: a session ended by a TERM or INT now records who sent it, and the Agent
+  Island reads it as "ended (signal 15) from pkill"; the sender's pid is never shown, and the phone
+  keeps reading "ended (signal 15)" (#839). A terminal focus report split across reads no longer
+  leaks into the session as typed text. New sessions default to FORCE_HYPERLINK=1, so Claude Code
+  keeps its statusline links. dch serve gains the remote `ctl` op, which runs allowlisted verbs on a
+  host; a session name containing ':' is refused there, so a host never relays on to a third one.
 
 ## v2.174.0
 
