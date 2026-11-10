@@ -116,8 +116,8 @@ tag from the now-released section and put it on the new top draft.
   embedded {snippet:…} in the same panel. A typed keyword is erased when the panel opens, as an
   expansion would; Return inserts at the caret, and Escape types the keyword back (with the space or
   punctuation that triggered it, never Return or Tab). Either way focus goes back to the app you typed
-  in, and nothing is typed if another app took focus meanwhile, or if a password field took the caret
-  (Prosper beeps). If you click back into the app before you answer, the text goes in at the caret
+  in, and nothing is typed if another app took focus meanwhile, if that app could not be brought back,
+  or if a password field took the caret; Prosper beeps in each case (#848). If you click back into the app before you answer, the text goes in at the caret
   where you left it. The panel shows over full-screen apps, never opens in a password field, and macOS
   Text Replacements never ask (#842).
 

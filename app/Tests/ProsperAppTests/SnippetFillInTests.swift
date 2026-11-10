@@ -283,6 +283,55 @@ final class SnippetFillInTests: XCTestCase {
         }
     }
 
+    /// #848: anything the panel was going to send and could not beeps once: a cancel's
+    /// re-type or a submit's insert. A re-type that lands, and a palette cancel, do not.
+    func testDroppedRetypeOrInsertBeepsOnce() {
+        let cases: [(name: String, front: pid_t?, gone: Bool, retyped: Bool, beeps: Int)] = [
+            ("target frontmost", 4242, false, true, 0),
+            ("frontmost differs", 777, false, false, 1),
+            ("activate fails", 4242, true, false, 1),
+        ]
+        for c in cases {
+            executed = []; activated = []; alerts = 0; frontmost = 4242; appGone = false
+            let e = expander()
+            _ = typeSig(e)
+            frontmost = c.front; appGone = c.gone
+            answer?(nil)
+            settle { alerts > 0 || executed.count == 2 }
+            settle()
+            XCTAssertEqual(activated, [4242], c.name)
+            XCTAssertEqual(executed.count == 2, c.retyped, c.name)
+            XCTAssertEqual(alerts, c.beeps, c.name)
+            XCTAssertFalse(e.prompting, c.name)
+        }
+        for gone in [false, true] {
+            // Typed path: the keyword went at match time, so a dropped insert leaves nothing.
+            executed = []; alerts = 0; frontmost = 4242; appGone = false
+            let e = expander()
+            _ = typeSig(e)
+            frontmost = gone ? 4242 : 777; appGone = gone
+            answer?(["who": "Ann"])
+            settle { alerts > 0 }
+            settle()
+            XCTAssertEqual(executed.map { $0.0 }, [erase("sig", 4)], "typed submit, gone=\(gone)")
+            XCTAssertEqual(alerts, 1, "typed submit, gone=\(gone)")
+            // Palette/hotkey path: an Insert press that did nothing.
+            executed = []; alerts = 0
+            e.insert(greet, context: PlaceholderContext(), target: 99, bundleId: nil)
+            answer?(["who": "Ann"])
+            settle { alerts > 0 }
+            settle()
+            XCTAssertTrue(executed.isEmpty, "palette submit, gone=\(gone)")
+            XCTAssertEqual(alerts, 1, "palette submit, gone=\(gone)")
+            // Palette/hotkey cancel: nothing to send, nothing lost.
+            alerts = 0
+            e.insert(greet, context: PlaceholderContext(), target: 99, bundleId: nil)
+            answer?(nil)
+            settle()
+            XCTAssertEqual(alerts, 0, "palette cancel, gone=\(gone)")
+        }
+    }
+
     func testTargetGoneAbortsTheInsert() {
         let e = expander()
         _ = typeSig(e)

@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import os
 
 /// A pure expansion decision, computed off the typed buffer. Separated from the
 /// CGEvent side effects so it is unit-testable without AppKit / a real keyboard.
@@ -72,8 +73,10 @@ final class SnippetExpander {
     }
     /// Brings the open fill-in panel forward (a second argument snippet asked while it is open).
     var reveal: () -> Void = { SnippetFillInPanel.shared.reveal() }
-    /// Says a typed keyword was not put back (secure input came on while the panel asked).
+    /// Says the fill-in's insert or keyword re-type was not sent (secure input came on while
+    /// the panel asked, or the target app was not frontmost once focus returned).
     var alert: () -> Void = { NSSound.beep() }
+    nonisolated private static let log = Logger(subsystem: "eu.illegible.prosper", category: "snippets")
     var activateApp: (pid_t) -> Bool = { pid in
         NSRunningApplication(processIdentifier: pid)?.activate(options: []) ?? false
     }
@@ -348,9 +351,9 @@ final class SnippetExpander {
     /// nothing (a typed keyword was erased at match time). Shared by all three paths.
     /// Cancel returns focus and types `retype` back (a typed keyword; "" from the palette
     /// or a hotkey). A target that is gone or not frontmost once focus returned gets
-    /// nothing; secure input on by then gets nothing and a beep. Never asks inside a secure
-    /// input field, nor while another fill-in is open. `prompting` holds until the insert or
-    /// re-type is sent, so the expander never reads it back as typed keys.
+    /// nothing and a beep; secure input on by then gets nothing and a beep.
+    /// Never asks inside a secure input field, nor while another fill-in is open. `prompting`
+    /// holds until the insert or re-type is sent, so the expander never reads it back as typed keys.
     func fillIn(_ hit: SnippetHit, fields: [ArgumentSpec], context: PlaceholderContext,
                 target: pid_t, delimiter: String, retype: String, bundleId: String?) {
         guard !prompting, !secureInputActive() else { return }
@@ -367,15 +370,30 @@ final class SnippetExpander {
                 decision = retype.isEmpty ? nil
                     : .insertPlain(name: hit.name, backspaces: 0, insertText: retype, leftArrows: 0)
             }
-            guard self.activateApp(target), let decision else { self.prompting = false; return }
+            // #848: anything the panel was going to send and could not beeps, or the erased
+            // keyword (and the insert) vanish silently. A palette or hotkey cancel sends nothing.
+            let willSend = decision != nil
+            let what = values == nil ? "keyword re-type" : "insert"
+            guard self.activateApp(target), let decision else {
+                if willSend { self.sendDropped(what, "activating the target app failed") }
+                self.prompting = false; return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + self.focusSettle) {
                 defer { self.prompting = false }
                 // Another app came forward meanwhile: its field is not the one the keyword was typed in.
-                guard self.frontmostPID() == target else { return }
+                guard self.frontmostPID() == target else {
+                    self.sendDropped(what, "another app is frontmost")
+                    return
+                }
                 guard !self.secureInputActive() else { self.alert(); return }
                 self.execute(decision, values ?? [:], bundleId)
             }
         }
+    }
+
+    private func sendDropped(_ what: String, _ why: String) {
+        Self.log.info("snippet fill-in: \(what, privacy: .public) dropped, \(why, privacy: .public)")
+        alert()
     }
 
     /// A phone snippet's name is its namespaced id; the panel shows the snippet's own name.
