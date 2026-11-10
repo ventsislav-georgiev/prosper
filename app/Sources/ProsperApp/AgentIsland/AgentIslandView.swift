@@ -1030,7 +1030,8 @@ struct AgentIslandHistoryRow: View {
                             Text(verbatim: end)
                                 // #585: only a crash is colored; "ended (signal 15)" stays neutral.
                                 .foregroundStyle(end.hasPrefix("crashed") ? AgentState.blocked.color : Color.white.opacity(0.5))
-                                .fixedSize()
+                                // #839: a sender's program name can be long; the label truncates, cwd yields first.
+                                .lineLimit(1).layoutPriority(1)
                             Text(verbatim: cwd)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(Color.white.opacity(0.35))

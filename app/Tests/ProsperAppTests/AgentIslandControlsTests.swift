@@ -155,6 +155,18 @@ final class AgentIslandControlsTests: XCTestCase {
             ("signal 150", "crashed (signal 150)"),
             ("", "vanished"), ("vanished", "vanished"),
             ("paused", "paused"), ("exitx", "exitx"),
+            // #839: dch 1.40.1 names the sender; the pid never shows, the cmd as its program's basename.
+            ("signal 15 from 4242 /usr/bin/pkill -f claude --resume", "ended (signal 15) from pkill"),
+            ("signal 1 from 77 launchd", "ended (signal 1) from launchd"),
+            ("signal 2 from 77", "ended (signal 2)"), ("signal 15 from 77 ", "ended (signal 15)"), ("signal 15 from 4242", "ended (signal 15)"),
+            ("signal 9 from 4242 /bin/kill -9 99", "crashed (signal 9) from kill"),
+            ("signal 11 from 1 /sbin/launchd", "crashed (signal 11) from launchd"),
+            ("signal 15 from 5 " + String(repeating: "k", count: 120), "ended (signal 15) from " + String(repeating: "k", count: 120)),
+            ("signal 15 from 5 /opt/" + String(repeating: "k", count: 115), "ended (signal 15) from " + String(repeating: "k", count: 115)),
+            // Malformed: as before.
+            ("signal x from", "crashed (signal x from)"), ("signal 15 from", "crashed (signal 15 from)"),
+            ("signal 15 from x cmd", "crashed (signal 15 from x cmd)"), ("signal 15 to 3 cmd", "crashed (signal 15 to 3 cmd)"),
+            ("signal x from 3 cmd", "crashed (signal x from 3 cmd)"),
         ]
         for (end, label) in table { XCTAssertEqual(AgentIsland.endLabel(end), label, end) }
         // #580: a real 1.24.0 record after `dch --stop s1`.
@@ -175,7 +187,7 @@ final class AgentIslandControlsTests: XCTestCase {
         for end in ["exit 0", "killed", "stopped"] {
             XCTAssertFalse(AgentIsland.reviveAllTakes(rec(end), now: now), end)
         }
-        for end in ["exit 1", "signal 15", "signal 9", "vanished", "", "odd"] {
+        for end in ["exit 1", "signal 15", "signal 9", "signal 15 from 4242 /usr/bin/pkill", "vanished", "", "odd"] {
             XCTAssertTrue(AgentIsland.reviveAllTakes(rec(end), now: now), end)
         }
         let started = now - 4 * day
