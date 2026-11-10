@@ -221,7 +221,8 @@ function settings_render(section_id, state)
             .. "Keywords can't contain spaces or quotes. Use a symbol prefix (e.g. ;;addr) so everyday "
             .. "words don't trigger. Placeholders: {cursor} {clipboard} {date} {date +1d} {time} {uuid} "
             .. "{snippet:keyword} {argument} — with modifiers like {clipboard | uppercase}. "
-            .. "A snippet with {argument name=\"to\"} (or default=\"…\") asks for its values before it inserts. "
+            .. "A snippet with {argument name=\"to\"} asks for its values before it inserts; "
+            .. "add default=\"…\" to prefill one, as in {argument name=\"to\" default=\"…\"}. "
             .. "macOS Text Replacements are read-only here: they come after your snippets and your "
             .. "iPhone's, and are typed exactly as written.",
         rows = {

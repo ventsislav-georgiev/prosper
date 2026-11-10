@@ -98,11 +98,16 @@ tag from the now-released section and put it on the new top draft.
   The ring survives `dch --restart` (#846).
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
-  on, and Insert stays off while a required field is empty. It works for a typed keyword, the `sn`
+  on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
+  now asks too (it used to insert the defaults at once). It works for a typed keyword, the `sn`
   palette and a bound Shortcuts hotkey, for plain and rich-text snippets, and asks for the arguments of an
-  embedded {snippet:…} in the same panel. A typed keyword stays as typed until you submit, and stays on
-  cancel; either way focus goes back to the app you typed in. Nothing is inserted if another app took
-  focus meanwhile. The panel never opens in a password field, and macOS Text Replacements never ask (#842).
+  embedded {snippet:…} in the same panel. A typed keyword is erased when the panel opens, as an
+  expansion would; Return inserts at the caret, and Escape types the keyword back (with the space or
+  punctuation that triggered it, never Return or Tab). Either way focus goes back to the app you typed
+  in, and nothing is typed if another app took focus meanwhile, or if a password field took the caret
+  (Prosper beeps). If you click back into the app before you answer, the text goes in at the caret
+  where you left it. The panel shows over full-screen apps, never opens in a password field, and macOS
+  Text Replacements never ask (#842).
 
 ## v2.174.0
 

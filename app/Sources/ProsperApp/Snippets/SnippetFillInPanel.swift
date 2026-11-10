@@ -36,6 +36,11 @@ final class SnippetFillInModel: ObservableObject {
     }
 }
 
+extension ArgumentSpec {
+    /// The field's label: a bare `{argument}` (named "argument") reads "Value".
+    var label: String { name == "argument" ? "Value" : name }
+}
+
 /// One text field per argument; Return submits, Escape cancels, Tab moves on.
 struct SnippetFillInView: View {
     @ObservedObject var model: SnippetFillInModel
@@ -46,10 +51,11 @@ struct SnippetFillInView: View {
             Text(model.title).font(.headline).lineLimit(1)
             ForEach(model.fields.indices, id: \.self) { i in
                 HStack {
-                    Text(model.fields[i].name)
+                    Text(model.fields[i].label)
                         .frame(width: 100, alignment: .trailing)
                         .lineLimit(1)
-                    TextField(model.fields[i].name, text: $model.values[i],
+                        .help(model.fields[i].label)   // the full name when the column truncates it
+                    TextField(model.fields[i].label, text: $model.values[i],
                               prompt: Text(model.fields[i].required ? "Required" : ""))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
@@ -93,6 +99,13 @@ final class SnippetFillInPanel {
         panel.makeKeyAndOrderFront(nil)
     }
 
+    /// Brings the open panel forward, if there is one.
+    func reveal() {
+        guard let panel else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
     /// Built apart from `present` so tests get the panel without ordering it front.
     static func makePanel(_ model: SnippetFillInModel) -> KeyablePanel {
         let panel = KeyablePanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 120),
@@ -101,6 +114,8 @@ final class SnippetFillInPanel {
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
+        // Shows on the Space of a full-screen app the keyword was typed in, as the runner does.
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: SnippetFillInView(model: model))
         panel.contentView = host

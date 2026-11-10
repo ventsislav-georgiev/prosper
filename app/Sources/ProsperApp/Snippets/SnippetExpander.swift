@@ -12,10 +12,11 @@ enum SnippetExpansionDecision: Equatable {
     /// actor (AppKit), so the plan only carries the snippet + backspace count.
     case insertRich(name: String, backspaces: Int)
     /// #842: the snippet has `{argument}` fields (required or defaulted, nested
-    /// ones included): the fill-in panel asks for them. The trigger key is let
-    /// through, so the keyword stays typed while it asks; on submit `backspaces`
-    /// erases it (plus the delimiter, re-appended as `delimiter`), on cancel it stays.
-    case needsArguments(name: String, backspaces: Int, delimiter: String)
+    /// ones included): the fill-in panel asks for them. As with an expansion, the
+    /// trigger key is swallowed and `backspaces` erase the keyword at match time;
+    /// submit inserts at the caret (re-appending `delimiter`), cancel re-types
+    /// `keyword` (as typed) and a printable `delimiter`.
+    case needsArguments(name: String, backspaces: Int, delimiter: String, keyword: String)
 }
 
 /// Watches the typed-character stream (fed by the single shared autocomplete
@@ -66,9 +67,13 @@ final class SnippetExpander {
     // Tests swap these: no real panel, focus change, key event or secure-input read.
     var prompt: (_ title: String, _ fields: [ArgumentSpec],
                  _ done: @escaping @MainActor ([String: String]?) -> Void) -> Void = { title, fields, done in
-        // Next tick: a typed trigger key is still in the tap and must reach the target first.
+        // Next tick: the keyword's backspaces, posted from the tap, reach the target first.
         DispatchQueue.main.async { SnippetFillInPanel.shared.present(title: title, fields: fields, done: done) }
     }
+    /// Brings the open fill-in panel forward (a second argument snippet asked while it is open).
+    var reveal: () -> Void = { SnippetFillInPanel.shared.reveal() }
+    /// Says a typed keyword was not put back (secure input came on while the panel asked).
+    var alert: () -> Void = { NSSound.beep() }
     var activateApp: (pid_t) -> Bool = { pid in
         NSRunningApplication(processIdentifier: pid)?.activate(options: []) ?? false
     }
@@ -159,19 +164,22 @@ final class SnippetExpander {
     }
 
     /// Carries out a typed keyword's decision. Returns true when the trigger key is
-    /// swallowed (an expansion fired). A fill-in lets it through and asks first.
+    /// swallowed: an expansion fired, or a fill-in erased the keyword and asks next tick.
     func run(_ decision: SnippetExpansionDecision, hit: SnippetHit, context: PlaceholderContext,
              bundleId: String?) -> Bool {
         guard !prompting else { buffer = ""; return false }
         switch decision {
         case .none:
             return false
-        case let .needsArguments(_, backspaces, delimiter):
+        case let .needsArguments(name, backspaces, delimiter, keyword):
             buffer = ""
+            // Destructive work happens now, while the field is known (TextExpander's order).
+            guard !secureInputActive(), let target = frontmostPID() else { return false }
+            execute(.insertPlain(name: name, backspaces: backspaces, insertText: "", leftArrows: 0), [:], bundleId)
             fillIn(hit, fields: Self.fillInFields(hit, snippetByKeyword: context.snippetByKeyword),
-                   context: context, target: frontmostPID(), backspaces: backspaces,
-                   delimiter: delimiter, bundleId: bundleId)
-            return false
+                   context: context, target: target, delimiter: delimiter,
+                   retype: Self.retype(keyword: keyword, delimiter: delimiter), bundleId: bundleId)
+            return true
         case .insertPlain, .insertRich:
             buffer = ""
             execute(decision, [:], bundleId)
@@ -207,9 +215,9 @@ final class SnippetExpander {
         }
 
         // #842: every field (defaulted too) is asked for unless the context already holds it.
-        // The trigger key then goes through, so the field holds one more character.
         if fillInFields(hit, snippetByKeyword: context.snippetByKeyword).contains(where: { context.arguments[$0.name] == nil }) {
-            return .needsArguments(name: hit.name, backspaces: backspaces + 1, delimiter: delimiter)
+            let typed = buffer.suffix(match.keywordLength + delimiter.count).prefix(match.keywordLength)
+            return .needsArguments(name: hit.name, backspaces: backspaces, delimiter: delimiter, keyword: String(typed))
         }
         return expansion(hit, context, backspaces: backspaces, delimiter: delimiter)
     }
@@ -235,6 +243,21 @@ final class SnippetExpander {
         guard !hit.literal else { return [] }
         let template = hit.richText ? RichSnippet.plainText(rtf: hit.text) : hit.text
         return PlaceholderEngine.arguments(in: template, snippetByKeyword: snippetByKeyword)
+    }
+
+    /// Whether inserting `hit` asks for `{argument}` values: the one formula behind the
+    /// palette's fill-in row action, for Mac and phone rows alike.
+    nonisolated static func asksForArguments(_ hit: SnippetHit, snippetByKeyword: (String) -> String?) -> Bool {
+        !fillInFields(hit, snippetByKeyword: snippetByKeyword).isEmpty
+    }
+
+    /// What a cancelled typed fill-in puts back: the keyword as typed, then the delimiter
+    /// only when printable. Return, Enter and Tab never: in a chat field they would send it.
+    nonisolated static func retype(keyword: String, delimiter: String) -> String {
+        let printable = !delimiter.unicodeScalars.contains {
+            CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0)
+        }
+        return keyword + (printable ? delimiter : "")
     }
 
     /// `{snippet:key}` lookup: the Mac store by keyword or name, then the phones' sets.
@@ -301,12 +324,15 @@ final class SnippetExpander {
     }
 
     /// The hotkey's and the `sn` palette's way in: asks for `hit`'s fields first
-    /// (then inserts into `target`), else inserts at once.
+    /// (then inserts into `target`), else inserts at once. With a fill-in already open
+    /// it brings that one forward; with no app to return to it does not ask at all.
     func insert(_ hit: SnippetHit, context: PlaceholderContext, target: pid_t?, bundleId: String?) {
         let fields = Self.fillInFields(hit, snippetByKeyword: context.snippetByKeyword)
         guard fields.isEmpty else {
-            fillIn(hit, fields: fields, context: context, target: target, backspaces: 0,
-                   delimiter: "", bundleId: bundleId)
+            if prompting { reveal(); return }
+            guard let target else { return }
+            fillIn(hit, fields: fields, context: context, target: target, delimiter: "", retype: "",
+                   bundleId: bundleId)
             return
         }
         execute(Self.expansion(hit, context, backspaces: 0, delimiter: ""), [:], bundleId)
@@ -318,30 +344,36 @@ final class SnippetExpander {
     /// the runner handles it natively (`RunnerPanel.performFileAction`).
     nonisolated static let fillInActionID = "snippets.fill"
 
-    /// Asks for `fields`, then returns focus to `target` and inserts there, erasing
-    /// `backspaces` typed characters first. Shared by all three paths. Cancel returns
-    /// focus and inserts nothing (a typed keyword stays as typed); a target that is gone
-    /// or not frontmost once focus returned gets nothing either. Never asks inside a
-    /// secure input field, nor while another fill-in is open.
+    /// Asks for `fields`, then returns focus to `target` and inserts at its caret, erasing
+    /// nothing (a typed keyword was erased at match time). Shared by all three paths.
+    /// Cancel returns focus and types `retype` back (a typed keyword; "" from the palette
+    /// or a hotkey). A target that is gone or not frontmost once focus returned gets
+    /// nothing; secure input on by then gets nothing and a beep. Never asks inside a secure
+    /// input field, nor while another fill-in is open. `prompting` holds until the insert or
+    /// re-type is sent, so the expander never reads it back as typed keys.
     func fillIn(_ hit: SnippetHit, fields: [ArgumentSpec], context: PlaceholderContext,
-                target: pid_t?, backspaces: Int, delimiter: String, bundleId: String?) {
+                target: pid_t, delimiter: String, retype: String, bundleId: String?) {
         guard !prompting, !secureInputActive() else { return }
         prompting = true
         prompt(Self.displayName(hit.name), fields) { [weak self] values in
             guard let self else { return }
-            self.prompting = false
             self.buffer = ""
-            guard let target else { return }
-            // Cancel: focus goes back, the keyword stays as typed, nothing is inserted.
-            guard let values else { _ = self.activateApp(target); return }
-            var ctx = context
-            ctx.arguments = values
-            let decision = Self.expansion(hit, ctx, backspaces: backspaces, delimiter: delimiter)
-            guard self.activateApp(target) else { return }
+            let decision: SnippetExpansionDecision?
+            if let values {
+                var ctx = context
+                ctx.arguments = values
+                decision = Self.expansion(hit, ctx, backspaces: 0, delimiter: delimiter)
+            } else {
+                decision = retype.isEmpty ? nil
+                    : .insertPlain(name: hit.name, backspaces: 0, insertText: retype, leftArrows: 0)
+            }
+            guard self.activateApp(target), let decision else { self.prompting = false; return }
             DispatchQueue.main.asyncAfter(deadline: .now() + self.focusSettle) {
+                defer { self.prompting = false }
                 // Another app came forward meanwhile: its field is not the one the keyword was typed in.
                 guard self.frontmostPID() == target else { return }
-                self.execute(decision, values, bundleId)
+                guard !self.secureInputActive() else { self.alert(); return }
+                self.execute(decision, values ?? [:], bundleId)
             }
         }
     }
@@ -356,7 +388,8 @@ final class SnippetExpander {
         case let .insertPlain(_, backspaces, insertText, leftArrows):
             Self.e2elog("fire plain backspaces=\(backspaces) insert=\"\(insertText)\" compat=\(Preferences.usesCompatInsertion(forBundleId: bundleId))")
             sendBackspaces(backspaces)
-            insert(insertText, bundleId: bundleId)
+            // A fill-in's erase carries no text: an empty paste would still clobber the clipboard.
+            if !insertText.isEmpty { insert(insertText, bundleId: bundleId) }
             sendLeftArrows(leftArrows)
         case let .insertRich(name, backspaces):
             executeRich(name: name, backspaces: backspaces, bundleId: bundleId, arguments: arguments)

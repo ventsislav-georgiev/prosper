@@ -251,6 +251,15 @@ final class RunnerPanel {
         AppLauncher.open(url)
     }
 
+    /// #842: the fill action's hand-off, a seam so a test drives it without a runner.
+    static func fillIn(value: String, target: pid_t?, bundleId: String?,
+                       lookup: (String) -> SnippetHit? = { PhoneSnippetStore.lookup($0) },
+                       context: (SnippetHit) -> PlaceholderContext = { SnippetExpander.shared.context(for: $0) },
+                       expander: SnippetExpander = .shared) {
+        guard let hit = lookup(value) else { return }
+        expander.insert(hit, context: context(hit), target: target, bundleId: bundleId)
+    }
+
     /// Runs a built-in file action (open / reveal / quick look / copy / trash) and
     /// records frecency for engagements. Quick Look overlays the runner and keeps
     /// it open; every other action completes and dismisses (Raycast behavior).
@@ -275,11 +284,7 @@ final class RunnerPanel {
         // phone id): the palette closes, the fill-in panel asks, the app before it gets the text.
         if id == SnippetExpander.fillInActionID {
             dismiss()
-            if let hit = PhoneSnippetStore.lookup(path) {
-                let expander = SnippetExpander.shared
-                expander.insert(hit, context: expander.context(for: hit), target: previousApp?.processIdentifier,
-                                bundleId: previousApp?.bundleIdentifier)
-            }
+            Self.fillIn(value: path, target: previousApp?.processIdentifier, bundleId: previousApp?.bundleIdentifier)
             return
         }
         // Custom (non `file.*`) action id: dispatch it back to the extension that

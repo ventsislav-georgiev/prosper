@@ -306,14 +306,18 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     // MARK: Snippets (native store + placeholder engine)
 
     func snippetsAll() -> String {
-        // #842: `arguments` = inserting it asks for {argument} values (the palette offers the fill-in).
-        let all = SnippetStore.all()
-        let lookup = SnippetExpander.snippetLookup(all, PhoneSnippetStore.live.sets())
-        let arr = all.map { hit in
-            Self.snippetDict(hit).merging(
-                ["arguments": !SnippetExpander.fillInFields(hit, snippetByKeyword: lookup).isEmpty]) { $1 }
+        Self.jsonString(Self.snippetRows(SnippetStore.all(), phone: PhoneSnippetStore.live.sets())) ?? "[]"
+    }
+
+    /// The Mac rows. #842: `arguments` = inserting it asks for {argument} values (the
+    /// palette offers the fill-in); the phone rows use the same formula.
+    static func snippetRows(_ all: [SnippetHit],
+                            phone: [(device: String, set: PhoneSnippetStore.DeviceSet)]) -> [[String: Any]] {
+        let lookup = SnippetExpander.snippetLookup(all, phone)
+        return all.map { hit in
+            snippetDict(hit).merging(
+                ["arguments": SnippetExpander.asksForArguments(hit, snippetByKeyword: lookup)]) { $1 }
         }
-        return Self.jsonString(arr) ?? "[]"
     }
 
     func snippetGet(name: String) -> String? {
@@ -386,19 +390,24 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// #731: the phones' read-only sets, newest first, for the palette and Settings:
     /// [{device_id, device, count, updated, snippets: [{id, name, keyword, text, group}]}].
     func snippetsPhone() -> String {
-        let sets = PhoneSnippetStore.live.sets()
-        let lookup = SnippetExpander.snippetLookup(SnippetStore.all(), sets)
-        return Self.jsonString(sets.map { device, set in
+        Self.jsonString(Self.phoneRows(PhoneSnippetStore.live.sets(), mac: SnippetStore.all())) ?? "[]"
+    }
+
+    static func phoneRows(_ sets: [(device: String, set: PhoneSnippetStore.DeviceSet)],
+                          mac: [SnippetHit]) -> [[String: Any]] {
+        let lookup = SnippetExpander.snippetLookup(mac, sets)
+        return sets.map { device, set in
             [
                 "device_id": device, "device": set.label, "count": set.snippets.count,
                 "updated": Date(timeIntervalSince1970: set.updated).formatted(date: .abbreviated, time: .shortened),
                 "snippets": set.snippets.map {
                     ["id": PhoneSnippetStore.id(device: device, name: $0.name), "name": $0.name,
                      "keyword": $0.keyword ?? "", "text": $0.text, "group": $0.group ?? "",
-                     "arguments": !PlaceholderEngine.arguments(in: $0.text, snippetByKeyword: lookup).isEmpty]
+                     "arguments": SnippetExpander.asksForArguments(SnippetHit(name: $0.name, text: $0.text),
+                                                                   snippetByKeyword: lookup)]
                 },
             ] as [String: Any]
-        }) ?? "[]"
+        }
     }
 
     func snippetRemovePhone(deviceID: String) {

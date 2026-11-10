@@ -52,18 +52,38 @@ final class SnippetFillInTests: XCTestCase {
                              wordBoundaryMode: boundary)
     }
 
-    func testWordBoundaryRequestCountsTheDeliveredDelimiter() {
+    func testWordBoundaryRequestErasesTheKeywordAndKeepsTheDelimiterAside() {
         let hit = SnippetHit(name: "S", keyword: "sig", text: "To {argument name=\"to\"}")
-        // "sig" + " " both reach the field (nothing swallowed): erase 4, re-append the space.
+        // The space is swallowed as for an expansion: erase "sig" (3), the space comes back after.
         XCTAssertEqual(plan(hit, buffer: "sig ", trigger: "sig", boundary: true),
-                       .needsArguments(name: "S", backspaces: 4, delimiter: " "))
+                       .needsArguments(name: "S", backspaces: 3, delimiter: " ", keyword: "sig"))
+    }
+
+    func testNonASCIIKeywordIsCarriedAsTyped() {
+        let hit = SnippetHit(name: "D", keyword: ";déjà", text: "{argument}")
+        XCTAssertEqual(plan(hit, buffer: "x ;déjà ", trigger: ";déjà", boundary: true),
+                       .needsArguments(name: "D", backspaces: 5, delimiter: " ", keyword: ";déjà"))
+        XCTAssertEqual(plan(hit, buffer: "x;déjà", trigger: ";déjà"),
+                       .needsArguments(name: "D", backspaces: 4, delimiter: "", keyword: ";déjà"))
+    }
+
+    /// Cancel puts back the keyword and a printable delimiter, never Return, Enter or Tab.
+    func testRetypeKeepsSpaceAndPunctuationButNeverReturnOrTab() {
+        XCTAssertEqual(SnippetExpander.retype(keyword: ";sig", delimiter: " "), ";sig ")
+        XCTAssertEqual(SnippetExpander.retype(keyword: ";sig", delimiter: ","), ";sig,")
+        XCTAssertEqual(SnippetExpander.retype(keyword: ";sig", delimiter: "\r"), ";sig")
+        XCTAssertEqual(SnippetExpander.retype(keyword: ";sig", delimiter: "\n"), ";sig")
+        XCTAssertEqual(SnippetExpander.retype(keyword: ";sig", delimiter: "\u{3}"), ";sig")   // keypad Enter
+        XCTAssertEqual(SnippetExpander.retype(keyword: ";sig", delimiter: "\t"), ";sig")
+        XCTAssertEqual(SnippetExpander.retype(keyword: ";déjà", delimiter: ""), ";déjà")
     }
 
     func testNestedArgumentAsksThroughContextLookup() {
         let hit = SnippetHit(name: "N", keyword: ";n", text: "x {snippet:inner}")
         var ctx = PlaceholderContext()
         ctx.snippetByKeyword = { $0 == "inner" ? "{argument name=\"q\"}" : nil }
-        XCTAssertEqual(plan(hit, buffer: ";n", trigger: ";n", ctx), .needsArguments(name: "N", backspaces: 2, delimiter: ""))
+        XCTAssertEqual(plan(hit, buffer: ";n", trigger: ";n", ctx),
+                       .needsArguments(name: "N", backspaces: 1, delimiter: "", keyword: ";n"))
         ctx.arguments = ["q": "v"]
         XCTAssertEqual(plan(hit, buffer: ";n", trigger: ";n", ctx),
                        .insertPlain(name: "N", backspaces: 1, insertText: "x v", leftArrows: 0))
@@ -71,7 +91,8 @@ final class SnippetFillInTests: XCTestCase {
 
     func testRichWithArgumentAsks() {
         let hit = SnippetHit(name: "R", keyword: ";r", text: "body {argument}", richText: true)
-        XCTAssertEqual(plan(hit, buffer: ";r", trigger: ";r"), .needsArguments(name: "R", backspaces: 2, delimiter: ""))
+        XCTAssertEqual(plan(hit, buffer: ";r", trigger: ";r"),
+                       .needsArguments(name: "R", backspaces: 1, delimiter: "", keyword: ";r"))
     }
 
     func testTextReplacementNeverAsks() {
@@ -89,6 +110,8 @@ final class SnippetFillInTests: XCTestCase {
     private var frontmost: pid_t? = 4242
     private var secure = false
     private var appGone = false
+    private var revealed = 0
+    private var alerts = 0
 
     private func expander() -> SnippetExpander {
         let e = SnippetExpander()
@@ -99,6 +122,8 @@ final class SnippetFillInTests: XCTestCase {
         e.activateApp = { [unowned self] pid in activated.append(pid); return !appGone }
         e.frontmostPID = { [unowned self] in frontmost }
         e.secureInputActive = { [unowned self] in secure }
+        e.reveal = { [unowned self] in revealed += 1 }
+        e.alert = { [unowned self] in alerts += 1 }
         e.focusSettle = 0
         e.execute = { [unowned self] d, args, bundle in executed.append((d, args, bundle)) }
         return e
@@ -112,42 +137,73 @@ final class SnippetFillInTests: XCTestCase {
 
     private let greet = SnippetHit(name: "greet", keyword: ";hi",
                                    text: "Hi {argument name=\"who\"}{cursor}!{argument name=\"tone\" default=\"!\"}")
+    private let sig = SnippetHit(name: "sig", keyword: ";sig", text: "Regards {argument name=\"who\"}")
 
-    func testTypedKeywordPromptsLetsTheKeyThroughThenInsertsIntoTheTarget() {
-        let e = expander()
-        let decision = plan(greet, buffer: ";hi", trigger: ";hi")
-        XCTAssertFalse(e.run(decision, hit: greet, context: PlaceholderContext(), bundleId: "com.example.ed"),
-                       "the trigger key is not swallowed: the keyword stays typed while the panel asks")
-        XCTAssertEqual(prompts.map(\.title), ["greet"])
-        XCTAssertEqual(prompts.first?.fields, [ArgumentSpec(name: "who", defaultValue: nil),
-                                               ArgumentSpec(name: "tone", defaultValue: "!")])
-        XCTAssertTrue(executed.isEmpty, "nothing inserted while the panel is open")
-
-        answer?(["who": "Ann", "tone": "?"])
-        settle { !executed.isEmpty }
-        XCTAssertEqual(activated, [4242], "focus returns to the app the keyword was typed in")
-        XCTAssertEqual(executed.count, 1)
-        XCTAssertEqual(executed.first?.0, .insertPlain(name: "greet", backspaces: 3, insertText: "Hi Ann!?", leftArrows: 2))
-        XCTAssertEqual(executed.first?.1, ["who": "Ann", "tone": "?"])
-        XCTAssertEqual(executed.first?.2, "com.example.ed")
+    /// The erase a typed fill-in sends at match time.
+    private func erase(_ name: String, _ n: Int) -> SnippetExpansionDecision {
+        .insertPlain(name: name, backspaces: n, insertText: "", leftArrows: 0)
     }
 
-    func testCancelLeavesTheKeywordAndInsertsNothing() {
+    private func typeSig(_ e: SnippetExpander, bundleId: String? = nil) -> Bool {
+        e.run(plan(sig, buffer: ";sig ", trigger: ";sig", boundary: true), hit: sig,
+              context: PlaceholderContext(), bundleId: bundleId)
+    }
+
+    /// QA #684 F1: everything destructive happens at match time, while the field is known.
+    func testTypedKeywordIsSwallowedAndErasedAtMatchThenSubmitErasesNothing() {
         let e = expander()
-        _ = e.run(plan(greet, buffer: ";hi", trigger: ";hi"), hit: greet, context: PlaceholderContext(), bundleId: nil)
+        XCTAssertTrue(typeSig(e, bundleId: "com.example.ed"), "the trigger key is swallowed, as for an expansion")
+        XCTAssertEqual(executed.map { $0.0 }, [erase("sig", 4)], "the keyword goes at match time")
+        XCTAssertEqual(prompts.map(\.title), ["sig"])
+        XCTAssertEqual(prompts.first?.fields, [ArgumentSpec(name: "who", defaultValue: nil)])
+
+        answer?(["who": "Bob"])
+        settle { executed.count == 2 }
+        XCTAssertEqual(activated, [4242], "focus returns to the app the keyword was typed in")
+        XCTAssertEqual(executed.count, 2)
+        XCTAssertEqual(executed.last?.0, .insertPlain(name: "sig", backspaces: 0, insertText: "Regards Bob ", leftArrows: 0),
+                       "inserted at the caret: type-ahead or a click elsewhere loses nothing")
+        XCTAssertEqual(executed.last?.1, ["who": "Bob"])
+        XCTAssertEqual(executed.last?.2, "com.example.ed")
+    }
+
+    func testCursorSnippetSubmitMovesTheCaretWithNoBackspaces() {
+        let e = expander()
+        XCTAssertTrue(e.run(plan(greet, buffer: ";hi", trigger: ";hi"), hit: greet, context: PlaceholderContext(), bundleId: nil))
+        XCTAssertEqual(executed.map { $0.0 }, [erase("greet", 2)])
+        answer?(["who": "Ann", "tone": "?"])
+        settle { executed.count == 2 }
+        XCTAssertEqual(executed.last?.0, .insertPlain(name: "greet", backspaces: 0, insertText: "Hi Ann!?", leftArrows: 2))
+    }
+
+    /// Cancel leaves the field as it was: the keyword and its space come back once, sent while
+    /// the gate still holds, so the expander neither asks again nor expands.
+    func testCancelRetypesTheKeywordOnceWithoutReTriggering() {
+        let e = expander()
+        _ = typeSig(e)
         answer?(nil)
+        XCTAssertTrue(e.prompting, "the gate holds until the re-type is sent")
+        XCTAssertFalse(typeSig(e), "a keyword seen before the re-type lands does not ask again")
+        let plain = SnippetHit(name: "p", keyword: ";p", text: "plain")
+        XCTAssertFalse(e.run(plan(plain, buffer: ";p", trigger: ";p"), hit: plain, context: PlaceholderContext(), bundleId: nil))
+        settle { executed.count == 2 }
         settle()
         XCTAssertEqual(activated, [4242], "cancel returns focus to the app the keyword was typed in")
-        XCTAssertTrue(executed.isEmpty, "no backspace, no insert: the keyword stays as typed")
+        XCTAssertEqual(prompts.count, 1)
+        XCTAssertEqual(executed.map { $0.0 }, [erase("sig", 4),
+                                               .insertPlain(name: "sig", backspaces: 0, insertText: ";sig ", leftArrows: 0)],
+                       "re-typed exactly once, as a string")
+        XCTAssertFalse(e.prompting)
     }
 
-    func testCancelReturnsFocusOnThePaletteAndHotkeyPathToo() {
+    func testCancelOnThePaletteAndHotkeyPathReturnsFocusAndTypesNothing() {
         let e = expander()
         e.insert(greet, context: PlaceholderContext(), target: 99, bundleId: nil)
         answer?(nil)
         settle()
         XCTAssertEqual(activated, [99])
         XCTAssertTrue(executed.isEmpty)
+        XCTAssertFalse(e.prompting)
     }
 
     /// Keys typed into the open panel reach the shared tap: they neither ask again, nor
@@ -166,62 +222,110 @@ final class SnippetFillInTests: XCTestCase {
                                 commandHeld: false, bundleId: nil))
         XCTAssertEqual(e.buffer, "", "panel keystrokes stay out of the buffer")
         XCTAssertEqual(prompts.count, 1, "no second prompt over the open one")
-        XCTAssertTrue(executed.isEmpty)
-        frontmost = 4242
+        XCTAssertEqual(executed.count, 1, "only the match-time erase")
         first?(["who": "Ann"])
-        settle { !executed.isEmpty }
+        settle { executed.count == 2 }
         XCTAssertFalse(e.prompting)
         XCTAssertEqual(e.buffer, "", "the next keyword starts from an empty buffer")
-        XCTAssertEqual(executed.count, 1, "the first prompt's insert survives")
+        XCTAssertEqual(executed.count, 2, "the first prompt's insert survives")
     }
 
-    /// The palette or a hotkey fired while a fill-in is open: a snippet with arguments does not
-    /// open a second prompt; one without arguments inserts at once (into the field that has
+    /// QA #684 INFO-4: a hotkey chord leaves the buffer as typed (handle() bails before
+    /// clearing it), and a mouse-only Insert sends no key: finishing must clear it.
+    func testFinishClearsTheBufferAHotkeyLeftBehind() {
+        guard !SnippetExpander.autoExpandActive else { return XCTFail("auto-expand must be off in tests") }
+        let e = expander()
+        // Off by default under XCTest: handle() appends, then bails before any store read.
+        _ = e.handle(keyCode: 0, typed: "a", controlHeld: false, optionHeld: false, commandHeld: false, bundleId: nil)
+        _ = e.handle(keyCode: 1, typed: "s", controlHeld: true, optionHeld: false, commandHeld: false, bundleId: nil)
+        XCTAssertEqual(e.buffer, "a", "the chord left the buffer as typed")
+        e.insert(greet, context: PlaceholderContext(), target: 99, bundleId: nil)
+        answer?(nil)
+        XCTAssertEqual(e.buffer, "", "a mouse-only finish clears it")
+    }
+
+    /// QA #684 INFO-3: an argument snippet from the palette or a hotkey while a fill-in is open
+    /// brings that one forward; one without arguments inserts at once (into the field that has
     /// focus, the panel's), as `insert` is not gated.
-    func testPaletteOrHotkeyWhileThePanelIsOpenNeverOpensASecondPrompt() {
+    func testPaletteOrHotkeyWhileThePanelIsOpenRevealsItAndNeverAsksTwice() {
         let e = expander()
         _ = e.run(plan(greet, buffer: ";hi", trigger: ";hi"), hit: greet, context: PlaceholderContext(), bundleId: nil)
         let first = answer
         let other = SnippetHit(name: "other", keyword: ";o", text: "Re {argument name=\"topic\"}")
         e.insert(other, context: PlaceholderContext(), target: 99, bundleId: nil)
-        let noArg = SnippetHit(name: "sig", keyword: ";s", text: "Best")
+        XCTAssertEqual(revealed, 1, "the open panel comes forward")
+        let noArg = SnippetHit(name: "plain", keyword: ";s", text: "Best")
         e.insert(noArg, context: PlaceholderContext(), target: 99, bundleId: nil)
         XCTAssertEqual(prompts.count, 1, "no second prompt over the open one")
-        XCTAssertEqual(executed.map { $0.0 }, [.insertPlain(name: "sig", backspaces: 0, insertText: "Best", leftArrows: 0)])
+        XCTAssertEqual(executed.map { $0.0 }, [erase("greet", 2),
+                                               .insertPlain(name: "plain", backspaces: 0, insertText: "Best", leftArrows: 0)])
         XCTAssertTrue(activated.isEmpty)
         first?(["who": "Ann"])
-        settle { executed.count == 2 }
+        settle { executed.count == 3 }
         XCTAssertFalse(e.prompting)
         XCTAssertEqual(activated, [4242], "the first prompt still returns to its own target")
-        XCTAssertEqual(executed.last?.0, .insertPlain(name: "greet", backspaces: 3, insertText: "Hi Ann!!", leftArrows: 2))
+        XCTAssertEqual(executed.last?.0, .insertPlain(name: "greet", backspaces: 0, insertText: "Hi Ann!!", leftArrows: 2))
+        XCTAssertEqual(revealed, 1)
     }
 
-    func testFocusChangedAbortsTheInsert() {
-        let e = expander()
-        _ = e.run(plan(greet, buffer: ";hi", trigger: ";hi"), hit: greet, context: PlaceholderContext(), bundleId: nil)
-        frontmost = 777   // another app is frontmost once focus "returned"
-        answer?(["who": "Ann"])
-        settle()
-        XCTAssertEqual(activated, [4242])
-        XCTAssertTrue(executed.isEmpty, "never types into a field the keyword was not typed in")
+    /// Another app frontmost once focus "returned": neither the insert nor the re-type is sent.
+    func testFocusChangedAbortsBothTheInsertAndTheRetype() {
+        for result in [["who": "Ann"], nil] as [[String: String]?] {
+            executed = []; activated = []; frontmost = 4242
+            let e = expander()
+            _ = typeSig(e)
+            frontmost = 777
+            answer?(result)
+            settle()
+            XCTAssertEqual(activated, [4242])
+            XCTAssertEqual(executed.map { $0.0 }, [erase("sig", 4)], "never types into a field the keyword was not typed in")
+            XCTAssertFalse(e.prompting)
+        }
     }
 
     func testTargetGoneAbortsTheInsert() {
         let e = expander()
-        _ = e.run(plan(greet, buffer: ";hi", trigger: ";hi"), hit: greet, context: PlaceholderContext(), bundleId: nil)
+        _ = typeSig(e)
         appGone = true
         answer?(["who": "Ann"])
         settle()
-        XCTAssertTrue(executed.isEmpty)
+        XCTAssertEqual(executed.count, 1)
+        XCTAssertFalse(e.prompting)
     }
 
-    func testNoPromptInsideSecureInput() {
+    /// Secure input on by the time focus returns: nothing typed, and a beep says the keyword is gone.
+    func testSecureInputAtFinishSkipsTheInsertAndTheRetypeAndBeeps() {
+        for result in [["who": "Ann"], nil] as [[String: String]?] {
+            executed = []; secure = false; alerts = 0
+            let e = expander()
+            _ = typeSig(e)
+            secure = true
+            answer?(result)
+            settle { alerts > 0 }
+            XCTAssertEqual(executed.map { $0.0 }, [erase("sig", 4)])
+            XCTAssertEqual(alerts, 1)
+            XCTAssertFalse(e.prompting)
+        }
+    }
+
+    func testNoPromptAndNoEraseInsideSecureInput() {
         secure = true
         let e = expander()
-        _ = e.run(plan(greet, buffer: ";hi", trigger: ";hi"), hit: greet, context: PlaceholderContext(), bundleId: nil)
+        XCTAssertFalse(typeSig(e), "the trigger goes through untouched")
         e.insert(greet, context: PlaceholderContext(), target: 4242, bundleId: nil)
         XCTAssertTrue(prompts.isEmpty)
+        XCTAssertTrue(executed.isEmpty, "the keyword is not erased")
+    }
+
+    /// No app to return to: nothing is erased and nothing is asked for.
+    func testNoTargetNeitherErasesNorAsks() {
+        frontmost = nil
+        let e = expander()
+        XCTAssertFalse(typeSig(e))
+        e.insert(greet, context: PlaceholderContext(), target: nil, bundleId: nil)
+        XCTAssertTrue(prompts.isEmpty)
         XCTAssertTrue(executed.isEmpty)
+        XCTAssertFalse(e.prompting)
     }
 
     /// The `sn` palette and a bound hotkey both come in through `insert`, with no keyword to erase.
@@ -235,6 +339,43 @@ final class SnippetFillInTests: XCTestCase {
         settle { !executed.isEmpty }
         XCTAssertEqual(activated, [99])
         XCTAssertEqual(executed.first?.0, .insertPlain(name: "greet", backspaces: 0, insertText: "Hi Bo!.", leftArrows: 2))
+    }
+
+    /// QA #684 INFO-5: the runner's fill action hands the row's snippet and the app before the
+    /// palette to the expander.
+    func testRunnerFillActionAsksThenInsertsIntoTheAppBeforeThePalette() {
+        let e = expander()
+        let lookup: (String) -> SnippetHit? = { [greet] in $0 == "greet" ? greet : nil }
+        RunnerPanel.fillIn(value: "gone", target: 99, bundleId: nil, lookup: lookup,
+                           context: { _ in PlaceholderContext() }, expander: e)
+        RunnerPanel.fillIn(value: "greet", target: nil, bundleId: nil, lookup: lookup,
+                           context: { _ in PlaceholderContext() }, expander: e)
+        XCTAssertTrue(prompts.isEmpty, "an unknown row or no previous app asks for nothing")
+        RunnerPanel.fillIn(value: "greet", target: 99, bundleId: "com.example.prev", lookup: lookup,
+                           context: { _ in PlaceholderContext() }, expander: e)
+        XCTAssertEqual(prompts.map(\.title), ["greet"])
+        frontmost = 99
+        answer?(["who": "Bo"])
+        settle { !executed.isEmpty }
+        XCTAssertEqual(activated, [99])
+        XCTAssertEqual(executed.first?.2, "com.example.prev")
+    }
+
+    /// QA #684 INFO-5: Mac and phone rows flag `arguments` by the same formula, nested ones included.
+    func testHostRowsFlagArgumentsForMacAndPhoneSnippets() {
+        let mac = [SnippetHit(name: "ask", keyword: ";a", text: "Hi {argument}"),
+                   SnippetHit(name: "plain", keyword: ";p", text: "Hi {date}"),
+                   SnippetHit(name: "nest", keyword: ";n", text: "x {snippet:;a}")]
+        let set = PhoneSnippetStore.DeviceSet(name: "Phone", hash: "h", updated: 0, snippets: [
+            PhoneSnippetStore.Snippet(name: "p-ask", text: "{argument name=\"q\" default=\"1\"}"),
+            PhoneSnippetStore.Snippet(name: "p-plain", text: "plain"),
+            PhoneSnippetStore.Snippet(name: "p-nest", text: "{snippet:;a}"),
+        ])
+        let macRows = LiveExtensionHostServices.snippetRows(mac, phone: [("dev", set)])
+        XCTAssertEqual(macRows.map { $0["arguments"] as? Bool }, [true, false, true])
+        let phoneRows = LiveExtensionHostServices.phoneRows([("dev", set)], mac: mac)
+        let snippets = phoneRows.first?["snippets"] as? [[String: Any]] ?? []
+        XCTAssertEqual(snippets.map { $0["arguments"] as? Bool }, [true, false, true])
     }
 
     func testPhoneSnippetPromptShowsItsOwnName() {
@@ -256,11 +397,11 @@ final class SnippetFillInTests: XCTestCase {
         let e = expander()
         // Not valid RTF, so the plain projection is the text itself (a leading "{" would parse as a group).
         let rich = SnippetHit(name: "R", keyword: ";r", text: "Dear {argument name=\"x\"}", richText: true)
-        _ = e.run(plan(rich, buffer: ";r", trigger: ";r"), hit: rich, context: PlaceholderContext(), bundleId: nil)
+        XCTAssertTrue(e.run(plan(rich, buffer: ";r", trigger: ";r"), hit: rich, context: PlaceholderContext(), bundleId: nil))
         answer?(["x": "1"])
-        settle { !executed.isEmpty }
-        XCTAssertEqual(executed.first?.0, .insertRich(name: "R", backspaces: 2))
-        XCTAssertEqual(executed.first?.1, ["x": "1"])
+        settle { executed.count == 2 }
+        XCTAssertEqual(executed.map { $0.0 }, [erase("R", 1), .insertRich(name: "R", backspaces: 0)])
+        XCTAssertEqual(executed.last?.1, ["x": "1"])
     }
 
     func testPaletteActionIDMatchesTheLuaRows() {
@@ -321,5 +462,20 @@ final class SnippetFillInTests: XCTestCase {
         let editable = fields(content).filter(\.isEditable)
         XCTAssertEqual(editable.map(\.stringValue), ["", "!"], "one field per argument, prefilled with its default")
         XCTAssertFalse(panel.isVisible, "never ordered front")
+    }
+
+    /// QA #684 F2: a keyword typed in a full-screen app does not pull the user off its Space.
+    func testPanelJoinsAFullScreenAppsSpace() {
+        let panel = SnippetFillInPanel.makePanel(SnippetFillInModel(title: "t", fields: []) { _ in })
+        defer { panel.close() }
+        XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+        XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+        XCTAssertFalse(panel.isVisible)
+    }
+
+    /// QA #684 INFO-6: a bare {argument} is labelled "Value"; a named one by its name.
+    func testBareArgumentIsLabelledValue() {
+        let specs = PlaceholderEngine.arguments(in: "{argument} {argument name=\"to\"}")
+        XCTAssertEqual(specs.map(\.label), ["Value", "to"])
     }
 }

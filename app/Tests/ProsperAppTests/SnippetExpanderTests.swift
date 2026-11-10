@@ -59,8 +59,8 @@ final class SnippetExpanderTests: XCTestCase {
         let d = SnippetExpander.plan(
             buffer: ";a", keywords: [(";a", "A")],
             lookup: lookup([hit]), context: PlaceholderContext(), wordBoundaryMode: false)
-        // #842: the trigger 'a' goes through to the field, so the whole keyword (2) is erased on submit.
-        XCTAssertEqual(d, .needsArguments(name: "A", backspaces: 2, delimiter: ""))
+        // #842: the trigger 'a' is swallowed, as for an expansion: 1 erased at match time.
+        XCTAssertEqual(d, .needsArguments(name: "A", backspaces: 1, delimiter: "", keyword: ";a"))
     }
 
     func testSatisfiedArgumentExpands() {
@@ -79,6 +79,6 @@ final class SnippetExpanderTests: XCTestCase {
         let d = SnippetExpander.plan(
             buffer: ";a", keywords: [(";a", "A")],
             lookup: lookup([hit]), context: PlaceholderContext(), wordBoundaryMode: false)
-        XCTAssertEqual(d, .needsArguments(name: "A", backspaces: 2, delimiter: ""))
+        XCTAssertEqual(d, .needsArguments(name: "A", backspaces: 1, delimiter: "", keyword: ";a"))
     }
 }
