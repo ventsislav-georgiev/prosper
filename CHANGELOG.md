@@ -86,7 +86,7 @@ tag from the now-released section and put it on the new top draft.
   nothing it printed after the cancel is sent, and dch and everything it started are killed 2 s
   after the cancel if they have not exited. A request ends as soon as dch exits, even when a process
   it started still holds its output open. `--xray` is refused first when this Mac's dch lacks it.
-- Ships dch 1.44.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.45.1 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -108,6 +108,13 @@ tag from the now-released section and put it on the new top draft.
   transcript chapters, or a shell session's commands split at prompts. `<name>` can also be an agent
   id or a History record. `dch --xray <name> --clear --json` empties a live shell's ring. Prosper
   does not read it yet, and its Remote Terminal still refuses `--xray` (#849).
+- dch 1.45.0 to 1.45.1: a session name with a ':' stays local unless the part before it is a known
+  host, so a dead local `proj:task` can be revived and forgotten again. New sessions get
+  `LC_TERMINAL=ghostty` instead of FORCE_HYPERLINK=1: Claude Code's statusline keeps its links, and
+  other CLIs no longer write links into pipes and files. `dch --xray --clear` no longer wipes the
+  screen of an agent session or of a shell whose ring is off. A name shaped like a session id is
+  refused even with spaces around it. A remote `--say`, `--stop`, `--revive` or `--run` that is
+  cancelled or whose client goes away gets 660 s to finish before it is killed, as in Prosper (#851).
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
