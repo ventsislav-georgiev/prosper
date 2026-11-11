@@ -73,6 +73,10 @@ tag from the now-released section and put it on the new top draft.
   bookmark imports still decode); `> cmd` output stops at 1 MiB with an "[output truncated at
   1 MiB]" line. Shell output with invalid UTF-8 now shows replacement characters instead of
   coming back empty (#833).
+- App Updates: a Homebrew upgrade that outlasts the extension timeout now says it is still
+  running in the background instead of "Nothing was upgraded". Extensions: `host.shell.run`
+  rejects bad options (not a table, an unknown key, a non-boolean `keep_running`) with an error
+  naming the key, instead of silently running without them (#834).
 - Agent Sessions window: a live session now opens in its real terminal by default, inside the
   window: the same dch session Ghostty would attach to, drawn by libghostty, with full keyboard
   input (Esc, Tab, ⇧Return, ⌃C and arrows reach Claude), IME and Option-composed characters, ⌘C/⌘V

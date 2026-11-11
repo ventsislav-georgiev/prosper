@@ -1028,8 +1028,22 @@ struct ExtensionHost {
             chat      = __h_llm_chat,
         },
         -- run(cmd [, { keep_running = true }]) -> output, truncated (true | nil)
+        -- A bad opts raises (naming the key) rather than silently killing at the timeout.
         shell  = { run = function(cmd, opts)
-            return _shell_run(cmd, type(opts) == "table" and opts.keep_running == true)
+            if opts ~= nil then
+                if type(opts) ~= "table" then
+                    error("host.shell.run: opts must be a table, got " .. type(opts), 2)
+                end
+                for k, v in pairs(opts) do
+                    if k ~= "keep_running" then
+                        error("host.shell.run: unknown option '" .. tostring(k) .. "'", 2)
+                    end
+                    if type(v) ~= "boolean" then
+                        error("host.shell.run: keep_running must be a boolean, got " .. type(v), 2)
+                    end
+                end
+            end
+            return _shell_run(cmd, opts ~= nil and opts.keep_running == true)
         end },
         -- Process control. refusal(pid) -> nil when the kill is allowed, else the
         -- reason; kill(pid, force) -> nil when the signal was sent, else the reason.

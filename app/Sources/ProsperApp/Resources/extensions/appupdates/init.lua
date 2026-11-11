@@ -204,7 +204,12 @@ function appupdates_upgrade()
     if not brew then return "Homebrew is not installed" end
     local before = #load_cache().brew
     -- keep_running: the host timeout returns control without killing brew mid-upgrade.
-    host.shell.run(brew .. " upgrade 2>&1", { keep_running = true })
+    -- `; echo $?` makes a finished upgrade's output non-empty, so "" means the timeout won.
+    local out = host.shell.run(brew .. " upgrade 2>&1; echo $?", { keep_running = true })
+    if out == "" then
+        host.notify("Homebrew", "brew upgrade is still running in the background")
+        return render(load_cache())
+    end
     -- Re-derive from brew rather than trusting the upgrade's exit text.
     local c = load_cache()
     c.brew = check_brew()
