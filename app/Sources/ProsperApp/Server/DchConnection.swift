@@ -415,8 +415,12 @@ final class DchConnection: @unchecked Sendable {
             }
             send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.rename:
-            if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
-               let n = o["name"] as? String,
+            let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+            // #850: dch serve.c:1159 refuses an id-shaped alias before running dch, whatever the name.
+            if let a = o?["alias"] as? String, DchControlOps.idShaped(a) {
+                return send(DchControlOps.error(DchControlOps.idShapedRefusal))
+            }
+            if let o, let n = o["name"] as? String,
                let message = rename(n, o["alias"] as? String ?? "") {
                 // #811 (QA #636 INFO-1): dch refused it (a just-exited session exits 1); a malformed request stays 0x14 (spec).
                 return send(DchControlOps.error(message))
@@ -686,6 +690,11 @@ final class DchConnection: @unchecked Sendable {
         }
         let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
         let name = o["name"] as? String
+        // #850: dch serve.c:998: a new session never takes a session_id's shape; a listed one (legacy)
+        // still attaches by its exact listed name. An unavailable list ([] here, -1 there) refuses.
+        if let name, DchControlOps.idShaped(name), !listSessions().contains(where: { $0.name == name }) {
+            return send(DchControlOps.error(DchControlOps.idShapedRefusal))
+        }
         sessionName = name
         let command = (o["command"] as? [String]) ?? []
         let cols = (o["cols"] as? Int) ?? 80
@@ -1520,6 +1529,20 @@ struct DchControlOps: Sendable {
     struct Refusal: Error { let message: String }
 
     static let dashNameRefusal = "a session name starting with - can't be passed to dch"
+
+    /// #850: dch 1.46.1 serve's refusal of a session_id-shaped new name or alias (serve.c:1001, :1161).
+    static let idShapedRefusal = "name looks like a session_id"
+
+    /// #850: dch 1.46.1's xr_label_id_shaped (xray.c:222): trimmed of ' ' and \t...\r, then "m" and
+    /// 16 hex digits, any case (a case-insensitive file system answers the id to such a name).
+    static func idShaped(_ s: String) -> Bool {
+        let space: (UInt8) -> Bool = { $0 == 0x20 || (0x09...0x0d).contains($0) }
+        var b = Array(s.utf8)[...]
+        while let c = b.first, space(c) { b = b.dropFirst() }
+        while let c = b.last, space(c) { b = b.dropLast() }
+        return b.count == 17 && (b.first == UInt8(ascii: "m") || b.first == UInt8(ascii: "M"))
+            && b.dropFirst().allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || (0x61...0x66).contains($0 | 0x20) }
+    }
 
     /// Each name's one live session, in request order; refused whole when any name
     /// is not exactly one live session.

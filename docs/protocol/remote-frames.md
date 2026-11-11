@@ -380,6 +380,11 @@ The connection then carries one session:
   connections attached to it (Prosper).
 - A second attach or create on the same connection is ignored. Attach or create on a
   watch, chat or clipboardUpload connection: 0x13 `"<kind> connections cannot attach or create"`.
+- A name shaped like a Claude session_id (`m` + 16 hex digits, any case, after trimming ASCII
+  space and `\t`-`\r`) that is not in the 0x03 list: 0x13 `name looks like a session_id`, nothing
+  starts, the connection stays open (both servers, dch 1.46.1; Prosper #850). A listed session of
+  that name (an older one) still attaches by its exact listed name. 0x06 refuses such an `alias` the
+  same way and runs no `dch -m`.
 - A failed spawn (Prosper: `forkpty` fails, the Mac is out of ptys or processes): 0x13
   `{"message": "Could not start the session: ..."}`, then close; the 0x13 is sent as the last
   frame before the FIN. Frames the client sent after the attach on that connection are
@@ -659,7 +664,7 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31, 32: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
@@ -668,7 +673,8 @@ Without `--mutating` the runner skips, and prints as SKIP, every fixture marked 
 and each cleanup kills its own; 15 ends it by typing `exit` and ^D into it), 16 (a 0x02
 create of `golden-776-16`, killed by its cleanup), and 18 (its setup creates `golden-838-18`,
 then reads it with ctl `--read`; its cleanup kills it), and 26-29 (each setup creates its own
-`golden-841-<n>` and each cleanup kills it). Run `--mutating` only against a test server, never a
+`golden-841-<n>` and each cleanup kills it), and 31 and 32 (an id-shaped attach name and rename
+alias: refused by a conformant server, but one without the check would run dch). Run `--mutating` only against a test server, never a
 host with sessions someone uses.
 
 17-25 are the `ctl` set (#838), each `requires_op` `ctl`: 17 a server listing `ctl` speaks proto

@@ -115,6 +115,10 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal: when Tailscale reports a negative user id for this Mac, no device counts as
   yours and every device is refused, as `dch serve` does. "Allow when Tailscale isn't answering"
   doesn't let them in (#855).
+- Remote Terminal: the Mac's server now refuses a new session name or a rename alias shaped like a
+  Claude session id (`m` + 16 hex digits, any case, padding trimmed) with dch serve's own "name
+  looks like a session_id", before running dch. A listed older session of that name still attaches
+  by its exact name (#850).
 - Ships dch 1.47.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

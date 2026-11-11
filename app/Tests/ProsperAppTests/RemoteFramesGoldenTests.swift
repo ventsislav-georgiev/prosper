@@ -116,6 +116,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertTrue(calls.contains(["-k", "golden-776-15"]), "15's cleanup: \(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776-16"]), "16's cleanup: \(calls)")
         XCTAssertFalse(calls.contains { $0.contains("-golden-776") }, "13: a dash name never reaches dch: \(calls)")
+        XCTAssertFalse(calls.contains { $0.contains("golden-850-no-such-session") }, "32: an id-shaped alias never reaches dch: \(calls)")
     }
 
     /// The runner dch CI uses, against the same server: it must read the fixtures as this test does.

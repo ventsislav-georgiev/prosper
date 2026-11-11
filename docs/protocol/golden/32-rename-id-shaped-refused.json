@@ -1,0 +1,16 @@
+{
+  "id": "32-rename-id-shaped-refused",
+  "about": "0x06 with an alias shaped like a Claude session_id (m + 16 hex, any case, trimmed) answers exactly this 0x13 and runs no dch -m (dch 1.46.1 serve.c:1159, Prosper #850). Mutating: a server without the check would run dch -m.",
+  "mutating": true,
+  "steps": [
+    {
+      "send": "06 00000041 7b226e616d65223a22676f6c64656e2d3835302d6e6f2d737563682d73657373696f6e222c22616c696173223a224d30303030303030303030303030383541227d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a226e616d65206c6f6f6b73206c696b6520612073657373696f6e5f6964227d"
+      }
+    }
+  ]
+}
