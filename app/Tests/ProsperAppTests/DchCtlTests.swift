@@ -27,8 +27,19 @@ final class DchCtlTests: XCTestCase {
         func advance(_ s: TimeInterval) { lock.withLock { t += s } }
     }
 
+    /// #856: DchCtlOps.after's recorder: each armed timeout's delay and its fire, run only by hand.
+    /// One never armed reads nil and fires nothing, so a failing test fails instead of trapping.
+    private final class Timers: @unchecked Sendable {
+        private let lock = NSLock()
+        private var armed: [(delay: TimeInterval, fire: @Sendable () -> Void)] = []
+        func add(_ d: TimeInterval, _ f: @escaping @Sendable () -> Void) { lock.withLock { armed.append((d, f)) } }
+        var count: Int { lock.withLock { armed.count } }
+        func delay(_ i: Int) -> TimeInterval? { lock.withLock { armed.indices.contains(i) ? armed[i].delay : nil } }
+        func fire(_ i: Int) { lock.withLock { armed.indices.contains(i) ? armed[i].fire : nil }?() }
+    }
+
     private func rig(_ script: String? = nil, timeout: TimeInterval = 60, agentTimeout: TimeInterval = 660,
-                     cap: Int = 8 << 20, reached: Recorder? = nil) -> Rig {
+                     cap: Int = 8 << 20, reached: Recorder? = nil, timers: Timers? = nil) -> Rig {
         let queue = DispatchQueue(label: "test.dchconn.ctl")
         let frames = Frames(), closes = Recorder()
         let conn = DchConnection(conn: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), queue: queue,
@@ -40,6 +51,7 @@ final class DchCtlTests: XCTestCase {
         conn.ctl.timeout = timeout
         conn.ctl.agentTimeout = agentTimeout
         conn.ctl.cap = cap
+        if let timers { conn.ctl.after = { timers.add($0, $1) } }
         conn.clipboard.enabled = { false }
         conn.commands.enabled = { false }
         // QA #688 F2: every default that forks dch (DchCommand.dchPath, against the real socket dir) is seamed.
@@ -454,14 +466,19 @@ final class DchCtlTests: XCTestCase {
 
     func testTimeoutKillsTheGroupAndEndsWithTimeout() throws {
         let f = try fake("echo $$ > \"$D/pid\"; /bin/sleep 30 & echo $! > \"$D/kid\"; echo started; wait")
-        let r = rig(f.path, timeout: 0.5)
-        let start = Date()
+        let timers = Timers()
+        let r = rig(f.path, timeout: 0.5, timers: timers)
         send(r, Self.ctl(["--run", "alpha", "hi"]))
-        XCTAssertTrue(wait(10) { !finals(r).isEmpty })
-        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        // #856: the timeout fires once both pids are written (a 0.5 s timer under load beat the script's start).
+        let script = pid(f.dir, "pid"), kid = pid(f.dir, "kid")
+        XCTAssertTrue(wait(5) { timers.count == 1 })
+        XCTAssertEqual(timers.delay(0), 0.5)
+        XCTAssertEqual(finals(r).count, 0)
+        timers.fire(0)
+        XCTAssertTrue(wait(5) { !finals(r).isEmpty })
         XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary)
-        XCTAssertTrue(dead(pid(f.dir, "pid")))
-        XCTAssertTrue(dead(pid(f.dir, "kid")))
+        XCTAssertTrue(dead(script))
+        XCTAssertTrue(dead(kid))
         usleep(300_000)
         XCTAssertEqual(Self.type(try XCTUnwrap(all(r).last)), DchFrame.ctlExit)
         XCTAssertEqual(finals(r).count, 1)
@@ -482,6 +499,33 @@ final class DchCtlTests: XCTestCase {
         usleep(useconds_t(max(0, 2.5 - Date().timeIntervalSince(start)) * 1_000_000))   // the timeout has passed
         XCTAssertEqual(Darwin.kill(try XCTUnwrap(pid(f.dir, "kid")), 0), 0, "the child still holds the pipe")
         XCTAssertEqual(finals(r).count, 1)
+    }
+
+    /// #856: the timeout's end and its 0x33 are one step. Before, the timer's end() SIGTERMed dch, the reap
+    /// ran run() to its return (whose defer clears the timeout's reply) before the timer sent, and the
+    /// request never got a final: its connection answered "busy" for good. The kill seam holds the timer
+    /// thread right after the SIGTERM until run() returns; with the fix run() waits for the timer's 0x33
+    /// instead, so the hold only ends at its 3 s bound.
+    func testATimeoutRacingTheReapStillSendsItsFinal() throws {
+        let f = try fake("exec /bin/sleep 30")
+        let returned = DispatchSemaphore(value: 0), replies = Frames()
+        let saved = CodexHarness.sendSignal
+        defer { CodexHarness.sendSignal = saved }
+        CodexHarness.sendSignal = { pid, sig in
+            let r = Darwin.kill(pid, sig)
+            if sig == SIGTERM, pid < -1 { _ = returned.wait(timeout: .now() + 3) }   // killGroup's SIGTERM only
+            return r
+        }
+        let job = DchCtlJob()
+        DispatchQueue.global().async {
+            job.run(path: f.path, argv: ["--status", "alpha"], env: ["PATH": "/usr/bin:/bin"], cwd: nil, follow: false,
+                    cap: 1 << 20, timeout: 0.05, grace: DchCtl.cancelGrace, send: { _ in true },
+                    reply: { d in replies.lock.withLock { replies.all.append(d) } })
+            returned.signal()
+        }
+        XCTAssertTrue(wait(10) { replies.lock.withLock { !replies.all.isEmpty } }, "the timeout's 0x33 is sent")
+        XCTAssertEqual(replies.lock.withLock { replies.all }, [DchCtl.exitFrame(2, why: "timeout")])
+        XCTAssertEqual(returned.wait(timeout: .now() + 5), .success, "run() returned")
     }
 
     /// #841 (QA #680 INFO-3): as dch 1.42 serve's ctl_read, the request ends at dch's reap: a process
@@ -722,13 +766,18 @@ final class DchCtlTests: XCTestCase {
         for v in ["--say", "--stop", "--revive"] { XCTAssertEqual(ops.timeout(of: v), 660, v) }
         for v in ["--read", "--send", "--run", "--keys", "--status", "-k", "-m", "-d", "--spawn", "--history",
                   "--pin", "--unpin", "--forget"] { XCTAssertEqual(ops.timeout(of: v), 60, v) }
-        // --status outlives its 0.3 s by far, so a timeout late under load still lands first (#841 review).
-        let f = try fake("[ \"$1\" = --status ] && exec /bin/sleep 5; /bin/sleep 1; printf ok")
-        let r = rig(f.path, timeout: 0.3, agentTimeout: 20)
-        for (argv, want) in [(["--stop", "alpha", "--json"], ["exit": 0]), (["--status", "alpha"], ["exit": 2, "why": "timeout"]),
-                             (["--revive", "alpha", "--json"], ["exit": 0]), (["--say", "alpha", "--json", "--", "hi"], ["exit": 0])] as [([String], [String: Any])] {
-            let n = finals(r).count
+        // #856: each ctl's armed delay is read off the timer seam, and only --status's timer is fired.
+        let f = try fake("[ \"$1\" = --status ] && exec /bin/sleep 30; printf ok")
+        let timers = Timers()
+        let r = rig(f.path, timeout: 0.3, agentTimeout: 20, timers: timers)
+        for (argv, delay, want) in [(["--stop", "alpha", "--json"], 20, ["exit": 0]), (["--status", "alpha"], 0.3, ["exit": 2, "why": "timeout"]),
+                                    (["--revive", "alpha", "--json"], 20, ["exit": 0]), (["--say", "alpha", "--json", "--", "hi"], 20, ["exit": 0])]
+                as [([String], TimeInterval, [String: Any])] {
+            let n = finals(r).count, i = timers.count
             send(r, Self.ctl(argv))
+            XCTAssertTrue(wait(10) { timers.count == i + 1 }, "\(argv)")
+            XCTAssertEqual(timers.delay(i), delay, "\(argv)")
+            if argv[0] == "--status" { timers.fire(i) }
             XCTAssertTrue(wait(10) { finals(r).count == n + 1 }, "\(argv)")
             XCTAssertEqual(Self.object(finals(r).last) as NSDictionary, want as NSDictionary, "\(argv)")
         }
@@ -799,8 +848,9 @@ final class DchCtlTests: XCTestCase {
             trap 'echo term >> "$D/sig"' TERM
             printf 'working\\n'; while :; do /bin/sleep 0.05; done
             """)
-        // The timeout lands inside the 2 s grace if dch prints within 1.5 s of its spawn (#841 review: load).
-        let r = rig(f.path, timeout: 1.5)
+        // #856: the timeout fires inside the 2 s grace, by hand (a 1.5 s timer under load fired before dch printed).
+        let timers = Timers()
+        let r = rig(f.path, timeout: 1.5, timers: timers)
         send(r, Self.ctl(["--read", "alpha"]))
         let script = pid(f.dir, "pid"), kid = pid(f.dir, "kid")
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
@@ -810,6 +860,8 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(Darwin.kill(try XCTUnwrap(script), 0), 0, "alive inside the grace")
         // After the trap ran: two SIGTERMs sent back to back coalesce into one pending signal.
         send(r, DchFrame.encode(DchFrame.ctlCancel, []))
+        XCTAssertEqual(timers.count, 1)
+        timers.fire(0)
         usleep(300_000)
         XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n", "one SIGTERM")
         XCTAssertEqual(finals(r).count, 0)

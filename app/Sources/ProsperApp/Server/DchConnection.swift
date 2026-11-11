@@ -589,7 +589,8 @@ final class DchConnection: @unchecked Sendable {
             let (path, why) = vetted ?? vet()
             guard let path else { return self.ctlFinal(DchControlOps.error(why ?? "")) }
             job.run(path: path, argv: argv, env: ctl.env(), cwd: cwd, follow: DchCtl.follows(argv), cap: ctl.cap,
-                    timeout: ctl.timeout(of: argv[0]), grace: ctl.grace(of: argv[0]), send: { self.sendStreamed($0) }, reply: { self.ctlFinal($0) })
+                    timeout: ctl.timeout(of: argv[0]), grace: ctl.grace(of: argv[0]), after: ctl.after,
+                    send: { self.sendStreamed($0) }, reply: { self.ctlFinal($0) })
         }
     }
 

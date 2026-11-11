@@ -16,6 +16,8 @@ struct DchCtlOps: Sendable {
     var timeout: TimeInterval = 60
     /// --say, --stop, --revive wait for an agent: dch's own 600 s idle wait (DCH_AGENT_TIMEOUT_MS) plus margin.
     var agentTimeout: TimeInterval = 660
+    /// #856: arms the timeout's timer; tests record it and fire it by hand.
+    var after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after
     /// stdout + stderr of a non-follow verb.
     var cap = 8 << 20
 
@@ -60,6 +62,11 @@ enum DchCtl {
     /// "xray" stays off. Set it to that release's version once Prosper bundles it.
     static let xrayMinDch = [999, 0, 0]
     static func hasXray(_ version: [Int]?) -> Bool { version.map { DchCommand.isAtLeast($0, xrayMinDch) } ?? false }
+
+    /// The timeout's timer (DchCtlOps.after's default).
+    @Sendable static func after(_ delay: TimeInterval, _ fire: @escaping @Sendable () -> Void) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay, execute: fire)
+    }
 
     /// What each allowlisted verb takes after itself. Anything else is refused before dch runs.
     enum Rule {
@@ -342,7 +349,8 @@ final class DchCtlJob: @unchecked Sendable {
 
     /// Blocks its thread (never the connection's queue) until dch exits or is killed.
     func run(path: String, argv: [String], env: [String: String], cwd: String?, follow: Bool, cap: Int,
-             timeout: TimeInterval, grace: TimeInterval, send: @escaping @Sendable (Data) -> Bool, reply: @escaping @Sendable (Data) -> Void) {
+             timeout: TimeInterval, grace: TimeInterval, after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after,
+             send: @escaping @Sendable (Data) -> Bool, reply: @escaping @Sendable (Data) -> Void) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = argv
@@ -391,9 +399,13 @@ final class DchCtlJob: @unchecked Sendable {
         if !follow {
             timeoutReply = reply
             // QA #688 F1: weak, so a finished job (and what it holds) goes now, not when the timer fires.
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak self] in
-                guard let self, self.end(.killGroup, running: true) else { return }   // gone: it ended
-                self.sendLock.withLock { self.timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
+            after(timeout) { [weak self] in
+                guard let self else { return }   // gone: it ended
+                // #856: the end and its 0x33 under one sendLock, as the cap's: between the two the reap could
+                // end run(), whose defer clears timeoutReply, and the request never got its final.
+                self.sendLock.withLock {
+                    if self.end(.killGroup, running: true) { self.timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
+                }
             }
         }
         pump([(out.fileHandleForReading, DchFrame.ctlStdout), (err.fileHandleForReading, DchFrame.ctlStderr)],

@@ -118,6 +118,9 @@ tag from the now-released section and put it on the new top draft.
   660 s (`--say`, `--stop`, `--revive`, `--run`, so their clean-up is never cut) or 2 s (every other
   verb), it and the processes it started are killed. A request ends as soon as dch exits, even when
   a process it started still holds its output open. `--xray` is refused first when this Mac's dch lacks it.
+- Remote Terminal: a ctl that hit its timeout could lose its final frame when dch exited at once on
+  the kill; the connection then answered every later ctl with "busy" until the client dropped it.
+  The timeout's end and its final frame now go out together (#856).
 - Remote Terminal: when Tailscale reports a negative user id for this Mac, no device counts as
   yours and every device is refused, as `dch serve` does. "Allow when Tailscale isn't answering"
   doesn't let them in (#855).
