@@ -55,7 +55,7 @@ final class BoundedListEdgeTests: XCTestCase {
             .sorted { $0.minY < $1.minY }
     }
 
-    private func checkLists(scale: CGFloat, query: String?, expectLists: Int,
+    private func checkLists(scale: CGFloat, query: String?, expectLists: Int, backing: CGFloat? = nil,
                             file: StaticString = #filePath, line: UInt = #line) throws {
         let saved = ThemeRuntime.scale
         ThemeRuntime.scale = scale
@@ -68,12 +68,17 @@ final class BoundedListEdgeTests: XCTestCase {
             ShortcutTable(rows: self.rows(), paneHeight: side.height, model: SettingsModel())
         })
         host.frame = CGRect(origin: .zero, size: side)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        let win = FixedBackingWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        win.fixedBacking = backing
         win.contentView = host
         defer { win.contentView = NSView() }
         flush(host)
 
-        let tag = "scale \(scale), query \(query ?? "none")"
+        let tag = "scale \(scale), backing \(win.backingScaleFactor), query \(query ?? "none")"
+        // SwiftUI snaps each edge of a hosted view to the backing pixel grid, so a
+        // field filling its sz(24) slot measures up to one pixel off it (21 or 20 for
+        // 20.4 at 1x). Anything further off is the #859 overflow (24 in a 20.4 slot).
+        let pixel = 1 / win.backingScaleFactor
         // [0] is the pane's own scroll; the rest are the bounded lists.
         let lists = Array(all(host, NSScrollView.self).dropFirst())
         XCTAssertEqual(lists.count, expectLists, "bounded lists at \(tag)", file: file, line: line)
@@ -87,9 +92,9 @@ final class BoundedListEdgeTests: XCTestCase {
                                         "list \(i) first key field cut at the top at \(tag): \(first) in \(clip.bounds)",
                                         file: file, line: line)
             for f in top {
-                XCTAssertEqual(f.height, sz(24), accuracy: 0.5,
+                XCTAssertEqual(f.height, sz(24), accuracy: pixel,
                                "key field overflows its row slot at \(tag): \(f)", file: file, line: line)
-                XCTAssertEqual(f.width, sz(142), accuracy: 0.5,
+                XCTAssertEqual(f.width, sz(142), accuracy: pixel,
                                "key field overflows its column at \(tag): \(f)", file: file, line: line)
             }
 
@@ -106,16 +111,29 @@ final class BoundedListEdgeTests: XCTestCase {
     }
 
     func testFirstAndLastKeyFieldsShowWholeAtEveryScaleUnfiltered() throws {
-        for scale in [1.0, 0.85, 0.7] as [CGFloat] {
-            try checkLists(scale: scale, query: nil, expectLists: 2)
+        // nil: this machine's own backing scale; 1: CI's non-Retina grid.
+        for backing in [nil, 1] as [CGFloat?] {
+            for scale in [1.0, 0.85, 0.7] as [CGFloat] {
+                try checkLists(scale: scale, query: nil, expectLists: 2, backing: backing)
+            }
         }
     }
 
     /// "All Actions" filtered down to three rows, the operator's case; it stays a
     /// bounded list (threshold 0) with content shorter than its frame.
     func testFirstAndLastKeyFieldsShowWholeAtEveryScaleFiltered() throws {
-        for scale in [1.0, 0.85, 0.7] as [CGFloat] {
-            try checkLists(scale: scale, query: "unbound", expectLists: 2)
+        // nil: this machine's own backing scale; 1: CI's non-Retina grid.
+        for backing in [nil, 1] as [CGFloat?] {
+            for scale in [1.0, 0.85, 0.7] as [CGFloat] {
+                try checkLists(scale: scale, query: "unbound", expectLists: 2, backing: backing)
+            }
         }
     }
+}
+
+/// A window whose backing scale can be pinned, so a Retina machine lays out on the
+/// 1x pixel grid CI's runner uses. SwiftUI snaps the hosted views to this value.
+private final class FixedBackingWindow: NSWindow {
+    var fixedBacking: CGFloat?
+    override var backingScaleFactor: CGFloat { fixedBacking ?? super.backingScaleFactor }
 }
