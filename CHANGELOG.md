@@ -76,7 +76,7 @@ tag from the now-released section and put it on the new top draft.
 - App Updates: a Homebrew upgrade that outlasts the extension timeout now says it is still
   running in the background instead of "Nothing was upgraded". Extensions: `host.shell.run`
   rejects bad options (not a table, an unknown key, a non-boolean `keep_running`) with an error
-  naming the key, instead of silently running without them (#834).
+  that says which, instead of silently running without them (#834).
 - Agent Sessions window: a live session now opens in its real terminal by default, inside the
   window: the same dch session Ghostty would attach to, drawn by libghostty, with full keyboard
   input (Esc, Tab, ⇧Return, ⌃C and arrows reach Claude), IME and Option-composed characters, ⌘C/⌘V
