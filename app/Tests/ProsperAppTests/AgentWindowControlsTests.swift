@@ -314,7 +314,7 @@ extension AgentWindowD1Tests {
         Preferences.defaults.set(["Sessions", "Sidekicks", "History"], forKey: pref)
         var opened: [String] = []
         let m = windowModel(foldStore(), opened: { opened.append($0.name) })
-        showTranscript(m)   // #822: Return opens the terminal app in Transcript mode
+        showTranscript(m)   // #845: Return moves the keys into the input box in Transcript mode
         m.setVisible(true)
         defer { m.close() }
         XCTAssertNil(m.selection)
@@ -1152,7 +1152,7 @@ extension AgentWindowD1Tests {
         let a = try XCTUnwrap(st.sessions.first { $0.name == "a" })
         m.select(.live(a.key))
         XCTAssertFalse(m.selectionIsHeld)
-        XCTAssertTrue(m.openSelected(), "live: Return opens it")
+        XCTAssertTrue(m.openSelected(), "live: Open in terminal opens it")
         XCTAssertEqual(opened, [a.key])
         XCTAssertEqual(m.interaction.session?.key, a.key, "live: the input box is its")
         let detail = AgentDetailView(model: m, transcript: m.transcript, scrolls: false)
@@ -1163,8 +1163,8 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.selection, .live(a.key), "held: the pane keeps showing it")
         XCTAssertEqual(m.selectedRow?.session?.key, a.key)
         XCTAssertTrue(m.selectionIsHeld)
-        // Return / Open in terminal: nothing runs (`dch -n a` would start a new session named a).
-        XCTAssertFalse(m.openSelected(), "Return passes on")
+        // Open in terminal: nothing runs (`dch -n a` would start a new session named a).
+        XCTAssertFalse(m.openSelected(), "nothing to open")
         XCTAssertFalse(m.focusSelection(), "#845: nothing there takes input, the focus stays")
         XCTAssertFalse(m.interaction.composerFocusPending)
         XCTAssertEqual(opened, [a.key], "the openSession seam ran nothing")

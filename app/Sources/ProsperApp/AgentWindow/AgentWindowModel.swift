@@ -381,6 +381,13 @@ final class AgentWindowModel: ObservableObject {
         focusSelection()
     }
 
+    /// QA #694 INFO-2: the human took the keys elsewhere (a sidebar mouse-down, a rename) before a
+    /// focus asked for landed (a terminal still attaching, an input box not built yet): it never lands.
+    func dropPendingFocus() {
+        terminal.dropPendingFocus()
+        interaction.dropPendingFocus()
+    }
+
     /// Up/down: the next or previous shown row across groups, clamped; from none, the first.
     func move(_ delta: Int) {
         let ids = navigableIDs
@@ -389,8 +396,8 @@ final class AgentWindowModel: ObservableObject {
         select(ids[min(max(i + delta, 0), ids.count - 1)])
     }
 
-    /// Return and the "Open in terminal" buttons: a live session only. False: nothing
-    /// to open (a History row, none), so Return passes on (QA #626 INFO-2). QA #668 F1: nor an ended
+    /// The "Open in terminal" buttons: a live session only. False: nothing to open (a History
+    /// row, none). QA #668 F1: nor an ended
     /// session's held row (`dch -n <name>` would start a new session of that name).
     @discardableResult
     func openSelected() -> Bool {
@@ -448,7 +455,10 @@ final class AgentWindowModel: ObservableObject {
         // G4: Rename edits the title in place and asks nothing; only a session still listed live.
         if verb == .rename {
             confirming = nil
-            if store?.sessions.contains(where: { $0.key == s.key }) == true { renaming = s.key }
+            if store?.sessions.contains(where: { $0.key == s.key }) == true {
+                renaming = s.key
+                dropPendingFocus()   // QA #694 INFO-2: the field has the keys
+            }
             return
         }
         confirming = AgentWindowConfirm(verb: verb, key: s.key)

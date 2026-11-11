@@ -332,6 +332,13 @@ extension AgentWindowD1Tests {
             w2.isReleasedWhenClosed = false
             w2.contentView?.addSubview(tv)
             XCTAssertFalse(w2.firstResponder === tv, "e's box joined the window: nothing pending lands")
+            // QA #694 INFO-6: a focus asked for before the box is in a window lands when it joins one.
+            tv.removeFromSuperview()
+            XCTAssertTrue(t.focusSelection())
+            XCTAssertTrue(t.interaction.composerFocusPending, "no window yet: pending")
+            w2.contentView?.addSubview(tv)
+            XCTAssertTrue(w2.firstResponder === tv, "the box joined the window: the pending focus landed")
+            XCTAssertFalse(t.interaction.composerFocusPending)
             XCTAssertFalse(w2.isVisible || win.isVisible, "never shown")
         }
     }
@@ -372,6 +379,153 @@ extension AgentWindowD1Tests {
             guard case .failed = m.terminal.phase else { return XCTFail("\(m.terminal.phase)") }
             win.sendEvent(focusKey(36, win, "\r"))
             XCTAssertFalse(win.firstResponder === term, "failed: the keys stay in the sidebar")
+            XCTAssertTrue(win.sidebarFocused)
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    // MARK: QA #694 (#845 r2)
+
+    /// INFO-1: find open in a's terminal with the keys in it, the sidebar takes them back, Down picks b.
+    /// The attach closes the find bar without asking a focus, so b going live leaves the keys in the sidebar.
+    @MainActor
+    func testAgentWindowFindOpenThenDownNeverMovesTheKeysIntoTheNextTerminal() throws {
+        try withModePref {
+            let m = windowModel(store([mapped("a", .done, ago: 1), mapped("b", .done, ago: 2)]))
+            _ = fakeTerminal(m)
+            m.setVisible(true)
+            defer { m.close() }
+            let (win, host) = focusWindow(m)
+            defer { win.close() }
+            m.select(live("a"))
+            settle(host)
+            let term = try XCTUnwrap(m.terminal.view)
+            m.terminal.openFind()
+            settle(host)
+            XCTAssertTrue(m.terminal.findOpen)
+            XCTAssertTrue(AgentsNSWindow.focus(term), "the keys in a's terminal, find open")
+            focusClick(NSPoint(x: sz(120), y: 120), win, host)   // the sidebar's empty part: the keys back
+            XCTAssertTrue(win.sidebarFocused)
+            XCTAssertFalse(win.firstResponder === term)
+            slowTerminal(m)
+            win.sendEvent(focusKey(125, win, "\u{F701}"))
+            settle(host)
+            XCTAssertEqual(m.selection, live("b"))
+            XCTAssertEqual(m.terminal.phase, .attaching)
+            XCTAssertFalse(m.terminal.findOpen, "the find bar went with a")
+            XCTAssertFalse(m.terminal.focusPending, "closing it asked no focus")
+            reportGrid(m)
+            XCTAssertEqual(m.terminal.phase, .live)
+            XCTAssertFalse(win.firstResponder === term, "b went live: the keys stayed in the sidebar")
+            XCTAssertTrue(win.sidebarFocused)
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// INFO-2: a click on a row that still connects asks the focus; the human taking the keys elsewhere
+    /// before it goes live drops it: a rename (the field keeps the keys and the edit), a sidebar mouse-down, ⌘F.
+    @MainActor
+    func testAgentWindowPendingFocusNeverOverridesARenameASidebarClickOrFind() throws {
+        try withModePref {
+            let st = store([mapped("a", .done, ago: 1), mapped("b", .done, ago: 2), mapped("c", .done, ago: 3)])
+            let m = windowModel(st)
+            _ = fakeTerminal(m)
+            var renamed: [String] = []
+            m.renameSession = { renamed.append($1); return true }
+            m.setVisible(true)
+            defer { m.close() }
+            let (win, host) = focusWindow(m)
+            defer { win.close() }
+            m.select(live("a"))
+            settle(host)
+            sidebarKeys(win)
+            let term = try XCTUnwrap(m.terminal.view)
+            slowTerminal(m)
+            // Rename b while it connects.
+            clickRow("b", m, win, host)
+            XCTAssertEqual(m.terminal.phase, .attaching)
+            XCTAssertTrue(m.terminal.focusPending)
+            m.ask(.rename, try XCTUnwrap(st.sessions.first { $0.name == "b" }))
+            settle(host)
+            XCTAssertFalse(m.terminal.focusPending, "the rename took the keys")
+            let field = try XCTUnwrap(focusViews(host, AgentRenameTextField.self).first)
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            XCTAssertTrue(win.firstResponder === editor)
+            editor.string = "Bee"
+            reportGrid(m)
+            XCTAssertEqual(m.terminal.phase, .live)
+            XCTAssertTrue(win.firstResponder === editor, "b went live: the field kept the keys")
+            XCTAssertEqual(m.renaming?.name, "b", "and the edit")
+            editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+            XCTAssertEqual(renamed, ["Bee"])
+            settle(host)
+            // A mouse-down on the sidebar while c connects.
+            sidebarKeys(win)
+            clickRow("c", m, win, host)
+            XCTAssertEqual(m.terminal.phase, .attaching)
+            XCTAssertTrue(m.terminal.focusPending)
+            focusClick(NSPoint(x: sz(120), y: 120), win, host)
+            XCTAssertFalse(m.terminal.focusPending, "the sidebar took the keys back")
+            reportGrid(m)
+            XCTAssertEqual(m.terminal.phase, .live)
+            XCTAssertFalse(win.firstResponder === term, "c went live: the keys stayed in the sidebar")
+            XCTAssertTrue(win.sidebarFocused)
+            // ⌘F while a connects.
+            clickRow("a", m, win, host)
+            XCTAssertEqual(m.terminal.phase, .attaching)
+            XCTAssertTrue(m.terminal.focusPending)
+            m.terminal.openFind()
+            XCTAssertFalse(m.terminal.focusPending, "the find field has the keys")
+            reportGrid(m)
+            XCTAssertEqual(m.terminal.phase, .live)
+            XCTAssertFalse(win.firstResponder === term, "a went live: no keys taken from find")
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// QA #694 r3: the same drops for a pending input-box focus (Transcript mode, the box not in a window yet):
+    /// a Rename opening and a sidebar mouse-down drop it, so the box joining a window takes no keys.
+    @MainActor
+    func testAgentWindowPendingComposerFocusNeverOverridesARenameOrASidebarClick() throws {
+        try withModePref {
+            let st = store([mapped("a", .done, ago: 1), mapped("b", .done, ago: 2)])
+            let m = windowModel(st)
+            showTranscript(m)
+            m.renameSession = { _, _ in true }
+            m.setVisible(true)
+            defer { m.close() }
+            let (win, host) = focusWindow(m)
+            defer { win.close() }
+            m.select(live("a"))
+            settle(host)
+            let tv = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first)
+            let box = try XCTUnwrap(tv.superview)
+            /// The box out of the window, the keys asked for it: pending.
+            @MainActor func pending() {
+                tv.removeFromSuperview()
+                XCTAssertTrue(m.focusSelection())
+                XCTAssertTrue(m.interaction.composerFocusPending, "no window yet: pending")
+            }
+            // (a) Rename opens on a while the focus is pending.
+            sidebarKeys(win)
+            pending()
+            m.ask(.rename, try XCTUnwrap(st.sessions.first { $0.name == "a" }))
+            settle(host)
+            XCTAssertFalse(m.interaction.composerFocusPending, "the rename took the keys")
+            let field = try XCTUnwrap(focusViews(host, AgentRenameTextField.self).first)
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            box.addSubview(tv)
+            XCTAssertTrue(win.firstResponder === editor, "the box joined the window: the field kept the keys")
+            XCTAssertEqual(m.renaming?.name, "a", "and the edit")
+            editor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+            settle(host)
+            // (b) A mouse-down on the sidebar while the focus is pending.
+            sidebarKeys(win)
+            pending()
+            focusClick(NSPoint(x: sz(120), y: 120), win, host)
+            XCTAssertFalse(m.interaction.composerFocusPending, "the sidebar took the keys back")
+            box.addSubview(tv)
+            XCTAssertFalse(win.firstResponder === tv, "the box joined the window: the keys stayed in the sidebar")
             XCTAssertTrue(win.sidebarFocused)
             XCTAssertFalse(win.isVisible, "never shown")
         }

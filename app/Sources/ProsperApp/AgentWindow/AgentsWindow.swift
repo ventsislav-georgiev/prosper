@@ -198,6 +198,7 @@ final class AgentsNSWindow: NSWindow {
             // #822: a sidebar click takes the keys from the terminal, so the arrows select again;
             // #845: from the input box too (a row's click then moves them in again, on mouse-up).
             if sidebarFocused, responderKind == .terminal || firstResponder is AgentComposerTextView { makeFirstResponder(nil) }
+            if sidebarFocused { model?.dropPendingFocus() }   // QA #694 INFO-2: a row's click asks again, on mouse-up
         }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,

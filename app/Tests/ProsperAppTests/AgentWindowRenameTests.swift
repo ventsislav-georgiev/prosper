@@ -599,7 +599,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(try composer(false).accessibilityLabel(), "Message Claude")
         XCTAssertEqual(AgentStateChip.endedGlyph, "○")
         XCTAssertFalse(AgentState.allCases.map(\.glyph).contains(AgentStateChip.endedGlyph), "Ended is no live state's glyph")
-        XCTAssertEqual(OpenInTerminalButton(action: {}).help, "Open this session in the terminal (Return)")
+        XCTAssertEqual(OpenInTerminalButton(action: {}).help, "Open this session in the terminal app")
         XCTAssertEqual(OpenInTerminalButton(action: {}, ended: true).help, "This session ended: there is no terminal to attach to")
         // Its two ended call sites: the terminal-first state and the header.
         let first = TerminalFirstView(reason: "r", openTerminal: {}, ended: true)

@@ -370,7 +370,7 @@ struct OpenInTerminalButton: View {
     var compact = false
     /// QA #668 F1: the session ended: off and dimmed in its slot; QA #672 #4: its help says why.
     var ended = false
-    static let help = "Open this session in the terminal (Return)"
+    static let help = "Open this session in the terminal app"
     var help: String { ended ? AgentPaneModeToggle.endedReason : Self.help }
     var body: some View {
         Button(action: action) {

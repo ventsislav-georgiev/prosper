@@ -241,7 +241,7 @@ final class AgentTerminalController: ObservableObject {
         detach()
         self.key = key
         reattached = false
-        closeFind()
+        closeFind(refocus: false)   // QA #694 INFO-1: the find bar goes with the session, the keys stay put
         guard key != nil else { phase = .idle; return }
         begin()
     }
@@ -448,6 +448,7 @@ final class AgentTerminalController: ObservableObject {
     func openFind() {
         guard screen != nil else { return }
         findOpen = true
+        focusPending = false   // QA #694 INFO-2: the find field has the keys; going live takes none
         if !findText.isEmpty { search(findText) }
     }
 
@@ -462,21 +463,24 @@ final class AgentTerminalController: ObservableObject {
         _ = view?.surface?.performBindingAction(forward ? "navigate_search:next" : "navigate_search:previous")
     }
 
-    func closeFind() {
+    func closeFind(refocus: Bool = true) {
         guard findOpen else { return }
         findOpen = false
         findTotal = nil
         findSelected = nil
         _ = view?.surface?.performBindingAction("end_search")
-        focus()
+        if refocus { focus() }
     }
 
     func searchTotal(_ n: Int?) { findTotal = n }
     func searchSelected(_ n: Int?) { findSelected = n }
 
     /// A focus asked for before the view was in a window (a toggle builds it on the next pass), or
-    /// (#845) before the client was live. Dropped by an attach to another session.
+    /// (#845) before the client was live. Dropped by an attach to another session, and (QA #694
+    /// INFO-2) when the human takes the keys elsewhere first (dropPendingFocus, ⌘F).
     private(set) var focusPending = false
+
+    func dropPendingFocus() { focusPending = false }
 
     /// Moves the keyboard into the terminal (⌘T, the toggle, a row click, Return or Right on a sidebar row,
     /// closing find). Only the first responder within this window: it never orders a window front or makes

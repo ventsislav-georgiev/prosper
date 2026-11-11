@@ -816,6 +816,8 @@ final class AgentWindowInteraction: ObservableObject {
     weak var composer: AgentComposerTextView?
     private(set) var composerFocusPending = false
 
+    func dropPendingFocus() { composerFocusPending = false }
+
     /// #845: the keyboard into the input box; pending until the box is in a window (a session switch dropped it).
     func focusComposer() {
         guard let composer, composer.window != nil else { composerFocusPending = true; return }
