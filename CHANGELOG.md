@@ -102,7 +102,7 @@ tag from the now-released section and put it on the new top draft.
   660 s (`--say`, `--stop`, `--revive`, `--run`, so their clean-up is never cut) or 2 s (every other
   verb), it and the processes it started are killed. A request ends as soon as dch exits, even when
   a process it started still holds its output open. `--xray` is refused first when this Mac's dch lacks it.
-- Ships dch 1.46.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.46.1 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -124,7 +124,7 @@ tag from the now-released section and put it on the new top draft.
   transcript chapters, or a shell session's commands split at prompts. `<name>` can also be an agent
   id or a History record. `dch --xray <name> --clear --json` empties a live shell's ring. Prosper
   does not read it yet, and its Remote Terminal still refuses `--xray` (#849).
-- dch 1.45.0 to 1.46.0: a session name with a ':' stays local unless the part before it is a known
+- dch 1.45.0 to 1.46.1: a session name with a ':' stays local unless the part before it is a known
   host, so a dead local `proj:task` can be revived and forgotten again. New sessions get
   `LC_TERMINAL=ghostty` instead of FORCE_HYPERLINK=1: Claude Code's statusline keeps its links, and
   other CLIs no longer write links into pipes and files. `dch --xray --clear` no longer wipes the
@@ -132,7 +132,8 @@ tag from the now-released section and put it on the new top draft.
   refused in any case and with spaces around it. `dch --say`, `--run` and `--revive` stop at a safe
   point on Ctrl-C, a SIGTERM or a SIGHUP: nothing more is typed, text already typed is taken back
   out of Claude's input box, and the result says `interrupted`, `withdrawn` or `draft_left`. A remote one
-  that is cancelled or whose client goes away gets up to 660 s for that, as in Prosper (#851).
+  that is cancelled or whose client goes away gets up to 660 s for that, as in Prosper (#851). A
+  remote request whose host sends back a reason full of control characters no longer crashes dch.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
