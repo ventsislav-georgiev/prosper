@@ -146,7 +146,7 @@ tag from the now-released section and put it on the new top draft.
   Claude session id (`m` + 16 hex digits, any case, padding trimmed) with dch serve's own "name
   looks like a session_id", before running dch. A listed older session of that name still attaches
   by its exact name (#850).
-- Ships dch 1.52.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.54.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -202,6 +202,13 @@ tag from the now-released section and put it on the new top draft.
   from a file outside the project hidden in a compound command, `--ref --full` on a shell session
   with a lot of output no longer comes back empty, and a relative `--ref` too long for a key says
   `dch: not a ref` and exits 2 (was 3). Prosper does not read X-ray yet.
+- dch 1.53.0 to 1.54.0: no session name can start with `-` any more (`dch: a session name cannot
+  start with '-'`), and a folder named `-x` names its session `_x`; Prosper already refused such
+  names. One made by an older dch is still reached after `--` (`dch -k -- -x`, `dch --forget -- -h`).
+  dch's picker fetches other hosts' History once when it opens and then only while its History tab
+  shows. X-ray on a shell session also reads the lines still on screen, never a full-screen program
+  (vim, less), and a session that ends mid-request answers `dch: no such session`. A long name in
+  the list of background work Restart and Stop stopped is cut on a whole character.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
