@@ -227,26 +227,42 @@ jobs:
           echo "${PROFILE_B64}" | base64 --decode > scripts/embedded.provisionprofile
           echo "Staged scripts/embedded.provisionprofile ($(wc -c < scripts/embedded.provisionprofile) bytes)."
 
-      - name: Build dch (Remote Terminal binary to embed)
+      - name: Fetch dch (Remote Terminal binary to embed)
         # bundle.sh embeds $ROOT/../dch/dch into Resources so Remote Terminal works
-        # with zero user install. The runner has no sibling clone, so fetch + build
-        # it here. dch is a public C/autotools repo. Build fails loudly (bundle.sh
-        # only warns). Pinned to a dch release tag (#181): a push to dch main can no
-        # longer change what a Prosper tag embeds; bump DCH_TAG deliberately. dch's
-        # check-version.sh fails the step when the tag and its AC_INIT disagree or
-        # when DCH_VERSION (what dch --version prints) is not AC_INIT's value;
-        # nothing in dch itself runs it (#181, #448).
+        # with zero user install. The runner has no sibling clone, so fetch dch's
+        # prebuilt darwin-arm64 release asset (#865; was a per-release source build).
+        # arm64 only: ProsperApp and ProsperHelper are arm64-only (this arm64 runner,
+        # no --arch), so an x86_64 slice could never run. Pinned to a dch release tag
+        # (#181): a push to dch main can no longer change what a Prosper tag embeds;
+        # bump DCH_TAG deliberately. A sha256 mismatch, a tarball not named for the
+        # tag, or a binary whose version string is not the tag fails the step; there
+        # is no fallback build. dch is never executed here (#181, #448).
         env:
           DCH_TAG: v1.49.0
-          # dch's configure sets no deployment target, so clang targets the runner
-          # SDK: every dch from v2.156.0-beta.5 to v2.158.0 was minos 27.0 inside a
-          # 14.0 app and dyld refused it on macOS 14-26 (#447). Keep this equal to
-          # LSMinimumSystemVersion; the Bundle step fails on any drift.
-          MACOSX_DEPLOYMENT_TARGET: "14.0"
+          # dch's release assets are built for minos 14.0 = LSMinimumSystemVersion.
+          # Every dch from v2.156.0-beta.5 to v2.158.0 was minos 27.0 inside a 14.0
+          # app and dyld refused it on macOS 14-26 (#447); the Bundle step's minos
+          # guard fails on any drift, so a DCH_TAG bump cannot reintroduce it.
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git clone --depth 1 --branch "$DCH_TAG" https://github.com/ventsislav-georgiev/dch.git "$GITHUB_WORKSPACE/../dch"
-          ( cd "$GITHUB_WORKSPACE/../dch" && ./scripts/check-version.sh "$DCH_TAG" && ./configure && make )
-          test -x "$GITHUB_WORKSPACE/../dch/dch" || { echo "::error::dch did not build"; exit 1; }
+          V="${DCH_TAG#v}"
+          T="dch-${V}-darwin-arm64"
+          D="$RUNNER_TEMP/dch-dl"
+          mkdir -p "$D"
+          gh release download "$DCH_TAG" -R ventsislav-georgiev/dch -D "$D" \
+            -p "$T.tar.gz" -p "$T.tar.gz.sha256"
+          ( cd "$D" && shasum -a 256 -c "$T.tar.gz.sha256" ) \
+            || { echo "::error::$T.tar.gz sha256 mismatch"; exit 1; }
+          # The check-version equivalent: the tarball's top dir carries the version.
+          tar -xzf "$D/$T.tar.gz" -C "$D"
+          test -x "$D/$T/dch" || { echo "::error::$T.tar.gz has no $T/dch"; exit 1; }
+          strings "$D/$T/dch" | grep -qE "^dch ${V//./\\.}( |$)" \
+            || { echo "::error::$T/dch carries no 'dch $V' version string"; exit 1; }
+          lipo -info "$D/$T/dch" | grep -q 'architecture: arm64$' \
+            || { echo "::error::$T/dch is not arm64"; lipo -info "$D/$T/dch"; exit 1; }
+          mkdir -p "$GITHUB_WORKSPACE/../dch"
+          cp "$D/$T/dch" "$GITHUB_WORKSPACE/../dch/dch"
+          test -x "$GITHUB_WORKSPACE/../dch/dch" || { echo "::error::dch not staged"; exit 1; }
 
       - name: Bundle Prosper.app
         env:

@@ -113,10 +113,11 @@ shopt -u nullglob
 # Bundle the `dch` terminal binary into Resources so DchSessionServer can spawn
 # it with zero user install ("user installs nothing" goal). DchCommand.dchPath
 # probes Resources/dch first. Build it fresh from the sibling dch clone when
-# present (canonical fork, version-locked to this build); otherwise fall back to
-# a dch already on PATH. The final --deep reseal signs it as part of the bundle.
+# present (canonical fork, version-locked to this build); a prebuilt dch there
+# (release.yml stages the release asset, #865) is copied as is; otherwise fall
+# back to a dch already on PATH. The final --deep reseal signs it as part of the bundle.
 DCH_SRC="${DCH_SRC:-$ROOT/../dch}"
-if [[ -x "$DCH_SRC/dch" || -f "$DCH_SRC/Makefile.in" ]]; then
+if [[ -f "$DCH_SRC/Makefile.in" ]]; then
   ( cd "$DCH_SRC" && ./configure >/dev/null 2>&1 && make >/dev/null 2>&1 ) \
     || echo "warn: dch build failed — falling back to PATH copy." >&2
 fi
