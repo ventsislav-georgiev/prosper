@@ -161,9 +161,11 @@ tag from the now-released section and put it on the new top draft.
 - dch 1.46.2 to 1.48.0: in dch's session picker, Shift+Enter or `o` opens a History session, and
   a session opened from the picker goes back to the picker when it ends. A remote `ctl` whose
   host's reply can't be read now says so (#857).
-- dch 1.49.0: a first prompt given when a session starts (`dch --spawn work -- claude -- "the task"`)
-  is sent once. Restart, revive and History resume start the agent again without it, every other
-  option is kept, and the History list and records never store or show it.
+- dch 1.49.0: a first prompt given when a Claude Code session starts (`dch --spawn work -- claude --
+  "the task"`) is sent once. Restart, revive and History resume start Claude again without it and
+  keep every other option, and the History list and records never store or show it. A command dch
+  cannot read as Claude Code's (another agent, an option dch does not know, a one-word prompt that
+  is a claude subcommand) is kept whole, as before.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
