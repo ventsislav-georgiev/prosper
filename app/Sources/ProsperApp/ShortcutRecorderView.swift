@@ -21,6 +21,14 @@ struct ShortcutRecorder: NSViewRepresentable {
         nsView.onChange = onChange
         nsView.refreshTitle()
     }
+
+    /// #859: take the size the caller's `.frame` proposes. Left to the fixed 110x24
+    /// `intrinsicContentSize`, the field kept 24 pt below UI scale 1.0 where its slot
+    /// is `sz(24)`, overflowed the row by half the difference on each side, and the
+    /// first row's top border was cut by the bounded list's scroll view.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: RecorderView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: nsView.intrinsicContentSize)
+    }
 }
 
 /// A focusable button-like NSView that captures the next key combination.

@@ -91,6 +91,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions window: Settings › Shortcuts lists "Open Agent Sessions", a hotkey that opens the
   window or brings it forward. It is unset by default, listed and registered only while the Agent
   Island extension is on, and does nothing while the island is not running (#858).
+- Settings › Shortcuts: below UI scale 1.0, the first row's key field is no longer cut off at the
+  top of the Bound and All Actions lists; key fields fit their row at every scale (#859).
 - Prosper now bundles Ghostty's terminal library (libghostty, through libghostty-spm) for the Agent
   Sessions terminal, so the download is about 4 MB (10%) bigger. The app's credits list libghostty
   and the libraries inside it (FreeType, libpng, zlib, Oniguruma, Wuffs, simdutf, Highway, stb,
