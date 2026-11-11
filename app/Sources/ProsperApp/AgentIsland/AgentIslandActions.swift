@@ -291,17 +291,25 @@ extension AgentIsland {
     // MARK: - Rename (#829 G4)
 
     static let renameLabel = "Rename…"
-    /// The longest alias the window sends (dch itself truncates at 599 bytes).
+    /// The longest alias the window sends: 120 characters, and (QA #693 INFO-2) never more than the 599
+    /// bytes dch keeps (write_alias, dch.c:2040 at 7983f4b), which it cuts on a code point and can split
+    /// a character. Cut here on a character, dch stores what was sent and Return does not run it again.
     static let renameMax = 120
+    static let renameMaxBytes = 599
     static let renameBusyText = "Rename not run: another job is running"
 
     static func renameHelp(_ name: String) -> String { "Display name only; the dch session name stays \(name)" }
 
     /// The field's text as dch -m gets it: tabs and newlines become spaces (dch does it too),
-    /// trimmed, at most `renameMax` characters.
+    /// trimmed, at most `renameMax` characters and `renameMaxBytes` UTF-8 bytes, whole characters only.
     static func renameText(_ alias: String) -> String {
         let flat = String(alias.map { $0 == "\t" || $0.isNewline ? " " : $0 })
-        return String(flat.trimmingCharacters(in: .whitespaces).prefix(renameMax)).trimmingCharacters(in: .whitespaces)
+        var bytes = 0
+        let cut = flat.trimmingCharacters(in: .whitespaces).prefix(renameMax).prefix {
+            bytes += $0.utf8.count
+            return bytes <= renameMaxBytes
+        }
+        return String(cut).trimmingCharacters(in: .whitespaces)
     }
 
     /// `-m <name> <alias>`: two argv elements taken verbatim by dch, so any name works (no
@@ -309,6 +317,28 @@ extension AgentIsland {
     static func renameArgs(_ name: String, _ alias: String, current: String) -> [String]? {
         let text = renameText(alias)
         return text == current ? nil : ["-m", name, text]
+    }
+
+    /// QA #693 INFO-3: an alias a rename set (`alias`) over the one it replaced (`was`).
+    struct SentAlias: Equatable {
+        let alias: String
+        let was: String
+    }
+
+    /// The listing with each sent alias over the one it replaced, while a list read before dch -m
+    /// still shows that one. A sent alias goes once the listing shows it (the poller caught up), shows
+    /// anything else (renamed since, elsewhere), or the session left.
+    static func overlaySent(_ sessions: [AgentSession], _ sent: [AgentSessionKey: SentAlias])
+        -> (sessions: [AgentSession], sent: [AgentSessionKey: SentAlias]) {
+        var kept: [AgentSessionKey: SentAlias] = [:]
+        let out = sessions.map { s in
+            guard let a = sent[s.key], s.alias == a.was, a.alias != a.was else { return s }
+            kept[s.key] = a
+            var s = s
+            s.alias = a.alias
+            return s
+        }
+        return (out, kept)
     }
 
     /// DchConnection.setAlias's copy: nil when it worked, else "Couldn't rename <name>: <dch's first line>".

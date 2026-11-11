@@ -234,8 +234,13 @@ struct AgentSessionMenuButton: View {
         // header and leaves the narrowest title line its room (#822's pill included).
         .frame(width: sz(18), height: sz(18))
         .disabled(store.map { AgentWindowControls.menu(session, store: $0).isEmpty } ?? true)
-        .help("Rename, restart, stop or kill this session")
+        .help(Self.help(session))
         .accessibilityLabel("Session actions")
+    }
+
+    /// QA #693 INFO-6: what the menu holds: Rename alone for a name dch would read as a flag (#627).
+    static func help(_ s: AgentSession) -> String {
+        AgentIsland.passable(s.name) ? "Rename, restart, stop or kill this session" : "Rename this session"
     }
 }
 
@@ -344,19 +349,38 @@ struct AgentLockedInteraction: View {
 
 // MARK: - Rename (G4)
 
+/// #853 (QA #693 INFO-1): one Rename edit: its session, the text typed so far and the field that has
+/// it. A field the header builds anew (a resize or a UI-scale change swaps its ViewThatFits variant)
+/// reads the text back and takes the edit over; the field it replaced ends nothing.
+@MainActor
+final class AgentRenameEdit {
+    let key: AgentSessionKey
+    var text: String
+    /// The field that ends the edit: the last one built for it.
+    weak var field: NSTextField?
+
+    init(key: AgentSessionKey, text: String) {
+        self.key = key
+        self.text = text
+    }
+}
+
 /// #829 G4: the header title as a text field, prefilled with the alias (empty when there is none,
 /// the dch name as its placeholder). Return saves, Esc cancels, the focus leaving cancels; each
 /// ends it once. An NSTextField, so the keys are its own: the window's shortcuts stand down while
 /// the field editor has them (AgentsNSWindow.route), and nothing reaches the terminal or the composer.
 struct AgentRenameField: NSViewRepresentable {
     let name: String
-    let alias: String
-    let end: (String?) -> Void
+    let edit: AgentRenameEdit
+    /// The edit and Return's text or nil (Esc, the focus left); true: the edit goes on (a Return refused while a job runs).
+    let end: (AgentRenameEdit, String?) -> Bool
 
-    func makeCoordinator() -> Coordinator { Coordinator(end) }
+    func makeCoordinator() -> Coordinator { Coordinator(edit, end) }
 
     func makeNSView(context: Context) -> AgentRenameTextField {
-        let f = AgentRenameTextField(string: alias)
+        let f = AgentRenameTextField(string: edit.text)
+        edit.field = f
+        context.coordinator.field = f
         f.isBordered = false
         f.drawsBackground = false
         f.focusRingType = .none
@@ -380,16 +404,26 @@ struct AgentRenameField: NSViewRepresentable {
         ])
     }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
-        var end: (String?) -> Void
+        let edit: AgentRenameEdit
+        var end: (AgentRenameEdit, String?) -> Bool
+        weak var field: NSTextField?
         private(set) var ended = false
-        init(_ end: @escaping (String?) -> Void) { self.end = end }
+        init(_ edit: AgentRenameEdit, _ end: @escaping (AgentRenameEdit, String?) -> Bool) {
+            self.edit = edit
+            self.end = end
+        }
 
-        /// Once: Return's text, or nil (Esc, the focus leaving, the field going away).
+        /// Once: Return's text, or nil (Esc, the focus leaving, the field going away). Only from the
+        /// edit's own field; a refused Return leaves it open for another.
         func finish(_ text: String?) {
-            guard !ended else { return }
-            ended = true
-            end(text)
+            guard !ended, let field, edit.field === field else { return }   // #853 r2: a freed field never matches
+            ended = !end(edit, text)
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            if let field, edit.field === field { edit.text = field.stringValue }
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -401,7 +435,13 @@ struct AgentRenameField: NSViewRepresentable {
             return true
         }
 
-        func controlTextDidEndEditing(_ obj: Notification) { finish(nil) }
+        /// The focus left. #853 (QA #693 INFO-1): held one turn. A field leaving its window (the header swapped
+        /// ViewThatFits variants) ends editing before it learns it is leaving, and the field built in its place
+        /// may come after; only a field still the edit's own then ends it.
+        /// r2: the field is held until then, so a field freed meanwhile still ends its edit (finish needs it).
+        func controlTextDidEndEditing(_ obj: Notification) {
+            DispatchQueue.main.async { [self, field] in MainActor.assumeIsolated { withExtendedLifetime(field) { finish(nil) } } }
+        }
     }
 }
 

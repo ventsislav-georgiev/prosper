@@ -197,7 +197,10 @@ final class AgentWindowModel: ObservableObject {
     var renameSession: (AgentSession, String) -> Bool = { AgentIslandController.shared.rename($0, alias: $1) }
     /// G4: the live session whose header title is a text field now. Dropped by a selection change,
     /// an ask, Return, Esc and the field losing focus. While set, the window's shortcuts stand down.
-    @Published private(set) var renaming: AgentSessionKey?
+    /// #853 (QA #693 INFO-1): the edit itself, its typed text included, so a field the header builds
+    /// anew (a ViewThatFits variant swap) carries on with it.
+    @Published private(set) var renameEdit: AgentRenameEdit?
+    var renaming: AgentSessionKey? { renameEdit?.key }
     /// #829 (R5): the question the confirm strip shows; dropped by a selection change.
     @Published private(set) var confirming: AgentWindowConfirm?
     /// QA #665 INFO-6: an answer a gate refused since the question; dropped by a selection change or the next ask.
@@ -289,7 +292,7 @@ final class AgentWindowModel: ObservableObject {
             }
         }
         if confirming != nil, confirmingSession == nil, confirmingRecord == nil { confirming = nil }
-        if let k = renaming, !sessions.contains(where: { $0.key == k }) { renaming = nil }   // it ended: no field
+        if let k = renaming, !sessions.contains(where: { $0.key == k }) { renameEdit = nil }   // it ended: no field
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
             filled = true
@@ -354,7 +357,7 @@ final class AgentWindowModel: ObservableObject {
             selection = id
             confirming = nil
             refusal = nil
-            renaming = nil
+            renameEdit = nil
         }
         follow()
     }
@@ -451,12 +454,13 @@ final class AgentWindowModel: ObservableObject {
         if selectionIsHeld, selection == .live(s.key) { return }   // QA #668 F1: it ended, nothing to ask
         select(.live(s.key))
         refusal = nil
-        renaming = nil
+        renameEdit = nil
         // G4: Rename edits the title in place and asks nothing; only a session still listed live.
         if verb == .rename {
             confirming = nil
-            if store?.sessions.contains(where: { $0.key == s.key }) == true {
-                renaming = s.key
+            // QA #693 INFO-3: prefilled from the store, which holds a rename's alias before the poller lists it.
+            if let live = store?.sessions.first(where: { $0.key == s.key }) {
+                renameEdit = AgentRenameEdit(key: s.key, text: live.alias)
                 dropPendingFocus()   // QA #694 INFO-2: the field has the keys
             }
             return
@@ -464,16 +468,25 @@ final class AgentWindowModel: ObservableObject {
         confirming = AgentWindowConfirm(verb: verb, key: s.key)
     }
 
-    /// G4: the title field's end, for the session `key` it was opened on. A key that is not the open
-    /// field's (a replaced field's late end) changes nothing. `text` nil: Esc or the focus left, nothing
+    /// G4: the title field's end, for the edit it was opened with. An edit that is not the open one (a
+    /// replaced field's late end, on another row or this one) changes nothing. `text` nil: Esc or the focus left, nothing
     /// runs. Else Return: the session is re-read by key (gone: nothing) and the controller runs `dch -m`
     /// unless the text is its alias already. An empty text clears the alias.
-    func endRename(_ key: AgentSessionKey, _ text: String?) {
-        guard renaming == key else { return }
-        renaming = nil
+    /// #853 (QA #693 INFO-4): a Return the controller refused while another job runs on the row (a
+    /// Restart's or Stop's running text stays the row's line) keeps the field open with the text, and
+    /// the row says why. True: the edit goes on.
+    @discardableResult
+    func endRename(_ edit: AgentRenameEdit, _ text: String?) -> Bool {
+        guard renameEdit === edit else { return false }   // #853 r2: a replaced edit's late end, even on the same row
+        let key = edit.key
+        refusal = nil
         guard let text, let s = store?.sessions.first(where: { $0.key == key }),
-              AgentIsland.renameArgs(s.name, text, current: s.alias) != nil else { return }
-        _ = renameSession(s, text)
+              AgentIsland.renameArgs(s.name, text, current: s.alias) != nil else { renameEdit = nil; return false }
+        // Past the checks above, a rename not run with a control dch there is a busy row.
+        guard !renameSession(s, text), store?.controlDch != nil else { renameEdit = nil; return false }
+        edit.text = text
+        refusal = AgentWindowRefusal(id: .live(key), text: AgentIsland.renameBusyText)
+        return true
     }
 
     /// #829 G6-G8: a History row's context menu or detail button: selects the row first (R6).

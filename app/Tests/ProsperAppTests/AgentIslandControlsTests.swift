@@ -5353,8 +5353,8 @@ extension AgentIslandControlsTests {
         XCTAssertEqual(f.lock.withLock { f.envs.last }, ["PATH": "/login/bin", "DCH_SOCKET_DIR": "/d"])
         XCTAssertNil(f.lock.withLock { f.launches.last?.cwd })
         XCTAssertNil(store.actions[a.key], "worked: no line")
-        _ = run(a, "x", status: 1, output: "dch: no session: a\nsecond line\n")
-        XCTAssertEqual(store.actions[a.key], "Couldn't rename a: dch: no session: a")
+        _ = run(a, "x", status: 1, output: "no session: a\nsecond line\n")   // dch's own words (dch.c:11909 at 7983f4b)
+        XCTAssertEqual(store.actions[a.key], "Couldn't rename a: no session: a")
         _ = run(a, "y")
         XCTAssertNil(store.actions[a.key], "the next rename that works drops the failure")
         // Busy: a job on the row refuses the rename, and the row says so until it ends.
@@ -5371,5 +5371,172 @@ extension AgentIslandControlsTests {
         store.controlDch = nil
         XCTAssertFalse(c.rename(a, alias: "w"))
         XCTAssertEqual(f.args.count, n)
+    }
+}
+
+// MARK: - #853 (QA #693): the sent alias until the poller lists it; the rename's own poller tick; a busy Return
+
+extension AgentIslandControlsTests {
+    /// INFO-3: the pure rule. A listing that still shows the replaced alias gets the sent one over it; the
+    /// listing showing the sent one (caught up) or anything else (renamed elsewhere since) drops it, as does the
+    /// session leaving.
+    func testRenameOverlaySentKeepsTheAliasUntilTheListingCarriesIt() {
+        let k = AgentSessionKey(dir: "/d", name: "a"), j = AgentSessionKey(dir: "/d", name: "b")
+        func s(_ key: AgentSessionKey, _ alias: String) -> AgentSession {
+            AgentSession(key: key, alias: alias, activity: 0, state: .idle, agents: 0)
+        }
+        let sent: [AgentSessionKey: AgentIsland.SentAlias] = [k: .init(alias: "New", was: "Old"), j: .init(alias: "Bee", was: "")]
+        let stale = AgentIsland.overlaySent([s(k, "Old"), s(j, "")], sent)
+        XCTAssertEqual(stale.sessions.map(\.alias), ["New", "Bee"], "a list read before dch -m: the sent aliases show")
+        XCTAssertEqual(stale.sent, sent, "and stay")
+        let later = AgentIsland.overlaySent([s(k, "New"), s(j, "Other")], stale.sent)
+        XCTAssertEqual(later.sessions.map(\.alias), ["New", "Other"], "the listing wins")
+        XCTAssertEqual(later.sent, [:], "caught up (a), renamed elsewhere since (b): both go")
+        let gone = AgentIsland.overlaySent([s(j, "")], sent)
+        XCTAssertEqual(gone.sessions.map(\.alias), ["Bee"])
+        XCTAssertEqual(gone.sent, [j: .init(alias: "Bee", was: "")], "a left: its entry goes")
+    }
+
+    /// The poller's list for the integration test below: one session per .sock with the alias the test serves,
+    /// its activity bumped per list (so each list differs and reaches apply), on the test's clock.
+    private final class AliasBox: @unchecked Sendable {
+        let lock = NSLock()
+        var alias = "Old"
+        var lists = 0
+        var clock: TimeInterval = 1_000_000
+    }
+
+    nonisolated private static func aliasPoller(_ dir: String, _ box: AliasBox) -> AgentIslandPoller {
+        AgentIslandPoller(now: { box.lock.withLock { box.clock } }, dirs: { [dir] }, list: { dirs, _ in
+            box.lock.withLock {
+                box.lists += 1
+                return dirs.flatMap { d in
+                    ((try? FileManager.default.contentsOfDirectory(atPath: d)) ?? []).filter { $0.hasSuffix(".sock") }.map {
+                        AgentSession(key: AgentSessionKey(dir: d, name: String($0.dropLast(5))), alias: box.alias,
+                                     activity: TimeInterval(box.lists), state: .idle, agents: 0)
+                    }
+                }
+            }
+        })
+    }
+
+    /// INFO-3 and INFO-5 (refreshList): the timer ticks once (reload) and then not for an hour, so only the
+    /// rename's own refresh can list again. A rename that worked shows its alias at once and over a list read
+    /// before the sidecar landed; the window's prefill and unchanged check read it, so reverting to the old
+    /// alias runs; the poller listing the sent alias drops the overlay.
+    @MainActor
+    func testWindowRenameShowsTheSentAliasAndTicksThePollerAtOnce() throws {
+        let f = FakeProc(), reads = Reads(), dir = tempDir()
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("a.sock").path, contents: nil)
+        let c = controller(f, reads, dirs: [dir.path])
+        c.store = nil
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        let g = notched
+        c.currentGeometry = { g }
+        let box = AliasBox(), path = dir.path
+        c.makePoller = { Self.aliasPoller(path, box) }
+        c.pollEvery = 3600
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        settle(c) { c.store?.sessions.first?.alias == "Old" }
+        c.setExpanded(true)
+        settle(c) { c.store?.controlDch != nil }
+        let store = try XCTUnwrap(c.store)
+        let a = try XCTUnwrap(store.sessions.first)
+        XCTAssertEqual(box.lock.withLock { box.lists }, 1, "the reload's one tick")
+        /// dch -m ran and exited 0; `gate`: the clock passes the gate's backstop, so the rename's own tick lists.
+        func ran(_ text: String, ticks: Int, gate: Bool = true) {
+            if gate { box.lock.withLock { box.clock += 31 } }
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+            f.release.signal()
+            settle(c) { box.lock.withLock { box.lists } == ticks && !c.runner.isBusy(a.key) }
+            settle(c)
+            XCTAssertEqual(box.lock.withLock { box.lists }, ticks, "lists after renaming to \(text)")
+            XCTAssertEqual(f.args.last, ["-m", "a", text])
+        }
+        // The gate shut (its 2 s floor on a still clock): no list yet, the title reads the sent alias at once.
+        XCTAssertTrue(c.rename(a, alias: "New"))
+        ran("New", ticks: 1, gate: false)
+        XCTAssertEqual(store.sessions.first?.alias, "New", "the sent alias, before any list")
+        // The window, on this store and controller: the prefill and the unchanged check read "New".
+        let m = AgentWindowModel()
+        m.openSession = { _ in }
+        m.resume = { _ in }
+        m.onVisible = { _ in }
+        m.transcript.offMain = { $0() }
+        m.transcript.makeWatch = { _, _ in NSObject() }
+        m.ageInterval = 3600
+        m.transcript.tickInterval = 3600
+        m.renameSession = { c.rename($0, alias: $1) }
+        m.bind(store)
+        m.setVisible(true)
+        defer { m.close() }
+        m.ask(.rename, a)
+        XCTAssertEqual(m.renameEdit?.text, "New", "prefilled with the alias just set")
+        let n = f.args.count
+        XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), "New"))
+        XCTAssertEqual(f.args.count, n, "unchanged: nothing runs")
+        // A second rename; its own tick lists at once (the timer waits an hour), a list that still reads "Old".
+        m.ask(.rename, a)
+        XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), "Newer"), "it ran: the field closes")
+        ran("Newer", ticks: 2)
+        XCTAssertEqual(store.sessions.first?.activity, 2, "the stale list was applied")
+        XCTAssertEqual(store.sessions.first?.alias, "Newer", "the sent alias, over the stale list")
+        // Back to the old alias: it runs (the listing's "Old" is not the current one); that list caught up.
+        m.ask(.rename, a)
+        XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), "Old"), "it ran: the field closes")
+        ran("Old", ticks: 3)
+        XCTAssertEqual(store.sessions.first?.alias, "Old")
+        // Renamed elsewhere since (the list reads "Other"): the listing wins.
+        box.lock.withLock { box.alias = "Other" }
+        XCTAssertTrue(c.rename(a, alias: "Third"))
+        ran("Third", ticks: 4)
+        XCTAssertEqual(store.sessions.first?.alias, "Other")
+    }
+
+    /// INFO-4: Return while the row's Restart runs: the controller refuses, "Restarting…" stays the row's
+    /// line (the input lock), and the window keeps the field open with the text and says why; Return again
+    /// once the restart ended renames.
+    @MainActor
+    func testWindowRenameReturnDuringARestartKeepsTheFieldOpen() throws {
+        let f = FakeProc()
+        let a = session("a")
+        let c = opened(f, [a])
+        let store = try XCTUnwrap(c.store)
+        let m = AgentWindowModel()
+        m.openSession = { _ in }
+        m.resume = { _ in }
+        m.onVisible = { _ in }
+        m.transcript.offMain = { $0() }
+        m.transcript.makeWatch = { _, _ in NSObject() }
+        m.ageInterval = 3600
+        m.transcript.tickInterval = 3600
+        m.renameSession = { c.rename($0, alias: $1) }
+        m.bind(store)
+        m.setVisible(true)
+        defer { m.close() }
+        XCTAssertTrue(c.restart(a, sayBusy: true))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(store.actions[a.key], AgentIsland.restartingText)
+        let n = f.args.count
+        m.ask(.rename, a)
+        XCTAssertTrue(m.endRename(try XCTUnwrap(m.renameEdit), "Busy"), "refused: the field stays open")
+        XCTAssertEqual(m.renaming, a.key)
+        XCTAssertEqual(m.renameEdit?.text, "Busy")
+        XCTAssertEqual(m.refusalText(.live(a.key)), AgentIsland.renameBusyText, "the row says why")
+        XCTAssertEqual(store.actions[a.key], AgentIsland.restartingText, "the running text stays (the input lock)")
+        XCTAssertEqual(f.args.count, n, "never launched")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(a.key) }
+        settle(c)
+        XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), "Busy"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, ["-m", "a", "Busy"], "Return again, the restart over: it renames")
+        XCTAssertNil(m.renaming)
+        XCTAssertNil(m.refusalText(.live(a.key)))
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(a.key) }
     }
 }

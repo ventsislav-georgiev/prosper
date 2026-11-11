@@ -15,8 +15,8 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(AgentIsland.renameArgs("a", "  New  ", current: ""), ["-m", "a", "New"])
         XCTAssertEqual(AgentIsland.renameArgs("a", "x\ty\nz\r\nw", current: ""), ["-m", "a", "x y z w"],
                        "tabs and newlines become spaces")
-        let long = String(repeating: "👍🏽", count: 130)
-        XCTAssertEqual(AgentIsland.renameArgs("a", long, current: "")?.last?.count, 120, "capped at 120 characters")
+        XCTAssertEqual(AgentIsland.renameArgs("a", String(repeating: "x", count: 130), current: "")?.last?.count, 120,
+                       "capped at 120 characters")
         XCTAssertEqual(AgentIsland.renameArgs("a", "b" + String(repeating: " ", count: 119) + "c", current: ""), ["-m", "a", "b"],
                        "the cut's trailing spaces go too")
         XCTAssertNil(AgentIsland.renameArgs("a", "  cur \n", current: "cur"), "unchanged: nothing runs")
@@ -25,11 +25,42 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(AgentIsland.renameArgs("-x", "y", current: ""), ["-m", "-x", "y"], "any name, its own argv element")
         XCTAssertEqual(AgentIsland.renameHelp("a"), "Display name only; the dch session name stays a")
         XCTAssertNil(AgentIsland.renameFailure(DchActionResult(status: 0), name: "a"))
-        XCTAssertEqual(AgentIsland.renameFailure(DchActionResult(status: 1, text: ["dch: no session: a", "more"]), name: "a"),
-                       "Couldn't rename a: dch: no session: a")
+        XCTAssertEqual(AgentIsland.renameFailure(DchActionResult(status: 1, text: ["no session: a", "more"]), name: "a"),
+                       "Couldn't rename a: no session: a", "dch's own words (dch.c:11909 at 7983f4b)")
         XCTAssertEqual(AgentIsland.renameFailure(DchActionResult(status: 2), name: "a"), "Couldn't rename a: dch exited 2")
         XCTAssertEqual(AgentIsland.renameFailure(DchActionResult(status: -1), name: "a"), "Couldn't rename a: dch could not be run")
         XCTAssertNotNil(AgentIsland.renameFailure(DchActionResult(status: 0, stopped: true), name: "a"), "cut off: not renamed")
+    }
+
+    /// #853 (QA #693 INFO-2): dch keeps at most 599 bytes (write_alias, dch.c:2040 at 7983f4b) and cuts on a
+    /// code point; the window cuts first, on a whole character, so what dch stores is what was sent.
+    func testAgentRenameTextCapsAt599BytesOnACharacter() throws {
+        func sent(_ s: String) throws -> String { try XCTUnwrap(AgentIsland.renameArgs("a", s, current: "")?.last) }
+        // 👍🏽 (thumb + skin tone) is one character of 8 bytes: 74 fit (592), the 75th would make 600.
+        let thumbs = try sent(String(repeating: "👍🏽", count: 130))
+        XCTAssertEqual(thumbs, String(repeating: "👍🏽", count: 74))
+        XCTAssertEqual(thumbs.utf8.count, 592)
+        // A combining mark at the boundary: e + U+0301 is one character of 3 bytes, never a bare e.
+        let acute = "e\u{301}"
+        let marks = try sent(String(repeating: "👍🏽", count: 74) + String(repeating: acute, count: 3))
+        XCTAssertEqual(marks, String(repeating: "👍🏽", count: 74) + acute + acute, "598 bytes; the third would make 601")
+        XCTAssertEqual(marks.utf8.count, 598)
+        XCTAssertEqual(marks.unicodeScalars.last, "\u{301}", "the cut keeps the mark with its letter")
+        // A family (four people joined by ZWJ, 25 bytes) is kept whole or not at all.
+        let family = "👨‍👩‍👧‍👦"
+        XCTAssertEqual(family.utf8.count, 25)
+        let fam = try sent(String(repeating: "a", count: 590) + family)
+        XCTAssertEqual(fam.count, 120, "120 characters first: all a's")
+        let famBytes = try sent(String(repeating: "👍🏽", count: 72) + "ab" + family + "c")
+        XCTAssertEqual(famBytes, String(repeating: "👍🏽", count: 72) + "ab", "578 + 25 > 599: the family goes whole")
+        // Exactly 599 bytes stays; one byte more cuts the last character.
+        let exact = String(repeating: "👍🏽", count: 74) + "abcde" + "\u{E9}"   // 592 + 5 + 2
+        XCTAssertEqual(try sent(exact).utf8.count, 599)
+        XCTAssertEqual(try sent(exact + "f"), exact)
+        // The cut's trailing space goes, as the character cap's does.
+        XCTAssertEqual(try sent(String(repeating: "👍🏽", count: 74) + " " + "👍🏽"), String(repeating: "👍🏽", count: 74))
+        // Stored = sent: the same text again is unchanged, nothing runs.
+        XCTAssertNil(AgentIsland.renameArgs("a", String(repeating: "👍🏽", count: 130), current: thumbs))
     }
 
     // MARK: Menu and model
@@ -56,20 +87,21 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.selection, .live(a.key))
         XCTAssertEqual(m.renaming, a.key)
         XCTAssertNil(m.confirming, "no question strip")
-        m.endRename(a.key, nil)
+        m.endRename(try XCTUnwrap(m.renameEdit), nil)
         XCTAssertNil(m.renaming)
         XCTAssertTrue(renamed.isEmpty, "Esc / focus loss: nothing runs")
         m.ask(.rename, a)
-        m.endRename(a.key, "  Alpha ")
+        m.endRename(try XCTUnwrap(m.renameEdit), "  Alpha ")
         XCTAssertTrue(renamed.isEmpty, "unchanged: nothing runs")
         m.ask(.rename, a)
-        m.endRename(a.key, "Beta")
+        let beta = try XCTUnwrap(m.renameEdit)
+        m.endRename(beta, "Beta")
         XCTAssertEqual(renamed.map(\.0), [a.key])
         XCTAssertEqual(renamed.map(\.1), ["Beta"])
-        m.endRename(a.key, "again")
+        m.endRename(beta, "again")
         XCTAssertEqual(renamed.count, 1, "an end with no field runs nothing")
         m.ask(.rename, a)
-        m.endRename(a.key, "")
+        m.endRename(try XCTUnwrap(m.renameEdit), "")
         XCTAssertEqual(renamed.last?.1, "", "empty clears the alias")
         // Dropped by a selection change, an ask, and the session ending.
         m.ask(.rename, a)
@@ -102,15 +134,16 @@ extension AgentWindowD1Tests {
         m.setVisible(true)
         defer { m.close() }
         m.ask(.rename, a)
+        let ea = try XCTUnwrap(m.renameEdit)
         m.ask(.rename, b)
         XCTAssertEqual(m.renaming, b.key)
         XCTAssertEqual(m.selection, .live(b.key))
-        m.endRename(a.key, nil)
+        m.endRename(ea, nil)
         XCTAssertEqual(m.renaming, b.key, "a's late focus loss leaves b's field open")
-        m.endRename(a.key, "Typed for a")
+        m.endRename(ea, "Typed for a")
         XCTAssertEqual(m.renaming, b.key, "a's late Return neither")
         XCTAssertTrue(renamed.isEmpty, "and runs nothing")
-        m.endRename(b.key, "Bee")
+        m.endRename(try XCTUnwrap(m.renameEdit), "Bee")
         XCTAssertNil(m.renaming)
         XCTAssertEqual(renamed.map(\.0), [b.key])
         XCTAssertEqual(renamed.map(\.1), ["Bee"])
@@ -133,7 +166,6 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(m.selectionIsHeld)
         m.ask(.rename, a)
         XCTAssertNil(m.renaming, "held (ended): no field")
-        m.endRename(a.key, "x")
         XCTAssertEqual(renamed, 0)
         let header = AgentSessionHeader(row: try XCTUnwrap(m.selectedRow), session: a, cwd: nil, open: {}, store: st, ended: true)
         XCTAssertNil(header.menuStore, "the ended header's \"⋯\" offers nothing, Rename included")
@@ -145,9 +177,10 @@ extension AgentWindowD1Tests {
         let b = try XCTUnwrap(st.sessions.first { $0.name == "b" })
         m.ask(.rename, b)
         XCTAssertEqual(m.renaming, b.key)
+        let eb = try XCTUnwrap(m.renameEdit)
         st.sessions = []
         XCTAssertNil(m.renaming, "it ended while the field was open: no field")
-        m.endRename(b.key, "y")
+        m.endRename(eb, "y")
         XCTAssertEqual(renamed, 0)
     }
 
@@ -205,7 +238,8 @@ extension AgentWindowD1Tests {
         final class Log { var ends: [String?] = [] }
         func field(_ alias: String) throws -> (NSWindow, AgentRenameTextField, NSTextView, Log) {
             let log = Log()
-            let (win, host) = hostedWindow(AgentRenameField(name: "prosper", alias: alias, end: { log.ends.append($0) })
+            let edit = AgentRenameEdit(key: AgentSessionKey(dir: "/tmp/dch-test", name: "prosper"), text: alias)
+            let (win, host) = hostedWindow(AgentRenameField(name: "prosper", edit: edit, end: { log.ends.append($1); return false })
                 .frame(width: 300, height: 24), CGSize(width: 300, height: 24))
             let f = try XCTUnwrap(subviews(host, AgentRenameTextField.self).first)
             let editor = try XCTUnwrap(f.currentEditor() as? NSTextView, "the field has the keys as it shows")
@@ -225,6 +259,7 @@ extension AgentWindowD1Tests {
         e1.doCommand(by: #selector(NSResponder.insertNewline(_:)))
         XCTAssertEqual(log1.ends, ["New name"])
         XCTAssertTrue(w1.makeFirstResponder(nil))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(log1.ends, ["New name"], "the focus leaving after Return ends nothing twice")
         w1.close()
         // Esc cancels.
@@ -237,6 +272,8 @@ extension AgentWindowD1Tests {
         let (w3, _, e3, log3) = try field("old")
         e3.string = "typed"
         XCTAssertTrue(w3.makeFirstResponder(nil))
+        XCTAssertEqual(log3.ends, [], "#853: held one turn")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(log3.ends, [nil])
         XCTAssertFalse(w3.isVisible, "never shown")
         w3.close()
@@ -362,6 +399,282 @@ extension AgentWindowD1Tests {
         }
     }
 
+    // MARK: #853 (QA #693)
+
+    /// INFO-1: a resize mid-edit swaps the header's ViewThatFits variant, which builds a new field. The
+    /// edit and the typed text carry on (the model holds them), the replaced field's end changes nothing,
+    /// and Return renames with the text. Both ways: narrower, then (a second edit, Esc) wider again.
+    @MainActor
+    func testAgentWindowRenameSurvivesAHeaderVariantSwap() throws {
+        try withModePref {
+            let a = session("a", .idle, alias: "Alpha")
+            let st = store([a, session("b", .idle)])
+            st.controlDch = bin([1, 38, 0])
+            let m = windowModel(st)
+            Calls().wire(m)
+            var renamed: [String] = []
+            m.renameSession = { renamed.append($1); return true }
+            showTranscript(m)
+            m.setVisible(true)
+            defer { m.close() }
+            m.select(.live(a.key))
+            let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 1000, height: 600), styleMask: [.titled],
+                                     backing: .buffered, defer: true)
+            win.model = m
+            let (_, host) = hostedWindow(AgentDetailView(model: m, transcript: m.transcript, scrolls: false),
+                                         CGSize(width: 1000, height: 600), window: win)
+            defer { win.close() }
+            @MainActor func field() throws -> (AgentRenameTextField, NSTextView) {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                host.layoutSubtreeIfNeeded()
+                let fields = subviews(host, AgentRenameTextField.self)
+                XCTAssertEqual(fields.count, 1, "one field")
+                let f = try XCTUnwrap(fields.first)
+                return (f, try XCTUnwrap(f.currentEditor() as? NSTextView, "the field has the keys"))
+            }
+            @MainActor func resize(_ width: CGFloat) {
+                win.setContentSize(NSSize(width: width, height: 600))
+                host.frame = CGRect(x: 0, y: 0, width: width, height: 600)
+            }
+            m.ask(.rename, a)
+            let (f1, e1) = try field()
+            XCTAssertEqual(f1.stringValue, "Alpha")
+            e1.selectAll(nil)
+            e1.insertText("Typed mid-edit", replacementRange: e1.selectedRange())
+            XCTAssertEqual(m.renameEdit?.text, "Typed mid-edit", "the model holds the draft")
+            resize(420)
+            let (f2, e2) = try field()
+            XCTAssertFalse(f2 === f1, "the narrow variant built its own field (the swap happened)")
+            XCTAssertEqual(m.renaming, a.key, "the edit survived the swap")
+            XCTAssertEqual(f2.stringValue, "Typed mid-edit", "with the typed text")
+            XCTAssertTrue(win.firstResponder === e2, "and the keys")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            XCTAssertEqual(m.renaming, a.key, "the replaced field's late end changed nothing")
+            XCTAssertTrue(renamed.isEmpty)
+            e2.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+            XCTAssertEqual(renamed, ["Typed mid-edit"])
+            XCTAssertNil(m.renaming)
+            // Wider again mid-edit, then Esc: nothing runs.
+            m.ask(.rename, a)
+            let (f3, e3) = try field()
+            e3.selectAll(nil)
+            e3.insertText("Second", replacementRange: e3.selectedRange())
+            resize(1000)
+            let (f4, e4) = try field()
+            XCTAssertFalse(f4 === f3, "the wide variant's own field")
+            XCTAssertEqual(f4.stringValue, "Second")
+            XCTAssertEqual(m.renaming, a.key)
+            e4.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+            XCTAssertNil(m.renaming)
+            XCTAssertEqual(renamed, ["Typed mid-edit"], "Esc ran nothing")
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// #853: Rename asked again on the row while its field is open (the "⋯" menu) starts a fresh edit;
+    /// the field it replaces goes away, and its end (same session key) closes nothing: the model matches
+    /// the edit itself, not its key (r2).
+    @MainActor
+    func testAgentWindowRenameAskedAgainKeepsTheNewField() throws {
+        try withModePref {
+            let a = session("a", .idle, alias: "Alpha")
+            let st = store([a])
+            st.controlDch = bin([1, 38, 0])
+            let m = windowModel(st)
+            Calls().wire(m)
+            showTranscript(m)
+            m.setVisible(true)
+            defer { m.close() }
+            m.ask(.rename, a)
+            let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled],
+                                     backing: .buffered, defer: true)
+            win.model = m
+            let (_, host) = hostedWindow(AgentDetailView(model: m, transcript: m.transcript, scrolls: false),
+                                         CGSize(width: 900, height: 600), window: win)
+            defer { win.close() }
+            let e1 = try XCTUnwrap(m.renameEdit)
+            let f1 = try XCTUnwrap(subviews(host, AgentRenameTextField.self).first)
+            let c1 = try XCTUnwrap(f1.delegate as? AgentRenameField.Coordinator)
+            m.ask(.rename, a)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            XCTAssertEqual(m.renaming, a.key, "the new edit stays open")
+            let e2 = try XCTUnwrap(m.renameEdit)
+            XCTAssertFalse(e1 === e2, "a fresh edit")
+            let f2 = try XCTUnwrap(subviews(host, AgentRenameTextField.self).first)
+            XCTAssertFalse(f1 === f2, "a fresh field")
+            XCTAssertTrue(win.firstResponder === f2.currentEditor(), "with the keys")
+            // #853 r2: the old field's late end (its focus loss, held one turn) is the old edit's: it ends nothing.
+            c1.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: f1))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            XCTAssertTrue(m.renameEdit === e2, "the old field's end left the new edit")
+            XCTAssertTrue(win.firstResponder === f2.currentEditor())
+            // The model: an end from the replaced edit (same row, same key) changes nothing.
+            XCTAssertFalse(m.endRename(e1, nil))
+            XCTAssertFalse(m.endRename(e1, "Typed in the old field"))
+            XCTAssertTrue(m.renameEdit === e2)
+            XCTAssertEqual(m.renaming, a.key)
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// INFO-1, the safety net: a field that leaves the window with none built in its place ends the edit
+    /// on the next turn (no edit left open with the shortcuts standing down and no field).
+    @MainActor
+    func testAgentRenameFieldLeavingWithNoReplacementEndsTheEdit() throws {
+        final class Log { var ends: [String?] = [] }
+        let log = Log()
+        let edit = AgentRenameEdit(key: AgentSessionKey(dir: "/tmp/dch-test", name: "a"), text: "Alpha")
+        let (win, host) = hostedWindow(AgentRenameField(name: "a", edit: edit, end: { log.ends.append($1); return false })
+            .frame(width: 300, height: 24), CGSize(width: 300, height: 24))
+        defer { win.close() }
+        let f = try XCTUnwrap(subviews(host, AgentRenameTextField.self).first)
+        XCTAssertTrue(win.firstResponder === f.currentEditor())
+        f.removeFromSuperview()
+        XCTAssertEqual(log.ends.count, 0, "not at once: a field built in its place may come")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(log.ends, [nil], "none came: the edit ends")
+        XCTAssertFalse(win.isVisible, "never shown")
+    }
+
+    /// INFO-4: Return while a Restart or Stop runs on the row: the controller refuses and its running text stays
+    /// the row's line (the input lock reads it), so the field stays open with the text and the row says why.
+    /// Return again once the job ended renames. Model, then the hosted field (it takes a second Return).
+    @MainActor
+    func testAgentWindowRenameReturnWhileAJobRunsKeepsTheFieldAndSaysWhy() throws {
+        try withModePref {
+            let a = session("a", .idle, alias: "Alpha")
+            let st = store([a, session("b", .idle)])
+            st.controlDch = bin([1, 38, 0])
+            let m = windowModel(st)
+            Calls().wire(m)
+            var started = false
+            var renamed: [String] = []
+            m.renameSession = { _, text in
+                renamed.append(text)
+                return started
+            }
+            showTranscript(m)
+            m.setVisible(true)
+            defer { m.close() }
+            st.actions[a.key] = AgentIsland.restartingText
+            m.ask(.rename, a)
+            XCTAssertTrue(m.endRename(try XCTUnwrap(m.renameEdit), "Busy"), "refused: the edit goes on")
+            XCTAssertEqual(m.renaming, a.key)
+            XCTAssertEqual(m.renameEdit?.text, "Busy", "the text is kept")
+            XCTAssertEqual(m.refusalText(.live(a.key)), "Rename not run: another job is running")
+            XCTAssertEqual(st.actions[a.key], AgentIsland.restartingText, "the running text stays (the input lock)")
+            // Esc: the line goes with the edit.
+            XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), nil))
+            XCTAssertNil(m.renaming)
+            XCTAssertNil(m.refusalText(.live(a.key)))
+            // No control dch: not a busy row; the field closes (the menu item is off then anyway).
+            st.controlDch = nil
+            m.ask(.rename, a)
+            XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), "NoDch"))
+            XCTAssertNil(m.renaming)
+            XCTAssertNil(m.refusalText(.live(a.key)))
+            st.controlDch = bin([1, 38, 0])
+            // Hosted: Return refused, the same field stays with the keys; Return again after the job renames.
+            m.ask(.rename, a)
+            let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled],
+                                     backing: .buffered, defer: true)
+            win.model = m
+            let (_, host) = hostedWindow(AgentDetailView(model: m, transcript: m.transcript, scrolls: false),
+                                         CGSize(width: 900, height: 600), window: win)
+            defer { win.close() }
+            let f = try XCTUnwrap(subviews(host, AgentRenameTextField.self).first)
+            let e = try XCTUnwrap(f.currentEditor() as? NSTextView)
+            e.string = "Later"
+            e.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            XCTAssertEqual(m.renaming, a.key, "the field stays open")
+            XCTAssertTrue(subviews(host, AgentRenameTextField.self).first === f, "the same field")
+            XCTAssertTrue(win.firstResponder === e, "with the keys")
+            XCTAssertEqual(e.string, "Later")
+            XCTAssertEqual(m.refusalText(.live(a.key)), AgentIsland.renameBusyText)
+            st.actions[a.key] = "Restarted"
+            started = true
+            e.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+            XCTAssertEqual(renamed, ["Busy", "NoDch", "Later", "Later"], "the second Return ran")
+            XCTAssertNil(m.renaming)
+            XCTAssertNil(m.refusalText(.live(a.key)))
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// INFO-6: the "⋯" help names what the menu holds: a dash-named session's holds only Rename.
+    @MainActor
+    func testAgentSessionMenuHelpNamesWhatTheMenuHolds() {
+        let st = store([session("a", .idle), session("-x", .idle)])
+        st.controlDch = bin([1, 38, 0])
+        let dash = session("-x", .idle), a = session("a", .idle)
+        func verbs(_ s: AgentSession) -> [AgentWindowVerb] {
+            AgentWindowControls.menu(s, store: st).compactMap { if case .item(_, _, let v) = $0 { v } else { nil } }
+        }
+        XCTAssertEqual(verbs(dash), [.rename])
+        XCTAssertEqual(AgentSessionMenuButton.help(dash), "Rename this session")
+        XCTAssertEqual(verbs(a), [.rename, .restart, .stop, .kill])
+        XCTAssertEqual(AgentSessionMenuButton.help(a), "Rename, restart, stop or kill this session")
+    }
+
+    /// QA #693 INFO-5 (#2): while the field lies over it, the title and the state chip are hidden from
+    /// VoiceOver (it reads the field, not a stale title under it). A never-shown window builds no
+    /// accessibility tree, so this reads the view value: titleSlot's visibility entry, hidden (4) only while
+    /// renaming. shortcut: reads SwiftUI's reflected AccessibilityVisibility; a SwiftUI that renames it fails
+    /// here first, then an AX read in a shown window is the check.
+    @MainActor
+    func testAgentWindowRenameHidesTheTitleUnderTheFieldFromVoiceOver() throws {
+        let a = session("a", .idle, alias: "Alpha Title")
+        let st = store([a])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(a.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        func visibility(_ rename: AgentRenameEdit?) -> String? {
+            var out = ""
+            dump(AgentSessionHeader(row: row, session: a, cwd: nil, open: {}, store: st, rename: rename).titleSlot, to: &out, maxDepth: 12)
+            guard let key = out.range(of: "VisibilityKey"), let raw = out.range(of: "rawValue: ", range: key.upperBound..<out.endIndex)
+            else { return nil }
+            return String(out[raw.upperBound...].prefix { $0.isNumber })
+        }
+        XCTAssertEqual(visibility(AgentRenameEdit(key: a.key, text: "Alpha Title")), "4", "renaming: hidden")
+        XCTAssertEqual(visibility(nil), "0", "not renaming: the title reads")
+    }
+
+    /// QA #693 INFO-5 (#3): the header passes `ended` to its Open in terminal: an ended session's button
+    /// draws dimmed in its slot (the other call sites have their own checks). The button's columns on the
+    /// title line, between the mode controls and the "⋯".
+    @MainActor
+    func testAgentSessionHeaderDimsOpenInTerminalForAnEndedSession() throws {
+        let a = session("a", .idle, alias: "Alpha Title")
+        let st = store([a])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(a.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        let size = CGSize(width: 900, height: 120)
+        func header(_ ended: Bool) throws -> NSBitmapImageRep {
+            try render(AgentSessionHeader(row: row, session: a, cwd: nil, open: {}, store: st, ended: ended), size: size, dark: true)
+        }
+        let live = try header(false), again = try header(false), ended = try header(true)
+        let px = CGFloat(live.pixelsWide) / (size.width + 24)
+        let menuW = NSHostingView(rootView: AgentSessionMenuButton(store: nil, session: a, ask: { _ in })).fittingSize.width
+        let openW = NSHostingView(rootView: OpenInTerminalButton(action: {})).fittingSize.width
+        let right = size.width - sz(16) - menuW - sz(6)
+        let open = Int((right - openW) * px) + 2..<Int(right * px) - 2
+        let line = Int(sz(28) * px)..<Int(sz(56) * px)
+        XCTAssertGreaterThan(open.count, Int(20 * px))
+        XCTAssertEqual(differing(live, again, x: open, y: line), 0, "control: a render is stable")
+        XCTAssertGreaterThan(differing(live, ended, x: open, y: line), 0, "ended: the header's Open in terminal dims")
+    }
+
     // MARK: Offscreen renders: the field takes the title's slot and moves nothing
 
     @MainActor
@@ -399,7 +712,7 @@ extension AgentWindowD1Tests {
                                 m.ask(.rename, s)
                                 XCTAssertEqual(m.renaming, s.key)
                                 let editing = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
-                                m.endRename(s.key, nil)
+                                m.endRename(try XCTUnwrap(m.renameEdit), nil)
                                 let back = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
                                 try save(plain, "829p3-\(tag)-title")
                                 try save(editing, "829p3-\(tag)-editing")

@@ -68,6 +68,8 @@ final class AgentIslandController {
     /// Test seams (#478, #475): the poller reload() starts, the dch IO, and
     /// showsPanel = false so layout() never builds or orders the panel.
     var makePoller: () -> AgentIslandPoller = { AgentIslandPoller() }
+    /// The poll timer's period; tests set a long one, so only an explicit refresh ticks.
+    var pollEvery: TimeInterval = 1
     var io = AgentPromptIO.live
     var showsPanel = true
     /// More seams (#477): the screen geometry, the center the screen observer
@@ -197,7 +199,7 @@ final class AgentIslandController {
         let poller = makePoller(), hidden = screen.hidden
         queue.async { poller.hidden = hidden }
         self.poller = poller
-        let t = Self.makePollTimer(poller, queue: queue) { [weak self] sessions in
+        let t = Self.makePollTimer(poller, queue: queue, every: pollEvery) { [weak self] sessions in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
         }
         t.resume()
@@ -210,10 +212,10 @@ final class AgentIslandController {
     /// #478: nonisolated so the handler is too. Built in reload() it was inferred
     /// @MainActor (setEventHandler is not @Sendable) and its executor check
     /// trapped on the poll queue.
-    nonisolated static func makePollTimer(_ poller: AgentIslandPoller, queue: DispatchQueue,
+    nonisolated static func makePollTimer(_ poller: AgentIslandPoller, queue: DispatchQueue, every: TimeInterval = 1,
                                           onSessions: @escaping @Sendable ([AgentSession]) -> Void) -> DispatchSourceTimer {
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(250))
+        t.schedule(deadline: .now(), repeating: every, leeway: .milliseconds(250))
         t.setEventHandler {
             guard let sessions = poller.tick() else { return }
             onSessions(sessions)
@@ -243,6 +245,7 @@ final class AgentIslandController {
 
     private func apply(_ sessions: [AgentSession]) {
         guard timer != nil, let store else { return }   // a tick that raced teardown
+        let sessions = withSent(sessions)
         // #768: only ages moved and nobody sees them (collapsed, or the display
         // asleep or locked): Live status and the watch stream still get the list,
         // the store, cards and panel do not.
@@ -621,18 +624,37 @@ final class AgentIslandController {
         guard let store, let dch = store.controlDch?.path,
               let live = store.sessions.first(where: { $0.key == s.key }),
               let args = AgentIsland.renameArgs(live.name, alias, current: live.alias) else { return false }
-        let key = live.key, name = live.name
+        let key = live.key, name = live.name, sent = args[2]
         let started = run(key, dch: dch, args: args, running: nil) { [weak self] r in
-            guard let store = self?.store else { return }
+            guard let self, let store = self.store else { return }
             if let failed = AgentIsland.renameFailure(r, name: name) {
                 store.actions[key] = failed
-            } else if store.actions[key]?.hasPrefix("Couldn't rename ") == true {
-                store.actions[key] = nil   // an earlier failure's line goes with the rename that worked
+            } else {
+                if store.actions[key]?.hasPrefix("Couldn't rename ") == true {
+                    store.actions[key] = nil   // an earlier failure's line goes with the rename that worked
+                }
+                // QA #693 INFO-3: the title, the field's prefill and its unchanged check read the new alias now,
+                // not after the poller's next list (up to the 2 s gate floor plus the list). `was`: the alias the
+                // listing still shows (an earlier rename's, when one is still shown over it).
+                guard let i = store.sessions.firstIndex(where: { $0.key == key }) else { return self.refreshList() }
+                let was = self.sentAliases[key]?.was ?? store.sessions[i].alias
+                self.sentAliases[key] = sent == was ? nil : AgentIsland.SentAlias(alias: sent, was: was)
+                store.sessions[i].alias = sent
             }
-            self?.refreshList()
+            self.refreshList()
         }
         if !started { refuseBusy(key, AgentIsland.renameBusyText) }
         return started
+    }
+
+    /// QA #693 INFO-3: the aliases renames set, until the poller lists them (AgentIsland.overlaySent).
+    private var sentAliases: [AgentSessionKey: AgentIsland.SentAlias] = [:]
+
+    private func withSent(_ sessions: [AgentSession]) -> [AgentSession] {
+        guard !sentAliases.isEmpty else { return sessions }
+        let r = AgentIsland.overlaySent(sessions, sentAliases)
+        sentAliases = r.sent
+        return r.sessions
     }
 
     /// One poller tick now, not on the next second: the list (and the window's title) shows the

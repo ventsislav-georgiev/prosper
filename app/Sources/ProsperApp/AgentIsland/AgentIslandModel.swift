@@ -65,7 +65,7 @@ struct AgentSessionKey: Hashable {
 
 struct AgentSession: Equatable, Identifiable {
     let key: AgentSessionKey
-    let alias: String
+    var alias: String
     /// Last pty output, seconds since 1970. Refreshed every tick from the stat'd
     /// `.sock.act` mtime, so the age ticks without a dch fork.
     var activity: TimeInterval

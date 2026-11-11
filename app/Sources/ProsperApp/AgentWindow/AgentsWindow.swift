@@ -485,7 +485,8 @@ struct AgentDetailView: View {
                                    level: $model.verbosity, todos: transcript.todos,
                                    todosOpen: mode == .terminal ? floatingTodos : $transcript.todosOpen,
                                    store: model.store, ask: { model.ask($0, s) }, ended: ended,
-                                   renaming: !ended && model.renaming == s.key, endRename: { model.endRename(s.key, $0) },
+                                   rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
+                                   endRename: { model.endRename($0, $1) },
                                    mode: mode, setMode: { model.switchMode($0, for: s) })
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if mode == .terminal {
@@ -585,9 +586,11 @@ struct AgentSessionHeader: View {
     var menuStore: AgentIslandStore? { ended ? nil : store }
     /// QA #668 INFO-4: the state chip reads "Ended" for an ended session, in the same slot.
     var stateChip: AgentStateChip { AgentStateChip(state: session.state, ended: ended) }
-    /// #829 G4: the title is a text field (Rename…); `endRename` gets the text on Return, nil on Esc or focus loss.
-    var renaming = false
-    var endRename: (String?) -> Void = { _ in }
+    /// #829 G4: the title is a text field (Rename…) while `rename` is set; `endRename` gets the text on Return,
+    /// nil on Esc or focus loss (true: the edit goes on).
+    var rename: AgentRenameEdit?
+    var renaming: Bool { rename != nil }
+    var endRename: (AgentRenameEdit, String?) -> Bool = { _, _ in false }
     /// #822: Transcript | Terminal (the window passes `setMode`; without it there is no toggle).
     var mode = AgentPaneMode.transcript
     var setMode: ((AgentPaneMode) -> Void)?
@@ -639,10 +642,10 @@ struct AgentSessionHeader: View {
         .opacity(renaming ? 0 : 1)
         .accessibilityHidden(renaming)
         .overlay(alignment: .leading) {
-            if renaming {
-                AgentRenameField(name: session.name, alias: session.alias, end: endRename)
+            if let rename {
+                AgentRenameField(name: session.name, edit: rename, end: endRename)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .id(session.key)   // per session: Rename on another row gets a new field, never this one's text
+                    .id(ObjectIdentifier(rename))   // per edit: Rename on another row gets a new field, never this one's text
             }
         }
     }

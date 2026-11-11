@@ -509,7 +509,7 @@ struct RawPixels {
 
 extension XCTestCase {
     /// #822: a live session opens in Terminal. A test of Transcript behavior (the input box, the prompt
-    /// panel, Return opening the terminal app) shows its sessions as Transcript, the store's by default;
+    /// panel, Return moving the keys into the input box) shows its sessions as Transcript, the store's by default;
     /// the per-Mac pref is put back at teardown so no later test inherits the choice.
     @MainActor
     func showTranscript(_ m: AgentWindowModel, _ sessions: [AgentSession]? = nil) {

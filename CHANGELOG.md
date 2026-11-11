@@ -43,7 +43,13 @@ tag from the now-released section and put it on the new top draft.
   into a text field: Return saves, Esc or clicking away cancels, and an empty field clears the alias.
   It renames the display name only, through `dch -m`, and a failure shows on the session's line. An
   ended session's chip now reads Ended with its own glyph, its disabled Open in terminal says why,
-  and VoiceOver hears "Message Claude, session ended" on its input box (#829).
+  and VoiceOver hears "Message Claude, session ended" on its input box (#829). What you typed
+  survives the window being resized mid-edit. A new name shows at once and stays shown until the
+  session list catches up, so renaming back to the old name works straight away. A name longer than
+  dch keeps (599 bytes) is cut on a whole character, so emoji with skin tones and accented letters
+  are never split. Return while a Restart or Stop runs on the session keeps the field open with your
+  text and says why on the session's line. The "⋯" help on a session whose name starts with a dash
+  names only Rename (#853).
 - Agent Sessions window: clicking a session in the sidebar moves the keyboard into it, so you can
   type without clicking again: into its terminal in Terminal mode (as soon as the terminal is
   connected), into the message box in Transcript mode. Return on a selected row does the same, and
@@ -131,7 +137,8 @@ tag from the now-released section and put it on the new top draft.
   screen of an agent session or of a shell whose ring is off. A name shaped like a session id is
   refused in any case and with spaces around it. `dch --say`, `--run` and `--revive` stop at a safe
   point on Ctrl-C, a SIGTERM or a SIGHUP: nothing more is typed, text already typed is taken back
-  out of Claude's input box, and the result says `interrupted`, `withdrawn` or `draft_left`. A remote one
+  out of Claude's input box until it is empty, and the result says `interrupted`, `withdrawn` or
+  `draft_left`. A remote one
   that is cancelled or whose client goes away gets up to 660 s for that, as in Prosper (#851). A
   remote request whose host sends back a reason full of control characters no longer crashes dch.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
