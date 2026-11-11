@@ -293,6 +293,10 @@ final class AgentWindowModel: ObservableObject {
         }
         if confirming != nil, confirmingSession == nil, confirmingRecord == nil { confirming = nil }
         if let k = renaming, !sessions.contains(where: { $0.key == k }) { renameEdit = nil }   // it ended: no field
+        // #853 F1 (QA #699): a busy Return's refusal goes with the running text it was refused under,
+        // so the row's outcome ("Restarted", a failure, the Stop's result) shows. Other refusals keep theirs.
+        if let r = refusal, r.text == AgentIsland.renameBusyText, case .live(let k) = r.id,
+           AgentWindowControls.lock(actions[k]) == nil { refusal = nil }
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
             filled = true
@@ -472,9 +476,9 @@ final class AgentWindowModel: ObservableObject {
     /// replaced field's late end, on another row or this one) changes nothing. `text` nil: Esc or the focus left, nothing
     /// runs. Else Return: the session is re-read by key (gone: nothing) and the controller runs `dch -m`
     /// unless the text is its alias already. An empty text clears the alias.
-    /// #853 (QA #693 INFO-4): a Return the controller refused while another job runs on the row (a
-    /// Restart's or Stop's running text stays the row's line) keeps the field open with the text, and
-    /// the row says why. True: the edit goes on.
+    /// #853 (QA #693 INFO-4): a Return the controller refused while another job runs on the row keeps
+    /// the field open with the text, and the row's line says why over the running text ("Restarting…",
+    /// which store.actions keeps for the input lock) until that text goes (refresh). True: the edit goes on.
     @discardableResult
     func endRename(_ edit: AgentRenameEdit, _ text: String?) -> Bool {
         guard renameEdit === edit else { return false }   // #853 r2: a replaced edit's late end, even on the same row

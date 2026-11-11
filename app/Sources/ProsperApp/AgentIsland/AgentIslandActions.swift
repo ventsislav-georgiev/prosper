@@ -292,7 +292,7 @@ extension AgentIsland {
 
     static let renameLabel = "Rename…"
     /// The longest alias the window sends: 120 characters, and (QA #693 INFO-2) never more than the 599
-    /// bytes dch keeps (write_alias, dch.c:2040 at 7983f4b), which it cuts on a code point and can split
+    /// bytes dch keeps (write_alias, dch.c:2051 at v1.46.1), which it cuts on a code point and can split
     /// a character. Cut here on a character, dch stores what was sent and Return does not run it again.
     static let renameMax = 120
     static let renameMaxBytes = 599
@@ -328,6 +328,9 @@ extension AgentIsland {
     /// The listing with each sent alias over the one it replaced, while a list read before dch -m
     /// still shows that one. A sent alias goes once the listing shows it (the poller caught up), shows
     /// anything else (renamed since, elsewhere), or the session left.
+    /// QA #699 INFO-2, two edges left as is: renamed elsewhere back to exactly `was` before the first
+    /// list, the sent alias stays until the next rename; Old->A->B with a list read between the two
+    /// sidecars shows A for one list, then B.
     static func overlaySent(_ sessions: [AgentSession], _ sent: [AgentSessionKey: SentAlias])
         -> (sessions: [AgentSession], sent: [AgentSessionKey: SentAlias]) {
         var kept: [AgentSessionKey: SentAlias] = [:]

@@ -48,8 +48,9 @@ tag from the now-released section and put it on the new top draft.
   session list catches up, so renaming back to the old name works straight away. A name longer than
   dch keeps (599 bytes) is cut on a whole character, so emoji with skin tones and accented letters
   are never split. Return while a Restart or Stop runs on the session keeps the field open with your
-  text and says why on the session's line. The "⋯" help on a session whose name starts with a dash
-  names only Rename (#853).
+  text and says why on the session's line, only while that job runs; once it ends, the line shows
+  the job's result ("Restarted", why a restart failed, the Stop's result). The "⋯" help on a
+  session whose name starts with a dash names only Rename (#853).
 - Agent Sessions window: clicking a session in the sidebar moves the keyboard into it, so you can
   type without clicking again: into its terminal in Terminal mode (as soon as the terminal is
   connected), into the message box in Transcript mode. Return on a selected row does the same, and
@@ -149,9 +150,9 @@ tag from the now-released section and put it on the new top draft.
   refused in any case and with spaces around it. `dch --say`, `--run` and `--revive` stop at a safe
   point on Ctrl-C, a SIGTERM or a SIGHUP: nothing more is typed, text already typed is taken back
   out of Claude's input box until it is empty, and the result says `interrupted`, `withdrawn` or
-  `draft_left`. A remote one
-  that is cancelled or whose client goes away gets up to 660 s for that, as in Prosper (#851). A
-  remote request whose host sends back a reason full of control characters no longer crashes dch.
+  `draft_left`. A remote one that is cancelled or whose client goes away gets up to 660 s for
+  that, as in Prosper (#851). A remote request whose host sends back a reason full of control
+  characters no longer crashes dch.
 - dch 1.46.2 to 1.48.0: in dch's session picker, Shift+Enter or `o` opens a History session, and
   a session opened from the picker goes back to the picker when it ends. A remote `ctl` whose
   host's reply can't be read now says so (#857).

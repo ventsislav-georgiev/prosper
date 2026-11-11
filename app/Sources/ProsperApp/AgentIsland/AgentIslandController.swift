@@ -1620,6 +1620,7 @@ final class AgentIslandController {
         if had { onStoreChanged?() }
         autoAllow = [:]
         dchSeen = [:]
+        sentAliases = [:]   // QA #699 INFO-3
         shown = false
     }
 }

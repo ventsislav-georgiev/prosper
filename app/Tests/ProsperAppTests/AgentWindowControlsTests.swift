@@ -791,6 +791,9 @@ extension AgentWindowD1Tests {
         m.confirm(true)
         let why = try XCTUnwrap(st.resumeGate.refusal)
         XCTAssertEqual(m.refusalText(.live(a.key)), "Not run: Controls \(why)", "the gate's own reason")
+        st.actions[a.key] = "Restarted"   // QA #699 F1: a refresh drops only a busy Return's line
+        XCTAssertEqual(m.refusalText(.live(a.key)), "Not run: Controls \(why)", "a refresh keeps it")
+        st.actions[a.key] = nil
         // A master that dropped under 1.24.0 since the question (a restarted session on an old dch).
         st.controlDch = Self.v1241
         m.ask(.stop, old)

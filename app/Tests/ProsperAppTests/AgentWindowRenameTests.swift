@@ -605,6 +605,60 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// QA #699 F1: a busy Return's line goes with the job's running text, so the row's outcome shows:
+    /// a Restart that worked or failed with the field still open, and a window Stop on the selected row.
+    @MainActor
+    func testAgentWindowRenameBusyLineGivesWayToTheJobsOutcome() throws {
+        let a = session("a", .idle, alias: "Alpha"), b = session("b", .idle)
+        let st = store([a, b])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        Calls().wire(m)
+        m.renameSession = { _, _ in false }   // busy: the controller refuses every Return
+        m.setVisible(true)
+        defer { m.close() }
+        func line() -> String? { m.refusalText(.live(a.key)) ?? AgentWindowControls.notice(st, a.key) }
+        // Restart: "Restarting…", then a phase text, then the outcome, the field open throughout.
+        for outcome in ["Restarted", "Couldn't restart a: no session: a"] {
+            st.actions[a.key] = AgentIsland.restartingText
+            m.ask(.rename, a)
+            XCTAssertTrue(m.endRename(try XCTUnwrap(m.renameEdit), "Busy"))
+            XCTAssertEqual(line(), AgentIsland.renameBusyText)
+            st.actions[a.key] = "Pausing…"
+            XCTAssertEqual(line(), AgentIsland.renameBusyText, "a running text still: the job runs")
+            st.actions[a.key] = outcome
+            XCTAssertEqual(m.renaming, a.key, "the field stays open")
+            XCTAssertNil(m.refusalText(.live(a.key)))
+            XCTAssertEqual(line(), outcome, "the job's outcome, not the stale busy line")
+            XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), nil))
+        }
+        // A window Stop on the selected row, then Rename (a manual pick: it drops the follow to History).
+        for (outcome, leaves) in [("Couldn't stop a: no session: a", false), ("Stopped", true)] {
+            st.sessions = [a, b]
+            st.actions[a.key] = nil
+            m.select(.live(a.key))
+            m.ask(.stop, a)
+            m.confirm(true)
+            st.actions[a.key] = AgentIsland.stoppingText
+            m.ask(.rename, a)
+            XCTAssertTrue(m.endRename(try XCTUnwrap(m.renameEdit), "Busy"))
+            XCTAssertEqual(line(), AgentIsland.renameBusyText)
+            st.actions[a.key] = outcome
+            if leaves { st.sessions = [b] }
+            XCTAssertNil(m.refusalText(.live(a.key)))
+            if leaves {
+                // QA #699 F1's held case: the Rename dropped the follow, so the ended row is not held.
+                XCTAssertNil(m.selection, "the session left: nothing selected, no field")
+                XCTAssertNil(m.renaming)
+            } else {
+                XCTAssertEqual(m.selection, .live(a.key))
+                XCTAssertEqual(m.renaming, a.key, "the field stays open")
+                XCTAssertEqual(line(), outcome, "the Stop's failure, not the stale busy line")
+                XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), nil))
+            }
+        }
+    }
+
     /// INFO-6: the "⋯" help names what the menu holds: a dash-named session's holds only Rename.
     @MainActor
     func testAgentSessionMenuHelpNamesWhatTheMenuHolds() {

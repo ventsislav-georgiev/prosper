@@ -5559,6 +5559,12 @@ extension AgentIslandControlsTests {
         f.release.signal()
         settle(c) { !c.runner.isBusy(a.key) }
         settle(c)
+        // QA #699 F1: the restart over, the open field's line is its outcome, not the busy line.
+        XCTAssertEqual(m.renaming, a.key, "the field is still open")
+        XCTAssertNil(m.refusalText(.live(a.key)), "the busy line went with the restart")
+        let outcome = try XCTUnwrap(AgentWindowControls.notice(store, a.key))
+        XCTAssertNil(AgentWindowControls.lock(outcome), "the restart's outcome: \(outcome)")
+        XCTAssertNotEqual(outcome, AgentIsland.renameBusyText)
         XCTAssertFalse(m.endRename(try XCTUnwrap(m.renameEdit), "Busy"))
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
         XCTAssertEqual(f.args.last, ["-m", "a", "Busy"], "Return again, the restart over: it renames")
