@@ -854,6 +854,10 @@ final class AgentWindowInteractionTests: XCTestCase {
             (#"{"name":"s","result":"skipped","reason":"no_screen","detail":""}"#, AgentWindowText.noScreen),
             (#"{"name":"s","result":"skipped","reason":"not_claude","detail":""}"#, AgentWindowText.notClaude),
             (#"{"name":"s","result":"failed","reason":"not_submitted","detail":""}"#, AgentWindowText.notSubmitted),
+            // #854: dch 1.46's signal outcomes.
+            (#"{"name":"s","result":"failed","reason":"draft_left","detail":""}"#, AgentWindowText.draftLeft),
+            (#"{"name":"s","result":"failed","reason":"withdrawn","detail":""}"#, AgentWindowText.notSent),
+            (#"{"name":"s","result":"failed","reason":"interrupted","detail":""}"#, AgentWindowText.notSent),
             (#"{"name":"s","result":"failed","reason":"no_session","detail":""}"#, "dch didn't send it (no_session). Open in terminal"),
             ("", AgentWindowText.unconfirmed),
             ("dch: unknown option --say", AgentWindowText.unconfirmed),

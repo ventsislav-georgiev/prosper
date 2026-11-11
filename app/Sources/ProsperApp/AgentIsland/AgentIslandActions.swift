@@ -457,6 +457,11 @@ extension AgentIsland {
             return (o.result == "skipped" ? "Skipped: " : "Not resumed: ") + d
         case "ambiguous":
             return (resume ? "Not resumed: " : "\(verb.rawValue) failed: ") + ambiguousText
+        case "withdrawn" where resume, "draft_left" where resume:
+            // #854: dch 1.46 revived it; only the resume message failed (a signal once it was typed).
+            let a = o.revivedAs.flatMap { $0.isEmpty || $0 == o.name ? nil : $0 }
+            return (a.map { "Resumed as \($0)" } ?? "Resumed") + (o.reason == "withdrawn"
+                ? "; the resume message wasn't sent" : "; the resume message may still be in Claude's input, not sent")
         case "claude_unreadable":
             return "Not stopped: its Claude session record can't be read; left running"
         case "signal" where o.result == "interrupted":

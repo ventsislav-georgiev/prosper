@@ -59,6 +59,10 @@ tag from the now-released section and put it on the new top draft.
   the sidebar, start a rename or press ⌘F before the session is connected, the keys stay where you
   put them. Return no longer opens the session in the terminal app; "Open in terminal" in the
   header still does (#845).
+- Agent Sessions window and Agent Island: a message dch stopped sending on a Ctrl-C, SIGTERM or
+  SIGHUP now says what happened. One taken back, or stopped before anything was typed, reads "Not
+  sent"; one that may still sit in Claude's input box says so. A Resume whose session came back
+  but whose resume message was not sent reads "Resumed" and says why (#854).
 - Extensions: a `host.shell.run` that times out now stops the shell and everything it started
   (the whole process group, forced after 1 s) instead of leaving it running. Calls that must
   finish opt out with `host.shell.run(cmd, { keep_running = true })`: control returns at the

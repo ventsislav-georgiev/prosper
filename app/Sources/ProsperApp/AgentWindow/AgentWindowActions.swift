@@ -262,6 +262,10 @@ enum AgentWindowText {
     static let noScreenInterrupt = "This dch can't confirm an interrupt. Open in terminal"
     static let notClaude = "Claude isn't running in this session. Open in terminal"
     static let notSubmitted = "The message is in Claude's input but wasn't sent. Open in terminal"
+    /// #854: dch 1.46's draft_left: a signal came once the message was typed, and it may still be in the composer.
+    static let draftLeft = "The message may still be in Claude's input, but it wasn't sent. Open in terminal"
+    /// #854: dch 1.46's interrupted (nothing typed) and withdrawn (typed, then taken back out): Claude's input is as it was.
+    static let notSent = "Not sent: dch was stopped before it sent the message. Try again"
     static let notWorking = "Claude isn't working, so there's nothing to interrupt"
     /// #820: a prompt on screen that dch reported as idle or working (a message could pick a row, Esc answers it).
     static let promptShown = "Claude is showing a prompt. Open in terminal to answer it"
@@ -378,6 +382,8 @@ struct AgentWindowDriver: Sendable {
         case ("skipped"?, "no_screen"?): return .failed(AgentWindowText.noScreen)
         case ("skipped"?, "not_claude"?): return .failed(AgentWindowText.notClaude)
         case ("failed"?, "not_submitted"?): return .failed(AgentWindowText.notSubmitted)
+        case ("failed"?, "draft_left"?): return .failed(AgentWindowText.draftLeft)
+        case ("failed"?, "withdrawn"?), ("failed"?, "interrupted"?): return .failed(AgentWindowText.notSent)
         case (let r?, let why): return .failed("dch didn't send it (\(why ?? r)). Open in terminal")
         }
         for _ in 0..<confirmReads {

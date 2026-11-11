@@ -4340,6 +4340,34 @@ final class AgentIslandControlsTests: XCTestCase {
                        "session is live", "forget's live is no Resume")
     }
 
+    /// #854: dch 1.46 revived the session but a signal stopped the resume message once it was
+    /// typed: withdrawn and draft_left read as resumed with the message not sent. interrupted
+    /// keeps dch's detail, which says whether it was revived at all.
+    func testReviveMessageSignalReasonsReadInWords() {
+        func row(_ o: [String: String], _ verb: AgentIsland.Verb = .resume) -> String {
+            let line = String(decoding: try! JSONSerialization.data(withJSONObject: o), as: UTF8.self)
+            return AgentIsland.rowText(result(line, status: 1), name: "a", verb)
+        }
+        let typed = "revived as a in /Users/example/p, claude claude resumed S; resume message NOT sent (a signal came once it was typed: "
+        XCTAssertEqual(row(["name": "a", "as": "a", "result": "failed", "reason": "withdrawn",
+                            "detail": typed + "taken back out of the composer, not sent)", "session_id": "S"]),
+                       "Resumed; the resume message wasn't sent")
+        XCTAssertEqual(row(["name": "a", "as": "a-2", "result": "failed", "reason": "draft_left",
+                            "detail": typed + "it may still sit in the composer, not sent)", "session_id": "S"]),
+                       "Resumed as a-2; the resume message may still be in Claude's input, not sent")
+        XCTAssertEqual(row(["name": "a", "as": "", "result": "failed", "reason": "withdrawn", "detail": "", "session_id": ""]),
+                       "Resumed; the resume message wasn't sent", "no as: the name")
+        let notRevived = "NOT revived — a signal came before anything was typed; resume by hand: claude --resume S"
+        XCTAssertEqual(row(["name": "a", "as": "a", "result": "failed", "reason": "interrupted", "detail": notRevived, "session_id": "S"]),
+                       notRevived, "interrupted may mean not revived at all: dch's detail")
+        XCTAssertEqual(row(["name": "a", "result": "failed", "reason": "withdrawn", "detail": "x", "session_id": ""], .stop),
+                       "x", "only a resume reads it")
+        for verb in [AgentIsland.Verb.stop, .restart] {
+            XCTAssertEqual(row(["name": "a", "result": "failed", "reason": "draft_left", "detail": "y", "session_id": ""], verb),
+                           "y", "only a resume reads draft_left (\(verb.rawValue))")
+        }
+    }
+
     // MARK: - #714 round 2: dch 1.28.1 "file" on every record, `<file>.json` edits
 
     private static let v1281 = DchCommand.Binary(path: "/fake/dch", version: [1, 28, 1])
