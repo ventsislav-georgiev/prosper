@@ -119,7 +119,7 @@ tag from the now-released section and put it on the new top draft.
   Claude session id (`m` + 16 hex digits, any case, padding trimmed) with dch serve's own "name
   looks like a session_id", before running dch. A listed older session of that name still attaches
   by its exact name (#850).
-- Ships dch 1.47.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.48.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -152,7 +152,7 @@ tag from the now-released section and put it on the new top draft.
   `draft_left`. A remote one
   that is cancelled or whose client goes away gets up to 660 s for that, as in Prosper (#851). A
   remote request whose host sends back a reason full of control characters no longer crashes dch.
-- dch 1.46.2 to 1.47.0: in dch's session picker, Shift+Enter or `o` opens a History session, and
+- dch 1.46.2 to 1.48.0: in dch's session picker, Shift+Enter or `o` opens a History session, and
   a session opened from the picker goes back to the picker when it ends. A remote `ctl` whose
   host's reply can't be read now says so (#857).
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
