@@ -2738,7 +2738,8 @@ struct AppPickerMenu: View {
 
 /// One native key-mapping row: trigger → action → target, applied to the live engine
 /// on every edit. Replaces the old appkeys/app-remaps/media-layer extensions.
-private struct KeyMappingRow: View {
+/// Internal, not private: `KeyMappingRowLayoutTests` (#868) hosts it offscreen.
+struct KeyMappingRow: View {
     @ObservedObject var model: SettingsModel
     let rule: ShortcutRulesStore.Rule
 

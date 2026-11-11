@@ -20,7 +20,7 @@ final class GlobalHotKey {
     /// is stated once, here, so a registrar can't drift into its neighbour by copying
     /// a bare literal:
     ///
-    ///   1…16     fixed `ShortcutAction`s (`ShortcutAction.hotKeyId`)
+    ///   1…21     fixed `ShortcutAction`s (`ShortcutAction.hotKeyId`)
     ///   100…199  user custom shortcuts (`customIdBase` + `customMaxRegistered`)
     ///   200…299  app shortcuts (`AppShortcut.hotKeyIdBase` + `maxRegistered`)
     ///   300+     extension commands (`extensionIdBase`) — manifest keybindings

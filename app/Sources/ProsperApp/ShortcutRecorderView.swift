@@ -49,12 +49,7 @@ final class RecorderView: NSView {
         layer?.borderWidth = 1
         label.alignment = .center
         label.font = .systemFont(ofSize: 12 * ThemeRuntime.scale, weight: .medium)
-        label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
         refreshTitle()
     }
 
@@ -66,10 +61,24 @@ final class RecorderView: NSView {
     // so it never outlives the recording session.
 
     override var intrinsicContentSize: NSSize { NSSize(width: 110, height: 24) }
+
+    /// #868: centred by frame, not by constraints. SwiftUI hosts this view with
+    /// translatesAutoresizingMaskIntoConstraints off, so centring constraints solved
+    /// against the 110 pt intrinsic width, not the narrower frame #859 gives it: the
+    /// label's centre sat at x = 55 and it ran off the right edge below UI scale 1.0.
+    override func layout() {
+        super.layout()
+        let size = label.fittingSize
+        label.frame = NSRect(x: ((bounds.width - size.width) / 2).rounded(),
+                             y: ((bounds.height - size.height) / 2).rounded(),
+                             width: size.width, height: size.height)
+    }
+
     override var acceptsFirstResponder: Bool { true }
 
     func refreshTitle() {
         label.stringValue = recording ? "Press keys…" : combo.label
+        needsLayout = true
         label.textColor = recording ? .secondaryLabelColor : .labelColor
         layer?.borderColor = (recording ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor

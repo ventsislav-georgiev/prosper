@@ -206,6 +206,8 @@ tag from the now-released section and put it on the new top draft.
   or if a password field took the caret; Prosper beeps in each case (#848). If you click back into the
   app before you answer, the text goes in at the caret where you left it. The panel shows over
   full-screen apps, never opens in a password field, and macOS Text Replacements never ask (#842).
+- Settings: a shortcut key field centres its label again. In Key Remapping rows the label sat right
+  of centre and a long shortcut was cut at the right edge, more so below UI scale 1.0 (#868).
 
 ## v2.174.0
 
