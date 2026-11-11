@@ -93,9 +93,9 @@ tag from the now-released section and put it on the new top draft.
   not minimized and not covered. Settings › Agent Island › Agent Sessions › "Let sessions set the
   clipboard while you're viewing them" (on by default) turns it off. A program can never read the
   clipboard, and a middle click no longer pastes it. A session that ends while shown says "Session
-  ended" at once, with no "Couldn't attach" flash. The find buttons have VoiceOver labels, a
-  terminal whose program cannot be started says why, and no config file is left in the temporary
-  folder.
+  ended" at once, with no "Couldn't attach" flash. The find buttons have VoiceOver labels, the
+  error shown when the Mac cannot start a new process for a terminal is a plain sentence, and no
+  config file is left in the temporary folder.
   Pasting several lines is not confirmed first: Claude Code and login shells take a paste as one
   block (bracketed paste), so nothing runs early (#843).
 - Agent Sessions window: Settings › Shortcuts lists "Open Agent Sessions", a hotkey that opens the
