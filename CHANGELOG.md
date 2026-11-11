@@ -92,11 +92,13 @@ tag from the now-released section and put it on the new top draft.
   allowlisted, and offered once the bundled dch has it. (#838)
 - Remote Terminal: Prosper's "ctl" now answers the way dch 1.42.0's serve does (#841). A refused
   request gets its reason and then the connection closes; a second request while one runs gets
-  "busy" and the connection stays. A connection that ran a ctl takes only ctl frames, and a ctl on a
-  connection that is attached or watching is refused. A cancelled request ends with exit 2 "cancel",
-  nothing it printed after the cancel is sent, and dch and everything it started are killed 2 s
-  after the cancel if they have not exited. A request ends as soon as dch exits, even when a process
-  it started still holds its output open. `--xray` is refused first when this Mac's dch lacks it.
+  "busy" and the connection stays. A connection that ran a ctl takes only ctl frames: a session frame
+  or a watch closes it, and any other frame is dropped. A ctl on a connection that is attached or
+  watching is refused. A cancelled request ends with exit 2 "cancel", and nothing it printed after
+  the cancel is sent. A cancel or a closed connection sends dch SIGTERM; if dch has not exited after
+  660 s (`--say`, `--stop`, `--revive`, `--run`, so their clean-up is never cut) or 2 s (every other
+  verb), it and the processes it started are killed. A request ends as soon as dch exits, even when
+  a process it started still holds its output open. `--xray` is refused first when this Mac's dch lacks it.
 - Ships dch 1.46.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
@@ -125,8 +127,8 @@ tag from the now-released section and put it on the new top draft.
   other CLIs no longer write links into pipes and files. `dch --xray --clear` no longer wipes the
   screen of an agent session or of a shell whose ring is off. A name shaped like a session id is
   refused in any case and with spaces around it. `dch --say`, `--run` and `--revive` stop at a safe
-  point on Ctrl-C or a SIGTERM: nothing more is typed, text already typed is taken back out of
-  Claude's input box, and the result says `interrupted`, `withdrawn` or `draft_left`. A remote one
+  point on Ctrl-C, a SIGTERM or a SIGHUP: nothing more is typed, text already typed is taken back
+  out of Claude's input box, and the result says `interrupted`, `withdrawn` or `draft_left`. A remote one
   that is cancelled or whose client goes away gets up to 660 s for that, as in Prosper (#851).
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
@@ -137,9 +139,9 @@ tag from the now-released section and put it on the new top draft.
   expansion would; Return inserts at the caret, and Escape types the keyword back (with the space or
   punctuation that triggered it, never Return or Tab). Either way focus goes back to the app you typed
   in, and nothing is typed if another app took focus meanwhile, if that app could not be brought back,
-  or if a password field took the caret; Prosper beeps in each case (#848). If you click back into the app before you answer, the text goes in at the caret
-  where you left it. The panel shows over full-screen apps, never opens in a password field, and macOS
-  Text Replacements never ask (#842).
+  or if a password field took the caret; Prosper beeps in each case (#848). If you click back into the
+  app before you answer, the text goes in at the caret where you left it. The panel shows over
+  full-screen apps, never opens in a password field, and macOS Text Replacements never ask (#842).
 
 ## v2.174.0
 

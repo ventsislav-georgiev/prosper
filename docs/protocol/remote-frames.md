@@ -36,10 +36,15 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   never by `proto`.
 - **1.1 amendment, 2026-11-10** (#841, with dch #118 / dch 1.42.0): the ctl connection rules of
   `dch serve` 1.42.0, still `proto` `"1.1"`. A 0x30 while the connection's ctl runs gets the coded
-  `0x13 {"code": "busy", ...}` and nothing closes; every other refused 0x30 is a 0x13 and then the
-  FIN; a ctl connection (running or warm) takes only 0x08, 0x03, 0x30 and 0x34; a 0x30 on an
-  attached or watch connection is refused; a 0x34 ends the ctl with `{"exit": 2, "why": "cancel"}`
-  (SIGTERM, SIGKILL 2 s later) and forwards nothing after it; the request ends at dch's reap. See
+  `0x13 {"code": "busy", ...}` and nothing closes; a 0x30 on an attached or watch connection (or
+  beside a Mac-only request in flight) gets `ctl needs its own connection` and nothing closes either;
+  every other refused 0x30 is a 0x13 and then the FIN. A ctl connection (running or warm) takes only
+  0x08, 0x03, 0x30 and 0x34: any other frame `dch serve` reads whole (0x01-0x09, 0x2e) is refused,
+  then the FIN; anything else (0x10, 0x0a, a type it does not serve) is dropped unread. A 0x34 ends
+  the ctl with `{"exit": 2, "why": "cancel"}` and forwards nothing after it, and a close ends it the
+  same way with no frame; the request ends at dch's reap. Both send SIGTERM, then SIGKILL to the
+  group if dch has not exited: after **660 s** for `--say`, `--stop`, `--revive` and `--run`, after
+  **2 s** for every other verb (see [the grace](#the-sigkill-grace)). See
   [0x30 ctl](#0x30-ctl-gate-ctl). An amendment, not 1.2: `dch serve` 1.42.0 speaks these rules as
   `"1.1"` (serve.c's hello), a client gates 0x34 and a second 0x30 on the `ctl-cancel` token, and
   the only added key (`code` on the busy 0x13) is optional to a client.
@@ -119,8 +124,8 @@ Every frame, in both directions:
   flight gets `0x13 {"message": "busy with an earlier request"}` at once, ahead of the first
   one's reply. 0x30 ctl allows one in flight per connection too, answered with `dch serve`'s coded
   busy instead (see [0x30 ctl](#0x30-ctl-gate-ctl)); a 0x30 while a Mac-only request is in flight
-  gets `ctl needs its own connection`, and a Mac-only request on a ctl connection is refused and
-  closed (a ctl connection takes only ctl frames). The others are never refused as busy:
+  gets `ctl needs its own connection`, and a Mac-only request on a ctl connection is dropped unread
+  (a ctl connection takes only ctl frames). The others are never refused as busy:
   - the base frames, 0x02 create, 0x0a putClipboard and 0x17 putClipboardText are handled even
     while a request is in flight;
   - a second 0x2e on a connection that is already watching is ignored (no reply);
@@ -138,8 +143,9 @@ Every frame, in both directions:
   - on a length prefix over the receive guard (0x13 `frame too large` first);
   - after 0x12 exit (the FIN follows the frame);
   - when an attach or create fails to spawn (0x13 first, see below);
-  - after a refused 0x30 (0x13 first; not a busy one), after any frame but 0x08, 0x03, 0x30 and
-    0x34 on a ctl connection (0x13 `a ctl connection takes only ctl frames` first), and when a
+  - after a refused 0x30 (0x13 first; not a busy one, nor `ctl needs its own connection`), after
+    0x01, 0x02, 0x04-0x07, 0x09 or 0x2e on a ctl connection (0x13 `a ctl connection takes only ctl
+    frames` first; other frames there are dropped unread), and when a
     warm ctl connection has been idle for 300 s (#841, see [0x30 ctl](#0x30-ctl-gate-ctl));
   - when another connection attaches to the same session (the newest wins; no frame);
   - when an attached session's output has not been taken by the socket for 20 s;
@@ -416,10 +422,13 @@ Request: `0x30 {"argv": [string, ...], "cwd"?: string}`.
 
 Cancel: `0x34` (empty payload, client to server; `ctl-cancel` in `ops`). As `dch serve` 1.42.0
 (amendment 2026-11-10): the server forwards nothing more of the running ctl's output, sends its dch
-SIGTERM and, if that dch has not exited 2 s later, SIGKILL (Prosper: to its whole process group);
-once dch exits the request ends with `0x33 {"exit": 2, "why": "cancel"}` whatever dch's own exit
+SIGTERM and, if that dch has not exited by the end of the verb's grace (below), SIGKILL (Prosper: to
+its whole process group); once dch exits the request ends with `0x33 {"exit": 2, "why": "cancel"}` whatever dch's own exit
 was. A 0x34 with no ctl running, a second one, or one after the 0x33 went out, is ignored: no
-frame. (1.1 before the amendment: dch's own exit, and the output it wrote on its way out.)
+frame. After the cut nothing is typed or sent into the session, except a late Enter, which dch
+reports as `withdrawn` (see [the grace](#the-sigkill-grace)). Prosper, like `dch serve`, reads
+dch's pipes until the reap and drops what it reads. (1.1 before the amendment: dch's own exit, and
+the output it wrote on its way out.)
 
 Replies, all server to client:
 
@@ -494,7 +503,8 @@ The rules behind it:
   it, a well-formed `--xray` gets `0x13 xray not supported by this host` and nothing runs.
 
 Refusals, each a single 0x13 and nothing runs. Since the amendment of 2026-11-10 (`dch serve`
-1.42.0) every one but the first two is followed by the server's FIN, on a warm connection too.
+1.42.0) every one but the first two (busy, and `ctl needs its own connection`) is followed by the
+server's FIN, on a warm connection too.
 Prosper's messages:
 
 | Cause | `message` |
@@ -547,19 +557,23 @@ for an agent, and a client shows it as it comes.
   reaped the server sends what is left in its pipes and then the 0x33. A process dch started
   that still holds a pipe holds neither the 0x33 nor the connection's ctl slot.
 - **The client closes** while a ctl runs (any verb, `--follow` and `--xray --follow` included): the server sends its dch
-  child one SIGTERM and nothing more (no SIGKILL after it), and sends no frame. `--stop` and
-  `--say` answer the SIGTERM by leaving the session running and typing their resume message, so
-  they get the time they need.
+  child SIGTERM and, if that dch has not exited by the end of the verb's grace (660 s for `--say`,
+  `--stop`, `--revive` and `--run`, 2 s for the rest; see [the grace](#the-sigkill-grace)), SIGKILL
+  (Prosper: to its whole process group), as for a 0x34, and sends no frame (amendment 2026-11-10,
+  `dch serve`'s ctl_end). dch 1.46.0+ answers the SIGTERM as described in
+  [the grace](#the-sigkill-grace). (1.1 before the amendment: SIGTERM only.)
 
 **Connections.** One ctl in flight per connection: another 0x30 while one runs gets the busy
 0x13 at once and runs nothing; the running one goes on, and a 0x34 still cancels it. After its
 0x33 the same connection takes the next 0x30 (warm reuse). A `--follow` (or `--xray --follow`)
 holds its slot until it ends. Since the amendment of 2026-11-10 a ctl connection stays one: once a
-ctl has run on it (running or warm) it takes only 0x08, 0x03, 0x30 and 0x34; any other frame
-(an attach, a watch, a kill, a Mac-only request, 0x10 input, an unknown type) gets `0x13 {"message":
-"a ctl connection takes only ctl frames"}`, is not handled, and the FIN follows (a running ctl
-is ended as on a close). The reverse holds too: a 0x30 on an attached or watch connection is
-refused (above). Closing the connection sends a running ctl's child SIGTERM (above). A connection
+ctl has run on it (running or warm) it takes only 0x08, 0x03, 0x30 and 0x34. Any other frame
+`dch serve` reads whole (0x01 attach, 0x02 create, 0x04 kill, 0x05 resize, 0x06 rename, 0x07
+redraw, 0x09 snapshot, 0x2e watch) gets `0x13 {"message": "a ctl connection takes only ctl
+frames"}`, is not handled, and the FIN follows (a running ctl is ended as on a close). Every other
+frame (0x10 input, 0x0a, a Mac-only request, an unknown type) is dropped unread, as `dch serve`
+drops what it does not serve: no frame, no close. The reverse holds too: a 0x30 on an attached or
+watch connection is refused (above). Closing the connection ends a running ctl (above). A connection
 a ctl ran on is closed by the server once it has been idle for **300 s**: no frame from the
 client and no reply from the server for 300 s, and no ctl running. (1.1 before the amendment
 let a ctl share a connection with an attach.)
@@ -578,6 +592,30 @@ op (`dch: <host>: does not support <verb> (needs dch serve 1.41+)`, or
 `(needs dch serve --allow-create)` for `--spawn`); 7 unreachable (`dch: <host>: unreachable:
 <why>`); 1 on a 0x13 (`dch: <host>: <reason>`). `-a` keeps the 1.40 codes. The client refuses
 a flag that is not allowlisted before it connects.
+
+#### The SIGKILL grace
+
+After a 0x34's SIGTERM, or a close's, the server waits for dch to exit before it sends SIGKILL:
+**660 s** for `--say`, `--stop`, `--revive` and `--run`, **2 s** for every other verb. A dch reaped
+inside the grace gets no SIGKILL. The long grace is there because these verbs clean up after the
+SIGTERM, and a SIGKILL partway through would leave the session half-typed or paused:
+- dch 1.46.0+ stops `--say`, `--run` and `--revive` at a safe point on a first SIGINT, SIGTERM or
+  SIGHUP. Nothing more is typed and no Enter is pressed. Text already typed is taken back with
+  Ctrl-U, and a paste may first get up to `DCH_AGENT_LAND_MS` (30 s by default) to paint. These
+  verbs then exit 1 with `interrupted`, `withdrawn` (an Enter landed late) or `draft_left`. A
+  second signal exits at once (128 + the signal).
+- `--stop` answers the SIGTERM by leaving the session running and typing its resume message to an
+  agent that was still waiting to pause. That typing waits for the composer to empty and retries
+  Enter, so with a busy Claude it can take tens of seconds.
+
+660 s bounds that clean-up. It is `dch serve`'s `CTL_LONG_MS`, the timeout of `--say`, `--stop`
+and `--revive` (see Limits).
+
+`dch serve` 1.45.1+ has the same rule: 660 s for these four verbs on a 0x34 or a close, 2 s
+(`CTL_GRACE_MS`) for every other verb. Two differences remain. On a cap or timeout, serve cuts the
+ctl with SIGTERM and SIGKILL 2 s later. Prosper kills the process group (SIGTERM, then SIGKILL
+after 1 s; see Limits). #852 tracks it. Also, serve gives `--run` the 660 s timeout as well
+(`CTL_LONG` in rframe.c), while Prosper gives it 60 s. #852 tracks it too.
 
 ## Mac-only frames (Prosper)
 

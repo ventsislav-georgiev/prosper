@@ -79,7 +79,7 @@ enum DchFrame {
     static let ctlStdout: UInt8 = 0x31  // raw bytes: a chunk of the ctl's dch stdout
     static let ctlStderr: UInt8 = 0x32  // raw bytes: a chunk of its stderr
     static let ctlExit: UInt8 = 0x33    // {exit, why?: "cap"|"timeout"|"cancel"}: always a ran ctl's last frame
-    static let ctlCancel: UInt8 = 0x34  // (empty) C→S: cut the running ctl (SIGTERM, SIGKILL 2 s later); "ctl-cancel" in ops
+    static let ctlCancel: UInt8 = 0x34  // (empty) C→S: cut the running ctl (SIGTERM, SIGKILL 2 s or 660 s later); "ctl-cancel" in ops
 
     /// QA #606 F1: the requests that change the list. After one, the list frame forks until
     /// the island has caught up (DchWatchHub.changed).
@@ -391,6 +391,10 @@ final class DchConnection: @unchecked Sendable {
         // #841, dch 1.42 serve.c on_frame: a ctl connection (running or warm) stays one. Its frames are
         // read while the ctl runs, so an attach, watch or request there would mix into the ctl's stream.
         if ctlConnection, ![DchFrame.machineInfo, DchFrame.list, DchFrame.ctl, DchFrame.ctlCancel].contains(type) {
+            // QA #688 INFO-1: serve refuses only the frames it reads whole (rframe.c rf_control: 0x01-0x09,
+            // 0x2e); the rest (0x10, 0x0a, any type it does not serve, Prosper's Mac-only requests too) it
+            // drops unread, with no frame and no close.
+            guard (0x01...0x09).contains(type) || type == DchFrame.watch else { return }
             return close(after: DchControlOps.error(DchCtl.ctlOnly))
         }
         // QA #606 F1: once a list-changing request ran (for #591's verbs: was sent off, then
@@ -581,7 +585,7 @@ final class DchConnection: @unchecked Sendable {
             let (path, why) = vetted ?? vet()
             guard let path else { return self.ctlFinal(DchControlOps.error(why ?? "")) }
             job.run(path: path, argv: argv, env: ctl.env(), cwd: cwd, follow: DchCtl.follows(argv), cap: ctl.cap,
-                    timeout: ctl.timeout(of: argv[0]), send: { self.sendStreamed($0) }, reply: { self.ctlFinal($0) })
+                    timeout: ctl.timeout(of: argv[0]), grace: ctl.grace(of: argv[0]), send: { self.sendStreamed($0) }, reply: { self.ctlFinal($0) })
         }
     }
 

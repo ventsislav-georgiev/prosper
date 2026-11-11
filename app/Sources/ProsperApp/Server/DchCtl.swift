@@ -22,6 +22,11 @@ struct DchCtlOps: Sendable {
     /// The timeout `verb` runs under (not --follow: it has none).
     func timeout(of verb: String) -> TimeInterval { DchCtl.agentVerbs.contains(verb) ? agentTimeout : timeout }
 
+    /// #841 r4: the SIGKILL backstop after a 0x34's or a close's SIGTERM (tests set it small).
+    var agentGrace: TimeInterval = DchCtl.agentGrace
+    /// The grace `verb` gets: `agentGrace` for DchCtl.longGraceVerbs, else DchCtl.cancelGrace.
+    func grace(of verb: String) -> TimeInterval { DchCtl.longGraceVerbs.contains(verb) ? agentGrace : DchCtl.cancelGrace }
+
     /// "xray" in ops, and --xray allowed: the dch ctl runs answers `--version` with at least
     /// DchCtl.xrayMinDch. The probe is DchCommand's (cached per path and mtime, bounded at 4 s), so
     /// never on the connection's queue. Under XCTest false: no test probes a dch.
@@ -37,12 +42,17 @@ enum DchCtl {
     static let localOnly = "a session name with ':' is local only"
     /// #841, dch 1.42 serve's words: a 0x30 on an attached or watch connection (or beside another request), no close.
     static let ownConnection = "ctl needs its own connection"
-    /// #841: anything but 0x08, 0x03, 0x30 or 0x34 on a ctl connection (running or warm), then the FIN.
+    /// #841: a frame dch serve reads whole (0x01-0x09, 0x2e) but 0x08 or 0x03, on a ctl connection (running or warm), then the FIN.
     static let ctlOnly = "a ctl connection takes only ctl frames"
     /// #841: a 0x30 while this connection's ctl runs; the connection stays open. serve.c's BUSY_JSON byte for byte.
     static let busy = DchFrame.encode(DchFrame.error, Array(#"{"code":"busy","message":"a ctl is already running on this connection"}"#.utf8))
-    /// #841: serve's CTL_GRACE_MS: a 0x34's SIGTERM, then SIGKILL to the group this long after.
+    /// #841: serve's CTL_GRACE_MS: a 0x34's or a close's SIGTERM, then SIGKILL to the group this long after.
     static let cancelGrace: TimeInterval = 2
+    /// #841 r4 (dch's ruling, 2026-11-10): an agent verb's grace instead. On SIGTERM dch 1.46.0+ --say/--run/--revive
+    /// stop at a safe point (Ctrl-U take-back, up to 30 s DCH_AGENT_LAND_MS for a paste to paint) and --stop
+    /// types its resume message; a SIGKILL at 2 s cuts that short. dch serve's CTL_LONG_MS.
+    static let agentGrace: TimeInterval = 660
+    static let longGraceVerbs: Set<String> = ["--say", "--stop", "--revive", "--run"]
     /// dch's CTL_ARGV_MAX.
     static let argvMax = 1024
 
@@ -267,10 +277,11 @@ enum DchCtl {
 
 /// #838: one ctl request's dch child. Its stdout and stderr go out as 0x31/0x32 chunks, then one
 /// final frame: 0x33 with dch's exit, 0x33 {"exit": 2, "why"} once the cap, the timeout or a 0x34
-/// cut it, or 0x13 when dch could not start. `cancel` (the connection closed) sends dch SIGTERM only, and
-/// nothing more: --stop and --say answer it by leaving the session running with their resume
-/// message. The cap and timeout kill is ShellRunner's: SIGTERM to the child's whole process group
-/// (Foundation makes it the leader), SIGKILL to the group after 1 s.
+/// cut it, or 0x13 when dch could not start. `cancel` (the connection closed) ends it as a 0x34 does
+/// but sends no frame: SIGTERM (the four agent verbs clean up on it, see DchCtl.agentGrace), SIGKILL
+/// to the group the verb's grace later if dch is still unreaped (DchCtlOps.grace: 660 s for the agent
+/// verbs, 2 s for the rest, as dch serve 1.45.1+). The cap and timeout kill is ShellRunner's: SIGTERM to the child's whole process
+/// group (Foundation makes it the leader), SIGKILL to the group after 1 s.
 final class DchCtlJob: @unchecked Sendable {
     enum Stop { case none, term, killGroup }
 
@@ -280,8 +291,10 @@ final class DchCtlJob: @unchecked Sendable {
     private var ended = false
     private var cancelled = false
     private var sent = 0
-    /// #841: written once dch is reaped, so the pump stops waiting on a pipe a leftover writer holds.
-    private let wake = Pipe()
+    /// The SIGKILL grace after a SIGTERM (DchCtlOps.grace of the verb). Set in run(), before the pid.
+    private var grace = DchCtl.cancelGrace
+    /// The timeout's 0x33 goes here, so the timer holds nothing but a weak job (QA #688 F1). Set in run().
+    private var timeoutReply: (@Sendable (Data) -> Void)?
 
     /// Ends the request once: true for the one caller that did. `running` (the timeout): only while
     /// dch is not yet reaped (one that exited in time ends with its own exit) and not cut by a 0x34
@@ -296,7 +309,7 @@ final class DchCtlJob: @unchecked Sendable {
         guard pid > 0 else { return true }
         switch stop {
         case .none: break
-        case .term: Darwin.kill(pid, SIGTERM)
+        case .term: term(pid)
         case .killGroup: CodexHarness.killGroup(pid, grace: 1)
         }
         return true
@@ -304,8 +317,18 @@ final class DchCtlJob: @unchecked Sendable {
 
     func cancel() { _ = end(.term) }
 
+    /// The one SIGTERM path, a 0x34's and a close's: SIGTERM to dch, then SIGKILL to its group `grace`
+    /// later while it is still unreaped. A reaped dch left pid 0, so nothing is signalled however late.
+    private func term(_ pid: pid_t) {
+        Darwin.kill(pid, SIGTERM)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + lock.withLock { grace }) { [weak self] in
+            guard let self else { return }   // run() returned: dch was reaped
+            self.lock.withLock { if self.pid == pid, CodexHarness.mayKillGroup(pid) { Darwin.kill(-pid, SIGKILL) } }
+        }
+    }
+
     /// 0x34, as dch 1.42 serve's ctl_cut "cancel": nothing more is forwarded, dch gets SIGTERM and,
-    /// still unreaped `DchCtl.cancelGrace` later, its group SIGKILL; once reaped the request ends with
+    /// still unreaped its verb's grace later, its group SIGKILL; once reaped the request ends with
     /// 0x33 {"exit": 2, "why": "cancel"}. Nothing once it ended or was already cancelled (a late 0x34).
     func cancelRequest() {
         let pid: pid_t? = lock.withLock {
@@ -314,15 +337,12 @@ final class DchCtlJob: @unchecked Sendable {
             return self.pid
         }
         guard let pid, pid > 0 else { return }   // before the spawn: run() sees `cancelled` and runs nothing
-        Darwin.kill(pid, SIGTERM)
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + DchCtl.cancelGrace) {
-            self.lock.withLock { if self.pid == pid, CodexHarness.mayKillGroup(pid) { Darwin.kill(-pid, SIGKILL) } }
-        }
+        term(pid)
     }
 
     /// Blocks its thread (never the connection's queue) until dch exits or is killed.
     func run(path: String, argv: [String], env: [String: String], cwd: String?, follow: Bool, cap: Int,
-             timeout: TimeInterval, send: @escaping @Sendable (Data) -> Bool, reply: @escaping @Sendable (Data) -> Void) {
+             timeout: TimeInterval, grace: TimeInterval, send: @escaping @Sendable (Data) -> Bool, reply: @escaping @Sendable (Data) -> Void) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = argv
@@ -332,7 +352,20 @@ final class DchCtlJob: @unchecked Sendable {
         p.standardOutput = out
         p.standardError = err
         p.standardInput = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0), poke = wake.fileHandleForWriting.fileDescriptor
+        // #841: the reap writes `wake`, so the pump stops waiting on a pipe a leftover writer holds.
+        // QA #688 F1: closed here on every return. The early returns never spawn, so nothing writes it;
+        // past the spawn, run() returns only after exited.wait(), which follows the handler's one write,
+        // and after the pump, the one reader: no write or poll can reach a closed (or reused) fd number.
+        var wake: [Int32] = [-1, -1]
+        guard Darwin.pipe(&wake) == 0 else {
+            if end(.none) { reply(DchControlOps.error("dch could not be run")) }
+            return
+        }
+        defer { Darwin.close(wake[0]); Darwin.close(wake[1]) }
+        // A closed connection keeps its ctlJob, and `reply` holds the connection: clear it, or the two hold each other.
+        defer { sendLock.withLock { timeoutReply = nil } }
+        for fd in wake { _ = fcntl(fd, F_SETFD, FD_CLOEXEC) }   // no forkpty child inherits them
+        let exited = DispatchSemaphore(value: 0), poke = wake[1]
         // Cleared once reaped: a late kill must not signal a recycled pid.
         p.terminationHandler = { [lock] _ in
             lock.withLock { self.pid = 0 }
@@ -341,6 +374,7 @@ final class DchCtlJob: @unchecked Sendable {
             exited.signal()
         }
         lock.lock()   // a cancel either sees the pid or stops the spawn
+        self.grace = grace
         guard !ended else { lock.unlock(); return }
         if cancelled {   // a 0x34 that came before the spawn: nothing runs
             ended = true
@@ -355,13 +389,15 @@ final class DchCtlJob: @unchecked Sendable {
         pid = p.processIdentifier
         lock.unlock()
         if !follow {
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
-                guard self.end(.killGroup, running: true) else { return }
-                self.sendLock.withLock { reply(DchCtl.exitFrame(2, why: "timeout")) }
+            timeoutReply = reply
+            // QA #688 F1: weak, so a finished job (and what it holds) goes now, not when the timer fires.
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak self] in
+                guard let self, self.end(.killGroup, running: true) else { return }   // gone: it ended
+                self.sendLock.withLock { self.timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
             }
         }
         pump([(out.fileHandleForReading, DchFrame.ctlStdout), (err.fileHandleForReading, DchFrame.ctlStderr)],
-             follow: follow, cap: cap, send: send, reply: reply)
+             woken: wake[0], follow: follow, cap: cap, send: send, reply: reply)
         exited.wait()
         let code = p.terminationReason == .uncaughtSignal ? 128 + p.terminationStatus : p.terminationStatus
         let frame = lock.withLock { cancelled } ? DchCtl.exitFrame(2, why: "cancel") : DchCtl.exitFrame(code)
@@ -373,10 +409,9 @@ final class DchCtlJob: @unchecked Sendable {
     /// leftover writer (a process dch started that kept the pipe) holds neither the 0x33 nor the slot.
     /// Until the reap the pipes are read even after the end (dropped), so a child writing into a full
     /// pipe still exits.
-    private func pump(_ pipes: [(FileHandle, UInt8)], follow: Bool, cap: Int,
+    private func pump(_ pipes: [(FileHandle, UInt8)], woken: Int32, follow: Bool, cap: Int,
                       send: (Data) -> Bool, reply: (Data) -> Void) {
         var open = pipes.map { (fd: $0.0.fileDescriptor, type: $0.1) }
-        let woken = wake.fileHandleForReading.fileDescriptor
         for fd in open.map(\.fd) { _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) }
         var buf = [UInt8](repeating: 0, count: 1 << 16)
         while !open.isEmpty {
