@@ -284,8 +284,11 @@ extension AgentIsland {
     static let reviveAllNoMessageArgs = ["--revive", "--all", "--no-message", "--json"]
 
     /// `name` when free, else the first free `<name>-2`, `-3`, ….
+    /// #847: compared case-folded: on a case-insensitive APFS "Proj" and "proj" share one socket path.
     static func freeName(_ name: String, taken: Set<String>) -> String {
-        taken.contains(name) ? (2...).lazy.map { "\(name)-\($0)" }.first { !taken.contains($0) }! : name
+        let folded = Set(taken.map { $0.lowercased() })
+        func free(_ n: String) -> Bool { !folded.contains(n.lowercased()) }
+        return free(name) ? name : (2...).lazy.map { "\(name)-\($0)" }.first { free($0) }!
     }
 
     // MARK: - Rename (#829 G4)
@@ -871,8 +874,14 @@ extension AgentIsland {
     /// `--spawn <name> -- [launch argv]`; the name is free of the dir's live
     /// sessions and records (a record of that name would be overwritten). QA #629
     /// sweep: "--" so a setting's command starting with "-" is never a dch flag.
-    static func newSessionArgs(folder: String, command: [String], taken: Set<String>) -> [String] {
-        ["--spawn", freeName(sessionName(folder: folder), taken: taken), "--"] + command
+    /// #847: `name` given (the window's form): used as is; the caller checked it (AgentNewSession.nameError).
+    static func newSessionArgs(folder: String, command: [String], taken: Set<String>, name: String? = nil) -> [String] {
+        ["--spawn", name ?? freeName(sessionName(folder: folder), taken: taken), "--"] + command
+    }
+
+    /// #847: the names a new session in `dir` must not take: its live sessions' and its records'.
+    static func spawnTaken(dir: String, sessions: [AgentSession], history: [DchHistoryRecord]) -> Set<String> {
+        Set(sessions.filter { $0.key.dir == dir }.map(\.name)).union(history.filter { $0.key.dir == dir }.map(\.name))
     }
 
     /// --spawn passes its env to the session: a Claude Code identity in it

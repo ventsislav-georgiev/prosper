@@ -451,6 +451,8 @@ enum Preferences {
         static let agentWindowTranscriptSessions = "agentWindowTranscriptSessions"
         // OQ-66: a session's terminal may set the clipboard (OSC 52) while you view it; per Mac, not in SyncedKeys.
         static let agentWindowClipboardWrites = "agentWindowClipboardWrites"
+        // #847: the folder the window's last new session started in (expanded path); per Mac, not in SyncedKeys.
+        static let agentWindowNewSessionFolder = "agentWindowNewSessionFolder"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1169,6 +1171,12 @@ enum Preferences {
     static var agentWindowTranscriptSessions: [String] {
         get { defaults.stringArray(forKey: Keys.agentWindowTranscriptSessions) ?? [] }
         set { defaults.set(newValue, forKey: Keys.agentWindowTranscriptSessions) }
+    }
+
+    /// #847: the folder the window's last new session or shell started in; unset reads as nil.
+    static var agentWindowNewSessionFolder: String? {
+        get { defaults.string(forKey: Keys.agentWindowNewSessionFolder) }
+        set { defaults.set(newValue, forKey: Keys.agentWindowNewSessionFolder) }
     }
 
     /// Agent Island's terminal raw value (`AgentTerminal`); unset or uninstalled

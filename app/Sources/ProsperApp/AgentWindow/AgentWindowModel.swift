@@ -302,6 +302,7 @@ final class AgentWindowModel: ObservableObject {
         // so the row's outcome ("Restarted", a failure, the Stop's result) shows. Other refusals keep theirs.
         if let r = refusal, r.text == AgentIsland.renameBusyText, case .live(let k) = r.id,
            AgentWindowControls.lock(actions[k]) == nil { refusal = nil }
+        landSpawn()   // #847
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
             filled = true
@@ -360,8 +361,9 @@ final class AgentWindowModel: ObservableObject {
 
     /// `manual`: the human's pick (a click, a key, a menu); it drops a pending follow-to-History.
     /// Any change of row drops the confirm strip's question (R5).
+    /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true) {
-        if manual { following = nil; removing = nil }
+        if manual { following = nil; removing = nil; pendingSpawn = nil; newSession = nil }
         if selection != id {
             selection = id
             confirming = nil
@@ -454,6 +456,178 @@ final class AgentWindowModel: ObservableObject {
         guard !selectionIsHeld, let s = selectedRow?.session else { return false }
         setMode(mode(s) == .terminal ? .transcript : .terminal, for: s)
         return true
+    }
+
+    // MARK: #847 New session
+
+    /// The form in the detail pane; nil: not shown.
+    @Published private(set) var newSession: AgentNewSessionForm?
+    /// Bumped by every open: the form's Name field takes the keys (⌘N on an open form too).
+    @Published private(set) var newSessionFocus = 0
+    /// A session the window started: on the refresh its row shows, it is selected in Terminal with the keys.
+    /// Dropped by a manual pick, the form reopening and after `spawnSlack`.
+    private(set) var pendingSpawn: (key: AgentSessionKey, at: TimeInterval)?
+    static let spawnSlack: TimeInterval = 15
+    /// The island's one --spawn (its gate, runner key, env and failure line).
+    lazy var spawnSession: (_ folder: String, _ command: [String], _ name: String?,
+                            _ done: @escaping @MainActor @Sendable (AgentSessionKey?, String?) -> Void) -> AgentSessionKey? = {
+        [weak self] in self?.island().spawn(in: $0, command: $1, name: $2, done: $3)
+    }
+    var folderExists: (String) -> Bool = { AgentIsland.isFolder($0) }
+    var home = NSHomeDirectory()
+    var shell = ProcessInfo.processInfo.environment["SHELL"]
+
+    /// ⌘N, +, the empty state's pill: the form, prefilled (last folder > the selected session's cwd > ~,
+    /// its free name, the island's command setting, else its inference). Open already: its Name field.
+    func openNewSession(folder: String? = nil) {
+        pendingSpawn = nil
+        newSessionFocus += 1
+        guard newSession == nil else { return }
+        let typed = Preferences.agentIslandNewSessionCommand
+        newSession = AgentNewSessionForm(folder: AgentNewSession.abbreviate(folder ?? newSessionDefaultFolder, home: home),
+                                         command: typed.isEmpty ? "claude" : typed)
+        guard typed.isEmpty else { return }
+        island().newSessionCommand { [weak self] argv in
+            guard let self, var f = self.newSession, f.starting == nil, f.command == "claude" else { return }
+            f.command = AgentIsland.shellLine(argv)
+            self.newSession = f
+        }
+    }
+
+    func cancelNewSession() { newSession = nil }
+
+    var newSessionDefaultFolder: String {
+        if let last = Preferences.agentWindowNewSessionFolder, folderExists(last) { return last }
+        if !selectionIsHeld, selectedRow?.session != nil, let cwd = transcript.cwd, folderExists(cwd) { return cwd }
+        return home
+    }
+
+    func setNewSessionFolder(_ s: String) { newSession?.folder = s }
+
+    /// Typing pins the name; clearing it returns to the folder's free name.
+    func setNewSessionName(_ s: String) {
+        newSession?.name = s
+        newSession?.nameEdited = !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func setNewSessionCommand(_ s: String) { newSession?.command = s }
+
+    func chooseNewSessionFolder() {
+        island().chooseFolder { [weak self] path in
+            guard let self, let path, self.newSession?.starting == nil else { return }
+            self.setNewSessionFolder(AgentNewSession.abbreviate(path, home: self.home))
+        }
+    }
+
+    /// The live sessions' and records' names in the spawn dir, from this window's store.
+    var spawnTaken: Set<String> {
+        guard let store else { return [] }
+        return AgentIsland.spawnTaken(dir: island().spawnDir(), sessions: store.sessions, history: store.history)
+    }
+
+    var newSessionAutoName: String {
+        AgentNewSession.autoName(folder: AgentNewSession.expand(newSession?.folder ?? "", home: home), taken: spawnTaken)
+    }
+
+    /// The name Start uses: the typed one, else the free name now (an untouched name taken since is re-picked).
+    var newSessionName: String {
+        guard let f = newSession, f.nameEdited else { return newSessionAutoName }
+        return f.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var newSessionErrors: (folder: String?, name: String?) {
+        guard let f = newSession else { return (nil, nil) }
+        return (AgentNewSession.folderError(AgentNewSession.expand(f.folder, home: home), exists: folderExists),
+                AgentNewSession.nameError(newSessionName, taken: spawnTaken))
+    }
+
+    var newSessionRuns: String {
+        let argv = AgentNewSession.argv(newSession?.command ?? "", shell: shell)
+        return AgentIsland.shellLine(argv) + (AgentIsland.shellWords(newSession?.command ?? "").isEmpty ? " (your login shell)" : "")
+    }
+
+    var newSessionRecents: [String] {
+        AgentNewSession.recents(last: Preferences.agentWindowNewSessionFolder, history: store?.history ?? [], exists: folderExists)
+    }
+
+    /// The status slot: starting, else the gate's refusal, else the last failure or busy text.
+    var newSessionStatus: String? {
+        guard let f = newSession else { return nil }
+        if let k = f.starting { return "Starting \(k.name)…" }
+        if let why = store?.resumeGate.refusal { return "Controls \(why)" }
+        return f.status
+    }
+
+    /// Every check, against the store as it is now.
+    var canStartNewSession: Bool {
+        guard newSession?.starting == nil, store?.resumeGate.isOK == true else { return false }
+        let e = newSessionErrors
+        return e.folder == nil && e.name == nil
+    }
+
+    /// Start or Return: nothing runs unless every check passes now.
+    @discardableResult
+    func startNewSession() -> Bool {
+        guard let f = newSession, canStartNewSession else { return false }
+        return spawn(AgentNewSession.expand(f.folder, home: home), AgentNewSession.argv(f.command, shell: shell),
+                     name: newSessionName, command: f.command)
+    }
+
+    /// ⇧⌘N, [>_] and the form's New shell: the login shell. With the form open, in its folder and name;
+    /// else at once in ⌘N's folder with its free name.
+    @discardableResult
+    func startShell() -> Bool {
+        let argv = [AgentNewSession.loginShell(shell), "-l"]
+        if let f = newSession {
+            guard canStartNewSession else { return false }
+            return spawn(AgentNewSession.expand(f.folder, home: home), argv, name: newSessionName, command: nil)
+        }
+        guard store?.resumeGate.isOK == true else { return false }
+        let folder = newSessionDefaultFolder
+        return spawn(folder, argv, name: AgentNewSession.autoName(folder: folder, taken: spawnTaken), command: nil)
+    }
+
+    private func spawn(_ folder: String, _ argv: [String], name: String, command: String?) -> Bool {
+        let form = newSession != nil
+        guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
+            self?.spawned(key, failure, folder: folder, command: command, form: form)
+        }) else {
+            newSession?.status = "\(name) is busy: try again"
+            return false
+        }
+        newSession?.starting = key
+        newSession?.status = nil
+        return true
+    }
+
+    /// The runner's answer. Success keeps the folder and (OQ-3) a typed command as the one shared setting,
+    /// closes the form and selects the session once its row shows; failure re-enables the form with dch's line.
+    private func spawned(_ key: AgentSessionKey?, _ failure: String?, folder: String, command: String?, form: Bool) {
+        guard let key else {
+            if newSession?.starting != nil { newSession?.starting = nil; newSession?.status = failure }
+            return
+        }
+        Preferences.agentWindowNewSessionFolder = folder
+        if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Preferences.agentIslandNewSessionCommand = command
+        }
+        if form {
+            guard newSession?.starting == key else { return }   // closed meanwhile: the human moved on
+            newSession = nil
+        }
+        pendingSpawn = (key, now())
+        refresh()
+    }
+
+    /// The pending spawn's row is there: Terminal (a reused name's Transcript choice dropped), selected, the keys in.
+    private func landSpawn() {
+        guard let p = pendingSpawn else { return }
+        guard now() - p.at <= Self.spawnSlack else { pendingSpawn = nil; return }
+        guard let s = row(.live(p.key))?.session else { return }
+        pendingSpawn = nil
+        setMode(.terminal, for: s)
+        select(.live(s.key))
+        focusSelection()
     }
 
     // MARK: #829 Restart agent, Stop, Kill (ask, then act)

@@ -2098,6 +2098,64 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "My-Repo")) }
     }
 
+    /// #847: what the window's spawn hands back (on main).
+    private final class Spawned: @unchecked Sendable {
+        var keys: [AgentSessionKey?] = []
+        var texts: [String?] = []
+    }
+
+    /// #847: the window's spawn: the given name and command exactly, the folder as cwd, the key to done;
+    /// a busy key or a name the form refuses runs nothing.
+    @MainActor
+    func testAgentNewSessionSpawnRunsTheGivenNameAndCommand() throws {
+        let f = FakeProc(), got = Spawned()
+        let c = opened(f, [session("a")])
+        let key = c.spawn(in: "/src", command: ["/bin/zsh", "-l"], name: "sh") { got.keys.append($0); got.texts.append($1) }
+        XCTAssertEqual(key, AgentSessionKey(dir: "/d", name: "sh"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--spawn", "sh", "--", "/bin/zsh", "-l"]])
+        XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, "/src")
+        XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: "sh"), "busy key: refused")
+        XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: "a:b"), "a name the form refuses is never passed")
+        XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: "m0123456789abcdef"))
+        XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: ""))
+        f.release.signal()
+        settle(c) { !got.keys.isEmpty }
+        XCTAssertEqual(got.keys, [AgentSessionKey(dir: "/d", name: "sh")])
+        XCTAssertEqual(got.texts, [nil])
+        XCTAssertEqual(f.args.count, 1, "nothing else launched")
+        XCTAssertNil(c.store?.actions[AgentSessionKey(dir: "/d", name: "")])
+    }
+
+    /// #847: a failed spawn's line goes to done and to the dir-wide line, as the island's.
+    @MainActor
+    func testAgentNewSessionSpawnFailureGoesToDoneAndTheDirLine() throws {
+        let f = FakeProc(), got = Spawned()
+        f.status = 1
+        f.output = Fixture.spawnNotExecutable
+        let c = opened(f, [session("a")])
+        XCTAssertNotNil(c.spawn(in: "/src", command: ["/tmp/p/nonexistent-prog"], name: "s4") {
+            got.keys.append($0); got.texts.append($1)
+        })
+        f.release.signal()
+        settle(c) { !got.keys.isEmpty }
+        let text = "New session failed: dch: s4: /tmp/p/nonexistent-prog: No such file or directory"
+        XCTAssertEqual(got.keys, [nil])
+        XCTAssertEqual(got.texts, [text])
+        XCTAssertEqual(c.store?.actions[AgentSessionKey(dir: "/d", name: "")], text)
+    }
+
+    /// #847: a refused gate: nil, nothing runs.
+    @MainActor
+    func testAgentNewSessionSpawnRefusedGateRunsNothing() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a", version: "1.25.0")])
+        XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: "x"))
+        XCTAssertNil(c.spawn(in: "/src", command: ["claude"]))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [])
+    }
+
     /// #606: a set command is used as typed (no resume stripping) for every
     /// folder, over the history and the live sessions; nothing is read.
     @MainActor

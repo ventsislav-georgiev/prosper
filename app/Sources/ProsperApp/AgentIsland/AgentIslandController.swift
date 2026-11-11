@@ -952,20 +952,32 @@ final class AgentIslandController {
     /// #606: the command is the setting's, else inferred first (off main).
     func newSession(in folder: String) {
         guard store?.resumeGate.isOK == true else { return }
-        newSessionCommand { [weak self] command in self?.spawn(in: folder, command) }
+        newSessionCommand { [weak self] command in self?.spawn(in: folder, command: command) }
     }
 
-    private func spawn(in folder: String, _ command: [String]) {
-        guard let store, case .ok(let dch) = store.resumeGate else { return }
-        let dir = historyDirs().first ?? DchCommand.defaultSocketDir
-        let taken = Set(store.sessions.filter { $0.key.dir == dir }.map(\.name))
-            .union(store.history.filter { $0.key.dir == dir }.map(\.name))
-        let args = AgentIsland.newSessionArgs(folder: folder, command: command, taken: taken)
+    /// #847: the socket dir a new session goes to.
+    func spawnDir() -> String { historyDirs().first ?? DchCommand.defaultSocketDir }
+
+    /// The one --spawn (#847: the island's New session, the window's form and quick shell). `name` nil:
+    /// the folder's free name; given, it must pass the form's shape rule. nil: nothing runs (the gate
+    /// refuses, a bad name, the key busy); else the session's key, and `done` later gets the key on
+    /// success or the failure text, which also goes to the dir-wide line.
+    @discardableResult
+    func spawn(in folder: String, command: [String], name: String? = nil,
+               done: (@MainActor @Sendable (AgentSessionKey?, String?) -> Void)? = nil) -> AgentSessionKey? {
+        guard let store, case .ok(let dch) = store.resumeGate else { return nil }
+        if let name, name.isEmpty || name.contains(where: \.isWhitespace) || AgentNewSession.nameError(name, taken: []) != nil { return nil }
+        let dir = spawnDir()
+        let taken = AgentIsland.spawnTaken(dir: dir, sessions: store.sessions, history: store.history)
+        let args = AgentIsland.newSessionArgs(folder: folder, command: command, taken: taken, name: name)
         let key = AgentSessionKey(dir: dir, name: args[1])
-        run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: true) { [weak self] r in
+        let started = run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: true) { [weak self] r in
             guard let store = self?.store else { return }
-            if let failed = AgentIsland.spawnText(r, name: key.name) { store.actions[AgentSessionKey(dir: dir, name: "")] = failed }
+            let failed = AgentIsland.spawnText(r, name: key.name)
+            if let failed { store.actions[AgentSessionKey(dir: dir, name: "")] = failed }
+            done?(failed == nil ? key : nil, failed)
         }
+        return started ? key : nil
     }
 
     /// #606: New session's command to `done`, on main: the setting as typed;
