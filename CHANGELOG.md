@@ -108,6 +108,9 @@ tag from the now-released section and put it on the new top draft.
   660 s (`--say`, `--stop`, `--revive`, `--run`, so their clean-up is never cut) or 2 s (every other
   verb), it and the processes it started are killed. A request ends as soon as dch exits, even when
   a process it started still holds its output open. `--xray` is refused first when this Mac's dch lacks it.
+- Remote Terminal: when Tailscale reports a negative user id for this Mac, no device counts as
+  yours and every device is refused, as `dch serve` does. "Allow when Tailscale isn't answering"
+  doesn't let them in (#855).
 - Ships dch 1.46.1 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

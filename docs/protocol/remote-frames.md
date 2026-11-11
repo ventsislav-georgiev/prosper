@@ -854,6 +854,11 @@ gap above or the item says so.
     `tailscale status` works: Tailscale is answering and cannot vouch for it;
   - refuse a whois answer with no `Node`. Once the host's node id is known, Prosper and dch
     v1.33.1 also refuse a `Node` with no `StableID` (v1.33.0 needs a numeric `Node.ID`);
+  - grant owner only while the host's `Self.UserID` is 0 or more: a negative host id has no
+    owner, so every peer is refused, one whois names with the same negative id included (#855;
+    `dch serve` `self_uid >= 0 && uid == self_uid`, and the dch 1.46.1 client's `*me < 0`).
+    A negative peer id can then never match. Prosper's status line reads "Tailscale gives this
+    Mac no valid user id (-1)";
   - remember a refusal Tailscale answered for 30 s, asking nothing for that address meanwhile.
 
   Where they differ:

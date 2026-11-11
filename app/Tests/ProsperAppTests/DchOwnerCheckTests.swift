@@ -173,6 +173,33 @@ final class DchOwnerCheckTests: XCTestCase {
         XCTAssertEqual(verdict(gate(answer(peer: nil))), .unknownPeer)
     }
 
+    /// #855 (QA #696): dch serve grants owner only while `self_uid >= 0` (serve.c serve_gate), so
+    /// a negative host id has no owner, even for a peer with the same id. 0 is a valid owner.
+    func testNegativeUserIDIsNeverTheOwner() throws {
+        func node(_ id: Int64, _ name: String) -> TailscaleNode { TailscaleNode(userID: id, name: name) }
+        func decide(host: Int64, peer: Int64) -> Verdict {
+            DchOwnerCheck.decide(TailscaleWhois(host: node(host, "my-mac"), peer: node(peer, "my-phone")))
+        }
+        let noOwner = Verdict.unusable("Tailscale gives this Mac no valid user id (-1)")
+        XCTAssertEqual(decide(host: -1, peer: -1), noOwner)
+        XCTAssertEqual(decide(host: -1, peer: 5), noOwner)
+        XCTAssertEqual(decide(host: -1, peer: 0), noOwner)
+        XCTAssertEqual(decide(host: 5, peer: -1), .otherUser(node(-1, "my-phone")))
+        XCTAssertEqual(decide(host: 5, peer: 5), .owner)
+        XCTAssertEqual(decide(host: 0, peer: 0), .owner)
+        XCTAssertEqual(decide(host: Int64.min, peer: Int64.min), .unusable("Tailscale gives this Mac no valid user id (\(Int64.min))"))
+        XCTAssertTrue(noOwner.cacheable, "refused for the TTL, like dch serve's 30 s")
+        // The production parse keeps the sign, so the refusal comes from decide, as in serve.
+        let status = #"{"BackendState":"Running","Self":{"ID":"n1","UserID":-1,"HostName":"my-mac"}}"#
+        let whois = #"{"Node":{"StableID":"n2","ComputedName":"my-phone"},"UserProfile":{"ID":-1}}"#
+        let w = TailscaleWhois(host: try DchOwnerCheck.parseHost(Data(status.utf8)),
+                               peer: try DchOwnerCheck.parsePeer(Data(whois.utf8)))
+        XCTAssertEqual(w.host.userID, -1)
+        XCTAssertEqual(w.peer?.userID, -1)
+        XCTAssertEqual(DchOwnerCheck.decide(w), noOwner)
+        XCTAssertEqual(verdict(gate(answer(peer: node(-1, "my-phone"), host: node(-1, "my-mac")))), noOwner)
+    }
+
     /// The "tagged-devices" identity is tagged even with no Tags key (dch serve does the same).
     func testTaggedDevicesLoginCountsAsTagged() throws {
         let whois = #"{"Node":{"StableID":"7","Name":"x"},"UserProfile":{"ID":5,"LoginName":"tagged-devices"}}"#

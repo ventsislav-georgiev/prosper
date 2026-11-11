@@ -240,6 +240,10 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         // apart from this Mac's own node.
         if !w.host.nodeID.isEmpty, peer.nodeID.isEmpty { return .unusable("Tailscale's whois answer has no device id") }
         if !peer.nodeID.isEmpty, peer.nodeID == w.host.nodeID { return .thisMac }
+        // dch serve (serve.c serve_gate: `self_uid >= 0 && uid == self_uid`, else not_allowed):
+        // a negative host id is no owner, so no peer matches it, a peer with the same id included.
+        // A 0 id is a valid owner. A negative peer id can't equal a host id that passed this.
+        guard w.host.userID >= 0 else { return .unusable("Tailscale gives this Mac no valid user id (\(w.host.userID))") }
         return peer.userID == w.host.userID ? .owner : .otherUser(peer)
     }
 
