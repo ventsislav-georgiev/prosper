@@ -283,7 +283,7 @@ jobs:
           # (our libghostty-spm fork reads it from Contents/Resources): assert it
           # reached the .app the same way (#822, QA #681 INFO-8).
           G=dist/Prosper.app/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle
-          [[ -d "$G" ]] || { echo "::error::$G missing in the bundled app"; exit 1; }
+          [[ -f "$G/Info.plist" && -d "$G/Ghostty" ]] || { echo "::error::$G missing or incomplete in the bundled app"; exit 1; }
           # bundle.sh only warns (to suppressed stderr) if dch is missing — assert
           # it actually embedded so a broken Remote Terminal can't ship silently.
           test -x dist/Prosper.app/Contents/Resources/dch \
