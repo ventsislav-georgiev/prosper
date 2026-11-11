@@ -203,12 +203,13 @@ tag from the now-released section and put it on the new top draft.
   with a lot of output no longer comes back empty, and a relative `--ref` too long for a key says
   `dch: not a ref` and exits 2 (was 3). Prosper does not read X-ray yet.
 - dch 1.53.0 to 1.54.0: no session name can start with `-` any more (`dch: a session name cannot
-  start with '-'`), and a folder named `-x` names its session `_x`; Prosper already refused such
-  names. One made by an older dch is still reached after `--` (`dch -k -- -x`, `dch --forget -- -h`).
+  start with '-'`), and a folder named `-x` names its session `_x`. Prosper's own forms already
+  refused such names, and one sent from the phone is now refused by dch. One made by an older dch
+  is still reached after `--` (`dch -k -- -x`, `dch --forget -- -h`), but cannot be resumed.
   dch's picker fetches other hosts' History once when it opens and then only while its History tab
   shows. X-ray on a shell session also reads the lines still on screen, never a full-screen program
-  (vim, less), and a session that ends mid-request answers `dch: no such session`. A long name in
-  the list of background work Restart and Stop stopped is cut on a whole character.
+  (vim, less), and a session that ends mid-request answers `dch: no such session`. The list of
+  background work Restart and Stop stopped is cut at its length limit on a whole character.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
