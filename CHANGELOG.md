@@ -106,7 +106,8 @@ tag from the now-released section and put it on the new top draft.
   window or brings it forward. It is unset by default, listed and registered only while the Agent
   Island extension is on, and does nothing while the island is not running (#858).
 - Settings › Shortcuts: below UI scale 1.0, the first row's key field is no longer cut off at the
-  top of the Bound and All Actions lists; key fields fit their row at every scale (#859).
+  top of the Bound and All Actions lists; key fields fit their row at every scale, in Shortcuts
+  and in Key Remapping, and keep their label centred (#859, #868).
 - Agent Island: New session, and Resume when it has to pick a new name, no longer take a name
   that differs only in case from an existing session's or a History record's ("Proj" beside
   "proj"): on a case-insensitive disk both would share one socket (#847).
@@ -213,8 +214,6 @@ tag from the now-released section and put it on the new top draft.
   or if a password field took the caret; Prosper beeps in each case (#848). If you click back into the
   app before you answer, the text goes in at the caret where you left it. The panel shows over
   full-screen apps, never opens in a password field, and macOS Text Replacements never ask (#842).
-- Settings: a shortcut key field centres its label again. In Key Remapping rows the label sat right
-  of centre and a long shortcut was cut at the right edge, more so below UI scale 1.0 (#868).
 
 ## v2.174.0
 
