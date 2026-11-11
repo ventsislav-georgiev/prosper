@@ -99,11 +99,11 @@ jobs:
 
       - name: Check image tools
         # Proves the preview image before a tag depends on it: the release steps
-        # need gh (feeds), python3 (appcast merge), make and cc (dch), curl,
-        # shasum and tar (Sparkle tools). A missing Metal toolchain only costs
-        # the download build.sh does itself.
+        # need gh (feeds, dch asset), python3 (appcast merge), curl, shasum and tar
+        # (Sparkle tools, dch asset), strings and lipo (dch asset checks). A missing
+        # Metal toolchain only costs the download build.sh does itself.
         run: |
-          for t in gh python3 make cc curl shasum tar; do
+          for t in gh python3 curl shasum tar strings lipo; do
             command -v "$t" >/dev/null || { echo "::error::$t missing on runner"; exit 1; }
           done
           xcrun metal --version >/dev/null 2>&1 || echo "::warning::Metal toolchain not installed; build.sh downloads it (~840 MB) if the metallib step runs"
@@ -237,8 +237,15 @@ jobs:
         # bump DCH_TAG deliberately. A sha256 mismatch, a tarball not named for the
         # tag, or a binary whose version string is not the tag fails the step; there
         # is no fallback build. dch is never executed here (#181, #448).
+        # No `shell:` on this step on purpose: `strings | grep -q` is safe only under
+        # the default bash -e without pipefail (grep -q closes the pipe early).
         env:
           DCH_TAG: v1.49.0
+          # sha256 of dch-<version>-darwin-arm64.tar.gz, pinned here (#875): the
+          # release's own .sha256 asset is as replaceable as the tarball, so it only
+          # proves an uncorrupted download. A DCH_TAG bump waits for dch's
+          # release-assets workflow to attach the tarball, then updates both lines.
+          DCH_SHA256: c1621dc73d37950298d9943f6f1584a50878daa29924ba05f62ca3efa0c1a04e
           # dch's release assets are built for minos 14.0 = LSMinimumSystemVersion.
           # Every dch from v2.156.0-beta.5 to v2.158.0 was minos 27.0 inside a 14.0
           # app and dyld refused it on macOS 14-26 (#447); the Bundle step's minos
@@ -249,10 +256,9 @@ jobs:
           T="dch-${V}-darwin-arm64"
           D="$RUNNER_TEMP/dch-dl"
           mkdir -p "$D"
-          gh release download "$DCH_TAG" -R ventsislav-georgiev/dch -D "$D" \
-            -p "$T.tar.gz" -p "$T.tar.gz.sha256"
-          ( cd "$D" && shasum -a 256 -c "$T.tar.gz.sha256" ) \
-            || { echo "::error::$T.tar.gz sha256 mismatch"; exit 1; }
+          gh release download "$DCH_TAG" -R ventsislav-georgiev/dch -D "$D" -p "$T.tar.gz"
+          echo "$DCH_SHA256  $T.tar.gz" | ( cd "$D" && shasum -a 256 -c - ) \
+            || { echo "::error::$T.tar.gz is not the pinned DCH_SHA256"; exit 1; }
           # The check-version equivalent: the tarball's top dir carries the version.
           tar -xzf "$D/$T.tar.gz" -C "$D"
           test -x "$D/$T/dch" || { echo "::error::$T.tar.gz has no $T/dch"; exit 1; }
