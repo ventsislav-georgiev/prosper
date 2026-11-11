@@ -359,6 +359,28 @@ final class AgentWindowModel: ObservableObject {
         follow()
     }
 
+    /// #845: the selection sits in a folded section (Right unfolds it before it moves in).
+    var selectionFolded: Bool {
+        sections.first { $0.rows.contains { $0.id == selection } }.map { isCollapsed($0.title) } ?? false
+    }
+
+    /// #845: a row click, Return, Right, ⌘T and the header toggle: the keyboard into the selected live session,
+    /// its terminal (Terminal mode, once its client is live) or its input box (Transcript). False, and the focus
+    /// stays where it is: nothing there takes input (History, an ended session's held row, none), or the rename
+    /// field is editing. Only the human's actions call it, never a selection the model makes itself.
+    @discardableResult
+    func focusSelection() -> Bool {
+        guard renaming == nil, !selectionIsHeld, selectedRow?.session != nil else { return false }
+        if paneMode == .terminal { terminal.focus() } else { interaction.focusComposer() }
+        return true
+    }
+
+    /// #845: a sidebar row's click: the human's pick, and the keyboard moves into it.
+    func click(_ id: AgentSidebar.RowID) {
+        select(id)
+        focusSelection()
+    }
+
     /// Up/down: the next or previous shown row across groups, clamped; from none, the first.
     func move(_ delta: Int) {
         let ids = navigableIDs
@@ -399,6 +421,12 @@ final class AgentWindowModel: ObservableObject {
         if m == .transcript { keys.insert(k, at: 0) }
         transcriptKeys = Array(keys.prefix(64))
         follow()
+    }
+
+    /// #845: the header's Transcript | Terminal toggle: the mode, then the keyboard into the shown mode's input.
+    func switchMode(_ m: AgentPaneMode, for s: AgentSession) {
+        setMode(m, for: s)
+        focusSelection()
     }
 
     /// ⌘T and the header toggle: the selected live session's other mode. False: nothing to toggle.

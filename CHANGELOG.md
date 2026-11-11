@@ -44,6 +44,12 @@ tag from the now-released section and put it on the new top draft.
   It renames the display name only, through `dch -m`, and a failure shows on the session's line. An
   ended session's chip now reads Ended with its own glyph, its disabled Open in terminal says why,
   and VoiceOver hears "Message Claude, session ended" on its input box (#829).
+- Agent Sessions window: clicking a session in the sidebar moves the keyboard into it, so you can
+  type without clicking again: into its terminal in Terminal mode (as soon as the terminal is
+  connected), into the message box in Transcript mode. Return or Right arrow on a selected row does
+  the same, and ⌘T or the Transcript | Terminal switch lands in the shown view's input. Up and down
+  still move through the list, and a click on the sidebar's empty part takes the keys back. Return
+  no longer opens the session in the terminal app; "Open in terminal" in the header still does (#845).
 - Extensions: a `host.shell.run` that times out now stops the shell and everything it started
   (the whole process group, forced after 1 s) instead of leaving it running. Calls that must
   finish opt out with `host.shell.run(cmd, { keep_running = true })`: control returns at the

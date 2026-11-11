@@ -256,7 +256,7 @@ final class AgentWindowD1Tests: XCTestCase {
         var opened: [String] = []
         let st = store([session("one", .working, ago: 1), session("two", .idle, ago: 2)], history: [record("h")])
         let m = windowModel(st, opened: { opened.append($0.name) })
-        showTranscript(m)   // #822: Return opens the terminal app in Transcript mode
+        showTranscript(m)   // #845: Return moves into the input box in Transcript mode (no longer opens the app)
         m.setVisible(true)
         defer { m.close() }
         let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],
@@ -271,10 +271,12 @@ final class AgentWindowD1Tests: XCTestCase {
         win.sendEvent(key(125))   // down
         XCTAssertEqual(m.selection, .live(AgentSessionKey(dir: "/tmp/dch-test", name: "two")))
         win.sendEvent(key(36))    // Return
-        XCTAssertEqual(opened, ["two"])
+        XCTAssertTrue(m.interaction.composerFocusPending, "#845: into the input box (built by the pane)")
         win.sendEvent(key(126))   // up
+        XCTAssertFalse(m.interaction.composerFocusPending, "another session: the pending focus is dropped")
         win.sendEvent(key(76))    // keypad Enter
-        XCTAssertEqual(opened, ["two", "one"])
+        XCTAssertTrue(m.interaction.composerFocusPending)
+        XCTAssertEqual(opened, [], "#845: Return opens no terminal app (the header's Open in terminal does)")
         // Review round 1 (g): any modifier passes through, each one on its own.
         let at = m.selection
         for flag: NSEvent.ModifierFlags in [.shift, .option, .control, .command] {
@@ -283,11 +285,12 @@ final class AgentWindowD1Tests: XCTestCase {
             }
         }
         XCTAssertEqual(m.selection, at, "no modified arrow moved the selection")
-        XCTAssertEqual(opened, ["two", "one"], "no modified Return opened anything")
+        XCTAssertEqual(opened, [], "no modified Return opened anything")
         XCTAssertFalse(AgentsNSWindow.handle(key(0), m), "other keys pass through")
         m.move(5)
-        win.sendEvent(key(36))
-        XCTAssertEqual(opened, ["two", "one"], "Return on a History row opens nothing")
+        XCTAssertFalse(AgentsNSWindow.handle(key(36), m), "Return on a History row passes on")
+        XCTAssertFalse(m.interaction.composerFocusPending)
+        XCTAssertEqual(opened, [], "Return on a History row opens nothing")
         XCTAssertFalse(win.isVisible, "never shown")
     }
 

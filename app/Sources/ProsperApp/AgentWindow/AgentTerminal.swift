@@ -237,6 +237,7 @@ final class AgentTerminalController: ObservableObject {
     /// session selected, and its mode Terminal. The same key again changes nothing.
     func attach(_ key: AgentSessionKey?) {
         guard key != self.key else { return }
+        focusPending = false   // #845: a focus asked for on another session never lands on this one
         detach()
         self.key = key
         reattached = false
@@ -295,6 +296,7 @@ final class AgentTerminalController: ObservableObject {
             sentSize = grid
             phase = .live
             c.run()
+            if focusPending { focus() }   // #845: a click while it attached lands now
             let probe = clientVersion, path = req.exe, gen = generation
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 let v = probe(path)
@@ -472,15 +474,17 @@ final class AgentTerminalController: ObservableObject {
     func searchTotal(_ n: Int?) { findTotal = n }
     func searchSelected(_ n: Int?) { findSelected = n }
 
-    /// A focus asked for before the view was in a window (a toggle builds it on the next pass).
+    /// A focus asked for before the view was in a window (a toggle builds it on the next pass), or
+    /// (#845) before the client was live. Dropped by an attach to another session.
     private(set) var focusPending = false
 
-    /// Moves the keyboard into the terminal (⌘T, the toggle, Return on a sidebar row, closing find).
-    /// Only the first responder within this window: it never orders a window front or makes it key.
+    /// Moves the keyboard into the terminal (⌘T, the toggle, a row click, Return or Right on a sidebar row,
+    /// closing find). Only the first responder within this window: it never orders a window front or makes
+    /// it key. #845: only a live client takes input; until then the keys stay where they are.
     func focus() {
-        guard let view, let window = view.window else { focusPending = true; return }
+        guard phase == .live, let view, view.window != nil else { focusPending = true; return }
         focusPending = false
-        window.makeFirstResponder(view)
+        AgentsNSWindow.focus(view)
     }
 
     /// Paste text with the phone's rules (TerminalMath.pasteBytes): TAB, LF, CR and printable text

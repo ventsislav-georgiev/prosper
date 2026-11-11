@@ -351,11 +351,12 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(AgentsNSWindow.handle(key(123), m))
         XCTAssertNil(m.selection, "left with nothing selected does nothing")
         XCTAssertTrue(m.isCollapsed("Sessions"))
-        // Note 2 (decided: acting is fine, the detail pane shows the folded selection): Return opens it.
+        // Note 2 (decided: acting is fine, the detail pane shows the folded selection): #845 Return moves into it.
         m.select(live("a"))
         XCTAssertTrue(m.isCollapsed("Sessions"))
         XCTAssertTrue(AgentsNSWindow.handle(key(36), m))
-        XCTAssertEqual(opened, ["a"], "Return acts on a selection inside a folded section")
+        XCTAssertTrue(m.interaction.composerFocusPending, "Return acts on a selection inside a folded section")
+        XCTAssertEqual(opened, [])
         // Note 5: with a text view first responder, left and right go to it, not to the sidebar.
         let tv = NSTextView(frame: .init(x: 0, y: 0, width: 100, height: 20))
         tv.string = "draft"
@@ -1164,6 +1165,8 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(m.selectionIsHeld)
         // Return / Open in terminal: nothing runs (`dch -n a` would start a new session named a).
         XCTAssertFalse(m.openSelected(), "Return passes on")
+        XCTAssertFalse(m.focusSelection(), "#845: nothing there takes input, the focus stays")
+        XCTAssertFalse(m.interaction.composerFocusPending)
         XCTAssertEqual(opened, [a.key], "the openSession seam ran nothing")
         // Send, Interrupt and the prompt answers: no session to write to.
         XCTAssertNil(m.interaction.session, "the input box follows nothing")

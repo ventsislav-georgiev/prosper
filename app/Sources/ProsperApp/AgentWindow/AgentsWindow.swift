@@ -102,10 +102,10 @@ final class AgentsWindow {
     }
 }
 
-/// ⌘W closes; up/down move the selection and Return opens it in the terminal while
-/// the sidebar has the focus (QA #626 INFO-2): the last click landed in it and Tab has
-/// not moved on since. A text field or the input box keeps every key.
+/// ⌘W closes; up/down move the selection while the sidebar has the focus (QA #626 INFO-2): the
+/// last click landed in it and Tab has not moved on since. A text field or the input box keeps every key.
 /// #822: so does the terminal, except the window's own shortcuts (`route`).
+/// #845: a row click, Return and Right (on an unfolded section) move the keyboard into the session.
 final class AgentsNSWindow: NSWindow {
     weak var model: AgentWindowModel?
     /// The last click was in the sidebar (where the window starts).
@@ -175,7 +175,7 @@ final class AgentsNSWindow: NSWindow {
         case .verbosity(let v): model.verbosity = v
         case .toggleMode:
             guard model.toggleMode() else { return super.performKeyEquivalent(with: event) }
-            if model.paneMode == .terminal { model.terminal.focus() }
+            model.focusSelection()   // #845: the shown mode's input, Transcript's too
         case .session(let d): model.move(d)
         case .find: model.terminal.openFind()
         case .findNext(let forward): model.terminal.findNext(forward)
@@ -195,14 +195,23 @@ final class AgentsNSWindow: NSWindow {
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown {
             sidebarFocused = event.locationInWindow.x < sz(290)
-            // #822: a sidebar click takes the keys from the terminal, so the arrows select again.
-            if sidebarFocused, responderKind == .terminal { makeFirstResponder(nil) }
+            // #822: a sidebar click takes the keys from the terminal, so the arrows select again;
+            // #845: from the input box too (a row's click then moves them in again, on mouse-up).
+            if sidebarFocused, responderKind == .terminal || firstResponder is AgentComposerTextView { makeFirstResponder(nil) }
         }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
                                  terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil) == .sidebar,
            Self.handle(event, model) { return }
         super.sendEvent(event)
+    }
+
+    /// #845: the keyboard into `view` (the terminal, the input box): first responder within its window only,
+    /// never ordered front or made key. The sidebar no longer has the focus, so its keys stand down.
+    @MainActor @discardableResult static func focus(_ view: NSView) -> Bool {
+        guard let window = view.window, window.makeFirstResponder(view) else { return false }
+        (window as? AgentsNSWindow)?.sidebarFocused = false
+        return true
     }
 
     /// Plain up, down, left, right and Return only; anything with a modifier passes through.
@@ -212,13 +221,12 @@ final class AgentsNSWindow: NSWindow {
         case 126: model.move(-1)                   // up
         case 125: model.move(1)                    // down
         case 123: model.collapseSelected(true)     // #828 left: fold the selection's section
-        case 124: model.collapseSelected(false)    // right: unfold it
-        case 36, 76:   // Return, keypad Enter; a History row passes on
-            // #822: in Terminal mode the keys go into the terminal instead of opening Ghostty.
-            guard model.paneMode == .terminal, !model.selectionIsHeld, model.selectedRow?.session != nil else {
-                return model.openSelected()
-            }
-            model.terminal.focus()
+        // #845 right: into the session; a folded selection's section (or none selected) unfolds first.
+        case 124 where model.selection != nil && !model.selectionFolded: model.focusSelection()
+        case 124: model.collapseSelected(false)
+        // Return, keypad Enter: #822/#845 into the terminal or the input box (Ghostty is the header's button).
+        // A History row, an ended session's row: nothing takes input, so it passes on.
+        case 36, 76: return model.focusSelection()
         default: return false
         }
         return true
@@ -299,7 +307,7 @@ struct AgentSidebarView: View {
                                                        ? { model.toggleCollapsed(section.title) } : nil)
                                 if !folded {
                                     ForEach(section.rows) { row in
-                                        Button { model.select(row.id) } label: {
+                                        Button { model.click(row.id) } label: {
                                             AgentSidebarRowView(row: row, selected: model.selection == row.id)
                                         }
                                         .buttonStyle(.plain)
@@ -477,10 +485,7 @@ struct AgentDetailView: View {
                                    todosOpen: mode == .terminal ? floatingTodos : $transcript.todosOpen,
                                    store: model.store, ask: { model.ask($0, s) }, ended: ended,
                                    renaming: !ended && model.renaming == s.key, endRename: { model.endRename(s.key, $0) },
-                                   mode: mode, setMode: { m in
-                                       model.setMode(m, for: s)
-                                       if m == .terminal { model.terminal.focus() }
-                                   })
+                                   mode: mode, setMode: { model.switchMode($0, for: s) })
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if mode == .terminal {
                     terminalPane(row, s)
@@ -494,7 +499,7 @@ struct AgentDetailView: View {
                 .overlay(alignment: .top) { confirmStrip }   // #829 G8: Remove asks, over the pane's top
         } else {
             AgentEmptyState(icon: "sidebar.left", title: "Select a session",
-                            detail: "Up and down move through the list; Return opens it in the terminal.")
+                            detail: "Up and down move through the list; Return or a click moves into it.")
         }
     }
 
@@ -981,7 +986,8 @@ struct AgentInteractionPane: View {
                 ZStack(alignment: .topLeading) {
                     // QA #668 INFO-3: an ended session's field neither edits nor reads as editable; same slot.
                     // QA #672 #2: no .disabled here: it never reached the NSTextView; `editable` is what turns it off.
-                    AgentComposerField(text: $model.draft, onSubmit: { if canSend { model.send() } }, editable: !ended)
+                    AgentComposerField(text: $model.draft, onSubmit: { if canSend { model.send() } }, editable: !ended,
+                                       owner: model)
                     if model.draft.isEmpty {
                         Text(placeholder).font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
                             .lineLimit(1).padding(.horizontal, sz(9)).padding(.vertical, sz(7))
@@ -1219,6 +1225,8 @@ struct AgentComposerField: NSViewRepresentable {
     var onSubmit: () -> Void
     /// QA #668 INFO-3: false for an ended session (NSTextView ignores SwiftUI's .disabled).
     var editable = true
+    /// #845: the window's interaction model, which moves the keyboard here (a row click, Return, Right).
+    var owner: AgentWindowInteraction?
 
     /// QA #672 #2: VoiceOver hears why the field takes nothing (only an ended session's is not editable).
     static func label(editable: Bool) -> String { editable ? "Message Claude" : "Message Claude, session ended" }
@@ -1239,6 +1247,8 @@ struct AgentComposerField: NSViewRepresentable {
         tv.textContainer?.widthTracksTextView = true
         tv.textContainerInset = NSSize(width: sz(4), height: sz(6))
         tv.delegate = context.coordinator
+        tv.owner = owner   // #845: before it joins the window, so a pending focus lands as it does
+        owner?.composer = tv
         let sv = NSScrollView()
         sv.documentView = tv
         sv.hasVerticalScroller = true
@@ -1260,6 +1270,8 @@ struct AgentComposerField: NSViewRepresentable {
         tv.isSelectable = editable
         tv.isEditable = editable
         tv.setAccessibilityLabel(AgentComposerField.label(editable: editable))
+        tv.owner = owner
+        owner?.composer = tv
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -1274,6 +1286,13 @@ struct AgentComposerField: NSViewRepresentable {
 
 final class AgentComposerTextView: NSTextView {
     var onSubmit: () -> Void = {}
+    weak var owner: AgentWindowInteraction?
+
+    /// #845: a focus asked for before the box was in the window (a row click from Terminal mode builds it next pass).
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil, owner?.composerFocusPending == true { owner?.focusComposer() }
+    }
 
     /// Return or keypad Enter alone sends; Shift-Return adds a line; an IME's marked text keeps Return.
     override func keyDown(with event: NSEvent) {

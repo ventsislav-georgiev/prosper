@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // #798 Agent window B: talk to the selected session from the window. A message
@@ -811,10 +812,22 @@ final class AgentWindowInteraction: ObservableObject {
         set { if let k = session?.key { drafts[k] = newValue.isEmpty ? nil : newValue } }
     }
 
+    /// #845: the input box (its view sets it) and a focus asked for before it was in a window.
+    weak var composer: AgentComposerTextView?
+    private(set) var composerFocusPending = false
+
+    /// #845: the keyboard into the input box; pending until the box is in a window (a session switch dropped it).
+    func focusComposer() {
+        guard let composer, composer.window != nil else { composerFocusPending = true; return }
+        composerFocusPending = false
+        AgentsNSWindow.focus(composer)
+    }
+
     /// The selection (nil: none, hidden or closed). Cheap: called on every sidebar rebuild.
     func follow(_ s: AgentSession?) {
         let was = session
         session = s
+        if was?.key != s?.key { composerFocusPending = false }   // #845: never lands on another session
         guard let s, controller != nil else {
             readGen += 1
             reading = false

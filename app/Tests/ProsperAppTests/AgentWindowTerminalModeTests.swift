@@ -365,13 +365,14 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.selection, live("b"), "the sidebar's down again")
             win.sendEvent(key(126, "\u{F700}", [.numericPad, .function]))
             XCTAssertEqual(m.selection, live("a"))
-            // Transcript mode: Return opens it in the terminal app as before (QA #626 INFO-2).
+            // Transcript mode: #845 Return moves into the input box (pending: no pane builds it here), no app opens.
             XCTAssertTrue(win.performKeyEquivalent(with: key(17, "t", .command)))
             XCTAssertEqual(m.paneMode, .transcript)
             XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\ta", "/tmp/dch-test\tb"])
             XCTAssertTrue(win.makeFirstResponder(nil))
             win.sendEvent(key(36, "\r"))
-            XCTAssertEqual(opened, ["a"])
+            XCTAssertTrue(m.interaction.composerFocusPending)
+            XCTAssertEqual(opened, [])
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }
