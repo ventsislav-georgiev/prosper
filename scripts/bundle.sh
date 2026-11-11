@@ -98,12 +98,16 @@ else
   echo "warn: Resources/lexicon not found — completion candidates degrade to OS lexicon only." >&2
 fi
 
-# Dependency resource bundles (GRDB/Crypto privacy manifests, swift-transformers
-# Hub tokenizer fallbacks). Place them under Contents/Resources so they are
-# part of the signed bundle. Their Bundle.module accessors look at the .app root
-# and so won't resolve them, but none are reached on the Gemma code path
-# (swift-transformers only consults Hub.bundle for models whose tokenizer_config
-# lacks a tokenizer_class; Gemma's has one).
+# Dependency resource bundles. Place them under Contents/Resources so they are
+# part of the signed bundle. Two are read from there at run time:
+# mlx-swift_Cmlx.bundle (default.metallib, asserted below) and
+# GhosttyKit_GhosttyTerminal.bundle (the Agent Sessions terminal, #822: our
+# libghostty-spm fork looks in Contents/Resources; upstream looks at the .app
+# root and traps; release.yml asserts it shipped). The rest (GRDB/Crypto privacy
+# manifests, swift-transformers Hub tokenizer fallbacks) have Bundle.module
+# accessors that look at the .app root and so won't resolve them, but none are
+# reached on the Gemma code path (swift-transformers only consults Hub.bundle
+# for models whose tokenizer_config lacks a tokenizer_class; Gemma's has one).
 shopt -s nullglob
 for b in "$ROOT/app/.build/$PROFILE"/*.bundle; do
   cp -R "$b" "$APP/Contents/Resources/"

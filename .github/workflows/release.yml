@@ -279,6 +279,11 @@ jobs:
           # reached the .app (bundle.sh copies app/.build/release/*.bundle).
           M=dist/Prosper.app/Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib
           [[ -f "$M" ]] || { echo "::error::$M missing in the bundled app"; exit 1; }
+          # The Agent Sessions terminal traps without GhosttyTerminal's resource bundle
+          # (our libghostty-spm fork reads it from Contents/Resources): assert it
+          # reached the .app the same way (#822, QA #681 INFO-8).
+          G=dist/Prosper.app/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle
+          [[ -d "$G" ]] || { echo "::error::$G missing in the bundled app"; exit 1; }
           # bundle.sh only warns (to suppressed stderr) if dch is missing — assert
           # it actually embedded so a broken Remote Terminal can't ship silently.
           test -x dist/Prosper.app/Contents/Resources/dch \
