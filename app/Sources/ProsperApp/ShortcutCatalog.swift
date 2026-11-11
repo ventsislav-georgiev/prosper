@@ -296,6 +296,7 @@ extension ShortcutAction {
         case .mixerToggleMicMute: return "mic.slash"
         case .copyScreenText: return "text.viewfinder"
         case .pickColor: return "eyedropper"
+        case .agentSessions: return "sidebar.left"
         }
     }
 }

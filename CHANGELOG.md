@@ -88,6 +88,9 @@ tag from the now-released section and put it on the new top draft.
   Retry. The verbosity picker (⌥⌘1-3) is off in Terminal mode. ⌘↑ / ⌘↓ go to the previous / next
   session, except in a text field (#822). A session opened in Terminal mode now draws at the pane's
   size at once; it no longer shows wrapped at another size until the window is resized (#844).
+- Agent Sessions window: Settings › Shortcuts lists "Open Agent Sessions", a hotkey that opens the
+  window or brings it forward. It is unset by default, listed and registered only while the Agent
+  Island extension is on, and does nothing while the island is not running (#858).
 - Prosper now bundles Ghostty's terminal library (libghostty, through libghostty-spm) for the Agent
   Sessions terminal, so the download is about 4 MB (10%) bigger. The app's credits list libghostty
   and the libraries inside it (FreeType, libpng, zlib, Oniguruma, Wuffs, simdutf, Highway, stb,

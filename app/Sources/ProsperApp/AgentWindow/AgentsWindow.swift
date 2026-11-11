@@ -61,6 +61,14 @@ final class AgentsWindow {
         return item
     }
 
+    /// #858: the "Open Agent Sessions" hotkey opens `shared` through the same `show` as the island
+    /// button and the menu item. A no-op while the island has no store (extension on but not live),
+    /// the state that hides the menu item; a disabled extension leaves the hotkey unregistered.
+    static func openFromShortcut() {
+        guard shared.island().store != nil else { return }
+        shared.show()
+    }
+
     /// The item's target: NSMenuItem holds it weakly, so one lives for the app.
     @MainActor
     private final class MenuTarget: NSObject {

@@ -810,6 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(.mixerToggleMicMute) { AudioInputDeviceManager.shared.toggleMicMute() }
         add(.copyScreenText) { ScreenTools.copyScreenText() }
         add(.pickColor) { ScreenTools.pickColor() }
+        add(.agentSessions) { AgentsWindow.openFromShortcut() }
 
         // Built-in window management: snap the frontmost window to a screen edge,
         // maximize, or centre it. Applied via Accessibility to whatever app is

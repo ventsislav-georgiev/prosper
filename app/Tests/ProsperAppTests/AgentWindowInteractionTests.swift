@@ -1707,6 +1707,47 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertFalse(win.isVisible, "never on screen")
     }
 
+    /// #858: the "Open Agent Sessions" hotkey handler opens AgentsWindow.shared through the
+    /// same show() as the island button and menu item; a press while open presents the same
+    /// window again; with the island's store gone it does nothing. Seams faked: never on screen.
+    @MainActor
+    func testAgentSessionsShortcutOpensTheAgentsWindowOnlyWithTheIsland() throws {
+        let w = AgentsWindow.shared
+        XCTAssertFalse(w.isOpen)
+        let (island, build, present, dismissed) = (w.island, w.build, w.present, w.dismissed)
+        defer { (w.island, w.build, w.present, w.dismissed) = (island, build, present, dismissed) }
+        let c = controller(FormSim(.plain("")).io, autoAllow: false)
+        var presented = 0, built = 0
+        w.island = { c }
+        w.present = { _ in presented += 1 }
+        w.dismissed = { _ in }
+        w.build = { m in
+            built += 1
+            let win = AgentsNSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled, .closable],
+                                     backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            win.model = m
+            return win
+        }
+        let store = c.store
+        c.store = nil
+        AgentsWindow.openFromShortcut()
+        XCTAssertEqual(presented, 0, "island off: the press is a no-op")
+        XCTAssertFalse(w.isOpen)
+        c.store = store
+        AgentsWindow.openFromShortcut()
+        XCTAssertEqual(presented, 1)
+        let win = try XCTUnwrap(w.window)
+        XCTAssertTrue(w.model?.interaction.controller === c)
+        AgentsWindow.openFromShortcut()
+        XCTAssertEqual(presented, 2, "a press while open brings the same window forward")
+        XCTAssertEqual(built, 1, "no second window")
+        XCTAssertTrue(w.window === win)
+        win.close()
+        XCTAssertFalse(w.isOpen)
+        XCTAssertFalse(win.isVisible, "never on screen")
+    }
+
     // MARK: - Offscreen renders: input box and every prompt kind
 
     static var renderDir: URL? {

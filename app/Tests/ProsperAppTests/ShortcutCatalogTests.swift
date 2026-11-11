@@ -78,6 +78,23 @@ final class ShortcutCatalogTests: XCTestCase {
         }
     }
 
+    /// #858: the Agent Sessions window has its own row, found by "agent", unset by default
+    /// and owned by the Agent Island extension, so it is hidden and unregistered with it off.
+    func testAgentSessionsRowIsListedUnsetAndGatedOnTheIsland() throws {
+        let a = ShortcutAction.agentSessions
+        let hits = ShortcutCatalog.filter(catalog(), query: "agent")
+        let row = try XCTUnwrap(hits.first { $0.key == a.rawValue }, "filter \"agent\" must find it")
+        XCTAssertEqual(row.title, "Open Agent Sessions")
+        XCTAssertEqual(row.combo, unsetKeyCombo)
+        XCTAssertEqual(a.defaultCombo, unsetKeyCombo)
+        XCTAssertFalse(a.isWindowManagement)
+        XCTAssertEqual(a.hotKeyId, 21, "stable: a changed id re-registers under another slot")
+        XCTAssertEqual(ShortcutAction.allCases.filter { $0.hotKeyId == a.hotKeyId }, [a])
+        XCTAssertEqual(a.owningExtensionID, "com.prosper.agentisland")
+        XCTAssertFalse(MainActor.assumeIsolated { a.isAvailable(registry: nil) },
+                       "no island extension: no row and no hotkey")
+    }
+
     /// Ids are what `ForEach` tracks. Two rows sharing one would make the table
     /// flicker and hand a recorder's output to the wrong action.
     func testRowIDsAreUniqueAcrossKinds() {

@@ -347,6 +347,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     case mixerToggleMicMute
     case copyScreenText
     case pickColor
+    case agentSessions
 
     var title: String {
         switch self {
@@ -370,6 +371,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .mixerToggleMicMute: return "Volume Mixer: Mute Every Microphone"
         case .copyScreenText: return "Screen: Copy Text from Region"
         case .pickColor: return "Screen: Pick Color"
+        case .agentSessions: return "Open Agent Sessions"
         }
     }
 
@@ -396,6 +398,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .copyScreenText: return 18
         case .pickColor: return 19
         case .mixerToggleMicMute: return 20
+        case .agentSessions: return 21
         }
     }
 
@@ -409,6 +412,8 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .translate: return "com.prosper.translate"
         case .menuBarToggleHidden: return "com.prosper.menubar"
         case .calendarTogglePopup: return "com.prosper.calendar"
+        // #858: the Agent Sessions window reads the island's store, so it goes with the island.
+        case .agentSessions: return "com.prosper.agentisland"
         default: return nil
         }
     }
@@ -490,6 +495,9 @@ enum ShortcutAction: String, CaseIterable, Sendable {
             return unsetKeyCombo
         case .copyScreenText, .pickColor:
             // Opt-in: the runner (`:ocr` / `:color`) is the always-available trigger.
+            return unsetKeyCombo
+        case .agentSessions:
+            // Opt-in: the island button and the status menu item are the always-available triggers.
             return unsetKeyCombo
         }
     }
