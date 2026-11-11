@@ -88,6 +88,16 @@ tag from the now-released section and put it on the new top draft.
   Retry. The verbosity picker (⌥⌘1-3) is off in Terminal mode. ⌘↑ / ⌘↓ go to the previous / next
   session, except in a text field (#822). A session opened in Terminal mode now draws at the pane's
   size at once; it no longer shows wrapped at another size until the window is resized (#844).
+- Agent Sessions window, Terminal mode: a program in a session's terminal can set your clipboard
+  (OSC 52) only while you are looking at that session: it is selected and the window is on screen,
+  not minimized and not covered. Settings › Agent Island › Agent Sessions › "Let sessions set the
+  clipboard while you're viewing them" (on by default) turns it off. A program can never read the
+  clipboard, and a middle click no longer pastes it. A session that ends while shown says "Session
+  ended" at once, with no "Couldn't attach" flash. The find buttons have VoiceOver labels, a
+  terminal whose program cannot be started says why, and no config file is left in the temporary
+  folder.
+  Pasting several lines is not confirmed first: Claude Code and login shells take a paste as one
+  block (bracketed paste), so nothing runs early (#843).
 - Agent Sessions window: Settings › Shortcuts lists "Open Agent Sessions", a hotkey that opens the
   window or brings it forward. It is unset by default, listed and registered only while the Agent
   Island extension is on, and does nothing while the island is not running (#858).

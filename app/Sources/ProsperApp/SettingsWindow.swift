@@ -881,7 +881,9 @@ private struct SettingsRootView: View {
         // Agent Island: the "Show sessions" picker (Remote Terminal isolation on),
         // then (#571) the sort and sidekick tabs, then (#534) the row-detail toggles.
         case "com.prosper.agentisland":
-            footer = AnyView(Group { AgentIslandPane(); AgentIslandListSection(); AgentIslandRowDetailsSection() })
+            footer = AnyView(Group {
+                AgentIslandPane(); AgentIslandListSection(); AgentIslandRowDetailsSection(); AgentSessionsSection()
+            })
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,
@@ -1000,6 +1002,21 @@ struct AgentIslandRowDetailsSection: View {
             Preferences.agentIslandRowDetails = v
             AgentIslandController.shared.rowDetailsChanged()
         }
+    }
+}
+
+/// OQ-66: Agent Island › Agent Sessions, the window's terminal. Per Mac (not in SyncedKeys); the
+/// terminal reads it on every OSC 52 write, so a change applies at once.
+struct AgentSessionsSection: View {
+    static let clipboardLabel = "Let sessions set the clipboard while you're viewing them"
+    @State private var clipboard = Preferences.agentWindowClipboardWrites
+
+    var body: some View {
+        NeonSection("Agent Sessions",
+                    footer: "A program in a session's terminal can set the clipboard only while that session is selected in the Agent Sessions window and the window is on screen. It can never read your clipboard.") {
+            NeonRow(Self.clipboardLabel) { Toggle("", isOn: $clipboard).labelsHidden() }
+        }
+        .onChange(of: clipboard) { _, v in Preferences.agentWindowClipboardWrites = v }
     }
 }
 

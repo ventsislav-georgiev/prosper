@@ -159,6 +159,20 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(AgentPaneModeToggle.endedReason, "This session ended: there is no terminal to attach to")
             try save(render(AgentWindowRootView(model: m, scrolls: false), size: CGSize(width: 1000, height: 680), dark: true),
                      "822-ended-1.0")
+            // QA #681 INFO-7: the held row's header hands the toggle the reason, its tooltip in every style; a live
+            // row's toggle has none (the view's dump: no accessibility tree is built offscreen).
+            let reason = "\"\(AgentPaneModeToggle.endedReason)\""
+            for style in [AgentVerbosityPicker.Style.labels, .icons, .menu] {
+                for ended in [true, false] {
+                    var out = ""
+                    let h = AgentSessionHeader(row: try XCTUnwrap(m.selectedRow), session: a, cwd: nil, open: {},
+                                               ended: ended, mode: .transcript, setMode: { _ in })
+                    dump(h.titleLine(picker: style, compact: true), to: &out)
+                    XCTAssertTrue(out.contains("AgentPaneModeToggle"), "\(style)")
+                    XCTAssertEqual(out.contains(reason), ended, "\(style) ended: \(ended)")
+                }
+            }
+            XCTAssertFalse(m.terminal.isSelected(a.key), "OQ-66: a held (ended) row is no selection a write can use")
             // The session gone with no hold: the selection clears, Transcript (the empty state).
             m.select(.live(b.key))
             st.sessions = []
@@ -181,6 +195,8 @@ extension AgentWindowD1Tests {
             m.setVisible(true)
             m.select(.live(one.key))
             XCTAssertEqual(t.spawned().map(\.args), [["-E", "-a", "one"]], "the default Terminal attaches")
+            XCTAssertTrue(m.terminal.isSelected(one.key), "OQ-66: the selection is the session a write may come from")
+            XCTAssertFalse(m.terminal.isSelected(two.key))
             XCTAssertEqual(m.terminal.phase, .live)
             XCTAssertNil(m.interaction.session, "Terminal mode: no input box, no prompt reads")
             XCTAssertTrue(m.transcript.running, "the transcript keeps the header's cwd and todos")

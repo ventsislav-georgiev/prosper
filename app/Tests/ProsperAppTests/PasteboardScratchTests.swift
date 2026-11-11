@@ -29,7 +29,10 @@ final class PasteboardScratchTests: XCTestCase {
         let app = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let sources = app.appendingPathComponent("Sources")
-        let rule = /NSPasteboard\s*\.\s*`?general\b|generalPasteboard|kPasteboardClipboard|Apple CFPasteboard general|name:\s*(NSPasteboard\.Name\s*)?\.\s*`?general\b|NSPasteboard\s*[?!]?\s*=\s*\.\s*`?general\b|typealias\s+\w+\s*=\s*(AppKit\.)?NSPasteboard\b|\bpb(copy|paste)\b|(?i:\b(set|get)\s+the\s+clipboard\b)/
+        let rule = /NSPasteboard\s*\.\s*`?general\b|generalPasteboard|kPasteboardClipboard|Apple CFPasteboard general|name:\s*(NSPasteboard\.Name\s*)?\.\s*`?general\b|NSPasteboard\s*[?!]?\s*=\s*\.\s*`?general\b|typealias\s+\w+\s*=\s*(AppKit\.)?NSPasteboard\b|\bpb(copy|paste)\b|(?i:\bset\s+the\s+clipboard\s+to\b|\bget\s+the\s+clipboard\b)/
+        // AppleScript's write is always "set the clipboard to"; #843's Settings copy "set the clipboard while" is not one.
+        XCTAssertTrue("set the clipboard to \"x\"".contains(rule) && "Get The Clipboard".contains(rule))
+        XCTAssertFalse("Let sessions set the clipboard while you're viewing them".contains(rule))
         let languages: Set<String> = ["swift", "m", "mm", "c", "h", "lua", "js"]
         var urls = (FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?.allObjects as? [URL]) ?? []
         urls.append(app.appendingPathComponent("plugin-host/plugin-host.js"))

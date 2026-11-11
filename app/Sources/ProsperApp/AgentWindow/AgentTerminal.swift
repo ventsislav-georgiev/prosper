@@ -220,6 +220,18 @@ final class AgentTerminalController: ObservableObject {
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// The client binary's version, probed off main (cached per path and mtime).
     var clientVersion: @Sendable (String) -> [Int]? = { DchCommand.probedVersion($0) }
+    /// QA #681 INFO-4: the session's socket is on disk. dch's master unlinks it at exit (atexit, master.c:4234 at dch v1.49.0)
+    /// before its clients read EOF, so an exit 0 with the socket gone is an end even while the store (polled
+    /// about once a second) still lists the session.
+    var socketExists: (AgentSessionKey) -> Bool = {
+        FileManager.default.fileExists(atPath: ($0.dir as NSString).appendingPathComponent($0.name + ".sock"))
+    }
+    /// OQ-66: the session is the window's selection (the window model answers; until it does, none is).
+    var isSelected: (AgentSessionKey) -> Bool = { _ in false }
+    /// OQ-66: the pane's window as it is now; nil with no window (closed, or the view not in one).
+    var windowState: @MainActor (NSWindow?) -> AgentTerminalWindowState? = { $0.map(AgentTerminalWindowState.init) }
+    /// OQ-66: Settings › Agent Island › "Let sessions set the clipboard while you're viewing them".
+    var clipboardWrites: () -> Bool = { Preferences.agentWindowClipboardWrites }
 
     enum SpawnError: Error, CustomStringConvertible {
         case underTests
@@ -310,8 +322,15 @@ final class AgentTerminalController: ObservableObject {
         } catch {
             inbox = nil
             box.close()
-            phase = .failed("Couldn't open the terminal: \(error)")
+            phase = .failed(Self.failure(error))
         }
+    }
+
+    /// QA #681 INFO-7: a spawn error as a sentence (it read "Couldn't open the terminal: forkFailed").
+    nonisolated static func failure(_ error: Error) -> String {
+        error is PtyChild.PtyError
+            ? "Couldn't open the terminal: the Mac couldn't start a new process. Close some apps and retry."
+            : "Couldn't open the terminal."
     }
 
     /// Built outside the main actor: these closures run on the pump thread (a closure formed in
@@ -400,7 +419,8 @@ final class AgentTerminalController: ObservableObject {
         child = nil
         writer.child = nil
         inbox = nil
-        let live = isLive(key)
+        // INFO-4: the store's list trails the socket, so a stale "live" never flashes "Couldn't attach".
+        let live = isLive(key) && socketExists(key)
         switch code {
         case 0 where live && !reattached:
             reattached = true
@@ -434,6 +454,15 @@ final class AgentTerminalController: ObservableObject {
         screen = nil
         sentSize = nil
         if phase != .idle { phase = .idle }
+    }
+
+    /// OQ-66 (operator, 2026-11-10): a program sets the clipboard (OSC 52) only while someone is looking
+    /// at this session: the pane attached, the session selected, and its window on screen, not minimized
+    /// and not fully covered (occlusionState has .visible). Off in Settings: never.
+    func clipboardWriteAllowed() -> Bool {
+        guard clipboardWrites(), phase == .live, let key, isSelected(key),
+              let w = windowState(view?.window) else { return false }
+        return w.onScreen && !w.miniaturized && w.occlusionVisible
     }
 
     // MARK: Links and find
@@ -499,6 +528,25 @@ final class AgentTerminalController: ObservableObject {
         String(String.UnicodeScalarView(s.unicodeScalars.filter {
             ($0.value >= 0x20 && $0.value != 0x7f && !(0x80...0x9f).contains($0.value)) || $0 == "\t" || $0 == "\n" || $0 == "\r"
         }))
+    }
+}
+
+/// OQ-66: the pane's window, read when an OSC 52 write arrives.
+struct AgentTerminalWindowState: Equatable {
+    /// Ordered in (closed or ordered out: false).
+    var onScreen: Bool
+    var miniaturized: Bool
+    /// occlusionState contains .visible: some of it shows (another window, Space or a hidden app: false).
+    var occlusionVisible: Bool
+
+    init(onScreen: Bool, miniaturized: Bool, occlusionVisible: Bool) {
+        self.onScreen = onScreen
+        self.miniaturized = miniaturized
+        self.occlusionVisible = occlusionVisible
+    }
+
+    @MainActor init(_ w: NSWindow) {
+        self.init(onScreen: w.isVisible, miniaturized: w.isMiniaturized, occlusionVisible: w.occlusionState.contains(.visible))
     }
 }
 
@@ -585,6 +633,9 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
 
     /// Text goes in sanitized (bracketed when the program asked); an image with no text sends ^V,
     /// so a local Claude Code reads the Mac clipboard itself, as it does under Ghostty.
+    /// QA #681 INFO-6 (decided: left as is): no multi-line paste confirm. Ghostty asks before a paste with a
+    /// new line into a program without bracketed paste; Prosper's terminal hosts Claude Code and login
+    /// shells, which set 2004, so `surface.paste(text:)` sends without libghostty's paste protection.
     @IBAction override func paste(_ sender: Any?) {
         let pb = pasteboard()
         if let text = pb.string(forType: .string) {
@@ -608,14 +659,16 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     }
 
     /// clipboard-write = ask routes every OSC 52 write here: it lands on the Pasteboard seam and the
-    /// library is told no, so it never writes the system pasteboard itself. Reads are denied.
+    /// library is told no, so it never writes the system pasteboard itself. Reads are denied, and so is
+    /// a paste-protection request (`.paste`; Prosper's own paste never asks, see paste(_:)).
+    /// OQ-66: a write lands only while the controller says the session is being viewed.
     func terminalDidRequestClipboardConfirmation(_ request: TerminalClipboardConfirmationRequest) {
         confirmClipboard(request)
     }
 
     /// The answer to every clipboard request, behind a protocol so a test can hand in a recorder.
     func confirmClipboard(_ request: some AgentClipboardRequest) {
-        if request.kind == .osc52Write, !request.contents.isEmpty {
+        if request.kind == .osc52Write, !request.contents.isEmpty, owner?.clipboardWriteAllowed() == true {
             let pb = pasteboard()
             pb.clearContents()
             pb.setString(request.contents, forType: .string)
@@ -640,13 +693,23 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
 /// view's Edit-menu actions own ⌘C/⌘V/⌘A), OSC 52 reads denied and writes asked (see the view).
 @MainActor
 enum AgentTerminalLook {
-    static let controller: TerminalController = TerminalController(configuration: configuration, theme: theme())
+    static let controller: TerminalController = make()
+
+    /// A ghostty app on Prosper's config, its generated config file already gone (QA #681 INFO-10).
+    static func make() -> TerminalController {
+        let c = TerminalController(configuration: configuration, theme: theme())
+        dropConfigFile(c)
+        return c
+    }
 
     static var configuration: TerminalConfiguration {
         TerminalConfiguration(startingFrom: .default) {
             $0.withCustom("keybind", "clear")
             $0.withCustom("clipboard-read", "deny")
             $0.withCustom("clipboard-write", "ask")
+            // QA #681 INFO-2: the default primary-paste reads the system pasteboard straight through
+            // GhosttyTerminal (its selection clipboard is the general one), past the Pasteboard seam.
+            $0.withCustom("middle-click-action", "ignore")
             $0.withCustom("copy-on-select", "false")
             $0.withCustom("macos-option-as-alt", "false")
             $0.withWindowPaddingX(4)
@@ -663,8 +726,22 @@ enum AgentTerminalLook {
         return TerminalTheme(light: colours, dark: colours)
     }
 
-    /// A theme switch since the last attach: one reconfigure, no rebuild.
-    static func refresh(_ c: TerminalController) { c.setTheme(theme()) }
+    /// A theme switch since the last attach: one reconfigure, no rebuild (and a new config file, dropped).
+    static func refresh(_ c: TerminalController) {
+        if c.setTheme(theme()) { dropConfigFile(c) }
+    }
+
+    /// QA #681 INFO-10: GhosttyTerminal writes each config it loads to $TMPDIR/<bundle id>/ghostty-config-
+    /// <uuid>.conf and removes it only when the controller goes, which the app's never does.
+    /// ghostty_config_load_file has parsed it by now (TerminalController+Config.swift prepareConfig), and
+    /// a later reconfigure writes a fresh one, so it goes at once. Only this controller's own file, found
+    /// by its stored property: nil when a GhosttyTerminal bump renames it (the INFO-10 test then fails).
+    @discardableResult
+    static func dropConfigFile(_ c: TerminalController) -> URL? {
+        let url = Mirror(reflecting: c).children.first { $0.label == "managedConfigURL" }?.value as? URL
+        if let url { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
 
     static func hex(_ c: Color) -> String {
         let n = NSColor(c).usingColorSpace(.sRGB) ?? .black
@@ -784,11 +861,11 @@ struct AgentTerminalFindBar: View {
             }
             .font(Neon.font(10.5).monospacedDigit()).fixedSize()
             Button { controller.findNext(false) } label: { Image(systemName: "chevron.up") }
-                .help("Previous (⇧⌘G)")
+                .help("Previous (⇧⌘G)").accessibilityLabel("Previous match")   // QA #681 INFO-7: not "Go Up"
             Button { controller.findNext() } label: { Image(systemName: "chevron.down") }
-                .help("Next (⌘G)")
+                .help("Next (⌘G)").accessibilityLabel("Next match")
             Button { controller.closeFind() } label: { Image(systemName: "xmark") }
-                .help("Close (Esc)")
+                .help("Close (Esc)").accessibilityLabel("Close find")
         }
         .buttonStyle(.plain).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
         .padding(.horizontal, sz(8)).padding(.vertical, sz(5))

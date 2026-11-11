@@ -229,6 +229,11 @@ final class AgentWindowModel: ObservableObject {
 
     init() {
         terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
+        // OQ-66: an OSC 52 write needs the session to be this window's live selection (not a held, ended row).
+        terminal.isSelected = { [weak self] key in
+            guard let self else { return false }
+            return self.selection == .live(key) && !self.selectionIsHeld
+        }
         // #798: the transcript's pending AskUserQuestion is what a question form is checked against.
         askSubscription = transcript.$pendingAsk.sink { [weak self] ask in
             MainActor.assumeIsolated { self?.interaction.ask = ask }

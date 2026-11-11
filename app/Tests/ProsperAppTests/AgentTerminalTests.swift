@@ -1,7 +1,9 @@
 import AppKit
+import Combine
 import CoreImage
 import GhosttyTerminal
 import IOSurface
+import SwiftUI
 import XCTest
 @testable import ProsperApp
 
@@ -82,6 +84,18 @@ final class AgentTerminalTests: XCTestCase {
         /// A new screen reports the view's grid as its own at once, as libghostty's surface does from
         /// its IO thread once it runs at that grid. Off for the tests of that hand-off.
         var screenReports = true
+        /// INFO-4: the session's socket on disk.
+        var socket = true
+        /// OQ-66: what an OSC 52 write sees. Nothing is viewed until a test says so.
+        var selected = false
+        var window: AgentTerminalWindowState?
+        var writes = true
+
+        /// Selected, in an ordered-in, unminimized, visible window: a write may land.
+        func view() {
+            selected = true
+            window = AgentTerminalWindowState(onScreen: true, miniaturized: false, occlusionVisible: true)
+        }
 
         init(version: [Int]? = [1, 40, 0]) {
             c.request = { AgentTerminalSpawn.local($0, cols: $1, rows: $2, dch: "/opt/example/bin/dch", env: ["HOME": "/Users/example"]) }
@@ -103,6 +117,10 @@ final class AgentTerminalTests: XCTestCase {
             c.isLive = { [unowned self] _ in live }
             c.openURL = { [unowned self] in opened.append($0) }
             c.clientVersion = { _ in version }
+            c.socketExists = { [unowned self] _ in socket }
+            c.isSelected = { [unowned self] _ in selected }
+            c.windowState = { [unowned self] _ in window }
+            c.clipboardWrites = { [unowned self] in writes }
         }
 
         var child: FakeChild? { children.last }
@@ -495,6 +513,75 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertEqual(rig.requests.count, 8)
     }
 
+    /// QA #681 INFO-4: the session ended, the client exits 0, and the store (polled) still lists it. dch
+    /// unlinked the socket before that EOF, so the pane says "Session ended" at once: no reattach, and no
+    /// "Couldn't attach" from that reattach failing until the store catches up.
+    @MainActor
+    func testAnExitZeroWithAStaleIsLiveShowsTheEndAtOnce() {
+        let rig = Rig()
+        let c = rig.c
+        final class Log { var phases: [AgentTerminalController.Phase] = [] }
+        let log = Log()
+        let watch = c.$phase.sink { log.phases.append($0) }
+        defer { watch.cancel() }
+        c.attach(Self.key)
+        rig.grid(80, 24)
+        XCTAssertEqual(c.phase, .live)
+        rig.live = true   // stale: the store has not polled since the master went
+        rig.socket = false
+        rig.ios[0].exit(0)
+        spin()
+        XCTAssertEqual(c.phase, .ended, "the end shows at once")
+        XCTAssertEqual(rig.requests.count, 1, "no reattach to a session that is gone")
+        XCTAssertNil(c.notice, "no Reattached")
+        XCTAssertTrue(c.revealed)
+        XCTAssertFalse(log.phases.contains { if case .failed = $0 { return true } else { return false } },
+                       "never Couldn't attach: \(log.phases)")
+        // A nonzero exit with the socket gone and the store stale: ended too, not a failure.
+        c.attach(nil)
+        c.attach(Self.key)
+        rig.grid(80, 24)
+        rig.socket = false
+        rig.ios[1].exit(1)
+        spin()
+        XCTAssertEqual(c.phase, .ended)
+        // The socket still there: an exit 0 is a detach elsewhere, reattached once (as before).
+        c.attach(nil)
+        c.attach(Self.key)
+        rig.grid(80, 24)
+        rig.socket = true
+        rig.ios[2].exit(0)
+        spin()
+        XCTAssertEqual(rig.requests.count, 4, "reattached")
+        XCTAssertEqual(c.notice, "Reattached")
+        c.detach()
+    }
+
+    /// QA #709 F1: the real socketExists looks for "<name>.sock" (dch.c "%s/%s.sock"), as the scanner does.
+    @MainActor
+    func testTheDefaultSocketCheckLooksForTheSockFile() throws {
+        let dir = tempDir()
+        let key = AgentSessionKey(dir: dir.path, name: "s1")
+        let check = AgentTerminalController().socketExists
+        XCTAssertFalse(check(key), "nothing on disk")
+        try Data().write(to: dir.appendingPathComponent("s1"))
+        XCTAssertFalse(check(key), "a bare <name> is not the socket")
+        try Data().write(to: dir.appendingPathComponent("s1.sock"))
+        XCTAssertTrue(check(key))
+    }
+
+    /// QA #709 INFO-4: the real window reader on a window never shown (never ordered or made key).
+    @MainActor
+    func testTheWindowStateOfAWindowNeverShownIsOffScreenAndNotVisible() {
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled],
+                         backing: .buffered, defer: true)
+        w.isReleasedWhenClosed = false
+        let s = AgentTerminalWindowState(w)
+        XCTAssertFalse(s.onScreen)
+        XCTAssertFalse(s.miniaturized)
+        XCTAssertFalse(s.occlusionVisible)
+    }
+
     @MainActor
     func testASpawnThatFailsSaysWhy() {
         struct Boom: Error, CustomStringConvertible { var description: String { "no such file" } }
@@ -502,7 +589,11 @@ final class AgentTerminalTests: XCTestCase {
         rig.refuse = Boom()
         rig.c.attach(Self.key)
         rig.grid(80, 24)
-        XCTAssertEqual(rig.c.phase, .failed("Couldn't open the terminal: no such file"))
+        // QA #681 INFO-7: a sentence, never the error's own text.
+        XCTAssertEqual(rig.c.phase, .failed("Couldn't open the terminal."))
+        rig.refuse = PtyChild.PtyError.forkFailed
+        rig.c.retry()
+        XCTAssertEqual(rig.c.phase, .failed("Couldn't open the terminal: the Mac couldn't start a new process. Close some apps and retry."))
         rig.refuse = nil
         rig.c.retry()
         XCTAssertEqual(rig.c.phase, .live)
@@ -569,7 +660,7 @@ final class AgentTerminalTests: XCTestCase {
         let rig: Rig
         let host = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 720, height: 420))
         let window: NSWindow
-        let app = TerminalController(configuration: AgentTerminalLook.configuration, theme: AgentTerminalLook.theme())
+        let app = AgentTerminalLook.make()
         let pb = NSPasteboard(name: NSPasteboard.Name("eu.illegible.prosper.xctest.term.\(UUID().uuidString)"))
 
         init(_ rig: Rig = Rig()) {
@@ -739,10 +830,65 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertEqual(v.take(self), [])
     }
 
+    /// QA #681 INFO-3: while it runs, NSPasteboard.general and a by-name lookup of the general board
+    /// answer a private board, so a libghostty or GhosttyTerminal that wrote or read the system pasteboard
+    /// itself (its setPasteboardString and its paste reader both name NSPasteboard.general) reaches only
+    /// that board. `install` checks the swap took before it returns one; nil means do not run.
+    @MainActor
+    final class GeneralPasteboardRedirect {
+        static let prefix = "eu.illegible.prosper.xctest."
+        let board = NSPasteboard(name: NSPasteboard.Name("\(GeneralPasteboardRedirect.prefix)general.\(UUID().uuidString)"))
+        private var restore: [(Method, IMP)] = []
+
+        static func install() -> GeneralPasteboardRedirect? {
+            let r = GeneralPasteboardRedirect()
+            let general = NSSelectorFromString("generalPasteboard"), named = NSSelectorFromString("pasteboardWithName:")
+            guard let mGeneral = class_getClassMethod(NSPasteboard.self, general),
+                  let mNamed = class_getClassMethod(NSPasteboard.self, named) else { return nil }
+            let board = r.board
+            typealias Named = @convention(c) (AnyObject, Selector, NSString) -> Unmanaged<NSPasteboard>
+            let original = unsafeBitCast(method_getImplementation(mNamed), to: Named.self)
+            let byName: @convention(block) (AnyObject, NSString) -> Unmanaged<NSPasteboard> = { cls, name in
+                name as String == NSPasteboard.Name.general.rawValue ? Unmanaged.passUnretained(board) : original(cls, named, name)
+            }
+            let generalImp = imp_implementationWithBlock({ (_: AnyObject) in board } as @convention(block) (AnyObject) -> NSPasteboard)
+            let namedImp = imp_implementationWithBlock(byName)
+            r.restore = [(mGeneral, method_setImplementation(mGeneral, generalImp)),
+                         (mNamed, method_setImplementation(mNamed, namedImp))]
+            // The swap is in before anything asks for the board; only then is the general board looked up.
+            guard method_getImplementation(mGeneral) == generalImp, method_getImplementation(mNamed) == namedImp,
+                  NSPasteboard.general.name == board.name, NSPasteboard(name: .general).name == board.name else {
+                r.uninstall()
+                return nil
+            }
+            return r
+        }
+
+        func uninstall() {
+            for (m, imp) in restore { method_setImplementation(m, imp) }
+            restore = []
+            board.releaseGlobally()
+        }
+    }
+
+    /// QA #681 INFO-3: real libghostty end to end. An OSC 52 write from the program lands on the seam's
+    /// board through the host's confirmation, and a read is denied. It cannot reach the real pasteboard: the
+    /// seam's board is a private named one and the general board is redirected (both checked before the
+    /// program writes a byte; XCTFail and no run otherwise). The redirect board staying empty proves the
+    /// library never wrote it itself.
     @MainActor
     func testCopyAndOSC52GoToThePasteboardSeamAndReadsAreDenied() {
         let v = startedView()
         defer { v.tearDown() }
+        let seam = v.host.pasteboard().name.rawValue
+        guard seam.hasPrefix(GeneralPasteboardRedirect.prefix), seam != NSPasteboard.Name.general.rawValue else {
+            return XCTFail("the host's board must be a private named one, not \(seam)")
+        }
+        guard let redirect = GeneralPasteboardRedirect.install() else {
+            return XCTFail("NSPasteboard.general is not redirected: no OSC 52 runs")
+        }
+        defer { redirect.uninstall() }
+        v.rig.view()   // OQ-66: selected, in a visible window
         v.output("copy me please\r\n", self)
         XCTAssertTrue(v.host.surface?.performBindingAction("select_all") == true)
         v.pb.clearContents()
@@ -752,14 +898,36 @@ final class AgentTerminalTests: XCTestCase {
         v.pb.clearContents()
         v.output("\u{1b}]52;c;\(Data("from the program".utf8).base64EncodedString())\u{7}", self)
         wait("osc 52 write") { v.pb.string(forType: .string) == "from the program" }
-        // OSC 52 read: denied, no reply carries the board.
+        XCTAssertNil(redirect.board.string(forType: .string), "libghostty wrote no pasteboard of its own")
+        // OSC 52 read: denied, no reply carries either board.
         v.pb.clearContents()
         v.pb.setString("secret", forType: .string)
+        redirect.board.clearContents()
+        redirect.board.setString("general secret", forType: .string)
         _ = v.take(self)
         v.output("\u{1b}]52;c;?\u{7}", self)
         let reply = String(decoding: v.take(self), as: UTF8.self)
         XCTAssertFalse(reply.contains("52;"), "no clipboard reply: \(reply.debugDescription)")
         XCTAssertFalse(reply.contains(Data("secret".utf8).base64EncodedString()))
+        XCTAssertFalse(reply.contains(Data("general secret".utf8).base64EncodedString()))
+        // OQ-66 end to end: the same write while the session is not selected lands nowhere.
+        v.rig.selected = false
+        v.pb.clearContents()
+        redirect.board.clearContents()
+        v.output("\u{1b}]52;c;\(Data("unseen".utf8).base64EncodedString())\u{7}", self)
+        spin(0.3)
+        XCTAssertNil(v.pb.string(forType: .string), "not viewed: denied")
+        XCTAssertNil(redirect.board.string(forType: .string))
+    }
+
+    /// A clipboard request as libghostty hands it over, recording the answers.
+    @MainActor
+    final class ClipRequest: AgentClipboardRequest {
+        let kind: TerminalClipboardRequestKind
+        let contents: String
+        var answers: [Bool] = []
+        init(_ kind: TerminalClipboardRequestKind, _ contents: String) { self.kind = kind; self.contents = contents }
+        func respond(allow: Bool) { answers.append(allow) }
     }
 
     /// Every clipboard request libghostty asks about is answered no: an OSC 52 write lands on the
@@ -767,32 +935,159 @@ final class AgentTerminalTests: XCTestCase {
     /// so nothing reaches libghostty, whose own write (on a yes) would go to NSPasteboard.general.
     @MainActor
     func testClipboardRequestsAreDeniedAndAWriteLandsOnlyOnTheSeam() {
-        @MainActor final class Request: AgentClipboardRequest {
-            let kind: TerminalClipboardRequestKind
-            let contents: String
-            var answers: [Bool] = []
-            init(_ kind: TerminalClipboardRequestKind, _ contents: String) { self.kind = kind; self.contents = contents }
-            func respond(allow: Bool) { answers.append(allow) }
-        }
         let pb = NSPasteboard(name: NSPasteboard.Name("eu.illegible.prosper.xctest.term.\(UUID().uuidString)"))
         defer { pb.releaseGlobally() }
+        let rig = Rig()
+        rig.c.attach(Self.key)
+        rig.grid(80, 24)
+        rig.view()
+        defer { rig.c.detach() }
         let host = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         host.pasteboard = { [pb] in pb }
-        let write = Request(.osc52Write, "from the program")
+        host.owner = rig.c
+        let write = ClipRequest(.osc52Write, "from the program")
         host.confirmClipboard(write)
         XCTAssertEqual(write.answers, [false], "the library is told no, so it never writes the system pasteboard")
         XCTAssertEqual(pb.string(forType: .string), "from the program", "the write landed on the seam's board")
         pb.clearContents()
         pb.setString("secret", forType: .string)
+        // INFO-6: a paste-protection request (.paste) is denied too; Prosper's own paste never raises one.
         for kind: TerminalClipboardRequestKind in [.osc52Read, .paste] {
-            let r = Request(kind, "secret")
+            let r = ClipRequest(kind, "secret")
             host.confirmClipboard(r)
             XCTAssertEqual(r.answers, [false], "\(kind) denied")
         }
-        let empty = Request(.osc52Write, "")
+        let empty = ClipRequest(.osc52Write, "")
         host.confirmClipboard(empty)
         XCTAssertEqual(empty.answers, [false])
         XCTAssertEqual(pb.string(forType: .string), "secret", "a read, a paste request or an empty write leave the board alone")
+    }
+
+    /// OQ-66 (operator, 2026-11-10): an OSC 52 write lands only while the session is viewed: attached,
+    /// selected, its window ordered in, not minimized, not fully covered, and the setting on. Every other
+    /// case is answered no and writes nothing.
+    @MainActor
+    func testAnOSC52WriteLandsOnlyWhileTheSessionIsViewed() {
+        let pb = NSPasteboard(name: NSPasteboard.Name("eu.illegible.prosper.xctest.term.\(UUID().uuidString)"))
+        defer { pb.releaseGlobally() }
+        let rig = Rig()
+        let host = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        host.pasteboard = { [pb] in pb }
+        host.owner = rig.c
+        rig.c.attach(Self.key)
+        rig.grid(80, 24)
+        defer { rig.c.detach() }
+        let shown = AgentTerminalWindowState(onScreen: true, miniaturized: false, occlusionVisible: true)
+        func write(_ why: String, lands: Bool, owned: Bool = true, line: UInt = #line) {
+            pb.clearContents()
+            let r = ClipRequest(.osc52Write, why)
+            host.confirmClipboard(r)
+            XCTAssertEqual(r.answers, [false], "the library is always told no: \(why)", line: line)
+            XCTAssertEqual(pb.string(forType: .string), lands ? why : nil, why, line: line)
+            if owned { XCTAssertEqual(rig.c.clipboardWriteAllowed(), lands, why, line: line) }
+        }
+        func reset() { rig.view(); rig.writes = true }
+        reset()
+        write("visible and selected", lands: true)
+        rig.selected = false
+        write("not selected", lands: false)
+        reset()
+        rig.window?.occlusionVisible = false
+        write("covered, on another Space or the app hidden", lands: false)
+        reset()
+        rig.window?.miniaturized = true
+        write("minimized", lands: false)
+        reset()
+        rig.window?.onScreen = false
+        write("ordered out", lands: false)
+        reset()
+        rig.window = nil
+        write("window closed", lands: false)
+        reset()
+        rig.writes = false
+        write("setting off", lands: false)
+        reset()
+        write("viewed again", lands: true)
+        XCTAssertEqual(rig.window, shown)
+        // Detached: the client left (taken by another device), then the pane let go of it.
+        rig.ios[0].exit(5)
+        spin()
+        XCTAssertEqual(rig.c.phase, .detached("Opened on another device"))
+        write("detached", lands: false)
+        rig.c.attach(nil)
+        write("nothing attached", lands: false)
+        // No owner: the view out of its pane.
+        host.owner = nil
+        rig.c.attach(Self.key)
+        rig.grid(80, 24)
+        XCTAssertTrue(rig.c.clipboardWriteAllowed(), "its controller would say yes")
+        write("no controller", lands: false, owned: false)
+    }
+
+    /// OQ-66: the setting is a Prosper default (the in-memory test store), on when unset; the controller reads
+    /// it on every write, so a change in Settings applies to the next one.
+    @MainActor
+    func testTheClipboardSettingIsOnByDefaultAndReadOnEveryWrite() {
+        let key = "agentWindowClipboardWrites"
+        let saved = Preferences.defaults.object(forKey: key)
+        defer { Preferences.defaults.set(saved, forKey: key) }
+        XCTAssertFalse(Preferences.defaults === UserDefaults.standard, "a private defaults store")
+        Preferences.defaults.removeObject(forKey: key)
+        let c = AgentTerminalController()
+        XCTAssertTrue(Preferences.agentWindowClipboardWrites, "on when unset")
+        XCTAssertTrue(c.clipboardWrites())
+        Preferences.agentWindowClipboardWrites = false
+        XCTAssertFalse(c.clipboardWrites(), "read at the write, not cached")
+        XCTAssertEqual(Preferences.defaults.object(forKey: key) as? Bool, false)
+        Preferences.agentWindowClipboardWrites = true
+        XCTAssertTrue(c.clipboardWrites())
+        XCTAssertEqual(AgentSessionsSection.clipboardLabel, "Let sessions set the clipboard while you're viewing them")
+    }
+
+    /// QA #681 INFO-2 and INFO-10: libghostty takes Prosper's config as is (no diagnostics), a middle click
+    /// does nothing (its primary-paste read the system pasteboard past the seam), and the config file it was
+    /// loaded from is gone at once, after a theme switch too.
+    @MainActor
+    func testTheGhosttyConfigIgnoresMiddleClickAndLeavesNoFile() throws {
+        XCTAssertTrue(AgentTerminalLook.configuration.rendered.contains("middle-click-action = ignore"))
+        let c = AgentTerminalLook.make()
+        XCTAssertNil(c.lastConfigurationIssue, "libghostty accepted every line")
+        XCTAssertTrue(c.renderedConfig.contains("middle-click-action = ignore"))
+        XCTAssertTrue(c.renderedConfig.contains("clipboard-read = deny"))
+        XCTAssertTrue(c.renderedConfig.contains("clipboard-write = ask"))
+        // The wrapper's own record of its file, read without touching it (dropConfigFile would remove it).
+        func file() throws -> URL {
+            try XCTUnwrap(Mirror(reflecting: c).children.first { $0.label == "managedConfigURL" }?.value as? URL,
+                          "GhosttyTerminal's managedConfigURL is found")
+        }
+        let first = try file()
+        defer { try? FileManager.default.removeItem(at: first) }   // only left over when the drop is broken
+        XCTAssertEqual(first.deletingLastPathComponent().standardizedFileURL, TerminalController.managedConfigDirectory.standardizedFileURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path), "dropped right after the load")
+        // A theme switch writes a new file (the wrapper leaves it, so the check above can see one); refresh drops its own.
+        c.setTheme(TerminalTheme(light: TerminalConfiguration { $0.withBackground("#123456") },
+                                 dark: TerminalConfiguration { $0.withBackground("#123456") }))
+        let switched = try file()
+        XCTAssertNotEqual(switched, first)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: switched.path), "a load the app does not drop leaves a file")
+        AgentTerminalLook.refresh(c)
+        let second = try file()
+        XCTAssertNotEqual(second, switched)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path), "and the refresh's own")
+        XCTAssertEqual(AgentTerminalLook.dropConfigFile(c), second, "the drop names the file it removed")
+        try? FileManager.default.removeItem(at: switched)
+    }
+
+    /// QA #681 INFO-7: the find bar's buttons say what they do to VoiceOver, not the symbols' names.
+    /// (SwiftUI builds no accessibility tree for a never-shown window, so the view's modifiers are read from
+    /// its dump, as AgentWindowRenameTests does.)
+    @MainActor
+    func testTheFindBarButtonsHaveLabels() {
+        var out = ""
+        dump(AgentTerminalFindBar(controller: AgentTerminalController()).body, to: &out)
+        for want in ["Previous match", "Next match", "Close find", "Previous (⇧⌘G)", "Next (⌘G)", "Close (Esc)"] {
+            XCTAssertTrue(out.contains("\"\(want)\""), want)
+        }
     }
 
     @MainActor

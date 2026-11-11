@@ -449,6 +449,8 @@ enum Preferences {
         static let agentWindowCollapsedSections = "agentWindowCollapsedSections"
         // #822: sessions the Agent Sessions window shows as Transcript, not the default Terminal ("<dir>\t<name>"); per Mac, not in SyncedKeys.
         static let agentWindowTranscriptSessions = "agentWindowTranscriptSessions"
+        // OQ-66: a session's terminal may set the clipboard (OSC 52) while you view it; per Mac, not in SyncedKeys.
+        static let agentWindowClipboardWrites = "agentWindowClipboardWrites"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1261,6 +1263,12 @@ enum Preferences {
             if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandNewSessionCommand) }
             else { defaults.set(v, forKey: Keys.agentIslandNewSessionCommand) }
         }
+    }
+
+    /// OQ-66: Agent Sessions' "Let sessions set the clipboard while you're viewing them"; on when unset.
+    static var agentWindowClipboardWrites: Bool {
+        get { defaults.object(forKey: Keys.agentWindowClipboardWrites) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.agentWindowClipboardWrites) }
     }
 
     /// #751: Always allow permission prompts; off when unset.
