@@ -44,24 +44,29 @@ extension AgentWindowD1Tests {
         let st = store([a, old, dash])
         st.controlDch = nil
         let why = try XCTUnwrap(st.resumeGate.refusal)
+        let rename = AgentWindowMenuEntry.item("Rename…", enabled: true, verb: .rename)
         XCTAssertEqual(AgentWindowControls.menu(a, store: st), [
+            .item("Rename…", enabled: false, verb: .rename), .divider,
             .item("Restart agent", enabled: false, verb: .restart), .item("Stop", enabled: false, verb: .stop), .divider,
             .item("Kill…", enabled: false, verb: .kill), .note("Controls \(why)"),
         ], "no control dch: all off, the island's footer says why")
         st.controlDch = Self.v1240
         XCTAssertEqual(AgentWindowControls.menu(a, store: st), [
+            rename, .divider,
             .item("Restart agent (needs dch 1.24.1)", enabled: false, verb: .restart),
             .item("Stop (needs dch 1.24.1)", enabled: false, verb: .stop), .divider,
             .item("Kill…", enabled: true, verb: .kill),
         ], "1.24.0: Restart and Stop name the version; Kill needs only the base gate")
         st.controlDch = Self.v1241
         XCTAssertEqual(AgentWindowControls.menu(a, store: st), [
+            rename, .divider,
             .item("Restart agent…", enabled: true, verb: .restart), .item("Stop…", enabled: true, verb: .stop), .divider,
             .item("Kill…", enabled: true, verb: .kill),
         ], "items that ask carry an ellipsis")
-        XCTAssertEqual(AgentWindowControls.menu(old, store: st)[1], .item(AgentIsland.stopOldMasterLabel, enabled: false, verb: .stop),
+        XCTAssertEqual(AgentWindowControls.menu(old, store: st)[3], .item(AgentIsland.stopOldMasterLabel, enabled: false, verb: .stop),
                        "an old master's Stop says why")
-        XCTAssertEqual(AgentWindowControls.menu(dash, store: st), [], "#627: a name dch reads as a flag gets no item")
+        XCTAssertEqual(AgentWindowControls.menu(dash, store: st), [rename],
+                       "#627: a name dch reads as a flag gets no Restart/Stop/Kill; #829 G4: Rename takes any name")
         // The header's button is there either way, one size (it never moves the title line).
         func width(_ s: AgentSession, _ store: AgentIslandStore?) -> CGFloat {
             NSHostingView(rootView: AgentSessionMenuButton(store: store, session: s, ask: { _ in })).fittingSize.width

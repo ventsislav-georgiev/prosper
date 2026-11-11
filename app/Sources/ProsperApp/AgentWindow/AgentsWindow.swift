@@ -133,11 +133,15 @@ final class AgentsNSWindow: NSWindow {
     /// except in a text view, where they move to its start and end (QA #669). Plain arrows and
     /// Return go to the sidebar only while it has the focus and nothing that types does.
     /// Everything else (Esc, Tab, ⌃C, arrows, Return) reaches the first responder.
-    static func route(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool) -> KeyRoute {
+    /// #829 G4: while the title is a rename field, every key but ⌘W is the field's (the
+    /// verbosity keys, ⌘T, ⌘F, ⌘G, ⌘↑/⌘↓ and any shortcut added later stand down).
+    static func route(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool,
+                      renaming: Bool = false) -> KeyRoute {
         guard event.type == .keyDown else { return .pass }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased()
         if mods.contains(.command), key == "w" { return .close }
+        if renaming { return .pass }
         if let v = verbosity(for: event) { return terminalMode ? .swallow : .verbosity(v) }
         if mods == [.command] {
             switch key {
@@ -166,7 +170,7 @@ final class AgentsNSWindow: NSWindow {
             return super.performKeyEquivalent(with: event)
         }
         switch Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                          terminalMode: model.paneMode == .terminal) {
+                          terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil) {
         case .close: performClose(nil)
         case .verbosity(let v): model.verbosity = v
         case .toggleMode:
@@ -196,7 +200,8 @@ final class AgentsNSWindow: NSWindow {
         }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                                 terminalMode: model.paneMode == .terminal) == .sidebar, Self.handle(event, model) { return }
+                                 terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil) == .sidebar,
+           Self.handle(event, model) { return }
         super.sendEvent(event)
     }
 
@@ -471,6 +476,7 @@ struct AgentDetailView: View {
                                    level: $model.verbosity, todos: transcript.todos,
                                    todosOpen: mode == .terminal ? floatingTodos : $transcript.todosOpen,
                                    store: model.store, ask: { model.ask($0, s) }, ended: ended,
+                                   renaming: !ended && model.renaming == s.key, endRename: { model.endRename(s.key, $0) },
                                    mode: mode, setMode: { m in
                                        model.setMode(m, for: s)
                                        if m == .terminal { model.terminal.focus() }
@@ -573,6 +579,9 @@ struct AgentSessionHeader: View {
     var menuStore: AgentIslandStore? { ended ? nil : store }
     /// QA #668 INFO-4: the state chip reads "Ended" for an ended session, in the same slot.
     var stateChip: AgentStateChip { AgentStateChip(state: session.state, ended: ended) }
+    /// #829 G4: the title is a text field (Rename…); `endRename` gets the text on Return, nil on Esc or focus loss.
+    var renaming = false
+    var endRename: (String?) -> Void = { _ in }
     /// #822: Transcript | Terminal (the window passes `setMode`; without it there is no toggle).
     var mode = AgentPaneMode.transcript
     var setMode: ((AgentPaneMode) -> Void)?
@@ -612,6 +621,26 @@ struct AgentSessionHeader: View {
         .background(Neon.card)
     }
 
+    /// The title, the state chip and the room after them: one slot. G4: while renaming, the field
+    /// lies over the whole slot and the title and chip only go transparent, so nothing moves.
+    var titleSlot: some View {
+        HStack(alignment: .center, spacing: sz(8)) {
+            Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                .lineLimit(1).truncationMode(.middle)
+            stateChip
+            Spacer(minLength: sz(8))
+        }
+        .opacity(renaming ? 0 : 1)
+        .accessibilityHidden(renaming)
+        .overlay(alignment: .leading) {
+            if renaming {
+                AgentRenameField(name: session.name, alias: session.alias, end: endRename)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .id(session.key)   // per session: Rename on another row gets a new field, never this one's text
+            }
+        }
+    }
+
     /// Focused hides todos; Verbose draws the todo/task cards in the conversation instead.
     var shownTodos: AgentTodos? { level.wrappedValue == .default ? todos : nil }
 
@@ -627,10 +656,7 @@ struct AgentSessionHeader: View {
 
     func titleLine(picker: AgentVerbosityPicker.Style, compact: Bool) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
-            Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                .lineLimit(1).truncationMode(.middle)
-            stateChip
-            Spacer(minLength: sz(8))
+            titleSlot
             AgentVerbosityPicker(level: level, style: picker)   // #822: in its slot, off in Terminal mode
                 .disabled(mode == .terminal).opacity(mode == .terminal ? 0.45 : 1)
             if let setMode {
@@ -639,8 +665,7 @@ struct AgentSessionHeader: View {
                     .disabled(ended).opacity(ended ? 0.45 : 1)
             }
             HStack(spacing: sz(6)) {   // #829: the "⋯" sits close to the button, always last, fixed size
-                OpenInTerminalButton(action: open, compact: compact)
-                    .disabled(ended).opacity(ended ? 0.45 : 1)
+                OpenInTerminalButton(action: open, compact: compact, ended: ended)
                 AgentSessionMenuButton(store: menuStore, session: session, ask: ask)
             }
         }
@@ -806,6 +831,8 @@ struct AgentStateChip: View {
     /// QA #668 INFO-4: the session ended (the window's held row): "Ended", not its last live state.
     var ended = false
     static let endedLabel = "Ended"
+    /// QA #672 #3: Ended's own glyph (History rows' hollow dot), not Idle's filled one.
+    static let endedGlyph = "○"
     /// The chip's words (and VoiceOver's).
     var label: String { ended ? Self.endedLabel : state.label }
     /// #828: the slot is the widest state's (Ended included), so a state change never moves the title, the
@@ -813,8 +840,8 @@ struct AgentStateChip: View {
     var body: some View {
         ZStack(alignment: .leading) {
             ForEach(AgentState.allCases, id: \.self) { chip($0.glyph, $0.label, agentStateColor($0)).hidden() }
-            chip("●", Self.endedLabel, Neon.textSecondary).hidden()
-            if ended { chip("●", label, Neon.textSecondary) } else { chip(state.glyph, label, agentStateColor(state)) }
+            chip(Self.endedGlyph, Self.endedLabel, Neon.textSecondary).hidden()
+            if ended { chip(Self.endedGlyph, label, Neon.textSecondary) } else { chip(state.glyph, label, agentStateColor(state)) }
         }
         .fixedSize()
     }
@@ -953,8 +980,8 @@ struct AgentInteractionPane: View {
             HStack(alignment: .bottom, spacing: sz(8)) {
                 ZStack(alignment: .topLeading) {
                     // QA #668 INFO-3: an ended session's field neither edits nor reads as editable; same slot.
+                    // QA #672 #2: no .disabled here: it never reached the NSTextView; `editable` is what turns it off.
                     AgentComposerField(text: $model.draft, onSubmit: { if canSend { model.send() } }, editable: !ended)
-                        .disabled(ended)
                     if model.draft.isEmpty {
                         Text(placeholder).font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
                             .lineLimit(1).padding(.horizontal, sz(9)).padding(.vertical, sz(7))
@@ -1193,6 +1220,9 @@ struct AgentComposerField: NSViewRepresentable {
     /// QA #668 INFO-3: false for an ended session (NSTextView ignores SwiftUI's .disabled).
     var editable = true
 
+    /// QA #672 #2: VoiceOver hears why the field takes nothing (only an ended session's is not editable).
+    static func label(editable: Bool) -> String { editable ? "Message Claude" : "Message Claude, session ended" }
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -1209,7 +1239,6 @@ struct AgentComposerField: NSViewRepresentable {
         tv.textContainer?.widthTracksTextView = true
         tv.textContainerInset = NSSize(width: sz(4), height: sz(6))
         tv.delegate = context.coordinator
-        tv.setAccessibilityLabel("Message Claude")
         let sv = NSScrollView()
         sv.documentView = tv
         sv.hasVerticalScroller = true
@@ -1230,6 +1259,7 @@ struct AgentComposerField: NSViewRepresentable {
         // Selectable first: a false isSelectable clears isEditable, a true isEditable sets isSelectable.
         tv.isSelectable = editable
         tv.isEditable = editable
+        tv.setAccessibilityLabel(AgentComposerField.label(editable: editable))
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

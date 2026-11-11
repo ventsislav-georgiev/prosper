@@ -105,7 +105,7 @@ struct TerminalFirstView: View {
             Text("Opens in the terminal").font(Neon.font(14, weight: .semibold)).foregroundStyle(Neon.textPrimary)
             Text(reason).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-            if let openTerminal { OpenInTerminalButton(action: openTerminal).disabled(!openEnabled).opacity(openEnabled ? 1 : 0.45) }
+            if let openTerminal { OpenInTerminalButton(action: openTerminal, ended: !openEnabled) }
             Button("Show the conversation anyway", action: showConversation)
                 .buttonStyle(.plain).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.blue)
         }
@@ -368,6 +368,10 @@ struct OpenInTerminalButton: View {
     let action: () -> Void
     /// Icon only (a narrow window's header).
     var compact = false
+    /// QA #668 F1: the session ended: off and dimmed in its slot; QA #672 #4: its help says why.
+    var ended = false
+    static let help = "Open this session in the terminal (Return)"
+    var help: String { ended ? AgentPaneModeToggle.endedReason : Self.help }
     var body: some View {
         Button(action: action) {
             Label("Open in terminal", systemImage: "terminal")
@@ -381,7 +385,8 @@ struct OpenInTerminalButton: View {
                 .fixedSize()
         }
         .buttonStyle(.plain)
-        .help("Open this session in the terminal (Return)")
+        .disabled(ended).opacity(ended ? 0.45 : 1)
+        .help(help)
         .accessibilityLabel("Open in terminal")
     }
 }

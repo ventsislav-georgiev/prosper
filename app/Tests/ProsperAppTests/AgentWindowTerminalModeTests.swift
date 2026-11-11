@@ -436,23 +436,40 @@ extension AgentWindowD1Tests {
     }
 
     /// Pixels in the box that differ between `a` and `b` (`b` read `dx` pixels to the right).
+    /// Reps of one layout compare raw bytes first, a row at a time: equal bytes are the same colour,
+    /// so only a pixel whose bytes differ goes through colorAt and same() (#829 P3 r3: the per-pixel
+    /// NSColors made the rename render test take 292 s).
     func differing(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, x: Range<Int>, y: Range<Int>, dx: Int = 0) -> Int {
+        let raw = RawPixels.pair(a, b)
+        // The boxes colorAt answers for: in both reps, `b` shifted by dx.
+        let lo = max(x.lowerBound, 0, -dx), hi = min(x.upperBound, a.pixelsWide, b.pixelsWide, b.pixelsWide - dx)
+        guard lo < hi else { return 0 }
         var n = 0
-        for yy in y where yy < min(a.pixelsHigh, b.pixelsHigh) {
-            for xx in x where xx < min(a.pixelsWide, b.pixelsWide) && xx + dx >= 0 && xx + dx < b.pixelsWide {
-                if let p = a.colorAt(x: xx, y: yy), let q = b.colorAt(x: xx + dx, y: yy), !same(p, q) { n += 1 }
+        for yy in max(y.lowerBound, 0)..<max(y.lowerBound, 0, min(y.upperBound, a.pixelsHigh, b.pixelsHigh)) {
+            if let r = raw, r.0.equal(lo, yy, r.1, lo + dx, yy, count: hi - lo) { continue }
+            // colorAt and usingColorSpace autorelease 4 NSColors a pixel: drained per row, or a
+            // whole-window compare loop holds them all (#829 P3 grew one xctest to 34 GB).
+            autoreleasepool {
+                for xx in lo..<hi {
+                    if let r = raw, r.0.equal(xx, yy, r.1, xx + dx, yy) { continue }
+                    if let c = a.colorAt(x: xx, y: yy), let d = b.colorAt(x: xx + dx, y: yy), !same(c, d) { n += 1 }
+                }
             }
         }
         return n
     }
 
-    /// Pixels in the box unlike its top-left one.
+    /// Pixels in the box unlike its top-left one (the same raw bytes as it: alike, no colorAt).
     func unlike(_ rep: NSBitmapImageRep, x: Range<Int>, y: Range<Int>) -> Int {
         guard let ref = rep.colorAt(x: x.lowerBound, y: y.lowerBound) else { return -1 }
+        let raw = RawPixels(rep)
         var n = 0
         for yy in y where yy < rep.pixelsHigh {
-            for xx in x where xx < rep.pixelsWide {
-                if let p = rep.colorAt(x: xx, y: yy), !same(p, ref) { n += 1 }
+            autoreleasepool {
+                for xx in x where xx < rep.pixelsWide {
+                    if let raw, xx >= 0, yy >= 0, raw.equal(xx, yy, raw, x.lowerBound, y.lowerBound) { continue }
+                    if let p = rep.colorAt(x: xx, y: yy), !same(p, ref) { n += 1 }
+                }
             }
         }
         return n
@@ -462,6 +479,30 @@ extension AgentWindowD1Tests {
         guard let p = p.usingColorSpace(.sRGB), let q = q.usingColorSpace(.sRGB) else { return false }
         return abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent)
             + abs(p.blueComponent - q.blueComponent) <= 0.03
+    }
+}
+
+/// #829 P3 r3: a rep's pixel bytes. Within one rep, or two of one layout, equal bytes are the same
+/// colour, so a compare skips colorAt for them; any other pixel still goes through colorAt and same().
+/// nil for a planar or not 8-bit rep (colorAt only).
+struct RawPixels {
+    let base: UnsafeMutablePointer<UInt8>, row: Int, size: Int
+
+    init?(_ rep: NSBitmapImageRep) {
+        guard !rep.isPlanar, rep.bitsPerSample == 8, rep.bitsPerPixel % 8 == 0, let d = rep.bitmapData else { return nil }
+        base = d; row = rep.bytesPerRow; size = rep.bitsPerPixel / 8
+    }
+
+    /// Both, when `a` and `b` lay their bytes out alike (format, depth, colour space); else nil.
+    static func pair(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> (RawPixels, RawPixels)? {
+        guard a.bitmapFormat == b.bitmapFormat, a.bitsPerPixel == b.bitsPerPixel, a.samplesPerPixel == b.samplesPerPixel,
+              a.colorSpace == b.colorSpace, let p = RawPixels(a), let q = RawPixels(b) else { return nil }
+        return (p, q)
+    }
+
+    /// `count` pixels from (x, y) here equal, byte for byte, those from (ox, oy) in `o`.
+    func equal(_ x: Int, _ y: Int, _ o: RawPixels, _ ox: Int, _ oy: Int, count: Int = 1) -> Bool {
+        memcmp(base + y * row + x * size, o.base + oy * o.row + ox * o.size, count * size) == 0
     }
 }
 

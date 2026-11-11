@@ -288,6 +288,37 @@ extension AgentIsland {
         taken.contains(name) ? (2...).lazy.map { "\(name)-\($0)" }.first { !taken.contains($0) }! : name
     }
 
+    // MARK: - Rename (#829 G4)
+
+    static let renameLabel = "Rename…"
+    /// The longest alias the window sends (dch itself truncates at 599 bytes).
+    static let renameMax = 120
+    static let renameBusyText = "Rename not run: another job is running"
+
+    static func renameHelp(_ name: String) -> String { "Display name only; the dch session name stays \(name)" }
+
+    /// The field's text as dch -m gets it: tabs and newlines become spaces (dch does it too),
+    /// trimmed, at most `renameMax` characters.
+    static func renameText(_ alias: String) -> String {
+        let flat = String(alias.map { $0 == "\t" || $0.isNewline ? " " : $0 })
+        return String(flat.trimmingCharacters(in: .whitespaces).prefix(renameMax)).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// `-m <name> <alias>`: two argv elements taken verbatim by dch, so any name works (no
+    /// passable check); "" clears the alias. nil: the text is the alias already, nothing runs.
+    static func renameArgs(_ name: String, _ alias: String, current: String) -> [String]? {
+        let text = renameText(alias)
+        return text == current ? nil : ["-m", name, text]
+    }
+
+    /// DchConnection.setAlias's copy: nil when it worked, else "Couldn't rename <name>: <dch's first line>".
+    static func renameFailure(_ r: DchActionResult, name: String) -> String? {
+        guard r.status != 0 || r.stopped else { return nil }
+        let line = r.text.first.map { String($0.prefix(120)) }
+        let shown = name.count > 64 ? String(name.prefix(64)) + "…" : name
+        return "Couldn't rename \(shown): \(line ?? (r.status < 0 ? "dch could not be run" : "dch exited \(r.status)"))"
+    }
+
     // MARK: - Restart (#579)
 
     static let restartingText = "Restarting…"

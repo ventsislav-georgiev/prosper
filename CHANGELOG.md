@@ -39,6 +39,11 @@ tag from the now-released section and put it on the new top draft.
   session stays in view until its History row arrives (about a minute at most); meanwhile it
   reads Ended, and Open in terminal, Return, its "⋯" menu and the input box are off. Remove from
   History says when it also removes older records of that name (#829).
+- Agent Sessions window: Rename… in a live session's row menu and in the header "⋯" turns the title
+  into a text field: Return saves, Esc or clicking away cancels, and an empty field clears the alias.
+  It renames the display name only, through `dch -m`, and a failure shows on the session's line. An
+  ended session's chip now reads Ended with its own glyph, its disabled Open in terminal says why,
+  and VoiceOver hears "Message Claude, session ended" on its input box (#829).
 - Extensions: a `host.shell.run` that times out now stops the shell and everything it started
   (the whole process group, forced after 1 s) instead of leaving it running. Calls that must
   finish opt out with `host.shell.run(cmd, { keep_running = true })`: control returns at the

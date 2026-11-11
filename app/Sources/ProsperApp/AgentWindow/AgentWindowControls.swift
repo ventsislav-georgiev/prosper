@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // #829 Phase 1: the window's live-session lifecycle (Restart agent, Stop, Kill) and the island's
@@ -9,6 +10,8 @@ enum AgentWindowVerb: Equatable {
     case restart, stop, kill
     /// #829 Phase 2: a History record's.
     case resume, resumeNoMessage, pin, remove
+    /// #829 G4: a live session's; edits the header title in place (never asks).
+    case rename
 }
 
 /// The confirm strip's question: what, on which session (by key; re-resolved at the answer).
@@ -40,8 +43,10 @@ enum AgentWindowControls {
     static func menu(_ s: AgentSession, store: AgentIslandStore) -> [AgentWindowMenuEntry] {
         let d = AgentIslandView.Drawn(session: s, card: nil, open: {}, answer: { _, _ in }, refused: store.resumeGate.refusal,
                                       canStop: AgentIsland.canStop(s), needs: store.restartNeeds)
-        var out: [AgentWindowMenuEntry] = []
+        // G4: any name (dch -m takes it verbatim), any dch that runs: no gate but the control binary.
+        var out: [AgentWindowMenuEntry] = [.item(AgentIsland.renameLabel, enabled: store.controlDch != nil, verb: .rename)]
         if d.controls {
+            out.append(.divider)
             out.append(.item(d.restartEnabled ? AgentIsland.restartLabel + "…" : d.restartTitle, enabled: d.restartEnabled,
                              verb: .restart))
             out.append(.item(d.stopEnabled ? AgentIsland.stopLabel + "…" : d.stopTitle, enabled: d.stopEnabled, verb: .stop))
@@ -131,7 +136,7 @@ enum AgentWindowControls {
             return "Stop \(s.title)? Claude Code is paused and the session ends. Resume it later from History." + blocked
         case .kill:
             return AgentIsland.killQuestion(s.title)
-        case .resume, .resumeNoMessage, .pin, .remove:
+        case .resume, .resumeNoMessage, .pin, .remove, .rename:
             return ""   // History verbs: removeQuestion; the rest never ask
         }
     }
@@ -145,6 +150,7 @@ enum AgentWindowControls {
         case .resume: AgentIsland.resumeLabel
         case .resumeNoMessage: AgentIsland.resumeNoMessageLabel
         case .pin: AgentIsland.pinLabel
+        case .rename: AgentIsland.renameLabel
         }
     }
 
@@ -228,7 +234,7 @@ struct AgentSessionMenuButton: View {
         // header and leaves the narrowest title line its room (#822's pill included).
         .frame(width: sz(18), height: sz(18))
         .disabled(store.map { AgentWindowControls.menu(session, store: $0).isEmpty } ?? true)
-        .help("Restart, stop or kill this session")
+        .help("Rename, restart, stop or kill this session")
         .accessibilityLabel("Session actions")
     }
 }
@@ -333,5 +339,77 @@ struct AgentLockedInteraction: View {
     var body: some View {
         AgentInteractionPane(model: model, session: session, open: open,
                              lock: AgentWindowControls.lock(store.actions[session.key]))
+    }
+}
+
+// MARK: - Rename (G4)
+
+/// #829 G4: the header title as a text field, prefilled with the alias (empty when there is none,
+/// the dch name as its placeholder). Return saves, Esc cancels, the focus leaving cancels; each
+/// ends it once. An NSTextField, so the keys are its own: the window's shortcuts stand down while
+/// the field editor has them (AgentsNSWindow.route), and nothing reaches the terminal or the composer.
+struct AgentRenameField: NSViewRepresentable {
+    let name: String
+    let alias: String
+    let end: (String?) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(end) }
+
+    func makeNSView(context: Context) -> AgentRenameTextField {
+        let f = AgentRenameTextField(string: alias)
+        f.isBordered = false
+        f.drawsBackground = false
+        f.focusRingType = .none
+        f.usesSingleLineMode = true
+        f.cell?.isScrollable = true
+        f.cell?.wraps = false
+        f.delegate = context.coordinator
+        f.toolTip = AgentIsland.renameHelp(name)
+        f.setAccessibilityLabel("Session title")
+        f.setAccessibilityHelp(AgentIsland.renameHelp(name))
+        return f
+    }
+
+    func updateNSView(_ f: AgentRenameTextField, context: Context) {
+        context.coordinator.end = end
+        let font = NSFont.systemFont(ofSize: sz(15), weight: .semibold)
+        f.font = font
+        f.textColor = NSColor(Neon.textPrimary)
+        f.placeholderAttributedString = NSAttributedString(string: name, attributes: [
+            .font: font, .foregroundColor: NSColor(Neon.textSecondary),
+        ])
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var end: (String?) -> Void
+        private(set) var ended = false
+        init(_ end: @escaping (String?) -> Void) { self.end = end }
+
+        /// Once: Return's text, or nil (Esc, the focus leaving, the field going away).
+        func finish(_ text: String?) {
+            guard !ended else { return }
+            ended = true
+            end(text)
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)): finish(textView.string)
+            case #selector(NSResponder.cancelOperation(_:)): finish(nil)
+            default: return false
+            }
+            return true
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) { finish(nil) }
+    }
+}
+
+final class AgentRenameTextField: NSTextField {
+    /// Takes the keys as soon as it is in the window: first responder within the window only
+    /// (never ordering it front or making it key).
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.makeFirstResponder(self)
     }
 }

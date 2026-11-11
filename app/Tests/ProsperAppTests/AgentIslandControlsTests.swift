@@ -5318,3 +5318,58 @@ extension AgentIslandControlsTests {
         settle(c) { !c.runner.isBusy(rec.id) }
     }
 }
+
+// MARK: - #829 Phase 3: Rename (dch -m) on the row's key, in the row's dir
+
+extension AgentIslandControlsTests {
+    /// G4: `-m <name> <alias>` (the field's text cleaned) on the row's key with the row's dir env,
+    /// any name; refused (and said) on a busy row; nothing for an unchanged text, a session not
+    /// live or no control dch; a failure is "Couldn't rename <name>: <dch's first line>".
+    @MainActor
+    func testWindowRenameRunsDashMInTheRowsDirEnv() throws {
+        let f = FakeProc()
+        let a = AgentSession(key: AgentSessionKey(dir: "/d", name: "a"), alias: "old", activity: 0, state: .idle, agents: 0)
+        let e = session("e", dir: "/e"), dash = session("-x")
+        let c = opened(f, [a, e, dash], dirs: ["/d", "/e"])
+        c.controlEnv = { ["PATH": "/login/bin", "DCH_SOCKET_DIR": $0] }
+        let store = try XCTUnwrap(c.store)
+        XCTAssertFalse(c.rename(a, alias: "  old\t"), "unchanged: nothing")
+        XCTAssertFalse(c.rename(session("gone"), alias: "new"), "not live: nothing")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        func run(_ s: AgentSession, _ alias: String, status: Int32 = 0, output: String = "") -> [String] {
+            f.lock.withLock { f.status = status; f.output = output }
+            XCTAssertTrue(c.rename(s, alias: alias))
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+            f.release.signal()
+            settle(c) { !c.runner.isBusy(s.key) }
+            settle(c)
+            return f.args.last ?? []
+        }
+        XCTAssertEqual(run(a, " New\tname\n "), ["-m", "a", "New name"])
+        XCTAssertEqual(run(e, "other dir"), ["-m", "e", "other dir"])
+        XCTAssertEqual(run(dash, "flag-like"), ["-m", "-x", "flag-like"], "the name is its own argv element, verbatim")
+        XCTAssertEqual(run(a, ""), ["-m", "a", ""], "empty clears the alias")
+        XCTAssertEqual(f.lock.withLock { f.launches.map(\.dir) }, ["/d", "/e", "/d", "/d"], "each row's own dir env")
+        XCTAssertEqual(f.lock.withLock { f.envs.last }, ["PATH": "/login/bin", "DCH_SOCKET_DIR": "/d"])
+        XCTAssertNil(f.lock.withLock { f.launches.last?.cwd })
+        XCTAssertNil(store.actions[a.key], "worked: no line")
+        _ = run(a, "x", status: 1, output: "dch: no session: a\nsecond line\n")
+        XCTAssertEqual(store.actions[a.key], "Couldn't rename a: dch: no session: a")
+        _ = run(a, "y")
+        XCTAssertNil(store.actions[a.key], "the next rename that works drops the failure")
+        // Busy: a job on the row refuses the rename, and the row says so until it ends.
+        c.resume(record("a"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        let n = f.args.count
+        XCTAssertFalse(c.rename(a, alias: "z"))
+        XCTAssertEqual(store.actions[a.key], AgentIsland.renameBusyText)
+        XCTAssertEqual(f.args.count, n, "refused: never launched")
+        f.release.signal()
+        settle(c) { store.actions[a.key] == nil }
+        XCTAssertNil(store.actions[a.key])
+        // No control dch: nothing.
+        store.controlDch = nil
+        XCTAssertFalse(c.rename(a, alias: "w"))
+        XCTAssertEqual(f.args.count, n)
+    }
+}

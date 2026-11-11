@@ -580,7 +580,8 @@ final class AgentIslandController {
     /// another refusal. A running text says what runs (and the window's input lock reads it);
     /// an outcome ("Killed") outlives the refusal. Goes once the job that refused it ends.
     private func refuseBusy(_ key: AgentSessionKey, _ text: String) {
-        if let now = store?.actions[key], ![AgentIsland.restartBusyText, AgentIsland.stopBusyText, AgentIsland.killBusyText].contains(now) {
+        if let now = store?.actions[key], ![AgentIsland.restartBusyText, AgentIsland.stopBusyText, AgentIsland.killBusyText,
+                                            AgentIsland.renameBusyText].contains(now) {
             return
         }
         store?.actions[key] = text
@@ -606,6 +607,42 @@ final class AgentIslandController {
         }
         if !started, sayBusy { refuseBusy(key, AgentIsland.stopBusyText) }
         return started
+    }
+
+    // MARK: - Rename (#829 G4)
+
+    /// The window's Rename: `dch -m <name> <alias>` on the row's key with its dir's control env
+    /// (never DchConnection.setAlias, which is pinned to Remote Terminal's dir). Live sessions
+    /// only; no version gate (-m predates every supported dch). A failure is the row's text; the
+    /// alias sidecar's new stamp makes the poller list the dir again. False: nothing ran
+    /// (not live, no dch, the text unchanged, or a busy row, which says so).
+    @discardableResult
+    func rename(_ s: AgentSession, alias: String) -> Bool {
+        guard let store, let dch = store.controlDch?.path,
+              let live = store.sessions.first(where: { $0.key == s.key }),
+              let args = AgentIsland.renameArgs(live.name, alias, current: live.alias) else { return false }
+        let key = live.key, name = live.name
+        let started = run(key, dch: dch, args: args, running: nil) { [weak self] r in
+            guard let store = self?.store else { return }
+            if let failed = AgentIsland.renameFailure(r, name: name) {
+                store.actions[key] = failed
+            } else if store.actions[key]?.hasPrefix("Couldn't rename ") == true {
+                store.actions[key] = nil   // an earlier failure's line goes with the rename that worked
+            }
+            self?.refreshList()
+        }
+        if !started { refuseBusy(key, AgentIsland.renameBusyText) }
+        return started
+    }
+
+    /// One poller tick now, not on the next second: the list (and the window's title) shows the
+    /// new alias as soon as the poll gate lets it fetch.
+    private func refreshList() {
+        guard let poller else { return }
+        queue.async { [weak self] in
+            guard let sessions = poller.tick() else { return }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
+        }
     }
 
     /// The "⋯" menu's Stop all in <tab>, or (#744 `global`) Stop all: only asks (the inline line).

@@ -193,6 +193,11 @@ final class AgentWindowModel: ObservableObject {
     var restartSession: (AgentSession) -> Bool = { AgentIslandController.shared.restart($0, sayBusy: true) }
     var stopSession: (AgentSession) -> Bool = { AgentIslandController.shared.stop($0, sayBusy: true) }
     var killSession: (AgentSession) -> Bool = { AgentIslandController.shared.kill($0) }
+    /// #829 G4: Rename's `dch -m`, on the island's controller (its runner key and the row's dir env).
+    var renameSession: (AgentSession, String) -> Bool = { AgentIslandController.shared.rename($0, alias: $1) }
+    /// G4: the live session whose header title is a text field now. Dropped by a selection change,
+    /// an ask, Return, Esc and the field losing focus. While set, the window's shortcuts stand down.
+    @Published private(set) var renaming: AgentSessionKey?
     /// #829 (R5): the question the confirm strip shows; dropped by a selection change.
     @Published private(set) var confirming: AgentWindowConfirm?
     /// QA #665 INFO-6: an answer a gate refused since the question; dropped by a selection change or the next ask.
@@ -284,6 +289,7 @@ final class AgentWindowModel: ObservableObject {
             }
         }
         if confirming != nil, confirmingSession == nil, confirmingRecord == nil { confirming = nil }
+        if let k = renaming, !sessions.contains(where: { $0.key == k }) { renaming = nil }   // it ended: no field
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
             filled = true
@@ -348,6 +354,7 @@ final class AgentWindowModel: ObservableObject {
             selection = id
             confirming = nil
             refusal = nil
+            renaming = nil
         }
         follow()
     }
@@ -409,7 +416,26 @@ final class AgentWindowModel: ObservableObject {
         if selectionIsHeld, selection == .live(s.key) { return }   // QA #668 F1: it ended, nothing to ask
         select(.live(s.key))
         refusal = nil
+        renaming = nil
+        // G4: Rename edits the title in place and asks nothing; only a session still listed live.
+        if verb == .rename {
+            confirming = nil
+            if store?.sessions.contains(where: { $0.key == s.key }) == true { renaming = s.key }
+            return
+        }
         confirming = AgentWindowConfirm(verb: verb, key: s.key)
+    }
+
+    /// G4: the title field's end, for the session `key` it was opened on. A key that is not the open
+    /// field's (a replaced field's late end) changes nothing. `text` nil: Esc or the focus left, nothing
+    /// runs. Else Return: the session is re-read by key (gone: nothing) and the controller runs `dch -m`
+    /// unless the text is its alias already. An empty text clears the alias.
+    func endRename(_ key: AgentSessionKey, _ text: String?) {
+        guard renaming == key else { return }
+        renaming = nil
+        guard let text, let s = store?.sessions.first(where: { $0.key == key }),
+              AgentIsland.renameArgs(s.name, text, current: s.alias) != nil else { return }
+        _ = renameSession(s, text)
     }
 
     /// #829 G6-G8: a History row's context menu or detail button: selects the row first (R6).
@@ -422,7 +448,7 @@ final class AgentWindowModel: ObservableObject {
         case .resumeNoMessage: resumeNoMessage(r)
         case .pin: pinRecord(r)
         case .remove: confirming = AgentWindowConfirm(verb: .remove, key: r.id)
-        case .restart, .stop, .kill: break
+        case .restart, .stop, .kill, .rename: break
         }
     }
 
@@ -462,7 +488,7 @@ final class AgentWindowModel: ObservableObject {
         case .restart: _ = restartSession(s)
         case .stop: if stopSession(s) { startFollowing(s) }
         case .kill: if killSession(s) { startFollowing(s) }
-        case .resume, .resumeNoMessage, .pin, .remove: break
+        case .resume, .resumeNoMessage, .pin, .remove, .rename: break
         }
     }
 

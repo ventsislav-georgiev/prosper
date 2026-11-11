@@ -19,6 +19,8 @@ import XCTest
 /// - lid helper / remote wake cores: LidHelperCoreTests.testTransitionThroughputUnderBudget,
 ///   RemoteWakeCorePerfTests.
 /// - stats popup ping thread (`StatsPoller`, `NetPingReader`): StatsPopupGateTests' two ping rows.
+/// - agents window rename render matrix: AgentWindowD1Tests.testAgentWindowRenameFieldMovesNothingAtEveryScaleAndMode
+///   runs 2 of its 24 cases without the flag (one per mode, scale 1.0, default size), all 24 with it.
 /// Run one area: `PROSPER_HEAVY_TESTS=1 swift test --filter <Class>`.
 func requireHeavyTests() throws {
     guard ProcessInfo.processInfo.environment["PROSPER_HEAVY_TESTS"] == "1" else {
