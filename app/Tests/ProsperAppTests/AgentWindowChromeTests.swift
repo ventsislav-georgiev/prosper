@@ -26,10 +26,18 @@ extension AgentWindowD1Tests {
     /// The view drawn into a bitmap at an explicit backing scale (r6: 1 is CI's runner, 2 is Retina),
     /// so one local run proves both. Not bitmapImageRepForCachingDisplay: that follows the main
     /// screen's scale, which is the only thing it would add.
+    /// #881 (QA #735 INFO-7): no fixed 0.15 s settle. The run loop turns in 5 ms slices until a
+    /// turn leaves no layout or display pending anywhere in the tree (a store change SwiftUI applies
+    /// on the next turn re-marks the view), bounded at 0.3 s.
     @MainActor
     func snapshot(_ v: NSView, backing: CGFloat) throws -> NSBitmapImageRep {
-        v.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        func pending(_ v: NSView) -> Bool { v.needsLayout || v.needsDisplay || v.subviews.contains(where: pending) }
+        let deadline = Date().addingTimeInterval(0.3)
+        repeat {
+            v.layoutSubtreeIfNeeded()
+            v.displayIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+        } while pending(v) && Date() < deadline
         v.layoutSubtreeIfNeeded()
         v.displayIfNeeded()
         let rep = try XCTUnwrap(NSBitmapImageRep(
@@ -347,6 +355,11 @@ extension AgentWindowD1Tests {
                 assertClose(win.backgroundColor.usingColorSpace(.sRGB),
                             NSColor(Neon.bgTop).withAlphaComponent(win.isOpaque ? 1 : ThemeRuntime.backdropFillOpacity)
                                 .usingColorSpace(.sRGB), "strip is the backdrop's top colour \(tag)", tolerance: 0.001)
+                // #881 (QA #735 INFO-5): literal sizes, not the helper under test (640 x 420 pt at 1.0).
+                let want = [1.0: NSSize(width: 640, height: 420), 0.85: NSSize(width: 544, height: 357),
+                            0.7: NSSize(width: 448, height: 294)][scale]!
+                XCTAssertEqual(win.contentMinSize.width, want.width, accuracy: 0.001, tag)
+                XCTAssertEqual(win.contentMinSize.height, want.height, accuracy: 0.001, tag)
                 XCTAssertEqual(win.contentMinSize, AgentsWindow.contentMinSize(scale: scale), tag)
                 let content = win.contentRect(forFrameRect: win.frame).size
                 XCTAssertGreaterThanOrEqual(content.width, win.contentMinSize.width, tag)
@@ -388,11 +401,16 @@ extension AgentWindowD1Tests {
                                    canvas: canvas, dark: true, backing: backing)
             }
         }
+        // #881 (QA #735 INFO-7): the whole sweep (32 cases) runs under PROSPER_HEAVY_TESTS=1 (QA and CI);
+        // a plain run keeps two: dark at 1.0 faded to 0.8, and light at 0.7 opaque, at backing 1 and 2.
+        let heavy = ProcessInfo.processInfo.environment["PROSPER_HEAVY_TESTS"] == "1"
         for dark in [true, false] {
             ThemeRuntime.palette = dark ? saved.1 : Self.lightPalette
             for scale: CGFloat in [1.0, 0.7] {
                 ThemeRuntime.scale = scale
                 for (opacity, frost) in [(1.0, false), (0.8, false), (1.0, true), (0.8, true)] as [(CGFloat, Bool)] {
+                    let smoke = !frost && (dark ? scale == 1.0 && opacity < 1 : scale == 0.7 && opacity == 1)
+                    guard heavy || smoke else { continue }
                     for backing: CGFloat in [1, 2] {
                         ThemeRuntime.opacity = opacity
                         ThemeRuntime.frost = frost
@@ -524,6 +542,12 @@ extension AgentWindowD1Tests {
         }
 
         // An opacity change (backdropTick, no rebuild) fades the open window's body in place.
+        // #881 (QA #735 INFO-6): the product reads the Mac's flag directly (ThemeStore.effectiveOpacity,
+        // no seam), and with it on the window stays at 1.0 by design, so the fade is not checkable here.
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
+            throw XCTSkip("System Settings › Accessibility › Display › Reduce transparency is on: "
+                          + "ThemeStore.effectiveOpacity keeps windows at 1.0, so the 0.8 fade is not checked")
+        }
         ThemeStore.shared.setOpacity(0.8)
         AppDelegate.applyThemedWindowSizing([win], scale: ThemeRuntime.scale)
         XCTAssertFalse(win.isOpaque)
@@ -716,6 +740,132 @@ extension AgentWindowD1Tests {
                 }
                 XCTAssertEqual(pt2(total, g, size), 400, accuracy: 0.01, tag)
                 XCTAssertEqual(through, total, "opacity 0.8: the canvas shows through every divider pixel (\(tag))")
+            }
+        }
+    }
+
+    /// #881 (QA #735 INFO-2, mutant t2): a theme select reaches the window's CONTENT, not only the
+    /// lifted pieces that observe the store themselves. In the live window (Themed root, never shown):
+    /// a rail row's PR chip (Neon.blue, AgentSidebarRowView) takes the new accent, and the terminal
+    /// pane's background (Neon.bgBottom) goes dark to light and back to dark. Areas in pt², backing 1 and 2.
+    @MainActor
+    func testChrome860ThemeChangeReachesTheContent() throws {
+        let saved = (ThemeRuntime.scale, ThemeRuntime.opacity, ThemeRuntime.frost)
+        func reset() {
+            ThemeStore.shared.setOpacity(1.0)
+            ThemeStore.shared.setFrost(false)
+            Preferences.defaults.removeObject(forKey: "prosper.activeThemeID")
+            ThemeStore.shared.setAvailable([])
+        }
+        reset()
+        defer { reset(); (ThemeRuntime.scale, ThemeRuntime.opacity, ThemeRuntime.frost) = saved }
+        ThemeRuntime.scale = 1
+        let pr = DchSessionMeta.PR(url: "https://github.com/acme/repo/pull/1234567", repo: "acme/repo", num: 1234567, title: "t")
+        let m = windowModel(store([session("prosper", .working), session("notes", .idle, meta: DchSessionMeta(openPRs: [pr]))]))
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(AgentSessionKey(dir: "/tmp/dch-test", name: "prosper")))
+        let win = AgentsWindow.makeWindow(m, autosave: nil)
+        defer { win.contentViewController = nil }
+        let view = try XCTUnwrap(win.contentView)
+        let size = view.bounds.size
+        let cyan: (NSColor) -> Bool = { $0.blueComponent > 0.85 && $0.greenComponent > 0.65 && $0.redComponent < 0.5 }
+        let pink: (NSColor) -> Bool = { $0.redComponent > 0.75 && $0.blueComponent > 0.75 && $0.greenComponent < 0.35 }
+        // The rail right of the bar and the section ticks, under its title row: the chip's text is the
+        // only full-strength accent there (the selected row's fill and edge are faint, and observe the store).
+        let rows = CGRect(x: sz(40), y: sz(54), width: sz(250), height: sz(300))   // the header and both rows
+        // The terminal pane's middle: its background (not revealed: the pane's own bgBottom overlay).
+        let terminal = CGPoint(x: sz(291) + (size.width - sz(291)) / 2, y: size.height * 0.75)
+
+        func check(dark: Bool, _ step: String) throws {
+            // colorAt autoreleases NSColors per pixel: drained per snapshot.
+            for backing: CGFloat in [1, 2] { try autoreleasepool {
+                let rep = try snapshot(view, backing: backing)
+                let tag = "\(step) x\(Int(backing))"
+                try saveTo860(rep, "881-content-\(step)-x\(Int(backing))")
+                let old = pt2(band(rep, dark ? pink : cyan, in: rows, size: size), rep, size)
+                let new = pt2(band(rep, dark ? cyan : pink, in: rows, size: size), rep, size)
+                XCTAssertGreaterThan(new, 3, "the PR chip wears the theme's accent (\(tag))")
+                XCTAssertLessThan(old, 1.25, "no pixel of the other accent in the rows (\(tag), \(new) pt² of the new)")
+                let bg = try XCTUnwrap(pixel(rep, terminal, in: size))
+                if dark {
+                    XCTAssertLessThan(bg.redComponent, 0.3, "the terminal pane is the dark theme's (\(tag), \(rgba(bg)))")
+                } else {
+                    XCTAssertGreaterThan(bg.redComponent, 0.8, "the terminal pane is the light theme's (\(tag), \(rgba(bg)))")
+                }
+            } }
+        }
+        try check(dark: true, "default")
+        let dir = tempDir("theme881")
+        let json = dir.appendingPathComponent("theme.json")
+        try Data(##"{ "appearance": "light", "colors": { "blue": "#FF00FF", "bgTop": "#F4F4F8", "bgBottom": "#E8E8EE", "sidebar": "#EEEEF4" } }"##.utf8)
+            .write(to: json)
+        let d = ThemeDescriptor(id: "t.881", title: "Probe 881", appearance: .light, extensionID: "e881", jsonPath: json)
+        ThemeStore.shared.setAvailable([d])
+        ThemeStore.shared.select(id: d.id)
+        XCTAssertEqual(ThemeStore.shared.activeID, d.id)
+        try check(dark: false, "probe-light")
+        ThemeStore.shared.select(id: ThemeDescriptor.builtInID)
+        XCTAssertEqual(ThemeStore.shared.activeID, ThemeDescriptor.builtInID)
+        try check(dark: true, "back-to-dark")
+        XCTAssertFalse(win.isVisible, "never on screen")
+    }
+
+    /// #881 (QA #735 INFO-3, mutant t3): the terminal stays opaque at any window opacity. A revealed
+    /// attach (fakeTerminal's recorders: a FakeScreen, no dch; one fed byte reveals it) rendered over a
+    /// CLEAR canvas at opacity 0.35: every backing pixel of the terminal area, one backing pixel in from
+    /// its edges, has alpha 1, while the body's backdrop beside it is at the low opacity. Backing 1 and 2.
+    @MainActor
+    func testChrome860TerminalIsOpaqueAtLowWindowOpacity() throws {
+        let saved = (ThemeRuntime.scale, ThemeRuntime.palette, ThemeRuntime.opacity, ThemeRuntime.frost)
+        defer { (ThemeRuntime.scale, ThemeRuntime.palette, ThemeRuntime.opacity, ThemeRuntime.frost) = saved }
+        ThemeRuntime.scale = 1
+        ThemeRuntime.frost = false
+        try withModePref {
+            let s = mapped("prosper", .working)
+            let m = windowModel(store([s]))
+            _ = fakeTerminal(m)
+            final class Box { var io: AgentTerminalIO? }
+            let box = Box()
+            let spawn = m.terminal.spawn
+            m.terminal.spawn = { req, io in box.io = io; return try spawn(req, io) }
+            m.setVisible(true)
+            defer { m.close() }
+            m.select(.live(s.key))
+            XCTAssertEqual(m.terminal.phase, .live)
+            try XCTUnwrap(box.io).output([0x41])
+            let deadline = Date().addingTimeInterval(2)
+            while !m.terminal.revealed && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            XCTAssertTrue(m.terminal.revealed, "the fed byte revealed the terminal")
+            XCTAssertNotNil(m.terminal.screen)
+            let size = CGSize(width: 1000, height: 680)
+            for dark in [true, false] {
+                ThemeRuntime.palette = dark ? saved.1 : Self.lightPalette
+                for backing: CGFloat in [1, 2] {
+                    ThemeRuntime.opacity = 0.35
+                    let tag = "\(dark ? "dark" : "light")-x\(Int(backing))"
+                    let rep = try renderOver(AgentWindowRootView(model: m, scrolls: false), size: size, canvas: .clear,
+                                             dark: dark, backing: backing)
+                    try saveTo860(rep, "881-terminal-o0.35-\(tag)")
+                    // The lower half of the detail column (well under the header), one backing pixel in.
+                    let px = 1 / backing
+                    let area = CGRect(x: sz(291) + px, y: size.height / 2, width: size.width - sz(291) - 2 * px,
+                                      height: size.height / 2 - px)
+                    let d = try XCTUnwrap(rep.bitmapData)
+                    var lowest = 255, seen = 0
+                    for y in Int((area.minY * backing).rounded(.up))..<Int((area.maxY * backing).rounded(.down)) {
+                        for x in Int((area.minX * backing).rounded(.up))..<Int((area.maxX * backing).rounded(.down)) {
+                            lowest = min(lowest, Int(d[y * rep.bytesPerRow + x * 4 + 3]))
+                            seen += 1
+                        }
+                    }
+                    XCTAssertGreaterThan(pt2(seen, rep, size), 700 * 330, "the terminal area (\(tag))")
+                    XCTAssertEqual(lowest, 255, "opacity 0.35: the terminal is opaque at every pixel (\(tag))")
+                    // The header's top-left padding is the backdrop: see-through at the low opacity (r1: alpha
+                    // 0.38 there, the header band's faint fill over the 0.35 backdrop).
+                    let backdrop = try XCTUnwrap(pixel(rep, CGPoint(x: sz(291) + 5, y: 4), in: size))
+                    XCTAssertLessThan(backdrop.alphaComponent, 0.5, "the body's backdrop fades (\(tag))")
+                }
             }
         }
     }
