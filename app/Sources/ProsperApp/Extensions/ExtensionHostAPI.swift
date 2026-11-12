@@ -1030,6 +1030,7 @@ struct ExtensionHost {
         -- run(cmd [, { keep_running = true }]) -> output, truncated (true | nil)
         -- A bad opts raises (naming the key) rather than silently killing at the timeout.
         shell  = { run = function(cmd, opts)
+            if opts == false then opts = nil end   -- `cond and { keep_running = true }`
             if opts ~= nil then
                 if type(opts) ~= "table" then
                     error("host.shell.run: opts must be a table, got " .. type(opts), 2)

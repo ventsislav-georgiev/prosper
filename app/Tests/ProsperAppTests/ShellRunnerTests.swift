@@ -175,12 +175,34 @@ final class ShellRunnerTests: XCTestCase {
             end
             function t()
                 return table.concat({ e("yes"), e({ keep_runing = true }), e({ keep_running = 1 }),
-                                      e({ keep_running = false }), e(nil) }, "|")
+                                      e({ keep_running = false }), e(nil), e(false), e(true), e(1) }, "|")
             end
             """, callTimeout: 10)
         XCTAssertEqual(out, "host.shell.run: opts must be a table, got string"
                        + "|host.shell.run: unknown option 'keep_runing'"
-                       + "|host.shell.run: keep_running must be a boolean, got number|ok|ok")
+                       + "|host.shell.run: keep_running must be a boolean, got number|ok|ok|ok"
+                       + "|host.shell.run: opts must be a table, got boolean"
+                       + "|host.shell.run: opts must be a table, got number")
+    }
+
+    /// QA #714 INFO-1: `false` opts (from `cond and { keep_running = true }`) is no opts:
+    /// one return value, and the timeout kills zsh and its background child.
+    func testFalseOptsIsNoOptsAndKillsAtTheTimeout() throws {
+        let file = tempDir().appendingPathComponent("pids").path
+        var live: [pid_t] = []
+        defer { live.forEach { _ = killIfReal($0, group: false) } }   // armed before the pid file is read
+        let out = try hostShell("""
+            function t()
+                local r = table.pack(host.shell.run([[echo $$ > '\(file)'; /bin/sleep 30 & echo $! >> '\(file)'; wait]], false))
+                return r.n .. ":" .. r[1]
+            end
+            """, callTimeout: 1)
+        XCTAssertEqual(out, "1:", "one empty return at the timeout")
+        live = (try? String(contentsOfFile: file, encoding: .utf8))?
+            .split(separator: "\n").compactMap { parsePid(String($0)) } ?? []
+        XCTAssertEqual(live.count, 2, "expected the zsh pid and the sleep pid")
+        live.removeAll { waitGone($0, timeout: 2) }
+        XCTAssertEqual(live, [], "these pids outlived the false-opts timeout by 2 s")
     }
 
     /// F2: a >5 MB JSON file read through host.shell.run decodes; nothing marks the text.
@@ -214,57 +236,247 @@ final class ShellRunnerTests: XCTestCase {
 
     // MARK: appupdates upgrade at the host timeout (QA #671 r2 R3)
 
-    /// Runs appupdates_upgrade with a canned brew whose upgrade takes `upgradeSeconds`
-    /// against a 0.5 s host timeout; returns the notification bodies.
-    private func appupdatesUpgrade(upgradeSeconds: Double, outdatedAfter: Int) throws -> [String] {
+    /// Calls `call` (Lua) on the shipped appupdates init.lua with `fake` as the host,
+    /// against a 0.5 s host timeout.
+    private func appupdates(_ fake: BrewFakeServices, _ call: String = "appupdates_upgrade()") throws {
         let lua = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/Resources/extensions/appupdates/init.lua")
-        let fake = BrewFakeServices(upgradeSeconds: upgradeSeconds, outdatedAfter: outdatedAfter)
         _ = try hostShell(try String(contentsOf: lua, encoding: .utf8) + """
 
-            function t() appupdates_upgrade() return "ok" end
+            function t() \(call) return "ok" end
             """, callTimeout: 0.5, services: fake, extensionID: "com.prosper.appupdates")
+    }
+
+    /// Runs appupdates_upgrade with a canned brew whose upgrade takes `upgradeSeconds`;
+    /// returns the notification bodies.
+    private func appupdatesUpgrade(upgradeSeconds: Double, outdatedAfter: Int) throws -> [String] {
+        let fake = BrewFakeServices(upgradeSeconds: upgradeSeconds, outdatedAfter: outdatedAfter)
+        try appupdates(fake)
         return fake.notifications
     }
 
+    /// A backgrounded upgrade also arms the 60 s watch and records what it watches (QA #714 INFO-5).
     func testAppUpdatesUpgradeStillRunningSaysSo() throws {
-        XCTAssertEqual(try appupdatesUpgrade(upgradeSeconds: 2, outdatedAfter: 1),
-                       ["brew upgrade is still running in the background"])
+        let fake = BrewFakeServices(upgradeSeconds: 2, outdatedAfter: 1)
+        try appupdates(fake)
+        XCTAssertEqual(fake.notifications, ["brew upgrade is still running in the background"])
+        XCTAssertEqual(fake.timers["appupdates.upgrade_poll"], "60.0:on_upgrade_poll")
+        let pending = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data((fake.pref("upgrade_pending") ?? "").utf8)) as? [String: Any])
+        XCTAssertEqual(pending["before"] as? Double, 1)
+        XCTAssertEqual(pending["at"] as? Double, 1_700_000_000)
+        XCTAssertEqual(pending["file"] as? String, "/fake-tmp/prosper-appupdates-1700000000000.status")
     }
 
     func testAppUpdatesUpgradeFinishedCountsUpgrades() throws {
         XCTAssertEqual(try appupdatesUpgrade(upgradeSeconds: 0, outdatedAfter: 0), ["1 package upgraded"])
         XCTAssertEqual(try appupdatesUpgrade(upgradeSeconds: 0, outdatedAfter: 1), ["Nothing was upgraded"])
     }
+
+    /// QA #714 INFO-2: a non-zero status (brew's lock error on a second Upgrade) is a failure:
+    /// no `brew outdated` mid-upgrade, the cache untouched, no count.
+    func testAppUpdatesUpgradeFailedStatusKeepsCache() throws {
+        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, upgradeStatus: 1)
+        let before = fake.pref("cache")
+        try appupdates(fake)
+        XCTAssertEqual(fake.notifications, ["brew upgrade failed (exit 1)"])
+        XCTAssertEqual(fake.pref("cache"), before)
+        XCTAssertFalse(fake.commands.contains { $0.contains(" outdated ") }, "\(fake.commands)")
+        XCTAssertNil(fake.timers["appupdates.upgrade_poll"])
+    }
+
+    /// QA #714 INFO-3: "" (timeout) and a spawn error from `brew outdated` are no answer, not
+    /// "nothing outdated": the cached brew list stays and no count is claimed.
+    func testAppUpdatesNoAnswerFromBrewKeepsTheList() throws {
+        for reply in ["", "error: spawn failed"] {
+            let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, outdatedReply: reply)
+            let before = fake.pref("cache")
+            try appupdates(fake)
+            XCTAssertEqual(fake.notifications, ["brew upgrade finished; the list could not be refreshed"], reply)
+            XCTAssertEqual(fake.pref("cache"), before, reply)
+            try appupdates(fake, "appupdates_refresh()")
+            XCTAssertEqual(fake.cachedBrew, ["jq"], reply)
+        }
+        // brew's own empty answer does empty the list.
+        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0)
+        try appupdates(fake, "appupdates_refresh()")
+        XCTAssertEqual(fake.cachedBrew, [])
+    }
+
+    // MARK: the backgrounded-upgrade watch (QA #714 INFO-5)
+
+    /// A fake whose earlier upgrade went to the background at `fake.now` with 1 package outdated.
+    private func watching(statusFile: Bool, outdatedAfter: Int = 0) -> BrewFakeServices {
+        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: outdatedAfter, statusFileExists: statusFile)
+        fake.prefSet(extensionID: "", key: "upgrade_pending",
+                     value: #"{"file":"/fake-tmp/prosper-appupdates-1.status","at":1700000000,"before":1}"#)
+        fake.timerSchedule(extensionID: "", id: "appupdates.upgrade_poll", every: true, seconds: 60, handler: "on_upgrade_poll")
+        return fake
+    }
+
+    func testUpgradeWatchStaysWhileBrewRuns() throws {
+        let fake = watching(statusFile: false)
+        fake.now += 3600
+        try appupdates(fake, "on_upgrade_poll()")
+        XCTAssertEqual(fake.notifications, [])
+        XCTAssertEqual(fake.commands, [], "no refresh while brew runs")
+        XCTAssertNotNil(fake.timers["appupdates.upgrade_poll"], "the watch stays")
+        XCTAssertNotEqual(fake.pref("upgrade_pending"), "")
+    }
+
+    func testUpgradeWatchRefreshesNotifiesAndEndsWhenBrewEnds() throws {
+        let fake = watching(statusFile: true)
+        try appupdates(fake, "on_upgrade_poll()")
+        XCTAssertEqual(fake.notifications, ["1 package upgraded"])
+        XCTAssertEqual(fake.cachedBrew, [])
+        XCTAssertNil(fake.timers["appupdates.upgrade_poll"], "the watch cancels itself")
+        XCTAssertEqual(fake.pref("upgrade_pending"), "")
+        XCTAssertTrue(fake.commands.first?.hasPrefix("/bin/cat '/fake-tmp/prosper-appupdates-1.status'") == true,
+                      "\(fake.commands)")
+    }
+
+    func testUpgradeWatchGivesUpSilentlyAtTheCap() throws {
+        let fake = watching(statusFile: false)
+        fake.now += 2 * 3600
+        try appupdates(fake, "on_upgrade_poll()")
+        XCTAssertEqual(fake.notifications, [])
+        XCTAssertEqual(fake.commands, [])
+        XCTAssertNil(fake.timers["appupdates.upgrade_poll"], "the watch ends at the cap")
+        XCTAssertEqual(fake.pref("upgrade_pending"), "")
+    }
+
+    // MARK: QA #714 r4 pins
+
+    /// An unreadable status (empty status file, garbage last line) is a failed upgrade, on
+    /// the watch path and the synchronous path: no refresh, cache untouched, no count.
+    func testUnreadableUpgradeStatusCountsAsFailed() throws {
+        let watch = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, statusFileExists: true, statusText: "")
+        watch.prefSet(extensionID: "", key: "upgrade_pending",
+                      value: #"{"file":"/fake-tmp/prosper-appupdates-1.status","at":1700000000,"before":1}"#)
+        let before = watch.pref("cache")
+        try appupdates(watch, "on_upgrade_poll()")
+        XCTAssertEqual(watch.notifications, ["brew upgrade failed (exit ?)"])
+        XCTAssertEqual(watch.pref("cache"), before)
+        XCTAssertFalse(watch.commands.contains { $0.contains(" outdated ") }, "\(watch.commands)")
+
+        let sync = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, statusText: "Upgrading jq\ndone")
+        try appupdates(sync)
+        XCTAssertEqual(sync.notifications, ["brew upgrade failed (exit ?)"])
+        XCTAssertEqual(sync.pref("cache"), before)
+        XCTAssertFalse(sync.commands.contains { $0.contains(" outdated ") }, "\(sync.commands)")
+    }
+
+    /// A relaunch drops a pending watch: after on_launch the pref is cleared, the watch timer
+    /// is cancelled, and a tick that still arrives (status file present) does nothing.
+    func testLaunchDropsAPendingUpgradeWatch() throws {
+        let fake = watching(statusFile: true)
+        try appupdates(fake, "on_launch()")
+        XCTAssertEqual(fake.pref("upgrade_pending"), "")
+        XCTAssertNil(fake.timers["appupdates.upgrade_poll"])
+        try appupdates(fake, "on_upgrade_poll()")
+        XCTAssertEqual(fake.notifications, [])
+        XCTAssertEqual(fake.commands, [])
+    }
+
+    /// The softwareupdate twin of testAppUpdatesNoAnswerFromBrewKeepsTheList.
+    func testAppUpdatesNoAnswerFromSoftwareUpdateKeepsTheList() throws {
+        let cache = #"{"brew":[],"macos":["Safari 18.1"]}"#
+        for reply in ["", "error: spawn failed"] {
+            let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, suReply: reply)
+            fake.prefSet(extensionID: "", key: "cache", value: cache)
+            try appupdates(fake, "appupdates_refresh()")
+            XCTAssertEqual(fake.cachedMacos, ["Safari 18.1"], reply)
+        }
+        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0,
+                                    suReply: "Software Update Tool\n\nFinding available software\nNo new software available.")
+        fake.prefSet(extensionID: "", key: "cache", value: cache)
+        try appupdates(fake, "appupdates_refresh()")
+        XCTAssertEqual(fake.cachedMacos, [])
+    }
 }
 
-/// A Mac with one outdated brew formula: `brew upgrade` takes `upgradeSeconds` and prints
-/// nothing itself, like a real no-op upgrade; only a trailing `; echo $?` adds the status.
-/// Then `outdatedAfter` remain.
+/// A Mac with one outdated brew formula: `brew upgrade` takes `upgradeSeconds`, prints a
+/// lock error when `upgradeStatus` is not 0, and only the trailing `echo $s` adds the status
+/// (the status file holds the same). Then `outdatedAfter` remain, or `outdatedReply` comes
+/// back verbatim. Nothing here touches a real file, process or timer.
 private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable {
     let upgradeSeconds: Double
     let outdatedAfter: Int
+    let upgradeStatus: Int
+    let outdatedReply: String?
+    let statusFileExists: Bool
+    /// When set, the upgrade's whole output and the status file's text (no trailing number).
+    let statusText: String?
+    let suReply: String
     private let lock = NSLock()
     private var prefs = ["cache": #"{"brew":[{"name":"jq","from":"1.6","to":"1.7"}],"macos":[]}"#]
     private var bodies: [String] = []
+    private var ran: [String] = []
+    private var armed: [String: String] = [:]
+    private var clock: Double = 1_700_000_000
     var notifications: [String] { lock.lock(); defer { lock.unlock() }; return bodies }
+    /// Every shell command except the upgrade itself and its status-file cleanup.
+    var commands: [String] { lock.lock(); defer { lock.unlock() }; return ran }
+    /// Live timers: id -> "<seconds>:<handler>".
+    var timers: [String: String] { lock.lock(); defer { lock.unlock() }; return armed }
+    var now: Double {
+        get { lock.lock(); defer { lock.unlock() }; return clock }
+        set { lock.lock(); clock = newValue; lock.unlock() }
+    }
+    func pref(_ key: String) -> String? { prefGet(extensionID: "", key: key) }
+    /// Package names in the cached brew list; an empty Lua table may encode as `{}`.
+    var cachedBrew: [String]? {
+        guard let doc = try? JSONSerialization.jsonObject(with: Data((pref("cache") ?? "").utf8)) as? [String: Any]
+        else { return nil }
+        if let d = doc["brew"] as? [String: Any], d.isEmpty { return [] }
+        return (doc["brew"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
+    }
+    /// The cached macOS update titles.
+    var cachedMacos: [String]? {
+        guard let doc = try? JSONSerialization.jsonObject(with: Data((pref("cache") ?? "").utf8)) as? [String: Any]
+        else { return nil }
+        if let d = doc["macos"] as? [String: Any], d.isEmpty { return [] }
+        return doc["macos"] as? [String]
+    }
 
-    init(upgradeSeconds: Double, outdatedAfter: Int) {
+    init(upgradeSeconds: Double, outdatedAfter: Int, upgradeStatus: Int = 0,
+         outdatedReply: String? = nil, statusFileExists: Bool = false,
+         statusText: String? = nil, suReply: String = "") {
+        self.statusText = statusText
+        self.suReply = suReply
         self.upgradeSeconds = upgradeSeconds
         self.outdatedAfter = outdatedAfter
+        self.upgradeStatus = upgradeStatus
+        self.outdatedReply = outdatedReply
+        self.statusFileExists = statusFileExists
     }
 
     func shellRun(_ command: String) async -> String {
         if command.contains(" upgrade ") {
             try? await Task.sleep(nanoseconds: UInt64(upgradeSeconds * 1_000_000_000))
-            return command.hasSuffix("; echo $?") ? "0" : ""
+            guard command.hasSuffix("; echo $s") else { return "" }
+            if let statusText { return statusText }
+            return upgradeStatus == 0 ? "\(upgradeStatus)" : "Error: Another active Homebrew process is already in progress.\n\(upgradeStatus)"
         }
+        if command.hasPrefix("/bin/rm -f ") { return "" }
+        record(command)
+        if command.hasPrefix("/bin/cat ") { return statusFileExists ? (statusText ?? "\(upgradeStatus)") : "" }
+        if command.hasPrefix("softwareupdate ") { return suReply }
         guard command.contains(" outdated ") else { return "" }
+        if let outdatedReply { return outdatedReply }
         let formulae = Array(repeating: #"{"name":"jq","installed_versions":["1.6"],"current_version":"1.7"}"#,
                              count: outdatedAfter).joined(separator: ",")
         return #"{"formulae":[\#(formulae)],"casks":[]}"#
     }
-    func fsExists(_ path: String) -> Bool { path == "/opt/homebrew/bin/brew" }
+    private func record(_ command: String) { lock.lock(); ran.append(command); lock.unlock() }
+    func fsExists(_ path: String) -> Bool {
+        path == "/opt/homebrew/bin/brew" || (statusFileExists && path.hasPrefix("/fake-tmp/prosper-appupdates-"))
+    }
+    func envGet(_ name: String) -> String? { name == "TMPDIR" ? "/fake-tmp/" : nil }
+    func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String) {
+        lock.lock(); armed[id] = "\(seconds):\(handler)"; lock.unlock()
+    }
+    func timerCancel(extensionID: String, id: String) { lock.lock(); armed[id] = nil; lock.unlock() }
     func notify(title: String, body: String) { lock.lock(); bodies.append(body); lock.unlock() }
     func prefGet(extensionID: String, key: String) -> String? { lock.lock(); defer { lock.unlock() }; return prefs[key] }
     func prefSet(extensionID: String, key: String, value: String) { lock.lock(); prefs[key] = value; lock.unlock() }
@@ -276,7 +488,7 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
     func llmChat(_ prompt: String) async -> String { "" }
     func httpRequest(method: String, url: String, headers: [String: String],
                      body: String?, timeout: TimeInterval) async -> HTTPResponse? { nil }
-    func currentEpochSeconds() -> Double { 1_700_000_000 }
+    func currentEpochSeconds() -> Double { now }
     func focusedWindowFrame() -> WindowFrame? { nil }
     func setFocusedWindowFrame(x: Double, y: Double, width: Double, height: Double) -> Bool { false }
     func listDirectories(_ path: String) -> [String] { [] }

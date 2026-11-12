@@ -77,6 +77,13 @@ tag from the now-released section and put it on the new top draft.
   running in the background instead of "Nothing was upgraded". Extensions: `host.shell.run`
   rejects bad options (not a table, an unknown key, a non-boolean `keep_running`) with an error
   that says which, instead of silently running without them (#834).
+- App Updates: when a Homebrew upgrade runs on in the background, the list refreshes about a
+  minute after brew finishes and you get the same "N packages upgraded" notification. A failed
+  upgrade (for example a second one while the first still runs) now says "brew upgrade failed"
+  instead of "Nothing was upgraded", and a brew or macOS check that times out keeps the last
+  known list instead of emptying it (#834).
+- Extensions: `host.shell.run(cmd, false)` is treated like no options again, so
+  `host.shell.run(cmd, cond and { keep_running = true })` works (#834).
 - Agent Sessions window: a live session now opens in its real terminal by default, inside the
   window: the same dch session Ghostty would attach to, drawn by libghostty, with full keyboard
   input (Esc, Tab, ⇧Return, ⌃C and arrows reach Claude), IME and Option-composed characters, ⌘C/⌘V

@@ -15,7 +15,8 @@ import XCTest
 /// - extension / marketplace / bookmarks / analytics hot paths: ExtensionInstallTests.testRoutePerformance,
 ///   MarketplaceBrowseModelTests.testInstalledMembershipRenderBudget,
 ///   BookmarksExtensionTests.testSearchHotPathBudget,
-///   AnalyticsSnapshotTests.testBuildScalesLinearlyWithExtensionCount.
+///   AnalyticsSnapshotTests.testBuildScalesLinearlyWithExtensionCount,
+///   ShellRunnerTests.testHostShellCapIsReportedAsSecondReturn (70 MB through host.shell.run).
 /// - lid helper / remote wake cores: LidHelperCoreTests.testTransitionThroughputUnderBudget,
 ///   RemoteWakeCorePerfTests.
 /// - stats popup ping thread (`StatsPoller`, `NetPingReader`): StatsPopupGateTests' two ping rows.

@@ -22,6 +22,9 @@ local PREFS_INTERVAL = "interval_hours"  -- number, default 6
 local PREFS_NOTIFY   = "notifications"   -- "true" / "false", default true
 local TIMER_ID       = "appupdates.poll"
 local KICK_ID        = "appupdates.kick"
+local UPGRADE_ID     = "appupdates.upgrade_poll"  -- 60 s watch for a backgrounded brew upgrade
+local PREFS_PENDING  = "upgrade_pending"          -- JSON { file, at, before } while that watch runs
+local UPGRADE_CAP    = 2 * 3600                   -- give up silently after this long
 local SU_PANE        = "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"
 
 -- Both Homebrew prefixes: Apple Silicon and the Intel/rosetta layout. host.shell
@@ -116,18 +119,27 @@ local function total(c) return #c.brew + #c.macos end
 
 -- MARK: - Sources (never called from a render path)
 
+-- nil means "no answer" (timeout -> "", spawn failure -> "error: ...", not brew's
+-- JSON): callers keep the cached list instead of saving an empty one over it.
 local function check_brew()
     local brew = brew_path()
     if not brew then return {} end
-    return parse_brew(host.shell.run(brew .. " outdated --json=v2 2>/dev/null"))
+    local out = host.shell.run(brew .. " outdated --json=v2 2>/dev/null")
+    local ok, doc = pcall(host.json.decode, out or "")
+    if not ok or type(doc) ~= "table" or (doc.formulae == nil and doc.casks == nil) then return nil end
+    return parse_brew(out)
 end
 
+-- Same "no answer" cases; any other text is softwareupdate's own (even an empty list).
 local function check_macos()
-    return parse_softwareupdate(host.shell.run("softwareupdate -l 2>&1"))
+    local out = trim(host.shell.run("softwareupdate -l 2>&1"))
+    if out == "" or out:match("^error:") then return nil end
+    return parse_softwareupdate(out)
 end
 
 local function refresh_all()
-    local c = { at = host.time(), brew = check_brew(), macos = check_macos() }
+    local old = load_cache()
+    local c = { at = host.time(), brew = check_brew() or old.brew, macos = check_macos() or old.macos }
     save_cache(c)
     return c
 end
@@ -199,26 +211,72 @@ function appupdates_refresh()
     return render(refresh_all())
 end
 
-function appupdates_upgrade()
-    local brew = brew_path()
-    if not brew then return "Homebrew is not installed" end
-    local before = #load_cache().brew
-    -- keep_running: the host timeout returns control without killing brew mid-upgrade.
-    -- `; echo $?` makes a finished upgrade's output non-empty, so "" means the timeout won.
-    local out = host.shell.run(brew .. " upgrade 2>&1; echo $?", { keep_running = true })
-    if out == "" then
-        host.notify("Homebrew", "brew upgrade is still running in the background")
-        return render(load_cache())
+local function shq(s) return "'" .. s:gsub("'", "'\\''") .. "'" end
+
+-- `out` ends with brew's exit status on its own line. Notifies and returns the cache.
+local function finish_upgrade(out, before)
+    local status = tonumber(trim(out):match("[^\n]*$"))
+    if status ~= 0 then
+        -- A lock error (a second Upgrade while one runs) lands here: brew's list is mid-change.
+        host.notify("Homebrew", "brew upgrade failed (exit " .. (status or "?") .. ")")
+        return load_cache()
     end
     -- Re-derive from brew rather than trusting the upgrade's exit text.
     local c = load_cache()
-    c.brew = check_brew()
+    local now = check_brew()
+    if not now then
+        host.notify("Homebrew", "brew upgrade finished; the list could not be refreshed")
+        return c
+    end
+    c.brew = now
     save_cache(c)
     local done = before - #c.brew
     host.notify("Homebrew", (done > 0)
         and (done .. " package" .. (done == 1 and "" or "s") .. " upgraded")
         or "Nothing was upgraded")
-    return render(c)
+    return c
+end
+
+function appupdates_upgrade()
+    local brew = brew_path()
+    if not brew then return "Homebrew is not installed" end
+    local before = #load_cache().brew
+    -- The shell writes brew's status to a file only this upgrade names, so the watch
+    -- below knows brew ended without probing or matching any process.
+    local tmp = (host.env.get("TMPDIR") or "/tmp"):gsub("/*$", "/")
+    local file = tmp .. "prosper-appupdates-" .. string.format("%d", math.floor(host.time() * 1000)) .. ".status"
+    -- keep_running: the host timeout returns control without killing brew mid-upgrade.
+    -- `echo $s` makes a finished upgrade's output non-empty, so "" means the timeout won.
+    -- The mv makes the file appear only once it holds the status.
+    local out = host.shell.run(brew .. " upgrade 2>&1; s=$?; echo $s > " .. shq(file .. ".part")
+                               .. "; /bin/mv -f " .. shq(file .. ".part") .. " " .. shq(file) .. "; echo $s",
+                               { keep_running = true })
+    if out == "" then
+        host.prefs.set(PREFS_PENDING, host.json.encode({ file = file, at = host.time(), before = before }))
+        host.timer.schedule{ id = UPGRADE_ID, every = 60, handler = "on_upgrade_poll" }
+        host.notify("Homebrew", "brew upgrade is still running in the background")
+        return render(load_cache())
+    end
+    host.shell.run("/bin/rm -f " .. shq(file))
+    return render(finish_upgrade(out, before))
+end
+
+-- Every 60 s while a backgrounded upgrade runs: once its status file exists, refresh
+-- and notify like the synchronous path, then stop. Gives up silently at UPGRADE_CAP.
+function on_upgrade_poll()
+    local ok, p = pcall(host.json.decode, host.prefs.get(PREFS_PENDING) or "")
+    if not ok or type(p) ~= "table" or type(p.file) ~= "string" then
+        host.timer.cancel(UPGRADE_ID)
+        return
+    end
+    local ended = host.fs.exists(p.file)
+    if not ended and host.time() - (tonumber(p.at) or 0) < UPGRADE_CAP then return end
+    host.timer.cancel(UPGRADE_ID)
+    host.prefs.set(PREFS_PENDING, "")
+    if ended then
+        finish_upgrade(host.shell.run("/bin/cat " .. shq(p.file) .. "; /bin/rm -f " .. shq(p.file)),
+                       tonumber(p.before) or 0)
+    end
 end
 
 -- MARK: - Background poll
@@ -232,6 +290,9 @@ function on_launch()
     -- re-arming on every launch would starve the poll on a machine that restarts
     -- often. A one-shot kick covers that, and the first check on a fresh install.
     arm_timer()
+    -- A relaunch drops an upgrade watch; the regular poll picks up whatever brew did.
+    host.timer.cancel(UPGRADE_ID)
+    host.prefs.set(PREFS_PENDING, "")
     local c = load_cache()
     if not c.at or (host.time() - c.at) >= interval_hours() * 3600 then
         host.timer.schedule{ id = KICK_ID, after = 30, handler = "on_poll" }

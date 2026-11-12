@@ -45,12 +45,13 @@ Software Update found the following new or updated software:
 -- Route by command so one host serves both sources; every shell call is logged
 -- so the tests can assert what did NOT run.
 local shellLog = {}
-local brewOut, suOut = BREW_OUTDATED_0, SU_NONE
+local brewOut, suOut, upgradeOut = BREW_OUTDATED_0, SU_NONE, "0"
 
 local function router(cmd)
     shellLog[#shellLog + 1] = cmd
     if cmd:find("outdated", 1, true) then return brewOut end
     if cmd:find("softwareupdate", 1, true) then return suOut end
+    if cmd:find("brew upgrade", 1, true) then return upgradeOut end
     return ""
 end
 
@@ -59,6 +60,7 @@ local host, env = h.makeHost{
     fsExists = { [BREW] = true },
     now = 100000,
 }
+host.env = { get = function() return "/fake-tmp/" end }   -- the harness has no host.env
 local G = h.load(h.dir() .. "init.lua", host)
 
 local function reset()
