@@ -345,15 +345,7 @@ struct NeonSection<Content: View>: View {
     @ViewBuilder
     private func titleRow(_ title: String) -> some View {
         let label = HStack(spacing: sz(8)) {
-            RoundedRectangle(cornerRadius: sz(1))
-                .fill(Neon.blue)
-                .frame(width: sz(3), height: sz(12))
-                .shadow(color: Neon.blue.opacity(0.9), radius: sz(4))
-            neonAccentedText(title, accent: accent)
-                .font(Neon.font(11, weight: .bold))
-                .textCase(.uppercase)
-                .tracking(sz(1.4))
-                .foregroundStyle(Neon.textSecondary)
+            NeonSectionLabel(title: title, accent: accent)
             if collapsible {
                 // #122: trailing, not tucked against the title. Beside the text it
                 // read as "this title IS a button"; at the far right it reads as a
@@ -930,19 +922,7 @@ struct SettingsSidebar: View {
             .padding(.bottom, sz(16))
         }
         .frame(width: sz(218))
-        .background(
-            ZStack {
-                // Frost: the sidebar is a distinct surface from the content column —
-                // it needs its own blur or the window reads half-frosted (solid rail,
-                // glass body). Same recipe as SettingsBackground / NeonPanelSurface.
-                if ThemeRuntime.frost { VisualEffectBackground() }
-                ZStack {
-                    Neon.sidebar
-                    LinearGradient(colors: [Neon.blue.opacity(0.06), .clear],
-                                   startPoint: .top, endPoint: .bottom)
-                }
-                .opacity(ThemeRuntime.backdropFillOpacity)
-            })
+        .background(NeonSidebarSurface())
         .overlay(alignment: .trailing) {
             Rectangle().fill(Neon.stroke).frame(width: 1)
         }
@@ -1075,10 +1055,7 @@ struct SettingsSidebar: View {
             selection = tab.id
         } label: {
             HStack(spacing: sz(11)) {
-                RoundedRectangle(cornerRadius: sz(2))
-                    .fill(Neon.blue)
-                    .frame(width: sz(3), height: sz(18))
-                    .shadow(color: Neon.blue.opacity(0.9), radius: sz(4))
+                NeonSelectionBar()
                     .opacity(selected ? 1 : 0)
                 Image(systemName: tab.icon)
                     .font(Neon.font(13, weight: .semibold))
@@ -1091,14 +1068,82 @@ struct SettingsSidebar: View {
             }
             .padding(.vertical, sz(8))
             .padding(.trailing, sz(8))
-            .background(
-                RoundedRectangle(cornerRadius: sz(9), style: .continuous)
-                    .fill(selected ? Neon.blue.opacity(0.14) : .clear)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: sz(9), style: .continuous)
-                            .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1)))
+            .background(NeonSelectedRowFill(selected: selected))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The section label ("▍MENU BAR ICON"): a glowing accent tick and an uppercase, tracked
+/// title. NeonSection's title row and the Agent Sessions sidebar headers (#860). `size` 11
+/// is Settings'; the tick is one point taller than the text. `tint` colours the tick and
+/// the title (nil: the accent tick over secondary text). Self-observes the store so a theme
+/// select repaints it inside Settings' select-without-teardown root (#089).
+struct NeonSectionLabel: View {
+    let title: String
+    var accent: String? = nil
+    var size: CGFloat = 11
+    var tint: Color? = nil
+    @ObservedObject private var theme = ThemeStore.shared
+
+    var body: some View {
+        HStack(spacing: sz(8)) {
+            RoundedRectangle(cornerRadius: sz(1))
+                .fill(tint ?? Neon.blue)
+                .frame(width: sz(3), height: sz(size + 1))
+                .shadow(color: (tint ?? Neon.blue).opacity(0.9), radius: sz(4))
+            neonAccentedText(title, accent: accent)
+                .font(Neon.font(size, weight: .bold))
+                .textCase(.uppercase)
+                .tracking(sz(1.4))
+                .foregroundStyle(tint ?? Neon.textSecondary)
+        }
+    }
+}
+
+/// The sidebar rail's surface: `Neon.sidebar` under a faint accent wash, faded to the live
+/// backdrop opacity. Frost: the sidebar is a distinct surface from the content column — it
+/// needs its own blur or the window reads half-frosted (solid rail, glass body). Same recipe
+/// as SettingsBackground / NeonPanelSurface. Settings' rail and the Agent Sessions sidebar
+/// (#860); self-observes the store so an opacity/frost change re-renders it in place.
+struct NeonSidebarSurface: View {
+    @ObservedObject private var theme = ThemeStore.shared
+    var body: some View {
+        ZStack {
+            if ThemeRuntime.frost { VisualEffectBackground() }
+            ZStack {
+                Neon.sidebar
+                LinearGradient(colors: [Neon.blue.opacity(0.06), .clear],
+                               startPoint: .top, endPoint: .bottom)
+            }
+            .opacity(ThemeRuntime.backdropFillOpacity)
+        }
+    }
+}
+
+/// A selected sidebar row's glowing left accent bar. Settings' rail and the Agent Sessions
+/// sidebar (#860). Self-observes so a theme select repaints it (#089).
+struct NeonSelectionBar: View {
+    @ObservedObject private var theme = ThemeStore.shared
+    var body: some View {
+        RoundedRectangle(cornerRadius: sz(2))
+            .fill(Neon.blue)
+            .frame(width: sz(3), height: sz(18))
+            .shadow(color: Neon.blue.opacity(0.9), radius: sz(4))
+    }
+}
+
+/// A sidebar row's background: the accent fill and edge when selected, clear otherwise (the
+/// same shape either way, so nothing moves). Settings' rail and the Agent Sessions sidebar (#860).
+struct NeonSelectedRowFill: View {
+    let selected: Bool
+    @ObservedObject private var theme = ThemeStore.shared
+    var body: some View {
+        RoundedRectangle(cornerRadius: sz(9), style: .continuous)
+            .fill(selected ? Neon.blue.opacity(0.14) : .clear)
+            .overlay(
+                RoundedRectangle(cornerRadius: sz(9), style: .continuous)
+                    .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1))
     }
 }

@@ -738,6 +738,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case ChatWindow.themedIdentifier:
                 SettingsWindow.applyWindowOpacity(win)
                 win.contentMinSize = NSSize(width: 560 * scale, height: 520 * scale)
+            case AgentsWindow.themedIdentifier:   // #860: same chrome as Settings, live
+                SettingsWindow.applyWindowOpacity(win)
+                win.contentMinSize = AgentsWindow.contentMinSize(scale: scale)
             default:
                 continue
             }

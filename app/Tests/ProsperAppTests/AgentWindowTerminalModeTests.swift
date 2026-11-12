@@ -430,7 +430,7 @@ extension AgentWindowD1Tests {
                     XCTAssertEqual(differing(a, b, x: (width - Int(sz(70) * px))..<menuLeft, y: 0..<hb), 0, "button unmoved (\(tag))")
                     // The "⋯" is an AppKit Menu (20 pt minimum, framed to 18): at 0.85 its glyph lands one device
                     // pixel apart depending on the pane below (Color.black there does it too), so ±1 px only.
-                    XCTAssertEqual([-1, 0, 1].map { differing(a, b, x: menuLeft..<width, y: 0..<hb, dx: $0) }.min(), 0,
+                    XCTAssertEqual([-1, 0, 1].map { differing(a, b, x: menuLeft..<width, y: 0..<hb, dx: $0, tolerance: 0.06) }.min(), 0,
                                    "\"⋯\" unmoved (\(tag))")
                     // Terminal mode: the terminal runs to the window's bottom (no input box under it).
                     let bottom = (Int(size.height * px) - Int(sz(30) * px))..<Int(size.height * px)
@@ -441,13 +441,17 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// The first row under the header's top where the header colour ends.
+    /// The first row under the header's top where the colour steps (the header's bottom edge).
+    /// #860: the header sits on the window's backdrop gradient, so each row is compared with the
+    /// row above it, not with the top row: a gradient drifts past 0.03 without any edge. Its dither
+    /// steps up to ~0.031 row to row; the header's edge steps 0.19 or more (dark and light), so 0.1.
     func headerBottom(_ rep: NSBitmapImageRep, x: Int) -> Int? {
-        guard let top = rep.colorAt(x: x, y: 4)?.usingColorSpace(.sRGB) else { return nil }
+        guard var above = rep.colorAt(x: x, y: 4)?.usingColorSpace(.sRGB) else { return nil }
         for y in 5..<rep.pixelsHigh {
             guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-            if abs(c.redComponent - top.redComponent) + abs(c.greenComponent - top.greenComponent)
-                + abs(c.blueComponent - top.blueComponent) > 0.03 { return y }
+            if abs(c.redComponent - above.redComponent) + abs(c.greenComponent - above.greenComponent)
+                + abs(c.blueComponent - above.blueComponent) > 0.1 { return y }
+            above = c
         }
         return nil
     }
@@ -456,7 +460,10 @@ extension AgentWindowD1Tests {
     /// Reps of one layout compare raw bytes first, a row at a time: equal bytes are the same colour,
     /// so only a pixel whose bytes differ goes through colorAt and same() (#829 P3 r3: the per-pixel
     /// NSColors made the rename render test take 292 s).
-    func differing(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, x: Range<Int>, y: Range<Int>, dx: Int = 0) -> Int {
+    /// `tolerance`: see same(); the "⋯" ±1 px compares pass 0.06 (#860: shifted 1 px, the backdrop
+    /// gradient's dither differs by up to ~0.035 where the glyph does not).
+    func differing(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, x: Range<Int>, y: Range<Int>, dx: Int = 0,
+                   tolerance: CGFloat = 0.03) -> Int {
         let raw = RawPixels.pair(a, b)
         // The boxes colorAt answers for: in both reps, `b` shifted by dx.
         let lo = max(x.lowerBound, 0, -dx), hi = min(x.upperBound, a.pixelsWide, b.pixelsWide, b.pixelsWide - dx)
@@ -469,7 +476,7 @@ extension AgentWindowD1Tests {
             autoreleasepool {
                 for xx in lo..<hi {
                     if let r = raw, r.0.equal(xx, yy, r.1, xx + dx, yy) { continue }
-                    if let c = a.colorAt(x: xx, y: yy), let d = b.colorAt(x: xx + dx, y: yy), !same(c, d) { n += 1 }
+                    if let c = a.colorAt(x: xx, y: yy), let d = b.colorAt(x: xx + dx, y: yy), !same(c, d, tolerance: tolerance) { n += 1 }
                 }
             }
         }
@@ -492,10 +499,10 @@ extension AgentWindowD1Tests {
         return n
     }
 
-    func same(_ p: NSColor, _ q: NSColor) -> Bool {
+    func same(_ p: NSColor, _ q: NSColor, tolerance: CGFloat = 0.03) -> Bool {
         guard let p = p.usingColorSpace(.sRGB), let q = q.usingColorSpace(.sRGB) else { return false }
         return abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent)
-            + abs(p.blueComponent - q.blueComponent) <= 0.03
+            + abs(p.blueComponent - q.blueComponent) <= tolerance
     }
 }
 

@@ -15,6 +15,8 @@ final class AgentsWindow {
     private var observers: [NSObjectProtocol] = []
     var isOpen: Bool { window != nil }
     static let title = "Agent Sessions"
+    static let themedIdentifier = NSUserInterfaceItemIdentifier("prosper.agentsWindow")
+    static func contentMinSize(scale: CGFloat) -> NSSize { NSSize(width: 640 * scale, height: 420 * scale) }
 
     // Seams (QA #626 INFO-7: show and teardown run in tests with a window never put on screen).
     var island: () -> AgentIslandController = { .shared }
@@ -76,22 +78,27 @@ final class AgentsWindow {
         @objc func open(_ sender: Any?) { AgentsWindow.shared.show() }
     }
 
-    /// The window, built but not shown (tests render it offscreen from here).
-    static func makeWindow(_ model: AgentWindowModel) -> AgentsNSWindow {
+    /// The window, built but not shown (tests render it offscreen from here; #860: they pass a nil
+    /// `autosave`, so no frame is read from or written to the defaults).
+    static func makeWindow(_ model: AgentWindowModel, autosave: String? = "ProsperAgentsWindow") -> AgentsNSWindow {
         let hosting = NSHostingController(rootView: Themed { AgentWindowRootView(model: model) })
         let win = AgentsNSWindow(contentViewController: hosting)
         win.model = model
         win.title = title
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        // #860: Settings' chrome. The title hides (the sidebar's "Agent Sessions" header names the
+        // window, and the Window menu still lists `title`); the strip is painted by applyWindowOpacity.
+        win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
-        win.identifier = NSUserInterfaceItemIdentifier("prosper.agentsWindow")
+        // The theme hook (AppDelegate.applyThemedWindowSizing) finds the open window by it.
+        win.identifier = themedIdentifier
         let s = ThemeRuntime.scale
         win.setContentSize(NSSize(width: 1000 * s, height: 680 * s))
-        win.contentMinSize = NSSize(width: 640 * s, height: 420 * s)
+        win.contentMinSize = contentMinSize(scale: s)
         SettingsWindow.applyWindowOpacity(win)
         win.isReleasedWhenClosed = false
-        win.setFrameAutosaveName("ProsperAgentsWindow")
-        if !win.setFrameUsingName("ProsperAgentsWindow") { win.centerOnScreen() }
+        if let autosave { win.setFrameAutosaveName(autosave) }
+        if !(autosave.map { win.setFrameUsingName($0) } ?? false) { win.centerOnScreen() }
         win.clampToContentMinSize()
         return win
     }
@@ -262,23 +269,26 @@ struct AgentWindowRootView: View {
             AgentEmptyState(icon: "rectangle.dashed", title: "Agent Island is off",
                             detail: "Turn on Agent Island in Settings › Extensions to list your dch sessions here.")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Neon.bgBottom)
+                .background(SettingsBackground())
         } else {
             split
         }
     }
 
+    // #860: Settings' surfaces, at the live opacity and frost: the rail's NeonSidebarSurface and
+    // the content column's SettingsBackground. Both observe the store, so an opacity or frost
+    // change repaints them in place; the panes on top add no full-width fill of their own.
     var split: some View {
         HStack(spacing: 0) {
             AgentSidebarView(model: model)
                 .frame(width: sz(290))
-                .background(Neon.sidebar)
+                .background(NeonSidebarSurface())
             Rectangle().fill(Neon.stroke).frame(width: 1)
             AgentDetailView(model: model, transcript: model.transcript, scrolls: scrolls)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(SettingsBackground())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Neon.bgBottom)
     }
 }
 
@@ -288,8 +298,9 @@ struct AgentSidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: sz(6)) {
-                Text(AgentsWindow.title).font(Neon.font(13, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                    .lineLimit(1)
+                // #860: names the window (its title is hidden); "Sessions" in the accent, as Settings' rail titles.
+                neonAccentedText(AgentsWindow.title, accent: "Sessions").font(Neon.font(13, weight: .semibold))
+                    .foregroundStyle(Neon.textPrimary).lineLimit(1)
                 Spacer(minLength: 0)
                 let n = model.sections.filter { $0.title != "History" }.reduce(0) { $0 + $1.rows.count }
                 if n > 0 {
@@ -367,17 +378,16 @@ struct AgentSectionHeader: View {
 
     var content: some View {
         HStack(spacing: sz(5)) {
-            if title == AgentSidebar.needsYouTitle {
-                Circle().fill(AgentState.blocked.color).frame(width: sz(5), height: sz(5))
-            }
             if toggle != nil {
                 // Rotated, not swapped: one glyph in one fixed box, so the title never moves.
                 Image(systemName: "chevron.right").font(Neon.font(8, weight: .bold)).foregroundStyle(Neon.textSecondary)
                     .rotationEffect(.degrees(collapsed ? 0 : 90))
                     .frame(width: sz(9), height: sz(9))
             }
-            Text(title.uppercased()).font(Neon.font(9.5, weight: .bold)).tracking(0.8)
-                .foregroundStyle(title == AgentSidebar.needsYouTitle ? AgentState.blocked.color : Neon.textSecondary)
+            // #860: Settings' section label (accent tick, caps, tracking) at the sidebar's 9.5 pt, so the
+            // header keeps its height; Needs you tints tick and title in the blocked colour (was a dot).
+            NeonSectionLabel(title: title, size: 9.5,
+                             tint: title == AgentSidebar.needsYouTitle ? AgentState.blocked.color : nil)
             Text("\(count)").font(Neon.font(9.5, weight: .medium).monospacedDigit()).foregroundStyle(Neon.textSecondary.opacity(0.8))
             Spacer(minLength: 0)
         }
@@ -429,10 +439,10 @@ struct AgentSidebarRowView: View {
         }
         .padding(.horizontal, sz(10)).padding(.vertical, sz(7))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: sz(7)).fill(selected ? Neon.cardHi : Color.clear))
-        .overlay(alignment: .leading) {
-            if selected { RoundedRectangle(cornerRadius: 1).fill(Neon.blue).frame(width: 2).padding(.vertical, sz(7)) }
-        }
+        // #860: Settings' selected row (accent fill and edge, the glowing accent bar), drawn behind and
+        // over the row's padding so nothing in it moves.
+        .background(NeonSelectedRowFill(selected: selected))
+        .overlay(alignment: .leading) { NeonSelectionBar().opacity(selected ? 1 : 0) }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail,
@@ -635,7 +645,7 @@ struct AgentSessionHeader: View {
         }
         .padding(.horizontal, sz(16)).padding(.top, sz(30)).padding(.bottom, sz(12))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Neon.card)
+        // #860: on the window's backdrop, as Settings' pane title (no opaque band under the titlebar).
     }
 
     /// The title, the state chip and the room after them: one slot. G4: while renaming, the field
@@ -1015,7 +1025,7 @@ struct AgentInteractionPane: View {
         }
         .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Neon.card)
+        // #860: on the window's backdrop (its input box keeps its own field fill).
     }
 }
 

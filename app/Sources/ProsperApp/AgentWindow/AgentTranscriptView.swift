@@ -40,7 +40,7 @@ struct AgentTranscriptView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: scrolls ? .infinity : nil, alignment: .top)
-        .background(Neon.bgBottom)
+        // #860: no fill of its own; the window's SettingsBackground shows through at the live opacity.
         .onAppear { if scrolls && ownsLifecycle { model.start() } }
         .onDisappear { if scrolls && ownsLifecycle { model.stop() } }
     }

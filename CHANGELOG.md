@@ -112,6 +112,11 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions window: Settings › Shortcuts lists "Open Agent Sessions", a hotkey that opens the
   window or brings it forward. It is unset by default, listed and registered only while the Agent
   Island extension is on, and does nothing while the island is not running (#858).
+- Agent Sessions window: wears the Settings window's look. The title is hidden and the titlebar
+  is painted like Settings'; the body uses the Settings backdrop, sidebar surface, accent
+  selection bar and section labels, and follows the Appearance opacity, frost, accent, light/dark
+  and UI size live, like Settings. The terminal keeps its own opaque background for legibility
+  (#860).
 - Settings › Shortcuts: below UI scale 1.0, the first row's key field is no longer cut off at the
   top of the Bound and All Actions lists; key fields fit their row at every scale, in Shortcuts
   and in Key Remapping, and keep their label centred (#859, #868).

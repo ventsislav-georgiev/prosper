@@ -789,7 +789,7 @@ extension AgentWindowD1Tests {
                                 let menuLeft = width - Int(sz(16 + 18 + 2) * px)
                                 XCTAssertEqual(differing(plain, editing, x: left..<menuLeft, y: 0..<hb), 0,
                                                "picker, toggle and Open in terminal unmoved (\(tag))")
-                                XCTAssertEqual([-1, 0, 1].map { differing(plain, editing, x: menuLeft..<width, y: 0..<hb, dx: $0) }.min(), 0,
+                                XCTAssertEqual([-1, 0, 1].map { differing(plain, editing, x: menuLeft..<width, y: 0..<hb, dx: $0, tolerance: 0.06) }.min(), 0,
                                                "\"⋯\" unmoved (\(tag))")
                                 // The field shows, and only in the title line's band.
                                 XCTAssertGreaterThan(differing(plain, editing, x: detail..<left, y: line), 0, "the field shows (\(tag))")
@@ -798,7 +798,7 @@ extension AgentWindowD1Tests {
                                 XCTAssertEqual(differing(plain, editing, x: detail..<width, y: (line.upperBound + Int(sz(4) * px))..<hb), 0,
                                                "the folder line (\(tag))")
                                 // Leaving edit mode draws the title exactly as before.
-                                XCTAssertEqual([-1, 0, 1].map { differing(plain, back, x: menuLeft..<width, y: 0..<height, dx: $0) }.min(), 0, tag)
+                                XCTAssertEqual([-1, 0, 1].map { differing(plain, back, x: menuLeft..<width, y: 0..<height, dx: $0, tolerance: 0.06) }.min(), 0, tag)
                                 XCTAssertEqual(differing(plain, back, x: 0..<menuLeft, y: 0..<height), 0, "back to the title (\(tag))")
                             }
                         }
@@ -838,10 +838,11 @@ extension AgentWindowD1Tests {
             return n
         }
         func slowControlsLeft(_ rep: NSBitmapImageRep, line: Range<Int>, from: Int, to: Int, gap: Int) -> Int? {
-            guard let bg = rep.colorAt(x: from + 2, y: 4) else { return nil }
+            guard rep.colorAt(x: from + 2, y: 4) != nil else { return nil }
             var run = 0
             for x in stride(from: from, through: to, by: -1) {
-                let blank = line.allSatisfy { y in rep.colorAt(x: x, y: y).map { same($0, bg) } ?? true }
+                let bg = rep.colorAt(x: x, y: 4)
+                let blank = line.allSatisfy { y in rep.colorAt(x: x, y: y).map { p in bg.map { same(p, $0, tolerance: 0.06) } ?? true } ?? true }
                 run = blank ? run + 1 : 0
                 if run >= gap { return x + gap }
             }
@@ -884,14 +885,18 @@ extension AgentWindowD1Tests {
 
     /// Scanning the title line leftwards from `from`: the x where a run of `gap` columns of the
     /// header's own colour starts (the spacer between the title slot and the controls), plus one run.
+    /// #860: the header sits on the window's backdrop gradient, so a column is blank when it matches its
+    /// own pixel at y 4 (above every control), not one colour read at the right edge, within 0.06
+    /// (the gradient's dither and its 30-50 pt drift; a control's edge is far past that).
     func controlsLeft(_ rep: NSBitmapImageRep, line: Range<Int>, from: Int, to: Int, gap: Int) -> Int? {
-        guard let bg = rep.colorAt(x: from + 2, y: 4) else { return nil }
+        guard rep.colorAt(x: from + 2, y: 4) != nil else { return nil }
         let raw = RawPixels(rep)
         var run = 0
         for x in stride(from: from, through: to, by: -1) {
+            let bg = rep.colorAt(x: x, y: 4)
             let blank = line.allSatisfy { (y: Int) -> Bool in
-                if let raw, x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh, raw.equal(x, y, raw, from + 2, 4) { return true }
-                return rep.colorAt(x: x, y: y).map { same($0, bg) } ?? true
+                if let raw, x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh, raw.equal(x, y, raw, x, 4) { return true }
+                return rep.colorAt(x: x, y: y).map { p in bg.map { same(p, $0, tolerance: 0.06) } ?? true } ?? true
             }
             run = blank ? run + 1 : 0
             if run >= gap { return x + gap }
