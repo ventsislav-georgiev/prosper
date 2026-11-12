@@ -116,7 +116,9 @@ tag from the now-released section and put it on the new top draft.
   top of the Bound and All Actions lists; key fields fit their row at every scale, in Shortcuts
   and in Key Remapping, and keep their label centred (#859, #868).
 - Settings › Shortcuts and Key Remapping: a long shortcut now fits its key field instead of being
-  cut off at both ends, and Page Up / Page Down show as ⇞ ⇟ in key fields and menu titles (#876).
+  cut off at both ends. Page Up / Page Down show as ⇞ ⇟ in key fields and in the "shortcut
+  unavailable" notification, and the Shortcuts search also finds a row by its keys' names
+  ("pageup", "return", "cmd") (#876).
 - Agent Island: New session, and Resume when it has to pick a new name, no longer take a name
   that differs only in case from an existing session's or a History record's ("Proj" beside
   "proj"): on a case-insensitive disk both would share one socket (#847).
