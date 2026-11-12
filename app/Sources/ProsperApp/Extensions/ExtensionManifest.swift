@@ -106,6 +106,9 @@ struct Contributes: Codable, Sendable, Equatable {
     /// (relative to the extension dir) with a flat color-token map. Declarative
     /// data only — selecting a theme never spawns the extension's Lua VM.
     let themes: [ThemeContribution]?
+    /// #872: `[contributes.kit]`, an Agent Kit (spec 4.2), kept as the raw TOML table. Decoding it
+    /// never fails; `KitManifest.parse` and `KitValidator` refuse a bad kit with a reason.
+    let kit: KitTOML?
 
     var allCommands: [CommandContribution] { commands ?? [] }
     var allKeybindings: [KeybindingContribution] { keybindings ?? [] }
