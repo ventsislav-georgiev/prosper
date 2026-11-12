@@ -230,6 +230,11 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
     }
 
     private func makeListener(host: String) throws -> NWListener {
+        try NWListener(using: Self.listenerParameters(host: host), on: NWEndpoint.Port(rawValue: bindPort)!)
+    }
+
+    /// The listener's parameters; accepted connections inherit them, TCP options included.
+    static func listenerParameters(host: String) -> NWParameters {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         // A phone that leaves the network (sleep, tunnel switch, no signal) never sends
@@ -237,7 +242,7 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
         // never runs and its dch client — plus that client's pty — leaks. 44 of them
         // had piled up over one day, all still attached to their sessions.
         if let tcp = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
-            Self.configureKeepalive(tcp)
+            Self.configureTCP(tcp)
         }
         // Port MUST stay `.any` here. Listener params are inherited by every accepted
         // connection, so a port in requiredLocalEndpoint makes each accepted socket try to
@@ -246,7 +251,7 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
         // which does not cover an actively LISTENing port. The listening port goes in `on:`.
         params.requiredLocalEndpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(host), port: .any)
-        return try NWListener(using: params, on: NWEndpoint.Port(rawValue: bindPort)!)
+        return params
     }
 
     /// Idle 120 s (#767; was 30 s): each probe wakes the phone's radio, so an idle
@@ -254,7 +259,10 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
     /// noticed in ~160 s (was ~70 s); a reconnect never waits on it, because
     /// `retireOlderClients` drops the old client on the new attach.
     static let keepaliveIdle = 120
-    static func configureKeepalive(_ tcp: NWProtocolTCP.Options) {
+    static func configureTCP(_ tcp: NWProtocolTCP.Options) {
+        // #888: the server sends one small frame per pty read; with Nagle on, each one after
+        // the first waits a full round trip for the previous ACK. dch serve sets it too.
+        tcp.noDelay = true
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = keepaliveIdle
         tcp.keepaliveInterval = 10

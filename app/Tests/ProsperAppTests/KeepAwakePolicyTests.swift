@@ -141,10 +141,33 @@ final class KeepAwakePolicyTests: XCTestCase {
 
     func testKeepaliveIdleIs120AndDeadLinkSeenWithinThreeMinutes() {
         let tcp = NWProtocolTCP.Options()
-        DchSessionServer.configureKeepalive(tcp)
+        DchSessionServer.configureTCP(tcp)
         XCTAssertTrue(tcp.enableKeepalive)
         XCTAssertEqual(tcp.keepaliveIdle, 120)
         XCTAssertLessThanOrEqual(tcp.keepaliveIdle + tcp.keepaliveInterval * tcp.keepaliveCount, 180)
+    }
+
+    // MARK: - #888 TCP no-delay on the session server
+
+    private func assertSessionTCP(_ tcp: NWProtocolTCP.Options?, file: StaticString = #filePath, line: UInt = #line) {
+        guard let tcp else { return XCTFail("no TCP options", file: file, line: line) }
+        XCTAssertTrue(tcp.noDelay, "Nagle on: every small frame waits a round trip", file: file, line: line)
+        XCTAssertTrue(tcp.enableKeepalive, file: file, line: line)
+        XCTAssertEqual(tcp.keepaliveIdle, 120, file: file, line: line)
+        XCTAssertEqual(tcp.keepaliveInterval, 10, file: file, line: line)
+        XCTAssertEqual(tcp.keepaliveCount, 4, file: file, line: line)
+    }
+
+    func testConfigureTCPSetsNoDelayAndKeepalive() {
+        let tcp = NWProtocolTCP.Options()
+        DchSessionServer.configureTCP(tcp)
+        assertSessionTCP(tcp)
+    }
+
+    /// The parameters makeListener really uses; no listener is built, nothing binds.
+    func testListenerParametersCarryNoDelayAndKeepalive() {
+        let params = DchSessionServer.listenerParameters(host: "127.0.0.1")
+        assertSessionTCP(params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options)
     }
 
     /// Hot-ish path budget: `step` runs every tick for the life of every remote

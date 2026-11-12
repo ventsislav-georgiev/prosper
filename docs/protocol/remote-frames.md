@@ -14,6 +14,7 @@ The conformance set in [`golden/`](golden/) runs against any server: see
 
 - Plain TCP, port 8771, IPv4 only. No TLS, no tokens, no pairing: Tailscale is the trust
   boundary.
+- Both servers set TCP_NODELAY on every accepted connection (dch serve: v1.58.0 remote.c :2445, called from serve.c :2480; Prosper since #888); a client should set it too.
 - Prosper binds the first IPv4 address in 100.64.0.0/10 it finds on any interface, which is
   Tailscale's on a normal Mac. With none it does not listen (it retries with backoff); it never
   falls back to a wider address. That range is not Tailscale's alone: see

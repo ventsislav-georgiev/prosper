@@ -334,10 +334,14 @@ tag from the now-released section and put it on the new top draft.
   bracketed paste, mouse reporting, focus events, keyboard flags and alternate screen back on, as
   dch serve does when a `dch -a host:name` client leaves the X-ray view. Requests are read as dch
   serve reads them: a UTF-8 byte order mark before the request, a key given twice, or a text with a
-  NUL or a broken surrogate escape is refused with dch serve's answer instead of being read loosely,
-  and none of these reaches dch. A create whose command is not a list of strings (or has more than
+  NUL or a broken surrogate escape is refused instead of being read loosely, and none of these
+  reaches dch. A create whose command is not a list of strings (or has more than
   256 words) starts nothing, a rename whose alias is not readable no longer clears the alias, and a
-  window size above 1000 is capped instead of crashing Prosper (#885).
+  window size from the phone above 65535 or below zero no longer crashes Prosper: a size above 1000
+  is capped at 1000, and zero or less reads as 80 by 24 (#885).
+- Remote Terminal: the phone terminal no longer waits a network round trip between the pieces of a
+  screen update. The Mac session server now sends every small update at once (TCP no-delay)
+  (#888).
 
 ## v2.174.0
 
