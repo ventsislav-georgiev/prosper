@@ -966,10 +966,14 @@ final class AgentIslandController {
     func spawn(in folder: String, command: [String], name: String? = nil,
                done: (@MainActor @Sendable (AgentSessionKey?, String?) -> Void)? = nil) -> AgentSessionKey? {
         guard let store, case .ok(let dch) = store.resumeGate else { return nil }
-        if let name, name.isEmpty || name.contains(where: \.isWhitespace) || AgentNewSession.nameError(name, taken: []) != nil { return nil }
         let dir = spawnDir()
+        if let name, name.isEmpty || name.contains(where: \.isWhitespace) || AgentNewSession.nameError(name, taken: [], dir: dir) != nil {
+            return nil
+        }
         let taken = AgentIsland.spawnTaken(dir: dir, sessions: store.sessions, history: store.history)
-        let args = AgentIsland.newSessionArgs(folder: folder, command: command, taken: taken, name: name)
+        // QA #713 INFO-3: the island's automatic name fits dch's room in `dir` too.
+        let args = AgentIsland.newSessionArgs(folder: folder, command: command, taken: taken,
+                                              name: name ?? AgentNewSession.autoName(folder: folder, taken: taken, dir: dir))
         let key = AgentSessionKey(dir: dir, name: args[1])
         let started = run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: true) { [weak self] r in
             guard let store = self?.store else { return }

@@ -252,6 +252,9 @@ final class AgentWindowModel: ObservableObject {
         hasStore = store != nil
         subscription = nil
         guard let store else {
+            // QA #713 INFO-4: the island's runner drops every answer once its store is gone.
+            if let k = newSession?.starting { newSession?.starting = nil; newSession?.status = "No answer for \(k.name): Agent Island is off" }
+            claimed = [:]
             sections = []
             select(nil, manual: false)
             return
@@ -468,6 +471,11 @@ final class AgentWindowModel: ObservableObject {
     /// Dropped by a manual pick, the form reopening and after `spawnSlack`.
     private(set) var pendingSpawn: (key: AgentSessionKey, at: TimeInterval)?
     static let spawnSlack: TimeInterval = 15
+    /// QA #713 INFO-4: numbers every spawn; the form keeps its own (`request`), a quick shell has none.
+    private var requests = 0
+    /// QA #713 INFO-4 (d): the names this window spawned until the poll lists them: in flight (.infinity), then for
+    /// `spawnSlack` after the answer. A second quick shell before the next poll takes the next free name.
+    private var claimed: [String: TimeInterval] = [:]
     /// The island's one --spawn (its gate, runner key, env and failure line).
     lazy var spawnSession: (_ folder: String, _ command: [String], _ name: String?,
                             _ done: @escaping @MainActor @Sendable (AgentSessionKey?, String?) -> Void) -> AgentSessionKey? = {
@@ -522,11 +530,15 @@ final class AgentWindowModel: ObservableObject {
     /// The live sessions' and records' names in the spawn dir, from this window's store.
     var spawnTaken: Set<String> {
         guard let store else { return [] }
+        let t = now(), own = newSession?.starting?.name.lowercased()
+        // R2-1: the name the open form is starting is not taken for that form (its claim, or a poll listing it early).
         return AgentIsland.spawnTaken(dir: island().spawnDir(), sessions: store.sessions, history: store.history)
+            .union(claimed.filter { t - $0.value <= Self.spawnSlack }.keys).filter { $0.lowercased() != own }
     }
 
     var newSessionAutoName: String {
-        AgentNewSession.autoName(folder: AgentNewSession.expand(newSession?.folder ?? "", home: home), taken: spawnTaken)
+        AgentNewSession.autoName(folder: AgentNewSession.expand(newSession?.folder ?? "", home: home), taken: spawnTaken,
+                                 dir: island().spawnDir())
     }
 
     /// The name Start uses: the typed one, else the free name now (an untouched name taken since is re-picked).
@@ -538,7 +550,7 @@ final class AgentWindowModel: ObservableObject {
     var newSessionErrors: (folder: String?, name: String?) {
         guard let f = newSession else { return (nil, nil) }
         return (AgentNewSession.folderError(AgentNewSession.expand(f.folder, home: home), exists: folderExists),
-                AgentNewSession.nameError(newSessionName, taken: spawnTaken))
+                AgentNewSession.nameError(newSessionName, taken: spawnTaken, dir: island().spawnDir()))
     }
 
     /// #847 D7.4: the argv that runs, `--name` included.
@@ -585,38 +597,52 @@ final class AgentWindowModel: ObservableObject {
         }
         guard store?.resumeGate.isOK == true else { return false }
         let folder = newSessionDefaultFolder
-        return spawn(folder, argv, name: AgentNewSession.autoName(folder: folder, taken: spawnTaken), command: nil)
+        return spawn(folder, argv, name: AgentNewSession.autoName(folder: folder, taken: spawnTaken, dir: island().spawnDir()),
+                     command: nil)
     }
 
     private func spawn(_ folder: String, _ argv: [String], name: String, command: String?) -> Bool {
-        let form = newSession != nil
+        requests += 1
+        let request = newSession == nil ? nil : requests   // nil: a quick shell, no form's
         guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
-            self?.spawned(key, failure, folder: folder, command: command, form: form)
+            self?.spawned(key, failure, name: name, folder: folder, command: command, request: request)
         }) else {
-            newSession?.status = "\(name) is busy: try again"
+            let busy = "\(name) is busy: try again"
+            if newSession != nil { newSession?.status = busy } else {
+                store?.actions[AgentSessionKey(dir: island().spawnDir(), name: "")] = busy   // never dropped silently
+            }
             return false
         }
+        claimed[name] = .infinity
         newSession?.starting = key
+        newSession?.request = requests
         newSession?.status = nil
         return true
     }
 
     /// The runner's answer. Success keeps the folder and (OQ-3) a typed command as the one shared setting,
     /// closes the form and selects the session once its row shows; failure re-enables the form with dch's line.
-    private func spawned(_ key: AgentSessionKey?, _ failure: String?, folder: String, command: String?, form: Bool) {
+    /// QA #713 INFO-4: an answer touches the form only when it answers the open form's own request.
+    private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String, command: String?,
+                         request: Int?) {
+        let mine = request != nil && newSession?.request == request && newSession?.starting != nil
         guard let key else {
-            if newSession?.starting != nil { newSession?.starting = nil; newSession?.status = failure }
+            claimed[name] = nil
+            if mine { newSession?.starting = nil; newSession?.status = failure }
             return
         }
+        claimed[name] = now()
         Preferences.agentWindowNewSessionFolder = folder
         if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // #847 D7.2: a typed -n/--name would name every later session; else the text as typed.
             let words = AgentIsland.shellWords(command), kept = AgentIsland.strippingName(words)
             Preferences.agentIslandNewSessionCommand = kept == words ? command : AgentIsland.shellLine(kept)
         }
-        if form {
-            guard newSession?.starting == key else { return }   // closed meanwhile: the human moved on
+        if request != nil {
+            guard mine else { return }   // closed or replaced meanwhile: the human moved on
             newSession = nil
+        } else if newSession != nil {
+            return   // a quick shell's answer under a form opened since: the form keeps the pane
         }
         pendingSpawn = (key, now())
         refresh()

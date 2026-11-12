@@ -133,7 +133,7 @@ extension AgentWindowD1Tests {
             m.openNewSession(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --chrome 'my x'")
             m.setNewSessionName("a:b")
-            XCTAssertEqual(m.newSessionErrors.name, "Use letters, digits, . _ and - only")
+            XCTAssertEqual(m.newSessionErrors.name, "Use ASCII letters, digits, . _ and - only")
             XCTAssertFalse(m.startNewSession())
             m.setNewSessionName("m0123456789ABCDEF")
             XCTAssertFalse(m.startNewSession())
@@ -171,7 +171,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.canStartNewSession)
             st.sessions = [session("WEB", .idle), session("api", .idle)]
             XCTAssertFalse(m.startNewSession(), "typed, and taken since (case-folded): refused")
-            XCTAssertEqual(m.newSessionErrors.name, "web is taken")
+            XCTAssertEqual(m.newSessionErrors.name, "WEB is taken", "QA #713 INFO-7: the session as it is spelled")
             XCTAssertEqual(spawns.calls.count, 0)
             m.setNewSessionName("")
             XCTAssertTrue(m.startNewSession(), "the automatic name, taken since: quietly re-picked")
@@ -467,6 +467,183 @@ extension AgentWindowD1Tests {
             m.cancelNewSession()
             XCTAssertFalse(m.startShell())
             XCTAssertEqual(spawns.calls.count, 0)
+        }
+    }
+
+    // MARK: QA #713 INFO-3: dch's room for a name
+
+    /// The form's limit is dch's room in the socket dir the island spawns into, and the automatic name fits it.
+    @MainActor
+    func testAgentWindowNewSessionNameLimitFollowsTheSpawnDir() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            m.island().historyDirs = { ["/Users/example-user/.config/prosper/dch-isolated-00001"] }   // 54 bytes: 43 left
+            m.openNewSession(folder: "/Users/example/" + String(repeating: "b", count: 60))
+            XCTAssertEqual(m.newSessionName, String(repeating: "b", count: 39), "room for a -N under 43")
+            m.setNewSessionName(String(repeating: "a", count: 44))
+            XCTAssertEqual(m.newSessionErrors.name, "43 characters at most")
+            XCTAssertFalse(m.startNewSession())
+            m.setNewSessionName(String(repeating: "a", count: 43))
+            XCTAssertNil(m.newSessionErrors.name)
+            XCTAssertTrue(m.startNewSession())
+            XCTAssertEqual(spawns.calls.map(\.name), [String(repeating: "a", count: 43)])
+        }
+    }
+
+    // MARK: QA #713 INFO-4: whose answer arrived
+
+    /// (a) A quick shell started before the form fails while the form's own spawn runs: the form keeps
+    /// "Starting…" and shows nothing of the shell's; its own answer still closes it.
+    @MainActor
+    func testAgentWindowNewSessionQuickShellFailureLeavesTheFormAlone() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            XCTAssertTrue(m.startShell())
+            XCTAssertNil(m.newSession)
+            m.openNewSession(folder: "/Users/example/api")
+            XCTAssertTrue(m.startNewSession())
+            spawns.done[0](nil, "New session failed: dch: example: nope")
+            XCTAssertEqual(m.newSession?.starting, AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
+            XCTAssertEqual(m.newSessionStatus, "Starting api…")
+            spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
+            XCTAssertNil(m.newSession, "its own answer closes it")
+            XCTAssertEqual(m.pendingSpawn?.key, AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
+        }
+    }
+
+    /// (b) A quick shell that succeeds after the form opened: the form stays open, nothing is selected later.
+    @MainActor
+    func testAgentWindowNewSessionQuickShellSuccessKeepsAFormOpenedSince() throws {
+        try withNewSessionPrefs {
+            let other = mapped("other"), st = store([other]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
+            defer { m.close() }
+            m.select(.live(other.key))
+            XCTAssertTrue(m.startShell())
+            let shell = try XCTUnwrap(spawns.calls.first?.name)
+            m.openNewSession(folder: "/Users/example/api")
+            spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: shell), nil)
+            XCTAssertNotNil(m.newSession, "the form stays")
+            XCTAssertNil(m.pendingSpawn)
+            st.sessions = [other, mapped(shell)]
+            XCTAssertNotNil(m.newSession, "the shell's row shows: the form still stays")
+            XCTAssertEqual(m.selection, .live(other.key))
+        }
+    }
+
+    /// (c) The store goes (the island's runner then drops every answer): the form leaves "Starting…" with a short
+    /// failure text; a late answer changes nothing.
+    @MainActor
+    func testAgentWindowNewSessionStoreGoneEndsStarting() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/api")
+            XCTAssertTrue(m.startNewSession())
+            m.bind(nil)
+            XCTAssertNil(m.newSession?.starting)
+            XCTAssertEqual(m.newSessionStatus, "No answer for api: Agent Island is off")
+            XCTAssertFalse(m.canStartNewSession, "no store: no Start")
+            spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
+            XCTAssertNotNil(m.newSession, "a late answer is not the form's any more")
+            XCTAssertNil(m.pendingSpawn)
+        }
+    }
+
+    /// (d) A second quick shell before the next poll lists the first: started under the next free name (in flight,
+    /// answered, failed). A busy runner on a name the window did not claim says so on the dir-wide line.
+    @MainActor
+    func testAgentWindowNewSessionSecondQuickShellBeforeThePollIsStarted() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), st = store([]), m = newSessionModel(st, spawns)
+            defer { m.close() }
+            XCTAssertTrue(m.startShell())
+            XCTAssertTrue(m.startShell(), "the first in flight")
+            XCTAssertEqual(spawns.calls.map(\.name), ["example", "example-2"])
+            spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "example"), nil)
+            XCTAssertTrue(m.startShell(), "answered, not yet listed")
+            XCTAssertEqual(spawns.calls.last?.name, "example-3")
+            spawns.done[1](nil, "New session failed: dch: example-2: nope")
+            XCTAssertTrue(m.startShell(), "a failed name is free again")
+            XCTAssertEqual(spawns.calls.last?.name, "example-2")
+            spawns.accept = false
+            XCTAssertFalse(m.startShell())
+            XCTAssertEqual(st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")], "example-4 is busy: try again")
+        }
+    }
+
+    /// A stale answer: the form closed, reopened and started again; the first spawn's answer touches nothing.
+    @MainActor
+    func testAgentWindowNewSessionStaleFormAnswerDoesNotTouchANewerRequest() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/api")
+            XCTAssertTrue(m.startNewSession())
+            m.cancelNewSession()
+            m.openNewSession(folder: "/Users/example/web")
+            XCTAssertTrue(m.startNewSession())
+            spawns.done[0](nil, "New session failed: dch: api: nope")
+            XCTAssertEqual(m.newSessionStatus, "Starting web…", "the old failure is not this form's")
+            spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
+            XCTAssertNotNil(m.newSession, "nor the old success")
+            XCTAssertNil(m.pendingSpawn)
+            spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
+            XCTAssertNil(m.newSession)
+            XCTAssertEqual(m.pendingSpawn?.key, AgentSessionKey(dir: "/tmp/dch-test", name: "web"))
+        }
+    }
+
+    /// R2-1: from Start to the answer a typed name is not taken for its own form (its claim, or a poll listing it
+    /// early): no error, the same name and Runs line. A failure frees it (no stale claim).
+    @MainActor
+    func testAgentWindowNewSessionStartingTypedNameIsNotTakenForItsOwnForm() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), st = store([]), m = newSessionModel(st, spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/web")
+            m.setNewSessionName("api")
+            let runs = m.newSessionRuns
+            XCTAssertTrue(m.startNewSession())
+            XCTAssertNil(m.newSessionErrors.name, "its own claim")
+            XCTAssertEqual(m.newSessionName, "api")
+            XCTAssertEqual(m.newSessionRuns, runs)
+            st.sessions = [session("api", .idle)]
+            XCTAssertNil(m.newSessionErrors.name, "listed before the answer")
+            XCTAssertEqual(m.newSessionName, "api")
+            XCTAssertEqual(m.newSessionRuns, runs)
+            st.sessions = []
+            spawns.done[0](nil, "New session failed: dch: api: nope")
+            XCTAssertNil(m.newSession?.starting)
+            XCTAssertNil(m.newSessionErrors.name, "a failure frees the name")
+            XCTAssertTrue(m.canStartNewSession)
+        }
+    }
+
+    /// R2-1: the automatic name stays the one being started (not "-2") until the answer; after the form's success
+    /// the claim still counts for the next form within spawnSlack.
+    @MainActor
+    func testAgentWindowNewSessionStartingAutoNameIsNotTakenForItsOwnForm() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), st = store([]), m = newSessionModel(st, spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/api")
+            XCTAssertEqual(m.newSessionName, "api")
+            let runs = m.newSessionRuns
+            XCTAssertTrue(m.startNewSession())
+            XCTAssertNil(m.newSessionErrors.name)
+            XCTAssertEqual(m.newSessionName, "api", "not api-2")
+            XCTAssertEqual(m.newSessionRuns, runs)
+            st.sessions = [session("api", .idle)]
+            XCTAssertNil(m.newSessionErrors.name, "listed before the answer")
+            XCTAssertEqual(m.newSessionName, "api")
+            XCTAssertEqual(m.newSessionRuns, runs)
+            st.sessions = []
+            spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
+            XCTAssertNil(m.newSession)
+            m.openNewSession(folder: "/Users/example/api")
+            XCTAssertEqual(m.newSessionName, "api-2", "the claim counts for the next form")
         }
     }
 }

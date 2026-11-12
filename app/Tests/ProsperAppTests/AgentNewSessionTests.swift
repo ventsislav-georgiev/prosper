@@ -4,32 +4,67 @@ import XCTest
 /// #847: the New session form's pure rules: the name check, the free name, the folder, the argv.
 final class AgentNewSessionTests: XCTestCase {
 
+    /// A short socket dir: dch's room for a name is over `nameMax`.
+    static let dir = "/tmp/dch-501"
+
     func testAgentNewSessionNameErrorRulesInOrder() {
-        let chars = "Use letters, digits, . _ and - only"
+        let d = Self.dir
+        let chars = "Use ASCII letters, digits, . _ and - only"
         for bad in ["a:b", "a/b", "a b", "a\u{1}b", "é", "host:api"] {
-            XCTAssertEqual(AgentNewSession.nameError(bad, taken: []), chars, bad)
+            XCTAssertEqual(AgentNewSession.nameError(bad, taken: [], dir: d), chars, bad)
         }
-        XCTAssertEqual(AgentNewSession.nameError("-x", taken: []), "Can't start with - or .")
-        XCTAssertEqual(AgentNewSession.nameError(".x", taken: []), "Can't start with - or .")
-        XCTAssertEqual(AgentNewSession.nameError(String(repeating: "a", count: 65), taken: []), "64 characters at most")
+        XCTAssertEqual(AgentNewSession.nameError("-x", taken: [], dir: d), "Can't start with - or .")
+        XCTAssertEqual(AgentNewSession.nameError(".x", taken: [], dir: d), "Can't start with - or .")
+        XCTAssertEqual(AgentNewSession.nameError(String(repeating: "a", count: 65), taken: [], dir: d), "64 characters at most")
         for id in ["m0123456789abcdef", "M0123456789ABCDEF", " m0123456789abcdef ", "mABCDEF0123456789"] {
-            XCTAssertEqual(AgentNewSession.nameError(id, taken: []), "Looks like a dch session id", id)
+            XCTAssertEqual(AgentNewSession.nameError(id, taken: [], dir: d), "Looks like a dch session id", id)
         }
-        XCTAssertEqual(AgentNewSession.nameError("Api", taken: ["api"]), "Api is taken", "case-folded: one socket on APFS")
-        XCTAssertEqual(AgentNewSession.nameError("api", taken: ["API"]), "api is taken")
+        XCTAssertEqual(AgentNewSession.nameError("Api", taken: ["api"], dir: d), "api is taken", "case-folded: one socket on APFS")
+        XCTAssertEqual(AgentNewSession.nameError("api", taken: ["API"], dir: d), "API is taken", "QA #713 INFO-7: as it is spelled")
         for ok in ["api-2", "a.b_c", String(repeating: "a", count: 64), "m0123456789abcde", "m0123456789abcdeg",
                    "x0123456789abcdef", "", "   ", "api"] {
-            XCTAssertNil(AgentNewSession.nameError(ok, taken: ["api-3"]), ok)
+            XCTAssertNil(AgentNewSession.nameError(ok, taken: ["api-3"], dir: d), ok)
         }
     }
 
+    /// QA #713 INFO-3: dch hashes a name longer than 104 - "<dir>/" - ".sock\0" bytes (canon_name), so the form's
+    /// limit is that room, in bytes, at most 64.
+    func testAgentNewSessionNameLimitIsDchsRoomInTheSocketDir() {
+        // 54 bytes, like ~/.config/prosper/dch-isolated under a long home: 104 - 54 - 7 = 43.
+        let dir = "/Users/example-user/.config/prosper/dch-isolated-00001"
+        XCTAssertEqual(dir.utf8.count, 54)
+        XCTAssertEqual(AgentNewSession.nameLimit(dir: dir), 43)
+        XCTAssertNil(AgentNewSession.nameError(String(repeating: "a", count: 43), taken: [], dir: dir), "at the room")
+        XCTAssertEqual(AgentNewSession.nameError(String(repeating: "a", count: 44), taken: [], dir: dir), "43 characters at most",
+                       "one byte over: the real limit in the text")
+        // A multi-byte dir is counted in bytes: 31 characters, 60 bytes: 104 - 60 - 7 = 37.
+        let wide = "/" + String(repeating: "é", count: 29) + "x"
+        XCTAssertEqual(wide.count, 31)
+        XCTAssertEqual(AgentNewSession.nameLimit(dir: wide), 104 - wide.utf8.count - 7)
+        XCTAssertEqual(AgentNewSession.nameError(String(repeating: "a", count: 38), taken: [], dir: wide), "37 characters at most")
+        XCTAssertNil(AgentNewSession.nameError(String(repeating: "a", count: 37), taken: [], dir: wide))
+        // A multi-byte name is never passed (ASCII only), whatever its length.
+        XCTAssertEqual(AgentNewSession.nameError("é", taken: [], dir: dir), "Use ASCII letters, digits, . _ and - only")
+        // A short socket dir still caps at 64.
+        XCTAssertEqual(AgentNewSession.nameLimit(dir: Self.dir), 64)
+        XCTAssertEqual(AgentNewSession.nameError(String(repeating: "a", count: 65), taken: [], dir: Self.dir), "64 characters at most")
+        // The automatic name from a long folder fits the room with a "-N".
+        let long = AgentNewSession.autoName(folder: "/x/" + String(repeating: "b", count: 100), taken: [], dir: dir)
+        XCTAssertEqual(long.utf8.count, 43 - 4)
+        XCTAssertNil(AgentNewSession.nameError(long + "-999", taken: [], dir: dir))
+        let taken = AgentNewSession.autoName(folder: "/x/" + String(repeating: "b", count: 100), taken: [long], dir: dir)
+        XCTAssertEqual(taken, long + "-2")
+        XCTAssertNil(AgentNewSession.nameError(taken, taken: [long], dir: dir))
+    }
+
     func testAgentNewSessionAutoNameIsTheFolderFreeNameCaseFolded() {
-        XCTAssertEqual(AgentNewSession.autoName(folder: "/Users/example/My Repo", taken: []), "My-Repo")
-        XCTAssertEqual(AgentNewSession.autoName(folder: "/Users/example/My Repo", taken: ["my-repo"]), "My-Repo-2")
-        XCTAssertEqual(AgentNewSession.autoName(folder: "/Users/example/My Repo", taken: ["my-repo", "MY-REPO-2"]), "My-Repo-3")
-        let long = AgentNewSession.autoName(folder: "/x/" + String(repeating: "b", count: 100), taken: [])
+        let d = Self.dir
+        XCTAssertEqual(AgentNewSession.autoName(folder: "/Users/example/My Repo", taken: [], dir: d), "My-Repo")
+        XCTAssertEqual(AgentNewSession.autoName(folder: "/Users/example/My Repo", taken: ["my-repo"], dir: d), "My-Repo-2")
+        XCTAssertEqual(AgentNewSession.autoName(folder: "/Users/example/My Repo", taken: ["my-repo", "MY-REPO-2"], dir: d), "My-Repo-3")
+        let long = AgentNewSession.autoName(folder: "/x/" + String(repeating: "b", count: 100), taken: [], dir: d)
         XCTAssertEqual(long.count, AgentNewSession.nameMax - 4, "room for a -N under the cap")
-        XCTAssertNil(AgentNewSession.nameError(long + "-999", taken: []))
+        XCTAssertNil(AgentNewSession.nameError(long + "-999", taken: [], dir: d))
     }
 
     func testAgentNewSessionFreeNameFoldsCaseOnTheIslandPathToo() {

@@ -132,6 +132,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: New session, and Resume when it has to pick a new name, no longer take a name
   that differs only in case from an existing session's or a History record's ("Proj" beside
   "proj"): on a case-insensitive disk both would share one socket (#847).
+- Agent Island: Resume of an ended session whose name differs only in case from a running one
+  (record "proj" beside a live "Proj") now resumes it under a free name instead of failing (#847).
 - New session names Claude after its session: every Claude session started from New session runs
   with `--name <session name>`, so the name in Claude's prompt box, in /resume and in the terminal
   title matches the session's row. A name typed into the command is replaced, never doubled, and

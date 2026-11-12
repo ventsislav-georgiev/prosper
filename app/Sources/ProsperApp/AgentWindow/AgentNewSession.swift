@@ -14,6 +14,8 @@ struct AgentNewSessionForm: Equatable {
     var command: String
     /// Set while the runner works.
     var starting: AgentSessionKey?
+    /// QA #713 INFO-4: the window's number for this form's spawn; only that spawn's answer touches the form.
+    var request = 0
     /// The status slot's failure or busy text.
     var status: String?
 }
@@ -36,24 +38,30 @@ enum AgentNewSession {
         return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
-    /// The folder's free name, compared case-folded (freeName). Cut to leave room for a "-N" under `nameMax`.
-    static func autoName(folder: String, taken: Set<String>) -> String {
-        AgentIsland.freeName(String(AgentIsland.sessionName(folder: folder).prefix(nameMax - 4)), taken: taken)
+    /// QA #713 INFO-3: the longest name dch keeps in socket dir `dir`, in UTF-8 bytes, at most `nameMax`. A longer
+    /// one is listed as "<prefix>-<6hex>" (canon_name, dch 1.50.1): sun_path's 104 less "<dir>/" and ".sock\0".
+    static func nameLimit(dir: String) -> Int { max(1, min(nameMax, 104 - dir.utf8.count - 7)) }
+
+    /// The folder's free name, compared case-folded (freeName). Cut to leave room for a "-N" under `nameLimit`
+    /// (sessionName is ASCII: characters are bytes).
+    static func autoName(folder: String, taken: Set<String>, dir: String) -> String {
+        AgentIsland.freeName(String(AgentIsland.sessionName(folder: folder).prefix(max(1, nameLimit(dir: dir) - 4))), taken: taken)
     }
 
-    /// nil: the name can be spawned. Empty (after trim) is the automatic name, so no error.
-    static func nameError(_ n: String, taken: Set<String>) -> String? {
+    /// nil: the name can be spawned into socket dir `dir`. Empty (after trim) is the automatic name, so no error.
+    static func nameError(_ n: String, taken: Set<String>, dir: String) -> String? {
         let t = n.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty { return nil }
         // dch sends "host:name" to a tailnet host; '/' and the rest break the socket name.
         guard t.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }) else {
-            return "Use letters, digits, . _ and - only"
+            return "Use ASCII letters, digits, . _ and - only"
         }
         if t.hasPrefix("-") || t.hasPrefix(".") { return "Can't start with - or ." }
-        if t.count > nameMax { return "\(nameMax) characters at most" }
+        let limit = nameLimit(dir: dir)
+        if t.utf8.count > limit { return "\(limit) characters at most" }
         if idShaped(t) { return "Looks like a dch session id" }   // dch 1.46 refuses it (refuse_id_name)
-        let folded = Set(taken.map { $0.lowercased() })
-        return folded.contains(t.lowercased()) ? "\(t) is taken" : nil
+        // The clash is case-folded: name the session as it is spelled.
+        return taken.filter { $0.lowercased() == t.lowercased() }.min().map { "\($0) is taken" }
     }
 
     /// dch's xr_id_shaped: "m" + 16 hex digits, any case.

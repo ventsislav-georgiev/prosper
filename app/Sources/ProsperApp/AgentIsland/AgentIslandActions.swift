@@ -264,7 +264,8 @@ extension AgentIsland {
     static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>,
                            noMessage: Bool = false, exact: Bool = false) -> [String]? {
         let tail = (noMessage ? ["--no-message"] : []) + ["--json"], arg = r.editTarget(exact: exact)
-        guard live.contains(r.name) else { return named("--revive", [arg], tail) }
+        // QA #713 INFO-2: dch folds case, as freeName does: a live "Proj" holds a record "proj"'s name.
+        guard live.contains(where: { $0.lowercased() == r.name.lowercased() }) else { return named("--revive", [arg], tail) }
         return named("--revive", [arg], ["--as", freeName(r.name, taken: live.union(records))] + tail)
     }
 

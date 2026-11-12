@@ -265,6 +265,9 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["a"], records: []), ["--revive", "a", "--as", "a-2", "--json"])
         XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["a", "a-2"], records: ["a-3"]), ["--revive", "a", "--as", "a-4", "--json"],
                        "a name another record holds is not free either")
+        // QA #713 INFO-2: dch folds case, so a live "Proj" holds a record "proj"'s name.
+        XCTAssertEqual(AgentIsland.reviveArgs(record("proj"), live: ["Proj"], records: []),
+                       ["--revive", "proj", "--as", "proj-2", "--json"])
     }
 
     // MARK: - #580: --json results
@@ -2222,12 +2225,37 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: "a:b"), "a name the form refuses is never passed")
         XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: "m0123456789abcdef"))
         XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: ""))
+        XCTAssertNil(c.spawn(in: "/src", command: ["claude"], name: " sh"), "QA #713 INFO-5: a name with a space, as typed")
         f.release.signal()
         settle(c) { !got.keys.isEmpty }
         XCTAssertEqual(got.keys, [AgentSessionKey(dir: "/d", name: "sh")])
         XCTAssertEqual(got.texts, [nil])
         XCTAssertEqual(f.args.count, 1, "nothing else launched")
         XCTAssertNil(c.store?.actions[AgentSessionKey(dir: "/d", name: "")])
+    }
+
+    /// QA #713 INFO-3 (R2-2): the island's own New session (no name) cuts the folder's name to dch's room in the spawn
+    /// dir: 54 bytes leave 43, so 39 with room for "-NNN".
+    @MainActor
+    func testAgentNewSessionIslandAutoNameFitsTheSpawnDirsRoom() throws {
+        let dir = "/Users/example-user/.config/prosper/dch-isolated-00001", folder = "/src/" + String(repeating: "b", count: 60)
+        let cut = String(repeating: "b", count: 39), f = FakeProc(), got = Spawned()
+        XCTAssertEqual(dir.utf8.count, 54)
+        let c = opened(f, [session("a", dir: dir)], dirs: [dir])
+        XCTAssertNotNil(c.spawn(in: folder, command: ["/bin/zsh", "-l"]) { got.keys.append($0); got.texts.append($1) })
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last?[1], cut)
+        f.release.signal()
+        settle(c) { got.keys.count == 1 }
+        c.store?.sessions = [session("a", dir: dir), session(cut, dir: dir)]
+        XCTAssertNotNil(c.spawn(in: folder, command: ["/bin/zsh", "-l"]) { got.keys.append($0); got.texts.append($1) })
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last?[1], cut + "-2", "taken: the next free name, at the room")
+        // autoName keeps 4 bytes for "-NNN": 39 + "-2" = 41, within the 43 dch keeps.
+        XCTAssertEqual(f.args.last?[1].utf8.count, 41)
+        XCTAssertEqual(AgentNewSession.nameLimit(dir: dir), 43)
+        f.release.signal()
+        settle(c) { got.keys.count == 2 }
     }
 
     /// #847: a failed spawn's line goes to done and to the dir-wide line, as the island's.
