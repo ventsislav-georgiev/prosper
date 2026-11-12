@@ -200,7 +200,7 @@ tag from the now-released section and put it on the new top draft.
   (plan, apply, status, remove, repair): marked blocks, hooks, permission rules, the status line and
   seeded files, each written only after you approve the exact diff in a native sheet, backed up
   first, and removed again on uninstall. See "Managed config (host.config)" in extensions.md (#870).
-- Ships dch 1.57.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.58.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -282,6 +282,15 @@ tag from the now-released section and put it on the new top draft.
   Prosper's own terminal still passes every key to the session. Each `dch --revive --json`
   result line ends with a "running" key. A `dch serve` you run by hand lets go of a device that
   vanished without closing its connection after about 30 s. Prosper does not read X-ray yet.
+- dch 1.57.0 to 1.58.0: a security fix in `dch --xray`. Since 1.57.0, a session whose project was
+  a credential directory kept as its own git repo outside your home (a Claude Code config dir, a
+  Codex home, `.kube`, `.docker`, `.password-store`) showed its files, also to a `dch serve` peer;
+  they are refused by name again, and more credential file names are on the list. In a `dch -a
+  host:name` attach in your own terminal, the detach key and then x opens the X-ray view of that
+  remote session; a host on dch serve 1.58.0 turns bracketed paste, mouse reporting and the
+  keyboard flags back on when you leave it, while the Prosper server only repaints. The X-ray view
+  hides chapters for prompts the harness wrote (task notifications), and one device holds at most
+  two `--xray --follow` of one session. Prosper still does not read X-ray.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults

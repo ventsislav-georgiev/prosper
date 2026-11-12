@@ -240,12 +240,12 @@ jobs:
         # No `shell:` on this step on purpose: `strings | grep -q` is safe only under
         # the default bash -e without pipefail (grep -q closes the pipe early).
         env:
-          DCH_TAG: v1.57.0
+          DCH_TAG: v1.58.0
           # sha256 of dch-<version>-darwin-arm64.tar.gz, pinned here (#875): the
           # release's own .sha256 asset is as replaceable as the tarball, so it only
           # proves an uncorrupted download. A DCH_TAG bump waits for dch's
           # release-assets workflow to attach the tarball, then updates both lines.
-          DCH_SHA256: 61e8fe48c5ea1ea6d6e054a7f408290e46ee82298c06f54eef786a63b819b86f
+          DCH_SHA256: 69d6d8695aafa417048af0ae94dedbde4ae36ef767c267b95210ad93695839c9
           # dch's release assets are built for minos 14.0 = LSMinimumSystemVersion.
           # Every dch from v2.156.0-beta.5 to v2.158.0 was minos 27.0 inside a 14.0
           # app and dyld refused it on macOS 14-26 (#447); the Bundle step's minos
