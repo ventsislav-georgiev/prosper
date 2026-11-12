@@ -551,11 +551,13 @@ for an agent, and a client shows it as it comes.
 
 **Limits.**
 - Every ctl but `--follow` and `--xray --follow`: at most **8 MiB** of stdout and stderr together, and a timeout:
-  **660 s** for `--say`, `--stop` and `--revive` (dch's own 600 s wait for an idle agent,
-  `DCH_AGENT_TIMEOUT_MS`, plus a margin), **60 s** for every other verb (dch #112's composer gate
-  on `--run` can take ~30 s plus 5 s of re-presses). On either, the server kills its child and
-  sends `0x33 {"exit": 2, "why": "cap"}` or `0x33 {"exit": 2, "why": "timeout"}`. Prosper's
-  kill: SIGTERM to the child's whole process group, then SIGKILL to the group after a 1 s grace.
+  **660 s** for `--say`, `--stop`, `--revive` and `--run` (dch's own 600 s wait for an idle agent,
+  `DCH_AGENT_TIMEOUT_MS`, plus a margin; typing into an agent with `--run` can take ~60 s: `dch serve`
+  1.45.0's `CTL_LONG`, rframe.c:470, Prosper #852), **60 s** for every other verb. On either, the
+  server kills its child and sends `0x33 {"exit": 2, "why": "cap"}` or `0x33 {"exit": 2, "why":
+  "timeout"}`. The kill is SIGTERM, then SIGKILL to the child's process group 2 s later
+  (`CTL_GRACE_MS`, serve.c:1264@v1.45.1; Prosper #852, 1 s before). Prosper's SIGTERM goes to the
+  whole group, serve's to dch.
   Prosper sends output up to exactly 8 MiB, then the 0x33; no 0x31 or 0x32 follows it.
 - Every 0x31 and 0x32 is within the 8 MiB send limit.
 - **`--follow`** and **`--xray --follow`** have neither limit. Each streams 0x31 until the session ends (dch exits: 0x33 with
@@ -585,7 +587,12 @@ drops what it does not serve: no frame, no close. The reverse holds too: a 0x30 
 watch connection is refused (above). Closing the connection ends a running ctl (above). A connection
 a ctl ran on is closed by the server once it has been idle for **300 s**: no frame from the
 client and no reply from the server for 300 s, and no ctl running. (1.1 before the amendment
-let a ctl share a connection with an attach.)
+let a ctl share a connection with an attach.) `dch serve` 1.45.0+ closes such a connection after
+**30 s** instead once its slots run short (serve.c:1990, :2331@v1.45.1): a peer holds 8 of its 16
+connections or 32 of the 64 are in use. That is sticky for the connections open then. A ctl a close
+cut holds its slot there until its dch is reaped (serve.c ctl_wait). Prosper has no connection slots, per peer
+or in total, so a warm connection holds nothing another one waits for: it idles 300 s whatever the
+count (#852).
 
 **The gate.** The same as attach: the peer address and owner check, decided before any byte is
 read (see [Transport and trust](#transport-and-trust)); a refused peer's 0x30 is never read. No
@@ -621,10 +628,12 @@ SIGTERM, and a SIGKILL partway through would leave the session half-typed or pau
 and `--revive` (see Limits).
 
 `dch serve` 1.45.1+ has the same rule: 660 s for these four verbs on a 0x34 or a close, 2 s
-(`CTL_GRACE_MS`) for every other verb. Two differences remain. On a cap or timeout, serve cuts the
-ctl with SIGTERM and SIGKILL 2 s later. Prosper kills the process group (SIGTERM, then SIGKILL
-after 1 s; see Limits). #852 tracks it. Also, serve gives `--run` the 660 s timeout as well
-(`CTL_LONG` in rframe.c), while Prosper gives it 60 s. #852 tracks it too.
+(`CTL_GRACE_MS`) for every other verb. A cap or timeout gets 2 s on both servers (see Limits).
+While the server stops, every cut gets 2 s whatever the verb, and a SIGKILL already pending after a
+0x34 comes no later than 2 s from the stop (serve.c:1251, :1480-1481@v1.45.1). Prosper does the
+same for the connections open when Remote Terminal is turned off (#852). A ctl whose connection
+closed before the stop keeps the grace it was cut with, as its timer runs on in the app. The
+client sees none of this: it has closed by then.
 
 ## Mac-only frames (Prosper)
 

@@ -287,6 +287,12 @@ final class DchConnection: @unchecked Sendable {
         onClose(ObjectIdentifier(self))
     }
 
+    /// #852: DchSessionServer.stop's close: a running ctl gets the short grace (DchCtlJob.serverStop).
+    func serverStop() {
+        ctlJob?.serverStop()
+        close()
+    }
+
     private func receive() {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [weak self] data, _, isComplete, error in
             guard let self else { return }

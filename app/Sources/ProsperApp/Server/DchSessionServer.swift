@@ -343,7 +343,7 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
         setBindStatus(nil)
         queue.async { [weak self] in
             guard let self else { return }
-            self.connections.values.forEach { $0.close() }
+            self.connections.values.forEach { $0.serverStop() }
             self.connections.removeAll()
             self.stopKeepAwake()
         }

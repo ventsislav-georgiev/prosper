@@ -263,6 +263,40 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertEqual(reached.all, [])
     }
 
+    /// #852: DchSessionServer.stop (Remote Terminal turned off) cuts a running ctl with dch serve's 2 s grace
+    /// (serve.c:1251, :1480-1481@v1.45.1), an agent verb's too, whose close or 0x34 gets 660 s.
+    func testAServerStopCutsARunningAgentCtlWithTheShortGrace() throws {
+        let dir = tempDir("golden-852-stop"), script = dir.appendingPathComponent("dch")
+        try "#!/bin/sh\necho $$ > '\(dir.path)/pid'\ntrap '' TERM\nprintf 'working\\n'\nwhile :; do /bin/sleep 0.05; done\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let s = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
+                                 allowPeer: { _ in true }, owner: Self.owner(),
+                                 configure: { c in
+                                     c.ctl.path = { script.path }
+                                     c.ctl.env = { ["PATH": "/usr/bin:/bin"] }
+                                 })
+        try s.start()
+        var pid: pid_t = 0
+        defer {
+            s.stop(); s.queue.sync {}
+            if pid > 1, Darwin.kill(pid, 0) == 0 { Darwin.kill(pid, SIGKILL) }
+        }
+        let c = try Client(port: try XCTUnwrap(s.boundPort))
+        try c.send(DchFrame.encode(DchFrame.ctl, json: ["argv": ["--say", "alpha", "--json", "--", "hi"]]))
+        XCTAssertEqual(try c.frame(timeout: 5).0, DchFrame.ctlStdout)
+        pid = try XCTUnwrap(pid_t((try String(contentsOf: dir.appendingPathComponent("pid"), encoding: .utf8))
+            .trimmingCharacters(in: .whitespacesAndNewlines)))
+        let at = Date()
+        s.stop()
+        s.queue.sync {}
+        let end = Date() + 5
+        while Darwin.kill(pid, 0) == 0, Date() < end { usleep(50_000) }
+        XCTAssertNotEqual(Darwin.kill(pid, 0), 0, "SIGKILLed after the stop")
+        XCTAssertLessThan(Date().timeIntervalSince(at), 4, "2 s, not 660 s")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(at), 1.9)
+    }
+
     /// #838: a server with create off (dch serve without --allow-create; on Prosper only through the
     /// createAllowed seam): no "create" in ops, so 22 and 23 run and pass in both runners, 18 and 24
     /// (they need create) skip, and no ctl gets as far as choosing a dch.

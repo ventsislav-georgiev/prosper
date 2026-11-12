@@ -468,7 +468,7 @@ final class DchCtlTests: XCTestCase {
         let f = try fake("echo $$ > \"$D/pid\"; /bin/sleep 30 & echo $! > \"$D/kid\"; echo started; wait")
         let timers = Timers()
         let r = rig(f.path, timeout: 0.5, timers: timers)
-        send(r, Self.ctl(["--run", "alpha", "hi"]))
+        send(r, Self.ctl(["--read", "alpha"]))   // #852: --run has the 660 s timeout now
         // #856: the timeout fires once both pids are written (a 0.5 s timer under load beat the script's start).
         let script = pid(f.dir, "pid"), kid = pid(f.dir, "kid")
         XCTAssertTrue(wait(5) { timers.count == 1 })
@@ -761,17 +761,19 @@ final class DchCtlTests: XCTestCase {
     }
 
     /// amendment 2: --say, --stop and --revive wait for an agent: 660 s; every other non-follow verb 60 s.
+    /// #852: --run too, as dch serve 1.45.0's CTL_LONG (rframe.c:470): typing into an agent can take ~60 s.
     func testTheTimeoutIsPerVerb() throws {
         let ops = DchCtlOps()
-        for v in ["--say", "--stop", "--revive"] { XCTAssertEqual(ops.timeout(of: v), 660, v) }
-        for v in ["--read", "--send", "--run", "--keys", "--status", "-k", "-m", "-d", "--spawn", "--history",
+        for v in ["--say", "--stop", "--revive", "--run"] { XCTAssertEqual(ops.timeout(of: v), 660, v) }
+        for v in ["--read", "--send", "--keys", "--status", "-k", "-m", "-d", "--spawn", "--history",
                   "--pin", "--unpin", "--forget"] { XCTAssertEqual(ops.timeout(of: v), 60, v) }
         // #856: each ctl's armed delay is read off the timer seam, and only --status's timer is fired.
         let f = try fake("[ \"$1\" = --status ] && exec /bin/sleep 30; printf ok")
         let timers = Timers()
         let r = rig(f.path, timeout: 0.3, agentTimeout: 20, timers: timers)
         for (argv, delay, want) in [(["--stop", "alpha", "--json"], 20, ["exit": 0]), (["--status", "alpha"], 0.3, ["exit": 2, "why": "timeout"]),
-                                    (["--revive", "alpha", "--json"], 20, ["exit": 0]), (["--say", "alpha", "--json", "--", "hi"], 20, ["exit": 0])]
+                                    (["--revive", "alpha", "--json"], 20, ["exit": 0]), (["--say", "alpha", "--json", "--", "hi"], 20, ["exit": 0]),
+                                    (["--run", "alpha", "ls"], 20, ["exit": 0])]
                 as [([String], TimeInterval, [String: Any])] {
             let n = finals(r).count, i = timers.count
             send(r, Self.ctl(argv))
@@ -870,6 +872,57 @@ final class DchCtlTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9)
         XCTAssertTrue(wait(5) { finals(r).count == 1 })
         XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "cancel"] as NSDictionary)
+    }
+
+    /// #852: a timeout's cut (a cap's too), as dch serve's ctl_cut (serve.c:1263-1264@v1.45.1): SIGTERM, then
+    /// SIGKILL to the group CTL_GRACE_MS (2 s) later, not 1 s. Its 0x33 still goes out at once (#856).
+    func testATimeoutCutGetsServesTwoSecondGrace() throws {
+        let f = try fake("""
+            echo $$ > "$D/pid"; trap 'echo term >> "$D/sig"' TERM
+            printf 'working\\n'; while :; do /bin/sleep 0.05; done
+            """)
+        let timers = Timers()
+        let r = rig(f.path, timers: timers)
+        send(r, Self.ctl(["--read", "alpha"]))
+        let script = try XCTUnwrap(pid(f.dir, "pid"))
+        XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty && timers.count == 1 })
+        let start = Date()
+        timers.fire(0)
+        XCTAssertTrue(wait(1.5) { finals(r).count == 1 })
+        XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary)
+        XCTAssertTrue(wait(1.5) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil }, "the SIGTERM")
+        usleep(useconds_t(max(0, 1.5 - Date().timeIntervalSince(start)) * 1_000_000))
+        XCTAssertEqual(Darwin.kill(script, 0), 0, "alive at 1.5 s: the grace is 2 s")
+        XCTAssertTrue(dead(script), "SIGKILLed")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9)
+    }
+
+    /// #852: a server stop (DchSessionServer.stop, through DchConnection.serverStop) cuts with dch serve's
+    /// 2 s grace whatever the verb (serve.c:1251, :1480-1481@v1.45.1): an agent verb's 660 s goes, and so
+    /// does the long grace of one a 0x34 cut before the stop.
+    func testAServerStopCutsWithTheTwoSecondGrace() throws {
+        for cancelFirst in [false, true] {
+            let f = try fake("""
+                echo $$ > "$D/pid"; /bin/sleep 30 & echo $! > "$D/kid"
+                trap 'echo term >> "$D/sig"' TERM
+                printf 'working\\n'; while :; do /bin/sleep 0.05; done
+                """)
+            let r = rig(f.path)
+            send(r, Self.ctl(["--say", "alpha", "--json", "--", "hi"]))
+            let dch = try XCTUnwrap(pid(f.dir, "pid")), kid = try XCTUnwrap(pid(f.dir, "kid"))
+            XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
+            if cancelFirst {
+                send(r, DchFrame.encode(DchFrame.ctlCancel, []))
+                XCTAssertTrue(wait(1.5) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
+            }
+            let at = Date()
+            r.queue.sync { r.conn.serverStop() }
+            XCTAssertEqual(r.closes.count, 1, "closed")
+            XCTAssertTrue(dead(dch), "SIGKILLed (cancelFirst \(cancelFirst))")
+            XCTAssertTrue(dead(kid), "its group too (cancelFirst \(cancelFirst))")
+            XCTAssertLessThan(Date().timeIntervalSince(at), 4, "2 s, not 660 s")
+            XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(at), 1.9, "not before the grace")
+        }
     }
 
     /// #841: a 0x34 that lands before the spawn (the --xray probe still running) runs nothing and ends the

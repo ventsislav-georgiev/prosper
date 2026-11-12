@@ -12,9 +12,10 @@ struct DchCtlOps: Sendable {
     }
     /// Remote Terminal's one dir, as list, kill and rename.
     var env: @Sendable () -> [String: String] = { DchCommand.remoteEnv() }
-    /// Non-follow verbs only: dch #112's composer gate on --run can take ~30 s plus 5 s re-presses.
+    /// Non-follow verbs but DchCtl.longVerbs: dch serve's CTL_MS.
     var timeout: TimeInterval = 60
-    /// --say, --stop, --revive wait for an agent: dch's own 600 s idle wait (DCH_AGENT_TIMEOUT_MS) plus margin.
+    /// DchCtl.longVerbs wait for an agent: dch's own 600 s idle wait (DCH_AGENT_TIMEOUT_MS) plus margin,
+    /// dch serve's CTL_LONG_MS. #852: --run too (rframe.c:470@v1.45.1): typing into an agent can take ~60 s.
     var agentTimeout: TimeInterval = 660
     /// #856: arms the timeout's timer; tests record it and fire it by hand.
     var after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after
@@ -22,12 +23,12 @@ struct DchCtlOps: Sendable {
     var cap = 8 << 20
 
     /// The timeout `verb` runs under (not --follow: it has none).
-    func timeout(of verb: String) -> TimeInterval { DchCtl.agentVerbs.contains(verb) ? agentTimeout : timeout }
+    func timeout(of verb: String) -> TimeInterval { DchCtl.longVerbs.contains(verb) ? agentTimeout : timeout }
 
     /// #841 r4: the SIGKILL backstop after a 0x34's or a close's SIGTERM (tests set it small).
     var agentGrace: TimeInterval = DchCtl.agentGrace
-    /// The grace `verb` gets: `agentGrace` for DchCtl.longGraceVerbs, else DchCtl.cancelGrace.
-    func grace(of verb: String) -> TimeInterval { DchCtl.longGraceVerbs.contains(verb) ? agentGrace : DchCtl.cancelGrace }
+    /// The grace `verb` gets: `agentGrace` for DchCtl.longVerbs, else DchCtl.cancelGrace.
+    func grace(of verb: String) -> TimeInterval { DchCtl.longVerbs.contains(verb) ? agentGrace : DchCtl.cancelGrace }
 
     /// "xray" in ops, and --xray allowed: the dch ctl runs answers `--version` with at least
     /// DchCtl.xrayMinDch. The probe is DchCommand's (cached per path and mtime, bounded at 4 s), so
@@ -49,12 +50,14 @@ enum DchCtl {
     /// #841: a 0x30 while this connection's ctl runs; the connection stays open. serve.c's BUSY_JSON byte for byte.
     static let busy = DchFrame.encode(DchFrame.error, Array(#"{"code":"busy","message":"a ctl is already running on this connection"}"#.utf8))
     /// #841: serve's CTL_GRACE_MS: a 0x34's or a close's SIGTERM, then SIGKILL to the group this long after.
+    /// #852: a cap's and a timeout's too, and every cut's on a server stop (serve.c:1251-1264@v1.45.1).
     static let cancelGrace: TimeInterval = 2
     /// #841 r4 (dch's ruling, 2026-11-10): an agent verb's grace instead. On SIGTERM dch 1.46.0+ --say/--run/--revive
     /// stop at a safe point (Ctrl-U take-back, up to 30 s DCH_AGENT_LAND_MS for a paste to paint) and --stop
     /// types its resume message; a SIGKILL at 2 s cuts that short. dch serve's CTL_LONG_MS.
     static let agentGrace: TimeInterval = 660
-    static let longGraceVerbs: Set<String> = ["--say", "--stop", "--revive", "--run"]
+    /// dch serve's CTL_LONG verbs (rframe.c:470-485@v1.45.1): the 660 s timeout and grace.
+    static let longVerbs: Set<String> = ["--say", "--stop", "--revive", "--run"]
     /// dch's CTL_ARGV_MAX.
     static let argvMax = 1024
 
@@ -90,9 +93,6 @@ enum DchCtl {
 
     /// The verbs that start a process: the create gate (0x02's) decides them.
     static let creating: Set<String> = ["--spawn", "--revive"]
-
-    /// The verbs that wait for an agent and stream NDJSON progress meanwhile: the long timeout.
-    static let agentVerbs: Set<String> = ["--say", "--stop", "--revive"]
 
     /// --follow, and --xray --follow: no cap, no timeout. Read from --xray's parse, so a --ref
     /// whose text is "--follow" is not one.
@@ -295,7 +295,7 @@ enum DchCtl {
 /// but sends no frame: SIGTERM (the four agent verbs clean up on it, see DchCtl.agentGrace), SIGKILL
 /// to the group the verb's grace later if dch is still unreaped (DchCtlOps.grace: 660 s for the agent
 /// verbs, 2 s for the rest, as dch serve 1.45.1+). The cap and timeout kill is ShellRunner's: SIGTERM to the child's whole process
-/// group (Foundation makes it the leader), SIGKILL to the group after 1 s.
+/// group (Foundation makes it the leader), SIGKILL to the group DchCtl.cancelGrace (2 s) later (#852).
 final class DchCtlJob: @unchecked Sendable {
     enum Stop { case none, term, killGroup }
 
@@ -324,12 +324,19 @@ final class DchCtlJob: @unchecked Sendable {
         switch stop {
         case .none: break
         case .term: term(pid)
-        case .killGroup: CodexHarness.killGroup(pid, grace: 1)
+        case .killGroup: CodexHarness.killGroup(pid, grace: DchCtl.cancelGrace)   // #852: serve's cap/timeout cut, CTL_GRACE_MS
         }
         return true
     }
 
     func cancel() { _ = end(.term) }
+
+    /// #852: a server stop, as dch serve's (serve.c:1251 and :1480-1481@v1.45.1): the cut's SIGKILL comes
+    /// DchCtl.cancelGrace after its SIGTERM whatever the verb, a 0x34-cut one's too (it is cut again here).
+    func serverStop() {
+        lock.withLock { grace = DchCtl.cancelGrace }
+        cancel()
+    }
 
     /// The one SIGTERM path, a 0x34's and a close's: SIGTERM to dch, then SIGKILL to its group `grace`
     /// later while it is still unreaped. A reaped dch left pid 0, so nothing is signalled however late.

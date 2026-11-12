@@ -160,6 +160,9 @@ tag from the now-released section and put it on the new top draft.
 - iPhone Resume and Resume interrupted (phone and island): a session dch revived whose resume
   message was not sent now counts as resumed, under the name it runs as now, and the line still
   says the message was not sent (#861).
+- Remote Terminal ctl: `--run` gets the 660 s timeout dch serve gives it, a timeout or output cap
+  ends dch 2 s after asking it to stop (was 1 s), and turning Remote Terminal off ends a running
+  ctl within 2 s, an agent verb's too (#852).
 - Ships dch 1.54.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
