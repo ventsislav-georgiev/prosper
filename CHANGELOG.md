@@ -287,10 +287,14 @@ tag from the now-released section and put it on the new top draft.
   Codex home, `.kube`, `.docker`, `.password-store`) showed its files, also to a `dch serve` peer;
   they are refused by name again, and more credential file names are on the list. In a `dch -a
   host:name` attach in your own terminal, the detach key and then x opens the X-ray view of that
-  remote session; a host on dch serve 1.58.0 turns bracketed paste, mouse reporting and the
-  keyboard flags back on when you leave it, while the Prosper server only repaints. The X-ray view
+  remote session; a host on dch serve 1.58.0 turns bracketed paste, mouse reporting, the keyboard
+  flags and the alternate screen back on when you leave it. When the host is the Prosper server,
+  those modes stay off until you attach again, so a multi-line paste into Claude Code after
+  leaving the view is no longer one paste. The X-ray view
   hides chapters for prompts the harness wrote (task notifications), and one device holds at most
-  two `--xray --follow` of one session. Prosper still does not read X-ray.
+  two `--xray --follow` of one session. Also fixed in dch: the remote X-ray view hanging on q or
+  Esc, a crash in a very small window, `dch -d` with the view open, and a slow reader cut off
+  after 65 s. Prosper still does not read X-ray.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
