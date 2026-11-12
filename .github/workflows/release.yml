@@ -262,6 +262,8 @@ jobs:
           # The check-version equivalent: the tarball's top dir carries the version.
           tar -xzf "$D/$T.tar.gz" -C "$D"
           test -x "$D/$T/dch" || { echo "::error::$T.tar.gz has no $T/dch"; exit 1; }
+          # Matches dch's usage line ("dch X.Y.Z ..."). If dch rewords it this step fails:
+          # update the pattern to the new text, never drop the check.
           strings "$D/$T/dch" | grep -qE "^dch ${V//./\\.}( |$)" \
             || { echo "::error::$T/dch carries no 'dch $V' version string"; exit 1; }
           lipo -info "$D/$T/dch" | grep -q 'architecture: arm64$' \

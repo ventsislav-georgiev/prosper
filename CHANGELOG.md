@@ -122,8 +122,8 @@ tag from the now-released section and put it on the new top draft.
   selection bar and section labels, and follows the Appearance opacity, frost, accent, light/dark
   and UI size live, like Settings. The terminal keeps its own opaque background for legibility
   (#860).
-- Settings › Shortcuts: below UI scale 1.0, the first row's key field is no longer cut off at the
-  top of the Bound and All Actions lists; key fields fit their row at every scale, in Shortcuts
+- Settings: below UI scale 1.0, the first row's key field is no longer cut off at the top of the
+  Bound and All Actions lists in Shortcuts; key fields fit their row at every scale, in Shortcuts
   and in Key Remapping, and keep their label centred (#859, #868).
 - Settings › Shortcuts and Key Remapping: a long shortcut now fits its key field instead of being
   cut off at both ends. Page Up / Page Down show as ⇞ ⇟ in key fields and in the "shortcut
@@ -322,7 +322,7 @@ tag from the now-released section and put it on the new top draft.
   reason, while session controls are unavailable, and a start that fails says why (#847).
 - Remote Terminal: the Mac's session server now refuses a session name holding a bidi mark (U+200E, U+200F,
   U+061C), a line or paragraph separator (U+2028, U+2029) or a NUL, as dch serve 1.55.0+ does: attach, create,
-  rename and kill run no dch for it, and the rename says "invalid session name". A create whose request is not a
+  rename and kill are refused for it, and the rename says "invalid session name". A create whose request is not a
   JSON object is refused instead of starting a session with no name, and a kill of a name whose first byte is "-"
   is refused even when a combining mark follows it (#879).
 - Agent Island: Resume all no longer reports an old History record whose name starts with "-" as a new failure
@@ -338,7 +338,8 @@ tag from the now-released section and put it on the new top draft.
   reaches dch. A create whose command is not a list of strings (or has more than
   256 words) starts nothing, a rename whose alias is not readable no longer clears the alias, and a
   window size from the phone above 65535 or below zero no longer crashes Prosper: a size above 1000
-  is capped at 1000, and zero or less reads as 80 by 24 (#885).
+  is capped at 1000, and a width or height of zero or less reads as its default, 80 wide or 24
+  high (#885).
 - Remote Terminal: the phone terminal no longer waits a network round trip between the pieces of a
   screen update. The Mac session server now sends every small update at once (TCP no-delay)
   (#888).
