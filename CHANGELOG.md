@@ -268,8 +268,9 @@ tag from the now-released section and put it on the new top draft.
   host's row apart from a local row of the same name.
 - dch 1.55.0 to 1.57.0: `dch --xray <n>` with no `--json` opens X-ray as a view in your terminal,
   for a session on another host too (`dch --xray host:name`), and dch's picker opens it with X. In a
-  `dch` attach in your own terminal, the detach key followed by x opens the view instead of
-  detaching; Prosper's own terminal still passes every key to the session. Each `dch --revive --json`
+  `dch` attach in your own terminal, the detach key and then x within the double-press window (300 ms
+  by default) opens the view instead of detaching; with a later x the attach still detaches.
+  Prosper's own terminal still passes every key to the session. Each `dch --revive --json`
   result line ends with a "running" key. A `dch serve` you run by hand lets go of a device that
   vanished without closing its connection after about 30 s. Prosper does not read X-ray yet.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
