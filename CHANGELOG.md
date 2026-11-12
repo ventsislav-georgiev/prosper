@@ -239,11 +239,14 @@ tag from the now-released section and put it on the new top draft.
 - dch 1.54.0 to 1.55.0: `dch --xray --ref` reads the other sessions of the same project
   (`--scope project`, the default; `--scope all` for every project, `--scope session` for the old
   answer), `dch --xray <n> --chapter <anchor> --json` prints one chapter's entries, and
-  `dch --xray host:name … --json` runs on another host's `dch serve`. A `dch serve` host refuses a
-  session name holding a left-to-right or right-to-left mark, an Arabic letter mark or a line or
-  paragraph separator, and dch's JSON output escapes those characters. dch's picker keeps the
-  selection of another host's row apart from a local row of the same name. Prosper does not read
-  X-ray yet, and its own Remote Terminal does not offer X-ray to other devices.
+  `dch --xray host:name … --json` runs on another host's `dch serve`. A `dch serve` you run by hand
+  now offers X-ray to the devices it admits: such a device can read file windows from a session's
+  project, `git show --stat` and the transcripts of other sessions. Prosper's own Remote Terminal
+  does not offer X-ray, and Prosper does not read it yet. A `dch serve` host refuses a session name
+  holding a left-to-right or right-to-left mark, an Arabic letter mark or a line or paragraph
+  separator, and dch's JSON lines (the session list, History, the verbs' results) now also escape
+  the Arabic letter mark and the two separators. dch's picker keeps the selection of another
+  host's row apart from a local row of the same name.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
