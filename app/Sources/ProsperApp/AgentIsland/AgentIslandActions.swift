@@ -271,7 +271,9 @@ extension AgentIsland {
 
     /// #627: dch takes a session name that starts with '-' and its argv has no
     /// "--", so a record named "--all" makes `--forget <name>` `--forget --all`.
-    static func passable(_ name: String) -> Bool { !name.hasPrefix("-") }
+    /// #878 (QA #727 INFO-4): the first byte, as dch's name[0] == '-': hasPrefix compares whole
+    /// Characters, and "-" with a combining mark after it is not "-".
+    static func passable(_ name: String) -> Bool { name.utf8.first != 0x2d }
 
     /// Every verb that names sessions builds its argv here: `verb names… rest`,
     /// nil (nothing runs) when any name is not `passable`.
@@ -469,6 +471,8 @@ extension AgentIsland {
             let a = o.revivedAs.flatMap { $0.isEmpty || $0 == o.name ? nil : $0 }
             return (a.map { "Resumed as \($0)" } ?? "Resumed") + (o.reason == "withdrawn"
                 ? "; the resume message wasn't sent" : "; the resume message may still be in Claude's input, not sent")
+        case "not_started" where dashRefused(o, verb):
+            return dashRefusedText
         case "claude_unreadable":
             return "Not stopped: its Claude session record can't be read; left running"
         case "signal" where o.result == "interrupted":
@@ -545,8 +549,10 @@ extension AgentIsland {
         let other = r.status != 0 && c.failed + k == 0 ? failedText(r) : nil
         let unsent = r.json.filter { resumedUnsent($0, verb) }, w = unsent.filter { $0.reason == "withdrawn" }.count
         let messages = { (n: Int) in "\(n) resume message\(n == 1 ? "" : "s")" }
-        let parts = [(c.ok + unsent.count, verb.done.lowercased()), (k, "killed"), (c.failed - unsent.count, "failed"),
+        let dashed = r.json.filter { dashRefused($0, verb) }.count
+        let parts = [(c.ok + unsent.count, verb.done.lowercased()), (k, "killed"), (c.failed - unsent.count - dashed, "failed"),
                      (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+            + (dashed > 0 ? ["\(dashed) session\(dashed == 1 ? " has a name" : "s have names") dch can no longer start"] : [])
             + (w > 0 ? ["\(messages(w)) not sent"] : [])
             + (unsent.count > w ? ["\(messages(unsent.count - w)) may still be in Claude's input, not sent"] : [])
         if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
@@ -567,6 +573,17 @@ extension AgentIsland {
         (verb == .resume || verb == .resumeNoMessage) && o.isFinal && o.result == "failed"
             && (o.reason == "withdrawn" || o.reason == "draft_left")
     }
+
+    /// #878 (QA #722 INFO-3): dch 1.54+ starts no session whose name begins with '-' (refuse_id_name,
+    /// dch.c:2053-2058 at v1.58.0, from do_spawn_verb :5460), so `--revive --all` fails an older record
+    /// of such a name on every run: not_started (revive_spawn, :10242-10246). Nothing the user can act
+    /// on (the row's Resume is off): a reason, not a failure.
+    static func dashRefused(_ o: DchJSONLine, _ verb: Verb) -> Bool {
+        (verb == .resume || verb == .resumeNoMessage) && o.isFinal && o.result == "failed"
+            && o.reason == "not_started" && !passable(o.name)
+    }
+
+    static let dashRefusedText = "Not resumed: dch no longer starts a name that begins with '-'"
 
     /// #620: `tally`'s numbers, the session results by kind (dch's own --json tally line counts the same).
     static func counts(_ r: DchActionResult) -> (ok: Int, failed: Int, skipped: Int) {

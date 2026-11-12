@@ -651,6 +651,21 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(tick(c, .blocked), .blocked)
     }
 
+    /// #878 (carry from the #877 review): a held session goes out working with its fields kept, `cwd` too
+    /// (Remote Terminal's list reads it).
+    @MainActor func testAHeldSessionIsPublishedWithItsCwd() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        var s = session(.blocked)
+        s.alias = "A"
+        s.cwd = "/src/app"
+        let out = c.published([s]).first
+        XCTAssertEqual(out?.state, .working, "held: the copy, not the session as is")
+        XCTAssertEqual(out?.cwd, "/src/app")
+        XCTAssertEqual(out?.alias, "A")
+    }
+
     /// Teardown drops every hold.
     @MainActor func testTeardownDropsTheHold() {
         let f = FakeIO(Self.bash3), (c, _) = controller(f)

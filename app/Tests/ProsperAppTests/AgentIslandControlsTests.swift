@@ -2728,6 +2728,71 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.actions[all], "nothing to resume")
     }
 
+    /// #878 (QA #722 INFO-3): dch 1.54+ fails an old "-" named record on every Resume all
+    /// (not_started, v1.58.0 dch.c:10242-10246 after refuse_id_name :2055-2058). Its row and the
+    /// dir line say why, once, in words; a real failure of another record in the run stays a failure.
+    @MainActor
+    func testResumeAllSaysADashNameIsNotStartableNotFailed() throws {
+        let f = FakeProc(), reads = Reads()
+        let dash = record("-x"), y = record("y"), z = record("z")
+        reads.records = [dash, y, z]
+        let c = controller(f, reads)
+        c.store?.sessions = [session("w", version: "1.24.1")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 3 }
+        let store = try XCTUnwrap(c.store)
+        f.status = 1
+        f.output = #"""
+            {"name":"-x","phase":"starting"}
+            dch: a session name cannot start with '-'
+            {"name":"-x","as":"-x","result":"failed","reason":"not_started","detail":"NOT revived — the session did not start","session_id":""}
+            {"name":"y","phase":"starting"}
+            {"name":"y","as":"y","result":"ok","reason":"","detail":"revived as y in /src","session_id":""}
+            {"name":"z","phase":"starting"}
+            {"name":"z","as":"z","result":"failed","reason":"cwd_gone","detail":"NOT revived — its directory /src is gone (No such file or directory)","session_id":""}
+
+            """#
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--revive", "--all", "--json"]])
+        f.release.signal()
+        let all = AgentSessionKey(dir: "/d", name: "")
+        settle(c) { store.actions[all] != AgentIsland.resumingText }
+        XCTAssertEqual(store.actions[all], "1 resumed, 1 failed, 1 session has a name dch can no longer start")
+        XCTAssertEqual(store.historyActions[dash.key], AgentIsland.dashRefusedText)
+        XCTAssertEqual(store.historyActions[y.key], "Resumed")
+        XCTAssertEqual(store.historyActions[z.key], "NOT revived — its directory /src is gone (No such file or directory)")
+    }
+
+    /// #878: the tally's numbers for a dash-named not_started; only a resume reads it, and only by
+    /// the name's first byte and reason not_started.
+    func testTallyCountsADashRefusalApart() {
+        func line(_ n: String, _ reason: String = "not_started") -> String {
+            #"{"name":"\#(n)","as":"\#(n)","result":"failed","reason":"\#(reason)","detail":"d","session_id":""}"#
+        }
+        func resume(_ out: String, _ verb: AgentIsland.Verb = .resume) -> String {
+            AgentIsland.tally(result(out + "\ndch: a session name cannot start with '-'", status: 1), verb,
+                              title: verb.rawValue, empty: "nothing to resume")
+        }
+        XCTAssertEqual(resume(line("-x")), "1 session has a name dch can no longer start", "never 'failed: dch: …'")
+        XCTAssertEqual(resume(line("-x") + "\n" + line("--all")), "2 sessions have names dch can no longer start")
+        XCTAssertEqual(resume(line("-x"), .resumeNoMessage), "1 session has a name dch can no longer start")
+        XCTAssertEqual(resume(line("-\u{301}x")), "1 session has a name dch can no longer start", "first byte")
+        XCTAssertEqual(resume(line("x")), "1 failed", "a passable name's not_started is a failure")
+        XCTAssertEqual(resume(line("-x", "cwd_gone")), "1 failed", "another reason is a failure")
+        XCTAssertEqual(AgentIsland.tally(result(line("-x"), status: 1), .stop, title: "Stop all", empty: ""), "1 failed")
+        XCTAssertEqual(resume(line("-x") + "\n" + line("y", "cwd_gone") + "\n" + Fixture.reviveOne),
+                       "1 resumed, 1 failed, 1 session has a name dch can no longer start")
+    }
+
+    /// #878 (QA #727 INFO-4): a name dch reads as a flag, by its first byte (dch: name[0] == '-').
+    func testPassableTestsTheFirstByte() {
+        for (name, ok) in [("-x", false), ("-\u{301}x", false), ("--all", false), ("x-", true), ("", true)] {
+            XCTAssertEqual(AgentIsland.passable(name), ok, name.debugDescription)
+        }
+        XCTAssertNil(AgentIsland.forgetArgs(["-\u{301}x"]), "nothing runs on a combining-mark dash name")
+    }
+
     /// Visual evidence: the inline Stop all question, and rows with a Stop
     /// running, failed and a Stop all tally. Offscreen only.
     @MainActor

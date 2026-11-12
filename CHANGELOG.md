@@ -322,8 +322,13 @@ tag from the now-released section and put it on the new top draft.
   taken, and a second shell started before the first is listed gets the next free name. Both buttons dim, with the
   reason, while session controls are unavailable, and a start that fails says why (#847).
 - Remote Terminal: the Mac's session server now refuses a session name holding a bidi mark (U+200E, U+200F,
-  U+061C) or a line or paragraph separator (U+2028, U+2029), as dch serve 1.55.0+ does, and refuses an attach or
-  create whose request is not a JSON object instead of starting a session (#879).
+  U+061C), a line or paragraph separator (U+2028, U+2029) or a NUL, as dch serve 1.55.0+ does: attach, create,
+  rename and kill run no dch for it, and the rename says "invalid session name". A create whose request is not a
+  JSON object is refused instead of starting a session with no name, and a kill of a name whose first byte is "-"
+  is refused even when a combining mark follows it (#879).
+- Agent Island: Resume all no longer reports an old History record whose name starts with "-" as a new failure
+  every run; its row and the summary now say dch can no longer start that name ("1 session has a name dch can no
+  longer start") (#878).
 
 ## v2.174.0
 
