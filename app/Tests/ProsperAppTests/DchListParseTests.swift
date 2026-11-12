@@ -270,4 +270,48 @@ final class DchListParseTests: XCTestCase {
         """)
         XCTAssertEqual(wire(r), #"{"meta":{"prs":{"open":[{"num":9,"repo":"evil\/x","title":"t","url":"https:\/\/github.com\/evil\/x\/pull\/9"}]}}}"#)
     }
+
+    // MARK: - cwd (#877, dch 1.52+ --ls-json, dch serve's listResp)
+
+    private func rows(_ cwd: String) -> [[String: Any]] {
+        let row = DchListRow(name: "a", alias: "", activityEpoch: 1, state: "", agents: 0, cwd: cwd)
+        return (try? JSONSerialization.jsonObject(with: DchFrame.listPayload([row]))) as? [[String: Any]] ?? []
+    }
+
+    /// --ls-json's "cwd": a string, null with no live record, missing from an older dch.
+    func testParsesCwd() {
+        let json = #"[{"name":"a","cwd":"/Users/me/src"},{"name":"b","cwd":null},{"name":"c"}]"#
+        XCTAssertEqual(DchCommand.parseListJSON(Data(json.utf8)).map(\.cwd), ["/Users/me/src", "", ""])
+    }
+
+    /// serve.c:374-378@v1.54.0: the key in sorted place, with the other strings' escaping; absent when unknown.
+    func testCwdIsOnTheWireWhenKnownAndAbsentOtherwise() {
+        let row = DchListRow(name: "a", alias: "A", activityEpoch: 1, state: "idle", agents: 2, cwd: "rel")
+        XCTAssertEqual(String(decoding: DchFrame.listPayload([row]), as: UTF8.self),
+                       #"[{"agents":2,"alias":"A","cwd":"rel","name":"a","state":"idle"}]"#)
+        XCTAssertEqual(rows("/Users/me/src").first?["cwd"] as? String, "/Users/me/src")
+        XCTAssertEqual(rows("/w \"q\"\n").first?["cwd"] as? String, "/w \"q\"\n", "escaped as JSON, read back the same")
+        XCTAssertEqual(String(decoding: DchFrame.listPayload([DchListRow(name: "a", alias: "", activityEpoch: 1, state: "", agents: 0)]),
+                              as: UTF8.self), #"[{"name":"a"}]"#, "unknown: no key, never null or \"\"")
+    }
+
+    /// dch serve's cwd[512]: 511 bytes go out, 512 do not. Bytes, not Characters: "/" + 255 "é" is 511 bytes.
+    func testCwdBoundIsBytesNotCharacters() {
+        let at511 = "/" + String(repeating: "x", count: 510), at512 = "/" + String(repeating: "x", count: 511)
+        XCTAssertEqual(rows(at511).first?["cwd"] as? String, at511)
+        XCTAssertNil(rows(at512).first?["cwd"])
+        let wide511 = "/" + String(repeating: "\u{e9}", count: 255), wide513 = wide511 + "\u{e9}"
+        XCTAssertEqual(wide511.utf8.count, 511)
+        XCTAssertEqual(rows(wide511).first?["cwd"] as? String, wide511)
+        XCTAssertEqual(wide513.count, 257, "257 Characters, 513 bytes")
+        XCTAssertNil(rows(wide513).first?["cwd"])
+        XCTAssertNil(rows(wide511 + "x").first?["cwd"], "512 bytes")
+    }
+
+    /// dch serve checks nothing else: a relative or trailing-slash value goes out as dch gave it.
+    func testCwdIsPassedOnAsDchGaveIt() {
+        for cwd in ["rel/dir", "/tmp/x/", "/", "~/src"] {
+            XCTAssertEqual(rows(cwd).first?["cwd"] as? String, cwd)
+        }
+    }
 }

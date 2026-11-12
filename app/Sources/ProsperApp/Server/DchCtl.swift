@@ -61,8 +61,9 @@ enum DchCtl {
     /// dch's CTL_ARGV_MAX.
     static let argvMax = 1024
 
-    /// PLACEHOLDER: the first dch release with --xray is not out yet, so this is set out of reach and
-    /// "xray" stays off. Set it to that release's version once Prosper bundles it.
+    /// Out of reach on purpose: dch has shipped --xray since 1.44.0, with the --ref/--scope/--budget-ms forms
+    /// `.xray` allows since 1.50.0, but "xray" stays off until Prosper's X-ray client ships. Then set this to
+    /// the first release that client needs (QA #720).
     static let xrayMinDch = [999, 0, 0]
     static func hasXray(_ version: [Int]?) -> Bool { version.map { DchCommand.isAtLeast($0, xrayMinDch) } ?? false }
 
@@ -101,23 +102,25 @@ enum DchCtl {
     }
 
     /// dch's flag test (dch.c main): "-" alone is a word, not a flag.
-    static func isFlag(_ w: String) -> Bool { w.hasPrefix("-") && w.utf8.count > 1 }
+    static func isFlag(_ w: String) -> Bool { w.utf8.first == 0x2d && w.utf8.count > 1 }   // #877: the byte, as dch
 
     /// dch serve's ctl_name: name_ok (non-empty, at most 255 bytes, no leading "-", no "/", no
     /// control: C0, DEL, C1, bidi overrides), not "serve", then no ':' (dch dea6fd4: the child dch
     /// reads a:b as host:name and dials on with this Mac's identity). The leading "-" has 0x04's message.
     static func nameRefusal(_ n: String) -> String? {
-        if n.hasPrefix("-") { return DchControlOps.dashNameRefusal }
+        if n.utf8.first == 0x2d { return DchControlOps.dashNameRefusal }   // QA #727 INFO-4: the byte, not a Character
         if !nameOK(n) || n == "serve" { return invalidName }
         return n.contains(":") ? localOnly : nil
     }
 
     static let invalidName = "invalid session name"
+    /// dch's NAME_CAP (rframe.h:29@v1.54.0): name_ok's byte bound.
+    static let nameCap = 255
 
     /// dch's name_ok (rframe.c:433@v1.46.1): non-empty, at most 255 bytes, no leading "-", no "/",
     /// no control (cp_ctl, rframe.c:73: C0, DEL, C1, bidi overrides).
     static func nameOK(_ n: String) -> Bool {
-        !n.isEmpty && n.utf8.count <= 255 && !n.hasPrefix("-") && !n.unicodeScalars.contains { c in
+        !n.isEmpty && n.utf8.count <= nameCap && n.utf8.first != 0x2d && !n.unicodeScalars.contains { c in
             let v = c.value
             return v == 0x2f || v < 0x20 || (0x7f..<0xa0).contains(v) || (0x202a...0x202e).contains(v) || (0x2066...0x2069).contains(v)
         }

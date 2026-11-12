@@ -83,6 +83,8 @@ struct AgentSession: Equatable, Identifiable {
     /// session ↔ transcript mapping (design rule 6); nil from older dch or no confident match.
     var claudeSessionID: String? = nil
     var transcriptPath: String? = nil
+    /// #877: dch 1.52's `cwd`, carried for Remote Terminal's list (DchWatchHub.cache); "" when unknown.
+    var cwd: String = ""
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -521,7 +523,8 @@ enum AgentIsland {
                              activity: TimeInterval($0.activityEpoch), state: AgentState(dch: $0.state),
                              agents: $0.agents, meta: $0.meta, version: $0.version, metaEpoch: $0.metaEpoch,
                              autoAllowed: $0.autoAllowed,
-                             claudeSessionID: mapping[$0.name]?.sessionID, transcriptPath: mapping[$0.name]?.path)
+                             claudeSessionID: mapping[$0.name]?.sessionID, transcriptPath: mapping[$0.name]?.path,
+                             cwd: $0.cwd)
             }
         }
     }

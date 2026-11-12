@@ -273,13 +273,13 @@ final class DchWatchStreamTests: XCTestCase {
     // MARK: - The cache
 
     /// The island's rows encode to the bytes a fork of the same dch output does (meta,
-    /// meta_epoch included; #772: dch's tasks dropped), in name order.
+    /// meta_epoch included; #772: dch's tasks dropped; #877: cwd, null and too long left out), in name order.
     func testCachedPayloadMatchesTheForkPayload() {
         let out = #"""
-        [{"name":"a","alias":"","harness":"claude-a","activity_epoch":5,"state":"working","agents":2,"version":"1.28.0",
+        [{"name":"a","alias":"","harness":"claude-a","activity_epoch":5,"state":"working","agents":2,"version":"1.28.0","cwd":"/w/a",
           "meta_epoch":1784995200,"meta":{"tasks":{"done":3,"total":7,"in_progress":1,"queued":2},
           "prs":{"open":[{"url":"https://github.com/o/prosper/pull/12","repo":"o/prosper","num":12,"title":"Fix"}],"merged":4}}},
-         {"name":"b","alias":"Build","activity_epoch":6,"state":"blocked"},
+         {"name":"b","alias":"Build","activity_epoch":6,"state":"blocked","cwd":null},
          {"name":"c","activity_epoch":7,"state":"done"},{"name":"d","activity_epoch":8,"state":"idle"}]
         """#
         let island = AgentIsland.list(dirs: [Self.dir]) { args, _ in args == ["--ls-json"] ? Data(out.utf8) : nil }
@@ -289,6 +289,7 @@ final class DchWatchStreamTests: XCTestCase {
         let rows = (try? JSONSerialization.jsonObject(with: fork)) as? [[String: Any]] ?? []
         XCTAssertEqual(rows.first?["meta_epoch"] as? Int, 1_784_995_200)
         XCTAssertEqual((rows.first?["meta"] as? [String: Any])?.keys.sorted(), ["prs"], "#772: no tasks key")
+        XCTAssertEqual(rows.map { $0["cwd"] as? String }, ["/w/a", nil, nil, nil], "#877: the island carries cwd too")
     }
 
     func testCacheOnlyForRemoteTerminalsDir() {

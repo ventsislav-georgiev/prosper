@@ -1,0 +1,16 @@
+{
+  "id": "35-attach-dash-name-refused",
+  "about": "0x01 with a name starting with - answers exactly this 0x13 (the dash message) and starts nothing: dch 1.54.0 serve.c:999-1003 refuses it before name_ok's text and the session_id check, attach and create alike. Prosper #877. Mutating: a server without the check would run dch -n -golden-877.",
+  "mutating": true,
+  "steps": [
+    {
+      "send": "01 0000002a 7b226e616d65223a222d676f6c64656e2d383737222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a22612073657373696f6e206e616d65207374617274696e672077697468202d2063616e27742062652070617373656420746f20646368227d"
+      }
+    }
+  ]
+}

@@ -61,7 +61,7 @@ enum DchFrame {
     // both directions
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
-    static let listResp: UInt8 = 0x11 // [{name, alias?, state?}]
+    static let listResp: UInt8 = 0x11 // [{name, alias?, state?, agents?, cwd?, meta?, meta_epoch?}]
     static let exit: UInt8     = 0x12 // {code}
     static let error: UInt8    = 0x13 // {message}
     static let ok: UInt8       = 0x14 // (empty) ack for kill, rename, putClipboard; {names} for #591's verbs
@@ -156,6 +156,7 @@ enum DchFrame {
             if !row.alias.isEmpty { o["alias"] = row.alias }
             if !row.state.isEmpty { o["state"] = row.state }   // working|idle|blocked|done
             if row.agents > 0 { o["agents"] = row.agents }     // live subagents; absent from older dch
+            if let cwd = row.wireCwd { o["cwd"] = cwd }        // #877: dch 1.52+, absent when unknown
             o.merge(row.metaWire) { $1 }                       // "meta"/"meta_epoch", dch 1.22+
             return o
         }
@@ -426,7 +427,7 @@ final class DchConnection: @unchecked Sendable {
             // #863: serve.c:1154-1158@v1.46.1 checks a name starting with "-" first, so such a pair gets
             // DASH_MSG. Prosper still runs dch -m for a dash name with any other alias (remote-frames.md).
             if let a = o?["alias"] as? String, DchControlOps.idShaped(a) {
-                let dash = (o?["name"] as? String)?.hasPrefix("-") == true
+                let dash = (o?["name"] as? String)?.utf8.first == 0x2d   // QA #727 INFO-4: the byte, as serve
                 return send(DchControlOps.error(dash ? DchControlOps.dashNameRefusal : DchControlOps.idShapedRefusal))
             }
             if let o, let n = o["name"] as? String,
@@ -686,6 +687,9 @@ final class DchConnection: @unchecked Sendable {
         }
     }
 
+    /// #877: dch serve's answer to a 0x01 with no name, and to a 0x01/0x02 name it cannot read (serve.c:994@v1.54.0).
+    static let needsName = "attach needs a session name"
+
     /// QA #625 F1: a failed spawn's 0x13, shown on the phone as written.
     static let spawnFailed = "Could not start the session: the Mac could not open a terminal."
 
@@ -700,15 +704,28 @@ final class DchConnection: @unchecked Sendable {
         }
         let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
         let name = o["name"] as? String
-        // #850: dch serve.c:998: a new session never takes a session_id's shape; a listed one (legacy)
-        // still attaches by its exact listed name. An unavailable list ([] here, -1 there) refuses.
-        // #863: serve.c:991-996@v1.46.1 runs name_ok first, so an id-shaped name padded with \t-\r (a
-        // control) gets "invalid session name"; padded with spaces it passes name_ok and gets :1001's text.
-        if let name, DchControlOps.idShaped(name), !listSessions().contains(where: { $0.name == name }) {
-            return send(DchControlOps.error(DchCtl.nameOK(name) ? DchControlOps.idShapedRefusal : DchCtl.invalidName))
+        // #877: dch serve's on_attach checks, in its order, each refused before any dch call (serve.c:990-1011
+        // @v1.54.0). QA #727 INFO-3: jstr into name[NAME_CAP + 2] fails on a name that is no string or 257
+        // bytes or more, and an attach needs a name at all.
+        if (o["name"] != nil && name == nil) || (name?.utf8.count ?? 0) > DchCtl.nameCap + 1
+            || (type == DchFrame.attach && (name ?? "").isEmpty) {
+            return send(DchControlOps.error(Self.needsName))
+        }
+        if let name, !name.isEmpty {
+            // QA #722 INFO-2, #727 INFO-1/4: a first byte "-" (listed or not), then name_ok for every name.
+            guard name.utf8.first != 0x2d else { return send(DchControlOps.error(DchControlOps.dashNameRefusal)) }
+            guard DchCtl.nameOK(name) else { return send(DchControlOps.error(DchCtl.invalidName)) }
+            // #850: :1006, after name_ok (#727 INFO-2): a new session never takes a session_id's shape; a listed
+            // one (legacy) still attaches by its exact listed name. An unavailable list ([] here, -1 there) refuses.
+            if DchControlOps.idShaped(name), !listSessions().contains(where: { $0.name == name }) {
+                return send(DchControlOps.error(DchControlOps.idShapedRefusal))
+            }
         }
         sessionName = name
-        let command = (o["command"] as? [String]) ?? []
+        // #877 (QA #725 INFO-1): an interactive Claude gets `--name <session name>`, as a Mac New session
+        // (#847, AgentIsland.naming); no name (dch picks one): left unnamed. dch serve passes it as sent.
+        let raw = (o["command"] as? [String]) ?? []
+        let command = name.map { $0.isEmpty ? raw : AgentIsland.naming(raw, name: $0) } ?? raw
         let cols = (o["cols"] as? Int) ?? 80
         let rows = (o["rows"] as? Int) ?? 24
 
@@ -1024,7 +1041,7 @@ final class DchWatchHub: @unchecked Sendable {
         guard let sessions, dirs.contains(remote) else { return nil }
         let rows = sessions.filter { $0.key.dir == remote }.sorted { $0.name < $1.name }.map { s in
             DchListRow(name: s.name, alias: s.alias, activityEpoch: Int(s.activity), state: wireState(s.state),
-                       agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version)
+                       agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version, cwd: s.cwd)
         }
         return Cache(dir: remote, rows: rows)
     }
@@ -1704,6 +1721,16 @@ struct DchListRow: Equatable, Sendable {
     var version: String = ""
     /// #792: the prompt the master's own auto-allow answered last (dch 1.29.2+), nil when none.
     var autoAllowed: DchAutoAllowed? = nil
+    /// #877: dch 1.52's `cwd` (dch #115), the session's start dir from its live history record; "" when
+    /// dch has none (no record, an ended one, an older dch: `null` or no key).
+    var cwd: String = ""
+
+    /// #877: listResp's "cwd" as dch serve writes it (serve.c:340, :358-359, :374-378@v1.54.0): the
+    /// string as dch gave it, unchecked (no absolute or trailing-slash rule), nil when empty or when its
+    /// UTF-8 does not fit serve's cwd[512] with its NUL (512 bytes or more), so the key is left out.
+    var wireCwd: String? { cwd.isEmpty || cwd.utf8.count >= Self.maxCwdBytes ? nil : cwd }
+    /// dch serve's `char cwd[512]` (serve.c:340@v1.54.0): bytes, the NUL included.
+    static let maxCwdBytes = 512
 
     /// The phone's `meta`/`meta_epoch` row keys, re-encoded from the decoded fields
     /// (never dch's raw JSON); empty when there is no meta or nothing survives the
@@ -2047,7 +2074,8 @@ enum DchCommand {
                               meta: DchSessionMeta(json: o["meta"]),
                               metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0,
                               version: o["version"] as? String ?? "",
-                              autoAllowed: DchAutoAllowed(json: o["auto_allowed"]))
+                              autoAllowed: DchAutoAllowed(json: o["auto_allowed"]),
+                              cwd: o["cwd"] as? String ?? "")
         }
     }
 

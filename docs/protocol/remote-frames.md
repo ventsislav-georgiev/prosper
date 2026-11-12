@@ -48,6 +48,10 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   [0x30 ctl](#0x30-ctl-gate-ctl). An amendment, not 1.2: `dch serve` 1.42.0 speaks these rules as
   `"1.1"` (serve.c's hello), a client gates 0x34 and a second 0x30 on the `ctl-cancel` token, and
   the only added key (`code` on the busy 0x13) is optional to a client.
+- **1.1 amendment, 2026-11-12** (Prosper #877, with dch #115 / dch 1.52.0): 0x11 rows may carry
+  `cwd`, and 0x01/0x02 refuse a name starting with `-` before anything runs. Still `proto` `"1.1"`
+  (dch serve 1.54.0's hello): an optional key an older client ignores, and a refusal both servers
+  already gave (dch serve) or gave later (Prosper ran dch, which refused).
 - A minor bump only adds: new optional keys, new frames, new `ops` names. A client ignores
   keys and `ops` it does not know.
 - A major bump breaks. A client that reads a newer major than its own refuses the host
@@ -299,6 +303,7 @@ until the island publishes again at least 5 s later. Each row's keys are sorted.
 | `alias` | string | no | Display alias (dch's alias, else the Claude Code session name); absent when empty. |
 | `state` | string | no | `working`, `idle`, `blocked` or `done`; absent when unknown. |
 | `agents` | int | no | Live subagents; absent when 0. |
+| `cwd` | string | no | Since the 2026-11-12 amendment (dch 1.52.0, Prosper #877): the session's start directory as `getcwd` gave its master (absolute, no trailing slash, `/` the one exception), from the session's live history record, passed on as dch read it. **Absent, never `null` or `""`**, when there is no record (`DCH_NO_HISTORY`, an older dch), the record has no cwd, or the path is 512 bytes of UTF-8 or longer (dch serve's `cwd[512]`, serve.c:340@v1.54.0). An older client ignores it. |
 | `meta` | object | no | `{"prs": {"open": [{url, repo, title, num?}], "merged"?: int}}`; only allowlisted `https://github.com/<owner>/<repo>/pull/<n>` URLs. |
 | `meta_epoch` | int | no | When `meta` last changed (epoch seconds); absent when unknown. |
 
@@ -386,8 +391,23 @@ The connection then carries one session:
   that name (an older one) still attaches by its exact listed name. 0x06 refuses such an `alias` the
   same way and runs no `dch -m`. The checks before it come first (dch 1.46.1 serve.c:991-996 and
   :1154-1158, Prosper #863): such a name padded with a control (`\t`-`\r`), which `name_ok` refuses,
-  gets 0x13 `invalid session name` (padded with spaces it gets the session_id text), and a 0x06
+  gets 0x13 `invalid session name`, listed or not (Prosper since #877) (padded with spaces it gets the session_id text), and a 0x06
   whose `name` starts with `-` and whose alias is id-shaped gets the `-` message below.
+- The name checks, in `dch serve`'s order (serve.c:990-1011@v1.54.0; Prosper since #877, which ran
+  dch for most of these before). Each answers a 0x13, starts nothing, and leaves the connection open:
+  1. `name` that is not a string or is 257 bytes of UTF-8 or more (serve's 256-byte buffer), attach
+     and create alike, or an attach with no `name` or `""`: `attach needs a session name`.
+  2. A first byte `-`, listed or not: `a session name starting with - can't be passed to dch`. A
+     byte, so `-` followed by a combining mark counts.
+  3. Not `name_ok` (a `/`, a control: C0, DEL, C1, the bidi overrides and isolates; more than 255
+     bytes): `invalid session name`.
+  4. The session_id shape above, which reads the list only now.
+  A create with no `name` (or `""`) skips 2-4: dch picks the name.
+- Prosper names an interactive Claude after its session (#877, as the Mac's New session does): a
+  0x02 (or an attach that starts one) with a `name` and a `command` that runs Claude interactively
+  gets `--name <name>` right after the `claude` word, any `-n`/`--name` of its own replaced. A
+  shell, another program and `claude -p` run as sent; so does any command of a create with no
+  name (dch picks the name, unknown to Prosper beforehand). `dch serve` runs the command as sent.
 - A failed spawn (Prosper: `forkpty` fails, the Mac is out of ptys or processes): 0x13
   `{"message": "Could not start the session: ..."}`, then close; the 0x13 is sent as the last
   frame before the FIN. Frames the client sent after the attach on that connection are
@@ -688,7 +708,7 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-34: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-35: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
@@ -700,7 +720,8 @@ then reads it with ctl `--read`; its cleanup kills it), and 26-29 (each setup cr
 `golden-841-<n>` and each cleanup kills it), and 31 and 32 (an id-shaped attach name and rename
 alias: refused by a conformant server, but one without the check would run dch), and 33 and 34
 (#863: a dash name with an id-shaped alias gets the `-` message; an id-shaped attach name padded
-with `\t` and `\r` gets `invalid session name`; one without the checks would run dch). Run `--mutating` only against a test server, never a
+with `\t` and `\r` gets `invalid session name`; one without the checks would run dch), and 35
+(#877: an attach to `-golden-877` gets the `-` message; one without the check would run dch). Run `--mutating` only against a test server, never a
 host with sessions someone uses.
 
 17-25 are the `ctl` set (#838), each `requires_op` `ctl`: 17 a server listing `ctl` speaks proto

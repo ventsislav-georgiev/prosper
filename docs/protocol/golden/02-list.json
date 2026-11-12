@@ -14,6 +14,7 @@
             "?alias": "string",
             "?state": "string~working|idle|blocked|done",
             "?agents": "int",
+            "?cwd": "string~.+",
             "?meta": "object",
             "?meta_epoch": "int"
           }

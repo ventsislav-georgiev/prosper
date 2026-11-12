@@ -18,7 +18,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         .appendingPathComponent("docs/protocol/golden")
 
     private static let rows = [
-        DchListRow(name: "alpha", alias: "Alpha", activityEpoch: 1, state: "working", agents: 2),
+        DchListRow(name: "alpha", alias: "Alpha", activityEpoch: 1, state: "working", agents: 2, cwd: "/golden/alpha"),
         DchListRow(name: "beta", alias: "", activityEpoch: 2, state: "", agents: 0),
     ]
 
@@ -120,6 +120,22 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertFalse(calls.contains { $0.contains("-golden-863") }, "33: a dash name with an id-shaped alias never reaches dch: \(calls)")
     }
 
+    /// #877: fixture 02 allows the optional "cwd" (dch 1.52+), and the server sends it for a row that has one
+    /// and leaves the key out (never null or "") for a row that has none.
+    func testTheListCarriesCwdOnlyWhenKnown() throws {
+        let fx = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: try goldenDir().appendingPathComponent("02-list.json"))) as? [String: Any])
+        let row = try XCTUnwrap(((fx["steps"] as? [[String: Any]])?[1]["expect"] as? [String: Any])?["json"] as? [[String: Any]])
+        XCTAssertEqual(row.first?["?cwd"] as? String, "string~.+")
+        let c = try Client(port: port)
+        try c.send(DchFrame.encode(DchFrame.list, []))
+        let (type, payload) = try c.frame()
+        XCTAssertEqual(type, DchFrame.listResp)
+        let rows = try XCTUnwrap(try JSONSerialization.jsonObject(with: payload) as? [[String: Any]])
+        XCTAssertEqual(rows.first { $0["name"] as? String == "alpha" }?["cwd"] as? String, "/golden/alpha")
+        XCTAssertNil(rows.first { $0["name"] as? String == "beta" }?["cwd"], "absent, not null")
+    }
+
     /// The runner dch CI uses, against the same server: it must read the fixtures as this test does.
     func testPythonRunnerPassesAgainstTheServer() throws {
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)", "--mutating"])
@@ -140,7 +156,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertEqual(status, 0, text)
         for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws", "14-attach-twice-ignored",
                    "15-session-exit-closes", "16-create-exit-closes", "18-ctl-read-round-trip",
-                   "33-rename-dash-id-shaped-refused", "34-attach-padded-id-shaped-refused"] + Self.cancelSet {
+                   "33-rename-dash-id-shaped-refused", "34-attach-padded-id-shaped-refused",
+                   "35-attach-dash-name-refused"] + Self.cancelSet {
             XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
         }
         XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)
