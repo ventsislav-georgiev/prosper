@@ -1630,6 +1630,18 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(strip(["claude", "--frob", "-c", "task"]), ["claude", "--frob", "-c"], "unknown, dashed next: kept alone")
         XCTAssertEqual(strip(["claude", "-x"]), ["claude", "-x"])
         XCTAssertEqual(strip([]), [])
+        // QA #726 F1: dch's basename keeps a trailing "/": a directory named claude is no claude word, the real one is.
+        XCTAssertEqual(strip(["direnv", "exec", "/Users/example/code/claude/", "claude", "--chrome", "task"], agent: true),
+                       ["direnv", "exec", "/Users/example/code/claude/", "claude", "--chrome"])
+        XCTAssertEqual(strip(["myclaude", "task"], agent: true), ["myclaude", "task"], "no claude word: whole")
+    }
+
+    /// QA #726 F1: dch_claude_tok's rule: the text after the last "/", else the whole word; a trailing "/" stays.
+    func testDchBaseIsTheTextAfterTheLastSlash() {
+        for w in ["claude", "/opt/bin/claude"] { XCTAssertTrue(AgentIsland.dchBase(w, is: "claude"), w) }
+        for w in ["claude/", "/x/claude/", "myclaude", "claude-wrapper", "", "/"] { XCTAssertFalse(AgentIsland.dchBase(w, is: "claude"), w) }
+        XCTAssertTrue(AgentIsland.dchBase("/usr/bin/env", is: "env"))
+        XCTAssertFalse(AgentIsland.dchBase("/usr/bin/env/", is: "env"))
     }
 
     /// #867 (QA #707 INFO-1, QA #715): a record's startup prompt never becomes the New session command; the

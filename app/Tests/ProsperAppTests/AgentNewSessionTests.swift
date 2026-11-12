@@ -100,6 +100,9 @@ final class AgentNewSessionTests: XCTestCase {
                        ["headroom", "wrap", "claude", "--name", "api", "--chrome"])
         XCTAssertEqual(AgentIsland.naming(["/opt/homebrew/bin/claude", "--model", "opus"], name: "api"),
                        ["/opt/homebrew/bin/claude", "--name", "api", "--model", "opus"], "the token by basename")
+        XCTAssertEqual(AgentIsland.naming(["direnv", "exec", "/Users/example/code/claude/", "claude", "--chrome"], name: "api"),
+                       ["direnv", "exec", "/Users/example/code/claude/", "claude", "--name", "api", "--chrome"],
+                       "QA #726 F1: after the real claude; a trailing-/ directory is no claude word")
     }
 
     /// T3: the user's own name is replaced, never doubled.

@@ -745,7 +745,7 @@ extension AgentIsland {
     /// A record with no agent, or an empty command, is no source.
     static func recordCommand(_ r: DchHistoryRecord) -> [String]? {
         guard let agent = r.agent else { return nil }
-        let argv = r.argv.contains { ($0 as NSString).lastPathComponent == "claude" } ? r.argv : agent.launch
+        let argv = r.argv.contains { dchBase($0, is: "claude") } ? r.argv : agent.launch
         return argv.isEmpty ? nil : argv
     }
 
@@ -848,7 +848,7 @@ extension AgentIsland {
     /// shortcut: any `claude` word counts (the spec's rule: `headroom wrap claude` must be named, and a spawn has
     /// no "agent seen" yet), so `vim ~/claude` gets `--name` after that word; use dch's claude_runs if one shows.
     static func isInteractiveClaude(_ argv: [String]) -> Bool {
-        guard let tok = argv.firstIndex(where: { ($0 as NSString).lastPathComponent == "claude" }) else { return false }
+        guard let tok = argv.firstIndex(where: { dchBase($0, is: "claude") }) else { return false }
         let rest = argv[(tok + 1)...]
         return !rest.prefix { $0 != "--" }.contains { $0 == "-p" || $0 == "--print" }
             && !(rest.first.map(claudeCommands.contains) ?? false)
@@ -858,7 +858,7 @@ extension AgentIsland {
     /// value is never taken for a name: -n/--name with its value, --name=…, -nfoo go; a cluster -cn x keeps
     /// -c. A bare `--` and what follows stay. Anything else is returned as is.
     static func strippingName(_ argv: [String]) -> [String] {
-        guard isInteractiveClaude(argv), let tok = argv.firstIndex(where: { ($0 as NSString).lastPathComponent == "claude" })
+        guard isInteractiveClaude(argv), let tok = argv.firstIndex(where: { dchBase($0, is: "claude") })
         else { return argv }
         return Array(argv.prefix(tok + 1)) + claudeArgs(argv[(tok + 1)...]).flatMap { arg -> [String] in
             switch arg {
@@ -879,7 +879,7 @@ extension AgentIsland {
     /// the claude token, as dch's resume_argv inserts --resume (v1.50.1 dch.c:5870-5874): a trailing
     /// `-- <prompt>` can never swallow it. Anything else (a shell, another agent, a batch run) as is.
     static func naming(_ argv: [String], name: String) -> [String] {
-        guard isInteractiveClaude(argv), let tok = argv.firstIndex(where: { ($0 as NSString).lastPathComponent == "claude" })
+        guard isInteractiveClaude(argv), let tok = argv.firstIndex(where: { dchBase($0, is: "claude") })
         else { return argv }
         var out = strippingName(argv)
         out.insert(contentsOf: ["--name", name], at: tok + 1)
@@ -971,12 +971,19 @@ extension AgentIsland {
         st.st_mode & S_IFMT == type && st.st_uid == getuid() && st.st_mode & 0o022 == 0
     }
 
+    /// QA #726 F1: dch's basename test (dch_claude_tok, claude_runs; v1.54.0 cargv.c:99-112, :155-156): the text
+    /// after the last "/", else the whole word, is `word`. Never NSString's lastPathComponent, which drops a trailing
+    /// "/": "/x/claude/" is a directory, no claude word.
+    static func dchBase(_ s: String, is word: String) -> Bool {
+        (s.lastIndex(of: "/").map { s[s.index(after: $0)...] } ?? s[...]) == word
+    }
+
     /// #867: dch's claude_runs (v1.50.1 cargv.c:133-172): claude is the program run, argv[0], or after `env`
     /// with only NAME=value words and the value-less env flags between. A `claude` anywhere else (a
     /// directory, an option value, an ssh or sh -c argument) belongs to another command (dch #141).
     static func claudeRuns(_ argv: [String], tok: Int) -> Bool {
         if tok == 0 { return true }
-        guard (argv[0] as NSString).lastPathComponent == "env" else { return false }
+        guard dchBase(argv[0], is: "env") else { return false }
         return argv[1..<tok].allSatisfy { a in
             let name = a.prefix { $0 == "_" || $0.isASCII && ($0.isLetter || $0.isNumber) }   // NAME=value
             return name.first.map { !$0.isNumber } == true && a.dropFirst(name.count).first == "="
@@ -994,7 +1001,7 @@ extension AgentIsland {
     /// command (:201-205), or an unknown option, not a --no-x, is followed by a non-dashed token that may be
     /// its value (:226-233).
     static func strippingPrompt(_ argv: [String], agent: Bool) -> [String] {
-        guard let tok = argv.firstIndex(where: { ($0 as NSString).lastPathComponent == "claude" }),
+        guard let tok = argv.firstIndex(where: { dchBase($0, is: "claude") }),
               agent || claudeRuns(argv, tok: tok) else { return argv }
         let args = claudeArgs(argv[(tok + 1)...])
         var kept = Array(argv.prefix(tok + 1)), firstOperand = true
@@ -1022,7 +1029,7 @@ extension AgentIsland {
     /// a record passes its own `agent` (hrec_strip's). A <=1.48 record's prompt is never resent by New session.
     static func strippingResume(_ argv: [String], agent: Bool = true) -> [String] {
         let argv = strippingPrompt(argv, agent: agent)
-        let tok = argv.firstIndex { ($0 as NSString).lastPathComponent == "claude" } ?? 0
+        let tok = argv.firstIndex { dchBase($0, is: "claude") } ?? 0
         var out = Array(argv.prefix(tok + 1)), k = tok + 1
         while k < argv.count {
             let a = argv[k]
