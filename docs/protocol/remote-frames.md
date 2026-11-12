@@ -624,15 +624,19 @@ SIGTERM, and a SIGKILL partway through would leave the session half-typed or pau
   agent that was still waiting to pause. That typing waits for the composer to empty and retries
   Enter, so with a busy Claude it can take tens of seconds.
 
-660 s bounds that clean-up. It is `dch serve`'s `CTL_LONG_MS`, the timeout of `--say`, `--stop`
-and `--revive` (see Limits).
+660 s bounds that clean-up. It is `dch serve`'s `CTL_LONG_MS`, the timeout of `--say`, `--stop`,
+`--revive` and `--run` (see Limits).
 
 `dch serve` 1.45.1+ has the same rule: 660 s for these four verbs on a 0x34 or a close, 2 s
 (`CTL_GRACE_MS`) for every other verb. A cap or timeout gets 2 s on both servers (see Limits).
 While the server stops, every cut gets 2 s whatever the verb, and a SIGKILL already pending after a
-0x34 comes no later than 2 s from the stop (serve.c:1251, :1480-1481@v1.45.1). Prosper does the
-same for the connections open when Remote Terminal is turned off (#852). A ctl whose connection
-closed before the stop keeps the grace it was cut with, as its timer runs on in the app. The
+0x34 comes no later than 2 s from the stop (serve.c:1261-1267, :1502-1503@v1.54.0). Prosper does the
+same for the connections open when Remote Terminal is turned off (#852). A dch is never signalled
+twice on either server: a ctl already cut (by a 0x34, a timeout or a cap) gets no second SIGTERM from
+a close or a stop, only the earlier SIGKILL (serve.c:1827-1828@v1.54.0, Prosper QA #729 F1), since
+dch exits at once on a second signal and would skip its clean-up. One difference: a ctl whose
+connection closed before the stop keeps the grace it was cut with on Prosper (its timer runs on in
+the app, and the server no longer holds the connection), where `dch serve` shortens it to 2 s. The
 client sees none of this: it has closed by then.
 
 ## Mac-only frames (Prosper)

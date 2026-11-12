@@ -294,16 +294,20 @@ enum DchCtl {
 /// cut it, or 0x13 when dch could not start. `cancel` (the connection closed) ends it as a 0x34 does
 /// but sends no frame: SIGTERM (the four agent verbs clean up on it, see DchCtl.agentGrace), SIGKILL
 /// to the group the verb's grace later if dch is still unreaped (DchCtlOps.grace: 660 s for the agent
-/// verbs, 2 s for the rest, as dch serve 1.45.1+). The cap and timeout kill is ShellRunner's: SIGTERM to the child's whole process
-/// group (Foundation makes it the leader), SIGKILL to the group DchCtl.cancelGrace (2 s) later (#852).
+/// verbs, 2 s for the rest, as dch serve 1.45.1+). The cap and timeout kill is CodexHarness.killGroup: SIGTERM to the child's
+/// whole process group (Foundation makes it the leader), SIGKILL to the group DchCtl.cancelGrace (2 s) later (#852).
+/// QA #729 F1: a dch is SIGTERMed once per request, whatever comes after the cut: dch's ty_on_sig _exits on a
+/// second signal (dch.c:6256-6272@v1.54.0) and so would skip its take-back; serve's conn_end cuts only an uncut ctl.
 final class DchCtlJob: @unchecked Sendable {
     enum Stop { case none, term, killGroup }
 
-    private let lock = NSLock()      // pid, ended, cancelled
+    private let lock = NSLock()      // pid, ended, cancelled, grace, stopping
     private let sendLock = NSLock()  // chunks, then the one final frame
     private var pid: pid_t = 0
     private var ended = false
     private var cancelled = false
+    /// A server stop came (serverStop): its 2 s grace wins over the verb's that run() sets (QA #729 INFO-1).
+    private var stopping = false
     private var sent = 0
     /// The SIGKILL grace after a SIGTERM (DchCtlOps.grace of the verb). Set in run(), before the pid.
     private var grace = DchCtl.cancelGrace
@@ -313,11 +317,12 @@ final class DchCtlJob: @unchecked Sendable {
     /// Ends the request once: true for the one caller that did. `running` (the timeout): only while
     /// dch is not yet reaped (one that exited in time ends with its own exit) and not cut by a 0x34
     /// (serve's ctl_tick: one why per request).
+    /// A 0x34 already SIGTERMed it, so nothing is signalled here then (QA #729 F1): its grace timer stands.
     private func end(_ stop: Stop, running: Bool = false) -> Bool {
         let pid: pid_t? = lock.withLock {
             guard !ended, !(running && (self.pid == 0 || cancelled)) else { return nil }
             ended = true
-            return self.pid
+            return cancelled ? 0 : self.pid
         }
         guard let pid else { return false }
         guard pid > 0 else { return true }
@@ -331,18 +336,29 @@ final class DchCtlJob: @unchecked Sendable {
 
     func cancel() { _ = end(.term) }
 
-    /// #852: a server stop, as dch serve's (serve.c:1251 and :1480-1481@v1.45.1): the cut's SIGKILL comes
-    /// DchCtl.cancelGrace after its SIGTERM whatever the verb, a 0x34-cut one's too (it is cut again here).
+    /// #852: a server stop, as dch serve's: an uncut ctl is cut with DchCtl.cancelGrace whatever the verb
+    /// (ctl_grace, serve.c:1261-1267@v1.54.0). QA #729 F1: one already cut (a 0x34, a timeout, a cap) gets no
+    /// second SIGTERM; its group SIGKILL only comes no later than DchCtl.cancelGrace from now (ctl_wait under
+    /// g_stop, serve.c:1502-1503@v1.54.0). The earlier timer stays, guarded by the pid like every other.
     func serverStop() {
-        lock.withLock { grace = DchCtl.cancelGrace }
-        cancel()
+        let cut: pid_t? = lock.withLock {
+            (grace, stopping) = (DchCtl.cancelGrace, true)
+            return cancelled || ended ? pid : nil
+        }
+        guard let cut else { return cancel() }
+        if cut > 0 { killGroup(cut, after: DchCtl.cancelGrace) }
     }
 
-    /// The one SIGTERM path, a 0x34's and a close's: SIGTERM to dch, then SIGKILL to its group `grace`
-    /// later while it is still unreaped. A reaped dch left pid 0, so nothing is signalled however late.
+    /// The one SIGTERM path, a 0x34's and a close's: SIGTERM to dch, then SIGKILL to its group `grace` later.
     private func term(_ pid: pid_t) {
         Darwin.kill(pid, SIGTERM)
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + lock.withLock { grace }) { [weak self] in
+        killGroup(pid, after: lock.withLock { grace })
+    }
+
+    /// SIGKILL to dch's group `delay` from now while it is still unreaped. A reaped dch left pid 0, so
+    /// nothing is signalled however late, and a recycled pid never.
+    private func killGroup(_ pid: pid_t, after delay: TimeInterval) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }   // run() returned: dch was reaped
             self.lock.withLock { if self.pid == pid, CodexHarness.mayKillGroup(pid) { Darwin.kill(-pid, SIGKILL) } }
         }
@@ -396,7 +412,7 @@ final class DchCtlJob: @unchecked Sendable {
             exited.signal()
         }
         lock.lock()   // a cancel either sees the pid or stops the spawn
-        self.grace = grace
+        if !stopping { self.grace = grace }   // QA #729 INFO-1: a stop that came first keeps its 2 s
         guard !ended else { lock.unlock(); return }
         if cancelled {   // a 0x34 that came before the spawn: nothing runs
             ended = true
