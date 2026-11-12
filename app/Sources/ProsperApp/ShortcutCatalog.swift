@@ -88,7 +88,8 @@ struct BindableAction: Identifiable, Hashable, Sendable {
         self.defaultCombo = defaultCombo
         self.recordID = recordID
         self.conflictNote = conflictNote
-        self.searchText = SettingsSearch.fold("\(title) \(category) \(combo.label)")
+        // #876: the spec string ("cmd+pageup") keeps keys drawn as glyphs (⇞ ⇟ ↩) findable by name.
+        self.searchText = SettingsSearch.fold("\(title) \(category) \(combo.label) \(combo.specString ?? "")")
     }
 
     /// Same row with a freshly computed conflict hint. `ShortcutCatalog.build`'s

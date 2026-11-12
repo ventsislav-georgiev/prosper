@@ -37,8 +37,12 @@ final class RecorderView: NSView {
     var onChange: ((KeyCombo) -> Void)?
 
     private let label = NSTextField(labelWithString: "")
+    /// Today's label size, fixed at init like the font always was.
+    private let fullFontSize = 12 * ThemeRuntime.scale
     private var monitor: Any?
-    private var recording = false {
+    /// Internal, not private, only so KeyMappingRowLayoutTests can show "Press keys…"
+    /// without arming the event monitor; set it through beginRecording / stopRecording.
+    var recording = false {
         didSet { refreshTitle(); needsDisplay = true }
     }
 
@@ -48,7 +52,7 @@ final class RecorderView: NSView {
         layer?.cornerRadius = 6
         layer?.borderWidth = 1
         label.alignment = .center
-        label.font = .systemFont(ofSize: 12 * ThemeRuntime.scale, weight: .medium)
+        label.font = .systemFont(ofSize: fullFontSize, weight: .medium)
         addSubview(label)
         refreshTitle()
     }
@@ -66,8 +70,19 @@ final class RecorderView: NSView {
     /// translatesAutoresizingMaskIntoConstraints off, so centring constraints solved
     /// against the 110 pt intrinsic width, not the narrower frame #859 gives it: the
     /// label's centre sat at x = 55 and it ran off the right edge below UI scale 1.0.
+    ///
+    /// #876: a label wider than the field (a four-modifier "Key<n>" fallback in the 96 pt
+    /// key-rule slot) steps its font down until it fits; one that fits keeps the full size.
     override func layout() {
         super.layout()
+        // No inset: the label's fitting width already carries the cell's side padding, and
+        // ⌃⌥⇧⌘HOME fills the 67 pt field exactly at UI scale 0.7 today.
+        var pt = fullFontSize
+        label.font = .systemFont(ofSize: pt, weight: .medium)
+        while label.fittingSize.width > bounds.width, pt > 1 {
+            pt -= 0.25
+            label.font = .systemFont(ofSize: pt, weight: .medium)
+        }
         let size = label.fittingSize
         label.frame = NSRect(x: ((bounds.width - size.width) / 2).rounded(),
                              y: ((bounds.height - size.height) / 2).rounded(),

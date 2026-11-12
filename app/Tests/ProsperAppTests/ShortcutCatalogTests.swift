@@ -316,6 +316,15 @@ final class ShortcutCatalogTests: XCTestCase {
         XCTAssertEqual(ShortcutCatalog.filter(rows, query: "   ").count, rows.count)
     }
 
+    /// #876: Page Up / Page Down render as ⇞ ⇟, so the key's name comes from the spec
+    /// string: "pageup" still finds a ⌘⇞ row and does not find a ⌘A one.
+    func testFilterFindsAGlyphKeyByName() {
+        let rows = catalog(apps: [AppShortcut(target: "com.example.one", combo: combo(kVK_PageUp, cmdKey), name: "Fake One"),
+                                  AppShortcut(target: "com.example.two", combo: combo(kVK_ANSI_A, cmdKey), name: "Fake Two")])
+        XCTAssertEqual(ShortcutCatalog.filter(rows, query: "pageup").map(\.title), ["Fake One"])
+        XCTAssertEqual(ShortcutCatalog.filter(rows, query: "PageUp").map(\.title), ["Fake One"])
+    }
+
     func testBoundOnlyKeepsOnlyBoundRows() {
         let rows = catalog(targets: [ActivationTarget(label: "Quicklinks", prefix: "ql ")])
         let bound = ShortcutCatalog.filter(rows, query: "", boundOnly: true)

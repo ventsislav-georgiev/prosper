@@ -46,6 +46,12 @@ final class KeyComboLabelTests: XCTestCase {
         XCTAssertEqual(combo(kVK_DownArrow, controlKey | optionKey).label, "⌃⌥↓")
     }
 
+    /// #876: the names were too wide for the key-rule field; the glyphs macOS menus use.
+    func testPageUpAndPageDownGlyphs() {
+        XCTAssertEqual(combo(kVK_PageUp, cmdKey).label, "⌘⇞")
+        XCTAssertEqual(combo(kVK_PageDown, controlKey | optionKey | shiftKey | cmdKey).label, "⌃⌥⇧⌘⇟")
+    }
+
     func testSpaceReturnAndDeleteGlyphs() {
         XCTAssertEqual(combo(kVK_Space, cmdKey).label, "⌘Space")
         XCTAssertEqual(combo(kVK_Return, controlKey | optionKey).label, "⌃⌥↩")

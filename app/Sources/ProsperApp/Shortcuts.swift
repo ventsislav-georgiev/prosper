@@ -136,6 +136,9 @@ extension KeyCombo {
         kVK_RightArrow: "→",
         kVK_UpArrow: "↑",
         kVK_DownArrow: "↓",
+        // #876: "PAGEDOWN" with four modifiers needed 8 pt to fit the 96 pt key-rule field.
+        kVK_PageUp: "⇞",
+        kVK_PageDown: "⇟",
     ]
 
     /// The combo stripped to what macOS actually arbitrates on. `display` is a label

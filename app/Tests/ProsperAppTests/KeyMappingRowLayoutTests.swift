@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 import XCTest
 @testable import ProsperApp
@@ -112,12 +113,170 @@ final class KeyMappingRowLayoutTests: XCTestCase {
         // nil: this machine's own backing scale; 1: CI's non-Retina grid.
         for backing in [nil, 1] as [CGFloat?] {
             for scale in [1.0, 0.85, 0.7] as [CGFloat] {
-                // Every modifier plus F12 / Space (86 pt at 1.0). Not pinned: ⌃⌥⇧⌘PAGEUP (98 pt) and
-                // ⌃⌥⇧⌘PAGEDOWN (120 pt, clipped at the old 110 pt too) are wider than the slot.
+                // Every modifier plus F12 / Space (86 pt at 1.0). The labels wider than the slot
+                // (#876) are covered by testEveryRecorderLabelFitsTheKeyRuleField.
                 try checkRow(trigger: "ctrl+alt+shift+cmd+f12", target: "ctrl+alt+shift+cmd+space",
                              scale: scale, backing: backing)
                 // A fresh rule: both fields read "Unset".
                 try checkRow(trigger: "", target: "", scale: scale, backing: backing)
+            }
+        }
+    }
+
+    // MARK: - #876: labels wider than the field shrink to fit
+
+    /// What the recorder can show: "Unset", "Press keys…" (while recording) and the
+    /// label of every key code a keyboard sends, each with all four modifiers. The key
+    /// names come from `KeyCombo.label`: glyphs, `codeToName` uppercased, else "Key<n>".
+    private static func everyLabel() -> [(text: String, combo: KeyCombo?)] {
+        let mods = UInt32(controlKey | optionKey | shiftKey | cmdKey)
+        var seen: Set<String> = []
+        var out: [(text: String, combo: KeyCombo?)] = [("Unset", unsetKeyCombo), ("Press keys…", nil)]
+        for code in 0..<128 {
+            let combo = KeyCombo(keyCode: UInt32(code), carbonModifiers: mods, display: "")
+            if seen.insert(combo.label).inserted { out.append((combo.label, combo)) }
+        }
+        return out
+    }
+
+    /// Shows `text` the way the recorder would. A nil combo is the recording state, set
+    /// directly: beginRecording would install an event monitor and take first responder.
+    private func show(_ item: (text: String, combo: KeyCombo?), in r: RecorderView, _ label: NSTextField) {
+        if let combo = item.combo {
+            r.recording = false
+            r.combo = combo
+            r.refreshTitle()
+        } else {
+            r.recording = true
+        }
+        r.layoutSubtreeIfNeeded()
+    }
+
+    /// The label lies inside the field (one backing pixel of slack), centred, at its
+    /// fitting size, its origin on whole points (#868 rounds it; whole points are whole
+    /// pixels at backing 1 and 2).
+    private func assertFits(_ label: NSTextField, in r: RecorderView, pixel: CGFloat, _ tag: String,
+                            file: StaticString = #filePath, line: UInt = #line) {
+        let f = label.frame
+        XCTAssertTrue(r.bounds.insetBy(dx: -pixel, dy: -pixel).contains(f),
+                      "'\(label.stringValue)' outside the field at \(tag): \(f) in \(r.bounds)", file: file, line: line)
+        XCTAssertEqual(f.size, label.fittingSize, "'\(label.stringValue)' not at its fitting size at \(tag)", file: file, line: line)
+        XCTAssertEqual(f.minX, f.minX.rounded(), accuracy: 0.01, "label x off whole points at \(tag): \(f)", file: file, line: line)
+        XCTAssertEqual(f.minY, f.minY.rounded(), accuracy: 0.01, "label y off whole points at \(tag): \(f)", file: file, line: line)
+        assertCentred(label, in: r, tolerance: 0.5 + pixel, "\(tag), \(label.stringValue)", file: file, line: line)
+    }
+
+    /// "Key<n>": a key code with no name or glyph (JIS, keypad, help keys).
+    private static func isFallback(_ text: String) -> Bool {
+        text.range(of: #"Key[0-9]+$"#, options: .regularExpression) != nil
+    }
+
+    /// The Key Remapping row's target recorder, hosted offscreen at `scale`.
+    private func withKeyRuleRecorder(scale: CGFloat, backing: CGFloat?,
+                                     _ body: (RecorderView, NSTextField, CGFloat, String) throws -> Void) throws {
+        let saved = ThemeRuntime.scale
+        ThemeRuntime.scale = scale
+        defer { ThemeRuntime.scale = saved }
+
+        var rule = ShortcutRulesStore.Rule()
+        rule.action = .remap
+        let side = CGSize(width: 660, height: 60)
+        let host = NSHostingView(rootView: KeyMappingRow(model: SettingsModel(), rule: rule)
+            .frame(width: side.width, height: side.height))
+        host.frame = CGRect(origin: .zero, size: side)
+        let win = FixedBackingWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        win.fixedBacking = backing
+        win.contentView = host
+        defer { win.contentView = NSView() }
+        flush(host)
+
+        let r = try XCTUnwrap(all(host, RecorderView.self).filter { !$0.isHiddenOrHasHiddenAncestor }.last)
+        XCTAssertEqual(r.bounds.width, sz(96), accuracy: 1 / win.backingScaleFactor)
+        let label = try XCTUnwrap(all(r, NSTextField.self).first)
+        try body(r, label, 1 / win.backingScaleFactor, "scale \(scale), backing \(win.backingScaleFactor)")
+    }
+
+    /// ⌃⌥⇧⌘PAGEDOWN was 120 pt at 12 pt: cut at both ends of the 96 pt key-rule field.
+    /// Page Up / Page Down now draw as ⇞ ⇟, so every named key (and Unset, "Press keys…")
+    /// keeps today's 12 pt x scale at every scale; only the "Key<n>" fallbacks shrink, and
+    /// never below 11 pt at 1.0. Every label lies inside the field.
+    func testEveryRecorderLabelFitsTheKeyRuleField() throws {
+        let labels = Self.everyLabel()
+        XCTAssertTrue(labels.contains { $0.text == "⌃⌥⇧⌘⇟" } && labels.contains { $0.text == "⌃⌥⇧⌘⇞" },
+                      "the enumeration lost the page keys: \(labels.map(\.text))")
+        for backing in [1, 2] as [CGFloat] {
+            for scale in [1.0, 0.85, 0.7] as [CGFloat] {
+                try withKeyRuleRecorder(scale: scale, backing: backing) { r, label, pixel, tag in
+                    for item in labels {
+                        show(item, in: r, label)
+                        XCTAssertEqual(label.stringValue, item.text)
+                        assertFits(label, in: r, pixel: pixel, tag)
+                        let pt = try XCTUnwrap(label.font?.pointSize)
+                        XCTAssertLessThanOrEqual(pt, 12 * scale, "'\(item.text)' grew at \(tag)")
+                        if scale == 1 { XCTAssertGreaterThanOrEqual(pt, 11, "'\(item.text)' below 11 pt at \(tag)") }
+                        if !Self.isFallback(item.text) {
+                            XCTAssertEqual(pt, 12 * scale, "named key '\(item.text)' lost the full size at \(tag): \(label.fittingSize.width) wide at \(pt) pt in \(r.bounds.width)")
+                        }
+                    }
+                    r.recording = false
+                }
+            }
+        }
+    }
+
+    /// Settings > Shortcuts (All Actions) hosts the same recorder in a sz(142) slot: the
+    /// widest label of all, a four-modifier "Key<n>" fallback, fits there at full size.
+    func testAllActionsRecorderFitsTheWidestLabel() throws {
+        let mods = UInt32(controlKey | optionKey | shiftKey | cmdKey)
+        let widest = KeyCombo(keyCode: 104, carbonModifiers: mods, display: "")
+        for backing in [1, 2] as [CGFloat] {
+            for scale in [1.0, 0.85, 0.7] as [CGFloat] {
+                let saved = ThemeRuntime.scale
+                ThemeRuntime.scale = scale
+                defer { ThemeRuntime.scale = saved }
+
+                let action = BindableAction(kind: .prosper, key: "fake", title: "Fake Action", category: "Prosper",
+                                            icon: "command", combo: widest)
+                let side = CGSize(width: 560, height: 40)
+                let host = NSHostingView(rootView: ShortcutCatalogRow(action: action, onRecord: { _ in },
+                                                                      onReset: {}, onClear: {})
+                    .frame(width: side.width, height: side.height))
+                host.frame = CGRect(origin: .zero, size: side)
+                let win = FixedBackingWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+                win.fixedBacking = backing
+                win.contentView = host
+                defer { win.contentView = NSView() }
+                flush(host)
+
+                let tag = "All Actions, scale \(scale), backing \(win.backingScaleFactor)"
+                let pixel = 1 / win.backingScaleFactor
+                let r = try XCTUnwrap(all(host, RecorderView.self).first, tag)
+                XCTAssertEqual(r.bounds.width, sz(142), accuracy: pixel, tag)
+                let label = try XCTUnwrap(all(r, NSTextField.self).first, tag)
+                XCTAssertEqual(label.stringValue, "⌃⌥⇧⌘Key104")
+                assertFits(label, in: r, pixel: pixel, tag)
+                XCTAssertEqual(label.font?.pointSize, 12 * scale, "\(tag): the widest label shrank in the wide slot")
+            }
+        }
+    }
+
+    /// The text changes in place ("Press keys…", a newly recorded combo): a short label
+    /// after a long one is back at the full size, not left at the long one's.
+    func testLabelRefitsWhenTheTextChanges() throws {
+        let mods = UInt32(controlKey | optionKey | shiftKey | cmdKey)
+        let short = KeyCombo(keyCode: UInt32(kVK_F12), carbonModifiers: mods, display: "")
+        let long = KeyCombo(keyCode: 104, carbonModifiers: mods, display: "")  // ⌃⌥⇧⌘Key104, the widest
+        for scale in [1.0, 0.7] as [CGFloat] {
+            try withKeyRuleRecorder(scale: scale, backing: nil) { r, label, _, tag in
+                show((short.label, short), in: r, label)
+                XCTAssertEqual(label.font?.pointSize, 12 * scale, "short label at \(tag)")
+                show((long.label, long), in: r, label)
+                XCTAssertLessThan(try XCTUnwrap(label.font?.pointSize), 12 * scale, "long label not shrunk at \(tag)")
+                show((short.label, short), in: r, label)
+                XCTAssertEqual(label.font?.pointSize, 12 * scale, "short label after a long one at \(tag)")
+                XCTAssertEqual(label.frame.size, label.fittingSize, "stale frame after re-fit at \(tag)")
+                show(("Unset", unsetKeyCombo), in: r, label)
+                XCTAssertEqual(label.font?.pointSize, 12 * scale, "Unset after a long one at \(tag)")
             }
         }
     }

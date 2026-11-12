@@ -2420,7 +2420,9 @@ struct ShortcutTable: View {
 /// Deliberately dumb — a value and four closures, no `@ObservedObject` — so one
 /// keystroke in the search field cannot fan a store change out into a repaint of
 /// every row in the table.
-private struct ShortcutCatalogRow: View {
+///
+/// Internal, not private, only so KeyMappingRowLayoutTests can host it offscreen (#876).
+struct ShortcutCatalogRow: View {
     let action: BindableAction
     let onRecord: (KeyCombo) -> Void
     let onReset: () -> Void
