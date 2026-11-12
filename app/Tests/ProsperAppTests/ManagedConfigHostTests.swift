@@ -206,6 +206,27 @@ final class ManagedConfigHostTests: XCTestCase {
         XCTAssertEqual(env.read(env.settings), "{\n  \"theme\": \"light\"\n}\n", "the cancelled piece is not in the file")
     }
 
+    /// QA #743 F1 follow-up: a file that keeps changing until the replans run out. Nothing landed: nothing
+    /// named; one file landed first: only its piece.
+    func test12FileChangedListsOnlyTheLandedPieces() async throws {
+        let env = makeMCEnv()
+        try env.write("# mine\n", env.claudeMD)
+        try env.write("{\n  \"theme\": \"dark\"\n}\n", env.settings)
+        let settings = env.settings
+        env.writer.interleave { target, n in
+            if target.lastPathComponent == "settings.json" { try? Data("{\n  \"theme\": \"user-\(n)\"\n}\n".utf8).write(to: settings) }
+        }
+        let hook = #"{ id = "pre", kind = "json", target = "claude:settings.json", path = { "hooks", "PreToolUse" }, op = "append", value = { matcher = "Bash", hooks = { { type = "command", command = "kit-run pre" } } } }"#
+        let services = MCHostServices(env.mc)
+        let none = try await runOnLane(services, env, lists("host.config.apply{ pieces = { \(hook) } }"))
+        XCTAssertEqual(none as NSDictionary, ["status": "fileChanged", "applied": "", "removed": "", "pieces": 0] as NSDictionary)
+        let one = try await runOnLane(services, env, lists("host.config.apply{ pieces = { \(blockPiece), \(hook) } }"))
+        env.writer.interleave(nil)
+        XCTAssertEqual(one as NSDictionary, ["status": "fileChanged", "applied": "rules", "removed": "", "pieces": 1] as NSDictionary)
+        XCTAssertTrue(try XCTUnwrap(env.read(env.claudeMD)).contains("prosper:\(Self.extID):rules"))
+        XCTAssertFalse(try XCTUnwrap(env.read(env.settings)).contains("kit-run pre"))
+    }
+
     /// The one test that drives the whole path: the Lua call on the extension's async lane, the
     /// bridge's detached task (never main), the consent seam, the write, and the answer back.
     func testLuaApplyEndToEndFromTheAsyncLane() async throws {

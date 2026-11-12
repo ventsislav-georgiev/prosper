@@ -677,10 +677,50 @@ final class ManagedConfigTests: XCTestCase {
         let r = await env.mc.apply([MCPieces.hook()], owner: env.owner)
         XCTAssertEqual(r.status, .fileChanged)
         XCTAssertEqual(r.message, "file changed, retry")
+        XCTAssertEqual(r.pieces, [], "nothing landed, nothing named")
         XCTAssertEqual(env.writer.temps(env.settings), 1 + ManagedConfig.maxReplans)
         XCTAssertEqual(env.read(env.settings), "{\n  \"theme\": \"user-4\"\n}\n", "the user's last bytes are never lost")
         XCTAssertEqual(env.files(under: env.claude).filter { $0.contains(".prosper-") }, [])
         XCTAssertTrue(env.mc.status(owner: env.owner).isEmpty)
+    }
+
+    /// QA #743 F1 follow-up: CLAUDE.md lands, settings.json changes under every write until the replans
+    /// run out. The result names exactly the landed piece.
+    func testC9FileChangedAfterALandedFileListsOnlyThatPiece() async throws {
+        let env = makeMCEnv()
+        try env.write("# mine\n", env.claudeMD)
+        try env.write("{\n  \"theme\": \"dark\"\n}\n", env.settings)
+        let settings = env.settings
+        env.writer.interleave { target, n in
+            if target.lastPathComponent == "settings.json" { try? Data("{\n  \"theme\": \"user-\(n)\"\n}\n".utf8).write(to: settings) }
+        }
+        let r = await env.mc.apply([MCPieces.block(), MCPieces.hook()], owner: env.owner)
+        env.writer.interleave(nil)
+        XCTAssertEqual(r.status, .fileChanged)
+        XCTAssertEqual(r.pieces, [.init(id: "rules", action: .insert)], "only the piece whose file landed")
+        XCTAssertTrue(try XCTUnwrap(env.read(env.claudeMD)).contains("prosper:kit-a:rules"))
+        XCTAssertFalse(try XCTUnwrap(env.read(env.settings)).contains("kit-run pre"))
+        XCTAssertEqual(env.mc.status(owner: env.owner).map(\.id), ["rules"])
+    }
+
+    /// QA #743 F1 follow-up: a refusal on a replan after one file landed names exactly that file's piece.
+    func testRefusalOnAReplanAfterALandedFileListsOnlyThatPiece() async throws {
+        let env = makeMCEnv()
+        try env.write("# mine\n", env.claudeMD)
+        try env.write("{\n  \"theme\": \"dark\"\n}\n", env.settings)
+        let settings = env.settings, stateURL = env.state.appendingPathComponent("state.json")
+        // after CLAUDE.md landed: settings.json changes (replan) and state.json turns unreadable (refusal)
+        env.writer.interleave { target, n in
+            guard target.lastPathComponent == "settings.json", n == 1 else { return }
+            try? Data("{\n  \"theme\": \"light\"\n}\n".utf8).write(to: settings)
+            try? Data(#"{"version": 99}"#.utf8).write(to: stateURL)
+        }
+        let r = await env.mc.apply([MCPieces.block(), MCPieces.hook()], owner: env.owner)
+        env.writer.interleave(nil)
+        XCTAssertEqual(r.status, .refused)
+        XCTAssertEqual(r.refusals.map(\.reason), [.stateUnreadable])
+        XCTAssertEqual(r.pieces, [.init(id: "rules", action: .insert)], "only the piece whose file landed")
+        XCTAssertTrue(try XCTUnwrap(env.read(env.claudeMD)).contains("prosper:kit-a:rules"))
     }
 
     // MARK: 2.8-10 modes, errata C10
@@ -820,6 +860,7 @@ final class ManagedConfigTests: XCTestCase {
         for r in runs {
             XCTAssertEqual(r.status, .refused)
             XCTAssertEqual(r.refusals.map(\.reason), [.stateUnreadable])
+            XCTAssertEqual(r.pieces, [], "nothing landed")
         }
         // status with a declared block whose markers are on disk: reported, nothing adopted or written
         XCTAssertEqual(env.mc.status(owner: env.owner, declared: [MCPieces.block()]).map(\.state), [.notApplied])
