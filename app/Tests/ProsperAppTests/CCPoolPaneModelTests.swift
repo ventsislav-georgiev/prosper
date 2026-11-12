@@ -367,6 +367,205 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(m.notice, CCPoolMigration.ReadError.notJSON.description)
     }
 
+    // QA #739 F1 (follow-up A1): no account, no routing, whatever the stored choice; the toggle
+    // shows off and says why, and the stored choice comes back with an account.
+    func testCCPoolRoutingNeedsAnAccount() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        guard case .running(let port) = r.service.start() else { return XCTFail("\(r.service.status)") }
+        let base = CCPool.baseURL(port: port)
+        m.routeAgentSessions = true
+        for on in [true, false] {
+            XCTAssertTrue(r.service.sessionEnv(command: ["claude"], on: on).isEmpty, "zero accounts, on: \(on)")
+            XCTAssertTrue(r.service.sessionEnv(command: ["headroom"], on: on).isEmpty, "zero accounts, on: \(on)")
+        }
+        XCTAssertFalse(r.service.routable)
+        XCTAssertFalse(m.routeToggleShown, "shown off")
+        XCTAssertEqual(m.routeDisabledReason, "Add an account first.")
+        XCTAssertTrue(r.defaults.bool(forKey: CCPoolPaneModel.routeKey), "the stored choice is not overwritten")
+
+        try r.add(["a"])
+        XCTAssertTrue(r.service.routable)
+        XCTAssertTrue(m.routeToggleShown, "an account restores the stored choice")
+        XCTAssertNil(m.routeDisabledReason)
+        XCTAssertEqual(r.service.sessionEnv(command: ["claude"], on: m.routeAgentSessions).set["ANTHROPIC_BASE_URL"], base)
+
+        // The last account removed: the next session is not routed.
+        m.requestRemove("a")
+        await m.confirmRemove()?.value
+        XCTAssertEqual(r.store.snapshot.order, [])
+        XCTAssertTrue(r.service.sessionEnv(command: ["claude"], on: m.routeAgentSessions).isEmpty, "the next session is not routed")
+        XCTAssertFalse(r.service.routable)
+        XCTAssertFalse(m.routeToggleShown)
+        XCTAssertEqual(m.routeDisabledReason, "Add an account first.")
+        XCTAssertTrue(m.routeAgentSessions, "the stored choice survives")
+
+        try r.add(["b"])
+        XCTAssertTrue(m.routeToggleShown)
+        XCTAssertEqual(r.service.sessionEnv(command: ["claude"], on: m.routeAgentSessions).set["ANTHROPIC_BASE_URL"], base)
+        m.routeAgentSessions = false
+        XCTAssertFalse(m.routeToggleShown)
+        XCTAssertTrue(r.service.sessionEnv(command: ["claude"], on: m.routeAgentSessions).isEmpty, "off stays off")
+        r.service.stop()
+        XCTAssertTrue(r.service.sessionEnv(command: ["claude"], on: true).isEmpty, "stopped: never routed")
+        XCTAssertFalse(r.service.routable)
+    }
+
+    // QA #739 F2 (A2): a Replace import drops the old token's verdict and usage from its row.
+    func testCCPoolReplaceImportDropsTheOldVerdictAndUsage() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try r.add(["a", "b", "c"])
+        r.anthropic.set {
+            $0.reject = ["tok-a": 401]
+            $0.usage = ["tok-b": 0.5]
+        }
+        try r.secrets.remove(id: try XCTUnwrap(r.store.snapshot.accounts["c"]?.id))
+        await m.refreshUsage().value
+        XCTAssertEqual(row(m, "a")?.state, .rejected)
+        XCTAssertTrue(row(m, "b")?.usageText.hasPrefix("5h 50%") ?? false, row(m, "b")?.usageText ?? "")
+        XCTAssertEqual(row(m, "c")?.state, .unverified)
+
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-a2"}, "b": {"token": "tok-b2"}, "c": {"token": "tok-c2"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .replace, "b": .replace, "c": .replace]
+        await m.runImport()?.value
+        guard case .imported(let o) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(o.replaced, ["a", "b", "c"])
+        XCTAssertEqual(row(m, "a")?.state, .ready, "the old token's rejection is gone")
+        XCTAssertEqual(row(m, "a")?.stateText, "ready")
+        XCTAssertEqual(row(m, "c")?.state, .ready, "the old token's \"not verified\" is gone")
+        XCTAssertNil(r.store.usageSample("b"), "the old token's usage is dropped at the replace")
+        XCTAssertEqual(row(m, "b")?.usageText, "no usage seen yet")
+    }
+
+    // Review carry 1 (A5): a Keychain delete that fails after the state was written names the account.
+    func testCCPoolRemoveSaysWhenTheKeychainItemStays() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        r.secrets.refuseRemove = true
+        r.model.requestRemove("a")
+        await r.model.confirmRemove()?.value
+        XCTAssertEqual(r.store.snapshot.order, ["b"], "the account is gone")
+        XCTAssertEqual(r.secrets.count, 2, "its item stayed")
+        XCTAssertEqual(r.model.notice, "Removed a, but its Keychain item could not be deleted; it stays in the Keychain, listed nowhere.")
+        XCTAssertTrue(r.log.lines.contains("a: removed; its Keychain item could not be deleted"), "\(r.log.lines)")
+        for t in [r.model.notice ?? ""] + r.log.lines { XCTAssertFalse(t.contains("tok-"), t) }
+        r.secrets.refuseRemove = false
+        r.model.requestRemove("b")
+        await r.model.confirmRemove()?.value
+        XCTAssertEqual(r.model.notice, "Removed b.")
+        XCTAssertEqual(r.secrets.count, 1, "only the orphan is left")
+    }
+
+    // QA #739 INFO-10 (B6): an open Remove confirm does nothing while the model is busy.
+    func testCCPoolRemoveConfirmWaitsWhileBusy() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a"])
+        r.model.requestRemove("a")
+        r.model.labelDraft = "x"
+        r.model.tokenDraft = "tok-x"
+        let add = r.model.addAccount()
+        XCTAssertTrue(r.model.busy)
+        XCTAssertNil(r.model.confirmRemove(), "busy: nothing is removed")
+        XCTAssertEqual(r.model.confirmingRemove, "a", "the confirm stays open")
+        await add.value
+        await r.model.confirmRemove()?.value
+        XCTAssertEqual(r.store.snapshot.order, ["x"])
+    }
+
+    // QA #739 INFO-11 (B7): "not running" carries the service's fixed reason.
+    func testCCPoolPaneSaysWhyTheProxyIsNotRunning() async throws {
+        let r = try ccpoolPaneRig()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0   // the production upstream: refused under XCTest, a fixed reason
+        let svc = CCPoolService(config: cfg, store: r.store, secrets: r.secrets, logger: r.log)
+        let m = CCPoolPaneModel(store: r.store, secrets: r.secrets, service: svc, logger: r.log, defaults: r.defaults,
+                                probeBase: r.base, vaultURL: r.vault)
+        await m.startProxy().value
+        XCTAssertEqual(m.proxyText, "Not running: ccpool: refusing the production upstream under XCTest")
+        guard case .running = r.service.start() else { return XCTFail("\(r.service.status)") }
+        r.service.listenerLost(.posix(.ENETDOWN))
+        XCTAssertEqual(r.model.proxyText, "Not running: " + CCPoolService.reasonLost)
+        XCTAssertFalse(r.model.proxyText.contains("POSIX"), "no raw system error text")
+    }
+
+    // QA #739 INFO-3 (B1): a vault that is a link is never trashed; the pane names its target.
+    func testCCPoolVaultLinkIsNeverTrashed() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        let target = tempDir().appendingPathComponent("elsewhere.json")
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}}}"#.utf8).write(to: target)
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: r.vault, withDestinationURL: target)
+        XCTAssertTrue(m.importVisible)
+        await m.beginImport().value
+        await m.runImport()?.value
+        guard case .imported(let o) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(o.imported, ["a"])
+        XCTAssertTrue(o.allHeld)
+        XCTAssertEqual(o.vaultLink, target.path)
+        let why = "The old vault is a link to \(target.path). Prosper moves nothing: delete that file yourself once you no longer need it."
+        XCTAssertEqual(m.trashBlockedReason, why)
+        m.finishImport(trash: true)
+        XCTAssertEqual(r.trashed.urls, [], "neither the link nor its target goes to the Trash")
+        XCTAssertEqual(m.importPhase, .finished(why))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: r.vault.path))
+    }
+
+    // QA #739 INFO-2 (B2): the Trash is offered only when every vault token is in the pool.
+    func testCCPoolTrashOnlyWhenEveryTokenIsHeld() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try r.add(["a", "b"])
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}, "b": {"token": "tok-other"}, "n": {}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .skip, "b": .skip]
+        await m.runImport()?.value
+        guard case .imported(let o) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(o.skipped, ["a", "b"])
+        XCTAssertEqual(o.notHeld, ["b"], "b keeps another token; a holds the same one")
+        XCTAssertEqual(o.failures.map(\.label), ["n"])
+        XCTAssertFalse(o.allHeld)
+        let why = "Not every account in the old vault is in the pool, so it stays where it is."
+        XCTAssertEqual(m.trashBlockedReason, why)
+        m.finishImport(trash: true)
+        XCTAssertEqual(r.trashed.urls, [], "an import with failures keeps the vault")
+        XCTAssertEqual(m.importPhase, .finished(why))
+
+        // Failures only (every kept label holds the same token): still kept.
+        m.dismissImport()
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}, "n": {}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .skip]
+        await m.runImport()?.value
+        XCTAssertEqual(m.trashBlockedReason, why)
+
+        // A different token left alone (no failure): still kept.
+        m.dismissImport()
+        try Data(#"{"accounts": {"b": {"token": "tok-other"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["b": .skip]
+        await m.runImport()?.value
+        XCTAssertEqual(m.trashBlockedReason, why)
+
+        // Same token skipped, the rest imported: offered, and the default trashes it.
+        m.dismissImport()
+        try Data(#"{"accounts": {"a": {"token": " tok-a\n"}, "c": {"token": "tok-c"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .skip]
+        await m.runImport()?.value
+        guard case .imported(let ok) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertTrue(ok.allHeld, "\(ok)")
+        XCTAssertNil(m.trashBlockedReason)
+        m.finishImport(trash: true)
+        XCTAssertEqual(r.trashed.urls, [r.vault])
+        XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
+    }
+
     // Errata C7 on real queues: an add (probe + Keychain + state), a proxy request and a refresh
     // all finish while the main thread is blocked. Only the final `finish*` hop needs main.
     func testCCPoolPaneModelWorkRunsWithMainBlocked() async throws {

@@ -15,6 +15,9 @@ struct CCPoolServiceConfig: Sendable {
     /// The start-up port probe, a test seam: a bound socket that is not listening makes the real
     /// probe wait for it, so only an injected "free" can stage the bind race start(bindRetry:) retries.
     var portProbe: @Sendable (_ port: UInt16, _ timeout: TimeInterval) -> CCPoolPortProbe.Result = CCPoolPortProbe.probe
+    /// Test seam (QA follow-up A6): runs on start()'s thread after the listener said .ready and
+    /// before it is published, so a test can deliver a state change into that window. nil in production.
+    var afterReady: (@Sendable (NWListener) -> Void)? = nil
 }
 
 /// #871: the in-process ccpool proxy. HTTP/1.1 on Network.framework, loopback only. Clients point
@@ -57,6 +60,12 @@ final class CCPoolService: @unchecked Sendable {
     /// socket bound but not listening): the case a brief retry can win.
     private var bindRaced = false
 
+    /// Fixed reasons a `.failed` status carries (QA #739 INFO-11): never a raw system error text.
+    static let reasonCreate = "the listener could not be created"
+    static let reasonBind = "the port could not be bound"
+    static let reasonTimeout = "the bind timed out"
+    static let reasonLost = "the listener stopped after it started"
+
     init(config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger = CCPoolOSLog()) {
         self.config = config
         self.store = store
@@ -65,6 +74,23 @@ final class CCPoolService: @unchecked Sendable {
     }
 
     var status: Status { lock.withLock { _status } }
+
+    /// The published listener (tests deliver its state changes through its own handler, A6).
+    var currentListener: NWListener? { lock.withLock { listener } }
+
+    /// QA #739 F1: new sessions route only while the listener runs AND the pool lists an account.
+    var routable: Bool {
+        guard case .running = status else { return false }
+        return store.hasAccounts
+    }
+
+    /// The env delta for a new Agent Session (P2b's one call): base URL, health and accounts all
+    /// come from this service, so no caller can route to a stopped proxy or an empty pool.
+    func sessionEnv(command: [String], on: Bool) -> CCPool.EnvDelta {
+        guard case .running(let port) = status else { return CCPool.EnvDelta() }
+        return CCPool.sessionEnv(command: command, base: CCPool.baseURL(port: port), on: on, healthy: true,
+                                 hasAccounts: store.hasAccounts)
+    }
 
     /// Under XCTest the proxy never binds the production port and never dials the production
     /// upstream: the operator's own proxy may be on that port, and tests never reach the network.
@@ -106,15 +132,34 @@ final class CCPoolService: @unchecked Sendable {
         }
         let l: NWListener
         do { l = try NWListener(using: Self.listenerParameters(port: config.port)) } catch {
-            return finishStart(.failed("listener: \(error)"), note: "listener could not be created")
+            return finishStart(.failed(Self.reasonCreate), note: "listener could not be created", detail: " \(error)")
         }
-        final class Outcome: @unchecked Sendable { var status: Status = .failed("bind timed out"); var inUse = false; var settled = false }
+        final class Outcome: @unchecked Sendable {
+            var status: Status = .failed(CCPoolService.reasonTimeout)
+            var inUse = false, settled = false
+            /// A6 (b): a state change after .ready that came before start() published the listener.
+            var lost = false
+        }
         let outcome = Outcome()
         let sem = DispatchSemaphore(value: 0)
+        // Runs on `queue` (Network's callbacks); formed in a nonisolated method, never @MainActor.
         l.stateUpdateHandler = { [weak self, weak l] state in
-            // After start settled, only a later failure matters: the status must stop saying running.
+            // After .ready, every state but .ready/.setup means the listener no longer serves (A6):
+            // .waiting (a), .failed, .cancelled. Before start() published it, `lost` tells start();
+            // after, listenerLost() finds it by identity.
             if outcome.settled {
-                if case .failed(let e) = state { self?.listenerLost(e, from: l) }
+                // A freed listener is never the published one (the service holds that); and a nil
+                // `from` would mean "the current listener" to listenerLost.
+                guard let l else { return }
+                switch state {
+                case .waiting(let e), .failed(let e):
+                    outcome.lost = true
+                    self?.listenerLost(e, from: l)
+                case .cancelled:
+                    outcome.lost = true
+                    self?.listenerLost(nil, from: l)
+                default: break
+                }
                 return
             }
             switch state {
@@ -123,7 +168,7 @@ final class CCPoolService: @unchecked Sendable {
                 outcome.settled = true
                 sem.signal()
             case .failed(let e), .waiting(let e):
-                if case .posix(.EADDRINUSE) = e { outcome.status = .heldByOther; outcome.inUse = true } else { outcome.status = .failed("\(e)") }
+                if case .posix(.EADDRINUSE) = e { outcome.status = .heldByOther; outcome.inUse = true } else { outcome.status = .failed(CCPoolService.reasonBind) }
                 outcome.settled = true
                 sem.signal()
             default: break
@@ -132,13 +177,22 @@ final class CCPoolService: @unchecked Sendable {
         l.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
         l.start(queue: queue)
         _ = sem.wait(timeout: .now() + 5)
-        guard case .running = outcome.status else {
+        if case .running = outcome.status { config.afterReady?(l) }
+        // A6 (b): decided on the listener's own queue, so a state change after .ready was either
+        // seen above (`lost`) or runs after `listener = l` and is matched by identity.
+        let published: Bool = queue.sync {
+            outcome.settled = true   // a late .ready after the 5 s timeout changes nothing
+            guard case .running = outcome.status else { return false }
+            if outcome.lost { outcome.status = .failed(CCPoolService.reasonLost); return false }
+            lock.withLock { listener = l }
+            return true
+        }
+        guard published else {
             l.stateUpdateHandler = nil
             l.cancel()
             lock.withLock { bindRaced = outcome.inUse }
             return finishStart(outcome.status, note: "listener did not start")
         }
-        lock.withLock { listener = l }
         return finishStart(outcome.status, note: "proxy listening on loopback")
     }
 
@@ -169,30 +223,34 @@ final class CCPoolService: @unchecked Sendable {
         return start(bindRetry: bindRetry)
     }
 
-    /// Remove an account and drop its upstream URLSession with it (P2a follow-up e).
-    func removeAccount(label: String) throws {
-        let id = try store.removeAccount(label: label, secrets: secrets)
+    /// Remove an account and drop its upstream URLSession with it (P2a follow-up e). False when the
+    /// account is gone but its Keychain item could not be deleted (the caller says so).
+    @discardableResult
+    func removeAccount(label: String) throws -> Bool {
+        let (id, deleted) = try store.removeAccount(label: label, secrets: secrets)
         upstream.drop(accountID: id)
+        return deleted
     }
 
-    /// QA #734: the running listener failed (`from` nil means the current one). The status says
-    /// so and the listener is dropped, so the pane offers Start again instead of showing running.
-    func listenerLost(_ error: NWError, from failed: NWListener? = nil) {
+    /// QA #734 / A6: the running listener stopped serving (`from` nil means the current one; `error`
+    /// nil for a cancel nobody asked for). The status says so and the listener is dropped, so the
+    /// pane offers Start again and no session routes to it.
+    func listenerLost(_ error: NWError?, from failed: NWListener? = nil) {
         let lost = lock.withLock { () -> NWListener? in
             guard let l = listener, failed == nil || failed === l else { return nil }
             listener = nil
-            _status = .failed("\(error)")
+            _status = .failed(Self.reasonLost)
             return l
         }
         guard let lost else { return }
         lost.stateUpdateHandler = nil
         lost.cancel()
-        logger.note(nil, "listener failed after start: \(error)")
+        logger.note(nil, "listener stopped after start: \(error.map { "\($0)" } ?? "cancelled")")
     }
 
-    private func finishStart(_ s: Status, note: String) -> Status {
+    private func finishStart(_ s: Status, note: String, detail: String = "") -> Status {
         lock.withLock { _status = s }
-        logger.note(nil, note)
+        if detail.isEmpty { logger.note(nil, note) } else { logger.note(nil, note, private: detail) }
         return s
     }
 

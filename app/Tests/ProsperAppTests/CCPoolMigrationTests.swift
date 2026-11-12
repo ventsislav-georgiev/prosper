@@ -176,6 +176,104 @@ final class CCPoolMigrationTests: XCTestCase {
         XCTAssertNil(st.snapshot.current)
     }
 
+    // QA #739 INFO-14 (A7): a Replace that fails keeps the old Keychain item and the old listing.
+    func testCCPoolFailedReplaceKeepsTheOldItem() throws {
+        let vault = try fixture()
+        // The new item cannot be written.
+        let st = store()
+        let secrets = CCPoolMemorySecrets()
+        try st.addAccount(label: "alpha", token: "tok-old", secrets: secrets)
+        let oldID = try XCTUnwrap(st.snapshot.accounts["alpha"]?.id)
+        secrets.refuseStore = true
+        let out = try CCPoolMigration.run(vault: vault, store: st, secrets: secrets, choices: ["alpha": .replace], now: t0)
+        XCTAssertEqual(out.failures.first { $0.label == "alpha" }?.reason, CCPoolMigration.reasonKeychain)
+        XCTAssertEqual(out.replaced, [])
+        XCTAssertEqual(out.retiredIDs, [])
+        XCTAssertEqual(st.snapshot.accounts["alpha"]?.id, oldID, "still listed under the old item")
+        XCTAssertEqual(try secrets.token(id: oldID), "tok-old", "the old item survives")
+        XCTAssertEqual(secrets.count, 1)
+
+        // The new item reads back different.
+        let trunc = TruncatingSecrets()
+        let st2 = store()
+        try st2.addAccount(label: "alpha", token: "tok-old", secrets: trunc.inner)
+        let oldID2 = try XCTUnwrap(st2.snapshot.accounts["alpha"]?.id)
+        let out2 = try CCPoolMigration.run(vault: vault, store: st2, secrets: trunc, choices: ["alpha": .replace], now: t0)
+        XCTAssertEqual(out2.failures.first { $0.label == "alpha" }?.reason, CCPoolMigration.reasonReadBack)
+        XCTAssertEqual(out2.replaced, [])
+        XCTAssertEqual(st2.snapshot.accounts["alpha"]?.id, oldID2)
+        XCTAssertEqual(try trunc.inner.token(id: oldID2), "tok-old", "the old item survives")
+        XCTAssertEqual(trunc.inner.count, 1, "and only it: the truncated new items are removed")
+    }
+
+    // QA #739 INFO-5 (B5): an old item that cannot be deleted after a replace is logged, label only.
+    func testCCPoolReplaceLogsAnOldItemItCannotDelete() throws {
+        let vault = try fixture()
+        let log = CCPoolCapturingLogger()
+        let t = t0
+        let st = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"), clock: { t }, logger: log)
+        let secrets = CCPoolMemorySecrets()
+        try st.addAccount(label: "alpha", token: "tok-old", secrets: secrets)
+        let oldID = try XCTUnwrap(st.snapshot.accounts["alpha"]?.id)
+        secrets.refuseRemove = true
+        let out = try CCPoolMigration.run(vault: vault, store: st, secrets: secrets, choices: ["alpha": .replace], now: t0)
+        XCTAssertEqual(out.replaced, ["alpha"])
+        XCTAssertEqual(try secrets.token(id: oldID), "tok-old", "the delete really failed")
+        XCTAssertTrue(log.lines.contains("alpha: replaced; the old Keychain item could not be deleted"), "\(log.lines)")
+        XCTAssertTrue(out.notes.contains { $0.hasPrefix("alpha: the replaced token") }, "\(out.notes)")
+        for text in log.lines + out.notes { XCTAssertFalse(text.contains("tok-"), text) }
+    }
+
+    // QA #739 INFO-6 (B3): vault labels follow the typed-label rule; a bad one is refused with a
+    // fixed reason and never shown, logged or stored as it is.
+    func testCCPoolVaultLabelsFollowTheLabelRule() async throws {
+        let long = String(repeating: "x", count: CCPoolStore.labelMax + 1)
+        let bad = ["bell\u{7}x", "zero\u{200B}width", "rtl\u{202E}abc", "line\u{2028}x", "tab\tx", long, "", "  "]
+        for label in bad {
+            XCTAssertNotNil(CCPoolStore.labelProblem(label), label.debugDescription)
+        }
+        for label in ["work-account@example.com", "personal", "Zoë 2", String(repeating: "x", count: CCPoolStore.labelMax)] {
+            XCTAssertNil(CCPoolStore.labelProblem(label), label)
+        }
+
+        let dir = tempDir()
+        let vault = dir.appendingPathComponent(CCPoolMigration.vaultFileName)
+        let json = #"{"accounts": {"ok": {"token": "tok-ok"}, "bell\u0007x": {"token": "tok-1"}, "zero\u200bwidth": {"token": "tok-2"}, "#
+            + #""rtl\u202eabc": {"token": "tok-3"}, "line\u2028x": {"token": "tok-4"}, "tab\tx": {"token": "tok-5"}, "#
+            + #""\#(long)": {"token": "tok-6"}, "": {"token": "tok-7"}}}"#
+        try Data(json.utf8).write(to: vault)
+        let log = CCPoolCapturingLogger()
+        let t = t0
+        let st = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"), clock: { t }, logger: log)
+        let secrets = CCPoolMemorySecrets()
+        let shown = ["ok"] + (2...8).map { "entry \($0) (unusable label)" }
+        XCTAssertEqual(try CCPoolMigration.inspect(vault: vault, store: st).labels, shown)
+        let out = try CCPoolMigration.run(vault: vault, store: st, secrets: secrets, choices: [:], now: t0)
+        XCTAssertEqual(out.imported, ["ok"])
+        XCTAssertEqual(out.failures, (2...8).map { CCPoolMigration.Failure(label: "entry \($0) (unusable label)", reason: CCPoolMigration.reasonBadLabel) })
+        XCTAssertEqual(st.snapshot.order, ["ok"])
+        XCTAssertEqual(secrets.count, 1, "no item for a refused entry")
+        XCTAssertFalse(out.allHeld, "the vault keeps what was refused")
+        let texts = ["\(out)"] + CCPoolPaneModel.summary(out) + log.lines
+            + [try String(contentsOf: st.stateURL, encoding: .utf8)]
+        for text in texts {
+            for raw in ["bell", "zero", "rtl", "line", "tab", long] { XCTAssertFalse(text.contains(raw), "\(raw) in \(text.prefix(200))") }
+        }
+
+        // A typed label meets the same rule: refused before any probe or Keychain write.
+        for label in ["a\u{200B}b", long] {
+            XCTAssertThrowsError(try st.addAccount(label: label, token: "tok-typed", secrets: secrets)) {
+                XCTAssertEqual($0 as? CCPoolStoreError, .badLabel)
+            }
+            let added = await CCPoolPaneModel.add(label: label, token: "tok-typed", store: st, secrets: secrets,
+                                                  base: URL(string: "http://127.0.0.1:9")!)
+            XCTAssertEqual(added, .failed(CCPoolStoreError.badLabel.description))
+            XCTAssertThrowsError(try st.renameAccount("ok", to: label)) { XCTAssertEqual($0 as? CCPoolStoreError, .badLabel) }
+        }
+        XCTAssertEqual(secrets.count, 1)
+        XCTAssertEqual(st.snapshot.order, ["ok"])
+    }
+
     // Leak guard: no outcome, error, summary line, log line or state file holds a token.
     func testCCPoolImportLeakGuard() throws {
         let vault = try fixture()

@@ -108,7 +108,8 @@ final class CCPoolPaneModel: ObservableObject {
             return "Another ccpool proxy\(pid.map { " (pid \($0))" } ?? "") holds port \(service.config.port). "
                 + "Prosper never stops it: quit it, then Start proxy."
         case .heldByOther: return "Port \(service.config.port) is in use by another program"
-        case .failed: return "Could not start"
+        // QA #739 INFO-11: the service's fixed reason, never a raw system error text.
+        case .failed(let why): return "Not running: \(why)"
         }
     }
 
@@ -209,8 +210,12 @@ final class CCPoolPaneModel: ObservableObject {
         }
     }
 
+    /// What the toggle shows (QA #739 F1): off while the pool has no account, the stored choice
+    /// otherwise. Turning it never happens while it is disabled, so the stored choice survives.
+    var routeToggleShown: Bool { store.hasAccounts && routeAgentSessions }
+
     var routeDisabledReason: String? {
-        if store.read({ $0.order.isEmpty }) { return "Add an account first." }
+        if !store.hasAccounts { return "Add an account first." }
         if !proxyRunning { return "The proxy is not running." }
         return nil
     }
@@ -248,7 +253,7 @@ final class CCPoolPaneModel: ObservableObject {
     nonisolated static func add(label: String, token: String, store: CCPoolStore, secrets: CCPoolSecrets,
                                 base: URL) async -> AddResult {
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !label.isEmpty else { return .failed(CCPoolStoreError.emptyLabel.description) }
+        if let problem = CCPoolStore.labelProblem(label) { return .failed(problem.description) }
         guard !token.isEmpty else { return .failed(CCPoolStoreError.emptyToken.description) }
         guard !store.unreadable else { return .failed(CCPoolStoreError.stateUnreadable.description) }
         guard store.read({ $0.accounts[label] == nil }) else { return .failed(CCPoolStoreError.duplicateLabel.description) }
@@ -297,35 +302,37 @@ final class CCPoolPaneModel: ObservableObject {
     /// The confirm row's Remove: the Keychain item, the state entry and the upstream session go.
     @discardableResult
     func confirmRemove() -> Task<Void, Never>? {
-        guard let label = confirmingRemove else { return nil }
+        // QA #739 INFO-10: one account change at a time; the confirm stays open until it is free.
+        guard let label = confirmingRemove, !busy else { return nil }
         confirmingRemove = nil
         busy = true
         let service = service
         return Task.detached { [weak self] in
-            let failure = Self.remove(label, service: service)
-            await self?.finishRemove(label, failure)
+            let (failure, itemDeleted) = Self.remove(label, service: service)
+            await self?.finishRemove(label, failure, itemDeleted: itemDeleted)
         }
     }
 
-    nonisolated static func remove(_ label: String, service: CCPoolService) -> String? {
-        do { try service.removeAccount(label: label) } catch let e as CCPoolStoreError {
-            return e.description
+    /// `itemDeleted` false: the account is gone but its Keychain item stayed (P2a review carry 1).
+    nonisolated static func remove(_ label: String, service: CCPoolService) -> (failure: String?, itemDeleted: Bool) {
+        do { return (nil, try service.removeAccount(label: label)) } catch let e as CCPoolStoreError {
+            return (e.description, true)
         } catch let e as CCPoolSecretsError {
-            return "ccpool: \(e.description)"
+            return ("ccpool: \(e.description)", true)
         } catch {
-            return "ccpool: \(label) could not be removed"
+            return ("ccpool: \(label) could not be removed", true)
         }
-        return nil
     }
 
-    private func finishRemove(_ label: String, _ failure: String?) {
+    private func finishRemove(_ label: String, _ failure: String?, itemDeleted: Bool) {
         busy = false
         if failure == nil {
             if selected == label { selected = nil }
             rejected.remove(label)
             unverified.remove(label)
         }
-        notice = failure ?? "Removed \(label)."
+        notice = failure ?? (itemDeleted ? "Removed \(label)."
+            : "Removed \(label), but its Keychain item could not be deleted; it stays in the Keychain, listed nowhere.")
     }
 
     func rename(_ label: String, to newLabel: String) {
@@ -467,16 +474,38 @@ final class CCPoolPaneModel: ObservableObject {
     private func finishRun(_ r: Result<CCPoolMigration.Outcome, CCPoolMigration.ReadError>) {
         busy = false
         switch r {
-        case .success(let o): importPhase = .imported(o)
+        case .success(let o):
+            // QA #739 F2: a replaced token is not the old one: its verdict goes (its usage went in run).
+            for label in o.imported + o.replaced {
+                rejected.remove(label)
+                unverified.remove(label)
+            }
+            importPhase = .imported(o)
         case .failure(let e):
             importPhase = .idle
             notice = e.description
         }
     }
 
+    /// Why "Move the old vault to the Trash" is not offered after this import, or nil when it is.
+    /// B1: a link is never trashed (that would leave the plaintext it points to); the pane names
+    /// the target. B2: an import with failures, or a kept label holding another token, keeps it.
+    var trashBlockedReason: String? {
+        guard case .imported(let o) = importPhase else { return nil }
+        if let target = o.vaultLink {
+            return "The old vault is a link to \(target). Prosper moves nothing: delete that file yourself once you no longer need it."
+        }
+        if !o.allHeld { return "Not every account in the old vault is in the pool, so it stays where it is." }
+        return nil
+    }
+
     /// The last step: "Move the old vault to the Trash" (the default) or "Keep it".
     func finishImport(trash moveToTrash: Bool) {
         guard case .imported = importPhase else { return }
+        if moveToTrash, let why = trashBlockedReason {
+            importPhase = .finished(why)
+            return
+        }
         guard moveToTrash else {
             importPhase = .finished("Kept the old vault. The Homebrew ccpool keeps using it; it and Prosper never share state.")
             return

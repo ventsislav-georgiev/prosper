@@ -13,8 +13,11 @@ enum CCPoolMigration {
     static let vaultFileName = "vault.json"
     static let stateFileName = "state.json"
 
-    /// The ONE production path rule, as the Python ccpool resolves it: `$CCPOOL_HOME/vault.json`,
-    /// else `<home>/.ccpool/vault.json`. An empty variable counts as unset. Reads nothing.
+    /// The ONE production path rule: `$CCPOOL_HOME/vault.json`, else `<home>/.ccpool/vault.json`.
+    /// Reads nothing. One deliberate difference from the Python ccpool (QA #739 INFO-7): Python's
+    /// `Path(os.environ.get(...))` reads an EMPTY variable as "" = its current directory; here an
+    /// empty variable counts as unset, since the app's current directory is never the one the
+    /// user ran ccpool in. (A relative value resolves against the app's directory, not theirs.)
     static func vaultURL(home: URL, environment: [String: String]) -> URL {
         let dir = environment[homeVariable].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
             ?? home.appendingPathComponent(homeDirName, isDirectory: true)
@@ -54,6 +57,13 @@ enum CCPoolMigration {
         var notes: [String] = []
         /// Keychain ids a replaced token used to live under (now removed): drop their upstream sessions.
         var retiredIDs: [String] = []
+        /// QA #739 INFO-2: skipped or left-alone labels whose token in the pool is not the vault's.
+        var notHeld: [String] = []
+        /// QA #739 INFO-3: where vault.json points when it is a symbolic link (path only).
+        var vaultLink: String?
+        /// Every vault token is now in the pool (imported, replaced, or the same token already
+        /// listed): only then may the old vault go to the Trash.
+        var allHeld: Bool { failures.isEmpty && notHeld.isEmpty }
     }
 
     /// Why nothing was imported. Never quotes the file.
@@ -70,12 +80,19 @@ enum CCPoolMigration {
     }
 
     static let reasonNoToken = "no token in the old vault"
+    static let reasonBadLabel = "its label is too long or holds a control or invisible character; not imported"
     static let reasonKeychain = "the Keychain did not take the token"
     static let reasonReadBack = "the stored token did not read back intact; not imported"
     static let reasonState = "the account list could not be saved; not imported"
     static let noteStateUnreadable = "the old state file could not be read; cooldowns were not carried"
 
     // MARK: Read
+
+    /// QA #739 INFO-6: a vault label that fails the label rule is never shown or logged; the
+    /// entry's place in the vault stands in for it.
+    static func shownLabel(_ label: String, at index: Int) -> String {
+        CCPoolStore.labelProblem(label) == nil ? label : "entry \(index + 1) (unusable label)"
+    }
 
     /// Labels and tokens in vault order (the Python pick order breaks ties by it).
     private static func readVault(_ url: URL) throws -> [(label: String, token: String?)] {
@@ -119,7 +136,8 @@ enum CCPoolMigration {
     static func inspect(vault: URL, store: CCPoolStore) throws -> Plan {
         let labels = try readVault(vault).map(\.label)
         let have = store.read { Set($0.accounts.keys) }
-        return Plan(labels: labels, conflicts: labels.filter { have.contains($0) })
+        return Plan(labels: labels.enumerated().map { shownLabel($1, at: $0) },
+                    conflicts: labels.filter { CCPoolStore.labelProblem($0) == nil && have.contains($0) })
     }
 
     private enum Step { case added, replaced(old: String), conflict }
@@ -132,17 +150,28 @@ enum CCPoolMigration {
         let stateURL = stateURL(vault: vault)
         let carried = readState(stateURL)
         var out = Outcome()
+        out.vaultLink = try? FileManager.default.destinationOfSymbolicLink(atPath: vault.path)
         if carried == nil, FileManager.default.fileExists(atPath: stateURL.path) { out.notes.append(noteStateUnreadable) }
+        /// A label left as it is: does the pool already hold this very token? Compared in memory.
+        func checkHeld(_ label: String, _ token: String) {
+            let id = store.read { $0.accounts[label]?.id }
+            let have = id.flatMap { (try? secrets.token(id: $0)) ?? nil }
+            if have != token { out.notHeld.append(label) }
+        }
 
-        for (label, token) in entries {
-            guard let token, !token.isEmpty, !label.isEmpty else {
+        for (i, (label, token)) in entries.enumerated() {
+            guard CCPoolStore.labelProblem(label) == nil else {
+                out.failures.append(Failure(label: shownLabel(label, at: i), reason: reasonBadLabel))
+                continue
+            }
+            guard let token, !token.isEmpty else {
                 out.failures.append(Failure(label: label, reason: reasonNoToken))
                 continue
             }
             if store.read({ $0.accounts[label] != nil }) {
                 switch choices[label] {
-                case nil: out.undecided.append(label); continue
-                case .skip?: out.skipped.append(label); continue
+                case nil: out.undecided.append(label); checkHeld(label, token); continue
+                case .skip?: out.skipped.append(label); checkHeld(label, token); continue
                 case .replace?: break
                 }
             }
@@ -180,13 +209,20 @@ enum CCPoolMigration {
             case (.conflict, _):
                 try? secrets.remove(id: id)
                 out.undecided.append(label)
+                checkHeld(label, token)
             case (_, false):
                 try? secrets.remove(id: id)
                 out.failures.append(Failure(label: label, reason: reasonState))
             case (.added, true):
                 out.imported.append(label)
             case (.replaced(let old), true):
-                try? secrets.remove(id: old)
+                // QA #739 F2: the old token's usage is not the new one's.
+                store.forgetUsage(label)
+                do { try secrets.remove(id: old) } catch {
+                    // QA #739 INFO-5: label only, kept private by the live logger.
+                    store.logger.note(label, "replaced; the old Keychain item could not be deleted")
+                    out.notes.append("\(label): the replaced token's Keychain item could not be deleted; it is listed nowhere")
+                }
                 out.retiredIDs.append(old)
                 out.replaced.append(label)
             }

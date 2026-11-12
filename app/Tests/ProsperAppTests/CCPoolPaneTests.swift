@@ -87,10 +87,30 @@ final class CCPoolPaneTests: XCTestCase {
         let r = try await busyModel()
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
-        for phase in ["accounts", "import review"] {
-            if phase == "import review" {
+        // QA #739 INFO-12 (B9): the import's result states too, with the Trash offered and refused.
+        for phase in ["accounts", "import review", "imported", "finished", "imported, vault kept"] {
+            switch phase {
+            case "import review":
                 await r.model.beginImport().value
                 guard case .review = r.model.importPhase else { return XCTFail("\(r.model.importPhase)") }
+            case "imported":
+                r.model.importChoices = ["personal": .replace]
+                await r.model.runImport()?.value
+                guard case .imported = r.model.importPhase else { return XCTFail("\(r.model.importPhase)") }
+                XCTAssertNil(r.model.trashBlockedReason, "both buttons on one row")
+            case "finished":
+                r.model.finishImport(trash: false)
+                guard case .finished = r.model.importPhase else { return XCTFail("\(r.model.importPhase)") }
+            case "imported, vault kept":
+                r.model.dismissImport()
+                try Data(#"{"accounts": {"personal": {"token": "tok-p2"}, "other": {"token": "tok-o"}, "broken-entry-with-a-long-label": {}}}"#.utf8)
+                    .write(to: r.vault)
+                await r.model.beginImport().value
+                r.model.importChoices = ["personal": .skip, "other": .skip]
+                await r.model.runImport()?.value
+                guard case .imported = r.model.importPhase else { return XCTFail("\(r.model.importPhase)") }
+                XCTAssertNotNil(r.model.trashBlockedReason, "the reason caption and Keep it")
+            default: break
             }
             for backing in [1, 2] as [CGFloat] {
                 for scale in [1.0, 0.85, 0.7] as [CGFloat] {
@@ -185,6 +205,9 @@ final class CCPoolPaneTests: XCTestCase {
         XCTAssertTrue(CCPoolPane.mintHint.contains("claude setup-token"))
         XCTAssertTrue(CCPoolPane.labelHint.contains("Labels are visible to local processes"), "errata C6")
         XCTAssertTrue(CCPoolPane.refreshHint.contains("one tiny request per account"))
+        // QA #739 INFO-1 (B8): the order only breaks ties.
+        XCTAssertFalse(CCPoolPane.accountsFooter.contains("Tried in this order"))
+        XCTAssertTrue(CCPoolPane.accountsFooter.contains("five-hour window resets soonest"))
         var s = viewStrings(r.model)
         XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeTitle) })
         XCTAssertTrue(s.contains { $0.contains("Add an account first.") }, "the toggle says why it is off")

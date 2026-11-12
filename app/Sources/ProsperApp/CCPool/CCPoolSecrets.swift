@@ -26,10 +26,31 @@ enum CCPoolSecretsError: Error, Equatable, CustomStringConvertible {
 final class CCPoolMemorySecrets: CCPoolSecrets, @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String: String] = [:]
+    private var _refuseStore = false, _refuseRemove = false
 
-    func store(token: String, id: String, label: String) throws { lock.withLock { items[id] = token } }
+    /// Test switches: the next stores / removes throw like a Keychain error, and change nothing.
+    var refuseStore: Bool {
+        get { lock.withLock { _refuseStore } }
+        set { lock.withLock { _refuseStore = newValue } }
+    }
+    var refuseRemove: Bool {
+        get { lock.withLock { _refuseRemove } }
+        set { lock.withLock { _refuseRemove = newValue } }
+    }
+
+    func store(token: String, id: String, label: String) throws {
+        try lock.withLock {
+            if _refuseStore { throw CCPoolSecretsError.failed(errSecIO) }
+            items[id] = token
+        }
+    }
     func token(id: String) throws -> String? { lock.withLock { items[id] } }
-    func remove(id: String) throws { _ = lock.withLock { items.removeValue(forKey: id) } }
+    func remove(id: String) throws {
+        try lock.withLock {
+            if _refuseRemove { throw CCPoolSecretsError.failed(errSecIO) }
+            items.removeValue(forKey: id)
+        }
+    }
     var count: Int { lock.withLock { items.count } }
 }
 

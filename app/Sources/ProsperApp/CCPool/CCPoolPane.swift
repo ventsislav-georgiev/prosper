@@ -11,6 +11,10 @@ struct CCPoolPane: View {
     static let labelHint = "Labels are visible to local processes (the proxy health answer, the state file, the Keychain item name); the token is not."
     static let refreshHint = "Costs one tiny request per account, straight to Anthropic."
     static let routeTitle = "Start new Claude sessions through the pool"
+    /// QA #739 INFO-1: CCPoolCore.pick keeps the current account while it has room, then takes the
+    /// soonest five-hour reset; the list order only breaks ties.
+    static let accountsFooter = "The current account is used while it has room, then the one whose five-hour window resets soonest; "
+        + "this order breaks ties. Remove deletes the Keychain item too."
 
     var body: some View {
         // Re-render on the minute so "limited until", "held until" and usage ages stay true.
@@ -54,7 +58,7 @@ struct CCPoolPane: View {
     // MARK: Accounts
 
     private var accountsSection: some View {
-        NeonSection("Accounts", footer: "Tried in this order. Remove deletes the Keychain item too.") {
+        NeonSection("Accounts", footer: Self.accountsFooter) {
             VStack(alignment: .leading, spacing: sz(10)) {
                 if let problem = model.storeProblem { caption(problem, color: Neon.magenta) }
                 if let notice = model.notice { caption(notice, color: Neon.blueBright) }
@@ -79,6 +83,7 @@ struct CCPoolPane: View {
                 fitting {
                     caption("Remove \(label) and its Keychain item?")
                     Button("Remove") { model.confirmRemove() }.buttonStyle(.neonDestructive).fixedSize()
+                        .disabled(model.busy)
                     Button("Cancel") { model.cancelRemove() }.buttonStyle(.neon).fixedSize()
                 }
             }
@@ -151,7 +156,8 @@ struct CCPoolPane: View {
         let reason = model.routeDisabledReason
         return NeonSection("Agent Sessions") {
             NeonRow(Self.routeTitle, subtitle: reason ?? "Applies to sessions started after the change.") {
-                Toggle("", isOn: $model.routeAgentSessions)
+                // Shows off while there is no account; writes only the stored choice (QA #739 F1).
+                Toggle("", isOn: Binding(get: { model.routeToggleShown }, set: { model.routeAgentSessions = $0 }))
                     .labelsHidden()
                     .disabled(reason != nil)
             }
@@ -198,9 +204,14 @@ struct CCPoolPane: View {
                     }
                 case .imported(let outcome):
                     ForEach(CCPoolPaneModel.summary(outcome), id: \.self) { caption($0) }
-                    fitting {
-                        Button("Move the old vault to the Trash") { model.finishImport(trash: true) }.buttonStyle(.neon).fixedSize()
+                    if let why = model.trashBlockedReason {
+                        caption(why, color: Neon.magenta)
                         Button("Keep it") { model.finishImport(trash: false) }.buttonStyle(.neon).fixedSize()
+                    } else {
+                        fitting {
+                            Button("Move the old vault to the Trash") { model.finishImport(trash: true) }.buttonStyle(.neon).fixedSize()
+                            Button("Keep it") { model.finishImport(trash: false) }.buttonStyle(.neon).fixedSize()
+                        }
                     }
                 case .finished(let text):
                     NeonRow(text) {

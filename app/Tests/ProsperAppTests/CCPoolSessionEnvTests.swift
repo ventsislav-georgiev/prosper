@@ -4,10 +4,10 @@ import XCTest
 /// #871 spec 3.6 + errata C8: the env a new Agent Session gets. Pure; no process is spawned.
 final class CCPoolSessionEnvTests: XCTestCase {
     private let base = CCPool.baseURL(port: 41234)
-    private let creds = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+    private let creds = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
 
-    private func env(_ argv: [String], on: Bool = true, healthy: Bool = true) -> CCPool.EnvDelta {
-        CCPool.sessionEnv(command: argv, base: base, on: on, healthy: healthy)
+    private func env(_ argv: [String], on: Bool = true, healthy: Bool = true, hasAccounts: Bool = true) -> CCPool.EnvDelta {
+        CCPool.sessionEnv(command: argv, base: base, on: on, healthy: healthy, hasAccounts: hasAccounts)
     }
 
     func testCCPoolSessionEnvTable() {
@@ -37,11 +37,15 @@ final class CCPoolSessionEnvTests: XCTestCase {
             XCTAssertEqual(env(argv, on: on, healthy: healthy), want, name)
         }
         XCTAssertTrue(env(["claude"], on: false).isEmpty)
+        // QA #739 F1: an empty pool never routes, whatever else holds.
+        for argv in [["claude"], ["headroom"]] {
+            XCTAssertTrue(env(argv, hasAccounts: false).isEmpty, "\(argv)")
+        }
     }
 
     func testCCPoolSessionEnvAppliedStripsCredentialsOnlyWhenRouting() {
         let parent = ["ANTHROPIC_API_KEY": "dummy-key", "ANTHROPIC_AUTH_TOKEN": "dummy-auth", "PATH": "/usr/bin",
-                      "ANTHROPIC_BASE_URL": "http://elsewhere.invalid"]
+                      "ANTHROPIC_BASE_URL": "http://elsewhere.invalid", "CLAUDE_CODE_OAUTH_TOKEN": "dummy-oauth"]
         let routed = env(["claude"]).applied(to: parent)
         XCTAssertEqual(routed, ["PATH": "/usr/bin", "ANTHROPIC_BASE_URL": base])
         let head = env(["headroom"]).applied(to: parent)
@@ -49,6 +53,8 @@ final class CCPoolSessionEnvTests: XCTestCase {
         XCTAssertEqual(head["ANTHROPIC_BASE_URL"], "http://elsewhere.invalid", "headroom keeps its own base URL")
         XCTAssertNil(head["ANTHROPIC_API_KEY"])
         XCTAssertNil(head["ANTHROPIC_AUTH_TOKEN"])
+        XCTAssertNil(head["CLAUDE_CODE_OAUTH_TOKEN"], "QA #739 INFO-4: the proxy supplies the credential")
+        XCTAssertEqual(env(["claude"], hasAccounts: false).applied(to: parent), parent, "empty pool: nothing changes")
         XCTAssertEqual(env(["claude"], healthy: false).applied(to: parent), parent, "proxy down: nothing changes")
         XCTAssertEqual(env(["bash"]).applied(to: parent), parent, "not claude: nothing changes")
     }

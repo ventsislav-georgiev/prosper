@@ -36,10 +36,13 @@ enum CCPoolStoreError: Error, Equatable, CustomStringConvertible {
     case emptyLabel, duplicateLabel, emptyToken, noSuchAccount, stateWriteFailed
     /// QA #734 INFO-4: state.json exists but could not be read; this process never writes it.
     case stateUnreadable
+    /// QA #739 INFO-6: too long, or a control or invisible character (CCPoolStore.labelProblem).
+    case badLabel
 
     var description: String {
         switch self {
         case .emptyLabel: return "ccpool: an account needs a label"
+        case .badLabel: return "ccpool: a label is at most \(CCPoolStore.labelMax) characters, with no control or invisible characters"
         case .duplicateLabel: return "ccpool: an account with that label already exists"
         case .emptyToken: return "ccpool: empty token, nothing stored"
         case .noSuchAccount: return "ccpool: no such account"
@@ -176,7 +179,29 @@ final class CCPoolStore: @unchecked Sendable {
 
     func usageSample(_ label: String) -> CCPoolUsageSample? { lock.withLock { usage[label] } }
 
+    /// QA #739 F2: a replaced token's sample is not the new token's usage.
+    func forgetUsage(_ label: String) { _ = lock.withLock { usage.removeValue(forKey: label) } }
+
     // MARK: Accounts
+
+    /// QA #739 F1: the pool lists an account the proxy can pick. The routing gate and the pane's
+    /// toggle both read this, from the state the proxy picks from.
+    var hasAccounts: Bool { read { st in st.order.contains { st.accounts[$0] != nil } } }
+
+    static let labelMax = 64
+
+    /// QA #739 INFO-6: the one label rule, for a typed label (after trimming) and a vault label alike.
+    static func labelProblem(_ label: String) -> CCPoolStoreError? {
+        if label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .emptyLabel }
+        guard label.unicodeScalars.count <= labelMax else { return .badLabel }
+        let unseen: Set<Unicode.GeneralCategory> = [.control, .format, .lineSeparator, .paragraphSeparator,
+                                                     .privateUse, .surrogate, .unassigned]
+        let bad = label.unicodeScalars.contains { s in
+            unseen.contains(s.properties.generalCategory) || s.properties.isDefaultIgnorableCodePoint
+                || (s.properties.isWhitespace && s != " ")
+        }
+        return bad ? .badLabel : nil
+    }
 
     /// Why a state write failed, for callers that report it.
     private var writeFailure: CCPoolStoreError { unreadable ? .stateUnreadable : .stateWriteFailed }
@@ -186,7 +211,7 @@ final class CCPoolStore: @unchecked Sendable {
         let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !unreadable else { throw CCPoolStoreError.stateUnreadable }
-        guard !label.isEmpty else { throw CCPoolStoreError.emptyLabel }
+        if let problem = Self.labelProblem(label) { throw problem }
         guard !token.isEmpty else { throw CCPoolStoreError.emptyToken }
         guard read({ $0.accounts[label] == nil }) else { throw CCPoolStoreError.duplicateLabel }
         let id = UUID().uuidString
@@ -206,12 +231,13 @@ final class CCPoolStore: @unchecked Sendable {
         }
     }
 
-    /// Returns the removed account's Keychain id (its upstream session is dropped by the service).
+    /// Returns the removed account's Keychain id (its upstream session is dropped by the service)
+    /// and whether its item is gone. The state change is written first: a failed write keeps both
+    /// the account and its Keychain item (QA #734 INFO-6). A Keychain delete that fails after it
+    /// is logged and returned (`itemDeleted` false): the item stays, listed nowhere, and the pane
+    /// names the account (P2a review carry 1).
     @discardableResult
-    /// The state change is written first: a failed write keeps both the account and its Keychain
-    /// item (QA #734 INFO-6). A Keychain delete that fails after it is logged; the item stays,
-    /// listed nowhere (known limit).
-    func removeAccount(label: String, secrets: CCPoolSecrets) throws -> String {
+    func removeAccount(label: String, secrets: CCPoolSecrets) throws -> (id: String, itemDeleted: Bool) {
         guard let id = read({ $0.accounts[label]?.id }) else { throw CCPoolStoreError.noSuchAccount }
         let (removed, saved) = mutateOrUndo { st -> Bool in
             guard st.accounts[label]?.id == id else { return false }
@@ -223,15 +249,18 @@ final class CCPoolStore: @unchecked Sendable {
         guard removed else { throw CCPoolStoreError.noSuchAccount }
         guard saved else { throw writeFailure }
         lock.withLock { _ = usage.removeValue(forKey: label) }
-        do { try secrets.remove(id: id) } catch { logger.note(label, "removed; its Keychain item could not be deleted") }
-        return id
+        do { try secrets.remove(id: id) } catch {
+            logger.note(label, "removed; its Keychain item could not be deleted")
+            return (id, false)
+        }
+        return (id, true)
     }
 
     /// Rename in place: same Keychain id (the secret is never rewritten), same pick-order slot,
     /// `current` and the usage sample follow.
     func renameAccount(_ label: String, to newLabel: String) throws {
         let to = newLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !to.isEmpty else { throw CCPoolStoreError.emptyLabel }
+        if let problem = Self.labelProblem(to) { throw problem }
         guard to != label else { return }
         let (outcome, saved) = mutateOrUndo { st -> CCPoolStoreError? in
             guard let acct = st.accounts[label] else { return .noSuchAccount }
