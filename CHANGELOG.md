@@ -157,6 +157,9 @@ tag from the now-released section and put it on the new top draft.
   by its exact name (#850).
 - Remote Terminal: a rename whose session name starts with "-", and an attach to a session-id-shaped
   name padded with tabs or line breaks, are refused with the same message dch serve gives (#863).
+- iPhone Resume and Resume interrupted (phone and island): a session dch revived whose resume
+  message was not sent now counts as resumed, under the name it runs as now, and the line still
+  says the message was not sent (#861).
 - Ships dch 1.54.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

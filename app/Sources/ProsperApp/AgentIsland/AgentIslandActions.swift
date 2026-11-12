@@ -536,13 +536,18 @@ extension AgentIsland {
     /// Resume interrupted's and Stop all's one line: "N resumed|stopped, N failed,
     /// N skipped"; `empty` when dch named no session and exited 0.
     /// #749 (QA #572 INFO-R5): a failed session a Kill ended (`r.killed`) counts as "killed".
+    /// #861: a revive whose message was not sent (`resumedUnsent`) counts as resumed, and says so.
     static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String) -> String {
         if r.stopped { return "\(title) cancelled: no answer in \(verb.minutes)m" }
         let cut = cutByKill(r), k = cut.killed, r = cut.rest
         let c = counts(r)
         let other = r.status != 0 && c.failed + k == 0 ? failedText(r) : nil
-        let parts = [(c.ok, verb.done.lowercased()), (k, "killed"), (c.failed, "failed"),
+        let unsent = r.json.filter { resumedUnsent($0, verb) }, w = unsent.filter { $0.reason == "withdrawn" }.count
+        let messages = { (n: Int) in "\(n) resume message\(n == 1 ? "" : "s")" }
+        let parts = [(c.ok + unsent.count, verb.done.lowercased()), (k, "killed"), (c.failed - unsent.count, "failed"),
                      (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+            + (w > 0 ? ["\(messages(w)) not sent"] : [])
+            + (unsent.count > w ? ["\(messages(unsent.count - w)) may still be in Claude's input, not sent"] : [])
         if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
         return (parts + [other].compactMap { $0 }).joined(separator: ", ")
     }
@@ -553,6 +558,13 @@ extension AgentIsland {
         var rest = r
         rest.json.removeAll { $0.isFinal && $0.failed && r.killed.contains($0.name) }
         return (r.json.count - rest.json.count, rest)
+    }
+
+    /// #861: a revive dch 1.46+ answered withdrawn or draft_left (dch.c:9694-9699@v1.47.0): the session
+    /// revived (under `as`), only its resume message was not sent. A failed result line, exit 1.
+    static func resumedUnsent(_ o: DchJSONLine, _ verb: Verb) -> Bool {
+        (verb == .resume || verb == .resumeNoMessage) && o.isFinal && o.result == "failed"
+            && (o.reason == "withdrawn" || o.reason == "draft_left")
     }
 
     /// #620: `tally`'s numbers, the session results by kind (dch's own --json tally line counts the same).

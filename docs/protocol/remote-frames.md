@@ -638,7 +638,7 @@ bytes as an image (see [M11](#known-gaps)); its gate is `paste_image` or a Prosp
 |------|------|---------|-------|----|
 | 0x0a | putClipboard | raw image bytes | 0x14 (empty), after the Mac's pasteboard holds it; also when the bytes are not an image (M11) | `paste_image` (the phone sends it on the attached connection before ctrl-V) |
 | 0x0b | history | empty or `{}` | 0x1b `[{name, alias?, end, last_seen, started, runtime, cwd?, command?, agent_name?, takes, pinned?}]` | `history` |
-| 0x0c | revive | `{"name"}` or `{"all": true}`, plus `"no_message"?: bool` | 0x14 `{"names": [string]}` | `revive` (`revive_no_message`) |
+| 0x0c | revive | `{"name"}` or `{"all": true}`, plus `"no_message"?: bool` | 0x14 `{"names": [string], "message"?}` | `revive` (`revive_no_message`) |
 | 0x0d | restart | `{"names": [string]}` or `{"all": true}` | 0x14 `{"names"}` | `restart` |
 | 0x0e | stop | `{"names": [string]}` | 0x14 `{"names"}` | `stop` |
 | 0x0f | library | empty, `{}` or `{"etag": hex}` | 0x1c `{etag, unchanged: true}` or `{etag, snippets, quicklinks, errors?}` | `library` |
@@ -656,6 +656,13 @@ bytes as an image (see [M11](#known-gaps)); its gate is `paste_image` or a Prosp
 | 0x1f | chat | `{model?, messages: [{role, content}], max_tokens?}` | 0x20 `{text}` deltas, then 0x21 `{stop}` | `chat` |
 | 0x28 | commands | empty or `{}` | 0x2a `[{id, title, subtitle?, ext, argument?, icon?}]` | `commands` |
 | 0x29 | runCommand | `{id, argument?}` | 0x2b `{text, detail?}` | `commands` |
+
+A 0x14 with `"message"` is a partial success: done, with a line for the user. 0x25 forget sends one
+when it kept pinned records. 0x0c revive sends one (#861) when dch 1.46+ revived a session but did
+not send its resume message (`withdrawn` or `draft_left`, dch.c:9694-9699@v1.47.0). That session
+is in `names` under its `as` name, and `message` is `<name>: Resumed as <as>; the resume message
+wasn't sent` (`Resumed;` when `as` is the name; `draft_left` ends `...; the resume message may
+still be in Claude's input, not sent`), one per session, joined by `; `. A client that ignores `message` still gets the right names.
 
 A clipboardUpload, a chat and a watch each need a connection of their own; such a connection
 never attaches. A 0x23 or 0x1f on an attached connection gets 0x13

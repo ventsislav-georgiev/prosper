@@ -612,6 +612,56 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), "1 resumed, 1 failed", "a failed line on exit 0")
     }
 
+    /// #861 (QA #702 INFO-1): dch 1.46+ --revive answers withdrawn or draft_left (exit 1) once the session
+    /// revived and only its resume message was not sent (dch.c:9694-9699@v1.47.0). The phone's 0x0c gets
+    /// ok under the `as` name, the reason in "message" (forget's partial success).
+    private static func unsent(_ name: String, as revived: String, _ reason: String) -> String {
+        json(["name": name, "as": revived, "result": "failed", "reason": reason, "session_id": "s",
+              "detail": "revived as \(revived) in /p, claude resumed s; resume message NOT sent (a signal came once it was typed)"])
+    }
+
+    func testReviveByNameWithTheMessageNotSentIsOkUnderItsAsName() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        f.status = 1
+        for (reason, text) in [("withdrawn", "Resumed as a-2; the resume message wasn't sent"),
+                               ("draft_left", "Resumed as a-2; the resume message may still be in Claude's input, not sent")] {
+            f.out["--revive a --as a-2 --json"] = Self.unsent("a", as: "a-2", reason)
+            let r = call(ops(f), DchFrame.revive, ["name": "a"])
+            XCTAssertEqual(names(r), ["a-2"], reason)
+            XCTAssertEqual((r.json as? [String: Any])?["message"] as? String, "a: \(text)", reason)
+        }
+        f.ls["/d"] = "[]"
+        f.out["--revive a --json"] = Self.unsent("a", as: "a", "withdrawn")
+        let r = call(ops(f), DchFrame.revive, ["name": "a"])
+        XCTAssertEqual(names(r), ["a"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String, "a: Resumed; the resume message wasn't sent")
+        f.out["--revive a --json"] = Self.line("a", "failed", reason: "interrupted", detail: "a: NOT revived")
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["name": "a"])), "a: NOT revived", "interrupted stays a failure")
+        // A Stop's withdrawn is no revive: still the error (answer(named:) is shared).
+        let stop = AgentIsland.jsonLine(Self.line("a", "failed", reason: "withdrawn", detail: "a: x"))!
+        XCTAssertEqual(message(Self.decode(DchControlOps.answer(named: [("a", DchActionResult(status: 1, json: [stop]))], .stop))), "a: x")
+    }
+
+    func testReviveAllWithTheMessageNotSentCountsItRevived() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        f.status = 1
+        let all = AgentIsland.reviveAllArgs.joined(separator: " ")
+        f.out[all] = Self.ok("x", as: "x") + "\n" + Self.unsent("a", as: "a-2", "withdrawn") + "\n" + Self.unsent("b", as: "b", "draft_left")
+        let r = call(ops(f), DchFrame.revive, ["all": true])
+        XCTAssertEqual(names(r), ["x", "a-2", "b"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String,
+                       "a: Resumed as a-2; the resume message wasn't sent; b: Resumed; the resume message may still be in Claude's input, not sent")
+        // Beside a real failure it is still the error, with the island's tally.
+        f.out[all] = Self.unsent("a", as: "a-2", "withdrawn") + "\n" + Self.line("c", "failed", detail: "c: no agent")
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), "1 resumed, 1 failed, 1 resume message not sent")
+        f.status = 0
+        f.out[all] = Self.ok("x")
+        XCTAssertNil((call(ops(f), DchFrame.revive, ["all": true]).json as? [String: Any])?["message"], "no message on a plain ok")
+    }
+
     func testRestartAllWithNoResultAndANonZeroExitIsAnError() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1")])

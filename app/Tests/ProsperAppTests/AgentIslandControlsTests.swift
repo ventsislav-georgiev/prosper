@@ -4519,6 +4519,24 @@ final class AgentIslandControlsTests: XCTestCase {
         }
     }
 
+    /// #861: Resume interrupted counts a revive whose message was not sent as resumed, and its
+    /// line still says the message was not sent; a Stop all's withdrawn stays a failure.
+    func testResumeInterruptedCountsAnUnsentMessageAsResumed() {
+        func line(_ n: String, _ reason: String) -> String {
+            #"{"name":"\#(n)","as":"\#(n)-2","result":"failed","reason":"\#(reason)","detail":"d","session_id":"S"}"#
+        }
+        let ok = #"{"name":"o","as":"o","result":"ok","reason":"","detail":"","session_id":"S"}"#
+        func resume(_ out: String) -> String {
+            AgentIsland.tally(result(out, status: 1), .resume, title: "Resume", empty: "nothing to resume")
+        }
+        XCTAssertEqual(resume(line("a", "withdrawn")), "1 resumed, 1 resume message not sent")
+        XCTAssertEqual(resume([ok, line("a", "withdrawn"), line("b", "withdrawn"), line("c", "draft_left")].joined(separator: "\n")),
+                       "4 resumed, 2 resume messages not sent, 1 resume message may still be in Claude's input, not sent")
+        XCTAssertEqual(resume(line("a", "draft_left") + "\n" + Fixture.reviveNotStarted),
+                       "1 resumed, 1 failed, 1 resume message may still be in Claude's input, not sent")
+        XCTAssertEqual(AgentIsland.tally(result(line("a", "withdrawn"), status: 1), .stop, title: "Stop all", empty: ""), "1 failed")
+    }
+
     // MARK: - #714 round 2: dch 1.28.1 "file" on every record, `<file>.json` edits
 
     private static let v1281 = DchCommand.Binary(path: "/fake/dch", version: [1, 28, 1])

@@ -1620,34 +1620,50 @@ struct DchControlOps: Sendable {
     /// carry rowText's cancelled text).
     /// #719: an unpin dch finds nothing for (1.28.2's not_found) is ok: the record went.
     /// `record`: a revive's, for the by-hand hint's CLAUDE_CONFIG_DIR.
+    /// #861: a revive that came back withdrawn or draft_left is ok under its `as` name, its
+    /// "<name>: <rowText>" in the ok's "message" (forget's partial success; remote-frames.md 0x0c).
     static func answer(named: [(String, DchActionResult)], _ verb: AgentIsland.Verb, record: DchHistoryRecord? = nil) -> Data {
-        var ok: [String] = [], failed: [String] = []
+        var ok: [String] = [], lines: [String] = [], failed = false
         for (n, r) in named {
             let last = r.json.last { $0.name == n && ($0.isFinal || $0.isMaster) }
-            if !r.stopped, last.map({ isOK($0) || AgentIsland.unpinGone($0, verb) }) ?? (r.status == 0) {
+            let unsent = !r.stopped && last.map { AgentIsland.resumedUnsent($0, verb) } == true
+            if unsent || !r.stopped && last.map({ isOK($0) || AgentIsland.unpinGone($0, verb) }) ?? (r.status == 0) {
                 ok.append(last?.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? n)
+                if !unsent { continue }
             } else {
-                failed.append("\(n): \(AgentIsland.byHand(AgentIsland.rowText(r, name: n, verb), record))")
+                failed = true
             }
+            lines.append("\(n): \(AgentIsland.byHand(AgentIsland.rowText(r, name: n, verb), record))")
         }
-        return failed.isEmpty ? DchFrame.encode(DchFrame.ok, json: ["names": ok]) : error(failed.joined(separator: "; "))
+        if failed { return error(lines.joined(separator: "; ")) }
+        var reply: [String: Any] = ["names": ok]
+        if !lines.isEmpty { reply["message"] = lines.joined(separator: "; ") }
+        return DchFrame.encode(DchFrame.ok, json: reply)
     }
 
     /// An all-request (QA #462 M1): ok {"names"} (each session with an ok result, a
     /// revive's under its `as` name, in dch's order) only when every job exited 0
     /// and no result failed; else one error with the island's own summary line.
+    /// #861: a revive whose message was not sent (exit 1) is ok too, its line in "message" as answer(named:)'s.
+    /// shortcut: `r` is merged (first non-zero exit), so another dir's no-JSON failure beside such a line
+    /// reads ok, as tally's `other` reads it; per-dir results would close it.
     static func answer(all r: DchActionResult, _ verb: AgentIsland.Verb) -> Data {
         let results = r.json.filter { $0.isFinal || $0.isMaster }
-        guard !r.stopped, r.status == 0, !results.contains(where: \.failed) else {
+        let unsent = results.filter { AgentIsland.resumedUnsent($0, verb) }
+        guard !r.stopped, r.status == 0 || !unsent.isEmpty,
+              !results.contains(where: { $0.failed && !AgentIsland.resumedUnsent($0, verb) }) else {
             return error(verb == .resume ? AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume")
                                          : AgentIsland.restartAllSummary(r))
         }
         var names: [String] = [], seen = Set<String>()
-        for o in results where o.result == "ok" {
+        for o in results where o.result == "ok" || AgentIsland.resumedUnsent(o, verb) {
             let n = o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name
             if seen.insert(n).inserted { names.append(n) }
         }
-        return DchFrame.encode(DchFrame.ok, json: ["names": names])
+        let message = unsent.map { "\($0.name): \(AgentIsland.finalText($0, verb))" }.joined(separator: "; ")
+        var reply: [String: Any] = ["names": names]
+        if !message.isEmpty { reply["message"] = message }
+        return DchFrame.encode(DchFrame.ok, json: reply)
     }
 }
 
