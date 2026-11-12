@@ -75,15 +75,15 @@ tag from the now-released section and put it on the new top draft.
   coming back empty (#833).
 - App Updates: a Homebrew upgrade that outlasts the extension timeout now says it is still
   running in the background instead of "Nothing was upgraded". Extensions: `host.shell.run`
-  rejects bad options (not a table, an unknown key, a non-boolean `keep_running`) with an error
-  that says which, instead of silently running without them (#834).
-- App Updates: when a Homebrew upgrade runs on in the background, the list refreshes about a
-  minute after brew finishes and you get the same "N packages upgraded" notification. A failed
+  rejects bad options (a value that is neither a table nor `false`, an unknown key, a non-boolean
+  `keep_running`) with an error, instead of silently running without them; `false` still means
+  no options, so `host.shell.run(cmd, cond and { keep_running = true })` works (#834).
+- App Updates: when a Homebrew upgrade runs on in the background, the list refreshes within a
+  minute of brew finishing and you get the same "N packages upgraded" notification (for up to
+  2 hours, and only while Prosper stays open). A failed
   upgrade (for example a second one while the first still runs) now says "brew upgrade failed"
   instead of "Nothing was upgraded", and a brew or macOS check that times out keeps the last
   known list instead of emptying it (#834).
-- Extensions: `host.shell.run(cmd, false)` is treated like no options again, so
-  `host.shell.run(cmd, cond and { keep_running = true })` works (#834).
 - Agent Sessions window: a live session now opens in its real terminal by default, inside the
   window: the same dch session Ghostty would attach to, drawn by libghostty, with full keyboard
   input (Esc, Tab, ⇧Return, ⌃C and arrows reach Claude), IME and Option-composed characters, ⌘C/⌘V
@@ -166,8 +166,9 @@ tag from the now-released section and put it on the new top draft.
   attaching to a session-id-shaped name padded with tabs or line breaks, are refused with the same
   message dch serve gives (#863).
 - iPhone Resume and Resume interrupted (phone and island): a session dch revived whose resume
-  message was not sent now counts as resumed, under the name it runs as now, and the line still
-  says the message was not sent (#861).
+  message was typed and then taken back, or left in Claude's input, now counts as resumed, under
+  the name it runs as now, and the line still says the message was not sent. Other revives that
+  dch reports as failed still count as failed (#861).
 - Remote Terminal ctl: `--run` gets the 660 s timeout dch serve gives it, a timeout or output cap
   ends dch 2 s after asking it to stop (was 1 s), and turning Remote Terminal off ends a running
   ctl within 2 s, an agent verb's too (#852).
