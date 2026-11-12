@@ -190,10 +190,12 @@ tag from the now-released section and put it on the new top draft.
   dch reports as failed still count as failed (#861).
 - Remote Terminal ctl: `--run` gets the 660 s timeout dch serve gives it, a timeout or output cap
   ends dch 2 s after asking it to stop (was 1 s), and turning Remote Terminal off ends a running
-  ctl within 2 s, an agent verb's too (#852).
+  ctl within 2 s, an agent verb's too. A warm ctl connection is closed after 300 s idle however
+  many are open; dch serve closes one after 30 s when its connection slots run short (#852).
 - Remote Terminal: the session list tells the phone each session's working directory when dch knows
-  it, as dch serve 1.54.0 does. Attaching or creating a session whose name starts with "-", has a
-  control character or "/", or is too long is refused with dch serve's own message before dch runs.
+  it, as dch serve does since 1.54.0. Attaching or creating a session whose name starts with "-", has
+  a control character or "/", or is too long is refused with dch serve's own message before dch
+  runs. The dash check is on the first byte, so "-" followed by a combining mark is refused too.
   A Claude session created from the phone is named after its session, as a New session on the Mac
   is (#877).
 - Extensions: trusted extensions can add owned pieces to Claude Code's config through `host.config`
@@ -278,10 +280,16 @@ tag from the now-released section and put it on the new top draft.
 - dch 1.55.0 to 1.57.0: `dch --xray <n>` with no `--json` opens X-ray as a view in your terminal,
   for a session on another host too (`dch --xray host:name`), and dch's picker opens it with X. In a
   `dch` attach in your own terminal, the detach key and then x within the double-press window (300 ms
-  by default) opens the view instead of detaching; with a later x the attach still detaches.
+  by default) opens the view instead of detaching; with a later x the attach still detaches (or
+  switches, when your detach key is also your switch key).
   Prosper's own terminal still passes every key to the session. Each `dch --revive --json`
   result line ends with a "running" key. A `dch serve` you run by hand lets go of a device that
-  vanished without closing its connection after about 30 s. Prosper does not read X-ray yet.
+  vanished without closing its connection after about 30 s. Also when you run the bundled dch by
+  hand (all in 1.56.0): `dch --xray --follow`, X-ray across Codex sessions and the resolver card; a
+  remote X-ray whose host sends nothing for 65 s ends with exit 7; a remote History record that
+  gives a key twice is dropped; the picker draws bidi control characters as `?`; `dch --forget -h`
+  (and --pin, --unpin, --stop) says that a name starting with `-` goes after `--`; and `dch serve`
+  sets TCP no-delay on every connection. Prosper does not read X-ray yet.
 - dch 1.57.0 to 1.58.0: a security fix in `dch --xray`. Since 1.57.0, a session whose project was
   a credential directory kept as its own git repo outside your home (a Claude Code config dir, a
   Codex home, `.kube`, `.docker`, `.password-store`) showed its files, also to a `dch serve` peer;
