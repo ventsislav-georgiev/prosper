@@ -123,6 +123,12 @@ final class DchCtlTests: XCTestCase {
         return p
     }
 
+    /// The pid a fake recorded, read once (no wait): nil when it never got that far.
+    private func recorded(_ dir: URL) -> pid_t? {
+        (try? String(contentsOf: dir.appendingPathComponent("pid"), encoding: .utf8))
+            .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
     private func dead(_ pid: pid_t?) -> Bool {
         guard let pid else { return false }
         return wait(5) { Darwin.kill(pid, 0) != 0 }
@@ -507,7 +513,7 @@ final class DchCtlTests: XCTestCase {
     /// thread right after the SIGTERM until run() returns; with the fix run() waits for the timer's 0x33
     /// instead, so the hold only ends at its 3 s bound.
     func testATimeoutRacingTheReapStillSendsItsFinal() throws {
-        let f = try fake("exec /bin/sleep 30")
+        let f = try fake("echo $$ > \"$D/pid\"; exec /bin/sleep 30")   // #874: exec keeps the pid, so teardown reaps it
         let returned = DispatchSemaphore(value: 0), replies = Frames()
         let saved = CodexHarness.sendSignal
         defer { CodexHarness.sendSignal = saved }
@@ -526,6 +532,42 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(wait(10) { replies.lock.withLock { !replies.all.isEmpty } }, "the timeout's 0x33 is sent")
         XCTAssertEqual(replies.lock.withLock { replies.all }, [DchCtl.exitFrame(2, why: "timeout")])
         XCTAssertEqual(returned.wait(timeout: .now() + 5), .success, "run() returned")
+        // The 0.05 s timeout can end the shell before it records its pid: then nothing is left to reap.
+        if let p = recorded(f.dir) { XCTAssertTrue(dead(p), "the recorded pid (teardown's reap) is the one the timeout ended") }
+    }
+
+    /// #874 (QA #710 INFO-2): DchCtlOps' default `after` (not a recorder) arms a real timer: it fires
+    /// once, off the test's thread, and not before its delay. A no-op default would disable every timeout.
+    func testTheDefaultTimerFiresAfterItsDelayOffTheTestsThread() throws {
+        final class Fired: @unchecked Sendable {
+            let lock = NSLock()
+            var at: [(Date, Bool)] = []
+        }
+        let fired = Fired(), done = DispatchSemaphore(value: 0), start = Date()
+        DchCtlOps().after(0.3) {
+            fired.lock.withLock { fired.at.append((Date(), Thread.isMainThread)) }
+            done.signal()
+        }
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "the default fires its closure")
+        usleep(200_000)
+        let at = fired.lock.withLock { fired.at }
+        XCTAssertEqual(at.count, 1, "once")
+        let first = try XCTUnwrap(at.first)
+        XCTAssertGreaterThanOrEqual(first.0.timeIntervalSince(start), 0.29, "not before its delay")
+        XCTAssertFalse(first.1, "on a queue that is not the test's (main) thread")
+    }
+
+    /// #874: through a real ctl with the default ops' timer (no Timers recorder), a dch that never exits
+    /// is ended by the timeout: 0x33 {"exit": 2, "why": "timeout"} and its pid gone.
+    func testTheDefaultTimerEndsADchThatNeverExits() throws {
+        let f = try fake("echo $$ > \"$D/pid\"; exec /bin/sleep 30")
+        let r = rig(f.path, timeout: 1)
+        send(r, Self.ctl(["--status", "alpha"]))
+        XCTAssertTrue(wait(10) { finals(r).count == 1 }, "the timeout ended it")
+        // Only a dch still unreaped when the timer fires ends with why "timeout".
+        XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary)
+        // Under load the timer can beat the pid write; a recorded one is gone.
+        if let p = recorded(f.dir) { XCTAssertTrue(dead(p), "killed by the timeout") }
     }
 
     /// #841 (QA #680 INFO-3): as dch 1.42 serve's ctl_read, the request ends at dch's reap: a process
@@ -768,7 +810,7 @@ final class DchCtlTests: XCTestCase {
         for v in ["--read", "--send", "--keys", "--status", "-k", "-m", "-d", "--spawn", "--history",
                   "--pin", "--unpin", "--forget"] { XCTAssertEqual(ops.timeout(of: v), 60, v) }
         // #856: each ctl's armed delay is read off the timer seam, and only --status's timer is fired.
-        let f = try fake("[ \"$1\" = --status ] && exec /bin/sleep 30; printf ok")
+        let f = try fake("[ \"$1\" = --status ] && { echo $$ > \"$D/pid\"; exec /bin/sleep 30; }; printf ok")
         let timers = Timers()
         let r = rig(f.path, timeout: 0.3, agentTimeout: 20, timers: timers)
         for (argv, delay, want) in [(["--stop", "alpha", "--json"], 20, ["exit": 0]), (["--status", "alpha"], 0.3, ["exit": 2, "why": "timeout"]),
@@ -779,10 +821,14 @@ final class DchCtlTests: XCTestCase {
             send(r, Self.ctl(argv))
             XCTAssertTrue(wait(10) { timers.count == i + 1 }, "\(argv)")
             XCTAssertEqual(timers.delay(i), delay, "\(argv)")
-            if argv[0] == "--status" { timers.fire(i) }
+            if argv[0] == "--status" {
+                XCTAssertNotNil(pid(f.dir, "pid"), "recorded before the fire, so teardown can reap it")
+                timers.fire(i)
+            }
             XCTAssertTrue(wait(10) { finals(r).count == n + 1 }, "\(argv)")
             XCTAssertEqual(Self.object(finals(r).last) as NSDictionary, want as NSDictionary, "\(argv)")
         }
+        XCTAssertTrue(dead(pid(f.dir, "pid")), "--status's sleep: recorded for teardown, ended by the fired timeout")
     }
 
     func testFollowEndsWithTheRealExitWhenTheSessionEnds() throws {
@@ -797,7 +843,7 @@ final class DchCtlTests: XCTestCase {
     /// One ctl at a time per connection: another meanwhile is answered "busy" at once and runs nothing.
     /// #841: dch 1.42 serve's coded busy, byte for byte (its golden 42), and nothing closes.
     func testASecondCtlWhileOneRunsIsBusy() throws {
-        let f = try fake("echo x >> \"$D/runs\"; while [ ! -e \"$D/go\" ]; do /bin/sleep 0.05; done; printf done")
+        let f = try fake("echo x >> \"$D/runs\"; echo $$ > \"$D/pid\"; while [ ! -e \"$D/go\" ]; do /bin/sleep 0.05; done; printf done")
         let r = rig(f.path)
         send(r, Self.ctl(["--status", "alpha"]))
         XCTAssertTrue(wait(5) { FileManager.default.fileExists(atPath: f.dir.appendingPathComponent("runs").path) })
@@ -888,13 +934,24 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty && timers.count == 1 })
         let start = Date()
         timers.fire(0)
-        XCTAssertTrue(wait(1.5) { finals(r).count == 1 })
+        // #874 (QA #729 INFO-4): one poll to the end state, not a sample at one instant, so a loaded
+        // machine only delays the observations: `alive` is a lower bound of the last instant dch was
+        // seen running (taken before the probe), `finalWhileAlive` that the 0x33 came before the SIGKILL.
+        var alive = start, finalWhileAlive = false
+        let gone = wait(10) {
+            let t = Date(), sent = finals(r).count == 1
+            guard Darwin.kill(script, 0) == 0 else { return true }
+            alive = t
+            finalWhileAlive = finalWhileAlive || sent
+            return false
+        }
+        XCTAssertTrue(gone, "SIGKILLed")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9, "not before the 2 s grace")
+        XCTAssertGreaterThanOrEqual(alive.timeIntervalSince(start), 1.3, "seen alive past 1 s: the grace is 2 s")
+        XCTAssertTrue(finalWhileAlive, "the 0x33 goes out at once, not at the reap")
+        XCTAssertEqual(finals(r).count, 1)
         XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary)
-        XCTAssertTrue(wait(1.5) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil }, "the SIGTERM")
-        usleep(useconds_t(max(0, 1.5 - Date().timeIntervalSince(start)) * 1_000_000))
-        XCTAssertEqual(Darwin.kill(script, 0), 0, "alive at 1.5 s: the grace is 2 s")
-        XCTAssertTrue(dead(script), "SIGKILLed")
-        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9)
+        XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n", "a SIGTERM first")
     }
 
     /// #852: a server stop (DchSessionServer.stop, through DchConnection.serverStop) cuts with dch serve's
@@ -913,15 +970,17 @@ final class DchCtlTests: XCTestCase {
             XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
             if cancelFirst {
                 send(r, DchFrame.encode(DchFrame.ctlCancel, []))
-                XCTAssertTrue(wait(1.5) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
+                XCTAssertTrue(wait(5) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
             }
             let at = Date()
             r.queue.sync { r.conn.serverStop() }
             XCTAssertEqual(r.closes.count, 1, "closed")
-            XCTAssertTrue(dead(dch), "SIGKILLed (cancelFirst \(cancelFirst))")
-            XCTAssertTrue(dead(kid), "its group too (cancelFirst \(cancelFirst))")
-            XCTAssertLessThan(Date().timeIntervalSince(at), 4, "2 s, not 660 s")
+            // #874 (QA #729 INFO-4): a late observation only adds time, so the lower bound holds under load;
+            // the upper one is 15 s, far under the 660 s it rules out.
+            XCTAssertTrue(wait(15) { Darwin.kill(dch, 0) != 0 }, "SIGKILLed (cancelFirst \(cancelFirst))")
             XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(at), 1.9, "not before the grace")
+            XCTAssertTrue(wait(15) { Darwin.kill(kid, 0) != 0 }, "its group too (cancelFirst \(cancelFirst))")
+            XCTAssertLessThan(Date().timeIntervalSince(at), 15, "2 s, not 660 s")
         }
     }
 
@@ -969,7 +1028,7 @@ final class DchCtlTests: XCTestCase {
     /// A warm connection (it sent a 0x30) closes 300 s after the last frame or reply, through the
     /// injected clock; never while a request runs.
     func testAWarmConnectionClosesAfter300sIdle() throws {
-        let f = try fake("[ \"$1\" = --follow ] && { while [ ! -e \"$D/go\" ]; do /bin/sleep 0.05; done; }; printf ok")
+        let f = try fake("[ \"$1\" = --follow ] && { echo $$ > \"$D/pid\"; while [ ! -e \"$D/go\" ]; do /bin/sleep 0.05; done; }; printf ok")
         let r = rig(f.path), clock = Clock()
         r.conn.clock = { clock.now }
         XCTAssertEqual(r.conn.ctlIdle, 300)
@@ -1240,7 +1299,7 @@ final class DchCtlTests: XCTestCase {
     /// The idle re-check waits at least 1 s: with a 0 s idle and a ctl running it ticks once a second,
     /// never in a loop on the connection's queue.
     func testTheIdleCheckNeverSpins() throws {
-        let f = try fake("while [ ! -e \"$D/go\" ]; do /bin/sleep 0.05; done; printf ok")
+        let f = try fake("echo $$ > \"$D/pid\"; while [ ! -e \"$D/go\" ]; do /bin/sleep 0.05; done; printf ok")
         let r = rig(f.path), ticks = Recorder()
         r.conn.ctlIdle = 0
         r.conn.clock = { ticks.add(); return Date() }
