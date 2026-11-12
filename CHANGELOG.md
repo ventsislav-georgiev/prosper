@@ -294,6 +294,10 @@ tag from the now-released section and put it on the new top draft.
   or if a password field took the caret; Prosper beeps in each case (#848). If you click back into the
   app before you answer, the text goes in at the caret where you left it. The panel shows over
   full-screen apps, never opens in a password field, and macOS Text Replacements never ask (#842).
+- Settings → Appearance → Theme: High Contrast Dark and High Contrast Light now come in tints. Click a
+  dot on the theme's row to switch its accent (Dark: Lime, Cyan, Amber, Violet, White; Light: Blue,
+  Lime, Cyan, Amber, Violet, Black). Each theme remembers its own tint. Theme extensions can offer
+  tints too, through a new `variants` list in theme.json.
 
 ## v2.174.0
 

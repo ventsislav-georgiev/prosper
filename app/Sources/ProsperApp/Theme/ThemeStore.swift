@@ -30,6 +30,11 @@ final class ThemeStore: ObservableObject {
     /// descriptor id → resolved palette, for swatch previews. Built once per
     /// `setAvailable` so the selector never reads theme.json from a view body.
     @Published private(set) var previews: [String: ThemePalette] = [:]
+    /// #862: descriptor id -> its tint dots (base first, then the variants in file
+    /// order). Only themes that declare valid variants have an entry.
+    @Published private(set) var tints: [String: [ThemeTint]] = [:]
+    /// #862: the applied variant key of the active theme; nil = its base palette.
+    @Published private(set) var activeTint: String?
 
     /// Global UI size + window opacity. Persisted via Preferences; mirrored into
     /// `ThemeRuntime` so the non-isolated `Neon.font`/`sz`/`op` helpers read them.
@@ -72,6 +77,9 @@ final class ThemeStore: ObservableObject {
     private let log = Logger(subsystem: "com.prosper", category: "theme")
 
     private static let activeKey = "prosper.activeThemeID"
+    /// #862: theme id -> remembered variant key, beside `activeKey` in the same store.
+    /// Per Mac like `activeKey` (neither is in SyncedKeys).
+    private static let tintKey = "prosper.themeTints"
     /// Cap on a cached remote asset. ponytail: post-download size check, not a
     /// streaming cap — themes ship from the trusted marketplace and icons are
     /// small. Upgrade to a streaming `URLSession.bytes` cap if untrusted theme
@@ -261,34 +269,66 @@ final class ThemeStore: ObservableObject {
         // Resolve swatch palettes once here (one disk read per theme), so the
         // selector renders from `previews` instead of decoding theme.json in a
         // view body on every redraw.
-        previews = Dictionary(uniqueKeysWithValues: available.map { ($0.id, ThemePalette.load(for: $0)) })
+        let specs = available.map { ($0.id, ThemeSpec.load(for: $0)) }
+        for (id, spec) in specs {
+            if let e = spec.variantError {
+                log.error("theme \(id, privacy: .public): variants refused (\(e.description, privacy: .public)); base palette only")
+            }
+        }
+        tints = Dictionary(uniqueKeysWithValues: specs.compactMap { id, spec in
+            ThemeTint.options(spec).map { (id, $0) }
+        })
+        previews = Dictionary(uniqueKeysWithValues: specs.map { id, spec in
+            (id, ThemePalette.resolve(spec, tint: storedTint(for: id)))
+        })
         let wanted = defaults.string(forKey: Self.activeKey) ?? ThemeDescriptor.builtInID
         let target = available.first { $0.id == wanted } ?? available.first ?? .builtIn
-        applyDescriptor(target, persist: false)
+        applyDescriptor(target, tint: storedTint(for: target.id), persist: false)
     }
 
     // MARK: - Selection
 
-    /// User picked a theme. Persists the choice and applies it.
+    /// User picked a theme. Persists the choice and applies it with the tint
+    /// remembered for that theme.
     func select(id: String) {
         guard let target = available.first(where: { $0.id == id }) else { return }
-        applyDescriptor(target, persist: true)
+        applyDescriptor(target, tint: storedTint(for: id), persist: true)
     }
 
-    private func applyDescriptor(_ d: ThemeDescriptor, persist: Bool) {
-        let spec: ThemeSpec
-        if let path = d.jsonPath {
-            spec = (try? ThemeSpec.decode(Data(contentsOf: path))) ?? .empty
-        } else {
-            spec = .empty   // built-in default = empty spec = pure ThemePalette.default
-        }
-        apply(spec: spec, descriptor: d, persist: persist)
+    /// #862: a tint dot. Selects theme `id` WITH tint `tint` (nil = the base) in one
+    /// apply, and remembers the tint for that theme.
+    func select(id: String, tint: String?) {
+        guard let target = available.first(where: { $0.id == id }) else { return }
+        applyDescriptor(target, tint: tint, persist: true)
+    }
+
+    /// The tint remembered for theme `id` as stored; `applyDescriptor` validates it.
+    private func storedTint(for id: String) -> String? {
+        (defaults.dictionary(forKey: Self.tintKey) as? [String: String])?[id]
+    }
+
+    /// The tint the theme's row shows as selected: the remembered one when that theme
+    /// still declares it, else nil (the base dot).
+    func rememberedTint(for id: String) -> String? {
+        guard let key = storedTint(for: id), tints[id]?.contains(where: { $0.key == key }) == true else { return nil }
+        return key
+    }
+
+    private func applyDescriptor(_ d: ThemeDescriptor, tint: String?, persist: Bool) {
+        // built-in default = empty spec = pure ThemePalette.default
+        let spec = ThemeSpec.load(for: d)
+        apply(spec: spec, descriptor: d, tint: spec.variantKey(tint), persist: persist)
     }
 
     /// The synchronous core: swap colors + appearance now, kick assets async.
-    private func apply(spec: ThemeSpec, descriptor d: ThemeDescriptor, persist: Bool) {
-        let newPalette = ThemePalette.resolve(spec)
-        if persist { defaults.set(d.id, forKey: Self.activeKey) }
+    private func apply(spec: ThemeSpec, descriptor d: ThemeDescriptor, tint: String?, persist: Bool) {
+        let newPalette = ThemePalette.resolve(spec, tint: tint)
+        if persist {
+            defaults.set(d.id, forKey: Self.activeKey)
+            var map = (defaults.dictionary(forKey: Self.tintKey) as? [String: String]) ?? [:]
+            map[d.id] = tint
+            defaults.set(map, forKey: Self.tintKey)
+        }
 
         // Always assert the app appearance, even on a suppressed no-op apply.
         // Idempotent + cheap. Critical at startup: the very first apply for the
@@ -307,6 +347,7 @@ final class ThemeStore: ObservableObject {
         // assets change — so editing the active theme.json (hot-reload) still
         // takes effect.
         let unchanged = activeID == d.id
+            && activeTint == tint
             && appearance == spec.appearance
             && lastAssets == spec.assets
             && newPalette.channelsEqual(ThemeRuntime.palette)
@@ -315,6 +356,8 @@ final class ThemeStore: ObservableObject {
         ThemeRuntime.palette = newPalette
         appearance = spec.appearance
         activeID = d.id
+        activeTint = tint
+        previews[d.id] = newPalette
         lastAssets = spec.assets
 
         // Drop the previous theme's images immediately; the new ones stream in.

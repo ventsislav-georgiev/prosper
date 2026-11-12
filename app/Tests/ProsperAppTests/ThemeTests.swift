@@ -192,6 +192,8 @@ final class ThemeTests: XCTestCase {
             // both silent, so assert the exact full token set survived.
             XCTAssertEqual(Set(spec.colors.keys), Set(ThemePalette.tokenNames),
                            "\(dir.lastPathComponent): token set incomplete or misspelled")
+            // #862: a refused variant list loads silently with the base palette; lint it here.
+            XCTAssertNil(spec.variantError, "\(dir.lastPathComponent): variants refused")
         }
     }
 
@@ -206,36 +208,94 @@ final class ThemeTests: XCTestCase {
     ///    `blue` is the everyday accent. When those two are the same colour, an
     ///    error message is invisible — which is exactly what Graphite and Silver
     ///    shipped (a 2-3° hue gap between the two).
+    ///
+    /// #862: a theme's tint variants are one theme. (1) compares each theme's BASE
+    /// accent only, so a tint never collides falsely with another theme (a Cyan tint
+    /// next to a cyan theme is the point); (2) holds for every tint against the
+    /// theme's own magenta; (3) a theme's own tints stay apart from each other, or two
+    /// dots on one row would look the same.
     func testBundledThemeAccentsAreDistinguishable() throws {
-        var byAppearance: [String: [(name: String, accent: NSColor, alert: NSColor)]] = [:]
+        var byAppearance: [String: [(name: String, accent: NSColor, alert: NSColor, tints: [(String, NSColor)])]] = [:]
+        let all = try bundledTints()
+        for t in all.themes {
+            guard let magenta = t.spec.colors["magenta"] else { return XCTFail("\(t.name): missing magenta") }
+            byAppearance[t.spec.appearance.rawValue, default: []].append(
+                (t.name, Self.srgb(t.tints[0].palette.blue), Self.srgb(magenta),
+                 t.tints.map { ($0.label, Self.srgb($0.palette.blue)) }))
+        }
+        XCTAssertEqual(byAppearance.keys.sorted(), ["dark", "light"])
+
+        var checked = 0
+        for (_, themes) in byAppearance {
+            for t in themes {
+                // (2) alert must not read as the everyday accent, in any tint.
+                for (label, accent) in t.tints {
+                    XCTAssertGreaterThanOrEqual(
+                        Self.hueDistance(accent, t.alert), 30,
+                        "\(t.name) \(label): magenta (alert) is the same hue as blue (accent) — errors would be invisible")
+                    checked += 1
+                }
+                // (3) a theme's own tints, pairwise.
+                for (a, b) in Self.pairs(t.tints) {
+                    XCTAssertFalse(Self.lookAlike(a.1, b.1), "\(t.name): tints \(a.0) and \(b.0) look alike")
+                }
+            }
+            // (1) pairwise distinctness within an appearance mode, base accents only.
+            for (a, b) in Self.pairs(themes) {
+                XCTAssertFalse(Self.lookAlike(a.accent, b.accent),
+                               "\(a.name) and \(b.name) have look-alike accents")
+            }
+        }
+        XCTAssertEqual(checked, all.expected, "every tint of every bundled theme was checked")
+    }
+
+    /// #862: every tint (base and variants) of a bundled theme that declares variants
+    /// keeps its accent family readable as text: the extensions.md section 7 rule for
+    /// text (WCAG AA 4.5:1, ThemeContrastTests.minimum) against bgTop and card.
+    @MainActor
+    func testBundledThemeTintsPassTheTextContrastRule() throws {
+        let minimum: CGFloat = 4.5
+        let all = try bundledTints()
+        var checked = 0
+        for t in all.themes where t.tints.count > 1 {
+            for tint in t.tints {
+                let p = tint.palette
+                for (tn, c) in [("blue", p.blue), ("blueBright", p.blueBright), ("indigo", p.indigo)] {
+                    for (sn, bg) in [("bgTop", p.bgTop), ("card", p.card)] {
+                        let r = ThemeContrastTests.contrast(NSColor(c), on: NSColor(bg))
+                        XCTAssertGreaterThanOrEqual(r, minimum, "\(t.name) \(tint.label): \(tn) on \(sn) is \(r):1")
+                    }
+                }
+                checked += 1
+            }
+        }
+        XCTAssertEqual(checked, all.expected - all.themes.filter { $0.tints.count == 1 }.count,
+                       "every tint of every tinted bundled theme was checked")
+        XCTAssertGreaterThanOrEqual(checked, 11, "High Contrast Dark (1 + 4) and Light (1 + 5)")
+    }
+
+    /// Every bundled theme with its tints: the base first, then each variant's applied
+    /// palette. `expected` counts them from the specs, apart from the list itself.
+    private func bundledTints() throws -> (themes: [(name: String, spec: ThemeSpec, tints: [(label: String, palette: ThemePalette)])], expected: Int) {
+        var themes: [(name: String, spec: ThemeSpec, tints: [(label: String, palette: ThemePalette)])] = []
+        var expected = 0
         for dir in try bundledThemeDirs() {
             let loaded = try ExtensionLoader.load(directory: dir, isSystem: true, hostVersion: "2.0.0")
             guard let t = loaded.manifest.contributes?.allThemes.first else { continue }
             let spec = try ThemeSpec.decode(Data(contentsOf: dir.appendingPathComponent(t.path)))
-            guard let blue = spec.colors["blue"], let magenta = spec.colors["magenta"] else {
-                return XCTFail("\(dir.lastPathComponent): missing blue/magenta")
-            }
-            byAppearance[spec.appearance.rawValue, default: []]
-                .append((dir.lastPathComponent, Self.srgb(blue), Self.srgb(magenta)))
+            expected += 1 + spec.variants.count
+            let tints: [(label: String, palette: ThemePalette)] =
+                [(label: spec.tintLabel ?? "base", palette: ThemePalette.resolve(spec))]
+                + spec.variants.map { (label: $0.label, palette: ThemePalette.resolve(spec, tint: $0.key)) }
+            themes.append((dir.lastPathComponent, spec, tints))
         }
-        XCTAssertEqual(byAppearance.keys.sorted(), ["dark", "light"])
+        return (themes, expected)
+    }
 
-        for (_, themes) in byAppearance {
-            for t in themes {
-                // (2) alert must not read as the everyday accent.
-                XCTAssertGreaterThanOrEqual(
-                    Self.hueDistance(t.accent, t.alert), 30,
-                    "\(t.name): magenta (alert) is the same hue as blue (accent) — errors would be invisible")
-            }
-            // (1) pairwise distinctness within an appearance mode.
-            for (a, b) in Self.pairs(themes) {
-                let sameHue = Self.hueDistance(a.accent, b.accent) < 22
-                let sameSat = abs(a.accent.saturationComponent - b.accent.saturationComponent) < 0.30
-                let sameBri = abs(a.accent.brightnessComponent - b.accent.brightnessComponent) < 0.22
-                XCTAssertFalse(sameHue && sameSat && sameBri,
-                               "\(a.name) and \(b.name) have look-alike accents")
-            }
-        }
+    private static func lookAlike(_ a: NSColor, _ b: NSColor) -> Bool {
+        hueDistance(a, b) < 22
+            && abs(a.saturationComponent - b.saturationComponent) < 0.30
+            && abs(a.brightnessComponent - b.brightnessComponent) < 0.22
     }
 
     private func bundledThemeDirs() throws -> [URL] {

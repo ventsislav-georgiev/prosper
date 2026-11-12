@@ -295,6 +295,42 @@ checkmark in red):
 to break by accident: no two bundled themes of the same appearance may share an accent, and
 `magenta` may never collapse onto `blue`.
 
+### Tints (`variants`, `tintLabel`)
+
+A theme can offer a few accent **tints** of itself. Settings → Appearance → Theme shows them as
+dots on the theme's row: the base palette first, then each variant in file order. One click on
+a dot selects the theme with that tint; Prosper remembers the tint per theme on this Mac.
+
+```json
+{
+  "appearance": "dark",
+  "colors": { "blue": "#E0FF00", "blueBright": "#F0FF80", "indigo": "#66C2FF", "...": "..." },
+  "tintLabel": "Lime",
+  "variants": [
+    { "key": "cyan",  "label": "Cyan",  "colors": { "blue": "#00E5FF", "blueBright": "#8CF4FF", "indigo": "#A98BFF" } },
+    { "key": "amber", "label": "Amber", "colors": { "blue": "#FFB000", "blueBright": "#FFD166", "indigo": "#66C2FF" } }
+  ]
+}
+```
+
+- `tintLabel` (optional) names the base palette's tint on its dot ("Default" when absent).
+- `variants` (optional) is an ordered list of at most **5** entries. Each has a `key` (1 to 24
+  bytes of `a-z`, `0-9` and `-`, unique within the theme), a `label` (the dot's name; the key
+  when absent) and `colors`.
+- A variant's `colors` may set **only the accent family**: `blue`, `blueBright` and `indigo`.
+  Keys it omits keep the base value. Grounds, cards, text, `magenta` and `terminal` always stay
+  the theme's, so a tint never changes what an error or a success looks like.
+- The list is all or nothing: any other color key, a bad hex, a malformed or duplicate key, a
+  sixth variant or an entry without `key` and `colors` refuses the **whole list**. The theme
+  still loads with its base palette and no dots; the reason is logged (subsystem `com.prosper`,
+  category `theme`).
+- A remembered tint the theme no longer declares (renamed, removed, or the list was refused)
+  falls back to the base palette without an error.
+- Every tint of a bundled theme must pass the same rules as the base: `magenta` tellable from
+  each tint's `blue`, the tints of one theme tellable from each other, and `blue`, `blueBright`
+  and `indigo` at WCAG AA (4.5:1) against `bgTop` and `card`. Tints never count as a collision
+  with another theme's accent.
+
 Pick a theme in **Settings → Personalization**; the whole app (and the AppKit menu-bar / dock chrome) redraws instantly. Missing tokens fall back to the default palette, so a partial palette is valid. Selecting a theme **never spawns the extension's Lua VM** — it is pure declarative data.
 
 ---

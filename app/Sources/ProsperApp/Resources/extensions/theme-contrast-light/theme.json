@@ -13,5 +13,13 @@
     "cardHi":        "#E5E5E5",
     "textPrimary":   "#000000",
     "textSecondary": "#3C3C3C"
-  }
+  },
+  "tintLabel": "Blue",
+  "variants": [
+    { "key": "lime",   "label": "Lime",   "colors": { "blue": "#3D4A00", "blueBright": "#566600", "indigo": "#0000C2" } },
+    { "key": "cyan",   "label": "Cyan",   "colors": { "blue": "#005866", "blueBright": "#00707F", "indigo": "#6A00B8" } },
+    { "key": "amber",  "label": "Amber",  "colors": { "blue": "#7A4000", "blueBright": "#945000", "indigo": "#0000C2" } },
+    { "key": "violet", "label": "Violet", "colors": { "blue": "#6B12B8", "blueBright": "#7F2ED6", "indigo": "#0000C2" } },
+    { "key": "black",  "label": "Black",  "colors": { "blue": "#000000", "blueBright": "#262626", "indigo": "#595959" } }
+  ]
 }

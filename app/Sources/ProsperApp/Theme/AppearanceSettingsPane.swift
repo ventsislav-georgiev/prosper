@@ -108,12 +108,10 @@ struct AppearanceSettingsPane: View {
                 // see `orderedByAppearance`), NOT raw `theme.available` order.
                 // `moveSelection` below walks that same `orderedThemes` list so
                 // ↑/↓ tracks the rows actually on screen.
-                VStack(alignment: .leading, spacing: sz(14)) {
-                    ForEach(Array(orderedThemes.enumerated()), id: \.element.id) { idx, d in
-                        if idx > 0 { NeonDivider() }
-                        row(d).id(Self.rowAnchor(pane: paneID, themeID: d.id))
-                    }
-                }
+                //
+                // #862: the rows live in `ThemeList` (same layout), so a test can host
+                // the list on a scratch store without this pane's key monitor.
+                ThemeList(theme: theme, paneID: paneID)
             }
 
             NeonSection("UI Size", accent: "Size",
@@ -286,43 +284,6 @@ struct AppearanceSettingsPane: View {
         presets.min(by: { abs($0 - v) < abs($1 - v) }) ?? 1.0
     }
 
-    private func row(_ d: ThemeDescriptor) -> some View {
-        let selected = theme.activeID == d.id
-        let palette = theme.previews[d.id] ?? .default
-        return Button {
-            // Selecting is all a click does — it never touches first responder,
-            // so keyboard focus (e.g. the sidebar search field) stays exactly
-            // where it was. Arrows keep working regardless: see `KeyHandling`.
-            theme.select(id: d.id)
-        } label: {
-            HStack(spacing: sz(12)) {
-                swatches(palette)
-                VStack(alignment: .leading, spacing: sz(2)) {
-                    Text(d.title).foregroundStyle(Neon.textPrimary)
-                    Text(d.isBuiltIn ? "Built-in · \(d.appearance.rawValue)" : "\(d.id) · \(d.appearance.rawValue)")
-                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                }
-                Spacer(minLength: sz(12))
-                if selected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Neon.blueBright)
-                        .shadow(color: Neon.blue.opacity(0.6), radius: sz(4))
-                }
-            }
-            .padding(.vertical, sz(6))
-            // Selected-row highlight — same fill + border treatment as the
-            // sidebar's selected tab (SettingsSidebar.row in SettingsTheme.swift).
-            .background(
-                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
-                    .fill(selected ? Neon.blue.opacity(0.14) : .clear)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: sz(8), style: .continuous)
-                            .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1)))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     /// The bundled default icon, for an accurate "Prosper" swatch preview —
     /// same PNG `MenuBarController.setMenuBarImage` falls back to. Loaded once;
     /// nil (rare — a broken bundle) just drops to a plain glyph in the picker.
@@ -458,6 +419,116 @@ struct AppearanceSettingsPane: View {
         }
         return false
     }
+}
+
+/// Settings > Appearance > Theme: one row per selectable theme, in
+/// `AppearanceSettingsPane.orderedByAppearance` order. A theme with variants
+/// (#862) carries its tint dots on its row.
+struct ThemeList: View {
+    @ObservedObject var theme: ThemeStore
+    let paneID: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(14)) {
+            ForEach(Array(AppearanceSettingsPane.orderedByAppearance(theme.available).enumerated()), id: \.element.id) { idx, d in
+                if idx > 0 { NeonDivider() }
+                row(d).id(AppearanceSettingsPane.rowAnchor(pane: paneID, themeID: d.id))
+            }
+        }
+    }
+
+    private func row(_ d: ThemeDescriptor) -> some View {
+        let selected = theme.activeID == d.id
+        let palette = theme.previews[d.id] ?? .default
+        return Group {
+            if let options = theme.tints[d.id] {
+                tintedRow(d, selected: selected, palette: palette, options: options)
+            } else {
+                plainRow(d, selected: selected, palette: palette)
+            }
+        }
+    }
+
+    /// A theme with no variants: the row exactly as before #862.
+    private func plainRow(_ d: ThemeDescriptor, selected: Bool, palette: ThemePalette) -> some View {
+        Button {
+            // Selecting is all a click does — it never touches first responder,
+            // so keyboard focus (e.g. the sidebar search field) stays exactly
+            // where it was. Arrows keep working regardless: see `KeyHandling`.
+            theme.select(id: d.id)
+        } label: {
+            HStack(spacing: sz(12)) {
+                swatches(palette)
+                titles(d)
+                Spacer(minLength: sz(12))
+                if selected { checkmark }
+            }
+            .padding(.vertical, sz(6))
+            .background(highlight(selected))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("theme-row:\(d.id)")
+    }
+
+    /// #862: a theme with variants. The dots sit right of the row, before the
+    /// checkmark, as sibling buttons (a button nested in the row button's label
+    /// would lose its own click and its own accessibility element). Fixed slots:
+    /// every dot keeps its ring slot and the checkmark keeps its place when hidden,
+    /// so nothing moves when the selection does; the row button carries the same
+    /// vertical padding as a plain row and the dots are shorter, so the row is as
+    /// tall as a plain one.
+    private func tintedRow(_ d: ThemeDescriptor, selected: Bool, palette: ThemePalette,
+                           options: [ThemeTint]) -> some View {
+        HStack(spacing: sz(12)) {
+            Button { theme.select(id: d.id) } label: {
+                HStack(spacing: sz(12)) {
+                    swatches(palette)
+                    titles(d)
+                    Spacer(minLength: sz(12))
+                }
+                .padding(.vertical, sz(6))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("theme-row:\(d.id)")
+            ThemeTintDots(themeTitle: d.title, options: options,
+                          selectedKey: theme.rememberedTint(for: d.id)) { key in pickTint(d, key) }
+            Button { theme.select(id: d.id) } label: { checkmark.opacity(selected ? 1 : 0) }
+                .buttonStyle(.plain)
+                .accessibilityHidden(true)
+        }
+        .background(highlight(selected))
+    }
+
+    /// A dot press: that theme with that tint, in one apply, from any active theme.
+    func pickTint(_ d: ThemeDescriptor, _ key: String?) {
+        theme.select(id: d.id, tint: key)
+    }
+
+    private func titles(_ d: ThemeDescriptor) -> some View {
+        VStack(alignment: .leading, spacing: sz(2)) {
+            Text(d.title).foregroundStyle(Neon.textPrimary)
+            Text(d.isBuiltIn ? "Built-in · \(d.appearance.rawValue)" : "\(d.id) · \(d.appearance.rawValue)")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+        }
+    }
+
+    private var checkmark: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .foregroundStyle(Neon.blueBright)
+            .shadow(color: Neon.blue.opacity(0.6), radius: sz(4))
+    }
+
+    /// Selected-row highlight — same fill + border treatment as the
+    /// sidebar's selected tab (SettingsSidebar.row in SettingsTheme.swift).
+    private func highlight(_ selected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: sz(8), style: .continuous)
+            .fill(selected ? Neon.blue.opacity(0.14) : .clear)
+            .overlay(
+                RoundedRectangle(cornerRadius: sz(8), style: .continuous)
+                    .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1))
+    }
 
     /// A tiny preview strip: background, accent, secondary accent, text.
     private func swatches(_ p: ThemePalette) -> some View {
@@ -469,6 +540,37 @@ struct AppearanceSettingsPane: View {
         .clipShape(RoundedRectangle(cornerRadius: sz(6), style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: sz(6), style: .continuous)
             .strokeBorder(Neon.stroke, lineWidth: 1))
+    }
+}
+
+/// #862: a theme's tint dots — the base tint first, then the variants in file
+/// order. A dot is a plain shape in a fixed sz(18) slot; the selected one wears a
+/// ring drawn in the same slot, so the ring moving never moves a dot.
+struct ThemeTintDots: View {
+    let themeTitle: String
+    let options: [ThemeTint]
+    let selectedKey: String?
+    let pick: (String?) -> Void
+
+    var body: some View {
+        HStack(spacing: sz(4)) {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, t in
+                let on = t.key == selectedKey
+                Button { pick(t.key) } label: {
+                    ZStack {
+                        Circle().strokeBorder(Neon.textPrimary, lineWidth: sz(1.5)).opacity(on ? 1 : 0)
+                        Circle().fill(t.color)
+                            .overlay(Circle().strokeBorder(Neon.textSecondary.opacity(0.6), lineWidth: 1))
+                            .frame(width: sz(12), height: sz(12))
+                    }
+                    .frame(width: sz(18), height: sz(18))
+                    .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(themeTitle), \(t.label)")
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
     }
 }
 

@@ -62,14 +62,23 @@ struct ThemePalette: Equatable, Sendable {
         return p
     }
 
+    /// #862: the palette of `spec` with tint `tint` applied — the base palette with
+    /// only the accent family replaced. An unknown key (or nil) is the base palette.
+    static func resolve(_ spec: ThemeSpec, tint: String?) -> ThemePalette {
+        var p = resolve(spec)
+        guard let v = spec.variants.first(where: { $0.key == tint }) else { return p }
+        // Only the accent family, whatever the variant carries (decode already refuses others).
+        if let c = v.colors["blue"]       { p.blue = c }
+        if let c = v.colors["blueBright"] { p.blueBright = c }
+        if let c = v.colors["indigo"]     { p.indigo = c }
+        return p
+    }
+
     /// Resolve a descriptor's palette without applying it — used by the selector
     /// to render swatch previews. Falls back to the default for the built-in theme
     /// or any unreadable theme.json.
     static func load(for d: ThemeDescriptor) -> ThemePalette {
-        guard let path = d.jsonPath,
-              let data = try? Data(contentsOf: path),
-              let spec = try? ThemeSpec.decode(data) else { return .default }
-        return resolve(spec)
+        resolve(ThemeSpec.load(for: d))
     }
 
     /// Recognized token names (for validation / docs). Order is display order.
@@ -195,8 +204,26 @@ struct ThemeSpec: Sendable, Equatable {
     /// logical name (e.g. "menuBarIcon", "appIcon") → ref string (https URL,
     /// `data:` URI, or bundle-relative path). Resolved + cached by `ThemeStore`.
     var assets: [String: String]
+    /// #862: optional accent tints, in file order, and the base palette's tint name.
+    /// A refused list is empty here and `variantError` names why; the theme itself still loads.
+    var variants: [ThemeVariant] = []
+    var tintLabel: String?
+    var variantError: ThemeVariantError?
 
     static let empty = ThemeSpec(appearance: .dark, colors: [:], assets: [:])
+
+    /// The descriptor's spec, or `.empty` for the built-in theme or an unreadable theme.json.
+    static func load(for d: ThemeDescriptor) -> ThemeSpec {
+        guard let path = d.jsonPath, let data = try? Data(contentsOf: path),
+              let spec = try? decode(data) else { return .empty }
+        return spec
+    }
+
+    /// `key` when this theme declares that variant, else nil (the base palette). The one
+    /// fallback rule for a stored, removed or unknown tint key.
+    func variantKey(_ key: String?) -> String? {
+        variants.contains { $0.key == key } ? key : nil
+    }
 
     /// Decode from raw JSON data. Lenient: bad color strings are skipped, not
     /// fatal, so one typo can't brick a theme — that token just falls back.
@@ -215,7 +242,90 @@ struct ThemeSpec: Sendable, Equatable {
         if let raw = obj["assets"] as? [String: Any] {
             for (k, v) in raw where v is String { assets[k] = v as? String }
         }
-        return ThemeSpec(appearance: appearance, colors: colors, assets: assets)
+        var spec = ThemeSpec(appearance: appearance, colors: colors, assets: assets)
+        spec.tintLabel = obj["tintLabel"] as? String
+        if let raw = obj["variants"] {
+            // A broken tint list never takes the theme away: refuse the list, keep the palette.
+            do { spec.variants = try ThemeVariant.decodeList(raw) } catch { spec.variantError = error as? ThemeVariantError }
+        }
+        return spec
+    }
+}
+
+/// #862: one accent tint of a theme ("variants" in theme.json). Overrides only the
+/// accent family; everything else stays the theme's.
+struct ThemeVariant: Sendable, Equatable {
+    let key: String
+    let label: String
+    let colors: [String: Color]
+
+    static let accentKeys: Set<String> = ["blue", "blueBright", "indigo"]
+    static let maxCount = 5
+
+    /// All or nothing: the first bad entry refuses the whole list.
+    static func decodeList(_ raw: Any) throws -> [ThemeVariant] {
+        guard let list = raw as? [Any] else { throw ThemeVariantError.notAList }
+        guard list.count <= maxCount else { throw ThemeVariantError.tooMany(list.count) }
+        var out: [ThemeVariant] = []
+        for (i, item) in list.enumerated() {
+            guard let obj = item as? [String: Any], let key = obj["key"] as? String,
+                  let colors = obj["colors"] as? [String: Any] else { throw ThemeVariantError.malformedEntry(i) }
+            guard isValidKey(key) else { throw ThemeVariantError.malformedKey(key) }
+            guard !out.contains(where: { $0.key == key }) else { throw ThemeVariantError.duplicateKey(key) }
+            var parsed: [String: Color] = [:]
+            for (token, value) in colors {
+                guard accentKeys.contains(token) else { throw ThemeVariantError.notAnAccentKey(variant: key, token: token) }
+                guard let s = value as? String, let c = Color(hex: s) else { throw ThemeVariantError.badHex(variant: key, token: token) }
+                parsed[token] = c
+            }
+            let label = (obj["label"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? key
+            out.append(ThemeVariant(key: key, label: label, colors: parsed))
+        }
+        return out
+    }
+
+    /// a-z, 0-9 and "-", 1 to 24 bytes.
+    static func isValidKey(_ key: String) -> Bool {
+        (1...24).contains(key.utf8.count) && key.utf8.allSatisfy { (0x61...0x7A).contains($0) || (0x30...0x39).contains($0) || $0 == 0x2D }
+    }
+}
+
+/// #862: one dot on a theme's row: the base tint (key nil) or a variant.
+struct ThemeTint: Equatable, Sendable {
+    let key: String?
+    let label: String
+    let color: Color
+
+    /// Base first, then the variants in file order; nil when the theme declares none.
+    static func options(_ spec: ThemeSpec) -> [ThemeTint]? {
+        guard !spec.variants.isEmpty else { return nil }
+        let base = ThemeTint(key: nil, label: spec.tintLabel ?? "Default", color: ThemePalette.resolve(spec).blue)
+        return [base] + spec.variants.map {
+            ThemeTint(key: $0.key, label: $0.label, color: ThemePalette.resolve(spec, tint: $0.key).blue)
+        }
+    }
+}
+
+/// Why a theme's "variants" list was refused (the theme still loads with its base palette).
+enum ThemeVariantError: Error, Equatable, Sendable, CustomStringConvertible {
+    case notAList
+    case tooMany(Int)
+    case malformedEntry(Int)
+    case malformedKey(String)
+    case duplicateKey(String)
+    case notAnAccentKey(variant: String, token: String)
+    case badHex(variant: String, token: String)
+
+    var description: String {
+        switch self {
+        case .notAList: return "variants is not a list"
+        case .tooMany(let n): return "\(n) variants, at most \(ThemeVariant.maxCount)"
+        case .malformedEntry(let i): return "variant \(i) needs a key and a colors object"
+        case .malformedKey(let k): return "variant key \"\(k)\" must be 1-24 of a-z, 0-9, -"
+        case .duplicateKey(let k): return "variant key \"\(k)\" appears twice"
+        case .notAnAccentKey(let v, let t): return "variant \"\(v)\" sets \(t); only blue, blueBright, indigo"
+        case .badHex(let v, let t): return "variant \"\(v)\" has a bad color for \(t)"
+        }
     }
 }
 

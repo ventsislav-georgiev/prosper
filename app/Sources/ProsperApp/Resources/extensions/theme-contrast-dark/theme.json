@@ -13,5 +13,12 @@
     "cardHi":        "#202020",
     "textPrimary":   "#FFFFFF",
     "textSecondary": "#C8C8C8"
-  }
+  },
+  "tintLabel": "Lime",
+  "variants": [
+    { "key": "cyan",   "label": "Cyan",   "colors": { "blue": "#00E5FF", "blueBright": "#8CF4FF", "indigo": "#A98BFF" } },
+    { "key": "amber",  "label": "Amber",  "colors": { "blue": "#FFB000", "blueBright": "#FFD166", "indigo": "#66C2FF" } },
+    { "key": "violet", "label": "Violet", "colors": { "blue": "#B58CFF", "blueBright": "#D6C2FF", "indigo": "#66C2FF" } },
+    { "key": "white",  "label": "White",  "colors": { "blue": "#FFFFFF", "blueBright": "#FFFFFF", "indigo": "#A0A0A0" } }
+  ]
 }
