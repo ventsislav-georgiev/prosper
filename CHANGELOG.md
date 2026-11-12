@@ -134,6 +134,9 @@ tag from the now-released section and put it on the new top draft.
   "proj"): on a case-insensitive disk both would share one socket (#847).
 - Agent Island: Resume of an ended session whose name differs only in case from a running one
   (record "proj" beside a live "Proj") now resumes it under a free name instead of failing (#847).
+- Agent Island: New session in a folder with a very long name now starts the session under a
+  shortened name that fits dch's socket path, instead of a name dch cut itself and ended with a
+  hash (#847).
 - New session names Claude after its session: every Claude session started from New session runs
   with `--name <session name>`, so the name in Claude's prompt box, in /resume and in the terminal
   title matches the session's row. A name typed into the command is replaced, never doubled, and
