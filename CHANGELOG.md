@@ -293,7 +293,7 @@ tag from the now-released section and put it on the new top draft.
   leaving the view is no longer one paste. The X-ray view
   hides chapters for prompts the harness wrote (task notifications), and one device holds at most
   two `--xray --follow` of one session. Also fixed in dch: the remote X-ray view hanging on q or
-  Esc, a crash in a very small window, `dch -d` with the view open, and a slow reader cut off
+  Esc, a crash in a very small window, `dch -d` not detaching a client that has the view open, and a slow reader cut off
   after 65 s. Prosper still does not read X-ray.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
@@ -321,6 +321,9 @@ tag from the now-released section and put it on the new top draft.
   folder is refused with the real limit, a name that differs only in case from an existing session counts as
   taken, and a second shell started before the first is listed gets the next free name. Both buttons dim, with the
   reason, while session controls are unavailable, and a start that fails says why (#847).
+- Remote Terminal: the Mac's session server now refuses a session name holding a bidi mark (U+200E, U+200F,
+  U+061C) or a line or paragraph separator (U+2028, U+2029), as dch serve 1.55.0+ does, and refuses an attach or
+  create whose request is not a JSON object instead of starting a session (#879).
 
 ## v2.174.0
 

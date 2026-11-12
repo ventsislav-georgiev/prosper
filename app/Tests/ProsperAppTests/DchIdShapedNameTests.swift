@@ -3,8 +3,8 @@ import os
 import XCTest
 @testable import ProsperApp
 
-/// #850: dch 1.46.1 serve refuses a session_id-shaped new name (attach/create, serve.c:998) and alias
-/// (rename, serve.c:1159) with 0x13 "name looks like a session_id", before any dch runs. Every dch here
+/// #850: dch 1.46.1+ serve refuses a session_id-shaped new name (attach/create, v1.57.0 serve.c:1007-1012) and
+/// alias (rename, v1.57.0 serve.c:1169-1172) with 0x13 "name looks like a session_id", before any dch runs. Every dch here
 /// is a recorder seam; frames go to sendOverride, the NWConnection never starts.
 final class DchIdShapedNameTests: XCTestCase {
     private final class Calls: @unchecked Sendable {
@@ -67,8 +67,9 @@ final class DchIdShapedNameTests: XCTestCase {
         }
     }
 
-    /// #863: dch 1.46.1 serve.c:991-996 runs name_ok before :998, so a name padded with \t-\r (a control
-    /// to cp_ctl) gets "invalid session name"; one padded with spaces passes name_ok and gets :1001's text.
+    /// #863: dch 1.46.1+ serve runs name_ok (v1.57.0 serve.c:1001-1006) before the id-shaped check (:1007-1012),
+    /// so a name padded with \t-\r (a control to cp_ctl) gets "invalid session name"; one padded with spaces passes
+    /// name_ok and gets :1011's text.
     func testAPaddedIdShapedNameGetsNameOksRefusalFirst() {
         let invalid = DchControlOps.error("invalid session name")
         for type in [DchFrame.attach, DchFrame.create] {
@@ -101,7 +102,7 @@ final class DchIdShapedNameTests: XCTestCase {
         XCTAssertEqual(calls.lock.withLock { calls.spawned.count }, 1, "a nameless create")
     }
 
-    /// serve.c:998's session_listed: a legacy session listed under an id-shaped name keeps attaching by
+    /// v1.57.0 serve.c:1008's session_listed: a legacy session listed under an id-shaped name keeps attaching by
     /// its exact name; a case or padding variant of it is not listed, so it is refused.
     func testALegacyListedIdNameAttachesByItsExactName() {
         let legacy = "m0123456789abcdef"
@@ -132,7 +133,7 @@ final class DchIdShapedNameTests: XCTestCase {
         }
     }
 
-    /// #863: dch 1.46.1 serve.c:1154-1158 refuses a name starting with "-" before :1159's alias check.
+    /// #863: dch 1.46.1+ serve refuses a name starting with "-" (v1.57.0 serve.c:1164-1168) before the alias check (:1169-1172).
     func testADashNameWithAnIdShapedAliasGetsTheDashRefusal() {
         let dash = DchControlOps.error(DchControlOps.dashNameRefusal)
         for alias in ["m0123456789abcdef", "M0123456789ABCDEF\t"] {

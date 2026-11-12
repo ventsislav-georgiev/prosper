@@ -416,19 +416,28 @@ final class DchConnection: @unchecked Sendable {
         case DchFrame.kill:
             if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
                let n = o["name"] as? String {
-                // #627: dch's -k takes no name starting with '-'; it would re-parse "--all" as a flag.
-                guard AgentIsland.passable(n) else { return send(DchControlOps.error(DchControlOps.dashNameRefusal)) }
-                kill(n)
+                // #627: dch's -k takes no name starting with '-'; it would re-parse "--all" as a flag. QA #741 (#879):
+                // the first byte, as serve (v1.57.0 serve.c:1164-1168), not a Character: "-" + U+0301 is one.
+                guard n.utf8.first != 0x2d else { return send(DchControlOps.error(DchControlOps.dashNameRefusal)) }
+                // #879: dch serve runs no -k for a name name_ok refuses, and still answers the empty 0x14
+                // (on_kill_rename, v1.57.0 serve.c:1174-1184).
+                if DchCtl.nameOK(n) { kill(n) }
             }
             send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.rename:
             let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
-            // #850: dch serve.c:1159 refuses an id-shaped alias before running dch, whatever the name.
-            // #863: serve.c:1154-1158@v1.46.1 checks a name starting with "-" first, so such a pair gets
-            // DASH_MSG. Prosper still runs dch -m for a dash name with any other alias (remote-frames.md).
+            // #850: dch serve refuses an id-shaped alias before running dch, whatever the name (v1.57.0
+            // serve.c:1169-1172). #863: it checks a name starting with "-" first (v1.57.0 serve.c:1164-1168), so
+            // such a pair gets DASH_MSG. Prosper still runs dch -m for a dash name with any other alias (remote-frames.md).
             if let a = o?["alias"] as? String, DchControlOps.idShaped(a) {
                 let dash = (o?["name"] as? String)?.utf8.first == 0x2d   // QA #727 INFO-4: the byte, as serve
                 return send(DchControlOps.error(dash ? DchControlOps.dashNameRefusal : DchControlOps.idShapedRefusal))
+            }
+            // #879: then name_ok (v1.57.0 serve.c:1174): serve runs no dch -m for a name it refuses (and answers
+            // the empty 0x14); Prosper reports it, as every rename it does not do (#811). A dash name is left to
+            // dch -m, as above.
+            if let n = o?["name"] as? String, n.utf8.first != 0x2d, !DchCtl.nameOK(n) {
+                return send(DchControlOps.error(DchCtl.invalidName))
             }
             if let o, let n = o["name"] as? String,
                let message = rename(n, o["alias"] as? String ?? "") {
@@ -581,7 +590,8 @@ final class DchConnection: @unchecked Sendable {
         }
         let ctl = ctl, create = createAllowed(), cwd = o?["cwd"] as? String
         let cwdWhy = DchCtl.cwdRefusal(o?["cwd"], verb: argv.first ?? "")
-        // (dch path, refusal). serve refuses --xray before any shape (rframe.c ctl_check): its probe
+        // (dch path, refusal). With xray off --xray is refused before any shape, as dch serve before 1.55.0
+        // did (rframe.c:574-576@v1.54.0; 1.55.0+ runs it, ctl_xray, v1.57.0 rframe.c:682-683). The xray probe
         // may take seconds, so an --xray is vetted off this queue, every other 0x30 here.
         let vet: @Sendable () -> (String?, String?) = {
             if argv.first == "--xray", !ctl.xray() { return (nil, DchCtl.xrayOff) }
@@ -702,12 +712,19 @@ final class DchConnection: @unchecked Sendable {
         guard !uploaded, !chatted, !watching else {
             return send(DchControlOps.error("\(uploaded ? "clipboardUpload" : chatted ? "chat" : "watch") connections cannot attach or create"))
         }
-        let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
+        // QA #741 (#879): a payload that is not a JSON object is refused before anything runs, as serve's rq_json
+        // (v1.57.0 serve.c:142-159, :986-991), a NUL byte anywhere included; an empty one reads as {} there too.
+        // The NUL test is not redundant: JSONSerialization detects UTF-16 and UTF-32 and parses them (#879 r2 probe).
+        guard !payload.contains(0),
+              let o = payload.isEmpty ? [String: Any]() : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] else {
+            return send(DchControlOps.error(type == DchFrame.create ? "malformed create request" : "malformed attach request"))
+        }
         let name = o["name"] as? String
         // #877: dch serve's on_attach checks, in its order, each refused before any dch call (serve.c:990-1011
         // @v1.54.0). QA #727 INFO-3: jstr into name[NAME_CAP + 2] fails on a name that is no string or 257
         // bytes or more, and an attach needs a name at all.
-        if (o["name"] != nil && name == nil) || (name?.utf8.count ?? 0) > DchCtl.nameCap + 1
+        // #879 r2: a "\u0000" escape decodes, but dch_json_decode's utf8_ok refuses a NUL (v1.57.0 json.c:48-53), so jstr fails.
+        if (o["name"] != nil && name == nil) || (name?.utf8.count ?? 0) > DchCtl.nameCap + 1 || name?.utf8.contains(0) == true
             || (type == DchFrame.attach && (name ?? "").isEmpty) {
             return send(DchControlOps.error(Self.needsName))
         }
@@ -1559,10 +1576,10 @@ struct DchControlOps: Sendable {
 
     static let dashNameRefusal = "a session name starting with - can't be passed to dch"
 
-    /// #850: dch 1.46.1 serve's refusal of a session_id-shaped new name or alias (serve.c:1001, :1161).
+    /// #850: dch 1.46.1 serve's refusal of a session_id-shaped new name or alias (v1.57.0 serve.c:1011, :1171).
     static let idShapedRefusal = "name looks like a session_id"
 
-    /// #850: dch 1.46.1's xr_label_id_shaped (xray.c:222): trimmed of ' ' and \t...\r, then "m" and
+    /// #850: dch 1.46.1's xr_label_id_shaped (xray.c:222-223@v1.46.1, v1.57.0 xray.c:1122-1123): trimmed of ' ' and \t...\r, then "m" and
     /// 16 hex digits, any case (a case-insensitive file system answers the id to such a name).
     static func idShaped(_ s: String) -> Bool {
         let space: (UInt8) -> Bool = { $0 == 0x20 || (0x09...0x0d).contains($0) }

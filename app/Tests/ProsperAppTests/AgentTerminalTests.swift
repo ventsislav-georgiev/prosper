@@ -319,8 +319,8 @@ final class AgentTerminalTests: XCTestCase {
         c.detach()
     }
 
-    /// #844: dch adopts the attaching client's size and replays its screen drawn for it (attach.c:719-729,
-    /// master.c:3358-3367). So the client starts only once the screen parses at the view's grid, a late
+    /// #844: dch adopts the attaching client's size and replays its screen drawn for it (dch v1.57.0: MSG_ATTACH +
+    /// MSG_REDRAW, attach.c:883-893; the master's MSG_REDRAW resizes, then queue_replay, master.c:3953-3982). So the client starts only once the screen parses at the view's grid, a late
     /// report of the surface's creation grid never sizes the pty, and nothing more is sent: the attach is
     /// the one WINCH, on the first attach, on a switch and on the way back.
     @MainActor
@@ -1117,7 +1117,7 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertTrue(v.window.firstResponder === v.host, "closing find gives the keys back to the terminal")
     }
 
-    /// dch's attach replay for a cols x rows pane (vt_restore_blob, master.c:1801+): home, erase, one line
+    /// dch's attach replay for a cols x rows pane (vt_restore_blob, v1.57.0 master.c:2295, through queue_replay :2418): home, erase, one line
     /// per row filling all but the last column, the cursor parked. Parsed at any other grid it wraps.
     static func replay(_ tag: String, _ cols: Int, _ rows: Int) -> String {
         let lines = (0..<rows - 1).map { r in

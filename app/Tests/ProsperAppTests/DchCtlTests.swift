@@ -803,7 +803,7 @@ final class DchCtlTests: XCTestCase {
     }
 
     /// amendment 2: --say, --stop and --revive wait for an agent: 660 s; every other non-follow verb 60 s.
-    /// #852: --run too, as dch serve 1.45.0's CTL_LONG (rframe.c:470): typing into an agent can take ~60 s.
+    /// #852: --run too, as dch serve 1.45.0's CTL_LONG (rframe.c:470@v1.45.0, v1.57.0 :474): typing into an agent can take ~60 s.
     func testTheTimeoutIsPerVerb() throws {
         let ops = DchCtlOps()
         for v in ["--say", "--stop", "--revive", "--run"] { XCTAssertEqual(ops.timeout(of: v), 660, v) }
@@ -955,7 +955,7 @@ final class DchCtlTests: XCTestCase {
     }
 
     /// #852: a server stop (DchSessionServer.stop, through DchConnection.serverStop) cuts with dch serve's
-    /// 2 s grace whatever the verb (serve.c:1251, :1480-1481@v1.45.1): an agent verb's 660 s goes, and so
+    /// 2 s grace whatever the verb (serve.c:1251@v1.45.1, :1480-1481@v1.45.1; v1.57.0 serve.c:1281-1286, :1522-1523): an agent verb's 660 s goes, and so
     /// does the long grace of one a 0x34 cut before the stop.
     func testAServerStopCutsWithTheTwoSecondGrace() throws {
         for cancelFirst in [false, true] {

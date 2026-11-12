@@ -1,6 +1,6 @@
 {
   "id": "31-attach-id-shaped-refused",
-  "about": "0x01 with a new name shaped like a Claude session_id (m + 16 hex, any case, trimmed) answers exactly this 0x13 and starts nothing (dch 1.46.1 serve.c:998, Prosper #850). Mutating: a server without the check would start the session.",
+  "about": "0x01 with a new name shaped like a Claude session_id (m + 16 hex, any case, trimmed) answers exactly this 0x13 and starts nothing (dch 1.46.1, v1.57.0 serve.c:1007-1012, Prosper #850). Mutating: a server without the check would start the session.",
   "mutating": true,
   "steps": [
     {

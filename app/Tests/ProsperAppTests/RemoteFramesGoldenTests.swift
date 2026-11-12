@@ -157,7 +157,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws", "14-attach-twice-ignored",
                    "15-session-exit-closes", "16-create-exit-closes", "18-ctl-read-round-trip",
                    "33-rename-dash-id-shaped-refused", "34-attach-padded-id-shaped-refused",
-                   "35-attach-dash-name-refused"] + Self.cancelSet {
+                   "35-attach-dash-name-refused", "36-create-line-separator-name-refused"] + Self.cancelSet {
             XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
         }
         XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)
@@ -281,7 +281,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
     }
 
     /// #852: DchSessionServer.stop (Remote Terminal turned off) cuts a running ctl with dch serve's 2 s grace
-    /// (serve.c:1251, :1480-1481@v1.45.1), an agent verb's too, whose close or 0x34 gets 660 s.
+    /// (serve.c:1251@v1.45.1, :1480-1481@v1.45.1; v1.57.0 serve.c:1281-1286, :1522-1523), an agent verb's too, whose close or 0x34 gets 660 s.
     func testAServerStopCutsARunningAgentCtlWithTheShortGrace() throws {
         let dir = tempDir("golden-852-stop"), script = dir.appendingPathComponent("dch")
         try "#!/bin/sh\necho $$ > '\(dir.path)/pid'\ntrap '' TERM\nprintf 'working\\n'\nwhile :; do /bin/sleep 0.05; done\n"

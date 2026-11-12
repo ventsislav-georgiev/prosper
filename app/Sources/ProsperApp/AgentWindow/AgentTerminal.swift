@@ -220,7 +220,7 @@ final class AgentTerminalController: ObservableObject {
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// The client binary's version, probed off main (cached per path and mtime).
     var clientVersion: @Sendable (String) -> [Int]? = { DchCommand.probedVersion($0) }
-    /// QA #681 INFO-4: the session's socket is on disk. dch's master unlinks it at exit (atexit, master.c:4234 at dch v1.49.0)
+    /// QA #681 INFO-4: the session's socket is on disk. dch's master unlinks it at exit (atexit(unlink_socket), master.c:4234 at dch v1.49.0, :4325 at v1.57.0, the bundled tag)
     /// before its clients read EOF, so an exit 0 with the socket gone is an end even while the store (polled
     /// about once a second) still lists the session.
     var socketExists: (AgentSessionKey) -> Bool = {
@@ -364,8 +364,9 @@ final class AgentTerminalController: ObservableObject {
 
     /// The view's grid (cols x rows, `gen` nil) or the screen's report of the grid its parser now runs
     /// at (`gen`). The client starts once the two agree, or `screenWait` after the screen began.
-    /// #844: dch adopts the spawn size at attach and replays its screen drawn for it (dch
-    /// attach.c:719-729, master.c:3358-3367); parsed at the new surface's creation grid (46x16 for
+    /// #844: dch adopts the spawn size at attach and replays its screen drawn for it (dch v1.57.0: the client's
+    /// MSG_ATTACH + MSG_REDRAW, attach.c:883-893; the master's MSG_REDRAW resizes, then queue_replay, master.c:3953-3982,
+    /// :2418-2443); parsed at the new surface's creation grid (46x16 for
     /// 720x420 pt on 2x) that replay came out wrapped and torn.
     /// The screen's report never sizes the pty: it trails the view's (46x16 after 101x26).
     /// Later view grids reach the pty after a 150 ms trailing debounce, or once at the end of a live

@@ -1,0 +1,17 @@
+{
+  "id": "36-create-line-separator-name-refused",
+  "about": "0x02 with a name holding U+2028 (LINE SEPARATOR, here raw UTF-8) answers exactly this 0x13 and starts nothing: dch 1.55.0+ cp_ctl counts U+200E, U+200F, U+061C, U+2028 and U+2029 as controls (v1.57.0 rframe.c:70-81), so name_ok (:437-450) refuses the name (v1.57.0 serve.c:1001-1006), create and attach alike. Prosper #879. Mutating: a server without the check would start the session.",
+  "requires_op": "create",
+  "mutating": true,
+  "steps": [
+    {
+      "send": "02 0000002d 7b226e616d65223a22676f6c64656e2d383739e280a878222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a22696e76616c69642073657373696f6e206e616d65227d"
+      }
+    }
+  ]
+}

@@ -50,8 +50,12 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   the only added key (`code` on the busy 0x13) is optional to a client.
 - **1.1 amendment, 2026-11-12** (Prosper #877, with dch #115 / dch 1.52.0): 0x11 rows may carry
   `cwd`, and 0x01/0x02 refuse a name starting with `-` before anything runs. Still `proto` `"1.1"`
-  (dch serve 1.54.0's hello): an optional key an older client ignores, and a refusal both servers
-  already gave (dch serve) or gave later (Prosper ran dch, which refused).
+  (dch serve 1.54.0's hello): an optional key an older client ignores, and a refusal `dch serve`
+  already gave. Prosper before #877 ran dch with such a name, so an existing session whose name
+  starts with `-` attached there; now it is refused before anything runs, as on `dch serve`. Also (Prosper #879, with
+  dch #167 / dch 1.55.0): `name_ok` refuses the bidi marks U+200E, U+200F, U+061C and the line and
+  paragraph separators U+2028, U+2029 too, so a name holding one gets `invalid session name` (0x01,
+  0x02, every ctl name) and 0x04/0x06 run no dch for it.
 - A minor bump only adds: new optional keys, new frames, new `ops` names. A client ignores
   keys and `ops` it does not know.
 - A major bump breaks. A client that reads a newer major than its own refuses the host
@@ -138,9 +142,10 @@ Every frame, in both directions:
 - **Unknown frame types are ignored**: no reply, the connection stays open. A client tells an
   old server by a missing reply (the phone gives 0x08 two seconds).
 - Everything malformed is a 0x13 reply, except for the base frames, 0x02 create and 0x0a
-  putClipboard, which answer as each one's section says (0x01 and 0x02 fall back to their
-  defaults, 0x04 and 0x06 answer 0x14, 0x0a answers 0x14, see [M11](#known-gaps)), and a length
-  over the receive guard, which closes.
+  putClipboard, which answer as each one's section says (0x01 and 0x02 answer 0x13 `malformed
+  attach request` / `malformed create request` and start nothing, both servers, Prosper since #879;
+  0x04 and 0x06 answer 0x14, 0x0a answers 0x14, see [M11](#known-gaps)), and a length over the
+  receive guard, which closes.
 - **When Prosper closes a connection.** A client must expect a close at any time. Only 0x12
   exit means the session ended; every other close is a refusal, a dropped link or the
   client's own FIN. Prosper closes:
@@ -225,7 +230,7 @@ Prosper's ops and their frames:
 | `paste_image` | 0x0a | always (dch serve: only once it supports 0x0a) |
 | `ctl` | 0x30 (replies 0x31, 0x32, 0x33) | always, since #838 (dch serve: 1.41.0+) |
 | `ctl-cancel` | 0x34 | always, since #838 (dch serve: the release after 1.41.0) |
-| `xray` | 0x30 with `--xray` | while the dch that ctl runs has `--xray` (Prosper: its version gate, off until a dch release has it) |
+| `xray` | 0x30 with `--xray` | dch serve 1.55.0+; Prosper: off, its version gate set out of reach until its `--xray` allowlist matches dch serve's (see [the xray gate](#0x30-ctl-gate-ctl)) |
 
 ## Core subset and Mac-only frames
 
@@ -395,12 +400,19 @@ The connection then carries one session:
   whose `name` starts with `-` and whose alias is id-shaped gets the `-` message below.
 - The name checks, in `dch serve`'s order (serve.c:990-1011@v1.54.0; Prosper since #877, which ran
   dch for most of these before). Each answers a 0x13, starts nothing, and leaves the connection open:
-  1. `name` that is not a string or is 257 bytes of UTF-8 or more (serve's 256-byte buffer), attach
-     and create alike, or an attach with no `name` or `""`: `attach needs a session name`.
+  0. A payload that is not a JSON object, or holds a NUL byte (an empty one reads as `{}`):
+     `malformed attach request` / `malformed create request` (v1.57.0 serve.c:142-159, :986-991;
+     Prosper since #879, which ran a create with no name and gave an attach `attach needs a session
+     name` before). A NUL byte refuses even a valid object: UTF-16 or UTF-32 JSON is malformed.
+  1. `name` that is not a string, is 257 bytes of UTF-8 or more (serve's 256-byte buffer) or decodes
+     to a NUL (a `\u0000` escape, json.c:48-53@v1.57.0; Prosper since #879), attach and create
+     alike, or an attach with no `name` or `""`: `attach needs a session name`.
   2. A first byte `-`, listed or not: `a session name starting with - can't be passed to dch`. A
      byte, so `-` followed by a combining mark counts.
-  3. Not `name_ok` (a `/`, a control: C0, DEL, C1, the bidi overrides and isolates; more than 255
-     bytes): `invalid session name`.
+  3. Not `name_ok` (a `/`, a control: C0, DEL, C1, the bidi embeddings, overrides and isolates
+     U+202A-U+202E and U+2066-U+2069, the bidi marks U+200E, U+200F, U+061C and the separators
+     U+2028, U+2029; more than 255 bytes): `invalid session name` (`name_ok` and `cp_ctl`, v1.57.0
+     rframe.c:437-450 and :70-81; the marks and separators since dch 1.55.0, Prosper #879).
   4. The session_id shape above, which reads the list only now.
   A create with no `name` (or `""`) skips 2-4: dch picks the name.
 - Prosper names an interactive Claude after its session (#877, as the Mac's New session does): a
@@ -423,15 +435,22 @@ The connection then carries one session:
 ### 0x04 kill, 0x06 rename
 
 - 0x04 kill `{"name": string}` → 0x14 (empty). Ends the session (`dch -k`). A name starting
-  with `-` → 0x13 `a session name starting with - can't be passed to dch` (both servers). A malformed
-  payload or an unknown name still answers 0x14: dch's result is not reported.
+  with `-` → 0x13 `a session name starting with - can't be passed to dch` (both servers; a first
+  byte, so `-` followed by a combining mark counts: Prosper since #879). A malformed
+  payload or an unknown name still answers 0x14: dch's result is not reported. Any other name
+  `name_ok` refuses (below) runs no `dch -k` and still answers 0x14 (both servers; v1.57.0
+  serve.c:1174-1184, Prosper #879).
 - 0x06 rename `{"name": string, "alias": string}` → 0x14 (empty). `alias` `""` (or missing)
   clears it. Always 0x14 on `dch serve`, as kill. A name starting with `-`: `dch serve` answers 0x13 as for
   kill; Prosper answers 0x14, since it runs `dch -m <name> <alias>` and `-m` takes the next two
   arguments verbatim, so such a name is harmless there; with an id-shaped `alias`, which both
   servers refuse, Prosper answers `dch serve`'s `-` message (#863). Prosper (#811) answers 0x13 when
   `dch -m` exits non-zero or cannot run (`Couldn't rename <name>: <dch's first stderr line>`,
-  for example an unknown or just-exited session); a malformed payload still answers 0x14.
+  for example an unknown or just-exited session); a malformed payload still answers 0x14. A `name`
+  `name_ok` refuses that does not start with `-` (a `/`, a control, the code points listed under
+  0x01, more than 255 bytes) runs no `dch -m` on either server: `dch serve` answers the empty 0x14
+  (v1.57.0 serve.c:1174-1184), Prosper 0x13 `invalid session name` (#879, as it reports any rename it
+  did not do). The id-shaped `alias` check comes first on both.
 - `dch serve` keeps this in 1.0 (Q2): failure is not reported, and 0x13 is only for a name
   starting with `-`. Prosper's kill does not report failure either; a client handles a 0x13 to either frame.
 
@@ -502,7 +521,8 @@ The rules behind it:
 - `argv` has 2 to 1024 elements (dch's `CTL_ARGV_MAX`), every one a string.
 - Every name (each `<name>`, and `--as`'s `<new>`) passes dch serve's `name_ok`: non-empty, at
   most 255 bytes, no leading `-`, no `/`, no control character (C0, DEL, C1, U+202A-U+202E,
-  U+2066-U+2069), and not `serve` (dch's `ctl_name`).
+  U+2066-U+2069, and since dch 1.55.0 U+200E, U+200F, U+061C, U+2028, U+2029: v1.57.0 rframe.c:70-81),
+  and not `serve` (dch's `ctl_name`, v1.57.0 rframe.c:560-569). Prosper since #879 for the five.
 - **No `:` in a name** (each `<name>`, and `--as`'s `<new>`): dch reads a name with `:` as
   `host:name` and dials that host with the serving host's identity, a relay. Free text (the words
   of `--send`, `--run`, `--keys`, `--say`, `--spawn`'s command, `--ref`'s text) and `-m`'s alias
@@ -526,10 +546,13 @@ The rules behind it:
 - **The create gate.** `--spawn` and `--revive` start a process, so they need `create` in `ops`,
   the same gate as 0x02 create. Prosper always allows create; `dch serve` only with
   `--allow-create`. `--xray` is read-only and not behind it.
-- **The xray gate.** `--xray` runs only where the server lists `xray` in `ops`: Prosper lists it
-  while the dch ctl runs answers `--version` with at least its minimum (`DchCtl.xrayMinDch`, a
-  placeholder set out of reach until a dch release ships `--xray`, so it is off today). Without
-  it, a well-formed `--xray` gets `0x13 xray not supported by this host` and nothing runs.
+- **The xray gate.** `--xray` runs only where the server lists `xray` in `ops`. `dch serve` lists it
+  since 1.55.0. Prosper lists it while the dch ctl runs answers `--version` with at least its minimum
+  (`DchCtl.xrayMinDch`), a placeholder set out of reach, so it is off today: the bundled dch has
+  `--xray`, but Prosper's allowlist above does not match `dch serve`'s yet (no `--clear`, other
+  refusal words, no `--ref` grammar check, at most 3 digits of `--budget-ms`), and the minimum
+  stays out of reach until it does. Without it, a well-formed `--xray` gets `0x13 xray not supported
+  by this host` and nothing runs.
 
 Refusals, each a single 0x13 and nothing runs. Since the amendment of 2026-11-10 (`dch serve`
 1.42.0) every one but the first two (busy, and `ctl needs its own connection`) is followed by the
@@ -559,8 +582,10 @@ Prosper's messages:
 | dch could not be started | `dch could not be run` |
 | no dch on this Mac | `dch is not available on this Mac` |
 
-`--xray` is checked first (as `dch serve`, which refuses it whatever follows): with `xray` off a
-malformed `--xray` gets `xray not supported by this host`, not its shape error.
+`--xray` is checked first: with `xray` off a malformed `--xray` gets `xray not supported by this
+host`, not its shape error, as `dch serve` before 1.55.0 refused it whatever followed
+(rframe.c:574-576@v1.54.0). `dch serve` 1.55.0+ has the op and answers its own shape errors
+(ctl_xray, v1.57.0 rframe.c:609-667).
 
 Only `no such directory`, the `:` message, the busy payload and the two connection messages are fixed by the spec; the rest are Prosper's words, shown to the user
 as written.
@@ -708,7 +733,7 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-35: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-36: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
@@ -721,8 +746,9 @@ then reads it with ctl `--read`; its cleanup kills it), and 26-29 (each setup cr
 alias: refused by a conformant server, but one without the check would run dch), and 33 and 34
 (#863: a dash name with an id-shaped alias gets the `-` message; an id-shaped attach name padded
 with `\t` and `\r` gets `invalid session name`; one without the checks would run dch), and 35
-(#877: an attach to `-golden-877` gets the `-` message; one without the check would run dch). Run `--mutating` only against a test server, never a
-host with sessions someone uses.
+(#877: an attach to `-golden-877` gets the `-` message; one without the check would run dch), and 36
+(#879: a create whose name holds U+2028 gets `invalid session name`; one without the check would
+start the session). Run `--mutating` only against a test server, never a host with sessions someone uses.
 
 17-25 are the `ctl` set (#838), each `requires_op` `ctl`: 17 a server listing `ctl` speaks proto
 1.1 or later; 18 a `--read` round trip (0x31, then 0x33); 19 a flag off the verb's allowlist,
@@ -831,7 +857,8 @@ rules above; each item is either a known limit of the code or a decision still o
 - **M5. kill and rename never report failure.** 0x04 and 0x06 answer an empty 0x14 even for a
   malformed request or an unknown session; only a name starting with `-` gets 0x13 (kill on
   both servers, rename on `dch serve` only). Kept in 1.0 for `dch serve` (Q2); Prosper's rename
-  answers 0x13 when `dch -m` fails (#811), so fixture 08 accepts either.
+  answers 0x13 when `dch -m` fails (#811) or when it runs none for a name `name_ok` refuses (#879),
+  so fixture 08 accepts either.
 - **M6. The watch stream's sidekick frame.** Prosper sends `0x14 {"sidekick"}` on every stream
   (it always lists `sidekick`). This spec makes it conditional on `sidekick` in `ops`, so a dch
   server need not invent one.

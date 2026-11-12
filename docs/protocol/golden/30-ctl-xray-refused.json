@@ -1,6 +1,6 @@
 {
   "id": "30-ctl-xray-refused",
-  "about": "Without xray in ops, --xray is refused before its shape is checked (here it lacks --json): 0x13 \"xray not supported by this host\", then the FIN (dch's golden 32).",
+  "about": "Without xray in ops, --xray is refused before its shape is checked (here it lacks --json): 0x13 \"xray not supported by this host\", then the FIN. A server without the xray op: dch serve before 1.55.0 refused every --xray so (rframe.c:574-576@v1.54.0, its golden 32 then), and Prosper does while its xray gate is off. dch serve 1.55.0+ has the op and runs --xray (ctl_xray, v1.57.0 rframe.c:609-667); its golden 32 now pins a host WITH the op refusing the view form (no --json) with its own words, the case this fixture's unless_op leaves out.",
   "requires_op": "ctl",
   "unless_op": "xray",
   "steps": [

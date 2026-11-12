@@ -62,8 +62,10 @@ enum DchCtl {
     static let argvMax = 1024
 
     /// Out of reach on purpose: dch has shipped --xray since 1.44.0, with the --ref/--scope/--budget-ms forms
-    /// `.xray` allows since 1.50.0, but "xray" stays off until Prosper's X-ray client ships. Then set this to
-    /// the first release that client needs (QA #720).
+    /// `.xray` allows since 1.50.0, and dch serve runs a peer's --xray since 1.55.0 (ctl_xray, v1.57.0
+    /// rframe.c:609-667), but "xray" stays off until Prosper's X-ray client ships AND `.xray`'s allowlist
+    /// matches dch serve's (it does not: no --clear, other refusal words, no --ref grammar check, a 3-digit
+    /// --budget-ms; #879 item 4). A bundled dch that has --xray is not a reason to lower it (QA #720, #879).
     static let xrayMinDch = [999, 0, 0]
     static func hasXray(_ version: [Int]?) -> Bool { version.map { DchCommand.isAtLeast($0, xrayMinDch) } ?? false }
 
@@ -104,25 +106,28 @@ enum DchCtl {
     /// dch's flag test (dch.c main): "-" alone is a word, not a flag.
     static func isFlag(_ w: String) -> Bool { w.utf8.first == 0x2d && w.utf8.count > 1 }   // #877: the byte, as dch
 
-    /// dch serve's ctl_name: name_ok (non-empty, at most 255 bytes, no leading "-", no "/", no
-    /// control: C0, DEL, C1, bidi overrides), not "serve", then no ':' (dch dea6fd4: the child dch
-    /// reads a:b as host:name and dials on with this Mac's identity). The leading "-" has 0x04's message.
+    /// dch serve's ctl_name (v1.57.0 rframe.c:560-569): name_ok (see nameOK), not "serve", then no ':'
+    /// (dch dea6fd4, v1.57.0 serve.c:1246-1254: the child dch reads a:b as host:name and dials on with this
+    /// Mac's identity). The leading "-" has 0x04's message.
     static func nameRefusal(_ n: String) -> String? {
         if n.utf8.first == 0x2d { return DchControlOps.dashNameRefusal }   // QA #727 INFO-4: the byte, not a Character
         if !nameOK(n) || n == "serve" { return invalidName }
-        return n.contains(":") ? localOnly : nil
+        return n.utf8.contains(0x3a) ? localOnly : nil   // #879: the byte, as serve's strchr (":" + a combining mark is one Character)
     }
 
     static let invalidName = "invalid session name"
     /// dch's NAME_CAP (rframe.h:29@v1.54.0): name_ok's byte bound.
     static let nameCap = 255
 
-    /// dch's name_ok (rframe.c:433@v1.46.1): non-empty, at most 255 bytes, no leading "-", no "/",
-    /// no control (cp_ctl, rframe.c:73: C0, DEL, C1, bidi overrides).
+    /// dch's name_ok (v1.57.0 rframe.c:437-450): non-empty, at most 255 bytes, no leading "-", no "/",
+    /// no control (cp_ctl, v1.57.0 rframe.c:70-81: C0, DEL, C1, the bidi embeddings, overrides and isolates
+    /// U+202A-E and U+2066-9, and since dch 1.55.0 (#879) the bidi marks U+200E, U+200F, U+061C and the
+    /// line and paragraph separators U+2028, U+2029). Scalars, as cp_ctl reads code points.
     static func nameOK(_ n: String) -> Bool {
         !n.isEmpty && n.utf8.count <= nameCap && n.utf8.first != 0x2d && !n.unicodeScalars.contains { c in
             let v = c.value
             return v == 0x2f || v < 0x20 || (0x7f..<0xa0).contains(v) || (0x202a...0x202e).contains(v) || (0x2066...0x2069).contains(v)
+                || [0x200e, 0x200f, 0x061c, 0x2028, 0x2029].contains(v)
         }
     }
 
