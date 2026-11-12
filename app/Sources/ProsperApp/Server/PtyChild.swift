@@ -12,7 +12,10 @@ final class PtyChild: @unchecked Sendable {
     private let onOutput: ([UInt8]) -> Void
     private let onExit: (Int32) -> Void
     private var done = false
-    private let lock = NSLock()
+    /// Recursive (#885): `signal` runs under it, and a test's seam reads isJiggling there.
+    private let lock = NSRecursiveLock()
+    /// #885: redraw(rearm:)'s SIGURG; tests record (pid, signal) instead of sending it.
+    private let signal: @Sendable (pid_t, Int32) -> Void
     private var lastCols = 80
     private var lastRows = 24
     private var jiggling = false
@@ -23,9 +26,11 @@ final class PtyChild: @unchecked Sendable {
 
     init(exe: String, args: [String], env: [String: String], cols: Int, rows: Int,
          cwd: String = NSHomeDirectory(),
+         signal: @escaping @Sendable (pid_t, Int32) -> Void = { _ = Darwin.kill($0, $1) },
          onOutput: @escaping ([UInt8]) -> Void, onExit: @escaping (Int32) -> Void) throws {
         self.onOutput = onOutput
         self.onExit = onExit
+        self.signal = signal
 
         // Build C argv/envp BEFORE forking — the child (post-fork, pre-exec) must not
         // allocate or call non-async-signal-safe functions, so everything is ready.
@@ -143,29 +148,42 @@ final class PtyChild: @unchecked Sendable {
     /// dropped and an attach mid-prompt stays a black screen until a keypress.
     /// Two real size changes guarantee two resize events and a full repaint.
     /// The 120 ms gap keeps the kernel/dch from coalescing them into a no-op.
-    func redraw() {
+    ///
+    /// `rearm` (#885, the server's 0x07 only): then SIGURG to this child, as dch serve 1.58.0 does after its
+    /// jiggle (v1.58.0 serve.c:1815-1829), also when no jiggle starts. A dch 1.58.0+ client answers it with
+    /// MSG_ATTACH, so its master re-arms the session's terminal modes, then MSG_REDRAW (attach.c:213-224,
+    /// :1134-1149); an older one ignores it, SIGURG's default. Sent under the lock and only while !done:
+    /// reap() sets done under this lock before its waitpid, the only reap of this pid, so the pid is still
+    /// this child (at worst a zombie), never one the system has handed to another process.
+    func redraw() { redraw(rearm: false) }
+
+    func redraw(rearm: Bool) {
         lock.lock()
+        defer { lock.unlock() }
+        guard !done else { return }
         // Claim the jiggle only once we know we'll schedule the restore that
         // releases it — a bail here must not wedge every future redraw().
-        guard !done, !jiggling, masterFD >= 0, lastRows > 2 else { lock.unlock(); return }
-        jiggling = true
-        var small = winsize(ws_row: UInt16(lastRows - 1), ws_col: UInt16(lastCols),
-                            ws_xpixel: 0, ws_ypixel: 0)
-        _ = ioctl(masterFD, TIOCSWINSZ, &small)
-        lock.unlock()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.12) { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            self.jiggling = false
-            guard self.masterFD >= 0 else { return }
-            // Restore to the CURRENT size (a real resize may have landed
-            // meanwhile). Read + ioctl stay under the lock so a concurrent
-            // resize() can't be clobbered by this stale restore.
-            var ws = winsize(ws_row: UInt16(self.lastRows), ws_col: UInt16(self.lastCols),
-                             ws_xpixel: 0, ws_ypixel: 0)
-            _ = ioctl(self.masterFD, TIOCSWINSZ, &ws)
+        if !jiggling, masterFD >= 0, lastRows > 2 {
+            jiggling = true
+            var small = winsize(ws_row: UInt16(lastRows - 1), ws_col: UInt16(lastCols),
+                                ws_xpixel: 0, ws_ypixel: 0)
+            _ = ioctl(masterFD, TIOCSWINSZ, &small)
+            // Runs on a global queue, 120 ms on; it takes the lock itself.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                defer { self.lock.unlock() }
+                self.jiggling = false
+                guard self.masterFD >= 0 else { return }
+                // Restore to the CURRENT size (a real resize may have landed
+                // meanwhile). Read + ioctl stay under the lock so a concurrent
+                // resize() can't be clobbered by this stale restore.
+                var ws = winsize(ws_row: UInt16(self.lastRows), ws_col: UInt16(self.lastCols),
+                                 ws_xpixel: 0, ws_ypixel: 0)
+                _ = ioctl(self.masterFD, TIOCSWINSZ, &ws)
+            }
         }
+        if rearm, pid > 0 { signal(pid, SIGURG) }
     }
 
     /// Detach: SIGHUP the dch client so it exits; its master daemon keeps running.

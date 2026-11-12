@@ -22,6 +22,13 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   included, before it reads a byte (the client sees a close).
 - Prosper then lets in only the host owner's own devices: the owner check (#777, see
   [Decided defaults](#decided-defaults-for-dch-serve)), also before it reads a byte.
+- TCP keepalive on every accepted connection, so a peer gone without a FIN (asleep, off the
+  network) is dropped and what it held is freed. `dch serve` probes after 15 s idle, every 5 s, 3
+  times: about 30 s (remote.c:2435-2465, serve.c:2476-2480@v1.58.0; a dead peer's idle `--follow`
+  held a subscriber slot). Prosper probes after 120 s, every 10 s, 4 times: about 160 s, a
+  deliberate difference (#767, kept in #885): each probe wakes the phone's radio, and Prosper
+  holds no slot a dead peer could keep from another (no connection slots, and no `--xray --follow`
+  runs), and the newest attach to a session retires the older connections to it at once.
 - A server must never bind a wider address than its Tailscale one on its own; `dch serve`
   binds another only when its operator names it (`--bind`). See
   [Decided defaults](#decided-defaults-for-dch-serve) for the rules `dch serve` follows.
@@ -141,11 +148,16 @@ Every frame, in both directions:
     `0x13 {"message": "watch needs its own connection"}`.
 - **Unknown frame types are ignored**: no reply, the connection stays open. A client tells an
   old server by a missing reply (the phone gives 0x08 two seconds).
-- Everything malformed is a 0x13 reply, except for the base frames, 0x02 create and 0x0a
-  putClipboard, which answer as each one's section says (0x01 and 0x02 answer 0x13 `malformed
-  attach request` / `malformed create request` and start nothing, both servers, Prosper since #879;
-  0x04 and 0x06 answer 0x14, 0x0a answers 0x14, see [M11](#known-gaps)), and a length over the
-  receive guard, which closes.
+- Everything malformed is a 0x13 reply (0x01 and 0x02 included: `malformed attach request` /
+  `malformed create request`, nothing starts, both servers, Prosper since #879), except 0x04 kill
+  and 0x06 rename, which answer the empty 0x14; 0x05 resize and 0x07 redraw, which answer nothing;
+  0x0a putClipboard, which answers 0x14 (see [M11](#known-gaps)); and a length over the receive
+  guard, which closes. "Malformed" is `dch serve`'s reading (rq_json, v1.58.0 serve.c:145-163;
+  Prosper since #885): not a JSON object, a NUL byte anywhere (so UTF-16 or UTF-32 JSON), or a
+  UTF-8 BOM before the object (json.c:67-70 skips only space, tab, CR and LF); an empty payload
+  reads as `{}`. A value given twice, or a string that decodes to a NUL or holds a lone surrogate
+  escape (`\ud800` with no low half), is no readable value: that one key reads as of the wrong type
+  (json.c:288-384, rframe.c:301-322), as each frame's section says.
 - **When Prosper closes a connection.** A client must expect a close at any time. Only 0x12
   exit means the session ended; every other close is a refusal, a dropped link or the
   client's own FIN. Prosper closes:
@@ -367,9 +379,17 @@ The connection then carries one session:
   master repaints for the new client. `dch serve` must send the same repaint on attach.
 - 0x10 data, client to server: raw bytes for the session's input (keys, pastes).
 - 0x10 data, server to client: raw pty output.
-- 0x05 resize `{"cols": int, "rows": int}`: the session's window size (80×24 for a missing key).
-  No reply.
-- 0x07 redraw (empty): force a repaint (Prosper shrinks the pty a row and restores it). No reply.
+- 0x05 resize `{"cols": int, "rows": int}`: the session's window size (80×24 for a missing key,
+  one that is not a positive integer, or one given twice; above 1000 it is 1000: rq_size, v1.58.0
+  serve.c:168-179, the same for 0x01 and 0x02; Prosper since #885). No reply.
+- 0x07 redraw (empty): force a repaint, and re-arm the session's terminal modes. The server
+  shrinks the pty a row and restores it 120 ms later (not while a shrink is pending), then sends
+  SIGURG to its own dch client while that is still running, shrink or not. A dch 1.58.0+ client
+  answers it by attaching again, so its master re-sends the session's DEC modes (mouse, focus,
+  bracketed paste, the alternate screen) and kitty keyboard flags, then repaints; an older client
+  ignores SIGURG (its default). So a phone whose terminal lost those modes gets them back without
+  attaching again (`dch serve` 1.58.0 serve.c:1815-1829, attach.c:213-224 and :1134-1149,
+  master.c:3863-3930; Prosper since #885, which only shrank the pty before). No reply.
 - 0x05 and 0x07 on a connection that has not attached are ignored: no reply, no error (Prosper:
   there is no pty to size or repaint).
 - 0x09 snapshot (empty) → 0x19 snapshotResp: raw ANSI of the session's current screen from
@@ -400,13 +420,14 @@ The connection then carries one session:
   whose `name` starts with `-` and whose alias is id-shaped gets the `-` message below.
 - The name checks, in `dch serve`'s order (serve.c:990-1011@v1.54.0; Prosper since #877, which ran
   dch for most of these before). Each answers a 0x13, starts nothing, and leaves the connection open:
-  0. A payload that is not a JSON object, or holds a NUL byte (an empty one reads as `{}`):
-     `malformed attach request` / `malformed create request` (v1.57.0 serve.c:142-159, :986-991;
-     Prosper since #879, which ran a create with no name and gave an attach `attach needs a session
-     name` before). A NUL byte refuses even a valid object: UTF-16 or UTF-32 JSON is malformed.
-  1. `name` that is not a string, is 257 bytes of UTF-8 or more (serve's 256-byte buffer) or decodes
-     to a NUL (a `\u0000` escape, json.c:48-53@v1.57.0; Prosper since #879), attach and create
-     alike, or an attach with no `name` or `""`: `attach needs a session name`.
+  0. A payload that is not a JSON object, holds a NUL byte or starts with a UTF-8 BOM (an empty one
+     reads as `{}`): `malformed attach request` / `malformed create request` (v1.58.0 serve.c:145-163,
+     :999-1003; Prosper since #879, the BOM since #885). A NUL byte refuses even a valid object:
+     UTF-16 or UTF-32 JSON is malformed.
+  1. `name` that is not a string, is given twice, is 257 bytes of UTF-8 or more (serve's 256-byte
+     buffer), decodes to a NUL (a `\u0000` escape, json.c:48-53) or holds a lone surrogate escape
+     (json.c:288-357; Prosper since #879, the duplicate and the surrogate since #885), attach and
+     create alike, or an attach with no `name` or `""`: `attach needs a session name`.
   2. A first byte `-`, listed or not: `a session name starting with - can't be passed to dch`. A
      byte, so `-` followed by a combining mark counts.
   3. Not `name_ok` (a `/`, a control: C0, DEL, C1, the bidi embeddings, overrides and isolates
@@ -414,7 +435,13 @@ The connection then carries one session:
      U+2028, U+2029; more than 255 bytes): `invalid session name` (`name_ok` and `cp_ctl`, v1.57.0
      rframe.c:437-450 and :70-81; the marks and separators since dch 1.55.0, Prosper #879).
   4. The session_id shape above, which reads the list only now.
-  A create with no `name` (or `""`) skips 2-4: dch picks the name.
+  A create with no `name` (or `""`) skips 2-4: dch picks the name. Then, for a 0x02 only, a
+  `command` that is present but not an array of strings, given twice, holds a word that decodes to
+  a NUL or a lone surrogate, or has more than 256 words: `malformed create request: command must be
+  an array of strings` (v1.58.0 serve.c:1043-1056, MAX_CMD :101; Prosper since #885, which ran the
+  default shell for one, or passed the NUL to `execve`). `dch serve` reads no `command` on a 0x01;
+  Prosper runs one an attach brings when the attach starts the session (below), and reads one it
+  cannot read as none.
 - Prosper names an interactive Claude after its session (#877, as the Mac's New session does): a
   0x02 (or an attach that starts one) with a `name` and a `command` that runs Claude interactively
   gets `--name <name>` right after the `claude` word, any `-n`/`--name` of its own replaced. A
@@ -439,7 +466,8 @@ The connection then carries one session:
   byte, so `-` followed by a combining mark counts: Prosper since #879). A malformed
   payload or an unknown name still answers 0x14: dch's result is not reported. Any other name
   `name_ok` refuses (below) runs no `dch -k` and still answers 0x14 (both servers; v1.57.0
-  serve.c:1174-1184, Prosper #879).
+  serve.c:1174-1184, Prosper #879). So does a `name` given twice, or one that decodes to a NUL or
+  holds a lone surrogate escape (both servers: jstr -1, v1.58.0 serve.c:1172, :1187; Prosper since #885).
 - 0x06 rename `{"name": string, "alias": string}` → 0x14 (empty). `alias` `""` (or missing)
   clears it. Always 0x14 on `dch serve`, as kill. A name starting with `-`: `dch serve` answers 0x13 as for
   kill; Prosper answers 0x14, since it runs `dch -m <name> <alias>` and `-m` takes the next two
@@ -450,7 +478,10 @@ The connection then carries one session:
   `name_ok` refuses that does not start with `-` (a `/`, a control, the code points listed under
   0x01, more than 255 bytes) runs no `dch -m` on either server: `dch serve` answers the empty 0x14
   (v1.57.0 serve.c:1174-1184), Prosper 0x13 `invalid session name` (#879, as it reports any rename it
-  did not do). The id-shaped `alias` check comes first on both.
+  did not do). The id-shaped `alias` check comes first on both. An `alias` that is present but no
+  readable string (not a string, given twice, a NUL or a lone surrogate once decoded, 1024 bytes or
+  more: serve's `alias[1024]`) runs no `dch -m` and answers the empty 0x14 on both servers (v1.58.0
+  serve.c:1167, :1174, :1187; Prosper since #885, which cleared the alias for one before).
 - `dch serve` keeps this in 1.0 (Q2): failure is not reported, and 0x13 is only for a name
   starting with `-`. Prosper's kill does not report failure either; a client handles a 0x13 to either frame.
 
@@ -563,7 +594,8 @@ Prosper's messages:
 |-------|-----------|
 | another ctl running on this connection | `{"code": "busy", "message": "a ctl is already running on this connection"}`, byte for byte as `dch serve`; no close |
 | an attached or watch connection, or a Mac-only request in flight | `ctl needs its own connection` (both servers); no close |
-| not a JSON object with an `argv` array of strings | `malformed ctl request: send {"argv": [verb, name, ...]}` |
+| not a JSON object (a NUL byte, a UTF-8 BOM), or no `argv` | `malformed ctl request: send {"argv": [verb, name, ...]}` |
+| an `argv` that is not an array of strings, or a `cwd` that is not a string: of another type, given twice, a word or the `cwd` that decodes to a NUL or holds a lone surrogate escape, a `cwd` of 1024 bytes or more | `malformed ctl request: argv must be an array of strings, cwd a string` (both servers: ctl_request, v1.58.0 serve.c:1223-1233; Prosper since #885) |
 | fewer than 2 elements | `ctl needs a verb and its arguments` |
 | more than 1024 elements | `too many arguments` |
 | a verb not in the table | `ctl does not run <verb>` |
@@ -587,7 +619,7 @@ host`, not its shape error, as `dch serve` before 1.55.0 refused it whatever fol
 (rframe.c:574-576@v1.54.0). `dch serve` 1.55.0+ has the op and answers its own shape errors
 (ctl_xray, v1.57.0 rframe.c:609-667).
 
-Only `no such directory`, the `:` message, the busy payload and the two connection messages are fixed by the spec; the rest are Prosper's words, shown to the user
+Only `no such directory`, the `:` message, the busy payload, the two connection messages and (since #885) `malformed ctl request: argv must be an array of strings, cwd a string` are fixed by the spec; the rest are Prosper's words, shown to the user
 as written.
 
 **Streaming.** The server sends each chunk of dch's output as dch writes it, never buffered to
@@ -605,6 +637,10 @@ for an agent, and a client shows it as it comes.
   whole group, serve's to dch.
   Prosper sends output up to exactly 8 MiB, then the 0x33; no 0x31 or 0x32 follows it.
 - Every 0x31 and 0x32 is within the 8 MiB send limit.
+- `dch serve` 1.58.0 runs at most 2 `--xray --follow` of one session per device: a third closes
+  that device's oldest as a timeout would (#202, serve.c:41-45, MAX_FOLLOW_PER_DEV :97). Prosper
+  needs no such cap while its xray gate is off (below): every `--xray` is refused there, so no
+  `--xray --follow` runs (#885).
 - **`--follow`** and **`--xray --follow`** have neither limit. Each streams 0x31 until the session ends (dch exits: 0x33 with
   its real exit code) or the client closes the connection (below). The server reads dch's pipe
   only as fast as the socket takes the frames, so a slow client slows dch rather than filling the
@@ -733,7 +769,7 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-36: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-39: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
@@ -748,7 +784,11 @@ alias: refused by a conformant server, but one without the check would run dch),
 with `\t` and `\r` gets `invalid session name`; one without the checks would run dch), and 35
 (#877: an attach to `-golden-877` gets the `-` message; one without the check would run dch), and 36
 (#879: a create whose name holds U+2028 gets `invalid session name`; one without the check would
-start the session). Run `--mutating` only against a test server, never a host with sessions someone uses.
+start the session), and 37 (#885: an attach to `golden-885`, then a 0x07, which must bring more
+output once the attach's repaint has drained: the re-armed client's repaint; its cleanup kills it),
+and 38 and 39 (#885: an attach whose object follows a UTF-8 BOM gets `malformed attach request`,
+one giving `name` twice `attach needs a session name`; one without the checks would start the
+session, which each cleanup kills). Run `--mutating` only against a test server, never a host with sessions someone uses.
 
 17-25 are the `ctl` set (#838), each `requires_op` `ctl`: 17 a server listing `ctl` speaks proto
 1.1 or later; 18 a `--read` round trip (0x31, then 0x33); 19 a flag off the verb's allowlist,
@@ -757,7 +797,10 @@ start the session). Run `--mutating` only against a test server, never a host wi
 server with create off: a `dch serve` without `--allow-create`, or Prosper's test server with
 its create seam off); 24 `--spawn` with a `cwd` that does not exist (needs `create` too); 25 a
 name with `:` (`a session name with ':' is local only`). A conforming server runs nothing for 19-25,
-and since the amendment of 2026-11-10 closes the connection after each of their 0x13s.
+and since the amendment of 2026-11-10 closes the connection after each of their 0x13s. 40 and 41
+(#885) are ctl refusals too: an `argv` given twice gets `malformed ctl request: argv must be an
+array of strings, cwd a string`, and a request behind a UTF-8 BOM `malformed ctl request: ...`
+(the rest of its words are each server's), each then the FIN.
 
 26-30 follow `dch serve` 1.42.0 (#841; its goldens 40-42 and 32): 26 a 0x34 with no ctl running
 is ignored and the connection still runs a 0x30; 27 a 0x34 during a `--follow` ends it with

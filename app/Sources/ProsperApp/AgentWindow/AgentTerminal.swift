@@ -220,7 +220,7 @@ final class AgentTerminalController: ObservableObject {
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// The client binary's version, probed off main (cached per path and mtime).
     var clientVersion: @Sendable (String) -> [Int]? = { DchCommand.probedVersion($0) }
-    /// QA #681 INFO-4: the session's socket is on disk. dch's master unlinks it at exit (atexit(unlink_socket), master.c:4234 at dch v1.49.0, :4325 at v1.57.0, the bundled tag)
+    /// QA #681 INFO-4: the session's socket is on disk. dch's master unlinks it at exit (atexit(unlink_socket), master.c:4234 at dch v1.49.0, :4333 at v1.58.0, the bundled tag)
     /// before its clients read EOF, so an exit 0 with the socket gone is an end even while the store (polled
     /// about once a second) still lists the session.
     var socketExists: (AgentSessionKey) -> Bool = {

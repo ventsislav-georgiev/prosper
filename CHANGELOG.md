@@ -288,9 +288,8 @@ tag from the now-released section and put it on the new top draft.
   they are refused by name again, and more credential file names are on the list. In a `dch -a
   host:name` attach in your own terminal, the detach key and then x opens the X-ray view of that
   remote session; a host on dch serve 1.58.0 turns bracketed paste, mouse reporting, the keyboard
-  flags and the alternate screen back on when you leave it. When the host is the Prosper server,
-  those modes stay off until you attach again, so a multi-line paste into Claude Code after
-  leaving the view is no longer one paste. The X-ray view
+  flags and the alternate screen back on when you leave it. The Prosper server does the same
+  since this release. The X-ray view
   hides chapters for prompts the harness wrote (task notifications), and one device holds at most
   two `--xray --follow` of one session. Also fixed in dch: the remote X-ray view hanging on q or
   Esc, a crash in a very small window, `dch -d` not detaching a client that has the view open, and a slow reader cut off
@@ -331,6 +330,14 @@ tag from the now-released section and put it on the new top draft.
   longer start") (#878).
 - Agent Sessions: ⌘W, ⌘T, ⌘F, ⌘G, ⇧⌘G, ⌘N and ⇧⌘N now work while a Cyrillic, Greek, Hebrew or other non-Latin
   keyboard layout is active (#882).
+- Remote Terminal server: matches dch serve 1.58.0. A redraw request now also turns the session's
+  bracketed paste, mouse reporting, focus events, keyboard flags and alternate screen back on, as
+  dch serve does when a `dch -a host:name` client leaves the X-ray view. Requests are read as dch
+  serve reads them: a UTF-8 byte order mark before the request, a key given twice, or a text with a
+  NUL or a broken surrogate escape is refused with dch serve's answer instead of being read loosely,
+  and none of these reaches dch. A create whose command is not a list of strings (or has more than
+  256 words) starts nothing, a rename whose alias is not readable no longer clears the alias, and a
+  window size above 1000 is capped instead of crashing Prosper (#885).
 
 ## v2.174.0
 

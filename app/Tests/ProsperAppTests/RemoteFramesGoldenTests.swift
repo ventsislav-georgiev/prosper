@@ -42,10 +42,15 @@ final class RemoteFramesGoldenTests: XCTestCase {
     override func setUpWithError() throws {
         let script = tempDir("golden-dch").appendingPathComponent("fake-dch")
         // dch's spawn args are -E [-f] [-n name] [-- command...] (DchCommand.spawnArgs). #838: a ctl --read
-        // prints a screen, as dch's would. #841: a ctl --follow prints a frame and runs until it is ended.
+        // prints a screen, as dch's would. #841: a ctl --follow prints a frame and runs until it is ended. #885: a
+        // session prints a line on SIGURG, as a 1.58.0 client's re-attach repaints; cat runs in the background so
+        // the trap runs at once (a shell defers it until a foreground child ends), on stdin kept through fd 3. The
+        // trap is set before the repaint, so a 0x07 sent on seeing the repaint always finds it.
         try ("#!/bin/sh\n[ \"$1\" = --read ] && { printf 'golden screen of %s\\n' \"$2\"; exit 0; }\n"
             + "[ \"$1\" = --follow ] && { printf 'golden follow of %s\\n' \"$2\"; exec /bin/sleep 30; }\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; --) shift; break;; *) break;; esac; done\n"
-            + "[ $# -gt 0 ] && exec \"$@\"\nprintf '\\033[2J\\033[Hgolden repaint\\r\\n'\nexec /bin/cat\n")
+            + "[ $# -gt 0 ] && exec \"$@\"\ntrap 'printf \"golden rearm\\r\\n\"' URG\n"
+            + "printf '\\033[2J\\033[Hgolden repaint\\r\\n'\nexec 3<&0\n/bin/cat <&3 3<&- & c=$!\n"
+            + "while kill -0 $c 2>/dev/null; do wait $c; done\n")
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         DchCommand.dchPathOverride = script.path
@@ -115,6 +120,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertTrue(calls.contains(["-k", "golden-776-14"]), "14's cleanup: \(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776-15"]), "15's cleanup: \(calls)")
         XCTAssertTrue(calls.contains(["-k", "golden-776-16"]), "16's cleanup: \(calls)")
+        for id in ["golden-885", "golden-885-38", "golden-885-39"] { XCTAssertTrue(calls.contains(["-k", id]), "\(id): \(calls)") }
         XCTAssertFalse(calls.contains { $0.contains("-golden-776") }, "13: a dash name never reaches dch: \(calls)")
         XCTAssertFalse(calls.contains { $0.contains("golden-850-no-such-session") }, "32: an id-shaped alias never reaches dch: \(calls)")
         XCTAssertFalse(calls.contains { $0.contains("-golden-863") }, "33: a dash name with an id-shaped alias never reaches dch: \(calls)")
@@ -157,10 +163,13 @@ final class RemoteFramesGoldenTests: XCTestCase {
         for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws", "14-attach-twice-ignored",
                    "15-session-exit-closes", "16-create-exit-closes", "18-ctl-read-round-trip",
                    "33-rename-dash-id-shaped-refused", "34-attach-padded-id-shaped-refused",
-                   "35-attach-dash-name-refused", "36-create-line-separator-name-refused"] + Self.cancelSet {
+                   "35-attach-dash-name-refused", "36-create-line-separator-name-refused",
+                   "37-attach-redraw-rearms", "38-attach-bom-refused", "39-attach-duplicate-name-refused"] + Self.cancelSet {
             XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
         }
         XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)
+        XCTAssertTrue(text.contains("PASS 40-ctl-duplicate-argv-refused"), text)
+        XCTAssertTrue(text.contains("PASS 41-ctl-bom-refused"), text)
         XCTAssertFalse(text.contains("FAIL"), text)
         XCTAssertEqual(ran.all, [], "no kill or rename reached the server's dch")
     }
@@ -331,13 +340,14 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let dir = tempDir("golden-838-fixtures")
         let files = try FileManager.default.contentsOfDirectory(at: try goldenDir(), includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.contains("-ctl-") }
-        XCTAssertEqual(files.count, 14, "17-30")
+        XCTAssertEqual(files.count, 16, "17-30, 40, 41")
         for f in files { try FileManager.default.copyItem(at: f, to: dir.appendingPathComponent(f.lastPathComponent)) }
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)",
                                           "--mutating", "--fixtures", dir.path])
         XCTAssertEqual(status, 0, text)
         for id in ["17-ctl-listed-with-proto-1-1", "19-ctl-unlisted-flag-refused", "20-ctl-dash-name-refused",
-                   "21-ctl-short-argv-refused", "25-ctl-colon-name-refused", "30-ctl-xray-refused"] + Self.createOffOnly {
+                   "21-ctl-short-argv-refused", "25-ctl-colon-name-refused", "30-ctl-xray-refused",
+                   "40-ctl-duplicate-argv-refused", "41-ctl-bom-refused"] + Self.createOffOnly {
             XCTAssertTrue(text.contains("PASS \(id)"), text)
         }
         for id in ["18-ctl-read-round-trip", "24-ctl-spawn-cwd-missing"] + Self.cancelSet {

@@ -1,0 +1,29 @@
+{
+  "id": "37-attach-redraw-rearms",
+  "about": "0x07 on an attached connection re-arms the session: besides the size jiggle, the server sends SIGURG to its own dch client, which (1.58.0+) attaches again so the master re-sends the session's terminal modes, then repaints. So 0x07 brings more 0x10 output after the attach's repaint has drained (dch 1.58.0 serve.c:1815-1829, attach.c:213-224 and :1134-1149, master.c:3863-3930; Prosper #885). Mutating: it starts golden-885.",
+  "requires_op": "create",
+  "mutating": true,
+  "cleanup": [
+    "04 00000015 7b226e616d65223a22676f6c64656e2d383835227d"
+  ],
+  "steps": [
+    {
+      "send": "01 00000029 7b226e616d65223a22676f6c64656e2d383835222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect": {
+        "type": "10",
+        "nonempty": true
+      }
+    },
+    {
+      "send": "07 00000000"
+    },
+    {
+      "expect": {
+        "type": "10",
+        "nonempty": true
+      }
+    }
+  ]
+}

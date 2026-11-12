@@ -1,0 +1,19 @@
+{
+  "id": "38-attach-bom-refused",
+  "about": "0x01 whose JSON object follows a UTF-8 BOM (EF BB BF) answers exactly this 0x13 and starts nothing: rq_json's parser skips only space, tab, CR and LF (dch 1.58.0 json.c:67-70, serve.c:999-1003). Prosper #885. Mutating: a server that skips the BOM would start golden-885-38.",
+  "mutating": true,
+  "cleanup": [
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3838352d3338227d"
+  ],
+  "steps": [
+    {
+      "send": "01 0000002f efbbbf7b226e616d65223a22676f6c64656e2d3838352d3338222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a226d616c666f726d6564206174746163682072657175657374227d"
+      }
+    }
+  ]
+}

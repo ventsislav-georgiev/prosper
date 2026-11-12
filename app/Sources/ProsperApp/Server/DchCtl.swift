@@ -41,6 +41,8 @@ struct DchCtlOps: Sendable {
 enum DchCtl {
     static let createOff = "creating sessions is off on this host"
     static let noDirectory = "no such directory"
+    /// #885: dch serve's words for an argv or cwd it cannot read (ctl_request, v1.58.0 serve.c:1232-1233), then the FIN.
+    static let unreadable = "malformed ctl request: argv must be an array of strings, cwd a string"
     static let xrayOff = "xray not supported by this host"
     static let localOnly = "a session name with ':' is local only"
     /// #841, dch 1.42 serve's words: a 0x30 on an attached or watch connection (or beside another request), no close.

@@ -1,0 +1,21 @@
+{
+  "id": "41-ctl-bom-refused",
+  "about": "0x30 whose JSON object follows a UTF-8 BOM is malformed: 0x13 and nothing runs, then the FIN (rq_json, dch 1.58.0 serve.c:1217-1222, json.c:67-70). The words after \"malformed ctl request: \" are each server's own. Prosper #885.",
+  "requires_op": "ctl",
+  "steps": [
+    {
+      "send": "30 00000026 efbbbf7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3838352d3431225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "json": {
+          "message": "string~malformed ctl request: .+"
+        }
+      }
+    },
+    {
+      "expect_close": true
+    }
+  ]
+}

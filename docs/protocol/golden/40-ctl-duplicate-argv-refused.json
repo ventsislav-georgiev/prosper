@@ -1,0 +1,19 @@
+{
+  "id": "40-ctl-duplicate-argv-refused",
+  "about": "0x30 giving \"argv\" twice answers exactly this 0x13 and runs nothing, then the FIN (ctl_request, dch 1.58.0 serve.c:1223-1233; json_field -2, json.c:366-384). Prosper #885.",
+  "requires_op": "ctl",
+  "steps": [
+    {
+      "send": "30 00000045 7b2261726776223a5b222d2d72656164222c22676f6c64656e2d3838352d3430225d2c2261726776223a5b222d2d72656164222c22676f6c64656e2d3838352d3430225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a226d616c666f726d65642063746c20726571756573743a2061726776206d75737420626520616e206172726179206f6620737472696e67732c20637764206120737472696e67227d"
+      }
+    },
+    {
+      "expect_close": true
+    }
+  ]
+}

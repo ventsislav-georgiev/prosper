@@ -162,6 +162,83 @@ enum DchFrame {
         }
         return (try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])) ?? Data("[]".utf8)
     }
+
+    /// #885: a request payload of a frame dch serve also reads (0x01, 0x02, 0x04, 0x05, 0x06, 0x2e, 0x30), as serve
+    /// reads it: rq_json (v1.58.0 serve.c:145-163), then jstr or dch_json_strv per key. nil where rq_json refuses
+    /// it: a NUL byte (QA #748 INFO-1: JSONSerialization parses UTF-16 and UTF-32), a UTF-8 BOM (json_space skips
+    /// only space, tab, CR and LF, json.c:67-70; JSONSerialization skips a BOM), anything but a JSON object. Empty
+    /// reads as {}. A top-level value serve could not read becomes NSNull, which every caller answers as a value
+    /// of the wrong type, as serve does (jstr -1, rframe.c:301-312): a key given twice (json_field -2,
+    /// json.c:366-384), and a string, or an array of strings, holding a NUL or a lone surrogate once decoded
+    /// (json_decode, json.c:288-357, and utf8_ok, :48-53). JSONSerialization refuses a whole document for a lone
+    /// surrogate escape, serve only the string (QA #748 INFO-2): scan writes each as \u0000 first.
+    static func request(_ payload: Data) -> [String: Any]? {
+        if payload.isEmpty { return [:] }
+        guard !payload.contains(0), !payload.starts(with: [0xef, 0xbb, 0xbf]) else { return nil }
+        let (bytes, keys) = scan([UInt8](payload))
+        guard var o = (try? JSONSerialization.jsonObject(with: Data(bytes))) as? [String: Any] else { return nil }
+        func nul(_ v: Any) -> Bool { (v as? String)?.utf8.contains(0) == true }
+        for (k, v) in o where keys[k, default: 0] > 1 || nul(v) || (v as? [Any])?.contains(where: nul) == true {
+            o[k] = NSNull()
+        }
+        return o
+    }
+
+    /// One pass over a JSON text: each lone surrogate escape becomes \u0000, and the count of each top-level key
+    /// (decoded, as json_key_eq compares them, json.c:359-364).
+    private static func scan(_ b: [UInt8]) -> (bytes: [UInt8], keys: [String: Int]) {
+        func hex4(_ at: Int) -> Int? {
+            guard at + 4 <= b.count else { return nil }
+            return Int(String(decoding: b[at..<at + 4], as: UTF8.self), radix: 16)
+        }
+        var out: [UInt8] = [], keys: [String: Int] = [:], depth = 0, i = 0
+        out.reserveCapacity(b.count)
+        while i < b.count {
+            guard b[i] == 0x22 else {   // outside a string
+                if b[i] == 0x7b || b[i] == 0x5b { depth += 1 } else if b[i] == 0x7d || b[i] == 0x5d { depth -= 1 }
+                out.append(b[i])
+                i += 1
+                continue
+            }
+            let start = out.count
+            out.append(b[i])
+            i += 1
+            while i < b.count, b[i] != 0x22 {
+                guard b[i] == 0x5c, i + 1 < b.count else { out.append(b[i]); i += 1; continue }
+                if b[i + 1] == 0x75, let u = hex4(i + 2), (0xd800...0xdfff).contains(u) {
+                    if u <= 0xdbff, i + 12 <= b.count, b[i + 6] == 0x5c, b[i + 7] == 0x75,
+                       let low = hex4(i + 8), (0xdc00...0xdfff).contains(low) {
+                        out += b[i..<i + 12]   // a pair
+                        i += 12
+                    } else {
+                        out += Array(#"\u0000"#.utf8)
+                        i += 6
+                    }
+                    continue
+                }
+                out += b[i...i + 1]
+                i += 2
+            }
+            if i < b.count { out.append(b[i]); i += 1 }   // the closing quote
+            var j = i
+            while j < b.count, [0x20, 0x09, 0x0a, 0x0d].contains(b[j]) { j += 1 }
+            if depth == 1, j < b.count, b[j] == 0x3a,
+               let key = (try? JSONSerialization.jsonObject(with: Data(out[start...]), options: .fragmentsAllowed)) as? String {
+                keys[key, default: 0] += 1
+            }
+        }
+        return (out, keys)
+    }
+
+    /// #885: cols and rows as dch serve's rq_size (v1.58.0 serve.c:168-179): a missing, unreadable or non-positive
+    /// value is 80 and 24, past 1000 it is 1000. Unclamped, a phone's rows of 70000 trapped in PtyChild's UInt16(rows).
+    static func size(_ o: [String: Any]) -> (cols: Int, rows: Int) {
+        func one(_ key: String, _ none: Int) -> Int {
+            guard let v = o[key] as? Int, v > 0 else { return none }
+            return min(v, 1000)
+        }
+        return (one("cols", 80), one("rows", 24))
+    }
 }
 
 /// One client connection. Parses frames off the socket and either answers a
@@ -414,8 +491,8 @@ final class DchConnection: @unchecked Sendable {
         case DchFrame.watch:
             startWatch(payload)
         case DchFrame.kill:
-            if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
-               let n = o["name"] as? String {
+            // #885: DchFrame.request: a payload or a name serve cannot read runs no dch -k, as serve (0x14).
+            if let o = DchFrame.request(payload), let n = o["name"] as? String {
                 // #627: dch's -k takes no name starting with '-'; it would re-parse "--all" as a flag. QA #741 (#879):
                 // the first byte, as serve (v1.57.0 serve.c:1164-1168), not a Character: "-" + U+0301 is one.
                 guard n.utf8.first != 0x2d else { return send(DchControlOps.error(DchControlOps.dashNameRefusal)) }
@@ -425,7 +502,7 @@ final class DchConnection: @unchecked Sendable {
             }
             send(DchFrame.encode(DchFrame.ok, []))
         case DchFrame.rename:
-            let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+            let o = DchFrame.request(payload)   // #885
             // #850: dch serve refuses an id-shaped alias before running dch, whatever the name (v1.57.0
             // serve.c:1169-1172). #863: it checks a name starting with "-" first (v1.57.0 serve.c:1164-1168), so
             // such a pair gets DASH_MSG. Prosper still runs dch -m for a dash name with any other alias (remote-frames.md).
@@ -439,6 +516,12 @@ final class DchConnection: @unchecked Sendable {
             if let n = o?["name"] as? String, n.utf8.first != 0x2d, !DchCtl.nameOK(n) {
                 return send(DchControlOps.error(DchCtl.invalidName))
             }
+            // #885 (QA #748 INFO-3): an alias serve's jstr cannot read (no string, given twice, a NUL, 1024 bytes or
+            // more: alias[1024], v1.58.0 serve.c:1167, :1174, :1187) runs no dch -m and answers the empty 0x14, as
+            // there; before, Prosper ran dch -m <name> "" (clearing the alias) or passed the NUL to Process.
+            if let a = o?["alias"], (a as? String).map({ $0.utf8.count > 1023 }) ?? true {
+                return send(DchFrame.encode(DchFrame.ok, []))
+            }
             if let o, let n = o["name"] as? String,
                let message = rename(n, o["alias"] as? String ?? "") {
                 // #811 (QA #636 INFO-1): dch refused it (a just-exited session exits 1); a malformed request stays 0x14 (spec).
@@ -450,13 +533,14 @@ final class DchConnection: @unchecked Sendable {
         case DchFrame.data:
             if let upload { upload.feed(payload) } else { pty?.write([UInt8](payload)) }
         case DchFrame.resize:
-            if let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] {
-                let cols = (o["cols"] as? Int) ?? 80
-                let rows = (o["rows"] as? Int) ?? 24
+            if let o = DchFrame.request(payload) {   // #885: rq_json, then rq_size (v1.58.0 serve.c:1807-1813)
+                let (cols, rows) = DchFrame.size(o)
                 pty?.resize(cols: cols, rows: rows)
             }
         case DchFrame.redraw:
-            pty?.redraw()
+            // #885: the jiggle, then SIGURG to this connection's own dch client, which re-arms the session's
+            // modes, as dch serve 1.58.0 (serve.c:1815-1829). Runs on `queue`.
+            pty?.redraw(rearm: true)
         case DchFrame.snapshot:
             sendSnapshot()
         case DchFrame.putClipboard:
@@ -584,7 +668,13 @@ final class DchConnection: @unchecked Sendable {
         guard !closed else { return }
         guard pty == nil, !watching, ctlJob != nil || !inFlight else { return send(DchControlOps.error(DchCtl.ownConnection)) }
         guard ctlJob == nil else { return send(DchCtl.busy) }
-        let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+        let o = DchFrame.request(payload)   // #885
+        // #885: serve's words for an argv or a cwd it cannot read: of a wrong type, given twice, a word or the cwd
+        // holding a NUL, a cwd past PATH_MAX - 1 bytes (ctl_request, v1.58.0 serve.c:1223-1233), before any other check.
+        if let o, (o["argv"].map { !($0 is [String]) } ?? false)
+            || (o["cwd"].map { (($0 as? String)?.utf8.count ?? Int.max) > Int(PATH_MAX) - 1 } ?? false) {
+            return close(after: DchControlOps.error(DchCtl.unreadable))
+        }
         guard let argv = o?["argv"] as? [String] else {
             return close(after: DchControlOps.error("malformed ctl request: send {\"argv\": [verb, name, ...]}"))
         }
@@ -631,7 +721,7 @@ final class DchConnection: @unchecked Sendable {
     private func startWatch(_ payload: Data) {
         guard !closed, !watching else { return }
         guard pty == nil, !inFlight, !uploaded, !chatted else { return send(DchControlOps.error("watch needs its own connection")) }
-        let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
+        let o = DchFrame.request(payload)   // #885: rq_json (v1.58.0 serve.c:1689-1693)
         guard let o else { return send(DchControlOps.error("malformed watch request: send {}")) }
         // The phone sends {"device_id"} (Q8); a {} client's tailnet address stands for its device_id.
         var device = o["device_id"] as? String ?? ""
@@ -700,6 +790,10 @@ final class DchConnection: @unchecked Sendable {
     /// #877: dch serve's answer to a 0x01 with no name, and to a 0x01/0x02 name it cannot read (serve.c:994@v1.54.0).
     static let needsName = "attach needs a session name"
 
+    /// #885: dch serve's answer to a create whose command it cannot read (v1.58.0 serve.c:1052-1053), and MAX_CMD (:101).
+    static let badCommand = "malformed create request: command must be an array of strings"
+    static let maxCommand = 256
+
     /// QA #625 F1: a failed spawn's 0x13, shown on the phone as written.
     static let spawnFailed = "Could not start the session: the Mac could not open a terminal."
 
@@ -713,18 +807,17 @@ final class DchConnection: @unchecked Sendable {
             return send(DchControlOps.error("\(uploaded ? "clipboardUpload" : chatted ? "chat" : "watch") connections cannot attach or create"))
         }
         // QA #741 (#879): a payload that is not a JSON object is refused before anything runs, as serve's rq_json
-        // (v1.57.0 serve.c:142-159, :986-991), a NUL byte anywhere included; an empty one reads as {} there too.
-        // The NUL test is not redundant: JSONSerialization detects UTF-16 and UTF-32 and parses them (#879 r2 probe).
-        guard !payload.contains(0),
-              let o = payload.isEmpty ? [String: Any]() : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] else {
+        // (v1.58.0 serve.c:145-163, :999-1003), a NUL byte anywhere and (#885) a UTF-8 BOM included; an empty one
+        // reads as {} there too (DchFrame.request).
+        guard let o = DchFrame.request(payload) else {
             return send(DchControlOps.error(type == DchFrame.create ? "malformed create request" : "malformed attach request"))
         }
         let name = o["name"] as? String
-        // #877: dch serve's on_attach checks, in its order, each refused before any dch call (serve.c:990-1011
-        // @v1.54.0). QA #727 INFO-3: jstr into name[NAME_CAP + 2] fails on a name that is no string or 257
-        // bytes or more, and an attach needs a name at all.
-        // #879 r2: a "\u0000" escape decodes, but dch_json_decode's utf8_ok refuses a NUL (v1.57.0 json.c:48-53), so jstr fails.
-        if (o["name"] != nil && name == nil) || (name?.utf8.count ?? 0) > DchCtl.nameCap + 1 || name?.utf8.contains(0) == true
+        // #877: dch serve's on_attach checks, in its order, each refused before any dch call (v1.58.0
+        // serve.c:1005-1026). QA #727 INFO-3: jstr into name[NAME_CAP + 2] fails on a name that is no string or 257
+        // bytes or more, and an attach needs a name at all. #879 r2, #885: a name holding a NUL or a lone surrogate
+        // once decoded, or given twice, is NSNull here (DchFrame.request), so it is "no string".
+        if (o["name"] != nil && name == nil) || (name?.utf8.count ?? 0) > DchCtl.nameCap + 1
             || (type == DchFrame.attach && (name ?? "").isEmpty) {
             return send(DchControlOps.error(Self.needsName))
         }
@@ -738,13 +831,19 @@ final class DchConnection: @unchecked Sendable {
                 return send(DchControlOps.error(DchControlOps.idShapedRefusal))
             }
         }
+        // #885 (QA #748 INFO-3): a create's command serve cannot read (not an array of strings, a word holding a NUL,
+        // given twice, more than MAX_CMD 256 words) starts nothing (v1.58.0 serve.c:1043-1056; MAX_CMD :101). Before,
+        // Prosper started the default shell for one, or passed the NUL on to execve. serve's attach does not read
+        // a command; Prosper's does (#879 R3), and one it cannot read (NSNull, DchFrame.request) is no command.
+        if type == DchFrame.create, let c = o["command"], ((c as? [String])?.count ?? Int.max) > Self.maxCommand {
+            return send(DchControlOps.error(Self.badCommand))
+        }
         sessionName = name
         // #877 (QA #725 INFO-1): an interactive Claude gets `--name <session name>`, as a Mac New session
         // (#847, AgentIsland.naming); no name (dch picks one): left unnamed. dch serve passes it as sent.
         let raw = (o["command"] as? [String]) ?? []
         let command = name.map { $0.isEmpty ? raw : AgentIsland.naming(raw, name: $0) } ?? raw
-        let cols = (o["cols"] as? Int) ?? 80
-        let rows = (o["rows"] as? Int) ?? 24
+        let (cols, rows) = DchFrame.size(o)
 
         let args = DchCommand.spawnArgs(name: name, command: command, attach: type == DchFrame.attach)
         do {

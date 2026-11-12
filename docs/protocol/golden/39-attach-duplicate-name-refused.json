@@ -1,0 +1,19 @@
+{
+  "id": "39-attach-duplicate-name-refused",
+  "about": "0x01 giving \"name\" twice answers exactly this 0x13 and starts nothing: a duplicated key is no readable name (json_field -2, dch 1.58.0 json.c:366-384; jstr -1, rframe.c:301-312; serve.c:1005-1011). Prosper #885. Mutating: a server that takes either copy would start golden-885-39.",
+  "mutating": true,
+  "cleanup": [
+    "04 00000018 7b226e616d65223a22676f6c64656e2d3838352d3339227d"
+  ],
+  "steps": [
+    {
+      "send": "01 00000043 7b226e616d65223a22676f6c64656e2d3838352d3339222c226e616d65223a22676f6c64656e2d3838352d3339222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a22617474616368206e6565647320612073657373696f6e206e616d65227d"
+      }
+    }
+  ]
+}
