@@ -49,6 +49,9 @@ enum ExtensionError: Error, Equatable {
     /// A market artifact's internal manifest id didn't match the signed/requested
     /// package id — an id-spoof attempt (could overwrite/impersonate another id).
     case marketIdMismatch(expected: String, got: String)
+    /// #870: the extension still has managed-config pieces and they were not removed (Remove
+    /// cancelled, refused or failed): the uninstall stops and the dir stays.
+    case managedConfigKept(id: String, reason: String)
 }
 
 /// Off-main Lua VM cache for commands that call async host APIs (http / llm /
@@ -75,6 +78,8 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         let privileged: Bool
         /// User has trusted this extension. Guarded in `callOnLane` as a chokepoint.
         let trusted: Bool
+        /// #870: owner of the extension's managed-config pieces (`host.config`).
+        var configOwner: ManagedConfigOwner? = nil
     }
 
     private let lock = NSLock()
@@ -126,7 +131,8 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
                 rt = try LuaRuntime(allowLoad: spec.privileged || spec.trusted)
                 try ExtensionHost(extensionID: spec.extensionID, services: services,
                                   callTimeout: spec.callTimeout,
-                                  privileged: spec.privileged, trusted: spec.trusted).install(into: rt)
+                                  privileged: spec.privileged, trusted: spec.trusted,
+                                  configOwner: spec.configOwner).install(into: rt)
                 let source = try String(contentsOf: spec.entryURL, encoding: .utf8)
                 try rt.run(source, name: "@\(spec.extensionID)")
                 lock.lock(); cache[spec.extensionID] = rt; lock.unlock()
@@ -622,7 +628,8 @@ final class ExtensionRegistry: ObservableObject {
             entryURL: record.loaded.entryURL,
             handler: Self.handlerName(for: command.id),
             callTimeout: callTimeout,
-            privileged: record.privileged, trusted: record.trusted
+            privileged: record.privileged, trusted: record.trusted,
+            configOwner: record.loaded.managedConfigOwner
         )
         let result = await asyncRuntimes.invoke(spec, args: [query])
         if result != nil, record.isSystem { AnalyticsStore.bumpUsage(extensionID: record.id) }
@@ -655,7 +662,8 @@ final class ExtensionRegistry: ObservableObject {
             entryURL: record.loaded.entryURL,
             handler: Self.handlerName(for: command.id) + "_action",
             callTimeout: callTimeout,
-            privileged: record.privileged, trusted: record.trusted
+            privileged: record.privileged, trusted: record.trusted,
+            configOwner: record.loaded.managedConfigOwner
         )
         guard let json = await asyncRuntimes.invoke(spec, args: [actionID, value ?? "", formJSON]) else { return nil }
         return try? ExtensionViewNode.decode(json: json)
@@ -691,7 +699,8 @@ final class ExtensionRegistry: ObservableObject {
         guard let record = record(id: extensionID), record.isLive else { return nil }
         let spec = AsyncExtensionRuntimes.Spec(
             extensionID: record.id, entryURL: record.loaded.entryURL,
-            handler: "settings_render", callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted)
+            handler: "settings_render", callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted,
+            configOwner: record.loaded.managedConfigOwner)
         guard let json = await asyncRuntimes.invoke(spec, args: [sectionID, state]) else { return nil }
         return try? SettingsUI.decode(json: json)
     }
@@ -706,7 +715,8 @@ final class ExtensionRegistry: ObservableObject {
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let spec = AsyncExtensionRuntimes.Spec(
             extensionID: record.id, entryURL: record.loaded.entryURL,
-            handler: "settings_action", callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted)
+            handler: "settings_action", callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted,
+            configOwner: record.loaded.managedConfigOwner)
         guard let json = await asyncRuntimes.invoke(
             spec, args: [sectionID, actionID, value ?? "", formJSON]) else { return nil }
         return try? SettingsUI.decode(json: json)
@@ -779,7 +789,8 @@ final class ExtensionRegistry: ObservableObject {
             entryURL: record.loaded.entryURL,
             handler: function,
             callTimeout: callTimeout,
-            privileged: record.privileged, trusted: record.trusted
+            privileged: record.privileged, trusted: record.trusted,
+            configOwner: record.loaded.managedConfigOwner
         )
         guard let json = await asyncRuntimes.invoke(spec, args: args) else { return nil }
         return try? ExtensionViewNode.decode(json: json)
@@ -795,7 +806,8 @@ final class ExtensionRegistry: ObservableObject {
             entryURL: record.loaded.entryURL,
             handler: function,
             callTimeout: callTimeout,
-            privileged: record.privileged, trusted: record.trusted
+            privileged: record.privileged, trusted: record.trusted,
+            configOwner: record.loaded.managedConfigOwner
         )
         return await asyncRuntimes.invoke(spec, args: args)
     }
@@ -811,7 +823,8 @@ final class ExtensionRegistry: ObservableObject {
         guard let record = record(id: extensionID), record.isLive else { return }
         let spec = AsyncExtensionRuntimes.Spec(
             extensionID: record.id, entryURL: record.loaded.entryURL,
-            handler: handler, callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted)
+            handler: handler, callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted,
+            configOwner: record.loaded.managedConfigOwner)
         _ = await asyncRuntimes.invoke(spec, args: [payloadJSON])
     }
 
@@ -858,7 +871,8 @@ final class ExtensionRegistry: ObservableObject {
         if let rt = record.runtime { return rt }
         let rt = try LuaRuntime(allowLoad: record.isSystem || record.trusted)
         try ExtensionHost(extensionID: record.id, services: services, callTimeout: callTimeout,
-                          privileged: record.privileged, trusted: record.trusted)
+                          privileged: record.privileged, trusted: record.trusted,
+                          configOwner: record.loaded.managedConfigOwner)
             .install(into: rt)
         let source = try String(contentsOf: record.loaded.entryURL, encoding: .utf8)
         try rt.run(source, name: "@\(record.id)")
@@ -922,9 +936,24 @@ final class ExtensionRegistry: ObservableObject {
         onEnabledChanged?()
     }
 
+    /// #870: the managed-config core, set by AppDelegate. nil (tests that do not exercise it) skips
+    /// the uninstall hook.
+    var managedConfig: ManagedConfigProvider?
+
     /// Uninstall a user extension. System extensions cannot be uninstalled
     /// (only disabled) — see ADR-002 system-extension semantics.
-    func uninstall(id: String) throws {
+    /// #870 (spec 2.7): an extension with managed-config pieces goes through the Remove sheet first;
+    /// declined, refused or failed = the uninstall stops and the dir is kept.
+    func uninstall(id: String) async throws {
+        guard let first = record(id: id) else { throw ExtensionError.notFound(id) }
+        guard !first.isSystem else { throw ExtensionError.cannotUninstallSystem(id) }
+        if let provider = managedConfig {
+            if let kept = await Self.removeManagedPieces(owner: first.loaded.managedConfigOwner, provider: provider) {
+                throw ExtensionError.managedConfigKept(id: id, reason: kept)
+            }
+            ManagedConfigRefresh.current?.rescan()
+        }
+        // re-read after the await: the record list may have been rebuilt meanwhile
         guard let record = record(id: id) else { throw ExtensionError.notFound(id) }
         guard !record.isSystem else { throw ExtensionError.cannotUninstallSystem(id) }
         // Drop any granted system-tier privilege so a different extension reinstalled
@@ -939,6 +968,27 @@ final class ExtensionRegistry: ObservableObject {
         teardown(record)
         try FileManager.default.removeItem(at: record.loaded.directory)
         discover()
+    }
+
+    /// nil: nothing of `owner` is left in the managed config. Otherwise why the uninstall stops.
+    /// Runs off the main actor (status and remove take the write lock, A-INFO-13); only the
+    /// consent sheet hops to main.
+    /// r2 (R2-1): a provider that cannot resolve (slow or fish login shell, relative
+    /// CLAUDE_CONFIG_DIR) stops only an owner the state has records for.
+    nonisolated static func removeManagedPieces(owner: ManagedConfigOwner, provider: ManagedConfigProvider) async -> String? {
+        let config: ManagedConfig
+        switch await provider.resolve() {
+        case .failure(let why):
+            guard let state = provider.stateOnly() else { return why.description }
+            guard state.stateIsReadable() else { return ManagedConfigRefusalReason.stateUnreadable.description }
+            return state.ownerIDs().contains(owner.id) ? "Its config changes cannot be removed now: \(why.description)" : nil
+        case .success(let c): config = c
+        }
+        guard config.stateIsReadable() else { return ManagedConfigRefusalReason.stateUnreadable.description }
+        guard !config.status(owner: owner).isEmpty else { return nil }
+        let result = await config.remove(owner: owner)
+        if result.ok { return nil }
+        return result.status == .denied ? "Remove was cancelled: the extension and its config stay" : result.message
     }
 
     /// Install (or upgrade) a user extension by copying a validated source

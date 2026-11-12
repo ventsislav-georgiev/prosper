@@ -196,6 +196,10 @@ tag from the now-released section and put it on the new top draft.
   control character or "/", or is too long is refused with dch serve's own message before dch runs.
   A Claude session created from the phone is named after its session, as a New session on the Mac
   is (#877).
+- Extensions: trusted extensions can add owned pieces to Claude Code's config through `host.config`
+  (plan, apply, status, remove, repair): marked blocks, hooks, permission rules, the status line and
+  seeded files, each written only after you approve the exact diff in a native sheet, backed up
+  first, and removed again on uninstall. See "Managed config (host.config)" in extensions.md (#870).
 - Ships dch 1.57.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

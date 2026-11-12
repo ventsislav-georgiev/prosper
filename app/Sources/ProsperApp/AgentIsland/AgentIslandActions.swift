@@ -1197,6 +1197,21 @@ enum LoginPath {
         cache.lock.withLock { cache.path = p }
         return p
     }
+
+    /// #870 (errata A11): one variable of the login env, e.g. CLAUDE_CONFIG_DIR. "" when it is unset
+    /// there, nil when the probe failed (the caller retries later). `name` is a constant identifier.
+    /// r2: no `${…}` expansion, so the script is valid in zsh, bash and fish alike; printenv ends the
+    /// value with one newline (prints nothing when unset), and exactly that one is dropped.
+    static func value(of name: String, shell: String? = ProcessInfo.processInfo.environment["SHELL"],
+                      probe: Probe = shellProbe) -> String? {
+        guard name.range(of: "^[A-Z_][A-Z0-9_]*$", options: .regularExpression) != nil else { return nil }
+        let shell = shell.flatMap { $0.hasPrefix("/") ? $0 : nil } ?? "/bin/zsh"
+        guard let out = probe(shell, "printf '\(marker)'; /usr/bin/printenv \(name); printf '\(marker)'") else { return nil }
+        let parts = String(decoding: out, as: UTF8.self).components(separatedBy: marker)
+        guard parts.count >= 3 else { return nil }
+        let v = parts[1]
+        return v.utf8.last == UInt8(ascii: "\n") ? String(decoding: v.utf8.dropLast(), as: UTF8.self) : v
+    }
 }
 
 /// #578: runs the long dch verbs, one per row at a time, off main. The verb is

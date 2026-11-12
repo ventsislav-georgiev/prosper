@@ -7,8 +7,15 @@ import Foundation
 enum ManagedTextBlock {
     enum Syntax: Sendable { case markdown, hash }
 
-    static func syntax(for url: URL) -> Syntax {
-        ["md", "markdown"].contains(url.pathExtension.lowercased()) ? .markdown : .hash
+    /// B-INFO-7: the file types whose comment syntax a block's markers use. Every other type is
+    /// refused at plan time: a `#` marker would break a .json, .lua or .html file.
+    static let markdownExtensions: Set<String> = ["md", "markdown"]
+    static let hashExtensions: Set<String> = ["sh", "bash", "zsh", "fish", "conf", "toml", "yaml", "yml"]
+
+    static func syntax(for url: URL) -> Syntax? {
+        let ext = url.pathExtension.lowercased()
+        if markdownExtensions.contains(ext) { return .markdown }
+        return hashExtensions.contains(ext) ? .hash : nil
     }
 
     static func begin(owner: String, piece: String, version: String, syntax: Syntax) -> String {

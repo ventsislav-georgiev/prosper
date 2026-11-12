@@ -7,7 +7,15 @@ import Foundation
 enum ManagedConfigDiff {
     static let allowedPermissionKeys: Set<String> = ["allow", "deny", "ask", "additionalDirectories"]
 
-    static func lines(old: [UInt8], new: [UInt8], json: Bool) -> [ManagedConfigChangeSet.Line] {
+    /// QA #724 INFO-11/12/13: the sheet shows the lines Prosper adds or removes, plus at most
+    /// `contextLines` unchanged lines each side. A user line whose only change is a trailing comma
+    /// or its line ending is context, not a change. In settings.json a context line that carries a
+    /// value (a user's hook group, say) is elided, and `hide` replaces one side wholesale: the user's
+    /// own value that a `set` replaces, or that a removal brings back.
+    static let contextLines = 2
+
+    static func lines(old: [UInt8], new: [UInt8], json: Bool, hide: ManagedConfigChangeSet.Line.Sign? = nil) -> [ManagedConfigChangeSet.Line] {
+        typealias Line = ManagedConfigChangeSet.Line
         let a = Lines(old), b = Lines(new)
         func full(_ l: Lines, _ n: Int) -> ArraySlice<UInt8> { l.bytes[l.start(n)..<l.lineEnd(n)] }
         var p = 0
@@ -16,11 +24,61 @@ enum ManagedConfigDiff {
         while s < a.count - p, s < b.count - p, full(a, a.count - 1 - s) == full(b, b.count - 1 - s) { s += 1 }
         let maskOld = json ? Mask(old) : nil
         let maskNew = json ? Mask(new) : nil
-        func line(_ l: Lines, _ n: Int, _ mask: Mask?, _ sign: ManagedConfigChangeSet.Line.Sign) -> ManagedConfigChangeSet.Line {
+        func line(_ l: Lines, _ n: Int, _ mask: Mask?, _ sign: Line.Sign) -> Line {
             let shown = mask.map { $0.showable(l.range(n)) } ?? true
-            return .init(sign: sign, text: shown ? l.text(n) : ManagedConfigChangeSet.maskedLine)
+            var text = shown ? l.text(n) : ManagedConfigChangeSet.maskedLine
+            if shown, json, sign == .context, !structural(text) { text = ManagedConfigChangeSet.elidedLine }
+            return .init(sign: sign, text: text, noFinalNewline: n == l.count - 1 && l.terminatorLength(n) == 0)
         }
-        return (p..<a.count - s).map { line(a, $0, maskOld, .removed) } + (p..<b.count - s).map { line(b, $0, maskNew, .added) }
+        var removed = Array(p..<a.count - s), added = Array(p..<b.count - s)
+        var lead: [Line] = [], trail: [Line] = []
+        if let r = removed.first, let n = added.first, punctuationOnly(a.text(r), b.text(n)) {
+            lead = [line(b, n, maskNew, .context)]
+            removed.removeFirst(); added.removeFirst()
+        }
+        if let r = removed.last, let n = added.last, punctuationOnly(a.text(r), b.text(n)) {
+            trail = [line(b, n, maskNew, .context)]
+            removed.removeLast(); added.removeLast()
+        }
+        // One JSON line changed in place (a compact array gaining or losing our element): show only the
+        // changed span, so the user's own element on that line is never printed.
+        var inline: [Line] = []
+        if json, hide == nil, removed.count == 1, added.count == 1, let r = removed.first, let n = added.first,
+           maskOld?.showable(a.range(r)) == true, maskNew?.showable(b.range(n)) == true {
+            let o = Array(a.text(r)), m = Array(b.text(n))
+            var pre = 0
+            while pre < o.count, pre < m.count, o[pre] == m[pre] { pre += 1 }
+            var suf = 0
+            while suf < o.count - pre, suf < m.count - pre, o[o.count - 1 - suf] == m[m.count - 1 - suf] { suf += 1 }
+            func span(_ c: [Character]) -> String { (pre > 0 ? "…" : "") + String(c[pre..<(c.count - suf)]) + (suf > 0 ? "…" : "") }
+            if pre + suf < o.count { inline.append(.init(sign: .removed, text: span(o))) }
+            if pre + suf < m.count { inline.append(.init(sign: .added, text: span(m))) }
+            removed = []; added = []
+        }
+        let before = max(0, p - contextLines)..<p
+        let after = (b.count - s)..<min(b.count, b.count - s + contextLines)
+        var out = before.map { line(b, $0, maskNew, .context) } + lead
+        out += hide == .removed && !removed.isEmpty ? [Line(sign: .removed, text: ManagedConfigChangeSet.userValueLine)]
+            : removed.map { line(a, $0, maskOld, .removed) }
+        out += hide == .added && !added.isEmpty ? [Line(sign: .added, text: ManagedConfigChangeSet.userValueLine)]
+            : added.map { line(b, $0, maskNew, .added) }
+        return out + inline + trail + after.map { line(b, $0, maskNew, .context) }
+    }
+
+    /// Same content but for one trailing comma: the user's line next to an inserted or removed sibling.
+    static func punctuationOnly(_ x: String, _ y: String) -> Bool {
+        func core(_ s: String) -> Substring {
+            var t = Substring(s)
+            while t.last == " " || t.last == "\t" { t.removeLast() }
+            if t.last == "," { t.removeLast() }
+            return t
+        }
+        return x != y ? core(x) == core(y) : true
+    }
+
+    /// A JSON line with no value on it: a key opening a container, or brackets and commas.
+    static func structural(_ text: String) -> Bool {
+        text.range(of: #"^\s*("[^"\\]*"\s*:\s*)?[\[\]\{\},\s]*$"#, options: .regularExpression) != nil
     }
 
     struct Mask {

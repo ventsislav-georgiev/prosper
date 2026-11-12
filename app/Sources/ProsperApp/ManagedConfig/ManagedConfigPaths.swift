@@ -11,14 +11,16 @@ struct ManagedConfigRoots: Sendable, Equatable {
     var stateDir: URL
 
     /// The only place in ManagedConfig that reads the user's home. `loginEnvironment` is Prosper's
-    /// login-shell env (never the process env of a test). Wired to no call site in P1.
-    static func production(loginEnvironment: [String: String]) -> ManagedConfigRoots {
+    /// login-shell env (never the process env of a test). Called only by ManagedConfigProvider.live.
+    /// A-INFO-12: a set but non-absolute CLAUDE_CONFIG_DIR is refused, never replaced by ~/.claude.
+    static func production(loginEnvironment: [String: String]) -> Result<ManagedConfigRoots, ManagedConfigRefusalReason> {
+        let dir = loginEnvironment["CLAUDE_CONFIG_DIR"] ?? ""
+        guard dir.isEmpty || dir.hasPrefix("/") else { return .failure(.badPath("CLAUDE_CONFIG_DIR is not an absolute path")) }
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let claude = loginEnvironment["CLAUDE_CONFIG_DIR"].flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0, isDirectory: true) : nil }
-        return ManagedConfigRoots(
-            claude: claude ?? home.appendingPathComponent(".claude", isDirectory: true),
+        return .success(ManagedConfigRoots(
+            claude: dir.isEmpty ? home.appendingPathComponent(".claude", isDirectory: true) : URL(fileURLWithPath: dir, isDirectory: true),
             configHome: home.appendingPathComponent(".config", isDirectory: true),
-            stateDir: home.appendingPathComponent("Library/Application Support/Prosper/managed-config", isDirectory: true))
+            stateDir: home.appendingPathComponent("Library/Application Support/Prosper/managed-config", isDirectory: true)))
     }
 }
 
@@ -83,6 +85,8 @@ enum ManagedConfigPaths {
             }
             base = roots.claude
         case "kitconfig":
+            // A-INFO-5: the owner marker file is never a target, in any case.
+            if rel.split(separator: "/").contains(where: { $0.lowercased() == kitMarkerFile }) { return .failure(.badPath("\(kitMarkerFile) is Prosper's")) }
             guard kind != .json else { return .failure(.wrongKind("json pieces target claude:settings.json only")) }
             guard let slug = owner.kitSlug, isValidSlug(slug) else { return .failure(.wrongKind("kitconfig: needs a kit slug [a-z0-9-]+")) }
             base = roots.configHome.appendingPathComponent(slug, isDirectory: true)

@@ -29,6 +29,10 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// `AppDelegate`; nil before wiring / in headless runs (`closeWindow` no-ops).
     var windowCloser: (@MainActor () -> Void)?
 
+    /// #870 `host.config`. Injected by `AppDelegate`; nil before wiring and in headless runs, when
+    /// every call answers "not available".
+    var managedConfig: ManagedConfigProvider?
+
     // MARK: Clipboard (live system pasteboard + native history store)
 
     func clipboardRead() -> String? {
@@ -968,6 +972,18 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
 
     func alertShow(text: String, seconds: Double) {
         Task { @MainActor in ExtensionMenuBar.shared.alert(text: text, seconds: seconds) }
+    }
+
+    /// Runs on the bridge's detached task, never main (A-INFO-13); only the consent sheet hops to main.
+    func managedConfigCall(_ op: String, owner: ManagedConfigOwner, json: String) async -> String {
+        guard let provider = managedConfig else { return ManagedConfigLua.inert(op, message: "managed config is not available") }
+        switch provider.get() {
+        case .failure(let why): return ManagedConfigLua.inert(op, message: why.description)
+        case .success(let config):
+            let out = await ManagedConfigLua.call(op, json: json, owner: owner, config: config)
+            if ManagedConfigLua.writes(op) { Task { @MainActor in ManagedConfigRefresh.current?.rescan() } }
+            return out
+        }
     }
 
     // MARK: App control / scripting / keyboard

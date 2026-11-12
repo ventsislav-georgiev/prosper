@@ -54,10 +54,13 @@ final class ExtensionFSWatch {
     private final class Entry {
         let extensionID: String
         let handler: String
+        /// A host-side watch (#870 managed-config refresh): called instead of a Lua handler.
+        let onChange: (@MainActor () -> Void)?
         var stream: FSEventStreamRef?
-        init(extensionID: String, handler: String) {
+        init(extensionID: String, handler: String, onChange: (@MainActor () -> Void)? = nil) {
             self.extensionID = extensionID
             self.handler = handler
+            self.onChange = onChange
         }
     }
 
@@ -67,12 +70,12 @@ final class ExtensionFSWatch {
     private func key(_ extID: String, _ path: String) -> String { "\(extID)\u{1}\(path)" }
 
     /// Start (or replace) a watch on `path` for `extensionID`, firing `handler`.
-    func watch(extensionID: String, path: String, handler: String) {
+    func watch(extensionID: String, path: String, handler: String, onChange: (@MainActor () -> Void)? = nil) {
         let p = (path as NSString).expandingTildeInPath
         let k = key(extensionID, p)
         unwatch(extensionID: extensionID, path: p) // replace any existing watch on this path
 
-        let entry = Entry(extensionID: extensionID, handler: handler)
+        let entry = Entry(extensionID: extensionID, handler: handler, onChange: onChange)
         var ctx = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(entry).toOpaque(),
@@ -83,7 +86,9 @@ final class ExtensionFSWatch {
             let entry = Unmanaged<Entry>.fromOpaque(info).takeUnretainedValue()
             let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String] ?? []
             let payload = ExtensionFSWatch.payloadJSON(paths)
-            Task { @MainActor in ExtensionFSWatch.shared.invoke?(entry.extensionID, entry.handler, payload) }
+            Task { @MainActor in
+                if let onChange = entry.onChange { onChange() } else { ExtensionFSWatch.shared.invoke?(entry.extensionID, entry.handler, payload) }
+            }
         }
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault, callback, &ctx, [p] as CFArray,

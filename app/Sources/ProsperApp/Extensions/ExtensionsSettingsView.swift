@@ -321,8 +321,11 @@ private struct ExtensionRow: View {
 
     private func uninstall() {
         rowError = nil
-        do { try registry.uninstall(id: record.id) }
-        catch { rowError = String(describing: error) }
+        Task {
+            do { try await registry.uninstall(id: record.id) }
+            catch ExtensionError.managedConfigKept(_, let reason) { rowError = reason }
+            catch { rowError = String(describing: error) }
+        }
     }
 
     private func publish() {

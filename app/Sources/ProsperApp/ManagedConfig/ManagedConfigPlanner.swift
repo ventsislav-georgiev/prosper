@@ -11,6 +11,7 @@ struct ManagedConfigPlanner {
         var backupRel: String
         var kitDir: URL?
         var json: Bool
+        var kind: ManagedConfigPiece.Kind
         var base: [UInt8]?
         var text: [UInt8]
         var existed: Bool
@@ -18,6 +19,8 @@ struct ManagedConfigPlanner {
         var mode: mode_t
         var created: [[String]]
         var steps: [(old: [UInt8], new: [UInt8])] = []
+        /// step index -> the side that is the user's own value (QA #724 INFO-11), shown as one line
+        var hidden: [Int: ManagedConfigChangeSet.Line.Sign] = [:]
         var upserts: [String: ManagedConfigRecord] = [:]
         var deletes: Set<String> = []
         var notes: [String] = []
@@ -44,6 +47,18 @@ struct ManagedConfigPlanner {
 
     static let refusedTopKeys: Set<String> = ["env", "apiKeyHelper", "model", "disableAllHooks", "disableBypassPermissionsMode"]
 
+    /// errata A5: the hook events Claude Code documents, from the table on code.claude.com/docs/en/hooks
+    /// as fetched 2026-11-11 (33 events). The one list: `jsonRule` reads it, and so does #872's kit
+    /// validator. Claude Code only warns on an unknown name; Prosper refuses it.
+    static let hookEvents: [String] = [
+        "SessionStart", "Setup", "UserPromptSubmit", "UserPromptExpansion", "PreToolUse", "PermissionRequest",
+        "PermissionDenied", "PostToolUse", "PostToolUseFailure", "PostToolBatch", "Notification",
+        "MessageDisplay", "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "Stop", "StopFailure",
+        "TeammateIdle", "InstructionsLoaded", "ConfigChange", "CwdChanged", "DirectoryAdded", "FileChanged",
+        "WorktreeCreate", "WorktreeRemove", "PreCompact", "PostCompact", "PreModelSwitch", "PostModelSwitch",
+        "Elicitation", "ElicitationResult", "SessionEnd",
+    ]
+
     static func jsonRule(_ path: [String], _ op: ManagedConfigPiece.Op) -> ManagedConfigRefusalReason? {
         let name = path.joined(separator: ".")
         guard let first = path.first, !refusedTopKeys.contains(first), !(path.count >= 2 && path[0] == "permissions" && path[1] == "defaultMode") else {
@@ -51,7 +66,7 @@ struct ManagedConfigPlanner {
         }
         switch op {
         case .append:
-            if path.count == 2, first == "hooks", let c = path[1].first, c.isUppercase, path[1].allSatisfy({ $0.isLetter }) { return nil }
+            if path.count == 2, first == "hooks", hookEvents.contains(path[1]) { return nil }
         case .union:
             if path.count == 2, first == "permissions", ManagedConfigDiff.allowedPermissionKeys.contains(path[1]) { return nil }
         case .set:
@@ -62,14 +77,15 @@ struct ManagedConfigPlanner {
 
     // MARK: work files
 
-    private mutating func work(_ url: URL, target: String, backupRel: String, kitDir: URL?, json: Bool) -> Work {
+    private mutating func work(_ url: URL, target: String, backupRel: String, kitDir: URL?, kind: ManagedConfigPiece.Kind) -> Work {
         if let w = works[url.path] { return w }
+        let json = kind == .json
         let base = FileManager.default.contents(atPath: url.path).map { Array($0) }
         let record = state.files.first { $0.path == url.path }
         let blank = base.map { $0.allSatisfy { [0x20, 0x09, 0x0A, 0x0D].contains($0) } } ?? true
         var st = stat()
         let mode: mode_t = stat(url.path, &st) == 0 ? st.st_mode & 0o7777 : (json ? 0o600 : 0o644)
-        var w = Work(url: url, target: target, backupRel: backupRel, kitDir: kitDir, json: json, base: base, text: base ?? [],
+        var w = Work(url: url, target: target, backupRel: backupRel, kitDir: kitDir, json: json, kind: kind, base: base, text: base ?? [],
                      existed: record?.existed ?? (base != nil), initial: record?.initial, mode: mode, created: record?.created ?? [])
         if json, blank {
             if record == nil, let base { w.initial = String(decoding: base, as: UTF8.self) }
@@ -79,10 +95,13 @@ struct ManagedConfigPlanner {
         return w
     }
 
-    private func step(_ w: inout Work, _ new: [UInt8]) {
-        guard new != w.text else { return }
+    /// Reports whether it appended, so a caller marks `hidden` only on a step of its own (r3).
+    @discardableResult
+    private func step(_ w: inout Work, _ new: [UInt8]) -> Bool {
+        guard new != w.text else { return false }
         w.steps.append((w.text, new))
         w.text = new
+        return true
     }
 
     private mutating func upsert(_ w: inout Work, _ r: ManagedConfigRecord) {
@@ -133,7 +152,7 @@ struct ManagedConfigPlanner {
             var movedFrom: String?
             if let r = record(piece.id) { movedFrom = relocate(from: r.path, to: resolved.url) }
             let existing = record(piece.id)
-            var w = work(resolved.url, target: resolved.display, backupRel: resolved.backupRel, kitDir: resolved.kitDir, json: piece.kind == .json)
+            var w = work(resolved.url, target: resolved.display, backupRel: resolved.backupRel, kitDir: resolved.kitDir, kind: piece.kind)
             if let movedFrom { w.movedFrom = movedFrom }
             let action: ManagedConfigPieceAction.Kind
             switch piece.kind {
@@ -151,8 +170,10 @@ struct ManagedConfigPlanner {
 
     private mutating func applyBlock(_ piece: ManagedConfigPiece, _ existing: ManagedConfigRecord?, _ repair: Bool, _ w: inout Work) throws(ManagedConfigRefusalReason) -> ManagedConfigPieceAction.Kind {
         guard let body = piece.text, ManagedTextBlock.bodyIsValid(body) else { throw .invalidPiece("a block needs text without prosper markers") }
-        let block = ManagedTextBlock.render(owner: owner.id, piece: piece.id, version: owner.version, body: body,
-                                            syntax: ManagedTextBlock.syntax(for: w.url))
+        guard let syntax = ManagedTextBlock.syntax(for: w.url) else {
+            throw .wrongKind("blocks go in .md, .markdown, .sh, .bash, .zsh, .fish, .conf, .toml, .yaml or .yml files")
+        }
+        let block = ManagedTextBlock.render(owner: owner.id, piece: piece.id, version: owner.version, body: body, syntax: syntax)
         let record = newRecord(piece, w, written: block, hash: OrderedJSON.sha256(Array(block.utf8)))
         switch ManagedTextBlock.find(owner: owner.id, piece: piece.id, in: w.text) {
         case .corrupt(let lines):
@@ -163,7 +184,8 @@ struct ManagedConfigPlanner {
                 if existing == nil { upsert(&w, record); return .adopt }
                 return .noop
             }
-            if let existing, existing.written != onDisk, !repair { throw .drifted }
+            // F1 (QA #723): with no record, only the byte-equal block is ours; anything else is an edit.
+            if (existing?.written ?? block) != onDisk, !repair { throw .drifted }
             step(&w, ManagedTextBlock.replacing(begin: b, end: e, with: block, in: w.text))
             upsert(&w, record)
             notes(&w)
@@ -287,6 +309,10 @@ struct ManagedConfigPlanner {
             if let other = state.records.first(where: { $0.path == w.url.path && $0.piece.path == path && $0.piece.op == .set && $0.owner != owner.id }) {
                 throw .conflict(owner: other.owner)
             }
+            // A-INFO-11: one slot, one piece; a second `set` would record the first as its "previous".
+            if let twin = state.records.first(where: { $0.path == w.url.path && $0.piece.path == path && $0.piece.op == .set && $0.piece.id != piece.id }) {
+                throw .invalidPiece("pieces \(twin.piece.id) and \(piece.id) both set \(name)")
+            }
             let currentIsOurs = existing.map { r in node.map { OrderedJSON.hash($0.value) == r.hash } ?? false } ?? false
             var record = newRecord(piece, w, written: OrderedJSON.canonical(value), hash: hash)
             if existing == nil, let node, OrderedJSON.hash(node.value) == hash {
@@ -303,7 +329,11 @@ struct ManagedConfigPlanner {
                 record.previous = node.map { doc.raw($0) }
             }
             if let node {
-                if OrderedJSON.hash(node.value) != hash { step(&w, doc.replacingValue(at: path, with: value)) }
+                if OrderedJSON.hash(node.value) != hash {
+                    if step(&w, doc.replacingValue(at: path, with: value)), !currentIsOurs {
+                        w.hidden[w.steps.count - 1] = .removed // the user's value goes to the backup
+                    }
+                }
             } else {
                 try insert(value, at: path, leafIsContainer: false, &w)
             }
@@ -391,7 +421,7 @@ struct ManagedConfigPlanner {
         if access(dir.path, W_OK) != 0 || (FileManager.default.fileExists(atPath: url.path) && access(url.path, W_OK) != 0) {
             return refuse(.unwritable("read-only file or directory"))
         }
-        var w = work(url, target: r.target, backupRel: resolved.backupRel, kitDir: nil, json: r.piece.kind == .json)
+        var w = work(url, target: r.target, backupRel: resolved.backupRel, kitDir: nil, kind: r.piece.kind)
         if let movedFrom { w.movedFrom = movedFrom }
         var action: ManagedConfigPieceAction.Kind = .forget
         switch r.piece.kind {
@@ -427,7 +457,8 @@ struct ManagedConfigPlanner {
             case .set?:
                 if let n = doc.node(at: path) {
                     if OrderedJSON.hash(n.value) == r.hash {
-                        step(&w, r.hadPrevious ? doc.replacingValue(at: path, withRaw: r.previous ?? "null") : doc.removingMember(at: path))
+                        let restored = r.hadPrevious ? doc.replacingValue(at: path, withRaw: r.previous ?? "null") : doc.removingMember(at: path)
+                        if step(&w, restored), r.hadPrevious { w.hidden[w.steps.count - 1] = .added }
                         action = .remove
                     } else {
                         action = .keep // replaced by hand: left as it is

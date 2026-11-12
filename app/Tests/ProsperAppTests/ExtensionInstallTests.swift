@@ -180,7 +180,7 @@ final class ExtensionInstallTests: XCTestCase {
         XCTAssertFalse(registry3.isPrivileged(id: "com.test.hello"))
     }
 
-    func testUninstallClearsPrivilege() throws {
+    func testUninstallClearsPrivilege() async throws {
         let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         let source = tmp.appendingPathComponent("source")
@@ -202,7 +202,7 @@ final class ExtensionInstallTests: XCTestCase {
 
         // Uninstall must scrub the privilege grant so a DIFFERENT extension reinstalled
         // under the same id is never silently privileged (RCE escalation guard).
-        try registry.uninstall(id: "com.test.hello")
+        try await registry.uninstall(id: "com.test.hello")
         try registry.installLocal(from: source)
         XCTAssertFalse(registry.isPrivileged(id: "com.test.hello"))
         // And a brand-new registry reading the persisted set agrees.
@@ -270,7 +270,7 @@ final class ExtensionInstallTests: XCTestCase {
         XCTAssertNotNil(registry.command(id: "hello.run"))
     }
 
-    func testUninstallUserExtensionRemovesIt() throws {
+    func testUninstallUserExtensionRemovesIt() async throws {
         let tmp = tempDir()
         let userDir = tmp.appendingPathComponent("user")
         let source = tmp.appendingPathComponent("source")
@@ -281,7 +281,7 @@ final class ExtensionInstallTests: XCTestCase {
         try registry.installLocal(from: source)
         XCTAssertNotNil(registry.record(id: "com.test.hello"))
 
-        try registry.uninstall(id: "com.test.hello")
+        try await registry.uninstall(id: "com.test.hello")
         XCTAssertNil(registry.record(id: "com.test.hello"))
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: userDir.appendingPathComponent("com.test.hello").path))
@@ -380,7 +380,7 @@ final class ExtensionInstallTests: XCTestCase {
         XCTAssertLessThan(perCall, .milliseconds(1), "route() over 200 routes took \(perCall)/call")
     }
 
-    func testCannotUninstallSystemExtension() throws {
+    func testCannotUninstallSystemExtension() async throws {
         // A registry whose only "system" dir is our source — the loaded record is
         // flagged system and must refuse uninstall.
         let tmp = tempDir()
@@ -416,7 +416,10 @@ final class ExtensionInstallTests: XCTestCase {
             services: NoopServices())
         registry.discover()
         XCTAssertEqual(registry.record(id: "com.test.sys")?.isSystem, true)
-        XCTAssertThrowsError(try registry.uninstall(id: "com.test.sys")) { error in
+        do {
+            try await registry.uninstall(id: "com.test.sys")
+            XCTFail("a system extension was uninstalled")
+        } catch {
             XCTAssertEqual(error as? ExtensionError, .cannotUninstallSystem("com.test.sys"))
         }
     }

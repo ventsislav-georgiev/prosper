@@ -322,7 +322,7 @@ final class DchUserCommandsTests: XCTestCase {
         let r = try rig { try writeExt(in: $0, folder: "com.user.a", extID: "com.user.a", title: "A", commands: [Cmd(id: "a.run")]) }
         r.reg.setPhoneApproved(true, id: "com.user.a")
         XCTAssertTrue(r.reg.isPhoneApproved(id: "com.user.a"))
-        try r.reg.uninstall(id: "com.user.a")
+        try await r.reg.uninstall(id: "com.user.a")
         let source = try writeExt(in: tempDir("dch-user-source"), folder: "src", extID: "com.user.a", title: "A",
                                   commands: [Cmd(id: "a.run")])
         try r.reg.installLocal(from: source)

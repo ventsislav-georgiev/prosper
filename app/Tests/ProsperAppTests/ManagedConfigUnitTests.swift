@@ -87,9 +87,10 @@ final class ManagedConfigUnitTests: XCTestCase {
         let home = "homeDirectory" + "ForCurrentUser"
         let forbidden = ["NSHome" + "Directory", "expandingTilde" + "InPath", "\"" + "~" + "/", "Process" + "Info.processInfo.environment"]
         let sources = swiftFiles(appDir.appendingPathComponent("Sources/ProsperApp/ManagedConfig"))
-        XCTAssertGreaterThanOrEqual(sources.count, 7)
+            + swiftFiles(appDir.appendingPathComponent("Sources/ProsperApp/ManagedConfigHost"))
+        XCTAssertGreaterThanOrEqual(sources.count, 10)
         let tests = swiftFiles(appDir.appendingPathComponent("Tests/ProsperAppTests")).filter { $0.lastPathComponent.hasPrefix("ManagedConfig") }
-        XCTAssertGreaterThanOrEqual(tests.count, 2)
+        XCTAssertGreaterThanOrEqual(tests.count, 3)
         var homeLines: [String] = []
         for file in sources + tests {
             let text = try String(contentsOf: file, encoding: .utf8)
@@ -100,15 +101,26 @@ final class ManagedConfigUnitTests: XCTestCase {
                 homeLines.append("\(file.lastPathComponent): \(fn.trimmingCharacters(in: .whitespaces))")
             }
         }
-        XCTAssertEqual(homeLines, ["ManagedConfigPaths.swift: static func production(loginEnvironment: [String: String]) -> ManagedConfigRoots {"])
+        XCTAssertEqual(homeLines, ["ManagedConfigPaths.swift: static func production(loginEnvironment: [String: String]) -> Result<ManagedConfigRoots, ManagedConfigRefusalReason> {"])
+        // r2 (R2-1): its callers are the live provider's two closures (the login-env roots, and the
+        // state-only view built with no login env); nothing else in the app reaches the home.
+        var uses: [String] = []
+        for file in swiftFiles(appDir.appendingPathComponent("Sources")) {
+            let n = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "production(loginEnvironment:").count - 1
+            uses += Array(repeating: file.lastPathComponent, count: n)
+        }
+        XCTAssertEqual(uses.sorted(), ["ManagedConfigLua.swift", "ManagedConfigLua.swift", "ManagedConfigPaths.swift"])
     }
 
-    /// P1 wires the core to nothing: no source outside ManagedConfig/ names it.
-    func testNoCallSiteOutsideTheManagedConfigDirectory() throws {
+    /// P2 gives the core exactly these callers outside ManagedConfig/ and ManagedConfigHost/: the
+    /// Lua bridge, the registry's uninstall hook and the app wiring. A new one is a review item.
+    func testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones() throws {
         let dir = appDir.appendingPathComponent("Sources")
-        for file in swiftFiles(dir) where !file.path.contains("/ManagedConfig/") {
-            XCTAssertFalse(try String(contentsOf: file, encoding: .utf8).contains("ManagedConfig"), file.lastPathComponent)
+        var callers: [String] = []
+        for file in swiftFiles(dir) where !file.path.contains("/ManagedConfig/") && !file.path.contains("/ManagedConfigHost/") {
+            if try String(contentsOf: file, encoding: .utf8).contains("ManagedConfig") { callers.append(file.lastPathComponent) }
         }
+        XCTAssertEqual(callers.sorted(), ["AppDelegate.swift", "ExtensionHostAPI.swift", "ExtensionRegistry.swift", "LiveExtensionHostServices.swift"])
     }
 
     /// Swift 6: the core carries no actor isolation (it runs off main; the sheet hops to main itself).

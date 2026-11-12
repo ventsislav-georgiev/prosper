@@ -164,7 +164,7 @@ final class PastePlainTests: XCTestCase {
 
     @MainActor
     private func withRuleRegisteringExtension(
-        _ body: (ExtensionRegistry, String) throws -> Void
+        _ body: (ExtensionRegistry, String) async throws -> Void
     ) async throws {
         let id = "com.test.ruler"
         let tmp = tempDir()
@@ -183,7 +183,7 @@ final class PastePlainTests: XCTestCase {
         XCTAssertEqual(ExtensionKeyRules.shared.evaluate(chord: chord, bundleID: nil),
                        .invoke(extensionID: id, handler: "pasteplain_chord", arg: "plain"))
 
-        try body(registry, id)
+        try await body(registry, id)
 
         let after = await awaitRulesCleared(chord)
         XCTAssertEqual(after, .passThrough, "the extension's key rule outlived it")
@@ -199,7 +199,7 @@ final class PastePlainTests: XCTestCase {
     @MainActor
     func testUninstallingAnExtensionDropsItsKeyRules() async throws {
         try await withRuleRegisteringExtension { registry, id in
-            try registry.uninstall(id: id)
+            try await registry.uninstall(id: id)
         }
     }
 

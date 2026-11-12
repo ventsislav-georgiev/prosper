@@ -371,10 +371,47 @@ For an **untrusted, non-system** extension every side-effecting call is an inert
 
 ### System-only calls
 
-- `host.shell.run(cmd [, { keep_running = true }])` → output, truncated — arbitrary command execution through the login shell (stdout + stderr, trimmed). Output is capped at 64 MiB; `truncated` is `true` when the cap was hit, else `nil` (the text itself is never marked). On the host call timeout the command's whole process group is killed and `""` is returned; with `keep_running = true` the call still returns `""` at the timeout but the command runs on to completion (for upgrades, user scripts, file moves). `opts` must be `nil`, `false` (same as `nil`, so `cond and { keep_running = true }` works) or a table whose only key is `keep_running` (a boolean); anything else raises a Lua error naming the key. When output can exceed 64 MiB, never pass `host.shell.run(x)` as the last argument of a call or inside `{...}`: the second return (`true`) spills in as an extra argument or element. Wrap it in parentheses, `f((host.shell.run(x)))`, or assign it to a local first.
+- `host.shell.run(cmd [, { keep_running = true }])` → output, truncated — arbitrary command execution through the login shell (stdout + stderr, trimmed). Output is capped at 64 MiB; `truncated` is `true` when the cap was hit, else `nil` (the text itself is never marked). On the host call timeout the command's whole process group is killed and `""` is returned; with `keep_running = true` the call still returns `""` at the timeout but the command runs on to completion (for upgrades, user scripts, file moves). `opts` must be `nil`, `false` (same as `nil`, so `cond and { keep_running = true }` works) or a table whose only key is `keep_running` (a boolean); anything else raises a Lua error. An unknown key is named in it; a non-table `opts` or a non-boolean `keep_running` is reported by the type of the bad value (`got string`). When output can exceed 64 MiB, never pass `host.shell.run(x)` as the last argument of a call or inside `{...}`: the second return (`true`) spills in as an extra argument or element. Wrap it in parentheses, `f((host.shell.run(x)))`, or assign it to a local first.
 - `host.fs.read(path)` → string | nil — arbitrary-path file read
 - `host.fallback.*` — fallback-search provider list/save/mode/import ([`fallback-search`](app/Sources/ProsperApp/Resources/extensions/fallback-search/) owns the settings UI; per-keystroke row building is native)
 - the coding agent and destructive file ops (trash)
+
+### Managed config (`host.config`)
+
+A **trusted** extension (a kit) can add owned pieces to Claude Code's config: a marked block in a Markdown or shell-style file, a hook, a permission rule, the status line, or a seeded starter file. Prosper writes only after **you** approve the exact change in a native sheet, keeps a backup of every file first, and can take every piece back out. For an untrusted extension all five calls are inert: `plan` and the write calls answer `ok = false`, and `status` answers `{}`.
+
+The owner of every piece is the calling extension's id. It is never read from the arguments: a piece cannot name another extension, and `status` shows only your own pieces.
+
+```lua
+local pieces = {
+  { id = "rules", kind = "block", target = "claude:CLAUDE.md", text = "Follow the kit rules.", position = "bottom" },
+  { id = "pre", kind = "json", target = "claude:settings.json", path = { "hooks", "PreToolUse" }, op = "append",
+    value = { matcher = "Bash", hooks = { { type = "command", command = "kit-run pre" } } } },
+  { id = "perms", kind = "json", target = "claude:settings.json", path = { "permissions", "allow" }, op = "union", value = { "Bash(kit-run:*)" } },
+  { id = "status", kind = "json", target = "claude:settings.json", path = { "statusLine" }, op = "set", value = { type = "command", command = "kit-status" } },
+  { id = "local", kind = "seed", target = "kitconfig:local.md", source = "ext:local.md" },
+}
+host.config.plan{ pieces = pieces }   -- -> { ok, files = { { target, path, backup, diff, notes, new_file, deletes_file } }, pieces = { { id, action } }, refused = { { id, target, why } } }
+host.config.apply{ pieces = pieces }  -- -> { ok, status, applied = { ids }, removed = { ids }, refused, pieces, message }
+host.config.status{ pieces = pieces } -- -> { { id, state, target, path } }, or { error = "state_unreadable", message }
+host.config.remove{ ids = { "pre" } } -- or { all = true }
+host.config.repair{ all = true }      -- or { ids = { … } }
+```
+
+- **`plan`** never writes and never asks. Its `diff` holds only the added and removed lines; the unchanged lines around them are the user's own text and appear only on the consent sheet. **`apply`**, **`remove`** and **`repair`** show the consent sheet: the masked diff, the backup folder, and a sentence per hook and status line. A change to `claude:settings.json` notes that it applies to open Claude Code sessions at once. **Cancel** writes nothing and answers `ok = false, status = "denied"`. Nothing is remembered: the next change asks again.
+- If a file changes on disk while the sheet is up, Prosper plans again. When the new change set differs, it shows the sheet a second time.
+- The write calls wait for your answer, so call them from an **async handler** (or any off-main lane). A write call made on the main thread answers `ok = false` and writes nothing. After 5 minutes with no answer, the call gives up and writes nothing; a later Apply counts as Cancel.
+- **Targets.** `claude:` is Claude Code's config dir (`CLAUDE_CONFIG_DIR` from your login shell, else `~/.claude`). `kitconfig:` is `~/.config/<your manifest name>/`; Prosper creates that dir and marks it with a `.prosper-kit` file. `ext:` (seed sources only) is your extension's own dir, read-only. `..`, absolute paths, `settings.local.json`, paths that differ only by letter case, and the `.prosper-kit` file are refused.
+- **Blocks** go in `claude:<name>.md`, or in `kitconfig:` files ending in `.md`, `.markdown`, `.sh`, `.bash`, `.zsh`, `.fish`, `.conf`, `.toml`, `.yaml` or `.yml`. Any other extension is refused, because the block markers need a known comment syntax.
+- **JSON** pieces target `claude:settings.json` only. Only these paths are allowed: `hooks.<event>` with `append`, for the 33 events Claude Code documents (an unknown event is refused); `permissions.allow`, `deny`, `ask` and `additionalDirectories` with `union`; and `statusLine` with `set`. `env`, `apiKeyHelper`, `model`, `disableAllHooks`, `disableBypassPermissionsMode` and `permissions.defaultMode` are always refused. Two of your pieces cannot both `set` the same path.
+- **Status states:** `applied`, `drifted` (someone edited it), `missing`, `replaced`, `corrupt`, `unwritable`, `conflict`, `adopted` and `orphaned` (the extension is gone). Remove still works on orphaned pieces.
+- **Uninstall** of an extension with live pieces shows the Remove sheet first. If you cancel it, the extension and its config both stay. An extension that never wrote a piece uninstalls even when Prosper cannot read `CLAUDE_CONFIG_DIR` from your login shell; one with pieces waits until it can. If Prosper's own record (`~/Library/Application Support/Prosper/managed-config/state.json`) is damaged or from a newer Prosper, no uninstall goes ahead, because nothing can tell which pieces are whose: update Prosper, or move that file aside, after which uninstall works and any pieces stay in your files as plain text to delete by hand.
+- Known limits:
+  - A write replaces the file by rename. This drops its group, ACLs and extended attributes, and splits any hard link.
+  - A symlinked target is written through to the real file.
+  - If Prosper crashes between a write and saving its state, seeded files and `union` strings stay in place but no piece owns them.
+  - Two Prosper processes are not locked against each other.
+  - A `position = "top"` block goes above a shebang or front matter.
 
 ### Key rules
 

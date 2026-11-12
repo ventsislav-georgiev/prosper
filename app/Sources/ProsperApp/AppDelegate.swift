@@ -294,6 +294,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     extensionID: extID, handler: handler, payloadJSON: payload)
             }
         }
+        // #870 managed config: host.config, the uninstall hook, and the status refresh. Resolving
+        // reads CLAUDE_CONFIG_DIR from the login shell, so it runs off main. The refresh starts on
+        // the first resolve that works: this launch attempt, or any later get() (r2, R2-3). The
+        // hook is set before anything else can call get(); a config cached first still fires it (r3).
+        ManagedConfigRefresh.follow(.live) { [weak self] in
+            self?.extensions.records.map(\.loaded.managedConfigOwner) ?? []
+        }
+        LiveExtensionHostServices.shared.managedConfig = .live
+        extensions.managedConfig = .live
+        Task.detached { _ = ManagedConfigProvider.live.get() }
         // An `.invoke` key rule (hammerspoon-compat hotkeys) re-invokes its named Lua
         // handler off-main on the owning extension's lane, exactly like a timer/event.
         ExtensionKeyRules.shared.invoke = { [weak self] extID, handler, payload in

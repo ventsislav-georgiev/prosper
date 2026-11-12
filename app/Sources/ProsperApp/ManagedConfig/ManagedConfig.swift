@@ -23,6 +23,7 @@ struct ManagedConfigPlan: Sendable {
         var upserts: [ManagedConfigRecord]
         var deletes: Set<String>
         var fileRecord: ManagedConfigFileRecord? // after this change; nil drops it
+        var kind: ManagedConfigPiece.Kind // to re-resolve the target after consent (A-INFO-6)
         var movedFrom: String? // the records' old path: the target resolves here now
         var pieces: Set<String> // ids whose action belongs to this file
         var writes: Bool { delete || newBytes != nil }
@@ -49,7 +50,7 @@ struct ManagedConfigPlan: Sendable {
 /// isolation. `plan`/`status` are synchronous and may run on any thread; `apply`/`remove`/`repair`
 /// are nonisolated async and suspend only inside `consent.confirm`. File writes run synchronously
 /// under one process-wide lock (spec 2.5 "one serial queue for all managed writes").
-/// P1 wires it to nothing: no call site outside this directory.
+/// Callers (P2): the Lua `host.config` bridge, the uninstall hook, the status refresh (ManagedConfigHost/).
 final class ManagedConfig: Sendable {
     let roots: ManagedConfigRoots
     let consent: any ManagedConfigConsent
@@ -74,7 +75,11 @@ final class ManagedConfig: Sendable {
     }
 
     var stateURL: URL { roots.stateDir.appendingPathComponent("state.json") }
+    /// D4: the dir #872's "Reveal backups" button opens on a user click. Never logged, never shown
+    /// in a message or uploaded with diagnostics (errata C10).
     var backupsDir: URL { roots.stateDir.appendingPathComponent("backups", isDirectory: true) }
+    /// errata E5 / D6: a crash between the temp write and the rename leaves this beside the target.
+    static let staleTempAge: TimeInterval = 60
 
     // MARK: public surface
 
@@ -139,7 +144,7 @@ final class ManagedConfig: Sendable {
         guard ManagedConfigPaths.isValidID(owner.id) else { return refused(.invalidPiece("owner id must be [A-Za-z0-9._-]")) }
         var state = ManagedConfigState()
         if let stateBytes {
-            guard let decoded = try? Self.decoder.decode(ManagedConfigState.self, from: Data(stateBytes)) else { return refused(.stateUnreadable) }
+            guard let decoded = Self.decodeState(stateBytes) else { return refused(.stateUnreadable) }
             state = decoded
         }
         var planner = ManagedConfigPlanner(roots: roots, owner: owner, now: now(), state: state)
@@ -158,6 +163,15 @@ final class ManagedConfig: Sendable {
             }
         }
         planner.finish()
+        // A-INFO-5: on a case-insensitive volume two case variants are one file, written twice.
+        var seen: [String: String] = [:]
+        for path in planner.order {
+            if let first = seen[path.lowercased()], first != path {
+                planner.refusals.append(.init(pieceID: "*", target: planner.works[path]?.target ?? "*",
+                                              reason: .badPath("\(planner.works[first]?.target ?? first) and \(planner.works[path]?.target ?? path) differ only by case")))
+            }
+            seen[path.lowercased()] = seen[path.lowercased()] ?? path
+        }
 
         var changes: [ManagedConfigPlan.FileChange] = []
         var files: [ManagedConfigChangeSet.File] = []
@@ -177,13 +191,22 @@ final class ManagedConfig: Sendable {
             guard delete || newBytes != nil || !w.upserts.isEmpty || !w.deletes.isEmpty || record != old || w.movedFrom != nil else { continue }
             changes.append(.init(url: w.url, target: w.target, backupRel: w.backupRel, kitDir: w.kitDir, base: w.base, baseHash: hash(w.base),
                                  newBytes: newBytes, delete: delete, mode: w.mode, upserts: Array(w.upserts.values),
-                                 deletes: w.deletes, fileRecord: record, movedFrom: w.movedFrom,
+                                 deletes: w.deletes, fileRecord: record, kind: w.kind, movedFrom: w.movedFrom,
                                  pieces: Set(planner.pieceFiles.filter { $0.value == path }.keys)))
             if delete || newBytes != nil {
-                let lines = w.steps.flatMap { ManagedConfigDiff.lines(old: $0.old, new: $0.new, json: w.json) }
+                // QA #724 INFO-13: the first step starts from the file as it is (absent: nothing, never the
+                // `{}` skeleton) and the last ends at what is written (a restored original, or nothing).
+                // A file that appears or goes is one whole-file hunk; otherwise one hunk per splice.
+                let last = w.steps.count - 1
+                let lines = delete || w.base == nil
+                    ? ManagedConfigDiff.lines(old: w.base ?? [], new: delete ? [] : w.text, json: w.json)
+                    : w.steps.enumerated().flatMap { i, s in
+                        ManagedConfigDiff.lines(old: i == 0 ? (w.base ?? []) : s.old, new: i == last ? w.text : s.new,
+                                                json: w.json, hide: w.hidden[i])
+                    }
                 files.append(.init(target: w.target, path: path,
                                    backupDirectory: backupsDir.appendingPathComponent(w.backupRel).deletingLastPathComponent().path,
-                                   lines: lines, notes: w.notes))
+                                   lines: lines, notes: w.notes, newFile: w.base == nil, deletesFile: delete))
             }
         }
         return ManagedConfigPlan(owner: owner, operation: operation,
@@ -201,9 +224,15 @@ final class ManagedConfig: Sendable {
         defer { ManagedConfig.writeLock.unlock() }
         let stateBytes = read(stateURL)
         guard hash(stateBytes) == plan.stateHash else { return .changed(committed: []) }
-        var state = stateBytes.flatMap { try? Self.decoder.decode(ManagedConfigState.self, from: Data($0)) } ?? ManagedConfigState()
+        var state = stateBytes.flatMap(Self.decodeState) ?? ManagedConfigState()
         // Spec 2.5 step 1: every target still matches the plan before anything is written.
         for f in plan.files where f.writes && hash(read(f.url)) != f.baseHash { return .changed(committed: []) }
+        // A-INFO-6: the path shape is re-checked after consent too: a symlink that appeared or went
+        // while the sheet was up is a concurrent change (replan, and the sheet again if the set differs).
+        for f in plan.files where f.writes {
+            guard case .success(let t) = ManagedConfigPaths.resolve(f.target, kind: f.kind, owner: plan.owner, roots: roots),
+                  t.url.path == f.url.path else { return .changed(committed: []) }
+        }
         var committed: Set<String> = []
         for f in plan.files {
             if let from = f.movedFrom { // the target resolves elsewhere now: its records follow it
@@ -258,15 +287,42 @@ final class ManagedConfig: Sendable {
             if var record = f.fileRecord {
                 record.firstBackup = old?.firstBackup ?? firstBackup
                 state.files.append(record)
-            } else if let orig = old?.firstBackup {
-                _ = unlink(orig) // errata C10: the first-write backup goes with the last piece on the file
+            } else if let orig = old?.firstBackup, f.writes {
+                // errata C10 narrowed by D8: the first-write backup goes with the last piece only when this
+                // Remove wrote the file (a fresh `pre` copy now exists); after a .forget it stays in backups/.
+                _ = unlink(orig)
             }
             do { try saveState(state) } catch {
                 return .failed("saving managed-config state after \(f.target) failed: \(error)", committed: committed)
             }
             committed.formUnion(f.pieces)
         }
+        if plan.files.contains(where: { $0.target.hasPrefix("kitconfig:") }) { removeEmptyKitDir(owner: plan.owner, state: state) }
         return .done
+    }
+
+    /// D2: when the owner's last `kitconfig:` piece has left, the dir Prosper created goes too, but
+    /// only while it holds nothing except our `.prosper-kit` marker. Any other entry keeps it.
+    private func removeEmptyKitDir(owner: ManagedConfigOwner, state: ManagedConfigState) {
+        guard let slug = owner.kitSlug, ManagedConfigPaths.isValidSlug(slug) else { return }
+        let dir = roots.configHome.appendingPathComponent(slug, isDirectory: true)
+        let real = dir.resolvingSymlinksInPath().path + "/"
+        guard !state.records.contains(where: { $0.path.hasPrefix(real) || $0.path.hasPrefix(dir.path + "/") }),
+              case .ours = ManagedConfigPaths.ownership(of: dir, owner: owner.id),
+              Self.entries(of: dir) == [ManagedConfigPaths.kitMarkerFile] else { return }
+        if unlink(dir.appendingPathComponent(ManagedConfigPaths.kitMarkerFile).path) == 0 { _ = rmdir(dir.path) }
+    }
+
+    /// Every name in `dir` by readdir: FileManager hides AppleDouble `._*` names.
+    static func entries(of dir: URL) -> [String]? {
+        guard let d = opendir(dir.path) else { return nil }
+        defer { closedir(d) }
+        var out: [String] = []
+        while let e = readdir(d) {
+            let name = withUnsafeBytes(of: e.pointee.d_name) { String(decoding: $0.prefix(Int(e.pointee.d_namlen)), as: UTF8.self) }
+            if name != ".", name != ".." { out.append(name) }
+        }
+        return out.sorted()
     }
 
     private func createKitDir(_ dir: URL, owner: String) throws {
@@ -332,6 +388,7 @@ final class ManagedConfig: Sendable {
     func status(owner: ManagedConfigOwner, declared: [ManagedConfigPiece] = []) -> [ManagedConfigPieceStatus] {
         var state = loadState()
         let readable = stateIsReadable()
+        sweepStaleTemps(beside: state)
         var out = state.records.filter { $0.owner == owner.id }.map { r in
             // the live file: the target may have become (or stopped being) a symlink since the write
             var live = r
@@ -346,6 +403,11 @@ final class ManagedConfig: Sendable {
                 let bytes = read(t.url) ?? []
                 if case .present(let b, let e) = ManagedTextBlock.find(owner: owner.id, piece: p.id, in: bytes) {
                     let text = ManagedTextBlock.text(of: bytes, begin: b, end: e)
+                    let block = p.text.flatMap { body in ManagedTextBlock.syntax(for: t.url).map {
+                        ManagedTextBlock.render(owner: owner.id, piece: p.id, version: owner.version, body: body, syntax: $0)
+                    } }
+                    // F1 (QA #723): adopt only the byte-equal block; an edited one is drift and stays unowned.
+                    guard text == block else { s.state = .drifted; out.append(s); continue }
                     adopted.append(.init(owner: owner.id, piece: p, target: t.display, path: t.url.path, written: text,
                                          hash: OrderedJSON.sha256(Array(text.utf8)), version: owner.version, appliedAt: now(),
                                          sourceDir: owner.extensionDir?.path))
@@ -423,6 +485,38 @@ final class ManagedConfig: Sendable {
         }
     }
 
+    /// D6 (errata E5): deletes `.<name>.prosper-<UUID>` regular files beside a recorded path once they
+    /// are older than `staleTempAge` (wall clock against the file's mtime), under the write lock, so a
+    /// temp of a write in flight is never taken. Nothing else is ever deleted.
+    private func sweepStaleTemps(beside state: ManagedConfigState) {
+        let targets = Set(state.records.map(\.path) + state.files.map(\.path)).map { URL(fileURLWithPath: $0) }
+        guard !targets.isEmpty else { return }
+        ManagedConfig.writeLock.lock()
+        defer { ManagedConfig.writeLock.unlock() }
+        let cutoff = Date().addingTimeInterval(-ManagedConfig.staleTempAge).timeIntervalSince1970
+        for target in targets {
+            let dir = target.deletingLastPathComponent()
+            let prefix = "." + target.lastPathComponent + ".prosper-"
+            for name in Self.entries(of: dir) ?? [] where name.hasPrefix(prefix) {
+                let tail = String(name.dropFirst(prefix.count))
+                guard tail.count == 36, UUID(uuidString: tail) != nil else { continue }
+                let path = dir.appendingPathComponent(name).path
+                var st = stat()
+                guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, Double(st.st_mtimespec.tv_sec) < cutoff else { continue }
+                _ = unlink(path)
+            }
+        }
+    }
+
+    /// Every file a record points at: the paths the status refresh watches (never the state dir).
+    func recordedPaths() -> [String] {
+        let state = loadState()
+        return Array(Set(state.records.map(\.path) + state.files.map(\.path))).sorted()
+    }
+
+    /// Owners with at least one record, installed or not (a vanished one reports `orphaned`).
+    func ownerIDs() -> [String] { Array(Set(loadState().records.map(\.owner))).sorted() }
+
     // MARK: helpers
 
     /// False when state.json exists but does not decode: apply, remove and repair refuse, status writes nothing.
@@ -431,11 +525,19 @@ final class ManagedConfig: Sendable {
     /// nil: the file exists and does not decode. Absent file: an empty state.
     private func decodedState() -> ManagedConfigState? {
         guard let bytes = read(stateURL) else { return ManagedConfigState() }
-        return try? Self.decoder.decode(ManagedConfigState.self, from: Data(bytes))
+        return Self.decodeState(bytes)
     }
 
     private func loadState() -> ManagedConfigState {
-        read(stateURL).flatMap { try? Self.decoder.decode(ManagedConfigState.self, from: Data($0)) } ?? ManagedConfigState()
+        read(stateURL).flatMap(Self.decodeState) ?? ManagedConfigState()
+    }
+
+    /// A-INFO-8: a state written by a newer Prosper (version above ours) is unreadable, so nothing
+    /// re-saves it and drops the fields this build does not know.
+    static func decodeState(_ bytes: [UInt8]) -> ManagedConfigState? {
+        guard let state = try? decoder.decode(ManagedConfigState.self, from: Data(bytes)),
+              state.version <= ManagedConfigState.currentVersion else { return nil }
+        return state
     }
 
     private func read(_ url: URL) -> [UInt8]? { FileManager.default.contents(atPath: url.path).map { Array($0) } }

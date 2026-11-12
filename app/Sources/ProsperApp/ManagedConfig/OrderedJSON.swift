@@ -59,9 +59,13 @@ struct OrderedJSON: Sendable {
     var text: String { String(decoding: bytes, as: UTF8.self) }
     var newline: String { OrderedJSON.newline(of: bytes) }
 
+    /// B-INFO-9: the file's majority line ending; a tie or a file with none is LF.
     static func newline(of bytes: [UInt8]) -> String {
-        for i in bytes.indices.dropFirst() where bytes[i] == 0x0A && bytes[i - 1] == 0x0D { return "\r\n" }
-        return "\n"
+        var crlf = 0, lf = 0
+        for i in bytes.indices where bytes[i] == 0x0A {
+            if i > 0, bytes[i - 1] == 0x0D { crlf += 1 } else { lf += 1 }
+        }
+        return crlf > lf ? "\r\n" : "\n"
     }
 
     // MARK: lookup
@@ -140,7 +144,7 @@ struct OrderedJSON: Sendable {
                 sep += 1
             }
             let ws = String(decoding: bytes[sep..<last.lowerBound], as: UTF8.self)
-            let pretty = ws.contains("\n")
+            let pretty = bytes[sep..<last.lowerBound].contains(0x0A) // B-INFO-4: on bytes, "\r\n" is one Character
             let indent = pretty ? lineIndent(last.lowerBound) : ""
             return splice(last.upperBound..<last.upperBound, with: "," + ws + make(indent, pretty))
         }
@@ -238,6 +242,8 @@ struct OrderedJSON: Sendable {
         case .number(let lexeme):
             guard let d = Double(lexeme) else { return lexeme }
             if d == d.rounded(), abs(d) < 1e15 { return String(Int64(d)) }
+            // B-INFO-2: past 2^53 (or past Double's range) two lexemes can share one Double; keep the literal.
+            if !d.isFinite || (d == d.rounded() && abs(d) >= 9_007_199_254_740_992) { return lexeme }
             return String(d)
         case .array(let elements): return "[" + elements.map { canonical($0.value) }.joined(separator: ",") + "]"
         case .object(let members):
@@ -358,7 +364,9 @@ private struct Parser {
     }
 
     private mutating func hex4() throws(OrderedJSON.ParseError) -> UInt32 {
-        guard i + 4 <= b.count, let v = UInt32(String(decoding: b[i..<i + 4], as: UTF8.self), radix: 16) else {
+        // B-INFO-1: exactly four hex digits; UInt32(_:radix:) alone would take a sign ("\u+041").
+        guard i + 4 <= b.count, b[i..<i + 4].allSatisfy({ ($0 >= 0x30 && $0 <= 0x39) || ($0 | 0x20 >= 0x61 && $0 | 0x20 <= 0x66) }),
+              let v = UInt32(String(decoding: b[i..<i + 4], as: UTF8.self), radix: 16) else {
             throw fail("invalid \\u escape")
         }
         i += 4

@@ -270,7 +270,7 @@ final class ExtensionManifestTests: XCTestCase {
     }
 
     @MainActor
-    func testSystemExtensionCannotBeUninstalled() throws {
+    func testSystemExtensionCannotBeUninstalled() async throws {
         let systemRoot = tempDir()
         let userRoot = tempDir()
         defer {
@@ -284,13 +284,16 @@ final class ExtensionManifestTests: XCTestCase {
             systemDir: systemRoot, userDir: userRoot, hostVersion: "2.0.0", defaults: defaults)
         registry.discover()
 
-        XCTAssertThrowsError(try registry.uninstall(id: "com.prosper.calc")) { err in
-            XCTAssertEqual(err as? ExtensionError, .cannotUninstallSystem("com.prosper.calc"))
+        do {
+            try await registry.uninstall(id: "com.prosper.calc")
+            XCTFail("a system extension was uninstalled")
+        } catch {
+            XCTAssertEqual(error as? ExtensionError, .cannotUninstallSystem("com.prosper.calc"))
         }
     }
 
     @MainActor
-    func testUserExtensionUninstallAndResetRules() throws {
+    func testUserExtensionUninstallAndResetRules() async throws {
         let userRoot = tempDir()
         defer { try? FileManager.default.removeItem(at: userRoot) }
         // user extension: not system
@@ -310,7 +313,7 @@ final class ExtensionManifestTests: XCTestCase {
         }
 
         // uninstall removes it from disk + registry
-        try registry.uninstall(id: "com.prosper.calc")
+        try await registry.uninstall(id: "com.prosper.calc")
         XCTAssertTrue(registry.records.isEmpty)
     }
 

@@ -146,7 +146,8 @@ struct ManagedConfigFileRecord: Codable, Sendable, Equatable {
 }
 
 struct ManagedConfigState: Codable, Sendable, Equatable {
-    var version = 1
+    static let currentVersion = 1
+    var version = currentVersion
     var records: [ManagedConfigRecord] = []
     var files: [ManagedConfigFileRecord] = []
 }
@@ -159,9 +160,11 @@ struct ManagedConfigChangeSet: Equatable, Sendable {
     enum Action: String, Sendable { case apply, remove, repair }
 
     struct Line: Equatable, Sendable {
-        enum Sign: Sendable { case added, removed }
+        enum Sign: Sendable { case added, removed, context }
         var sign: Sign
         var text: String
+        /// the file's last line, with no newline after it
+        var noFinalNewline = false
     }
 
     struct File: Equatable, Sendable {
@@ -170,6 +173,9 @@ struct ManagedConfigChangeSet: Equatable, Sendable {
         var backupDirectory: String
         var lines: [Line]
         var notes: [String]
+        /// the file does not exist yet / the change deletes it (a file only Prosper wrote)
+        var newFile = false
+        var deletesFile = false
     }
 
     var action: Action
@@ -178,6 +184,8 @@ struct ManagedConfigChangeSet: Equatable, Sendable {
     var pieces: [ManagedConfigPieceAction]
 
     static let maskedLine = "•••• (hidden: outside the keys Prosper manages)"
+    static let elidedLine = "…"
+    static let userValueLine = "•••• (your own value: kept in the backup, not shown)"
 }
 
 /// The seam every user-file write goes through. The real implementation (P2) is a native SwiftUI

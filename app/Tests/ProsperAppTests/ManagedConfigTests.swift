@@ -379,6 +379,34 @@ final class ManagedConfigTests: XCTestCase {
         XCTAssertEqual(env.read(env.settings), original)
     }
 
+    /// r3 (R3-2): a restore that changes no byte appends no step, so it must not mark another step
+    /// hidden. Reached by: the user's statusLine is written exactly as the planner renders it, a kit
+    /// sets its own value over it, then updates its piece to the user's value. Remove then restores
+    /// the user's raw text over identical bytes. The kit's `allow` removal earlier in the same file
+    /// is the step the old code wrongly hid.
+    func test6NoOpRestoreDoesNotHideTheStepBeforeIt() async throws {
+        let env = makeMCEnv()
+        let user = try OrderedJSON(#"{"type": "command", "command": "my-line"}"#).root.value
+        let skeleton = "{\n  \"permissions\": {\n    \"allow\": [\"Mine(*)\"]\n  },\n  \"statusLine\": 0\n}\n"
+        let original = String(decoding: try OrderedJSON(skeleton).replacingValue(at: ["statusLine"], with: user), as: UTF8.self)
+        try env.write(original, env.settings)
+        _ = await env.mc.apply([MCPieces.allow(["Kit(*)"]), MCPieces.statusLine()], owner: env.owner)
+        XCTAssertTrue(try XCTUnwrap(env.read(env.settings)).contains("kit-status"))
+        _ = await env.mc.apply([MCPieces.allow(["Kit(*)"]), MCPieces.statusLine(command: "my-line")], owner: env.owner)
+        let updated = try XCTUnwrap(env.read(env.settings))
+        XCTAssertEqual(updated.replacingOccurrences(of: #","Kit(*)""#, with: ""), original,
+                       "precondition: the slot now holds the user's value in the user's own bytes")
+        let seen = env.consent.seen.count
+        let r = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        XCTAssertEqual(env.read(env.settings), original, "byte for byte")
+        XCTAssertEqual(env.consent.seen.count, seen + 1)
+        let lines = try XCTUnwrap(env.consent.seen.last?.files.first).lines
+        XCTAssertFalse(lines.contains { $0.text == ManagedConfigChangeSet.userValueLine }, "\(lines)")
+        XCTAssertFalse(lines.contains { $0.text.contains("Mine(*)") }, "\(lines)")
+        XCTAssertTrue(lines.contains { $0.sign == .removed && $0.text.contains("Kit(*)") }, "\(lines)")
+    }
+
     // MARK: 2.8-7 key order and formatting
 
     func test7FortyKeyFixtureKeepsOrderAndFormatting() async throws {
@@ -419,13 +447,17 @@ final class ManagedConfigTests: XCTestCase {
         try env.write("# mine\n", env.claudeMD)
         let outside = env.root.appendingPathComponent("outside", isDirectory: true)
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-        try FileManager.default.createSymbolicLink(atPath: env.claude.appendingPathComponent("rootowned.md").path, withDestinationPath: "/etc/hosts")
+        // QA #724 INFO-14: the link points at a temp file, never a real system file. Our own file there, so
+        // the refusal is the type check (a link to another user's file needs a file this runner cannot make).
+        try env.write("outside\n", outside.appendingPathComponent("x.txt"))
+        try FileManager.default.createSymbolicLink(atPath: env.claude.appendingPathComponent("rootowned.md").path,
+                                                   withDestinationPath: outside.appendingPathComponent("x.txt").path)
         let bad: [(ManagedConfigPiece, ManagedConfigRefusalReason)] = [
             (MCPieces.block("a", target: "claude:../x.md"), .badPath("'..' component")),
             (MCPieces.block("b", target: "claude:/etc/x.md"), .badPath("absolute path")),
             (MCPieces.block("c", target: "claude:../../etc/x"), .badPath("'..' component")),
             (MCPieces.block("d", target: "claude:sub/../CLAUDE.md"), .badPath("'..' component")),
-            (MCPieces.block("e", target: "claude:rootowned.md"), .symlinkNotOwned),
+            (MCPieces.block("e", target: "claude:rootowned.md"), .wrongKind("the symlink points to a different file type")),
             (ManagedConfigPiece(id: "f", kind: .json, target: "claude:settings.json", path: ["env", "FOO"], op: .set, value: "\"x\""),
              .refusedJSONPath("env.FOO")),
             (MCPieces.block("g", target: "claude:hook.sh"), .wrongKind("claude: blocks go in a .md file directly under the root")),
@@ -918,13 +950,22 @@ final class ManagedConfigTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: kitDir.appendingPathComponent("my notes/today.md").path))
     }
 
+    /// QA #724 INFO-15: the user file the link and `..` reach exists, so only the containment check
+    /// stops the copy; each refusal is asserted by its reason.
     func testSeedSourceCannotLeaveTheExtensionDir() async throws {
         let env = makeMCEnv()
+        try env.write("a user file\n", env.root.appendingPathComponent("extensions/x.md"))
+        try env.write("a user file\n", env.root.appendingPathComponent("x.md"))
         try FileManager.default.createSymbolicLink(at: env.ext.appendingPathComponent("leak.md"), withDestinationURL: env.root.appendingPathComponent("x.md"))
-        for source in ["ext:../x.md", "ext:leak.md", "/etc/hosts"] {
+        let cases: [(String, ManagedConfigRefusalReason)] = [
+            ("ext:leak.md", .outsideRoot), ("ext:../x.md", .badPath("'..' component")), ("/etc/hosts", .invalidPiece("seed source must be ext:<path>")),
+        ]
+        for (source, reason) in cases {
             let r = await env.mc.apply([MCPieces.seed(source: source)], owner: env.owner)
             XCTAssertEqual(r.status, .refused, source)
+            XCTAssertEqual(r.refusals.map(\.reason), [reason], source)
         }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: env.config.appendingPathComponent("kit-a/local.md").path))
     }
 
     // MARK: status extras (errata A3, A12) and the production roots (A11)
@@ -949,13 +990,23 @@ final class ManagedConfigTests: XCTestCase {
         XCTAssertTrue(env.mc.hooksDisabledAtUserScope())
     }
 
-    func testProductionRootsHonourClaudeConfigDirFromTheInjectedEnv() {
-        let custom = ManagedConfigRoots.production(loginEnvironment: ["CLAUDE_CONFIG_DIR": "/nonexistent/scratch-claude"])
+    func testProductionRootsHonourClaudeConfigDirFromTheInjectedEnv() throws {
+        let custom = try ManagedConfigRoots.production(loginEnvironment: ["CLAUDE_CONFIG_DIR": "/nonexistent/scratch-claude"]).get()
         XCTAssertEqual(custom.claude.path, "/nonexistent/scratch-claude")
-        let plain = ManagedConfigRoots.production(loginEnvironment: [:])
+        let plain = try ManagedConfigRoots.production(loginEnvironment: [:]).get()
         XCTAssertTrue(plain.claude.path.hasSuffix("/.claude"))
         XCTAssertTrue(plain.stateDir.path.hasSuffix("/Library/Application Support/Prosper/managed-config"))
-        XCTAssertEqual(ManagedConfigRoots.production(loginEnvironment: ["CLAUDE_CONFIG_DIR": "relative"]).claude, plain.claude)
+        XCTAssertEqual(try ManagedConfigRoots.production(loginEnvironment: ["CLAUDE_CONFIG_DIR": ""]).get(), plain, "empty = unset")
+    }
+
+    /// A-INFO-12: a relative CLAUDE_CONFIG_DIR is refused by name, never swapped for ~/.claude. No I/O.
+    func testRelativeClaudeConfigDirIsRefusedNotReplaced() {
+        for dir in ["relative", "claude-dir/x", "./x"] {
+            guard case .failure(let why) = ManagedConfigRoots.production(loginEnvironment: ["CLAUDE_CONFIG_DIR": dir]) else {
+                return XCTFail("\(dir) was accepted")
+            }
+            XCTAssertTrue(why.description.contains("CLAUDE_CONFIG_DIR"), why.description)
+        }
     }
 
     func testRemoveAndRepairOfUnknownIdsAreRefused() async {

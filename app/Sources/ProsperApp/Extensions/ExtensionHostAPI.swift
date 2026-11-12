@@ -53,6 +53,9 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func dialogPrompt(json: String) async -> String?
     func dialogConfirm(json: String) async -> Bool
     func alertShow(text: String, seconds: Double)
+    /// #870 `host.config` (trusted only): `op` is plan/apply/status/remove/repair, `json` the Lua
+    /// options, `owner` always the calling extension (never read from `json`). JSON result.
+    func managedConfigCall(_ op: String, owner: ManagedConfigOwner, json: String) async -> String
     // App control + scripting + keyboard input source (§G/§P/§F). Control ops
     // (launch/hide/run-script/set-source) are privileged; reads (frontmost,
     // windows, current source, layouts) are open. `*JSON` return documented shapes.
@@ -325,6 +328,9 @@ extension ExtensionHostServices {
     func dialogPrompt(json: String) async -> String? { nil }
     func dialogConfirm(json: String) async -> Bool { false }
     func alertShow(text: String, seconds: Double) {}
+    func managedConfigCall(_ op: String, owner: ManagedConfigOwner, json: String) async -> String {
+        ManagedConfigLua.inert(op, message: "managed config is not available in this host")
+    }
 
     /// Default: no app/scripting/keyboard backend (test / minimal hosts). The live
     /// host drives `AppControl` / `Scripting` / `KeyboardSource`.
@@ -404,17 +410,22 @@ struct ExtensionHost {
     /// `privileged` tier grants EXCEPT the system-only RCE/destructive surface
     /// above. A bare untrusted extension never executes, so it gets neither.
     let trusted: Bool
+    /// #870: the owner of this extension's managed-config pieces (version, kit slug, dir). Its id is
+    /// always forced to `extensionID`.
+    let configOwner: ManagedConfigOwner?
 
     init(extensionID: String,
          services: ExtensionHostServices,
          callTimeout: TimeInterval = ExtensionHost.defaultCallTimeout,
          privileged: Bool = true,
-         trusted: Bool = true) {
+         trusted: Bool = true,
+         configOwner: ManagedConfigOwner? = nil) {
         self.extensionID = extensionID
         self.services = services
         self.callTimeout = callTimeout
         self.privileged = privileged
         self.trusted = trusted
+        self.configOwner = configOwner
     }
 
     /// Register every host function and assemble the `host` table. Call before
@@ -909,6 +920,28 @@ struct ExtensionHost {
             }
             lua.register("__h_dialog_prompt") { rt in rt.pushNil(); return 1 }
             lua.register("__h_dialog_confirm") { rt in rt.push(false); return 1 }
+        }
+
+        // --- managed config (#870, spec 2.7): trusted only, never the system-only tier's extra ---
+        if trusted {
+            var owner = configOwner ?? ManagedConfigOwner(id: extID, version: "0")
+            owner.id = extID // the owner is the calling extension, whatever the record says
+            let configOwner = owner
+            lua.register("__h_config") { rt in
+                let op = rt.stringArgument(1) ?? ""
+                let json = rt.stringArgument(2) ?? "{}"
+                guard ManagedConfigLua.operations.contains(op) else { rt.push(ManagedConfigLua.inert(op, message: "unknown host.config call")); return 1 }
+                // The consent sheet runs on main: a write called from a main-thread VM would wait on itself.
+                if ManagedConfigLua.writes(op), Thread.isMainThread {
+                    rt.push(ManagedConfigLua.inert(op, message: "host.config.\(op) cannot run on the main thread; call it from an async handler"))
+                    return 1
+                }
+                let out = ExtensionHost.awaitSync(timeout: 300) { await services.managedConfigCall(op, owner: configOwner, json: json) }
+                rt.push(out ?? ManagedConfigLua.inert(op, message: "no answer within 5 minutes: nothing was written"))
+                return 1
+            }
+        } else {
+            lua.register("__h_config") { rt in rt.push(ManagedConfigLua.inert(rt.stringArgument(1) ?? "")); return 1 }
         }
 
         // --- app reads / scripting reads / keyboard reads (open to all) ---
@@ -1484,6 +1517,22 @@ struct ExtensionHost {
     host.alert = { show = function(text, seconds) raw_alert_show(text or "", seconds or 0) end }
     __h_menubar_set = nil; __h_menubar_remove = nil
     __h_dialog_prompt = nil; __h_dialog_confirm = nil; __h_alert_show = nil
+
+    -- Managed config (#870, trusted only; untrusted gets inert answers). Every write shows the
+    -- native consent sheet. See extensions.md "Managed config (host.config)".
+    --   host.config.plan{ pieces = { … } }   -> { ok=, files={ {target=, path=, backup=, diff=, notes=} }, pieces={ {id=, action=} }, refused= }
+    --   host.config.apply{ pieces = { … } }  -> { ok=, status=, applied={ids}, removed={ids}, refused={ {id=, target=, why=} }, message= }
+    --   host.config.status{ pieces = { … } } -> { {id=, state=, target=, path=} }, or { error="state_unreadable", message= }
+    --   host.config.remove{ ids = { … } } / { all = true }; host.config.repair{ ids = { … } } / { all = true }
+    local raw_config = __h_config
+    local function config_call(op)
+        return function(opts) return json_decode(raw_config(op, raw_json_encode(opts or {}))) end
+    end
+    host.config = {
+        plan = config_call("plan"), apply = config_call("apply"), status = config_call("status"),
+        remove = config_call("remove"), repair = config_call("repair"),
+    }
+    __h_config = nil
 
     -- App launcher search. Returns a Lua array of { name = , path = } ranked
     -- application matches for `query` ({} when nothing matches), decoded from the
