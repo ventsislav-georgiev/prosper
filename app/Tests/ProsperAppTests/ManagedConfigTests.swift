@@ -9,12 +9,16 @@ final class MCRecordingConsent: ManagedConfigConsent, @unchecked Sendable {
     private let lock = NSLock()
     private var _seen: [ManagedConfigChangeSet] = []
     private let answer: Bool
+    private var script: [Bool]
 
-    init(_ answer: Bool = true) { self.answer = answer }
+    /// `script`: answers for the first asks, in order; `answer` after it runs out.
+    init(_ answer: Bool = true, script: [Bool] = []) { self.answer = answer; self.script = script }
 
     func confirm(_ changes: ManagedConfigChangeSet) async -> Bool {
-        lock.withLock { _seen.append(changes) }
-        return answer
+        lock.withLock {
+            _seen.append(changes)
+            return script.isEmpty ? answer : script.removeFirst()
+        }
     }
 
     var seen: [ManagedConfigChangeSet] { lock.withLock { _seen } }
@@ -831,6 +835,7 @@ final class ManagedConfigTests: XCTestCase {
         let r = await env.mc.apply([MCPieces.block(), MCPieces.hook(), MCPieces.seed()], owner: env.owner)
         XCTAssertEqual(r.status, .denied)
         XCTAssertFalse(r.ok)
+        XCTAssertEqual(r.pieces, [], "QA #743 F1: nothing landed, nothing named")
         XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
         XCTAssertFalse(FileManager.default.fileExists(atPath: env.settings.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: env.config.path), "no kitconfig dir before consent")

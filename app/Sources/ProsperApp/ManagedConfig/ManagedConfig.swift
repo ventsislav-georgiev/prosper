@@ -108,7 +108,8 @@ final class ManagedConfig: Sendable {
             if plan.files.isEmpty { return .init(status: landed.isEmpty ? .nothingToDo : .done, pieces: merged(plan.actions)) }
             if plan.writesUserFiles, plan.changes != consented {
                 guard await consent.confirm(plan.changes) else {
-                    return .init(status: .denied, pieces: landed.isEmpty ? plan.actions : landed,
+                    // QA #743 F1: only what an earlier round landed; the planned rest was never written
+                    return .init(status: .denied, pieces: landed,
                                  message: landed.isEmpty ? "cancelled: nothing was written" : "cancelled: the rest was not written")
                 }
                 consented = plan.changes

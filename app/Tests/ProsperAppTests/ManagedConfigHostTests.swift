@@ -149,6 +149,61 @@ final class ManagedConfigHostTests: XCTestCase {
         XCTAssertEqual(env.consent.seen.count, 1)
         XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
         XCTAssertNil(env.read(env.state.appendingPathComponent("state.json")), "no state either")
+        let again = try await runOnLane(MCHostServices(env.mc), env, lists("host.config.apply{ pieces = { \(blockPiece) } }"))
+        XCTAssertEqual(again as NSDictionary, ["status": "denied", "applied": "", "removed": "", "pieces": 0] as NSDictionary,
+                       "QA #743 F1: a cancelled apply names nothing")
+    }
+
+    /// The Lua answer reduced to strings: an empty Lua table has no fixed JSON shape.
+    private func lists(_ call: String) -> String {
+        "local r = \(call) return { status = r.status, applied = table.concat(r.applied, \",\"), removed = table.concat(r.removed, \",\"), pieces = #r.pieces }"
+    }
+
+    /// QA #743 F1: a cancelled remove or repair names nothing, and the file keeps what it had.
+    func test12DeniedRemoveAndRepairNameNothing() async throws {
+        let env = makeMCEnv()
+        try env.write("# mine\n", env.claudeMD)
+        _ = try await runOnLane(MCHostServices(env.mc), env, "return host.config.apply{ pieces = { \(blockPiece) } }")
+        let applied = try XCTUnwrap(env.read(env.claudeMD))
+        XCTAssertTrue(applied.contains("prosper:\(Self.extID):rules"), applied)
+        let deny = MCRecordingConsent(false)
+        let denying = MCHostServices(ManagedConfig(roots: env.mc.roots, consent: deny, writer: env.writer))
+        let none = ["status": "denied", "applied": "", "removed": "", "pieces": 0] as NSDictionary
+        let removed = try await runOnLane(denying, env, lists(#"host.config.remove{ ids = { "rules" } }"#))
+        XCTAssertEqual(removed as NSDictionary, none)
+        XCTAssertEqual(env.read(env.claudeMD), applied, "the block is still in the file")
+        let edited = applied.replacingOccurrences(of: "Follow the kit rules.", with: "Follow the kit rules, edited.")
+        XCTAssertNotEqual(edited, applied)
+        try env.write(edited, env.claudeMD)
+        let repaired = try await runOnLane(denying, env, lists(#"host.config.repair{ ids = { "rules" } }"#))
+        XCTAssertEqual(repaired as NSDictionary, none)
+        XCTAssertEqual(env.read(env.claudeMD), edited, "the edit is still in the file")
+        XCTAssertEqual(deny.seen.count, 2, "both calls asked")
+        // granted: unchanged
+        let granted = try await runOnLane(MCHostServices(env.mc), env, lists(#"host.config.repair{ ids = { "rules" } }"#))
+        XCTAssertEqual(granted as NSDictionary, ["status": "done", "applied": "rules", "removed": "", "pieces": 1] as NSDictionary)
+        XCTAssertEqual(env.read(env.claudeMD), applied)
+    }
+
+    /// QA #743 F1, pinned as it was: a cancel after one round landed lists exactly that round.
+    func test12DenyAfterALandedRoundListsOnlyTheLandedPieces() async throws {
+        let env = makeMCEnv()
+        try env.write("# mine\n", env.claudeMD)
+        try env.write("{\n  \"theme\": \"dark\"\n}\n", env.settings)
+        let consent = MCRecordingConsent(false, script: [true])
+        let mc = ManagedConfig(roots: env.mc.roots, consent: consent, writer: env.writer)
+        let settings = env.settings
+        // CLAUDE.md lands, then settings.json changes under the write: the replan asks again, and is cancelled
+        env.writer.interleave { target, n in
+            if target.lastPathComponent == "settings.json", n == 1 { try? Data("{\n  \"theme\": \"light\"\n}\n".utf8).write(to: settings) }
+        }
+        let hook = #"{ id = "pre", kind = "json", target = "claude:settings.json", path = { "hooks", "PreToolUse" }, op = "append", value = { matcher = "Bash", hooks = { { type = "command", command = "kit-run pre" } } } }"#
+        let r = try await runOnLane(MCHostServices(mc), env, lists("host.config.apply{ pieces = { \(blockPiece), \(hook) } }"))
+        env.writer.interleave(nil)
+        XCTAssertEqual(r as NSDictionary, ["status": "denied", "applied": "rules", "removed": "", "pieces": 1] as NSDictionary)
+        XCTAssertEqual(consent.seen.count, 2)
+        XCTAssertTrue(try XCTUnwrap(env.read(env.claudeMD)).contains("prosper:\(Self.extID):rules"))
+        XCTAssertEqual(env.read(env.settings), "{\n  \"theme\": \"light\"\n}\n", "the cancelled piece is not in the file")
     }
 
     /// The one test that drives the whole path: the Lua call on the extension's async lane, the
