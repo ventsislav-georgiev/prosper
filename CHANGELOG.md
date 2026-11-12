@@ -342,6 +342,9 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal: the phone terminal no longer waits a network round trip between the pieces of a
   screen update. The Mac session server now sends every small update at once (TCP no-delay)
   (#888).
+- Live session status: when a phone's sign-in expires, its Live Activity card is ended within a
+  minute and it gets no more session alerts or updates. The server's every-minute check also reads
+  far less of its database (#1001).
 
 ## v2.174.0
 

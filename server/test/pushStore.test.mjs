@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { sendApns, collapseId, LA_MAX_AGE_S, ROTATE_LEAD_S } from "../src/pushLogic.mjs";
+import { sendApns, collapseId, LA_MAX_AGE_S, ROTATE_LEAD_S, RATE_PER_MIN } from "../src/pushLogic.mjs";
 import {
   putToken as putTokenAs,
   deleteTokens,
@@ -65,7 +65,7 @@ const putToken = (deps, email, body, hash = HASH[email]) => putTokenAs(deps, ema
 
 function setup() {
   const raw = new DatabaseSync(":memory:");
-  for (const f of ["0001_init.sql", "0006_push.sql", "0007_push_harden.sql", "0008_push_mode.sql"]) {
+  for (const f of ["0001_init.sql", "0006_push.sql", "0007_push_harden.sql", "0008_push_mode.sql", "0009_push_kind_index.sql"]) {
     raw.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"));
   }
   raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC, "Studio");
@@ -1792,4 +1792,186 @@ test("#770 budget: a paced post over 10 cards (5 live sent, 5 saver deferred, a 
   const rows = t.rows(`SELECT token, due_at, fails FROM push_tokens WHERE kind = 'la_update' ORDER BY token`);
   assert.deepEqual(rows[0], { token: tok("0"), due_at: t.clock.now, fails: 1 }, "the failed live card is due next cron");
   assert.deepEqual(rows.filter((r) => r.due_at !== null).map((r) => r.token[0]), ["0", "1", "3", "5", "7", "9"]);
+});
+
+// ---- #1001 (QA #357, QA #403) -------------------------------------------------
+
+test("#1001 QA #357: the cron's 8 h purge and its read of rotated cards search idx_push_tokens_kind, never scan push_tokens", async () => {
+  const t = setup();
+  const db = t.deps.db;
+  const seen = [];
+  t.deps.db = { ...db, prepare: (sql) => (seen.push(sql), db.prepare(sql)) };
+  await runCron(t.deps);
+  const plan = (marker) => {
+    const sql = seen.find((s) => s.includes(marker));
+    assert.ok(sql, marker);
+    return t.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...(sql.includes("?2") ? [0, 0] : [0])).map((r) => r.detail);
+  };
+  // The purge reads every la_update row (a card of an expired session goes too), never the rest.
+  const purge = plan("SET kind = 'la_expired'");
+  assert.ok(purge.some((d) => /^SEARCH push_tokens USING (COVERING )?INDEX idx_push_tokens_kind \(kind=\?/.test(d)), purge.join(" | "));
+  assert.ok(!purge.some((d) => d.startsWith("SCAN")), purge.join(" | "));
+  const read = plan("WHERE e.kind = 'la_expired'");
+  assert.ok(read.some((d) => /^SEARCH e USING (COVERING )?INDEX idx_push_tokens_kind \(kind=\?\)/.test(d)), read.join(" | "));
+  assert.ok(!read.some((d) => d.startsWith("SCAN")), read.join(" | "));
+});
+
+test("#1001 QA #357: two stale posts that load the same row before either writes both count", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 5 });
+  t.clock.now += 60; // a new window: both stale posts below load a count of 0
+  interpose(t, "UPDATE push_macs SET rl_", () => postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 }));
+  assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 3 })).status, 204);
+  assert.deepEqual(t.rows(`SELECT seq, rl_window, rl_count FROM push_macs`), [{ seq: 5, rl_window: Math.floor(t.clock.now / 60), rl_count: 2 }]);
+});
+
+test("#1001 QA #357: a stale post landing between an accepted post's load and its upsert still counts", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 5 }); // count 1 in this window
+  interpose(t, "INSERT INTO push_macs", () => postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 })); // bumps no rev
+  assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 6 })).status, 204);
+  assert.deepEqual(t.rows(`SELECT seq, rl_count, rev FROM push_macs`), [{ seq: 6, rl_count: 3, rev: 2 }], "upsert went through first time");
+});
+
+// Alice's phones split across two sessions, so each row kind read for a push has one row under
+// the session that expires (HASH[ALICE]) and one under a live one (H2):
+// PHONE: alert 1, la_start 2 under HASH[ALICE], its card on MAC (3) under H2;
+// PHONE2: alert 5, la_start 6 under H2, its card on MAC (7) under HASH[ALICE].
+// d: expires_at - now. requireSession accepts expires_at = now, so d = 0 is live too.
+test("#1001 QA #357: a session 1 s past expiry gets no push from a post and no start from the cron's restart; at or before expiry, it does", async () => {
+  for (const d of [1, 0, -1]) {
+    const live = d >= 0;
+    const t = setup();
+    t.raw.prepare(`INSERT INTO sessions VALUES (?, ?, 0, 0, NULL)`).run(H2, ALICE);
+    t.raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC2, "Other");
+    const expiry = () =>
+      t.raw.prepare(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`).run(t.clock.now + d, HASH[ALICE]);
+    await registerPhone(t, PHONE, "1");
+    await putToken(t.deps, ALICE, alertBody(PHONE2, "5"), H2);
+    await putToken(t.deps, ALICE, startBody(PHONE2, "6"), H2);
+    await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+    await putToken(t.deps, ALICE, cardBody(PHONE, MAC, "3"), H2);
+    await putToken(t.deps, ALICE, cardBody(PHONE2, MAC, "7"));
+    await t.settle();
+    t.takeCalls();
+
+    t.clock.now += 120;
+    expiry();
+    await postSessions(t.deps, ALICE, sessions(2, [S("a", "blocked")])); // card updates + alerts
+    await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 1, sessions: [S("b", "working")] }); // push-to-start
+    await t.settle();
+    const post = [[tok("3"), "update"], [tok("5"), "alert"], [tok("6"), "start"]];
+    if (live) post.push([tok("1"), "alert"], [tok("2"), "start"], [tok("7"), "update"]);
+    assert.deepEqual(sent(t).sort(), post.sort(), `post, d: ${d}`);
+
+    t.clock.now += 60; // past START_GAP_S
+    expire(t);
+    expiry();
+    await runCron(t.deps);
+    // Both cards end either way; an expired session's la_start (2) starts nothing. PHONE2's la_start
+    // is a live session's, so its new card starts.
+    const cron = [[tok("3"), "end"], [tok("7"), "end"], [tok("6"), "start"]];
+    if (live) cron.push([tok("2"), "start"]);
+    assert.deepEqual(sent(t).sort(), cron.sort(), `cron restart, d: ${d}`);
+    assert.deepEqual(t.rows(`SELECT device_id FROM push_tokens WHERE kind IN ('la_update', 'la_expired')`), [], "both rotated cards dropped");
+  }
+});
+
+// R1: PHONE's alert 1, la_start 2 and its card on MAC (3) under HASH[ALICE]; its card on MAC2 (4) under H2.
+// Both Macs working, 120 s on (past START_GAP_S) with heartbeats; the MAC card has an update due.
+async function expiringPhone(t, d) {
+  t.raw.prepare(`INSERT INTO sessions VALUES (?, ?, 0, 0, NULL)`).run(H2, ALICE);
+  t.raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC2, "Other");
+  await registerPhone(t, PHONE, "1");
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 1, sessions: [S("b", "working")] });
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC, "3"));
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC2, "4"), H2);
+  await t.settle();
+  t.clock.now += 120;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 2 });
+  await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 2 });
+  t.takeCalls();
+  t.raw.prepare(`UPDATE push_tokens SET due_at = ? WHERE token = ?`).run(t.clock.now, tok("3"));
+  t.raw.prepare(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`).run(t.clock.now + d, HASH[ALICE]);
+}
+const cardRows = (t) => t.rows(`SELECT kind, token FROM push_tokens WHERE kind IN ('la_update', 'la_expired') ORDER BY token`);
+
+test("#1001 R1: a card whose session expired 1 s ago is ended by the next cron, once, and nothing starts; at or before expiry it gets its update", async () => {
+  for (const d of [-1, 0, 1]) {
+    const t = setup();
+    await expiringPhone(t, d);
+    await runCron(t.deps);
+    const calls = t.takeCalls();
+    if (d < 0) {
+      assert.deepEqual(calls.map((c) => [c.token, c.body.aps.event]), [[tok("3"), "end"]], "one end, no start");
+      assert.equal(calls[0].body.aps["dismissal-date"], t.clock.now);
+      assert.deepEqual(cardRows(t), [{ kind: "la_update", token: tok("4") }], "its row is gone; the live session's card is untouched");
+    } else {
+      assert.deepEqual(calls.map((c) => [c.token, c.body.aps.event]), [[tok("3"), "update"]], `d: ${d}: the due update`);
+      assert.deepEqual(cardRows(t), [{ kind: "la_update", token: tok("3") }, { kind: "la_update", token: tok("4") }], `d: ${d}`);
+    }
+    t.clock.now += 60;
+    await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 3 });
+    await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 3 });
+    t.raw.prepare(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`).run(t.clock.now + d, HASH[ALICE]); // same distance
+    await runCron(t.deps);
+    assert.deepEqual(sent(t), [], `d: ${d}: the second cron sends nothing`);
+  }
+});
+
+test("#1001 R1: an expired session's card the budget defers is ended on a later cron, not lost", async () => {
+  const t = setup();
+  await expiringPhone(t, -1);
+  t.deps.budget = 1; // a restart that only ends costs 2 (its end + the drop batch)
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), []);
+  assert.deepEqual(cardRows(t), [{ kind: "la_expired", token: tok("3") }, { kind: "la_update", token: tok("4") }], "waits as la_expired");
+  delete t.deps.budget;
+  t.clock.now += 60;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 3 });
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), [[tok("3"), "end"]]);
+  assert.deepEqual(cardRows(t), [{ kind: "la_update", token: tok("4") }]);
+});
+
+test("#1001 R3: the post counter rolls over per minute window, on an accepted post and on a stale one", async () => {
+  const t = setup();
+  const win = () => Math.floor(t.clock.now / 60);
+  const counter = () => t.rows(`SELECT rl_window, rl_count FROM push_macs`)[0];
+  let seq = 0;
+  const fill = async (n) => {
+    for (let i = 0; i < n; i++) assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: ++seq })).status, 204, `#${seq}`);
+    assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: ++seq })).status, 429);
+  };
+  await fill(RATE_PER_MIN);
+  t.clock.now += 60;
+  assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: ++seq })).status, 204);
+  assert.deepEqual(counter(), { rl_window: win(), rl_count: 1 }, "an accepted post opens the new window at 1");
+  await fill(RATE_PER_MIN - 1);
+  t.clock.now += 60;
+  assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 1 })).status, 204); // stale
+  assert.deepEqual(counter(), { rl_window: win(), rl_count: 1 }, "a stale post opens the new window at 1");
+  await fill(RATE_PER_MIN - 1);
+});
+
+// QA #403 D6: activity ids are per phone in practice, so only two phones posting the same one
+// show what the device_id clauses decide.
+const sameActivity = (c) => ({ ...cardBody(PHONE2, MAC, c), activity_id: cardBody(PHONE, MAC).activity_id });
+
+test("#1001 QA #403: ROTATING is per phone: another phone's card of the same activity id is stored while this one's rotation waits", async () => {
+  const t = setup();
+  await waiting(t); // PHONE's card (3) is la_expired, waiting for its restart
+  await putToken(t.deps, ALICE, sameActivity("8"));
+  await t.settle();
+  assert.deepEqual(t.rows(`SELECT device_id, token FROM push_tokens WHERE kind = 'la_update'`), [{ device_id: PHONE2, token: tok("8") }]);
+});
+
+test("#1001 QA #403: the carry is per phone: another phone's token of the same activity id stays off this one's la_expired row", async () => {
+  const t = setup();
+  await waiting(t);
+  await putToken(t.deps, ALICE, sameActivity("8"));
+  await t.settle();
+  assert.deepEqual(t.rows(`SELECT device_id, token FROM push_tokens WHERE kind = 'la_expired'`), [{ device_id: PHONE, token: tok("3") }]);
+  assert.deepEqual(sent(t), [[tok("8"), "update"]], "the other phone's card gets its catch-up");
 });

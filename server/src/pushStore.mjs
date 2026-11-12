@@ -48,6 +48,12 @@ const MAC_COLS =
 // Binds ?1 email, ?2 device_id, ?4 activity_id: that activity's card is being rotated out.
 const ROTATING = `EXISTS (SELECT 1 FROM push_tokens x WHERE x.email = ?1 AND x.device_id = ?2
   AND x.kind = 'la_expired' AND x.activity_id = ?4)`;
+// QA #357: the row's session has expired (expires_at < now: requireSession still accepts
+// expires_at = now). Such a row gets no push; the cron rotates its card out, which ends it; the
+// 03:00 cleanup deletes the rest. A row with no sessions row at all (pre-0007 '' rows, gone at
+// 0007's first cleanup) is not expired. ?n binds now.
+const EXPIRED = (t, n) => `EXISTS (SELECT 1 FROM sessions z WHERE z.token_hash = ${t}.token_hash AND z.expires_at < ?${n})`;
+const LIVE = (t, n) => `NOT ${EXPIRED(t, n)}`;
 
 /** The Mac's display name, or null when mac_id is not an activated device of `email`. */
 async function macName(db, email, macId) {
@@ -78,23 +84,23 @@ async function loadMac(db, email, macId) {
   return row ? { mac: fromRow(row), rev: row.rev, rl_window: row.rl_window, rl_count: row.rl_count } : null;
 }
 
-async function tokens(db, where, ...binds) {
+async function tokens(db, now, where, ...binds) {
   const { results } = await db
-    .prepare(`SELECT ${CARD_COLS} FROM push_tokens WHERE email = ?1 AND ${where}`)
-    .bind(...binds)
+    .prepare(`SELECT ${CARD_COLS} FROM push_tokens WHERE email = ?1 AND ${where} AND ${LIVE("push_tokens", binds.length + 1)}`)
+    .bind(...binds, now)
     .all();
   return results;
 }
 
 /** Push-to-start targets: la_start tokens of phones holding no la_update for this Mac. */
-async function startTokens(db, email, macId) {
+async function startTokens(db, email, macId, now) {
   const { results } = await db
     .prepare(
       `SELECT ${TOKEN_COLS} FROM push_tokens s WHERE s.email = ?1 AND s.kind = 'la_start'
        AND NOT EXISTS (SELECT 1 FROM push_tokens u WHERE u.email = s.email
-         AND u.device_id = s.device_id AND u.kind = 'la_update' AND u.mac_id = ?2)`,
+         AND u.device_id = s.device_id AND u.kind = 'la_update' AND u.mac_id = ?2) AND ${LIVE("s", 3)}`,
     )
-    .bind(email, macId)
+    .bind(email, macId, now)
     .all();
   return results;
 }
@@ -185,7 +191,7 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
   const pushes = [];
   // A flush takes only the cards with an update due.
   const where = push.flush ? `kind = 'la_update' AND mac_id = ?2 AND due_at <= ?3` : `kind = 'la_update' AND mac_id = ?2`;
-  const la = push.end || push.update ? await tokens(db, where, email, macId, ...(push.flush ? [now] : [])) : [];
+  const la = push.end || push.update ? await tokens(db, now, where, email, macId, ...(push.flush ? [now] : [])) : [];
   const cards = push.end ? la : la.filter((row) => sendNow(row, push, now));
   const deferred = push.end ? [] : la.filter((row) => !cards.includes(row));
   for (const row of cards) {
@@ -197,7 +203,7 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
     );
   }
   if (push.start) {
-    for (const row of await startTokens(db, email, macId)) {
+    for (const row of await startTokens(db, email, macId, now)) {
       pushes.push(laPush(row, push.priority, startPayload(cs, now, macId, name)));
     }
   }
@@ -205,7 +211,7 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
     // One alert per phone per post, whatever the number of sessions entering blocked.
     const payload = alertPayload(macId, name, push.alerts);
     const id = await collapseId(macId, push.alerts.length > 1 ? undefined : push.alerts[0].name);
-    for (const row of await tokens(db, `kind = 'alert'`, email)) {
+    for (const row of await tokens(db, now, `kind = 'alert'`, email)) {
       pushes.push({ row, pushType: "alert", priority: 10, payload, collapseId: id });
     }
   }
@@ -417,15 +423,20 @@ export async function postSessions(deps, email, body) {
     const r = reduceSessions(stored?.mac ?? null, v, now);
     if (!r) {
       // Stale seq: ignored, but it still counts against the rate limit. The counter
-      // alone is not rev-guarded: a lost increment is harmless, and bumping rev here
-      // would let a stream of stale posts starve the cron's lapse of this Mac.
+      // alone is not rev-guarded (bumping rev here would let a stream of stale posts
+      // starve the cron's lapse of this Mac); it is incremented in SQL, so two
+      // concurrent posts both count (QA #357).
       await db
-        .prepare(`UPDATE push_macs SET rl_window = ?3, rl_count = ?4 WHERE email = ?1 AND mac_id = ?2`)
-        .bind(email, v.mac_id, win, count + 1)
+        .prepare(
+          `UPDATE push_macs SET rl_count = CASE WHEN rl_window = ?3 THEN rl_count + 1 ELSE 1 END, rl_window = ?3
+           WHERE email = ?1 AND mac_id = ?2`,
+        )
+        .bind(email, v.mac_id, win)
         .run();
       return NO_CONTENT;
     }
     const m = r.mac;
+    // rl_count counts in SQL: a stale post's increment bumps no rev, so the guard below does not see it.
     const res = await db
       .prepare(
         `INSERT INTO push_macs (email, mac_id, seq, last_seen, online, snapshot, last_push_at,
@@ -435,7 +446,8 @@ export async function postSessions(deps, email, body) {
            seq = excluded.seq, last_seen = excluded.last_seen, online = excluded.online,
            snapshot = excluded.snapshot, last_push_at = excluded.last_push_at,
            last_alert = excluded.last_alert, idle_since = excluded.idle_since,
-           started_at = excluded.started_at, rl_window = excluded.rl_window, rl_count = excluded.rl_count,
+           started_at = excluded.started_at, rl_window = excluded.rl_window,
+           rl_count = CASE WHEN push_macs.rl_window = excluded.rl_window THEN push_macs.rl_count + 1 ELSE 1 END,
            blocked = excluded.blocked, rev = push_macs.rev + 1
          WHERE push_macs.rev = ?14`,
       )
@@ -477,11 +489,16 @@ export async function runCron(deps) {
   // card) and stays as la_expired until a restart step has ended the old card and,
   // where the Mac still wants one, push-started a new one; a restart the budget
   // defers is never lost.
+  // A card whose session has expired is rotated out the same way, so the restart ends it;
+  // its la_start is not read (LIVE on s), so nothing starts again on it.
   // One batch: the purge and the read of every expired card (one subrequest).
   const [, { results: expired }] = await db.batch([
     db
-      .prepare(`UPDATE OR REPLACE push_tokens SET kind = 'la_expired' WHERE kind = 'la_update' AND created_at <= ?1`)
-      .bind(now - (LA_MAX_AGE_S - ROTATE_LEAD_S)),
+      .prepare(
+        `UPDATE OR REPLACE push_tokens SET kind = 'la_expired'
+         WHERE kind = 'la_update' AND (created_at <= ?1 OR ${EXPIRED("push_tokens", 2)})`,
+      )
+      .bind(now - (LA_MAX_AGE_S - ROTATE_LEAD_S), now),
     db.prepare(
       `SELECT e.email, e.device_id, e.activity_id, e.token, e.env, e.mac_id, e.created_at,
          s.token AS start_token, s.env AS start_env, m.online, m.last_seen, m.snapshot, m.started_at,
@@ -489,11 +506,11 @@ export async function runCron(deps) {
          EXISTS (SELECT 1 FROM push_tokens u WHERE u.email = e.email AND u.device_id = e.device_id
            AND u.kind = 'la_update' AND u.mac_id = e.mac_id AND u.activity_id != e.activity_id) AS has_card
        FROM push_tokens e
-       LEFT JOIN push_tokens s ON s.email = e.email AND s.device_id = e.device_id AND s.kind = 'la_start'
+       LEFT JOIN push_tokens s ON s.email = e.email AND s.device_id = e.device_id AND s.kind = 'la_start' AND ${LIVE("s", 1)}
        LEFT JOIN push_macs m ON m.email = e.email AND m.mac_id = e.mac_id
        LEFT JOIN devices d ON d.email = e.email AND d.device_id = e.mac_id
        WHERE e.kind = 'la_expired'`,
-    ),
+    ).bind(now),
   ]);
   const { results } = await db
     .prepare(
