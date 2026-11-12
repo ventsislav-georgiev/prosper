@@ -67,6 +67,25 @@ final class DchIdShapedNameTests: XCTestCase {
         }
     }
 
+    /// #863: dch 1.46.1 serve.c:991-996 runs name_ok before :998, so a name padded with \t-\r (a control
+    /// to cp_ctl) gets "invalid session name"; one padded with spaces passes name_ok and gets :1001's text.
+    func testAPaddedIdShapedNameGetsNameOksRefusalFirst() {
+        let invalid = DchControlOps.error("invalid session name")
+        for type in [DchFrame.attach, DchFrame.create] {
+            for name in ["\tm0123456789abcdef\r", "m0123456789abcdef\n", "\u{0B}M0123456789ABCDEF", "\u{0C}m0123456789abcdef "] {
+                let (conn, queue, calls) = rig()
+                queue.sync { conn.ingest(DchFrame.encode(type, json: ["name": name, "cols": 80, "rows": 24])) }
+                XCTAssertEqual(frames(calls), [invalid], "0x\(String(type, radix: 16)) \(name.debugDescription)")
+                XCTAssertEqual(calls.lock.withLock { calls.spawned }, [], "no dch spawned for \(name.debugDescription)")
+            }
+            for name in [" m0123456789abcdef", "m0123456789abcdef  "] {
+                let (conn, queue, calls) = rig()
+                queue.sync { conn.ingest(DchFrame.encode(type, json: ["name": name, "cols": 80, "rows": 24])) }
+                XCTAssertEqual(frames(calls), [Self.refusalFrame], "spaces pass name_ok: \(name.debugDescription)")
+            }
+        }
+    }
+
     func testAnOrdinaryNameStillSpawns() {
         for type in [DchFrame.attach, DchFrame.create] {
             for name in ["work", "m0123456789abcde", "m0123456789abcdef0"] {
@@ -111,6 +130,21 @@ final class DchIdShapedNameTests: XCTestCase {
                 XCTAssertEqual(calls.lock.withLock { calls.renamed }, [], "no dch -m for \(payload)")
             }
         }
+    }
+
+    /// #863: dch 1.46.1 serve.c:1154-1158 refuses a name starting with "-" before :1159's alias check.
+    func testADashNameWithAnIdShapedAliasGetsTheDashRefusal() {
+        let dash = DchControlOps.error(DchControlOps.dashNameRefusal)
+        for alias in ["m0123456789abcdef", "M0123456789ABCDEF\t"] {
+            let (conn, queue, calls) = rig(listed: ["-work"])
+            queue.sync { conn.ingest(DchFrame.encode(DchFrame.rename, json: ["name": "-work", "alias": alias])) }
+            XCTAssertEqual(frames(calls), [dash], alias.debugDescription)
+            XCTAssertEqual(calls.lock.withLock { calls.renamed }, [])
+        }
+        // Text only: a dash name with any other alias still runs dch -m (remote-frames.md, 0x06).
+        let (conn, queue, calls) = rig()
+        queue.sync { conn.ingest(DchFrame.encode(DchFrame.rename, json: ["name": "-work", "alias": "Work"])) }
+        XCTAssertEqual(calls.lock.withLock { calls.renamed }, [["-work", "Work"]])
     }
 
     func testAnOrdinaryAliasAndAnIdShapedNameStillRename() {

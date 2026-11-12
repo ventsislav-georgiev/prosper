@@ -108,12 +108,19 @@ enum DchCtl {
     /// reads a:b as host:name and dials on with this Mac's identity). The leading "-" has 0x04's message.
     static func nameRefusal(_ n: String) -> String? {
         if n.hasPrefix("-") { return DchControlOps.dashNameRefusal }
-        let bad = n.unicodeScalars.contains { c in
+        if !nameOK(n) || n == "serve" { return invalidName }
+        return n.contains(":") ? localOnly : nil
+    }
+
+    static let invalidName = "invalid session name"
+
+    /// dch's name_ok (rframe.c:433@v1.46.1): non-empty, at most 255 bytes, no leading "-", no "/",
+    /// no control (cp_ctl, rframe.c:73: C0, DEL, C1, bidi overrides).
+    static func nameOK(_ n: String) -> Bool {
+        !n.isEmpty && n.utf8.count <= 255 && !n.hasPrefix("-") && !n.unicodeScalars.contains { c in
             let v = c.value
             return v == 0x2f || v < 0x20 || (0x7f..<0xa0).contains(v) || (0x202a...0x202e).contains(v) || (0x2066...0x2069).contains(v)
         }
-        if n.isEmpty || n.utf8.count > 255 || bad || n == "serve" { return "invalid session name" }
-        return n.contains(":") ? localOnly : nil
     }
 
     private static func shown(_ w: String) -> String { w.count > 64 ? String(w.prefix(64)) + "…" : w }

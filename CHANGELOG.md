@@ -155,6 +155,8 @@ tag from the now-released section and put it on the new top draft.
   Claude session id (`m` + 16 hex digits, any case, padding trimmed) with dch serve's own "name
   looks like a session_id", before running dch. A listed older session of that name still attaches
   by its exact name (#850).
+- Remote Terminal: a rename whose session name starts with "-", and an attach to a session-id-shaped
+  name padded with tabs or line breaks, are refused with the same message dch serve gives (#863).
 - Ships dch 1.54.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);

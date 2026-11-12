@@ -117,6 +117,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertTrue(calls.contains(["-k", "golden-776-16"]), "16's cleanup: \(calls)")
         XCTAssertFalse(calls.contains { $0.contains("-golden-776") }, "13: a dash name never reaches dch: \(calls)")
         XCTAssertFalse(calls.contains { $0.contains("golden-850-no-such-session") }, "32: an id-shaped alias never reaches dch: \(calls)")
+        XCTAssertFalse(calls.contains { $0.contains("-golden-863") }, "33: a dash name with an id-shaped alias never reaches dch: \(calls)")
     }
 
     /// The runner dch CI uses, against the same server: it must read the fixtures as this test does.
@@ -138,7 +139,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)"])
         XCTAssertEqual(status, 0, text)
         for id in ["07-kill-unknown-name", "08-rename-unknown-name", "12-attach-redraws", "14-attach-twice-ignored",
-                   "15-session-exit-closes", "16-create-exit-closes", "18-ctl-read-round-trip"] + Self.cancelSet {
+                   "15-session-exit-closes", "16-create-exit-closes", "18-ctl-read-round-trip",
+                   "33-rename-dash-id-shaped-refused", "34-attach-padded-id-shaped-refused"] + Self.cancelSet {
             XCTAssertTrue(text.contains("SKIP \(id): mutating"), text)
         }
         XCTAssertTrue(text.contains("PASS 13-kill-dash-refused"), text)

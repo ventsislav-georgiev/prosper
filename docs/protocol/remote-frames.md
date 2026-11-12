@@ -384,7 +384,10 @@ The connection then carries one session:
   space and `\t`-`\r`) that is not in the 0x03 list: 0x13 `name looks like a session_id`, nothing
   starts, the connection stays open (both servers, dch 1.46.1; Prosper #850). A listed session of
   that name (an older one) still attaches by its exact listed name. 0x06 refuses such an `alias` the
-  same way and runs no `dch -m`.
+  same way and runs no `dch -m`. The checks before it come first (dch 1.46.1 serve.c:991-996 and
+  :1154-1158, Prosper #863): such a name padded with a control (`\t`-`\r`), which `name_ok` refuses,
+  gets 0x13 `invalid session name` (padded with spaces it gets the session_id text), and a 0x06
+  whose `name` starts with `-` and whose alias is id-shaped gets the `-` message below.
 - A failed spawn (Prosper: `forkpty` fails, the Mac is out of ptys or processes): 0x13
   `{"message": "Could not start the session: ..."}`, then close; the 0x13 is sent as the last
   frame before the FIN. Frames the client sent after the attach on that connection are
@@ -405,7 +408,8 @@ The connection then carries one session:
 - 0x06 rename `{"name": string, "alias": string}` → 0x14 (empty). `alias` `""` (or missing)
   clears it. Always 0x14 on `dch serve`, as kill. A name starting with `-`: `dch serve` answers 0x13 as for
   kill; Prosper answers 0x14, since it runs `dch -m <name> <alias>` and `-m` takes the next two
-  arguments verbatim, so such a name is harmless there. Prosper (#811) answers 0x13 when
+  arguments verbatim, so such a name is harmless there; with an id-shaped `alias`, which both
+  servers refuse, Prosper answers `dch serve`'s `-` message (#863). Prosper (#811) answers 0x13 when
   `dch -m` exits non-zero or cannot run (`Couldn't rename <name>: <dch's first stderr line>`,
   for example an unknown or just-exited session); a malformed payload still answers 0x14.
 - `dch serve` keeps this in 1.0 (Q2): failure is not reported, and 0x13 is only for a name
@@ -664,7 +668,7 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31, 32: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-34: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
@@ -674,7 +678,9 @@ and each cleanup kills its own; 15 ends it by typing `exit` and ^D into it), 16 
 create of `golden-776-16`, killed by its cleanup), and 18 (its setup creates `golden-838-18`,
 then reads it with ctl `--read`; its cleanup kills it), and 26-29 (each setup creates its own
 `golden-841-<n>` and each cleanup kills it), and 31 and 32 (an id-shaped attach name and rename
-alias: refused by a conformant server, but one without the check would run dch). Run `--mutating` only against a test server, never a
+alias: refused by a conformant server, but one without the check would run dch), and 33 and 34
+(#863: a dash name with an id-shaped alias gets the `-` message; an id-shaped attach name padded
+with `\t` and `\r` gets `invalid session name`; one without the checks would run dch). Run `--mutating` only against a test server, never a
 host with sessions someone uses.
 
 17-25 are the `ctl` set (#838), each `requires_op` `ctl`: 17 a server listing `ctl` speaks proto

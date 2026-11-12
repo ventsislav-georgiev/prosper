@@ -1,0 +1,16 @@
+{
+  "id": "34-attach-padded-id-shaped-refused",
+  "about": "0x01 with a session_id-shaped name padded with \\t and \\r answers exactly this 0x13 and starts nothing: dch 1.46.1 serve.c:991-996 runs name_ok (rframe.c:433, cp_ctl) before the id-shaped check (:998). Prosper #863. Mutating: a server without either check would start the session.",
+  "mutating": true,
+  "steps": [
+    {
+      "send": "01 00000034 7b226e616d65223a225c746d303030303030303030303030303836335c72222c22636f6c73223a38302c22726f7773223a32347d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a22696e76616c69642073657373696f6e206e616d65227d"
+      }
+    }
+  ]
+}

@@ -417,8 +417,11 @@ final class DchConnection: @unchecked Sendable {
         case DchFrame.rename:
             let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
             // #850: dch serve.c:1159 refuses an id-shaped alias before running dch, whatever the name.
+            // #863: serve.c:1154-1158@v1.46.1 checks a name starting with "-" first, so such a pair gets
+            // DASH_MSG. Prosper still runs dch -m for a dash name with any other alias (remote-frames.md).
             if let a = o?["alias"] as? String, DchControlOps.idShaped(a) {
-                return send(DchControlOps.error(DchControlOps.idShapedRefusal))
+                let dash = (o?["name"] as? String)?.hasPrefix("-") == true
+                return send(DchControlOps.error(dash ? DchControlOps.dashNameRefusal : DchControlOps.idShapedRefusal))
             }
             if let o, let n = o["name"] as? String,
                let message = rename(n, o["alias"] as? String ?? "") {
@@ -693,8 +696,10 @@ final class DchConnection: @unchecked Sendable {
         let name = o["name"] as? String
         // #850: dch serve.c:998: a new session never takes a session_id's shape; a listed one (legacy)
         // still attaches by its exact listed name. An unavailable list ([] here, -1 there) refuses.
+        // #863: serve.c:991-996@v1.46.1 runs name_ok first, so an id-shaped name padded with \t-\r (a
+        // control) gets "invalid session name"; padded with spaces it passes name_ok and gets :1001's text.
         if let name, DchControlOps.idShaped(name), !listSessions().contains(where: { $0.name == name }) {
-            return send(DchControlOps.error(DchControlOps.idShapedRefusal))
+            return send(DchControlOps.error(DchCtl.nameOK(name) ? DchControlOps.idShapedRefusal : DchCtl.invalidName))
         }
         sessionName = name
         let command = (o["command"] as? [String]) ?? []
