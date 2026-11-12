@@ -191,7 +191,7 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal ctl: `--run` gets the 660 s timeout dch serve gives it, a timeout or output cap
   ends dch 2 s after asking it to stop (was 1 s), and turning Remote Terminal off ends a running
   ctl within 2 s, an agent verb's too (#852).
-- Ships dch 1.55.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.57.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -266,6 +266,12 @@ tag from the now-released section and put it on the new top draft.
   separator, and dch's JSON lines (the session list, History, the verbs' results) now also escape
   the Arabic letter mark and the two separators. dch's picker keeps the selection of another
   host's row apart from a local row of the same name.
+- dch 1.55.0 to 1.57.0: `dch --xray <n>` with no `--json` opens X-ray as a view in your terminal,
+  for a session on another host too (`dch --xray host:name`), and dch's picker opens it with X. In a
+  `dch` attach in your own terminal, the detach key followed by x opens the view instead of
+  detaching; Prosper's own terminal still passes every key to the session. Each `dch --revive --json`
+  result line ends with a "running" key. A `dch serve` you run by hand lets go of a device that
+  vanished without closing its connection after about 30 s. Prosper does not read X-ray yet.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
