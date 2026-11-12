@@ -742,8 +742,10 @@ extension AgentIsland {
     /// history record's; resume flags stripped. nil: no source (New session runs
     /// `claude` and nothing is stored).
     /// #847 D7.3: and without a recorded `--name` (a record of a named spawn carries one).
+    /// #867: and without Claude's one-shot prompt, dch's way for that record (strippingPrompt's `agent`).
     static func inferredCommand(live: [DchHistoryRecord], history: [DchHistoryRecord]) -> [String]? {
-        (live + history).lazy.compactMap(recordCommand).first.map { strippingName(strippingResume($0)) }
+        (live + history).lazy.compactMap { r in recordCommand(r).map { strippingResume($0, agent: r.agent?.kind == "claude") } }
+            .first.map(strippingName)
     }
 
     /// #847: Claude Code 2.1.318's commands and aliases (dch v1.50.1 cargv.c:92-97 csubs): as the
@@ -957,12 +959,57 @@ extension AgentIsland {
         st.st_mode & S_IFMT == type && st.st_uid == getuid() && st.st_mode & 0o022 == 0
     }
 
+    /// #867: dch's claude_runs (v1.50.1 cargv.c:133-172): claude is the program run, argv[0], or after `env`
+    /// with only NAME=value words and the value-less env flags between. A `claude` anywhere else (a
+    /// directory, an option value, an ssh or sh -c argument) belongs to another command (dch #141).
+    static func claudeRuns(_ argv: [String], tok: Int) -> Bool {
+        if tok == 0 { return true }
+        guard (argv[0] as NSString).lastPathComponent == "env" else { return false }
+        return argv[1..<tok].allSatisfy { a in
+            let name = a.prefix { $0 == "_" || $0.isASCII && ($0.isLetter || $0.isNumber) }   // NAME=value
+            return name.first.map { !$0.isNumber } == true && a.dropFirst(name.count).first == "="
+                || ["-i", "-0", "-v", "--ignore-environment", "--null", "--debug"].contains(a)
+        }
+    }
+
+    /// #867: dch_claude_strip (dch v1.50.1 cargv.c:174-249), which dch runs on every record it reads
+    /// (hrec_strip, dch.c:8382-8400, called at :8469 and :8473) and on every relaunch (resume_argv, :5891):
+    /// Claude's one-shot prompt out, so a record a <=1.48 master wrote, or a 1.50.1 live record written before
+    /// its agent was seen (QA #715), never hands it to New session. After the claude token every operand goes,
+    /// and a bare `--` with everything after it; every option and its values stay (claudeArgs). The whole
+    /// argv stays when there is no claude token (another agent), claude does not run (claudeRuns) unless
+    /// `agent` (dch saw Claude run: hrec_strip's agent.kind "claude", cargv.c:184-185), the first operand is a
+    /// command (:201-205), or an unknown option, not a --no-x, is followed by a non-dashed token that may be
+    /// its value (:226-233).
+    static func strippingPrompt(_ argv: [String], agent: Bool) -> [String] {
+        guard let tok = argv.firstIndex(where: { ($0 as NSString).lastPathComponent == "claude" }),
+              agent || claudeRuns(argv, tok: tok) else { return argv }
+        let args = claudeArgs(argv[(tok + 1)...])
+        var kept = Array(argv.prefix(tok + 1)), firstOperand = true
+        for (i, arg) in args.enumerated() {
+            switch arg {
+            case .operand(let a):
+                if firstOperand && claudeCommands.contains(a) { return argv }
+                firstOperand = false
+            case .option(let o, let known):
+                if !known, !o[0].hasPrefix("--no-"), i + 1 < args.count, case .operand = args[i + 1] { return argv }
+                kept += o
+            case .rest:
+                break
+            }
+        }
+        return kept
+    }
+
     /// dch's resume_argv rules, so a new session never resumes a recorded
     /// conversation a second time (only --revive may carry --resume). After the
     /// `claude` token (else after argv[0]), up to a bare `--`: --resume/-r and
     /// a next token not starting with '-'; --session-id and its next token;
     /// --resume=, --session-id=, --continue, -c, --fork-session alone.
-    static func strippingResume(_ argv: [String]) -> [String] {
+    /// #867: the one-shot prompt first, as resume_argv runs dch_claude_strip first (v1.50.1 dch.c:5891, agent 1);
+    /// a record passes its own `agent` (hrec_strip's). A <=1.48 record's prompt is never resent by New session.
+    static func strippingResume(_ argv: [String], agent: Bool = true) -> [String] {
+        let argv = strippingPrompt(argv, agent: agent)
         let tok = argv.firstIndex { ($0 as NSString).lastPathComponent == "claude" } ?? 0
         var out = Array(argv.prefix(tok + 1)), k = tok + 1
         while k < argv.count {

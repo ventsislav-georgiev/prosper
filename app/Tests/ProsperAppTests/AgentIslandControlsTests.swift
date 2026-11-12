@@ -1512,8 +1512,9 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(strip("claude --session-id --chrome"), "claude", "--session-id always takes the next token")
         XCTAssertEqual(strip("claude --resume=sid --session-id=x --chrome"), "claude --chrome", "the = forms drop as one token")
         XCTAssertEqual(strip("claude -c --continue --fork-session --model opus"), "claude --model opus", "these drop alone")
-        XCTAssertEqual(strip("claude --chrome -- --resume sid -c"), "claude --chrome -- --resume sid -c", "the prompt after -- stays")
-        XCTAssertEqual(strip("claude --resume sid -- -c"), "claude -- -c")
+        XCTAssertEqual(strip("claude --chrome -- --resume sid -c"), "claude --chrome", "#867: the prompt after -- goes, the -- too")
+        XCTAssertEqual(strip("claude --resume sid -- -c"), "claude")
+        XCTAssertEqual(strip("claude update -- --resume sid"), "claude update -- --resume sid", "#867 whole: after -- stays")
         XCTAssertEqual(strip("wrapper -c /usr/local/bin/claude --continue"), "wrapper -c /usr/local/bin/claude",
                        "only after the claude token")
         XCTAssertEqual(strip("agent --resume sid -v"), "agent -v", "no claude token: after argv[0]")
@@ -1573,6 +1574,85 @@ final class AgentIslandControlsTests: XCTestCase {
         let resumed = agentRecord("api", ended: 5, cwd: "/a", launch: ["claude"],
                                   argv: ["headroom", "wrap", "claude", "--resume", "sid", "-n", "api", "--name=x"])
         XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [resumed]), ["headroom", "wrap", "claude"])
+    }
+
+    /// #867: dch_claude_strip's rules (dch v1.50.1 cargv.c:174-249): operands and a bare -- with the rest go,
+    /// options and their values stay; no claude token, a claude that does not run (unless the agent was seen), a
+    /// command first, or an unknown option that may own the next token: the whole argv.
+    func testStrippingPromptMirrorsDchClaudeStrip() {
+        func strip(_ argv: [String], agent: Bool = false) -> [String] { AgentIsland.strippingPrompt(argv, agent: agent) }
+        XCTAssertEqual(strip(["claude", "--chrome", "--", "fix the login bug"]), ["claude", "--chrome"])
+        XCTAssertEqual(strip(["claude", "--", "-p", "x"]), ["claude"], "-- drops itself and the rest")
+        XCTAssertEqual(strip(["claude", "fix", "it", "--chrome"]), ["claude", "--chrome"], "every operand, options kept")
+        XCTAssertEqual(strip(["claude", "--name", "api", "--", "task"]), ["claude", "--name", "api"], "--name stays")
+        XCTAssertEqual(strip(["claude", "-n", "--", "task"]), ["claude", "-n", "--"], "r: the next token, whatever it is")
+        XCTAssertEqual(strip(["claude", "--model", "opus", "task"]), ["claude", "--model", "opus"])
+        XCTAssertEqual(strip(["claude", "--resume", "sid", "task"]), ["claude", "--resume", "sid"], "o: a non-dashed value")
+        XCTAssertEqual(strip(["claude", "-r", "-c", "task"]), ["claude", "-r", "-c"], "o: a dashed next is not its value")
+        for o in ["--resume", "-r", "--debug", "-w"] {
+            XCTAssertEqual(strip(["claude", o, "--model", "opus", "task"]), ["claude", o, "--model", "opus"],
+                           "\(o): a dashed next is an option of its own, the prompt still the first operand")
+            XCTAssertEqual(strip(["claude", o, "-p", "task"]), ["claude", o, "-p"])
+            XCTAssertEqual(strip(["claude", o, "feat", "task"]), ["claude", o, "feat"], "\(o): a bare next is its value")
+        }
+        XCTAssertEqual(strip(["claude", "--add-dir", "/a", "/b", "-c", "task"]), ["claude", "--add-dir", "/a", "/b", "-c"],
+                       "v: values up to the next dashed token")
+        XCTAssertEqual(strip(["claude", "--add-dir", "/a", "task"]), ["claude", "--add-dir", "/a", "task"],
+                       "v: a trailing operand is one more value (commander)")
+        XCTAssertEqual(strip(["claude", "--model=opus", "task"]), ["claude", "--model=opus"], "--opt=value takes nothing more")
+        XCTAssertEqual(strip(["claude", "-cp", "task"]), ["claude", "-cp"], "a flag cluster")
+        XCTAssertEqual(strip(["claude", "-nfoo", "task"]), ["claude", "-nfoo"], "-nfoo is -n foo")
+        XCTAssertEqual(strip(["claude", "-cn", "foo", "task"]), ["claude", "-cn", "foo"], "-cn takes n's value next")
+        XCTAssertEqual(strip(["claude", "-", "--chrome"]), ["claude", "--chrome"], "a lone - is an operand")
+        XCTAssertEqual(strip(["claude", "--no-frob", "task"]), ["claude", "--no-frob"], "an unknown --no-x takes no value")
+        XCTAssertEqual(strip(["claude", "--no-frob", "-c", "task"]), ["claude", "--no-frob", "-c"])
+        // claude_runs: argv[0], or after env with only NAME=value and value-less env flags between.
+        XCTAssertEqual(strip(["/opt/homebrew/bin/claude", "task"]), ["/opt/homebrew/bin/claude"])
+        XCTAssertEqual(strip(["env", "A=1", "_B2=x=y", "claude", "--chrome", "task"]), ["env", "A=1", "_B2=x=y", "claude", "--chrome"])
+        XCTAssertEqual(strip(["/usr/bin/env", "-i", "-0", "-v", "--ignore-environment", "--null", "--debug", "claude", "task"]),
+                       ["/usr/bin/env", "-i", "-0", "-v", "--ignore-environment", "--null", "--debug", "claude"])
+        XCTAssertEqual(strip(["env", "claude", "task"]), ["env", "claude"])
+        for whole in [["env", "-u", "X", "claude", "task"], ["env", "1A=x", "claude", "task"], ["env", "=x", "claude", "task"],
+                      ["env", "A", "claude", "task"], ["vim", "/Users/example/claude", "notes"], ["ssh", "host", "claude", "task"],
+                      ["sh", "-c", "claude", "task"], ["headroom", "wrap", "claude", "task"]] {
+            XCTAssertEqual(strip(whole), whole, "\(whole): claude does not run here")
+        }
+        XCTAssertEqual(strip(["headroom", "wrap", "claude", "--chrome", "task"], agent: true), ["headroom", "wrap", "claude", "--chrome"],
+                       "the agent was seen: a wrapped claude's prompt goes")
+        XCTAssertEqual(strip(["ssh", "host", "claude", "task"], agent: true), ["ssh", "host", "claude"])
+        // Whole-command cases.
+        for whole in [["claude", "update"], ["claude", "--chrome", "mcp", "list"], ["claude", "--frob", "x", "task"],
+                      ["claude", "-x", "y"], ["codex", "--", "task"], ["aider", "fix it"], ["/opt/x/claude-wrapper", "task"]] {
+            XCTAssertEqual(strip(whole), whole, "\(whole)")
+            XCTAssertEqual(strip(whole, agent: true), whole, "\(whole), agent seen")
+        }
+        XCTAssertEqual(strip(["claude", "task", "update"]), ["claude"], "only the first operand can be a command")
+        XCTAssertEqual(strip(["claude", "--frob", "-c", "task"]), ["claude", "--frob", "-c"], "unknown, dashed next: kept alone")
+        XCTAssertEqual(strip(["claude", "-x"]), ["claude", "-x"])
+        XCTAssertEqual(strip([]), [])
+    }
+
+    /// #867 (QA #707 INFO-1, QA #715): a record's startup prompt never becomes the New session command; the
+    /// record's agent.kind "claude" is dch's "agent seen" (hrec_strip), so a wrapped claude is stripped only then.
+    func testInferredCommandDropsALegacyRecordsStartupPrompt() {
+        let prompt = agentRecord("api", ended: 5, cwd: "/a", launch: ["claude"], argv: ["claude", "--chrome", "--", "task"])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [prompt]), ["claude", "--chrome"])
+        let named = agentRecord("api", ended: 5, cwd: "/a", launch: ["claude"],
+                                argv: ["headroom", "wrap", "claude", "--name", "api", "--resume", "sid", "--", "task"])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [named]), ["headroom", "wrap", "claude"],
+                       "a wrapper, agent seen: prompt, resume and name gone")
+        var unseen = named
+        unseen.agent?.kind = ""
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [unseen]), ["headroom", "wrap", "claude", "--", "task"],
+                       "no Claude seen: dch keeps the wrapper's argv whole (claude_runs); resume and name still go")
+        let bare = agentRecord("api", ended: 5, cwd: "/a", launch: ["claude", "fix the bug", "--chrome"])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [bare]), ["claude", "--chrome"], "a positional prompt too")
+        let other = agentRecord("cx", ended: 5, cwd: "/a", launch: ["codex", "--", "task"])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [other]), ["codex", "--", "task"], "another agent: whole")
+        var live = agentRecord("l", ended: 0, cwd: "/z", launch: ["claude"], argv: ["claude", "--chrome", "--", "task"])
+        live.end = ""
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [live], history: []), ["claude", "--chrome"],
+                       "QA #715: a 1.50.1 live record is not assumed stripped")
     }
 
     /// #606: shell words, quote-aware, no expansion; shellLine reads back exactly.
