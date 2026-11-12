@@ -30,6 +30,8 @@ local UPGRADE_CAP    = 2 * 3600                   -- give up silently after this
 -- already locked <path>.", and utils/lock.sh, "Another `brew update` process is already
 -- running."). Pre-4.x Homebrew printed the same line under "Another active Homebrew process".
 local BREW_LOCK_TEXT = "Please wait for it to finish or terminate it to continue."
+-- Said when an upgrade Prosper started is still running, so a second one starts nothing.
+local REFUSED        = "brew upgrade refused: an upgrade Prosper started is still running"
 local SU_PANE        = "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"
 
 -- Both Homebrew prefixes: Apple Silicon and the Intel/rosetta layout. host.shell
@@ -233,7 +235,7 @@ local function finish_upgrade(out, before)
         -- Our own backgrounded upgrade holds the lock: the list is mid-change and its watch
         -- refreshes when it ends, so no refresh and no count here.
         if watch_pending() then
-            host.notify("Homebrew", "brew upgrade refused: an upgrade Prosper started is still running")
+            host.notify("Homebrew", REFUSED)
             return load_cache()
         end
         -- Someone else's lock, possibly hit after this run upgraded earlier packages: refresh.
@@ -273,6 +275,13 @@ end
 function appupdates_upgrade()
     local brew = brew_path()
     if not brew then return "Homebrew is not installed" end
+    -- Settle an earlier backgrounded upgrade first (finished: report it; past the cap:
+    -- drop it); one still running refuses this one before anything runs.
+    if watch_pending() then on_upgrade_poll() end
+    if watch_pending() then
+        host.notify("Homebrew", REFUSED)
+        return render(load_cache())
+    end
     local before = #load_cache().brew
     -- The shell writes brew's status to a file only this upgrade names, so the watch
     -- below knows brew ended without probing or matching any process.
@@ -303,6 +312,8 @@ function on_upgrade_poll()
     local ok, p = pcall(host.json.decode, host.prefs.get(PREFS_PENDING) or "")
     if not ok or type(p) ~= "table" or type(p.file) ~= "string" then
         host.timer.cancel(UPGRADE_ID)
+        -- A record with no file name can never end; left, it would refuse every Upgrade.
+        if ok and type(p) == "table" then host.prefs.set(PREFS_PENDING, "") end
         return
     end
     local ended = host.fs.exists(p.file)

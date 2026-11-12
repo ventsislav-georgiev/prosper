@@ -45,13 +45,18 @@ Software Update found the following new or updated software:
 -- Route by command so one host serves both sources; every shell call is logged
 -- so the tests can assert what did NOT run.
 local shellLog = {}
-local brewOut, suOut, upgradeOut = BREW_OUTDATED_0, SU_NONE, "0"
+local brewOut, suOut, upgradeOut, catOut = BREW_OUTDATED_0, SU_NONE, "0", ""
+local onUpgrade   -- runs inside the `brew upgrade` call, when set
 
 local function router(cmd)
     shellLog[#shellLog + 1] = cmd
+    if cmd:find("^/bin/cat ") then return catOut end   -- the watch reading a status file
     if cmd:find("outdated", 1, true) then return brewOut end
     if cmd:find("softwareupdate", 1, true) then return suOut end
-    if cmd:find("brew upgrade", 1, true) then return upgradeOut end
+    if cmd:find("brew upgrade", 1, true) then
+        if onUpgrade then onUpgrade() end
+        return upgradeOut
+    end
     return ""
 end
 
@@ -229,15 +234,97 @@ upgradeOut = "Error: A `brew upgrade` process has already locked /opt/homebrew/v
 G.appupdates_upgrade()
 h.eq(ran("outdated"), true, "a foreign lock re-checks the list")
 h.eq(env.notifications[1].body, "brew upgrade stopped: another Homebrew process holds its lock (exit 1)", "names the lock")
--- Our own backgrounded upgrade holds it: no re-check mid-upgrade, its watch stays.
+-- Our own backgrounded upgrade holds it, its record written after this call began (a
+-- record there at the start refuses before brew runs, section 7b): no re-check, the watch stays.
 reset()
-host.prefs.set("upgrade_pending", '{"file":"/fake-tmp/x/status","at":1,"before":2}')
+local REC = '{"file":"/fake-tmp/x/status","at":100000,"before":2}'
+onUpgrade = function() host.prefs.set("upgrade_pending", REC) end
 G.appupdates_upgrade()
+onUpgrade = nil
+h.eq(ran("brew upgrade"), true, "this brew ran: the record came while it ran")
 h.eq(ran("outdated"), false, "a lock held by our own upgrade does not re-check")
 h.eq(env.notifications[1].body, "brew upgrade refused: an upgrade Prosper started is still running", "names our upgrade")
-h.eq(host.prefs.get("upgrade_pending"), '{"file":"/fake-tmp/x/status","at":1,"before":2}', "the watch pref survives")
+h.eq(host.prefs.get("upgrade_pending"), REC, "the watch pref survives")
 host.prefs.set("upgrade_pending", "")
 upgradeOut = "0"
+
+-- MARK: - 7b. A second Upgrade while ours runs in the background (QA #730 r2 F1)
+
+local PENDING, WATCH = "upgrade_pending", "appupdates.upgrade_poll"
+local REFUSED = "brew upgrade refused: an upgrade Prosper started is still running"
+local function count(pat)
+    local n = 0
+    for _, c in ipairs(shellLog) do if c:find(pat, 1, true) then n = n + 1 end end
+    return n
+end
+
+reset()
+brewOut = BREW_OUTDATED_2
+G.appupdates_refresh()                 -- cache: 2 outdated
+reset()
+env.timers, env.calls.timerSchedule = {}, 0
+upgradeOut = ""                        -- the host timeout wins: brew goes on in the background
+G.appupdates_upgrade()
+h.eq(env.notifications[1].body, "brew upgrade is still running in the background", "first Upgrade backgrounds")
+local rec = env.prefs[PENDING]
+local recFile = host.json.decode(rec).file
+
+-- t1: status file absent, record fresh: refused, nothing runs, nothing written.
+reset()
+env.now = 100000 + 20
+h.resetCalls(env)
+G.appupdates_upgrade()
+h.eq(#shellLog, 0, "t1: no shell call at all")
+h.eq(count("mkdir"), 0, "t1: no second mkdir")
+h.eq(count("brew upgrade"), 0, "t1: no second brew upgrade")
+h.eq(#env.notifications, 1, "t1: one notice")
+h.eq(env.notifications[1].body, REFUSED, "t1: the refused sentence")
+h.eq(env.prefs[PENDING], rec, "t1: the pending record is byte-identical")
+h.eq(env.calls.prefsSet, 0, "t1: no prefs write")
+h.eq(env.calls.timerSchedule, 0, "t1: no new timer")
+h.eq(env.calls.timerCancel, 0, "t1: the watch is not cancelled")
+h.eq(env.timers[WATCH].handler, "on_upgrade_poll", "t1: the first watch is still armed")
+
+-- t2: the status file appears, Upgrade again before the 60 s poll: the first result is
+-- reported and its file and folder removed, THEN the second upgrade starts.
+reset()
+env.now = 100000 + 40
+env.fsExists[recFile] = true
+catOut, brewOut, upgradeOut = "0", BREW_OUTDATED_0, "0"
+G.appupdates_upgrade()
+h.eq(shellLog[1], "/bin/cat '" .. recFile .. "'; [ ! -L '/fake-tmp/prosper-appupdates-100000000' ] && "
+     .. "[ -O '/fake-tmp/prosper-appupdates-100000000' ] && { /bin/rm -f '" .. recFile
+     .. "'; /bin/rmdir '/fake-tmp/prosper-appupdates-100000000'; }", "t2: the first status is read and removed first")
+h.eq(env.notifications[1].body, "2 packages upgraded", "t2: the first upgrade's result is reported")
+h.eq(count("mkdir"), 1, "t2: one new mkdir")
+h.eq(count("brew upgrade"), 1, "t2: one brew upgrade")
+h.eq(count("/bin/mkdir -m 700 '/fake-tmp/prosper-appupdates-100040000'"), 1, "t2: in a new folder")
+h.eq(env.notifications[2].body, "Nothing was upgraded", "t2: then the second upgrade's own result")
+h.eq(env.prefs[PENDING], "", "t2: the first record is cleared")
+h.eq(env.timers[WATCH], nil, "t2: the first watch is cancelled")
+env.fsExists[recFile] = nil
+catOut = ""
+
+-- t3: a record UPGRADE_CAP old with no status file is dropped; the new upgrade starts.
+reset()
+host.prefs.set(PENDING, '{"file":"/fake-tmp/old/status","at":' .. (env.now - 2 * 3600) .. ',"before":2}')
+G.appupdates_upgrade()
+h.eq(count("/bin/cat"), 0, "t3: no status file to read")
+h.eq(count("brew upgrade"), 1, "t3: the new upgrade starts")
+h.eq(env.notifications[1].body, "Nothing was upgraded", "t3: no refusal")
+h.eq(env.prefs[PENDING], "", "t3: the stale record is dropped")
+
+-- t4: a malformed record (no file name, or an `at` that is no number) never refuses for good.
+for _, bad in ipairs({ '{"at":100040,"before":2}', '{"file":7,"at":100040}', '[1,2]',
+                       '{"file":"/fake-tmp/y/status","at":"soon"}', '{"file":"/fake-tmp/y/status","at":{}}',
+                       '{"file":"/fake-tmp/y/status","at":null}', '{"file":"/fake-tmp/y/status","at":true}' }) do
+    reset()
+    host.prefs.set(PENDING, bad)
+    G.appupdates_upgrade()
+    h.eq(count("brew upgrade"), 1, "t4: the upgrade starts under " .. bad)
+    h.eq(env.notifications[1].body, "Nothing was upgraded", "t4: no refusal under " .. bad)
+    h.eq(env.prefs[PENDING], "", "t4: the record is cleared under " .. bad)
+end
 
 -- MARK: - 8. Settings render
 

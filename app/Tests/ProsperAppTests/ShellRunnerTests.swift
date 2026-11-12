@@ -316,12 +316,13 @@ final class ShellRunnerTests: XCTestCase {
     }
 
     /// QA #714 INFO-2 / #730 F1: Homebrew's lock refusal while our own backgrounded upgrade is
-    /// watched (a second Upgrade): no `brew outdated` mid-upgrade, the cache untouched, no count,
-    /// and the first upgrade's watch and its pref survive the refused call.
+    /// watched, its record written after this call began (a record there at the start refuses
+    /// before brew runs): no `brew outdated` mid-upgrade, the cache untouched, no count, and the
+    /// first upgrade's watch and its pref survive the refused call.
     func testAppUpdatesLockRefusalDuringOurWatchKeepsCacheAndWatch() throws {
         let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, upgradeStatus: 1, locked: true)
         let pending = #"{"file":"/fake-tmp/prosper-appupdates-1/status","at":1700000000,"before":1}"#
-        fake.prefSet(extensionID: "", key: "upgrade_pending", value: pending)
+        fake.pendingWrittenByUpgrade = pending
         fake.timerSchedule(extensionID: "", id: "appupdates.upgrade_poll", every: true, seconds: 60, handler: "on_upgrade_poll")
         let before = fake.pref("cache")
         try appupdates(fake)
@@ -331,6 +332,44 @@ final class ShellRunnerTests: XCTestCase {
         XCTAssertEqual(fake.cleanups.count, 1, "the refused call removes only its own status file")
         XCTAssertEqual(fake.timers["appupdates.upgrade_poll"], "60.0:on_upgrade_poll")
         XCTAssertEqual(fake.pref("upgrade_pending"), pending)
+    }
+
+    /// QA #730 r2 F1: Upgrade goes to the background, then Upgrade again while it runs: refused
+    /// by name, no second mkdir or brew, the record and the watch exactly as the first left them.
+    func testSecondUpgradeWhileOursRunsIsRefused() throws {
+        let fake = BrewFakeServices(upgradeSeconds: 2, outdatedAfter: 0)
+        try appupdates(fake)
+        let pending = fake.pref("upgrade_pending")
+        fake.now += 90
+        try appupdates(fake)
+        XCTAssertEqual(fake.notifications, ["brew upgrade is still running in the background",
+                                            "brew upgrade refused: an upgrade Prosper started is still running"])
+        XCTAssertEqual(fake.upgradeRuns, 1, "no second mkdir + brew upgrade line")
+        XCTAssertEqual(fake.commands, [])
+        XCTAssertEqual(fake.cleanups, [])
+        XCTAssertEqual(fake.pref("upgrade_pending"), pending)
+        XCTAssertEqual(fake.timers, ["appupdates.upgrade_poll": "60.0:on_upgrade_poll"])
+    }
+
+    /// The first upgrade's status file is there when Upgrade is pressed again (before the 60 s
+    /// tick): its result is reported and its file removed, then the second upgrade starts.
+    func testSecondUpgradeFinishesTheEndedOneFirst() throws {
+        let fake = BrewFakeServices(upgradeSeconds: 2, outdatedAfter: 0)
+        try appupdates(fake)
+        fake.statusFileExists = true
+        fake.now += 40
+        try appupdates(fake)
+        XCTAssertEqual(fake.notifications, ["brew upgrade is still running in the background", "1 package upgraded",
+                                            "brew upgrade is still running in the background"])
+        let d = "'/fake-tmp/prosper-appupdates-1700000000000'"
+        XCTAssertEqual(fake.commands.first, "/bin/cat '/fake-tmp/prosper-appupdates-1700000000000/status'; "
+            + "[ ! -L \(d) ] && [ -O \(d) ] && { /bin/rm -f '/fake-tmp/prosper-appupdates-1700000000000/status'; /bin/rmdir \(d); }")
+        XCTAssertEqual(fake.upgradeRuns, 2)
+        XCTAssertTrue(fake.upgradeCommand?.hasPrefix("/bin/mkdir -m 700 '/fake-tmp/prosper-appupdates-1700000040000'") == true,
+                      fake.upgradeCommand ?? "nil")
+        let pending = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data((fake.pref("upgrade_pending") ?? "").utf8)) as? [String: Any])
+        XCTAssertEqual(pending["file"] as? String, "/fake-tmp/prosper-appupdates-1700000040000/status")
     }
 
     /// F1b: a lock nobody of ours holds (brew in Terminal), possibly hit after this run upgraded
@@ -479,7 +518,14 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
     let upgradeStatus: Int
     let locked: Bool
     let outdatedReply: String?
-    let statusFileExists: Bool
+    private var fileThere: Bool
+    var statusFileExists: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return fileThere }
+        set { lock.lock(); fileThere = newValue; lock.unlock() }
+    }
+    /// When set, the `brew upgrade` call writes it as the pending record (a record that came
+    /// after appupdates_upgrade began).
+    var pendingWrittenByUpgrade: String?
     /// When set, the upgrade's whole output and the status file's text (no trailing number).
     let statusText: String?
     let suReply: String
@@ -489,6 +535,7 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
     private var ran: [String] = []
     private var cleaned: [String] = []
     private var upgradeLine: String?
+    private var upgradeCount = 0
     private var armed: [String: String] = [:]
     private var clock: Double = 1_700_000_000
     var notifications: [String] { lock.lock(); defer { lock.unlock() }; return bodies }
@@ -498,6 +545,8 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
     var cleanups: [String] { lock.lock(); defer { lock.unlock() }; return cleaned }
     /// The last `brew upgrade` shell line, verbatim.
     var upgradeCommand: String? { lock.lock(); defer { lock.unlock() }; return upgradeLine }
+    /// How many `brew upgrade` lines ran.
+    var upgradeRuns: Int { lock.lock(); defer { lock.unlock() }; return upgradeCount }
     /// Live timers: id -> "<seconds>:<handler>".
     var timers: [String: String] { lock.lock(); defer { lock.unlock() }; return armed }
     var now: Double {
@@ -530,12 +579,13 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
         self.upgradeStatus = upgradeStatus
         self.locked = locked
         self.outdatedReply = outdatedReply
-        self.statusFileExists = statusFileExists
+        self.fileThere = statusFileExists
     }
 
     func shellRun(_ command: String) async -> String {
         if command.contains(" upgrade ") {
             noteUpgrade(command)
+            if let pendingWrittenByUpgrade { prefSet(extensionID: "", key: "upgrade_pending", value: pendingWrittenByUpgrade) }
             try? await Task.sleep(nanoseconds: UInt64(upgradeSeconds * 1_000_000_000))
             guard command.hasSuffix("; echo $s") else { return "" }
             if let statusText { return statusText }
@@ -557,7 +607,7 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
         return #"{"formulae":[\#(formulae)],"casks":[]}"#
     }
     private func record(_ command: String) { lock.lock(); ran.append(command); lock.unlock() }
-    private func noteUpgrade(_ command: String) { lock.lock(); upgradeLine = command; lock.unlock() }
+    private func noteUpgrade(_ command: String) { lock.lock(); upgradeLine = command; upgradeCount += 1; lock.unlock() }
     private func noteCleanup(_ command: String) { lock.lock(); cleaned.append(command); lock.unlock() }
     func fsExists(_ path: String) -> Bool {
         path == "/opt/homebrew/bin/brew" || (statusFileExists && path.hasPrefix("/fake-tmp/prosper-appupdates-"))
