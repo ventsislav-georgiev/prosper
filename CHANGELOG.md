@@ -172,7 +172,7 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal ctl: `--run` gets the 660 s timeout dch serve gives it, a timeout or output cap
   ends dch 2 s after asking it to stop (was 1 s), and turning Remote Terminal off ends a running
   ctl within 2 s, an agent verb's too (#852).
-- Ships dch 1.54.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.55.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -236,6 +236,14 @@ tag from the now-released section and put it on the new top draft.
   shows. X-ray on a shell session also reads the lines still on screen, never a full-screen program
   (vim, less), and a session that ends mid-request answers `dch: no such session`. The list of
   background work Restart and Stop stopped is cut at its length limit on a whole character.
+- dch 1.54.0 to 1.55.0: `dch --xray --ref` reads the other sessions of the same project
+  (`--scope project`, the default; `--scope all` for every project, `--scope session` for the old
+  answer), `dch --xray <n> --chapter <anchor> --json` prints one chapter's entries, and
+  `dch --xray host:name … --json` runs on another host's `dch serve`. A `dch serve` host refuses a
+  session name holding a left-to-right or right-to-left mark, an Arabic letter mark or a line or
+  paragraph separator, and dch's JSON output escapes those characters. dch's picker keeps the
+  selection of another host's row apart from a local row of the same name. Prosper does not read
+  X-ray yet, and its own Remote Terminal does not offer X-ray to other devices.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
