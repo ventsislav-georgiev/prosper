@@ -25,6 +25,11 @@ local KICK_ID        = "appupdates.kick"
 local UPGRADE_ID     = "appupdates.upgrade_poll"  -- 60 s watch for a backgrounded brew upgrade
 local PREFS_PENDING  = "upgrade_pending"          -- JSON { file, at, before } while that watch runs
 local UPGRADE_CAP    = 2 * 3600                   -- give up silently after this long
+-- The last line of Homebrew's lock refusal, in both of its forms (read in Homebrew's
+-- Library/Homebrew/exceptions.rb OperationInProgressError, "A `brew upgrade` process has
+-- already locked <path>.", and utils/lock.sh, "Another `brew update` process is already
+-- running."). Pre-4.x Homebrew printed the same line under "Another active Homebrew process".
+local BREW_LOCK_TEXT = "Please wait for it to finish or terminate it to continue."
 local SU_PANE        = "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"
 
 -- Both Homebrew prefixes: Apple Silicon and the Intel/rosetta layout. host.shell
@@ -213,28 +218,56 @@ end
 
 local function shq(s) return "'" .. s:gsub("'", "'\\''") .. "'" end
 
+-- True while a backgrounded upgrade of ours is watched (on_upgrade_poll refreshes when it ends).
+local function watch_pending()
+    local ok, p = pcall(host.json.decode, host.prefs.get(PREFS_PENDING) or "")
+    return ok and type(p) == "table"
+end
+
 -- `out` ends with brew's exit status on its own line. Notifies and returns the cache.
 local function finish_upgrade(out, before)
     local status = tonumber(trim(out):match("[^\n]*$"))
-    if status ~= 0 then
-        -- A lock error (a second Upgrade while one runs) lands here: brew's list is mid-change.
-        host.notify("Homebrew", "brew upgrade failed (exit " .. (status or "?") .. ")")
-        return load_cache()
+    local exit = "(exit " .. (status or "?") .. ")"
+    local failed, partial
+    if status ~= 0 and out:find(BREW_LOCK_TEXT, 1, true) then
+        -- Our own backgrounded upgrade holds the lock: the list is mid-change and its watch
+        -- refreshes when it ends, so no refresh and no count here.
+        if watch_pending() then
+            host.notify("Homebrew", "brew upgrade refused: an upgrade Prosper started is still running")
+            return load_cache()
+        end
+        -- Someone else's lock, possibly hit after this run upgraded earlier packages: refresh.
+        failed = "brew upgrade stopped: another Homebrew process holds its lock " .. exit
+        partial = failed
+    elseif status ~= 0 then
+        -- brew also exits non-zero when some packages fail and the rest upgrade.
+        failed = "brew upgrade failed " .. exit
+        partial = "brew upgrade failed for some packages " .. exit
     end
     -- Re-derive from brew rather than trusting the upgrade's exit text.
     local c = load_cache()
     local now = check_brew()
     if not now then
-        host.notify("Homebrew", "brew upgrade finished; the list could not be refreshed")
+        host.notify("Homebrew", failed or "brew upgrade finished; the list could not be refreshed")
         return c
     end
     c.brew = now
     save_cache(c)
     local done = before - #c.brew
-    host.notify("Homebrew", (done > 0)
-        and (done .. " package" .. (done == 1 and "" or "s") .. " upgraded")
-        or "Nothing was upgraded")
+    local upgraded = done .. " package" .. (done == 1 and "" or "s") .. " upgraded"
+    if failed then
+        host.notify("Homebrew", (done > 0) and (partial .. "; " .. upgraded) or failed)
+    else
+        host.notify("Homebrew", (done > 0) and upgraded or "Nothing was upgraded")
+    end
     return c
+end
+
+-- Removes the status file and its private dir, only when that dir is ours: after a
+-- refused mkdir the name may be someone else's dir or a symlink.
+local function cleanup(file)
+    local dir = shq(file:match("^(.*)/[^/]*$") or file)
+    return "[ ! -L " .. dir .. " ] && [ -O " .. dir .. " ] && { /bin/rm -f " .. shq(file) .. "; /bin/rmdir " .. dir .. "; }"
 end
 
 function appupdates_upgrade()
@@ -244,11 +277,14 @@ function appupdates_upgrade()
     -- The shell writes brew's status to a file only this upgrade names, so the watch
     -- below knows brew ended without probing or matching any process.
     local tmp = (host.env.get("TMPDIR") or "/tmp"):gsub("/*$", "/")
-    local file = tmp .. "prosper-appupdates-" .. string.format("%d", math.floor(host.time() * 1000)) .. ".status"
+    local dir = tmp .. "prosper-appupdates-" .. string.format("%d", math.floor(host.time() * 1000))
+    local file = dir .. "/status"
     -- keep_running: the host timeout returns control without killing brew mid-upgrade.
     -- `echo $s` makes a finished upgrade's output non-empty, so "" means the timeout won.
-    -- The mv makes the file appear only once it holds the status.
-    local out = host.shell.run(brew .. " upgrade 2>&1; s=$?; echo $s > " .. shq(file .. ".part")
+    -- The file lives in a fresh 0700 dir (mkdir refuses a name that exists, a symlink
+    -- included), so nobody else can pre-place it; the mv makes it appear once it holds the status.
+    local out = host.shell.run("/bin/mkdir -m 700 " .. shq(dir) .. " 2>&1 || exit; "
+                               .. brew .. " upgrade 2>&1; s=$?; echo $s > " .. shq(file .. ".part")
                                .. "; /bin/mv -f " .. shq(file .. ".part") .. " " .. shq(file) .. "; echo $s",
                                { keep_running = true })
     if out == "" then
@@ -257,7 +293,7 @@ function appupdates_upgrade()
         host.notify("Homebrew", "brew upgrade is still running in the background")
         return render(load_cache())
     end
-    host.shell.run("/bin/rm -f " .. shq(file))
+    host.shell.run(cleanup(file))
     return render(finish_upgrade(out, before))
 end
 
@@ -274,7 +310,7 @@ function on_upgrade_poll()
     host.timer.cancel(UPGRADE_ID)
     host.prefs.set(PREFS_PENDING, "")
     if ended then
-        finish_upgrade(host.shell.run("/bin/cat " .. shq(p.file) .. "; /bin/rm -f " .. shq(p.file)),
+        finish_upgrade(host.shell.run("/bin/cat " .. shq(p.file) .. "; " .. cleanup(p.file)),
                        tonumber(p.before) or 0)
     end
 end

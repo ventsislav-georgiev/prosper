@@ -208,6 +208,37 @@ reset()
 G.appupdates_upgrade()                 -- still outdated afterwards
 h.eq(env.notifications[1].body, "Nothing was upgraded", "a no-op upgrade is reported honestly")
 
+-- A non-zero exit that is not a lock refusal (some packages failed): refresh and say both.
+reset()
+brewOut = BREW_OUTDATED_2
+G.appupdates_refresh()
+reset()
+brewOut = BREW_OUTDATED_0
+upgradeOut = "Error: lua: post-install step failed\n1"
+G.appupdates_upgrade()
+h.eq(env.notifications[1].body, "brew upgrade failed for some packages (exit 1); 2 packages upgraded",
+     "a partial failure says the status and the count")
+
+-- Homebrew's lock refusal. Someone else's lock: re-check and say so.
+reset()
+brewOut = BREW_OUTDATED_2
+G.appupdates_refresh()
+reset()
+upgradeOut = "Error: A `brew upgrade` process has already locked /opt/homebrew/var/homebrew/locks/lua.formula.lock.\n"
+          .. "Please wait for it to finish or terminate it to continue.\n1"
+G.appupdates_upgrade()
+h.eq(ran("outdated"), true, "a foreign lock re-checks the list")
+h.eq(env.notifications[1].body, "brew upgrade stopped: another Homebrew process holds its lock (exit 1)", "names the lock")
+-- Our own backgrounded upgrade holds it: no re-check mid-upgrade, its watch stays.
+reset()
+host.prefs.set("upgrade_pending", '{"file":"/fake-tmp/x/status","at":1,"before":2}')
+G.appupdates_upgrade()
+h.eq(ran("outdated"), false, "a lock held by our own upgrade does not re-check")
+h.eq(env.notifications[1].body, "brew upgrade refused: an upgrade Prosper started is still running", "names our upgrade")
+h.eq(host.prefs.get("upgrade_pending"), '{"file":"/fake-tmp/x/status","at":1,"before":2}', "the watch pref survives")
+host.prefs.set("upgrade_pending", "")
+upgradeOut = "0"
+
 -- MARK: - 8. Settings render
 
 node = G.settings_render("appupdates", "{}")

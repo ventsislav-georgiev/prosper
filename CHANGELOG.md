@@ -80,10 +80,15 @@ tag from the now-released section and put it on the new top draft.
   no options, so `host.shell.run(cmd, cond and { keep_running = true })` works (#834).
 - App Updates: when a Homebrew upgrade runs on in the background, the list refreshes within a
   minute of brew finishing and you get the same "N packages upgraded" notification (for up to
-  2 hours, and only while Prosper stays open). A failed
-  upgrade (for example a second one while the first still runs) now says "brew upgrade failed"
-  instead of "Nothing was upgraded", and a brew or macOS check that times out keeps the last
-  known list instead of emptying it (#834).
+  2 hours, and only while Prosper stays open). When some packages fail to upgrade, App Updates
+  re-reads the list and says both, for example "brew upgrade failed for some packages (exit 1);
+  3 packages upgraded" ("brew upgrade failed (exit 1)" when none was). When another Homebrew
+  process holds the lock, it re-reads the list too and says "brew upgrade stopped: another
+  Homebrew process holds its lock (exit 1)", with the count when packages were upgraded first;
+  an Upgrade started while one Prosper started still runs says "brew upgrade refused: an
+  upgrade Prosper started is still running" and leaves the list to that upgrade. The upgrade
+  status file now lives in a private folder that Prosper creates and removes. A brew or macOS
+  check that times out keeps the last known list instead of emptying it (#834).
 - Agent Sessions window: a live session now opens in its real terminal by default, inside the
   window: the same dch session Ghostty would attach to, drawn by libghostty, with full keyboard
   input (Esc, Tab, ⇧Return, ⌃C and arrows reach Claude), IME and Option-composed characters, ⌘C/⌘V
