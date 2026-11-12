@@ -200,7 +200,7 @@ tag from the now-released section and put it on the new top draft.
   (plan, apply, status, remove, repair): marked blocks, hooks, permission rules, the status line and
   seeded files, each written only after you approve the exact diff in a native sheet, backed up
   first, and removed again on uninstall. See "Managed config (host.config)" in extensions.md (#870).
-- Ships dch 1.58.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
+- Ships dch 1.59.0 (was 1.39.0). With 1.40.0, when a newer `dch -a` takes a remote session over, the
   older attach now says another client attached and ends, instead of a plain link loss. `dch -a`
   exits 4 when the host refuses the attach and 5 when it was taken over (both used to exit 1);
   neither is retried. A remote attach can ask for recent scrollback above the screen.
@@ -294,6 +294,17 @@ tag from the now-released section and put it on the new top draft.
   two `--xray --follow` of one session. Also fixed in dch: the remote X-ray view hanging on q or
   Esc, a crash in a very small window, `dch -d` not detaching a client that has the view open, and a slow reader cut off
   after 65 s. Prosper still does not read X-ray.
+- dch 1.58.0 to 1.59.0: a key change in dch's picker (`dch -l`, the switch, the `-k` and `-d`
+  pickers): `x` now opens the row's X-ray view and `X` kills, the other way round from before; kill
+  still asks first. Suspending an attach with ctrl-z now hands the shell a clean terminal (the main
+  screen, with mouse reporting, bracketed paste and the kitty keyboard flags off) and `fg` repaints
+  the session; repeated suspends no longer leave kitty keys on in the shell. A session started by an
+  older dch needs `dch --restart` for its side of that fix. A `dch serve` host no longer drops the
+  rest of a large one-shot answer (`dch --xray host:x --json | less`) when the reader pauses for
+  20 s. In the X-ray view, a remote host's screen can no longer put invalid UTF-8 or a NUL on your
+  terminal. Also fixed in dch: the X-ray view left on a cooked terminal after fast keys, a new PR or
+  issue getting another item's title in X-ray, and more commands that read outside the project no
+  longer define X-ray references.
 - Snippets: a snippet with {argument} placeholders now asks for them. A small panel shows the snippet's
   name and one field per argument, prefilled with its default: Return inserts, Escape cancels, Tab moves
   on, and Insert stays off while a required field is empty. A snippet whose arguments all have defaults
