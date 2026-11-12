@@ -741,8 +741,135 @@ extension AgentIsland {
     /// live session's record with one (newest activity first), else the newest
     /// history record's; resume flags stripped. nil: no source (New session runs
     /// `claude` and nothing is stored).
+    /// #847 D7.3: and without a recorded `--name` (a record of a named spawn carries one).
     static func inferredCommand(live: [DchHistoryRecord], history: [DchHistoryRecord]) -> [String]? {
-        (live + history).lazy.compactMap(recordCommand).first.map(strippingResume)
+        (live + history).lazy.compactMap(recordCommand).first.map { strippingName(strippingResume($0)) }
+    }
+
+    /// #847: Claude Code 2.1.318's commands and aliases (dch v1.50.1 cargv.c:92-97 csubs): as the
+    /// first operand one is dispatched, never a session.
+    static let claudeCommands: Set<String> = [
+        "agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install", "logs", "mcp", "plugin",
+        "plugins", "purge", "respawn", "rm", "setup-token", "stop", "kill", "ultrareview", "update", "upgrade",
+        "help", "remote-control", "rc", "sandbox", "import-conversations",
+    ]
+
+    /// #847: claude's options, dch v1.50.1 cargv.c:11-87 (copts, Claude Code 2.1.318). "b" a flag; "r" takes
+    /// the next token whatever it is; "o" an optional value, the next token unless it is dashed; "v"
+    /// variadic, the next token and then every one up to the next dashed one.
+    static let claudeOptions: [String: Character] = [
+        "--add-dir": "v", "--agent": "r", "--agents": "r", "--allow-dangerously-skip-permissions": "b",
+        "--allowedTools": "v", "--allowed-tools": "v", "--append-system-prompt": "r", "--autocompact": "r",
+        "--ax-screen-reader": "b", "--bg": "b", "--background": "b", "--bare": "b", "--betas": "v", "--brief": "b",
+        "--chrome": "b", "--cloud": "o", "-c": "b", "--continue": "b", "--dangerously-skip-permissions": "b",
+        "-d": "o", "--debug": "o", "--debug-file": "r", "--desktop": "b", "--disable-slash-commands": "b",
+        "--disallowedTools": "v", "--disallowed-tools": "v", "--effort": "r", "--environment": "r",
+        "--exclude-dynamic-system-prompt-sections": "b", "--fallback-model": "r", "--file": "v",
+        "--fork-session": "b", "--forward-subagent-text": "b", "--from-pr": "o", "-h": "b", "--help": "b",
+        "--ide": "b", "--include-hook-events": "b", "--include-partial-messages": "b", "--input-format": "r",
+        "--json-schema": "r", "--max-budget-usd": "r", "--mcp-config": "v", "--model": "r", "-n": "r", "--name": "r",
+        "--no-chrome": "b", "--no-session-persistence": "b", "--output-format": "r", "--permission-mode": "r",
+        "--permission-prompts": "r", "--plugin-dir": "r", "--plugin-url": "r", "-p": "b", "--print": "b",
+        "--prompt-suggestions": "o", "--remote-control": "o", "--remote-control-session-name-prefix": "r",
+        "--replay-user-messages": "b", "--restricted": "b", "-r": "o", "--resume": "o", "--safe-mode": "b",
+        "--session-id": "r", "--setting-sources": "r", "--settings": "r", "--strict-mcp-config": "b",
+        "--system-prompt": "r", "--system-prompt-snapshot": "r", "--teleport": "o", "--tmux": "b", "--tools": "v",
+        "--verbose": "b", "-v": "b", "--version": "b", "-w": "o", "--worktree": "o",
+    ]
+
+    /// #847: one word of claude's args as commander reads them: an option with its values (`known`: in
+    /// claudeOptions, a cluster of them, or an --opt=value), an operand (the prompt, or a command), or a
+    /// bare `--` with everything after it.
+    enum ClaudeArg: Equatable {
+        case option([String], known: Bool)
+        case operand(String)
+        case rest([String])
+    }
+
+    /// #847: a single-dash cluster's first letter that is not a flag, and that letter's kind (cargv.c:212-222:
+    /// -cp is -c -p, -nfoo is -n foo, -cn takes n's value from the next token). at == count: all flags.
+    static func clusterStop(_ letters: [Character]) -> (at: Int, kind: Character?) {
+        for (i, c) in letters.enumerated() where claudeOptions["-\(c)"] != "b" { return (i, claudeOptions["-\(c)"]) }
+        return (letters.count, "b")
+    }
+
+    /// #847: the args after the claude token, read as dch_claude_strip's loop reads them (dch v1.50.1
+    /// cargv.c:188-241): a bare `--` ends it (:193-194); a variadic option's non-dashed followers are its
+    /// values (:195-199); a non-dashed word is an operand (:200-208); `--opt=value` takes nothing more
+    /// (:210-211); a cluster's value is its rest or the next token (:212-225); an unknown option takes
+    /// nothing here (dch keeps that argv whole, :226-235); "r"/"v" take the next token whatever it is, "o"
+    /// one that is not dashed (:236-240). So a value is never read as an option of its own.
+    static func claudeArgs(_ args: ArraySlice<String>) -> [ClaudeArg] {
+        func dashed(_ s: String) -> Bool { s.hasPrefix("-") && s.utf8.count > 1 }   // cargv.c:115-119: "-" is an operand
+        var out: [ClaudeArg] = [], k = args.startIndex, variadic = false
+        while k < args.endIndex {
+            let a = args[k]
+            k += 1
+            if a == "--" { out.append(.rest(Array(args[(k - 1)...]))); break }
+            if variadic, !dashed(a), case .option(let o, let known)? = out.last {
+                out[out.count - 1] = .option(o + [a], known: known)
+                continue
+            }
+            variadic = false
+            guard dashed(a) else { out.append(.operand(a)); continue }
+            var kind: Character? = a.hasPrefix("--") && a.contains("=") ? "b" : claudeOptions[a]
+            if kind == nil && !a.hasPrefix("--") {
+                let letters = Array(a.dropFirst()), stop = clusterStop(letters)
+                kind = stop.kind == "b" || stop.kind != nil && stop.at + 1 < letters.count ? "b" : stop.kind
+            }
+            var o = [a]
+            if (kind == "r" || kind == "v") && k < args.endIndex || kind == "o" && k < args.endIndex && !dashed(args[k]) {
+                o.append(args[k])
+                k += 1
+            }
+            variadic = kind == "v"
+            out.append(.option(o, known: kind != nil))
+        }
+        return out
+    }
+
+    /// #847 D1.2: argv opens a Claude composer: a token whose basename is `claude` (dch_claude_tok,
+    /// cargv.c:99-112), and after it no -p/--print before a bare `--` and no command word first
+    /// (dch claude_batch, v1.50.1 dch.c:5831-5846).
+    /// shortcut: any `claude` word counts (the spec's rule: `headroom wrap claude` must be named, and a spawn has
+    /// no "agent seen" yet), so `vim ~/claude` gets `--name` after that word; use dch's claude_runs if one shows.
+    static func isInteractiveClaude(_ argv: [String]) -> Bool {
+        guard let tok = argv.firstIndex(where: { ($0 as NSString).lastPathComponent == "claude" }) else { return false }
+        let rest = argv[(tok + 1)...]
+        return !rest.prefix { $0 != "--" }.contains { $0 == "-p" || $0 == "--print" }
+            && !(rest.first.map(claudeCommands.contains) ?? false)
+    }
+
+    /// #847 D1.2: an interactive Claude's argv without its own name. Read by claudeArgs, so another option's
+    /// value is never taken for a name: -n/--name with its value, --name=…, -nfoo go; a cluster -cn x keeps
+    /// -c. A bare `--` and what follows stay. Anything else is returned as is.
+    static func strippingName(_ argv: [String]) -> [String] {
+        guard isInteractiveClaude(argv), let tok = argv.firstIndex(where: { ($0 as NSString).lastPathComponent == "claude" })
+        else { return argv }
+        return Array(argv.prefix(tok + 1)) + claudeArgs(argv[(tok + 1)...]).flatMap { arg -> [String] in
+            switch arg {
+            case .operand(let a): return [a]
+            case .rest(let r): return r
+            case .option(let o, _):
+                let a = o[0]
+                if a == "-n" || a == "--name" || a.hasPrefix("--name=") { return [] }
+                guard !a.hasPrefix("--"), claudeOptions[a] == nil else { return o }
+                let letters = Array(a.dropFirst()), stop = clusterStop(letters)
+                guard stop.at < letters.count, letters[stop.at] == "n" else { return o }
+                return stop.at == 0 ? [] : ["-" + String(letters[..<stop.at])]   // n's value goes with it
+            }
+        }
+    }
+
+    /// #847 D1.2 (OQ-68): an interactive Claude named `name`, the user's own name replaced. Right after
+    /// the claude token, as dch's resume_argv inserts --resume (v1.50.1 dch.c:5870-5874): a trailing
+    /// `-- <prompt>` can never swallow it. Anything else (a shell, another agent, a batch run) as is.
+    static func naming(_ argv: [String], name: String) -> [String] {
+        guard isInteractiveClaude(argv), let tok = argv.firstIndex(where: { ($0 as NSString).lastPathComponent == "claude" })
+        else { return argv }
+        var out = strippingName(argv)
+        out.insert(contentsOf: ["--name", name], at: tok + 1)
+        return out
     }
 
     /// #606: a command line as argv, no expansion of any kind. Whitespace
@@ -875,8 +1002,10 @@ extension AgentIsland {
     /// sessions and records (a record of that name would be overwritten). QA #629
     /// sweep: "--" so a setting's command starting with "-" is never a dch flag.
     /// #847: `name` given (the window's form): used as is; the caller checked it (AgentNewSession.nameError).
+    /// #847 D1.3: an interactive Claude gets `--name <name>` (naming), the island's New session too.
     static func newSessionArgs(folder: String, command: [String], taken: Set<String>, name: String? = nil) -> [String] {
-        ["--spawn", name ?? freeName(sessionName(folder: folder), taken: taken), "--"] + command
+        let n = name ?? freeName(sessionName(folder: folder), taken: taken)
+        return ["--spawn", n, "--"] + naming(command, name: n)
     }
 
     /// #847: the names a new session in `dir` must not take: its live sessions' and its records'.

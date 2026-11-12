@@ -541,8 +541,9 @@ final class AgentWindowModel: ObservableObject {
                 AgentNewSession.nameError(newSessionName, taken: spawnTaken))
     }
 
+    /// #847 D7.4: the argv that runs, `--name` included.
     var newSessionRuns: String {
-        let argv = AgentNewSession.argv(newSession?.command ?? "", shell: shell)
+        let argv = AgentIsland.naming(AgentNewSession.argv(newSession?.command ?? "", shell: shell), name: newSessionName)
         return AgentIsland.shellLine(argv) + (AgentIsland.shellWords(newSession?.command ?? "").isEmpty ? " (your login shell)" : "")
     }
 
@@ -609,7 +610,9 @@ final class AgentWindowModel: ObservableObject {
         }
         Preferences.agentWindowNewSessionFolder = folder
         if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Preferences.agentIslandNewSessionCommand = command
+            // #847 D7.2: a typed -n/--name would name every later session; else the text as typed.
+            let words = AgentIsland.shellWords(command), kept = AgentIsland.strippingName(words)
+            Preferences.agentIslandNewSessionCommand = kept == words ? command : AgentIsland.shellLine(kept)
         }
         if form {
             guard newSession?.starting == key else { return }   // closed meanwhile: the human moved on

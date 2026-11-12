@@ -117,7 +117,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSessionName, "other", "cleared: the automatic name again")
             m.setNewSessionName(" spaced ")
             XCTAssertEqual(m.newSessionName, "spaced", "trimmed")
-            XCTAssertEqual(m.newSessionRuns, "claude")
+            XCTAssertEqual(m.newSessionRuns, "claude --name spaced", "#847 D7.4: the named argv")
             m.setNewSessionCommand("")
             XCTAssertEqual(m.newSessionRuns, "/bin/fish -l (your login shell)")
         }
@@ -207,6 +207,31 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(Preferences.agentWindowNewSessionFolder, "/Users/example/api", "the expanded folder")
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --x", "OQ-3: the one shared command")
             XCTAssertFalse(SyncedKeys.isSynced("agentWindowNewSessionFolder"), "per Mac")
+        }
+    }
+
+    /// #847 T8 (D7.2, D7.4): Runs shows the named argv; the shared command never keeps a typed name, and a
+    /// command with none is stored byte-identical (no requoting).
+    @MainActor
+    func testAgentWindowNewSessionStoresTheCommandWithoutItsName() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/api")
+            m.setNewSessionCommand("claude --name x --chrome")
+            XCTAssertEqual(m.newSessionRuns, "claude --name api --chrome", "the typed name replaced by the session's")
+            XCTAssertEqual(m.newSession?.command, "claude --name x --chrome", "the field keeps what was typed")
+            XCTAssertTrue(m.startNewSession())
+            spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
+            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome")
+            m.openNewSession(folder: "/Users/example/api")
+            m.setNewSessionCommand("claude  \"--chrome\"  'my x'")
+            XCTAssertTrue(m.startNewSession())
+            spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
+            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude  \"--chrome\"  'my x'", "byte-identical")
+            m.openNewSession(folder: "/Users/example/api")
+            m.setNewSessionCommand("claude -p 'one shot' -n x")
+            XCTAssertEqual(m.newSessionRuns, "claude -p 'one shot' -n x", "a batch run is not named")
         }
     }
 

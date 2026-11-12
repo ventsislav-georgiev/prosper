@@ -1565,6 +1565,16 @@ final class AgentIslandControlsTests: XCTestCase {
                        "a record with no agent is no source")
     }
 
+    /// #847 T7: a record of a named spawn never makes the shared command carry its --name.
+    func testInferredCommandDropsARecordedName() {
+        let named = agentRecord("api", ended: 5, cwd: "/a", launch: ["/opt/homebrew/bin/claude", "--name", "api", "--chrome"],
+                                argv: ["claude", "--name", "api", "--chrome"])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [named]), ["claude", "--chrome"])
+        let resumed = agentRecord("api", ended: 5, cwd: "/a", launch: ["claude"],
+                                  argv: ["headroom", "wrap", "claude", "--resume", "sid", "-n", "api", "--name=x"])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [resumed]), ["headroom", "wrap", "claude"])
+    }
+
     /// #606: shell words, quote-aware, no expansion; shellLine reads back exactly.
     func testShellWordsSplitQuoteAwareWithNoExpansion() {
         XCTAssertEqual(AgentIsland.shellWords("headroom wrap claude --chrome"), ["headroom", "wrap", "claude", "--chrome"])
@@ -1788,7 +1798,8 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.sessionName(folder: "/"), "session")
         XCTAssertEqual(AgentIsland.freeName("app", taken: ["app", "app-2"]), "app-3")
         XCTAssertEqual(AgentIsland.freeName("app", taken: ["app-2"]), "app")
-        XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", command: ["claude"], taken: ["app"]), ["--spawn", "app-2", "--", "claude"])
+        XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", command: ["claude"], taken: ["app"]),
+                       ["--spawn", "app-2", "--", "claude", "--name", "app-2"])
         // QA #629 sweep: a setting's command starting with "-" stays the command, after "--".
         XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/src/app", command: ["-kl"], taken: []), ["--spawn", "app", "--", "-kl"])
     }
@@ -2059,8 +2070,8 @@ final class AgentIslandControlsTests: XCTestCase {
         press(sub.items[0])
         settle(c) { !f.args.isEmpty }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(f.args, [["--spawn", "app-3", "--", "/opt/homebrew/bin/headroom", "wrap", "claude", "--chrome"]],
-                       "app is live and app-2 a record: app-3; no --resume")
+        XCTAssertEqual(f.args, [["--spawn", "app-3", "--", "/opt/homebrew/bin/headroom", "wrap", "claude", "--name", "app-3", "--chrome"]],
+                       "app is live and app-2 a record: app-3; no --resume; #847 T6: Claude named app-3")
         XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "/opt/homebrew/bin/headroom wrap claude --chrome",
                        "#606: a real source is stored")
         XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, app)
@@ -2090,7 +2101,7 @@ final class AgentIslandControlsTests: XCTestCase {
         press(sub.items[0])
         settle(c) { !f.args.isEmpty }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        XCTAssertEqual(f.args, [["--spawn", "My-Repo", "--", "claude"]])
+        XCTAssertEqual(f.args, [["--spawn", "My-Repo", "--", "claude", "--name", "My-Repo"]], "#847 T6: the island's New session names it")
         XCTAssertEqual(f.lock.withLock { f.launches[0].cwd }, "/picked/My Repo")
         XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"),
                      "#606: no source: claude, and nothing stored")
@@ -2167,7 +2178,8 @@ final class AgentIslandControlsTests: XCTestCase {
         Preferences.agentIslandNewSessionCommand = "headroom wrap claude --chrome 'my x' --continue"
         c.newSession(in: "/a")
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success, "no inference: at once")
-        XCTAssertEqual(f.args, [["--spawn", "a-2", "--", "headroom", "wrap", "claude", "--chrome", "my x", "--continue"]])
+        XCTAssertEqual(f.args, [["--spawn", "a-2", "--", "headroom", "wrap", "claude", "--name", "a-2", "--chrome", "my x", "--continue"]],
+                       "#847: only the spawn argv is named")
         XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome 'my x' --continue", "never rewritten")
         f.release.signal()
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "a-2")) }
@@ -2188,13 +2200,14 @@ final class AgentIslandControlsTests: XCTestCase {
         c.newSession(in: "/x/proj")
         settle(c) { !f.args.isEmpty }
         XCTAssertEqual(seen.lock.withLock { seen.calls.map(\.1) }, [["a", "b"]], "the poller's live sessions")
-        XCTAssertEqual(f.args, [["--spawn", "proj", "--", "headroom", "wrap", "claude", "--chrome"]], "the live record, stripped")
+        XCTAssertEqual(f.args, [["--spawn", "proj", "--", "headroom", "wrap", "claude", "--name", "proj", "--chrome"]],
+                       "the live record, stripped; #847: named")
         XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome")
         f.release.signal()
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "proj")) }
         c.newSession(in: "/x/two")
         settle(c) { f.args.count == 2 }
-        XCTAssertEqual(f.args.last, ["--spawn", "two", "--", "headroom", "wrap", "claude", "--chrome"], "stored: no second inference")
+        XCTAssertEqual(f.args.last, ["--spawn", "two", "--", "headroom", "wrap", "claude", "--name", "two", "--chrome"], "stored: no second inference")
         XCTAssertEqual(seen.count, 1)
         f.release.signal()
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "two")) }
