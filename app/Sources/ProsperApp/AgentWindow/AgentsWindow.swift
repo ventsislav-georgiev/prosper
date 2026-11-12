@@ -156,7 +156,7 @@ final class AgentsNSWindow: NSWindow {
                       renaming: Bool = false) -> KeyRoute {
         guard event.type == .keyDown else { return .pass }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let key = event.charactersIgnoringModifiers?.lowercased()
+        let key = chordLetter(event)
         if mods.contains(.command), key == "w" { return .close }
         if renaming { return .pass }
         if key == "n", mods == [.command] || mods == [.command, .shift] {   // #847: from every responder, the form's fields too
@@ -184,7 +184,7 @@ final class AgentsNSWindow: NSWindow {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard let model else {
-            if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "w" {
+            if event.modifierFlags.contains(.command), Self.chordLetter(event) == "w" {
                 performClose(nil)
                 return true
             }
@@ -208,6 +208,17 @@ final class AgentsNSWindow: NSWindow {
         }
         return true
     }
+
+    /// #882: the letter a chord matches. On a Cyrillic, Greek or Hebrew layout `charactersIgnoringModifiers` is
+    /// the layout's own letter and the Command-modified `characters` the Latin one (what menu key equivalents
+    /// match), so either one fires a chord; `characters` wins when both are chord letters. On Latin layouts,
+    /// Dvorak too, the two agree: the letter, not the key position, stays the rule.
+    static func chordLetter(_ event: NSEvent) -> String? {
+        if let typed = event.characters?.lowercased(), chordLetters.contains(typed) { return typed }
+        return event.charactersIgnoringModifiers?.lowercased()
+    }
+
+    static let chordLetters: Set<String> = ["w", "t", "f", "g", "n"]
 
     /// #821: ⌥⌘1 / ⌥⌘2 / ⌥⌘3 pick Focused / Default / Verbose (no app menu item uses them).
     static func verbosity(for event: NSEvent) -> AgentVerbosity? {

@@ -329,6 +329,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: Resume all no longer reports an old History record whose name starts with "-" as a new failure
   every run; its row and the summary now say dch can no longer start that name ("1 session has a name dch can no
   longer start") (#878).
+- Agent Sessions: ⌘W, ⌘T, ⌘F, ⌘G, ⇧⌘G, ⌘N and ⇧⌘N now work while a Cyrillic, Greek, Hebrew or other non-Latin
+  keyboard layout is active (#882).
 
 ## v2.174.0
 
