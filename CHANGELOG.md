@@ -311,6 +311,16 @@ tag from the now-released section and put it on the new top draft.
   dot on the theme's row to switch its accent (Dark: Lime, Cyan, Amber, Violet, White; Light: Blue,
   Lime, Cyan, Amber, Violet, Black). Each theme remembers its own tint. Theme extensions can offer
   tints too, through a new `variants` list in theme.json.
+- Agent Sessions window: start new sessions from the window. Two buttons sit next to the session count:
+  "+" (⌘N, also the "New session" button when nothing is selected) opens a form in place of the detail pane with
+  the folder (recent folders and Choose…), the name (the folder's free name until you type one) and the exact
+  command, shown as it will run; an empty command runs your login shell. ">_" (⇧⌘N) starts a login shell at once
+  in the last folder, named after it, or "shell" when dch cannot use that name; holding the shortcut starts one.
+  Return starts, Esc cancels and puts the keys back where they were. After Start the form reads "Starting…" until
+  the new session is listed, then selects it in Terminal with the keys in it. A name dch cannot keep in its session
+  folder is refused with the real limit, a name that differs only in case from an existing session counts as
+  taken, and a second shell started before the first is listed gets the next free name. Both buttons dim, with the
+  reason, while session controls are unavailable, and a start that fails says why (#847).
 
 ## v2.174.0
 

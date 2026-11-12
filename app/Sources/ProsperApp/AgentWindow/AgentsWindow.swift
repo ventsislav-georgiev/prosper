@@ -129,6 +129,8 @@ final class AgentsNSWindow: NSWindow {
     /// #822 (spec 5.3): who gets a key.
     enum KeyRoute: Equatable {
         case close, toggleMode, verbosity(AgentVerbosity), session(Int), find, findNext(Bool)
+        /// #847: ⌘N (the New session form, or its Name field when open) and ⇧⌘N (the quick shell).
+        case newSession, newShell
         /// Up, down, left, right, Return for the sidebar (sendEvent).
         case sidebar
         /// The window's, doing nothing here (⌥⌘1/2/3 in Terminal mode).
@@ -144,7 +146,7 @@ final class AgentsNSWindow: NSWindow {
     }
 
     /// Pure: the event, the first responder's kind, the sidebar focus and the pane's mode.
-    /// ⌘W, ⌘T, ⌥⌘1/2/3, ⌘F, ⌘G, ⇧⌘G go to the window; ⌘↑/⌘↓ (previous / next session) too,
+    /// ⌘W, ⌘T, ⌥⌘1/2/3, ⌘F, ⌘G, ⇧⌘G, ⌘N, ⇧⌘N go to the window; ⌘↑/⌘↓ (previous / next session) too,
     /// except in a text view, where they move to its start and end (QA #669). Plain arrows and
     /// Return go to the sidebar only while it has the focus and nothing that types does.
     /// Everything else (Esc, Tab, ⌃C, arrows, Return) reaches the first responder.
@@ -157,6 +159,10 @@ final class AgentsNSWindow: NSWindow {
         let key = event.charactersIgnoringModifiers?.lowercased()
         if mods.contains(.command), key == "w" { return .close }
         if renaming { return .pass }
+        if key == "n", mods == [.command] || mods == [.command, .shift] {   // #847: from every responder, the form's fields too
+            if event.isARepeat { return .swallow }   // R2 F1: a held chord starts one session, not one per key repeat
+            return mods == [.command] ? .newSession : .newShell
+        }
         if let v = verbosity(for: event) { return terminalMode ? .swallow : .verbosity(v) }
         if mods == [.command] {
             switch key {
@@ -194,6 +200,9 @@ final class AgentsNSWindow: NSWindow {
         case .session(let d): model.move(d)
         case .find: model.terminal.openFind()
         case .findNext(let forward): model.terminal.findNext(forward)
+        // #847: the model checks the gate; refused, the key does nothing (handled: no beep).
+        case .newSession: model.openNewSession()
+        case .newShell: model.startShell()
         case .swallow: break
         case .sidebar, .pass: return super.performKeyEquivalent(with: event)
         }
@@ -297,23 +306,13 @@ struct AgentSidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: sz(6)) {
-                // #860: names the window (its title is hidden); "Sessions" in the accent, as Settings' rail titles.
-                neonAccentedText(AgentsWindow.title, accent: "Sessions").font(Neon.font(13, weight: .semibold))
-                    .foregroundStyle(Neon.textPrimary).lineLimit(1)
-                Spacer(minLength: 0)
-                let n = model.sections.filter { $0.title != "History" }.reduce(0) { $0 + $1.rows.count }
-                if n > 0 {
-                    Text(n == 1 ? "1 session" : "\(n) sessions").font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
-                }
-            }
-            .padding(.horizontal, sz(14)).padding(.top, sz(30)).padding(.bottom, sz(8))
+            AgentSidebarTitleRow(model: model)
             if !model.hasStore {
                 AgentEmptyState(icon: "rectangle.dashed", title: "Agent Island is off",
                                 detail: "Turn on Agent Island in Settings › Extensions to list your dch sessions here.")
             } else if model.sections.isEmpty {
                 AgentEmptyState(icon: "terminal", title: "No agent sessions",
-                                detail: "Sessions started with dch show up here.")
+                                detail: "Press + or ⌘N to start one.")
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -353,6 +352,35 @@ struct AgentSidebarView: View {
             if let store = model.store { AgentDirStatusStrip(store: store) }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+}
+
+/// The sidebar's title row: the window's name, the count, then #847's [>_] New shell and [+] New session in fixed
+/// sz(18) slots. The count gives way first (lineLimit 1, lowest priority); the buttons never move or resize.
+struct AgentSidebarTitleRow: View {
+    @ObservedObject var model: AgentWindowModel
+
+    var body: some View {
+        HStack(spacing: sz(6)) {
+            // #860: names the window (its title is hidden); "Sessions" in the accent, as Settings' rail titles.
+            neonAccentedText(AgentsWindow.title, accent: "Sessions").font(Neon.font(13, weight: .semibold))
+                .foregroundStyle(Neon.textPrimary).lineLimit(1)
+            Spacer(minLength: 0)
+            let n = model.sections.filter { $0.title != "History" }.reduce(0) { $0 + $1.rows.count }
+            if n > 0 {
+                Text(n == 1 ? "1 session" : "\(n) sessions").font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
+                    .lineLimit(1).layoutPriority(-1)
+            }
+        }
+        // The buttons sit over a reserved trailing strip, inside the row's height: a cut count can never move them.
+        .frame(minHeight: sz(18))
+        .padding(.trailing, AgentNewSessionButtons.width + sz(6))
+        // minWidth 0: the frame is the width offered, never its child's (a cut count's rounding moved the overlay 1 pt).
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .trailing) {
+            if let store = model.store { AgentNewSessionButtons(model: model, store: store) }
+        }
+        .padding(.horizontal, sz(14)).padding(.top, sz(30)).padding(.bottom, sz(8))
     }
 }
 
@@ -468,20 +496,27 @@ extension AgentSidebarRowView {
     }
 }
 
-struct AgentEmptyState: View {
+struct AgentEmptyState<Extra: View>: View {
     let icon: String
     let title: String
     let detail: String
+    /// #847: under the detail (the detail pane's New session pill).
+    @ViewBuilder var extra: Extra
     var body: some View {
         VStack(spacing: sz(8)) {
             Image(systemName: icon).font(Neon.font(22)).foregroundStyle(Neon.textSecondary)
             Text(title).font(Neon.font(13, weight: .semibold)).foregroundStyle(Neon.textPrimary)
             Text(detail).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            extra
         }
         .padding(sz(20))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
+
+extension AgentEmptyState where Extra == EmptyView {
+    init(icon: String, title: String, detail: String) { self.init(icon: icon, title: title, detail: detail) { EmptyView() } }
 }
 
 struct AgentDetailView: View {
@@ -494,7 +529,10 @@ struct AgentDetailView: View {
     var inputStore: AgentIslandStore? { model.selectionIsHeld ? nil : model.store }
 
     var body: some View {
-        if let row = model.selectedRow, let s = row.session {
+        if let form = model.newSession {
+            // #847: the form in place of the pane's content (the selected session's terminal detaches meanwhile).
+            AgentNewSessionView(model: model, form: form)
+        } else if let row = model.selectedRow, let s = row.session {
             // QA #668 F1: an ended session's held row is display-only.
             let ended = model.selectionIsHeld
             let mode = model.paneMode
@@ -519,7 +557,13 @@ struct AgentDetailView: View {
                 .overlay(alignment: .top) { confirmStrip }   // #829 G8: Remove asks, over the pane's top
         } else {
             AgentEmptyState(icon: "sidebar.left", title: "Select a session",
-                            detail: "Up and down move through the list; Return or a click moves into it.")
+                            detail: "Up and down move through the list; Return or a click moves into it.") {
+                AgentPillButton(title: "New session", icon: "plus", tint: Neon.blue,
+                                enabled: model.store?.resumeGate.isOK == true) { model.openNewSession() }
+                    .help(AgentNewSessionButtons.help("New session… (⌘N)", refusal: model.store?.resumeGate.refusal))
+                    .accessibilityLabel("New session")
+                    .padding(.top, sz(4))
+            }
         }
     }
 

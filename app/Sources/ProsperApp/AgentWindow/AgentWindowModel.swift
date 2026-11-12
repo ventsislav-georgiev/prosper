@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -253,7 +254,12 @@ final class AgentWindowModel: ObservableObject {
         subscription = nil
         guard let store else {
             // QA #713 INFO-4: the island's runner drops every answer once its store is gone.
-            if let k = newSession?.starting { newSession?.starting = nil; newSession?.status = "No answer for \(k.name): Agent Island is off" }
+            if let k = newSession?.starting {
+                // R2 F5: answered and waiting for its row: it started, so the form goes; else no answer will come.
+                if pendingSpawn?.key == k { newSession = nil } else {
+                    newSession?.starting = nil; newSession?.status = "No answer for \(k.name): Agent Island is off"
+                }
+            }
             claimed = [:]
             sections = []
             select(nil, manual: false)
@@ -488,12 +494,15 @@ final class AgentWindowModel: ObservableObject {
     /// ⌘N, +, the empty state's pill: the form, prefilled (last folder > the selected session's cwd > ~,
     /// its free name, the island's command setting, else its inference). Open already: its Name field.
     func openNewSession(folder: String? = nil) {
-        pendingSpawn = nil
         newSessionFocus += 1
         guard newSession == nil else { return }
+        guard store?.resumeGate.isOK == true else { return }   // R2 F2: the one gate check for ⌘N, + and the pill
+        pendingSpawn = nil
         let typed = Preferences.agentIslandNewSessionCommand
+        newSessionTookKeys = sessionHasKeys
         newSession = AgentNewSessionForm(folder: AgentNewSession.abbreviate(folder ?? newSessionDefaultFolder, home: home),
                                          command: typed.isEmpty ? "claude" : typed)
+        follow()   // P1b: the form covers the pane, so the terminal detaches (its view leaves the window)
         guard typed.isEmpty else { return }
         island().newSessionCommand { [weak self] argv in
             guard let self, var f = self.newSession, f.starting == nil, f.command == "claude" else { return }
@@ -502,7 +511,23 @@ final class AgentWindowModel: ObservableObject {
         }
     }
 
-    func cancelNewSession() { newSession = nil }
+    /// Cancel, Esc: the pane again, its terminal re-attached (a fresh client: dch redraws the screen), and the keys
+    /// back in the session when the form took them from it.
+    /// R2 F5: after a Start's answer (the form waits for the row), Cancel drops the pending selection too.
+    func cancelNewSession() {
+        if newSession?.starting != nil, pendingSpawn?.key == newSession?.starting { pendingSpawn = nil }
+        newSession = nil
+        follow()
+        if newSessionTookKeys { focusSelection() }
+    }
+
+    /// P1b: the form opened while the keys were in the selected session (its terminal or input box) or asked for it.
+    private var newSessionTookKeys = false
+    private var sessionHasKeys: Bool {
+        if terminal.focusPending || interaction.composerFocusPending { return true }
+        let views: [NSView?] = [terminal.view, interaction.composer]
+        return views.contains { v in v.map { $0.window?.firstResponder === $0 } ?? false }
+    }
 
     var newSessionDefaultFolder: String {
         if let last = Preferences.agentWindowNewSessionFolder, folderExists(last) { return last }
@@ -597,7 +622,7 @@ final class AgentWindowModel: ObservableObject {
         }
         guard store?.resumeGate.isOK == true else { return false }
         let folder = newSessionDefaultFolder
-        return spawn(folder, argv, name: AgentNewSession.autoName(folder: folder, taken: spawnTaken, dir: island().spawnDir()),
+        return spawn(folder, argv, name: AgentNewSession.shellName(folder: folder, taken: spawnTaken, dir: island().spawnDir()),
                      command: nil)
     }
 
@@ -607,9 +632,9 @@ final class AgentWindowModel: ObservableObject {
         guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
             self?.spawned(key, failure, name: name, folder: folder, command: command, request: request)
         }) else {
-            let busy = "\(name) is busy: try again"
-            if newSession != nil { newSession?.status = busy } else {
-                store?.actions[AgentSessionKey(dir: island().spawnDir(), name: "")] = busy   // never dropped silently
+            let why = spawnRefusal(name)
+            if newSession != nil { newSession?.status = why } else {
+                store?.actions[AgentSessionKey(dir: island().spawnDir(), name: "")] = why   // never dropped silently
             }
             return false
         }
@@ -620,8 +645,15 @@ final class AgentWindowModel: ObservableObject {
         return true
     }
 
+    /// QA #736 INFO-3: why the island refused, re-checked in its own order: the gate, the name, then the runner.
+    private func spawnRefusal(_ name: String) -> String {
+        if let why = store?.resumeGate.refusal ?? (store == nil ? "Agent Island is off" : nil) { return "Controls \(why)" }
+        return AgentNewSession.nameError(name, taken: [], dir: island().spawnDir()) ?? "\(name) is busy: try again"
+    }
+
     /// The runner's answer. Success keeps the folder and (OQ-3) a typed command as the one shared setting,
-    /// closes the form and selects the session once its row shows; failure re-enables the form with dch's line.
+    /// selects the session once its row shows (R2 F5: the form stays "Starting…" over the pane until then);
+    /// failure re-enables the form with dch's line.
     /// QA #713 INFO-4: an answer touches the form only when it answers the open form's own request.
     private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String, command: String?,
                          request: Int?) {
@@ -640,7 +672,7 @@ final class AgentWindowModel: ObservableObject {
         }
         if request != nil {
             guard mine else { return }   // closed or replaced meanwhile: the human moved on
-            newSession = nil
+            newSession?.starting = key   // R2 F5: the form stays "Starting…" over the pane until the row lands
         } else if newSession != nil {
             return   // a quick shell's answer under a form opened since: the form keeps the pane
         }
@@ -651,7 +683,12 @@ final class AgentWindowModel: ObservableObject {
     /// The pending spawn's row is there: Terminal (a reused name's Transcript choice dropped), selected, the keys in.
     private func landSpawn() {
         guard let p = pendingSpawn else { return }
-        guard now() - p.at <= Self.spawnSlack else { pendingSpawn = nil; return }
+        guard now() - p.at <= Self.spawnSlack else {
+            // R2 F5: the row never listed: the waiting form goes as Cancel does (its pane re-attached).
+            if newSession?.starting == p.key { cancelNewSession() }
+            pendingSpawn = nil
+            return
+        }
         guard let s = row(.live(p.key))?.session else { return }
         pendingSpawn = nil
         setMode(.terminal, for: s)
@@ -829,7 +866,8 @@ final class AgentWindowModel: ObservableObject {
         let terminalMode = paneMode == .terminal
         // QA #668 F1: an ended session takes no input; #822: Terminal mode has no input box (the terminal is the input).
         interaction.follow(selectionIsHeld || terminalMode ? nil : s)
-        terminal.attach(terminalMode ? s.key : nil)   // paneMode is Transcript for a held row
+        // paneMode is Transcript for a held row; #847: the New session form covers the pane, so no terminal under it.
+        terminal.attach(terminalMode && newSession == nil ? s.key : nil)
     }
 }
 

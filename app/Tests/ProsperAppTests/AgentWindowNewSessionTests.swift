@@ -183,7 +183,7 @@ extension AgentWindowD1Tests {
     func testAgentWindowNewSessionFailureReenablesAndSuccessClosesAndPersists() throws {
         try withNewSessionPrefs {
             Preferences.agentIslandNewSessionCommand = "claude"
-            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            let st = store([]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
             m.openNewSession(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --x")
@@ -202,11 +202,13 @@ extension AgentWindowD1Tests {
             spawns.accept = true
             XCTAssertTrue(m.startNewSession())
             spawns.done[2](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
-            XCTAssertNil(m.newSession, "success: the form closes")
+            XCTAssertEqual(m.newSessionStatus, "Starting api…", "R2 F5: success waits for the row over the pane")
             XCTAssertEqual(m.pendingSpawn?.key, AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
             XCTAssertEqual(Preferences.agentWindowNewSessionFolder, "/Users/example/api", "the expanded folder")
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --x", "OQ-3: the one shared command")
             XCTAssertFalse(SyncedKeys.isSynced("agentWindowNewSessionFolder"), "per Mac")
+            st.sessions = [mapped("api")]
+            XCTAssertNil(m.newSession, "the row lands: the form closes")
         }
     }
 
@@ -215,7 +217,7 @@ extension AgentWindowD1Tests {
     @MainActor
     func testAgentWindowNewSessionStoresTheCommandWithoutItsName() throws {
         try withNewSessionPrefs {
-            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            let st = store([]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
             m.openNewSession(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --name x --chrome")
@@ -224,11 +226,13 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome")
+            st.sessions = [mapped("api")]   // its row lands: the form closes
             m.openNewSession(folder: "/Users/example/api")
             m.setNewSessionCommand("claude  \"--chrome\"  'my x'")
             XCTAssertTrue(m.startNewSession())
             spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude  \"--chrome\"  'my x'", "byte-identical")
+            XCTAssertNil(m.newSession, "listed already: it lands at the answer")
             m.openNewSession(folder: "/Users/example/api")
             m.setNewSessionCommand("claude -p 'one shot' -n x")
             XCTAssertEqual(m.newSessionRuns, "claude -p 'one shot' -n x", "a batch run is not named")
@@ -428,7 +432,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             Preferences.agentIslandNewSessionCommand = "claude --x"
             Preferences.agentWindowNewSessionFolder = "/Users/example/last"
-            let spawns = SpawnCalls(), m = newSessionModel(store([session("last", .idle)]), spawns)
+            let last = session("last", .idle), st = store([last]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
             XCTAssertTrue(m.startShell())
             XCTAssertNil(m.newSession, "no form")
@@ -446,6 +450,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(spawns.calls.last?.argv, ["/bin/fish", "-l"])
             XCTAssertEqual(spawns.calls.last?.name, "sh")
             spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "sh"), nil)
+            st.sessions = [last, mapped("sh")]
             XCTAssertNil(m.newSession)
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --x")
             XCTAssertEqual(Preferences.agentWindowNewSessionFolder, "/Users/example/web")
@@ -457,15 +462,19 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), st = store([session("a", .idle)]), m = newSessionModel(st, spawns)
             defer { m.close() }
-            st.controlDch = nil
+            // R2 F2: the gate closes while the form is open: it stays, says why, Start and New shell refuse.
             m.openNewSession(folder: "/Users/example/api")
+            st.controlDch = nil
             let why = try XCTUnwrap(st.resumeGate.refusal)
+            XCTAssertNotNil(m.newSession)
             XCTAssertEqual(m.newSessionStatus, "Controls \(why)")
             XCTAssertFalse(m.canStartNewSession)
             XCTAssertFalse(m.startNewSession())
             XCTAssertFalse(m.startShell())
             m.cancelNewSession()
             XCTAssertFalse(m.startShell())
+            m.openNewSession(folder: "/Users/example/api")
+            XCTAssertNil(m.newSession, "R2 F2: refused, ⌘N, + and the pill open nothing")
             XCTAssertEqual(spawns.calls.count, 0)
         }
     }
@@ -508,7 +517,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSession?.starting, AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
             XCTAssertEqual(m.newSessionStatus, "Starting api…")
             spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
-            XCTAssertNil(m.newSession, "its own answer closes it")
+            XCTAssertEqual(m.newSessionStatus, "Starting api…", "its own answer: it waits for its row (R2 F5)")
             XCTAssertEqual(m.pendingSpawn?.key, AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
         }
     }
@@ -590,7 +599,7 @@ extension AgentWindowD1Tests {
             XCTAssertNotNil(m.newSession, "nor the old success")
             XCTAssertNil(m.pendingSpawn)
             spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
-            XCTAssertNil(m.newSession)
+            XCTAssertEqual(m.newSessionStatus, "Starting web…", "its own answer: it waits for its row (R2 F5)")
             XCTAssertEqual(m.pendingSpawn?.key, AgentSessionKey(dir: "/tmp/dch-test", name: "web"))
         }
     }
@@ -641,7 +650,9 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSessionRuns, runs)
             st.sessions = []
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
+            m.cancelNewSession()   // R2 F5: the form waits for its row; Cancel closes it and drops the pending pick
             XCTAssertNil(m.newSession)
+            XCTAssertNil(m.pendingSpawn)
             m.openNewSession(folder: "/Users/example/api")
             XCTAssertEqual(m.newSessionName, "api-2", "the claim counts for the next form")
         }

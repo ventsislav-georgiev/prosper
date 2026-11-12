@@ -45,7 +45,18 @@ enum AgentNewSession {
     /// The folder's free name, compared case-folded (freeName). Cut to leave room for a "-N" under `nameLimit`
     /// (sessionName is ASCII: characters are bytes).
     static func autoName(folder: String, taken: Set<String>, dir: String) -> String {
-        AgentIsland.freeName(String(AgentIsland.sessionName(folder: folder).prefix(max(1, nameLimit(dir: dir) - 4))), taken: taken)
+        freeStem(AgentIsland.sessionName(folder: folder), taken: taken, dir: dir)
+    }
+
+    /// QA #736 INFO-3: the quick shell starts in every folder: a folder name dch refuses (id-shaped, too long for
+    /// `dir`) gives way to the stem "shell".
+    static func shellName(folder: String, taken: Set<String>, dir: String) -> String {
+        let n = autoName(folder: folder, taken: taken, dir: dir)
+        return nameError(n, taken: taken, dir: dir) == nil ? n : freeStem("shell", taken: taken, dir: dir)
+    }
+
+    private static func freeStem(_ stem: String, taken: Set<String>, dir: String) -> String {
+        AgentIsland.freeName(String(stem.prefix(max(1, nameLimit(dir: dir) - 4))), taken: taken)
     }
 
     /// nil: the name can be spawned into socket dir `dir`. Empty (after trim) is the automatic name, so no error.
@@ -58,7 +69,7 @@ enum AgentNewSession {
         }
         if t.hasPrefix("-") || t.hasPrefix(".") { return "Can't start with - or ." }
         let limit = nameLimit(dir: dir)
-        if t.utf8.count > limit { return "\(limit) characters at most" }
+        if t.utf8.count > limit { return limit == 1 ? "1 character at most" : "\(limit) characters at most" }
         if idShaped(t) { return "Looks like a dch session id" }   // dch 1.46 refuses it (refuse_id_name)
         // The clash is case-folded: name the session as it is spelled.
         return taken.filter { $0.lowercased() == t.lowercased() }.min().map { "\($0) is taken" }
@@ -144,8 +155,9 @@ struct AgentNewSessionView: View {
             }
             Divider().padding(.vertical, sz(4))
             HStack(spacing: sz(8)) {
+                // QA #736 INFO-3: Start's condition; it dims in place.
                 AgentPillButton(title: "New shell", icon: "apple.terminal", tint: Neon.terminal,
-                                enabled: !starting && model.store?.resumeGate.isOK == true) { model.startShell() }
+                                enabled: model.canStartNewSession) { model.startShell() }
                 Spacer(minLength: 0)
                 AgentPillButton(title: "Cancel", icon: "xmark", tint: Neon.textSecondary) { model.cancelNewSession() }
                     .keyboardShortcut(.cancelAction)
@@ -194,15 +206,21 @@ struct AgentNewSessionButtons: View {
     var body: some View {
         let why = store.resumeGate.refusal
         HStack(spacing: sz(4)) {
-            icon("apple.terminal", help: why.map { "Controls \($0)" } ?? "New shell (⇧⌘N)", label: "New shell", on: why == nil) {
+            icon("apple.terminal", help: Self.help("New shell (⇧⌘N)", refusal: why), label: "New shell", on: why == nil) {
                 model.startShell()
             }
-            icon("plus", help: why.map { "Controls \($0)" } ?? "New session… (⌘N)", label: "New session", on: why == nil) {
+            icon("plus", help: Self.help("New session… (⌘N)", refusal: why), label: "New session", on: why == nil) {
                 model.openNewSession()
             }
         }
         .fixedSize()
     }
+
+    /// The pair's width: two sz(18) slots and the gap between them.
+    static var width: CGFloat { 2 * sz(18) + sz(4) }
+
+    /// The tooltip: the shortcut, or why the gate refuses (the button dimmed in its slot).
+    static func help(_ ok: String, refusal: String?) -> String { refusal.map { "Controls \($0)" } ?? ok }
 
     private func icon(_ name: String, help: String, label: String, on: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
