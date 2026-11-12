@@ -325,6 +325,90 @@ final class ShortcutCatalogTests: XCTestCase {
         XCTAssertEqual(ShortcutCatalog.filter(rows, query: "PageUp").map(\.title), ["Fake One"])
     }
 
+    /// #880: an unbound row is `unsetKeyCombo`, key code 0, which is the A key. Its spec
+    /// ("a") must not enter the search text; a bound row keeps its spec, and "cmd" still
+    /// finds every bound row with Command (the published "pageup", "return", "cmd" example).
+    func testUnboundRowHasNoSpecInItsSearchText() throws {
+        let rows = catalog(apps: [AppShortcut(target: "com.example.one", combo: combo(kVK_PageUp, cmdKey), name: "Fake One"),
+                                  AppShortcut(target: "com.example.two", combo: unsetKeyCombo, name: "Fake Two")])
+        let bound = try XCTUnwrap(rows.first { $0.title == "Fake One" })
+        let unbound = try XCTUnwrap(rows.first { $0.title == "Fake Two" })
+        XCTAssertFalse(unbound.searchText.split(separator: " ").contains("a"), unbound.searchText)
+        XCTAssertTrue(bound.searchText.split(separator: " ").contains("cmd+pageup"), bound.searchText)
+        XCTAssertEqual(ShortcutCatalog.filter(rows, query: "pageup").map(\.title), ["Fake One"])
+        let cmd = ShortcutCatalog.filter(rows, query: "cmd").map(\.title)
+        XCTAssertTrue(cmd.contains("Fake One"))
+        XCTAssertFalse(cmd.contains("Fake Two"))
+    }
+
+    /// The rule is "bound" (has a modifier), not "key code 0": a chord on the A key (key
+    /// code 0) keeps its spec, and an unbound row on another key gets none. Page Up is drawn
+    /// ⇞, so only a spec could put "pageup" in that row's search text.
+    func testSpecFollowsBoundNotKeyCode() throws {
+        let rows = catalog(apps: [AppShortcut(target: "com.example.one", combo: combo(kVK_ANSI_A, cmdKey), name: "Fake One"),
+                                  AppShortcut(target: "com.example.two", combo: combo(kVK_PageUp, 0), name: "Fake Two")])
+        XCTAssertEqual(kVK_ANSI_A, 0)
+        XCTAssertTrue(ShortcutCatalog.filter(rows, query: "cmd+a").contains { $0.title == "Fake One" })
+        XCTAssertTrue(ShortcutCatalog.filter(rows, query: "cmd").contains { $0.title == "Fake One" })
+        let unbound = try XCTUnwrap(rows.first { $0.title == "Fake Two" })
+        XCTAssertFalse(unbound.isBound)
+        XCTAssertFalse(ShortcutCatalog.filter(rows, query: "pageup").contains { $0.title == "Fake Two" }, unbound.searchText)
+    }
+
+    /// The published example: "return" finds a Return row (drawn ↩) on every launch.
+    func testFilterFindsReturnByItsPreferredName() {
+        let rows = catalog(apps: [AppShortcut(target: "com.example.one", combo: combo(kVK_Return, cmdKey), name: "Fake One")])
+        // Contains, not equals: a built-in default (Window: Maximize) is on Return too.
+        XCTAssertTrue(ShortcutCatalog.filter(rows, query: "return").contains { $0.title == "Fake One" })
+    }
+
+    // MARK: - #880: one stable name per key, every alias still parses
+
+    /// Every key with two names in the table, preferred name first. `KeyCombo.keyCodeTable`
+    /// is checked against this list below, so a new alias has to be added here.
+    private static let aliases: [(preferred: String, alias: String, code: Int)] = [
+        ("return", "enter", kVK_Return), ("delete", "backspace", kVK_Delete), ("escape", "esc", kVK_Escape),
+    ]
+
+    func testTheTableHasExactlyTheListedAliases() {
+        let byCode = Dictionary(grouping: KeyCombo.keyCodeTable.keys, by: { KeyCombo.keyCodeTable[$0]! })
+        let shared = byCode.filter { $0.value.count > 1 }.mapValues { Set($0) }
+        XCTAssertEqual(shared, Dictionary(uniqueKeysWithValues: Self.aliases.map { ($0.code, Set([$0.preferred, $0.alias])) }))
+        for (code, names) in shared {
+            XCTAssertEqual(names.intersection(KeyCombo.preferredKeyNames).count, 1, "key \(code): \(names)")
+        }
+    }
+
+    /// The name table is built in dictionary order, which differs per process: the
+    /// preferred name must win from either side, on every run.
+    func testPreferredNameWinsInEitherOrder() {
+        for a in Self.aliases {
+            XCTAssertEqual(KeyCombo.nameTable([(a.preferred, a.code), (a.alias, a.code)]), [a.code: a.preferred])
+            XCTAssertEqual(KeyCombo.nameTable([(a.alias, a.code), (a.preferred, a.code)]), [a.code: a.preferred])
+            XCTAssertEqual(KeyCombo.codeToName[a.code], a.preferred)
+            XCTAssertEqual(KeyCombo(keyCode: UInt32(a.code), carbonModifiers: UInt32(cmdKey), display: "").specString,
+                           "cmd+\(a.preferred)")
+        }
+    }
+
+    /// A binding stored under either name loads to the same key, and its re-written spec
+    /// (now always the preferred name) loads to that key again.
+    func testEveryAliasRoundTrips() throws {
+        for a in Self.aliases {
+            for name in [a.preferred, a.alias] {
+                let parsed = try XCTUnwrap(KeyCombo.parse("cmd+shift+\(name)"), name)
+                XCTAssertEqual(parsed.keyCode, UInt32(a.code), name)
+                XCTAssertEqual(parsed.carbonModifiers, UInt32(cmdKey | shiftKey), name)
+                let again = try XCTUnwrap(KeyCombo.parse(try XCTUnwrap(parsed.specString)), name)
+                XCTAssertEqual(again.keyCode, parsed.keyCode, name)
+                XCTAssertEqual(again.carbonModifiers, parsed.carbonModifiers, name)
+            }
+        }
+        for (name, code) in KeyCombo.keyCodeTable {
+            XCTAssertEqual(KeyCombo.parse("ctrl+\(name)")?.keyCode, UInt32(code), name)
+        }
+    }
+
     func testBoundOnlyKeepsOnlyBoundRows() {
         let rows = catalog(targets: [ActivationTarget(label: "Quicklinks", prefix: "ql ")])
         let bound = ShortcutCatalog.filter(rows, query: "", boundOnly: true)

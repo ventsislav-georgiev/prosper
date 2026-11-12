@@ -166,9 +166,35 @@ final class KeyMappingRowLayoutTests: XCTestCase {
         assertCentred(label, in: r, tolerance: 0.5 + pixel, "\(tag), \(label.stringValue)", file: file, line: line)
     }
 
-    /// "Key<n>": a key code with no name or glyph (JIS, keypad, help keys).
-    private static func isFallback(_ text: String) -> Bool {
-        text.range(of: #"Key[0-9]+$"#, options: .regularExpression) != nil
+    /// #880: the size rule as a property, not today's SF metrics. A label whose full-size
+    /// width fits the field keeps the full size; one that does not is shrunk (and
+    /// `assertFits` has already checked it fits), and shrunk no further than needed: one
+    /// step larger (the product's 0.25 pt step) would not fit, unless it sits at the 1 pt
+    /// floor. Widths are measured on the shown label (same weight and design, only the size
+    /// changed) and its font put back, so another macOS's font metrics move both sides.
+    private func assertFullSizeWhenItFits(_ label: NSTextField, in r: RecorderView, full: CGFloat, _ tag: String,
+                                          file: StaticString = #filePath, line: UInt = #line) {
+        guard let shown = label.font else { return XCTFail("no font at \(tag)", file: file, line: line) }
+        func width(at size: CGFloat) -> CGFloat {
+            label.font = NSFont(descriptor: shown.fontDescriptor, size: size)
+            defer { label.font = shown }
+            return label.fittingSize.width
+        }
+        let fullWidth = width(at: full)
+        let pt = shown.pointSize
+        if fullWidth <= r.bounds.width {
+            XCTAssertEqual(pt, full, "'\(label.stringValue)' shrank though it fits at full size at \(tag): \(fullWidth) in \(r.bounds.width)",
+                           file: file, line: line)
+        } else {
+            XCTAssertLessThan(pt, full, "'\(label.stringValue)' not shrunk at \(tag): \(fullWidth) in \(r.bounds.width)",
+                              file: file, line: line)
+            if pt > 1 {
+                let stepUp = width(at: pt + 0.25)
+                XCTAssertGreaterThan(stepUp, r.bounds.width,
+                                     "'\(label.stringValue)' over-shrunk at \(tag): \(pt + 0.25) pt is \(stepUp) wide and fits \(r.bounds.width)",
+                                     file: file, line: line)
+            }
+        }
     }
 
     /// The Key Remapping row's target recorder, hosted offscreen at `scale`.
@@ -197,9 +223,9 @@ final class KeyMappingRowLayoutTests: XCTestCase {
     }
 
     /// ⌃⌥⇧⌘PAGEDOWN was 120 pt at 12 pt: cut at both ends of the 96 pt key-rule field.
-    /// Page Up / Page Down now draw as ⇞ ⇟, so every named key (and Unset, "Press keys…")
-    /// keeps today's 12 pt x scale at every scale; only the "Key<n>" fallbacks shrink, and
-    /// never below 11 pt at 1.0. Every label lies inside the field.
+    /// Page Up / Page Down now draw as ⇞ ⇟. Every label lies inside the field (one
+    /// backing pixel, backing 1 and 2), never above 12 pt x scale, and keeps that full
+    /// size whenever it fits at it (#880: no pinned font metrics).
     func testEveryRecorderLabelFitsTheKeyRuleField() throws {
         let labels = Self.everyLabel()
         XCTAssertTrue(labels.contains { $0.text == "⌃⌥⇧⌘⇟" } && labels.contains { $0.text == "⌃⌥⇧⌘⇞" },
@@ -213,10 +239,7 @@ final class KeyMappingRowLayoutTests: XCTestCase {
                         assertFits(label, in: r, pixel: pixel, tag)
                         let pt = try XCTUnwrap(label.font?.pointSize)
                         XCTAssertLessThanOrEqual(pt, 12 * scale, "'\(item.text)' grew at \(tag)")
-                        if scale == 1 { XCTAssertGreaterThanOrEqual(pt, 11, "'\(item.text)' below 11 pt at \(tag)") }
-                        if !Self.isFallback(item.text) {
-                            XCTAssertEqual(pt, 12 * scale, "named key '\(item.text)' lost the full size at \(tag): \(label.fittingSize.width) wide at \(pt) pt in \(r.bounds.width)")
-                        }
+                        assertFullSizeWhenItFits(label, in: r, full: 12 * scale, tag)
                     }
                     r.recording = false
                 }
@@ -225,7 +248,8 @@ final class KeyMappingRowLayoutTests: XCTestCase {
     }
 
     /// Settings > Shortcuts (All Actions) hosts the same recorder in a sz(142) slot: the
-    /// widest label of all, a four-modifier "Key<n>" fallback, fits there at full size.
+    /// widest label of all, a four-modifier "Key<n>" fallback, fits there, at full size
+    /// whenever it fits at full size.
     func testAllActionsRecorderFitsTheWidestLabel() throws {
         let mods = UInt32(controlKey | optionKey | shiftKey | cmdKey)
         let widest = KeyCombo(keyCode: 104, carbonModifiers: mods, display: "")
@@ -255,7 +279,7 @@ final class KeyMappingRowLayoutTests: XCTestCase {
                 let label = try XCTUnwrap(all(r, NSTextField.self).first, tag)
                 XCTAssertEqual(label.stringValue, "⌃⌥⇧⌘Key104")
                 assertFits(label, in: r, pixel: pixel, tag)
-                XCTAssertEqual(label.font?.pointSize, 12 * scale, "\(tag): the widest label shrank in the wide slot")
+                assertFullSizeWhenItFits(label, in: r, full: 12 * scale, tag)
             }
         }
     }

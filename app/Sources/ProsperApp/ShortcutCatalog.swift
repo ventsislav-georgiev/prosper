@@ -88,8 +88,11 @@ struct BindableAction: Identifiable, Hashable, Sendable {
         self.defaultCombo = defaultCombo
         self.recordID = recordID
         self.conflictNote = conflictNote
-        // #876: the spec string ("cmd+pageup") keeps keys drawn as glyphs (⇞ ⇟ ↩) findable by name.
-        self.searchText = SettingsSearch.fold("\(title) \(category) \(combo.label) \(combo.specString ?? "")")
+        // #876: the spec string ("cmd+pageup") keeps keys drawn as glyphs (⇞ ⇟ ↩) findable by name;
+        // `specString` names each key once ("return", never "enter"). #880: an unbound row
+        // (same test as `isBound`) gets no spec: `unsetKeyCombo` is keyCode 0, the A key.
+        let spec = combo.carbonModifiers != 0 ? combo.specString ?? "" : ""
+        self.searchText = SettingsSearch.fold("\(title) \(category) \(combo.label) \(spec)")
     }
 
     /// Same row with a freshly computed conflict hint. `ShortcutCatalog.build`'s

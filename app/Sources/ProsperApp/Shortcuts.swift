@@ -266,8 +266,20 @@ extension KeyCombo {
         return parts.joined(separator: "+")
     }
 
-    private static let codeToName: [Int: String] =
-        Dictionary(keyCodeTable.map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+    /// One name per key code, the same in every process. A key with two names in
+    /// `keyCodeTable` (return/enter, delete/backspace, escape/esc) is named by the one
+    /// in `preferredKeyNames`; `parse` still accepts both (#880).
+    static let codeToName: [Int: String] = nameTable(keyCodeTable.map { ($0.key, $0.value) })
+
+    /// The names that win for a key with two. Dictionary order is seeded per process, so
+    /// plain first-wins named Return "enter" on some launches and "return" on others.
+    static let preferredKeyNames: Set<String> = ["return", "delete", "escape"]
+
+    /// Code → name over `pairs`, the same result in any order of `pairs`.
+    static func nameTable(_ pairs: [(name: String, code: Int)]) -> [Int: String] {
+        Dictionary(pairs.map { ($0.code, $0.name) },
+                   uniquingKeysWith: { a, b in preferredKeyNames.contains(a) ? a : b })
+    }
 
     /// Single printable ASCII char for a virtual keycode (layout-independent), or nil
     /// for keys with no character (space, arrows, F-keys, return…). Lets a synthetic
@@ -298,7 +310,7 @@ extension KeyCombo {
         return mask
     }
 
-    private static let keyCodeTable: [String: Int] = [
+    static let keyCodeTable: [String: Int] = [
         "a": kVK_ANSI_A, "b": kVK_ANSI_B, "c": kVK_ANSI_C, "d": kVK_ANSI_D,
         "e": kVK_ANSI_E, "f": kVK_ANSI_F, "g": kVK_ANSI_G, "h": kVK_ANSI_H,
         "i": kVK_ANSI_I, "j": kVK_ANSI_J, "k": kVK_ANSI_K, "l": kVK_ANSI_L,
