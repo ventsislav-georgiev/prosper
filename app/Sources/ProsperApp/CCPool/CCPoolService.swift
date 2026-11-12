@@ -12,6 +12,9 @@ struct CCPoolServiceConfig: Sendable {
     var exhaustedThreshold: Double = CCPoolCore.exhaustedDefault
     /// How long the start-up probe of an occupied port waits for an answer.
     var probeTimeout: TimeInterval = 2
+    /// The start-up port probe, a test seam: a bound socket that is not listening makes the real
+    /// probe wait for it, so only an injected "free" can stage the bind race start(bindRetry:) retries.
+    var portProbe: @Sendable (_ port: UInt16, _ timeout: TimeInterval) -> CCPoolPortProbe.Result = CCPoolPortProbe.probe
 }
 
 /// #871: the in-process ccpool proxy. HTTP/1.1 on Network.framework, loopback only. Clients point
@@ -50,6 +53,9 @@ final class CCPoolService: @unchecked Sendable {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: CCPoolConnection] = [:]
     private var _status: Status = .stopped
+    /// The last start() failed at bind time after the probe found the port free (TIME_WAIT, a
+    /// socket bound but not listening): the case a brief retry can win.
+    private var bindRaced = false
 
     init(config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger = CCPoolOSLog()) {
         self.config = config
@@ -90,7 +96,7 @@ final class CCPoolService: @unchecked Sendable {
         if case .running = status { return status }
         if let why = Self.refusalUnderTest(config) { return finishStart(.failed(why), note: why) }
         if config.port != 0 {
-            switch CCPoolPortProbe.probe(port: config.port, timeout: config.probeTimeout) {
+            switch config.portProbe(config.port, config.probeTimeout) {
             case .free: break
             case .ccpool(let pid, _):
                 return finishStart(.heldByCCPool(pid: pid), note: "port held by another ccpool proxy; not binding")
@@ -102,16 +108,23 @@ final class CCPoolService: @unchecked Sendable {
         do { l = try NWListener(using: Self.listenerParameters(port: config.port)) } catch {
             return finishStart(.failed("listener: \(error)"), note: "listener could not be created")
         }
-        final class Outcome: @unchecked Sendable { var status: Status = .failed("bind timed out") }
+        final class Outcome: @unchecked Sendable { var status: Status = .failed("bind timed out"); var inUse = false; var settled = false }
         let outcome = Outcome()
         let sem = DispatchSemaphore(value: 0)
-        l.stateUpdateHandler = { [weak l] state in
+        l.stateUpdateHandler = { [weak self, weak l] state in
+            // After start settled, only a later failure matters: the status must stop saying running.
+            if outcome.settled {
+                if case .failed(let e) = state { self?.listenerLost(e, from: l) }
+                return
+            }
             switch state {
             case .ready:
                 outcome.status = .running(port: l?.port?.rawValue ?? 0)
+                outcome.settled = true
                 sem.signal()
             case .failed(let e), .waiting(let e):
-                if case .posix(.EADDRINUSE) = e { outcome.status = .heldByOther } else { outcome.status = .failed("\(e)") }
+                if case .posix(.EADDRINUSE) = e { outcome.status = .heldByOther; outcome.inUse = true } else { outcome.status = .failed("\(e)") }
+                outcome.settled = true
                 sem.signal()
             default: break
             }
@@ -122,10 +135,59 @@ final class CCPoolService: @unchecked Sendable {
         guard case .running = outcome.status else {
             l.stateUpdateHandler = nil
             l.cancel()
+            lock.withLock { bindRaced = outcome.inUse }
             return finishStart(outcome.status, note: "listener did not start")
         }
         lock.withLock { listener = l }
         return finishStart(outcome.status, note: "proxy listening on loopback")
+    }
+
+    /// P2a (d): start, and while the bind itself loses to a port the probe found free (P1 note 5:
+    /// stop() then start() can meet TIME_WAIT; endpoint reuse stays off), retry for up to
+    /// `bindRetry` seconds. A port held by a live listener is never retried. Blocks: off main only.
+    @discardableResult
+    func start(bindRetry: TimeInterval) -> Status {
+        let deadline = Date().addingTimeInterval(bindRetry)
+        while true {
+            lock.withLock { bindRaced = false }
+            let s = start()
+            guard case .heldByOther = s, lock.withLock({ bindRaced }), Date() < deadline else { return s }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+    }
+
+    /// The Settings "Restart proxy": a listener restart (B25). Blocks: off main only.
+    @discardableResult
+    func restart(bindRetry: TimeInterval = 3) -> Status {
+        // Wait for the old listener to be gone: a probe racing its cancel would be answered by it
+        // (and read as "another ccpool holds the port") or reset (read as "something else").
+        let gone = DispatchSemaphore(value: 0)
+        let old = lock.withLock { listener }
+        old?.stateUpdateHandler = { if case .cancelled = $0 { gone.signal() } }
+        stop()
+        if old != nil { _ = gone.wait(timeout: .now() + 2) }
+        return start(bindRetry: bindRetry)
+    }
+
+    /// Remove an account and drop its upstream URLSession with it (P2a follow-up e).
+    func removeAccount(label: String) throws {
+        let id = try store.removeAccount(label: label, secrets: secrets)
+        upstream.drop(accountID: id)
+    }
+
+    /// QA #734: the running listener failed (`from` nil means the current one). The status says
+    /// so and the listener is dropped, so the pane offers Start again instead of showing running.
+    func listenerLost(_ error: NWError, from failed: NWListener? = nil) {
+        let lost = lock.withLock { () -> NWListener? in
+            guard let l = listener, failed == nil || failed === l else { return nil }
+            listener = nil
+            _status = .failed("\(error)")
+            return l
+        }
+        guard let lost else { return }
+        lost.stateUpdateHandler = nil
+        lost.cancel()
+        logger.note(nil, "listener failed after start: \(error)")
     }
 
     private func finishStart(_ s: Status, note: String) -> Status {

@@ -20,6 +20,8 @@ final class CCPoolFakeServer: @unchecked Sendable {
     private let lock = NSLock()
     private var live: [NWConnection] = []
     private var _accepted = 0
+    private var _dropReused = 0
+    private var _reusedDropped = 0
     private(set) var port: UInt16 = 0
     let handler: @Sendable (CCPoolRequestHead, Data) -> Reply
 
@@ -41,6 +43,19 @@ final class CCPoolFakeServer: @unchecked Sendable {
     }
 
     var accepted: Int { lock.withLock { _accepted } }
+    /// Read the next `n` requests that arrive on an already-used connection, then close it without
+    /// answering: a pooled connection the far end dropped (B17, QA #733 F1).
+    func dropReused(_ n: Int) { lock.withLock { _dropReused = n } }
+    var reusedDropped: Int { lock.withLock { _reusedDropped } }
+
+    private func takeReusedDrop() -> Bool {
+        lock.withLock {
+            guard _dropReused > 0 else { return false }
+            _dropReused -= 1
+            _reusedDropped += 1
+            return true
+        }
+    }
 
     func stop() {
         listener.cancel()
@@ -50,16 +65,22 @@ final class CCPoolFakeServer: @unchecked Sendable {
     private func serve(_ c: NWConnection) {
         lock.withLock { _accepted += 1; live.append(c) }
         c.start(queue: queue)
-        read(c, Data())
+        read(c, Data(), served: 0)
     }
 
-    private func read(_ c: NWConnection, _ pending: Data) {
+    private func read(_ c: NWConnection, _ pending: Data, served: Int) {
         c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, error in
             guard let self else { return }
             var buf = pending
+            var served = served
             if let data { buf.append(data) }
             while case .head(let h, let len, let rest)? = CCPoolRequestHead.parse(buf), rest.count >= len {
                 buf = Data(rest.dropFirst(len))
+                if served > 0, self.takeReusedDrop() {
+                    c.cancel()
+                    return
+                }
+                served += 1
                 switch self.handler(h, Data(rest.prefix(len))) {
                 case .drop:
                     c.cancel()
@@ -74,7 +95,7 @@ final class CCPoolFakeServer: @unchecked Sendable {
                 }
             }
             if done || error != nil { c.cancel(); return }
-            self.read(c, buf)
+            self.read(c, buf, served: served)
         }
     }
 }
@@ -89,6 +110,9 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
     var big: Set<String> = []          // 200 with a 400 KB body
     var usage: [String: Double] = [:]  // five_hour utilization per token
     var dropNext = 0                   // close this many requests without an answer
+    var reject: [String: Int] = [:]    // token -> 401/403, no rate-limit headers
+    var overloadRetryAfter: String?    // Retry-After sent with an overload 429 (P2a follow-up a)
+    var errorPad = 0                   // bytes of padding in a 429 error body (QA #733 INFO-3)
     private(set) var seen: [String] = []       // Authorization values answered, in order
     private(set) var apiKeys: [String] = []    // x-api-key values received
     private(set) var bodySizes: [Int] = []
@@ -110,6 +134,10 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
             bodySizes.append(body.count)
             paths.append(head.path)
             let has = { (set: Set<String>) in set.contains { auth.contains($0) } }
+            if let status = reject.first(where: { auth.contains($0.key) })?.value {
+                return .respond(status, [("content-type", "application/json")],
+                                Data(#"{"type":"error","error":{"type":"authentication_error","message":"invalid"}}"#.utf8))
+            }
             let isSpent = has(spent), isOverload = has(overload), isLong = has(longWait)
             let reset = Int(Date().timeIntervalSince1970) + 3600
             let util = usage.first { auth.contains($0.key) }?.value
@@ -124,7 +152,8 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
             h.append(("content-type", "application/json"))
             let limited = isSpent || isOverload || isLong
             if isLong { h.append(("Retry-After", "7200")) }
-            var out = Data(limited ? #"{"type":"error","error":{"message":"limit"}}"#.utf8
+            if isOverload, !isLong, let ra = overloadRetryAfter { h.append(("Retry-After", ra)) }
+            var out = Data(limited ? #"{"type":"error","error":{"message":"limit\#(String(repeating: "p", count: errorPad))"}}"#.utf8
                 : #"{"type":"message","content":[{"type":"text","text":"hi"}]}"#.utf8)
             if has(big), !limited { out = Data(#"{"type":"message","pad":""#.utf8) + Data(repeating: 120, count: 400_000) + Data(#""}"#.utf8) }
             return .respond(limited ? 429 : 200, h, out)
@@ -142,6 +171,13 @@ final class CCPoolCapturingLogger: CCPoolLogger, @unchecked Sendable {
             if Thread.isMainThread { _onMain = true }
         }
     }
+    private var _publicLines: [String] = []
+    func note(_ label: String?, _ message: String, private detail: String) {
+        note(label, message + detail)
+        lock.withLock { _publicLines.append("\(label ?? "-"): \(message)") }
+    }
+    /// What the unified log would show in the clear for the lines written with a private part.
+    var publicLines: [String] { lock.withLock { _publicLines } }
     var lines: [String] { lock.withLock { _lines } }
     var onMain: Bool { lock.withLock { _onMain } }
     func forgetMain() { lock.withLock { _onMain = false } }   // the test's own start() call logs on main
@@ -330,22 +366,86 @@ final class CCPoolProxyTests: XCTestCase {
         XCTAssertFalse(r.anthropic.get { $0.seen }.contains { $0.contains("tok-one") }, "the next request never touches it")
     }
 
-    // B17: a dropped upstream connection is retried once, never sent twice.
+    // B17: a pooled upstream connection the far end dropped is retried once, never more.
     func testCCPoolStaleConnectionRetriedOnceNeverSentTwice() throws {
         let r = try rig()
         r.setCurrent("three")
-        r.anthropic.set { $0.dropNext = 1 }
+        XCTAssertEqual(r.post()?.status, 200, "opens three's pooled connection")
+        XCTAssertEqual(r.up.accepted, 1)
+        r.anthropic.clearSeen()
+        r.up.dropReused(1)
         let resp = try XCTUnwrap(r.post())
         XCTAssertEqual(resp.status, 200, resp.text)
-        XCTAssertEqual(r.anthropic.get { $0.seen }.count, 1, "processed exactly once")
-        XCTAssertEqual(r.anthropic.get { $0.dropped }, 1)
+        XCTAssertEqual(r.up.reusedDropped, 1, "the request went out on the pooled connection, which dropped it")
+        XCTAssertEqual(r.anthropic.get { $0.seen }.count, 1, "answered once, on the retry")
+        XCTAssertEqual(r.up.accepted, 2, "the retry opened a fresh connection")
 
+        // The retry fails too: a real error, no third attempt.
         r.anthropic.clearSeen()
+        r.up.dropReused(1)
         r.anthropic.set { $0.dropNext = 10 }
         let again = try XCTUnwrap(r.post())
         XCTAssertEqual(again.status, 502, "a second failure is a real error")
-        XCTAssertEqual(r.anthropic.get { $0.dropped }, 3, "exactly one retry")
+        XCTAssertEqual(r.up.reusedDropped, 2)
+        XCTAssertEqual(r.anthropic.get { $0.dropped }, 1, "exactly one retry")
         XCTAssertEqual(r.store.snapshot.accounts.values.map(\.cooldown), [[:], [:], [:]], "transport failures bench nobody")
+    }
+
+    // QA #733 F1: a FRESH connection that drops after reading the whole request may have run it:
+    // 502, never resent (the quota is not spent twice).
+    func testCCPoolDropOnFreshConnectionIsNotResent() throws {
+        let r = try rig(["one"])
+        r.anthropic.set { $0.dropNext = 1 }
+        let resp = try XCTUnwrap(r.post())
+        XCTAssertEqual(resp.status, 502, resp.text)
+        XCTAssertEqual(r.anthropic.get { $0.dropped }, 1, "the fake read exactly one request")
+        XCTAssertEqual(r.anthropic.get { $0.seen }.count, 0, "and no second one")
+        XCTAssertEqual(r.up.accepted, 1)
+        XCTAssertFalse(r.log.lines.contains { $0.contains("retrying once") }, r.log.lines.joined(separator: "\n"))
+        XCTAssertEqual(r.cooldown("one"), [:])
+    }
+
+    func testCCPoolResendDecisionTable() {
+        let lost = URLError.Code.networkConnectionLost
+        let rows: [(URLError.Code?, Bool, Bool, Bool, Bool, String)] = [
+            (lost, false, false, true, true, "pooled connection dropped: one resend"),
+            (lost, false, false, false, false, "fresh connection: may have run, no resend"),
+            (lost, true, false, true, false, "already retried"),
+            (lost, false, true, true, false, "streamed body cannot be sent again"),
+            (.timedOut, false, false, true, false, "a timeout is not a stale connection"),
+            (nil, false, false, true, false, "not a URLError"),
+        ]
+        for (code, retried, streamed, reused, want, why) in rows {
+            XCTAssertEqual(CCPoolConnection.shouldResend(code, retried: retried, streamed: streamed, reused: reused), want, why)
+        }
+    }
+
+    // QA #733 F2: Retry-After is clamped to 0...maxBench before any arithmetic.
+    func testCCPoolRetryAfterClamp() {
+        let max = CCPoolCore.maxBench
+        let rows: [(String?, Int)] = [
+            ("9223372036854775807", max), (String(10 * max), max), ("-5", 0), ("abc", 0), (" 30 ", 30),
+            ("99999999999999999999999", 0), (nil, 0), ("", 0), ("7200", 7200),
+        ]
+        for (raw, want) in rows { XCTAssertEqual(CCPoolCore.retryAfterSeconds(raw), want, raw ?? "nil") }
+    }
+
+    func testCCPoolHugeRetryAfterNoTrap() throws {
+        for (header, benched) in [("9223372036854775807", true), ("-5", false), ("abc", false), (" 30 ", false)] {
+            let r = try rig(["one"])
+            r.anthropic.set { $0.overload = ["tok-one"]; $0.overloadRetryAfter = header }
+            let now = Int(Date().timeIntervalSince1970)
+            let resp = try XCTUnwrap(r.post(), header)
+            XCTAssertTrue([429, 503].contains(resp.status), "\(header): \(resp.status)")
+            let bench = r.cooldown("one").values.max()
+            if benched {
+                let until = try XCTUnwrap(bench, header)
+                XCTAssertLessThanOrEqual(until, now + CCPoolCore.maxBench + 5, "no bench past now + maxBench")
+                XCTAssertGreaterThan(until, now + CCPoolCore.maxBench - 60)
+            } else {
+                XCTAssertNil(bench, "\(header): a short or bad Retry-After benches nobody")
+            }
+        }
     }
 
     // B18: a client that hangs up mid-stream cannot corrupt the next response.
@@ -377,7 +477,7 @@ final class CCPoolProxyTests: XCTestCase {
     // B14: upstream congestion is not an account problem.
     func testCCPoolUpstreamCongestionPassesThroughNobodyBenched() throws {
         let r = try rig()
-        r.anthropic.set { $0.overload = ["tok-one", "tok-two", "tok-three"] }
+        r.anthropic.set { $0.overload = ["tok-one", "tok-two", "tok-three"]; $0.errorPad = 600 }
         let before = r.store.snapshot.accounts
         let resp = try XCTUnwrap(r.post())
         XCTAssertEqual(resp.status, 429)
@@ -386,9 +486,26 @@ final class CCPoolProxyTests: XCTestCase {
         XCTAssertEqual(r.store.snapshot.accounts.mapValues(\.cooldown), before.mapValues(\.cooldown), "nobody gets benched for it")
         XCTAssertEqual(r.anthropic.get { $0.seen }.count, 1, "and nothing rotates")
         let line = try XCTUnwrap(r.log.lines.first { $0.contains("429") })
-        XCTAssertTrue(line.contains("reason=no exhausted quota; body="), line)
+        XCTAssertTrue(line.contains("reason=no exhausted quota; model=claude-opus-5; body="), line)
         let snippet = line.components(separatedBy: "body=").last ?? ""
-        XCTAssertLessThanOrEqual(snippet.utf8.count, 200, "at most 200 bytes of an upstream error body")
+        XCTAssertEqual(snippet.utf8.count, 200, "a 600-byte body is cut to 200 bytes")
+        // QA #733 INFO-3: the model and the body are in the private part only.
+        let open = try XCTUnwrap(r.log.publicLines.first { $0.contains("429") })
+        XCTAssertFalse(open.contains("body="), open)
+        XCTAssertFalse(open.contains("claude-opus-5"), open)
+    }
+
+    // QA #733 INFO-3: the model and Retry-After printed in a 429 line are capped at 64 bytes.
+    func testCCPoolLogCapsModelAndRetryAfter() throws {
+        let r = try rig(["one"])
+        let long = String(repeating: "9", count: 100)
+        r.anthropic.set { $0.overload = ["tok-one"]; $0.overloadRetryAfter = long }
+        XCTAssertEqual(r.post(String(repeating: "m", count: 100))?.status, 429)
+        let line = try XCTUnwrap(r.log.lines.first { $0.contains("429") })
+        XCTAssertTrue(line.contains("retry-after=\(String(repeating: "9", count: 64));"), line)
+        XCTAssertTrue(line.contains("model=\(String(repeating: "m", count: 64));"), line)
+        XCTAssertFalse(line.contains(String(repeating: "m", count: 65)))
+        XCTAssertFalse(line.contains(String(repeating: "9", count: 65)))
     }
 
     // B13: a long Fable Retry-After does not hold Opus.
@@ -460,6 +577,34 @@ final class CCPoolProxyTests: XCTestCase {
         XCTAssertEqual(obj["current"] as? String, "two")
         XCTAssertEqual(obj["impl"] as? String, "prosper")
         XCTAssertEqual(r.anthropic.get { $0.seen }.count, 0)
+        XCTAssertEqual(r.up.accepted, 0, "upstream never saw it")
+        XCTAssertEqual(CCPoolPortProbe.probe(port: r.port, timeout: 5), .ccpool(pid: Int(getpid()), impl: "prosper"))
+    }
+
+    // P2a follow-up (a): the B14 pass-through 429 hands the upstream Retry-After on to the client.
+    func testCCPoolPassThrough429KeepsRetryAfter() throws {
+        let r = try rig(["one"])
+        r.anthropic.set { $0.overload = ["tok-one"]; $0.overloadRetryAfter = "17" }
+        let resp = try XCTUnwrap(r.post())
+        XCTAssertEqual(resp.status, 429)
+        XCTAssertTrue(resp.text.contains("not account quota"), resp.text)
+        XCTAssertEqual(resp.header("retry-after"), "17")
+        XCTAssertEqual(r.cooldown("one"), [:], "still nobody benched")
+        r.anthropic.set { $0.overloadRetryAfter = nil }
+        let bare = try XCTUnwrap(r.post())
+        XCTAssertEqual(bare.status, 429)
+        XCTAssertNil(bare.header("retry-after"), "none invented when upstream sent none")
+    }
+
+    // P2a follow-up (b): a query string does not send the health path upstream.
+    func testCCPoolHealthWithQueryAnsweredLocally() throws {
+        let r = try rig()
+        for path in [CCPoolService.healthPath + "?x=1", CCPoolService.healthPath + "?"] {
+            let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, method: "GET", path: path, headers: []))
+            XCTAssertEqual(resp.status, 200, path)
+            let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: resp.body) as? [String: Any], path)
+            XCTAssertEqual(obj["service"] as? String, "ccpool-proxy")
+        }
         XCTAssertEqual(r.up.accepted, 0, "upstream never saw it")
         XCTAssertEqual(CCPoolPortProbe.probe(port: r.port, timeout: 5), .ccpool(pid: Int(getpid()), impl: "prosper"))
     }

@@ -58,6 +58,10 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     var mode = Mode.deciding
     var snippet = Data()
     var pendingNote = ""
+    /// The private part of that note: the model and the upstream body (QA #733 INFO-3).
+    var pendingPrivate = ""
+    /// The upstream Retry-After of a pass-through 429, handed on to the client (P2a follow-up a).
+    var retryAfter: String?
     var suspended = false
 
     init(connection: CCPoolConnection, label: String, accountID: String, retried: Bool) {
@@ -77,9 +81,9 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
         c.queue.async { c.onData(self, data) }
     }
 
-    func upstreamDone(_ error: Error?) {
+    func upstreamDone(_ error: Error?, reused: Bool) {
         guard let c = connection else { return }
-        c.queue.async { c.onDone(self, error) }
+        c.queue.async { c.onDone(self, error, reused: reused) }
     }
 }
 
@@ -101,6 +105,10 @@ final class CCPoolConnection: @unchecked Sendable {
     static let modelScan = 64 << 10
     /// At most this much of an upstream error body reaches the log (B28).
     static let snippetCap = 200
+    /// At most this many bytes of a client model name or an upstream Retry-After reach the log.
+    static let logFieldCap = 64
+
+    static func capped(_ s: String) -> String { String(decoding: s.utf8.prefix(logFieldCap), as: UTF8.self) }
 
     let queue = DispatchQueue(label: "com.prosper.ccpool.conn")
     private let conn: NWConnection
@@ -228,7 +236,8 @@ final class CCPoolConnection: @unchecked Sendable {
                 fail(403, "forbidden", type: "permission_error")
                 return true
             }
-            if h.method == "GET", h.path == CCPoolService.healthPath {
+            // P2a (b): the query string does not make health a relayed request.
+            if h.method == "GET", h.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first == Substring(CCPoolService.healthPath) {
                 relayStarted = true
                 sendHealth()
                 return true
@@ -372,11 +381,12 @@ final class CCPoolConnection: @unchecked Sendable {
         let (limits, unknown) = CCPoolCore.parseLimits(headers)
         if !unknown.isEmpty { log.note(label, "unknown claim window \(unknown.joined(separator: ",")); not benching on it") }
         store.mutate { $0.remember(label) }
+        store.recordUsage(label, limits: limits)
 
         if response.statusCode == 429 {
             var spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
             let retry = headers["retry-after"]
-            let wait = Int(retry?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
+            let wait = CCPoolCore.retryAfterSeconds(retry)
             let detail = limits.isEmpty ? "NO unified rate-limit headers"
                 : limits.keys.sorted().map { "\($0)=\(limits[$0]?.status ?? "?")/\(limits[$0]?.utilization ?? "?")" }.joined(separator: ", ")
             var reason = spent.isEmpty ? "no exhausted quota" : "reported exhausted quota"
@@ -386,15 +396,21 @@ final class CCPoolConnection: @unchecked Sendable {
                 spent = [claim: Int(now) + wait]
                 reason = "long Retry-After for requested model"
             }
-            let line = "429 model=\(model ?? "none"); quota=\(detail); retry-after=\(retry ?? "?"); "
+            // QA #733 INFO-3: the model and the upstream body go to the private part of the log line;
+            // what is printed of the model and Retry-After is capped at 64 bytes.
+            let line = "429 quota=\(detail); retry-after=\(Self.capped(retry ?? "?")); "
                 + "cooldown=\(spent.isEmpty ? "none" : spent.keys.sorted().joined(separator: ",")); reason=\(reason)"
+            let privateDetail = "; model=\(Self.capped(model ?? "none"))"
             if spent.isEmpty {
                 // Upstream load, not quota: rotating would not help and benching would be a lie (B14).
                 ex.mode = .snippet
                 ex.pendingNote = line
+                ex.pendingPrivate = privateDetail
+                // Header-safe: one line, printable ASCII only.
+                ex.retryAfter = retry.map { String($0.unicodeScalars.filter { $0.value >= 0x20 && $0.value < 0x7f }) }
                 return decide(.allow)
             }
-            log.note(label, line)
+            log.note(label, line, private: privateDetail)
             store.mutate { st in for (claim, until) in spent { st.bench(label, claim: claim, until: until, now: now) } }
             let claims = spent.keys.sorted().joined(separator: ",")
             if replayable {
@@ -445,18 +461,23 @@ final class CCPoolConnection: @unchecked Sendable {
         }
     }
 
-    func onDone(_ ex: CCPoolExchange, _ error: Error?) {
+    /// B17, QA #733 F1: resend only a request that went out on a REUSED (pooled) connection the far
+    /// end had closed (URLSessionTaskMetrics said so), once, with a body that can be sent again.
+    /// A fresh connection that drops may have run the request: resending would spend quota twice.
+    static func shouldResend(_ code: URLError.Code?, retried: Bool, streamed: Bool, reused: Bool) -> Bool {
+        code == .networkConnectionLost && !retried && !streamed && reused
+    }
+
+    func onDone(_ ex: CCPoolExchange, _ error: Error?, reused: Bool) {
         guard ex === exchange, !closed else { return }
         switch ex.mode {
         case .deciding:
             let code = (error as? URLError)?.code
-            if code == .networkConnectionLost, !ex.retried, !streamed {
-                // A pooled connection the far end closed: nothing was processed, nothing went
-                // downstream, so one fresh attempt on the same account is safe (B17).
-                log.note(ex.label, "upstream connection dropped before a response; retrying once")
+            if Self.shouldResend(code, retried: ex.retried, streamed: streamed, reused: reused) {
+                log.note(ex.label, "pooled upstream connection dropped before a response; retrying once")
                 return send(label: ex.label, accountID: ex.accountID, retried: true)
             }
-            log.note(ex.label, "upstream unreachable (\(code.map { "\($0.rawValue)" } ?? "error"))")
+            log.note(ex.label, "upstream unreachable (\(code.map { "\($0.rawValue)" } ?? "error")\(reused ? ", pooled" : ""))")
             exchange = nil
             fail(502, "upstream unreachable", type: "api_error")
         case .snippet:
@@ -473,8 +494,10 @@ final class CCPoolConnection: @unchecked Sendable {
         guard ex === exchange else { return }
         exchange = nil
         ex.task?.cancel()
-        log.note(ex.label, ex.pendingNote + "; body=" + String(decoding: ex.snippet.prefix(Self.snippetCap), as: UTF8.self))
-        fail(429, "upstream rate limit (not account quota)", type: "rate_limit_error")
+        log.note(ex.label, ex.pendingNote,
+                 private: ex.pendingPrivate + "; body=" + String(decoding: ex.snippet.prefix(Self.snippetCap), as: UTF8.self))
+        let extra: [(String, String)] = ex.retryAfter.map { $0.isEmpty ? [] : [("retry-after", $0)] } ?? []
+        fail(429, "upstream rate limit (not account quota)", type: "rate_limit_error", headers: extra)
     }
 
     private func noAccounts() {
@@ -508,16 +531,17 @@ final class CCPoolConnection: @unchecked Sendable {
         sendComplete(200, contentType: "application/json", body: CCPoolService.healthBody(store: store))
     }
 
-    func fail(_ status: Int, _ message: String, type: String) {
+    func fail(_ status: Int, _ message: String, type: String, headers: [(String, String)] = []) {
         let obj: [String: Any] = ["type": "error", "error": ["type": type, "message": "ccpool: \(message)"]]
         let body = (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])) ?? Data()
-        sendComplete(status, contentType: "application/json", body: body)
+        sendComplete(status, contentType: "application/json", body: body, headers: headers)
     }
 
-    private func sendComplete(_ status: Int, contentType: String, body: Data) {
+    private func sendComplete(_ status: Int, contentType: String, body: Data, headers: [(String, String)] = []) {
         headSent = true
+        let extra = headers.map { "\($0.0): \($0.1)\r\n" }.joined()
         var out = Data(("HTTP/1.1 \(status) \(Self.reason(status))\r\nServer: \(CCPoolService.serverHeader)\r\n"
-            + "Content-Type: \(contentType)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n").utf8)
+            + "Content-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n\(extra)Connection: close\r\n\r\n").utf8)
         out.append(body)
         conn.send(content: out, completion: .contentProcessed { [weak self] _ in self?.close() })
     }

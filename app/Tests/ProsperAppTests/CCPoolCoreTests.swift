@@ -172,6 +172,40 @@ final class CCPoolCoreTests: XCTestCase {
         XCTAssertTrue(st.accounts.values.allSatisfy { $0.cooldown.isEmpty }, "clear all releases every account")
     }
 
+    // QA #734 INFO-8: hold refuses inf, NaN, zero and negatives; a huge finite value is capped.
+    func testHoldRefusesNonFiniteAndCapsHuge() {
+        var st = pool(["h"])
+        for bad in [Double.infinity, -Double.infinity, Double.nan, 0, -1] {
+            XCTAssertFalse(st.hold("h", hours: bad, now: now), "\(bad)")
+            XCTAssertEqual(st.accounts["h"]?.cooldown, [:], "\(bad): nothing benched")
+            XCTAssertNil(st.accounts["h"]?.held)
+        }
+        XCTAssertTrue(st.hold("h", hours: 1e300, now: now))
+        XCTAssertEqual(st.accounts["h"]?.cooldown["five_hour"], Int(now) + CCPoolCore.maxBench, "capped before Int()")
+        XCTAssertEqual(st.accounts["h"]?.held, Int(now) + CCPoolCore.maxBench)
+    }
+
+    private func utilLimits(_ values: [String: String]) -> [String: CCPoolLimit] {
+        CCPoolCore.parseLimits(Dictionary(uniqueKeysWithValues: values.map {
+            ("anthropic-ratelimit-unified-\($0.key)-utilization", $0.value) })).limits
+    }
+
+    // A2 list: a utilisation header outside 0...100 is dropped (the pane turns shares into Int percents).
+    func testUtilisationOutOfRangeIsDropped() {
+        let u = CCPoolCore.utils(utilLimits(["5h": "nan", "7d": "inf", "7d-opus": "1e300", "7d-sonnet": "-0.5", "7d-overage-included": " 0.4 "]))
+        XCTAssertEqual(Array(u.values), [0.4], "\(u)")
+    }
+
+    // The same headers end in the pane's texts without a trap.
+    func testUtilisationOutOfRangeNoTrapInPane() {
+        let limits = utilLimits(["5h": "nan", "7d": "1e300", "7d-opus": "-1e300", "7d-overage-included": "0.4"])
+        let sample = CCPoolUsageSample(util: CCPoolCore.utils(limits), at: now)
+        XCTAssertTrue(CCPoolPaneModel.usageText(sample, now: now).contains("40%"))
+        let cells = CCPoolCore.poolCells([.init(util: CCPoolCore.utils(limits), reset: ["seven_day_overage_included": Int(now) + 3600],
+                                                spent: [:])], now: now)
+        XCTAssertEqual(cells.map(\.free), [0.6])
+    }
+
     // B22 (test_ccpool.py:239-257): a hold on Fable leaves Opus usable.
     func testHoldOnFableLeavesOpusUsable() {
         var st = pool(["s-ok"])

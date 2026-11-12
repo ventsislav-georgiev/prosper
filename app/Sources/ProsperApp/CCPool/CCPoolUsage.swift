@@ -45,9 +45,12 @@ enum CCPoolUsage {
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        let session = URLSession(configuration: CCPoolUpstream.configuration())
+        // QA #734 INFO-10: never follow a redirect (a 3xx is the answer and reads as "could not
+        // answer": no rate-limit headers), so the token reaches no host but `base`.
+        let session = CCPoolUpstream.probeSession()
         defer { session.finishTasksAndInvalidate() }
-        guard let result = try? await session.data(for: req), let http = result.1 as? HTTPURLResponse else { return nil }
+        guard let result = try? await session.data(for: req, delegate: CCPoolNoRedirect()),
+              let http = result.1 as? HTTPURLResponse else { return nil }
         var headers: [String: String] = [:]
         for (k, v) in http.allHeaderFields { if let k = k as? String { headers[k] = "\(v)" } }
         return Probe(status: http.statusCode, limits: CCPoolCore.parseLimits(headers).limits)
@@ -66,7 +69,14 @@ enum CCPoolUsage {
                 rows.append(Row(label: label, limits: nil, status: nil))
                 continue
             }
-            guard let p = await probe(token: token, base: base), !p.limits.isEmpty else {
+            let answer = await probe(token: token, base: base)
+            // P2a: a 401/403 is a rejected token, said as such (spec 3.4), never a usage reading.
+            if let status = answer?.status, status == 401 || status == 403 {
+                logger.note(label, "refresh: token rejected (\(status))")
+                rows.append(Row(label: label, limits: nil, status: status))
+                continue
+            }
+            guard let p = answer, !p.limits.isEmpty else {
                 logger.note(label, "refresh: probe could not answer")
                 rows.append(Row(label: label, limits: nil, status: nil))
                 continue
@@ -78,6 +88,7 @@ enum CCPoolUsage {
                 st.recordResets(label, limits: p.limits, now: now)
                 return st.accounts[label]?.cooldown ?? [:]
             }
+            store.recordUsage(label, limits: p.limits)
             let held = cooldown.filter { Double($0.value) > now && spent[$0.key] == nil }
             logger.note(label, "refresh: status \(p.status); spent \(spent.keys.sorted()); held \(held.keys.sorted())")
             rows.append(Row(label: label, limits: p.limits, status: p.status, spent: spent, held: held))

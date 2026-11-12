@@ -65,7 +65,9 @@ final class CCPoolGuardTests: XCTestCase {
     // Errata C5: no CCPool test reads the Python ccpool home or the Keychain.
     func testCCPoolNoTestReadsPythonVaultOrKeychain() throws {
         let needles = ["." + "ccpool/", "CCPOOL" + "_HOME", "vault" + ".json", "SecItem" + "Copy", "SecItem" + "Add",
-                       "SecItem" + "Delete", "SecItem" + "Update", "home" + "DirectoryForCurrentUser", "NSHome" + "Directory"]
+                       "SecItem" + "Delete", "SecItem" + "Update", "home" + "DirectoryForCurrentUser", "NSHome" + "Directory",
+                       // P2a: nor the real environment or the real home by another route.
+                       "ProcessInfo.processInfo" + ".environment", "getpw" + "uid", "homeDirectory" + "(forUser"]
         var hits: [String] = []
         for f in ccpoolTestFiles() {
             let text = try String(contentsOf: f, encoding: .utf8)
@@ -76,13 +78,36 @@ final class CCPoolGuardTests: XCTestCase {
 
     // P1 starts the proxy from nothing: no call site outside the CCPool directory.
     func testCCPoolNoCallSiteOutsideItsDirectory() throws {
-        let names = ["CCPoolService", "CCPoolStore", "CCPoolKeychainSecrets", "CCPoolUsage"]
+        // P2a adds the pane (not mounted), its model, the import and the session env (wired in P2b).
+        let names = ["CCPoolService", "CCPoolStore", "CCPoolKeychainSecrets", "CCPoolUsage", "CCPoolPane",
+                     "CCPoolMigration", "CCPool.sessionEnv", "CCPool.EnvDelta"]
         var hits: [String] = []
         for f in swiftFiles(under: sourcesDir) where !f.path.contains("/CCPool/") {
             let text = try String(contentsOf: f, encoding: .utf8)
             hits += names.filter { text.contains($0) }.map { "\(f.lastPathComponent): \($0)" }
         }
         XCTAssertFalse(swiftFiles(under: sourcesDir.appendingPathComponent("CCPool")).isEmpty, "the guard found the sources")
+        XCTAssertEqual(hits, [])
+    }
+
+    // P2a: the Python ccpool's path names exist once, in the one path rule (CCPoolMigration.vaultURL).
+    func testCCPoolPythonPathsNamedOnce() throws {
+        let files = swiftFiles(under: sourcesDir.appendingPathComponent("CCPool"))
+        let all = try files.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+        // ("state.json" is also Prosper's own store file, so it is not counted.)
+        for literal in ["\"vault" + ".json\"", "\"." + "ccpool\"", "\"CCPOOL" + "_HOME\""] {
+            XCTAssertEqual(all.components(separatedBy: literal).count - 1, 1, literal)
+        }
+    }
+
+    // P2a: no modal UI, no global events, no pasteboard anywhere in the CCPool sources.
+    func testCCPoolSourcesUseNoModalUIOrGlobalEvents() throws {
+        let needles = ["NSAlert" + "(", "NSOpen" + "Panel", "NSMenu" + "(", "CGEvent" + "Post", "NSPaste" + "board", "runModal"]
+        var hits: [String] = []
+        for f in swiftFiles(under: sourcesDir.appendingPathComponent("CCPool")) {
+            let text = try String(contentsOf: f, encoding: .utf8)
+            hits += needles.filter { text.contains($0) }.map { "\(f.lastPathComponent): \($0)" }
+        }
         XCTAssertEqual(hits, [])
     }
 

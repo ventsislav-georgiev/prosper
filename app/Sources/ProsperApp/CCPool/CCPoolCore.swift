@@ -14,11 +14,15 @@ struct CCPoolState: Codable, Equatable, Sendable {
         var cooldown: [String: Int] = [:]
         /// claim -> epoch the claim's window rolls over, as last reported by Anthropic.
         var reset: [String: Int] = [:]
+        /// P2a: epoch a hand hold ends (Settings "Hold for…"). The hold itself is the five_hour bench;
+        /// this only lets Settings say "held" instead of "limited". Absent in the Python shape.
+        var held: Int?
 
-        init(id: String, cooldown: [String: Int] = [:], reset: [String: Int] = [:]) {
+        init(id: String, cooldown: [String: Int] = [:], reset: [String: Int] = [:], held: Int? = nil) {
             self.id = id
             self.cooldown = cooldown
             self.reset = reset
+            self.held = held
         }
 
         init(from decoder: Decoder) throws {
@@ -26,6 +30,7 @@ struct CCPoolState: Codable, Equatable, Sendable {
             id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
             cooldown = try c.decodeIfPresent([String: Int].self, forKey: .cooldown) ?? [:]
             reset = try c.decodeIfPresent([String: Int].self, forKey: .reset) ?? [:]
+            held = try c.decodeIfPresent(Int.self, forKey: .held)
         }
     }
 
@@ -66,6 +71,13 @@ enum CCPoolCore {
     static let maxBench = 8 * 86400
     /// A 429 with nothing spent benches only when Retry-After is longer than this.
     static let longRetryAfter = 3600
+
+    /// Retry-After in seconds, clamped to 0...maxBench before any arithmetic (QA #733 F2): a huge,
+    /// negative or non-numeric header cannot trap `now + wait`. Not a number: 0.
+    static func retryAfterSeconds(_ raw: String?) -> Int {
+        guard let n = Int(raw?.trimmingCharacters(in: .whitespaces) ?? "") else { return 0 }
+        return min(max(n, 0), maxBench)
+    }
 
     static let fiveHour = "five_hour"
 
@@ -201,8 +213,12 @@ enum CCPoolCore {
         limits.compactMapValues { epoch($0.reset) }
     }
 
+    /// Utilisation shares from the headers. Anything outside 0...100 (NaN, inf, 1e300) is not a
+    /// usage: dropped, so the pane's percent Int() and the pool sum stay in range.
     static func utils(_ limits: [String: CCPoolLimit]) -> [String: Double] {
-        limits.compactMapValues { $0.utilization.flatMap { Double($0.trimmingCharacters(in: .whitespaces)) } }
+        limits.compactMapValues { row in
+            row.utilization.flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }.flatMap { (0...100).contains($0) ? $0 : nil }
+        }
     }
 
     // MARK: Pool headroom (the "All" row)
@@ -273,15 +289,23 @@ extension CCPoolState {
     }
 
     /// Hold an account out of rotation by hand: a bench on five_hour, the one claim every model reads.
+    /// Non-finite or non-positive hours are refused; a huge value is capped to maxBench before
+    /// Int() (QA #734 INFO-8: the pane's custom hold feeds this).
     @discardableResult
     mutating func hold(_ label: String, hours: Double, now: Double) -> Bool {
-        bench(label, claim: CCPoolCore.fiveHour, until: Int(now + hours * 3600), now: now)
+        guard hours.isFinite, hours > 0 else { return false }
+        let seconds = min(hours * 3600, Double(CCPoolCore.maxBench))
+        guard bench(label, claim: CCPoolCore.fiveHour, until: Int(now + seconds), now: now) else { return false }
+        let until = accounts[label]?.cooldown[CCPoolCore.fiveHour]
+        accounts[label]?.held = until
+        return true
     }
 
     /// Undo benches: one account or all (`label == nil`), one claim or every claim.
     mutating func clear(_ label: String?, claim: String? = nil) {
         for name in label.map({ [$0] }) ?? Array(accounts.keys) where accounts[name] != nil {
             if let claim { accounts[name]?.cooldown.removeValue(forKey: claim) } else { accounts[name]?.cooldown = [:] }
+            if claim == nil || claim == CCPoolCore.fiveHour { accounts[name]?.held = nil }
         }
     }
 }
