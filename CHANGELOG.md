@@ -162,8 +162,9 @@ tag from the now-released section and put it on the new top draft.
   Claude session id (`m` + 16 hex digits, any case, padding trimmed) with dch serve's own "name
   looks like a session_id", before running dch. A listed older session of that name still attaches
   by its exact name (#850).
-- Remote Terminal: a rename whose session name starts with "-", and an attach to a session-id-shaped
-  name padded with tabs or line breaks, are refused with the same message dch serve gives (#863).
+- Remote Terminal: renaming a session whose name starts with "-" to a session-id-shaped alias, and
+  attaching to a session-id-shaped name padded with tabs or line breaks, are refused with the same
+  message dch serve gives (#863).
 - iPhone Resume and Resume interrupted (phone and island): a session dch revived whose resume
   message was not sent now counts as resumed, under the name it runs as now, and the line still
   says the message was not sent (#861).
