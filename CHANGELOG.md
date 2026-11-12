@@ -285,11 +285,11 @@ tag from the now-released section and put it on the new top draft.
   Prosper's own terminal still passes every key to the session. Each `dch --revive --json`
   result line ends with a "running" key. A `dch serve` you run by hand lets go of a device that
   vanished without closing its connection after about 30 s. Also when you run the bundled dch by
-  hand (all in 1.56.0): `dch --xray --follow`, X-ray across Codex sessions and the resolver card; a
-  remote X-ray whose host sends nothing for 65 s ends with exit 7; a remote History record that
-  gives a key twice is dropped; the picker draws bidi control characters as `?`; `dch --forget -h`
-  (and --pin, --unpin, --stop) says that a name starting with `-` goes after `--`; and `dch serve`
-  sets TCP no-delay on every connection. Prosper does not read X-ray yet.
+  hand (all in 1.56.0): fixes to `dch --xray --follow`; X-ray across Codex sessions and the resolver
+  card; a remote X-ray whose host sends nothing for 65 s ends with exit 7; a remote History record
+  that gives a key twice is dropped; the picker draws bidi control characters as `?`; `dch --forget
+  -h` (and --pin, --unpin, --stop) says that a name starting with `-` goes after `--`; and `dch
+  serve` sets TCP no-delay on every connection. Prosper does not read X-ray yet.
 - dch 1.57.0 to 1.58.0: a security fix in `dch --xray`. Since 1.57.0, a session whose project was
   a credential directory kept as its own git repo outside your home (a Claude Code config dir, a
   Codex home, `.kube`, `.docker`, `.password-store`) showed its files, also to a `dch serve` peer;
