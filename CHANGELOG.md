@@ -114,11 +114,12 @@ tag from the now-released section and put it on the new top draft.
 - New session names Claude after its session: every Claude session started from New session runs
   with `--name <session name>`, so the name in Claude's prompt box, in /resume and in the terminal
   title matches the session's row. A name typed into the command is replaced, never doubled, and
-  the shared New session command never stores a `--name`. Shells, other agents and `claude -p`
-  runs start unchanged (#847).
+  Prosper never adds a `--name` to the stored New session command. Shells, other agents and
+  `claude -p` runs start unchanged (#847).
 - New session no longer re-sends an old startup prompt: a session started under dch 1.48 or older
   with `claude … -- "<prompt>"` (or a bare prompt word) no longer makes that prompt part of the
-  inferred New session command; Prosper drops it by dch 1.49's rules (#867).
+  inferred New session command; Prosper drops it by the rules of dch's own strip, as of dch
+  1.50.1 (#867).
 - Prosper now bundles Ghostty's terminal library (libghostty, through libghostty-spm) for the Agent
   Sessions terminal, so the download is about 4 MB (10%) bigger. The app's credits list libghostty
   and the libraries inside it (FreeType, libpng, zlib, Oniguruma, Wuffs, simdutf, Highway, stb,
