@@ -365,6 +365,16 @@ tag from the now-released section and put it on the new top draft.
 - Live session status: when a phone's sign-in expires, its Live Activity card is ended within a
   minute and it gets no more session alerts or updates. The server's every-minute check also reads
   far less of its database (#1001).
+- App Updates: the "N packages upgraded" count is now taken against Homebrew's list read right
+  before the upgrade, so packages you upgraded in Terminal since the last check are not counted
+  (when that read gets no answer the notice gives no count). brew's output goes to a file in
+  Prosper's private folder instead of to Prosper, so quitting Prosper during an upgrade can no
+  longer stop brew partway, and a background upgrade stopped by another Homebrew process now says
+  so. A lock message from Homebrew's own auto-update step no longer turns a later failure into a
+  "lock" notice; a failed upgrade whose list could not be re-read adds "the list could not be
+  refreshed"; a private folder that could not be created reads "brew upgrade did not start"
+  instead of "failed (exit ?)". The folder is removed when the watch gives up after two hours or
+  Prosper relaunches, and a clock set back no longer blocks Upgrade for two hours (#1011).
 
 ## v2.174.0
 
