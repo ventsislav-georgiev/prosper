@@ -493,7 +493,7 @@ struct AgentSidebarRowView: View {
                         .lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: sz(4))
                     if !row.age.isEmpty {
-                        // #828: a fixed slot, so "9s" -> "10s" never re-truncates the title; #829 (QA #660
+                        // #828: a fixed slot, so "now" -> "1m" never re-truncates the title; #829 (QA #660
                         // note 4): the widest age the formatter returns, so "120d" fits it too.
                         ZStack(alignment: .trailing) {
                             Text(AgentIsland.ageWidest).hidden()
@@ -520,7 +520,7 @@ struct AgentSidebarRowView: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail,
-                             row.age.isEmpty ? nil : "\(row.age) ago"].compactMap { $0 }.joined(separator: ", "))
+                             AgentIsland.ago(row.age)].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -764,7 +764,7 @@ struct AgentSessionHeader: View {
                     .lineLimit(1).truncationMode(.middle)
             }
             let extra = [row.detail.split(separator: " · ").dropFirst().joined(separator: " · "),
-                         row.age.isEmpty ? "" : "\(row.age) ago"].filter { !$0.isEmpty }
+                         AgentIsland.ago(row.age) ?? ""].filter { !$0.isEmpty }
             if !extra.isEmpty {
                 // Whole or not at all: a squeezed low-priority Text overshot the line by a
                 // fraction of a point next to the #821 todo chip.
@@ -1103,7 +1103,7 @@ struct AgentHistoryDetail: View {
         VStack(spacing: sz(10)) {
             Image(systemName: "clock.arrow.circlepath").font(Neon.font(26)).foregroundStyle(Neon.indigo)
             Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary).lineLimit(1)
-            Text([row.detail, row.age.isEmpty ? nil : "\(row.age) ago"].compactMap { $0 }.joined(separator: " · "))
+            Text([row.detail, AgentIsland.ago(row.age)].compactMap { $0 }.joined(separator: " · "))
                 .font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
             if !record.cwd.isEmpty {
                 Text((record.cwd as NSString).abbreviatingWithTildeInPath).font(Neon.font(11, design: .monospaced))

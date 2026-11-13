@@ -226,7 +226,7 @@ extension AgentWindowD1Tests {
             AgentSidebar.Row(id: live("x"), title: "a long session title that truncates in the sidebar", state: .working,
                              detail: "Working", age: age, prs: [])
         }
-        let ages = ["9s", "10s", "1m", "59m"]
+        let ages = ["now", "1m", "10m", "59m"]
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
             var ideal: Set<Int> = [], edges: Set<Int> = []

@@ -1167,10 +1167,13 @@ struct AgentIslandRow: View {
                                 .fixedSize()
                         }
                         Spacer(minLength: 6)
-                        Text(AgentIsland.age(of: session, now: now))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Color.white.opacity(0.4))
-                            .fixedSize()
+                        let age = AgentIsland.age(of: session, now: now)
+                        if !age.isEmpty {   // #1114: none on a working row
+                            Text(age)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Color.white.opacity(0.4))
+                                .fixedSize()
+                        }
                     }
                     HStack(spacing: 6) {
                         if let notice {

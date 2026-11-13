@@ -391,7 +391,7 @@ extension AgentWindowD1Tests {
                 NSHostingView(rootView: Text(t).font(Neon.font(10).monospacedDigit()).fixedSize()).fittingSize.width
             }
             let slot = w(AgentIsland.ageWidest)
-            for t in ["9s", "59s", "59m", "23h", "120d", "364d", "1y", "99y"] {
+            for t in ["now", "1m", "59m", "23h", "120d", "364d", "1y", "99y"] {
                 XCTAssertLessThanOrEqual(w(t), slot + 0.01, "\(t) fits the slot at \(scale)")
             }
         }

@@ -51,7 +51,7 @@ enum AgentSidebar {
         let state: AgentState?
         /// "Needs input", "Working · 2 agents", "Ended · exit 1".
         let detail: String
-        /// "4m"; "" for an unknown time.
+        /// "4m", "now" under a minute; "" for an unknown time and on a working row (#1114).
         let age: String
         /// Open PR labels the island shows ("repo#12"), and "+N" past two.
         let prs: [String]
@@ -188,6 +188,8 @@ final class AgentWindowModel: ObservableObject {
     /// Told when the window shows or hides, so the island keeps the store current
     /// (it holds activity-only lists back while nothing shows them).
     var onVisible: (Bool) -> Void = { AgentIslandController.shared.windowWatching = $0 }
+    /// The age clock: while visible the rows are rebuilt at least this often, so a row's age is never more than
+    /// this behind (#1114: whole minutes, so at most one minute low, for at most this long past the minute).
     var ageInterval: TimeInterval = 30
     /// #829: Restart agent, Stop and Kill: the island's controller methods (its gates, runner
     /// keys, busy refusal and row texts). True: the job started.

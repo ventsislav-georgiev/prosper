@@ -600,6 +600,11 @@ tag from the now-released section and put it on the new top draft.
   is made again right before the key is sent, so a session whose Claude Code has just exited is not
   answered either. A Claude Code session that dch cannot name as one (two Claude Codes started side
   by side in one session, or a dch older than 1.30) is left to you the same way. (#935)
+- Agent Sessions and the island: the age on a session row no longer counts seconds. It reads "now"
+  under a minute, then 1m, 2h, 3d; a working session shows no age (its state already says Working),
+  and VoiceOver reads "just now". (#1114)
+- Agent Sessions and the island: a History record with a broken far-future time no longer crashes
+  Prosper when its age is drawn. (#1114)
 
 ## v2.174.0
 

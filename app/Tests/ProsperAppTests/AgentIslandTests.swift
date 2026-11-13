@@ -39,7 +39,7 @@ final class AgentIslandTests: XCTestCase {
     }
 
     func testAgeFormattingAtUnitBoundaries() {
-        let cases: [(TimeInterval, String)] = [(-5, "0s"), (0, "0s"), (12, "12s"), (59.9, "59s"), (60, "1m"),
+        let cases: [(TimeInterval, String)] = [(-5, "now"), (0, "now"), (12, "now"), (59.9, "now"), (60, "1m"),
                                                (3599, "59m"), (3600, "1h"), (86399, "23h"), (86400, "1d"),
                                                (3 * 86400 + 5, "3d")]
         for (s, want) in cases { XCTAssertEqual(AgentIsland.age(s), want, "\(s)") }
@@ -72,7 +72,7 @@ final class AgentIslandTests: XCTestCase {
 
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(
             session("fix-auth", .blocked, activity: 100, alias: "fix auth bug"), now: 112),
-            "fix auth bug, Needs input, 12s ago")
+            "fix auth bug, Needs input, just now")
     }
 
     // MARK: - Socket dirs and listing (G5)
@@ -1897,15 +1897,15 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertNil(AgentIsland.mergedLabel(nil))
         let s = session("s", .working, activity: 100, alias: "T")
         var m = s; m.meta = DchSessionMeta(openPRs: [pr("o/r", 12)], merged: 3)
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago", "no meta: unchanged")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working", "no meta: unchanged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, 3 merged, open pull requests o/r#12", "#525: owner kept here; no tasks")
+                       "T, Working, 3 merged, open pull requests o/r#12", "#525: owner kept here; no tasks")
         m.meta = DchSessionMeta(openPRs: (1...5).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 2 more pending PRs", "QA #347 L-e")
+                       "T, Working, open pull requests o/r#1, o/r#2, o/r#3 and 2 more pending PRs", "QA #347 L-e")
         m.meta = DchSessionMeta(openPRs: (1...4).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 12s ago, open pull requests o/r#1, o/r#2, o/r#3 and 1 more pending PR")
+                       "T, Working, open pull requests o/r#1, o/r#2, o/r#3 and 1 more pending PR")
     }
 
     /// QA #347 L-d: every drawn count caps at "99999+".
@@ -1914,7 +1914,7 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(AgentIsland.mergedLabel(DchSessionMeta(merged: 100_000)), "99999+ merged")
         var s = session("s", .working, activity: 100, alias: "T")
         s.meta = DchSessionMeta(merged: Int.max)
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 12s ago, 99999+ merged")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 99999+ merged")
         // Layout: an Int.max merged label still leaves the chips their room.
         let three = (1...3).map { pr("o/r", $0) }
         XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: three, merged: Int.max)).chips.count, 3)
@@ -2629,11 +2629,11 @@ final class AgentIslandTests: XCTestCase {
         var s = session("s", .working, activity: 100, alias: "T", agents: 2)
         s.meta = DchSessionMeta(openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: .all),
-                       "T, Working, 12s ago, 3 merged, open pull requests o/r#12", "#762: no tasks, no dch name")
+                       "T, Working, 3 merged, open pull requests o/r#12", "#762: no tasks, no dch name")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(openPRs: false)),
-                       "T, Working, 12s ago, 3 merged")
+                       "T, Working, 3 merged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(merged: false)),
-                       "T, Working, 12s ago, open pull requests o/r#12")
+                       "T, Working, open pull requests o/r#12")
     }
 
     /// A Settings toggle reaches the open island at once: the controller reads

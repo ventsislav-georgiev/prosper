@@ -298,12 +298,13 @@ enum AgentIsland {
         !split.sidekicks.isEmpty && (tab || split.primary.isEmpty)
     }
 
-    /// 12s, 4m, 2h, 3d, 1y — whole units, rounded down. Nothing for an unknown time.
+    /// now, 4m, 2h, 3d, 1y — whole units, rounded down; #1114: no seconds, "now" under a minute.
     /// #829 (QA #660 note 4): years past 364 days, capped at 99, so no age is wider than
     /// `ageWidest` and the window's fixed age slot always fits it.
     static func age(_ seconds: TimeInterval) -> String {
-        let s = max(0, Int(min(seconds, 1e15)))
-        if s < 60 { return "\(s)s" }
+        // Also NaN and a clock that moved back (a far-future stamp): Int( below only sees 60...1e15.
+        guard seconds >= 60 else { return "now" }
+        let s = Int(min(seconds, 1e15))
         if s < 3600 { return "\(s / 60)m" }
         if s < 86400 { return "\(s / 3600)h" }
         if s < 365 * 86400 { return "\(s / 86400)d" }
@@ -313,8 +314,14 @@ enum AgentIsland {
     /// The widest age `age` can return ("364d"), as a template of the same characters.
     static let ageWidest = "000d"
 
+    /// #1114: nothing on a working row (its state already says so, and its age is always "now").
     static func age(of s: AgentSession, now: TimeInterval) -> String {
-        s.activity > 0 ? age(now - s.activity) : ""
+        s.activity > 0 && s.state != .working ? age(now - s.activity) : ""
+    }
+
+    /// What VoiceOver and the "· 4m ago" texts read for an `age`: "just now" for "now"; nil for none.
+    static func ago(_ age: String) -> String? {
+        age.isEmpty ? nil : age == "now" ? "just now" : "\(age) ago"
     }
 
     struct Summary: Equatable {
@@ -352,7 +359,7 @@ enum AgentIsland {
 
     /// #592: a History row's VoiceOver text. #605: "pinned" after the title on a pinned record.
     static func historyAccessibilityLabel(_ r: DchHistoryRecord, line2: String, age: String, cwd: String) -> String {
-        ([r.title, r.pinned ? "pinned" : nil, line2, age.isEmpty ? nil : "\(age) ago", cwd] as [String?])
+        ([r.title, r.pinned ? "pinned" : nil, line2, ago(age), cwd] as [String?])
             .compactMap { $0 }.joined(separator: ", ")
     }
 
@@ -366,7 +373,7 @@ enum AgentIsland {
         let age = age(of: s, now: now)
         let (chips, more) = prChips(s.meta, show: d, budget: .infinity)
         let prs = chips.map(\.fullName).joined(separator: ", ") + (more > 0 ? " and \(more) more pending PR\(more == 1 ? "" : "s")" : "")
-        return [s.title, s.state.label, age.isEmpty ? nil : "\(age) ago", mergedLabel(s.meta, show: d),
+        return [s.title, s.state.label, ago(age), mergedLabel(s.meta, show: d),
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }
