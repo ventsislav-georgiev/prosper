@@ -30,7 +30,7 @@ struct ThemePalette: Equatable, Sendable {
     static let `default` = ThemePalette(
         blue:          Color(red: 0.13,  green: 0.80,  blue: 1.00),
         blueBright:    Color(red: 0.46,  green: 0.92,  blue: 1.00),
-        indigo:        Color(red: 0.36,  green: 0.50,  blue: 1.00),
+        indigo:        Color(red: 93 / 255, green: 129 / 255, blue: 1.00),  // #1122: exactly #5D81FF, 4.56 on cardHi
         magenta:       Color(red: 0.96,  green: 0.27,  blue: 0.69),
         terminal:      Color(red: 0.27,  green: 1.00,  blue: 0.71),
         bgTop:         Color(red: 0.043, green: 0.063, blue: 0.094),

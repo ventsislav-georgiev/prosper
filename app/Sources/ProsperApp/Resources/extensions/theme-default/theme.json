@@ -3,7 +3,7 @@
   "colors": {
     "blue":          "#21CCFF",
     "blueBright":    "#75EBFF",
-    "indigo":        "#5C80FF",
+    "indigo":        "#5D81FF",
     "magenta":       "#F545B0",
     "terminal":      "#45FFB5",
     "bgTop":         "#0B1018",
@@ -17,7 +17,7 @@
   "tintLabel": "Neon",
   "variants": [
     { "key": "violet", "label": "Violet", "colors": { "blue": "#A98BFF", "blueBright": "#CDBDFF", "indigo": "#21CCFF" } },
-    { "key": "amber",  "label": "Amber",  "colors": { "blue": "#FFB020", "blueBright": "#FFD27A", "indigo": "#5C80FF" } },
+    { "key": "amber",  "label": "Amber",  "colors": { "blue": "#FFB020", "blueBright": "#FFD27A", "indigo": "#5D81FF" } },
     { "key": "white",  "label": "White",  "colors": { "blue": "#E8F2FC", "blueBright": "#FFFFFF", "indigo": "#8FA3BF" } }
   ]
 }

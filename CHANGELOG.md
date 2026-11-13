@@ -605,6 +605,8 @@ tag from the now-released section and put it on the new top draft.
   and VoiceOver reads "just now". (#1114)
 - Agent Sessions and the island: a History record with a broken far-future time no longer crashes
   Prosper when its age is drawn. (#1114)
+- Default theme: the indigo accent of the Neon and Amber tints is very slightly brighter, so its
+  text keeps enough contrast on highlighted rows. (#1122)
 
 ## v2.174.0
 

@@ -34,9 +34,9 @@ final class ThemeTintPinTests: XCTestCase {
         Row("theme-daylight", "Violet", blue: "#5B2BD6", blueBright: "#6A3BE0", indigo: "#0062D1"),
         Row("theme-daylight", "Amber", blue: "#8A4F00", blueBright: "#985700", indigo: "#451FE0"),
         Row("theme-daylight", "Ink", blue: "#1F2A3A", blueBright: "#34445A", indigo: "#0062D1"),
-        Row("theme-default", "Neon", blue: "#21CCFF", blueBright: "#75EBFF", indigo: "#5C80FF"),
+        Row("theme-default", "Neon", blue: "#21CCFF", blueBright: "#75EBFF", indigo: "#5D81FF"),
         Row("theme-default", "Violet", blue: "#A98BFF", blueBright: "#CDBDFF", indigo: "#21CCFF"),
-        Row("theme-default", "Amber", blue: "#FFB020", blueBright: "#FFD27A", indigo: "#5C80FF"),
+        Row("theme-default", "Amber", blue: "#FFB020", blueBright: "#FFD27A", indigo: "#5D81FF"),
         Row("theme-default", "White", blue: "#E8F2FC", blueBright: "#FFFFFF", indigo: "#8FA3BF"),
         Row("theme-graphite", "Steel", blue: "#9CA7B4", blueBright: "#CAD1D8", indigo: "#8794A2"),
         Row("theme-graphite", "Ice", blue: "#6FC0F2", blueBright: "#B5DDF7", indigo: "#8794A2"),
@@ -95,6 +95,40 @@ final class ThemeTintPinTests: XCTestCase {
             checked += 1
         }
         XCTAssertEqual(checked, Self.table.count, "every row was compared")
+    }
+
+    /// #1122: the Swift fallback ThemePalette.default and the bundled theme-default/theme.json
+    /// are the same palette, token by token, as printed hex (a change in one place only splits them).
+    func testSwiftDefaultEqualsThemeDefaultJSON() throws {
+        let spec = try ThemeSpec.decode(Data(contentsOf: Self.extensionsDir
+            .appendingPathComponent("theme-default/theme.json")))
+        let json = ThemePalette.resolve(spec), swift = ThemePalette.default
+        let tokens: [(String, KeyPath<ThemePalette, Color>)] = [
+            ("blue", \.blue), ("blueBright", \.blueBright), ("indigo", \.indigo), ("magenta", \.magenta),
+            ("terminal", \.terminal), ("bgTop", \.bgTop), ("bgBottom", \.bgBottom), ("sidebar", \.sidebar),
+            ("card", \.card), ("cardHi", \.cardHi), ("textPrimary", \.textPrimary), ("textSecondary", \.textSecondary),
+        ]
+        XCTAssertEqual(Set(tokens.map(\.0)), Set(spec.colors.keys), "theme-default sets exactly the twelve tokens")
+        for (name, kp) in tokens {
+            XCTAssertEqual(Self.hex(swift[keyPath: kp]), Self.hex(json[keyPath: kp]), "\(name): Theme.swift vs theme.json")
+        }
+        XCTAssertEqual(Self.hex(swift.indigo), "#5D81FF")
+    }
+
+    /// #1122: the Swift fallback (drawn when the bundled theme is off) is under the five-surface
+    /// text rule too, on its own unrounded components, not only the json's rounded hexes.
+    func testSwiftDefaultForegroundsClearEverySurface() {
+        let p = ThemePalette.default
+        let fgs: [(String, KeyPath<ThemePalette, Color>)] = [
+            ("blue", \.blue), ("blueBright", \.blueBright), ("indigo", \.indigo), ("magenta", \.magenta),
+            ("terminal", \.terminal), ("textPrimary", \.textPrimary), ("textSecondary", \.textSecondary),
+        ]
+        for (fn, f) in fgs {
+            for (sn, s) in ThemeContrastTests.surfaces {
+                let r = ThemeContrastTests.contrast(NSColor(p[keyPath: f]), on: NSColor(p[keyPath: s]))
+                XCTAssertGreaterThanOrEqual(r, 4.5, "ThemePalette.default \(fn) on \(sn) is \(r):1")
+            }
+        }
     }
 
     // MARK: evidence renders (supervisor review; skipped unless PROSPER_RENDER_DIR is set)
