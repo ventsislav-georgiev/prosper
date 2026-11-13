@@ -1031,9 +1031,9 @@ struct StatsPopupView: View {
         _ targets: [Int: Double],
         firstReply: @escaping @Sendable (Int, Double) async -> FanManualReply = {
             await FanControlHelper.setManualReply($0, rpm: $1, timeout: FanControlHelper.firstEngageTimeout) },
-        engage: (Int, Double) async -> Bool = { await FanControlHelper.setManual($0, rpm: $1) }
+        engage: (Int, Double) async -> FanManualReply = { await FanControlHelper.setManualReply($0, rpm: $1) }
     ) async -> (saved: Bool, reply: FanManualReply) {
-        guard let first = targets.first else { return (false, .unavailable) }
+        guard let first = FanControlHelper.engageOrder(targets).first else { return (false, .unavailable) }
         return await FanControlHelper.popupEngage(targets, first: first.key, engageFirst: {
             await Self.withFanTimeout(45) { await firstReply(first.key, first.value) }
         }, engage: engage)
@@ -1081,11 +1081,10 @@ struct StatsPopupView: View {
             // recovery arm again. A still-live drag re-raises it on its next frame.
             Task { @MainActor in FanControlHelper.userAdjusting = false }
             Task { @MainActor in
-                var replies: [FanManualReply] = []
-                for (i, rpm) in targets { replies.append(await FanControlHelper.setManualReply(i, rpm: rpm)) }
+                // #926: stops at the first fan that does not engage; that reply is the request's.
+                let reply = await FanControlHelper.engageAll(targets)
                 // A newer drag/commit owns the slider (and the status line) now.
                 guard fanTargets == targets, !fanOwner.isDragging else { return }
-                let reply = FanManualReply.combine(replies)
                 guard !Self.commitKeptAsPreset(reply, targets) else { fanError = nil; return }
                 fanError = reply.errorText
                 // Unavailable: the hardware isn't running these targets — revert once to the

@@ -27,8 +27,10 @@ struct DchCommandOps: Sendable {
         /// approval modal (#728): an unapproved helper replies `.needsApproval`.
         var firstReply: @Sendable (Int, Double) async -> FanManualReply = {
             await FanControlHelper.setManualReply($0, rpm: $1, timeout: FanControlHelper.firstEngageTimeout, presentModal: false) }
-        /// Every other fan's engage (the popup's setManual), also without the modal.
-        var engage: @Sendable @MainActor (Int, Double) async -> Bool = { await FanControlHelper.setManual($0, rpm: $1, presentModal: false) }
+        /// Every other fan's engage (the popup's setManualReply), also without the modal (#728); its
+        /// reply is the request's when it is not engaged (#926: a refusal is pending, no reply an error).
+        var engage: @Sendable @MainActor (Int, Double) async -> FanManualReply = {
+            await FanControlHelper.setManualReply($0, rpm: $1, presentModal: false) }
     }
 
     typealias Reply = DchControlOps.Reply

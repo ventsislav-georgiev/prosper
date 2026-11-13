@@ -98,14 +98,6 @@ enum FanManualReply: Equatable {
     case unavailable   // no reply from the helper
     case needsApproval // the helper's Login Items switch is off (#728); the popup words it as unavailable
 
-    /// Collapse one burst of per-fan replies: any refusal wins (the latch is global),
-    /// then any unreachable fan; all engaged → engaged.
-    static func combine(_ replies: [FanManualReply]) -> FanManualReply {
-        if replies.contains(.refused) { return .refused }
-        if replies.contains(.settling) { return .settling }
-        return replies.allSatisfy { $0 == .engaged } ? .engaged : .unavailable
-    }
-
     /// #737: a live helper's refusal (its latch) makes the user's speed a pending preset;
     /// no reply (.unavailable / .needsApproval) stays a failure.
     var isLatchRefusal: Bool { self == .refused || self == .settling }
@@ -241,6 +233,11 @@ enum FanControlHelper {
     // ponytail: in-memory; a relaunch re-sets it through reapplyFromPreferences.
     static var presetPending = false
 
+    /// The fan a live helper refused last (#926). `engageOrder` engages it first, so a request
+    /// that stops at its first refused fan pins no sibling just to hand it back.
+    // ponytail: in-memory and never cleared; it only orders the fans.
+    static var lastRefusedFan: Int?
+
     // MARK: - Connection
 
     private static func makeConnection() -> NSXPCConnection {
@@ -293,7 +290,9 @@ enum FanControlHelper {
         let late: @Sendable (Bool) -> Void = { ok in Task { @MainActor in lateEngageLanded(ok) } }
         switch await callReply(c, timeout: timeout, late: late, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
         case true?: return .engaged
-        case false?: return .refusal(rpm: rpm, macOSRPM: await Task.detached(priority: .utility) { macOSRPM(index) }.value)
+        case false?:
+            lastRefusedFan = index
+            return .refusal(rpm: rpm, macOSRPM: await Task.detached(priority: .utility) { macOSRPM(index) }.value)
         case nil: return .unavailable
         }
     }
@@ -325,7 +324,7 @@ enum FanControlHelper {
     /// `reclaimGeneration`) releases every pin the popup made: asleep, a pin here would
     /// ride through sleep (#306); after a whole sleep+wake, willSleep reset the fans
     /// pinned so far, so saving the pref now would claim pins that are gone (#343).
-    /// The reply itself is ignored, as before: a sibling fan failing does not undo the others.
+    /// A failed engage is engageRest's to act on (#926), after this check.
     static func laterEngageLanded(since generation: Int, current: Int = Self.reclaimGeneration,
                                   release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) -> Bool {
         guard current != generation else { return true }
@@ -333,17 +332,39 @@ enum FanControlHelper {
         return false
     }
 
-    /// The popup's engage of every fan after the first; false = stop, do not save the pref.
-    /// `generation` is the popup's, captured before its first engage (#345).
-    /// `engage`/`landed` are the test seams.
+    /// The popup's engage of every fan after the first, in `engageOrder`. `.engaged` = every fan
+    /// landed; nil = a sleep stopped it (released, do not save the pref); any other reply is the
+    /// first fan that did not engage, its own reply, and the request stops there (#926: one decision
+    /// for every fan; the caller hands back what landed). `generation` is the popup's, captured
+    /// before its first engage (#345). `engage`/`landed` are the test seams.
     static func engageRest(_ targets: [Int: Double], skipping first: Int, since generation: Int = Self.reclaimGeneration,
-                           engage: (Int, Double) async -> Bool = { await setManual($0, rpm: $1) },
-                           landed: (Int) -> Bool = { laterEngageLanded(since: $0) }) async -> Bool {
-        for (i, rpm) in targets where i != first {
-            _ = await engage(i, rpm)
-            guard landed(generation) else { return false }
+                           engage: (Int, Double) async -> FanManualReply = { await setManualReply($0, rpm: $1) },
+                           landed: (Int) -> Bool = { laterEngageLanded(since: $0) }) async -> FanManualReply? {
+        for (i, rpm) in engageOrder(targets) where i != first {
+            let reply = await engage(i, rpm)
+            guard landed(generation) else { return nil }
+            guard reply == .engaged else { return reply }
         }
-        return true
+        return .engaged
+    }
+
+    /// The order a request engages its fans (#926): the fan the helper refused last first, then
+    /// by index. Every request stops at its first failed fan, so while one fan's speed is below
+    /// macOS's and a sibling's is not, a retry is refused before it pins the sibling: no pin and
+    /// handback every cooldown (each handback restarts the helper's settle window).
+    static func engageOrder(_ targets: [Int: Double], refusedFirst: Int? = lastRefusedFan) -> [(key: Int, value: Double)] {
+        targets.sorted { ($0.key == refusedFirst ? 0 : 1, $0.key) < ($1.key == refusedFirst ? 0 : 1, $1.key) }
+    }
+
+    /// The slider commit's burst (#926): every fan in `engageOrder`, stopping at the first that
+    /// does not engage, whose reply is the request's. `engage` is the test seam.
+    static func engageAll(_ targets: [Int: Double],
+                          engage: (Int, Double) async -> FanManualReply = { await setManualReply($0, rpm: $1) }) async -> FanManualReply {
+        for (i, rpm) in engageOrder(targets) {
+            let reply = await engage(i, rpm)
+            guard reply == .engaged else { return reply }
+        }
+        return .engaged
     }
 
     /// The popup's Manual click, from the click to the saved pref; `saved` = every fan engaged
@@ -359,7 +380,7 @@ enum FanControlHelper {
                             engageFirst: () async -> FanManualReply,
                             firstLanded: (FanManualReply, Int, Bool) -> Bool = {
                                 firstEngageLanded($0, since: $1, sleeping: $2 || Self.sleeping) },
-                            engage: (Int, Double) async -> Bool = { await setManual($0, rpm: $1) },
+                            engage: (Int, Double) async -> FanManualReply = { await setManualReply($0, rpm: $1) },
                             landed: (Int) -> Bool = { laterEngageLanded(since: $0) })
         async -> (saved: Bool, reply: FanManualReply) {
         let generation = reclaimGeneration, asleepAtClick = sleeping
@@ -369,7 +390,17 @@ enum FanControlHelper {
             return (true, reply)
         }
         guard firstLanded(reply, generation, asleepAtClick) else { return (false, reply) }
-        guard await engageRest(targets, skipping: first, since: generation, engage: engage, landed: landed) else { return (false, reply) }
+        guard let rest = await engageRest(targets, skipping: first, since: generation, engage: engage, landed: landed) else {
+            return (false, reply)
+        }
+        // #926: a later fan's reply does what it does on the first fan, and this click's pins go back
+        // to macOS. A live refusal makes the targets the pending preset (savePreset hands the fans
+        // back); no reply stays a failure (#737): nothing saved, released like a failed first engage.
+        // engageRest's last `landed` check ran after its last await: no await from there to here.
+        guard rest == .engaged else {
+            if rest.isLatchRefusal { savePreset(targets) } else { Task { await sleepSafeRelease() } }
+            return (rest.isLatchRefusal, rest)
+        }
         Preferences.fanManualEnabled = true
         Preferences.fanTargets = targets
         presetPending = false
@@ -490,8 +521,7 @@ enum FanControlHelper {
         // re-runs the full unlock. First fan gets the cold ceiling; once it lands the
         // unlock is live and the siblings commit at the steady default.
         var first = true
-        var reengaged = true
-        for (index, rpm) in targets {
+        for (index, rpm) in engageOrder(targets) {
             guard !sleeping && reclaimGeneration == Self.reclaimGeneration && Preferences.fanManualEnabled else { return false }
             let ok = await engage(index, rpm, first ? firstEngageTimeout : 12)
             // Automatic (#277) or willSleep (#278) landed while this engage was suspended: its
@@ -500,11 +530,12 @@ enum FanControlHelper {
             // in flight was held for it (#282) and is still pinned. Nothing pinned → no-op.
             // Asleep with manual on, keep the timer and connection, like `sleepSafeRelease` (#287).
             if !Preferences.fanManualEnabled || sleeping { _ = await reset(!Preferences.fanManualEnabled); return false }
-            reengaged = reengaged && ok
+            // #926: one failed fan fails the attempt; the caller's reset hands back what landed.
+            guard ok else { return false }
             first = false
         }
-        if reengaged { presetPending = false }
-        return reengaged
+        presetPending = false
+        return true
     }
 
     // MARK: - Reclaim recovery

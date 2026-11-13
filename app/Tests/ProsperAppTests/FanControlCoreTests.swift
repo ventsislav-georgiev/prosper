@@ -647,4 +647,95 @@ final class FanControlCoreTests: XCTestCase {
         XCTAssertNil(core.holder)
         XCTAssertTrue(core.heldTargets.isEmpty)
     }
+
+    // MARK: - The daemon's setFanManualRPM body (#926, QA #456 L4)
+
+    /// A fake for the SMC calls `engage` makes: it records each call in order. No SMC, no fan.
+    private final class FakeFan: FanHardware {
+        struct WriteFailed: Error {}
+        var calls: [String] = []
+        var temperature: Double? = 96
+        var actual: [Int: Double] = [:], target: [Int: Double] = [:]
+        var writeFails = false
+        func maxTemperature(complete: Bool) -> Double? { calls.append("temp complete=\(complete)"); return temperature }
+        func currentRPM(_ i: Int) -> Double? { calls.append("Ac \(i)"); return actual[i] }
+        func targetRPM(_ i: Int) -> Double? { calls.append("Tg \(i)"); return target[i] }
+        func setManual(_ i: Int, rpm: Double) throws {
+            calls.append("write \(i) \(Int(rpm))")
+            if writeFails { throw WriteFailed() }
+        }
+    }
+
+    /// Unlatched: no SMC read at all, the supervision timer is armed before the write, the pin is recorded.
+    func testEngageUnlatchedArmsThenWritesWithNoRead() throws {
+        let (core, _) = makeCore()
+        let fan = FakeFan()
+        let ok = try core.engage(fan, index: 1, rpm: 1800, holder: idA, arm: { fan.calls.append("arm") },
+                                 refused: { XCTFail("refused \($0)") })
+        XCTAssertTrue(ok)
+        XCTAssertEqual(fan.calls, ["arm", "write 1 1800"])
+        XCTAssertEqual(core.heldTargets, [1: 1800])
+        XCTAssertEqual(core.holder, idA)
+        XCTAssertTrue(core.manualHeld)
+    }
+
+    /// Latched, past the window: the gate reads the complete hottest sensor and THIS fan's Ac and Tg
+    /// (fan 0's speeds would let the pin through). Below max(Ac, Tg) refuses with nothing armed or
+    /// written, logged once per reason; at it, the pin lands.
+    func testEngageWhileLatchedReadsThisFansSpeedsAndLogsOncePerReason() throws {
+        let clock = Clock(), core = makeTripped(clock)
+        clock.advance(FanControlCore.reTakeSettleSeconds)
+        let fan = FakeFan()
+        fan.actual = [0: 1500, 1: 2300]
+        fan.target = [0: 1500, 1: 3200]
+        var logged: [FanControlCore.Refusal] = []
+        func engage(_ rpm: Double) throws -> Bool {
+            try core.engage(fan, index: 1, rpm: rpm, holder: idA, arm: { fan.calls.append("arm") },
+                            refused: { logged.append($0) })
+        }
+        XCTAssertFalse(try engage(3103))
+        XCTAssertEqual(fan.calls, ["temp complete=true", "Ac 1", "Tg 1"])
+        XCTAssertFalse(try engage(3103))
+        XCTAssertEqual(logged, [.belowMacOS], "one log line per reason, not per retry")
+        XCTAssertFalse(core.manualHeld)
+        XCTAssertTrue(core.heldTargets.isEmpty)
+        fan.calls = []
+        XCTAssertTrue(try engage(3200))
+        XCTAssertEqual(fan.calls, ["temp complete=true", "Ac 1", "Tg 1", "arm", "write 1 3200"])
+        XCTAssertEqual(core.heldTargets, [1: 3200])
+    }
+
+    /// Fail closed: an unreadable hottest sensor or speed refuses before any arm or write.
+    func testEngageUnreadableWhileLatchedArmsAndWritesNothing() throws {
+        for (name, setUp) in [("temperature", { (f: FakeFan) in f.temperature = nil }),
+                              ("Tg", { (f: FakeFan) in f.target = [:] }),
+                              ("Ac", { (f: FakeFan) in f.actual = [:] })] {
+            let clock = Clock(), core = makeTripped(clock)
+            clock.advance(60)
+            let fan = FakeFan()
+            fan.actual = [0: 2000]
+            fan.target = [0: 2000]
+            setUp(fan)
+            var logged: [FanControlCore.Refusal] = []
+            XCTAssertFalse(try core.engage(fan, index: 0, rpm: 5000, holder: idA, arm: { fan.calls.append("arm") },
+                                           refused: { logged.append($0) }), name)
+            XCTAssertEqual(logged, [.unreadable], name)
+            XCTAssertFalse(fan.calls.contains("arm"), name)
+            XCTAssertFalse(fan.calls.contains { $0.hasPrefix("write") }, name)
+        }
+    }
+
+    /// A write that throws rethrows after the arm, with the holder and target still recorded, so the
+    /// holder's drop still resets a half-written fan.
+    func testEngageFailedWriteStaysArmedForTheDrop() {
+        let (core, resets) = makeCore()
+        let fan = FakeFan()
+        fan.writeFails = true
+        XCTAssertThrowsError(try core.engage(fan, index: 0, rpm: 2000, holder: idA,
+                                             arm: { fan.calls.append("arm") }, refused: { _ in }))
+        XCTAssertEqual(fan.calls, ["arm", "write 0 2000"])
+        XCTAssertTrue(core.manualHeld)
+        core.connectionClosed(idA)
+        XCTAssertEqual(resets(), 1)
+    }
 }

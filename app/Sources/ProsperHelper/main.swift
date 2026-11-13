@@ -184,21 +184,15 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             // or above macOS's speed for the fan (max of F<i>Ac and F<i>Tg) once the
             // settle window has passed.
             // The core also records holder + target and arms crash-safety BEFORE the
-            // risky write (see FanControlCore.manualRequest).
-            let seen = self.fanCore.lastRefusal
-            guard self.fanCore.manualRequest(index: index, rpm: rpm, holder: cid,
-                                             maxCelsius: fan.maxTemperature(complete: true),
-                                             macOSRPM: FanControlCore.macOSSpeed(current: fan.currentRPM(index),
-                                                                                 target: fan.targetRPM(index))) else {
-                // One line per reason change in a latched episode, not one per retry.
-                if let why = self.fanCore.lastRefusal, why != seen {
-                    fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) refused (\(why.rawValue, privacy: .public)): kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C; at or above macOS's speed after \(FanControlCore.reTakeSettleSeconds, privacy: .public) s")
-                }
-                reply(false); return
-            }
-            self.armFanKillSwitch_fanQ()
+            // risky write (see FanControlCore.manualRequest). Read, gate, arm and write all
+            // run in FanControlCore.engage, inside this one fanQ block (unit-tested, #926).
             do {
-                try fan.setManual(index, rpm: rpm)
+                guard try self.fanCore.engage(fan, index: index, rpm: rpm, holder: cid,
+                                              arm: { self.armFanKillSwitch_fanQ() },
+                                              refused: { why in
+                    // One line per reason change in a latched episode, not one per retry.
+                    fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) refused (\(why.rawValue, privacy: .public)): kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C; at or above macOS's speed after \(FanControlCore.reTakeSettleSeconds, privacy: .public) s")
+                }) else { reply(false); return }
                 fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) ok")
                 reply(true)
             } catch {
@@ -455,6 +449,8 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         remoteWake.startFromDisk()
     }
 }
+
+extension SMCFanController: FanHardware {}
 
 let delegate = Helper()
 let listener = NSXPCListener(machServiceName: helperMachServiceName)

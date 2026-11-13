@@ -68,6 +68,25 @@ public final class FanControlCore {
         return true
     }
 
+    /// `setFanManualRPM`'s body, run by the daemon inside one fanQ block (#926 made it testable):
+    /// the gate (it reads the hottest sensor, complete, and fan `index`'s F<i>Ac and F<i>Tg only
+    /// while latched), then `arm` (the supervision timer), then the write. False = refused: nothing
+    /// armed or written, and `refused` gets the reason once per change in a latched episode (the
+    /// daemon's log line). A throwing write rethrows with the holder and target still recorded.
+    public func engage(_ fan: FanHardware, index: Int, rpm: Double, holder: ObjectIdentifier,
+                       arm: () -> Void, refused: (Refusal) -> Void) throws -> Bool {
+        let seen = lastRefusal
+        guard manualRequest(index: index, rpm: rpm, holder: holder,
+                            maxCelsius: fan.maxTemperature(complete: true),
+                            macOSRPM: Self.macOSSpeed(current: fan.currentRPM(index), target: fan.targetRPM(index))) else {
+            if let why = lastRefusal, why != seen { refused(why) }
+            return false
+        }
+        arm()
+        try fan.setManual(index, rpm: rpm)
+        return true
+    }
+
     /// `setFanAuto` succeeded on `index`. Returns true when the daemon must arm
     /// supervision: the last pinned fan went to auto with the controller unlock kept.
     /// `hasFtst` is only read on that path (it is an SMC read).
@@ -284,4 +303,13 @@ public final class FanControlCore {
         lastRefusal = nil
         if maxCelsius.map({ $0 >= Self.killSwitchCelsius }) ?? false { latch() }   // NaN compares false
     }
+}
+
+/// The SMC calls `FanControlCore.engage` makes. The daemon's `SMCFanController` conforms
+/// (this target cannot import SMCKit); tests pass a fake, so no test touches a real fan.
+public protocol FanHardware {
+    func maxTemperature(complete: Bool) -> Double?
+    func currentRPM(_ i: Int) -> Double?
+    func targetRPM(_ i: Int) -> Double?
+    func setManual(_ i: Int, rpm: Double) throws
 }

@@ -407,7 +407,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
         FanControlHelper.inject(sleeping: false)   // the wake
         gate.signal()
         let saved = await rest.value
-        XCTAssertFalse(saved, "the popup saved the pref after a sleep inside its engage loop")
+        XCTAssertTrue(saved == nil, "the popup saved the pref after a sleep inside its engage loop")
         await waitForTeardown()
         XCTAssertEqual(fake.proxy.resets, 2, "the loop released after the wake")
         XCTAssertTrue(FanControlHelper.connection == nil, "the loop's release did not tear down")
@@ -458,7 +458,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
             XCTAssertEqual(reply, .engaged)
             guard FanControlHelper.firstEngageLanded(reply, since: generation) else { return false }
             return await FanControlHelper.engageRest([0: 2000, 1: 3000], skipping: 0, since: generation,
-                                                     engage: { i, _ in restEngaged.append(i); return true })
+                                                     engage: { i, _ in restEngaged.append(i); return .engaged }) == .engaged
         }
         await fulfillment(of: [parked], timeout: 2)
         FanControlHelper.willSleep()
@@ -499,11 +499,11 @@ final class FanReclaimRecoveryTests: XCTestCase {
         for stopAt in [2, Int.max] {
             var engaged: [Int] = [], checks = 0
             let saved = await FanControlHelper.engageRest([0: 1, 1: 1, 2: 1, 3: 1], skipping: 0,
-                                                          engage: { i, _ in engaged.append(i); return true },
+                                                          engage: { i, _ in engaged.append(i); return .engaged },
                                                           landed: { _ in checks += 1; return checks < stopAt })
             XCTAssertEqual(engaged.count, stopAt == 2 ? 2 : 3, "stopAt=\(stopAt): \(engaged)")
             XCTAssertFalse(engaged.contains(0))
-            XCTAssertEqual(saved, stopAt != 2)
+            XCTAssertEqual(saved, stopAt == 2 ? nil : .engaged)
         }
     }
 
@@ -613,7 +613,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
             var restEngaged: [Int] = []
             let (saved, _) = await FanControlHelper.popupEngage(targets, first: 0,
                 engageFirst: { FanControlHelper.inject(sleeping: false); return .engaged },   // the wake, then the reply
-                engage: { i, _ in restEngaged.append(i); return true })
+                engage: { i, _ in restEngaged.append(i); return .engaged })
             XCTAssertFalse(saved, "a click taken asleep saved the pref after the wake")
             XCTAssertEqual(restEngaged, [])
             XCTAssertFalse(Preferences.fanManualEnabled)
@@ -635,7 +635,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
             // Capture before the first engage: the first engage is refused.
             var restEngaged: [Int] = []
             var (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: sleepAndWake,
-                engage: { i, _ in restEngaged.append(i); return true })
+                engage: { i, _ in restEngaged.append(i); return .engaged })
             XCTAssertFalse(saved, "the generation was captured after the first engage")
             XCTAssertEqual(restEngaged, [])
             await waitForTeardown()
@@ -643,7 +643,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
             FanControlHelper.inject(connection: FakeHelperConnection(), engagesInFlight: 0)
             (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: sleepAndWake,
                 firstLanded: { _, _, _ in true },
-                engage: { i, _ in restEngaged.append(i); return true })
+                engage: { i, _ in restEngaged.append(i); return .engaged })
             XCTAssertFalse(saved, "engageRest did not get the click's generation")
             XCTAssertEqual(restEngaged, [1], "the rest went on after the stale check")
             XCTAssertFalse(Preferences.fanManualEnabled)
@@ -657,14 +657,14 @@ final class FanReclaimRecoveryTests: XCTestCase {
     func testPopupEngageSavesOnlyWhenTheRestLanded() async {
         await withPopupFakes { targets, sentinel in
             var (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
-                engage: { _, _ in true }, landed: { _ in false })
+                engage: { _, _ in .engaged }, landed: { _ in false })
             XCTAssertFalse(saved, "the popup saved the pref after engageRest stopped")
             XCTAssertFalse(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, sentinel)
             FanControlHelper.presetPending = true   // #737: a saved preset the engage now lands
             defer { FanControlHelper.presetPending = false }
             (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
-                engage: { _, _ in true }, landed: { _ in true })
+                engage: { _, _ in .engaged }, landed: { _ in true })
             XCTAssertTrue(saved)
             XCTAssertTrue(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, targets)
@@ -726,7 +726,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
                 var restEngaged: [Int] = []
                 let start = Date()
                 let (saved, reply) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { refusal },
-                    engage: { i, _ in restEngaged.append(i); return true })
+                    engage: { i, _ in restEngaged.append(i); return .engaged })
                 XCTAssertTrue(saved, "\(refusal)")
                 XCTAssertEqual(reply, refusal)
                 XCTAssertTrue(Preferences.fanManualEnabled, "\(refusal): intent not saved")
@@ -753,7 +753,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
                 FanControlHelper.presetPending = false
                 FanControlHelper.armRecoveryLifecycle()   // what setManualReply does before the call
                 let (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { failure },
-                    engage: { _, _ in XCTFail("engaged after a failure"); return true })
+                    engage: { _, _ in XCTFail("engaged after a failure"); return .engaged })
                 XCTAssertFalse(saved, "\(failure)")
                 XCTAssertFalse(Preferences.fanManualEnabled, "\(failure) saved intent")
                 XCTAssertEqual(Preferences.fanTargets, sentinel)
@@ -778,7 +778,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
                 FanControlHelper.presetPending = false
                 if name == "clicked asleep" { FanControlHelper.willSleep() }
                 let (saved, _) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: engageFirst,
-                    engage: { _, _ in XCTFail("engaged after a sleep"); return true })
+                    engage: { _, _ in XCTFail("engaged after a sleep"); return .engaged })
                 XCTAssertFalse(saved, name)
                 XCTAssertFalse(Preferences.fanManualEnabled, "\(name): saved intent")
                 XCTAssertEqual(Preferences.fanTargets, sentinel, name)
@@ -888,6 +888,199 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await disarmPreset()
     }
 
+    // MARK: - #926 split verdicts: one decision for every fan of a request
+
+    @MainActor
+    func testEngageOrderPutsTheRefusedFanFirstThenByIndex() {
+        let targets: [Int: Double] = [2: 1, 0: 1, 1: 1]
+        XCTAssertEqual(FanControlHelper.engageOrder(targets, refusedFirst: nil).map(\.key), [0, 1, 2])
+        XCTAssertEqual(FanControlHelper.engageOrder(targets, refusedFirst: 2).map(\.key), [2, 0, 1])
+        XCTAssertEqual(FanControlHelper.engageOrder(targets, refusedFirst: 7).map(\.key), [0, 1, 2])
+        XCTAssertEqual(FanControlHelper.engageOrder([:], refusedFirst: 1).count, 0)
+    }
+
+    /// The slider commit's burst stops at the first fan that does not engage (no sibling pinned after
+    /// it) and that reply is the request's; the refused fan goes first next time.
+    @MainActor
+    func testCommitBurstStopsAtTheFirstFailedFan() async {
+        let previousRefused = FanControlHelper.lastRefusedFan
+        defer { FanControlHelper.lastRefusedFan = previousRefused }
+        FanControlHelper.lastRefusedFan = nil
+        let targets: [Int: Double] = [0: 2000, 1: 2000, 2: 2000]
+        var engaged: [Int] = []
+        var reply = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return i == 1 ? .refused : .engaged }
+        XCTAssertEqual(reply, .refused)
+        XCTAssertEqual(engaged, [0, 1], "a fan after the refused one was pinned")
+        FanControlHelper.lastRefusedFan = 1   // what setManualReply records for that refusal
+        engaged = []
+        reply = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return i == 1 ? .settling : .engaged }
+        XCTAssertEqual(reply, .settling)
+        XCTAssertEqual(engaged, [1], "the retry pinned a sibling before the refused fan")
+        engaged = []
+        reply = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return .engaged }
+        XCTAssertEqual(reply, .engaged)
+        XCTAssertEqual(engaged, [1, 0, 2])
+    }
+
+    /// QA #456 L2: the popup's first fan engaged, a later one refused. The request is refused as a
+    /// whole: the targets become the pending preset (as for a refused first fan, #737), the retry
+    /// waits one cooldown, and macOS gets the pinned fan back. Before #926 the split pin was saved.
+    @MainActor
+    func testALaterFansRefusalRefusesThePopupRequest() async {
+        await withPopupFakes { targets, _ in
+            FanControlHelper.presetPending = false
+            let fake = FakeHelperConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            var restEngaged: [Int] = []
+            let start = Date()
+            let (saved, reply) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
+                engage: { i, _ in restEngaged.append(i); return .refused })
+            XCTAssertEqual(restEngaged, [1])
+            XCTAssertTrue(saved)
+            XCTAssertEqual(reply, .refused, "the popup and the phone show the pending line")
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, targets)
+            XCTAssertTrue(FanControlHelper.presetPending, "the split pin was saved as landed")
+            XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
+            XCTAssertFalse(FanControlHelper.reclaimTickAllowed(now: start.addingTimeInterval(1)), "retry not deferred")
+            for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back")
+            await disarmPreset()
+        }
+    }
+
+    /// #926 r2: a later fan's .settling is the same live refusal as on the first fan: the preset is
+    /// kept, the reply is .settling (not .refused), and the fan this click pinned is handed back once.
+    @MainActor
+    func testALaterFansSettlingKeepsThePresetAndSaysSettling() async {
+        await withPopupFakes { targets, _ in
+            FanControlHelper.presetPending = false
+            let fake = FakeHelperConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            var restEngaged: [Int] = []
+            let (saved, reply) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
+                engage: { i, _ in restEngaged.append(i); return .settling })
+            XCTAssertEqual(restEngaged, [1])
+            XCTAssertTrue(saved)
+            XCTAssertEqual(reply, .settling)
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, targets)
+            XCTAssertTrue(FanControlHelper.presetPending)
+            for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back")
+            await disarmPreset()
+        }
+    }
+
+    /// #926 r2: no reply from a later fan (a timeout or an XPC error) stays a failure, as on the first
+    /// fan (#737): not saved, that reply, no pref and no preset, and fan 0's pin handed back. Manual
+    /// was off before the click, so the release tears down like a failed first engage.
+    @MainActor
+    func testALaterFansNoReplySavesNothingAndHandsBackThePin() async {
+        await withPopupFakes { targets, sentinel in
+            FanControlHelper.presetPending = false
+            let fake = FakeHelperConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            var restEngaged: [Int] = []
+            let (saved, reply) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
+                engage: { i, _ in restEngaged.append(i); return .unavailable })
+            XCTAssertEqual(restEngaged, [1])
+            XCTAssertFalse(saved)
+            XCTAssertEqual(reply, .unavailable)
+            XCTAssertFalse(Preferences.fanManualEnabled, "a helper that did not answer saved intent")
+            XCTAssertEqual(Preferences.fanTargets, sentinel)
+            XCTAssertFalse(FanControlHelper.presetPending)
+            for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back")
+            await waitForTeardown()
+            XCTAssertTrue(FanControlHelper.connection == nil, "manual off: the release did not tear down")
+            await disarmPreset()
+        }
+    }
+
+    /// #926 r2: a later fan's missing approval is no reply too. Here an earlier preset was pending
+    /// before the click: it stays as it was (intent, targets, pending flag), fan 0's pin is handed
+    /// back, and the connection stays for that preset's recovery (no teardown with manual on).
+    @MainActor
+    func testALaterFansMissingApprovalKeepsTheEarlierPresetAndHandsBackThePin() async {
+        await withPopupFakes { targets, sentinel in
+            Preferences.fanManualEnabled = true
+            FanControlHelper.presetPending = true
+            let fake = FakeHelperConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            var restEngaged: [Int] = []
+            let (saved, reply) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
+                engage: { i, _ in restEngaged.append(i); return .needsApproval })
+            XCTAssertEqual(restEngaged, [1])
+            XCTAssertFalse(saved)
+            XCTAssertEqual(reply, .needsApproval)
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, sentinel, "the click's targets replaced the earlier preset")
+            XCTAssertTrue(FanControlHelper.presetPending)
+            for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back")
+            XCTAssertTrue(FanControlHelper.connection === fake, "manual on: the release tore the connection down")
+            await disarmPreset()
+        }
+    }
+
+    /// QA #456 L2 / #586 ceiling 2, against the helper's real core (fake clock, temperature and
+    /// speeds; no XPC, no SMC). Latched and past the window, fan 0's preset is at or above macOS's
+    /// speed, fan 1's below. The first attempt pins fan 0, is refused on fan 1 and the reset hands
+    /// fan 0 back. Every retry engages fan 1 first and stops there: nothing pinned, nothing handed
+    /// back, so the settle window is not restarted. Once macOS slows fan 1 to its preset, both land.
+    @MainActor
+    func testSplitVerdictRetryPinsNoSibling() async {
+        let previousManualIntent = Preferences.fanManualEnabled, previousTargets = Preferences.fanTargets
+        let previousRefused = FanControlHelper.lastRefusedFan
+        defer {
+            Preferences.fanManualEnabled = previousManualIntent; Preferences.fanTargets = previousTargets
+            FanControlHelper.lastRefusedFan = previousRefused; FanControlHelper.presetPending = false
+        }
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = [0: 3103, 1: 2000]
+        FanControlHelper.lastRefusedFan = nil
+        final class Clock { var t = ContinuousClock.now }
+        final class Conn {}
+        let clock = Clock(), conn = Conn(), holder = ObjectIdentifier(conn)
+        let core = FanControlCore(reset: { true }, maxCelsius: { nil }, now: { clock.t })
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3103, holder: holder, maxCelsius: 50, macOSRPM: nil))
+        XCTAssertEqual(core.supervise(maxCelsius: 96, isManualEngaged: { _ in true }), .fired)
+        var macOS: [Int: Double] = [0: 2500, 1: 2500]
+        var engaged: [Int] = []
+        func attempt(after seconds: Double) async -> Bool {
+            clock.t = clock.t.advanced(by: .seconds(seconds))
+            engaged = []
+            let ok = await FanControlHelper.applySavedTargets(reclaimGeneration: FanControlHelper.reclaimGeneration,
+                engage: { i, rpm, _ in
+                    engaged.append(i)
+                    let pinned = core.manualRequest(index: i, rpm: rpm, holder: holder, maxCelsius: 90, macOSRPM: macOS[i])
+                    if !pinned { FanControlHelper.lastRefusedFan = i }   // setManualReply's record of a live refusal
+                    return pinned
+                },
+                reset: { _ in core.releaseAll() })
+            if !ok { XCTAssertTrue(core.releaseAll()) }   // settleReclaim's .retry reset
+            return ok
+        }
+        var landed = await attempt(after: FanReclaimRecovery.retryCooldown)
+        XCTAssertFalse(landed)
+        XCTAssertEqual(engaged, [0, 1])
+        XCTAssertEqual(core.lastRefusal, .belowMacOS)
+        for retry in 1...3 {
+            landed = await attempt(after: FanReclaimRecovery.retryCooldown)
+            XCTAssertFalse(landed, "retry \(retry)")
+            XCTAssertEqual(engaged, [1], "retry \(retry) pinned a sibling before the refused fan")
+            XCTAssertTrue(core.heldTargets.isEmpty, "retry \(retry)")
+        }
+        // macOS slowed fan 1 to 1900. One second later is past the window only if no retry restarted it.
+        macOS[1] = 1900
+        landed = await attempt(after: 1)
+        XCTAssertTrue(landed)
+        XCTAssertEqual(engaged, [1, 0])
+        XCTAssertEqual(core.heldTargets, [0: 3103, 1: 2000])
+        XCTAssertTrue(core.tripLatched)
+    }
+
     /// QA #103 M8: the reclaim tick does not run while asleep, even with manual on.
     @MainActor
     func testReclaimTickNotAllowedWhileAsleep() {
@@ -993,13 +1186,15 @@ final class FanReclaimRecoveryTests: XCTestCase {
     func testSetManualReplyNamesARefusalByTheFanSpeed() async {
         let previousManualIntent = Preferences.fanManualEnabled, savedRegistration = LidSleepHelper.registration
         let fake = FakeHelperConnection()
+        let previousRefused = FanControlHelper.lastRefusedFan
         defer {
             Preferences.fanManualEnabled = previousManualIntent; LidSleepHelper.registration = savedRegistration
-            FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.lastRefusedFan = previousRefused
         }
         Preferences.fanManualEnabled = false
         LidSleepHelper.registration = { .enabled }
         FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        FanControlHelper.lastRefusedFan = nil
         let reads = LockedBox()
         let speed: @Sendable (Int) -> Double? = { _ in reads.set(true); return 2500 }
         var reply = await FanControlHelper.setManualReply(0, rpm: 3103, macOSRPM: speed)
@@ -1008,9 +1203,15 @@ final class FanReclaimRecoveryTests: XCTestCase {
         fake.proxy.manualReply = false
         reply = await FanControlHelper.setManualReply(0, rpm: 3103, macOSRPM: speed)
         XCTAssertEqual(reply, .settling)
-        reply = await FanControlHelper.setManualReply(0, rpm: 2000, macOSRPM: speed)
+        XCTAssertEqual(FanControlHelper.lastRefusedFan, 0, "#926: a live refusal names the fan to engage first")
+        reply = await FanControlHelper.setManualReply(1, rpm: 2000, macOSRPM: speed)
         XCTAssertEqual(reply, .refused)
         XCTAssertEqual(reads.get().count, 2)
+        XCTAssertEqual(FanControlHelper.lastRefusedFan, 1)
+        fake.proxy.manualReply = true
+        reply = await FanControlHelper.setManualReply(0, rpm: 3103, macOSRPM: speed)
+        XCTAssertEqual(reply, .engaged)
+        XCTAssertEqual(FanControlHelper.lastRefusedFan, 1, "an engage moved the refused fan")
         await FanControlHelper.resetAll(teardown: true)
     }
 
@@ -1145,14 +1346,6 @@ final class FanManualReplyTests: XCTestCase {
         let missing = try XCTUnwrap(FanManualReply.unavailable.errorText)
         XCTAssertTrue(missing.contains("isn’t running or wasn’t approved"))
         XCTAssertNil(FanManualReply.engaged.errorText)
-    }
-
-    func testCombineRefusalWinsThenUnavailable() {
-        XCTAssertEqual(FanManualReply.combine([.engaged, .refused, .unavailable]), .refused)
-        XCTAssertEqual(FanManualReply.combine([.engaged, .unavailable]), .unavailable)
-        XCTAssertEqual(FanManualReply.combine([.engaged, .engaged]), .engaged)
-        XCTAssertEqual(FanManualReply.combine([.engaged, .settling, .unavailable]), .settling)
-        XCTAssertEqual(FanManualReply.combine([.settling, .refused]), .refused)
     }
 
     /// #586: the held text is only for a target below macOS's speed (or an unreadable one).

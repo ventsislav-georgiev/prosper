@@ -56,11 +56,11 @@ final class DchFanCommandsTests: XCTestCase {
     ]
 
     private func ops(fans: [FanReading] = DchFanCommandsTests.twoFans, enabled: Bool = true, log: Log,
-                     first: FanManualReply = .engaged) -> DchCommandOps {
+                     first: FanManualReply = .engaged, later: FanManualReply = .engaged) -> DchCommandOps {
         DchCommandOps(enabled: { enabled }, registry: { log.add("registry"); return nil },
                       fans: .init(read: { log.add("read"); return fans },
                                   firstReply: { i, rpm in log.add("first \(i) \(Int(rpm))"); return first },
-                                  engage: { i, rpm in log.add("engage \(i) \(Int(rpm))"); return true }))
+                                  engage: { i, rpm in log.add("engage \(i) \(Int(rpm))"); return later }))
     }
 
     /// Saves and restores the fan prefs and helper state around `body`. Drops any reclaim timer a
@@ -68,13 +68,15 @@ final class DchFanCommandsTests: XCTestCase {
     /// with manual off, `[9: 1]` saved, awake, no connection.
     private func withFanState(_ body: () async throws -> Void) async rethrows {
         let manual = Preferences.fanManualEnabled, targets = Preferences.fanTargets, hold = Preferences.fanHoldUnlock
+        let refused = FanControlHelper.lastRefusedFan
         FanControlHelper.inject(connection: nil, engagesInFlight: 0)
         await FanControlHelper.resetAll(teardown: true)   // no connection: no call, timer dropped
         defer {
             Preferences.fanManualEnabled = manual; Preferences.fanTargets = targets; Preferences.fanHoldUnlock = hold
             FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
-            FanControlHelper.userAdjusting = false
+            FanControlHelper.userAdjusting = false; FanControlHelper.lastRefusedFan = refused
         }
+        FanControlHelper.lastRefusedFan = nil   // engageOrder: fan 0 first, fan 1 later
         Preferences.fanManualEnabled = false
         Preferences.fanTargets = [9: 1]
         Preferences.fanHoldUnlock = false
@@ -279,6 +281,84 @@ final class DchFanCommandsTests: XCTestCase {
             XCTAssertFalse(FanControlHelper.presetPending)
             XCTAssertFalse(log.calls.contains { $0.hasPrefix("engage") }, "the rest engaged after a failure")
             await awaitRelease(sink)
+        }
+    }
+
+    // MARK: A later fan's reply (#926)
+
+    /// The first fan (0) engaged and the later one (1) refused: the same pending reply and preset as
+    /// a refused first fan, and fan 0 handed back to macOS by savePreset.
+    func testALaterFansRefusalRepliesPendingAndSavesThePreset() async {
+        await withFanState {
+            let log = Log(), fake = FakeConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            let f = await run(ops(log: log, later: .refused), "fans.manual", "60%")
+            XCTAssertEqual(Self.result(f), ["text": "Manual pending · 4080 / 3400 rpm",
+                                            "detail": "target at 60%, applies when the Mac cools down"])
+            XCTAssertEqual(log.calls.filter { $0 != "read" }, ["first 0 4080", "engage 1 3400"])
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [0: 4080, 1: 3400])
+            XCTAssertTrue(FanControlHelper.presetPending)
+            for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back")
+        }
+    }
+
+    /// A later .settling is a live refusal too: the same pending reply and preset as .refused.
+    func testALaterFansSettlingRepliesPendingAndSavesThePreset() async {
+        await withFanState {
+            let log = Log(), fake = FakeConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            let f = await run(ops(log: log, later: .settling), "fans.manual", "60%")
+            XCTAssertEqual(Self.result(f), ["text": "Manual pending · 4080 / 3400 rpm",
+                                            "detail": "target at 60%, applies when the Mac cools down"])
+            XCTAssertEqual(log.calls.filter { $0 != "read" }, ["first 0 4080", "engage 1 3400"])
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [0: 4080, 1: 3400])
+            XCTAssertTrue(FanControlHelper.presetPending)
+            for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back")
+        }
+    }
+
+    /// The later fan through FanOps' REAL engage (only the registration faked, no XPC): an unapproved
+    /// helper is the approval text, never the modal, nothing saved, fan 0 released.
+    func testALaterFansMissingApprovalRepliesTheApprovalText() async {
+        await withRegistration(.needsApproval) { log in
+            await withFanState {
+                let sink = releaseSink()
+                let firstLanded = DchCommandOps(enabled: { true }, registry: { nil }, fans: .init(read: { Self.twoFans },
+                    firstReply: { i, rpm in log.add("first \(i) \(Int(rpm))"); return .engaged }))
+                let f = await run(firstLanded, "fans.manual", "60%")
+                XCTAssertEqual(Self.message(f), "Prosper's fan helper needs approval on the Mac: System Settings › General › Login Items")
+                XCTAssertEqual(log.calls, ["first 0 4080", "register"], "the modal came up, or fan 1 never asked")
+                XCTAssertFalse(Preferences.fanManualEnabled)
+                XCTAssertEqual(Preferences.fanTargets, [9: 1])
+                XCTAssertFalse(FanControlHelper.presetPending)
+                await awaitRelease(sink)
+            }
+        }
+    }
+
+    /// The later fan through FanOps' REAL engage with registration failing (no XPC): no reply is the
+    /// popup's unavailable text, nothing saved, fan 0 released.
+    func testALaterFansNoReplyRepliesTheUnavailableText() async throws {
+        try await withRegistration(.failed) { log in
+            try await withFanState {
+                let sink = releaseSink()
+                let firstLanded = DchCommandOps(enabled: { true }, registry: { nil }, fans: .init(read: { Self.twoFans },
+                    firstReply: { i, rpm in log.add("first \(i) \(Int(rpm))"); return .engaged }))
+                let f = await run(firstLanded, "fans.manual", "60%")
+                XCTAssertEqual(Self.message(f), "Couldn’t enable manual control — the Prosper helper isn’t "
+                    + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
+                    + "General ▸ Login Items ▸ Allow in the Background, then try again.")
+                XCTAssertEqual(Self.message(f), try XCTUnwrap(FanManualReply.unavailable.errorText))
+                XCTAssertEqual(log.calls, ["first 0 4080", "register"])
+                XCTAssertFalse(Preferences.fanManualEnabled)
+                XCTAssertEqual(Preferences.fanTargets, [9: 1])
+                XCTAssertFalse(FanControlHelper.presetPending)
+                await awaitRelease(sink)
+            }
         }
     }
 

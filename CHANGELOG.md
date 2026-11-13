@@ -404,6 +404,9 @@ tag from the now-released section and put it on the new top draft.
 - The volume mixer no longer risks reading past its own memory, or reserving an outsized buffer,
   when an output device reports a stream layout that changed mid-read or looks implausible; it falls
   back to stereo limiting.
+- Fans: when the overheat cut-off lets one fan take your speed but not the other, Prosper no longer
+  leaves the fans split or re-pins one of them every few seconds; it keeps your speed as the pending
+  preset and applies it to every fan together once macOS allows it.
 
 ## v2.174.0
 
