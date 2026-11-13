@@ -637,6 +637,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a session row now shows its agents, merged pull requests and (when the chips do
   not fit) open pull requests as small icons with a number instead of words, and the ages keep
   updating while you scroll. (#1115)
+- Marketplace: a download no longer returns the publisher's e-mail address. Packages are signed with
+  an anonymous publisher id instead, and packages already published keep installing. This is a
+  change in the Marketplace service and takes effect when the service is updated; no app update is
+  needed. (#1138)
 
 ## v2.174.0
 

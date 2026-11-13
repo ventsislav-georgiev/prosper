@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { Ctx, Env } from "./types";
 import { signDetached } from "./jwt";
 import { requireSession } from "./middleware";
-import { intEnv, nowSec } from "./util";
+import { hmacSha256Hex, intEnv, normalizeEmail, nowSec } from "./util";
 
 /**
  * Extension marketplace. Authenticated publish + public browse/download, all on
@@ -24,7 +24,9 @@ const market = new Hono<Env>();
 
 /** The exact message the signature covers. Reproduced byte-for-byte in the app
  *  (RemoteInstaller.marketClaimMessage). Newline-delimited to avoid any
- *  cross-language JSON canonicalization ambiguity. */
+ *  cross-language JSON canonicalization ambiguity. `publisher_email` is the
+ *  masked publisherValue since #1138 (the app treats it as an opaque string);
+ *  rows signed before that carry the e-mail (see download). */
 function claimMessage(p: {
   id: string;
   version: string;
@@ -40,6 +42,25 @@ function claimMessage(p: {
     p.publisher_email,
     String(p.published_at),
   ].join("\n");
+}
+
+/** #1138: the publisher value the claim and the download carry instead of the
+ *  e-mail. "pub_" + 16 hex of HMAC-SHA256 over the lower-cased e-mail, keyed by
+ *  the signing key's private part under its own label: stable per publisher, and
+ *  guessing an address does not reproduce it without the server's key. */
+async function publisherValue(jwkStr: string, email: string): Promise<string> {
+  const d = (JSON.parse(jwkStr) as JsonWebKey).d;
+  if (!d) throw new Error("SUPPORTER_SIGNING_JWK has no private part");
+  const mac = await hmacSha256Hex(`prosper-market-publisher-v1:${d}`, normalizeEmail(email));
+  return `pub_${mac.slice(0, 16)}`;
+}
+
+/** Ed25519 check of a detached base64url signature with the signing key's public part. */
+async function verifyClaim(jwkStr: string, message: string, sigB64url: string): Promise<boolean> {
+  const { kty, crv, x } = JSON.parse(jwkStr) as JsonWebKey;
+  const key = await crypto.subtle.importKey("jwk", { kty, crv, x }, { name: "Ed25519" }, false, ["verify"]);
+  const sig = b64ToBytes(sigB64url.replace(/-/g, "+").replace(/_/g, "/"));
+  return crypto.subtle.verify("Ed25519", key, sig, new TextEncoder().encode(message));
 }
 
 type ManifestInput = {
@@ -134,9 +155,10 @@ async function publish(c: Ctx) {
 
   const now = nowSec();
   const sha = await sha256HexBytes(bytes);
+  const publisher = await publisherValue(c.env.SUPPORTER_SIGNING_JWK, email);
   const signature = await signDetached(
     c.env.SUPPORTER_SIGNING_JWK,
-    claimMessage({ id, version, sha256: sha, publisher_email: email, published_at: now }),
+    claimMessage({ id, version, sha256: sha, publisher_email: publisher, published_at: now }),
   );
   const artifactKey = `pkg:${id}:${version}`;
 
@@ -149,9 +171,9 @@ async function publish(c: Ctx) {
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO package_versions
-         (package_id, version, manifest, sha256, signature, size, artifact_key, published_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
-    ).bind(id, version, JSON.stringify(m), sha, signature, bytes.length, artifactKey, now),
+         (package_id, version, manifest, sha256, signature, size, artifact_key, published_at, publisher)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    ).bind(id, version, JSON.stringify(m), sha, signature, bytes.length, artifactKey, now, publisher),
     c.env.DB.prepare(
       `INSERT INTO packages
          (id, owner_email, name, title, description, author, icon, license,
@@ -223,8 +245,8 @@ function decodePreview<T extends { preview?: unknown }>(row: T): T {
 async function packageDetail(c: Ctx) {
   const id = c.req.param("id");
   // NB: owner_email is intentionally NOT selected — it's the publisher's supporter
-  // email (PII) and the detail view never needs it. (download returns it because
-  // the signed claim binds it and the app must reproduce the claim to verify.)
+  // email (PII). No public route returns it (#1138): download answers the masked
+  // publisherValue the claim is signed over.
   const pkg = await c.env.DB.prepare(
     `SELECT id, name, title, description, author, icon, license,
             latest_version, downloads, status, created_at, updated_at, kind, preview
@@ -249,7 +271,7 @@ async function download(c: Ctx) {
   const version = c.req.param("version");
 
   const row = await c.env.DB.prepare(
-    `SELECT v.sha256, v.signature, v.size, v.artifact_key, v.published_at, p.owner_email, p.status
+    `SELECT v.sha256, v.signature, v.size, v.artifact_key, v.published_at, v.publisher, p.owner_email, p.status
      FROM package_versions v JOIN packages p ON p.id = v.package_id
      WHERE v.package_id = ?1 AND v.version = ?2`,
   )
@@ -260,6 +282,7 @@ async function download(c: Ctx) {
       size: number;
       artifact_key: string;
       published_at: number;
+      publisher: string | null;
       owner_email: string;
       status: string;
     }>();
@@ -268,6 +291,23 @@ async function download(c: Ctx) {
 
   const bytes = await c.env.KV.get(row.artifact_key, "arrayBuffer");
   if (!bytes) return c.json({ error: "artifact_missing" }, 404);
+
+  // A row from before #1138 (publisher NULL) was signed over the e-mail. Re-sign it
+  // over the masked value, but only when its stored signature still verifies over
+  // the e-mail claim, so a D1 edit cannot get a fresh signature. Not written back:
+  // no extra query on the download path.
+  let publisher = row.publisher;
+  let signature = row.signature;
+  if (publisher === null) {
+    const jwk = c.env.SUPPORTER_SIGNING_JWK;
+    // The route always binds both params; ! only narrows Hono's string | undefined.
+    const claim = { id: id!, version: version!, sha256: row.sha256, published_at: row.published_at };
+    if (!(await verifyClaim(jwk, claimMessage({ ...claim, publisher_email: row.owner_email }), signature))) {
+      return c.json({ error: "republish_required" }, 410);
+    }
+    publisher = await publisherValue(jwk, row.owner_email);
+    signature = await signDetached(jwk, claimMessage({ ...claim, publisher_email: publisher }));
+  }
 
   // Best-effort download counter (don't block the response on it).
   c.executionCtx.waitUntil(
@@ -280,8 +320,8 @@ async function download(c: Ctx) {
     id,
     version,
     sha256: row.sha256,
-    signature: row.signature,
-    publisher_email: row.owner_email,
+    signature,
+    publisher_email: publisher, // field name kept: every installed app reads it
     published_at: row.published_at,
     blob: bytesToB64(new Uint8Array(bytes)),
   });
@@ -325,4 +365,4 @@ market.get("/download/:id/:version", download);
 market.post("/publish", requireSession, publish);
 market.delete("/packages/:id", requireSession, yank);
 
-export { market, claimMessage };
+export { market, claimMessage, publisherValue };
