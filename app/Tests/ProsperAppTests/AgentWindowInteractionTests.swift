@@ -1131,6 +1131,13 @@ final class AgentWindowInteractionTests: XCTestCase {
         AgentSession(key: Self.key, alias: "", activity: 1, state: state, agents: 0)
     }
 
+    /// #935: the row as dch lists a Claude Code session (its claude_session_id): Always allow answers no other.
+    func claudeSession(_ state: AgentState) -> AgentSession {
+        var s = session(state)
+        s.claudeSessionID = AgentIslandAutoAllowTests.claude
+        return s
+    }
+
     @MainActor
     func interaction(_ c: AgentIslandController?) -> AgentWindowInteraction {
         let i = AgentWindowInteraction()
@@ -1151,11 +1158,11 @@ final class AgentWindowInteractionTests: XCTestCase {
     func testAgentWindowAnswersThroughTheIslandsClickPathAndLeavesThePromptToTheHuman() throws {
         let f = FormSim(.plain(Self.modeSwitch))
         let c = controller(f.io)
-        c.store?.sessions = [session(.blocked)]
+        c.store?.sessions = [claudeSession(.blocked)]
         c.checkAutoAllow()
         until("Always allow leaves the prompt to the human") { !c.heldByAutoAllow(Self.key) }
         let i = interaction(c)
-        i.follow(session(.blocked))
+        i.follow(claudeSession(.blocked))
         guard case .prompt(let w) = i.panel else { return XCTFail("\(i.panel)") }
         XCTAssertEqual(w.enabled, [3])
         i.answer(w.buttons[0])
@@ -1169,7 +1176,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(i.panel, .none, "the read after the answer finds Claude at work, not an unreadable prompt")
         // The same prompt back is the human's: Always allow types nothing.
         f.lock.withLock { f.gone = false; f.status = "blocked" }
-        c.store?.sessions = [session(.blocked)]
+        c.store?.sessions = [claudeSession(.blocked)]
         c.checkAutoAllow()
         c.queue.sync {}
         XCTAssertEqual(f.log, ["send 3"])
@@ -1182,11 +1189,11 @@ final class AgentWindowInteractionTests: XCTestCase {
         // The first read waits for the test; every later one passes.
         let c = controller(AgentPromptIO(read: { k in gate.wait(); gate.signal(); return f.io.read(k) },
                                          status: f.io.status, send: f.io.send))
-        c.store?.sessions = [session(.blocked)]
+        c.store?.sessions = [claudeSession(.blocked)]
         c.checkAutoAllow()
         XCTAssertTrue(c.heldByAutoAllow(Self.key))
         let i = interaction(c)
-        i.follow(session(.blocked))
+        i.follow(claudeSession(.blocked))
         XCTAssertEqual(i.panel, .held)
         XCTAssertEqual(i.reads, 0, "nothing read while held")
         gate.signal()
@@ -1225,10 +1232,10 @@ final class AgentWindowInteractionTests: XCTestCase {
         a.deaf = true   // its Yes is taken but the screen stays: the prompt is still on screen while answered
         let ca = controller(AgentPromptIO(read: { k in gate.wait(); gate.signal(); return a.io.read(k) },
                                           status: a.io.status, send: a.io.send, keys: a.io.keys))
-        ca.store?.sessions = [session(.blocked)]
+        ca.store?.sessions = [claudeSession(.blocked)]
         ca.checkAutoAllow()
         XCTAssertTrue(ca.heldByAutoAllow(Self.key))
-        attempts({ let i = interaction(ca); i.follow(session(.blocked)); return i }(), "checking")
+        attempts({ let i = interaction(ca); i.follow(claudeSession(.blocked)); return i }(), "checking")
         XCTAssertEqual(a.log, [])
 
         // answered: the check sent its Yes and is off the session; the verify re-read is pending.
@@ -1237,7 +1244,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         settle(ca)
         XCTAssertEqual(a.log, ["send 1"])
         XCTAssertTrue(ca.heldByAutoAllow(Self.key), "answered holds")
-        attempts({ let i = interaction(ca); i.follow(session(.blocked)); return i }(), "answered")
+        attempts({ let i = interaction(ca); i.follow(claudeSession(.blocked)); return i }(), "answered")
         settle(ca)
         XCTAssertEqual(a.log, ["send 1"], "answered: only Always allow's own key")
 
@@ -1252,7 +1259,8 @@ final class AgentWindowInteractionTests: XCTestCase {
             return (a == ["--build"] ? "full\n" : a == ["--config"]
                     ? "/Users/probe/.config/dch/config\nauto_allow = true\nsidekick_pattern = -qa\n" : nil).map { Data($0.utf8) }
         }
-        let row = AgentSession(key: Self.key, alias: "", activity: 1, state: .blocked, agents: 0, version: "1.29.2")
+        let row = AgentSession(key: Self.key, alias: "", activity: 1, state: .blocked, agents: 0, version: "1.29.2",
+                               claudeSessionID: AgentIslandAutoAllowTests.claude)
         cd.store?.sessions = [row]
         cd.checkAutoAllow()
         settle(cd)
@@ -1266,13 +1274,13 @@ final class AgentWindowInteractionTests: XCTestCase {
         // human: Always allow left the prompt to the human; the window shows its buttons.
         let h = FormSim(.plain(Self.modeSwitch))
         let ch = controller(h.io)
-        ch.store?.sessions = [session(.blocked)]
+        ch.store?.sessions = [claudeSession(.blocked)]
         ch.checkAutoAllow()
         settle(ch)
         XCTAssertEqual(h.log, [], "no plain Yes: never Always allow's")
         XCTAssertFalse(ch.heldByAutoAllow(Self.key), "the human's: no hold")
         let ih = interaction(ch)
-        ih.follow(session(.blocked))
+        ih.follow(claudeSession(.blocked))
         guard case .prompt(let w) = ih.panel else { return XCTFail("human: \(ih.panel)") }
         XCTAssertFalse(w.enabled.isEmpty, "human: buttons")
     }

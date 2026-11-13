@@ -142,6 +142,8 @@ final class AgentIslandAutoAllowTests: XCTestCase {
     }
 
     private let key = AgentSessionKey(dir: "/d", name: "s")
+    /// #935: dch's `claude_session_id`: Always allow answers only a session that names a Claude Code.
+    static let claude = "0b7c2f3e-aaaa-bbbb-cccc-0123456789ab"
 
     // MARK: - The prompt rule
 
@@ -444,7 +446,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
     }
 
     private func session(_ state: AgentState, activity: TimeInterval = 1) -> AgentSession {
-        AgentSession(key: key, alias: "", activity: activity, state: state, agents: 0)
+        AgentSession(key: key, alias: "", activity: activity, state: state, agents: 0, claudeSessionID: Self.claude)
     }
 
     /// One poll that changed the list, as apply runs it; returns what apply publishes.
@@ -756,7 +758,8 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         c.currentGeometry = { Self.geometry }
         c.makePoller = {
             AgentIslandPoller(dirs: { [path] }, list: { _, _ in
-                [AgentSession(key: AgentSessionKey(dir: path, name: "s"), alias: "", activity: 1, state: .blocked, agents: 0)]
+                [AgentSession(key: AgentSessionKey(dir: path, name: "s"), alias: "", activity: 1, state: .blocked, agents: 0,
+                              claudeSessionID: Self.claude)]
             })
         }
         addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
@@ -1071,7 +1074,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
     private func row(_ state: AgentState, master: String = "1.29.2", allowed: DchAutoAllowed? = nil,
                      name: String = "s", activity: TimeInterval = 1) -> AgentSession {
         AgentSession(key: AgentSessionKey(dir: "/d", name: name), alias: "", activity: activity, state: state, agents: 0,
-                     version: master, autoAllowed: allowed)
+                     version: master, autoAllowed: allowed, claudeSessionID: Self.claude)
     }
 
     /// One list change, as apply runs it; what goes to the phone.
@@ -1471,7 +1474,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         let t0 = Date().timeIntervalSince1970.rounded(.down)
         touch(dir, "s.sock", mtime: t0 - 60)
         touch(dir, "s.sock.act", mtime: t0 - 30)
-        rows.set([AgentSession(key: k, alias: "", activity: 0, state: .blocked, agents: 0)])
+        rows.set([AgentSession(key: k, alias: "", activity: 0, state: .blocked, agents: 0, claudeSessionID: Self.claude)])
         let f = FakeIO(Self.subagentBash()), c = AgentIslandController(), r = Rec()
         let on = OSAllocatedUnfairLock(initialState: true)
         c.io = f.io
@@ -1953,7 +1956,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         let t0 = Date().timeIntervalSince1970.rounded(.down)
         touch(dir, "s.sock", mtime: t0 - 60)
         touch(dir, "s.sock.act", mtime: t0 - 30)
-        rows.set([AgentSession(key: k, alias: "", activity: 0, state: .blocked, agents: 0)])
+        rows.set([AgentSession(key: k, alias: "", activity: 0, state: .blocked, agents: 0, claudeSessionID: Self.claude)])
         let f = FakeIO(Self.subagentBash()), c = AgentIslandController()
         c.io = f.io
         c.showsPanel = false

@@ -593,6 +593,13 @@ tag from the now-released section and put it on the new top draft.
   and Kill Process then showed numbers with a comma and stopped reading "1.5", and lower/upper case
   and pattern matching corrupted text with accented letters. Lua now ignores the process locale for
   text case, character classes and numbers, for third-party extensions too. (#1099)
+- Safety fix: Always allow permission prompts now answers only in a session where dch reports a
+  running Claude Code. A session running anything else (a shell, a script, another agent, a file
+  being printed) that happens to show text shaped like a Claude Code permission prompt is never
+  typed into; it keeps its card and its Needs input notification, as with the setting off. The check
+  is made again right before the key is sent, so a session whose Claude Code has just exited is not
+  answered either. A Claude Code session that dch cannot name as one (two Claude Codes started side
+  by side in one session, or a dch older than 1.30) is left to you the same way. (#935)
 
 ## v2.174.0
 

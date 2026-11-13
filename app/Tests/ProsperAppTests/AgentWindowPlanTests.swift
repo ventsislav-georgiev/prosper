@@ -233,7 +233,7 @@ final class AgentWindowPlanTests: XCTestCase {
             g.planRows = rows
             g.planLines = plan
             let c = t.controller(g.io)
-            c.store?.sessions = [t.session(.blocked)]
+            c.store?.sessions = [t.claudeSession(.blocked)]
             c.checkAutoAllow()
             t.until("left to the human") { !c.heldByAutoAllow(T.key) }
             c.queue.sync {}
@@ -617,7 +617,7 @@ final class AgentWindowPlanTests: XCTestCase {
     func testAgentWindowPlanApproveRunsThroughTheControllerAndAStaleClickSendsNothing() throws {
         let f = FormSim(.plan)
         let c = t.controller(f.io)
-        c.store?.sessions = [t.session(.blocked)]
+        c.store?.sessions = [t.claudeSession(.blocked)]
         c.checkAutoAllow()
         t.until("Always allow leaves a plan to the human") { !c.heldByAutoAllow(T.key) }
         c.queue.sync {}

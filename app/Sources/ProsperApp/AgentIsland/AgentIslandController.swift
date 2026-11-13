@@ -1464,16 +1464,23 @@ final class AgentIslandController {
     private let dchBuilds = OSAllocatedUnfairLock<[String: (build: String?, at: Date)]>(initialState: [:])
     /// #791: the rows left to the human whose screen is being read again.
     private var rereading: Set<AgentSessionKey> = []
+    /// #935: the rows dch names one live Claude Code in (`claude_session_id`, the Agents window's
+    /// transcript mapping), from the newest list; the queue reads it again right before a send.
+    private let claudeKeys = OSAllocatedUnfairLock<Set<AgentSessionKey>>(initialState: [])
 
     /// Every list change, before it is published: a session that just went blocked
     /// gets one check, any tab, expanded or not. Off: nothing is read or held.
     func checkAutoAllow() {
         guard let store else { return }
+        // #935: no id (another program, two Claudes, an older dch, no list yet) is not Claude Code.
+        let claude = Set(store.sessions.filter { $0.claudeSessionID?.isEmpty == false }.map(\.key))
+        claudeKeys.withLock { $0 = claude }
         guard autoAllowOn() else { autoAllow = [:]; dchSeen = [:]; return }   // nothing held: published as is
         showDchAnswers(store.sessions)
         let blocked = Set(store.sessions.filter { $0.state == .blocked }.map(\.key))
         autoAllow = autoAllow.filter { blocked.contains($0.key) }
-        for key in blocked where autoAllow[key] == nil { startAutoAllow(key, answered: false) }
+        // #935: any other session is never checked or held: its card and Needs input, as with the setting off.
+        for key in blocked where autoAllow[key] == nil && claude.contains(key) { startAutoAllow(key, answered: false) }
         recheckHuman()
     }
 
@@ -1557,7 +1564,10 @@ final class AgentIslandController {
         store?.cards[key] = nil
         readAt[key] = nil
         _ = bump(key)
-        let io = io, t = now(), isOn = autoAllowOn, act = screen?.act ?? activity(key), retry = Self.dchBuildRetry
+        let io = io, t = now(), on = autoAllowOn, claude = claudeKeys, act = screen?.act ?? activity(key), retry = Self.dchBuildRetry
+        // #935: every automatic send (a fresh check, a re-read, the verify) asks this last, right before the key:
+        // a session whose newest list no longer names a Claude Code is left to the human.
+        let isOn: @Sendable () -> Bool = { on() && claude.withLock { $0.contains(key) } }
         let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
         // #792: a fresh blocked stretch only; the re-read after Prosper's own answer stays Prosper's.
         let master = answered ? "" : store?.sessions.first { $0.key == key }?.version ?? ""
