@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import os
 
 /// Reads the user's existing browser search engines so they can be imported as
 /// fallback providers, sparing them from retyping templates they already use.
@@ -8,12 +9,16 @@ import GRDB
 /// (`keywords` table, `url` column carrying a `{searchTerms}` placeholder). Safari
 /// exposes only its single default engine via a preference. Everything returns []
 /// gracefully on any failure — a missing/locked/corrupt file never throws into UI.
+/// A Chromium file that is there but cannot be read is logged (#211); a missing one is not.
 enum BrowserSearchImporter {
 
     /// Discover providers from whichever browser is currently the default.
     static func providers(forDefaultBrowser bundleID: String) -> [FallbackProvider] {
         if let vendor = chromiumVendorPath(for: bundleID) {
-            return chromiumProviders(appSupportSubpath: vendor)
+            guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                            in: .userDomainMask).first else { return [] }
+            return chromiumProviders(webData: appSupport.appendingPathComponent(vendor)
+                .appendingPathComponent("Web Data"))
         }
         if bundleID == "com.apple.Safari" {
             return safariProvider().map { [$0] } ?? []
@@ -39,57 +44,76 @@ enum BrowserSearchImporter {
         }
     }
 
+    /// The fallback-search extension's import runs this, so it logs where that extension does.
+    static let log = Logger(subsystem: "com.prosper.app", category: "extension")
+
     /// Parse the `keywords` table of a Chromium `Web Data` SQLite file. The file may
     /// be locked / WAL-journaled by a running browser, so we copy it to a temp path
-    /// and open that read-only.
-    private static func chromiumProviders(appSupportSubpath: String) -> [FallbackProvider] {
-        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory,
-                                                        in: .userDomainMask).first else { return [] }
-        let webData = appSupport.appendingPathComponent(appSupportSubpath)
-            .appendingPathComponent("Web Data")
-        guard FileManager.default.fileExists(atPath: webData.path) else { return [] }
-
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-webdata-\(UUID().uuidString).sqlite")
+    /// and open that read-only. A browser that is not installed (ENOENT) is silent; a
+    /// file that is there but cannot be copied or opened (a privacy/XProtect denial,
+    /// corruption) goes to `report` so it does not look like "no search engines" (#211).
+    static func chromiumProviders(webData: URL,
+                                  tempDir: URL = FileManager.default.temporaryDirectory,
+                                  report: (String) -> Void = { log.error("\($0, privacy: .public)") }) -> [FallbackProvider] {
+        // Last two components only ("Default/Web Data"): never the user's home path.
+        let label = webData.deletingLastPathComponent().lastPathComponent + "/" + webData.lastPathComponent
+        let temp = tempDir.appendingPathComponent("prosper-webdata-\(UUID().uuidString).sqlite")
         defer {
             try? FileManager.default.removeItem(at: temp)
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: temp.path + "-wal"))
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: temp.path + "-shm"))
         }
         do {
+            // No fileExists pre-check: it is a stat, and a denied stat reads as "missing".
             try FileManager.default.copyItem(at: webData, to: temp)
-            // A running browser keeps recent engine edits in the WAL; copy it too so we
-            // don't read only the last checkpoint. Skip -shm — it's a regenerable index
-            // into the WAL, and copying a stale one can make the open reject the snapshot.
-            let wal = URL(fileURLWithPath: webData.path + "-wal")
-            if FileManager.default.fileExists(atPath: wal.path) {
-                try? FileManager.default.copyItem(at: wal, to: URL(fileURLWithPath: temp.path + "-wal"))
-            }
         } catch {
+            if !isMissing(error) { report("browser search import: \(label) copy failed: \(describe(error))") }
             return []
+        }
+        // A running browser keeps recent engine edits in the WAL; copy it too so we
+        // don't read only the last checkpoint. Skip -shm — it's a regenerable index
+        // into the WAL, and copying a stale one can make the open reject the snapshot.
+        let wal = URL(fileURLWithPath: webData.path + "-wal")
+        do {
+            try FileManager.default.copyItem(at: wal, to: URL(fileURLWithPath: temp.path + "-wal"))
+        } catch {
+            // Continue from the last checkpoint, as before; only say so when the WAL is there.
+            if !isMissing(error) { report("browser search import: \(label)-wal copy failed: \(describe(error))") }
         }
 
         // Open the private COPY read-write (NEVER the browser's live file). Read-write
         // lets SQLite fold the WAL into the copy and rebuild -shm itself — a read-only
         // open can't when -shm is absent, so this keeps recent edits visible and stops a
         // missing/stale -shm from failing the open. The copy is deleted in `defer`.
-        guard let queue = try? DatabaseQueue(path: temp.path) else { return [] }
+        let queue: DatabaseQueue
+        do {
+            queue = try DatabaseQueue(path: temp.path)
+        } catch {
+            report("browser search import: \(label) open failed: \(describe(error))")
+            return []
+        }
 
         // Bound the read so a browser with thousands of keyword rows can't materialize an
         // unbounded array before the store's `maxProviders` cap applies downstream.
-        let rows: [(name: String, url: String)] = (try? queue.read { db in
-            try Row.fetchAll(db, sql: """
-                SELECT short_name, url FROM keywords
-                WHERE url LIKE '%{searchTerms}%'
-                LIMIT 256
-                """).compactMap { row -> (String, String)? in
-                // 256 = 4× the store's maxProviders (64); headroom for dedupe/scheme
-                // drop, and the store clamps the final list anyway. Inlined because
-                // maxProviders is @MainActor-isolated and this read runs off-main.
-                guard let name: String = row["short_name"], let url: String = row["url"] else { return nil }
-                return (name, url)
+        let rows: [(name: String, url: String)]
+        do {
+            rows = try queue.read { db in
+                try Row.fetchAll(db, sql: """
+                    SELECT short_name, url FROM keywords
+                    WHERE url LIKE '%{searchTerms}%'
+                    LIMIT 256
+                    """).compactMap { row -> (String, String)? in
+                    // 256 = 4× the store's maxProviders (64); headroom for dedupe/scheme
+                    // drop, and the store clamps the final list anyway. Inlined because
+                    // maxProviders is @MainActor-isolated and this read runs off-main.
+                    guard let name: String = row["short_name"], let url: String = row["url"] else { return nil }
+                    return (name, url)
+                }
             }
-        }) ?? []
+        } catch {
+            report("browser search import: \(label) read failed: \(describe(error))")
+            return []
+        }
 
         var seen = Set<String>()
         var out: [FallbackProvider] = []
@@ -127,6 +151,24 @@ enum BrowserSearchImporter {
     }
 
     // MARK: Helpers
+
+    /// ENOENT anywhere in the error: the file (or its profile dir) is not there.
+    private static func isMissing(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain, ns.code == NSFileNoSuchFileError || ns.code == NSFileReadNoSuchFileError {
+            return true
+        }
+        if ns.domain == NSPOSIXErrorDomain, ns.code == Int(ENOENT) { return true }
+        return (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map(isMissing) ?? false
+    }
+
+    /// Domain and codes only: a localized description can carry the full path.
+    private static func describe(_ error: Error) -> String {
+        let ns = error as NSError
+        var out = "\(ns.domain) \(ns.code)"
+        if let under = ns.userInfo[NSUnderlyingErrorKey] as? NSError { out += " (\(under.domain) \(under.code))" }
+        return out
+    }
 
     /// Lowercase, non-alphanumerics collapsed to "-", a stable id for dedupe.
     private static func slug(_ s: String) -> String {

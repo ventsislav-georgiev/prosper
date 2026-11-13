@@ -67,11 +67,37 @@ end
 -- Absolute path under the user's home for a Library-relative subpath.
 local function p(rel) return home() .. "/" .. rel end
 
+-- Run a read of `path` whose stderr `cmd` discards (host.shell.run merges stderr into
+-- the output we decode, and returns no exit status). On a non-zero exit (pipefail, so a
+-- pipeline's first stage counts) the shell re-opens `path` without reading it (`: <`)
+-- and prints why. ENOENT is a browser that is not installed: silent, as before. Anything
+-- else (a macOS privacy/XProtect denial, a file plutil/sqlite3 rejects) is logged once,
+-- naming the browser, never the path, so it does not pass for "no bookmarks" (#211).
+-- sqlite3 says "unable to open database" for both, hence the re-open for every reader.
+-- Returns the output, or "" on any failure (callers decode "" to nothing, as before).
+-- The marker counts only alone on its own line: every reader prints JSON, and a JSON
+-- string cannot hold a raw newline, so content can never produce that line. The bare
+-- `echo;` first ends a partial last line a failing reader may have left.
+local READ_FAILED = "__prosper_read_failed__"
+local function read_cmd(cmd, path, browser)
+    local out = sh("setopt pipefail; " .. cmd .. " || { echo; echo " .. READ_FAILED .. "; : < " .. shq(path) .. "; }")
+    -- host output is trimmed, so the marker line may also be the first or the last.
+    local padded = "\n" .. out .. "\n"
+    local at = padded:find("\n" .. READ_FAILED .. "\n", 1, true)
+    if not at then return out end
+    local why = padded:sub(at + #READ_FAILED + 2):lower()
+    if why:find("no such file", 1, true) then return "" end
+    local denied = why:find("not permitted", 1, true) or why:find("permission denied", 1, true)
+    host.log.warn("bookmarks: " .. browser .. " read failed ("
+        .. (denied and "permission denied" or "unreadable") .. ")")
+    return ""
+end
+
 -- Read a file's contents via the shell (the sandbox has no direct fs read).
 -- Returns nil when the file is missing / empty / unreadable.
-local function read_file(path)
-    local out = sh("cat " .. shq(path) .. " 2>/dev/null")
-    if out == nil or #out == 0 then return nil end
+local function read_file(path, browser)
+    local out = read_cmd("cat " .. shq(path) .. " 2>/dev/null", path, browser)
+    if #out == 0 then return nil end
     return out
 end
 
@@ -134,7 +160,7 @@ local function parse_chromium(support, browser, single, acc)
     for _, prof in ipairs(profiles) do
         local path = (prof ~= "") and (support .. "/" .. prof .. "/Bookmarks")
                                   or (support .. "/Bookmarks")
-        local data = decode(read_file(path))
+        local data = decode(read_file(path, browser))
         if data and type(data.roots) == "table" then
             for _, key in ipairs({ "bookmark_bar", "other", "synced" }) do
                 walk_chromium(data.roots[key], acc, browser, "")
@@ -170,11 +196,11 @@ local function parse_safari(acc)
     -- Safari import silently returns nothing. Convert to xml1 first, blank those two
     -- node types (their content is never a bookmark URL/title), then JSON-convert the
     -- scrubbed XML. /usr/bin/perl ships with macOS; -0 slurps so `.` spans newlines.
-    local plist = shq(p("Library/Safari/Bookmarks.plist"))
-    local cmd = "plutil -convert xml1 -o - " .. plist .. " 2>/dev/null"
+    local path = p("Library/Safari/Bookmarks.plist")
+    local cmd = "plutil -convert xml1 -o - " .. shq(path) .. " 2>/dev/null"
         .. " | /usr/bin/perl -0pe 's{<(data|date)>.*?</\\1>}{<string></string>}gs'"
         .. " | plutil -convert json -o - - 2>/dev/null"
-    local data = decode(sh(cmd))
+    local data = decode(read_cmd(cmd, path, "Safari"))
     if not data then return 0 end
     local count0 = #acc
     walk_safari(data, acc, "")
@@ -201,7 +227,7 @@ local function parse_mozilla(profiles_root, browser, acc)
     for _, prof in ipairs(list_dirs(profiles_root)) do
         local db = profiles_root .. "/" .. prof .. "/places.sqlite"
         local cmd = "sqlite3 -readonly -json " .. shq(file_uri(db)) .. " " .. shq(sql) .. " 2>/dev/null"
-        local rows = decode(sh(cmd))
+        local rows = decode(read_cmd(cmd, db, browser))
         if type(rows) == "table" then
             for _, r in ipairs(rows) do
                 if type(r) == "table" then add(acc, r.title, r.url, browser, prof) end
@@ -250,7 +276,7 @@ local function arc_collect_ids(list, out)
 end
 
 local function parse_arc(acc)
-    local data = decode(read_file(p("Library/Application Support/Arc/StorableSidebar.json")))
+    local data = decode(read_file(p("Library/Application Support/Arc/StorableSidebar.json"), "Arc"))
     if not data then return 0 end
     local cont = arc_container(data)
     if not cont then return 0 end

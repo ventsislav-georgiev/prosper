@@ -438,6 +438,9 @@ tag from the now-released section and put it on the new top draft.
 - Coding agent: messages, turn endings and approval requests from another codex thread (a sub-agent,
   a review or a forked thread) no longer show up in your session or end your turn early; that
   thread's approval requests are declined instead of being shown as yours.
+- When macOS refuses Prosper access to a browser file (search engines for Fallback Search, or
+  bookmarks), Prosper now logs which browser could not be read instead of silently treating it as
+  empty; browsers that are not installed stay silent.
 
 ## v2.174.0
 

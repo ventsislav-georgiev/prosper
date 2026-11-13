@@ -23,6 +23,11 @@ private final class BookmarkFakeServices: ExtensionHostServices, @unchecked Send
     var sqlite: [String: String] = [:]
     /// Granted privacy permissions (e.g. "full-disk-access").
     var granted: Set<String> = []
+    /// Files that are there but macOS refuses to open (#211): the read fails and the
+    /// re-open prints EPERM, the way /bin/zsh does.
+    var denied: Set<String> = []
+    /// Every host.log call, in order.
+    var logs: [(level: String, message: String)] = []
     /// host.prefs store (the import cache lives here).
     var prefs: [String: String] = [:]
     /// Number of reads of the big cache blob ("cache" key) — used to prove a
@@ -50,23 +55,44 @@ private final class BookmarkFakeServices: ExtensionHostServices, @unchecked Send
     func permissionGranted(_ name: String) -> Bool { granted.contains(name) }
 
     func shellRun(_ command: String) async -> String { runShell(command) }
+    func log(level: String, message: String) { logs.append((level: level, message: message)) }
 
-    /// Resolve a shelled command against the mocked filesystem.
+    /// The wrapper init.lua's read_cmd puts around every browser-file read (#211).
+    static let readPrefix = "setopt pipefail; "
+    static let readFailed = " || { echo; echo __prosper_read_failed__; : < '"
+    static let readSuffix = "'; }"
+
+    /// Resolve a shelled command against the mocked filesystem. Only the shipped
+    /// shape answers: `setopt pipefail; <reader> || { echo; echo <marker>; : < '<path>'; }`
+    /// with a known reader; anything else answers "".
     private func runShell(_ cmd: String) -> String {
         if cmd.contains("printf %s") { return home }
-        if cmd.hasPrefix("cat ") {
-            return Self.firstQuoted(cmd).flatMap { files[$0] } ?? ""
-        }
-        if cmd.hasPrefix("plutil") {
-            // plutil -convert json -o - 'PATH' : the plist path is the only quoted token.
-            return Self.firstQuoted(cmd).flatMap { files[$0] } ?? ""
-        }
-        if cmd.hasPrefix("sqlite3") {
+        guard cmd.hasPrefix(Self.readPrefix), cmd.hasSuffix(Self.readSuffix),
+              let fail = cmd.range(of: Self.readFailed, options: .backwards) else { return "" }
+        let reader = String(cmd[cmd.index(cmd.startIndex, offsetBy: Self.readPrefix.count)..<fail.lowerBound])
+        let reopened = String(cmd[fail.upperBound..<cmd.index(cmd.endIndex, offsetBy: -Self.readSuffix.count)])
+        let content: String?
+        let read: String?   // the path the reader opens; the re-open must name the same file
+        if reader.hasPrefix("cat ") {
+            read = Self.firstQuoted(reader)
+            content = read.flatMap { files[$0] }
+        } else if reader.hasPrefix("plutil") {
+            // plutil -convert xml1 -o - 'PATH' ... : the plist path is the first quoted token.
+            read = Self.firstQuoted(reader)
+            content = read.flatMap { files[$0] }
+        } else if reader.hasPrefix("sqlite3") {
             // sqlite3 -readonly -json 'file:ENC?immutable=1' 'SQL' : first quoted = URI.
-            guard let uri = Self.firstQuoted(cmd) else { return "" }
-            return sqlite[Self.decodeFileURI(uri)] ?? ""
+            read = Self.firstQuoted(reader).map(Self.decodeFileURI)
+            content = read.flatMap { sqlite[$0] }
+        } else {
+            return ""
         }
-        return ""
+        guard read == reopened else { return "" }
+        // What the real host returns (trimmed) when the reader exits non-zero.
+        if denied.contains(reopened) {
+            return "__prosper_read_failed__\nzsh:1: operation not permitted: \(reopened)"
+        }
+        return content ?? "__prosper_read_failed__\nzsh:1: no such file or directory: \(reopened)"
     }
 
     /// First single-quoted token (the path `shq` produced).
@@ -597,6 +623,65 @@ final class BookmarksExtensionTests: XCTestCase {
         XCTAssertEqual(items.count, 500, "max_results not clamped to the 500 cap")
     }
 
+    // MARK: - #211: a refused file is logged once, a missing one is not
+
+    @MainActor
+    func testDeniedFirefoxReadLogsOnceAndImportsTheRest() async throws {
+        let fake = BookmarkFakeServices()
+        fake.granted = ["full-disk-access"]   // no "Skipped: Safari" in the summary
+        fake.dirs[Self.chromeSupport] = ["Default"]
+        fake.dirs[Self.firefoxProfiles] = ["p1.default"]
+        fake.files["\(Self.chromeSupport)/Default/Bookmarks"] = Self.chromeNested
+        fake.denied = ["\(Self.firefoxProfiles)/p1.default/places.sqlite"]
+        let registry = try makeRegistry(fake)
+
+        let summary = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+        XCTAssertEqual(summary, "Imported 3 bookmarks (Chrome 3).")
+        XCTAssertEqual(fake.logs.count, 1, "\(fake.logs)")
+        XCTAssertEqual(fake.logs.last?.level, "warn")
+        XCTAssertEqual(fake.logs.last?.message, "bookmarks: Firefox read failed (permission denied)")
+    }
+
+    @MainActor
+    func testDeniedChromeProfileLogsOnceAndKeepsTheOtherProfile() async throws {
+        let fake = BookmarkFakeServices()
+        fake.granted = ["full-disk-access"]
+        fake.dirs[Self.chromeSupport] = ["Default", "Profile 1"]
+        fake.files["\(Self.chromeSupport)/Profile 1/Bookmarks"] = Self.chromium("Work BM", "https://w/")
+        fake.denied = ["\(Self.chromeSupport)/Default/Bookmarks"]
+        let registry = try makeRegistry(fake)
+
+        let summary = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+        XCTAssertEqual(summary, "Imported 1 bookmarks (Chrome 1).")
+        XCTAssertEqual(fake.logs.count, 1, "\(fake.logs)")
+        XCTAssertEqual(fake.logs.last?.level, "warn")
+        XCTAssertEqual(fake.logs.last?.message, "bookmarks: Chrome read failed (permission denied)")
+    }
+
+    @MainActor
+    func testMissingBrowserFilesLogNothing() async throws {
+        let fake = BookmarkFakeServices()
+        fake.granted = ["full-disk-access"]
+        fake.dirs[Self.chromeSupport] = ["Default"]          // a profile without a Bookmarks file
+        fake.dirs[Self.firefoxProfiles] = ["p1.default"]     // a profile without places.sqlite
+        let registry = try makeRegistry(fake)
+
+        let summary = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+        XCTAssertEqual(summary, "No bookmarks found.")
+        XCTAssertTrue(fake.logs.isEmpty, "\(fake.logs)")
+    }
+
+    @MainActor
+    func testGoodImportLogsNothing() async throws {
+        let fake = makeCombinedFake()
+        fake.granted = ["full-disk-access"]
+        let registry = try makeRegistry(fake)
+
+        let summary = await registry.invokeAsync(commandID: "bookmarks.run", query: "bm import")
+        XCTAssertEqual(summary, "Imported 8 bookmarks (Arc 2, Chrome 3, Firefox 2, Safari 1).")
+        XCTAssertTrue(fake.logs.isEmpty, "\(fake.logs)")
+    }
+
     /// REAL-ENVIRONMENT REGRESSION (no mock). The mocked suite stages pre-converted
     /// JSON for `plutil`, which hid that a direct `plutil -convert json` ABORTS on a
     /// real Safari plist's <data> (Sync/CloudKit blobs) and <date> nodes — yielding 0
@@ -627,17 +712,53 @@ final class BookmarksExtensionTests: XCTestCase {
         _ = Self.run("/usr/bin/plutil", ["-convert", "binary1", "-o", binURL.path, xmlURL.path])
 
         let q = "'" + binURL.path + "'"
-        // Control: the pre-fix naive conversion must fail on this plist.
-        let naive = Self.run("/bin/zsh", ["-lc", "plutil -convert json -o - \(q) 2>&1"])
+        // Control: the pre-fix naive conversion must fail on this plist. `-c`, not `-lc`:
+        // tests never run a login shell (ShellRunner.shellFlag is "-c" under XCTest too).
+        let naive = Self.run("/bin/zsh", ["-c", "plutil -convert json -o - \(q) 2>&1"])
         XCTAssertFalse(naive.contains("apple.com"), "control invalid: naive convert unexpectedly succeeded")
 
-        // The shipped pipeline (mirrors init.lua parse_safari).
-        let cmd = "plutil -convert xml1 -o - \(q) 2>/dev/null"
-            + " | /usr/bin/perl -0pe 's{<(data|date)>.*?</\\1>}{<string></string>}gs'"
-            + " | plutil -convert json -o - - 2>/dev/null"
-        let out = Self.run("/bin/zsh", ["-lc", cmd])
+        let out = Self.run("/bin/zsh", ["-c", Self.shippedSafariRead(binURL.path)])
         XCTAssertTrue(out.contains("\"URLString\":\"https:\\/\\/apple.com\\/\"") || out.contains("https://apple.com/"),
                       "scrub pipeline did not recover the bookmark URL; got: \(out)")
+        XCTAssertFalse(Self.markerLine(out), "a good plist prints no marker; got: \(out)")
+    }
+
+    /// The exact command init.lua's parse_safari sends through read_cmd (#211).
+    private static func shippedSafariRead(_ path: String) -> String {
+        let q = "'" + path + "'"
+        return BookmarkFakeServices.readPrefix
+            + "plutil -convert xml1 -o - \(q) 2>/dev/null"
+            + " | /usr/bin/perl -0pe 's{<(data|date)>.*?</\\1>}{<string></string>}gs'"
+            + " | plutil -convert json -o - - 2>/dev/null"
+            + BookmarkFakeServices.readFailed + path + BookmarkFakeServices.readSuffix
+    }
+
+    /// The marker alone on its own line, as read_cmd matches it; returns what follows.
+    private static func markerReason(_ out: String) -> String? {
+        let padded = "\n" + out + "\n"
+        guard let r = padded.range(of: "\n__prosper_read_failed__\n") else { return nil }
+        return padded[r.upperBound...].lowercased()
+    }
+    private static func markerLine(_ out: String) -> Bool { markerReason(out) != nil }
+
+    /// #211: the real /bin/zsh texts the Lua matcher depends on, through the shipped
+    /// Safari command: a refused plist reads as a denial, a missing one as ENOENT.
+    func testShippedSafariReadClassifiesDeniedAndMissingThroughRealShell() throws {
+        let dir = tempDir()
+        let plist = dir.appendingPathComponent("Bookmarks.plist")
+        try Data("<plist version=\"1.0\"><dict/></plist>".utf8).write(to: plist)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: plist.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: plist.path) }
+
+        let denied = Self.run("/bin/zsh", ["-c", Self.shippedSafariRead(plist.path)])
+        let why = try XCTUnwrap(Self.markerReason(denied), "a refused plist prints the marker; got: \(denied)")
+        XCTAssertTrue(why.contains("permission denied") || why.contains("not permitted"),
+                      "the Lua classes this as a denial; got: \(denied)")
+        XCTAssertFalse(why.contains("no such file"), denied)
+
+        let missing = Self.run("/bin/zsh", ["-c", Self.shippedSafariRead(dir.appendingPathComponent("Absent.plist").path)])
+        let gone = try XCTUnwrap(Self.markerReason(missing), "a missing plist prints the marker; got: \(missing)")
+        XCTAssertTrue(gone.contains("no such file"), "the Lua stays silent on this; got: \(missing)")
     }
 
     /// Run a process to completion, returning combined stdout (test helper only).
