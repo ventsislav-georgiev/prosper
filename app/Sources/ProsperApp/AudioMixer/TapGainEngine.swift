@@ -34,6 +34,74 @@ enum MixerCore {
                                        UnsafeMutableRawPointer(pointer)) == noErr
         }
     }
+
+    // MARK: Output stream configuration
+
+    /// The channel count the limiter is sized for when the configuration
+    /// cannot be read: a stereo device, as the tap is asked for.
+    static let fallbackChannelCount = 2
+
+    /// Largest stream configuration read. A list is an 8-byte header plus 16
+    /// bytes per stream, so this holds 4095 streams; the widest real devices
+    /// (MADI/Dante interfaces and aggregates of several) list a few hundred
+    /// mono streams, a few KiB.
+    static let maxStreamConfigurationBytes = 64 * 1024
+
+    /// Ceiling on the channel answer. It sizes the limiter's delay line
+    /// (256 frames per channel), so a bogus count must not allocate without
+    /// bound; a device past it still plays, through the plain limiter.
+    static let maxOutputChannels = 1024
+
+    /// How many bytes to allocate for a stream configuration the HAL reported
+    /// at `reportedSize`, or nil when it cannot hold one buffer list or is
+    /// past the cap.
+    static func streamConfigurationAllocationSize(reportedSize: UInt32) -> Int? {
+        let size = Int(reportedSize)
+        guard size >= MemoryLayout<AudioBufferList>.size,
+              size <= maxStreamConfigurationBytes else { return nil }
+        return size
+    }
+
+    /// The channel count of an AudioBufferList stream configuration the HAL
+    /// wrote into `storage`, reporting `writtenSize` bytes used. Walks no
+    /// more buffers than both the storage and the written size hold, whatever
+    /// mNumberBuffers claims.
+    static func outputChannelCount(streamConfiguration storage: UnsafeRawBufferPointer,
+                                   writtenSize: Int) -> Int {
+        let bufferStride = MemoryLayout<AudioBuffer>.stride
+        let headerSize = MemoryLayout<AudioBufferList>.size - bufferStride
+        let channelsOffset = MemoryLayout<AudioBuffer>.offset(of: \.mNumberChannels) ?? 0
+        let used = min(storage.count, max(0, writtenSize))
+        guard used >= headerSize, let base = storage.baseAddress else { return fallbackChannelCount }
+        let declared = Int(base.loadUnaligned(as: UInt32.self))
+        let walk = min(declared, (used - headerSize) / bufferStride)
+        var total = 0
+        for index in 0..<walk {
+            let channels = base.loadUnaligned(fromByteOffset: headerSize + index * bufferStride + channelsOffset,
+                                              as: UInt32.self)
+            // total <= maxOutputChannels before the add, so the sum stays far below Int.max.
+            total = min(total + Int(channels), maxOutputChannels)
+        }
+        return max(fallbackChannelCount, total)
+    }
+
+    /// The whole size-then-data read: `readSize` reports the property size
+    /// (nil on failure), `fill` writes the configuration into the storage and
+    /// answers the bytes it wrote (nil on failure). Any refusal answers the
+    /// fallback; `fill` is only called with storage the cap allowed.
+    static func outputChannelCount(readSize: () -> UInt32?,
+                                   fill: (UnsafeMutableRawBufferPointer) -> UInt32?) -> Int {
+        guard let reported = readSize(),
+              let byteCount = streamConfigurationAllocationSize(reportedSize: reported) else {
+            return fallbackChannelCount
+        }
+        let storage = UnsafeMutableRawBufferPointer.allocate(
+            byteCount: byteCount, alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { storage.deallocate() }
+        guard let written = fill(storage) else { return fallbackChannelCount }
+        return outputChannelCount(streamConfiguration: UnsafeRawBufferPointer(storage),
+                                  writtenSize: Int(written))
+    }
 }
 
 // MARK: - Tap engine
@@ -263,18 +331,17 @@ final class TapGainEngine: GainEngine {
             mSelector: kAudioDevicePropertyStreamConfiguration,
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain)
-        var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr,
-              size >= UInt32(MemoryLayout<AudioBufferList>.size) else { return 2 }
-        let storage = UnsafeMutableRawPointer.allocate(
-            byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
-        defer { storage.deallocate() }
-        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, storage) == noErr else {
-            return 2
-        }
-        let buffers = UnsafeMutableAudioBufferListPointer(
-            storage.assumingMemoryBound(to: AudioBufferList.self))
-        return max(2, buffers.reduce(0) { $0 + Int($1.mNumberChannels) })
+        return MixerCore.outputChannelCount(
+            readSize: {
+                var size: UInt32 = 0
+                return AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr ? size : nil
+            },
+            fill: { storage in
+                guard let base = storage.baseAddress,
+                      let capacity = UInt32(exactly: storage.count) else { return nil }
+                var size = capacity
+                return AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, base) == noErr ? size : nil
+            })
     }
 
     /// The rate the aggregate renders at, for the limiter's release timing.
