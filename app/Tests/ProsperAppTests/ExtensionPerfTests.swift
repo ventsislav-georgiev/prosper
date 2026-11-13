@@ -419,11 +419,18 @@ final class ExtensionPerfTests: XCTestCase {
         try XCTSkipUnless(FileManager.default.fileExists(atPath: shimURL.path),
                           "shim init.lua not found at \(shimURL.path)")
 
+        // pack() reports what hs.execute returned: "<count>|<v1>|<v2>…".
         let config = """
         hs.prosper.remap{ from="alt+down", to="ctrl+tab", apps={"com.apple.Safari"} }
-        hs.settings.set("shellout", hs.execute("echo hi"))
+        local function pack(...)
+            local t = { tostring(select("#", ...)) }
+            for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end
+            return table.concat(t, "|")
+        end
+        hs.settings.set("shellout1", pack(hs.execute("echo hi")))
+        hs.settings.set("shellout2", pack(hs.execute("echo hi")))
         """
-        let svc = HSServices(config: config)
+        let svc = HSShellServices(config: config)
         let extID = "eu.illegible.prosper.hammerspoon"
         svc.prefs["\(extID).enabled"] = "true"
 
@@ -443,10 +450,65 @@ final class ExtensionPerfTests: XCTestCase {
             return false
         }, "trusted non-system ext should reach host.keys (automation tier), got: \(rules)")
 
-        // SYSTEM-ONLY denied: hs.execute → host.shell is refused for a non-system ext.
-        let shellOut = svc.prefs["\(extID).hs.settings.shellout"] ?? ""
-        XCTAssertTrue(shellOut.contains("restricted to system extensions"),
-                      "host.shell must stay system-only even for trusted exts, got: \(shellOut)")
+        // SYSTEM-ONLY denied at the HOST: the same tier's host.shell.run answers the
+        // refusal sentence and never reaches the shell service.
+        let dir = tempDir("prosper-perf")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let probeURL = dir.appendingPathComponent("probe.lua")
+        try #"function probe() return host.shell.run("echo hi") end"#
+            .write(to: probeURL, atomically: true, encoding: .utf8)
+        let probe = await runtimes.invoke(AsyncExtensionRuntimes.Spec(
+            extensionID: "ext.shellprobe", entryURL: probeURL, handler: "probe",
+            callTimeout: 5, privileged: false, trusted: true), args: [])
+        XCTAssertEqual(probe, "error: host.shell is restricted to system extensions")
+        XCTAssertEqual(svc.shellRunCount, 0, "a trusted non-system ext must never reach the shell")
+
+        // The shim (#1048) turns that refusal into Hammerspoon's failure shape: 4 values
+        // "", nil, "exit", 126 (stored JSON-encoded), never the sentence as output.
+        for key in ["shellout1", "shellout2"] {
+            let out = svc.prefs["\(extID).hs.settings.\(key)"] ?? ""
+            XCTAssertEqual(out, "\"4||nil|exit|126\"", "\(key)")
+            XCTAssertFalse(out.contains("restricted"), "\(key) leaked the refusal sentence: \(out)")
+        }
+        // One "Grant System Access" notice for the two refused calls.
+        let notices = svc.logs.filter { $0.level == "warn" && $0.message.contains("hs.execute") }
+        XCTAssertEqual(notices.count, 1, "notices: \(notices)")
+        XCTAssertEqual(notices.first?.message,
+                       "hammerspoon-compat: hs.execute needs \"Grant System Access\" "
+                       + "(Settings > Extensions); until then it returns no output")
+    }
+
+    // HSServices plus the two seams testTrustedNonSystemGetsAutomationNotShell alone
+    // needs: host.log capture and a count of calls that reached the shell service.
+    private final class HSShellServices: ExtensionHostServices, @unchecked Sendable {
+        var prefs: [String: String] = [:]
+        var lastRulesJSON: String?
+        var logs: [(level: String, message: String)] = []
+        var shellRunCount = 0
+        private let config: String
+        init(config: String) { self.config = config }
+
+        func clipboardRead() -> String? { nil }
+        func clipboardWrite(_ text: String) {}
+        func clipboardHistory(limit: Int) -> [String] { [] }
+        func llmComplete(_ prompt: String) async -> String { "" }
+        func llmTranslate(_ text: String, target: String, source: String?) async -> String { "" }
+        func llmChat(_ prompt: String) async -> String { "" }
+        func shellRun(_ command: String) async -> String { shellRunCount += 1; return "" }
+        func httpRequest(method: String, url: String, headers: [String: String],
+                         body: String?, timeout: TimeInterval) async -> HTTPResponse? { nil }
+        func currentEpochSeconds() -> Double { 0 }
+        func focusedWindowFrame() -> WindowFrame? { nil }
+        func setFocusedWindowFrame(x: Double, y: Double, width: Double, height: Double) -> Bool { false }
+        func prefGet(extensionID: String, key: String) -> String? { prefs["\(extensionID).\(key)"] }
+        func prefSet(extensionID: String, key: String, value: String) { prefs["\(extensionID).\(key)"] = value }
+        func notify(title: String, body: String) {}
+        func listDirectories(_ path: String) -> [String] { [] }
+        func log(level: String, message: String) { logs.append((level, message)) }
+        func fsRead(_ path: String) -> String? { config }
+        func keysSetRules(extensionID: String, json: String) { lastRulesJSON = json }
+        func envGet(_ name: String) -> String? { name == "HOME" ? "/Users/test" : nil }
     }
 
     /// Regression guard for the shim's "load UNMODIFIED configs" contract: a real

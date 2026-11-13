@@ -449,6 +449,9 @@ tag from the now-released section and put it on the new top draft.
   could not be re-read says the list is stale; a folder that could not be created reads "brew
   upgrade did not start" instead of "failed (exit ?)"; the private folder is removed when the watch
   gives up or Prosper relaunches; and a clock set back no longer blocks Upgrade for two hours.
+- Hammerspoon compat example: without "Grant System Access", hs.execute no longer returns the error
+  sentence as command output; it returns no output with a failed status, and the extension logs once
+  that hs.execute needs System Access.
 
 ## v2.174.0
 

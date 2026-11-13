@@ -19,6 +19,10 @@ local scheduled, alerts, confirms, osascripts = {}, {}, {}, {}
 local confirm_result = true -- what host.dialog.confirm returns (OK vs Cancel)
 local hidden = {}           -- host.apps.hide calls (bundleID) — window API
 local window_count = 0      -- what host.apps.windows returns (AX window count)
+local SHELL_REFUSED = "error: host.shell is restricted to system extensions" -- the host's whole answer
+local shell_answer, shell_trunc = SHELL_REFUSED, nil -- what host.shell.run returns
+local shell_calls = 0
+local warns = {}            -- host.log.warn messages
 local FAKE_INIT = [[
 hs.urlevent.setDefaultHandler("http")
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
@@ -65,7 +69,9 @@ host = {
     } },
     time = function() return 0 end,
     env = { get = function() return nil end },
-    log = { info = function() end, warn = function() end, error = function(m) print("ERR " .. tostring(m)) end },
+    log = { info = function() end, warn = function(m) warns[#warns + 1] = m end,
+            error = function(m) print("ERR " .. tostring(m)) end },
+    shell = { run = function() shell_calls = shell_calls + 1; return shell_answer, shell_trunc end },
     keys = { set_rules = function() end, stroke = function() end },
     timer = { cancel = function() end,
               schedule = function(spec) scheduled[#scheduled + 1] = spec end }, -- doAfter/doEvery
@@ -411,6 +417,65 @@ for _ = 1, W do hs_dispatch(tostring(w_idx)) end
 local perw = (os.clock() - t0w) / W * 1e6
 print(string.format("perf: cmd+W hideAppIfNoWindows (warm) = %.2f us/press", perw))
 check(perw < 200, "warm window-check dispatch under 200us/press (shim overhead)")
+
+-- 9k. hs.execute without System Access: the host answers the refusal sentence; the
+--     script must get the failure shape (4 values: "", nil, "exit", 126), never the
+--     sentence, and ONE log notice per VM. The config reports what hs.execute returned
+--     through hs.alert (count|values) and, where alerts are suppressed (top level of a
+--     dispatch rebuild), by stashing on hs.urlevent, which the test reads via ctx.
+FAKE_INIT = [[
+local function pack(...)
+    local t = { tostring(select("#", ...)) }
+    for i = 1, select("#", ...) do t[#t + 1] = tostring((select(i, ...))) end
+    return table.concat(t, "|")
+end
+hs.alert.show(pack(hs.execute("ls /Users/example")))
+hs.urlevent.exec_probe = pack(hs.execute("ls /Users/example"))
+hs.hotkey.bind({"cmd", "alt"}, "x", function() hs.alert.show(pack(hs.execute("ls /Users/example"))) end)
+]]
+local EXEC_NOTICE = 'hammerspoon-compat: hs.execute needs "Grant System Access" '
+    .. "(Settings > Extensions); until then it returns no output"
+local function exec_notices()
+    local n = 0
+    for _, m in ipairs(warns) do if m:find("hs.execute", 1, true) then n = n + 1 end end
+    return n
+end
+shell_answer, shell_trunc = SHELL_REFUSED, nil
+env._HS = nil; alerts = {}; warns = {}; shell_calls = 0
+on_launch(nil) -- register: two top-level refused calls
+check(#alerts == 1 and alerts[1] == "4||nil|exit|126",
+      "refused hs.execute -> 4 values '', nil, 'exit', 126 (" .. tostring(alerts[1]) .. ")")
+check(env._HS.ctx.urlevent.exec_probe == "4||nil|exit|126", "refused hs.execute: second call same shape")
+check(exec_notices() == 1 and warns[#warns] == EXEC_NOTICE, "refused: one Grant System Access notice")
+local x_idx
+for i, b in ipairs(env._HS.ctx.binds) do if b.combo == "cmd+alt+x" then x_idx = i end end
+check(x_idx ~= nil, "cmd+alt+x bind recorded")
+env._HS = nil; alerts = {}; shell_calls = 0
+hs_dispatch(tostring(x_idx)) -- cold: rebuild (top level not allowed) + fire (refused)
+check(env._HS.ctx.urlevent.exec_probe == "1|", "not allowed (rebuild top level) -> '' as before")
+check(shell_calls == 1, "not-allowed calls never reach host.shell (only the fired one did)")
+check(#alerts == 1 and alerts[1] == "4||nil|exit|126", "refused in a fired hotkey -> failure shape")
+hs_dispatch(tostring(x_idx))
+check(exec_notices() == 1, "notice exactly once across 4 refused calls and 2 config runs")
+for _, a in ipairs(alerts) do
+    check(not a:find("restricted", 1, true), "refusal sentence never returned as output")
+end
+-- granted host: the output, one value (the host has no exit status), no new notice
+shell_answer, shell_trunc = "file-a\nfile-b", true
+alerts = {}
+hs_dispatch(tostring(x_idx))
+check(alerts[1] == "1|file-a\nfile-b", "granted hs.execute -> the output only (" .. tostring(alerts[1]) .. ")")
+-- real output that merely contains "restricted" / the sentence is output, not a refusal
+shell_answer, shell_trunc = "access restricted by policy", nil
+alerts = {}
+hs_dispatch(tostring(x_idx))
+check(alerts[1] == "1|access restricted by policy", "output containing 'restricted' passes through")
+shell_answer = "log: " .. SHELL_REFUSED
+alerts = {}
+hs_dispatch(tostring(x_idx))
+check(alerts[1] == "1|log: " .. SHELL_REFUSED, "output containing the sentence passes through")
+check(exec_notices() == 1, "granted calls add no notice")
+shell_answer, shell_trunc = SHELL_REFUSED, nil
 
 -- restore the URL-routing config for the perf tests below
 FAKE_INIT = [[

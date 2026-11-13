@@ -25,6 +25,11 @@
 
 local HS_INIT = "~/.hammerspoon/init.lua"
 local PROSPER = "eu.illegible.prosper"
+-- host.shell.run's whole answer when this extension lacks System Access: the host
+-- exposes no level flag, so this exact string is the only signal (ExtensionHostAPI).
+local SHELL_REFUSED = "error: host.shell is restricted to system extensions"
+-- Chunk-level, not per build_hs: a warm VM re-runs the config, the notice stays once.
+local shell_refusal_warned = false
 
 -- ============ Enable gate ============
 local function is_enabled()
@@ -235,7 +240,20 @@ local function build_hs(ctx)
     -- ref to the table so hs_url_open can read that closure after a (re)run.
     ctx.urlevent = hs.urlevent
     hs.openURL = function(url) if allowed() then host.url.open(url) end end
-    hs.execute = function(cmd) return allowed() and host.shell.run(cmd) or "" end
+    -- Granted: the output only (the host has no exit status to report). Refused: the
+    -- shape of a Hammerspoon command that could not run (output, status, type, rc):
+    -- "", nil, "exit", 126 (sh's "cannot execute"), never the refusal sentence as output.
+    hs.execute = function(cmd)
+        if not allowed() then return "" end
+        local out = host.shell.run(cmd)
+        if out ~= SHELL_REFUSED then return out or "" end
+        if not shell_refusal_warned then
+            shell_refusal_warned = true
+            host.log.warn("hammerspoon-compat: hs.execute needs \"Grant System Access\" "
+                .. "(Settings > Extensions); until then it returns no output")
+        end
+        return "", nil, "exit", 126
+    end
     hs.osascript = {
         applescript = function(src)
             if not allowed() then return false end
