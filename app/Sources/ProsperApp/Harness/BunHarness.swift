@@ -22,7 +22,7 @@ final class BunHarness {
     private var starting = false
     /// Re-applies the agent config when the host rewrites `.events.json` (plugins
     /// added/removed at runtime → the host reloads and the new event set must wire in).
-    private var eventsWatcher: FileWatcher?
+    private(set) var eventsWatcher: FileWatcher?
 
     // MARK: - Paths (nonisolated so the codex actor can read them in writeConfig)
 
@@ -100,11 +100,7 @@ final class BunHarness {
         // The host rewrites `.events.json` whenever it (re)loads plugins. Watch it so a
         // runtime plugin add/remove re-applies the agent config (wires the new event set
         // into the next codex spawn) — not just the one-shot apply below.
-        if eventsWatcher == nil {
-            eventsWatcher = FileWatcher(url: Self.eventsFileURL) {
-                Task { @MainActor in AgentController.shared.applyAgentConfigChange() }
-            }
-        }
+        watchEvents()
 
         // codex reads bridge hooks at spawn; the host writes .events.json shortly after
         // launch. Once it lands, respawn the (idle) agent harness so the bridge wires in
@@ -144,11 +140,23 @@ final class BunHarness {
         }
     }
 
-    func shutdown() {
+    /// The events-file watch, apart from `start` so a test drives it on its own file with a
+    /// recorder for `apply` (#1144). FileWatcher calls the closure on the main queue; `apply`
+    /// runs in a main-actor Task. A second call keeps the first watcher.
+    func watchEvents(at url: URL = BunHarness.eventsFileURL,
+                     apply: @escaping @MainActor @Sendable () -> Void = { AgentController.shared.applyAgentConfigChange() }) {
+        guard eventsWatcher == nil else { return }
+        eventsWatcher = FileWatcher(url: url) {
+            Task { @MainActor in apply() }
+        }
+    }
+
+    /// `socket` is settable so a test's shutdown never unlinks the live host socket (#1144).
+    func shutdown(socket: URL = BunHarness.socketURL) {
         eventsWatcher?.stop()
         eventsWatcher = nil
         stopHost()
-        try? FileManager.default.removeItem(at: Self.socketURL)
+        try? FileManager.default.removeItem(at: socket)
     }
 
     /// The process half of `shutdown`, apart so tests don't unlink the live socket.

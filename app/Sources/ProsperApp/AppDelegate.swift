@@ -397,11 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // external edit/import: a clean parse replaces the loaded servers and respawns
         // the agent harness so they start/stop on the next run. A broken file is ignored.
         MCPConfigStore.bootstrap()
-        mcpConfigWatcher = FileWatcher(url: MCPConfigStore.fileURL) {
-            guard let servers = MCPConfigStore.reloadIfChanged() else { return }
-            NotificationCenter.default.post(name: .mcpServersReloadedExternally, object: servers)
-            Task { @MainActor in AgentController.shared.applyAgentConfigChange() }
-        }
+        mcpConfigWatcher = Self.makeMCPConfigWatcher()
 
         // Agent personas (~/.config/prosper/agents) and slash-commands
         // (~/.config/prosper/commands) — ensure the dirs exist for external editing.
@@ -410,11 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Same lifecycle for the agent's lifecycle hooks (~/.config/prosper/hooks.json).
         HooksConfigStore.bootstrap()
-        hooksConfigWatcher = FileWatcher(url: HooksConfigStore.fileURL) {
-            guard let hooks = HooksConfigStore.reloadIfChanged() else { return }
-            NotificationCenter.default.post(name: .hooksReloadedExternally, object: hooks)
-            Task { @MainActor in AgentController.shared.applyAgentConfigChange() }
-        }
+        hooksConfigWatcher = Self.makeHooksConfigWatcher()
 
         // Bun plugin host: run opencode JS/TS plugins dropped in ~/.config/prosper/plugins
         // and bridge them to codex hooks. No-op (and no Bun download) when none present.
@@ -1102,6 +1094,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// #732: the palette activates the app, so `sn` searches the current Text Replacements.
     func applicationDidBecomeActive(_ notification: Notification) {
         TextReplacements.refresh()
+    }
+
+    /// The MCP config hot-reload wiring, apart from launch so a test drives it on its own
+    /// `MCPConfigStore.fileURL` with a recorder for `apply` (#1144). FileWatcher calls the
+    /// closure on the main queue; `apply` runs in a main-actor Task.
+    static func makeMCPConfigWatcher(
+        apply: @escaping @MainActor @Sendable () -> Void = { AgentController.shared.applyAgentConfigChange() }
+    ) -> FileWatcher {
+        FileWatcher(url: MCPConfigStore.fileURL) {
+            guard let servers = MCPConfigStore.reloadIfChanged() else { return }
+            NotificationCenter.default.post(name: .mcpServersReloadedExternally, object: servers)
+            Task { @MainActor in apply() }
+        }
+    }
+
+    /// Same for hooks (`HooksConfigStore.fileURL`).
+    static func makeHooksConfigWatcher(
+        apply: @escaping @MainActor @Sendable () -> Void = { AgentController.shared.applyAgentConfigChange() }
+    ) -> FileWatcher {
+        FileWatcher(url: HooksConfigStore.fileURL) {
+            guard let hooks = HooksConfigStore.reloadIfChanged() else { return }
+            NotificationCenter.default.post(name: .hooksReloadedExternally, object: hooks)
+            Task { @MainActor in apply() }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
