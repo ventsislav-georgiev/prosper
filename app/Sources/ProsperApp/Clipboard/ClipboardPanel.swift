@@ -249,6 +249,12 @@ final class ClipboardPanelModel: ObservableObject {
         return new.last
     }
 
+    /// #1066: the selection after deleting `id` from the listed rows `ids`: the next row,
+    /// else the row above (the last row deleted), else nil.
+    nonisolated static func afterDelete(_ id: UUID, in ids: [UUID]) -> UUID? {
+        reselect(id, old: ids, new: ids.filter { $0 != id })
+    }
+
     func reset(selecting id: UUID?) {
         query = ""
         typeFilter = nil
@@ -1145,8 +1151,7 @@ struct ClipboardView: View {
     private func deleteSelected() {
         guard let item = filtered.first(where: { $0.id == model.selectedId }) else { return }
         guard store.receiving[item.id] == nil else { store.cancel(item.id); return }   // #632
-        let nextId = filtered.drop(while: { $0.id != item.id }).dropFirst().first?.id
-            ?? filtered.first(where: { $0.id != item.id })?.id
+        let nextId = ClipboardPanelModel.afterDelete(item.id, in: filtered.map(\.id))
         store.delete(item)
         model.selectedId = nextId
     }

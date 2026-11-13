@@ -491,6 +491,8 @@ tag from the now-released section and put it on the new top draft.
   plan file under a symlinked ~/.claude or plans folder is read (links inside the folder are still
   refused), and a numbered draft in Claude's input is refused with "Claude's input already holds a
   draft" instead of "Claude is showing a prompt".
+- Clipboard history: deleting the last row now selects the row above instead of jumping back to the
+  top.
 
 ## v2.174.0
 

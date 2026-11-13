@@ -69,6 +69,18 @@ final class ClipboardReceivingPanelTests: XCTestCase {
 
     // MARK: - Selection after a row leaves (QA #496 LOW-1)
 
+    /// #1066: ⌘⌫ (the only delete path) picks the next row, else the row above. The panel passes the
+    /// filtered rows, so with search text typed "above" and "next" are among the matching rows only.
+    func testAfterDeleteSelection() {
+        let (a, b, c, d) = (UUID(), UUID(), UUID(), UUID())
+        XCTAssertEqual(ClipboardPanelModel.afterDelete(c, in: [a, b, c]), b, "last of three: the second")
+        XCTAssertEqual(ClipboardPanelModel.afterDelete(d, in: [a, b, c, d]), c, "last of four: the row above")
+        XCTAssertTrue(ClipboardPanelModel.afterDelete(a, in: [a]) == nil, "only row: nothing")
+        XCTAssertEqual(ClipboardPanelModel.afterDelete(b, in: [a, b, c]), c, "middle: the next")
+        XCTAssertEqual(ClipboardPanelModel.afterDelete(a, in: [a, b, c]), b, "first: the new first")
+        XCTAssertEqual(ClipboardPanelModel.afterDelete(c, in: [a, c]), a, "filtered list [a, c]: the match above")
+    }
+
     func testReselectPureCases() {
         let (a, b, c) = (UUID(), UUID(), UUID())
         XCTAssertEqual(ClipboardPanelModel.reselect(b, old: [a, b, c], new: [a, c]), c, "middle gone: the next row")
