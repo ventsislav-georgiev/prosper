@@ -397,6 +397,10 @@ tag from the now-released section and put it on the new top draft.
 - The coding agent now defaults to Qwen3.6 35B-A3B on Macs with 32 GB of RAM or more. A Mac that
   already has Qwen3-Coder 30B downloaded and never picked a model keeps using it until Qwen3.6 is
   downloaded; smaller Macs are unchanged (#892).
+- opencode plugins in Prosper now get the same hook inputs opencode gives them: tool.execute.after
+  receives the tool's arguments, permission.ask receives a Permission object (id, type, sessionID,
+  messageID, title, metadata, time), and plugins that register an experimental workspace no longer
+  fail to load (#183).
 
 ## v2.174.0
 

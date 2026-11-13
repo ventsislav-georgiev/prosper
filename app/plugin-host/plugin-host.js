@@ -68,6 +68,9 @@ async function loadPlugins() {
     directory: process.cwd(),
     worktree: process.cwd(),
     client: undefined,
+    // Prosper has no workspaces: a no-op register keeps a plugin that calls it from
+    // throwing in its factory and losing all its other hooks.
+    experimental_workspace: { register() {} },
     $: Bun.$,
   };
   const hooks = [];
@@ -125,7 +128,8 @@ async function dispatch(plugins, evt) {
   }
 
   if (event === "PostToolUse") {
-    const input = { tool: evt.tool_name, sessionID: evt.session_id, callID: evt.tool_use_id };
+    const input = { tool: evt.tool_name, sessionID: evt.session_id, callID: evt.tool_use_id,
+      args: evt.tool_input ?? {} };
     // codex rejects result rewrite, so `output.output` mutations are observed but dropped.
     const output = { title: "", output: stringifyResult(evt.tool_response ?? evt.tool_output), metadata: {} };
     try {
@@ -137,7 +141,20 @@ async function dispatch(plugins, evt) {
   }
 
   if (event === "PermissionRequest") {
-    const input = { tool: evt.tool_name, sessionID: evt.session_id, callID: evt.tool_use_id };
+    // opencode's Permission shape. codex sends no permission id, message id or title, so
+    // the nearest fields stand in (turn_id, tool_name). `tool` stays for older plugins.
+    const args = evt.tool_input;
+    const input = {
+      id: crypto.randomUUID(),
+      type: evt.tool_name ?? "",
+      sessionID: evt.session_id ?? "",
+      messageID: evt.turn_id ?? "",
+      callID: evt.tool_use_id,
+      title: evt.tool_name ?? "",
+      metadata: args && typeof args === "object" && !Array.isArray(args) ? args : {},
+      time: { created: Date.now() },
+      tool: evt.tool_name,
+    };
     const output = { status: "ask" };
     try {
       await runHooks(plugins, "permission.ask", input, output);
