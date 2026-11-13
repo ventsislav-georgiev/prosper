@@ -19,7 +19,10 @@ final class TOMLGuardTests: XCTestCase {
 
     private var trapping: [(String, String)] {
         [("inline tables", inlineTables), ("arrays", arrays), ("dotted key", dottedKey),
-         ("unclosed", unclosed), ("over 1 MiB", oversized)] + Self.qa125.map { ($0.name, $0.text) }
+         ("unclosed", unclosed), ("over 1 MiB", oversized),
+         // #883: a header parses iteratively but nests one table per segment; ~800 KB still fits 1 MiB.
+         ("header 20000", "[" + Self.key(19_999) + "]\n"), ("header 400000", "[" + Self.key(399_999) + "]\nx = 1\n"),
+         ("array-of-tables header 20000", "[[" + Self.key(19_999) + "]]\n")] + Self.qa125.map { ($0.name, $0.text) }
     }
 
     // QA #125's four crashing inputs, regenerated in code with gen-inputs.py's shapes; size
@@ -80,6 +83,38 @@ final class TOMLGuardTests: XCTestCase {
         XCTAssertFalse(TOMLGuard.accepts("t = {a = 1, " + Self.key(d) + " = 1}"))
         XCTAssertFalse(TOMLGuard.accepts("a = 1\n" + Self.key(d + 1) + " = 1"))
         XCTAssertFalse(TOMLGuard.accepts("a = " + String(repeating: "{a.b = ", count: d / 2 + 1) + "1" + String(repeating: "}", count: d / 2 + 1)))
+    }
+
+    /// #883: one table header may have at most maxDepth segments; quoted segments count once, spaces
+    /// around dots are allowed, and a `[` is a header only at a statement start (as TOMLDecoder's parse loop).
+    func testTableHeaderSegmentsAreCapped() {
+        let d = TOMLGuard.maxDepth
+        for (open, close) in [("[", "]"), ("[[", "]]")] {
+            XCTAssertTrue(TOMLGuard.accepts(open + Self.key(d - 1) + close + "\nx = 1\n"), "\(open) 64")
+            XCTAssertFalse(TOMLGuard.accepts(open + Self.key(d) + close + "\nx = 1\n"), "\(open) 65")
+            let spaced = { (n: Int) in open + " " + Array(repeating: "a", count: n).joined(separator: " .\t") + " " + close + "\n" }
+            XCTAssertTrue(TOMLGuard.accepts(spaced(d)), "\(open) spaced 64")
+            XCTAssertFalse(TOMLGuard.accepts(spaced(d + 1)), "\(open) spaced 65")
+            // A quoted segment is one segment whatever dots it holds.
+            let quoted = Self.key(d - 3) + ".\"x.y.z\".'p.q.r'"
+            XCTAssertTrue(TOMLGuard.accepts(open + quoted + close + "\n"), "\(open) quoted 64")
+            XCTAssertFalse(TOMLGuard.accepts(open + quoted + ".b" + close + "\n"), "\(open) quoted 65")
+        }
+        XCTAssertNoThrow(try TOMLDecoder().decode(Empty.self, from: "[" + Self.key(d - 3) + ".\"x.y.z\".'p.q.r']\n"))
+        // Headers do not add up: each starts at the root.
+        XCTAssertTrue(TOMLGuard.accepts(String(repeating: "[" + Self.key(d - 1) + "]\n", count: 3)))
+        // After a multi-line array or string, or a comment, the next line is a statement start again.
+        let over = "[" + Self.key(d) + "]\n", at = "[" + Self.key(d - 1) + "]\n"
+        let ml = String(repeating: "'", count: 3), mb = String(repeating: "\"", count: 3)
+        for prefix in ["a = [\n  1,\n  2,\n]\n", "s = \(mb)\n[x.y]\n\(mb)\n", "t = \(ml)\n[[x.y]]\n\(ml)\n", "# [a.b]\n"] {
+            XCTAssertFalse(TOMLGuard.accepts(prefix + over), prefix)
+            XCTAssertTrue(TOMLGuard.accepts(prefix + at), prefix)
+        }
+        // A `[` inside a multi-line array is a value: float dots on such a line are not segments.
+        let floats = (0..<(d + 10)).map { "\($0).5" }.joined(separator: ", ")
+        let nested = "a = [\n[" + floats + "],\n]\n"
+        XCTAssertTrue(TOMLGuard.accepts(nested))
+        XCTAssertNoThrow(try TOMLDecoder().decode(Empty.self, from: nested))
     }
 
     /// QA #160: a `}` restores the enclosing base, so a sibling key after a nested table's pop

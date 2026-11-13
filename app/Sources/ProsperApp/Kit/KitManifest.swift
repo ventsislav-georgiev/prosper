@@ -27,6 +27,9 @@ enum KitTOML: Codable, Sendable, Equatable {
     /// TOMLDecoder 0.4.5 hands a scalar to the parent's decoder with its token set (a single-value
     /// container), and a table or array to a fresh decoder whose single-value container throws.
     init(from decoder: Decoder) throws {
+        // #883 second line: TOMLGuard caps a header at 64 segments, but a `[[a]]` `[[a.a]]` … chain nests an
+        // array and a table per segment (up to 128 levels), and other decoders have no guard. No kit key is this deep.
+        guard decoder.codingPath.count <= TOMLGuard.maxDepth else { self = .unsupported; return }
         if let c = try? decoder.singleValueContainer() {
             if let b = try? c.decode(Bool.self) { self = .bool(b) }
             else if let i = try? c.decode(Int64.self) { self = .integer(i) }

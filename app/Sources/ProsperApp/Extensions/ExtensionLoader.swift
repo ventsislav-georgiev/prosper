@@ -42,12 +42,7 @@ enum ExtensionLoader {
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
             throw ExtensionLoadError.manifestMissing(manifestURL)
         }
-        let text: String
-        do {
-            text = try String(contentsOf: manifestURL, encoding: .utf8)
-        } catch {
-            throw ExtensionLoadError.unreadable(error.localizedDescription)
-        }
+        let text = try readManifest(manifestURL)
         let manifest: ExtensionManifest
         do {
             manifest = try TOMLDecoder().decodeGuarded(ExtensionManifest.self, from: text)
@@ -61,6 +56,26 @@ enum ExtensionLoader {
             throw ExtensionLoadError.entryMissing(manifest.extension.entry.main)
         }
         return loaded
+    }
+
+    /// #883: the one way an extension.toml is read. At most `TOMLGuard.maxBytes + 1` bytes are
+    /// read, so a larger file (a 4 MiB market tarball can inflate to any size) is refused with the
+    /// guard's own reason without being held whole; the nesting cap is `decodeGuarded`.
+    static func readManifest(_ url: URL) throws -> String {
+        let data: Data?
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            data = try handle.read(upToCount: TOMLGuard.maxBytes + 1)
+        } catch {
+            throw ExtensionLoadError.unreadable(error.localizedDescription)
+        }
+        let bytes = data ?? Data()
+        guard bytes.count <= TOMLGuard.maxBytes else { throw ExtensionLoadError.parse(String(describing: TOMLGuard.Rejected())) }
+        guard let text = String(data: bytes, encoding: .utf8) else {
+            throw ExtensionLoadError.unreadable("extension.toml is not valid UTF-8")
+        }
+        return text
     }
 
     static func validate(_ manifest: ExtensionManifest, hostVersion: String) throws {

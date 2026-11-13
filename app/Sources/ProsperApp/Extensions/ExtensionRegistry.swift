@@ -1123,7 +1123,7 @@ final class ExtensionRegistry: ObservableObject {
     /// one (author-provided or stamped by a prior install).
     private func injectUpdateURL(_ url: String, intoManifestAt dir: URL, force: Bool = false) {
         let toml = dir.appendingPathComponent(ExtensionLoader.manifestFileName)
-        guard var text = try? String(contentsOf: toml, encoding: .utf8) else { return }
+        guard var text = try? ExtensionLoader.readManifest(toml) else { return }
         if let existing = text.range(of: #"(?m)^[ \t]*update_url[ \t]*=.*$"#, options: .regularExpression) {
             guard force else { return }          // author/origin already set; leave it
             text.replaceSubrange(existing, with: "")   // drop it, re-stamp below

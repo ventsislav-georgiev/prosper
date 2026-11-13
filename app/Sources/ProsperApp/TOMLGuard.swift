@@ -17,7 +17,11 @@ enum TOMLGuard {
     }
 
     /// False when the text is over `maxBytes`, has a string the parser would call
-    /// unterminated, or when its parser frames in flight exceed `maxDepth`. Frames are
+    /// unterminated, when its parser frames in flight exceed `maxDepth`, or when one table
+    /// header (`[a.b]` / `[[a.b]]`) has more than `maxDepth` segments (#883). The parser reads
+    /// a header iteratively but builds one nested table per segment, so the header count bounds
+    /// the RESULT's depth (what Decodable, release and any walk over it recurse on); headers do
+    /// not add up, each starts at the root. Frames are
     /// counted the way `Parser.parseKeyValue` recurses: one per open `[` / `{`, plus one
     /// per dot of every key whose value is still open (a dotted key's frames stay on the
     /// stack while its value nests), plus the dots of the key being read. Unclosed nesting
@@ -33,6 +37,10 @@ enum TOMLGuard {
         // `base`: frames at the start of the innermost open container, what `,` and a
         // newline fall back to. `open` keeps the enclosing base and whether it is an array.
         var frames = 0, base = 0, inValue = false, i = 0
+        // Segments of the table header being read, nil outside one. A `[` with nothing open and
+        // no value pending is at a statement start: TOMLDecoder's parse loop sends exactly that
+        // `[` to parseSelect (Parser.swift :37-38); a `[` after `=` is a value (:880-882).
+        var headerSegments: Int? = nil
         var open: [(base: Int, isArray: Bool)] = []
 
         /// End (exclusive) of the string starting at `s`, nil when unterminated.
@@ -70,6 +78,7 @@ enum TOMLGuard {
                 i = end
                 continue
             case UInt8(ascii: "["), UInt8(ascii: "{"):
+                if c == UInt8(ascii: "["), open.isEmpty, !inValue { headerSegments = 1 }
                 open.append((base, c == UInt8(ascii: "[")))
                 frames += 1
                 if frames > maxDepth { return false }
@@ -77,11 +86,16 @@ enum TOMLGuard {
                 inValue = c == UInt8(ascii: "[")
             case UInt8(ascii: "]"), UInt8(ascii: "}"):
                 if let outer = open.popLast() { frames = outer.base; base = outer.base }
+                if open.isEmpty { headerSegments = nil }
                 inValue = true
             case UInt8(ascii: "."):
                 if !inValue {
                     frames += 1
                     if frames > maxDepth { return false }
+                } else if let segments = headerSegments {
+                    // Quoted segments are skipped whole by the string case, so their dots never land here.
+                    if segments + 1 > maxDepth { return false }
+                    headerSegments = segments + 1
                 }
             case UInt8(ascii: "="):
                 inValue = true

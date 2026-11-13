@@ -373,6 +373,11 @@ tag from the now-released section and put it on the new top draft.
   no session list (as on sign-out), and the nightly cleanup no longer leaves such a card frozen on
   the Lock Screen. The server's every-minute check now reads only cards due for rotation and
   expired sign-ins instead of every card (#1014).
+- Extensions: an extension.toml (or imported codex config.toml) with a table header of more than 64
+  segments, such as `[contributes.kit.a.a.a…]`, is now refused as malformed before the TOML parser
+  reads it, instead of crashing Prosper while it loads; an Agent Kit nested deeper than that is
+  refused with a reason. An extension.toml over 1 MiB is refused without being read whole into
+  memory, for built-in, local, GitHub and market installs alike (#883).
 
 ## v2.174.0
 
