@@ -21,6 +21,15 @@ struct AgentPair: Hashable {
     }
 }
 
+/// #1116: the sessions of one stem in one socket dir, by folded names, in group order (`AgentIsland.groups`):
+/// at least one main and one sidekick. A pair is the group of one main and one sidekick.
+struct AgentGroup: Hashable {
+    let dir: String
+    let stem: String
+    let mains: [String]
+    let sidekicks: [String]
+}
+
 /// One member's end of a Stop both or Resume both, for `pairLine`.
 enum AgentPairOutcome: Equatable, Sendable {
     /// Its job ran: the result its row reads too.
@@ -83,6 +92,86 @@ extension AgentIsland {
             default: false
             }
         }
+    }
+
+    // MARK: - Groups (#1116)
+
+    /// Every group in `keys` (live keys and History record keys, as `pairs`), by dir then stem. Per dir, on
+    /// the folded passable names, each name in one group at most:
+    /// 1. a stored link (m, k), both listed, puts k as a sidekick in m's group; k is linked once and is never a
+    ///    linked main, m is never a linked sidekick; link roles win over the name;
+    /// 2. when `suffixOK`, a name b + suffix + ("" | digits | "-" digits), b not empty, is a sidekick of stem b;
+    /// 3. any other name is a main: of stem `name` when a sidekick has that stem, else of stem `name` minus a
+    ///    trailing "-digits" or "digits" when a sidekick has that one, else of its own name (links only);
+    /// 4. a stem with a main and a sidekick is a group: mains, then sidekicks, bare names first, then by number.
+    static func groups(_ keys: [AgentSessionKey], suffix: String,
+                       links: [(main: AgentSessionKey, sidekick: AgentSessionKey)] = []) -> [AgentGroup] {
+        var index: [String: Set<String>] = [:]
+        for k in keys where passable(k.name) { index[k.dir, default: []].insert(k.name.lowercased()) }
+        let s = suffix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let byName = suffixOK(s)
+        var out: [AgentGroup] = []
+        for (dir, names) in index {
+            var linked: [String: String] = [:]   // linked sidekick -> its main
+            for l in links where l.main.dir == dir && l.sidekick.dir == dir {
+                let m = l.main.name.lowercased(), k = l.sidekick.name.lowercased()
+                guard m != k, names.contains(m), names.contains(k), linked[k] == nil, linked[m] == nil,
+                      !linked.values.contains(k) else { continue }
+                linked[k] = m
+            }
+            let linkedMains = Set(linked.values)
+            var sidekicks: [String: (stem: String, num: String?)] = [:]
+            if byName {
+                for n in names where linked[n] == nil && !linkedMains.contains(n) {
+                    if let t = sidekickTail(n, s) { sidekicks[n] = t }
+                }
+            }
+            let stems = Set(sidekicks.values.map(\.stem))
+            var mains: [String: (stem: String, num: String?)] = [:]
+            for n in names where linked[n] == nil && sidekicks[n] == nil {
+                var stem = n, num: String?
+                if !stems.contains(n), let t = trailingDigits(n) {   // the exact stem wins over a worker number
+                    let w = String(t.rest.hasSuffix("-") ? t.rest.dropLast() : t.rest)
+                    if stems.contains(w) { (stem, num) = (w, t.digits) }
+                }
+                mains[n] = (stem, num)
+            }
+            for (k, m) in linked { sidekicks[k] = (mains[m]?.stem ?? m, nil) }
+            var byStem: [String: (mains: [(String, String?)], sidekicks: [(String, String?)])] = [:]
+            for (n, m) in mains { byStem[m.stem, default: ([], [])].mains.append((n, m.num)) }
+            for (n, k) in sidekicks { byStem[k.stem, default: ([], [])].sidekicks.append((n, k.num)) }
+            for (stem, g) in byStem where !g.mains.isEmpty && !g.sidekicks.isEmpty {
+                out.append(AgentGroup(dir: dir, stem: stem, mains: groupOrder(g.mains), sidekicks: groupOrder(g.sidekicks)))
+            }
+        }
+        return out.sorted { ($0.dir, $0.stem) < ($1.dir, $1.stem) }
+    }
+
+    /// `n` = b + `s` + ("" | digits | "-" digits) with b not empty: (b, the digits). Digits are read greedily, so a
+    /// suffix ending in a digit ("-r2") takes a number only after a dash ("x-r2-3"; "x-r23" is no sidekick of x).
+    static func sidekickTail(_ n: String, _ s: String) -> (stem: String, num: String?)? {
+        var rest = Substring(n), num: String?
+        if !n.hasSuffix(s), let t = trailingDigits(n) {
+            rest = t.rest.hasSuffix(s) || !t.rest.hasSuffix("-") ? t.rest : t.rest.dropLast()
+            num = t.digits
+        }
+        guard rest.hasSuffix(s), rest.count > s.count else { return nil }
+        return (String(rest.dropLast(s.count)), num)
+    }
+
+    /// `n` split before its trailing ASCII digits; nil when it has none. The digits stay text: never an Int.
+    static func trailingDigits(_ n: String) -> (rest: Substring, digits: String)? {
+        let c = n.reversed().prefix { $0.isASCII && $0.isNumber }.count
+        return c == 0 ? nil : (n.dropLast(c), String(n.suffix(c)))
+    }
+
+    /// Bare names first, then by number (leading zeros dropped, shorter first, then text), then by name.
+    static func groupOrder(_ members: [(String, String?)]) -> [String] {
+        func key(_ m: (String, String?)) -> (Int, Int, String, String) {
+            let d = m.1.map { String($0.drop(while: { c in c == "0" })) }
+            return (d == nil ? 0 : 1, d?.count ?? 0, d ?? "", m.0)
+        }
+        return members.sorted { key($0) < key($1) }.map(\.0)
     }
 
     static func stopBothLabel(partner: String) -> String { "Stop both (with \(partner))" }
