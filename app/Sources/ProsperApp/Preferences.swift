@@ -442,6 +442,7 @@ enum Preferences {
         static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
         static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
+        static let agentIslandSidekickSuffix = "agentIslandSidekickSuffix"   // #847, per Mac
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         // #821: the Agent Sessions window's verbosity (AgentVerbosity); per Mac, so not in SyncedKeys.
         static let agentWindowVerbosity = "agentWindowVerbosity"
@@ -1271,6 +1272,13 @@ enum Preferences {
             if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandNewSessionCommand) }
             else { defaults.set(v, forKey: Keys.agentIslandNewSessionCommand) }
         }
+    }
+
+    /// #847: the pair suffix (X and X<suffix> are a pair); unset reads "-qa". Stored trimmed;
+    /// "" is kept and means no pairs by name. Per Mac, not synced.
+    static var agentIslandSidekickSuffix: String {
+        get { defaults.string(forKey: Keys.agentIslandSidekickSuffix) ?? AgentIsland.sidekickDefault }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.agentIslandSidekickSuffix) }
     }
 
     /// OQ-66: Agent Sessions' "Let sessions set the clipboard while you're viewing them"; on when unset.
