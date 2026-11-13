@@ -391,6 +391,9 @@ tag from the now-released section and put it on the new top draft.
   tint names from third-party themes are cleaned of invisible characters and capped at 32; a
   refused tint list is no longer logged again on every rescan, only when its reason changes or it
   comes back after a fix (#862, QA #744).
+- Settings shortcut fields now draw Home, End, keypad Enter and Clear with the glyphs macOS menus
+  use, keypad keys read "Pad1", "Pad+" and the like instead of "Key<n>", Help reads as a word, and
+  VoiceOver reads a shortcut field as a button with the combo in words (#890).
 
 ## v2.174.0
 

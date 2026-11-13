@@ -252,7 +252,9 @@ final class KeyMappingRowLayoutTests: XCTestCase {
     /// whenever it fits at full size.
     func testAllActionsRecorderFitsTheWidestLabel() throws {
         let mods = UInt32(controlKey | optionKey | shiftKey | cmdKey)
-        let widest = KeyCombo(keyCode: 104, carbonModifiers: mods, display: "")
+        // #890: 104 (JIS Kana) is named now; 108 is a code no key sends, still "Key108",
+        // and the widest label the #890 measurement found.
+        let widest = KeyCombo(keyCode: 108, carbonModifiers: mods, display: "")
         for backing in [1, 2] as [CGFloat] {
             for scale in [1.0, 0.85, 0.7] as [CGFloat] {
                 let saved = ThemeRuntime.scale
@@ -277,7 +279,7 @@ final class KeyMappingRowLayoutTests: XCTestCase {
                 let r = try XCTUnwrap(all(host, RecorderView.self).first, tag)
                 XCTAssertEqual(r.bounds.width, sz(142), accuracy: pixel, tag)
                 let label = try XCTUnwrap(all(r, NSTextField.self).first, tag)
-                XCTAssertEqual(label.stringValue, "⌃⌥⇧⌘Key104")
+                XCTAssertEqual(label.stringValue, "⌃⌥⇧⌘Key108")
                 assertFits(label, in: r, pixel: pixel, tag)
                 assertFullSizeWhenItFits(label, in: r, full: 12 * scale, tag)
             }
@@ -289,7 +291,7 @@ final class KeyMappingRowLayoutTests: XCTestCase {
     func testLabelRefitsWhenTheTextChanges() throws {
         let mods = UInt32(controlKey | optionKey | shiftKey | cmdKey)
         let short = KeyCombo(keyCode: UInt32(kVK_F12), carbonModifiers: mods, display: "")
-        let long = KeyCombo(keyCode: 104, carbonModifiers: mods, display: "")  // ⌃⌥⇧⌘Key104, the widest
+        let long = KeyCombo(keyCode: 108, carbonModifiers: mods, display: "")  // ⌃⌥⇧⌘Key108, the widest
         for scale in [1.0, 0.7] as [CGFloat] {
             try withKeyRuleRecorder(scale: scale, backing: nil) { r, label, _, tag in
                 show((short.label, short), in: r, label)
@@ -301,6 +303,94 @@ final class KeyMappingRowLayoutTests: XCTestCase {
                 XCTAssertEqual(label.frame.size, label.fittingSize, "stale frame after re-fit at \(tag)")
                 show(("Unset", unsetKeyCombo), in: r, label)
                 XCTAssertEqual(label.font?.pointSize, 12 * scale, "Unset after a long one at \(tag)")
+            }
+        }
+    }
+
+    // MARK: - #890: accessibility
+
+    /// The recorder is one accessible button that reads the combo in words, and says it is
+    /// waiting while recording. `recording` is set directly: beginRecording would install
+    /// a key monitor and take first responder. No window, no AX call through the system.
+    func testRecorderIsAnAccessibleButtonThatSpeaksTheCombo() throws {
+        let r = RecorderView(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
+        XCTAssertTrue(r.isAccessibilityElement())
+        XCTAssertEqual(r.accessibilityRole(), .button)
+        r.combo = unsetKeyCombo
+        r.refreshTitle()
+        XCTAssertEqual(r.accessibilityLabel(), "Unset")
+        let mods = UInt32(controlKey | optionKey | shiftKey | cmdKey)
+        r.combo = KeyCombo(keyCode: UInt32(kVK_PageUp), carbonModifiers: mods, display: "")
+        r.refreshTitle()
+        XCTAssertEqual(r.accessibilityLabel(), "Control Option Shift Command Page Up")
+        XCTAssertNil(r.accessibilityValue())
+        r.recording = true
+        XCTAssertEqual(r.accessibilityValue() as? String, "Waiting for keys")
+        XCTAssertEqual(r.accessibilityLabel(), "Control Option Shift Command Page Up")
+        r.recording = false
+        XCTAssertNil(r.accessibilityValue())
+        // The glyph text underneath is not a second element VoiceOver stops on.
+        let label = try XCTUnwrap(all(r, NSTextField.self).first)
+        XCTAssertFalse(label.isAccessibilityElement())
+    }
+
+    // MARK: - #890: the smallest size a real combo label reaches
+
+    /// For every key code 0-127 with all four modifiers, the font size layout() ends at in
+    /// each width the field is given (110 pt intrinsic, the sz(96) key-rule slot, the
+    /// sz(142) All Actions slot) at UI scale 1.0, 0.85 and 0.7: the smallest per slot and
+    /// scale, the label that hit it, and whether every label fit. Built by frame in an
+    /// offscreen window pinned to `backing`; the width is snapped down to that pixel grid.
+    private func smallestLabelSizes(backing: CGFloat)
+        -> [(slot: String, scale: CGFloat, pt: CGFloat, text: String, under9: [String], unfit: [String])] {
+        let mods = UInt32(controlKey | optionKey | shiftKey | cmdKey)
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        var out: [(slot: String, scale: CGFloat, pt: CGFloat, text: String, under9: [String], unfit: [String])] = []
+        for scale in [1.0, 0.85, 0.7] as [CGFloat] {
+            ThemeRuntime.scale = scale
+            for (slot, w) in [("110 intrinsic", 110), ("sz(96) key rule", sz(96)), ("sz(142) All Actions", sz(142))] as [(String, CGFloat)] {
+                let width = (w * backing).rounded(.down) / backing
+                let win = FixedBackingWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
+                                             styleMask: [.titled], backing: .buffered, defer: false)
+                win.fixedBacking = backing
+                let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
+                win.contentView = container
+                defer { win.contentView = NSView() }
+                let r = RecorderView(frame: NSRect(x: 0, y: 0, width: width, height: sz(24)))
+                container.addSubview(r)
+                guard let label = all(r, NSTextField.self).first else { continue }
+                var smallest = (pt: CGFloat.infinity, text: "")
+                var under9: [String] = [], unfit: [String] = []
+                for code in 0..<128 {
+                    r.combo = KeyCombo(keyCode: UInt32(code), carbonModifiers: mods, display: "")
+                    r.refreshTitle()
+                    r.layoutSubtreeIfNeeded()
+                    let pt = label.font?.pointSize ?? 0
+                    if pt < smallest.pt { smallest = (pt, label.stringValue) }
+                    if pt < 9 { under9.append("\(label.stringValue) \(pt)") }
+                    if label.fittingSize.width > r.bounds.width { unfit.append("\(label.stringValue) \(pt)") }
+                }
+                out.append((slot, scale, smallest.pt, smallest.text, under9, unfit))
+                print("#890 measure: backing \(backing), scale \(scale), \(slot) (\(width) pt): smallest \(smallest.pt) pt '\(smallest.text)'; under 9 pt: \(under9.count); unfit: \(unfit.count)")
+            }
+        }
+        return out
+    }
+
+    /// #890 pin: no real combo label goes under 9 pt at UI scale 1.0, at backing 1 and 2,
+    /// and every label fits its field at every scale. The 1 pt loop floor in layout() stays.
+    func testNoComboLabelUnderNinePointAtFullScale() {
+        for backing in [1, 2] as [CGFloat] {
+            let rows = smallestLabelSizes(backing: backing)
+            XCTAssertEqual(rows.count, 9, "backing \(backing)")
+            for row in rows {
+                let tag = "backing \(backing), scale \(row.scale), \(row.slot)"
+                XCTAssertTrue(row.unfit.isEmpty, "labels wider than the field at \(tag): \(row.unfit)")
+                if row.scale == 1.0 {
+                    XCTAssertGreaterThanOrEqual(row.pt, 9, "'\(row.text)' at \(tag)")
+                    XCTAssertTrue(row.under9.isEmpty, "under 9 pt at \(tag): \(row.under9)")
+                }
             }
         }
     }

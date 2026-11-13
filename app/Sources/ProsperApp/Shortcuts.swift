@@ -115,30 +115,71 @@ extension KeyCombo {
         return s
     }
 
+    /// The combo in words, for VoiceOver: "Control Option Shift Command Page Up", in the
+    /// same macOS modifier order as `label`. "Unset" for the unset combo. Letters, digits
+    /// and F-keys read as their label does; every key in `keyNames` reads its words.
+    var spokenLabel: String {
+        guard carbonModifiers != 0 || keyCode != 0 else { return "Unset" }
+        var words: [String] = []
+        if carbonModifiers & UInt32(controlKey) != 0 { words.append("Control") }
+        if carbonModifiers & UInt32(optionKey) != 0 { words.append("Option") }
+        if carbonModifiers & UInt32(shiftKey) != 0 { words.append("Shift") }
+        if carbonModifiers & UInt32(cmdKey) != 0 { words.append("Command") }
+        words.append(KeyCombo.keyNames[Int(keyCode)]?.words ?? KeyCombo.keyGlyph(Int(keyCode)))
+        return words.joined(separator: " ")
+    }
+
     /// Glyph/name for a bare key code, layout-independent — no NSEvent chars
     /// needed, unlike the old `RecorderView.keyName`. Special keys get their
     /// macOS glyph; everything else falls back to `codeToName` (already covers
     /// letters, digits, F1–F20, and punctuation), uppercased.
     private static func keyGlyph(_ code: Int) -> String {
-        if let glyph = keyGlyphs[code] { return glyph }
+        if let glyph = keyNames[code]?.glyph { return glyph }
         if let name = codeToName[code] { return name.uppercased() }
         return "Key\(code)"
     }
 
-    private static let keyGlyphs: [Int: String] = [
-        kVK_Space: "Space",
-        kVK_Return: "↩",
-        kVK_Tab: "⇥",
-        kVK_Delete: "⌫",
-        kVK_ForwardDelete: "⌦",
-        kVK_Escape: "⎋",
-        kVK_LeftArrow: "←",
-        kVK_RightArrow: "→",
-        kVK_UpArrow: "↑",
-        kVK_DownArrow: "↓",
+    /// Drawn glyph and spoken words per special key. The drawn label only: `parse`,
+    /// `specString` and the hotkey registration go through `keyCodeTable`, which this
+    /// does not touch, so Home still searches as "home" through the spec string.
+    static let keyNames: [Int: (glyph: String, words: String)] = [
+        kVK_Space: ("Space", "Space"),
+        kVK_Return: ("↩", "Return"),
+        kVK_Tab: ("⇥", "Tab"),
+        kVK_Delete: ("⌫", "Delete"),
+        kVK_ForwardDelete: ("⌦", "Forward Delete"),
+        kVK_Escape: ("⎋", "Escape"),
+        kVK_LeftArrow: ("←", "Left Arrow"),
+        kVK_RightArrow: ("→", "Right Arrow"),
+        kVK_UpArrow: ("↑", "Up Arrow"),
+        kVK_DownArrow: ("↓", "Down Arrow"),
         // #876: "PAGEDOWN" with four modifiers needed 8 pt to fit the 96 pt key-rule field.
-        kVK_PageUp: "⇞",
-        kVK_PageDown: "⇟",
+        kVK_PageUp: ("⇞", "Page Up"),
+        kVK_PageDown: ("⇟", "Page Down"),
+        // #890: the glyphs macOS menus draw; these read HOME, END, Key76, Key71 before.
+        kVK_Home: ("↖", "Home"),
+        kVK_End: ("↘", "End"),
+        kVK_ANSI_KeypadEnter: ("⌤", "Keypad Enter"),
+        kVK_ANSI_KeypadClear: ("⌧", "Clear"),
+        kVK_Help: ("Help", "Help"),
+        // Keypad keys draw as "Pad" + the cap: a bare "1" would read the same as the top-row 1.
+        kVK_ANSI_Keypad0: ("Pad0", "Keypad 0"), kVK_ANSI_Keypad1: ("Pad1", "Keypad 1"),
+        kVK_ANSI_Keypad2: ("Pad2", "Keypad 2"), kVK_ANSI_Keypad3: ("Pad3", "Keypad 3"),
+        kVK_ANSI_Keypad4: ("Pad4", "Keypad 4"), kVK_ANSI_Keypad5: ("Pad5", "Keypad 5"),
+        kVK_ANSI_Keypad6: ("Pad6", "Keypad 6"), kVK_ANSI_Keypad7: ("Pad7", "Keypad 7"),
+        kVK_ANSI_Keypad8: ("Pad8", "Keypad 8"), kVK_ANSI_Keypad9: ("Pad9", "Keypad 9"),
+        kVK_ANSI_KeypadDecimal: ("Pad.", "Keypad Decimal"),
+        kVK_ANSI_KeypadMultiply: ("Pad*", "Keypad Multiply"),
+        kVK_ANSI_KeypadPlus: ("Pad+", "Keypad Plus"),
+        kVK_ANSI_KeypadMinus: ("Pad-", "Keypad Minus"),
+        kVK_ANSI_KeypadDivide: ("Pad/", "Keypad Divide"),
+        kVK_ANSI_KeypadEquals: ("Pad=", "Keypad Equals"),
+        kVK_ISO_Section: ("§", "Section"),
+        kVK_JIS_Yen: ("¥", "Yen"),
+        kVK_JIS_Underscore: ("_", "Underscore"),
+        kVK_JIS_KeypadComma: ("Pad,", "Keypad Comma"),
+        kVK_JIS_Eisu: ("英数", "Eisu"),
+        kVK_JIS_Kana: ("かな", "Kana"),
     ]
 
     /// The combo stripped to what macOS actually arbitrates on. `display` is a label

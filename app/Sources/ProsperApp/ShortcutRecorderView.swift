@@ -53,6 +53,8 @@ final class RecorderView: NSView {
         layer?.borderWidth = 1
         label.alignment = .center
         label.font = .systemFont(ofSize: fullFontSize, weight: .medium)
+        // #890: the view speaks for the field; the glyph label underneath stays silent.
+        label.setAccessibilityElement(false)
         addSubview(label)
         refreshTitle()
     }
@@ -75,8 +77,7 @@ final class RecorderView: NSView {
     /// key-rule slot) steps its font down until it fits; one that fits keeps the full size.
     override func layout() {
         super.layout()
-        // No inset: the label's fitting width already carries the cell's side padding, and
-        // ⌃⌥⇧⌘HOME fills the 67 pt field exactly at UI scale 0.7 today.
+        // No inset: the label's fitting width already carries the cell's side padding.
         var pt = fullFontSize
         label.font = .systemFont(ofSize: pt, weight: .medium)
         while label.fittingSize.width > bounds.width, pt > 1 {
@@ -90,6 +91,19 @@ final class RecorderView: NSView {
     }
 
     override var acceptsFirstResponder: Bool { true }
+
+    // MARK: - Accessibility (#890)
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    /// The combo in words ("Shift Command K"), not the glyph string "⇧⌘K".
+    override func accessibilityLabel() -> String? { combo.spokenLabel }
+    override func accessibilityValue() -> Any? { recording ? "Waiting for keys" : nil }
+    /// VoiceOver's press is the click: arms the field like `mouseDown`.
+    override func accessibilityPerformPress() -> Bool {
+        beginRecording()
+        return true
+    }
 
     func refreshTitle() {
         label.stringValue = recording ? "Press keys…" : combo.label

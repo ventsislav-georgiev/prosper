@@ -325,6 +325,20 @@ final class ShortcutCatalogTests: XCTestCase {
         XCTAssertEqual(ShortcutCatalog.filter(rows, query: "PageUp").map(\.title), ["Fake One"])
     }
 
+    /// #890: Home / End draw as ↖ ↘; "home" and "end" still find them through the spec.
+    func testFilterFindsHomeAndEndByName() {
+        let rows = catalog(apps: [AppShortcut(target: "com.example.one", combo: combo(kVK_Home, cmdKey), name: "Fake One"),
+                                  AppShortcut(target: "com.example.two", combo: combo(kVK_End, cmdKey), name: "Fake Two"),
+                                  AppShortcut(target: "com.example.three", combo: combo(kVK_ANSI_A, cmdKey), name: "Fake Three")])
+        let home = ShortcutCatalog.filter(rows, query: "home").map(\.title)
+        XCTAssertTrue(home.contains("Fake One"), "\(home)")
+        XCTAssertFalse(home.contains("Fake Two") || home.contains("Fake Three"), "\(home)")
+        // "end" is also inside built-in titles ("Calendar"): check membership, not the whole list.
+        let end = ShortcutCatalog.filter(rows, query: "End").map(\.title)
+        XCTAssertTrue(end.contains("Fake Two"), "\(end)")
+        XCTAssertFalse(end.contains("Fake One") || end.contains("Fake Three"), "\(end)")
+    }
+
     /// #880: an unbound row is `unsetKeyCombo`, key code 0, which is the A key. Its spec
     /// ("a") must not enter the search text; a bound row keeps its spec, and "cmd" still
     /// finds every bound row with Command (the published "pageup", "return", "cmd" example).
