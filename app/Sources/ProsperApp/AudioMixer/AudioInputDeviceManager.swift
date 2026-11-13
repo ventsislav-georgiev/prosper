@@ -306,15 +306,7 @@ final class AudioInputDeviceManager: ObservableObject {
     // MARK: - CoreAudio plumbing
 
     private nonisolated static func inputDevices(defaultUID: String?) -> [MixerInputDevice] {
-        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
-                                                 mScope: kAudioObjectPropertyScopeGlobal,
-                                                 mElement: kAudioObjectPropertyElementMain)
-        var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject),
-                                             &address, 0, nil, &size) == noErr else { return [] }
-        var deviceIDs = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
-                                         &address, 0, nil, &size, &deviceIDs) == noErr else { return [] }
+        let deviceIDs = MixerRoutingSupport.systemObjectList(kAudioHardwarePropertyDevices)
 
         var devices: [MixerInputDevice] = []
         for deviceID in deviceIDs {

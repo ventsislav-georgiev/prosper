@@ -223,6 +223,62 @@ enum MixerRoutingSupport {
         !nowWatched.isSubset(of: previouslyWatched)
     }
 
+    // MARK: - Object list reads
+
+    /// Most ids one list read asks for. Far above any real device or process
+    /// list, and it bounds what a bogus size from the HAL can allocate.
+    static let objectListCap = 4096
+
+    /// Slots to read a list the HAL sized at `size` bytes into: the list,
+    /// capped, plus one spare. A list that grew between the size read and the
+    /// data read then fills the spare instead of coming back silently short.
+    static func objectListSlots(forSize size: UInt32) -> Int {
+        min(Int(size) / MemoryLayout<AudioObjectID>.size, objectListCap) + 1
+    }
+
+    /// One data read into `buffer`. Only the `reportedSize` bytes the read
+    /// wrote back are the list (the rest is the zero fill it started with),
+    /// and 0 is never an object. A read that used every slot, the spare
+    /// included, may have been cut short: `grown`.
+    static func objectListRead(_ buffer: [AudioObjectID],
+                               reportedSize: UInt32) -> (ids: [AudioObjectID], grown: Bool) {
+        let count = min(Int(reportedSize) / MemoryLayout<AudioObjectID>.size, buffer.count)
+        return (buffer.prefix(count).filter { $0 != 0 }, count == buffer.count)
+    }
+
+    /// Runs `attempt` (a size read and a data read, nil when either fails)
+    /// again once if the list grew or the read failed: a list that outgrew
+    /// the spare slot may fail the data read instead of filling it. Never a
+    /// third attempt. A second grown read, or a failed retry after a read,
+    /// keeps what was read rather than an empty list: every caller turns an
+    /// empty list into a visible failure (rows gone, an unmute that unmutes
+    /// nothing), and a list change fires its listener, so a fresh pass follows.
+    static func objectList(
+        _ attempt: () -> (buffer: [AudioObjectID], reportedSize: UInt32)?
+    ) -> [AudioObjectID] {
+        let first = attempt().map { objectListRead($0.buffer, reportedSize: $0.reportedSize) }
+        if let first, !first.grown { return first.ids }
+        guard let second = attempt() else { return first?.ids ?? [] }
+        return objectListRead(second.buffer, reportedSize: second.reportedSize).ids
+    }
+
+    /// A list property of the system object (devices, process objects);
+    /// empty on a failed read. The only part of these reads no test reaches.
+    static func systemObjectList(_ selector: AudioObjectPropertySelector) -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(mSelector: selector,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        return objectList {
+            var size: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else { return nil }
+            var buffer = [AudioObjectID](repeating: 0, count: objectListSlots(forSize: size))
+            size = UInt32(buffer.count * MemoryLayout<AudioObjectID>.size)
+            guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &buffer) == noErr else { return nil }
+            return (buffer, size)
+        }
+    }
+
     /// Turns the text entered beside a mixer slider into its gain. The field
     /// accepts the same optional percent sign it displays, while the caller
     /// supplies the limit (100 for the system output, 200 for an app row).

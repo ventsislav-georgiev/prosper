@@ -1340,16 +1340,7 @@ final class AppVolumeMixer: ObservableObject {
     // MARK: - CoreAudio plumbing
 
     private nonisolated static func audioProcessObjects() -> [AudioObjectID] {
-        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyProcessObjectList,
-                                                 mScope: kAudioObjectPropertyScopeGlobal,
-                                                 mElement: kAudioObjectPropertyElementMain)
-        var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject),
-                                             &address, 0, nil, &size) == noErr else { return [] }
-        var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
-                                         &address, 0, nil, &size, &objects) == noErr else { return [] }
-        return objects
+        MixerRoutingSupport.systemObjectList(kAudioHardwarePropertyProcessObjectList)
     }
 
     /// The bundle id the audio HAL itself reports for a process object. Used
@@ -1406,16 +1397,7 @@ final class AppVolumeMixer: ObservableObject {
 
     /// Every device object the HAL lists, unfiltered; empty on a failed read.
     private nonisolated static func allDeviceIDs() -> [AudioObjectID] {
-        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
-                                                 mScope: kAudioObjectPropertyScopeGlobal,
-                                                 mElement: kAudioObjectPropertyElementMain)
-        var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject),
-                                             &address, 0, nil, &size) == noErr else { return [] }
-        var deviceIDs = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
-                                         &address, 0, nil, &size, &deviceIDs) == noErr else { return [] }
-        return deviceIDs
+        MixerRoutingSupport.systemObjectList(kAudioHardwarePropertyDevices)
     }
 
     private nonisolated static func outputDevices(among deviceIDs: [AudioObjectID],

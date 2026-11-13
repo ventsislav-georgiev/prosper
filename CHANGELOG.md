@@ -407,6 +407,8 @@ tag from the now-released section and put it on the new top draft.
 - Fans: when the overheat cut-off lets one fan take your speed but not the other, Prosper no longer
   leaves the fans split or re-pins one of them every few seconds; it keeps your speed as the pending
   preset and applies it to every fan together once macOS allows it.
+- Mixer: a device or app that appears while the mixer is reading the audio device or app list no
+  longer makes another device or app drop out of the list for a moment.
 
 ## v2.174.0
 

@@ -461,4 +461,114 @@ final class MixerRoutingTests: XCTestCase {
                                                   outputDeviceName: "Studio Display Speakers").name,
                        "speaker.wave.3.fill")
     }
+
+    // MARK: - Object list reads (#1030)
+
+    func testObjectListSlotsAddOneSpareSlot() {
+        XCTAssertEqual(MixerRoutingSupport.objectListSlots(forSize: 12), 4)
+        XCTAssertEqual(MixerRoutingSupport.objectListSlots(forSize: 0), 1)
+        // A size that is not a whole number of ids rounds down.
+        XCTAssertEqual(MixerRoutingSupport.objectListSlots(forSize: 14), 4)
+    }
+
+    func testObjectListSlotsAreCappedForABogusSize() {
+        XCTAssertEqual(MixerRoutingSupport.objectListSlots(forSize: 16380), 4096)
+        XCTAssertEqual(MixerRoutingSupport.objectListSlots(forSize: 16384), 4097)
+        XCTAssertEqual(MixerRoutingSupport.objectListSlots(forSize: UInt32.max), 4097)
+    }
+
+    func testObjectListReadThatLeftTheSpareSlotIsComplete() {
+        let read = MixerRoutingSupport.objectListRead([11, 22, 33, 0], reportedSize: 12)
+        XCTAssertEqual(read.ids, [11, 22, 33])
+        XCTAssertFalse(read.grown)
+    }
+
+    func testObjectListReadIsTrimmedToTheReportedSize() {
+        // The list shrank: only the reported bytes count, whatever sits past them.
+        let read = MixerRoutingSupport.objectListRead([11, 22, 33, 0], reportedSize: 8)
+        XCTAssertEqual(read.ids, [11, 22])
+        XCTAssertFalse(read.grown)
+    }
+
+    func testObjectListReadThatFilledTheSpareSlotGrew() {
+        let read = MixerRoutingSupport.objectListRead([11, 22, 33, 44], reportedSize: 16)
+        XCTAssertEqual(read.ids, [11, 22, 33, 44])
+        XCTAssertTrue(read.grown)
+    }
+
+    func testObjectListReadReportingMoreThanTheBufferGrew() {
+        let read = MixerRoutingSupport.objectListRead([11, 22], reportedSize: 400)
+        XCTAssertEqual(read.ids, [11, 22])
+        XCTAssertTrue(read.grown)
+    }
+
+    func testObjectListReadDropsAPartialTrailingID() {
+        let read = MixerRoutingSupport.objectListRead([11, 22, 33, 0], reportedSize: 10)
+        XCTAssertEqual(read.ids, [11, 22])
+        XCTAssertFalse(read.grown)
+    }
+
+    func testObjectListReadOfAnEmptyList() {
+        let read = MixerRoutingSupport.objectListRead([0], reportedSize: 0)
+        XCTAssertEqual(read.ids, [])
+        XCTAssertFalse(read.grown)
+    }
+
+    func testObjectListReadDropsUnknownObjectIDs() {
+        let read = MixerRoutingSupport.objectListRead([11, 0, 33, 0], reportedSize: 12)
+        XCTAssertEqual(read.ids, [11, 33])
+        XCTAssertFalse(read.grown)
+    }
+
+    private func objectList(_ reads: [(buffer: [AudioObjectID], reportedSize: UInt32)?]) -> (ids: [AudioObjectID], attempts: Int) {
+        var remaining = reads
+        var attempts = 0
+        let ids = MixerRoutingSupport.objectList {
+            attempts += 1
+            return remaining.isEmpty ? nil : remaining.removeFirst()
+        }
+        return (ids, attempts)
+    }
+
+    func testObjectListReadsOnceWhenTheListDidNotGrow() {
+        let result = objectList([([11, 22, 0], 8), ([99, 98, 97], 12)])
+        XCTAssertEqual(result.ids, [11, 22])
+        XCTAssertEqual(result.attempts, 1)
+    }
+
+    func testObjectListRereadsOnceWhenTheListGrew() {
+        let result = objectList([([11, 22, 33], 12), ([11, 22, 33, 44, 0], 16)])
+        XCTAssertEqual(result.ids, [11, 22, 33, 44])
+        XCTAssertEqual(result.attempts, 2)
+    }
+
+    func testObjectListGrownTwiceKeepsTheSecondReadInsteadOfFailing() {
+        let result = objectList([([11, 22, 33], 12), ([11, 22, 33, 44], 16), ([55, 0], 4)])
+        XCTAssertEqual(result.ids, [11, 22, 33, 44])
+        XCTAssertEqual(result.attempts, 2)
+    }
+
+    func testObjectListFailedFirstReadIsTriedOnceMore() {
+        let result = objectList([nil, ([11, 0], 4)])
+        XCTAssertEqual(result.ids, [11])
+        XCTAssertEqual(result.attempts, 2)
+    }
+
+    func testObjectListTwoFailedReadsAreEmpty() {
+        let result = objectList([nil, nil])
+        XCTAssertEqual(result.ids, [])
+        XCTAssertEqual(result.attempts, 2)
+    }
+
+    func testObjectListFailedThenGrownKeepsTheSecondReadWithoutAThird() {
+        let result = objectList([nil, ([11, 22], 8), ([99, 0], 4)])
+        XCTAssertEqual(result.ids, [11, 22])
+        XCTAssertEqual(result.attempts, 2)
+    }
+
+    func testObjectListFailedRetryKeepsTheFirstRead() {
+        let result = objectList([([11, 22, 33], 12), nil])
+        XCTAssertEqual(result.ids, [11, 22, 33])
+        XCTAssertEqual(result.attempts, 2)
+    }
 }
