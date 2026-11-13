@@ -6,10 +6,19 @@ import MLXLMCommon
 /// tool-call grammar builder, UTF-8 stream assembly, and GGUF catalog routing.
 /// (Decode-path behavior needs a loaded model — covered by the agent bench.)
 final class LlamaAgentEngineTests: XCTestCase {
+    nonisolated(unsafe) private var savedOnDisk: (String) -> Bool = { _ in false }
+
+    /// #892: no row reads real model files; every row starts with nothing on disk.
+    override func setUp() {
+        super.setUp()
+        savedOnDisk = AgentModelRegistry.isOnDisk
+        AgentModelRegistry.isOnDisk = { _ in false }
+    }
 
     /// #385 (QA #184): a row that overrides the `physicalMemoryGB` seam must restore it; a leak
     /// would let later rows read a fake RAM tier. Reset after the check so only the leaker fails.
     override func tearDown() {
+        AgentModelRegistry.isOnDisk = savedOnDisk
         let real = Int(ProcessInfo.processInfo.physicalMemory / 1_000_000_000)
         XCTAssertEqual(AgentModelRegistry.physicalMemoryGB, real, "a row leaked a physicalMemoryGB override")
         AgentModelRegistry.physicalMemoryGB = real
@@ -154,7 +163,7 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(AgentModelRegistry.model(for: AgentModelRegistry.recommendedId).toolFormat, .qwenXML)
     }
 
-    func testQwen36RowPinnedAndDefaultUnchanged() throws {
+    func testQwen36RowPinnedAndIsDefault() throws {
         let id = "unsloth/Qwen3.6-35B-A3B-GGUF"
         let spec = try XCTUnwrap(AgentModelRegistry.gguf(for: id))
         XCTAssertEqual(spec.fileName, "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")
@@ -162,8 +171,9 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(spec.downloadURL.absoluteString,
                        "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")
         XCTAssertEqual(AgentModelRegistry.model(for: id).toolFormat, .qwenXML)
-        // Default stays Qwen3-Coder until 3.6 passes the on-device e2e + latency check.
-        XCTAssertEqual(AgentModelRegistry.recommendedId, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF")
+        // #892 (OQ-15): 3.6 is the default, switched without an on-device tool-call test.
+        XCTAssertEqual(AgentModelRegistry.recommendedId, id)
+        XCTAssertEqual(AgentModelRegistry.previousRecommendedId, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF")
     }
 
     /// #245: every GGUF row downloads from a commit-sha-pinned URL matching its id and fileName.
@@ -195,7 +205,7 @@ final class LlamaAgentEngineTests: XCTestCase {
     }
 
     /// #159: Qwen3-8B → Qwen3.5-9B and Nemotron-3-Nano-30B → Nemotron-3.5-Lightning-30B,
-    /// both pinned to a commit sha; the replaced ids are gone and the default is unchanged.
+    /// both pinned to a commit sha; the replaced ids are gone and the default is not one of them.
     func testRefreshedRowsPinnedAndReplacedIdsGone() throws {
         let rows: [(id: String, file: String, sha: String, bytes: Int64)] = [
             ("unsloth/Qwen3.5-9B-GGUF", "Qwen3.5-9B-Q4_K_M.gguf",
@@ -214,7 +224,7 @@ final class LlamaAgentEngineTests: XCTestCase {
         }
         XCTAssertNil(AgentModelRegistry.gguf(for: "unsloth/Qwen3-8B-GGUF"))
         XCTAssertNil(AgentModelRegistry.gguf(for: "unsloth/Nemotron-3-Nano-30B-A3B-GGUF"))
-        XCTAssertEqual(AgentModelRegistry.recommendedId, "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF")
+        XCTAssertEqual(AgentModelRegistry.recommendedId, "unsloth/Qwen3.6-35B-A3B-GGUF")
     }
 
     /// #247: a saved id #159 removed heals to its same-tier replacement, not the 32 GB recommended.
@@ -273,6 +283,62 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(AgentModelRegistry.canonicalId("gone/unknown", physicalMemoryGB: 32), AgentModelRegistry.recommendedId)
         XCTAssertEqual(AgentModelRegistry.canonicalId("mlx-community/Qwen3-Next-80B-A3B-Instruct-4bit", physicalMemoryGB: 64),
                        "unsloth/Qwen3-Next-80B-A3B-Instruct-GGUF")
+    }
+
+    /// #892: the default per RAM tier with nothing on disk. Before #892 the 32+ rows read
+    /// Qwen3-Coder 30B; every tier under the 32 GB floor is unchanged.
+    func testDefaultIdTableOverRAMTiers() {
+        let none: (String) -> Bool = { _ in false }
+        let want: [(Int, String)] = [
+            (8, "unsloth/Qwen3.5-4B-GGUF"), (16, "unsloth/Qwen3.5-9B-GGUF"), (18, "unsloth/Qwen3.5-9B-GGUF"),
+            (24, "unsloth/Qwen3.5-9B-GGUF"), (32, "unsloth/Qwen3.6-35B-A3B-GGUF"), (36, "unsloth/Qwen3.6-35B-A3B-GGUF"),
+            (48, "unsloth/Qwen3.6-35B-A3B-GGUF"), (64, "unsloth/Qwen3.6-35B-A3B-GGUF"),
+        ]
+        for (gb, id) in want {
+            XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: gb, onDisk: none), id, "\(gb) GB")
+        }
+    }
+
+    /// #892: a Mac with Qwen3-Coder 30B on disk, not 3.6, and no saved pick keeps reading the
+    /// coder (no silent 22 GB download); once 3.6 is on disk it reads 3.6. Under the 32 GB
+    /// floor the file changes nothing. Through Preferences.agentModel, nothing persisted.
+    func testCoder30BOnDiskKeepsDefaultWithNoSavedChoice() {
+        let coder = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF", q36 = "unsloth/Qwen3.6-35B-A3B-GGUF"
+        let coderOnly: (String) -> Bool = { $0 == coder }
+        let both: (String) -> Bool = { $0 == coder || $0 == q36 }
+        for gb in [32, 36, 48, 64] {
+            XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: gb, onDisk: coderOnly), coder, "\(gb) GB")
+            XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: gb, onDisk: both), q36, "\(gb) GB")
+            XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: gb, onDisk: { $0 == q36 }), q36, "\(gb) GB")
+        }
+        XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: 24, onDisk: coderOnly), "unsloth/Qwen3.5-9B-GGUF")
+        XCTAssertEqual(AgentModelRegistry.defaultId(physicalMemoryGB: 8, onDisk: coderOnly), "unsloth/Qwen3.5-4B-GGUF")
+
+        let d = Preferences.defaults, key = "agentModel"
+        let saved = d.object(forKey: key), savedGB = AgentModelRegistry.physicalMemoryGB
+        defer { d.set(saved, forKey: key); AgentModelRegistry.physicalMemoryGB = savedGB }
+        d.removeObject(forKey: key)
+        AgentModelRegistry.physicalMemoryGB = 36
+        AgentModelRegistry.isOnDisk = coderOnly
+        XCTAssertEqual(Preferences.agentModel, coder)
+        AgentModelRegistry.isOnDisk = both
+        XCTAssertEqual(Preferences.agentModel, q36)
+        AgentModelRegistry.isOnDisk = { _ in false }
+        XCTAssertEqual(Preferences.agentModel, q36)
+        XCTAssertTrue(d.object(forKey: key) == nil)
+    }
+
+    /// #892: a saved built-in id that fits reads as itself whatever is on disk.
+    func testCanonicalIdKeepsSavedIdsWhateverIsOnDisk() {
+        let coder = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+        let cases: [(String) -> Bool] = [{ _ in false }, { $0 == coder }, { _ in true }]
+        for onDisk in cases {
+            AgentModelRegistry.isOnDisk = onDisk
+            for m in AgentModelRegistry.models {
+                XCTAssertEqual(AgentModelRegistry.canonicalId(m.id, physicalMemoryGB: 64), m.id)
+            }
+        }
+        XCTAssertEqual(AgentModelRegistry.models.count, 8)
     }
 
     /// #437: a known or retired id whose row does not fit this Mac (synced from a bigger one)

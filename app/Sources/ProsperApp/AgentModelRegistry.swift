@@ -142,7 +142,7 @@ enum AgentModelRegistry {
             id: "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
             label: "Qwen3-Coder 30B-A3B (llama.cpp)",
             approxRAMGB: 20, minRAMGB: 32, toolFormat: .qwenXML,
-            note: "GGUF Q4_K_M ~17 GB · recommended · coder MoE (3B active), grammar-locked tool calls",
+            note: "GGUF Q4_K_M ~17 GB · coder MoE (3B active), grammar-locked tool calls",
             gguf: AgentGGUF(
                 fileName: "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf",
                 downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/b17cb02dd882d5b6ab62fc777ad2995f19668350/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf")!,
@@ -152,7 +152,7 @@ enum AgentModelRegistry {
             id: "unsloth/Qwen3.6-35B-A3B-GGUF",
             label: "Qwen3.6 35B-A3B (llama.cpp)",
             approxRAMGB: 24, minRAMGB: 32, toolFormat: .qwenXML,
-            note: "GGUF UD-Q4_K_M ~22 GB · newest Qwen MoE (3B active), grammar-locked tool calls",
+            note: "GGUF UD-Q4_K_M ~22 GB · recommended · newest Qwen MoE (3B active), grammar-locked tool calls",
             gguf: AgentGGUF(
                 fileName: "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
                 downloadURL: URL(string: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")!,
@@ -170,10 +170,17 @@ enum AgentModelRegistry {
         ),
     ]
 
-    /// Default agent model: Qwen3-Coder 30B-A3B on the llama.cpp engine —
-    /// coder-tuned MoE that fits a 32 GB dev Mac, with grammar-locked tool
-    /// calls and prompt-prefix KV reuse (the fastest correct agent path).
-    static let recommendedId = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    /// Default agent model: Qwen3.6 35B-A3B on the llama.cpp engine (#892, OQ-15:
+    /// switched without an on-device tool-call test; it is a thinking model).
+    static let recommendedId = "unsloth/Qwen3.6-35B-A3B-GGUF"
+
+    /// The default before #892. A Mac with no saved pick that has this file and not
+    /// `recommendedId`'s keeps it, so an update never swaps in an undownloaded model.
+    static let previousRecommendedId = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+
+    /// Whether a model's weights are on disk. Test seam (#892): tests inject a closure,
+    /// no test reads a real model path; no production caller writes it.
+    nonisolated(unsafe) static var isOnDisk: (String) -> Bool = { ModelFiles.isModelDownloaded($0) }
 
     /// This Mac's RAM in GB, same decimal conversion as the settings pane's warning.
     /// Test seam (#366): settable so tests can pin the RAM tier; no production caller writes it.
@@ -185,9 +192,15 @@ enum AgentModelRegistry {
     /// Default agent model for a Mac with `gb` of RAM (#332): `recommendedId` once its
     /// floor fits, else the largest built-in row whose floor fits. Below every floor,
     /// the smallest built-in row (catalog order breaks a RAM tie, so the first wins).
-    /// Never persisted: agentModel syncs between Macs (#256).
-    static func defaultId(physicalMemoryGB gb: Int) -> String {
-        if let rec = models.first(where: { $0.id == recommendedId }), rec.minRAMGB <= gb { return recommendedId }
+    /// Never persisted: agentModel syncs between Macs (#256). Where `recommendedId` fits but
+    /// only `previousRecommendedId` (also fitting) is on disk, that one (#892): a read-time
+    /// rule over the files, so downloading the new default switches to it with no stored state.
+    static func defaultId(physicalMemoryGB gb: Int, onDisk: (String) -> Bool = isOnDisk) -> String {
+        if let rec = models.first(where: { $0.id == recommendedId }), rec.minRAMGB <= gb {
+            if let prev = models.first(where: { $0.id == previousRecommendedId }), prev.minRAMGB <= gb,
+               !onDisk(recommendedId), onDisk(previousRecommendedId) { return previousRecommendedId }
+            return recommendedId
+        }
         if let fit = models.filter({ $0.minRAMGB <= gb }).max(by: { $0.approxRAMGB < $1.approxRAMGB }) { return fit.id }
         return models.min { $0.approxRAMGB < $1.approxRAMGB }?.id ?? recommendedId
     }
