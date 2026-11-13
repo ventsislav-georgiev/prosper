@@ -38,6 +38,15 @@ final class DchCtlTests: XCTestCase {
         func fire(_ i: Int) { lock.withLock { armed.indices.contains(i) ? armed[i].fire : nil }?() }
     }
 
+    /// #1012: the signals CodexHarness.sendSignal sent one group (probes left out), each with its send time and
+    /// the finals out at that instant.
+    private final class Signals: @unchecked Sendable {
+        private let lock = NSLock()
+        private var log: [(sig: Int32, at: Date, finals: Int)] = []
+        func add(_ sig: Int32, finals: Int) { lock.withLock { log.append((sig, Date(), finals)) } }
+        var all: [(sig: Int32, at: Date, finals: Int)] { lock.withLock { log } }
+    }
+
     private func rig(_ script: String? = nil, timeout: TimeInterval = 60, agentTimeout: TimeInterval = 660,
                      cap: Int = 8 << 20, reached: Recorder? = nil, timers: Timers? = nil) -> Rig {
         let queue = DispatchQueue(label: "test.dchconn.ctl")
@@ -115,7 +124,7 @@ final class DchCtlTests: XCTestCase {
 
     private func pid(_ dir: URL, _ name: String) -> pid_t? {
         var p: pid_t?
-        wait(5) {
+        wait(10) {
             p = (try? String(contentsOf: dir.appendingPathComponent(name), encoding: .utf8))
                 .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
             return p != nil
@@ -129,9 +138,12 @@ final class DchCtlTests: XCTestCase {
             .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    private func dead(_ pid: pid_t?) -> Bool {
+    /// Polls to the first probe that finds `pid` gone. #1012: a Date() right after it is never before the death, so
+    /// "that Date() is at least the grace" cannot fail falsely under load (load can only make a too-early kill pass),
+    /// and it fails a kill before the grace on a host that polls in time: the grace tests' "not sooner", no liveness sample.
+    private func dead(_ pid: pid_t?, _ secs: TimeInterval = 10) -> Bool {
         guard let pid else { return false }
-        return wait(5) { Darwin.kill(pid, 0) != 0 }
+        return wait(secs) { Darwin.kill(pid, 0) != 0 }
     }
 
     // MARK: - The allowlist
@@ -358,7 +370,7 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(all(r).count, 1)
         XCTAssertEqual(Self.object(finals(r).first)["message"] as? String, DchCtl.xrayOff)
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.dir.appendingPathComponent("argv").path), "nothing ran")
-        XCTAssertTrue(wait(2) { r.closes.count == 1 }, "the FIN follows the refusal")
+        XCTAssertTrue(wait(5) { r.closes.count == 1 }, "the FIN follows the refusal")
         let on = rig(f.path)
         on.conn.ctl.xray = { true }
         send(on, Self.ctl(["--xray", "alpha", "--chapter", "0", "--json"]))
@@ -393,12 +405,14 @@ final class DchCtlTests: XCTestCase {
             echo $$ > "$D/pid"; trap 'echo term > "$D/sig"; exit 0' TERM
             /usr/bin/head -c 100 /dev/zero | /usr/bin/tr '\\0' x; while :; do /bin/sleep 0.05; done
             """)
-        let r = rig(f.path, timeout: 0.3, cap: 10)
+        let timers = Timers()
+        let r = rig(f.path, timeout: 0.3, cap: 10, timers: timers)
         r.conn.ctl.xray = { true }
         send(r, Self.ctl(["--xray", "alpha", "--follow", "--json"]))
         let script = pid(f.dir, "pid")
         XCTAssertTrue(wait(5) { bytes(r, DchFrame.ctlStdout).count == 100 }, "no cap")
-        usleep(800_000)
+        // #1012: run() arms the timeout before it reads a byte, so with the output out none is armed for good.
+        XCTAssertEqual(timers.count, 0, "no timeout")
         XCTAssertEqual(finals(r).count, 0, "no timeout")
         r.queue.sync { r.conn.close() }
         XCTAssertTrue(dead(script))
@@ -493,9 +507,11 @@ final class DchCtlTests: XCTestCase {
     /// Review round 1: a timeout that fires after dch was reaped while a child still holds the pipe
     /// ends nothing: the request ends with dch's own exit, not "timeout". #841 review: 2 s of timeout
     /// for a shell that exits at once (0.3 s fired first under full-suite load); the child holds the
-    /// pipe 5 s, well past it.
+    /// pipe 30 s, well past it (#1012: 5 s was not, for a "still alive" sample a stalled host can take past 5 s;
+    /// fake()'s teardown SIGKILLs it). The 2.5 s wait is the 2 s timeout under test plus 0.5 s: what it rules
+    /// out is a second final, which no later event could show sooner.
     func testATimeoutAfterTheExitEndsWithTheRealExit() throws {
-        let f = try fake("/bin/sleep 5 & echo $! > \"$D/kid\"; echo done; exit 0")
+        let f = try fake("/bin/sleep 30 & echo $! > \"$D/kid\"; echo done; exit 0")
         let r = rig(f.path, timeout: 2)
         let start = Date()
         send(r, Self.ctl(["--status", "alpha"]))
@@ -583,11 +599,12 @@ final class DchCtlTests: XCTestCase {
             let r = rig(f.path)
             let start = Date()
             send(r, Self.ctl(argv))
-            XCTAssertTrue(wait(5) { finals(r).count == 1 }, "\(argv)")
-            XCTAssertLessThan(Date().timeIntervalSince(start), 5, "\(argv)")
+            // #1012: the bound is the behaviour (the reap, not the 30 s pipe holder, ends it), so 20 s, not 5.
+            XCTAssertTrue(wait(20) { finals(r).count == 1 }, "\(argv)")
+            XCTAssertLessThan(Date().timeIntervalSince(start), 20, "\(argv)")
             XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 4] as NSDictionary, "\(argv)")
             XCTAssertEqual(bytes(r, DchFrame.ctlStdout), Data(String(repeating: "a", count: 70000).utf8) + Data("done\n".utf8), "\(argv)")
-            XCTAssertTrue(wait(2) { !r.queue.sync { r.conn.inFlight } }, "\(argv): the slot is free")
+            XCTAssertTrue(wait(10) { !r.queue.sync { r.conn.inFlight } }, "\(argv): the slot is free")
         }
         XCTAssertEqual(kids().count, 2)
     }
@@ -598,11 +615,13 @@ final class DchCtlTests: XCTestCase {
             echo $$ > "$D/pid"; trap 'echo term > "$D/sig"; exit 0' TERM
             /usr/bin/head -c 100 /dev/zero | /usr/bin/tr '\\0' f; while :; do /bin/sleep 0.05; done
             """)
-        let r = rig(f.path, timeout: 0.3, cap: 10)
+        let timers = Timers()
+        let r = rig(f.path, timeout: 0.3, cap: 10, timers: timers)
         send(r, Self.ctl(["--follow", "alpha"]))
         let script = pid(f.dir, "pid")
         XCTAssertTrue(wait(5) { bytes(r, DchFrame.ctlStdout).count == 100 }, "no cap on --follow")
-        usleep(800_000)
+        // #1012: run() arms the timeout before it reads a byte, so with the output out none is armed for good.
+        XCTAssertEqual(timers.count, 0, "no timeout on --follow")
         XCTAssertEqual(finals(r).count, 0, "no timeout on --follow")
         XCTAssertNotNil(script)
         XCTAssertEqual(Darwin.kill(try XCTUnwrap(script), 0), 0, "still running")
@@ -627,7 +646,7 @@ final class DchCtlTests: XCTestCase {
         let script = pid(f.dir, "pid")
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
         r.queue.sync { r.conn.close() }
-        XCTAssertTrue(wait(8) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) == "term\nresumed\n" },
+        XCTAssertTrue(wait(20) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) == "term\nresumed\n" },
                       "one SIGTERM, then dch's own time to finish: no SIGKILL at 2 s for --stop")
         XCTAssertTrue(dead(script))
         XCTAssertEqual(finals(r).count, 0, "nothing after the close")
@@ -643,11 +662,12 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(wait(5) { !bytes(s, DchFrame.ctlStdout).isEmpty })
         let start = Date()
         s.queue.sync { s.conn.close() }
-        XCTAssertTrue(wait(1.5) { (try? String(contentsOf: g.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
-        XCTAssertEqual(Darwin.kill(try XCTUnwrap(stuck), 0), 0, "alive inside the grace")
+        XCTAssertTrue(wait(10) { (try? String(contentsOf: g.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
+        // #1012: "alive inside the grace" is the first probe that finds it gone coming at 1.9 s or later (dead()),
+        // not a liveness sample at one instant, which a host stalled past 2 s failed falsely.
         XCTAssertTrue(dead(stuck), "SIGKILLed")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9, "not inside the 2 s grace")
         XCTAssertTrue(dead(kid), "its group too")
-        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9)
         usleep(300_000)
         XCTAssertEqual(finals(s).count, 0, "nothing after the close")
     }
@@ -678,7 +698,7 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
         let at = Date()
         if cancel { send(r, DchFrame.encode(DchFrame.ctlCancel, [])) } else { r.queue.sync { r.conn.close() } }
-        XCTAssertTrue(wait(1.5) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil },
+        XCTAssertTrue(wait(10) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil },
                       "the SIGTERM: \(argv[0])")
         return (r, dch, kid, at)
     }
@@ -689,7 +709,9 @@ final class DchCtlTests: XCTestCase {
         let waiting: [([String], Bool)] = [(["--say", "alpha", "--json", "--", "hi"], false), (["--run", "alpha", "ls"], true)]
         for (argv, cancel) in waiting {
             let s = try stuck(argv, cancel: cancel)
-            usleep(useconds_t(max(0, 2.5 - Date().timeIntervalSince(s.at)) * 1_000_000))
+            // #1012: a negative with no later event to tie it to, so a wait derived from the grace it rules out
+            // (cancelGrace, 2 s, plus 0.5 s). The sample cannot fail falsely: the real backstop is 660 s away.
+            usleep(useconds_t(max(0, DchCtl.cancelGrace + 0.5 - Date().timeIntervalSince(s.at)) * 1_000_000))
             XCTAssertEqual(Darwin.kill(s.dch, 0), 0, "alive past 2 s: \(argv[0])")
             XCTAssertEqual(Darwin.kill(s.kid, 0), 0, "its group too: \(argv[0])")
             XCTAssertEqual(finals(s.r).count, 0, "no 0x33 while it runs: \(argv[0])")
@@ -697,11 +719,11 @@ final class DchCtlTests: XCTestCase {
         let backstop: [([String], Bool)] = [(["--stop", "alpha", "--json"], false), (["--revive", "alpha", "--json"], true)]
         for (argv, cancel) in backstop {
             let s = try stuck(argv, cancel: cancel, agentGrace: 3.5)
-            usleep(useconds_t(max(0, 2.5 - Date().timeIntervalSince(s.at)) * 1_000_000))
-            XCTAssertEqual(Darwin.kill(s.dch, 0), 0, "alive past 2 s: \(argv[0])")
-            XCTAssertTrue(dead(s.dch), "SIGKILLed at the backstop: \(argv[0])")
+            // #1012: "alive past 2 s" is the first probe that finds it gone coming at 3.4 s or later (dead()), not a
+            // sample at 2.5 s, which failed falsely once a stalled host took it past the 3.5 s backstop.
+            XCTAssertTrue(dead(s.dch, 15), "SIGKILLed at the backstop: \(argv[0])")
+            XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(s.at), 3.4, "alive past 2 s, to the backstop: \(argv[0])")
             XCTAssertTrue(dead(s.kid), "its group too: \(argv[0])")
-            XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(s.at), 3.4, argv[0])
             if cancel {
                 XCTAssertTrue(wait(5) { finals(s.r).count == 1 })
                 XCTAssertEqual(Self.object(finals(s.r).first) as NSDictionary, ["exit": 2, "why": "cancel"] as NSDictionary)
@@ -904,19 +926,23 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
         let start = Date()
         send(r, DchFrame.encode(DchFrame.ctlCancel, []))
-        XCTAssertTrue(wait(1.5) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
-        XCTAssertEqual(Darwin.kill(try XCTUnwrap(script), 0), 0, "alive inside the grace")
+        XCTAssertTrue(wait(10) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
         // After the trap ran: two SIGTERMs sent back to back coalesce into one pending signal.
         send(r, DchFrame.encode(DchFrame.ctlCancel, []))
         XCTAssertEqual(timers.count, 1)
         timers.fire(0)
-        usleep(300_000)
-        XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n", "one SIGTERM")
-        XCTAssertEqual(finals(r).count, 0)
+        // #1012: no 0x33 while dch runs, read before a probe that still finds it running (the cancel's 0x33
+        // waits for the reap), so a host stalled past the SIGKILL skips the check instead of failing it.
+        r.queue.sync {}   // a final the fire sent is queued by now: out before the count
+        let early = finals(r).count
+        if Darwin.kill(try XCTUnwrap(script), 0) == 0 { XCTAssertEqual(early, 0, "no 0x33 before the reap") }
+        // #1012: "alive inside the grace" is the first probe that finds it gone coming at 1.9 s or later (dead()).
         XCTAssertTrue(dead(script), "SIGKILLed")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9, "not inside the 2 s grace")
         XCTAssertTrue(dead(kid), "its group too")
-        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9)
-        XCTAssertTrue(wait(5) { finals(r).count == 1 })
+        // #1012: read once dch is gone, so the whole grace counts, not 0.3 s of it.
+        XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n", "one SIGTERM")
+        XCTAssertTrue(wait(10) { finals(r).count == 1 })
         XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "cancel"] as NSDictionary)
     }
 
@@ -932,23 +958,33 @@ final class DchCtlTests: XCTestCase {
         send(r, Self.ctl(["--read", "alpha"]))
         let script = try XCTUnwrap(pid(f.dir, "pid"))
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty && timers.count == 1 })
+        // #1012 (QA #729 r2 INFO): the cut's signals are read off the CodexHarness.sendSignal seam as they are sent,
+        // not off dch's liveness at the test's instants, which needed a poll inside 1.3-2.0 s. Load only delays a
+        // send, so the SIGKILL's distance from the SIGTERM is the grace, and the finals out when it is sent say
+        // whether the 0x33 came first. The seam forwards, so dch is really signalled.
+        let signals = Signals(), frames = r.frames, queue = r.queue
+        let saved = CodexHarness.sendSignal
+        defer { CodexHarness.sendSignal = saved }
+        CodexHarness.sendSignal = { pid, sig in
+            if pid == -script, sig != 0 {
+                queue.sync {}   // a 0x33 already replied is queued: out before the count
+                signals.add(sig, finals: frames.lock.withLock {
+                    frames.all.filter { [DchFrame.ctlExit, DchFrame.error].contains(DchCtlTests.type($0)) }.count
+                })
+            }
+            return Darwin.kill(pid, sig)
+        }
         let start = Date()
         timers.fire(0)
-        // #874 (QA #729 INFO-4): one poll to the end state, not a sample at one instant, so a loaded
-        // machine only delays the observations: `alive` is a lower bound of the last instant dch was
-        // seen running (taken before the probe), `finalWhileAlive` that the 0x33 came before the SIGKILL.
-        var alive = start, finalWhileAlive = false
-        let gone = wait(10) {
-            let t = Date(), sent = finals(r).count == 1
-            guard Darwin.kill(script, 0) == 0 else { return true }
-            alive = t
-            finalWhileAlive = finalWhileAlive || sent
-            return false
-        }
-        XCTAssertTrue(gone, "SIGKILLed")
+        XCTAssertTrue(dead(script, 15), "SIGKILLed")
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9, "not before the 2 s grace")
-        XCTAssertGreaterThanOrEqual(alive.timeIntervalSince(start), 1.3, "seen alive past 1 s: the grace is 2 s")
-        XCTAssertTrue(finalWhileAlive, "the 0x33 goes out at once, not at the reap")
+        let sent = signals.all
+        XCTAssertEqual(sent.map { $0.sig }, [SIGTERM, SIGKILL], "the group: a SIGTERM, then a SIGKILL")
+        if sent.count == 2, let term = sent.first, let kill = sent.last {
+            XCTAssertGreaterThanOrEqual(kill.at.timeIntervalSince(term.at), 1.9, "the SIGKILL comes the 2 s grace after the SIGTERM")
+            XCTAssertEqual(term.finals, 0, "the SIGTERM before the 0x33")
+            XCTAssertEqual(kill.finals, 1, "the 0x33 goes out at once, not at the reap")
+        }
         XCTAssertEqual(finals(r).count, 1)
         XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary)
         XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n", "a SIGTERM first")
