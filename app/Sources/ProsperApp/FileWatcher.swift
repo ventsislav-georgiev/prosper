@@ -5,8 +5,8 @@ import Foundation
 /// editors write a temp file then rename over the target): on a delete/rename it
 /// re-arms on the recreated path. Coarse by design — one fd, one callback.
 ///
-/// ponytail: intended to live for the app's lifetime (held by `AppDelegate`), so the
-/// fd cleanup in `stop()`/`deinit` is belt-and-suspenders, not a hot path.
+/// Releasing a watcher closes its descriptor, whether or not `stop()` came first: the app
+/// holds some for its lifetime (`AppDelegate`, `BunHarness`), the text viewer one per window.
 final class FileWatcher {
     private let url: URL
     private let onChange: @Sendable () -> Void
@@ -29,11 +29,16 @@ final class FileWatcher {
         }
     }
 
-    deinit { stop() }
+    // Released (with or without stop(), whose block then finds nil): cancel in place, since a
+    // deinit cannot queue a block that captures self. Nothing else can touch `source` now: every
+    // block that does holds self strongly while it runs, so none runs while deinit does.
+    // DispatchSource.cancel is thread-safe; the cancel handler closes the descriptor (#1130).
+    deinit { source?.cancel() }
 
     private func arm() {
         guard !stopped else { return }
-        let fd = open(url.path, O_EVTONLY)
+        // O_NONBLOCK: a FIFO at the path would otherwise block this queue until a writer opens it.
+        let fd = open(url.path, O_EVTONLY | O_NONBLOCK)
         guard fd >= 0 else {
             // Not there yet (bootstrap creates it on launch) — retry shortly.
             queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.arm() }

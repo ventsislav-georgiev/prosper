@@ -157,8 +157,42 @@ final class FileActionsViewRowTests: XCTestCase {
         intake.show = { shown.append($0) }
         intake.ready()
         XCTAssertTrue(FileActions.perform(FileActions.ID.view, path: md.path))
-        XCTAssertTrue(FileActions.perform(FileActions.ID.view, path: png.path))
+        XCTAssertFalse(FileActions.perform(FileActions.ID.view, path: png.path), "nothing ran: not handled")
         XCTAssertEqual(shown.map(\.lastPathComponent), ["a.md"])
+    }
+
+    /// #1130: file.view through the live performer and the dispatcher, intake seams only (no
+    /// window). Returns what `run` returned, the frecency boost for the file, and what was shown.
+    private func dispatchView(_ name: String, _ bytes: [UInt8]) throws -> (handled: Bool, boost: Double, shown: [String]) {
+        let file = tempDir("tv-view-frecency").appendingPathComponent(name)
+        try Data(bytes).write(to: file)
+        let intake = TextViewerIntake.shared
+        let saved = (intake.isEnabled, intake.notifyOff, intake.show)
+        defer { (intake.isEnabled, intake.notifyOff, intake.show) = saved }
+        var shown: [String] = []
+        intake.isEnabled = { true }
+        intake.notifyOff = {}
+        intake.show = { shown.append($0.lastPathComponent) }
+        intake.ready()
+        let frecency = FrecencyStore(defaults: scratchDefaults("view-frecency"), storageKey: "k")
+        let dispatcher = FileActionDispatcher(performer: LiveFileActionPerformer(), frecency: frecency)
+        let now: TimeInterval = 1_700_000_000
+        let handled = dispatcher.run(id: FileActions.ID.view, path: file.path, now: now)
+        return (handled, frecency.boost(path: file.path, now: now), shown)
+    }
+
+    func testViewOnADocumentRecordsFrecency() throws {
+        let r = try dispatchView("a.md", Array("# a\n".utf8))
+        XCTAssertTrue(r.handled)
+        XCTAssertEqual(r.shown, ["a.md"])
+        XCTAssertGreaterThan(r.boost, 0, "a document opened: recorded")
+    }
+
+    func testViewOnANonDocumentRecordsNoFrecency() throws {
+        let r = try dispatchView("b.png", [0x89, 0x50])
+        XCTAssertFalse(r.handled, "nothing ran: not handled")
+        XCTAssertEqual(r.shown, [])
+        XCTAssertEqual(r.boost, 0, "a non-document: nothing recorded")
     }
 }
 

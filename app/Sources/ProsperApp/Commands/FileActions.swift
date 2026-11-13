@@ -56,7 +56,8 @@ enum FileActions {
 
     /// Runs a built-in action against `path`. Returns true if it was a recognized
     /// built-in (so the caller can record frecency / dismiss). Unknown / missing
-    /// path → false (caller routes custom actions elsewhere).
+    /// path → false (caller routes custom actions elsewhere), and so does file.view on a path
+    /// that is not a text document (nothing ran).
     @discardableResult
     @MainActor
     static func perform(_ id: String, path: String) -> Bool {
@@ -73,8 +74,10 @@ enum FileActions {
         case ID.quickLook:
             QuickLook.preview(path)
         case ID.view:
-            // host.files.act can name any path: only a text document reaches the viewer.
-            if TextViewerRouting.isDocument(url) { TextViewerIntake.shared.receive(url) }
+            // host.files.act can name any path: only a text document reaches the viewer; anything
+            // else is not handled, so the dispatcher records no frecency for it (#1130).
+            guard TextViewerRouting.isDocument(url) else { return false }
+            TextViewerIntake.shared.receive(url)
         case ID.copyPath:
             let pb = Pasteboard.general
             pb.clearContents()

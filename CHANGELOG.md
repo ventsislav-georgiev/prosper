@@ -641,6 +641,9 @@ tag from the now-released section and put it on the new top draft.
   an anonymous publisher id instead, and packages already published keep installing. This is a
   change in the Marketplace service and takes effect when the service is updated; no app update is
   needed. (#1138)
+- Closing a text viewer window no longer leaves its file open in the background, and "Open in
+  Prosper" on a file that is not a text document no longer moves that file up in search
+  results. (#1130)
 
 ## v2.174.0
 
