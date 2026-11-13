@@ -208,8 +208,8 @@ final class RunnerPanel {
         let signpost = Perf.signposter.beginInterval("palette.present")
         CATransaction.setCompletionBlock { Perf.signposter.endInterval("palette.present", signpost) }
         // #1113 (QA 844): a switch press presents the key runner, Prosper frontmost only because the runner
-        // activated it: the target stays. Any other present takes the app in front, Prosper included.
-        if !WindowToggle.state(panel).focused { previousApp = WindowToggle.frontmost() }
+        // activated it: the target stays. Any other present asks WindowToggle's paste rule (#1121).
+        if !WindowToggle.state(panel).focused { previousApp = WindowToggle.pasteTarget() }
         shortcutPrefix = nil
         model.reset()
         model.mode = mode
@@ -224,9 +224,11 @@ final class RunnerPanel {
         onScreen(self)
     }
 
-    /// #1102: a hotkey press follows WindowToggle's rule: closed opens in `mode` with `prefill`, open
-    /// but not key comes back with its query and mode kept (a Translate press on an open plain runner
-    /// too), key closes. The status menu (`closing` false) opens or focuses and never closes.
+    /// #1102: WindowToggle's rule, for the runner hotkeys (`.universal`), the status menu and
+    /// toggle(prefix:) on a runner that counts as that shortcut's own: closed opens in `mode` with `prefill`,
+    /// open but not key comes back with its query and mode as they are, key closes. The status menu
+    /// (`closing` false) opens or focuses and never closes. Translate (⌥L) comes here only through
+    /// toggle(prefix: "l "): any other runner, in front or behind another app, is switched to Translate there.
     func toggle(mode: RunnerMode = .universal, prefill: String = "", closing: Bool = true) {
         WindowToggle.apply(panel, open: { present(mode: mode, prefill: prefill) }, focus: { focus() },
                            close: { closing ? dismiss() : focus() })
@@ -237,10 +239,13 @@ final class RunnerPanel {
     /// prefix leaves, WindowToggle's rule holds (typing after the prefix included); presented any other
     /// way, on another prefix, or left by the user (mode changed, prefix deleted), the press opens the
     /// runner on this prefix and never closes it. The input alone cannot tell: "qd Dev" starts
-    /// "qd Devices", which another shortcut may have prefilled.
+    /// "qd Devices", which another shortcut may have prefilled. #1121 (QA 847): one exception, a runner on
+    /// no shortcut's prefix that the user put into this prefix's locked mode (typed "l " or "t ") is this
+    /// shortcut's when the prefix leaves nothing to type ("l ", "g "; not "g x").
     func toggle(prefix: String) {
         let (mode, prefill) = ModeTrigger.resolve(prefix) ?? (mode: .universal, stripped: prefix)
-        if shortcutPrefix == prefix, model.mode == mode, model.input.hasPrefix(prefill) {
+        let own = shortcutPrefix == prefix || (shortcutPrefix == nil && mode != .universal && prefill.isEmpty)
+        if own, model.mode == mode, model.input.hasPrefix(prefill) {
             toggle(mode: mode, prefill: prefill)
         } else {
             present(mode: mode, prefill: prefill)
@@ -252,9 +257,9 @@ final class RunnerPanel {
     private(set) var shortcutPrefix: String?
 
     /// #1102: back in front and key, the query kept. The paste and menu-command target follows the
-    /// app the user went to meanwhile (never Prosper itself).
+    /// app or Prosper window the user went to meanwhile (WindowToggle.pasteTarget, #1121).
     func focus() {
-        previousApp = WindowToggle.pasteTarget(kept: previousApp)
+        previousApp = WindowToggle.pasteTarget()
         onScreen(self)
     }
 

@@ -34,10 +34,40 @@ enum WindowToggle {
     /// The frontmost app, a seam (#1113): a test hands the panels a fake one.
     @MainActor static var frontmost: () -> NSRunningApplication? = { NSWorkspace.shared.frontmostApplication }
 
-    /// #1102: a panel brought back by its hotkey pastes into the app the user went to meanwhile, never
-    /// into Prosper itself; with Prosper (or nothing) frontmost the old target stays.
-    @MainActor static func pasteTarget(kept: NSRunningApplication?) -> NSRunningApplication? {
-        guard let app = frontmost(), app.processIdentifier != getpid() else { return kept }
-        return app
+    /// The key window, a seam (#1121): a test cannot make a window key.
+    @MainActor static var keyWindow: () -> NSWindow? = { NSApplication.shared.keyWindow }
+
+    /// #1121: what the last pasteTarget() named, shared by the runner and Clipboard History. Read only while
+    /// Prosper is in front with no own window key; dropped when Prosper resigns active (r2). Internal for tests.
+    @MainActor static var openedOver: NSRunningApplication?
+
+    /// #1102/#1121: the one rule for which app a paste from the runner or Clipboard History goes to, asked when
+    /// the panel opens or comes back by its hotkey (main queue, before the panel activates Prosper). Another app
+    /// in front: that app. Prosper in front with one of its own windows key (Settings, Agent Sessions; not a
+    /// non-activating panel): Prosper, the paste lands in that window. Otherwise Prosper is in front only because
+    /// a panel put it there, or was just closed, or nothing is: the app the last answer named, none if it quit.
+    @MainActor static func pasteTarget() -> NSRunningApplication? {
+        observeResign()
+        if let app = frontmost(), app.processIdentifier != getpid()
+            || keyWindow().map({ !$0.styleMask.contains(.nonactivatingPanel) }) == true {
+            openedOver = app
+            return app
+        }
+        return openedOver?.isTerminated == false ? openedOver : nil
+    }
+
+    /// #1121 r2: the remembered app holds only while Prosper has stayed active since the answer that named it;
+    /// once Prosper resigns, another app is in front and the next answer names that one.
+    @MainActor static func prosperResignedActive() { openedOver = nil }
+
+    @MainActor private static var resignObserver: NSObjectProtocol?
+
+    /// Installed by the first pasteTarget(), the only writer of openedOver. queue .main runs the block on the
+    /// main thread, so assumeIsolated holds (the block itself is not main-actor isolated).
+    @MainActor private static func observeResign() {
+        guard resignObserver == nil else { return }
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { WindowToggle.prosperResignedActive() } }
     }
 }

@@ -107,7 +107,7 @@ final class ClipboardPanel {
     // the app's lifetime (lazily created, never released), so deinit never fires.
 
     func present() {
-        previousApp = WindowToggle.frontmost()   // Prosper included: a paste into its own window lands there
+        previousApp = WindowToggle.pasteTarget()   // #1121: over the runner, where the runner would paste
         model.reset(selecting: store.historyRows.first?.id)
         isProgrammaticMove = true
         positionRelativeToRunner()
@@ -122,10 +122,10 @@ final class ClipboardPanel {
         WindowToggle.apply(panel, open: { present() }, focus: { focus() }, close: { closing ? dismiss() : focus() })
     }
 
-    /// #1102: back in front and key, the search kept. The paste target follows the app the user
-    /// went to meanwhile (never Prosper itself).
+    /// #1102: back in front and key, the search kept. The paste target follows the app or Prosper
+    /// window the user went to meanwhile (WindowToggle.pasteTarget, #1121).
     func focus() {
-        previousApp = WindowToggle.pasteTarget(kept: previousApp)
+        previousApp = WindowToggle.pasteTarget()
         onScreen(self)
     }
 

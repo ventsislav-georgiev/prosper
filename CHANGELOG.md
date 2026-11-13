@@ -563,11 +563,11 @@ tag from the now-released section and put it on the new top draft.
   back instead of closing. If one shortcut's prefix starts another's ("qd Dev" and "qd Devices"),
   the press switches between them instead of closing. If the runner was opened some other way (the
   main hotkey, the menu bar item), a shortcut press switches it to that shortcut's prefix (#1113).
-- **Shortcuts**: Translate (⌥L) now works like a custom shortcut on the "l " prefix. A runner that
-  ⌥L opened comes back with its text kept when it was left open behind another app, and closes when
-  it has focus. Any other runner (one showing something else, or one you put into Translate yourself
-  by typing "l "), in front or behind another app, is switched to a fresh Translate and what it
-  showed is not kept (#1113).
+- **Shortcuts**: Translate (⌥L) now works like a custom shortcut on the "l " prefix. A runner in
+  Translate, opened by ⌥L or put there by typing "l ", comes back with its text kept when it was
+  left open behind another app, and closes when it has focus. A runner showing something else, in
+  front or behind another app, is switched to a fresh Translate and what it showed is not kept. The
+  same holds for any other shortcut whose prefix only switches the mode, such as "g " (#1113, #1121).
 - **Shortcuts**: a shortcut for an extension command that opens a window (such as Base64 or Add
   Quicklink) now works like the other window shortcuts. If that window is open but you clicked away
   from it, the shortcut brings it back with what you typed still there, instead of starting a fresh
@@ -667,6 +667,13 @@ tag from the now-released section and put it on the new top draft.
   (#1131)
 - Hardening: an extension download that holds a folder Prosper cannot read is now refused instead of
   installed unchecked, and a GitHub address with "." or ".." parts is not accepted. (#1131)
+- **Runner and Clipboard History**: a paste goes where you were when you opened the panel. Opened
+  (or brought back with its shortcut) while you were in a Prosper window such as Agent Sessions or
+  Settings, the paste lands in that window. Opened while Prosper is in front only because the runner
+  or Clipboard History put it there (Clipboard History opened over the runner, or the runner opened
+  again right after its shortcut closed it), the paste goes to the app you opened the runner from,
+  as long as you have not switched to another app since. If that app has quit, nothing is pasted
+  into another app and the text stays on the clipboard (#1121).
 
 ## v2.174.0
 

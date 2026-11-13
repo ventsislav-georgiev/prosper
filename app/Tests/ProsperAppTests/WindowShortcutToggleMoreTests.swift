@@ -52,11 +52,44 @@ final class WindowShortcutToggleMoreTests: XCTestCase {
     /// Never activated or asked anything but its pid: an app the user went to.
     private final class OtherApp: NSRunningApplication, @unchecked Sendable {
         override var processIdentifier: pid_t { 4242 }
+        override var isTerminated: Bool { false }   // #1121: a kept target that quit is dropped
     }
 
+    /// Fakes the frontmost app and the key window (#1121: nothing key unless a row says so) and starts with
+    /// no remembered target; all three are restored at teardown.
     private func fakeFrontmost() {
-        nonisolated(unsafe) let live = WindowToggle.frontmost
-        addTeardownBlock { @MainActor in WindowToggle.frontmost = live }
+        nonisolated(unsafe) let live = (WindowToggle.frontmost, WindowToggle.keyWindow, WindowToggle.openedOver)
+        addTeardownBlock { @MainActor in
+            (WindowToggle.frontmost, WindowToggle.keyWindow, WindowToggle.openedOver) = live
+        }
+        WindowToggle.keyWindow = { nil }
+        WindowToggle.openedOver = nil
+    }
+
+    /// #1121: an app with a fake bundle id that a row can quit. Never activated or asked anything else.
+    private final class FakeApp: NSRunningApplication, @unchecked Sendable {
+        let id: String
+        var quit = false
+        init(_ id: String) { self.id = id; super.init() }
+        override var bundleIdentifier: String? { id }
+        override var processIdentifier: pid_t { 4243 }
+        override var isTerminated: Bool { quit }
+    }
+
+    /// The paste target as a row names it: a fake bundle id, "Prosper window" or "none".
+    private func named(_ app: NSRunningApplication?) -> String {
+        guard let app else { return "none" }
+        return app.processIdentifier == getpid() ? "Prosper window" : app.bundleIdentifier ?? "?"
+    }
+
+    /// A Clipboard History whose on and off screen are recorders; never on screen.
+    private func quietClipboard() -> ClipboardPanel {
+        let cp = ClipboardPanel(store: ClipboardStore(dir: tempDir()))
+        let p = cp.panel
+        addTeardownBlock { MainActor.assumeIsolated { p.contentView = NSView() } }
+        cp.onScreen = { _ in }
+        cp.offScreen = { _ in }
+        return cp
     }
 
     // MARK: - Calendar popup (point 1)
@@ -281,9 +314,11 @@ final class WindowShortcutToggleMoreTests: XCTestCase {
         fakeFrontmost()
         stubState()
         let (rp, _, _) = countedRunner()
+        let settings = ToggleWindowFake.window()
         WindowToggle.frontmost = { NSRunningApplication.current }
+        WindowToggle.keyWindow = { settings }
         rp.present()
-        XCTAssertEqual(rp.previousApp?.processIdentifier, getpid(), "closed, Prosper in front: Prosper")
+        XCTAssertEqual(rp.previousApp?.processIdentifier, getpid(), "closed, a Prosper window key: Prosper")
         let other = OtherApp()
         WindowToggle.frontmost = { other }
         rp.toggle(prefix: ":")
@@ -304,9 +339,278 @@ final class WindowShortcutToggleMoreTests: XCTestCase {
         WindowToggle.frontmost = { other }
         cp.present()
         XCTAssertTrue(cp.previousApp === other, "opened from another app: that app")
+        let settings = ToggleWindowFake.window()
         WindowToggle.frontmost = { NSRunningApplication.current }
+        WindowToggle.keyWindow = { settings }
         cp.present()
-        XCTAssertEqual(cp.previousApp?.processIdentifier, getpid(), "Prosper in front: Prosper")
+        XCTAssertEqual(cp.previousApp?.processIdentifier, getpid(), "a Prosper window key: Prosper")
+    }
+
+    // MARK: - #1121: which app a paste goes to when Prosper itself is in front
+
+    func testPasteTargetOpenedFromAnotherApp() {
+        fakeFrontmost()
+        stubState()
+        let (rp, _, _) = countedRunner()
+        let cp = quietClipboard()
+        let editor = FakeApp("com.example.editor")
+        WindowToggle.frontmost = { editor }
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(named(rp.previousApp), "com.example.editor")
+        cp.toggle(closing: true)
+        XCTAssertEqual(named(cp.previousApp), "com.example.editor")
+    }
+
+    func testPasteTargetOpenedFromAProsperWindow() {
+        fakeFrontmost()
+        stubState()
+        let (rp, _, _) = countedRunner()
+        let cp = quietClipboard()
+        WindowToggle.openedOver = FakeApp("com.example.editor")   // an earlier panel's app must not win
+        let sessions = ToggleWindowFake.window()
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        WindowToggle.keyWindow = { sessions }
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(named(rp.previousApp), "Prosper window", "the paste lands in the window the user was in")
+        cp.toggle(closing: true)
+        XCTAssertEqual(named(cp.previousApp), "Prosper window")
+    }
+
+    /// A switch press on the key runner keeps its target even with another app in front (1113 round 3).
+    func testPasteTargetSwitchPressKeepsTheTarget() {
+        fakeFrontmost()
+        stubState()
+        let (rp, _, _) = countedRunner()
+        WindowToggle.frontmost = { FakeApp("com.example.editor") }
+        rp.toggle(prefix: ":")
+        XCTAssertEqual(named(rp.previousApp), "com.example.editor")
+        set(rp.panel, shown: true, focused: true)
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        WindowToggle.keyWindow = { rp.panel }
+        rp.toggle(prefix: "g ")
+        XCTAssertEqual(named(rp.previousApp), "com.example.editor", "Prosper in front because of the runner")
+        WindowToggle.frontmost = { FakeApp("com.example.mail") }
+        rp.toggle(prefix: ":")
+        XCTAssertEqual(named(rp.previousApp), "com.example.editor", "a key runner over another app: kept too")
+    }
+
+    func testPasteTargetHotkeyBackAfterTheUserWentToAnotherApp() {
+        fakeFrontmost()
+        stubState()
+        let (rp, on, _) = countedRunner()
+        let cp = quietClipboard()
+        WindowToggle.frontmost = { FakeApp("com.example.editor") }
+        rp.toggle(mode: .universal, closing: true)
+        cp.toggle(closing: true)
+        WindowToggle.frontmost = { FakeApp("com.example.mail") }
+        set(rp.panel, shown: true, focused: false)
+        set(cp.panel, shown: true, focused: false)
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(on(), 2, "shown, not key: the hotkey focuses")
+        XCTAssertEqual(named(rp.previousApp), "com.example.mail")
+        cp.toggle(closing: true)
+        XCTAssertEqual(named(cp.previousApp), "com.example.mail")
+    }
+
+    /// Point a: the runner left open, the user clicked into Agent Sessions, then the hotkey.
+    func testPasteTargetHotkeyBackAfterTheUserWentToAProsperWindow() {
+        fakeFrontmost()
+        stubState()
+        let (rp, on, _) = countedRunner()
+        let cp = quietClipboard()
+        WindowToggle.frontmost = { FakeApp("com.example.editor") }
+        rp.toggle(mode: .universal, closing: true)
+        cp.toggle(closing: true)
+        let sessions = ToggleWindowFake.window()
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        WindowToggle.keyWindow = { sessions }
+        set(rp.panel, shown: true, focused: false)
+        set(cp.panel, shown: true, focused: false)
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(on(), 2, "shown, not key: the hotkey focuses")
+        XCTAssertEqual(named(rp.previousApp), "Prosper window")
+        cp.toggle(closing: true)
+        XCTAssertEqual(named(cp.previousApp), "Prosper window")
+    }
+
+    /// Point b: the clipboard hotkey pressed over the runner (no runner row opens Clipboard History).
+    func testPasteTargetClipboardOpenedFromTheRunner() {
+        fakeFrontmost()
+        stubState()
+        let (rp, _, _) = countedRunner()
+        let cp = quietClipboard()
+        WindowToggle.frontmost = { FakeApp("com.example.editor") }
+        rp.toggle(mode: .universal, closing: true)
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        WindowToggle.keyWindow = { rp.panel }
+        cp.toggle(closing: true)
+        XCTAssertEqual(named(cp.previousApp), "com.example.editor", "the runner key: where the runner would paste")
+        // An empty runner closes when it resigns key: nothing key, still the runner's app.
+        WindowToggle.keyWindow = { nil }
+        cp.present()
+        XCTAssertEqual(named(cp.previousApp), "com.example.editor", "the runner gone, nothing key")
+
+        // A runner opened over a Prosper window hands that window over.
+        let settings = ToggleWindowFake.window()
+        WindowToggle.keyWindow = { settings }
+        rp.present()
+        XCTAssertEqual(named(rp.previousApp), "Prosper window")
+        WindowToggle.keyWindow = { rp.panel }
+        cp.present()
+        XCTAssertEqual(named(cp.previousApp), "Prosper window")
+    }
+
+    /// Point c.
+    func testPasteTargetKeptAppQuit() {
+        fakeFrontmost()
+        stubState()
+        let (rp, _, _) = countedRunner()
+        let cp = quietClipboard()
+        let editor = FakeApp("com.example.editor")
+        WindowToggle.frontmost = { editor }
+        rp.present()
+        XCTAssertEqual(named(rp.previousApp), "com.example.editor")
+        editor.quit = true
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        rp.focus()
+        XCTAssertEqual(named(rp.previousApp), "none", "the kept app quit, Prosper in front because of a panel")
+        cp.present()
+        XCTAssertEqual(named(cp.previousApp), "none")
+        WindowToggle.frontmost = { nil }
+        rp.focus()
+        XCTAssertEqual(named(rp.previousApp), "none", "nothing in front")
+        WindowToggle.frontmost = { FakeApp("com.example.mail") }
+        rp.focus()
+        XCTAssertEqual(named(rp.previousApp), "com.example.mail", "another app in front: that app")
+    }
+
+    /// Point d: the hotkey closes the key runner, dismiss() only orders it out, so Prosper stays in front
+    /// with nothing key until another app comes forward; a press then opens a fresh runner.
+    func testPasteTargetRePressRightAfterAHotkeyClose() {
+        fakeFrontmost()
+        stubState()
+        let (rp, on, off) = countedRunner()
+        let cp = quietClipboard()
+        WindowToggle.frontmost = { FakeApp("com.example.editor") }
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(on(), 1)
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        WindowToggle.keyWindow = { rp.panel }
+        set(rp.panel, shown: true, focused: true)
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(off(), 1, "key: the hotkey closes")
+        WindowToggle.keyWindow = { nil }
+        set(rp.panel, shown: false, focused: false)
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(on(), 2, "closed: the re-press opens")
+        XCTAssertEqual(named(rp.previousApp), "com.example.editor")
+        cp.toggle(closing: true)
+        XCTAssertEqual(named(cp.previousApp), "com.example.editor", "Clipboard History in the same moment")
+    }
+
+    // MARK: - #1121 round 2: the remembered app holds only while Prosper stayed active
+
+    /// Prosper resigned since the runner was opened over the editor: a Prosper window closed (nothing key),
+    /// another non-activating Prosper panel key, or nothing in front all name no app.
+    func testPasteTargetDroppedOnceProsperResigned() {
+        fakeFrontmost()
+        stubState()
+        let (rp, _, _) = countedRunner()
+        let cp = quietClipboard()
+        WindowToggle.frontmost = { FakeApp("com.example.editor") }
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(named(rp.previousApp), "com.example.editor")
+        WindowToggle.prosperResignedActive()
+
+        set(rp.panel, shown: true, focused: false)
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(named(rp.previousApp), "none", "Prosper in front, nothing key")
+        cp.toggle(closing: true)
+        XCTAssertEqual(named(cp.previousApp), "none", "Clipboard History the same")
+
+        let island = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        WindowToggle.keyWindow = { island }
+        rp.focus()
+        XCTAssertEqual(named(rp.previousApp), "none", "another non-activating Prosper panel key")
+
+        WindowToggle.keyWindow = { nil }
+        WindowToggle.frontmost = { nil }
+        rp.focus()
+        XCTAssertEqual(named(rp.previousApp), "none", "nothing in front")
+
+        // A new answer over another app names it, and holds while Prosper stays active.
+        WindowToggle.frontmost = { FakeApp("com.example.mail") }
+        rp.focus()
+        XCTAssertEqual(named(rp.previousApp), "com.example.mail")
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        cp.focus()
+        XCTAssertEqual(named(cp.previousApp), "com.example.mail", "no resign since: still the mail app")
+    }
+
+    /// The real observer: a decision installs it; the resign notification drops the remembered app. Posted with
+    /// no object, so only observers of every sender see it; nothing is activated or ordered.
+    func testPasteTargetResignNotificationDropsTheRememberedApp() {
+        fakeFrontmost()
+        stubState()
+        let (rp, _, _) = countedRunner()
+        WindowToggle.frontmost = { FakeApp("com.example.editor") }
+        rp.present()
+        XCTAssertEqual(named(WindowToggle.openedOver), "com.example.editor")
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+        // The block runs on the main queue; posted on main it has normally run already. Poll, never a fixed wait.
+        let deadline = Date().addingTimeInterval(5)
+        while WindowToggle.openedOver != nil, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertEqual(named(WindowToggle.openedOver), "none", "the resign notification drops it")
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        rp.focus()
+        XCTAssertEqual(named(rp.previousApp), "none")
+    }
+
+    // MARK: - #1121 rider: a mode reached by typing its prefix (QA 847 INFO-1)
+
+    /// "g " is the built-in stand-in for Translate's "l " (no registry in a test): the user typed it into a
+    /// runner the main hotkey opened, so no shortcut presented it.
+    func testTypedModePrefixCountsAsTheShortcutsOwn() throws {
+        stubState()
+        let (rp, on, off) = countedRunner()
+        let agent = try XCTUnwrap(ModeTrigger.resolve("g ")).mode
+        rp.toggle(mode: .universal, closing: true)
+        XCTAssertEqual(on(), 1)
+        rp.model.input = "g "
+        rp.model.inputChanged()
+        XCTAssertEqual(rp.model.mode, agent, "typing the prefix enters its mode")
+        XCTAssertTrue(rp.shortcutPrefix == nil, "no shortcut presented it")
+        rp.model.input = "fix the build"
+
+        set(rp.panel, shown: true, focused: false)
+        rp.toggle(prefix: "g ")
+        XCTAssertEqual(on(), 2, "behind another app: the press brings it back")
+        XCTAssertEqual(rp.model.input, "fix the build", "with the typed text")
+        XCTAssertEqual(rp.model.mode, agent)
+
+        set(rp.panel, shown: true, focused: true)
+        rp.toggle(prefix: "g ")
+        XCTAssertEqual(off(), 1, "in front: the press closes")
+        XCTAssertEqual(on(), 2)
+    }
+
+    /// A prefix that leaves text stays another shortcut's (QA 844 F2): typed "g xyz", then "g x" switches.
+    func testTypedModeWithAPrefixThatLeavesTextSwitches() {
+        stubState()
+        let (rp, on, off) = countedRunner()
+        rp.toggle(mode: .universal, closing: true)
+        rp.model.input = "g xyz"
+        rp.model.inputChanged()
+        XCTAssertEqual(rp.model.input, "xyz")
+        set(rp.panel, shown: true, focused: true)
+        rp.toggle(prefix: "g x")
+        XCTAssertEqual(off(), 0, "no close")
+        XCTAssertEqual(on(), 2, "it switches")
+        XCTAssertEqual(rp.model.input, "x", "fresh, on the shortcut's prefill")
     }
 
     // MARK: - The hotkey hookups (point 5)
