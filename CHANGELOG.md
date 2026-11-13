@@ -594,17 +594,20 @@ tag from the now-released section and put it on the new top draft.
   corrupted text with accented letters. Lua now ignores the process locale for text case, character
   classes and numbers, for third-party extensions too. (#1099)
 - Safety fix: Always allow permission prompts now answers only in a session where dch reports a
-  running Claude Code. A session running anything else (a shell, a script, another agent, a file
-  being printed) that happens to show text shaped like a Claude Code permission prompt is never
-  typed into; it keeps its card and its Needs input notification, as with the setting off. The check
+  running Claude Code. A session where dch finds none (a shell, a script, another agent, a file
+  being printed) that happens to show text shaped like a Claude Code permission prompt is no longer
+  answered; it keeps its card and its Needs input notification, as with the setting off. The check
   is made again right before the key is sent, so a session whose Claude Code has just exited is not
-  answered either. A Claude Code session that dch cannot name as one (two Claude Codes started side
-  by side in one session, or a dch older than 1.30) is left to you the same way. (#935)
+  answered either. One case is still answered: dch counts a Claude Code you suspended with Ctrl-Z as
+  running, so such a text in the shell in front of it gets the key. A Claude Code session that dch
+  cannot name as one is left to you the same way: two Claude Codes started side by side in one
+  session, a Claude Code that does not run under the session itself (inside ssh, tmux or a
+  container), one whose transcript file is not found, or a dch older than 1.30. (#935)
 - Agent Sessions and the island: the age on a session row no longer counts seconds. It reads "now"
   under a minute, then 1m, 2h, 3d; a working session shows no age (its state already says Working),
   and VoiceOver reads "just now". (#1114)
-- Agent Sessions and the island: a History record with a broken far-future time no longer crashes
-  Prosper when its age is drawn. (#1114)
+- Agent Sessions and the island: a session or a History record with a broken far-future time no
+  longer crashes Prosper when its age is drawn. (#1114)
 - Default theme: the indigo accent of the Neon and Amber tints is very slightly brighter, so its
   text keeps enough contrast on highlighted rows. (#1122)
 
