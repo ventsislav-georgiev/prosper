@@ -61,26 +61,15 @@
 			</array>
 		</dict>
 	</array>
-	<!-- #1106 Text viewer: Prosper is offered in Finder's Open With menu for
-	     Markdown and plain text, and does not ask to be the default: an Alternate
-	     claim loses to an app that ranks Default or Owner, and to a default the user
-	     chose. Not proven for a Mac where no app ranks higher for the type (TextEdit
-	     claims plain text with rank None, Xcode claims Markdown as Alternate): QA 854.
+	<!-- #1106/#1132 Text viewer: Prosper claims plain text only, as Alternate:
+	     TextEdit claims plain text with no rank key (Default), so the default app
+	     does not change; Markdown is plain text to the system, so Prosper is
+	     offered for it without claiming the type next to Xcode (Alternate). No
+	     imported type: CoreTypes already declares Markdown, and routing inside
+	     Prosper goes by file name. QA 854, QA 856.
 	     The role becomes Editor when the built-in editor lands (#1108). -->
 	<key>CFBundleDocumentTypes</key>
 	<array>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>Markdown document</string>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>LSHandlerRank</key>
-			<string>Alternate</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>net.daringfireball.markdown</string>
-			</array>
-		</dict>
 		<dict>
 			<key>CFBundleTypeName</key>
 			<string>Plain text document</string>
@@ -92,35 +81,6 @@
 			<array>
 				<string>public.plain-text</string>
 			</array>
-		</dict>
-	</array>
-	<!-- Imported, never exported: Prosper does not own the Markdown type, and a
-	     system or other-app declaration wins over this one. -->
-	<key>UTImportedTypeDeclarations</key>
-	<array>
-		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>net.daringfireball.markdown</string>
-			<key>UTTypeDescription</key>
-			<string>Markdown document</string>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.plain-text</string>
-			</array>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>md</string>
-					<string>markdown</string>
-					<string>mdown</string>
-					<string>mkd</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>text/markdown</string>
-				</array>
-			</dict>
 		</dict>
 	</array>
 	<key>NSHighResolutionCapable</key>

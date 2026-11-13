@@ -1,47 +1,62 @@
 import XCTest
 @testable import ProsperApp
 
-/// #1106 (design #1105 D2): scripts/Info.plist, read from the source tree. Prosper is offered in
-/// Finder's Open With menu for Markdown and plain text and is never the default: exactly two
-/// document types, both Alternate; the Markdown type imported, never exported; the URL types
-/// (default-browser picker, prosper://) unchanged. What Finder then lists is checked by a person
-/// in the beta; this file is the gate offscreen.
+/// #1106 (design #1105 D2), #1132: scripts/Info.plist, read from the source tree. Prosper claims
+/// plain text only, as an Alternate Viewer, and is never the default: TextEdit's plain-text claim has
+/// no rank key (Default). Markdown is not claimed by name (Xcode claims it as Alternate, a tie);
+/// Finder offers Prosper for .md and .markdown because the system Markdown type conforms to plain
+/// text. No type is imported or exported. The URL types (default-browser picker, prosper://) are
+/// unchanged. What Finder then lists is checked by a person in the beta; this file is the gate offscreen.
 final class InfoPlistDocumentTypesTests: XCTestCase {
 
-    private func plist() throws -> [String: Any] {
-        let url = URL(fileURLWithPath: #filePath)   // …/app/Tests/ProsperAppTests/<this file>
+    private var plistURL: URL {
+        URL(fileURLWithPath: #filePath)   // …/app/Tests/ProsperAppTests/<this file>
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("scripts/Info.plist")
-        let data = try Data(contentsOf: url)
+    }
+
+    private func plist() throws -> [String: Any] {
+        let data = try Data(contentsOf: plistURL)
         return try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
     }
 
-    func testTwoAlternateViewerDocumentTypes() throws {
-        let types = try XCTUnwrap(try plist()["CFBundleDocumentTypes"] as? [[String: Any]])
-        XCTAssertEqual(types.count, 2)
-        XCTAssertEqual(types.map { $0["LSItemContentTypes"] as? [String] ?? [] },
-                       [["net.daringfireball.markdown"], ["public.plain-text"]])
-        XCTAssertEqual(types.map { $0["LSHandlerRank"] as? String }, ["Alternate", "Alternate"],
-                       "Owner or Default would take the user's default app")
-        XCTAssertEqual(types.map { $0["CFBundleTypeRole"] as? String }, ["Viewer", "Viewer"])
-        XCTAssertEqual(types.map { $0["CFBundleTypeName"] as? String }, ["Markdown document", "Plain text document"])
+    private func documentTypes() throws -> [[String: Any]] {
+        try XCTUnwrap(try plist()["CFBundleDocumentTypes"] as? [[String: Any]])
+    }
+
+    func testOnlyPlainTextIsClaimedAsAlternateViewer() throws {
+        let types = try documentTypes()
+        XCTAssertEqual(types.map { $0["LSItemContentTypes"] as? [String] ?? [] }, [["public.plain-text"]])
+        XCTAssertEqual(types.map { $0["LSHandlerRank"] as? String }, ["Alternate"],
+                       "Owner or Default, or no rank key (counts as Default), would take the user's default app")
+        XCTAssertEqual(types.map { $0["CFBundleTypeRole"] as? String }, ["Viewer"])
+        XCTAssertEqual(types.map { $0["CFBundleTypeName"] as? String }, ["Plain text document"])
         XCTAssertEqual(Set(types.flatMap(\.keys)),
                        ["CFBundleTypeName", "CFBundleTypeRole", "LSHandlerRank", "LSItemContentTypes"],
                        "no extension or OSType claims beside the content types")
     }
 
-    func testMarkdownTypeIsImportedNotExported() throws {
+    func testNoDocumentTypeNamesMarkdown() throws {
+        let types = try documentTypes()
+        let claimed = types.flatMap { $0["LSItemContentTypes"] as? [String] ?? [] }
+        XCTAssertFalse(claimed.contains("net.daringfireball.markdown"), "\(claimed)")
+        XCTAssertFalse(claimed.contains(TextViewerRouting.markdownTypeID), "\(claimed)")
+        XCTAssertFalse(types.contains { ($0["CFBundleTypeName"] as? String)?.localizedCaseInsensitiveContains("markdown") == true })
+    }
+
+    func testNoTypeIsImportedOrExported() throws {
         let p = try plist()
         XCTAssertTrue(p["UTExportedTypeDeclarations"] == nil, "Prosper does not own a type")
-        let imported = try XCTUnwrap(p["UTImportedTypeDeclarations"] as? [[String: Any]])
-        XCTAssertEqual(imported.count, 1)
-        let md = try XCTUnwrap(imported.first)
-        XCTAssertEqual(md["UTTypeIdentifier"] as? String, TextViewerRouting.markdownTypeID)
-        XCTAssertEqual(md["UTTypeConformsTo"] as? [String], ["public.plain-text"])
-        let tags = try XCTUnwrap(md["UTTypeTagSpecification"] as? [String: Any])
-        XCTAssertEqual(tags["public.filename-extension"] as? [String], ["md", "markdown", "mdown", "mkd"])
-        XCTAssertEqual(tags["public.mime-type"] as? [String], ["text/markdown"])
-        XCTAssertEqual(Set(tags["public.filename-extension"] as? [String] ?? []), TextViewerRouting.markdownExtensions)
+        XCTAssertTrue(p["UTImportedTypeDeclarations"] == nil, "the system declares Markdown; routing goes by file name")
+    }
+
+    func testPlistLints() throws {
+        let lint = Process()
+        lint.executableURL = URL(fileURLWithPath: "/usr/bin/plutil")
+        lint.arguments = ["-lint", "-s", plistURL.path]
+        try lint.run()
+        lint.waitUntilExit()
+        XCTAssertEqual(lint.terminationStatus, 0)
     }
 
     func testURLTypesUnchanged() throws {
