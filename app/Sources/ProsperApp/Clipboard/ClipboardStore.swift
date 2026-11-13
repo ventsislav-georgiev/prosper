@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import os
 
 /// Persistent store for clipboard history. Index records live in `index.json`;
 /// payload blobs (full text, image PNG) live as sibling files so huge clips
@@ -24,6 +25,9 @@ final class ClipboardStore: ObservableObject {
 
     nonisolated let dir: URL
     private let indexURL: URL
+    /// #1067 test seam: told each blob name readBlob opens, on the reading thread. @Sendable, so
+    /// a closure made in MainActor code is not MainActor-isolated and may run on any queue.
+    nonisolated let onBlobRead: (@Sendable (String) -> Void)?
 
     /// #617: under XCTest a fixed throwaway dir, never the operator's store: ClipboardCrypto's
     /// test key is random per process, so a stray write to `shared` would re-seal the real index.
@@ -38,11 +42,12 @@ final class ClipboardStore: ObservableObject {
     }
 
     /// `dir` is a seam: tests pass a tempDir(), never the real store.
-    init(dir base: URL = ClipboardStore.defaultDir) {
+    init(dir base: URL = ClipboardStore.defaultDir, onBlobRead: (@Sendable (String) -> Void)? = nil) {
         dir = base
         indexURL = base.appending(path: "index.json")
+        self.onBlobRead = onBlobRead
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        load()
+        if load() { sweep() }
     }
 
     // MARK: - Public API
@@ -218,7 +223,7 @@ final class ClipboardStore: ObservableObject {
     @discardableResult
     func addRemote(id: UUID, date: Date, source: String, sha256: String, _ payload: RemotePayload) -> Bool {
         guard let item = sealRemote(id: id, date: date, source: source, sha256: sha256, payload) else { return false }
-        insert(item)
+        insertRemote(item)
         return true
     }
 
@@ -230,13 +235,13 @@ final class ClipboardStore: ObservableObject {
         switch payload {
         case .text(let s):
             let blob = "\(UUID().uuidString).txt"
-            guard writeBlob(Data(s.utf8), to: blob, encrypt: true) else { return nil }
+            guard writeSealing(Data(s.utf8), to: blob) else { return nil }
             item = ClipboardItem(id: id, kind: Self.classify(s), createdAt: date, preview: Self.textPreview(s),
                                  byteCount: s.utf8.count, blobFile: blob, sourcePath: nil, fileName: nil,
                                  source: source, sha256: sha256)
         case .image(let data, let w, let h):
             let blob = "\(UUID().uuidString).png"
-            guard writeBlob(data, to: blob, encrypt: true) else { return nil }
+            guard writeSealing(data, to: blob) else { return nil }
             item = ClipboardItem(id: id, kind: .image, createdAt: date, preview: "Image \(w)×\(h)",
                                  byteCount: data.count, blobFile: blob, sourcePath: nil, fileName: nil,
                                  source: source, sha256: sha256)
@@ -249,11 +254,31 @@ final class ClipboardStore: ObservableObject {
         return item
     }
 
-    func insertRemote(_ item: ClipboardItem) { insert(item) }
+    func insertRemote(_ item: ClipboardItem) {
+        insert(item)
+        unseal(item)
+    }
 
     /// A sealed item's blob, off main, once its insert lost.
     nonisolated func removeBlob(_ item: ClipboardItem) {
         if let blob = item.blobFile { try? FileManager.default.removeItem(at: dir.appending(path: blob)) }
+        unseal(item)
+    }
+
+    /// #1067: blob names sealRemote wrote and no insertRemote or removeBlob has settled yet,
+    /// process-wide. A name is a fresh UUID, so it is unique across stores. The sweep skips them.
+    nonisolated private static let sealing = OSAllocatedUnfairLock(initialState: Set<String>())
+
+    /// writeBlob (sealed) for a phone item, its name held in `sealing` from before the file exists.
+    nonisolated private func writeSealing(_ data: Data, to name: String) -> Bool {
+        Self.sealing.withLock { _ = $0.insert(name) }
+        if writeBlob(data, to: name, encrypt: true) { return true }
+        Self.sealing.withLock { _ = $0.remove(name) }
+        return false
+    }
+
+    nonisolated private func unseal(_ item: ClipboardItem) {
+        if let blob = item.blobFile { Self.sealing.withLock { _ = $0.remove(blob) } }
     }
 
     /// An upload starts arriving; `cancel` drops its connection (whose teardown calls endReceiving).
@@ -326,15 +351,49 @@ final class ClipboardStore: ObservableObject {
         }
     }
 
-    private func load() {
-        guard let raw = try? Data(contentsOf: indexURL) else { return }
+    /// True only when index.json was read and decoded: the sweep runs only then.
+    private func load() -> Bool {
+        guard let raw = try? Data(contentsOf: indexURL) else { return false }
         // Encrypted index (current) → fall back to legacy plaintext JSON written
         // by pre-encryption builds; either way decode, then re-persist so the
         // index lands back encrypted on the next write.
         let json = ClipboardCrypto.decryptOrPlaintext(raw)
-        guard let decoded = try? JSONDecoder().decode([ClipboardItem].self, from: json) else { return }
+        guard let decoded = try? JSONDecoder().decode([ClipboardItem].self, from: json) else { return false }
         items = decoded
         sort()
+        return true
+    }
+
+    /// #1067: removes the blobs no row references, as a quit between a phone item's seal and its
+    /// insert leaves. Once, from init on main, after load() read the index. Only names directly in
+    /// `dir` of this store's own pattern, not named by any row nor held in `sealing`; lstat, so
+    /// only a regular file (never a link or a folder) unmodified for sweepMinAge; unlink, which never
+    /// follows a link.
+    private func sweep() {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
+        let keep = Set(items.compactMap(\.blobFile) + items.compactMap(\.sourcePath).map { ($0 as NSString).lastPathComponent })
+            .union(Self.sealing.withLock { $0 })
+        var removed = 0
+        for name in names where Self.isBlobName(name) && !keep.contains(name) {
+            let path = dir.appending(path: name).path
+            var st = stat()
+            // Old enough only: `sealing` is per process, so another Prosper on this folder may be mid-seal.
+            // The file's mtime is never an arithmetic operand (any value a volume returns compares safely);
+            // a clock set back puts the cutoff before the file's mtime: the file stays.
+            guard lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
+                  st.st_mtimespec.tv_sec <= time(nil) - Self.sweepMinAge, unlink(path) == 0 else { continue }
+            removed += 1
+        }
+        if removed > 0 { NSLog("prosper: clipboard sweep removed \(removed) unreferenced file(s)") }
+    }
+
+    /// Seconds an unreferenced blob must sit unmodified before the launch sweep removes it.
+    nonisolated static let sweepMinAge = 600
+
+    /// The names this store gives its blobs, and only those: "<UUID().uuidString>.txt" or ".png".
+    nonisolated static func isBlobName(_ name: String) -> Bool {
+        let ns = name as NSString, stem = ns.deletingPathExtension
+        return ["txt", "png"].contains(ns.pathExtension) && UUID(uuidString: stem)?.uuidString == stem
     }
 
     // MARK: - Encrypted blob I/O
@@ -360,6 +419,7 @@ final class ClipboardStore: ObservableObject {
     /// Reads and decrypts blob `name`, or nil if missing/unreadable. Bytes
     /// written by a pre-encryption build are returned as-is (legacy migration).
     nonisolated func readBlob(_ name: String) -> Data? {
+        onBlobRead?(name)
         guard let raw = try? Data(contentsOf: dir.appending(path: name)) else { return nil }
         return ClipboardCrypto.decryptOrPlaintext(raw)
     }

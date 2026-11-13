@@ -493,6 +493,10 @@ tag from the now-released section and put it on the new top draft.
   draft" instead of "Claude is showing a prompt".
 - Clipboard history: deleting the last row now selects the row above instead of jumping back to the
   top.
+- Clipboard sync with iPhone: the Mac now checks a clip's content itself before treating it as a
+  copy of one it already has, removes files left behind by a quit in the middle of saving a phone
+  clip when it next starts, and no longer stalls on a phone file with an extremely long or unusual
+  name.
 
 ## v2.174.0
 
