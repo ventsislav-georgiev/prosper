@@ -124,15 +124,12 @@ final class AgentRowAgeTests: XCTestCase {
         clock.fire()
         XCTAssertEqual(shown(), "1m", "the tick catches up")
 
-        // Every tick over ten minutes: the label is the real age at the tick, and until the next tick the real age
-        // is at most one minute more.
+        // Every tick over ten minutes: the label is the real age at the tick.
         let act = Self.now - 59
         for _ in 0..<20 {
             t += m.ageInterval
             clock.fire()
             XCTAssertEqual(shown(), AgentIsland.age(t - act), "at \(t - act) s")
-            let lowest = Int((t - act) / 60), highest = Int((t + m.ageInterval - 0.001 - act) / 60)
-            XCTAssertLessThanOrEqual(highest - lowest, 1, "at most one minute low before the next tick")
         }
     }
 

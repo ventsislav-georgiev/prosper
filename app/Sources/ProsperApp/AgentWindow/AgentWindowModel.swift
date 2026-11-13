@@ -49,7 +49,7 @@ enum AgentSidebar {
         let title: String
         /// nil for a History row.
         let state: AgentState?
-        /// "Needs input", "Working · 2 agents", "Ended · exit 1".
+        /// "Needs input", "Working", "Stopping…"; "Ended · exit 1" on a History row. #1115: the counts are fields.
         let detail: String
         /// "4m", "now" under a minute; "" for an unknown time and on a working row (#1114).
         let age: String
@@ -57,8 +57,40 @@ enum AgentSidebar {
         let prs: [String]
         /// Every open PR shown (the chips' fallback when they do not fit).
         var prCount = 0
+        /// #1115: live subagents and merged PRs, drawn as symbol plus number; 0 (none, or the detail is off) draws nothing.
+        var agents = 0
+        var merged = 0
         var session: AgentSession?
         var record: DchHistoryRecord?
+
+        /// #1115: the groups beside the state text, agents then merged; a count of 0 is left out.
+        var counts: [(Count, Int)] { [(Count.agents, agents), (Count.merged, merged)].filter { $0.1 > 0 } }
+        /// The counts in words for VoiceOver, the open PRs too (whether their chips or their count shows).
+        var countWords: [String] { (counts + (prCount > 0 ? [(Count.open, prCount)] : [])).map { $0.0.words($0.1) } }
+    }
+
+    /// #1115: a count drawn as an SF Symbol plus a number (they follow the theme colour and the UI scale; an
+    /// emoji does not); VoiceOver and the help read the words.
+    enum Count: CaseIterable {
+        case agents, merged, open
+
+        var symbol: String {
+            switch self {
+            case .agents: "person.2"
+            case .merged: "arrow.triangle.merge"
+            case .open: "arrow.triangle.pull"
+            }
+        }
+
+        /// "2 agents", "192 merged pull requests", "1 open pull request"; "99999+" above 99999, as drawn.
+        func words(_ n: Int) -> String {
+            let noun = switch self {
+            case .agents: "agent"
+            case .merged: "merged pull request"
+            case .open: "open pull request"
+            }
+            return "\(AgentIsland.count(n)) \(noun)\(n == 1 ? "" : "s")"
+        }
     }
 
     struct Section: Identifiable, Equatable {
@@ -101,13 +133,13 @@ enum AgentSidebar {
 
     static func row(_ s: AgentSession, details: AgentIslandRowDetails, now: TimeInterval, action: String? = nil) -> Row {
         // #829 G0: "Stopping…", "Pausing…" while a Restart or Stop runs (from the island or the window).
-        var parts = [AgentWindowControls.lock(action) ?? s.state.label]
-        if details.agents, s.agents > 0 { parts.append(s.agents == 1 ? "1 agent" : "\(AgentIsland.count(s.agents)) agents") }
-        if let merged = AgentIsland.mergedLabel(s.meta, show: details) { parts.append(merged) }
         let (chips, more) = AgentIsland.prChips(s.meta, show: details, budget: .infinity)
         let prs = chips.prefix(2).map(\.label) + (chips.count + more > 2 ? ["+\(chips.count + more - 2)"] : [])
-        return Row(id: .live(s.key), title: s.title, state: s.state, detail: parts.joined(separator: " · "),
-                   age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more, session: s)
+        // dch's agents is an unclamped Int (DchCommand.parseListJSON); merged is clamped by DchSessionMeta.count.
+        return Row(id: .live(s.key), title: s.title, state: s.state, detail: AgentWindowControls.lock(action) ?? s.state.label,
+                   age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more,
+                   agents: details.agents ? max(0, s.agents) : 0, merged: details.merged ? max(0, s.meta?.merged ?? 0) : 0,
+                   session: s)
     }
 
     static func row(_ r: DchHistoryRecord, now: TimeInterval) -> Row {
@@ -858,9 +890,12 @@ final class AgentWindowModel: ObservableObject {
         clock?.invalidate()
         clock = nil
         if v {
-            clock = Timer.scheduledTimer(withTimeInterval: ageInterval, repeats: true) { [weak self] _ in
+            let t = Timer(timeInterval: ageInterval, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refresh() }
             }
+            // R1115-1: common modes, so the ages keep ticking while a scroll or a drag is tracking.
+            RunLoop.main.add(t, forMode: .common)
+            clock = t
             refresh()
         }
         follow()

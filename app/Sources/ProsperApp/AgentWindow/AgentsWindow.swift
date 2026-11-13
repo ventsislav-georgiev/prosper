@@ -492,9 +492,10 @@ struct AgentSidebarRowView: View {
                         .foregroundStyle(row.state == nil ? Neon.textSecondary : Neon.textPrimary)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: sz(4))
-                    if !row.age.isEmpty {
+                    if !row.age.isEmpty || row.state != nil {
                         // #828: a fixed slot, so "now" -> "1m" never re-truncates the title; #829 (QA #660
-                        // note 4): the widest age the formatter returns, so "120d" fits it too.
+                        // note 4): the widest age the formatter returns, so "120d" fits it too. R1115-2: a live
+                        // row keeps it with no age (working, #1114), so working <-> idle never moves the title.
                         ZStack(alignment: .trailing) {
                             Text(AgentIsland.ageWidest).hidden()
                             Text(row.age).foregroundStyle(Neon.textSecondary)
@@ -506,7 +507,7 @@ struct AgentSidebarRowView: View {
                 // The PR chips whole, else their count, else none: never a cut-off chip.
                 ViewThatFits(in: .horizontal) {
                     detailLine(row.prs)
-                    if !row.prs.isEmpty { detailLine([row.prCount == 1 ? "1 PR" : "\(row.prCount) PRs"]) }
+                    if !row.prs.isEmpty { detailLine([], open: row.prCount) }
                     detailLine([])
                 }
             }
@@ -519,18 +520,21 @@ struct AgentSidebarRowView: View {
         .overlay(alignment: .leading) { NeonSelectionBar().opacity(selected ? 1 : 0) }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail,
-                             AgentIsland.ago(row.age)].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail] + row.countWords
+                             + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
 extension AgentSidebarRowView {
-    func detailLine(_ chips: [String]) -> some View {
+    /// #1115: the state text, the count groups (no " · ": the gap and the symbol separate them), then the PR chips,
+    /// or with `open` the open PRs' count as a blue group in their place.
+    func detailLine(_ chips: [String], open: Int = 0) -> some View {
         HStack(spacing: sz(5)) {
             Text(row.detail).font(Neon.font(10.5))
                 .foregroundStyle(row.state == .blocked ? agentStateColor(.blocked) : Neon.textSecondary)
                 .lineLimit(1)
+            AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5)
             ForEach(chips, id: \.self) { pr in
                 Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Neon.blue)
                     .padding(.horizontal, sz(4)).padding(.vertical, sz(1))
@@ -538,6 +542,31 @@ extension AgentSidebarRowView {
                     .fixedSize()
             }
             Spacer(minLength: 0)
+        }
+    }
+}
+
+/// #1115: a session's count groups (the sidebar row and the header): symbol plus number, a wider gap between groups.
+/// Each reads its words as help and to VoiceOver; the open PRs' group wears the chips' blue. Never cut (fixedSize).
+struct AgentCountGroups: View {
+    let counts: [(AgentSidebar.Count, Int)]
+    let size: CGFloat
+
+    var body: some View {
+        if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
+            HStack(spacing: sz(6)) {
+                ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
+                    HStack(spacing: sz(2)) {
+                        Image(systemName: g.0.symbol).font(Neon.font(size - 1))
+                        Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
+                    }
+                    .foregroundStyle(g.0 == .open ? Neon.blue : Neon.textSecondary)
+                    .fixedSize()
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(g.0.words(g.1))
+                    .help(g.0.words(g.1))   // after the element: a help set on an ignored child never reaches AX
+                }
+            }
         }
     }
 }
@@ -763,15 +792,22 @@ struct AgentSessionHeader: View {
                 Text(project).font(Neon.font(11, design: .monospaced)).foregroundStyle(Neon.textSecondary)
                     .lineLimit(1).truncationMode(.middle)
             }
-            let extra = [row.detail.split(separator: " · ").dropFirst().joined(separator: " · "),
-                         AgentIsland.ago(row.age) ?? ""].filter { !$0.isEmpty }
-            if !extra.isEmpty {
+            // #1115: the row's count groups from its fields (no split of the detail text), then the age in words.
+            let ago = AgentIsland.ago(row.age)
+            if !row.counts.isEmpty || ago != nil {
                 // Whole or not at all: a squeezed low-priority Text overshot the line by a
                 // fraction of a point next to the #821 todo chip.
                 AgentWidthFloor(floor: 0) {   // #1103 F1: an extra, never part of what the line must hold
                     ViewThatFits(in: .horizontal) {
-                        Text("· " + extra.joined(separator: " · ")).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
-                            .lineLimit(1)
+                        HStack(spacing: sz(6)) {
+                            Text("·").accessibilityHidden(true)
+                            AgentCountGroups(counts: row.counts, size: 11)
+                            if let ago {
+                                if !row.counts.isEmpty { Text("·").accessibilityHidden(true) }   // a count never runs into "4m ago"
+                                Text(ago)
+                            }
+                        }
+                        .font(Neon.font(11)).foregroundStyle(Neon.textSecondary).lineLimit(1)
                         Color.clear.frame(width: 0, height: 0)
                     }
                 }

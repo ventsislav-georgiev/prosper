@@ -249,13 +249,14 @@ extension AgentWindowD1Tests {
         let m = windowModel(st)
         m.setVisible(true)
         defer { m.close() }
-        XCTAssertEqual(m.rows.first?.detail, "Stopping… · 2 agents", "a running text replaces the state word")
+        XCTAssertEqual(m.rows.first?.detail, "Stopping…", "a running text replaces the state word")
+        XCTAssertEqual(m.rows.first?.agents, 2, "#1115: the count stays beside it, as a field")
         st.actions[k] = "Pausing…"
-        XCTAssertEqual(m.rows.first?.detail, "Pausing… · 2 agents", "each phase as it comes")
+        XCTAssertEqual(m.rows.first?.detail, "Pausing…", "each phase as it comes")
         st.actions[k] = "Stopped"
-        XCTAssertEqual(m.rows.first?.detail, "Working · 2 agents", "a result is not a running text: the state again")
+        XCTAssertEqual(m.rows.first?.detail, "Working", "a result is not a running text: the state again")
         st.actions[k] = AgentIsland.restartBusyText
-        XCTAssertEqual(m.rows.first?.detail, "Working · 2 agents")
+        XCTAssertEqual(m.rows.first?.detail, "Working")
         // The dir strip: hidden while empty, one line when not.
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             let saved = ThemeRuntime.scale

@@ -633,6 +633,9 @@ tag from the now-released section and put it on the new top draft.
   instead of answering as if everything resumed, and when a resume message was not sent beside a
   session dch can no longer start, the phone names that session again. "Restart all" names such a
   folder in its error too. (#951)
+- Agent Sessions: a session row now shows its agents, merged pull requests and (when the chips do
+  not fit) open pull requests as small icons with a number instead of words, and the ages keep
+  updating while you scroll. (#1115)
 
 ## v2.174.0
 
