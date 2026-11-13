@@ -22,19 +22,51 @@ final class ChatWindow {
     /// between turns (no unload/reload per prompt) — see `AgentController`.
     var isOpen: Bool { window != nil }
 
+    // Seams (#1102): the shortcut's tests build a plain offscreen window, record the present and
+    // the teardown, and load no model.
+    var build: () -> NSWindow = { ChatWindow.makeWindow() }
+    var present: (NSWindow) -> Void = { win in
+        DockPolicy.windowDidShow(win)
+        NSApp.activate(ignoringOtherApps: true)
+        win.makeKeyAndOrderFront(nil)
+        AgentController.shared.warmUp()
+    }
+    var dismissed: (NSWindow) -> Void = { win in
+        DockPolicy.windowDidHide(win)
+        AgentController.shared.chatWindowDidClose()
+    }
+
+    /// #1102: the "Open Coding Agent" hotkey follows WindowToggle's rule; a focused window closes
+    /// through `close()`, the close button's willClose teardown (a running turn defers the model
+    /// release, as on ⌘W). The menu item and the runner's `goal:` keep `show`.
+    func toggleFromShortcut() {
+        WindowToggle.apply(window, open: { show() }, focus: { show() }, close: { window?.close() })
+    }
+
     /// Open the window. If `goal` is non-nil, prefill the composer with it (the
     /// RunnerPanel `goal:` entry point) — the user still presses Send.
     func show(prefill goal: String? = nil) {
-        if let window {
-            if let goal { ChatComposerModel.shared.draft = goal }
-            DockPolicy.windowDidShow(window)
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-            AgentController.shared.warmUp()
-            return
-        }
         if let goal { ChatComposerModel.shared.draft = goal }
+        if let window { return present(window) }
+        let win = build()
+        window = win
 
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: win, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let obs = self.closeObserver { NotificationCenter.default.removeObserver(obs) }
+                self.closeObserver = nil
+                self.window = nil
+                self.dismissed(win)
+                DispatchQueue.main.async { win.contentViewController = nil }
+            }
+        }
+        present(win)
+    }
+
+    private static func makeWindow() -> NSWindow {
         let hosting = NSHostingController(rootView: Themed { ChatRootView() })
         let win = ChatClosableWindow(contentViewController: hosting)
         win.title = "Prosper Coding Agent"
@@ -60,25 +92,7 @@ final class ChatWindow {
         // Grow a restored frame back to the min so the 8-row suggestion popup always
         // has room above the field.
         win.clampToContentMinSize()
-        window = win
-
-        closeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: win, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                if let obs = self.closeObserver { NotificationCenter.default.removeObserver(obs) }
-                self.closeObserver = nil
-                self.window = nil
-                DockPolicy.windowDidHide(win)
-                DispatchQueue.main.async { win.contentViewController = nil }
-                AgentController.shared.chatWindowDidClose()
-            }
-        }
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
-        AgentController.shared.warmUp()
+        return win
     }
 }
 

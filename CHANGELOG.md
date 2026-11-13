@@ -535,6 +535,12 @@ tag from the now-released section and put it on the new top draft.
   when an extension adds, updates or removes a block at the top of the file, and such a block no
   longer reads as corrupt. Seed files are copied byte for byte, byte order mark included. A
   permission change made to a file while the confirmation sheet is open is kept by the write.
+- Shortcuts: the shortcuts for Settings, Coding Agent, Agent Sessions, Clipboard History, the
+  Command Runner and Translate now work the same way: a press opens the window or brings it back to
+  the front, and a press while you are using it closes it. A Clipboard History or runner left open
+  behind another app is no longer closed by its shortcut; it comes back with your search kept.
+- Menu bar: the Command Runner and Clipboard History items now only open or bring back their panel;
+  they no longer close it.
 
 ## v2.174.0
 

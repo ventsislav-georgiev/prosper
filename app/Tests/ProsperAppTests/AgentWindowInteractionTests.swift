@@ -1735,8 +1735,9 @@ final class AgentWindowInteractionTests: XCTestCase {
     }
 
     /// #858: the "Open Agent Sessions" hotkey handler opens AgentsWindow.shared through the
-    /// same show() as the island button and menu item; a press while open presents the same
-    /// window again; with the island's store gone it does nothing. Seams faked: never on screen.
+    /// same show() as the island button and menu item; a press on the window built but not on
+    /// screen presents the same window again (#1102: the toggle rows are in
+    /// WindowShortcutToggleTests); with the island's store gone it does nothing. Seams faked: never on screen.
     @MainActor
     func testAgentSessionsShortcutOpensTheAgentsWindowOnlyWithTheIsland() throws {
         let w = AgentsWindow.shared
@@ -1758,16 +1759,16 @@ final class AgentWindowInteractionTests: XCTestCase {
         }
         let store = c.store
         c.store = nil
-        AgentsWindow.openFromShortcut()
+        AgentsWindow.toggleFromShortcut()
         XCTAssertEqual(presented, 0, "island off: the press is a no-op")
         XCTAssertFalse(w.isOpen)
         c.store = store
-        AgentsWindow.openFromShortcut()
+        AgentsWindow.toggleFromShortcut()
         XCTAssertEqual(presented, 1)
         let win = try XCTUnwrap(w.window)
         XCTAssertTrue(w.model?.interaction.controller === c)
-        AgentsWindow.openFromShortcut()
-        XCTAssertEqual(presented, 2, "a press while open brings the same window forward")
+        AgentsWindow.toggleFromShortcut()
+        XCTAssertEqual(presented, 2, "a press on a window not on screen (closed for the rule) presents the same window")
         XCTAssertEqual(built, 1, "no second window")
         XCTAssertTrue(w.window === win)
         win.close()

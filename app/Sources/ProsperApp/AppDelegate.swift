@@ -775,20 +775,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Translate is now a Lua system extension (com.prosper.translate). Its ⌥L
         // hotkey opens the universal launcher prefilled with the extension's "l "
         // mode prefix, which the runner resolves into the Translate mode.
+        // #1102: every hotkey below that opens a window or panel follows WindowToggle's rule
+        // (closed or unfocused: open and focus; focused: close).
         let toggleTranslate: () -> Void = { [weak self] in
-            DispatchQueue.main.async { self?.toggleRunnerPanel(mode: .universal, prefill: "l ") }
+            DispatchQueue.main.async { self?.toggleRunnerPanel(mode: .universal, prefill: "l ", closing: true) }
         }
         let toggle: () -> Void = { [weak self] in
-            DispatchQueue.main.async { self?.toggleRunnerPanel(mode: .universal) }
+            DispatchQueue.main.async { self?.toggleRunnerPanel(mode: .universal, closing: true) }
         }
         let toggleClipboard: () -> Void = { [weak self] in
-            DispatchQueue.main.async { self?.toggleClipboardPanel() }
+            DispatchQueue.main.async { self?.toggleClipboardPanel(closing: true) }
         }
         let openSettings: () -> Void = { [weak self] in
-            DispatchQueue.main.async { self?.openSettings() }
+            DispatchQueue.main.async { self?.openSettings(toggle: true) }
         }
         let openAgent: () -> Void = {
-            DispatchQueue.main.async { ChatWindow.shared.show() }
+            DispatchQueue.main.async { ChatWindow.shared.toggleFromShortcut() }
         }
         let toggleAutocomplete: () -> Void = { [weak self] in
             DispatchQueue.main.async { self?.setAutocomplete(enabled: !Preferences.autocompleteEnabled) }
@@ -829,7 +831,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(.mixerToggleMicMute) { AudioInputDeviceManager.shared.toggleMicMute() }
         add(.copyScreenText) { ScreenTools.copyScreenText() }
         add(.pickColor) { ScreenTools.pickColor() }
-        add(.agentSessions) { AgentsWindow.openFromShortcut() }
+        add(.agentSessions) { AgentsWindow.toggleFromShortcut() }
 
         // Built-in window management: snap the frontmost window to a screen edge,
         // maximize, or centre it. Applied via Accessibility to whatever app is
@@ -1095,30 +1097,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    private func toggleRunnerPanel(mode: RunnerMode = .universal, prefill: String? = nil) {
-        if let panel = runnerPanel, panel.isShown {
-            panel.dismiss()
-            return
-        }
+    /// #1102: `closing` is the hotkeys' (WindowToggle's rule: a focused panel closes); the status
+    /// menu leaves it false, so its items open or focus and never close.
+    private func toggleRunnerPanel(mode: RunnerMode = .universal, prefill: String? = nil, closing: Bool = false) {
         let panel = runnerPanel ?? RunnerPanel()
         runnerPanel = panel
-        panel.present(mode: mode, prefill: prefill ?? "")
+        panel.toggle(mode: mode, prefill: prefill ?? "", closing: closing)
     }
 
-    private func toggleClipboardPanel() {
-        if let panel = clipboardPanel, panel.isShown {
-            panel.dismiss()
-            return
-        }
+    private func toggleClipboardPanel(closing: Bool = false) {
         let panel = clipboardPanel ?? ClipboardPanel(onOpenSettings: { [weak self] in self?.openSettings() })
         clipboardPanel = panel
-        panel.present()
+        panel.toggle(closing: closing)
     }
 
-    private func openSettings() {
+    /// #1102: `toggle` is the hotkey's (WindowToggle's rule); every other caller opens or focuses.
+    private func openSettings(toggle: Bool = false) {
         let window = settingsWindow ?? SettingsWindow()
         settingsWindow = window
-        window.show()
+        if toggle { window.toggleFromShortcut() } else { window.show() }
     }
 
     private func setClipboardHistory(enabled: Bool) {

@@ -26,8 +26,6 @@ final class ClipboardPanel {
     private var resignKeyObserver: NSObjectProtocol?
     private static let originKey = "ClipboardPanelTopLeft"
 
-    var isShown: Bool { panel.isVisible }
-
     /// The panel's remembered top-left (x, maxY) from the user's last drag, or nil.
     static func savedTopLeft() -> (x: CGFloat, top: CGFloat)? {
         guard let saved = Preferences.defaults.dictionary(forKey: originKey),
@@ -114,6 +112,32 @@ final class ClipboardPanel {
         isProgrammaticMove = true
         positionRelativeToRunner()
         isProgrammaticMove = false
+        onScreen(self)
+    }
+
+    /// #1102: a hotkey press follows WindowToggle's rule: closed opens, open but not key comes back
+    /// with its search and selection kept (the operator's report: it used to close), key closes.
+    /// The status menu (`closing` false) opens or focuses and never closes.
+    func toggle(closing: Bool = true) {
+        WindowToggle.apply(panel, open: { present() }, focus: { focus() }, close: { closing ? dismiss() : focus() })
+    }
+
+    /// #1102: back in front and key, the search kept. The paste target follows the app the user
+    /// went to meanwhile (never Prosper itself).
+    func focus() {
+        if let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() { previousApp = app }
+        onScreen(self)
+    }
+
+    /// Seams (#1102): on and off screen. A test records them, so nothing is ordered front and the
+    /// Dock policy is left alone.
+    var onScreen: (ClipboardPanel) -> Void = { $0.putOnScreen() }
+    var offScreen: (NSWindow) -> Void = { win in
+        win.orderOut(nil)
+        DockPolicy.windowDidHide(win)
+    }
+
+    private func putOnScreen() {
         DockPolicy.windowDidShow(panel)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -164,8 +188,7 @@ final class ClipboardPanel {
 
     func dismiss() {
         wait.end()   // a hidden panel never pastes later
-        panel.orderOut(nil)
-        DockPolicy.windowDidHide(panel)
+        offScreen(panel)
     }
 
     /// ⌘C: copy the selected entry to the system pasteboard and close, WITHOUT

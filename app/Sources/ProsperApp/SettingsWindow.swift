@@ -45,16 +45,57 @@ final class SettingsWindow {
         NSSize(width: 820 * max(scale, 0.85), height: 480 * scale)
     }
 
+    // Seams (#1102): the shortcut's tests build a plain offscreen window and record the present.
+    var build: () -> NSWindow = { SettingsWindow.makeWindow() }
+    var present: (NSWindow) -> Void = { win in
+        DockPolicy.windowDidShow(win)
+        NSApp.activate(ignoringOtherApps: true)
+        win.makeKeyAndOrderFront(nil)
+    }
+    var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
+
+    /// #1102: the "Open Settings" hotkey follows WindowToggle's rule; a focused window closes
+    /// through `close()`, the close button's willClose teardown. The menu items keep `show`.
+    func toggleFromShortcut() {
+        WindowToggle.apply(window, open: { show() }, focus: { show() }, close: { window?.close() })
+    }
+
     func show() {
         // #195: show → this transaction committed (pane laid out and handed to the render server).
         let signpost = Perf.signposter.beginInterval("settings.show")
         CATransaction.setCompletionBlock { Perf.signposter.endInterval("settings.show", signpost) }
-        if let window {
-            DockPolicy.windowDidShow(window)
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-            return
+        if let window { return present(window) }
+        let win = build()
+        window = win
+        // Standard windows close via the title-bar button / ⌘W (performClose),
+        // which posts willClose rather than going through an orderOut funnel — so
+        // hide the Dock icon from here when the settings window is dismissed.
+        // Also tear the window down: the hosting view of an ordered-out window
+        // keeps rendering (timers/TimelineView schedules don't pause for it),
+        // which burned ~1% CPU forever after the first open. Dropping every
+        // strong reference deallocates the SwiftUI tree; the next open rebuilds
+        // it and the frame autosave name restores the position.
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: win, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { DockPolicy.windowDidHide(win); return }
+                self.dismissed(win)
+                if let obs = self.closeObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                }
+                self.closeObserver = nil
+                self.window = nil
+                // Detach the hosting controller once the close finishes: even a
+                // dereferenced window can be kept alive by stale stack/autorelease
+                // references, and its hosting view would keep rendering.
+                DispatchQueue.main.async { win.contentViewController = nil }
+            }
         }
+        present(win)
+    }
+
+    private static func makeWindow() -> NSWindow {
         let root = SettingsRootView()
         // rebuildOnSizeChangeOnly: true — every Settings surface that needs live
         // Neon.* colors already self-observes ThemeStore (SettingsBackground,
@@ -102,35 +143,7 @@ final class SettingsWindow {
             win.centerOnScreen()
         }
         win.clampToContentMinSize()
-        window = win
-        // Standard windows close via the title-bar button / ⌘W (performClose),
-        // which posts willClose rather than going through an orderOut funnel — so
-        // hide the Dock icon from here when the settings window is dismissed.
-        // Also tear the window down: the hosting view of an ordered-out window
-        // keeps rendering (timers/TimelineView schedules don't pause for it),
-        // which burned ~1% CPU forever after the first open. Dropping every
-        // strong reference deallocates the SwiftUI tree; the next open rebuilds
-        // it and the frame autosave name restores the position.
-        closeObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification, object: win, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                DockPolicy.windowDidHide(win)
-                guard let self else { return }
-                if let obs = self.closeObserver {
-                    NotificationCenter.default.removeObserver(obs)
-                }
-                self.closeObserver = nil
-                self.window = nil
-                // Detach the hosting controller once the close finishes: even a
-                // dereferenced window can be kept alive by stale stack/autorelease
-                // references, and its hosting view would keep rendering.
-                DispatchQueue.main.async { win.contentViewController = nil }
-            }
-        }
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        return win
     }
 }
 

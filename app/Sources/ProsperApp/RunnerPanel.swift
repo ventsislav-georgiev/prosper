@@ -48,8 +48,6 @@ final class RunnerPanel {
         return (x, top)
     }
 
-    var isShown: Bool { panel.isVisible }
-
     init() {
         model = RunnerModel()
 
@@ -220,6 +218,29 @@ final class RunnerPanel {
         // empty query.
         model.inputChanged()
         positionPanel()
+        onScreen(self)
+    }
+
+    /// #1102: a hotkey press follows WindowToggle's rule: closed opens in `mode` with `prefill`, open
+    /// but not key comes back with its query and mode kept (a Translate press on an open plain runner
+    /// too), key closes. The status menu (`closing` false) opens or focuses and never closes.
+    func toggle(mode: RunnerMode = .universal, prefill: String = "", closing: Bool = true) {
+        WindowToggle.apply(panel, open: { present(mode: mode, prefill: prefill) }, focus: { focus() },
+                           close: { closing ? dismiss() : focus() })
+    }
+
+    /// #1102: back in front and key, the query kept. The paste and menu-command target follows the
+    /// app the user went to meanwhile (never Prosper itself).
+    func focus() {
+        if let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() { previousApp = app }
+        onScreen(self)
+    }
+
+    /// Seam (#1102): on screen, key, the field focused and the indexes warmed. A test records it, so
+    /// nothing is ordered front and no menu bar is walked.
+    var onScreen: (RunnerPanel) -> Void = { $0.putOnScreen() }
+
+    private func putOnScreen() {
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         // Drive focus on the next runloop tick: on first open the SwiftUI
@@ -242,8 +263,11 @@ final class RunnerPanel {
     }
 
     func dismiss() {
-        panel.orderOut(nil)
+        offScreen(panel)
     }
+
+    /// Seam (#1102): a test sees the dismiss.
+    var offScreen: (NSWindow) -> Void = { $0.orderOut(nil) }
 
     /// Launches the chosen app and closes the runner.
     private func launchApp(_ url: URL) {

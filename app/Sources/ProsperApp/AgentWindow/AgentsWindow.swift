@@ -66,9 +66,11 @@ final class AgentsWindow {
     /// #858: the "Open Agent Sessions" hotkey opens `shared` through the same `show` as the island
     /// button and the menu item. A no-op while the island has no store (extension on but not live),
     /// the state that hides the menu item; a disabled extension leaves the hotkey unregistered.
-    static func openFromShortcut() {
-        guard shared.island().store != nil else { return }
-        shared.show()
+    /// #1102: it follows WindowToggle's rule; a focused window closes through `close()`, the close
+    /// button's teardown. The store guard holds for building only: an open window has its model.
+    static func toggleFromShortcut() {
+        guard shared.isOpen || shared.island().store != nil else { return }
+        WindowToggle.apply(shared.window, open: { shared.show() }, focus: { shared.show() }, close: { shared.window?.close() })
     }
 
     /// The item's target: NSMenuItem holds it weakly, so one lives for the app.
