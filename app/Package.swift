@@ -206,7 +206,7 @@ let package = Package(
         // LLM + network + GUI paths are not covered here (require model/Metal).
         .testTarget(
             name: "ProsperAppTests",
-            dependencies: ["ProsperApp", "LuaRuntime"]
+            dependencies: ["ProsperApp", "LuaRuntime", "CLua"]
         ),
     ]
 )
