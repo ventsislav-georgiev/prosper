@@ -563,11 +563,11 @@ tag from the now-released section and put it on the new top draft.
   back instead of closing. If one shortcut's prefix starts another's ("qd Dev" and "qd Devices"),
   the press switches between them instead of closing. If the runner was opened some other way (the
   main hotkey, the menu bar item), a shortcut press switches it to that shortcut's prefix (#1113).
-- **Shortcuts**: Translate (⌥L) now works like a custom shortcut on the "l " prefix. Pressed while
-  the runner shows something else, in front or left open behind another app, it switches the runner
-  to Translate and the earlier search is not kept. A Translate runner left open behind another app
-  comes back with its text kept. Pressed while the runner is in Translate and has focus, it closes
-  the runner (#1113).
+- **Shortcuts**: Translate (⌥L) now works like a custom shortcut on the "l " prefix. A runner that
+  ⌥L opened comes back with its text kept when it was left open behind another app, and closes when
+  it has focus. Any other runner (one showing something else, or one you put into Translate yourself
+  by typing "l "), in front or behind another app, is switched to a fresh Translate and what it
+  showed is not kept (#1113).
 - **Shortcuts**: a shortcut for an extension command that opens a window (such as Base64 or Add
   Quicklink) now works like the other window shortcuts. If that window is open but you clicked away
   from it, the shortcut brings it back with what you typed still there, instead of starting a fresh
