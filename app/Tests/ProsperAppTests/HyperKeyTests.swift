@@ -283,6 +283,7 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
         HyperKey.hidutilURL = URL(fileURLWithPath: "/usr/bin/hidutil")
         HyperKey.lastHidutilPID = 0
         HyperKey.hidutilBackoffUntil = nil   // every timeout row arms it
+        HyperKey.beforeHidutilTerm = {}
         super.tearDown()
     }
 
@@ -328,12 +329,24 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
     /// `exec /bin/sleep` — that removes the grandchild and a leader-only kill would pass.
     /// The earlier shape (#369 D) had an explicitly backgrounded grandchild plus an exec'd
     /// one and caught the broken kill path only 5 of 10 runs (QA #187); #382's shape, 10 of 10.
+    /// #1084: the TERM is held until the child has written `ready` after its ignore-trap, so
+    /// a slow shell start cannot take the TERM and die of it, passing without the KILL path.
+    /// The hold's own wait is measured and left out of the elapsed bound, which covers the
+    /// runner's timeout, grace, kill and reap, not how long the shell took to start.
     func testTermIgnoringGroupIsKilledAndReaped() {
-        let r = sh(#"trap "" TERM; /bin/sleep 612"#, timeout: 0.3)
+        let ready = tempDir().appendingPathComponent("ready")
+        nonisolated(unsafe) var held: TimeInterval = 0
+        HyperKey.beforeHidutilTerm = {
+            let start = Date(), deadline = start.addingTimeInterval(10)
+            while !FileManager.default.fileExists(atPath: ready.path) && Date() < deadline { usleep(10_000) }
+            held = Date().timeIntervalSince(start)
+        }
+        let r = sh(#"trap "" TERM; : > '\#(ready.path)'; /bin/sleep 612"#, timeout: 0.3)
         XCTAssertGreaterThan(r.pid, 1)
         defer { killIfReal(r.pid) }   // only our own group, if an assert fails
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ready.path), "the child never set its TERM trap")
         XCTAssertNil(r.out)
-        XCTAssertLessThan(r.elapsed, 2.3)
+        XCTAssertLessThan(r.elapsed - held, 2.3)
         let rc = kill(r.pid, 0), err = errno
         XCTAssertEqual(rc, -1, "child must be killed and reaped")
         XCTAssertEqual(err, ESRCH)
@@ -342,9 +355,18 @@ final class HyperKeyHidutilRunnerTests: XCTestCase {
     }
 
     /// #369 D: SIGTERM goes first — a cooperative child gets to run its TERM trap.
+    /// #1084: the TERM is held until the child says its trap is set (the ready file), so a
+    /// slow shell start under load cannot take the TERM with the default action. The
+    /// child's `sleep 1` before the trap keeps that ordering under test: without the hold
+    /// the 0.3 s TERM lands in it every run.
     func testTermIsSentBeforeKill() {
-        let marker = tempDir().appendingPathComponent("term")
-        let r = sh("trap \"echo T > '\(marker.path)'; exit 0\" TERM; while :; do /bin/sleep 0.05; done", timeout: 0.3)
+        let dir = tempDir()
+        let marker = dir.appendingPathComponent("term"), ready = dir.appendingPathComponent("ready")
+        HyperKey.beforeHidutilTerm = {
+            let deadline = Date().addingTimeInterval(10)
+            while !FileManager.default.fileExists(atPath: ready.path) && Date() < deadline { usleep(10_000) }
+        }
+        let r = sh("/bin/sleep 1; trap \"echo T > '\(marker.path)'; exit 0\" TERM; : > '\(ready.path)'; while :; do /bin/sleep 0.05; done", timeout: 0.3)
         defer { killIfReal(r.pid) }
         XCTAssertNil(r.out)
         XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path), "the child never saw SIGTERM")

@@ -529,6 +529,9 @@ final class HyperKey {
     /// launching, so a hung hidutil costs one bounded stall a minute, not one per
     /// Caps Lock press. Test seam — tests reset it to nil.
     nonisolated(unsafe) static var hidutilBackoffUntil: Date?
+    /// Test seam: runs after the deadline, right before the SIGTERM, so a test can hold
+    /// the TERM until its child has installed a trap (#1084). A no-op in the app.
+    nonisolated(unsafe) static var beforeHidutilTerm: @Sendable () -> Void = {}
 
     /// Runs on the main thread (launch reconcile, quit, wake, tap repair), so the
     /// wait is bounded: hidutil answers in milliseconds, and one that hangs is
@@ -569,6 +572,7 @@ final class HyperKey {
             // The child leads its own process group (Foundation spawns it that way), so
             // signalling the group also reaches a grandchild that would hold the pipe open.
             let pid = process.processIdentifier
+            beforeHidutilTerm()
             if pid > 1 { killpg(pid, SIGTERM) }
             let grace = Date().addingTimeInterval(0.5)
             while process.isRunning && Date() < grace { usleep(10_000) }
