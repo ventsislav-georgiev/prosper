@@ -63,8 +63,9 @@ enum FileActions {
     static func perform(_ id: String, path: String) -> Bool {
         guard isBuiltIn(id), !path.isEmpty else { return false }
         let url = URL(fileURLWithPath: path)
-        // Re-check existence: the index can lag a delete between search and act.
-        guard id == ID.copyPath || FileManager.default.fileExists(atPath: path) else { return true }
+        // Re-check existence: the index can lag a delete between search and act. Nothing ran, so
+        // not handled: the dispatcher records no frecency for a path that is gone (#1143).
+        guard id == ID.copyPath || FileManager.default.fileExists(atPath: path) else { return false }
 
         switch id {
         case ID.open:

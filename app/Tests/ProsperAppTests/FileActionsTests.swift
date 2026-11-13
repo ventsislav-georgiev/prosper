@@ -255,4 +255,62 @@ final class FileActionDispatcherTests: XCTestCase {
         XCTAssertFalse(handled)
         XCTAssertEqual(frecency.boost(path: "/a/x.txt", now: now), 0)  // not handled → no bump
     }
+
+    /// The engagement ids, written out: the set check below fails when one is added unpinned.
+    private let engagements = [FileActions.ID.open, FileActions.ID.reveal, FileActions.ID.openWith,
+                               FileActions.ID.enclosingFolder, FileActions.ID.quickLook, FileActions.ID.view]
+
+    /// #1143: an engagement on a path that is gone (never created, or deleted after the search)
+    /// runs nothing and records no frecency. Live performer: it returns before any OS call.
+    func testEngagementOnMissingPathRecordsNothing() throws {
+        XCTAssertEqual(Set(engagements), FileActions.engagementIDs)
+        let dir = tempDir("fileact-missing")
+        let removed = dir.appendingPathComponent("removed.md")
+        try Data("# a\n".utf8).write(to: removed)
+        try FileManager.default.removeItem(at: removed)
+        let frecency = isolatedFrecency()
+        let dispatcher = FileActionDispatcher(performer: LiveFileActionPerformer(), frecency: frecency)
+        let now: TimeInterval = 1_700_000_000
+        for id in engagements {
+            for path in [dir.appendingPathComponent("never-\(id).md").path, removed.path] {
+                XCTAssertFalse(dispatcher.run(id: id, path: path, now: now), "\(id) on a missing path: not handled")
+                XCTAssertEqual(frecency.boost(path: path, now: now), 0, "\(id) on a missing path: nothing recorded")
+            }
+        }
+    }
+
+    /// An existing path still records for each engagement id (mock performer: nothing opens), and
+    /// the live performer still handles a non-engagement on an existing path (copyFile, written to
+    /// the per-process test pasteboard, never the user's).
+    func testEngagementOnExistingPathStillRecords() throws {
+        XCTAssertEqual(Set(engagements), FileActions.engagementIDs)
+        let file = tempDir("fileact-existing").appendingPathComponent("here.md")
+        try Data("# a\n".utf8).write(to: file)
+        let now: TimeInterval = 1_700_000_000
+        for id in engagements {
+            let frecency = isolatedFrecency()
+            let dispatcher = FileActionDispatcher(performer: MockFileActionPerformer(), frecency: frecency)
+            XCTAssertTrue(dispatcher.run(id: id, path: file.path, now: now))
+            XCTAssertGreaterThan(frecency.boost(path: file.path, now: now), 0, "\(id) on an existing path: recorded")
+        }
+        let frecency = isolatedFrecency()
+        let live = FileActionDispatcher(performer: LiveFileActionPerformer(), frecency: frecency)
+        defer { Pasteboard.general.clearContents() }
+        XCTAssertTrue(live.run(id: FileActions.ID.copyFile, path: file.path, now: now), "an existing path is handled")
+        XCTAssertEqual(frecency.boost(path: file.path, now: now), 0, "copyFile is not an engagement")
+    }
+
+    /// copyPath needs no file: on a missing path it still copies the path (to the per-process
+    /// test pasteboard) and, as before, records nothing.
+    func testCopyPathOnMissingPathStillCopies() {
+        let path = tempDir("fileact-copypath").appendingPathComponent("gone.txt").path
+        let frecency = isolatedFrecency()
+        let dispatcher = FileActionDispatcher(performer: LiveFileActionPerformer(), frecency: frecency)
+        let now: TimeInterval = 1_700_000_000
+        defer { Pasteboard.general.clearContents() }
+        Pasteboard.general.clearContents()
+        XCTAssertTrue(dispatcher.run(id: FileActions.ID.copyPath, path: path, now: now))
+        XCTAssertEqual(Pasteboard.general.string(forType: .string), path)
+        XCTAssertEqual(frecency.boost(path: path, now: now), 0, "copyPath is not an engagement")
+    }
 }

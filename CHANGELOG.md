@@ -674,6 +674,8 @@ tag from the now-released section and put it on the new top draft.
   again right after its shortcut closed it), the paste goes to the app you opened the runner from,
   as long as you have not switched to another app since. If that app has quit, nothing is pasted
   into another app and the text stays on the clipboard (#1121).
+- File search: an action on a file that no longer exists does nothing and no longer counts as a use
+  when results are ranked. (#1143)
 
 ## v2.174.0
 
