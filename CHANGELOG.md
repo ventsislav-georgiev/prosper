@@ -548,6 +548,10 @@ tag from the now-released section and put it on the new top draft.
   is refused. The X-ray view hides compactions and Claude Code's own prompts until `n`, `o` opens
   the session the view is about, and it no longer opens `.yarnrc` or `auth.json`. `dch -d` now also
   detaches a remote client that has the X-ray view open.
+- Agent Island: the open island now also closes when you click in another Prosper window, such as
+  Settings or Agent Sessions, or when another Prosper window takes the keyboard; before, only a
+  click in another app closed it. A window that takes the keyboard by itself never drops a message
+  you were typing in the island; a click elsewhere still closes the island and drops it.
 
 ## v2.174.0
 

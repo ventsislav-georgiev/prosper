@@ -36,9 +36,15 @@ final class AgentIslandController {
     var extLive = false
 
     var store: AgentIslandStore?
-    private var panel: AgentIslandPanel?
+    /// Internal for #1112's tests, which set a never-shown panel after expanding; only makePanel sets it in the app.
+    var panel: AgentIslandPanel?
     private(set) var timer: DispatchSourceTimer?
     private(set) var outsideClick: Any?
+    /// #1112: while expanded, the local click monitor and the key-window and menu-tracking observers (on `center`).
+    private(set) var ownClick: Any?
+    private(set) var focusObservers: [NSObjectProtocol] = []
+    /// #1112: menus tracking now (the "⋯" and row menus are NSMenus). Nothing new closes the island meanwhile.
+    private(set) var menusTracking = 0
     private(set) var screenObserver: NSObjectProtocol?
     /// #768: display sleep and screen lock (the same notifications Stats pauses on).
     private var sleepObservers: [(NSObjectProtocol, NotificationCenter)] = []
@@ -78,11 +84,33 @@ final class AgentIslandController {
     var currentGeometry: @MainActor () -> AgentIslandGeometry? = { AgentIslandGeometry.current() }
     var center = NotificationCenter.default
     var monitorClicks: (@escaping @MainActor () -> Void) -> Any? = { onClick in
-        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { _ in
+        NSEvent.addGlobalMonitorForEvents(matching: AgentIslandController.clickMask) { _ in
             MainActor.assumeIsolated { onClick() }
         }
     }
+    /// #1112: a global monitor is never sent this app's own events (NSEvent.h), so a click in Settings,
+    /// Agent Sessions or any other Prosper window comes through a local one. The handler gets the
+    /// clicked window and the click in screen points. Inert under XCTest: no test installs a real
+    /// monitor; tests pass a fake and call the handler.
+    var monitorOwnClicks: @MainActor (@escaping @MainActor (NSWindow?, NSPoint?) -> Void) -> Any? = { onClick in
+        NSClassFromString("XCTestCase") != nil ? nil
+            : NSEvent.addLocalMonitorForEvents(matching: AgentIslandController.clickMask,
+                                               handler: AgentIslandController.passThrough(onClick))
+    }
     var removeMonitor: (Any) -> Void = { NSEvent.removeMonitor($0) }
+    /// Mouse downs only: a drag's dragged and up events never close the island.
+    nonisolated static let clickMask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
+    /// #1112: the local monitor's block. It hands every event on unchanged: closing the island never
+    /// swallows the click the other window was meant to get.
+    static func passThrough(_ onClick: @escaping @MainActor (NSWindow?, NSPoint?) -> Void) -> (NSEvent) -> NSEvent? {
+        { e in
+            MainActor.assumeIsolated {
+                let w = e.window
+                onClick(w, w?.convertPoint(toScreen: e.locationInWindow))
+            }
+            return e
+        }
+    }
     var jumpTarget: @MainActor (AgentSessionKey) -> AgentJumpTarget = { key in
         AgentIsland.jumpTarget(
             clients: AgentIsland.clientPIDs(key), info: AgentIsland.procInfo,
@@ -1205,12 +1233,59 @@ final class AgentIslandController {
                 guard let self, let f = self.panel?.frame, !f.contains(NSEvent.mouseLocation) else { return }
                 self.setExpanded(false)
             }
+            watchOwnWindows()
         } else {
-            if let m = outsideClick { removeMonitor(m) }
-            outsideClick = nil
+            unwatch()
             // Hand key focus back: out and straight back in, no animation.
             if let panel, panel.isKeyWindow { panel.orderOut(nil); layout() }
         }
+    }
+
+    /// #1112: the open island also closes when the user turns to another Prosper window: a mouse down in
+    /// it (the local monitor) or it taking key (typing there). Armed after makeKey, so the panel taking
+    /// key never counts, and the window it took key from only resigns (not observed).
+    private func watchOwnWindows() {
+        ownClick = monitorOwnClicks { [weak self] w, p in self?.turnedAway(to: w, at: p) }
+        focusObservers = [
+            center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] n in
+                let w = n.object as? NSWindow
+                MainActor.assumeIsolated { self?.keyTaken(by: w) }
+            },
+            center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.menusTracking += 1 }
+            },
+            center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.menuEnded() }
+            },
+        ]
+    }
+
+    /// 584's draft: a window that takes key with no click (a hotkey panel, one that opens itself) never
+    /// drops an unsent message; a click elsewhere still closes the island and drops it.
+    private func keyTaken(by w: NSWindow?) {
+        guard store?.messageDraft == nil else { return }
+        turnedAway(to: w, at: nil)
+    }
+
+    private func menuEnded() { menusTracking = max(0, menusTracking - 1) }   // an end whose begin came before expand
+
+    /// #1112: a mouse down at `p` (screen) in `window`, or `window` taking key (p nil). Closes the island
+    /// unless a menu tracks, the window is the panel, or the click lands inside the panel's frame (a
+    /// see-through corner of the island over the window below).
+    func turnedAway(to window: NSWindow?, at p: NSPoint?) {
+        guard menusTracking == 0, let window, window !== panel else { return }
+        if let p, panel?.frame.contains(p) == true { return }
+        setExpanded(false)
+    }
+
+    /// Every monitor and observer the open island holds, off (collapse and teardown).
+    private func unwatch() {
+        for m in [outsideClick, ownClick].compactMap({ $0 }) { removeMonitor(m) }
+        outsideClick = nil
+        ownClick = nil
+        for o in focusObservers { center.removeObserver(o) }
+        focusObservers = []
+        menusTracking = 0
     }
 
     // MARK: - Prompt cards (#475)
@@ -1711,8 +1786,7 @@ final class AgentIslandController {
     private func teardown() {
         if timer != nil { onSessions?(nil) }
         timer?.cancel(); timer = nil
-        if let m = outsideClick { removeMonitor(m) }
-        outsideClick = nil
+        unwatch()
         if let o = screenObserver { center.removeObserver(o) }
         screenObserver = nil
         for (o, c) in sleepObservers { c.removeObserver(o) }
