@@ -525,8 +525,9 @@ tag from the now-released section and put it on the new top draft.
   screen first and the row says to open it in a terminal.
 - Agent Island: the "⋯" menu has "Message all in Sessions…" (or "…Sidekicks…"), which sends one
   message to every live session in that tab, by name, and shows "N sent, K skipped, F failed" per
-  folder. A session that is showing a prompt, or that is busy with another island action, is not
-  messaged and says so.
+  folder. A session that is showing a prompt is not messaged and counts as skipped. While another
+  island action is running on a session of a folder, none of that folder's sessions is messaged and
+  the folder line says so.
 - Agent Island: a Restart whose master fails now shows dch's own error line, and a Resume that could
   not start the program shows the exec error (for example "No such file or directory") instead of a
   generic "did not start".
