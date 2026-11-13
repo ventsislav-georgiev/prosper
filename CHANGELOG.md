@@ -454,7 +454,8 @@ tag from the now-released section and put it on the new top draft.
   sentence as command output; it returns no output with a failed status, and the extension logs once
   that hs.execute needs System Access.
 - Editing MCP servers or hooks in Settings no longer drops keys Prosper does not use from mcp.json
-  and hooks.json, and no longer overwrites a file you are still editing by hand.
+  and hooks.json, and no longer overwrites a file it cannot read (broken JSON from a half-finished
+  hand edit, for example).
 - Resume and Resume interrupted (in Agent Island and from the iPhone) now count a session as resumed
   whenever dch says its Claude is running, even if the resume message could not be sent (for example
   a prompt was on screen); the line says the message wasn't sent, and a session whose Claude is not
