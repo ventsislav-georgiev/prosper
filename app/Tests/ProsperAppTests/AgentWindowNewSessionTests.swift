@@ -304,9 +304,10 @@ extension AgentWindowD1Tests {
             spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "example"), nil)
             XCTAssertNotNil(m.pendingSpawn)
             clock.t += AgentWindowModel.spawnSlack + 1
+            m.refresh()   // #887: its deadline (the row first: one listed by now would still land)
+            XCTAssertNil(m.pendingSpawn)
             st.sessions = [other, mapped("example")]
             XCTAssertEqual(m.selection, .live(other.key))
-            XCTAssertNil(m.pendingSpawn)
             // Reopening the form drops it too.
             st.sessions = [other]
             XCTAssertTrue(m.startShell())

@@ -1021,7 +1021,7 @@ final class AgentIslandController {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "New session"
+        panel.prompt = "Choose"   // QA #747 INFO-7: the window's form only fills its Folder field with it
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { resp in
             MainActor.assumeIsolated { done(resp == .OK ? panel.url?.path : nil) }

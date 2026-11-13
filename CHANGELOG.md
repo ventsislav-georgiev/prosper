@@ -333,7 +333,8 @@ tag from the now-released section and put it on the new top draft.
   "+" (⌘N, also the "New session" button when nothing is selected) opens a form in place of the detail pane with
   the folder (recent folders and Choose…), the name (the folder's free name until you type one) and the exact
   command, shown as it will run; an empty command runs your login shell. ">_" (⇧⌘N) starts a login shell at once
-  in the last folder, named after it, or "shell" when dch cannot use that name; holding the shortcut starts one.
+  in the last folder, named after it, or "shell" when dch cannot use that name; with the form open, it uses the
+  form's folder and name instead. Holding the shortcut starts one.
   Return starts, Esc cancels and puts the keys back where they were. After Start the form reads "Starting…" until
   the new session is listed, then selects it in Terminal with the keys in it. A name dch cannot keep in its session
   folder is refused with the real limit, a name that differs only in case from an existing session counts as
@@ -467,6 +468,16 @@ tag from the now-released section and put it on the new top draft.
 - Default, Daylight, Graphite and Silver now come in accent tints, picked from the dots on the
   theme's row in Settings > Appearance; Daylight's highlight blue and Silver's and Graphite's accent
   greys are a shade adjusted so accent text stays readable.
+- Agent Sessions window, New session: a session that dch started but that never shows up within 15
+  seconds (its command ended at once, or never started) now leaves the form open, ready to start
+  again, with "<name> ended at once or never started: check the command"; a ">_" shell in that case
+  says it in the line under the session list. A session that shows up while the window is on another
+  Space is still selected when you come back. When session controls are unavailable, ⌘N and ⇧⌘N now
+  say why on that line instead of doing nothing. While the form is open, ⌘T, ⌥⌘1/2/3, ⌘F, ⌘G and
+  ⌘↑/⌘↓ no longer act on the hidden session behind it. VoiceOver reads the form's fields by name,
+  the folder picker's button says "Choose", and an empty session list explains where sessions come
+  from. On the "Dvorak - QWERTY ⌘" layout each window shortcut now fires from one key only, so ⌘, no
+  longer closes the window (#887).
 
 ## v2.174.0
 

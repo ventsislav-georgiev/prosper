@@ -393,7 +393,8 @@ final class AgentWindowModel: ObservableObject {
     /// field is editing. Only the human's actions call it, never a selection the model makes itself.
     @discardableResult
     func focusSelection() -> Bool {
-        guard renaming == nil, !selectionIsHeld, selectedRow?.session != nil else { return false }
+        // #887 (QA #747 INFO-4): the New session form covers the pane, so its session takes no input meanwhile.
+        guard renaming == nil, newSession == nil, !selectionIsHeld, selectedRow?.session != nil else { return false }
         if paneMode == .terminal { terminal.focus() } else { interaction.focusComposer() }
         return true
     }
@@ -475,8 +476,21 @@ final class AgentWindowModel: ObservableObject {
     @Published private(set) var newSessionFocus = 0
     /// A session the window started: on the refresh its row shows, it is selected in Terminal with the keys.
     /// Dropped by a manual pick, the form reopening and after `spawnSlack`.
-    private(set) var pendingSpawn: (key: AgentSessionKey, at: TimeInterval)?
+    private(set) var pendingSpawn: (key: AgentSessionKey, at: TimeInterval)? {
+        didSet {
+            // #887 (QA #747 INFO-1): the slack has its own deadline, not the next refresh (the 30 s age clock).
+            spawnDeadline?.invalidate()
+            spawnDeadline = pendingSpawn == nil || closed ? nil
+                : Timer.scheduledTimer(withTimeInterval: Self.spawnSlack + 0.5, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.refresh() }
+                }
+        }
+    }
     static let spawnSlack: TimeInterval = 15
+    /// Fires once just past `spawnSlack` after the answer; a hidden window lands or expires the spawn when shown again.
+    private(set) var spawnDeadline: Timer?
+    /// QA #747 INFO-1: dch --spawn answers 0 for a session whose program already exited, the same as for one that runs.
+    nonisolated static func notListedText(_ name: String) -> String { "\(name) ended at once or never started: check the command" }
     /// QA #713 INFO-4: numbers every spawn; the form keeps its own (`request`), a quick shell has none.
     private var requests = 0
     /// QA #713 INFO-4 (d): the names this window spawned until the poll lists them: in flight (.infinity), then for
@@ -496,7 +510,10 @@ final class AgentWindowModel: ObservableObject {
     func openNewSession(folder: String? = nil) {
         newSessionFocus += 1
         guard newSession == nil else { return }
-        guard store?.resumeGate.isOK == true else { return }   // R2 F2: the one gate check for ⌘N, + and the pill
+        guard store?.resumeGate.isOK == true else {   // R2 F2: the one gate check for ⌘N, + and the pill
+            store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)") }   // #887: ⌘N says why too
+            return
+        }
         pendingSpawn = nil
         let typed = Preferences.agentIslandNewSessionCommand
         newSessionTookKeys = sessionHasKeys
@@ -620,7 +637,10 @@ final class AgentWindowModel: ObservableObject {
             guard canStartNewSession else { return false }
             return spawn(AgentNewSession.expand(f.folder, home: home), argv, name: newSessionName, command: nil)
         }
-        guard store?.resumeGate.isOK == true else { return false }
+        guard store?.resumeGate.isOK == true else {
+            store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)") }   // #887 (QA #747 INFO-3): ⇧⌘N says why
+            return false
+        }
         let folder = newSessionDefaultFolder
         return spawn(folder, argv, name: AgentNewSession.shellName(folder: folder, taken: spawnTaken, dir: island().spawnDir()),
                      command: nil)
@@ -633,9 +653,7 @@ final class AgentWindowModel: ObservableObject {
             self?.spawned(key, failure, name: name, folder: folder, command: command, request: request)
         }) else {
             let why = spawnRefusal(name)
-            if newSession != nil { newSession?.status = why } else {
-                store?.actions[AgentSessionKey(dir: island().spawnDir(), name: "")] = why   // never dropped silently
-            }
+            if newSession != nil { newSession?.status = why } else { sayOnDirLine(why) }   // never dropped silently
             return false
         }
         claimed[name] = .infinity
@@ -650,6 +668,10 @@ final class AgentWindowModel: ObservableObject {
         if let why = store?.resumeGate.refusal ?? (store == nil ? "Agent Island is off" : nil) { return "Controls \(why)" }
         return AgentNewSession.nameError(name, taken: [], dir: island().spawnDir()) ?? "\(name) is busy: try again"
     }
+
+    /// With no form open: the spawn dir's dir-wide line, which the window draws in its sidebar strip
+    /// (AgentDirStatusStrip) and the island on its own line; the runner's failures land there too.
+    private func sayOnDirLine(_ text: String) { store?.actions[AgentSessionKey(dir: island().spawnDir(), name: "")] = text }
 
     /// The runner's answer. Success keeps the folder and (OQ-3) a typed command as the one shared setting,
     /// selects the session once its row shows (R2 F5: the form stays "Starting…" over the pane until then);
@@ -681,15 +703,22 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// The pending spawn's row is there: Terminal (a reused name's Transcript choice dropped), selected, the keys in.
+    /// #887 (QA #747 INFO-2): the row first, so a window shown again past the slack still lands a row already listed.
     private func landSpawn() {
         guard let p = pendingSpawn else { return }
-        guard now() - p.at <= Self.spawnSlack else {
-            // R2 F5: the row never listed: the waiting form goes as Cancel does (its pane re-attached).
-            if newSession?.starting == p.key { cancelNewSession() }
+        guard let s = row(.live(p.key))?.session else {
+            guard now() - p.at > Self.spawnSlack else { return }
+            // QA #747 INFO-1: answered but never listed: the form stays, re-enabled, and says so; a quick shell, the dir line.
             pendingSpawn = nil
+            let why = Self.notListedText(p.key.name)
+            if newSession?.starting == p.key {
+                newSession?.starting = nil
+                newSession?.status = why
+            } else if newSession == nil {
+                sayOnDirLine(why)
+            }
             return
         }
-        guard let s = row(.live(p.key))?.session else { return }
         pendingSpawn = nil
         setMode(.terminal, for: s)
         select(.live(s.key))
@@ -840,6 +869,7 @@ final class AgentWindowModel: ObservableObject {
         guard !closed else { return }
         setVisible(false)
         closed = true
+        pendingSpawn = nil   // its deadline timer goes with it
         subscription = nil
         askSubscription = nil
         transcript.stop()

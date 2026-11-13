@@ -733,10 +733,10 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(AgentNewSession.nameError("abc", taken: [], dir: two), "2 characters at most")
     }
 
-    /// R2 F5 (r6): a Start whose row never lists: the form waits over the pane (no client for the old session),
-    /// and after spawnSlack it goes as Cancel does: the old terminal attached again, the keys where they were.
+    /// R2 F5 (r6): a Start whose row never lists: the form waits over the pane (no client for the old session).
+    /// #887 (QA #747 INFO-1): after spawnSlack the form stays, re-enabled, and says why (it was closed as Cancel).
     @MainActor
-    func testAgentWindowNewSessionStartWhoseRowNeverListsClosesAfterTheSlack() throws {
+    func testAgentWindowNewSessionStartWhoseRowNeverListsSaysWhyAfterTheSlack() throws {
         try withNewSessionPrefs {
             final class Clock { var t = AgentWindowD1Tests.now }
             let clock = Clock()
@@ -765,13 +765,20 @@ extension AgentWindowD1Tests {
             clock.t += 1
             m.refresh()
             settle(host)
-            XCTAssertNil(m.newSession, "past the slack: the form goes")
+            XCTAssertNotNil(m.newSession, "past the slack: the form stays")
+            XCTAssertEqual(m.newSessionStatus, AgentWindowModel.notListedText("web"), "and says why")
+            XCTAssertTrue(m.newSession?.starting == nil, "re-enabled")
             XCTAssertNil(m.pendingSpawn)
-            XCTAssertEqual(m.terminal.key?.name, "a", "a's terminal again")
-            XCTAssertEqual(t.spawned().count, 1, "one fresh client: a's")
-            XCTAssertTrue(win.firstResponder === m.terminal.view, "the keys where they were")
+            XCTAssertNil(m.terminal.key, "the form still covers the pane")
+            XCTAssertEqual(t.spawned().count, 0)
+            XCTAssertEqual(formFields(host).count, 3)
             st.sessions = [a, mapped("web")]
             XCTAssertEqual(m.selection, .live(a.key), "a late row selects nothing")
+            XCTAssertNotNil(m.newSession)
+            m.cancelNewSession()
+            settle(host)
+            XCTAssertEqual(m.terminal.key?.name, "a", "Cancel: a's terminal again")
+            XCTAssertTrue(win.firstResponder === m.terminal.view, "the keys where they were")
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }

@@ -152,8 +152,20 @@ final class AgentsNSWindow: NSWindow {
     /// Everything else (Esc, Tab, ⌃C, arrows, Return) reaches the first responder.
     /// #829 G4: while the title is a rename field, every key but ⌘W is the field's (the
     /// verbosity keys, ⌘T, ⌘F, ⌘G, ⌘↑/⌘↓ and any shortcut added later stand down).
+    /// #887 (QA #747 INFO-4): while the New session `form` covers the pane, a chord that acts on the session under it
+    /// (⌘T, ⌥⌘1/2/3, ⌘F, ⌘G, ⇧⌘G, ⌘↑/⌘↓) is swallowed; ⌘W, ⌘N and ⇧⌘N stay the window's.
     static func route(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool,
-                      renaming: Bool = false) -> KeyRoute {
+                      renaming: Bool = false, form: Bool = false) -> KeyRoute {
+        let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
+                          renaming: renaming)
+        switch r {
+        case .toggleMode, .verbosity, .session, .find, .findNext: return form ? .swallow : r
+        default: return r
+        }
+    }
+
+    private static func paneRoute(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool,
+                                  renaming: Bool) -> KeyRoute {
         guard event.type == .keyDown else { return .pass }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = chordLetter(event)
@@ -191,7 +203,8 @@ final class AgentsNSWindow: NSWindow {
             return super.performKeyEquivalent(with: event)
         }
         switch Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                          terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil) {
+                          terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil,
+                          form: model.newSession != nil) {
         case .close: performClose(nil)
         case .verbosity(let v): model.verbosity = v
         case .toggleMode:
@@ -211,10 +224,18 @@ final class AgentsNSWindow: NSWindow {
 
     /// #882: the letter a chord matches. On a Cyrillic, Greek or Hebrew layout `charactersIgnoringModifiers` is
     /// the layout's own letter and the Command-modified `characters` the Latin one (what menu key equivalents
-    /// match), so either one fires a chord; `characters` wins when both are chord letters. On Latin layouts,
-    /// Dvorak too, the two agree: the letter, not the key position, stays the rule.
+    /// match), so either one fires a chord; `characters` wins when both are chord letters. The letter, not the
+    /// key position, stays the rule.
+    /// #887: on "Dvorak - QWERTY ⌘" the two differ on Latin keys too (Command gives the QWERTY character), so with
+    /// Command held and Option not, a printable ASCII `characters` decides alone: ⌘, there is Settings, not ⌘W.
+    /// With Option held the rule above stays (⌥⌘W types an ASCII character on the Finnish/Norwegian Extended and
+    /// Sami layouts, and must still close).
     static func chordLetter(_ event: NSEvent) -> String? {
-        if let typed = event.characters?.lowercased(), chordLetters.contains(typed) { return typed }
+        let typed = event.characters?.lowercased()
+        let mods = event.modifierFlags
+        if mods.contains(.command), !mods.contains(.option), let typed, typed.unicodeScalars.count == 1,
+           typed.unicodeScalars.allSatisfy({ (0x21...0x7e).contains($0.value) }) { return typed }
+        if let typed, chordLetters.contains(typed) { return typed }
         return event.charactersIgnoringModifiers?.lowercased()
     }
 
@@ -237,7 +258,8 @@ final class AgentsNSWindow: NSWindow {
         }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                                 terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil) == .sidebar,
+                                 terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil,
+                                 form: model.newSession != nil) == .sidebar,
            Self.handle(event, model) { return }
         super.sendEvent(event)
     }
@@ -321,9 +343,8 @@ struct AgentSidebarView: View {
             if !model.hasStore {
                 AgentEmptyState(icon: "rectangle.dashed", title: "Agent Island is off",
                                 detail: "Turn on Agent Island in Settings › Extensions to list your dch sessions here.")
-            } else if model.sections.isEmpty {
-                AgentEmptyState(icon: "terminal", title: "No agent sessions",
-                                detail: "Press + or ⌘N to start one.")
+            } else if model.sections.isEmpty, let store = model.store {
+                AgentNoSessionsState(store: store)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -504,6 +525,19 @@ extension AgentSidebarRowView {
             }
             Spacer(minLength: 0)
         }
+    }
+}
+
+/// The sidebar with no session and no record. #887 (QA #747 INFO-7): + and ⌘N are named only while they work.
+struct AgentNoSessionsState: View {
+    @ObservedObject var store: AgentIslandStore
+
+    var body: some View {
+        AgentEmptyState(icon: "terminal", title: "No agent sessions", detail: Self.detail(canStart: store.resumeGate.isOK))
+    }
+
+    static func detail(canStart: Bool) -> String {
+        "Sessions started with dch show up here." + (canStart ? " Press + or ⌘N to start one." : "")
     }
 }
 

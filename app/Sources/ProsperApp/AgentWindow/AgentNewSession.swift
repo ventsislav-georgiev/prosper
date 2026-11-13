@@ -123,6 +123,7 @@ struct AgentNewSessionView: View {
                 HStack(spacing: sz(6)) {
                     TextField("~", text: Binding(get: { form.folder }, set: { model.setNewSessionFolder($0) }))
                         .focused($focus, equals: .folder)
+                        .accessibilityLabel("Folder")   // #887 (QA #747 INFO-6): VoiceOver read the placeholder
                     Menu {
                         ForEach(model.newSessionRecents, id: \.self) { f in
                             let shown = AgentNewSession.abbreviate(f, home: model.home)
@@ -136,6 +137,7 @@ struct AgentNewSessionView: View {
                     .frame(width: sz(18), height: sz(18))
                     .disabled(model.newSessionRecents.isEmpty)
                     .help("Recent folders")
+                    .accessibilityLabel("Recent folders")
                     AgentPillButton(title: "Choose…", icon: "folder", tint: Neon.blue) { model.chooseNewSessionFolder() }
                 }
             }
@@ -143,11 +145,13 @@ struct AgentNewSessionView: View {
                 TextField(model.newSessionAutoName, text: Binding(get: { form.nameEdited ? form.name : model.newSessionAutoName },
                                                                  set: { model.setNewSessionName($0) }))
                     .focused($focus, equals: .name)
+                    .accessibilityLabel("Name")
             }
             field("Command", error: nil) {
                 VStack(alignment: .leading, spacing: sz(4)) {
                     TextField("Empty: your login shell", text: Binding(get: { form.command }, set: { model.setNewSessionCommand($0) }))
                         .focused($focus, equals: .command)
+                        .accessibilityLabel("Command")
                     let runs = model.newSessionRuns
                     Text(verbatim: "Runs: " + runs).font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textSecondary)
                         .lineLimit(1).truncationMode(.tail).help(runs)

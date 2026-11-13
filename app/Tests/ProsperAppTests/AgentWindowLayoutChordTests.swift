@@ -115,6 +115,41 @@ final class AgentWindowLayoutChordTests: XCTestCase {
         }
     }
 
+    /// #887 (QA #754 INFO-1): "Dvorak - QWERTY ⌘" types Dvorak but gives the QWERTY character under Command (the
+    /// installed layout's UCKeyTranslate values). With Command and no Option a printable ASCII `characters` decides,
+    /// so each chord fires from its QWERTY key only: the Dvorak-letter key's ⌘, ⌘K, ⌘Y, ⌘U, ⌘L are no chord.
+    @MainActor
+    func testAgentWindowDvorakQwertyCommandFiresEachChordFromOneKey() {
+        // Letter, QWERTY key, what Dvorak types there, the Dvorak-letter key, what Command gives there, the route.
+        let rows: [(String, UInt16, String, UInt16, String, R)] = [
+            ("w", 13, ",", 43, ",", .close), ("t", 17, "y", 40, "k", .toggleMode), ("f", 3, "u", 16, "y", .find),
+            ("g", 5, "i", 32, "u", .findNext(true)), ("n", 45, "b", 37, "l", .newSession),
+        ]
+        for (l, qwerty, typed, dvorak, cmd, want) in rows {
+            for r: AgentsNSWindow.ResponderKind in [.text, .terminal, .other] {
+                XCTAssertEqual(route(ev(qwerty, l, typed, .command), r), want, "⌘ on the QWERTY \(l) key")
+                XCTAssertEqual(route(ev(dvorak, cmd, l, .command), r), .pass, "⌘\(cmd) on the Dvorak \(l) key is no chord")
+            }
+        }
+        XCTAssertEqual(route(ev(45, "n", "B", [.command, .shift])), .newShell, "⇧⌘ on the QWERTY N key")
+        XCTAssertEqual(route(ev(37, "l", "N", [.command, .shift])), .pass, "⇧⌘ on the Dvorak N key")
+        XCTAssertEqual(route(ev(5, "g", "I", [.command, .shift])), .findNext(false))
+        XCTAssertEqual(route(ev(32, "u", "G", [.command, .shift])), .pass)
+        XCTAssertEqual(route(ev(43, "<", "W", [.command, .shift])), .pass, "⇧⌘ on the Dvorak W key")
+        // Option held: the #882 rule stays. Finnish/Norwegian Extended and the Sami layouts type an ASCII "," with ⌥⌘
+        // on the W key, which must still close; the same fields on this layout's Dvorak W key close too (not separable).
+        XCTAssertEqual(route(ev(13, ",", "w", [.command, .option])), .close, "Finnish Extended ⌥⌘W")
+        XCTAssertEqual(route(ev(43, ",", "w", [.command, .option])), .close, "Dvorak - QWERTY ⌘'s ⌥⌘ on its W key")
+        XCTAssertEqual(route(ev(13, "w", ",", [.command, .option])), .close, "its ⌥⌘ on the QWERTY W key")
+        XCTAssertEqual(route(ev(45, "n", "b", [.command, .option])), .pass, "⌥⌘N is no chord")
+        // The modelless window: ⌘, is not its ⌘W.
+        let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled, .closable],
+                                 backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        XCTAssertFalse(win.performKeyEquivalent(with: ev(43, ",", "w", .command)), "⌘, passes on")
+        XCTAssertFalse(win.isVisible, "never shown")
+    }
+
     /// The modelless window's own ⌘W (performKeyEquivalent): closes on a Cyrillic layout. Never shown.
     @MainActor
     func testAgentWindowWithoutModelClosesOnCyrillicCommandW() {
