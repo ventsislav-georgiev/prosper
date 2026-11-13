@@ -982,6 +982,33 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(AgentWindowDriver.refusal(chat), AgentWindowText.promptShown)
     }
 
+    /// #1065 (QA #651 INFO-1): with no hint line under the composer (Claude Code drops "? for
+    /// shortcuts" once a draft is typed) a numbered draft parses as a two-row prompt. Still nothing
+    /// is pasted and no Esc goes out, but the refusal says it is a draft, not "showing a prompt".
+    func testAgentWindowNumberedDraftWithNoHintUnderTheComposerSaysItIsADraft() {
+        let head = ["⏺ Done.", "", Self.rule, "❯ 1. fix the build"]
+        let screens = [("blank under the composer", head + ["  2. then run the tests", "", Self.rule, ""]),
+                       ("bottom rule last", head + ["  2. then run the tests", Self.rule]),
+                       ("blank line inside the draft", head + ["", "  2. then run the tests", Self.rule, ""])]
+        for (name, lines) in screens {
+            let screen = lines.joined(separator: "\n")
+            XCTAssertTrue(AgentPrompt.screen(screen) != nil, "\(name): the parse reads the draft as a prompt")
+            XCTAssertEqual(AgentWindowDriver.refusal(screen), AgentWindowText.draft, name)
+            for st in ["idle", "done"] {
+                let f = MessageFake(statuses: [st, "working"], screens: [screen])
+                XCTAssertEqual(driver(f.io).send("go"), .failed(AgentWindowText.draft), "\(name) \(st)")
+                XCTAssertEqual(f.says, [], "\(name) \(st): nothing pasted")
+            }
+            let g = MessageFake(statuses: ["working", "idle"], screens: [screen])
+            XCTAssertEqual(driver(g.io).interrupt(), .failed(AgentWindowText.draft), name)
+            XCTAssertEqual(g.keys, [], "\(name): no Esc")
+        }
+        // A numbered row below the rule that closes the composer is not the draft: still a prompt.
+        let below = ["⏺ Done.", Self.rule, "❯ 1. fix the build", Self.rule, "  2. then run the tests", ""].joined(separator: "\n")
+        XCTAssertTrue(AgentPrompt.screen(below) != nil)
+        XCTAssertEqual(AgentWindowDriver.refusal(below), AgentWindowText.promptShown)
+    }
+
     /// QA #651 INFO-2: on a dch with no terminal mirror (dch-lite) every read is empty. Still
     /// nothing is sent, but the window says why: noScreen, not "Couldn't confirm". A full dch
     /// whose read timed out still reads unconfirmed. The mirror is asked only after an empty read.

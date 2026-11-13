@@ -355,9 +355,10 @@ final class AgentWindowPlanTests: XCTestCase {
         try Data("x".utf8).write(to: URL(fileURLWithPath: home + "/real/a.md"))
         try fm.createSymbolicLink(atPath: plans + "/sub", withDestinationPath: home + "/real")
         XCTAssertNil(read(plans + "/sub/a.md"), "a symlinked directory on the way")
+        // #1065: a symlink above the plans root is resolved once (testAgentWindowPlanFileReadResolvesTheConfiguredFolderOnce).
         try fm.createSymbolicLink(atPath: home + "/linked", withDestinationPath: home + "/.claude")
-        XCTAssertNil(AgentPlanInput.read(home + "/linked/plans/example-plan.md", root: home + "/linked/plans"),
-                     "a symlink above the plans root")
+        XCTAssertEqual(AgentPlanInput.read(home + "/linked/plans/example-plan.md", root: home + "/linked/plans"), T.planMarkdown,
+                       "a symlink above the plans root")
         // Not a regular file; the size cap; UTF-8; empty.
         try fm.createDirectory(atPath: plans + "/dir.md", withIntermediateDirectories: true)
         XCTAssertNil(read(plans + "/dir.md"))
@@ -498,6 +499,88 @@ final class AgentWindowPlanTests: XCTestCase {
         }
         // The live capture still matches (every existing plan test does too).
         XCTAssertEqual(AgentPlanInput.flat(T.planShown), AgentPlanInput.flat([T.planMarkdown]))
+    }
+
+    /// #1065 (QA #653 INFO-3): markdown forms Claude Code's renderer (2.1.322, read from its
+    /// binary) draws differently from their source: each plan with the lines its dialog shows.
+    /// Before #1065 each read as a mismatch, so such a plan could not be approved from the window.
+    @MainActor
+    func testAgentWindowPlanCompareMapsTheFormsTheRenderRedraws() throws {
+        let forms: [(String, String, [String])] = [
+            ("table without outer pipes", "File | Purpose\n:--- | ---:\nhello.txt | greeting",
+             ["┌───────────┬──────────┐", "│ File      │  Purpose │", "├───────────┼──────────┤",
+              "│ hello.txt │ greeting │", "└───────────┴──────────┘"]),
+            ("task item checked with X", "- [X] Create hello.txt\n* [ ] Verify its contents",
+             ["- [x] Create hello.txt", "- [ ] Verify its contents"]),
+            ("setext heading", "Steps\n=====\n\nCreate hello.txt", ["Steps", "", "Create hello.txt"]),
+            ("closing heading hashes", "## Steps ##\n\nCreate hello.txt", ["Steps", "", "Create hello.txt"]),
+            ("tilde fence", "~~~bash\necho hi > hello.txt\n~~~", ["echo hi > hello.txt"]),
+            ("autolink", "See <https://example.com> for details.", ["See https://example.com for details."]),
+        ]
+        let flat = { (s: String) in AgentPlanInput.flat([s]) }
+        for (name, md, shown) in forms {
+            XCTAssertEqual(flat(md), AgentPlanInput.flat(shown), name)
+            let w = try prompt(T.planScreen(caret: 1, plan: shown), plan: AgentPlanInput(id: "toolu_p", plan: md))
+            XCTAssertEqual(w.approve, [1, 2], name)
+            XCTAssertTrue(w.why == nil, name)
+        }
+        // Each rule maps only its own form: everything else the source says is still compared.
+        for (a, b) in [("a | b\nc", "a b\nc"), ("a | b\n--|--\nc | d\n\nx | y", "a b\nc d\n\nx y"),
+                       ("[X] done", "[x] done"), ("a = b", "a b"), ("## Use C#", "Use C"), ("x ##", "x"),
+                       ("~~~\nrm -rf build\n~~~", "~~~\necho hi\n~~~"), ("<ftp://example.com>", "ftp://example.com")] {
+            XCTAssertNotEqual(flat(a), flat(b), a)
+        }
+        // Still not mapped, so still refused: renumbered ordered lists, "1)" markers.
+        XCTAssertNotEqual(flat("1. a\n1. b"), AgentPlanInput.flat(["1. a", "2. b"]))
+        XCTAssertNotEqual(flat("1) a"), flat("1. a"))
+    }
+
+    /// #1065 (QA #649 INFO 4): the configured folder is resolved once, so a symlinked ~/.claude or
+    /// plans folder is read; below the resolved folder no symlink is followed, so a link inside
+    /// it (pointing out, or even back in) still refuses. Scratch dirs and fake homes only.
+    @MainActor
+    func testAgentWindowPlanFileReadResolvesTheConfiguredFolderOnce() throws {
+        let (real, file) = try planHome()
+        let fm = FileManager.default, read = AgentPlanInput.read
+        let home = real + "/home-a", plans = home + "/.claude/plans"
+        try fm.createDirectory(atPath: home, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: home + "/.claude", withDestinationPath: real + "/.claude")
+        XCTAssertEqual(read(plans + "/example-plan.md", plans), T.planMarkdown, "a symlinked ~/.claude")
+        let input = AgentPlanInput(id: "toolu_p", plan: nil, file: plans + "/example-plan.md", home: home)
+        XCTAssertEqual(try prompt(T.planScreen(caret: 1), plan: input).approve, [1, 2], "the dialog path")
+        let homeB = real + "/home-b", plansB = homeB + "/.claude/plans"
+        try fm.createDirectory(atPath: homeB + "/.claude", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: plansB, withDestinationPath: real + "/.claude/plans")
+        XCTAssertEqual(read(plansB + "/example-plan.md", plansB), T.planMarkdown, "a symlinked plans folder")
+        let homeC = real + "/home-c"
+        try fm.createDirectory(atPath: homeC, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: homeC + "/.claude", withDestinationPath: "../home-a/.claude")
+        XCTAssertEqual(read(homeC + "/.claude/plans/example-plan.md", homeC + "/.claude/plans"), T.planMarkdown,
+                       "a relative link to a link")
+        // Links inside the resolved folder: out of it, to a file in it, a directory out of it.
+        let outside = real + "/outside"
+        try fm.createDirectory(atPath: outside, withIntermediateDirectories: true)
+        try Data(T.planMarkdown.utf8).write(to: URL(fileURLWithPath: outside + "/a.md"))
+        try Data(T.planMarkdown.utf8).write(to: URL(fileURLWithPath: real + "/.claude/beside.md"))
+        try fm.createSymbolicLink(atPath: real + "/.claude/plans/out.md", withDestinationPath: outside + "/a.md")
+        try fm.createSymbolicLink(atPath: real + "/.claude/plans/in.md", withDestinationPath: file)
+        try fm.createSymbolicLink(atPath: real + "/.claude/plans/sub", withDestinationPath: outside)
+        for root in [plans, plansB, real + "/.claude/plans"] {
+            for name in ["out.md", "in.md", "sub/a.md", "../beside.md"] {
+                XCTAssertTrue(read(root + "/" + name, root) == nil, "\(root) \(name)")
+            }
+            XCTAssertTrue(read((root as NSString).deletingLastPathComponent + "/beside.md", root) == nil, "\(root): beside the folder")
+        }
+        let link = AgentPlanInput(id: "t", plan: nil, file: plans + "/out.md", home: home)
+        XCTAssertEqual(try prompt(T.planScreen(caret: 1, footer: "ctrl+g to edit in VS Code · ~/.claude/plans/out.md"), plan: link).why,
+                       AgentWindowText.planFile)
+        // A dangling folder link, or one to a file: nothing.
+        let homeD = real + "/home-d"
+        try fm.createDirectory(atPath: homeD, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: homeD + "/.claude", withDestinationPath: real + "/missing")
+        XCTAssertTrue(read(homeD + "/.claude/plans/example-plan.md", homeD + "/.claude/plans") == nil, "dangling")
+        try fm.createSymbolicLink(atPath: homeD + "/plans", withDestinationPath: file)
+        XCTAssertTrue(read(homeD + "/plans/example-plan.md", homeD + "/plans") == nil, "a folder link to a file")
     }
 
     /// #823 / #818 Q2: the island card answers no plan row. A digit with the caret on the feedback

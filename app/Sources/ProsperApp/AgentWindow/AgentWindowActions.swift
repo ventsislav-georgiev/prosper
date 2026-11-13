@@ -108,18 +108,23 @@ struct AgentPlanInput: Equatable, Sendable {
         return "/" + parts.joined(separator: "/")
     }
 
-    /// The plan file's text: `path` strictly under `root`, no symlink at any component from "/"
-    /// (lstat), a regular file of at most `maxFileBytes`, valid UTF-8, the file opened being the
-    /// one checked (O_NOFOLLOW, same device and inode). nil on any miss.
+    /// The plan file's text: `path` strictly under `root`; `root` resolved once (#1065: a symlinked
+    /// ~/.claude or plans folder), then no symlink at any component of the resolved path from "/"
+    /// (lstat), so a link inside the folder never leads out of it; a regular file of at most
+    /// `maxFileBytes`, valid UTF-8, the file opened being the one checked (O_NOFOLLOW, same
+    /// device and inode: a link swapped in after the walk cannot redirect the read). nil on any miss.
     static func read(_ path: String, root: String) -> String? {
-        guard let path = clean(path), let root = clean(root), path.hasPrefix(root + "/") else { return nil }
+        guard let path = clean(path), let root = clean(root), path.hasPrefix(root + "/"),
+              let real = realpath(root, nil) else { return nil }
+        let resolved = String(cString: real) + path.dropFirst(root.count)
+        free(real)
         var st = stat(), prefix = ""
-        for c in path.split(separator: "/") {
+        for c in resolved.split(separator: "/") {
             prefix += "/" + c
             guard lstat(prefix, &st) == 0, (st.st_mode & S_IFMT) != S_IFLNK else { return nil }
         }
         guard (st.st_mode & S_IFMT) == S_IFREG, st.st_size <= maxFileBytes else { return nil }
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        let fd = open(resolved, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         var ft = stat()
@@ -147,18 +152,32 @@ struct AgentPlanInput: Equatable, Sendable {
     /// "`" (bold, italic, inline code), "~~" (strikethrough), a backslash escape's "\\", the
     /// bullet glyphs "•◦▪▫‣·". Anything else the render redraws reads as a mismatch, which fails
     /// closed (Open in terminal); add rules from a live capture if one bites.
+    /// #1065, from Claude Code 2.1.322's renderer (zt/MN, read from the binary): a table without outer
+    /// pipes ("a | b" over "--|--") is drawn boxed like one with them; "~~~" fences go like "```"; a
+    /// setext "===" underline and an ATX heading's closing "#"s go; a task item's "[X]" reads "[x]";
+    /// an autolink "<https://…>" reads as its URL. Still not mapped (fail closed): ordered lists
+    /// renumbered by the render ("1. 1." reads "1. 2.", "1)" reads "1.", nested ones as a./i.), "+"
+    /// bullets (read "-"; mapping them would equate a diff's "+ x" and "- x"), &nbsp;, reference links.
     static func flat(_ lines: [String]) -> String {
-        var out = ""
-        for raw in lines.flatMap({ $0.components(separatedBy: .newlines) }) {
-            var l = String(raw.drop(while: \.isWhitespace))
-            if l.hasPrefix("```") { continue }
-            if l.first == "|" {
+        var out = "", table = false
+        let all = lines.flatMap { $0.components(separatedBy: .newlines) }.map { String($0.drop(while: \.isWhitespace)) }
+        let delimiter = { (l: String) in l.contains("|") && l.contains("-") && l.allSatisfy { "|:- \t".contains($0) } }
+        for (k, raw) in all.enumerated() {
+            var l = raw
+            if l.hasPrefix("```") || l.hasPrefix("~~~") { continue }
+            if l.first == "=", l.allSatisfy({ "= \t".contains($0) }) { continue }
+            // A table's rows: from a "|" line over a delimiter row to the first line with no "|".
+            table = l.contains("|") && (table || (k + 1 < all.count && delimiter(all[k + 1])))
+            if l.first == "|" || table {
                 if l.allSatisfy({ "|:- \t".contains($0) }) { continue }
                 l.removeAll { $0 == "|" }
             }
             let marks = l.filter { "-*_".contains($0) }
             if marks.count >= 3, l.allSatisfy({ "-*_ \t".contains($0) }) { continue }
+            if l.contains(#/^(?:>[ \t]*)*#{1,6}(?:[ \t]|$)/#) { l = l.replacing(#/[ \t]+#+[ \t]*$/#, with: "") }
+            l = l.replacing(#/^((?:>[ \t]*)*(?:[-*+]|\d{1,9}[.)])[ \t]+)\[X\]/#) { "\($0.1)[x]" }
             l = l.replacing(#/^(?:>[ \t]*)*(?:#{1,6}(?:[ \t]+|$)|-[ \t]+)?/#, with: "")
+            l = l.replacing(#/<(https?:\/\/[^\s<>]+)>/#) { String($0.1) }
             l = l.replacing(#/\[([^\]]*)\]\(([^)\s]*)\)/#) { "\($0.1) (\($0.2))" }
             l = l.replacing("~~", with: "")
             l = l.replacing(#/\\([!-\/:-@\[-`{-~])/#) { String($0.1) }
@@ -333,9 +352,30 @@ struct AgentWindowDriver: Sendable {
     /// QA #651 F1: also a prompt Prosper does not parse (a plan approval with no footer, no
     /// editor detected): below Claude Code's composer, if one is on screen, a "❯" caret on a
     /// numbered row ("❯ 1. Yes") or the plan's question line (dch #092's rule).
+    /// #1065 (QA #651 INFO-1): a numbered draft in the composer with no hint line under it parses
+    /// as a prompt (`draftParsed`). Still refused, never sent, but the reason says it is a draft.
     static func refusal(_ screen: String) -> String? {
         if screen.isEmpty { return AgentWindowText.unconfirmed }
-        return AgentPrompt.screen(screen) != nil || promptTail(screen) ? AgentWindowText.promptShown : nil
+        if promptTail(screen) { return AgentWindowText.promptShown }
+        guard AgentPrompt.screen(screen) != nil else { return nil }
+        return draftParsed(screen) ? AgentWindowText.draft : AgentWindowText.promptShown
+    }
+
+    /// Claude Code's composer: the last "❯" line at column 0 right under a rule with a rule further down.
+    static func composer(_ lines: [String]) -> Int? {
+        lines.indices.last { k in
+            k > 0 && AgentPrompt.isRule(lines[k - 1]) && lines[k].first == "❯"
+                && lines[(k + 1)...].contains(where: AgentPrompt.isRule)
+        }
+    }
+
+    /// #1065: the screen's bottom-most numbered line is inside the composer, between its "❯" line
+    /// and the rule closing it: what `AgentPrompt.screen` parsed is a typed draft, not a dialog.
+    static func draftParsed(_ screen: String) -> Bool {
+        let lines = AgentPrompt.unframe(screen.split(separator: "\n", omittingEmptySubsequences: false))
+        guard let k = composer(lines), let last = lines.lastIndex(where: { AgentPrompt.option($0) != nil }),
+              last >= k else { return false }
+        return !lines[k...last].contains(where: AgentPrompt.isRule)
     }
 
     /// QA #651 F1: the screen below Claude Code's composer (or all of it, with none) holds a caret
@@ -345,11 +385,7 @@ struct AgentWindowDriver: Sendable {
     /// row under a rule (a focused "❯ 5. Chat about this") has no rule below it.
     static func promptTail(_ screen: String) -> Bool {
         let lines = AgentPrompt.unframe(screen.split(separator: "\n", omittingEmptySubsequences: false))
-        let composer = lines.indices.last { k in
-            k > 0 && AgentPrompt.isRule(lines[k - 1]) && lines[k].first == "❯"
-                && lines[(k + 1)...].contains(where: AgentPrompt.isRule)
-        }
-        return lines[((composer ?? -1) + 1)...].contains { l in
+        return lines[((composer(lines) ?? -1) + 1)...].contains { l in
             AgentPrompt.option(l)?.caret == true
                 || l.trimmingCharacters(in: .whitespaces).hasPrefix("Claude has written up a plan")
         }

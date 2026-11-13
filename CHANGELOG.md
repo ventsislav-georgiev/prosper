@@ -486,6 +486,11 @@ tag from the now-released section and put it on the new top draft.
   domain written without its ending (docs.google) no longer matches docs.google.com: write
   docs.google.com or docs.google. instead. Other rules (localhost, /index.html, a word) still match
   anywhere in the link.
+- Agent Sessions: plans written with a table without outer pipes, "~~~" code fences, "===" or
+  closing-"#" headings, a "[X]" task or a <https://…> link can now be approved from the window, a
+  plan file under a symlinked ~/.claude or plans folder is read (links inside the folder are still
+  refused), and a numbered draft in Claude's input is refused with "Claude's input already holds a
+  draft" instead of "Claude is showing a prompt".
 
 ## v2.174.0
 
