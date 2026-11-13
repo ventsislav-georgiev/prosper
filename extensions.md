@@ -190,6 +190,8 @@ Each extension's off-main work runs on its **own serial lane**, so a slow handle
 
 **What a script can use:** only these standard libraries are opened: the base functions, `coroutine`, `table`, `string`, `math` and `utf8`. `io`, `os`, `package` and the `debug` library are never opened. From the base functions, `dofile` and `loadfile` are removed; `load`, where the host keeps it (trusted and built-in extensions), takes source text only (a precompiled binary chunk is refused); `string.dump` is removed. `debug` is a table holding `debug.traceback` only, so `xpcall(f, debug.traceback)` works. Everything else an extension does goes through `host.*`.
 
+**Budget:** every call the host makes into an extension (a command, an event handler, a callback) gets one instruction budget, shared by all of the extension's coroutines. Once it is spent the call ends with "execution budget exceeded"; `pcall`, `xpcall` and `coroutine.resume` cannot catch that, a message handler or a `__close` handler cannot run past it, and the next call starts with a full budget. `setmetatable` refuses a metatable with a `__gc` field (finalizers are refused), and `collectgarbage` only reports: `collectgarbage("count")` and `collectgarbage("isrunning")` answer, every other option does nothing and returns 0.
+
 **Keystroke path:** fully native and **keyCode-indexed** ([`ExtensionKeyRules.swift`](app/Sources/ProsperApp/Extensions/ExtensionKeyRules.swift)) — a keypress only scans rules bound to that key (≈0–2), budgeted under 5 µs and typically a few hundred ns. **No Lua runs in the keystroke path** (the one opt-in exception is raw event taps, §5).
 
 ---

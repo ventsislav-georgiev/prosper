@@ -647,6 +647,11 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: while dch cannot list its sessions, Always allow no longer answers prompts in the
   sessions it still shows from the last list; those prompts keep their card and send Needs input
   until dch lists again. (#1133)
+- Extensions: the limit on how long one call into an extension script may run can no longer be
+  outrun. There is one limit per call, shared by all of the script's coroutines; once it is spent
+  the call ends with "execution budget exceeded", and pcall, xpcall, coroutine.resume, an error
+  handler or a close handler cannot keep it going. An extension that sets a `__gc` finalizer now
+  gets an error from setmetatable, and collectgarbage only reports ("count", "isrunning"). (#1126)
 
 ## v2.174.0
 

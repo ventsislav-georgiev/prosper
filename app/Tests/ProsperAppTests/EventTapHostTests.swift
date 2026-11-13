@@ -218,9 +218,13 @@ final class EventTapHostTests: XCTestCase {
         _ = try lua.callGlobal("hs_eventtap_probe")
         let budget = EventTapHost.dispatchInstructionBudget
         let start = DispatchTime.now().uptimeNanoseconds
-        let r = try lua.callGlobal("hs_eventtap_dispatch", [keyDownJSON(code: 96)], budget: budget)
+        // #1126: the shim's pcall around the callback cannot catch a spent budget, so the whole dispatch
+        // aborts; callExtensionString turns the error into nil and EventTapHost fails open (== "true" is false).
+        XCTAssertThrowsError(try lua.callGlobal("hs_eventtap_dispatch", [keyDownJSON(code: 96)], budget: budget)) { err in
+            XCTAssertEqual(err as? LuaRuntime.LuaError, .runtime("execution budget exceeded"),
+                           "runaway callback must abort the dispatch, never swallow the key")
+        }
         let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        XCTAssertEqual(r, "false", "runaway callback must fail open (not swallow)")
         XCTAssertLessThan(ms, 100, "budget did not bound the runaway callback — main thread would stall")
     }
 

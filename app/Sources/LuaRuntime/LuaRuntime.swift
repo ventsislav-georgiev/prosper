@@ -16,8 +16,12 @@ import Foundation
 ///   A script cannot touch the filesystem, spawn processes, load native modules,
 ///   reach the registry or clear its budget hook. Capabilities are granted back
 ///   explicitly through host functions (task #22).
-/// - **Budget**: an instruction-count debug hook aborts any call that runs longer
-///   than `maxInstructions`, so a runaway loop cannot wedge the host.
+/// - **Budget** (#1126): an instruction-count debug hook aborts any host call
+///   (`run`, `callGlobal`) that runs longer than its budget, so a runaway loop
+///   cannot wedge the host. One count per call covers every coroutine of the
+///   state; once spent it stays spent until the call returns, so a script's
+///   `pcall` cannot keep going; `__gc` metamethods are refused and
+///   `collectgarbage` only reports (`count`, `isrunning`), so no finalizer runs.
 public final class LuaRuntime {
 
     /// Errors thrown by load/run/call.
@@ -103,6 +107,12 @@ public final class LuaRuntime {
         clua_pop(L, 1)
         lua_setglobal(L, "debug")
 
+        // #1126: no finalizers (they would run outside the budget); the collector stays the host's.
+        clua_pushcfunction(L, clua_sandbox_setmetatable)
+        lua_setglobal(L, "setmetatable")
+        clua_pushcfunction(L, clua_sandbox_collectgarbage)
+        lua_setglobal(L, "collectgarbage")
+
         for global in ["dofile", "loadfile"] + (allowLoad ? [] : ["load"]) {
             lua_pushnil(L)
             lua_setglobal(L, global)
@@ -162,19 +172,17 @@ public final class LuaRuntime {
         return result
     }
 
-    /// Protected call with a freshly-armed instruction budget.
+    /// Protected call with a freshly-armed instruction budget, shared by every
+    /// thread of the state and sticky once spent (#1126, clua_shim.c).
     private func pcall(args: Int32, results: Int32, budget: Int32? = nil) throws {
-        clua_set_count_hook(L, LuaRuntime.budgetHook, budget ?? maxInstructions)
+        clua_budget_arm(L, budget ?? maxInstructions)
         let status = clua_pcall(L, args, results, 0)
-        clua_clear_hook(L)
+        let spent = clua_budget_disarm(L) != 0
         if status != 0 {
-            throw LuaError.runtime(takeError())
+            let message = takeError()
+            // A spent budget is reported as such whatever unwound last (coroutine.wrap adds a position).
+            throw LuaError.runtime(spent ? "execution budget exceeded" : message)
         }
-    }
-
-    /// Fires once the per-call instruction budget is exhausted; aborts the call.
-    private static let budgetHook: lua_Hook = { L, _ in
-        clua_raise(L, "execution budget exceeded")
     }
 
     /// Pop and return the error message on the top of the stack.

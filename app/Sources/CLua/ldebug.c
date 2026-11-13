@@ -936,9 +936,10 @@ int luaG_traceexec (lua_State *L, const Instruction *pc) {
   }
   pc++;  /* reference is always next instruction */
   ci->u.l.savedpc = pc;  /* save 'pc' */
-  counthook = (mask & LUA_MASKCOUNT) && (--L->hookcount == 0);
+  /* #1126: one count for every thread (the main thread's), so a coroutine has no budget of its own */
+  counthook = (mask & LUA_MASKCOUNT) && (--G(L)->mainthread->hookcount == 0);
   if (counthook)
-    resethookcount(L);  /* reset count */
+    resethookcount(G(L)->mainthread);  /* reset count */
   else if (!(mask & LUA_MASKLINE))
     return 1;  /* no line hook and count != 0; nothing to be done now */
   if (ci->callstatus & CIST_HOOKYIELD) {  /* hook yielded last time? */
@@ -962,7 +963,7 @@ int luaG_traceexec (lua_State *L, const Instruction *pc) {
   }
   if (L->status == LUA_YIELD) {  /* did hook yield? */
     if (counthook)
-      L->hookcount = 1;  /* undo decrement to zero */
+      G(L)->mainthread->hookcount = 1;  /* undo decrement to zero (#1126) */
     ci->callstatus |= CIST_HOOKYIELD;  /* mark that it yielded */
     luaD_throw(L, LUA_YIELD);
   }
