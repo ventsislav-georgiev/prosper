@@ -412,6 +412,9 @@ tag from the now-released section and put it on the new top draft.
 - System Settings search: on macOS versions without the Passwords app, the Passwords row now opens
   the Passwords settings pane with its own icon instead of showing a blank file icon and opening
   nothing.
+- OpenLid: turning the extension off and back on now really keeps the Mac awake again (or ends a
+  timed session that ran out meanwhile) instead of showing "awake" while nothing held it; re-enabled
+  extensions also get their shortcuts, rules and timers back without a relaunch.
 
 ## v2.174.0
 

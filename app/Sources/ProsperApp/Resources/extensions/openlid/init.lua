@@ -605,14 +605,33 @@ end
 -- ============ Event handlers ============
 function on_launch(payload)
     local s = load_state()
-    -- Re-apply native assertions for a session that was active before a restart
-    -- (the host released them on quit). The durable expiry/tick timers were
-    -- already restored by the host's TimerScheduler.
+    local now = host.time()
+    -- The host also sends this on re-enable (#930), after its teardown released the
+    -- assertions and CANCELLED every timer (TimerScheduler restores them only at app
+    -- launch). A timed session that ran out meanwhile ends here, as on_expiry would.
+    if s.active and type(s.endTime) == "number" and s.endTime <= now then
+        deactivate("timer expired"); s = load_state()
+    end
+    if s.caffeine and type(s.caffeineEnd) == "number" and s.caffeineEnd <= now then
+        caffeine_off("timer expired"); s = load_state()
+    end
+    -- Re-apply native assertions for a session that was active before a restart or
+    -- a disable (the host released them), and re-arm the timers for the remainder
+    -- (re-scheduling an id the TimerScheduler already restored just replaces it).
     if s.active then
         host.caffeinate.prevent_idle_sleep("system", true)
         if s.lidSleepDisabled then host.caffeinate.set_disable_lid_sleep(true) end
+        if type(s.endTime) == "number" then
+            host.timer.schedule { id = "expiry", after = s.endTime - now, handler = "on_expiry" }
+        end
     end
-    if s.caffeine then host.caffeinate.prevent_idle_sleep("display", true) end
+    if s.caffeine then
+        host.caffeinate.prevent_idle_sleep("display", true)
+        if type(s.caffeineEnd) == "number" then
+            host.timer.schedule { id = "caffexpiry", after = s.caffeineEnd - now, handler = "on_caffeine_expiry" }
+        end
+    end
+    sync_tick(s)
     local src = host.battery.power_source()
     s.lastPowerSource = src
     save_state(s)

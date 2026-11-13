@@ -986,4 +986,144 @@ do
     h.eq(sent and sent.interval_batt, 300, "battery cadence default unchanged")
 end
 
+-- ── #930 Disable / re-enable: the stored state never outlives what is held ──────
+-- What ExtensionRegistry.teardown does on disable (and AppDelegate does on quit):
+-- assertions + lid override released, menubar item removed. A disable also
+-- cancels every durable timer (TimerScheduler.cancelAll); a quit keeps them for
+-- TimerScheduler.restore. Re-enable replays system.launch into a fresh VM.
+local function release_all(env, drop_timers)
+    env.flags.idleSystem = false; env.flags.idleDisplay = false; env.flags.lidDisabled = false
+    env.menu = nil
+    if drop_timers then env.timers = {} end
+end
+local function relaunch(host)
+    local G = h.load(INIT, host)
+    G.on_launch("{}")
+    return G
+end
+
+-- (a) active, disable, enable: held again, and the menu says so.
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.openlid_toggle(""); G.openlid_caffeine("")
+    release_all(env, true)                                   -- disable
+    relaunch(host)                                           -- enable
+    h.eq(state(host).active, true, "(a) still on after re-enable")
+    h.eq(env.flags.idleSystem, true, "(a) idle-sleep assertion re-held")
+    h.eq(env.flags.lidDisabled, true, "(a) lid override re-held")
+    h.eq(env.flags.idleDisplay, true, "(a) display assertion re-held")
+    h.eq(env.menu and env.menu.title, "\u{26A1}", "(a) menu bar item back")
+end
+
+-- (b) timed, disable, quit, launch (disabled: no on_launch), enable 10 min later:
+-- the expiry the disable cancelled is back for the remainder, with its countdown.
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.on_menu_on(host.json.encode { secs = 3600 })
+    G.on_caff_on(host.json.encode { secs = 7200 })
+    release_all(env, true)                                   -- disable
+    release_all(env, false)                                  -- quit + launch while disabled
+    env.now = env.now + 600
+    relaunch(host)                                           -- enable
+    h.eq(state(host).active, true, "(b) session kept")
+    h.eq(env.flags.idleSystem and env.flags.lidDisabled, true, "(b) re-held")
+    h.eq(env.timers["expiry"] and env.timers["expiry"].after, 3000, "(b) expiry re-armed for the remainder")
+    h.eq(env.timers["tick"] and env.timers["tick"].every, 60, "(b) countdown tick back")
+    h.eq(env.flags.idleDisplay, true, "(b) display re-held")
+    h.eq(env.timers["caffexpiry"] and env.timers["caffexpiry"].after, 6600, "(b) caffexpiry re-armed for the remainder")
+end
+
+-- (c) timed, quit (timers persisted), launch 10 min later: unchanged behaviour.
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.on_menu_on(host.json.encode { secs = 3600 })
+    release_all(env, false)                                  -- quit
+    env.now = env.now + 600
+    relaunch(host)                                           -- launch
+    h.eq(state(host).active, true, "(c) session kept")
+    h.eq(env.flags.idleSystem and env.flags.lidDisabled, true, "(c) re-held")
+    h.eq(env.timers["expiry"] ~= nil, true, "(c) expiry still armed")
+end
+
+-- (d) timers fall due while disabled: both sessions end at re-enable, nothing held.
+do
+    local host, env = h.makeHost { power = "Battery Power" }
+    local G = h.load(INIT, host)
+    G.on_menu_on(host.json.encode { secs = 1800 })
+    G.on_caff_on(host.json.encode { secs = 1800 })
+    release_all(env, true)                                   -- disable
+    env.now = env.now + 3600
+    relaunch(host)                                           -- enable
+    h.eq(state(host).active, false, "(d) Mac session ended")
+    h.eq(state(host).caffeine, false, "(d) display session ended")
+    h.eq(env.flags.idleSystem or env.flags.lidDisabled or env.flags.idleDisplay, false, "(d) nothing held")
+    h.eq(env.timers["expiry"] == nil and env.timers["caffexpiry"] == nil and env.timers["tick"] == nil, true,
+        "(d) no timers left")
+    h.eq(env.menu and env.menu.title, "\u{1F4A4}", "(d) menu says asleep")
+end
+
+-- (d) on the charger with the plugged-in rule: the ended manual session goes back
+-- to the hold, which is held.
+do
+    local host, env = h.makeHost { power = "AC Power" }
+    local G = h.load(INIT, host)
+    G.on_menu_on(host.json.encode { secs = 1800 })
+    release_all(env, true)                                   -- disable
+    env.now = env.now + 3600
+    relaunch(host)                                           -- enable
+    h.eq(state(host).active, true, "(d/AC) back to the hold")
+    h.eq(state(host).autoActivated, true, "(d/AC) the rule owns it")
+    h.eq(state(host).endTime, nil, "(d/AC) no stale end time")
+    h.eq(env.flags.idleSystem and env.flags.lidDisabled, true, "(d/AC) held")
+end
+
+-- (#930 r2) App launch with the timer overdue: quit, the end passes while the app
+-- is closed, launch. TimerScheduler.restore fires the persisted on_expiry at once
+-- and on_launch also ends it: in either order the session ends exactly once.
+local function count_alerts(env, needle)
+    local n = 0
+    for _, a in ipairs(env.alerts) do if a:find(needle, 1, true) then n = n + 1 end end
+    return n
+end
+local function overdue(power, kind, launch_first)
+    local host, env = h.makeHost { power = power }
+    local G = h.load(INIT, host)
+    if kind == "mac" then G.on_menu_on(host.json.encode { secs = 1800 })
+    else G.on_caff_on(host.json.encode { secs = 1800 }) end
+    release_all(env, false)                                  -- quit: timers persisted
+    env.now = env.now + 3600
+    env.alerts = {}
+    G = h.load(INIT, host)                                   -- launch
+    local fire = kind == "mac" and G.on_expiry or G.on_caffeine_expiry
+    if launch_first then G.on_launch("{}"); fire("{}") else fire("{}"); G.on_launch("{}") end
+    return host, env
+end
+for _, first in ipairs { true, false } do
+    local tag = first and "launch first" or "expiry first"
+    -- a/b. battery: ended once, nothing held, no timer left.
+    local host, env = overdue("Battery Power", "mac", first)
+    h.eq(count_alerts(env, "timer expired"), 1, "(overdue " .. tag .. ") one 'timer expired' toast")
+    h.eq(state(host).active, false, "(overdue " .. tag .. ") session ended")
+    h.eq(env.flags.idleSystem or env.flags.lidDisabled, false, "(overdue " .. tag .. ") nothing held")
+    h.eq(env.timers["expiry"] == nil and env.timers["tick"] == nil, true, "(overdue " .. tag .. ") no timer left")
+    -- c. AC + plugged-in rule: back to the hold once, and the hold survives the second handler.
+    host, env = overdue("AC Power", "mac", first)
+    h.eq(count_alerts(env, "Kept awake while plugged in"), 1, "(overdue/AC " .. tag .. ") one return to the hold")
+    h.eq(count_alerts(env, "timer expired"), 0, "(overdue/AC " .. tag .. ") no sleep toast")
+    h.eq(state(host).active, true, "(overdue/AC " .. tag .. ") hold active")
+    h.eq(state(host).autoActivated, true, "(overdue/AC " .. tag .. ") rule owns it")
+    h.eq(state(host).endTime, nil, "(overdue/AC " .. tag .. ") endTime nil")
+    h.eq(env.flags.idleSystem and env.flags.lidDisabled, true, "(overdue/AC " .. tag .. ") hold still held")
+    h.eq(env.timers["expiry"], nil, "(overdue/AC " .. tag .. ") no expiry left")
+    -- d. display session.
+    host, env = overdue("Battery Power", "display", first)
+    h.eq(count_alerts(env, "timer expired"), 1, "(overdue display " .. tag .. ") one 'timer expired' toast")
+    h.eq(state(host).caffeine, false, "(overdue display " .. tag .. ") display ended")
+    h.eq(env.flags.idleDisplay, false, "(overdue display " .. tag .. ") nothing held")
+    h.eq(env.timers["caffexpiry"] == nil and env.timers["tick"] == nil, true, "(overdue display " .. tag .. ") no timer left")
+end
+
 print("ok openlid")

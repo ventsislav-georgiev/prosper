@@ -85,6 +85,9 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
     private let lock = NSLock()
     private var cache: [String: LuaRuntime] = [:]   // guarded by `lock`; each VM used only on its lane
     private var lanes: [String: DispatchQueue] = [:] // guarded by `lock`
+    /// #930: bumped by `retire` (teardown). An invocation carries the epoch it was
+    /// queued under; a changed epoch means its extension was torn down meanwhile.
+    private var epochs: [String: Int] = [:]          // guarded by `lock`
     private let services: ExtensionHostServices
     private static let log = Logger(subsystem: "com.prosper.extensions", category: "async-runtime")
 
@@ -101,19 +104,31 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         return q
     }
 
+    private func epoch(_ id: String) -> Int { lock.lock(); defer { lock.unlock() }; return epochs[id] ?? 0 }
+
+    /// #930: called by the registry's teardown, on the main actor. Every invocation
+    /// queued before it is refused if it has not started, and one already running
+    /// has its resources released again when it returns (see callOnLane).
+    func retire(id: String) { lock.lock(); epochs[id, default: 0] += 1; cache[id] = nil; lock.unlock() }
+
     /// Run `spec.handler(args…)` on the extension's lane, building + caching the VM
     /// on first use. Returns the handler's string result, or nil to decline / error.
+    /// MainActor: the epoch is read and the job enqueued in the caller's turn, so no
+    /// teardown can fall between the caller's isLive check and the lane.
+    @MainActor
     func invoke(_ spec: Spec, args: [String]) async -> String? {
-        await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
-            lane(for: spec.extensionID).async {
-                cont.resume(returning: self.callOnLane(spec, args: args))
+        let queued = epoch(spec.extensionID)
+        let q = lane(for: spec.extensionID)
+        return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            q.async {
+                cont.resume(returning: self.callOnLane(spec, epoch: queued, args: args))
             }
         }
     }
 
     /// Runs on `spec.extensionID`'s serial lane — so the VM (built or cached) is
     /// never concurrently accessed.
-    private func callOnLane(_ spec: Spec, args: [String]) -> String? {
+    private func callOnLane(_ spec: Spec, epoch: Int, args: [String]) -> String? {
         // Defense-in-depth chokepoint mirroring ExtensionRegistry.activate(): never
         // build or run a VM for an untrusted extension, even if a caller forgot to
         // gate on isLive. This lane runs the privileged host APIs (http/llm/shell),
@@ -121,6 +136,16 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         guard spec.trusted else {
             Self.log.error("refused async VM for untrusted extension \(spec.extensionID, privacy: .public)")
             return nil
+        }
+        // #930: torn down after this was queued: never run (it would take resources
+        // nobody releases). Torn down while it ran: release again what it took late.
+        guard self.epoch(spec.extensionID) == epoch else { return nil }
+        defer {
+            if self.epoch(spec.extensionID) != epoch {
+                lock.lock(); cache[spec.extensionID] = nil; lock.unlock()
+                TimerScheduler.shared.cancelAll(extID: spec.extensionID)
+                services.resetResources(extensionID: spec.extensionID)
+            }
         }
         do {
             let rt: LuaRuntime
@@ -919,13 +944,16 @@ final class ExtensionRegistry: ObservableObject {
     /// anything at all. Shared by disable and uninstall so neither can drift.
     private func teardown(_ record: ExtensionRecord) {
         record.runtime = nil
+        // #930: retire FIRST: an in-flight call that returns after this sweeps again,
+        // one that returned before it took its resources before the release below.
+        asyncRuntimes.retire(id: record.id)         // the off-main twin, and its in-flight calls
         TimerScheduler.shared.cancelAll(extID: record.id)
         services.resetResources(extensionID: record.id)
-        asyncRuntimes.invalidate(id: record.id)     // the off-main twin
     }
 
     func setEnabled(_ enabled: Bool, id: String) throws {
         guard let record = record(id: id) else { throw ExtensionError.notFound(id) }
+        let wasEnabled = record.enabled
         record.enabled = enabled
         if !enabled { teardown(record) }
         asyncRuntimes.invalidate(id: id)        // re-enable drops the stale twin too
@@ -934,6 +962,15 @@ final class ExtensionRegistry: ObservableObject {
         rebuildRoutes()
         objectWillChange.send()
         onEnabledChanged?()
+        // #930: disable tore down the extension's assertions, timers, menubar items and
+        // key rules, and only its system.launch handler restores them (openlid's
+        // "kept awake" state, pasteplain's rules). Replay that one-shot to this
+        // extension alone; deliverEvent skips it unless it is live (trusted too).
+        if enabled && !wasEnabled {
+            for sub in eventSubscribers("system.launch") where sub.extensionID == id {
+                Task { await self.deliverEvent(extensionID: sub.extensionID, handler: sub.handler, payloadJSON: "{}") }
+            }
+        }
     }
 
     /// #870: the managed-config core, set by AppDelegate. nil (tests that do not exercise it) skips
