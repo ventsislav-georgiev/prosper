@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <xlocale.h>  /* #1099: strcoll_l */
 
 #include "lua.h"
 
@@ -389,7 +390,7 @@ static int l_strcmp (const TString *ts1, const TString *ts2) {
   const char *s2 = getstr(ts2);
   size_t rl2 = tsslen(ts2);
   for (;;) {  /* for each segment */
-    int temp = strcoll(s1, s2);
+    int temp = strcoll_l(s1, s2, LC_C_LOCALE);  /* #1099: byte order whatever the process locale */
     if (temp != 0)  /* not equal? */
       return temp;  /* done */
     else {  /* strings are equal up to a '\0' */

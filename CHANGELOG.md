@@ -621,6 +621,9 @@ tag from the now-released section and put it on the new top draft.
 - Files search: Markdown and .txt results have a new action, Open in Prosper. (#1106)
 - Themes: the accent colours of Daylight and Silver are a shade darker, so accent text stays
   readable on the tinted top of the Settings and Agent Sessions sidebars. (#1124)
+- Extensions: comparing text with < and table.sort now order it byte by byte whatever the system
+  language. Before, once a terminal had opened, the system's sorting rules applied: "a" came before
+  "B" and accented letters moved between the plain ones. (#1099)
 
 ## v2.174.0
 
