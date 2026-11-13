@@ -13,6 +13,24 @@ import XCTest
 /// Hosted offscreen: the window is never ordered front or made key.
 @MainActor
 final class KeyMappingRowLayoutTests: XCTestCase {
+    /// #1064: every offscreen window a test makes is closed in tearDown (44 per class run
+    /// were never closed). Closed only: never ordered front or made key.
+    private var windows: [NSWindow] = []
+
+    override func tearDown() {
+        windows.forEach { $0.close() }
+        windows = []
+        super.tearDown()
+    }
+
+    private func window(_ rect: NSRect, backing: CGFloat?) -> FixedBackingWindow {
+        let w = FixedBackingWindow(contentRect: rect, styleMask: [.titled], backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.fixedBacking = backing
+        windows.append(w)
+        return w
+    }
+
     private func all<T: NSView>(_ v: NSView, _ t: T.Type) -> [T] {
         var out: [T] = []
         if let x = v as? T { out.append(x) }
@@ -42,8 +60,7 @@ final class KeyMappingRowLayoutTests: XCTestCase {
         let host = NSHostingView(rootView: KeyMappingRow(model: SettingsModel(), rule: rule)
             .frame(width: side.width, height: side.height))
         host.frame = CGRect(origin: .zero, size: side)
-        let win = FixedBackingWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
-        win.fixedBacking = backing
+        let win = window(host.frame, backing: backing)
         win.contentView = host
         defer { win.contentView = NSView() }
         flush(host)
@@ -210,8 +227,7 @@ final class KeyMappingRowLayoutTests: XCTestCase {
         let host = NSHostingView(rootView: KeyMappingRow(model: SettingsModel(), rule: rule)
             .frame(width: side.width, height: side.height))
         host.frame = CGRect(origin: .zero, size: side)
-        let win = FixedBackingWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
-        win.fixedBacking = backing
+        let win = window(host.frame, backing: backing)
         win.contentView = host
         defer { win.contentView = NSView() }
         flush(host)
@@ -268,8 +284,7 @@ final class KeyMappingRowLayoutTests: XCTestCase {
                                                                       onReset: {}, onClear: {})
                     .frame(width: side.width, height: side.height))
                 host.frame = CGRect(origin: .zero, size: side)
-                let win = FixedBackingWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
-                win.fixedBacking = backing
+                let win = window(host.frame, backing: backing)
                 win.contentView = host
                 defer { win.contentView = NSView() }
                 flush(host)
@@ -351,9 +366,7 @@ final class KeyMappingRowLayoutTests: XCTestCase {
             ThemeRuntime.scale = scale
             for (slot, w) in [("110 intrinsic", 110), ("sz(96) key rule", sz(96)), ("sz(142) All Actions", sz(142))] as [(String, CGFloat)] {
                 let width = (w * backing).rounded(.down) / backing
-                let win = FixedBackingWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
-                                             styleMask: [.titled], backing: .buffered, defer: false)
-                win.fixedBacking = backing
+                let win = window(NSRect(x: 0, y: 0, width: 200, height: 40), backing: backing)
                 let container = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
                 win.contentView = container
                 defer { win.contentView = NSView() }

@@ -23,6 +23,16 @@ final class KeyComboLabelTests: XCTestCase {
         XCTAssertEqual(combo(kVK_F5, 0).label, "F5")
     }
 
+    /// #1064: the "Unset" guard in `label` and in `spokenLabel` needs BOTH halves: a bare
+    /// key with no modifier, and the A key (key code 0) with a modifier, are real combos.
+    func testUnsetGuardNeedsBothKeyCodeAndModifiersZero() {
+        XCTAssertEqual(combo(kVK_F5, 0).label, "F5")
+        XCTAssertEqual(combo(kVK_F5, 0).spokenLabel, "F5")
+        XCTAssertEqual(combo(kVK_ANSI_A, cmdKey).label, "⌘A")
+        XCTAssertEqual(combo(kVK_ANSI_A, cmdKey).spokenLabel, "Command A")
+        XCTAssertEqual(unsetKeyCombo.spokenLabel, "Unset")
+    }
+
     func testSingleModifier() {
         XCTAssertEqual(combo(kVK_ANSI_L, optionKey).label, "⌥L")
     }
