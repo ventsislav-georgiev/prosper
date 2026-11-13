@@ -541,6 +541,13 @@ tag from the now-released section and put it on the new top draft.
   behind another app is no longer closed by its shortcut; it comes back with your search kept.
 - Menu bar: the Command Runner and Clipboard History items now only open or bring back their panel;
   they no longer close it.
+- Ships dch 1.60.0 (was 1.59.0). A session remembers a terminal mode switch (alternate screen, mouse
+  reporting, bracketed paste, the kitty keyboard flags) even when the program's bytes for it arrive
+  in two pieces, so a later attach no longer gets the wrong modes. After ctrl-z, `bg` and `fg` an
+  attach is raw again instead of echoing keys and waiting for Enter. A session name that is a path
+  is refused. The X-ray view hides compactions and Claude Code's own prompts until `n`, `o` opens
+  the session the view is about, and it no longer opens `.yarnrc` or `auth.json`. `dch -d` now also
+  detaches a remote client that has the X-ray view open.
 
 ## v2.174.0
 
