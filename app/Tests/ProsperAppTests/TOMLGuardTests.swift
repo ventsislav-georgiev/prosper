@@ -117,6 +117,21 @@ final class TOMLGuardTests: XCTestCase {
         XCTAssertNoThrow(try TOMLDecoder().decode(Empty.self, from: nested))
     }
 
+    /// The header count ends at the header's closing bracket: dots in later values
+    /// (floats, fractional seconds) are not header segments.
+    func testFloatDotsAfterAHeaderAreNotSegments() {
+        let d = TOMLGuard.maxDepth
+        let floats = (0..<(d + 10)).map { "k\($0) = \($0).5\n" }.joined()
+        let times = (0..<(d + 10)).map { "t\($0) = 1979-05-27T07:32:00.999999Z\n" }.joined()
+        for header in ["[a]\n", "[[a]]\n", "[" + Self.key(d - 1) + "]\n"] {
+            for body in [floats, times] {
+                let text = header + body
+                XCTAssertTrue(TOMLGuard.accepts(text), header)
+                XCTAssertNoThrow(try TOMLDecoder().decode(Empty.self, from: text), header)
+            }
+        }
+    }
+
     /// QA #160: a `}` restores the enclosing base, so a sibling key after a nested table's pop
     /// gets the whole budget back (a pop leaving base at the inner level over-rejects it).
     func testSiblingAfterNestedPopKeepsItsBudget() {
