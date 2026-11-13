@@ -115,6 +115,8 @@ jobs:
         # After Test, and on a red Test too: a failed download here must not skip the Swift
         # suite or the cache save (QA #833).
         if: ${{ !cancelled() }}
+        # A stalled download must not sit until the job limit, whose cancel skips the cache save.
+        timeout-minutes: 5
         run: |
           # Same pin and hash as BunHarness.swift (bunVersion, bunSHA256) and bundle-bun.sh
           # PINNED_BUN; bump all three together.
