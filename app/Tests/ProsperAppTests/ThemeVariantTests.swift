@@ -37,6 +37,13 @@ final class ThemeVariantTests: XCTestCase {
 
     static var hcDark: ThemeDescriptor { bundled("theme-contrast-dark", id: hcDarkID, title: "High Contrast Dark", .dark) }
     static var hcLight: ThemeDescriptor { bundled("theme-contrast-light", id: hcLightID, title: "High Contrast Light", .light) }
+    /// #911: the four themes that gained tints in Phase B (Default is the bundled theme-default, the built-in id).
+    static var phaseB: [ThemeDescriptor] {
+        [bundled("theme-default", id: ThemeDescriptor.builtInID, title: "Default", .dark),
+         bundled("theme-daylight", id: "com.prosper.theme.daylight", title: "Daylight", .light),
+         bundled("theme-graphite", id: "com.prosper.theme.graphite", title: "Graphite", .dark),
+         bundled("theme-silver", id: "com.prosper.theme.silver", title: "Silver", .light)]
+    }
 
     static let baseColors = ##""colors": { "blue": "#E0FF00", "blueBright": "#F0FF80", "indigo": "#66C2FF", "magenta": "#FF3DC8", "bgTop": "#000000", "card": "#101010" }"##
 
@@ -153,7 +160,7 @@ final class ThemeVariantTests: XCTestCase {
             ("card", \.card), ("cardHi", \.cardHi), ("textPrimary", \.textPrimary), ("textSecondary", \.textSecondary),
         ]
         var checked = 0
-        for d in [Self.hcDark, Self.hcLight] {
+        for d in [Self.hcDark, Self.hcLight] + Self.phaseB {
             let spec = ThemeSpec.load(for: d)
             XCTAssertNil(spec.variantError, d.title)
             XCTAssertFalse(spec.variants.isEmpty, d.title)
@@ -171,7 +178,7 @@ final class ThemeVariantTests: XCTestCase {
                 checked += 1
             }
         }
-        XCTAssertEqual(checked, 9, "4 tints on High Contrast Dark, 5 on High Contrast Light")
+        XCTAssertEqual(checked, 21, "4 tints on High Contrast Dark, 5 on High Contrast Light, 3 each on Default, Daylight, Graphite, Silver")
     }
 
     // MARK: persistence
@@ -309,7 +316,7 @@ final class ThemeVariantTests: XCTestCase {
         return (h.fittingSize, win.backingScaleFactor)
     }
 
-    private func listStore(variants: Bool = true) throws -> ThemeStore {
+    private func listStore(variants: Bool = true, phaseB: Bool = false) throws -> ThemeStore {
         let s = store()
         let plain = descriptor("t.plain", "{ \(Self.baseColors) }", title: "Plain")
         var dark = Self.hcDark, light = Self.hcLight
@@ -326,7 +333,8 @@ final class ThemeVariantTests: XCTestCase {
                 if d.id == Self.hcDarkID { dark = copy } else { light = copy }
             }
         }
-        s.setAvailable([.builtIn, dark, plain, light])
+        // phaseB: every tinted bundled row (#911), the real Default in place of the built-in.
+        s.setAvailable(phaseB ? Self.phaseB + [dark, plain, light] : [.builtIn, dark, plain, light])
         return s
     }
 
@@ -672,13 +680,15 @@ final class ThemeVariantTests: XCTestCase {
     /// pane's (2 x 26) and the card's (2 x 16) insets: 518 pt at 1.0, 440 at 0.85, 486 at 0.7.
     /// Nothing overflows that width (a dot slot or the checkmark pushed past the card edge would),
     /// and the High Contrast captions wrap by the pinned number of lines, on 1x and 2x.
+    /// #911: with every tinted row in the list (Default, Daylight, Graphite, Silver too).
     func testHighContrastRowsFitTheMinimumSettingsWidth() throws {
         // Extra caption lines across the two High Contrast rows at the minimum width. Measured
         // (#862 A2): none at any scale; QA #744's estimate of a wrapped caption did not hold.
         let wraps: [CGFloat: Int] = [1.0: 0, 0.85: 0, 0.7: 0]
         for backing in [1, 2] as [CGFloat] {
             for scale in [1.0, 0.85, 0.7] as [CGFloat] {
-                let s = try listStore()
+                let s = try listStore(phaseB: true)
+                XCTAssertEqual(s.tints.count, 6, "six tinted rows")
                 s.select(id: Self.hcLightID, tint: "amber")
                 ThemeRuntime.scale = scale
                 let room = SettingsWindow.contentMinSize(scale: scale).width - sz(218 + 2 * 26 + 2 * 16)
@@ -737,7 +747,8 @@ final class ThemeVariantTests: XCTestCase {
 
     /// (a) the theme list (every bundled theme, the two High Contrast rows with their dots)
     /// at UI scale 1.0, 0.85, 0.7 under a dark and a light theme; (b) one sample sheet per
-    /// High Contrast tint.
+    /// tint of every theme in the literal ThemeTests.tintedThemes list (#911: 27 sheets, named
+    /// sheet-<theme dir>-<tint label>).
     func testTintEvidenceRenders() throws {
         guard Self.renderDir != nil else { throw XCTSkip("#862 evidence renders: set PROSPER_RENDER_DIR to write them") }
         let all = try FileManager.default.contentsOfDirectory(at: Self.extensionsDir, includingPropertiesForKeys: nil)
@@ -761,13 +772,17 @@ final class ThemeVariantTests: XCTestCase {
             }
         }
         ThemeRuntime.scale = 1
-        for d in [Self.hcDark, Self.hcLight] {
-            for t in try XCTUnwrap(s.tints[d.id]) {
+        var sheets = 0
+        for dir in ThemeTests.tintedThemes.keys.sorted() {
+            let d = try XCTUnwrap(all.first { $0.jsonPath?.deletingLastPathComponent().lastPathComponent == dir }, dir)
+            for t in try XCTUnwrap(s.tints[d.id], dir) {
                 s.select(id: d.id, tint: t.key)
                 try render(TintSampleSheet(title: "\(d.title) · \(t.label)"), width: 520, appearance: d.appearance,
-                           name: "sheet-\(d.appearance.rawValue)-\(t.label.lowercased())")
+                           name: "sheet-\(dir)-\(t.label.lowercased())")
+                sheets += 1
             }
         }
+        XCTAssertEqual(sheets, 27, "every tint of every listed theme")
     }
 }
 

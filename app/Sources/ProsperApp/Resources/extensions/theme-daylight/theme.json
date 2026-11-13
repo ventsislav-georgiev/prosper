@@ -2,7 +2,7 @@
   "appearance": "light",
   "colors": {
     "blue":          "#0062D1",
-    "blueBright":    "#1F8CF9",
+    "blueBright":    "#006DD4",
     "indigo":        "#451FE0",
     "magenta":       "#C11554",
     "terminal":      "#087D52",
@@ -13,5 +13,11 @@
     "cardHi":        "#F2F5F8",
     "textPrimary":   "#142234",
     "textSecondary": "#526072"
-  }
+  },
+  "tintLabel": "Blue",
+  "variants": [
+    { "key": "violet", "label": "Violet", "colors": { "blue": "#5B2BD6", "blueBright": "#6A3BE0", "indigo": "#0062D1" } },
+    { "key": "amber",  "label": "Amber",  "colors": { "blue": "#8A4F00", "blueBright": "#9A5800", "indigo": "#451FE0" } },
+    { "key": "ink",    "label": "Ink",    "colors": { "blue": "#1F2A3A", "blueBright": "#34445A", "indigo": "#0062D1" } }
+  ]
 }

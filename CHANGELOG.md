@@ -464,6 +464,9 @@ tag from the now-released section and put it on the new top draft.
   resumed (1 resume message not sent), 1 failed"). On the iPhone, Resume all now reports success
   when at least one session resumed and the only other sessions are old ones whose names start with
   "-" (which dch can no longer start), instead of an error.
+- Default, Daylight, Graphite and Silver now come in accent tints, picked from the dots on the
+  theme's row in Settings > Appearance; Daylight's highlight blue and Silver's and Graphite's accent
+  greys are a shade adjusted so accent text stays readable.
 
 ## v2.174.0
 

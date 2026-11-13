@@ -249,15 +249,31 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(checked, all.expected, "every tint of every bundled theme was checked")
     }
 
+    /// The bundled themes that ship tints, with their tint labels (base first), written out:
+    /// the contrast rule below walks this list, and the list must equal what ships.
+    static let tintedThemes: [String: [String]] = [
+        "theme-contrast-dark": ["Lime", "Cyan", "Amber", "Violet", "White"],
+        "theme-contrast-light": ["Blue", "Lime", "Cyan", "Amber", "Violet", "Black"],
+        "theme-default": ["Neon", "Violet", "Amber", "White"],          // #911
+        "theme-daylight": ["Blue", "Violet", "Amber", "Ink"],           // #911
+        "theme-graphite": ["Steel", "Ice", "Sand", "Lilac"],            // #911
+        "theme-silver": ["Slate", "Navy", "Plum", "Bronze"],            // #911
+    ]
+
     /// #862: every tint (base and variants) of a bundled theme that declares variants
     /// keeps its accent family readable as text: the extensions.md section 7 rule for
     /// text (WCAG AA 4.5:1, ThemeContrastTests.minimum) against bgTop and card.
+    /// #911: the themes are the literal `tintedThemes` list, which must equal the set that ships.
     @MainActor
     func testBundledThemeTintsPassTheTextContrastRule() throws {
         let minimum: CGFloat = 4.5
         let all = try bundledTints()
+        XCTAssertEqual(Set(all.themes.filter { $0.tints.count > 1 }.map(\.name)), Set(Self.tintedThemes.keys),
+                       "the tinted bundled themes are exactly the listed ones")
         var checked = 0
-        for t in all.themes where t.tints.count > 1 {
+        for (name, labels) in Self.tintedThemes.sorted(by: { $0.key < $1.key }) {
+            guard let t = all.themes.first(where: { $0.name == name }) else { XCTFail("\(name) is not bundled"); continue }
+            XCTAssertEqual(t.tints.map(\.label), labels, name)
             for tint in t.tints {
                 let p = tint.palette
                 for (tn, c) in [("blue", p.blue), ("blueBright", p.blueBright), ("indigo", p.indigo)] {
@@ -269,9 +285,31 @@ final class ThemeTests: XCTestCase {
                 checked += 1
             }
         }
-        XCTAssertEqual(checked, all.expected - all.themes.filter { $0.tints.count == 1 }.count,
-                       "every tint of every tinted bundled theme was checked")
-        XCTAssertGreaterThanOrEqual(checked, 11, "High Contrast Dark (1 + 4) and Light (1 + 5)")
+        XCTAssertEqual(checked, 27, "HC Dark 5, HC Light 6, Default, Daylight, Graphite and Silver 4 each")
+    }
+
+    /// #911 (OQ-91): the base tokens nudged to pass the tint rule, by the smallest change. The
+    /// values are pinned so a revert (or a drift back toward the old colour) is caught here
+    /// by name, not only as a contrast number.
+    func testNudgedBaseTokensArePinned() throws {
+        let pinned: [(theme: String, token: String, hex: String)] = [
+            ("theme-daylight", "blueBright", "#006DD4"),   // was #1F8CF9 (3.02:1 on bgTop)
+            ("theme-graphite", "indigo", "#798796"),       // was #717F8E (4.04:1 on card)
+            ("theme-silver", "blueBright", "#607086"),     // was #637288 (4.37:1 on bgTop)
+            ("theme-silver", "indigo", "#636F84"),         // was #657186 (4.40:1 on bgTop)
+        ]
+        let all = try bundledTints()
+        for (theme, token, hex) in pinned {
+            let spec = try XCTUnwrap(all.themes.first { $0.name == theme }?.spec, theme)
+            let got = try XCTUnwrap(spec.colors[token], "\(theme) \(token)")
+            let want = try XCTUnwrap(Color(hex: hex))
+            XCTAssertTrue(Self.close(Self.srgb(got), Self.srgb(want)), "\(theme) \(token) is not \(hex)")
+        }
+    }
+
+    private static func close(_ a: NSColor, _ b: NSColor) -> Bool {
+        abs(a.redComponent - b.redComponent) < 0.001 && abs(a.greenComponent - b.greenComponent) < 0.001
+            && abs(a.blueComponent - b.blueComponent) < 0.001
     }
 
     /// Every bundled theme with its tints: the base first, then each variant's applied

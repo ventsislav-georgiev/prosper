@@ -13,5 +13,11 @@
     "cardHi":        "#1B232F",
     "textPrimary":   "#E8F2FC",
     "textSecondary": "#8C9EBA"
-  }
+  },
+  "tintLabel": "Neon",
+  "variants": [
+    { "key": "violet", "label": "Violet", "colors": { "blue": "#A98BFF", "blueBright": "#CDBDFF", "indigo": "#21CCFF" } },
+    { "key": "amber",  "label": "Amber",  "colors": { "blue": "#FFB020", "blueBright": "#FFD27A", "indigo": "#5C80FF" } },
+    { "key": "white",  "label": "White",  "colors": { "blue": "#E8F2FC", "blueBright": "#FFFFFF", "indigo": "#8FA3BF" } }
+  ]
 }
