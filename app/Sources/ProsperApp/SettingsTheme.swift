@@ -1108,13 +1108,15 @@ struct NeonSectionLabel: View {
 /// as SettingsBackground / NeonPanelSurface. Settings' rail and the Agent Sessions sidebar
 /// (#860); self-observes the store so an opacity/frost change re-renders it in place.
 struct NeonSidebarSurface: View {
+    /// #1124: the accent wash at the top of the rail; ThemeTests' tint rule reads this same value.
+    static let washOpacity: Double = 0.06
     @ObservedObject private var theme = ThemeStore.shared
     var body: some View {
         ZStack {
             if ThemeRuntime.frost { VisualEffectBackground() }
             ZStack {
                 Neon.sidebar
-                LinearGradient(colors: [Neon.blue.opacity(0.06), .clear],
+                LinearGradient(colors: [Neon.blue.opacity(Self.washOpacity), .clear],
                                startPoint: .top, endPoint: .bottom)
             }
             .opacity(ThemeRuntime.backdropFillOpacity)

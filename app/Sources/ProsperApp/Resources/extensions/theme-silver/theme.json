@@ -2,8 +2,8 @@
   "appearance": "light",
   "colors": {
     "blue":          "#434E60",
-    "blueBright":    "#59687D",
-    "indigo":        "#5C677A",
+    "blueBright":    "#57667B",
+    "indigo":        "#5A6578",
     "magenta":       "#A92839",
     "terminal":      "#1C6949",
     "bgTop":         "#F1F2F4",
@@ -16,8 +16,8 @@
   },
   "tintLabel": "Slate",
   "variants": [
-    { "key": "navy",   "label": "Navy",   "colors": { "blue": "#1F4F8F", "blueBright": "#2D5DA0", "indigo": "#5C677A" } },
-    { "key": "plum",   "label": "Plum",   "colors": { "blue": "#5E3A78", "blueBright": "#6C4787", "indigo": "#5C677A" } },
-    { "key": "bronze", "label": "Bronze", "colors": { "blue": "#6B5020", "blueBright": "#7A5C27", "indigo": "#5C677A" } }
+    { "key": "navy",   "label": "Navy",   "colors": { "blue": "#1F4F8F", "blueBright": "#2D5DA0", "indigo": "#5A6578" } },
+    { "key": "plum",   "label": "Plum",   "colors": { "blue": "#5E3A78", "blueBright": "#6C4787", "indigo": "#5A6578" } },
+    { "key": "bronze", "label": "Bronze", "colors": { "blue": "#6B5020", "blueBright": "#7A5C27", "indigo": "#5A6578" } }
   ]
 }

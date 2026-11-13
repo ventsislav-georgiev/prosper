@@ -51,12 +51,63 @@ final class ThemeContrastTests: XCTestCase {
     }
 
     /// WCAG 2 contrast ratio. `fg` is composited over `bg` first when translucent.
+    /// #1124: a translucent `bg` is refused by name (the call fails and reads 1:1): what shows
+    /// through it (the desktop, frost, another surface) is not a token, so no ratio is honest.
     static func contrast(_ fg: NSColor, on bg: NSColor) -> CGFloat {
+        if let why = refusal(bg) { XCTFail(why); return 1 }
         let b = srgb(bg), f = srgb(fg)
         let over = (r: f.r * f.a + b.r * (1 - f.a), g: f.g * f.a + b.g * (1 - f.a),
                     b: f.b * f.a + b.b * (1 - f.a), a: CGFloat(1))
         let l1 = luminance(over), l2 = luminance(b)
         return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
+
+    /// #1124: why `contrast` refuses `bg`, or nil when it is opaque.
+    static func refusal(_ bg: NSColor) -> String? {
+        let a = srgb(bg).a
+        return a < 1 ? "contrast: the surface is translucent (alpha \(a)); the rule cannot see what shows through it" : nil
+    }
+
+    /// #1124: the sixth, computed surface: the top of the rail, where NeonSidebarSurface lays
+    /// `blue` at NeonSidebarSurface.washOpacity over `sidebar`. Blended per gamma-encoded sRGB
+    /// component (source-over, as the window composites the ZStack); the sidebar's own alpha is
+    /// kept, so a translucent sidebar is still refused.
+    static func washedSidebarTop(_ p: ThemePalette) -> NSColor {
+        let s = srgb(NSColor(p.sidebar)), b = srgb(NSColor(p.blue))
+        let a = CGFloat(NeonSidebarSurface.washOpacity) * b.a
+        return NSColor(srgbRed: s.r * (1 - a) + b.r * a, green: s.g * (1 - a) + b.g * a,
+                       blue: s.b * (1 - a) + b.b * a, alpha: s.a)
+    }
+
+    /// The surfaces the tint rule checks accent text on: the five tokens and the washed rail top.
+    static func ruleSurfaces(_ p: ThemePalette) -> [(String, NSColor)] {
+        surfaces.map { ($0.0, NSColor(p[keyPath: $0.1])) } + [("sidebarWashTop", washedSidebarTop(p))]
+    }
+
+    func testTranslucentSurfaceIsRefusedByName() throws {
+        XCTAssertTrue(Self.refusal(.white) == nil)
+        let why = try XCTUnwrap(Self.refusal(NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.8)))
+        XCTAssertTrue(why.contains("translucent"), why)
+        let rrggbbaa = try XCTUnwrap(Color(hex: "#ECEDF0CC"))
+        XCTAssertTrue(Self.refusal(NSColor(rrggbbaa)) != nil, "an RRGGBBAA surface")
+        // The helper itself refuses (fails the calling test) and reads 1:1, so no rule row passes.
+        var r: CGFloat = 0
+        XCTExpectFailure("a translucent surface is refused") { r = Self.contrast(.black, on: NSColor(rrggbbaa)) }
+        XCTAssertEqual(r, 1)
+    }
+
+    /// #1124: the wash composite, written out on one literal pair: Daylight's base sidebar
+    /// #E7EDF5 with 6 percent of #015FCC is (0.94 * E7 + 0.06 * 01, ...) / 255.
+    func testWashedSidebarTopIsTheWrittenOutComposite() throws {
+        XCTAssertEqual(NeonSidebarSurface.washOpacity, 0.06)
+        var p = ThemePalette.default
+        p.sidebar = try XCTUnwrap(Color(hex: "#E7EDF5")); p.blue = try XCTUnwrap(Color(hex: "#015FCC"))
+        let w = Self.srgb(Self.washedSidebarTop(p))
+        XCTAssertEqual(w.r, (0.94 * 0xE7 + 0.06 * 0x01) / 255, accuracy: 0.0005)
+        XCTAssertEqual(w.g, (0.94 * 0xED + 0.06 * 0x5F) / 255, accuracy: 0.0005)
+        XCTAssertEqual(w.b, (0.94 * 0xF5 + 0.06 * 0xCC) / 255, accuracy: 0.0005)
+        XCTAssertEqual(w.a, 1)
+        XCTAssertEqual(Self.ruleSurfaces(p).map(\.0), ["bgTop", "bgBottom", "sidebar", "card", "cardHi", "sidebarWashTop"])
     }
 
     func testContrastMatchesWCAGReferencePoints() {

@@ -30,10 +30,10 @@ final class ThemeTintPinTests: XCTestCase {
         Row("theme-contrast-light", "Amber", blue: "#7A4000", blueBright: "#945000", indigo: "#0000C2"),
         Row("theme-contrast-light", "Violet", blue: "#6B12B8", blueBright: "#7F2ED6", indigo: "#0000C2"),
         Row("theme-contrast-light", "Black", blue: "#000000", blueBright: "#262626", indigo: "#595959"),
-        Row("theme-daylight", "Blue", blue: "#0062D1", blueBright: "#0065C7", indigo: "#451FE0"),
-        Row("theme-daylight", "Violet", blue: "#5B2BD6", blueBright: "#6A3BE0", indigo: "#0062D1"),
-        Row("theme-daylight", "Amber", blue: "#8A4F00", blueBright: "#985700", indigo: "#451FE0"),
-        Row("theme-daylight", "Ink", blue: "#1F2A3A", blueBright: "#34445A", indigo: "#0062D1"),
+        Row("theme-daylight", "Blue", blue: "#015FCC", blueBright: "#0063C6", indigo: "#451FE0"),
+        Row("theme-daylight", "Violet", blue: "#5B2BD6", blueBright: "#6A3BE0", indigo: "#015FCC"),
+        Row("theme-daylight", "Amber", blue: "#8A4F00", blueBright: "#965500", indigo: "#451FE0"),
+        Row("theme-daylight", "Ink", blue: "#1F2A3A", blueBright: "#34445A", indigo: "#015FCC"),
         Row("theme-default", "Neon", blue: "#21CCFF", blueBright: "#75EBFF", indigo: "#5D81FF"),
         Row("theme-default", "Violet", blue: "#A98BFF", blueBright: "#CDBDFF", indigo: "#21CCFF"),
         Row("theme-default", "Amber", blue: "#FFB020", blueBright: "#FFD27A", indigo: "#5D81FF"),
@@ -42,10 +42,10 @@ final class ThemeTintPinTests: XCTestCase {
         Row("theme-graphite", "Ice", blue: "#6FC0F2", blueBright: "#B5DDF7", indigo: "#8794A2"),
         Row("theme-graphite", "Sand", blue: "#CDB48A", blueBright: "#E6D7B8", indigo: "#8794A2"),
         Row("theme-graphite", "Lilac", blue: "#B3A3D9", blueBright: "#D6CCEE", indigo: "#8794A2"),
-        Row("theme-silver", "Slate", blue: "#434E60", blueBright: "#59687D", indigo: "#5C677A"),
-        Row("theme-silver", "Navy", blue: "#1F4F8F", blueBright: "#2D5DA0", indigo: "#5C677A"),
-        Row("theme-silver", "Plum", blue: "#5E3A78", blueBright: "#6C4787", indigo: "#5C677A"),
-        Row("theme-silver", "Bronze", blue: "#6B5020", blueBright: "#7A5C27", indigo: "#5C677A"),
+        Row("theme-silver", "Slate", blue: "#434E60", blueBright: "#57667B", indigo: "#5A6578"),
+        Row("theme-silver", "Navy", blue: "#1F4F8F", blueBright: "#2D5DA0", indigo: "#5A6578"),
+        Row("theme-silver", "Plum", blue: "#5E3A78", blueBright: "#6C4787", indigo: "#5A6578"),
+        Row("theme-silver", "Bronze", blue: "#6B5020", blueBright: "#7A5C27", indigo: "#5A6578"),
     ]
 
     static let extensionsDir = URL(fileURLWithPath: #filePath)
@@ -69,10 +69,20 @@ final class ThemeTintPinTests: XCTestCase {
         return out
     }
 
+    /// #RRGGBB, or #RRGGBBAA when the colour is translucent (#1124: a pin compares alpha too).
     static func hex(_ c: Color) -> String {
         let n = NSColor(c).usingColorSpace(.sRGB) ?? NSColor(c)
-        let v = [n.redComponent, n.greenComponent, n.blueComponent].map { Int((min(max($0, 0), 1) * 255).rounded()) }
-        return String(format: "#%02X%02X%02X", v[0], v[1], v[2])
+        let v = [n.redComponent, n.greenComponent, n.blueComponent, n.alphaComponent]
+            .map { Int((min(max($0, 0), 1) * 255).rounded()) }
+        let rgb = String(format: "#%02X%02X%02X", v[0], v[1], v[2])
+        return v[3] == 255 ? rgb : rgb + String(format: "%02X", v[3])
+    }
+
+    /// #1124 (QA 846 INFO-4): 59687D and 59687DCC were the same pin.
+    func testHexComparesAlpha() throws {
+        XCTAssertEqual(Self.hex(try XCTUnwrap(Color(hex: "#59687D"))), "#59687D")
+        XCTAssertEqual(Self.hex(try XCTUnwrap(Color(hex: "#59687DCC"))), "#59687DCC")
+        XCTAssertEqual(Self.hex(try XCTUnwrap(Color(hex: "#59687DFE"))), "#59687DFE")
     }
 
     func testTableIsExactlyTheShippedTints() throws {
@@ -117,6 +127,7 @@ final class ThemeTintPinTests: XCTestCase {
 
     /// #1122: the Swift fallback (drawn when the bundled theme is off) is under the five-surface
     /// text rule too, on its own unrounded components, not only the json's rounded hexes.
+    /// #1124: and on the washed rail top.
     func testSwiftDefaultForegroundsClearEverySurface() {
         let p = ThemePalette.default
         let fgs: [(String, KeyPath<ThemePalette, Color>)] = [
@@ -124,8 +135,8 @@ final class ThemeTintPinTests: XCTestCase {
             ("terminal", \.terminal), ("textPrimary", \.textPrimary), ("textSecondary", \.textSecondary),
         ]
         for (fn, f) in fgs {
-            for (sn, s) in ThemeContrastTests.surfaces {
-                let r = ThemeContrastTests.contrast(NSColor(p[keyPath: f]), on: NSColor(p[keyPath: s]))
+            for (sn, s) in ThemeContrastTests.ruleSurfaces(p) {
+                let r = ThemeContrastTests.contrast(NSColor(p[keyPath: f]), on: s)
                 XCTAssertGreaterThanOrEqual(r, 4.5, "ThemePalette.default \(fn) on \(sn) is \(r):1")
             }
         }

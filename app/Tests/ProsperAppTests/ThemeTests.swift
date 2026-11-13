@@ -267,6 +267,8 @@ final class ThemeTests: XCTestCase {
     /// #1095: every surface token, not only bgTop and card (ThemeContrastTests.surfaces: accent
     /// text is drawn on all five; QA #825 found Graphite indigo 3.88 on cardHi, Daylight and
     /// Silver blueBright 4.07/4.08 on bgBottom).
+    /// #1124: and on a sixth, computed surface, the top of the rail under the accent wash
+    /// (ThemeContrastTests.washedSidebarTop; QA 846 found Daylight and Silver at 4.36 to 4.44 there).
     @MainActor
     func testBundledThemeTintsPassTheTextContrastRule() throws {
         let minimum: CGFloat = 4.5
@@ -280,8 +282,8 @@ final class ThemeTests: XCTestCase {
             for tint in t.tints {
                 let p = tint.palette
                 for (tn, c) in [("blue", p.blue), ("blueBright", p.blueBright), ("indigo", p.indigo)] {
-                    for (sn, s) in ThemeContrastTests.surfaces {
-                        let r = ThemeContrastTests.contrast(NSColor(c), on: NSColor(p[keyPath: s]))
+                    for (sn, s) in ThemeContrastTests.ruleSurfaces(p) {
+                        let r = ThemeContrastTests.contrast(NSColor(c), on: s)
                         XCTAssertGreaterThanOrEqual(r, minimum, "\(t.name) \(tint.label): \(tn) on \(sn) is \(r):1")
                         pairs += 1
                     }
@@ -290,7 +292,7 @@ final class ThemeTests: XCTestCase {
             }
         }
         XCTAssertEqual(checked, 27, "HC Dark 5, HC Light 6, Default, Daylight, Graphite and Silver 4 each")
-        XCTAssertEqual(pairs, 27 * 3 * 5, "three accent tokens on five surfaces per tint")
+        XCTAssertEqual(pairs, 486, "three accent tokens on six surfaces (five tokens and the washed rail top) per tint")
     }
 
     /// #911 (OQ-91): the base tokens nudged to pass the tint rule, by the smallest change. The
@@ -299,10 +301,12 @@ final class ThemeTests: XCTestCase {
     func testNudgedBaseTokensArePinned() throws {
         let pinned: [(theme: String, token: String, hex: String)] = [
             // #1095: nudged again for bgBottom, sidebar and cardHi (margin >= 0.05 on every surface).
-            ("theme-daylight", "blueBright", "#0065C7"),   // #911 #006DD4 (4.07:1 on bgBottom); #1F8CF9 before
+            // #1124: nudged again for the washed rail top (margin >= 0.05 there too).
+            ("theme-daylight", "blue", "#015FCC"),         // #1124 #0062D1 (4.36:1 washed, as Ink indigo)
+            ("theme-daylight", "blueBright", "#0063C6"),   // #1124 #0065C7 (4.45:1 washed); #911 #006DD4 (4.07:1 on bgBottom); #1F8CF9 before
             ("theme-graphite", "indigo", "#8794A2"),       // #911 #798796 (3.88:1 on cardHi); #717F8E before
-            ("theme-silver", "blueBright", "#59687D"),     // #911 #607086 (4.08:1 on bgBottom); #637288 before
-            ("theme-silver", "indigo", "#5C677A"),         // #911 #636F84 (4.10:1 on bgBottom); #657186 before
+            ("theme-silver", "blueBright", "#57667B"),     // #1124 #59687D (4.44:1 washed); #911 #607086 (4.08:1 on bgBottom); #637288 before
+            ("theme-silver", "indigo", "#5A6578"),         // #1124 #5C677A (4.45:1 washed); #911 #636F84 (4.10:1 on bgBottom); #657186 before
         ]
         let all = try bundledTints()
         for (theme, token, hex) in pinned {

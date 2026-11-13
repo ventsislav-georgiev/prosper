@@ -1,8 +1,8 @@
 {
   "appearance": "light",
   "colors": {
-    "blue":          "#0062D1",
-    "blueBright":    "#0065C7",
+    "blue":          "#015FCC",
+    "blueBright":    "#0063C6",
     "indigo":        "#451FE0",
     "magenta":       "#C11554",
     "terminal":      "#087D52",
@@ -16,8 +16,8 @@
   },
   "tintLabel": "Blue",
   "variants": [
-    { "key": "violet", "label": "Violet", "colors": { "blue": "#5B2BD6", "blueBright": "#6A3BE0", "indigo": "#0062D1" } },
-    { "key": "amber",  "label": "Amber",  "colors": { "blue": "#8A4F00", "blueBright": "#985700", "indigo": "#451FE0" } },
-    { "key": "ink",    "label": "Ink",    "colors": { "blue": "#1F2A3A", "blueBright": "#34445A", "indigo": "#0062D1" } }
+    { "key": "violet", "label": "Violet", "colors": { "blue": "#5B2BD6", "blueBright": "#6A3BE0", "indigo": "#015FCC" } },
+    { "key": "amber",  "label": "Amber",  "colors": { "blue": "#8A4F00", "blueBright": "#965500", "indigo": "#451FE0" } },
+    { "key": "ink",    "label": "Ink",    "colors": { "blue": "#1F2A3A", "blueBright": "#34445A", "indigo": "#015FCC" } }
   ]
 }

@@ -289,7 +289,7 @@ checkmark in red):
 | `terminal` | **Success**: confirmations, "connected", "supporter", agent output. Reads as positive — green in every built-in theme but Amber. |
 | `bgTop` / `bgBottom` / `sidebar` | Window ground, top to bottom, plus the sidebar. |
 | `card` / `cardHi` | Panel surfaces: resting and elevated/hover. Keep them a step off `bgTop` so panels read as panels. |
-| `textPrimary` / `textSecondary` | Body and muted text. Both need WCAG AA (4.5:1) against `bgTop` *and* `card`. |
+| `textPrimary` / `textSecondary` | Body and muted text. Both need WCAG AA (4.5:1) against every surface token: `bgTop`, `bgBottom`, `sidebar`, `card` and `cardHi`. |
 
 `ThemeTests.testBundledThemeAccentsAreDistinguishable` enforces the two rules that are easiest
 to break by accident: no two bundled themes of the same appearance may share an accent, and
@@ -329,8 +329,11 @@ a dot selects the theme with that tint; Prosper remembers the tint per theme on 
   falls back to the base palette without an error.
 - Every tint of a bundled theme must pass the same rules as the base: `magenta` tellable from
   each tint's `blue`, the tints of one theme tellable from each other, and `blue`, `blueBright`
-  and `indigo` at WCAG AA (4.5:1) against `bgTop` and `card`. Tints never count as a collision
-  with another theme's accent.
+  and `indigo` at WCAG AA (4.5:1) against every surface token and against the top of the
+  sidebar, where 6 percent of the tint's `blue` is laid over `sidebar`. Tints never count as a
+  collision with another theme's accent. The check reads opaque colours only: it cannot see
+  text on a translucent fill or behind Frost, where the surface is the blurred desktop, so
+  check those by eye.
 
 Pick a theme in **Settings → Appearance**; the whole app (and the AppKit menu-bar / dock chrome) redraws instantly. Missing tokens fall back to the default palette, so a partial palette is valid. Selecting a theme **never spawns the extension's Lua VM** — it is pure declarative data.
 
