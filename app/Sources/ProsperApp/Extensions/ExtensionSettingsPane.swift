@@ -29,19 +29,22 @@ struct ExtensionSettingsPane: View {
             if let ui {
                 SettingsUIView(ui: ui, section: section, busy: busy,
                                permissionTick: permissionTick, header: header,
-                               footer: footer, onEvent: handle)
+                               footer: pageFooter, onEvent: handle)
             } else {
                 NeonScroll {
                     PaneTitle(title: section.title, accent: section.accent,
                               subtitle: section.subtitle ?? "")
                     if let header { header }
                     ProgressView().controlSize(.small)
-                    if let footer { footer }
+                    if let pageFooter { pageFooter }
                 }
             }
         }
         .onAppear(perform: reload)
     }
+
+    /// #1134: the Text Viewer's default-app control rides in natively; the TOML kinds cannot call host code.
+    private var pageFooter: AnyView? { footer ?? TextViewerDefaultAppSection.footer(forExtension: record.id) }
 
     // MARK: Load
 

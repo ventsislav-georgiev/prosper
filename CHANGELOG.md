@@ -658,6 +658,9 @@ tag from the now-released section and put it on the new top draft.
   shows files, commits and URLs too, and `Ctrl-R` looks up a ref typed in the filter; on a ref's
   card `o` opens the session and the other-projects scan moved to `p`. The view says why it has
   nothing to show, and comes back whole after a stop and `fg`.
+- Settings › Text Viewer has a new "Make Prosper the Default" button: click it to have .txt and
+  Markdown files open in Prosper when you double-click them. Nothing changes until you click it, and
+  the page shows which app opens each kind now. (#1134)
 
 ## v2.174.0
 
