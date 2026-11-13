@@ -538,7 +538,8 @@ tag from the now-released section and put it on the new top draft.
 - Shortcuts: the shortcuts for Settings, Coding Agent, Agent Sessions, Clipboard History, the
   Command Runner and Translate now work the same way: a press opens the window or brings it back to
   the front, and a press while you are using it closes it. A Clipboard History or runner left open
-  behind another app is no longer closed by its shortcut; it comes back with your search kept.
+  behind another app is no longer closed by its shortcut; it comes back with your search kept
+  (Translate and shortcuts on a prefix come back as their own runner: see the entries below).
 - Menu bar: the Command Runner and Clipboard History items now only open or bring back their panel;
   they no longer close it.
 - Ships dch 1.60.0 (was 1.59.0). A session remembers a terminal mode switch (alternate screen, mouse
@@ -563,8 +564,10 @@ tag from the now-released section and put it on the new top draft.
   the press switches between them instead of closing. If the runner was opened some other way (the
   main hotkey, the menu bar item), a shortcut press switches it to that shortcut's prefix (#1113).
 - **Shortcuts**: Translate (⌥L) now works like a custom shortcut on the "l " prefix. Pressed while
-  the runner has focus but shows something else, it switches the runner to Translate. Pressed while
-  the runner is already in Translate, it closes the runner (#1113).
+  the runner shows something else, in front or left open behind another app, it switches the runner
+  to Translate and the earlier search is not kept. A Translate runner left open behind another app
+  comes back with its text kept. Pressed while the runner is in Translate and has focus, it closes
+  the runner (#1113).
 - **Shortcuts**: a shortcut for an extension command that opens a window (such as Base64 or Add
   Quicklink) now works like the other window shortcuts. If that window is open but you clicked away
   from it, the shortcut brings it back with what you typed still there, instead of starting a fresh
