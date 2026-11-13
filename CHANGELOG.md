@@ -629,6 +629,9 @@ tag from the now-released section and put it on the new top draft.
   Extensions now get only the base functions, coroutine, table, string, math, utf8 and
   debug.traceback, and load takes source text only. An extension that called another debug function
   or string.dump gets an error at that call. (#1125)
+- Remote Terminal: "Resume interrupted" from the iPhone now reports a failure in any one folder
+  instead of answering as if everything resumed, and when a resume message was not sent beside a
+  session dch can no longer start, the phone names that session again. (#951)
 
 ## v2.174.0
 

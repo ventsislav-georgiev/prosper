@@ -782,13 +782,14 @@ final class DchControlFramesTests: XCTestCase {
                        DchControlOps.error("1 resumed, 1 failed, 1 session has a name dch can no longer start"))
     }
 
-    /// (iv) an unsent message beside a dash refusal: ok, the unsent session counts as resumed.
+    /// (iv) an unsent message beside a dash refusal: ok, the unsent session counts as resumed. #951: its line stays,
+    /// the dash sentence after it.
     func testResumeAllWithAnUnsentOneAndADashRefusalIsOk() {
         let r = resumeAll(Self.ran("a", as: "a", "prompt", running: true), Self.dash)
         XCTAssertEqual(r.type, DchFrame.ok)
         XCTAssertEqual(names(r), ["a"])
         XCTAssertEqual((r.json as? [String: Any])?["message"] as? String,
-                       "1 resumed (1 resume message not sent), 1 session has a name dch can no longer start")
+                       "a: Resumed; the resume message wasn't sent; 1 session has a name dch can no longer start")
     }
 
     func testRestartAllWithNoResultAndANonZeroExitIsAnError() {

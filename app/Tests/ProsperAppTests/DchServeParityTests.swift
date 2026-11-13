@@ -438,4 +438,142 @@ final class DchServeParityTests: XCTestCase {
         XCTAssertEqual(try size("30"), [30, 30])
         XCTAssertEqual(try size("1"), [1, 1], "1 is an integer, true is not")
     }
+
+    // MARK: - #951 serve's whole-request refusals (QA #755 INFO-7)
+
+    /// {"name":"<bytes>"}, the bytes raw inside the string.
+    private static func named(_ bytes: UInt8...) -> [UInt8] { Array(#"{"name":""#.utf8) + bytes + Array(#""}"#.utf8) }
+
+    /// `n` nested containers: the object, then n - 1 arrays.
+    private static func nested(_ n: Int) -> [UInt8] {
+        Array(#"{"a":"#.utf8) + [UInt8](repeating: 0x5b, count: n - 1) + [UInt8](repeating: 0x5d, count: n - 1) + [0x7d]
+    }
+
+    /// Every input dch serve's json_parse refuses whole (json.c, the same bytes at v1.58.0 and v1.61.0) is nil here:
+    /// utf8_ok (:16-53), json_number (:142-171), JSON_MAX_DEPTH (:59, :262-263), and a trailing comma (json_parse_object
+    /// :185-189, json_parse_array :218-221). `foundation`: JSONSerialization alone refuses the row too, so request needs
+    /// no pre-check for it (a Foundation that starts reading one fails here, naming the row); false: it reads the row
+    /// and scan's comma check refuses it.
+    func testServesWholeRequestRefusalsAreMalformed() {
+        let rows: [(String, [UInt8], foundation: Bool)] = [
+            ("C3 then the closing quote", Self.named(0xc3), true),
+            ("a stray continuation byte", Self.named(0x80), true),
+            ("lead C0", Self.named(0xc0, 0x80), true),
+            ("lead C1", Self.named(0xc1, 0xbf), true),
+            ("lead F5", Self.named(0xf5, 0x80, 0x80, 0x80), true),
+            ("lead FF", Self.named(0xff), true),
+            ("overlong 3-byte", Self.named(0xe0, 0x80, 0xaf), true),
+            ("overlong 4-byte", Self.named(0xf0, 0x80, 0x80, 0xaf), true),
+            ("surrogate ED A0 80", Self.named(0xed, 0xa0, 0x80), true),
+            ("surrogate ED BF BF", Self.named(0xed, 0xbf, 0xbf), true),
+            ("past U+10FFFF", Self.named(0xf4, 0x90, 0x80, 0x80), true),
+            ("80 in a key", [0x7b, 0x22, 0x80, 0x22, 0x3a, 0x31, 0x7d], true),
+            ("01", Array(#"{"cols":01}"#.utf8), true),
+            ("-01", Array(#"{"cols":-01}"#.utf8), true),
+            ("a bare -", Array(#"{"cols":-}"#.utf8), true),
+            ("1.", Array(#"{"cols":1.}"#.utf8), true),
+            (".5", Array(#"{"cols":.5}"#.utf8), true),
+            ("1e", Array(#"{"cols":1e}"#.utf8), true),
+            ("1e+", Array(#"{"cols":1e+}"#.utf8), true),
+            ("1025 deep", Self.nested(1025), true),
+            ("a trailing comma in the object", Array(#"{"name":"w",}"#.utf8), false),
+            ("a trailing comma in an array", Array(#"{"command":["sh",]}"#.utf8), false),
+            ("spaces around it", Array(#"{"name":"w" , }"#.utf8), false),
+            ("tab, CR and LF before the }", Array("{\"name\":\"w\",\t\r\n}".utf8), false),
+            ("a newline before the ]", Array("{\"a\":[1,\n]}".utf8), false),
+            ("nested", Array(#"{"a":{"b":1,}}"#.utf8), false),
+        ]
+        for (label, bytes, foundation) in rows {
+            XCTAssertTrue(DchFrame.request(Data(bytes)) == nil, label)
+            XCTAssertEqual((try? JSONSerialization.jsonObject(with: Data(bytes))) == nil, foundation, "JSONSerialization: \(label)")
+        }
+    }
+
+    /// The neighbours of those rows serve reads, and a comma that is no trailing one.
+    func testServesReadableNeighboursStillRead() throws {
+        XCTAssertEqual(DchFrame.request(Data(Self.named(0xed, 0x9f, 0xbf)))?["name"] as? String, "\u{D7FF}")
+        XCTAssertEqual(DchFrame.request(Data(Self.named(0xf4, 0x8f, 0xbf, 0xbf)))?["name"] as? String, "\u{10FFFF}")
+        XCTAssertEqual(DchFrame.request(Data(#"{"cols":0,"rows":-0,"x":1e05}"#.utf8))?.count, 3)
+        XCTAssertEqual(DchFrame.request(Data(#"{"command":["sh","-c"]}"#.utf8))?["command"] as? [String], ["sh", "-c"])
+        let o = try XCTUnwrap(DchFrame.request(Data(#"{"s":",}","t":[",]"],"u":{"v":[1, 2]}}"#.utf8)))
+        XCTAssertEqual(o["s"] as? String, ",}", "a comma inside a string is text")
+        XCTAssertEqual(o["t"] as? [String], [",]"])
+        XCTAssertTrue(DchFrame.request(Data(Self.nested(513))) != nil)
+    }
+
+    /// Where Prosper refuses more than serve (remote-frames.md, Framing): JSONSerialization reads 513 nested containers
+    /// and refuses 514 (serve reads up to 1024), and refuses a number past a double (serve's json_number is syntax only).
+    func testJsonSerializationRefusesWhatServeReads() {
+        for bytes in [Self.nested(514), Self.nested(1024), Array(#"{"cols":1e400}"#.utf8)] {
+            XCTAssertTrue((try? JSONSerialization.jsonObject(with: Data(bytes))) == nil)
+            XCTAssertTrue(DchFrame.request(Data(bytes)) == nil)
+        }
+    }
+
+    /// The phone's answer for a trailing comma: each frame's malformed answer, as for the BOM (R1), nothing run.
+    func testATrailingCommaGetsEachFramesMalformedAnswer() {
+        let bad = Array(#"{"name":"work","argv":["--read","work"],}"#.utf8)
+        for type in [DchFrame.attach, DchFrame.create] {
+            let r = sendRaw(type, bad)
+            r.lock.withLock { XCTAssertEqual(r.frames, [Self.malformed(type)]); XCTAssertEqual(r.spawned, []) }
+        }
+        let k = sendRaw(DchFrame.kill, bad)
+        k.lock.withLock { XCTAssertEqual(k.frames, [Self.ok]); XCTAssertEqual(k.killed, []) }
+        let c = sendRaw(DchFrame.ctl, bad)
+        c.lock.withLock {
+            XCTAssertEqual(c.ctl, 0)
+            let m = (try? JSONSerialization.jsonObject(with: c.frames.first?.dropFirst(5) ?? Data())) as? [String: String]
+            XCTAssertTrue(m?["message"]?.hasPrefix("malformed ctl request: send") == true, "\(m ?? [:])")
+        }
+    }
+
+    // MARK: - #951 the all-requests' answers (#886 round 2 review)
+
+    private static func reply(_ d: Data) -> (type: UInt8?, json: [String: Any]) {
+        (d.first, ((try? JSONSerialization.jsonObject(with: d.dropFirst(5))) as? [String: Any]) ?? [:])
+    }
+
+    private static let unsentLine = #"{"name":"a","as":"a","result":"failed","reason":"prompt","detail":"x","session_id":"s","running":true}"#
+    private static let dashLine = #"{"name":"-x","result":"failed","reason":"not_started","detail":"-x: not started","session_id":""}"#
+    private static let okLine = #"{"name":"b","result":"ok","reason":"","detail":"","session_id":"s"}"#
+
+    private static func dir(_ status: Int32, _ lines: String...) -> DchActionResult {
+        AgentIsland.actionResult(status: status, output: Data(lines.map { $0 + "\n" }.joined().utf8))
+    }
+
+    /// Item 1: an unsent resume message and a dash refusal in one run keep the per-session line; the dash sentence
+    /// follows it (it was the tally alone). With no unsent line the tally stays.
+    func testResumeAllKeepsTheUnsentLineBeforeTheDashSentence() {
+        let r = Self.reply(DchControlOps.answer(all: Self.dir(1, Self.unsentLine, Self.dashLine), .resume))
+        XCTAssertEqual(r.type, DchFrame.ok)
+        XCTAssertEqual(r.json["names"] as? [String], ["a"])
+        XCTAssertEqual(r.json["message"] as? String, "a: Resumed; the resume message wasn't sent; 1 session has a name dch can no longer start")
+        let t = Self.reply(DchControlOps.answer(all: Self.dir(1, Self.okLine, Self.dashLine), .resume))
+        XCTAssertEqual(t.json["message"] as? String, "1 resumed, 1 session has a name dch can no longer start")
+    }
+
+    /// Item 2: per-dir results. A dir that exited non-zero with no failed line, beside a dir whose failed line reads
+    /// ok (unsent, or a dash refusal next to a resumed session), makes the answer the error: the summary, then that
+    /// dir's failedText. Merged, its exit was hidden behind the first dir's and the answer was ok.
+    func testAllRequestFailsForADirThatFailedWithoutAResultLine() {
+        let silent = AgentIsland.actionResult(status: 2, output: Data("dch: cannot read the history\n".utf8))
+        let want = DchControlOps.error("1 resumed (1 resume message not sent), failed: dch: cannot read the history")
+        XCTAssertEqual(DchControlOps.answer(all: [Self.dir(1, Self.unsentLine), silent], .resume), want)
+        XCTAssertEqual(DchControlOps.answer(all: [silent, Self.dir(1, Self.unsentLine)], .resume), want)
+        XCTAssertEqual(DchControlOps.answer(all: [Self.dir(1, Self.okLine, Self.dashLine), Self.dir(3)], .resume),
+                       DchControlOps.error("1 resumed, 1 session has a name dch can no longer start, failed (exit 3)"))
+        // A dir that exited 0, or failed with its line: the answer as before.
+        let ok = Self.reply(DchControlOps.answer(all: [Self.dir(1, Self.unsentLine), Self.dir(0, Self.okLine)], .resume))
+        XCTAssertEqual(ok.type, DchFrame.ok)
+        XCTAssertEqual(ok.json["names"] as? [String], ["a", "b"])
+        let split = Self.reply(DchControlOps.answer(all: [Self.dir(1, Self.unsentLine), Self.dir(0), Self.dir(1, Self.dashLine)], .resume))
+        XCTAssertEqual(split.type, DchFrame.ok)
+        XCTAssertEqual(split.json["names"] as? [String], ["a"])
+        XCTAssertEqual(split.json["message"] as? String, "a: Resumed; the resume message wasn't sent; 1 session has a name dch can no longer start")
+        // No failed line anywhere: the merged exit names it already, once.
+        XCTAssertEqual(DchControlOps.answer(all: [Self.dir(0, Self.okLine), Self.dir(3)], .resume), DchControlOps.error("1 resumed, failed (exit 3)"))
+        // Restart all was an error already; its summary now names the silent dir too.
+        let agent = #"{"name":"c","result":"failed","reason":"","detail":"c: no agent","session_id":"s"}"#
+        XCTAssertEqual(DchControlOps.answer(all: [Self.dir(1, agent), Self.dir(2)], .restart), DchControlOps.error("1 failed, failed (exit 2)"))
+    }
 }

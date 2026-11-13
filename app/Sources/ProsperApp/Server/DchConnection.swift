@@ -172,34 +172,45 @@ enum DchFrame {
     /// json.c:366-384), and a string, or an array of strings, holding a NUL or a lone surrogate once decoded
     /// (json_decode, json.c:288-357, and utf8_ok, :48-53). JSONSerialization refuses a whole document for a lone
     /// surrogate escape, serve only the string (QA #748 INFO-2): scan writes each as \u0000 first.
+    /// #951: a trailing comma before '}' or ']' is malformed too (JSONSerialization reads it). The rest of serve's
+    /// whole-request refusals (invalid UTF-8, json_number's forms, nesting past 1024) JSONSerialization refuses
+    /// itself (DchServeParityTests' table pins both). It refuses more: nesting past 513, a number past a double.
     static func request(_ payload: Data) -> [String: Any]? {
         if payload.isEmpty { return [:] }
-        guard !payload.contains(0), !payload.starts(with: [0xef, 0xbb, 0xbf]) else { return nil }
-        let (bytes, keys) = scan([UInt8](payload))
-        guard var o = (try? JSONSerialization.jsonObject(with: Data(bytes))) as? [String: Any] else { return nil }
+        guard !payload.contains(0), !payload.starts(with: [0xef, 0xbb, 0xbf]),
+              let s = scan([UInt8](payload)),
+              var o = (try? JSONSerialization.jsonObject(with: Data(s.bytes))) as? [String: Any] else { return nil }
         func nul(_ v: Any) -> Bool { (v as? String)?.utf8.contains(0) == true }
-        for (k, v) in o where keys[k, default: 0] > 1 || nul(v) || (v as? [Any])?.contains(where: nul) == true {
+        for (k, v) in o where s.keys[k, default: 0] > 1 || nul(v) || (v as? [Any])?.contains(where: nul) == true {
             o[k] = NSNull()
         }
         return o
     }
 
     /// One pass over a JSON text: each lone surrogate escape becomes \u0000, and the count of each top-level key
-    /// (decoded, as json_key_eq compares them, json.c:359-364).
-    private static func scan(_ b: [UInt8]) -> (bytes: [UInt8], keys: [String: Int]) {
+    /// (decoded, as json_key_eq compares them, json.c:359-364). #951: nil on a ',' that only space, tab, CR or LF
+    /// separate from the '}' or ']' after it: json_parse_object wants a key after a ',' (json.c:185-189),
+    /// json_parse_array a value (:218-221, json_parse_primitive :238-241). One pass, linear in the payload, which
+    /// DchConnection bounds at maxRequestFrame.
+    private static func scan(_ b: [UInt8]) -> (bytes: [UInt8], keys: [String: Int])? {
         func hex4(_ at: Int) -> Int? {
             guard at + 4 <= b.count else { return nil }
             return Int(String(decoding: b[at..<at + 4], as: UTF8.self), radix: 16)
         }
-        var out: [UInt8] = [], keys: [String: Int] = [:], depth = 0, i = 0
+        var out: [UInt8] = [], keys: [String: Int] = [:], depth = 0, i = 0, comma = false
         out.reserveCapacity(b.count)
         while i < b.count {
             guard b[i] == 0x22 else {   // outside a string
-                if b[i] == 0x7b || b[i] == 0x5b { depth += 1 } else if b[i] == 0x7d || b[i] == 0x5d { depth -= 1 }
+                if b[i] == 0x7b || b[i] == 0x5b { depth += 1 } else if b[i] == 0x7d || b[i] == 0x5d {
+                    if comma { return nil }
+                    depth -= 1
+                }
+                if ![0x20, 0x09, 0x0a, 0x0d].contains(b[i]) { comma = b[i] == 0x2c }
                 out.append(b[i])
                 i += 1
                 continue
             }
+            comma = false
             let start = out.count
             out.append(b[i])
             i += 1
@@ -1530,7 +1541,7 @@ struct DchControlOps: Sendable {
         case .all:
             let args = noMessage ? AgentIsland.reviveAllNoMessageArgs : AgentIsland.reviveAllArgs
             let jobs: [(AgentSessionKey, [String]?)] = Set(history.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), args) }
-            run(jobs, path: path, bound: nil, reply) { Self.answer(all: Self.merged($0), .resume) }
+            run(jobs, path: path, bound: nil, reply) { Self.answer(all: $0, .resume) }
         case .names(let names):
             let name = names[0], r: DchHistoryRecord
             switch Self.record(name, in: history) {
@@ -1557,7 +1568,7 @@ struct DchControlOps: Sendable {
         switch req {
         case .all:
             let jobs: [(AgentSessionKey, [String]?)] = Set(live.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.restartAllArgs) }
-            run(jobs, path: path, bound: DchActionRunner.restartBound, yields: true, reply) { Self.answer(all: Self.merged($0), .restart) }
+            run(jobs, path: path, bound: DchActionRunner.restartBound, yields: true, reply) { Self.answer(all: $0, .restart) }
         case .names(let names):
             switch Self.resolve(names, live: live) {
             case .failure(let why): reply(Self.error(why.message))
@@ -1791,8 +1802,7 @@ struct DchControlOps: Sendable {
     /// #886: AgentIsland.resumedUnsent decides it, so the phone and the island tally count one way.
     /// #886 r2: a dash refusal (AgentIsland.dashRefused) is no failure either, but only beside a session that
     /// resumed: with no names an ok would leave the phone's button doing nothing. Its "message" is then the tally.
-    /// shortcut: `r` is merged (first non-zero exit), so another dir's no-JSON failure beside such a line
-    /// (an unsent one, or a dash refusal beside a resumed one) reads ok, as tally's `other` reads it; per-dir results would close it.
+    /// #951: beside an unsent line the per-session lines stay and the dash sentence follows them.
     static func answer(all r: DchActionResult, _ verb: AgentIsland.Verb) -> Data {
         let results = r.json.filter { $0.isFinal || $0.isMaster }
         let unsent = results.filter { AgentIsland.resumedUnsent($0, verb) }
@@ -1807,11 +1817,27 @@ struct DchControlOps: Sendable {
             return error(verb == .resume ? AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume")
                                          : AgentIsland.restartAllSummary(r))
         }
-        let message = !dashed.isEmpty ? AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume")
-            : unsent.map { "\($0.name): \(AgentIsland.finalText($0, verb))" }.joined(separator: "; ")
+        // The dash sentence alone is tally's words for the dash lines alone.
+        let dash = dashed.isEmpty ? [] : [AgentIsland.tally(unsent.isEmpty ? r : DchActionResult(status: 0, json: dashed), .resume,
+                                                            title: "Resume", empty: "nothing to resume")]
+        let message = (unsent.map { "\($0.name): \(AgentIsland.finalText($0, verb))" } + dash).joined(separator: "; ")
         var reply: [String: Any] = ["names": names]
         if !message.isEmpty { reply["message"] = message }
         return DchFrame.encode(DchFrame.ok, json: reply)
+    }
+
+    /// #951: an all-request's per-dir results. A dir that exited non-zero with no failed result line, beside a failed
+    /// line in another dir (one answer(all:) may read as ok: unsent, or a dash refusal), makes the answer the error:
+    /// the summary over every dir, then that dir's failedText (tally's `other`, which the merged exit hides there).
+    /// With no failed line anywhere the merged exit already names it. The island tallies each dir alone.
+    static func answer(all rs: [DchActionResult], _ verb: AgentIsland.Verb) -> Data {
+        let r = merged(rs)
+        let failed = { (d: DchActionResult) in d.json.contains { ($0.isFinal || $0.isMaster) && $0.failed } }
+        let silent = r.stopped || !failed(r) ? [] : rs.filter { $0.status != 0 && !failed($0) }
+        guard !silent.isEmpty else { return answer(all: r, verb) }
+        let summary = verb == .resume ? AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume")
+                                      : AgentIsland.restartAllSummary(r)
+        return error(([summary] + silent.map(AgentIsland.failedText)).joined(separator: ", "))
     }
 }
 

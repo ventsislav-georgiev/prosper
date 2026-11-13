@@ -156,7 +156,13 @@ Every frame, in both directions:
   guard, which closes. "Malformed" is `dch serve`'s reading (rq_json, v1.58.0 serve.c:145-163;
   Prosper since #885): not a JSON object, a NUL byte anywhere (so UTF-16 or UTF-32 JSON), or a
   UTF-8 BOM before the object (json.c:67-70 skips only space, tab, CR and LF); an empty payload
-  reads as `{}`. A value given twice, or a string that decodes to a NUL or holds a lone surrogate
+  reads as `{}`. Malformed too, on both servers: invalid UTF-8 anywhere (a stray continuation byte, a
+  C0, C1 or F5-FF lead, an overlong form, an encoded surrogate, a scalar past U+10FFFF; utf8_ok,
+  json.c:16-53, before any token), a number `json_number` refuses (`01`, `-`, `1.`, `.5`, `1e`;
+  json.c:142-171), nesting deeper than 1024 (json.c:59, :262-263) and a trailing comma before `}` or
+  `]` (json.c:185-189, :218-221; Prosper since #951). Prosper also refuses what serve reads in two
+  cases: nesting deeper than 513 (its JSON parser's limit) and a number past a double's range
+  (`1e400`). A value given twice, or a string that decodes to a NUL or holds a lone surrogate
   escape (`\ud800` with no low half), is no readable value: that one key reads as of the wrong type
   (json.c:288-384, rframe.c:301-322), as each frame's section says.
 - **When Prosper closes a connection.** A client must expect a close at any time. Only 0x12
@@ -406,7 +412,13 @@ The connection then carries one session:
 - 0x12 exit `{"code": int}`: the session's client exited; the server then closes (the FIN
   follows the frame). `code` is the exit status of the dch client the server ran, not of the
   session's program: a create of `exit 3` can report 0. No golden fixture asserts a code (the
-  format cannot express it).
+  format cannot express it). `dch serve` 1.60.0+ may add `"why": "detach"` (dch #217) when its
+  client exited 0 and the session is still there: 1.60.0 when `<sockdir>/<name>.sock` is a socket
+  (stat), 1.61.0 only when a connect to it succeeds and the master then sends nothing for 100 ms
+  (sock_live, serve.c:1878-1906 at v1.61.0, on every OS: a dying master's socket can still take the
+  connect on Linux; a SIGKILLed one's refuses it). A client must not rely on it: Prosper sends
+  `{"code"}` only (#951: no client reads `why`, the phone ends the attach on 0x12 whatever its payload,
+  and the probe would hold the exit frame up to 100 ms). An older client ignores the key.
 - The client detaches by closing the TCP connection. The session lives on.
 - One client per session: the newest attach to a session retires the server's older
   connections attached to it (Prosper).
@@ -642,7 +654,10 @@ for an agent, and a client shows it as it comes.
 - `dch serve` 1.58.0 runs at most 2 `--xray --follow` of one session per device: a third closes
   that device's oldest as a timeout would (#202, serve.c:41-45, MAX_FOLLOW_PER_DEV :97). Prosper
   needs no such cap while its xray gate is off (below): every `--xray` is refused there, so no
-  `--xray --follow` runs (#885).
+  `--xray --follow` runs (#885). Since 1.60.0 serve counts one session by its socket's inode and
+  device as well as by name (kids_note, serve.c:2414-2460 at v1.61.0: `svf` and `SVF` on a
+  case-insensitive volume are one session, one count; QA 1.58.0 LOW-R6). Prosper has no count to key
+  (#951); a cap added when its xray gate opens keys the same way.
 - **`--follow`** and **`--xray --follow`** have neither limit. Each streams 0x31 until the session ends (dch exits: 0x33 with
   its real exit code) or the client closes the connection (below). The server reads dch's pipe
   only as fast as the socket takes the frames, so a slow client slows dch rather than filling the
@@ -767,7 +782,12 @@ resume message may still be in Claude's input, not sent`), one per session, join
 `{"all": true}` whose other failures are all names dch 1.54+ no longer starts (`not_started` for a name
 that begins with `-`) is a 0x14 too when at least one session resumed, its `message` the island's tally
 (`1 resumed, 1 session has a name dch can no longer start`; #886). With nothing resumed it stays the 0x13
-with that tally, since an ok with no names would leave the phone's button doing nothing. A client that
+with that tally, since an ok with no names would leave the phone's button doing nothing. When a session's
+message was not sent too, `message` keeps its per-session lines and that sentence follows them (`a: Resumed;
+the resume message wasn't sent; 1 session has a name dch can no longer start`; Prosper #951, the tally before).
+Each socket dir runs its own `--all`: a dir that exited non-zero with no failed result line makes the whole
+answer the 0x13 even beside such lines, its summary ending in that dir's `failed: dch: …` or `failed (exit N)`
+(`1 resumed (1 resume message not sent), failed (exit 2)`; Prosper #951, an ok before). A client that
 ignores `message` still gets the right names.
 
 A clipboardUpload, a chat and a watch each need a connection of their own; such a connection
