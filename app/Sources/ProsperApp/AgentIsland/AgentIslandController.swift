@@ -1485,7 +1485,8 @@ final class AgentIslandController {
             if case .human = a { return s }
             return AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .working,
                                 agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch,
-                                autoAllowed: s.autoAllowed, cwd: s.cwd)
+                                autoAllowed: s.autoAllowed, claudeSessionID: s.claudeSessionID, transcriptPath: s.transcriptPath,
+                                cwd: s.cwd)
         }
     }
 

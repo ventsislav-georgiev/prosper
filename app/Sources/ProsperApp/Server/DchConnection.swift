@@ -232,9 +232,12 @@ enum DchFrame {
 
     /// #885: cols and rows as dch serve's rq_size (v1.58.0 serve.c:168-179): a missing, unreadable or non-positive
     /// value is 80 and 24, past 1000 it is 1000. Unclamped, a phone's rows of 70000 trapped in PtyChild's UInt16(rows).
+    /// #886 (QA #755 INFO-3): readable is a JSON integer only, as jint's tok_int (v1.58.0 rframe.c:282-298); `as? Int`
+    /// alone also took 30.0, 1e2 and true. JSONSerialization keeps a fraction or exponent as a double ("d").
     static func size(_ o: [String: Any]) -> (cols: Int, rows: Int) {
         func one(_ key: String, _ none: Int) -> Int {
-            guard let v = o[key] as? Int, v > 0 else { return none }
+            guard let n = o[key] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
+                  !"fd".utf8.contains(UInt8(bitPattern: n.objCType.pointee)), let v = n as? Int, v > 0 else { return none }
             return min(v, 1000)
         }
         return (one("cols", 80), one("rows", 24))
@@ -1761,6 +1764,7 @@ struct DchControlOps: Sendable {
     /// `record`: a revive's, for the by-hand hint's CLAUDE_CONFIG_DIR.
     /// #861: a revive that came back withdrawn or draft_left is ok under its `as` name, its
     /// "<name>: <rowText>" in the ok's "message" (forget's partial success; remote-frames.md 0x0c).
+    /// #886: which lines those are is AgentIsland.resumedUnsent's (dch 1.58.0's "running" when the line has it).
     static func answer(named: [(String, DchActionResult)], _ verb: AgentIsland.Verb, record: DchHistoryRecord? = nil) -> Data {
         var ok: [String] = [], lines: [String] = [], failed = false
         for (n, r) in named {
@@ -1784,22 +1788,27 @@ struct DchControlOps: Sendable {
     /// revive's under its `as` name, in dch's order) only when every job exited 0
     /// and no result failed; else one error with the island's own summary line.
     /// #861: a revive whose message was not sent (exit 1) is ok too, its line in "message" as answer(named:)'s.
+    /// #886: AgentIsland.resumedUnsent decides it, so the phone and the island tally count one way.
+    /// #886 r2: a dash refusal (AgentIsland.dashRefused) is no failure either, but only beside a session that
+    /// resumed: with no names an ok would leave the phone's button doing nothing. Its "message" is then the tally.
     /// shortcut: `r` is merged (first non-zero exit), so another dir's no-JSON failure beside such a line
-    /// reads ok, as tally's `other` reads it; per-dir results would close it.
+    /// (an unsent one, or a dash refusal beside a resumed one) reads ok, as tally's `other` reads it; per-dir results would close it.
     static func answer(all r: DchActionResult, _ verb: AgentIsland.Verb) -> Data {
         let results = r.json.filter { $0.isFinal || $0.isMaster }
         let unsent = results.filter { AgentIsland.resumedUnsent($0, verb) }
-        guard !r.stopped, r.status == 0 || !unsent.isEmpty,
-              !results.contains(where: { $0.failed && !AgentIsland.resumedUnsent($0, verb) }) else {
-            return error(verb == .resume ? AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume")
-                                         : AgentIsland.restartAllSummary(r))
-        }
         var names: [String] = [], seen = Set<String>()
         for o in results where o.result == "ok" || AgentIsland.resumedUnsent(o, verb) {
             let n = o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name
             if seen.insert(n).inserted { names.append(n) }
         }
-        let message = unsent.map { "\($0.name): \(AgentIsland.finalText($0, verb))" }.joined(separator: "; ")
+        let dashed = names.isEmpty ? [] : results.filter { AgentIsland.dashRefused($0, verb) }
+        guard !r.stopped, r.status == 0 || !unsent.isEmpty || !dashed.isEmpty,
+              !results.contains(where: { $0.failed && !AgentIsland.resumedUnsent($0, verb) && !(!names.isEmpty && AgentIsland.dashRefused($0, verb)) }) else {
+            return error(verb == .resume ? AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume")
+                                         : AgentIsland.restartAllSummary(r))
+        }
+        let message = !dashed.isEmpty ? AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume")
+            : unsent.map { "\($0.name): \(AgentIsland.finalText($0, verb))" }.joined(separator: "; ")
         var reply: [String: Any] = ["names": names]
         if !message.isEmpty { reply["message"] = message }
         return DchFrame.encode(DchFrame.ok, json: reply)

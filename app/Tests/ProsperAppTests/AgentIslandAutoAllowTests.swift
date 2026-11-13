@@ -666,6 +666,29 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(out?.alias, "A")
     }
 
+    /// #886 rider (a): the held copy keeps claudeSessionID and transcriptPath (#797), and every other stored
+    /// field but state, so the phone list keeps them while a prompt is held.
+    @MainActor func testAHeldSessionIsPublishedWithItsClaudeSessionAndTranscript() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        var s = session(.blocked)
+        s.claudeSessionID = "00000000-0000-4000-8000-000000000001"
+        s.transcriptPath = "/Users/example/.claude/projects/p/00000000-0000-4000-8000-000000000001.jsonl"
+        s.alias = "A"
+        s.cwd = "/src/app"
+        s.version = "1.58.0"
+        s.metaEpoch = 7
+        let out = c.published([s]).first
+        XCTAssertEqual(out?.state, .working, "held: the copy, not the session as is")
+        XCTAssertEqual(out?.claudeSessionID, "00000000-0000-4000-8000-000000000001")
+        XCTAssertEqual(out?.transcriptPath, s.transcriptPath)
+        func fields(_ x: AgentSession) -> [String] {
+            Mirror(reflecting: x).children.filter { $0.label != "state" }.map { "\($0.label ?? ""): \($0.value)" }
+        }
+        XCTAssertEqual(out.map(fields), fields(s), "the next field added to AgentSession is copied too")
+    }
+
     /// Teardown drops every hold.
     @MainActor func testTeardownDropsTheHold() {
         let f = FakeIO(Self.bash3), (c, _) = controller(f)

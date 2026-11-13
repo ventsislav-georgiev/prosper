@@ -381,8 +381,9 @@ The connection then carries one session:
 - 0x10 data, client to server: raw bytes for the session's input (keys, pastes).
 - 0x10 data, server to client: raw pty output.
 - 0x05 resize `{"cols": int, "rows": int}`: the session's window size (80×24 for a missing key,
-  one that is not a positive integer, or one given twice; above 1000 it is 1000: rq_size, v1.58.0
-  serve.c:168-179, the same for 0x01 and 0x02; Prosper since #885). No reply.
+  one that is not a positive JSON integer (`30.0`, `1e2`, `true` and `"30"` are not: tok_int, v1.58.0
+  rframe.c:282-298), or one given twice; above 1000 it is 1000: rq_size, v1.58.0 serve.c:168-179, the
+  same for 0x01 and 0x02; Prosper since #885, the integer rule since #886). No reply.
 - 0x07 redraw (empty): force a repaint, and re-arm the session's terminal modes. The server
   shrinks the pty a row and restores it 120 ms later (not while a shrink is pending), then sends
   SIGURG to its own dch client while that is still running, shrink or not. A dch 1.58.0+ client
@@ -596,7 +597,7 @@ Prosper's messages:
 | another ctl running on this connection | `{"code": "busy", "message": "a ctl is already running on this connection"}`, byte for byte as `dch serve`; no close |
 | an attached or watch connection, or a Mac-only request in flight | `ctl needs its own connection` (both servers); no close |
 | not a JSON object (a NUL byte, a UTF-8 BOM), or no `argv` | `malformed ctl request: send {"argv": [verb, name, ...]}` |
-| an `argv` that is not an array of strings, or a `cwd` that is not a string: of another type, given twice, a word or the `cwd` that decodes to a NUL or holds a lone surrogate escape, a `cwd` of 1024 bytes or more | `malformed ctl request: argv must be an array of strings, cwd a string` (both servers: ctl_request, v1.58.0 serve.c:1223-1233; Prosper since #885) |
+| an `argv` that is not an array of strings, or a `cwd` that is not a string: of another type, given twice, a word or the `cwd` that decodes to a NUL or holds a lone surrogate escape, a `cwd` of PATH_MAX bytes or more (1024 on macOS, where Prosper runs; a Linux `dch serve`'s PATH_MAX is 4096, so it refuses from 4096) | `malformed ctl request: argv must be an array of strings, cwd a string` (both servers: ctl_request, v1.58.0 serve.c:1223-1233, `jstr(…, cwd, PATH_MAX)`; Prosper since #885) |
 | fewer than 2 elements | `ctl needs a verb and its arguments` |
 | more than 1024 elements | `too many arguments` |
 | a verb not in the table | `ctl does not run <verb>` |
@@ -753,11 +754,21 @@ bytes as an image (see [M11](#known-gaps)); its gate is `paste_image` or a Prosp
 | 0x29 | runCommand | `{id, argument?}` | 0x2b `{text, detail?}` | `commands` |
 
 A 0x14 with `"message"` is a partial success: done, with a line for the user. 0x25 forget sends one
-when it kept pinned records. 0x0c revive sends one (#861) when dch 1.46+ revived a session but did
-not send its resume message (`withdrawn` or `draft_left`, dch.c:9694-9699@v1.47.0). That session
-is in `names` under its `as` name, and `message` is `<name>: Resumed as <as>; the resume message
-wasn't sent` (`Resumed;` when `as` is the name; `draft_left` ends `...; the resume message may
-still be in Claude's input, not sent`), one per session, joined by `; `. A client that ignores `message` still gets the right names.
+when it kept pinned records. 0x0c revive sends one (#861) when dch revived a session but did not
+send its resume message. dch 1.58.0+ ends each `--revive --json` result with `"running": bool`
+(rv_json_final, dch.c:10093-10101@v1.58.0; #886): then a failed result of the message step
+(`withdrawn`, `draft_left`, `interrupted`, `not_idle`, `prompt`, `draft`, `queued`, `no_screen`,
+`not_submitted`, `not_typed`; revive_message, dch.c:10324-10377) counts when `running` is true, and
+`running` false is a failure. A line without the field, or with one that is not a JSON bool (older
+dch), counts `withdrawn` and `draft_left` only (dch.c:9694-9699@v1.47.0), byte for byte as before.
+That session is in `names` under its `as` name, and `message` is `<name>: Resumed as <as>; the resume
+message wasn't sent` (`Resumed;` when `as` is the name; `draft_left` and `not_submitted` end `...; the
+resume message may still be in Claude's input, not sent`), one per session, joined by `; `. A revive
+`{"all": true}` whose other failures are all names dch 1.54+ no longer starts (`not_started` for a name
+that begins with `-`) is a 0x14 too when at least one session resumed, its `message` the island's tally
+(`1 resumed, 1 session has a name dch can no longer start`; #886). With nothing resumed it stays the 0x13
+with that tally, since an ok with no names would leave the phone's button doing nothing. A client that
+ignores `message` still gets the right names.
 
 A clipboardUpload, a chat and a watch each need a connection of their own; such a connection
 never attaches. A 0x23 or 0x1f on an attached connection gets 0x13

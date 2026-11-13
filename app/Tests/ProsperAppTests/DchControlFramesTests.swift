@@ -656,10 +656,139 @@ final class DchControlFramesTests: XCTestCase {
                        "a: Resumed as a-2; the resume message wasn't sent; b: Resumed; the resume message may still be in Claude's input, not sent")
         // Beside a real failure it is still the error, with the island's tally.
         f.out[all] = Self.unsent("a", as: "a-2", "withdrawn") + "\n" + Self.line("c", "failed", detail: "c: no agent")
-        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), "1 resumed, 1 failed, 1 resume message not sent")
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), "1 resumed (1 resume message not sent), 1 failed")
         f.status = 0
         f.out[all] = Self.ok("x")
         XCTAssertNil((call(ops(f), DchFrame.revive, ["all": true]).json as? [String: Any])?["message"], "no message on a plain ok")
+    }
+
+    // MARK: - #886 dch 1.58.0's "running" on the 0x0c answer
+
+    /// A --revive --json result as dch 1.58.0 prints it (rv_json_final, dch.c:10093-10101); nil leaves "running" out.
+    private static func ran(_ name: String, as revived: String, _ reason: String, running: Any?) -> String {
+        var o: [String: Any] = ["name": name, "as": revived, "result": "failed", "reason": reason, "session_id": "s",
+                                "detail": "revived as \(revived) in /p, claude resumed s; resume message NOT sent (x)"]
+        o["running"] = running
+        return json(o)
+    }
+
+    private func reviveFake() -> Fake {
+        let f = Fake()
+        f.ls["/d"] = "[]"
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        f.status = 1
+        return f
+    }
+
+    private func answered(_ line: String, all: Bool) -> Data {
+        let r = AgentIsland.actionResult(status: 1, output: Data((line + "\n").utf8))
+        return all ? DchControlOps.answer(all: r, .resume) : DchControlOps.answer(named: [("a", r)], .resume)
+    }
+
+    /// Running true with a failed send: ok under the `as` name, the island's row text in "message", by name and for all.
+    func testReviveRunningTrueWithAFailedSendIsOkOnThePhone() {
+        let f = reviveFake()
+        f.out["--revive a --json"] = Self.ran("a", as: "a", "prompt", running: true)
+        let r = call(ops(f), DchFrame.revive, ["name": "a"])
+        XCTAssertEqual(names(r), ["a"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String, "a: Resumed; the resume message wasn't sent")
+        let all = AgentIsland.reviveAllArgs.joined(separator: " ")
+        f.out[all] = Self.ran("a", as: "a-2", "not_idle", running: true) + "\n" + Self.ran("b", as: "b", "not_submitted", running: true)
+        let a = call(ops(f), DchFrame.revive, ["all": true])
+        XCTAssertEqual(names(a), ["a-2", "b"])
+        XCTAssertEqual((a.json as? [String: Any])?["message"] as? String,
+                       "a: Resumed as a-2; the resume message wasn't sent; b: Resumed; the resume message may still be in Claude's input, not sent")
+        // "live" with running true names a session that already ran (rv_say, dch.c:10625): still the error.
+        f.out["--revive a --json"] = Self.json(["name": "a", "as": "a", "result": "failed", "reason": "live", "detail": "session a is live",
+                                                "session_id": "", "running": true])
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["name": "a"])), "a: Not resumed: a is running")
+    }
+
+    /// Running false with a failed send: the agent does not run, so the phone gets the error, withdrawn too.
+    func testReviveRunningFalseWithAFailedSendIsAnErrorOnThePhone() {
+        let f = reviveFake()
+        f.out["--revive a --json"] = Self.ran("a", as: "a", "withdrawn", running: false)
+        let r = call(ops(f), DchFrame.revive, ["name": "a"])
+        XCTAssertEqual(message(r), "a: revived as a in /p, claude resumed s; resume message NOT sent (x)")
+        XCTAssertNil((r.json as? [String: Any])?["names"])
+        f.out[AgentIsland.reviveAllArgs.joined(separator: " ")] = Self.ran("a", as: "a", "draft_left", running: false)
+        XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), "1 failed")
+    }
+
+    /// No "running" (dch before 1.58.0): the answer is the one before #886, byte for byte where it has one key.
+    func testReviveRunningAbsentAnswersAsBefore() {
+        let f = reviveFake()
+        f.out["--revive a --json"] = Self.ran("a", as: "a", "withdrawn", running: nil)
+        let r = call(ops(f), DchFrame.revive, ["name": "a"])
+        XCTAssertEqual(names(r), ["a"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String, "a: Resumed; the resume message wasn't sent")
+        let detail = "a: revived as a in /p, claude resumed s; resume message NOT sent (x)"
+        for reason in ["prompt", "not_idle", "not_submitted", "interrupted"] {
+            XCTAssertEqual(answered(Self.ran("a", as: "a", reason, running: nil), all: false), DchControlOps.error(detail), "absent is not true: \(reason)")
+            XCTAssertEqual(answered(Self.ran("a", as: "a", reason, running: nil), all: true), DchControlOps.error("1 failed"), reason)
+        }
+    }
+
+    /// A "running" that is not a JSON bool answers the bytes of a line without it.
+    func testReviveRunningOfAWrongTypeAnswersAsAbsentOnThePhone() {
+        for odd in [1, 0, "true", NSNull(), [true]] as [Any] {
+            for reason in ["withdrawn", "draft_left", "prompt"] {
+                for all in [false, true] {
+                    XCTAssertEqual(answered(Self.ran("a", as: "a-2", reason, running: odd), all: all),
+                                   answered(Self.ran("a", as: "a-2", reason, running: nil), all: all), "\(odd) \(reason) all: \(all)")
+                }
+            }
+        }
+        XCTAssertEqual(Self.decode(answered(Self.ran("a", as: "a-2", "prompt", running: 1), all: false)).type, DchFrame.error)
+    }
+
+    /// #861 QA #728 INFO-4: a revive the bound cut is cancelled, even when its last line said the message was not sent.
+    func testACancelledReviveWithAnUnsentLineIsStillCancelled() {
+        for running in [nil, true] as [Any?] {
+            let r = AgentIsland.actionResult(status: 143, output: Data(Self.ran("a", as: "a", "withdrawn", running: running).utf8), stopped: true)
+            let named = Self.decode(DchControlOps.answer(named: [("a", r)], .resume))
+            XCTAssertEqual(message(named), "a: Resume cancelled: no answer in 5m", "\(String(describing: running))")
+            XCTAssertEqual(message(Self.decode(DchControlOps.answer(all: r, .resume))), "Resume cancelled: no answer in 5m")
+        }
+    }
+
+    // MARK: - #886 r2: Resume all with a dash refusal (rider b)
+
+    /// dch 1.54+ refuses a record whose name starts with '-' (not_started, exit 1; dch.c:10681-10685@v1.58.0).
+    private static let dash = line("-x", "failed", reason: "not_started", detail: "-x: not started")
+
+    private func resumeAll(_ lines: String...) -> (type: UInt8, json: Any?) {
+        Self.decode(DchControlOps.answer(all: AgentIsland.actionResult(status: 1, output: Data((lines.joined(separator: "\n") + "\n").utf8)), .resume))
+    }
+
+    /// (i) one resumed beside a dash refusal: ok with the resumed name, the tally in "message".
+    func testResumeAllWithADashRefusalBesideAResumedOneIsOk() {
+        let r = resumeAll(Self.ok("a", as: "a-2"), Self.dash)
+        XCTAssertEqual(r.type, DchFrame.ok)
+        XCTAssertEqual(names(r), ["a-2"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String, "1 resumed, 1 session has a name dch can no longer start")
+    }
+
+    /// (ii) only a dash refusal: nothing resumed, so the error as before (an ok with no names would do nothing).
+    func testResumeAllWithOnlyADashRefusalIsStillAnError() {
+        let r = AgentIsland.actionResult(status: 1, output: Data((Self.dash + "\n").utf8))
+        XCTAssertEqual(DchControlOps.answer(all: r, .resume), DchControlOps.error("1 session has a name dch can no longer start"))
+    }
+
+    /// (iii) a dash refusal beside a real failure: the error as before.
+    func testResumeAllWithADashRefusalBesideAFailureIsStillAnError() {
+        let r = AgentIsland.actionResult(status: 1, output: Data((Self.ok("a") + "\n" + Self.dash + "\n" + Self.line("c", "failed", detail: "c: no agent") + "\n").utf8))
+        XCTAssertEqual(DchControlOps.answer(all: r, .resume),
+                       DchControlOps.error("1 resumed, 1 failed, 1 session has a name dch can no longer start"))
+    }
+
+    /// (iv) an unsent message beside a dash refusal: ok, the unsent session counts as resumed.
+    func testResumeAllWithAnUnsentOneAndADashRefusalIsOk() {
+        let r = resumeAll(Self.ran("a", as: "a", "prompt", running: true), Self.dash)
+        XCTAssertEqual(r.type, DchFrame.ok)
+        XCTAssertEqual(names(r), ["a"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String,
+                       "1 resumed (1 resume message not sent), 1 session has a name dch can no longer start")
     }
 
     func testRestartAllWithNoResultAndANonZeroExitIsAnError() {

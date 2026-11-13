@@ -207,7 +207,8 @@ final class DchServeParityTests: XCTestCase {
 
     /// R2: a lone surrogate escape in "name" fails json_decode (json.c:288-357), so jstr fails and serve
     /// answers "attach needs a session name"; JSONSerialization refuses the whole document instead, which
-    /// read as "malformed attach request" before. A valid pair still decodes.
+    /// read as "malformed attach request" before. A valid pair in raw UTF-8 still decodes (an escaped pair:
+    /// testAnEscapedSurrogatePairDecodes).
     func testALoneSurrogateNameNeedsAName() {
         for type in [DchFrame.attach, DchFrame.create] {
             for raw in [#"{"name":"w\ud800x"}"#, #"{"name":"\udc00"}"#, #"{"name":"\ud800\ud800"}"#, #"{"name":"\uDBFF"}"#,
@@ -223,6 +224,53 @@ final class DchServeParityTests: XCTestCase {
         r.lock.withLock {
             XCTAssertEqual(r.spawned, [["-E", "-f", "-n", "w\u{1F600}"]])
             XCTAssertEqual(r.frames, [Self.spawnFailed])
+        }
+    }
+
+    /// #886 (QA #755 INFO-1): an escaped valid pair (high then low, either case) is copied through as 12 bytes and
+    /// decodes on both servers (json_decode joins it, v1.58.0 json.c:317-324): the name reaches dch as the emoji.
+    func testAnEscapedSurrogatePairDecodes() throws {
+        for raw in [#"{"name":"w\ud83d\ude00"}"#, #"{"name":"w\uD83D\uDE00"}"#] {
+            let o = try XCTUnwrap(DchFrame.request(Data(raw.utf8)), raw)
+            XCTAssertEqual(o["name"] as? String, "w\u{1F600}", raw)
+            let r = send(DchFrame.attach, raw)
+            r.lock.withLock {
+                XCTAssertEqual(r.spawned, [["-E", "-f", "-n", "w\u{1F600}"]], raw)
+                XCTAssertEqual(r.frames, [Self.spawnFailed], raw)
+            }
+        }
+    }
+
+    /// #886 (QA #755 INFO-2): space, tab, CR or LF between a key and its ':' still makes it that key (json_parse_object
+    /// skips it before the ':', v1.58.0 json.c:190-191), so a "name" given twice that way is no readable name either.
+    func testAKeyWithSpaceBeforeItsColonCountsAsGivenTwice() throws {
+        for raw in [#"{"name":"a", "name" :"a"}"#, "{\"name\":\"a\",\"name\"\t\r\n:\"a\"}"] {
+            let o = try XCTUnwrap(DchFrame.request(Data(raw.utf8)), raw)
+            XCTAssertTrue(o["name"] is NSNull, raw)
+            for type in [DchFrame.attach, DchFrame.create] {
+                let r = send(type, raw)
+                r.lock.withLock {
+                    XCTAssertEqual(r.frames, [Self.needsName], raw)
+                    XCTAssertEqual(r.spawned, [], raw)
+                }
+            }
+        }
+    }
+
+    /// #886 (required by the #885 review): two low surrogate escapes in a row. dch serve's json_decode fails a
+    /// low surrogate that comes first (v1.58.0 json.c:325-326), so jstr fails and serve answers "attach needs a
+    /// session name"; the other keys still read. scan's bound `u <= 0xdbff` keeps the first from passing as the
+    /// high half of a pair: at 0xdfff both escapes went through and JSONSerialization refused the whole request.
+    func testTwoLowSurrogatesInARowNeedAName() throws {
+        let o = try XCTUnwrap(DchFrame.request(Data(#"{"name":"\udc00\udc00","cols":90}"#.utf8)))
+        XCTAssertTrue(o["name"] is NSNull)
+        XCTAssertEqual(o["cols"] as? Int, 90)
+        for type in [DchFrame.attach, DchFrame.create] {
+            let r = send(type, #"{"name":"\udc00\udc00"}"#)
+            r.lock.withLock {
+                XCTAssertEqual(r.frames, [Self.needsName])
+                XCTAssertEqual(r.spawned, [])
+            }
         }
     }
 
@@ -373,5 +421,21 @@ final class DchServeParityTests: XCTestCase {
         XCTAssertEqual(try size(#"{"cols":0,"rows":-5}"#), [80, 24])
         XCTAssertEqual(try size(#"{"cols":"100","rows":1.5}"#), [80, 24])
         XCTAssertEqual(try size(#"{"cols":100,"cols":100,"rows":99999999999999999999}"#), [80, 24])
+    }
+
+    /// #886 (QA #755 INFO-3): rq_size reads cols and rows with jint, whose tok_int takes only a JSON integer
+    /// (strtoll over the whole token, v1.58.0 rframe.c:282-298): 30.0, 1e2, true and "30" are none, so 80x24;
+    /// 0 and below too; 65536 is capped to 1000 (serve.c:168-179).
+    func testSizeReadsOnlyAPositiveJsonInteger() throws {
+        func size(_ v: String) throws -> [Int] {
+            let s = DchFrame.size(try XCTUnwrap(DchFrame.request(Data(#"{"cols":\#(v),"rows":\#(v)}"#.utf8)), v))
+            return [s.cols, s.rows]
+        }
+        for v in ["30.0", "1e2", "true", #""30""#, "0", "-7", "1.5E1", "false", "null"] {
+            XCTAssertEqual(try size(v), [80, 24], v)
+        }
+        XCTAssertEqual(try size("65536"), [1000, 1000])
+        XCTAssertEqual(try size("30"), [30, 30])
+        XCTAssertEqual(try size("1"), [1, 1], "1 is an integer, true is not")
     }
 }

@@ -64,6 +64,8 @@ struct DchHistoryRecord: Equatable, Identifiable {
 /// output"). A phase is {"name","phase"}; a result {"name","result","reason",
 /// "detail","session_id"} (`--revive` adds "as"); --restart's master pass
 /// carries both, with phase "master". Missing fields decode as nil.
+/// #886: dch 1.58.0's --revive final line ends `"running":true|false` (rv_json_final, dch.c:10093-10101
+/// at v1.58.0); absent (older dch) or not a JSON bool, nil, and the rest of the line reads as before.
 struct DchJSONLine: Decodable, Equatable, Sendable {
     var name: String
     var phase: String?
@@ -72,9 +74,10 @@ struct DchJSONLine: Decodable, Equatable, Sendable {
     var detail: String?
     var revivedAs: String?
     var sessionID: String?
+    var running: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case name, phase, result, reason, detail
+        case name, phase, result, reason, detail, running
         case revivedAs = "as", sessionID = "session_id"
     }
 
@@ -86,6 +89,21 @@ struct DchJSONLine: Decodable, Equatable, Sendable {
     /// One session's result (an agent's, for --restart); the master pass is not one.
     var isFinal: Bool { result != nil && phase == nil }
     var failed: Bool { result == "failed" || result == "interrupted" }
+}
+
+extension DchJSONLine {
+    /// The synthesized decode, except that a "running" of another type is nil instead of dropping the line.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        phase = try c.decodeIfPresent(String.self, forKey: .phase)
+        result = try c.decodeIfPresent(String.self, forKey: .result)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
+        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+        revivedAs = try c.decodeIfPresent(String.self, forKey: .revivedAs)
+        sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
+        running = try? c.decodeIfPresent(Bool.self, forKey: .running)
+    }
 }
 
 /// One finished long verb. `json`: its NDJSON objects in order; `text`: every
@@ -466,11 +484,11 @@ extension AgentIsland {
             return (o.result == "skipped" ? "Skipped: " : "Not resumed: ") + d
         case "ambiguous":
             return (resume ? "Not resumed: " : "\(verb.rawValue) failed: ") + ambiguousText
-        case "withdrawn" where resume, "draft_left" where resume:
-            // #854: dch 1.46 revived it; only the resume message failed (a signal once it was typed).
+        case _ where resumedUnsent(o, verb):
+            // #854: dch 1.46 revived it; only the resume message failed. #886: any message step under "running" true.
             let a = o.revivedAs.flatMap { $0.isEmpty || $0 == o.name ? nil : $0 }
-            return (a.map { "Resumed as \($0)" } ?? "Resumed") + (o.reason == "withdrawn"
-                ? "; the resume message wasn't sent" : "; the resume message may still be in Claude's input, not sent")
+            return (a.map { "Resumed as \($0)" } ?? "Resumed") + (messageLeft(o)
+                ? "; the resume message may still be in Claude's input, not sent" : "; the resume message wasn't sent")
         case "not_started" where dashRefused(o, verb):
             return dashRefusedText
         case "claude_unreadable":
@@ -542,19 +560,20 @@ extension AgentIsland {
     /// N skipped"; `empty` when dch named no session and exited 0.
     /// #749 (QA #572 INFO-R5): a failed session a Kill ended (`r.killed`) counts as "killed".
     /// #861: a revive whose message was not sent (`resumedUnsent`) counts as resumed, and says so.
+    /// #886 (QA #728 INFO-3): right after the resumed count, so it never reads as the failed ones'.
     static func tally(_ r: DchActionResult, _ verb: Verb, title: String, empty: String) -> String {
         if r.stopped { return "\(title) cancelled: no answer in \(verb.minutes)m" }
         let cut = cutByKill(r), k = cut.killed, r = cut.rest
         let c = counts(r)
         let other = r.status != 0 && c.failed + k == 0 ? failedText(r) : nil
-        let unsent = r.json.filter { resumedUnsent($0, verb) }, w = unsent.filter { $0.reason == "withdrawn" }.count
+        let unsent = r.json.filter { resumedUnsent($0, verb) }, left = unsent.filter(messageLeft).count
         let messages = { (n: Int) in "\(n) resume message\(n == 1 ? "" : "s")" }
+        let notes = ((unsent.count > left ? ["\(messages(unsent.count - left)) not sent"] : [])
+            + (left > 0 ? ["\(messages(left)) may still be in Claude's input, not sent"] : [])).joined(separator: "; ")
         let dashed = r.json.filter { dashRefused($0, verb) }.count
-        let parts = [(c.ok + unsent.count, verb.done.lowercased()), (k, "killed"), (c.failed - unsent.count - dashed, "failed"),
-                     (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+        let parts = [(c.ok + unsent.count, verb.done.lowercased() + (notes.isEmpty ? "" : " (\(notes))")), (k, "killed"),
+                     (c.failed - unsent.count - dashed, "failed"), (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
             + (dashed > 0 ? ["\(dashed) session\(dashed == 1 ? " has a name" : "s have names") dch can no longer start"] : [])
-            + (w > 0 ? ["\(messages(w)) not sent"] : [])
-            + (unsent.count > w ? ["\(messages(unsent.count - w)) may still be in Claude's input, not sent"] : [])
         if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
         return (parts + [other].compactMap { $0 }).joined(separator: ", ")
     }
@@ -569,18 +588,30 @@ extension AgentIsland {
 
     /// #861: a revive dch 1.46+ answered withdrawn or draft_left (dch.c:9694-9699@v1.47.0): the session
     /// revived (under `as`), only its resume message was not sent. A failed result line, exit 1.
+    /// #886: with dch 1.58.0's "running" the line decides: any reason of the message step (revive_message,
+    /// dch.c:10324-10377 at v1.58.0, printed at :10811) while its agent runs; false is a failure. Absent: as before.
     static func resumedUnsent(_ o: DchJSONLine, _ verb: Verb) -> Bool {
-        (verb == .resume || verb == .resumeNoMessage) && o.isFinal && o.result == "failed"
-            && (o.reason == "withdrawn" || o.reason == "draft_left")
+        guard (verb == .resume || verb == .resumeNoMessage) && o.isFinal && o.result == "failed" else { return false }
+        guard let running = o.running else { return o.reason == "withdrawn" || o.reason == "draft_left" }
+        return running && messageReasons.contains(o.reason ?? "")
     }
+
+    /// #886: revive_message's reasons (dch.c:10324-10377 at v1.58.0; cg_code :6376-6378, say_code :7998-8002).
+    /// Never "live", "no_history" or "ambiguous": those name a session that may run while nothing was revived.
+    static let messageReasons: Set = ["withdrawn", "draft_left", "interrupted", "not_idle", "prompt", "draft", "queued",
+                                      "no_screen", "not_submitted", "not_typed"]
+
+    /// #886: the message may sit in Claude's input: draft_left, or not_submitted (it stayed through every Enter).
+    static func messageLeft(_ o: DchJSONLine) -> Bool { o.reason == "draft_left" || o.reason == "not_submitted" }
 
     /// #878 (QA #722 INFO-3): dch 1.54+ starts no session whose name begins with '-' (refuse_id_name,
     /// dch.c:2053-2058 at v1.58.0, from do_spawn_verb :5460), so `--revive --all` fails an older record
     /// of such a name on every run: not_started (revive_spawn, :10242-10246). Nothing the user can act
     /// on (the row's Resume is off): a reason, not a failure.
+    /// #886 (#878 INFO-1): dch refuses the name it starts, `as` (do_spawn_verb(exe, r->as, …), dch.c:10231).
     static func dashRefused(_ o: DchJSONLine, _ verb: Verb) -> Bool {
         (verb == .resume || verb == .resumeNoMessage) && o.isFinal && o.result == "failed"
-            && o.reason == "not_started" && !passable(o.name)
+            && o.reason == "not_started" && !passable(o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name)
     }
 
     static let dashRefusedText = "Not resumed: dch no longer starts a name that begins with '-'"

@@ -4634,12 +4634,117 @@ final class AgentIslandControlsTests: XCTestCase {
         func resume(_ out: String) -> String {
             AgentIsland.tally(result(out, status: 1), .resume, title: "Resume", empty: "nothing to resume")
         }
-        XCTAssertEqual(resume(line("a", "withdrawn")), "1 resumed, 1 resume message not sent")
+        XCTAssertEqual(resume(line("a", "withdrawn")), "1 resumed (1 resume message not sent)")
         XCTAssertEqual(resume([ok, line("a", "withdrawn"), line("b", "withdrawn"), line("c", "draft_left")].joined(separator: "\n")),
-                       "4 resumed, 2 resume messages not sent, 1 resume message may still be in Claude's input, not sent")
+                       "4 resumed (2 resume messages not sent; 1 resume message may still be in Claude's input, not sent)")
         XCTAssertEqual(resume(line("a", "draft_left") + "\n" + Fixture.reviveNotStarted),
-                       "1 resumed, 1 failed, 1 resume message may still be in Claude's input, not sent")
+                       "1 resumed (1 resume message may still be in Claude's input, not sent), 1 failed",
+                       "QA #728 INFO-3: the note sits with the resumed count, never after the failed one")
         XCTAssertEqual(AgentIsland.tally(result(line("a", "withdrawn"), status: 1), .stop, title: "Stop all", empty: ""), "1 failed")
+    }
+
+    // MARK: - #886 dch 1.58.0's "running" on the revive final line
+
+    /// A --revive --json result as dch 1.58.0's rv_say prints it (json_final_open, dch.c:6119-6134, then
+    /// rv_json_final's `,"running":…}`, :10093-10101); `running` nil leaves the field out (older dch).
+    private static func revived(_ name: String, as a: String, _ reason: String, running: String?) -> String {
+        #"{"name":"\#(name)","as":"\#(a)","result":"failed","reason":"\#(reason)","detail":"revived as \#(a) in /Users/example/p, claude resumed S; resume message NOT sent (x)","session_id":"S""#
+            + (running.map { #","running":\#($0)"# } ?? "") + "}"
+    }
+
+    private func resumeTally(_ out: String) -> String {
+        AgentIsland.tally(result(out, status: 1), .resume, title: "Resume", empty: "nothing to resume")
+    }
+
+    private static let unsentDetail = "revived as a in /Users/example/p, claude resumed S; resume message NOT sent (x)"
+
+    /// The line decodes with every type "running" may come in; only a JSON bool is read, and the line is never dropped.
+    func testRunningDecodesOnlyAJsonBool() {
+        for (raw, want) in [("true", true), ("false", false)] as [(String, Bool)] {
+            XCTAssertEqual(AgentIsland.jsonLine(Self.revived("a", as: "a", "prompt", running: raw))?.running, want, raw)
+        }
+        for raw in [nil, "1", "0", #""true""#, "null", "[true]", "{}"] as [String?] {
+            let o = AgentIsland.jsonLine(Self.revived("a", as: "a", "prompt", running: raw))
+            XCTAssertEqual(o?.reason, "prompt", "the line is kept: \(raw ?? "absent")")
+            XCTAssertTrue(o != nil && o?.running == nil, raw ?? "absent")
+        }
+    }
+
+    /// Running true with a failed send, every reason of revive_message (dch.c:10324-10377): the row says
+    /// resumed with the message not sent, and the tally counts it resumed. Resume both's revivedOrLive too.
+    func testRunningTrueWithAFailedSendIsResumedOnTheIsland() {
+        // #886 r2: written out, not read from the set under test (revive_message's reasons, dch.c:10324-10377@v1.58.0).
+        let reasons = ["withdrawn", "draft_left", "interrupted", "not_idle", "prompt", "draft", "queued", "no_screen", "not_submitted", "not_typed"]
+        XCTAssertEqual(AgentIsland.messageReasons, Set(reasons))
+        for reason in reasons {
+            let left = reason == "draft_left" || reason == "not_submitted"
+            let out = Self.revived("a", as: "a-2", reason, running: "true")
+            XCTAssertEqual(AgentIsland.rowText(result(out, status: 1), name: "a", .resume),
+                           "Resumed as a-2; the resume message " + (left ? "may still be in Claude's input, not sent" : "wasn't sent"), reason)
+            XCTAssertEqual(resumeTally(out), "1 resumed (1 resume message " + (left ? "may still be in Claude's input, not sent)" : "not sent)"), reason)
+            XCTAssertTrue(AgentIsland.revivedOrLive(result(out, status: 1), name: "a"), reason)
+        }
+        XCTAssertEqual(resumeTally([Self.revived("a", as: "a", "prompt", running: "true"), Self.revived("b", as: "b", "not_typed", running: "false"),
+                                    Self.revived("c", as: "c", "not_submitted", running: "true")].joined(separator: "\n")),
+                       "2 resumed (1 resume message not sent; 1 resume message may still be in Claude's input, not sent), 1 failed")
+        // A failure that is not the message step stays one, whatever "running" says: "live" names a session
+        // that ran before (rv_say :10625), no_history and ambiguous the requested name (rv_json_final :10583, :10734).
+        for reason in ["live", "no_history", "ambiguous", "not_started", "cwd_gone", "launch_unknown", "relaunch_failed", "live_sid"] {
+            XCTAssertEqual(resumeTally(Self.revived("a", as: "a", reason, running: "true")), "1 failed", reason)
+        }
+        XCTAssertEqual(AgentIsland.rowText(result(Self.revived("a", as: "a", "live", running: "true"), status: 1), name: "a", .resume),
+                       "Not resumed: a is running")
+        XCTAssertEqual(AgentIsland.tally(result(Self.revived("a", as: "a", "prompt", running: "true"), status: 1), .stop,
+                                         title: "Stop all", empty: ""), "1 failed", "only a resume reads it")
+    }
+
+    /// Running false with a failed send: the agent does not run, so it is a failure, withdrawn and draft_left too.
+    func testRunningFalseWithAFailedSendIsAFailureOnTheIsland() {
+        for reason in ["withdrawn", "draft_left", "prompt", "not_typed"] {
+            let out = Self.revived("a", as: "a", reason, running: "false")
+            XCTAssertEqual(AgentIsland.rowText(result(out, status: 1), name: "a", .resume), Self.unsentDetail, reason)
+            XCTAssertEqual(resumeTally(out), "1 failed", reason)
+            XCTAssertFalse(AgentIsland.revivedOrLive(result(out, status: 1), name: "a"), reason)
+        }
+    }
+
+    /// No "running" (dch before 1.58.0): withdrawn and draft_left alone count, as before #886.
+    func testRunningAbsentKeepsTheOldRuleOnTheIsland() {
+        XCTAssertEqual(AgentIsland.rowText(result(Self.revived("a", as: "a-2", "withdrawn", running: nil), status: 1), name: "a", .resume),
+                       "Resumed as a-2; the resume message wasn't sent")
+        XCTAssertEqual(resumeTally(Self.revived("a", as: "a", "draft_left", running: nil)),
+                       "1 resumed (1 resume message may still be in Claude's input, not sent)")
+        for reason in ["prompt", "not_idle", "not_submitted", "interrupted"] {
+            let out = Self.revived("a", as: "a", reason, running: nil)
+            XCTAssertEqual(resumeTally(out), "1 failed", "absent is not true: \(reason)")
+            XCTAssertEqual(AgentIsland.rowText(result(out, status: 1), name: "a", .resume), Self.unsentDetail, reason)
+            XCTAssertFalse(AgentIsland.revivedOrLive(result(out, status: 1), name: "a"), reason)
+        }
+    }
+
+    /// A "running" that is not a JSON bool reads as absent: the same lines, the same row and tally.
+    func testRunningOfAWrongTypeReadsAsAbsentOnTheIsland() {
+        for raw in ["1", #""true""#, "null", "[true]"] {
+            for reason in ["withdrawn", "prompt"] {
+                let odd = result(Self.revived("a", as: "a", reason, running: raw), status: 1)
+                let absent = result(Self.revived("a", as: "a", reason, running: nil), status: 1)
+                XCTAssertEqual(odd, absent, "\(raw) \(reason)")
+                XCTAssertEqual(AgentIsland.rowText(odd, name: "a", .resume), AgentIsland.rowText(absent, name: "a", .resume))
+                XCTAssertEqual(resumeTally(Self.revived("a", as: "a", reason, running: raw)), reason == "withdrawn" ? "1 resumed (1 resume message not sent)" : "1 failed")
+            }
+        }
+    }
+
+    /// #878 INFO-1 (rider c): dch refuses the name it starts, the line's "as" (do_spawn_verb(exe, r->as, …),
+    /// dch.c:10231); a line without one names it by "name".
+    func testDashRefusedReadsTheAsName() {
+        func line(_ n: String, as a: String?) -> DchJSONLine {
+            DchJSONLine(name: n, result: "failed", reason: "not_started", detail: "d", revivedAs: a, sessionID: "")
+        }
+        XCTAssertTrue(AgentIsland.dashRefused(line("api", as: "-api"), .resume))
+        XCTAssertFalse(AgentIsland.dashRefused(line("-x", as: "x"), .resume))
+        XCTAssertTrue(AgentIsland.dashRefused(line("-x", as: nil), .resume))
+        XCTAssertTrue(AgentIsland.dashRefused(line("-x", as: ""), .resume))
     }
 
     // MARK: - #714 round 2: dch 1.28.1 "file" on every record, `<file>.json` edits
