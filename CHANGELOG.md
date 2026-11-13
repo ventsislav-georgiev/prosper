@@ -494,17 +494,17 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: plans written with a table without outer pipes, "~~~" code fences, "===" or
   closing-"#" headings, a "[X]" task or a <https://…> link can now be approved from the window, a
   plan file under a symlinked ~/.claude or plans folder is read (links inside the folder are still
-  refused), and a numbered draft in Claude's input is refused with "Claude's input already holds a
-  draft" instead of "Claude is showing a prompt".
+  refused), and the refusal for a numbered draft in Claude's input now reads "Claude's input already
+  holds a draft" instead of "Claude is showing a prompt".
 - Clipboard history: deleting the last row now selects the row above instead of jumping back to the
   top.
 - Clipboard sync with iPhone: the Mac now checks a clip's content itself before treating it as a
   copy of one it already has, removes files left behind by a quit in the middle of saving a phone
   clip when it next starts, and no longer stalls on a phone file with an extremely long or unusual
   name.
-- When macOS refuses to let Prosper read a browser's search engines or bookmarks, the log now says
-  which browser it was (for example "Chrome Default/Web Data copy failed"), and the bookmarks import
-  also logs when it cannot list a browser's profiles instead of quietly finding nothing.
+- When macOS refuses to let Prosper read a browser's search engines, the log now says which browser
+  it was (for example "Chrome Default/Web Data copy failed"), and the bookmarks import now logs when
+  it cannot list a browser's profiles instead of quietly finding nothing.
 
 ## v2.174.0
 
