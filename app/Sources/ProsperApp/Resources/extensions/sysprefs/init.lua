@@ -83,8 +83,20 @@ local PANES = {
     { "Automation Access",     "com.apple.settings.PrivacySecurity.extension?Privacy_Automation",    "privacy permission apple events osascript", "gearshape.2" },
 }
 
+-- App paths checked once per VM: the filter runs per keystroke and must not hop
+-- to the host each time.
+local present = {}
+local function installed(path)
+    if present[path] == nil then present[path] = host.fs.exists(path) == true end
+    return present[path]
+end
+
 local function row(p)
     local app = p[5] and p[5]:sub(1, 1) == "/" and p[5] or nil
+    -- An app missing on this macOS (Passwords.app is macOS 15+) would show a
+    -- generic file icon and launch nothing: keep the pane row and its SF Symbol.
+    local missing = app and not installed(app)
+    if missing then app = nil end
     return {
         id       = p[2],
         title    = p[1],
@@ -93,7 +105,7 @@ local function row(p)
         -- The runner opens `url` natively on Enter and dismisses itself; `launch`
         -- takes the native app-launch path ("Application" tag), `image` shows the
         -- bundle's Finder icon.
-        url      = not app and (p[5] or ("x-apple.systempreferences:" .. p[2])) or nil,
+        url      = not app and (not missing and p[5] or ("x-apple.systempreferences:" .. p[2])) or nil,
         launch   = app,
         image    = app,
     }

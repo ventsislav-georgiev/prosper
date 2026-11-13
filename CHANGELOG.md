@@ -409,6 +409,9 @@ tag from the now-released section and put it on the new top draft.
   preset and applies it to every fan together once macOS allows it.
 - Mixer: a device or app that appears while the mixer is reading the audio device or app list no
   longer makes another device or app drop out of the list for a moment.
+- System Settings search: on macOS versions without the Passwords app, the Passwords row now opens
+  the Passwords settings pane with its own icon instead of showing a blank file icon and opening
+  nothing.
 
 ## v2.174.0
 

@@ -7,7 +7,8 @@
 local h = require("harness")
 local INIT = h.dir() .. "init.lua"
 
-local host, env = h.makeHost{}
+local PW_APP = "/System/Applications/Passwords.app"
+local host, env = h.makeHost{ fsExists = { [PW_APP] = true } }
 local G = h.load(INIT, host)
 
 local function rows(query)
@@ -30,18 +31,22 @@ h.eq(#all.items >= 30, true, "bare query lists the whole pane table (got " .. #a
 h.eq(find(all, "Wi-Fi") ~= nil, true, "Wi-Fi present")
 
 -- Every row is openable and uniquely identified.
-local seen = {}
+-- QA #145: the app-row exemption is keyed on a literal id; a typo there must
+-- fail by name, not as a nil index on the exempted row's missing url.
+local seen, exempted = {}, 0
 for _, it in ipairs(all.items) do
     if it.id == "com.apple.Passwords-Settings.extension" then
+        exempted = exempted + 1
         h.eq(it.launch, "/System/Applications/Passwords.app", "Passwords row launches the app")
     else
-        h.eq(it.url:sub(1, 27), "x-apple.systempreferences:c", "row " .. it.title .. " carries a pane URL")
+        h.eq(tostring(it.url):sub(1, 27), "x-apple.systempreferences:c", "row " .. it.title .. " carries a pane URL")
         h.eq(it.launch, nil, "pane row " .. it.title .. " has no launch target")
     end
     h.eq(seen[it.id], nil, "duplicate pane id: " .. tostring(it.id))
     seen[it.id] = true
     h.eq(type(it.icon), "string", "row " .. it.title .. " has an icon")
 end
+h.eq(exempted, 1, "the app-row exemption id names exactly one row")
 
 -- ── Filtering ────────────────────────────────────────────────────────────────
 h.eq(find(rows("ss displays"), "Displays").url,
@@ -87,6 +92,31 @@ h.eq(G.sysprefs_open("ss zzzznope"), nil, "no match returns nil")
 
 -- A nil query must not throw; it reads as empty and lists everything.
 h.eq(#G.sysprefs_open(nil).items, #all.items, "nil query is tolerated")
+
+-- ── QA #145: an app missing on this macOS keeps the pane row ─────────────────
+-- Passwords.app is macOS 15+. Without it the row must not point at a dead path
+-- (generic file icon, Enter opens nothing): it opens the Settings pane and shows
+-- its own SF Symbol.
+do
+    local oldHost = host
+    local host2, env2 = h.makeHost{}          -- fsExists = {}: no Passwords.app
+    local checks = 0
+    local exists = host2.fs.exists
+    host2.fs.exists = function(p) checks = checks + 1; return exists(p) end
+    local G2 = h.load(INIT, host2)
+    G2.sysprefs_open("ss passwords")
+    local old = find(env2.rendered, "Passwords")
+    h.eq(old.url, "x-apple.systempreferences:com.apple.Passwords-Settings.extension",
+         "missing Passwords.app: the row opens the Passwords pane")
+    h.eq(old.launch, nil, "missing Passwords.app: no launch of a dead path")
+    h.eq(old.image, nil, "missing Passwords.app: no Finder icon of a dead path")
+    h.eq(old.icon, "key", "missing Passwords.app: the row keeps its SF Symbol")
+    h.eq(old.subtitle, "System Settings", "missing Passwords.app: labelled as a pane")
+    G2.sysprefs_open("ss ")
+    G2.sysprefs_open("ss pass")
+    h.eq(checks, 1, "the app path is checked once per VM, not per keystroke")
+    G = h.load(INIT, oldHost)                 -- back to the macOS 15+ host for the rest
+end
 
 -- ── Cost: the filter runs on every keystroke ─────────────────────────────────
 -- Pure Lua over a static table: no prefs, no shell, no HTTP. Any host-bridge hop

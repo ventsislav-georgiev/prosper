@@ -547,10 +547,11 @@ enum URLServices {
         appFor: (String) -> URL? = { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) },
         defaultAppID: (URL) -> String? = {
             NSWorkspace.shared.urlForApplication(toOpen: $0).flatMap { Bundle(url: $0)?.bundleIdentifier }
-        }
+        },
+        selfIDs: Set<String> = OpenedLinkRouter.selfBundleIDs
     ) -> URL? {
         if let bundleID, let app = appFor(bundleID) { return app }
-        guard defaultAppID(url) == OpenedLinkRouter.selfBundleID else { return nil }
+        guard let id = defaultAppID(url), selfIDs.contains(id) else { return nil }
         return appFor(OpenedLinkRouter.safeFallback)
     }
 
@@ -598,7 +599,10 @@ enum URLServices {
 /// bounce the link straight back here forever).
 @MainActor
 final class OpenedLinkRouter {
-    nonisolated static let selfBundleID = "eu.illegible.prosper"
+    /// Every id that is Prosper: the shipped one, plus the running bundle's (a dev
+    /// build or a fork signs under another id and must hit the same loop guards).
+    nonisolated static let selfBundleIDs: Set<String> =
+        Set(["eu.illegible.prosper", Bundle.main.bundleIdentifier].compactMap { $0 })
     nonisolated static let safeFallback = "com.apple.Safari"
 
     private let hasHandler: () -> Bool
@@ -606,6 +610,7 @@ final class OpenedLinkRouter {
     private let fallbackBrowser: () -> String?
     /// Native open seam; tests replace it so nothing is ever opened.
     private let open: (_ url: String, _ bundleID: String) -> Void
+    private let selfIDs: Set<String>
     /// Links delivered before the extensions are loaded (a cold launch by a link or
     /// file arrives before applicationDidFinishLaunching). nil once `ready()` ran.
     private var pending: [String]? = []
@@ -613,8 +618,10 @@ final class OpenedLinkRouter {
     init(hasHandler: @escaping () -> Bool,
          broadcast: @escaping (_ payloadJSON: String) -> Void,
          fallbackBrowser: @escaping () -> String?,
-         open: @escaping (_ url: String, _ bundleID: String) -> Void = { URLServices.open($0, bundleID: $1) }) {
+         open: @escaping (_ url: String, _ bundleID: String) -> Void = { URLServices.open($0, bundleID: $1) },
+         selfIDs: Set<String> = OpenedLinkRouter.selfBundleIDs) {
         self.hasHandler = hasHandler
+        self.selfIDs = selfIDs
         self.broadcast = broadcast
         self.fallbackBrowser = fallbackBrowser
         self.open = open
@@ -624,7 +631,7 @@ final class OpenedLinkRouter {
         if pending != nil { pending?.append(urlString); return }
         guard hasHandler() else {
             var browser = fallbackBrowser() ?? ""
-            if browser.isEmpty || browser == Self.selfBundleID { browser = Self.safeFallback }
+            if browser.isEmpty || selfIDs.contains(browser) { browser = Self.safeFallback }
             open(urlString, browser)
             return
         }

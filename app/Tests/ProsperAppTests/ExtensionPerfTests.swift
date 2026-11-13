@@ -703,14 +703,21 @@ final class ExtensionPerfTests: XCTestCase {
     /// It copies a single IOPS blob (down from two in the old powerSource() +
     /// batteryPercentage() pair). IOKit dominates and varies by hardware, so the
     /// ceiling is generous — **< 2 ms/call** — and the real number is printed.
+    /// Measured as the BEST of 5 batches of 40 (#986): machine load only ever adds
+    /// time (one loaded run averaged 2.147 ms against an idle 0.11 ms), so the
+    /// fastest batch is the reading load cannot fail, while a slower IOKit read
+    /// slows every batch and still fails it.
     func testPowerSnapshotPerformance() {
-        let iters = 200
+        let batches = 5, perBatch = 40
         for _ in 0..<10 { _ = SystemInfo.powerSnapshot() }  // warmup
-        let start = DispatchTime.now().uptimeNanoseconds
-        for _ in 0..<iters { _ = SystemInfo.powerSnapshot() }
-        let elapsed = DispatchTime.now().uptimeNanoseconds - start
-        let perCall = Double(elapsed) / Double(iters) / 1_000_000
-        print("SystemInfo.powerSnapshot: \(String(format: "%.3f", perCall)) ms/call over \(iters) iters")
-        XCTAssertLessThan(perCall, 2.0, "powerSnapshot exceeded its 2 ms ceiling — IOKit read regressed")
+        var best = Double.infinity
+        for _ in 0..<batches {
+            let start = DispatchTime.now().uptimeNanoseconds
+            for _ in 0..<perBatch { _ = SystemInfo.powerSnapshot() }
+            let elapsed = DispatchTime.now().uptimeNanoseconds - start
+            best = min(best, Double(elapsed) / Double(perBatch) / 1_000_000)
+        }
+        print("SystemInfo.powerSnapshot: \(String(format: "%.3f", best)) ms/call, best of \(batches) batches of \(perBatch)")
+        XCTAssertLessThan(best, 2.0, "powerSnapshot exceeded its 2 ms ceiling — IOKit read regressed")
     }
 }

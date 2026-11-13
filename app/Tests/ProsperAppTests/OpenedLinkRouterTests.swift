@@ -11,12 +11,14 @@ final class OpenedLinkRouterTests: XCTestCase {
     private var broadcasts: [String] = []
     private var opens: [(url: String, bundleID: String)] = []
 
-    private func router(handler: Bool, fallback: String? = nil) -> OpenedLinkRouter {
+    private func router(handler: Bool, fallback: String? = nil,
+                        selfIDs: Set<String> = OpenedLinkRouter.selfBundleIDs) -> OpenedLinkRouter {
         let r = OpenedLinkRouter(
             hasHandler: { handler },
             broadcast: { [unowned self] in broadcasts.append($0) },
             fallbackBrowser: { fallback },
-            open: { [unowned self] in opens.append(($0, $1)) })
+            open: { [unowned self] in opens.append(($0, $1)) },
+            selfIDs: selfIDs)
         r.ready()
         return r
     }
@@ -56,6 +58,21 @@ final class OpenedLinkRouterTests: XCTestCase {
     func testLoopGuardNeverOpensInProsper() {
         router(handler: false, fallback: "eu.illegible.prosper").receive("https://example.com")
         XCTAssertEqual(opens.map(\.bundleID), ["com.apple.Safari"])
+    }
+
+    /// QA #540 INFO-2: a dev build or fork runs under another bundle id; the guard
+    /// must know that id too, or the link is handed back to this very app forever.
+    func testLoopGuardKnowsTheRunningBundleID() {
+        router(handler: false, fallback: "com.example.prosper-dev",
+               selfIDs: ["com.example.prosper-dev"]).receive("https://example.com")
+        XCTAssertEqual(opens.map(\.bundleID), ["com.apple.Safari"])
+    }
+
+    /// The default set is the shipped id plus whatever bundle is running.
+    func testSelfBundleIDsAreTheShippedAndTheRunningID() {
+        XCTAssertEqual(OpenedLinkRouter.selfBundleIDs,
+                       Set(["eu.illegible.prosper", Bundle.main.bundleIdentifier].compactMap { $0 }))
+        XCTAssertTrue(OpenedLinkRouter.selfBundleIDs.contains("eu.illegible.prosper"))
     }
 
     /// A cold launch by a link/file delivers it before extensions are discovered.
@@ -101,6 +118,30 @@ final class OpenedLinkRouterTests: XCTestCase {
                                              defaultAppID: { _ in "org.mozilla.firefox" })
             XCTAssertNil(app, "nil = ws.open(url), macOS's own default")
         }
+    }
+
+    func testMissingBrowserWithAnotherProsperIDAsDefaultOpensInSafari() {
+        let app = URLServices.openTarget(for: link, bundleID: "com.google.Chrome",
+                                         appFor: { self.installed[$0] },
+                                         defaultAppID: { _ in "com.example.prosper-dev" },
+                                         selfIDs: ["com.example.prosper-dev"])
+        XCTAssertEqual(app, installed["com.apple.Safari"])
+    }
+
+    /// QA #540 INFO-3: `open -a Prosper a.pdf` with the fallback browser gone. The
+    /// file's own default app (not Prosper) is the right owner: nil = ws.open(url).
+    /// An .html file whose default is Prosper still goes to Safari, never back here.
+    func testMissingBrowserAndNonHTMLFileGoesToTheFileTypeDefault() {
+        let pdf = URL(fileURLWithPath: "/Users/example/a.pdf")
+        let html = URL(fileURLWithPath: "/Users/example/a.html")
+        let defaults = [pdf: "com.apple.Preview", html: "eu.illegible.prosper"]
+        let target = { (url: URL) in
+            URLServices.openTarget(for: url, bundleID: "com.google.Chrome",
+                                   appFor: { self.installed[$0] },
+                                   defaultAppID: { defaults[$0] })
+        }
+        XCTAssertTrue(target(pdf) == nil, "nil = ws.open(url): the .pdf goes to its own default app")
+        XCTAssertEqual(target(html), installed["com.apple.Safari"])
     }
 
     func testInstalledBrowserIsUsed() {
