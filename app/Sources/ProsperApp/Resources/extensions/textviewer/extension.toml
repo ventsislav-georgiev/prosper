@@ -29,4 +29,4 @@ subtitle  = "Markdown and text files in a Prosper window"
   [[contributes.settings_sections.controls]]
   kind = "info"
   title = "Open Markdown and text files from Finder's Open With menu"
-  subtitle = "Prosper never becomes the default app for them: choose it in Open With, or with Always Open With."
+  subtitle = "Prosper registers as an alternate viewer and does not ask to be the default app: choose it in Open With, or with Always Open With."

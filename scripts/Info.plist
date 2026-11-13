@@ -62,8 +62,10 @@
 		</dict>
 	</array>
 	<!-- #1106 Text viewer: Prosper is offered in Finder's Open With menu for
-	     Markdown and plain text, never as the default. Alternate never wins over an
-	     app that ranks Default or Owner, so the user's default app does not change.
+	     Markdown and plain text, and does not ask to be the default: an Alternate
+	     claim loses to an app that ranks Default or Owner, and to a default the user
+	     chose. Not proven for a Mac where no app ranks higher for the type (TextEdit
+	     claims plain text with rank None, Xcode claims Markdown as Alternate): QA 854.
 	     The role becomes Editor when the built-in editor lands (#1108). -->
 	<key>CFBundleDocumentTypes</key>
 	<array>
