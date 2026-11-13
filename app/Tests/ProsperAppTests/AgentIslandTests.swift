@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 import XCTest
 @testable import ProsperApp
@@ -2921,22 +2922,49 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 1)
     }
 
+    /// #1063: a fake thread-CPU clock for the matcher. Each read advances it `tick` ns, so a call's cost
+    /// is its count of clock reads, never the runner's speed (on a CI VM one of 9600 real timed texts
+    /// measured over the bar and flipped a cheap pattern).
+    private func countingCPU(tick: UInt64) -> @Sendable () -> UInt64 {
+        let now = OSAllocatedUnfairLock(initialState: UInt64(0))
+        return { now.withLock { $0 += tick; return $0 } }
+    }
+
     /// QA #592 INFO-8: the slow-call bar scales with the texts searched, so many sessions
     /// under a cheap pattern never flip it. The old whole-call rule flips here.
+    /// Counted, not timed (#1063), 1 µs a read: 3200 texts take 2 reads each plus one per ICU progress
+    /// callback (about one per start position, under 16 here), so a call is 6.4-54 ms (over the 1 ms bar),
+    /// the worst text under 16 µs and each 16 texts under 0.3 ms (both under it).
     func testSplitManySessionsCheapPatternStaysRegex() {
-        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal)
-        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal) = saved }
+        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU)
+        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU) = saved }
         let list = (0..<1600).map { session("s\($0)-many", .idle, alias: $0 % 2 == 0 ? "a\($0)-reviewer" : "") }
         AgentIsland.sidekickDeadline = .max
-        // A call measured 4.4 ms of CPU here (1.4 µs a text), 22 µs per 16 texts: 0.3 ms sits ~14x from both.
-        AgentIsland.sidekickSlowCall = 300_000
+        AgentIsland.sidekickSlowCall = 1_000_000
         AgentIsland.sidekickSlowTotal = 0   // any call that counts flips it
+        AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
         for _ in 0..<3 { XCTAssertEqual(AgentIsland.split(list, pattern: "-(qa|reviewer|many-x)$").sidekicks.count, 800) }
         XCTAssertNil(AgentIsland.sidekickCaption("-(qa|reviewer|many-x)$", tabs: true, names: []))
     }
 
+    /// #1063, the per-16 arm on its own: no one text is over the bar, every 16 texts are, so the call
+    /// counts and flips. Counted, 1 µs a read: 32 sessions "a" are 64 texts, at least 129 reads, so at
+    /// least 32 µs per 16 texts; one text is 1 µs plus a read per progress callback on "a" or "", a few at most.
+    func testSplitCheapTextsOverPerSixteenBarFlip() {
+        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU)
+        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU) = saved }
+        let list = (0..<32).map { _ in session("a", .idle) }
+        AgentIsland.sidekickDeadline = .max
+        AgentIsland.sidekickSlowCall = 16_000
+        AgentIsland.sidekickSlowTotal = 0
+        AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
+        // As a regex it takes all 32; as text, none.
+        XCTAssertEqual(AgentIsland.split(list, pattern: "^a$|^per16$").sidekicks.count, 0, "flipped: matched as text")
+        XCTAssertEqual(AgentIsland.sidekickCaption("^a$|^per16$", tabs: true, names: []), "Too slow on a session name: matched as text")
+    }
+
     /// INFO-8, the other side: one pathological name among 1600 cheap sessions still counts the call,
-    /// though spread over 3200 texts it is under the per-16 bar. Same 300 µs bar as above; the x{16}
+    /// though spread over 3200 texts it is under the per-16 bar. A 300 µs bar on the real clock; the x{16}
     /// search measured 4.3 ms of CPU here (14x over it), the whole call per 16 texts about 40 µs.
     func testSplitOneSlowNameAmongManyStillFlips() {
         let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal)

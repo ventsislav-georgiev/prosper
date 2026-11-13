@@ -219,6 +219,9 @@ enum AgentIsland {
     nonisolated(unsafe) static var sidekickDeadline: UInt64 = 10_000_000
     nonisolated(unsafe) static var sidekickSlowCall: UInt64 = 1_000_000
     nonisolated(unsafe) static var sidekickSlowTotal: UInt64 = 50_000_000
+    /// This thread's CPU time in ns. A var only so a test can count clock reads instead of
+    /// timing a runner (#1063); nothing else writes it.
+    nonisolated(unsafe) static var sidekickCPU: @Sendable () -> UInt64 = { clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) }
 
     /// Compiled once per trimmed pattern. Guarded by `sidekickLock`; the unsafe
     /// marker only silences Swift 6's global-state check.
@@ -229,7 +232,7 @@ enum AgentIsland {
 
     /// Which of `texts` the trimmed, non-empty `p` finds, and how it was matched.
     private static func sidekickFind(_ p: String, in texts: [String]) -> (how: SidekickMatch, hits: [Bool]) {
-        let cpu = { clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) }
+        let cpu = sidekickCPU
         let entry = sidekickLock.withLock { sidekickCache[p] }
         var (re, how) = (entry?.re, entry?.how ?? .invalid)
         if entry == nil {
