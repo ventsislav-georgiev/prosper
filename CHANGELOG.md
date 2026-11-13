@@ -590,9 +590,9 @@ tag from the now-released section and put it on the new top draft.
   accent shades moved slightly darker or lighter, with the same hue. (#1095)
 - Extensions: once the first Agent Sessions terminal had opened, the embedded Lua followed the
   system language settings. On a Mac whose region uses a decimal comma, Calculator, Units, Currency
-  and Kill Process then showed numbers with a comma and stopped reading "1.5", and lower/upper case
-  and pattern matching corrupted text with accented letters. Lua now ignores the process locale for
-  text case, character classes and numbers, for third-party extensions too. (#1099)
+  and Kill Process then showed numbers with a comma, and lower/upper case and pattern matching
+  corrupted text with accented letters. Lua now ignores the process locale for text case, character
+  classes and numbers, for third-party extensions too. (#1099)
 - Safety fix: Always allow permission prompts now answers only in a session where dch reports a
   running Claude Code. A session running anything else (a shell, a script, another agent, a file
   being printed) that happens to show text shaped like a Claude Code permission prompt is never
