@@ -61,6 +61,11 @@ enum RemoteInstaller {
         // pathComponents starts with "/"; drop it.
         let parts = comps.filter { $0 != "/" }
         guard parts.count >= 2 else { return nil }
+        // The subdir becomes a path under the extraction dir: no "..", ".", empty part,
+        // or "/" inside a part (pathComponents decodes %2e%2e and %2F per part).
+        guard !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0.contains("/") }) else {
+            return nil
+        }
 
         let owner = parts[0]
         var repo = parts[1]
@@ -112,20 +117,7 @@ enum RemoteInstaller {
         // Same zip-slip/symlink guards as the market path — a GitHub repo is just as
         // untrusted. assertSafeArchive checks RAW entries for `..` (conservative: also
         // covers `repo-ref/../../x`, which --strip-components 1 would turn into `../x`).
-        try assertSafeArchive(tarball)
-        try runTar(["-xzf", tarball.path, "-C", extractDir.path, "--strip-components", "1"])
-        try assertNoSymlinks(extractDir)
-
-        // Resolve the extension directory (root or declared subdir) and confirm
-        // its manifest exists.
-        let extDir = source.subdir.isEmpty
-            ? extractDir
-            : extractDir.appendingPathComponent(source.subdir, isDirectory: true)
-        let manifest = extDir.appendingPathComponent(ExtensionLoader.manifestFileName)
-        guard fm.fileExists(atPath: manifest.path) else {
-            throw InstallError.manifestNotFound(subdir: source.subdir)
-        }
-        return extDir
+        return try unpack(tarball, into: extractDir, stripTopLevel: true, subdir: source.subdir)
     }
 
     // MARK: - Marketplace install
@@ -198,15 +190,79 @@ enum RemoteInstaller {
 
         let extractDir = work.appendingPathComponent("src", isDirectory: true)
         try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
-        try assertSafeArchive(tarball)
-        try runTar(["-xzf", tarball.path, "-C", extractDir.path])
-        try assertNoSymlinks(extractDir)
+        return try unpack(tarball, into: extractDir, stripTopLevel: false)
+    }
 
-        let manifest = extractDir.appendingPathComponent(ExtensionLoader.manifestFileName)
-        guard fm.fileExists(atPath: manifest.path) else {
-            throw InstallError.manifestNotFound(subdir: "")
+    /// The extraction both install paths share: zip-slip check, extract, refuse a
+    /// symlink anywhere, resolve the extension dir (`subdir` under the root), confirm
+    /// its manifest, then drop the hidden members inside that dir only (a GitHub
+    /// subdir may itself sit under ".config/"). `stripTopLevel` drops codeload's
+    /// `<repo>-<ref>/` dir. Hidden members are skipped, not refused: a repo holds
+    /// .gitignore/.github, and Marketplace archives packed by Prosper before #1131
+    /// carry .DS_Store, "._" metadata or agent state: clutter, not an attack.
+    static func unpack(_ tarball: URL, into dir: URL, stripTopLevel: Bool, subdir: String = "") throws -> URL {
+        try assertSafeArchive(tarball)
+        try runTar(["-xzf", tarball.path, "-C", dir.path] + (stripTopLevel ? ["--strip-components", "1"] : []))
+        try assertNoSymlinks(dir)
+        let extDir = try extensionDir(in: dir, subdir: subdir)
+        try removeHiddenMembers(extDir)
+        return extDir
+    }
+
+    /// `root` or `root/<subdir>`, holding a manifest and really under `root`. The second
+    /// line behind assertNoSymlinks: a link anywhere on the way would resolve outside.
+    static func extensionDir(in root: URL, subdir: String) throws -> URL {
+        let extDir = subdir.isEmpty ? root : root.appendingPathComponent(subdir, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: extDir.appendingPathComponent(ExtensionLoader.manifestFileName).path) else {
+            throw InstallError.manifestNotFound(subdir: subdir)
         }
-        return extractDir
+        let r = root.resolvingSymlinksInPath().path, e = extDir.resolvingSymlinksInPath().path
+        guard e == r || e.hasPrefix(r + "/") else {
+            throw InstallError.unsafeArchive("extension folder leads outside the download: \(subdir)")
+        }
+        return extDir
+    }
+
+    /// The one hidden-name rule (publish and install): true when any component of
+    /// the relative path starts with "." (".omc/x", "a/.DS_Store", "._x", "...").
+    /// The root "." alone is not a hidden name.
+    static func isHiddenMember(_ path: String) -> Bool {
+        path.split(separator: "/").contains { $0 != "." && $0.hasPrefix(".") }
+    }
+
+    /// Every name in `dir` with its lstat file type: a link reads as a link, never
+    /// followed. readdir, not FileManager: FileManager listings omit "._*" names.
+    private static func entries(_ dir: URL) throws -> [(name: String, type: mode_t)] {
+        guard let d = opendir(dir.path) else {
+            throw InstallError.extractFailed("cannot read \(dir.lastPathComponent)")
+        }
+        defer { closedir(d) }
+        var out: [(name: String, type: mode_t)] = []
+        while let e = readdir(d) {
+            let ent = e.pointee
+            let len = Int(ent.d_namlen)
+            let name = withUnsafeBytes(of: ent.d_name) { String(decoding: $0.prefix(len), as: UTF8.self) }
+            if name == "." || name == ".." { continue }
+            var st = stat()
+            guard lstat(dir.appendingPathComponent(name).path, &st) == 0 else {
+                throw InstallError.extractFailed("cannot stat \(name)")
+            }
+            out.append((name, st.st_mode & S_IFMT))
+        }
+        return out
+    }
+
+    /// Removes every hidden file and folder under `dir`, at any depth; recurses into
+    /// real folders only (a link is removed or left, never entered).
+    static func removeHiddenMembers(_ dir: URL) throws {
+        for (name, type) in try entries(dir) {
+            let url = dir.appendingPathComponent(name)
+            if isHiddenMember(name) {
+                try FileManager.default.removeItem(at: url)
+            } else if type == S_IFDIR {
+                try removeHiddenMembers(url)
+            }
+        }
     }
 
     /// List the archive entries and refuse any that would escape the extraction
@@ -235,25 +291,46 @@ enum RemoteInstaller {
     /// dir could later be written-through to escape it; `assertSafeArchive`
     /// blocks `..` entries pre-extraction, this blocks the symlink vector.
     private static func assertNoSymlinks(_ root: URL) throws {
-        let fm = FileManager.default
-        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey],
-                                     options: []) else { return }
-        for case let url as URL in en {
-            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
-                throw InstallError.unsafeArchive("symlink: \(url.lastPathComponent)")
-            }
+        // Every name, "._*" included (a FileManager walk missed those).
+        for (name, type) in try entries(root) {
+            if type == S_IFLNK { throw InstallError.unsafeArchive("symlink: \(name)") }
+            if type == S_IFDIR { try assertNoSymlinks(root.appendingPathComponent(name)) }
         }
     }
 
     /// Package an extension directory's CONTENTS (extension.toml at the archive
     /// root) into a gzipped tarball, base64-encoded — the publish payload. Mirrors
     /// `fetchFromMarket`'s extraction (`-xzf` with no strip).
+    /// An explicit member list, not tar patterns: `--exclude '.*'` matches the root
+    /// "." and empties the archive. --no-mac-metadata/--no-xattrs keep macOS from
+    /// adding "._x" AppleDouble members and xattr records (provenance, quarantine).
     static func packageForPublish(_ dir: URL) throws -> String {
-        // Dev-only test files (see scripts/test-extensions.sh) never ship to the
-        // marketplace — strip *.test.lua and any tests/ dir from the payload.
-        try runTarData(["-czf", "-",
-                        "--exclude", "*.test.lua", "--exclude", "tests",
-                        "-C", dir.path, "."]).base64EncodedString()
+        // Fixed owner fields: by default every header names the publisher's account.
+        // paxr = bsdtar's default (restricted pax), named so a default change cannot bring
+        // GNU @LongLink headers (they carry an owner name).
+        try runTarData(["-czf", "-", "--format", "paxr", "-n", "--no-mac-metadata", "--no-xattrs",
+                        "--uid", "0", "--gid", "0", "--uname", "", "--gname", "", "-C", dir.path]
+                       + publishMembers(dir)).base64EncodedString()
+    }
+
+    /// The files a publish packs, as "./<relative path>", sorted. The "./" prefix
+    /// keeps a name like "-x" or "@x" from reading as a tar option or archive.
+    /// shortcut: members go as arguments (ARG_MAX 1 MB); a publish is capped at
+    /// 256 KB, so thousands of files never get here — switch to --null -T - if it must.
+    static func publishMembers(_ dir: URL) -> [String] {
+        guard let en = FileManager.default.enumerator(atPath: dir.path) else { return [] }
+        var members: [String] = []
+        for case let rel as String in en
+        where !isLeftOutOfPublish(rel) && en.fileAttributes?[.type] as? FileAttributeType != .typeDirectory {
+            members.append("./" + rel)
+        }
+        return members.sorted()
+    }
+
+    /// Hidden files and folders at any depth, plus the dev-only test files
+    /// (scripts/test-extensions.sh): *.test.lua and any `tests` folder.
+    static func isLeftOutOfPublish(_ path: String) -> Bool {
+        isHiddenMember(path) || path.hasSuffix(".test.lua") || path.split(separator: "/").contains("tests")
     }
 
     /// Run `tar` and return its raw stdout bytes (binary-safe, for packaging).
@@ -301,7 +378,9 @@ enum RemoteInstaller {
                 ?? "tar exited \(process.terminationStatus)"
             throw InstallError.extractFailed(msg.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        return String(data: data, encoding: .utf8) ?? ""
+        // Lossy, never "": one non-UTF-8 name used to blank the whole listing and
+        // let every entry past assertSafeArchive.
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func runTar(_ args: [String]) throws {

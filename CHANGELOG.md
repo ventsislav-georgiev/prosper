@@ -661,6 +661,12 @@ tag from the now-released section and put it on the new top draft.
 - Settings › Text Viewer has a new "Make Prosper the Default" button: click it to have .txt and
   Markdown files open in Prosper when you double-click them. Nothing changes until you click it, and
   the page shows which app opens each kind now. (#1134)
+- Marketplace publish no longer uploads hidden files and folders (such as .DS_Store, macOS "._"
+  metadata files, or a coding tool's state folder) or your Mac account name from an extension's
+  folder, and installing an extension now leaves out any hidden files an archive still carries.
+  (#1131)
+- Hardening: an extension download that holds a folder Prosper cannot read is now refused instead of
+  installed unchecked, and a GitHub address with "." or ".." parts is not accepted. (#1131)
 
 ## v2.174.0
 
