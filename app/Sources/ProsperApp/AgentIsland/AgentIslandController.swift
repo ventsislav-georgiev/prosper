@@ -1474,13 +1474,14 @@ final class AgentIslandController {
         guard let store else { return }
         // #935: no id (another program, two Claudes, an older dch, no list yet) is not Claude Code.
         let claude = Set(store.sessions.filter { $0.claudeSessionID?.isEmpty == false }.map(\.key))
+        // QA #849 INFO-5: before the setting's guard, so a check an off-toggle orphaned reads a fresh set at its
+        // send when the setting is back on before autoAllowChanged runs here.
         claudeKeys.withLock { $0 = claude }
         guard autoAllowOn() else { autoAllow = [:]; dchSeen = [:]; return }   // nothing held: published as is
         showDchAnswers(store.sessions)
         let blocked = Set(store.sessions.filter { $0.state == .blocked }.map(\.key))
         autoAllow = autoAllow.filter { blocked.contains($0.key) }
-        // #935: any other session is never checked or held: its card and Needs input, as with the setting off.
-        for key in blocked where autoAllow[key] == nil && claude.contains(key) { startAutoAllow(key, answered: false) }
+        for key in blocked where autoAllow[key] == nil { startAutoAllow(key, answered: false) }   // #935: it asks claudeKeys
         recheckHuman()
     }
 
@@ -1549,6 +1550,16 @@ final class AgentIslandController {
     /// `screen`: #791's re-read, the screen this check decides on and the row's activity then.
     private func startAutoAllow(_ key: AgentSessionKey, answered: Bool, screen: (text: String, act: TimeInterval)? = nil) {
         guard autoAllowOn() else { return autoAllowChanged() }   // QA #581 F3: switched off meanwhile
+        // #935 (QA #849 INFO-2): every way in asks first. A session the newest list names no Claude Code in is
+        // never checked or held: its card and Needs input, as with the setting off; one held until now
+        // (a re-read, the verify, a stand-down, a taken-back re-run) is left to the human.
+        guard claudeKeys.withLock({ $0.contains(key) }) else {
+            guard autoAllow[key] != nil else { return }
+            autoAllow[key] = .human(left: nil, seen: activity(key), at: now())
+            publish()
+            refreshCards()
+            return layout()
+        }
         // An island click is answering it: the human's.
         guard inFlight.insert(key).inserted else {
             // #755 INFO-1: our own check, orphaned by an off-toggle: held again, its result counts.

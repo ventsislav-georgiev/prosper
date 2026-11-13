@@ -23,7 +23,7 @@ final class AgentIslandAutoAllowClaudeOnlyTests: XCTestCase {
     private final class FakeIO: @unchecked Sendable {
         let lock = NSLock()
         var screen: String
-        var reads = 0, sends: [String] = []
+        var reads = 0, statuses = 0, sends: [String] = []
         /// The next read waits on this once (a check still on the queue); bounded, so a slip never hangs.
         var gate: DispatchSemaphore?
         init(_ screen: String) { self.screen = screen }
@@ -32,10 +32,12 @@ final class AgentIslandAutoAllowClaudeOnlyTests: XCTestCase {
                 _ = self.lock.withLock { () -> DispatchSemaphore? in defer { self.gate = nil }; return self.gate }?
                     .wait(timeout: .now() + 10)
                 return self.lock.withLock { self.reads += 1; return self.screen }
-            }, status: { _ in "blocked" }, send: { _, d in self.lock.withLock { self.sends.append(d) } })
+            }, status: { _ in self.lock.withLock { self.statuses += 1 }; return "blocked" }, send: { _, d in self.lock.withLock { self.sends.append(d) } })
         }
         var sent: [String] { lock.withLock { sends } }
         var readCount: Int { lock.withLock { reads } }
+        /// A check's send ask (answer() re-reads --status right before the key); no card read asks it.
+        var statusCount: Int { lock.withLock { statuses } }
     }
 
     @MainActor private final class Rec {
@@ -59,9 +61,10 @@ final class AgentIslandAutoAllowClaudeOnlyTests: XCTestCase {
     }
 
     /// `claude`: the row's claude_session_id. `version` "": a master too old to say anything (no agent information).
-    private func row(_ claude: String?, version: String = "1.60.0", activity: TimeInterval = 1) -> AgentSession {
+    private func row(_ claude: String?, version: String = "1.60.0", activity: TimeInterval = 1,
+                     allowed: DchAutoAllowed? = nil) -> AgentSession {
         AgentSession(key: key, alias: "", activity: activity, state: .blocked, agents: 0, version: version,
-                     claudeSessionID: claude, transcriptPath: claude.map { "/Users/example/.claude/projects/p/\($0).jsonl" })
+                     autoAllowed: allowed, claudeSessionID: claude, transcriptPath: claude.map { "/Users/example/.claude/projects/p/\($0).jsonl" })
     }
 
     /// One list change, as apply runs it (the check, then the cards); what goes to the phone.
@@ -111,6 +114,7 @@ final class AgentIslandAutoAllowClaudeOnlyTests: XCTestCase {
         XCTAssertTrue(c.store?.cards[key] == nil, "answered: no card")
     }
 
+    /// Way 1 into startAutoAllow (checkAutoAllow, a row that just went blocked).
     @MainActor func testANonClaudeSessionWithTheSameScreenIsNotAnsweredAndKeepsItsCard() throws {
         // dch new enough to name a Claude Code names none: a script, another agent, a file being printed.
         for (name, id) in [("no Claude named", nil), ("an empty id", "")] as [(String, String?)] {
@@ -134,7 +138,7 @@ final class AgentIslandAutoAllowClaudeOnlyTests: XCTestCase {
         XCTAssertEqual(lj.count, 1)
         XCTAssertEqual(noKey.count, 1)
         XCTAssertTrue(lj.first?.claudeSessionID == nil && noKey.first?.claudeSessionID == nil)
-        for (name, s) in [("-lj row", lj.first),("--ls-json without the key", noKey.first)] {
+        for (name, s) in [("-lj row", lj.first), ("--ls-json without the key", noKey.first)] {
             guard var s else { return XCTFail(name) }
             s = AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .blocked, agents: s.agents,
                              version: s.version, claudeSessionID: s.claudeSessionID)
@@ -198,5 +202,124 @@ final class AgentIslandAutoAllowClaudeOnlyTests: XCTestCase {
         XCTAssertEqual(tick(c, row(Self.sid, activity: 2)), .working)
         drain(c)
         XCTAssertEqual(f.sent, ["1"])
+    }
+
+    // MARK: - QA #849 INFO-2: every way into startAutoAllow asks the set before a check starts
+
+    /// Way 2 (#791's re-read): a row left to the human after its id went prints a different prompt;
+    /// the re-read starts no check: no status ask, no hold, Needs input and the new prompt's card.
+    @MainActor func testWay2AReReadOfARowWithoutTheIdStartsNoCheck() throws {
+        let f = FakeIO(Self.screen), (c, r) = controller(f)
+        let gate = DispatchSemaphore(value: 0)
+        f.lock.withLock { f.gate = gate }
+        tick(c, row(Self.sid))
+        tick(c, row(nil, activity: 2))   // the id goes while the check waits on the queue
+        gate.signal()
+        drain(c)
+        XCTAssertEqual(f.statusCount, 1, "the first check's send ask")
+        XCTAssertEqual(f.sent, [])
+        f.lock.withLock { f.screen = Self.otherScreen }
+        c.now = { Date(timeIntervalSince1970: 1_000_010) }   // past the poll floor: the print is read at once
+        tick(c, row(nil, activity: 3))
+        drain(c)
+        XCTAssertEqual(f.statusCount, 1, "the re-read started no check")
+        XCTAssertEqual(f.sent, [])
+        XCTAssertFalse(c.heldByAutoAllow(key))
+        XCTAssertEqual(r.lastState, .blocked, "Needs input")
+        XCTAssertEqual(c.store?.cards[key], .prompt(try XCTUnwrap(AgentPrompt.parse(Self.otherScreen))), "its card")
+    }
+
+    /// Way 3 (#755): a check orphaned by an off-toggle and taken back by an on-toggle comes back
+    /// refused (the id went meanwhile): it is not run again.
+    @MainActor func testWay3ATakenBackCheckOfARowWithoutTheIdIsNotRunAgain() throws {
+        let f = FakeIO(Self.screen), (c, r) = controller(f)
+        let on = OSAllocatedUnfairLock(initialState: true)
+        c.autoAllowOn = { on.withLock { $0 } }
+        let gate = DispatchSemaphore(value: 0)
+        f.lock.withLock { f.gate = gate }
+        tick(c, row(Self.sid))
+        on.withLock { $0 = false }
+        c.autoAllowChanged()   // the check is orphaned
+        on.withLock { $0 = true }
+        c.autoAllowChanged()   // and taken back
+        XCTAssertTrue(c.heldByAutoAllow(key), "held again")
+        tick(c, row(nil, activity: 2))
+        gate.signal()
+        drain(c)
+        XCTAssertEqual(f.statusCount, 1, "the orphaned check's send ask only: no re-run")
+        XCTAssertEqual(f.sent, [])
+        XCTAssertFalse(c.heldByAutoAllow(key))
+        XCTAssertEqual(r.lastState, .blocked, "Needs input")
+        XCTAssertEqual(c.store?.cards[key], .prompt(try XCTUnwrap(AgentPrompt.parse(Self.screen))), "its card")
+    }
+
+    /// Way 4 (the verify after Prosper's own Yes): the id went before it fires: no check holds the row.
+    @MainActor func testWay4TheVerifyOfARowWithoutTheIdHoldsNothing() throws {
+        let f = FakeIO(Self.screen), (c, r) = controller(f)
+        tick(c, row(Self.sid))
+        drain(c)
+        XCTAssertEqual(f.sent, ["1"])
+        XCTAssertEqual(r.timers.count, 1, "the verify is armed")
+        tick(c, row(nil, activity: 2))
+        XCTAssertTrue(c.heldByAutoAllow(key), "answered: held until the verify")
+        let t = r.timers
+        r.timers = []
+        for timer in t { timer() }
+        XCTAssertFalse(c.heldByAutoAllow(key), "no check holds it")
+        XCTAssertEqual(r.lastState, .blocked, "Needs input at once")
+        drain(c)
+        XCTAssertEqual(f.statusCount, 1, "the first check's send ask only")
+        XCTAssertEqual(f.sent, ["1"])
+        XCTAssertEqual(c.store?.cards[key], .prompt(try XCTUnwrap(AgentPrompt.parse(Self.screen))), "its card")
+    }
+
+    /// Way 5 (#792's stand-down): dch answered and a new prompt is up when the wait ends, the id gone:
+    /// neither dch nor the screen is asked again, and Needs input goes out.
+    @MainActor func testWay5AStandDownRecheckOfARowWithoutTheIdHoldsNothing() {
+        let f = FakeIO(Self.screen), (c, r) = controller(f)
+        let calls = OSAllocatedUnfairLock(initialState: [[String]]())
+        c.controlDch = { DchCommand.Binary(path: "/fake/dch", version: [1, 60, 0]) }
+        c.runDch = { _, args, _ in
+            calls.withLock { $0.append(args) }
+            return Data((args == ["--build"] ? "full\n" : "/Users/example/.config/dch/config\nauto_allow = true\n").utf8)
+        }
+        XCTAssertEqual(tick(c, row(Self.sid)), .working)
+        drain(c)
+        XCTAssertEqual(calls.withLock { $0 }, [["--build"], ["--config"]], "left to dch's own auto-allow")
+        XCTAssertEqual(r.timers.count, 1, "the stand-down wait is armed")
+        let answered = DchAutoAllowed(at: 1_000_005, title: "Bash command")
+        XCTAssertEqual(tick(c, row(nil, activity: 2, allowed: answered)), .working, "still stood down")
+        let t = r.timers
+        r.timers = []
+        for timer in t { timer() }
+        XCTAssertFalse(c.heldByAutoAllow(key), "no check holds it")
+        XCTAssertEqual(r.lastState, .blocked, "Needs input")
+        drain(c)
+        XCTAssertEqual(calls.withLock { $0 }, [["--build"], ["--config"]], "dch not asked again")
+        XCTAssertEqual(f.statusCount, 0)
+        XCTAssertEqual(f.sent, [])
+    }
+
+    /// QA #849 INFO-5: the set is stored before the setting's guard. A check orphaned by an off-toggle
+    /// asks it at its send; a list while off drops the id, and the setting comes back on before
+    /// autoAllowChanged runs on main: the send reads the list from while it was off.
+    @MainActor func testTheSetIsStoredWhileTheSettingIsOff() {
+        let f = FakeIO(Self.screen), (c, _) = controller(f)
+        let on = OSAllocatedUnfairLock(initialState: true)
+        c.autoAllowOn = { on.withLock { $0 } }
+        let gate = DispatchSemaphore(value: 0)
+        f.lock.withLock { f.gate = gate }
+        tick(c, row(Self.sid))
+        on.withLock { $0 = false }
+        c.autoAllowChanged()
+        tick(c, row(nil, activity: 2))
+        on.withLock { $0 = true }
+        gate.signal()
+        drain(c)
+        XCTAssertEqual(f.statusCount, 1, "the send was asked")
+        XCTAssertEqual(f.sent, [], "and refused on the list from while it was off")
+        c.autoAllowChanged()
+        drain(c)
+        XCTAssertEqual(f.sent, [])
     }
 }

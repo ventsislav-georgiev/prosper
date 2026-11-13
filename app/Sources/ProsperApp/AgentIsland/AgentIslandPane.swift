@@ -75,7 +75,7 @@ struct AgentIslandPane: View {
             }
         }
         NeonSection("Permission prompts",
-                    footer: "Answers Claude Code's \"Do you want to proceed?\" with Yes, so commands and tool calls run without your review and your iPhone isn't notified. Never picks \"don't ask again\"; every other question is left to you.") {
+                    footer: "Answers Claude Code's \"Do you want to proceed?\" with Yes, so commands and tool calls run without your review and your iPhone isn't notified. Only sessions that dch 1.30 or later reports as running Claude Code are answered. Never picks \"don't ask again\"; every other question is left to you.") {
             NeonRow("Always allow permission prompts") { Toggle("", isOn: $autoAllow).labelsHidden() }
         }
         .onChange(of: autoAllow) { _, v in Self.autoAllowToggled(v) }
