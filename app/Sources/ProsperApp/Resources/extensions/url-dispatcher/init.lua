@@ -168,9 +168,32 @@ end
 
 -- MARK: routing -----------------------------------------------------------------
 
+-- Escapes left encoded by decoded(): the URL delimiters : / ? # [ ] @ (so decoding
+-- never moves where the host, path or query ends) and DEL; control bytes below 0x20 too.
+local KEEP_ENCODED = { [0x3A] = true, [0x2F] = true, [0x3F] = true, [0x23] = true,
+                       [0x5B] = true, [0x5D] = true, [0x40] = true, [0x7F] = true }
+
+-- Percent-decode once, for matching only. An invalid escape (%zz, a lone or
+-- truncated %) or a result that is not valid UTF-8 returns the string as given.
+local function decoded(s)
+    if not s:find("%", 1, true) then return s end
+    if (s:gsub("%%%x%x", "")):find("%", 1, true) then return s end
+    local out = s:gsub("%%(%x%x)", function(hex)
+        local b = tonumber(hex, 16)
+        if b < 0x20 or KEEP_ENCODED[b] then return nil end -- nil keeps the escape
+        return string.char(b)
+    end)
+    return utf8.len(out) and out or s
+end
+
+-- A rule matches the URL as given, or the decoded URL with the decoded rule.
+-- First match in list order wins.
 local function pick(url)
+    local durl = decoded(url)
     for _, r in ipairs(load_routes()) do
-        if r.match and #r.match > 0 and string.find(url, r.match, 1, true) then
+        local m = r.match
+        if type(m) == "string" and #m > 0
+            and (string.find(url, m, 1, true) or string.find(durl, decoded(m), 1, true)) then
             return r.browser
         end
     end
@@ -299,7 +322,8 @@ function settings_render(section_id, state)
     local rules = s.section{
         id = "routes", title = "Routing rules",
         footer = "First match wins. “Domain contains” is a plain substring of the URL "
-            .. "(e.g. github.com, localhost, docs.google.com).",
+            .. "(e.g. github.com, localhost, docs.google.com). %-escapes are matched "
+            .. "decoded too, so “My Sites” matches My%20Sites.",
         rows = { s.records{
             id = "routes", records = recs, fields = route_fields("", ""),
             addLabel = "Add rule",

@@ -218,6 +218,100 @@ h.eq(env.urlOpened.url, "https://x.com/a", "clean on: web link still cleaned nex
 host.prefs.set("clean_tracking", "false")
 host.prefs.set("routes", J{ { match = "github.com", browser = "com.google.Chrome" } })
 
+-- ── percent-decoded matching (#936) ─────────────────────────────────────────
+-- A rule matches the URL as given, or (URL decoded once, rule decoded once).
+-- The decoded form only decides the match: what is opened stays byte-identical.
+host.prefs.set("fallback", "com.apple.Safari")
+local function route(rules, url)
+    host.prefs.set("routes", J(rules))
+    reset()
+    on_url(payload(url))
+    h.eq(env.urlOpened and env.urlOpened.url, url, "opened byte-identical: " .. url)
+    return lastBrowser()
+end
+local FF = "org.mozilla.firefox"
+
+-- 26. a space: rule typed plain, link encoded
+h.eq(route({ { match = "My Sites", browser = FF } }, "file:///Users/example/My%20Sites/index.html"),
+     FF, "rule with a space matches %20 in the link")
+-- 27. a non-ASCII letter: rule typed plain, link encoded
+h.eq(route({ { match = "café", browser = FF } }, "https://x.example/caf%C3%A9/menu"),
+     FF, "rule with a non-ASCII letter matches its encoded form")
+-- 28. a literal percent sign in the rule (lone % = invalid escape, rule kept as typed)
+h.eq(route({ { match = "100% off", browser = FF } }, "https://x.example/100%25%20off"),
+     FF, "rule with a literal % matches %25 in the link")
+-- 29. a rule that already contains %20 matches the link encoded and unencoded
+h.eq(route({ { match = "a%20b", browser = FF } }, "https://x.example/a%20b"), FF, "%20 rule, encoded link")
+h.eq(route({ { match = "a%20b", browser = FF } }, "file:///Users/example/a b.html"),
+     FF, "%20 rule matches an unencoded link")
+-- 30. the double-encoded link decodes once: %2520 -> %20, never a space
+h.eq(route({ { match = "a b", browser = FF } }, "https://x.example/a%2520b"),
+     "com.apple.Safari", "double-encoded link is decoded once only")
+h.eq(route({ { match = "a%20b", browser = FF } }, "https://x.example/a%2520b"),
+     "com.apple.Safari", "double-encoded link vs %20 rule: no match")
+-- 31. an invalid escape leaves the whole URL as given: no partial decode, no error
+h.eq(route({ { match = "a b", browser = FF } }, "https://x.example/x%zz/a%20b"),
+     "com.apple.Safari", "invalid escape %zz: URL as given, no match")
+h.eq(route({ { match = "a b", browser = FF } }, "https://x.example/a%20b%"),
+     "com.apple.Safari", "trailing lone %: URL as given, no match")
+h.eq(route({ { match = "a b", browser = FF } }, "https://x.example/a%20b%4"),
+     "com.apple.Safari", "truncated escape %4: URL as given, no match")
+h.eq(route({ { match = "a%zz b", browser = FF } }, "https://x.example/a%zz%20b"),
+     "com.apple.Safari", "invalid escape in rule and link: both as given, no error")
+-- 32. which rule wins: list order, first match wins, decoded matches included
+h.eq(route({ { match = "a b", browser = "com.google.Chrome" }, { match = "a%20b", browser = FF } },
+           "https://x.example/a%20b"), "com.google.Chrome", "decoded match earlier in the list wins")
+h.eq(route({ { match = "a%20b", browser = FF }, { match = "a b", browser = "com.google.Chrome" } },
+           "https://x.example/a%20b"), FF, "as-given match earlier in the list wins")
+-- 33. encoded delimiters stay encoded: decoding never moves where host/path/query end
+h.eq(route({ { match = "/@good.example", browser = FF } }, "https://evil.example/%40good.example"),
+     "com.apple.Safari", "%40 is not decoded to @")
+h.eq(route({ { match = "//good.example/", browser = FF } }, "https://good.example%2F.evil.example"),
+     "com.apple.Safari", "%2F is not decoded to /")
+h.eq(route({ { match = "page?q", browser = FF } }, "https://x.example/page%3Fq"),
+     "com.apple.Safari", "%3F is not decoded to ?")
+h.eq(route({ { match = "page#top", browser = FF } }, "https://x.example/page%23top"),
+     "com.apple.Safari", "%23 is not decoded to #")
+-- 34. invalid UTF-8, NUL and newline: no error, no match widened
+h.eq(route({ { match = "café", browser = FF } }, "https://x.example/%FF/caf%C3%A9"),
+     "com.apple.Safari", "decoded bytes not valid UTF-8: URL as given")
+h.eq(route({ { match = "a\0b", browser = FF } }, "https://x.example/a%00b"),
+     "com.apple.Safari", "%00 is not decoded to NUL")
+h.eq(route({ { match = "a\nb", browser = FF } }, "https://x.example/a%0Ab"),
+     "com.apple.Safari", "%0A is not decoded to a newline")
+h.eq(route({ { match = "a\31b", browser = FF } }, "https://x.example/a%1Fb"),
+     "com.apple.Safari", "%1F (last control byte) is not decoded")
+-- 34b. the rest of the kept delimiters, written out: %3A %5B %5D %7F
+h.eq(route({ { match = "a:b", browser = FF } }, "https://x.example/a%3Ab"),
+     "com.apple.Safari", "%3A is not decoded to :")
+h.eq(route({ { match = "a[b", browser = FF } }, "https://x.example/a%5Bb"),
+     "com.apple.Safari", "%5B is not decoded to [")
+h.eq(route({ { match = "a]b", browser = FF } }, "https://x.example/a%5Db"),
+     "com.apple.Safari", "%5D is not decoded to ]")
+h.eq(route({ { match = "a\127b", browser = FF } }, "https://x.example/a%7Fb"),
+     "com.apple.Safari", "%7F is not decoded to DEL")
+-- 34c. a rule that matched as given still matches when the decoded compare cannot
+h.eq(route({ { match = "%C3", browser = FF } }, "https://x.example/caf%C3%A9"),
+     FF, "as-given match kept: rule %C3 (not UTF-8 alone) vs encoded link")
+h.eq(route({ { match = "%41", browser = FF } }, "https://x.example/100%/%41"),
+     FF, "as-given match kept: rule %41 vs link with a malformed escape")
+-- 34d. a non-string match in a hand-edited pref is skipped, never an error
+h.eq(route({ { match = 42, browser = FF }, { match = true, browser = FF }, { match = {}, browser = FF },
+             { match = "x.example", browser = "com.google.Chrome" } }, "https://x.example/p"),
+     "com.google.Chrome", "non-string rule matches skipped without error")
+-- 35. the rule's own text decoded: an encoded non-ASCII rule matches a plain link
+h.eq(route({ { match = "caf%C3%A9", browser = FF } }, "file:///Users/example/café.html"),
+     FF, "encoded rule matches an unencoded link")
+-- 36. tracker cleaning still runs first; what is opened is the cleaned link as given
+host.prefs.set("clean_tracking", "true")
+host.prefs.set("routes", J{ { match = "a b", browser = FF } })
+reset()
+on_url(payload("https://x.example/a%20b?utm_source=z&id=1"))
+h.eq(env.urlOpened.url, "https://x.example/a%20b?id=1", "clean on: opened link stays encoded")
+h.eq(lastBrowser(), FF, "clean on: decoded match still routes")
+host.prefs.set("clean_tracking", "false")
+host.prefs.set("routes", J{ { match = "github.com", browser = "com.google.Chrome" } })
+
 -- ── performance: on_url hot path ─────────────────────────────────────────────
 host.prefs.set("routes", J{
     { match = "github.com", browser = "com.google.Chrome" },
