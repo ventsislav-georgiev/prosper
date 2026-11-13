@@ -73,16 +73,68 @@ enum HooksConfigStore {
         return out
     }
 
-    private static func document(from hooks: [HookRule]) -> Document {
-        var map: [String: [MatcherGroup]] = [:]
-        for h in hooks {
-            // Only write `enabled` when false, so a default file stays plain CC.
-            let handler = Handler(type: "command", command: h.command, timeout: h.timeout,
-                                  enabled: h.enabled ? nil : false)
-            let matcher = (h.event.usesMatcher && !h.matcher.isEmpty) ? h.matcher : nil
-            map[h.event.rawValue, default: []].append(MatcherGroup(matcher: matcher, hooks: [handler]))
+    /// Only write `enabled` when false, so a default file stays plain CC.
+    private static func handler(for h: HookRule) -> Handler {
+        Handler(type: "command", command: h.command, timeout: h.timeout, enabled: h.enabled ? nil : false)
+    }
+
+    /// The matcher as written: only for tool events, and only when set.
+    private static func writtenMatcher(_ event: HookRule.Event, _ matcher: String) -> String? {
+        (event.usesMatcher && !matcher.isEmpty) ? matcher : nil
+    }
+
+    // MARK: - Keys the app does not model (#1045)
+
+    /// Every key `Handler` / `MatcherGroup` models (property names are the JSON keys).
+    private static let handlerKeys = Set(Mirror(reflecting: Handler()).children.compactMap { $0.label })
+    private static let groupKeys = Set(Mirror(reflecting: MatcherGroup()).children.compactMap { $0.label })
+
+    /// A command handler read from the file, with the group it sits in.
+    private struct Written {
+        let rule: String      // event, matcher as written, command: what a rule is across a rewrite
+        let exact: String     // plus timeout and enabled
+        let group: OrderedJSON.Value
+        let handler: OrderedJSON.Value
+    }
+
+    private static func ruleKey(_ event: HookRule.Event, _ matcher: String, _ command: String) -> String {
+        "\(event.rawValue)\u{0}\(writtenMatcher(event, matcher) ?? "")\u{0}\(command)"
+    }
+
+    private static func elements(_ value: OrderedJSON.Value?) -> [OrderedJSON.Node] {
+        if case .array(let list)? = value { return list }
+        return []
+    }
+
+    /// The reader makes a rule of this handler (as `rules(from:)`: `type` command or none, and a
+    /// non-empty `command`). Any other handler is not read, so a rewrite keeps it as written.
+    private static func makesRule(_ value: OrderedJSON.Value) -> Bool {
+        guard let m = MCPConfigStore.members(value), case .string(let command)? = m["command"],
+              !command.isEmpty else { return false }
+        switch m["type"] {
+        case nil, .null?: return true
+        case .string(let t)?: return t == "command"
+        default: return false
         }
-        return Document(hooks: map)
+    }
+
+    /// Pairs each rule with the handler it was written from: first one equal in every modelled
+    /// field, then one with the same event, matcher and command (a toggled or re-timed rule).
+    /// Each handler goes to one rule at most, so a rule's unknown keys never move to another.
+    private static func match(_ hooks: [HookRule], _ written: [Written]) -> [Written?] {
+        var free: [Written?] = written
+        var out = [Written?](repeating: nil, count: hooks.count)
+        for exact in [true, false] {
+            for (i, h) in hooks.enumerated() where out[i] == nil {
+                let rule = ruleKey(h.event, h.matcher, h.command)
+                let full = rule + "\u{0}\(h.timeout.map { String($0) } ?? "")\u{0}\(h.enabled)"
+                guard let j = free.firstIndex(where: { w in w.map { exact ? $0.exact == full : $0.rule == rule } ?? false })
+                else { continue }
+                out[i] = free[j]
+                free[j] = nil
+            }
+        }
+        return out
     }
 
     // MARK: - File read / write
@@ -95,11 +147,55 @@ enum HooksConfigStore {
         return sorted(rules(from: doc.hooks))
     }
 
-    static func encode(_ hooks: [HookRule]) -> String? {
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? enc.encode(document(from: hooks)) else { return nil }
-        return String(data: data, encoding: .utf8)
+    /// The file text for `hooks`, one matcher group per rule. With `disk` (the file as it is
+    /// now), what the app does not model is kept: top-level keys, unknown event names, groups
+    /// and handlers of other kinds, and the unknown keys of each rule's group and handler. A rule
+    /// removed in the app, or one whose event, matcher or command changed, has none (#1045).
+    static func encode(_ hooks: [HookRule], over disk: OrderedJSON.Value? = nil) -> String? {
+        typealias J = MCPConfigStore
+        let old = J.members(J.members(disk)?["hooks"]) ?? [:]
+        var out = old.filter { HookRule.Event(rawValue: $0.key) == nil }  // not the app's: kept whole
+        var kept: [String: [OrderedJSON.Node]] = [:]  // groups or handlers the app does not read
+        var written: [Written] = []
+        for (name, value) in old {
+            guard let event = HookRule.Event(rawValue: name) else { continue }
+            for g in elements(value) {
+                let gm = J.members(g.value) ?? [:]
+                let handlers = elements(gm["hooks"])
+                let commands = handlers.filter { makesRule($0.value) }
+                let others = handlers.filter { !makesRule($0.value) }
+                if commands.isEmpty { kept[name, default: []].append(g); continue }
+                if !others.isEmpty {
+                    var rest = gm
+                    rest["hooks"] = .array(others)
+                    kept[name, default: []].append(J.node(J.object(rest)))
+                }
+                var matcher = ""
+                if case .string(let m)? = gm["matcher"] { matcher = m }
+                for c in commands {
+                    let hm = J.members(c.value) ?? [:]
+                    var command = "", timeout = ""
+                    if case .string(let s)? = hm["command"] { command = s }
+                    if case .number(let n)? = hm["timeout"] { timeout = n }
+                    var enabled = true
+                    if case .bool(false)? = hm["enabled"] { enabled = false }
+                    let rule = ruleKey(event, matcher, command)
+                    written.append(Written(rule: rule, exact: rule + "\u{0}\(timeout)\u{0}\(enabled)",
+                                           group: g.value, handler: c.value))
+                }
+            }
+        }
+        var groups: [String: [OrderedJSON.Node]] = [:]
+        // A rule with an empty command is not written: the reader would not read it back, so
+        // its handler would be kept as unread and the rule written again on every rewrite.
+        for (h, w) in zip(hooks, match(hooks, written)) where !h.command.isEmpty {
+            guard var gm = J.members(J.tree(MatcherGroup(matcher: writtenMatcher(h.event, h.matcher)))),
+                  let hm = J.members(J.tree(handler(for: h))) else { return nil }
+            gm["hooks"] = .array([J.node(J.object(J.keepingUnknown(w?.handler, in: hm, modelled: handlerKeys)))])
+            groups[h.event.rawValue, default: []].append(J.node(J.object(J.keepingUnknown(w?.group, in: gm, modelled: groupKeys))))
+        }
+        for (name, list) in groups.merging(kept, uniquingKeysWith: +) { out[name] = .array(list) }
+        return OrderedJSON.render(J.object(J.keepingUnknown(disk, in: ["hooks": J.object(out)], modelled: ["hooks"])))
     }
 
     /// Stable display/dedup order: by event, then matcher, then command.
@@ -112,9 +208,19 @@ enum HooksConfigStore {
     /// Mirror the loaded hooks out to the file. Skips the write (and the watcher reload
     /// it would cause) when the content is unchanged.
     static func writeFile(_ hooks: [HookRule]) {
-        guard let json = encode(hooks) else { return }
-        if json == Preferences.defaults.string(forKey: mirrorKey) { return }
         guard let url = MCPConfigStore.symlinkTarget(fileURL) else { return }
+        var disk: OrderedJSON.Value?
+        if MCPConfigStore.entryExists(url) {
+            // A file the app cannot read is the user's, as in bootstrap: never replaced (#1045).
+            guard let tree = MCPConfigStore.readableTree(url, key: "hooks", decodes: { decode($0) != nil }) else {
+                Logger(subsystem: "eu.illegible.prosper", category: "hooks")
+                    .error("\(url.path, privacy: .public) cannot be read as a hooks config; write skipped, file left untouched")
+                return
+            }
+            disk = tree
+        }
+        guard let json = encode(hooks, over: disk) else { return }
+        if json == Preferences.defaults.string(forKey: mirrorKey) { return }
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {

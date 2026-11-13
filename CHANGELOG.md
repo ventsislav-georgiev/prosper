@@ -452,6 +452,8 @@ tag from the now-released section and put it on the new top draft.
 - Hammerspoon compat example: without "Grant System Access", hs.execute no longer returns the error
   sentence as command output; it returns no output with a failed status, and the extension logs once
   that hs.execute needs System Access.
+- Editing MCP servers or hooks in Settings no longer drops keys Prosper does not use from mcp.json
+  and hooks.json, and no longer overwrites a file you are still editing by hand.
 
 ## v2.174.0
 

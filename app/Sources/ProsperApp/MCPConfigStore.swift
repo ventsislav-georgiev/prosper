@@ -107,20 +107,44 @@ enum MCPConfigStore {
             .sorted { $0.id.lowercased() < $1.id.lowercased() }
     }
 
-    static func encode(_ servers: [MCPServer]) -> String? {
+    /// The file text for `servers`. With `disk` (the file as it is now), every key the model
+    /// does not know is kept, at the top level and in each server that still exists; a server
+    /// is its id, so one removed or renamed in the app goes with its unknown keys (#1045).
+    static func encode(_ servers: [MCPServer], over disk: OrderedJSON.Value? = nil) -> String? {
         let map = Dictionary(servers.map { ($0.id, entry(from: $0)) }, uniquingKeysWith: { a, _ in a })
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        guard let data = try? enc.encode(Document(mcpServers: map)) else { return nil }
-        return String(data: data, encoding: .utf8)
+        let old = members(members(disk)?["mcpServers"]) ?? [:]
+        var out: [String: OrderedJSON.Value] = [:]
+        for (id, e) in map {
+            guard var ours = members(tree(e)) else { return nil }
+            // The file's own `type` ("sse", "SSE") stays while it reads back as the transport the
+            // app holds; absent, or naming the other transport, the app's value is written.
+            if case .string(let t)? = members(old[id])?["type"], e.type.map(isHTTPType) == isHTTPType(t) {
+                ours["type"] = .string(t)
+            }
+            out[id] = object(keepingUnknown(old[id], in: ours, modelled: entryKeys))
+        }
+        return OrderedJSON.render(object(keepingUnknown(disk, in: ["mcpServers": object(out)], modelled: ["mcpServers"])))
     }
+
+    /// Every key `Entry` models (its property names are its JSON keys).
+    private static let entryKeys = Set(Mirror(reflecting: Entry()).children.compactMap { $0.label })
 
     /// Mirror the loaded servers out to the file. Skips the write (and the watcher
     /// reload it would cause) when the content is unchanged.
     static func writeFile(_ servers: [MCPServer]) {
-        guard let json = encode(servers) else { return }
-        if json == Preferences.defaults.string(forKey: mirrorKey) { return }
         guard let url = symlinkTarget(fileURL) else { return }
+        var disk: OrderedJSON.Value?
+        if entryExists(url) {
+            // A file the app cannot read is the user's, as in bootstrap: never replaced (#1045).
+            guard let tree = readableTree(url, key: "mcpServers", decodes: { decode($0) != nil }) else {
+                Logger(subsystem: "eu.illegible.prosper", category: "mcp")
+                    .error("\(url.path, privacy: .public) cannot be read as an MCP config; write skipped, file left untouched")
+                return
+            }
+            disk = tree
+        }
+        guard let json = encode(servers, over: disk) else { return }
+        if json == Preferences.defaults.string(forKey: mirrorKey) { return }
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
@@ -152,6 +176,46 @@ enum MCPConfigStore {
     }
 
     private static func readFileRaw() -> String? { try? String(contentsOf: fileURL, encoding: .utf8) }
+
+    // MARK: - Keys the app does not model (#1045), shared with `HooksConfigStore`
+
+    /// The file at `url` as a JSON tree when the app can read it: UTF-8 strict JSON (OrderedJSON
+    /// keeps each number as written) with an object at the top, which the store's decoder accepts
+    /// or which has no `key` at all (`{}`, a settings.json with no hooks). nil otherwise.
+    static func readableTree(_ url: URL, key: String, decodes: (String) -> Bool) -> OrderedJSON.Value? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              let doc = try? OrderedJSON(text), let top = members(doc.root.value),
+              top[key] == nil || decodes(text) else { return nil }
+        return doc.root.value
+    }
+
+    /// An object's members by key; nil when `value` is not an object (OrderedJSON refuses
+    /// duplicate keys, so none are merged).
+    static func members(_ value: OrderedJSON.Value?) -> [String: OrderedJSON.Value]? {
+        guard case .object(let list)? = value else { return nil }
+        return Dictionary(list.map { ($0.key, $0.value.value) }, uniquingKeysWith: { _, last in last })
+    }
+
+    /// An object with its keys sorted, as the file has always been written. The renderer
+    /// reads no ranges.
+    static func object(_ members: [String: OrderedJSON.Value]) -> OrderedJSON.Value {
+        .object(members.sorted { $0.key < $1.key }.map { OrderedJSON.Member(key: $0.key, start: 0, value: node($0.value)) })
+    }
+
+    static func node(_ value: OrderedJSON.Value) -> OrderedJSON.Node { .init(value: value, range: 0..<0) }
+
+    /// `ours` plus the keys of `old` outside `modelled`. A modelled key always comes from
+    /// `ours`, so a value the app cleared is not brought back from the file.
+    static func keepingUnknown(_ old: OrderedJSON.Value?, in ours: [String: OrderedJSON.Value],
+                               modelled: Set<String>) -> [String: OrderedJSON.Value] {
+        (members(old) ?? [:]).filter { !modelled.contains($0.key) }.merging(ours) { $1 }
+    }
+
+    /// The app's own value as a JSON tree.
+    static func tree<T: Encodable>(_ value: T) -> OrderedJSON.Value? {
+        guard let data = try? JSONEncoder().encode(value) else { return nil }
+        return (try? OrderedJSON(bytes: Array(data)))?.root.value
+    }
 
     /// Launch reconcile (mirrors `QuicklinkStore`): an external file edit wins;
     /// otherwise (re)write the file from the loaded prefs so in-app changes since the
