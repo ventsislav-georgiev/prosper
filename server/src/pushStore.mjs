@@ -84,6 +84,9 @@ async function loadMac(db, email, macId) {
   return row ? { mac: fromRow(row), rev: row.rev, rl_window: row.rl_window, rl_count: row.rl_count } : null;
 }
 
+// #1022: an account's rows filter kind as +kind. Without sqlite_stat1 the planner takes
+// idx_push_tokens_kind (kind=?) over the account's own index for `kind = '...'` and reads that
+// kind's rows of every account; +kind leaves it the email-led indexes (test: the plan audit).
 async function tokens(db, now, where, ...binds) {
   const { results } = await db
     .prepare(`SELECT ${CARD_COLS} FROM push_tokens WHERE email = ?1 AND ${where} AND ${LIVE("push_tokens", binds.length + 1)}`)
@@ -96,7 +99,7 @@ async function tokens(db, now, where, ...binds) {
 async function startTokens(db, email, macId, now) {
   const { results } = await db
     .prepare(
-      `SELECT ${TOKEN_COLS} FROM push_tokens s WHERE s.email = ?1 AND s.kind = 'la_start'
+      `SELECT ${TOKEN_COLS} FROM push_tokens s WHERE s.email = ?1 AND +s.kind = 'la_start'
        AND NOT EXISTS (SELECT 1 FROM push_tokens u WHERE u.email = s.email
          AND u.device_id = s.device_id AND u.kind = 'la_update' AND u.mac_id = ?2) AND ${LIVE("s", 3)}`,
     )
@@ -190,7 +193,7 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
   const cs = contentState(mac.sessions, mac.online);
   const pushes = [];
   // A flush takes only the cards with an update due.
-  const where = push.flush ? `kind = 'la_update' AND mac_id = ?2 AND due_at <= ?3` : `kind = 'la_update' AND mac_id = ?2`;
+  const where = push.flush ? `+kind = 'la_update' AND mac_id = ?2 AND due_at <= ?3` : `+kind = 'la_update' AND mac_id = ?2`;
   const la = push.end || push.update ? await tokens(db, now, where, email, macId, ...(push.flush ? [now] : [])) : [];
   const cards = push.end ? la : la.filter((row) => sendNow(row, push, now));
   const deferred = push.end ? [] : la.filter((row) => !cards.includes(row));
@@ -211,7 +214,7 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
     // One alert per phone per post, whatever the number of sessions entering blocked.
     const payload = alertPayload(macId, name, push.alerts);
     const id = await collapseId(macId, push.alerts.length > 1 ? undefined : push.alerts[0].name);
-    for (const row of await tokens(db, now, `kind = 'alert'`, email)) {
+    for (const row of await tokens(db, now, `+kind = 'alert'`, email)) {
       pushes.push({ row, pushType: "alert", priority: 10, payload, collapseId: id });
     }
   }
@@ -366,7 +369,7 @@ export const END_MAX = 20;
  */
 async function endCards(deps, where, binds, also) {
   const { results } = await deps.db
-    .prepare(`SELECT ${TOKEN_COLS} FROM push_tokens WHERE kind IN ('la_update', 'la_expired') AND ${where} LIMIT ${END_MAX}`)
+    .prepare(`SELECT ${TOKEN_COLS} FROM push_tokens WHERE +kind IN ('la_update', 'la_expired') AND ${where} LIMIT ${END_MAX}`)
     .bind(...binds)
     .all();
   const now = deps.now();
@@ -523,15 +526,17 @@ export async function runCron(deps) {
        WHERE e.kind = 'la_expired'`,
     ).bind(now),
   ]);
+  // Rows read (#1022): each online Mac, its devices row and its cards once, through
+  // idx_push_tokens_mac. +t.kind keeps the planner off idx_push_tokens_kind: without
+  // sqlite_stat1 it took that index for the two COUNT subqueries this replaced, so every online
+  // Mac read every la_update row of every account twice a minute (100 Macs: 20,200 rows a run).
   const { results } = await db
     .prepare(
       `SELECT m.email, m.mac_id, ${MAC_COLS}, d.name AS mac_name,
-         (SELECT COUNT(*) FROM push_tokens t WHERE t.email = m.email
-           AND t.kind = 'la_update' AND t.mac_id = m.mac_id) AS cards,
-         (SELECT COUNT(*) FROM push_tokens t WHERE t.email = m.email
-           AND t.kind = 'la_update' AND t.mac_id = m.mac_id AND t.due_at <= ?1) AS due
+         COUNT(t.mac_id) AS cards, COUNT(CASE WHEN t.due_at <= ?1 THEN 1 END) AS due
        FROM push_macs m LEFT JOIN devices d ON d.email = m.email AND d.device_id = m.mac_id
-       WHERE m.online = 1`,
+       LEFT JOIN push_tokens t ON t.email = m.email AND +t.kind = 'la_update' AND t.mac_id = m.mac_id
+       WHERE m.online = 1 GROUP BY m.email, m.mac_id`,
     )
     .bind(now)
     .all();
@@ -582,7 +587,7 @@ async function restart(deps, steps, now) {
 
 /** deleteDevice: end every card showing the Mac (#573), then one batch: extra + the purge. */
 export const purgeMac = (deps, email, macId, extra = []) =>
-  endCards(deps, `email = ?1 AND kind = 'la_update' AND mac_id = ?2`, [email, macId], () => [
+  endCards(deps, `email = ?1 AND +kind = 'la_update' AND mac_id = ?2`, [email, macId], () => [
     ...extra,
     ...purgeMacStatements(deps.db, email, macId),
   ]);
@@ -599,7 +604,7 @@ export const logout = (deps, tokenHash) =>
 export function purgeMacStatements(db, email, macId) {
   return [
     db.prepare(`DELETE FROM push_macs WHERE email = ?1 AND mac_id = ?2`).bind(email, macId),
-    db.prepare(`DELETE FROM push_tokens WHERE email = ?1 AND kind = 'la_update' AND mac_id = ?2`).bind(email, macId),
+    db.prepare(`DELETE FROM push_tokens WHERE email = ?1 AND +kind = 'la_update' AND mac_id = ?2`).bind(email, macId),
   ];
 }
 

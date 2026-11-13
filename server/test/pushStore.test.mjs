@@ -18,10 +18,13 @@ import {
   END_MAX,
 } from "../src/pushStore.mjs";
 
+// Every SQL text the store prepared in this file's tests: the #1022 plan audit at the end reads it.
+const STORE_SQL = new Set();
+
 // A D1 stand-in over node:sqlite, so the real SQL and migrations run. APNs is a fake
 // fetch behind the real sendApns: nothing leaves the process.
 function d1(db) {
-  const make = (sql, args = []) => ({
+  const make = (sql, args = []) => (STORE_SQL.add(sql), {
     bind: (...a) => make(sql, a),
     first: async () => {
       const r = db.prepare(sql).get(...args);
@@ -2104,4 +2107,83 @@ test("#1014 round 2: a session with no card row whose expires_at is now survives
   await cleanup(t);
   assert.deepEqual(sessionRows(t), [HASH[BOB]]);
   assert.deepEqual(rowsOf(t, HASH[ALICE]), []);
+});
+
+// ---- #1022: rows the minute cron's online-Mac read visits ---------------------
+
+const planOf = (raw, sql) => raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((r) => r.detail);
+
+test("#1022: the cron's online-Mac read counts each Mac's own cards once, through idx_push_tokens_mac; a quiet run costs 2 D1 subrequests", async () => {
+  const t = setup();
+  t.raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC2, "Other");
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await postSessions(t.deps, ALICE, { mac_id: MAC2, seq: 1, sessions: [S("b", "working")] });
+  await postSessions(t.deps, BOB, { mac_id: BOB_MAC, seq: 1, sessions: [S("c", "working")] });
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC, "3"));
+  await putToken(t.deps, ALICE, cardBody(PHONE2, MAC, "4"));
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC2, "5"));
+  await t.settle();
+  t.takeCalls();
+  const raw = (kind, email, device, mac, c) =>
+    t.raw
+      .prepare(`INSERT INTO push_tokens (email, device_id, kind, activity_id, mac_id, token, env, created_at, updated_at, token_hash)
+        VALUES (?, ?, ?, ?, ?, ?, 'production', ?, ?, ?)`)
+      .run(email, device, kind, `x-${c}`, mac, tok(c), t.clock.now, t.clock.now, HASH[email]);
+  const seen = [];
+  const base = t.deps;
+  t.deps = { ...base, db: { ...base.db, prepare: (sql) => (seen.push(sql), base.db.prepare(sql)) } };
+  const n = countSubrequests(t);
+  await runCron(t.deps);
+  assert.deepEqual(n, { d1: 2, apns: 0 }, "the purge batch and the online-Mac read; no step is due");
+  const sql = seen.find((s) => s.includes("WHERE m.online = 1"));
+  assert.ok(sql);
+
+  raw("la_expired", ALICE, PHONE2, MAC, "6"); // a rotated card is not a card
+  raw("la_update", BOB, PHONE, MAC, "7"); // another account's row under the same mac_id string
+  t.raw.prepare(`UPDATE push_tokens SET due_at = ? WHERE token = ?`).run(t.clock.now, tok("4"));
+  t.raw.prepare(`UPDATE push_tokens SET due_at = ? WHERE token = ?`).run(t.clock.now + 1, tok("3")); // not yet due
+  const got = t.raw
+    .prepare(sql)
+    .all(t.clock.now)
+    .map((r) => [r.email, r.mac_id, r.mac_name, r.cards, r.due])
+    .sort();
+  assert.deepEqual(got, [
+    [ALICE, MAC2, "Other", 1, 0],
+    [ALICE, MAC, "Studio", 2, 1],
+    [BOB, BOB_MAC, "Bob's Mac", 0, 0],
+  ].sort());
+
+  // Without sqlite_stat1 (D1 has none unless someone ran ANALYZE) and with it.
+  for (const stats of [false, true]) {
+    if (stats) t.raw.exec("ANALYZE");
+    const plan = planOf(t.raw, sql).join(" | ");
+    assert.match(plan, /SEARCH t USING INDEX idx_push_tokens_mac \(email=\? AND mac_id=\?\)/, plan);
+    assert.doesNotMatch(plan, /idx_push_tokens_kind|SCAN t\b|SUBQUERY/, plan);
+    if (!stats) assert.match(plan, /^SEARCH m USING INDEX idx_push_macs_online \(online=\?\)/, plan);
+  }
+});
+
+// Runs last: it reads the SQL every test above made the store prepare.
+test("#1022 plan audit: no store query reads push_tokens by kind alone or scans a table, but the global ones", () => {
+  const { raw } = setup(); // the migrations, no sqlite_stat1
+  // Global by design: the rotated-card read takes every la_expired row (#1001); the daily
+  // cleanup deletes tokens of vanished sessions (once a day, every row).
+  const global = [/WHERE e\.kind = 'la_expired'/, /^DELETE FROM push_tokens WHERE NOT EXISTS \(SELECT 1 FROM sessions s/];
+  const must = [
+    "GROUP BY m.email, m.mac_id",
+    "+kind = 'la_update' AND mac_id = ?2 AND NOT",
+    "+kind = 'la_update' AND mac_id = ?2 AND due_at <= ?3",
+    "+kind = 'alert'",
+    "+s.kind = 'la_start'",
+    "+kind IN ('la_update', 'la_expired') AND email = ?1 AND +kind = 'la_update'",
+    "DELETE FROM push_tokens WHERE email = ?1 AND +kind = 'la_update' AND mac_id = ?2",
+  ];
+  for (const m of must) assert.ok([...STORE_SQL].some((s) => s.includes(m)), `not run in this file (run it whole): ${m}`);
+  const bad = [];
+  for (const sql of STORE_SQL) {
+    if (global.some((g) => g.test(sql))) continue;
+    const plan = planOf(raw, sql);
+    if (plan.some((d) => /idx_push_tokens_kind \(kind=\?\)/.test(d) || /^SCAN (?!CONSTANT ROW)/.test(d))) bad.push(`${sql.replace(/\s+/g, " ")}\n  ${plan.join(" | ")}`);
+  }
+  assert.deepEqual(bad, []);
 });
