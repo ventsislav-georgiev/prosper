@@ -610,6 +610,13 @@ tag from the now-released section and put it on the new top draft.
   longer crashes Prosper when its age is drawn. (#1114)
 - Default theme: the indigo accent of the Neon and Amber tints is very slightly brighter, so its
   text keeps enough contrast on highlighted rows. (#1122)
+- Text Viewer, a new built-in extension: Prosper is offered in Finder's Open With menu for Markdown
+  and plain text files, and never becomes their default app. The file opens in a read-only Prosper
+  window with selection, Copy (the text or the path), Find (⌘F, ⌘G, ⌘E), Open in the default app and
+  Reveal in Finder. The window reloads when the file changes, and opening the same file again brings
+  its window forward. Markdown is shown as its source for now. A binary file, a file over 16 MiB, a
+  folder or a pipe is refused with a message. (#1106)
+- Files search: Markdown and .txt results have a new action, Open in Prosper. (#1106)
 
 ## v2.174.0
 

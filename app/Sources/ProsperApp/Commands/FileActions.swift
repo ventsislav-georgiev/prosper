@@ -22,10 +22,12 @@ enum FileActions {
         static let openWith = "file.openWith"
         static let enclosingFolder = "file.enclosingFolder"
         static let trash = "file.trash"
+        /// #1106 "Open in Prosper": the text viewer, offered only on Markdown and plain-text rows.
+        static let view = "file.view"
 
         /// All reserved ids — used to tell built-in (native) from custom actions.
         static let all: Set<String> = [
-            open, reveal, quickLook, copyPath, copyFile, openWith, enclosingFolder, trash,
+            open, reveal, quickLook, copyPath, copyFile, openWith, enclosingFolder, trash, view,
         ]
     }
 
@@ -45,7 +47,7 @@ enum FileActions {
 
     /// Engagements that count toward frecency ranking (actively using a file),
     /// as opposed to incidental ones (copy/trash).
-    static let engagementIDs: Set<String> = [ID.open, ID.reveal, ID.openWith, ID.enclosingFolder, ID.quickLook]
+    static let engagementIDs: Set<String> = [ID.open, ID.reveal, ID.openWith, ID.enclosingFolder, ID.quickLook, ID.view]
 
     /// Whether running `id` should dismiss the runner. Quick Look overlays the
     /// runner and keeps it open (preview-then-act); everything else completes and
@@ -70,6 +72,9 @@ enum FileActions {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         case ID.quickLook:
             QuickLook.preview(path)
+        case ID.view:
+            // host.files.act can name any path: only a text document reaches the viewer.
+            if TextViewerRouting.isDocument(url) { TextViewerIntake.shared.receive(url) }
         case ID.copyPath:
             let pb = Pasteboard.general
             pb.clearContents()

@@ -46,17 +46,43 @@ local function parse(q)
     }
 end
 
--- The actions every file row offers, in priority order. The first is the primary
+-- #1106: extensions of the Markdown and plain-text files the text viewer opens
+-- (a subset of TextViewerRouting.isDocument, which a Swift test checks).
+local VIEWABLE = {
+    md = true, markdown = true, mdown = true, mkd = true, txt = true, text = true,
+}
+
+-- True for a file (not a folder) whose extension is viewable; a bare dotfile
+-- (".md") has no extension. The extension is lowercased by byte range, never
+-- through a locale-dependent class or string.lower.
+local function is_document(f)
+    if f.isDir then return false end
+    local ext = (f.path or ""):match("[^/]%.([^./]+)$")
+    if ext == nil then return false end
+    ext = ext:gsub("[A-Z]", function(c) return string.char(c:byte() + 32) end)
+    return VIEWABLE[ext] == true
+end
+
+-- The actions a file row offers, in priority order. The first is the primary
 -- (Enter); the runner maps the rest to ⌘⏎ / ⌥⏎ and the ⌘K actions panel.
-local function file_actions()
-    return {
+-- "Open in Prosper" (file.view) comes after Reveal, on text documents only.
+local function file_actions(f)
+    local actions = {
         { id = "file.open",       title = "Open",            icon = "arrow.up.forward.app" },
         { id = "file.reveal",     title = "Reveal in Finder", icon = "folder" },
+    }
+    if is_document(f) then
+        actions[#actions + 1] = { id = "file.view", title = "Open in Prosper", icon = "doc.text" }
+    end
+    for _, a in ipairs({
         { id = "file.quicklook",  title = "Quick Look",      icon = "eye" },
         { id = "file.copyPath",   title = "Copy Path",       icon = "doc.on.clipboard" },
         { id = "file.copyFile",   title = "Copy File",       icon = "doc.on.doc" },
         { id = "file.trash",      title = "Move to Trash",   icon = "trash" },
-    }
+    }) do
+        actions[#actions + 1] = a
+    end
+    return actions
 end
 
 function files_run(query)
@@ -96,7 +122,7 @@ function files_run(query)
             image = f.path,                  -- show the file's real Finder icon
             launch = f.path,                 -- carries the path for the file actions
             icon = f.isDir and "folder" or "doc",
-            actions = file_actions(),
+            actions = file_actions(f),
         }
     end
 

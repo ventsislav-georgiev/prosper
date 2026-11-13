@@ -1,0 +1,32 @@
+# Text Viewer — Markdown and plain text files in a themed Prosper window, in Read
+# mode, with selection and Copy. Implemented natively (TextViewer/); this extension
+# is the enable/disable gate and the declarative Settings page. Enabled by default:
+# it acts only on a file the user opens with Prosper.
+[extension]
+id          = "com.prosper.textviewer"
+name        = "textviewer"
+title       = "Text Viewer"
+description = "Open Markdown and text files in a Prosper window to read, select and copy."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "doc.text"
+system      = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[[contributes.settings_sections]]
+id        = "textviewer"
+title     = "Text Viewer"
+icon      = "doc.text"
+subtitle  = "Markdown and text files in a Prosper window"
+
+  [[contributes.settings_sections.controls]]
+  kind = "info"
+  title = "Open Markdown and text files from Finder's Open With menu"
+  subtitle = "Prosper never becomes the default app for them: choose it in Open With, or with Always Open With."

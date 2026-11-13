@@ -335,6 +335,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
         // Extensions are discovered: deliver links that cold-launched us.
         openedLinks.ready()
+        // #1106: and the text documents (the viewer's enable gate needs the registry).
+        let viewer = TextViewerIntake.shared
+        viewer.isEnabled = { [weak self] in self?.extensions.record(id: "com.prosper.textviewer")?.isLive ?? false }
+        viewer.notifyOff = {
+            LiveExtensionHostServices.shared.notify(title: "Text Viewer is off", body: "Turn it on in Settings \u{203A} Extensions.")
+        }
+        viewer.ready()
         // One-shot startup event so a stateless extension can render its menubar /
         // restore its session at launch (the equivalent of openlid's M.start()).
         extensions.broadcastEvent("system.launch")
@@ -681,9 +688,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Opened documents (odoc): macOS hands public.html to the default browser, so a
     /// .html file opened from Finder, `open`, or another app lands here as a file://
     /// URL. Also every GURL/odoc that cold-launches Prosper, before the GURL handler
-    /// above is installed.
+    /// above is installed. #1106: a Markdown or plain-text file (Open With, `open`) goes to the
+    /// text viewer instead; .html, https and prosper:// take the link path exactly as before.
     func application(_ application: NSApplication, open urls: [URL]) {
-        urls.forEach { handleOpenedLink($0.absoluteString) }
+        TextViewerRouting.route(urls, document: { TextViewerIntake.shared.receive($0) },
+                                link: { handleOpenedLink($0) })
     }
 
     /// Forward a link to extensions as `url.open` (a url-dispatcher rewrites/re-opens
@@ -758,6 +767,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case AgentsWindow.themedIdentifier:   // #860: same chrome as Settings, live
                 SettingsWindow.applyWindowOpacity(win)
                 win.contentMinSize = AgentsWindow.contentMinSize(scale: scale)
+            case TextViewerWindows.themedIdentifier:   // #1106
+                SettingsWindow.applyWindowOpacity(win)
+                win.contentMinSize = TextViewerWindows.contentMinSize(scale: scale)
             default:
                 continue
             }
