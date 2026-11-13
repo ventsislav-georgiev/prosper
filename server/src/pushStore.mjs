@@ -489,20 +489,31 @@ export async function runCron(deps) {
   // card) and stays as la_expired until a restart step has ended the old card and,
   // where the Mac still wants one, push-started a new one; a restart the budget
   // defers is never lost.
-  // A card whose session has expired is rotated out the same way, so the restart ends it;
-  // its la_start is not read (LIVE on s), so nothing starts again on it.
+  // A card whose session has expired is rotated out the same way, so the restart ends it
+  // (with an empty list, #1014); its la_start is not read (LIVE on s), so nothing starts again on it.
   // One batch: the purge and the read of every expired card (one subrequest).
-  const [, { results: expired }] = await db.batch([
+  // Rows read (D1 bills them; #1014, QA #764 INFO-1): two UPDATEs, each on its own index. The
+  // first reads only la_update rows past the rotation age (idx_push_tokens_kind on kind, created_at).
+  // The second reads only the sessions expired and not yet cleaned up (0010's idx_sessions_expires)
+  // and the push_tokens rows under their token_hash (idx_push_tokens_session); +kind keeps the
+  // planner off idx_push_tokens_kind, which would read every la_update row. So a run reads old
+  // cards + expired sessions + their tokens, not the live cards. The one-UPDATE form before it
+  // (created_at <= ? OR EXISTS expired session) read every la_update row plus one sessions row
+  // each, every minute: the OR kept created_at from narrowing it, whatever 0009's comment says.
+  const [, , { results: expired }] = await db.batch([
+    db
+      .prepare(`UPDATE OR REPLACE push_tokens SET kind = 'la_expired' WHERE kind = 'la_update' AND created_at <= ?1`)
+      .bind(now - (LA_MAX_AGE_S - ROTATE_LEAD_S)),
     db
       .prepare(
         `UPDATE OR REPLACE push_tokens SET kind = 'la_expired'
-         WHERE kind = 'la_update' AND (created_at <= ?1 OR ${EXPIRED("push_tokens", 2)})`,
+         WHERE +kind = 'la_update' AND token_hash IN (SELECT token_hash FROM sessions WHERE expires_at < ?1)`,
       )
-      .bind(now - (LA_MAX_AGE_S - ROTATE_LEAD_S), now),
+      .bind(now),
     db.prepare(
       `SELECT e.email, e.device_id, e.activity_id, e.token, e.env, e.mac_id, e.created_at,
          s.token AS start_token, s.env AS start_env, m.online, m.last_seen, m.snapshot, m.started_at,
-         d.name AS mac_name,
+         d.name AS mac_name, ${EXPIRED("e", 1)} AS signed_out,
          EXISTS (SELECT 1 FROM push_tokens u WHERE u.email = e.email AND u.device_id = e.device_id
            AND u.kind = 'la_update' AND u.mac_id = e.mac_id AND u.activity_id != e.activity_id) AS has_card
        FROM push_tokens e
@@ -558,7 +569,8 @@ async function restart(deps, steps, now) {
   const pushes = [];
   for (const { start, row: e } of steps) {
     const old = { email: e.email, device_id: e.device_id, kind: "la_expired", activity_id: e.activity_id, token: e.token, env: e.env };
-    const cs = contentState(e.mac?.sessions ?? [], e.mac?.online ?? false);
+    // An expired sign-in's card ends as logout's do (endCards): no session list (#1014).
+    const cs = e.signed_out ? contentState([], false) : contentState(e.mac?.sessions ?? [], e.mac?.online ?? false);
     pushes.push(laPush(old, 5, laPayload("end", cs, now, { "dismissal-date": now })));
     if (!start) continue;
     const row = { email: e.email, device_id: e.device_id, kind: "la_start", activity_id: "", token: e.start_token, env: e.start_env };
@@ -607,10 +619,21 @@ export function logoutStatements(db, tokenHash) {
   ];
 }
 
-/** The daily cleanup: expired sessions, then push tokens whose session is gone. */
+/**
+ * The daily cleanup: expired sessions, then push tokens whose session is gone. An expired
+ * session that a card row (la_update, la_expired) still points at stays until the next night
+ * (#1014): the minute cron ends that card over APNs first, and only finds it through the
+ * session's expires_at (EXPIRED), since a card row with no sessions row reads as live.
+ * Readers of sessions all check expires_at themselves (requireSession, EXPIRED/LIVE).
+ */
 export function sessionCleanupStatements(db, now) {
   return [
-    db.prepare(`DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at < ?1`).bind(now),
+    db
+      .prepare(
+        `DELETE FROM sessions WHERE expires_at IS NOT NULL AND expires_at < ?1 AND NOT EXISTS (SELECT 1 FROM push_tokens t
+           WHERE t.token_hash = sessions.token_hash AND t.kind IN ('la_update', 'la_expired'))`,
+      )
+      .bind(now),
     db.prepare(
       `DELETE FROM push_tokens WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.token_hash = push_tokens.token_hash)`,
     ),

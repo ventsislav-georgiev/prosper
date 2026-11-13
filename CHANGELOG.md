@@ -379,6 +379,10 @@ tag from the now-released section and put it on the new top draft.
   like "My Sites" or "café" catches links written My%20Sites or caf%C3%A9; the link opened is
   unchanged, and escaped URL delimiters and control bytes stay escaped for the match. A stored rule
   whose text is not a string is skipped instead of stopping routing for every link (#936).
+- Live session status: when a sign-in expires, its Live Activity card on the phone now ends with
+  no session list (as on sign-out), and the nightly cleanup no longer leaves such a card frozen on
+  the Lock Screen. The server's every-minute check now reads only cards due for rotation and
+  expired sign-ins instead of every card (#1014).
 
 ## v2.174.0
 

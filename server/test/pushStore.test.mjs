@@ -65,7 +65,7 @@ const putToken = (deps, email, body, hash = HASH[email]) => putTokenAs(deps, ema
 
 function setup() {
   const raw = new DatabaseSync(":memory:");
-  for (const f of ["0001_init.sql", "0006_push.sql", "0007_push_harden.sql", "0008_push_mode.sql", "0009_push_kind_index.sql"]) {
+  for (const f of ["0001_init.sql", "0006_push.sql", "0007_push_harden.sql", "0008_push_mode.sql", "0009_push_kind_index.sql", "0010_sessions_expires_index.sql"]) {
     raw.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"));
   }
   raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC, "Studio");
@@ -1974,4 +1974,134 @@ test("#1001 QA #403: the carry is per phone: another phone's token of the same a
   await t.settle();
   assert.deepEqual(t.rows(`SELECT device_id, token FROM push_tokens WHERE kind = 'la_expired'`), [{ device_id: PHONE, token: tok("3") }]);
   assert.deepEqual(sent(t), [[tok("8"), "update"]], "the other phone's card gets its catch-up");
+});
+
+// ---- #1014 -------------------------------------------------------------------
+
+// What logout's ends (endCards) carry: no session list, offline.
+const EMPTY_STATE = { v: 1, online: false, counts: { blocked: 0, working: 0, idle: 0, done: 0 }, sessions: [], more: 0 };
+const ends = (t) => t.takeCalls().map((c) => [c.token, c.body.aps.event, c.body.aps["content-state"]]);
+const cleanup = (t) => t.deps.db.batch(sessionCleanupStatements(t.deps.db, t.clock.now));
+const heartbeats = async (t, seq) => {
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq });
+  await postSessions(t.deps, ALICE, { mac_id: MAC2, seq });
+};
+
+test("#1014: an expired sign-in's card ends with an empty session list, as logout's; a live sign-in's 8 h rotation in the same run keeps the Mac's list", async () => {
+  const t = setup();
+  await expiringPhone(t, -1); // card 3 under the expired HASH[ALICE], card 4 on MAC2 under the live H2
+  t.raw.prepare(`UPDATE push_tokens SET created_at = ? WHERE token = ?`).run(t.clock.now - ROTATE_AGE, tok("4"));
+  await runCron(t.deps);
+  const got = ends(t);
+  assert.deepEqual(got.map(([token, event]) => [token, event]).sort(), [[tok("3"), "end"], [tok("4"), "end"]], "no start: la_start 2 is the expired session's");
+  assert.deepEqual(got.find(([token]) => token === tok("3"))[2], EMPTY_STATE);
+  const live = got.find(([token]) => token === tok("4"))[2];
+  assert.equal(live.online, true);
+  assert.deepEqual(live.sessions, [{ name: "b", state: "working" }], "the 8 h rotation end of a live sign-in: today's payload");
+});
+
+test("#1014: a card waiting as la_expired ends empty when its sign-in has expired by the time a later cron picks it up", async () => {
+  // expired: the purge rotated it for its expired session and the budget deferred the end.
+  // rotated: an 8 h rotation of a live sign-in, deferred; the sign-in expires before the pickup.
+  for (const cause of ["expired", "rotated"]) {
+    const t = setup();
+    await expiringPhone(t, cause === "expired" ? -1 : 3600);
+    if (cause === "rotated") t.raw.prepare(`UPDATE push_tokens SET created_at = ? WHERE token = ?`).run(t.clock.now - ROTATE_AGE, tok("3"));
+    t.deps.budget = 1;
+    await runCron(t.deps);
+    assert.deepEqual(sent(t), [], cause);
+    assert.deepEqual(cardRows(t), [{ kind: "la_expired", token: tok("3") }, { kind: "la_update", token: tok("4") }], `${cause}: waits`);
+    delete t.deps.budget;
+    t.clock.now += 60;
+    await heartbeats(t, 3);
+    t.raw.prepare(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`).run(t.clock.now - 1, HASH[ALICE]);
+    await runCron(t.deps);
+    assert.deepEqual(ends(t), [[tok("3"), "end", EMPTY_STATE]], cause);
+    assert.deepEqual(cardRows(t), [{ kind: "la_update", token: tok("4") }], cause);
+  }
+});
+
+const sessionRows = (t) => t.rows(`SELECT token_hash FROM sessions ORDER BY token_hash`).map((r) => r.token_hash);
+const rowsOf = (t, hash) => t.rows(`SELECT kind, token FROM push_tokens WHERE token_hash = ? ORDER BY kind`, hash);
+
+test("#1014 cleanup (a): a session that expired after the last minute cron keeps its card through the 03:00 cleanup; the next cron ends it, the next night takes the rest", async () => {
+  const t = setup();
+  await expiringPhone(t, -1); // no minute cron has run since the expiry
+  const before = rowsOf(t, HASH[ALICE]);
+  assert.deepEqual(before.map((r) => r.kind), ["alert", "la_start", "la_update"]);
+  await cleanup(t);
+  assert.deepEqual(sessionRows(t), [HASH[ALICE], H2, HASH[BOB]].sort(), "kept while its card row points at it");
+  assert.deepEqual(rowsOf(t, HASH[ALICE]), before);
+  await runCron(t.deps);
+  assert.deepEqual(ends(t), [[tok("3"), "end", EMPTY_STATE]], "the card is ended, not left frozen");
+  assert.deepEqual(rowsOf(t, HASH[ALICE]).map((r) => r.kind), ["alert", "la_start"], "the ended card's row is gone");
+  t.clock.now += 86400;
+  await cleanup(t);
+  assert.deepEqual(sessionRows(t), [H2, HASH[BOB]].sort(), "the next night: the session goes");
+  assert.deepEqual(rowsOf(t, HASH[ALICE]), [], "and its other rows");
+  assert.deepEqual(cardRows(t), [{ kind: "la_update", token: tok("4") }], "the live session's card stays");
+});
+
+test("#1014 cleanup (b): a card the budget deferred as la_expired survives the 03:00 cleanup; a later cron ends it, the next night takes the session", async () => {
+  const t = setup();
+  await expiringPhone(t, -1);
+  t.deps.budget = 1;
+  await runCron(t.deps);
+  assert.deepEqual(sent(t), []);
+  assert.deepEqual(cardRows(t), [{ kind: "la_expired", token: tok("3") }, { kind: "la_update", token: tok("4") }]);
+  await cleanup(t);
+  assert.ok(sessionRows(t).includes(HASH[ALICE]), "kept while its la_expired row points at it");
+  assert.deepEqual(cardRows(t), [{ kind: "la_expired", token: tok("3") }, { kind: "la_update", token: tok("4") }], "the waiting row survives");
+  delete t.deps.budget;
+  t.clock.now += 60;
+  await heartbeats(t, 3);
+  await runCron(t.deps);
+  assert.deepEqual(ends(t), [[tok("3"), "end", EMPTY_STATE]]);
+  t.clock.now += 86400;
+  await cleanup(t);
+  assert.deepEqual(sessionRows(t), [H2, HASH[BOB]].sort());
+  assert.deepEqual(rowsOf(t, HASH[ALICE]), []);
+});
+
+test("#1014 cleanup: an expired session with no card row goes the same night with its tokens, though another session's card shows the same Mac", async () => {
+  const t = setup();
+  t.raw.prepare(`INSERT INTO sessions VALUES (?, ?, 0, 0, NULL)`).run(H2, ALICE);
+  await registerPhone(t, PHONE, "1"); // alert 1, la_start 2 under HASH[ALICE]
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC, "3"), H2); // the phone's card, under the live H2
+  await t.settle();
+  t.raw.prepare(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`).run(t.clock.now - 1, HASH[ALICE]);
+  await cleanup(t);
+  assert.deepEqual(sessionRows(t), [H2, HASH[BOB]].sort());
+  assert.deepEqual(rowsOf(t, HASH[ALICE]), []);
+  assert.deepEqual(cardRows(t), [{ kind: "la_update", token: tok("3") }]);
+});
+
+test("#1014 QA #764 INFO-1: the purge reads expired sessions and their tokens through indexes, never every la_update row", async () => {
+  const t = setup();
+  const db = t.deps.db;
+  const seen = [];
+  t.deps.db = { ...db, prepare: (sql) => (seen.push(sql), db.prepare(sql)) };
+  await runCron(t.deps);
+  const purges = seen.filter((s) => s.includes("SET kind = 'la_expired'"));
+  assert.equal(purges.length, 2, "the age branch and the expired-session branch");
+  const plan = (sql) => t.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(0).map((r) => r.detail).join(" | ");
+  const [old, signedOut] = purges.map(plan);
+  assert.match(old, /^SEARCH push_tokens USING (COVERING )?INDEX idx_push_tokens_kind \(kind=\? AND created_at<\?\)$/, old);
+  assert.match(signedOut, /SEARCH push_tokens USING INDEX idx_push_tokens_session \(token_hash=\?\)/, signedOut);
+  assert.match(signedOut, /SEARCH sessions USING (COVERING )?INDEX idx_sessions_expires \(expires_at<\?\)/, signedOut);
+  assert.doesNotMatch(signedOut, /idx_push_tokens_kind|SCAN/, signedOut);
+});
+
+test("#1014 round 2: a session with no card row whose expires_at is now survives the cleanup with its tokens; a second later the cleanup takes them", async () => {
+  const t = setup();
+  await registerPhone(t, PHONE, "1"); // alert 1, la_start 2 under HASH[ALICE]
+  t.raw.prepare(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`).run(t.clock.now, HASH[ALICE]); // requireSession still accepts it
+  await cleanup(t);
+  assert.deepEqual(sessionRows(t), [HASH[ALICE], HASH[BOB]].sort(), "expires_at = now is not expired yet");
+  assert.deepEqual(rowsOf(t, HASH[ALICE]).map((r) => r.kind), ["alert", "la_start"]);
+  t.clock.now += 1;
+  await cleanup(t);
+  assert.deepEqual(sessionRows(t), [HASH[BOB]]);
+  assert.deepEqual(rowsOf(t, HASH[ALICE]), []);
 });
