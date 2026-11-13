@@ -32,8 +32,6 @@ local UPGRADE_CAP    = 2 * 3600                   -- give up silently after this
 local BREW_LOCK_TEXT = "Please wait for it to finish or terminate it to continue."
 -- Said when an upgrade Prosper started is still running, so a second one starts nothing.
 local REFUSED        = "brew upgrade refused: an upgrade Prosper started is still running"
--- The shell's last line when mkdir refuses the private folder: brew never ran.
-local NOT_STARTED    = "brew upgrade did not start"
 local SU_PANE        = "x-apple.systempreferences:com.apple.Software-Update-Settings.extension"
 
 -- Both Homebrew prefixes: Apple Silicon and the Intel/rosetta layout. host.shell
@@ -119,8 +117,6 @@ local function load_cache()
     if not ok or type(t) ~= "table" then return { brew = {}, macos = {} } end
     t.brew  = type(t.brew) == "table" and t.brew or {}
     t.macos = type(t.macos) == "table" and t.macos or {}
-    -- Read back from prefs: a non-number or a time in the future (clock set back) is "never checked".
-    if not (type(t.at) == "number" and t.at <= host.time()) then t.at = nil end
     return t
 end
 
@@ -230,29 +226,12 @@ local function watch_pending()
     return ok and type(p) == "table"
 end
 
--- brew's exit status: the last line of `out` when it is a whole number 0-255, else nil.
-local function exit_status(out)
-    local last = trim(out):match("[^\n]*$")
-    local s = last:match("^%d+$") and tonumber(last)
-    if s and s <= 255 then return s end
-end
-
--- A package count read back from a watch record: a whole number 0-100000, else nil.
-local function count_of(v)
-    local n = math.tointeger(tonumber(v))
-    if n and n >= 0 and n <= 100000 then return n end
-end
-
--- `out` is brew's output, then its exit status on its own line. `before` is the outdated
--- count before the upgrade, nil when unknown. Notifies and returns the cache.
+-- `out` ends with brew's exit status on its own line. Notifies and returns the cache.
 local function finish_upgrade(out, before)
-    local status = exit_status(out)
+    local status = tonumber(trim(out):match("[^\n]*$"))
     local exit = "(exit " .. (status or "?") .. ")"
     local failed, partial
-    -- The lock stopped brew only when its line is brew's last: the auto-update step prints
-    -- the same line for a running `brew update`, and brew upgrades on (brew.sh auto-update).
-    local last_brew_line = trim(out):match("([^\n]*)\n[^\n]*$") or ""
-    if status ~= 0 and last_brew_line:find(BREW_LOCK_TEXT, 1, true) then
+    if status ~= 0 and out:find(BREW_LOCK_TEXT, 1, true) then
         -- Our own backgrounded upgrade holds the lock: the list is mid-change and its watch
         -- refreshes when it ends, so no refresh and no count here.
         if watch_pending() then
@@ -271,15 +250,11 @@ local function finish_upgrade(out, before)
     local c = load_cache()
     local now = check_brew()
     if not now then
-        host.notify("Homebrew", (failed or "brew upgrade finished") .. "; the list could not be refreshed")
+        host.notify("Homebrew", failed or "brew upgrade finished; the list could not be refreshed")
         return c
     end
     c.brew = now
     save_cache(c)
-    if not before then
-        host.notify("Homebrew", failed or "brew upgrade finished")
-        return c
-    end
     local done = before - #c.brew
     local upgraded = done .. " package" .. (done == 1 and "" or "s") .. " upgraded"
     if failed then
@@ -290,18 +265,11 @@ local function finish_upgrade(out, before)
     return c
 end
 
--- The private folder of a status file name an upgrade makes (<tmp>/prosper-appupdates-<ms>/status),
--- nil for any other name: a watch record is read back from prefs.
-local function our_dir(file)
-    return type(file) == "string" and file:match("^(.*/prosper%-appupdates%-%d+)/status$") or nil
-end
-
--- Removes the status files and their private dir (`file` passed our_dir), only when that dir
--- is ours: the name may be someone else's dir or a symlink.
+-- Removes the status file and its private dir, only when that dir is ours: after a
+-- refused mkdir the name may be someone else's dir or a symlink.
 local function cleanup(file)
-    local dir = shq(our_dir(file))
-    return "[ ! -L " .. dir .. " ] && [ -O " .. dir .. " ] && { /bin/rm -f " .. shq(file) .. " "
-           .. shq(file .. ".part") .. "; /bin/rmdir " .. dir .. "; }"
+    local dir = shq(file:match("^(.*)/[^/]*$") or file)
+    return "[ ! -L " .. dir .. " ] && [ -O " .. dir .. " ] && { /bin/rm -f " .. shq(file) .. "; /bin/rmdir " .. dir .. "; }"
 end
 
 function appupdates_upgrade()
@@ -314,37 +282,20 @@ function appupdates_upgrade()
         host.notify("Homebrew", REFUSED)
         return render(load_cache())
     end
-    -- Count against brew's list now, not the cache: packages upgraded elsewhere since the
-    -- last check are not this run's. No answer: no count.
-    local pre = check_brew()
-    local before = pre and #pre
+    local before = #load_cache().brew
     -- The shell writes brew's status to a file only this upgrade names, so the watch
     -- below knows brew ended without probing or matching any process.
     local tmp = (host.env.get("TMPDIR") or "/tmp"):gsub("/*$", "/")
     local dir = tmp .. "prosper-appupdates-" .. string.format("%d", math.floor(host.time() * 1000))
     local file = dir .. "/status"
     -- keep_running: the host timeout returns control without killing brew mid-upgrade.
-    -- brew writes into the status file, never into Prosper's pipe, so a quit mid-upgrade
-    -- leaves it no closed pipe to die on. The file then gets the status line and is printed,
-    -- so a finished upgrade's output is non-empty and "" means the timeout won.
+    -- `echo $s` makes a finished upgrade's output non-empty, so "" means the timeout won.
     -- The file lives in a fresh 0700 dir (mkdir refuses a name that exists, a symlink
     -- included), so nobody else can pre-place it; the mv makes it appear once it holds the status.
-    -- The dir is re-checked after brew: the watch removes it at its cap or on a relaunch.
-    -- When the file cannot be printed (redirect refused, dir check false, a step failed) the bare
-    -- status goes to the pipe instead, so "" still means only the timeout.
-    local d, part = shq(dir), shq(file .. ".part")
-    local out = host.shell.run("/bin/mkdir -m 700 " .. d .. " 2>&1 || { echo '" .. NOT_STARTED .. "'; exit; }; "
-                               .. brew .. " upgrade > " .. part .. " 2>&1; s=$?; "
-                               .. "[ ! -L " .. d .. " ] && [ -O " .. d .. " ] && { echo $s >> " .. part
-                               .. " && /bin/mv -f " .. part .. " " .. shq(file) .. " && /bin/cat " .. shq(file)
-                               .. "; } || echo $s",
+    local out = host.shell.run("/bin/mkdir -m 700 " .. shq(dir) .. " 2>&1 || exit; "
+                               .. brew .. " upgrade 2>&1; s=$?; echo $s > " .. shq(file .. ".part")
+                               .. "; /bin/mv -f " .. shq(file .. ".part") .. " " .. shq(file) .. "; echo $s",
                                { keep_running = true })
-    if trim(out):match("[^\n]*$") == NOT_STARTED then
-        -- mkdir refused the folder (its message is the first line): brew never ran, the
-        -- list is unchanged, and the name is not ours to remove.
-        host.notify("Homebrew", NOT_STARTED .. ": " .. trim(out):match("^[^\n]*"))
-        return render(load_cache())
-    end
     if out == "" then
         host.prefs.set(PREFS_PENDING, host.json.encode({ file = file, at = host.time(), before = before }))
         host.timer.schedule{ id = UPGRADE_ID, every = 60, handler = "on_upgrade_poll" }
@@ -359,25 +310,19 @@ end
 -- and notify like the synchronous path, then stop. Gives up silently at UPGRADE_CAP.
 function on_upgrade_poll()
     local ok, p = pcall(host.json.decode, host.prefs.get(PREFS_PENDING) or "")
-    if not ok or type(p) ~= "table" or not our_dir(p.file) then
+    if not ok or type(p) ~= "table" or type(p.file) ~= "string" then
         host.timer.cancel(UPGRADE_ID)
-        -- A record with no file name of ours can never end; left, it would refuse every
-        -- Upgrade. Any other name is neither read nor removed.
+        -- A record with no file name can never end; left, it would refuse every Upgrade.
         if ok and type(p) == "table" then host.prefs.set(PREFS_PENDING, "") end
         return
     end
     local ended = host.fs.exists(p.file)
-    local at, now = tonumber(p.at), host.time()
-    -- An `at` in the future (clock set back, a hand edit) counts as expired, like a missing one.
-    if not ended and at and at <= now and now - at < UPGRADE_CAP then return end
+    if not ended and host.time() - (tonumber(p.at) or 0) < UPGRADE_CAP then return end
     host.timer.cancel(UPGRADE_ID)
     host.prefs.set(PREFS_PENDING, "")
     if ended then
-        finish_upgrade(host.shell.run("/bin/cat " .. shq(p.file) .. "; " .. cleanup(p.file)), count_of(p.before))
-    else
-        -- Given up: its folder goes too. A brew still running writes into a removed file,
-        -- and the upgrade command writes its status only into a folder that is still ours.
-        host.shell.run(cleanup(p.file))
+        finish_upgrade(host.shell.run("/bin/cat " .. shq(p.file) .. "; " .. cleanup(p.file)),
+                       tonumber(p.before) or 0)
     end
 end
 
@@ -392,10 +337,8 @@ function on_launch()
     -- re-arming on every launch would starve the poll on a machine that restarts
     -- often. A one-shot kick covers that, and the first check on a fresh install.
     arm_timer()
-    -- A relaunch drops an upgrade watch and its folder; the regular poll picks up whatever brew did.
+    -- A relaunch drops an upgrade watch; the regular poll picks up whatever brew did.
     host.timer.cancel(UPGRADE_ID)
-    local ok, p = pcall(host.json.decode, host.prefs.get(PREFS_PENDING) or "")
-    if ok and type(p) == "table" and our_dir(p.file) then host.shell.run(cleanup(p.file)) end
     host.prefs.set(PREFS_PENDING, "")
     local c = load_cache()
     if not c.at or (host.time() - c.at) >= interval_hours() * 3600 then
