@@ -415,6 +415,9 @@ tag from the now-released section and put it on the new top draft.
 - OpenLid: turning the extension off and back on now really keeps the Mac awake again (or ends a
   timed session that ran out meanwhile) instead of showing "awake" while nothing held it; re-enabled
   extensions also get their shortcuts, rules and timers back without a relaunch.
+- A model download that was stopped or interrupted is no longer shown as downloaded when its small
+  setup files never arrived; the app now records when a download finishes, and models downloaded
+  before this update still count as downloaded.
 
 ## v2.174.0
 

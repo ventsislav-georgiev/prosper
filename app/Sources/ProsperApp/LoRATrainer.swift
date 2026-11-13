@@ -292,6 +292,7 @@ actor LoRATrainer {
         } catch {
             return .failed(message: "model load: \(error.localizedDescription)")
         }
+        ModelFiles.settleAfterLoad(modelId)   // #1005: a load that fetched the rest completes the download
 
         // Run training inside the container's isolation. `LoRATrain.train` is
         // synchronous and CPU/GPU-bound; the closure evals all MLXArrays before

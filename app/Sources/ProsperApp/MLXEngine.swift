@@ -484,6 +484,7 @@ actor MLXEngine {
 
         do {
             let loaded = try await task.value
+            ModelFiles.settleAfterLoad(id)   // #1005: a load that fetched the rest completes the download
             poll.cancel()
             container = loaded
             unprovenId = id
@@ -503,14 +504,16 @@ actor MLXEngine {
     /// weights into memory** — for the Settings "download on select" flow. Reuses the
     /// exact same downloader, glob patterns, and disk-polling progress as `load()`, so
     /// the agent's later lazy load finds the cache already populated. Throws
-    /// `CancellationError` when the surrounding task is cancelled (Stop button).
+    /// `CancellationError` when the surrounding task is cancelled (Stop button). Returns
+    /// whether every listed file landed (`ModelFiles.everyFileLanded`): false when the hub
+    /// listing failed and the library returned a partial cached snapshot instead.
     ///
     /// Download-only (no `loadContainer`) is deliberate: the big agent models are
     /// 18–580 GB and must be fetchable on Macs that can't hold them in RAM.
     nonisolated static func downloadModelFiles(
         modelId: String,
         progress: @escaping @Sendable (Double, String) -> Void
-    ) async throws {
+    ) async throws -> Bool {
         let box = ProgressBox()
         let task = Task<Void, Error> {
             let downloader = #hubDownloader()
@@ -531,6 +534,7 @@ actor MLXEngine {
             }
             poll.cancel()
             progress(1.0, "Downloaded.")
+            return ModelFiles.everyFileLanded(box.get())
         } catch {
             poll.cancel()
             throw error
@@ -576,6 +580,7 @@ actor MLXEngine {
         let poll = Self.startProgressPoll(box, modelId: id, fallback: "Downloading draft model\u{2026}", progress)
         do {
             draftContainer = try await task.value
+            ModelFiles.settleAfterLoad(id)   // #1005
             poll.cancel()
             draftLoadTask = nil
         } catch {
@@ -1807,6 +1812,7 @@ actor MLXEngine {
         let poll = Self.startProgressPoll(box, modelId: id, fallback: "Downloading vision model\u{2026}", progress)
         do {
             vlmContainer = try await task.value
+            ModelFiles.settleAfterLoad(id)   // #1005
             unprovenId = id
             poll.cancel()
             vlmLoadTask = nil

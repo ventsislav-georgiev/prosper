@@ -18,13 +18,13 @@ enum ModelFiles {
 
     /// True when a model snapshot with weights is on disk — i.e. setup's download
     /// step is done. Scans `hub/models--*/snapshots/*` for a complete weight set
-    /// (see `holdsWeights`).
+    /// (see `holdsWeights`), skipping a model whose download is in progress.
     static var isModelDownloaded: Bool {
         let fm = FileManager.default
         guard let models = try? fm.contentsOfDirectory(
             at: ModelPaths.hubURL, includingPropertiesForKeys: nil
         ) else { return false }
-        for model in models where model.lastPathComponent.hasPrefix("models--") {
+        for model in models where model.lastPathComponent.hasPrefix("models--") && !downloadInProgress(model) {
             let snapshots = model.appendingPathComponent("snapshots")
             guard let revs = try? fm.contentsOfDirectory(
                 at: snapshots, includingPropertiesForKeys: nil
@@ -42,10 +42,10 @@ enum ModelFiles {
     /// starts last and a cancelled fetch can leave shards and no index): shards named
     /// `*-XXXXX-of-NNNNN.safetensors` need all NNNNN present; otherwise any non-empty
     /// `*.safetensors`.
-    // ponytail: weights only. A cancel after the shards but before a small file (config,
-    // tokenizer, index) finishes still reads as downloaded; the loader fetches those KB
-    // on load. An app-written completion marker would close it but needs a legacy rule
-    // for snapshots downloaded before the marker existed.
+    // Weights only: a cancel after the shards but before a small file (config, tokenizer,
+    // index) passes this. A Settings download closes that with its markers (#1005,
+    // `downloadSnapshot`); a marker-less dir (a download older than the markers, or a
+    // lazy load, which fetches any missing small file itself) is judged by this alone.
     private static func holdsWeights(_ dir: URL) -> Bool {
         let fm = FileManager.default
         // Snapshot files are symlinks into blobs/ (copies where symlinks fail).
@@ -85,10 +85,91 @@ enum ModelFiles {
         "models--" + modelId.replacingOccurrences(of: "/", with: "--")
     }
 
-    /// True when THIS specific model's weights are on disk (download done).
-    /// Scans `hub/models--<sanitized id>/snapshots/*` for a complete weight set
-    /// (see `holdsWeights`). `hubURL` is injectable for tests.
+    /// Download markers (#1005), empty files in `models--<id>/` so Delete removes them with
+    /// the model; only their names are read. `start` creates `downloadingMarker` before the
+    /// first byte; after the last file and the checks it is renamed to `completeMarker`.
+    /// A dir holding `downloadingMarker` is never ready; any other dir is judged by
+    /// `holdsWeights` (marker-less = downloaded before the markers, or by a lazy load).
+    static let downloadingMarker = ".prosper-download-incomplete"
+    static let completeMarker = ".prosper-download-complete"
+
+    /// `hub/models--<sanitized id>`, the dir Delete removes. `hubURL` is injectable for tests.
+    static func modelDir(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> URL {
+        hubURL.appendingPathComponent(cacheDirName(for: modelId))
+    }
+
+    private static func downloadInProgress(_ modelDir: URL) -> Bool {
+        FileManager.default.fileExists(atPath: modelDir.appendingPathComponent(downloadingMarker).path)
+    }
+
+    struct DownloadIncomplete: LocalizedError {
+        var errorDescription: String? { "The download did not finish. Check the connection and download again." }
+    }
+
+    /// Settings download of a Hugging Face snapshot between the two markers. `fetch` downloads
+    /// and returns whether every listed file landed (false when the library fell back to a
+    /// partial cached snapshot). The complete marker is written only after that AND
+    /// `holdsWeights`; a throw (cancel, error, incomplete) leaves the in-progress marker.
+    static func downloadSnapshot(
+        _ modelId: String, hubURL: URL = ModelPaths.hubURL,
+        fetch: @Sendable () async throws -> Bool
+    ) async throws {
+        let fm = FileManager.default
+        let dir = modelDir(modelId, hubURL: hubURL)
+        let downloading = dir.appendingPathComponent(downloadingMarker)
+        let complete = dir.appendingPathComponent(completeMarker)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard fm.createFile(atPath: downloading.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: downloading.path])
+        }
+        // After the in-progress marker: a crash between leaves both, and in-progress wins.
+        if fm.fileExists(atPath: complete.path) { try fm.removeItem(at: complete) }
+        guard try await fetch(), weightsOnDisk(modelId, hubURL: hubURL) else { throw DownloadIncomplete() }
+        let err = markComplete(dir)
+        guard err == 0 else { throw POSIXError(POSIXErrorCode(rawValue: err) ?? .EIO) }
+    }
+
+    /// A load of `modelId` that SUCCEEDED settles an interrupted Settings download: the
+    /// loader fetched what was missing, so in-progress + `weightsOnDisk` becomes complete.
+    /// A marker-less dir stays marker-less (legacy rule). Never fails the load: a failed
+    /// rename is logged. Costs one stat when no marker exists (every ordinary load).
+    static func settleAfterLoad(_ modelId: String, hubURL: URL = ModelPaths.hubURL) {
+        let dir = modelDir(modelId, hubURL: hubURL)
+        guard downloadInProgress(dir), weightsOnDisk(modelId, hubURL: hubURL) else { return }
+        let err = markComplete(dir)
+        if err != 0 { NSLog("prosper: could not settle the download marker of %@ (errno %d)", modelId, err) }
+    }
+
+    /// rename(2) in-progress -> complete, one atomic step. Returns 0 when the complete marker is
+    /// in place: renamed now, or ENOENT with the complete marker present (a load and a Settings
+    /// download of the same model both finished; the other one renamed first). Else errno.
+    private static func markComplete(_ dir: URL) -> Int32 {
+        let complete = dir.appendingPathComponent(completeMarker).path
+        if rename(dir.appendingPathComponent(downloadingMarker).path, complete) == 0 { return 0 }
+        let err = errno
+        if err == ENOENT, FileManager.default.fileExists(atPath: complete) { return 0 }
+        return err
+    }
+
+    /// True when the hub `Progress` of a snapshot download shows every listed file landed:
+    /// each file's child is set complete when it lands, so completed == total only then.
+    /// nil (the library's offline fallback never reports progress) or zero total is false.
+    static func everyFileLanded(_ p: Progress?) -> Bool {
+        guard let p, p.totalUnitCount > 0 else { return false }
+        return p.completedUnitCount >= p.totalUnitCount
+    }
+
+    /// True when THIS model is ready: on disk (see `weightsOnDisk`) and not inside a
+    /// download that has not completed (`downloadingMarker`). `hubURL` is injectable for tests.
     static func isModelDownloaded(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> Bool {
+        !downloadInProgress(modelDir(modelId, hubURL: hubURL)) && weightsOnDisk(modelId, hubURL: hubURL)
+    }
+
+    /// Today's file checks without the markers: the GGUF file exists, or a
+    /// `hub/models--<sanitized id>/snapshots/*` dir holds a complete weight set (see
+    /// `holdsWeights`). The crash-loop guard asks this: a load that dies after a lazy load
+    /// finished an interrupted download must still arm it (#435, #1005).
+    static func weightsOnDisk(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> Bool {
         guard !modelId.isEmpty else { return false }
         if let gguf = AgentModelRegistry.gguf(for: modelId) {
             return FileManager.default.fileExists(
@@ -129,7 +210,8 @@ enum ModelFiles {
             return DiskState(downloaded: true, sizeBytes: size)
         }
         let fm = FileManager.default
-        let root = hubURL.appendingPathComponent(cacheDirName(for: modelId))
+        let root = modelDir(modelId, hubURL: hubURL)
+        guard !downloadInProgress(root) else { return DiskState(downloaded: false, sizeBytes: nil) }
         let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
         guard let en = fm.enumerator(at: root, includingPropertiesForKeys: Array(keys)) else {
             return DiskState(downloaded: false, sizeBytes: nil)

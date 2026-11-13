@@ -213,6 +213,63 @@ final class ModelFilesDiskTests: XCTestCase {
         XCTAssertFalse(ModelFiles.isModelDownloaded("shard/emptymap", hubURL: hub))
     }
 
+    // Download markers (#1005). Literal marker names, so these also run against the parent
+    // (where the first and third are red: the parent reads weights only).
+    private func snapshotFiles(_ root: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("snapshots/main").path).sorted()
+    }
+
+    private func touch(_ root: URL, _ name: String) {
+        XCTAssertTrue(FileManager.default.createFile(atPath: root.appendingPathComponent(name).path, contents: nil))
+    }
+
+    // The entry's gap: every weight present, config.json missing, download interrupted.
+    func testGapWeightsCompleteConfigMissingInterruptedIsNotReady() throws {
+        let root = try makeCachedModel("gap/m", blobs: [
+            ("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 100), ("sha-t", "tokenizer.json", 10),
+        ])
+        try writeIndex(root, shards: twoShards)
+        touch(root, ".prosper-download-incomplete")
+        XCTAssertEqual(try snapshotFiles(root), [
+            "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors",
+            "model.safetensors.index.json", "tokenizer.json",
+        ])
+        XCTAssertFalse(ModelFiles.isModelDownloaded("gap/m", hubURL: hub))
+        XCTAssertEqual(ModelFiles.diskState("gap/m", hubURL: hub), ModelFiles.DiskState(downloaded: false, sizeBytes: nil))
+    }
+
+    // Legacy rule: no marker at all (downloaded before the markers) and today's checks pass.
+    func testLegacyNoMarkerCompleteStaysReady() throws {
+        let root = try makeCachedModel("legacy/m", blobs: [
+            ("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 100), ("sha-c", "config.json", 10),
+        ])
+        try writeIndex(root, shards: twoShards)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).sorted(), ["blobs", "snapshots"])
+        XCTAssertTrue(ModelFiles.isModelDownloaded("legacy/m", hubURL: hub))
+        XCTAssertTrue(ModelFiles.diskState("legacy/m", hubURL: hub).downloaded)
+    }
+
+    // A new-build download interrupted after every file landed is still not ready.
+    func testInterruptedEveryFilePresentIsNotReady() throws {
+        let root = try makeCachedModel("intr/m", blobs: [
+            ("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 100), ("sha-c", "config.json", 10),
+        ])
+        try writeIndex(root, shards: twoShards)
+        touch(root, ".prosper-download-incomplete")
+        XCTAssertFalse(ModelFiles.isModelDownloaded("intr/m", hubURL: hub))
+        XCTAssertFalse(ModelFiles.diskState("intr/m", hubURL: hub).downloaded)
+    }
+
+    func testCompletedMarkerIsReady() throws {
+        let root = try makeCachedModel("done/m", blobs: [
+            ("sha-1", twoShards[0], 100), ("sha-2", twoShards[1], 100), ("sha-c", "config.json", 10),
+        ])
+        try writeIndex(root, shards: twoShards)
+        touch(root, ".prosper-download-complete")
+        XCTAssertTrue(ModelFiles.isModelDownloaded("done/m", hubURL: hub))
+        XCTAssertEqual(ModelFiles.diskState("done/m", hubURL: hub).downloaded, true)
+    }
+
     // Hot-path budget: the pane calls diskState per catalog model. A sharded weights
     // checkpoint (many blobs) must still resolve in well under a frame.
     func testDiskStatePerfBudget() throws {

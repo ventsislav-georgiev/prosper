@@ -57,11 +57,13 @@ final class ModelDownloadManager: ObservableObject {
                     self.reset()
                     return
                 }
-                try await MLXEngine.downloadModelFiles(modelId: modelId) { p, s in
-                    Task { @MainActor in
-                        guard ModelDownloadManager.shared.activeModelId == modelId else { return }
-                        ModelDownloadManager.shared.progress = p
-                        ModelDownloadManager.shared.status = s
+                try await ModelFiles.downloadSnapshot(modelId) {
+                    try await MLXEngine.downloadModelFiles(modelId: modelId) { p, s in
+                        Task { @MainActor in
+                            guard ModelDownloadManager.shared.activeModelId == modelId else { return }
+                            ModelDownloadManager.shared.progress = p
+                            ModelDownloadManager.shared.status = s
+                        }
                     }
                 }
                 guard self.activeModelId == modelId else { return }
@@ -86,16 +88,16 @@ final class ModelDownloadManager: ObservableObject {
 
     /// Remove a downloaded model's files from disk. Cancels first if it's downloading.
     /// The unlink runs off-main — a multi-GB checkpoint tree can take a noticeable
-    /// moment, and blocking the main thread would freeze the UI.
-    func delete(_ modelId: String) {
+    /// moment, and blocking the main thread would freeze the UI. The whole model dir goes,
+    /// download markers included (#1005). `hubURL` is injectable for tests.
+    func delete(_ modelId: String, hubURL: URL = ModelPaths.hubURL) {
         guard !modelId.isEmpty else { return }
         if activeModelId == modelId { cancel() }
         let dir: URL
         if let gguf = AgentModelRegistry.gguf(for: modelId) {
             dir = LlamaAgentEngine.fileURL(fileName: gguf.fileName)
         } else {
-            dir = ModelPaths.hubURL.appendingPathComponent(
-                "models--" + modelId.replacingOccurrences(of: "/", with: "--"))
+            dir = ModelFiles.modelDir(modelId, hubURL: hubURL)
         }
         Task { [weak self] in
             await Task.detached { try? FileManager.default.removeItem(at: dir) }.value

@@ -529,8 +529,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // would abort every launch before Settings is reachable. Armed only for an
             // on-disk MLX model, so a quit or an offline launch mid-download never
             // reads as a death; a first download that dies re-arms on the next launch.
+            // Weights, not readiness: a load that finished an interrupted Settings download
+            // (in-progress marker, #1005) and died must still arm it.
             let id = Preferences.coreModel
-            if !LlamaInlineEngine.isEnabled, ModelFiles.isModelDownloaded(id),
+            if !LlamaInlineEngine.isEnabled, ModelFiles.weightsOnDisk(id),
                let fallback = Preferences.applyLaunchFallback(for: id) { // writes the per-Mac override (OQ-38)
                 NSLog("prosper: the previous launch died loading %@, skipping the automatic load once, model now %@",
                       id, fallback.isEmpty ? "none" : fallback)
