@@ -186,15 +186,143 @@ local function decoded(s)
     return utf8.len(out) and out or s
 end
 
--- A rule matches the URL as given, or the decoded URL with the decoded rule.
--- First match in list order wins.
+-- MARK: host rules (#1021)
+-- A rule shaped like a domain (letters, digits, '-', non-ASCII, at least one dot,
+-- no empty label: github.com, docs.google.com, café.example) matches the link's
+-- HOST only: the host itself or a subdomain, on label boundaries, case-insensitive,
+-- port and userinfo left out, IDN labels compared as punycode. Every other rule
+-- (localhost, /Sites/, My Sites, a path, a port, a %-escape) keeps the whole-link
+-- substring match below. Told apart by shape alone, so stored rules need no migration.
+-- Two domain shapes keep what a "contains" rule was written for (round 2):
+--   ends in a dot ("google.", "docs.google.") -> those labels at a label boundary of the
+--     host, followed by more labels: google.com, www.google.de, not notgoogle.com;
+--   all labels digits ("192.168", "10.0.0.", "192.168.1.5") -> an address or its start,
+--     compared from the LEFT of a dotted-number host; four labels = that address only.
+-- A domain without its ending ("docs.google") stays strict: OQ-112 is with the operator.
+
+-- RFC 3492 punycode of one lowercase UTF-8 label -> "xn--…".
+local function punycode(label)
+    local cps, out = {}, {}
+    for _, c in utf8.codes(label) do
+        cps[#cps + 1] = c
+        if c < 128 then out[#out + 1] = string.char(c) end
+    end
+    local b = #out
+    if b > 0 then out[#out + 1] = "-" end
+    local function digit(d) return string.char(d < 26 and d + 97 or d + 22) end
+    local n, delta, bias, h = 128, 0, 72, b
+    while h < #cps do
+        local m = math.maxinteger
+        for _, c in ipairs(cps) do if c >= n and c < m then m = c end end
+        delta = delta + (m - n) * (h + 1); n = m
+        for _, c in ipairs(cps) do
+            if c < n then delta = delta + 1 end
+            if c == n then
+                local q, k = delta, 36
+                while true do
+                    local t = k <= bias and 1 or (k >= bias + 26 and 26 or k - bias)
+                    if q < t then break end
+                    out[#out + 1] = digit(t + (q - t) % (36 - t))
+                    q = (q - t) // (36 - t); k = k + 36
+                end
+                out[#out + 1] = digit(q)
+                -- adapt(delta, h + 1, first = h == b)
+                local d = h == b and delta // 700 or delta // 2
+                d = d + d // (h + 1)
+                k = 0
+                while d > 455 do d = d // 35; k = k + 36 end
+                bias = k + (36 * d) // (d + 38)
+                delta = 0; h = h + 1
+            end
+        end
+        delta = delta + 1; n = n + 1
+    end
+    return "xn--" .. table.concat(out)
+end
+
+-- Lowercase, one trailing dot dropped, each non-ASCII label as punycode. nil when
+-- the text is not valid UTF-8 or a label has more than 63 characters (its punycode
+-- could not fit a DNS label; the cap also bounds punycode's quadratic loop).
+local function ascii_host(s)
+    s = s:lower():gsub("%.$", "")
+    if not s:find("[\128-\255]") then return s end
+    if not utf8.len(s) then return nil end
+    local labels = {}
+    for label in (s .. "."):gmatch("([^.]*)%.") do
+        if label:find("[\128-\255]") then
+            if utf8.len(label) > 63 then return nil end
+            labels[#labels + 1] = punycode(label)
+        else
+            labels[#labels + 1] = label
+        end
+    end
+    return table.concat(labels, ".")
+end
+
+-- Schemes whose host the browser finds after any run of / or \ (WHATWG "special").
+local SPECIAL = { http = true, https = true, ws = true, wss = true, ftp = true }
+
+-- The link's host as ascii_host gives it; "" when the link has an authority but no
+-- usable host (host rules then match nothing); nil when the link has no host at all
+-- (file://, about:, mailto:) and every rule falls back to the substring match.
+local function link_host(url)
+    local scheme, rest = url:match("^(%a[%w+.-]*):(.*)$")
+    if not scheme then return nil end
+    scheme = scheme:lower()
+    if scheme == "file" then return nil end -- a local path: keep matching it as text
+    local auth
+    if SPECIAL[scheme] then
+        auth = rest:match("^[/\\]*([^/\\?#]*)")
+    else
+        auth = rest:match("^//([^/?#]*)")
+        if not auth then return nil end
+    end
+    auth = auth:match("^.*@(.*)$") or auth -- userinfo ends at the LAST '@'
+    -- The port goes; an IPv6 literal leaves "[", which no host rule can match.
+    local host = decoded(auth:match("^[^:]*"))
+    -- A decoded host holding a delimiter, a space or a control byte ("evil.example%23.good.example")
+    -- is no host; '_' stays, browsers accept it in hosts.
+    if host:find("[^%w%-%._\128-\255]") then return "" end
+    return ascii_host(host) or ""
+end
+
+-- Rule kinds: "domain" (the host or a subdomain), "prefix" (dot-ended), "address" (digits).
+local function host_rule(m)
+    if not m:find("^[%w\128-\255%-]+%.[%w\128-\255%-%.]*$") or m:find("..", 1, true) then return nil end
+    local hr = ascii_host(m)
+    if not hr then return nil end
+    if hr:find("^[%d.]+$") then return hr, "address" end
+    if m:sub(-1) == "." then return hr, "prefix" end
+    return hr, "domain"
+end
+
+local function host_matches(host, hr, kind)
+    if kind == "address" then
+        if not host:find("^[%d.]+$") then return false end -- only a dotted-number host
+        if select(2, hr:gsub("%.", "")) >= 3 then return host == hr end -- a full address
+        return host == hr or host:sub(1, #hr + 1) == hr .. "."
+    elseif kind == "prefix" then
+        -- shortcut: any label boundary, so google. also takes google.evil.example; host-start only would drop www.google.com
+        return ("." .. host):find("." .. hr .. ".", 1, true) ~= nil
+    end
+    return host == hr or host:sub(-#hr - 1) == "." .. hr
+end
+
+-- A host rule matches the link's host; any other rule matches the URL as given,
+-- or the decoded URL with the decoded rule. First match in list order wins.
 local function pick(url)
     local durl = decoded(url)
+    local host = link_host(url)
     for _, r in ipairs(load_routes()) do
         local m = r.match
-        if type(m) == "string" and #m > 0
-            and (string.find(url, m, 1, true) or string.find(durl, decoded(m), 1, true)) then
-            return r.browser
+        if type(m) == "string" and #m > 0 then
+            local hr, kind
+            if host then hr, kind = host_rule(m) end
+            if hr then
+                if host_matches(host, hr, kind) then return r.browser end
+            elseif string.find(url, m, 1, true) or string.find(durl, decoded(m), 1, true) then
+                return r.browser
+            end
         end
     end
     return nil
@@ -321,9 +449,12 @@ function settings_render(section_id, state)
     end
     local rules = s.section{
         id = "routes", title = "Routing rules",
-        footer = "First match wins. “Domain contains” is a plain substring of the URL "
-            .. "(e.g. github.com, localhost, docs.google.com). %-escapes are matched "
-            .. "decoded too, so “My Sites” matches My%20Sites.",
+        footer = "First match wins. A domain (github.com, docs.google.com) matches that "
+            .. "site and its subdomains only, never the same text elsewhere in a link; "
+            .. "write the whole name (docs.google.com, not docs.google). End a rule with a dot "
+            .. "(google.) for any ending; 192.168 matches addresses that start with it. "
+            .. "Anything else (localhost, /index.html, My Sites) is a plain substring "
+            .. "of the URL; %-escapes are matched decoded too, so “My Sites” matches My%20Sites.",
         rows = { s.records{
             id = "routes", records = recs, fields = route_fields("", ""),
             addLabel = "Add rule",

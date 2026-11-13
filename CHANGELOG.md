@@ -478,6 +478,14 @@ tag from the now-released section and put it on the new top draft.
   the folder picker's button says "Choose", and an empty session list explains where sessions come
   from. On the "Dvorak - QWERTY ⌘" layout each window shortcut now fires from one key only, so ⌘, no
   longer closes the window (#887).
+- URL Dispatcher: a rule that is a domain (github.com) now matches only links to that site or its
+  subdomains, so a link that merely mentions the domain in its path, query or login part, or a
+  look-alike such as github.com.example.net, no longer opens in that rule's browser. A rule ending
+  in a dot (google.) matches that name with any ending (google.com, www.google.de, but also
+  google.evil.example), and a rule of numbers (192.168) matches addresses that start with it. A
+  domain written without its ending (docs.google) no longer matches docs.google.com: write
+  docs.google.com or docs.google. instead. Other rules (localhost, /index.html, a word) still match
+  anywhere in the link.
 
 ## v2.174.0
 

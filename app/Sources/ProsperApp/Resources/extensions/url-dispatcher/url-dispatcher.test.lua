@@ -312,6 +312,115 @@ h.eq(lastBrowser(), FF, "clean on: decoded match still routes")
 host.prefs.set("clean_tracking", "false")
 host.prefs.set("routes", J{ { match = "github.com", browser = "com.google.Chrome" } })
 
+-- ── host rules (#1021): a domain-shaped rule matches the link's host only ───
+-- route() also asserts every opened link stays byte-identical.
+local GOOD = { { match = "good.example", browser = FF } }
+local SAF = "com.apple.Safari" -- the fallback set above
+-- 37. the host itself, and a subdomain of it
+h.eq(route(GOOD, "https://good.example/a"), FF, "host rule: the host itself")
+h.eq(route(GOOD, "https://docs.good.example/a"), FF, "host rule: a subdomain")
+-- 38. a look-alike: the rule as a suffix of a longer label, or as a leading part of the host
+h.eq(route(GOOD, "https://good.example.evil.example/"), SAF, "host rule: good.example.evil.example is not good.example")
+h.eq(route(GOOD, "https://notgood.example/"), SAF, "host rule: label boundary, notgood.example")
+-- 39. the host text in the path, the query or the fragment
+h.eq(route(GOOD, "https://evil.example/good.example"), SAF, "host rule: host text in the path")
+h.eq(route(GOOD, "https://evil.example/?next=good.example"), SAF, "host rule: host text in the query")
+h.eq(route(GOOD, "https://evil.example/#good.example"), SAF, "host rule: host text in the fragment")
+h.eq(route(GOOD, "https://evil.example\\good.example"), SAF, "host rule: a backslash ends the host")
+h.eq(route(GOOD, "https://good.example\\@evil.example/"), FF, "host rule: backslash ends the host before the '@'")
+-- 40. userinfo is not the host: the host is after the LAST '@'
+h.eq(route(GOOD, "https://good.example@evil.example/"), SAF, "host rule: userinfo good.example")
+h.eq(route(GOOD, "https://a@good.example:pw@evil.example/"), SAF, "host rule: last '@' decides")
+h.eq(route(GOOD, "https://user:pw@good.example/"), FF, "host rule: userinfo dropped, host matches")
+-- 41. a port is not part of the host
+h.eq(route(GOOD, "https://good.example:8443/x"), FF, "host rule: port left out")
+h.eq(route(GOOD, "https://evil.example:443/good.example"), SAF, "host rule: port, host text in the path")
+-- 42. upper case on either side, and a trailing dot
+h.eq(route(GOOD, "HTTPS://Docs.GOOD.Example/Path"), FF, "host rule: upper-case link")
+h.eq(route({ { match = "Good.Example", browser = FF } }, "https://good.example/"), FF, "host rule: upper-case rule")
+h.eq(route(GOOD, "https://good.example./"), FF, "host rule: trailing dot on the host")
+-- 43. an IPv6 literal: the host is the bracketed address, its ':' is not a port
+h.eq(route(GOOD, "http://[::1]:8080/good.example"), SAF, "host rule: IPv6 host, text in the path")
+h.eq(route({ { match = "[::1]", browser = FF } }, "http://[::1]:8080/"), FF, "IPv6 rule is a substring rule")
+-- 44. a file:// link has no host to compare: every rule stays a substring match
+h.eq(route(GOOD, "file:///Users/example/good.example/index.html"), FF, "file link: domain-shaped rule as substring")
+h.eq(route({ { match = "index.html", browser = FF } }, "file:///Users/example/index.html"), FF,
+     "file link: index.html rule still matches")
+-- 45. a link with no host: substring as before; an empty host matches no host rule
+h.eq(route(GOOD, "about:good.example"), FF, "no-host link: substring as before")
+h.eq(route(GOOD, "https:///evil.example/good.example"), SAF, "extra slashes: host is evil.example")
+h.eq(route(GOOD, "https:///good.example/"), FF, "extra slashes: host is good.example")
+h.eq(route(GOOD, "https://"), SAF, "empty host: no host rule matches, no error")
+h.eq(route(GOOD, "good.example/x"), FF, "no scheme: no host to read, substring as before")
+-- 46. non-domain rules keep the whole-link substring match
+h.eq(route({ { match = "localhost", browser = FF } }, "http://localhost:3000/"), FF, "single label: substring")
+h.eq(route({ { match = "good.example/a", browser = FF } }, "https://evil.example/x?u=good.example/a"), FF,
+     "rule with a path: substring")
+h.eq(route({ { match = ".good.example", browser = FF } }, "https://x.good.example/"), FF, "leading dot: substring")
+h.eq(route({ { match = "github", browser = FF } }, "https://github.com/"), FF, "no dot: substring, still matches github.com")
+h.eq(route({ { match = "a..example", browser = FF } }, "https://x.example/a..example"), FF, "empty label: substring")
+-- 47. IDN: a Unicode rule and a punycode link (and the reverse) compare in one form
+h.eq(route({ { match = "café.example", browser = FF } }, "https://xn--caf-dma.example/"), FF, "IDN: Unicode rule, punycode link")
+h.eq(route({ { match = "xn--caf-dma.example", browser = FF } }, "https://café.example/"), FF, "IDN: punycode rule, Unicode link")
+h.eq(route({ { match = "bücher.example", browser = FF } }, "https://www.xn--bcher-kva.example/"), FF, "IDN: bücher subdomain")
+h.eq(route({ { match = "münchen.example", browser = FF } }, "https://xn--mnchen-3ya.example/"), FF, "IDN: münchen")
+h.eq(route({ { match = "café.example", browser = FF } }, "https://caf%C3%A9.example/"), FF, "IDN: %-encoded host decoded")
+h.eq(route({ { match = "café.example", browser = FF } }, "https://xn--caf-dma.example.evil.example/"), SAF,
+     "IDN: look-alike suffix")
+-- 47b. longer labels (the bias adapts between characters), vectors from Python's punycode codec
+for _, v in ipairs({ { "παράδειγμα", "xn--hxajbheg2az3al" }, { "пример", "xn--e1afmkfd" },
+                     { "ドメイン名例", "xn--eckwd4c7cu47r2wf" }, { "例え", "xn--r8jz45g" }, { "日本語", "xn--wgv71a119e" },
+                     { "bücherbüchér", "xn--bcherbchr-i4a5rf" } }) do
+    h.eq(route({ { match = v[1] .. ".example", browser = FF } }, "https://" .. v[2] .. ".example/"), FF,
+         "IDN: " .. v[1] .. " is " .. v[2])
+end
+-- 48. the label cap counts characters: 40 (80 bytes) compares, 64 matches no host rule
+h.eq(route({ { match = "xn--9c" .. string.rep("a", 40) .. ".example", browser = FF } },
+           "https://" .. string.rep("é", 40) .. ".example/"), FF, "IDN: 40-character label compares")
+h.eq(route({ { match = "xn--9c" .. string.rep("a", 64) .. ".example", browser = FF } },
+           "https://" .. string.rep("é", 64) .. ".example/"), SAF, "IDN: 64-character label matches no host rule")
+-- 49. a rule ending in a dot: its labels at a label boundary of the host, more labels after
+local GDOT = { { match = "google.", browser = FF } }
+h.eq(route(GDOT, "https://google.com/"), FF, "dot-ended: google.com")
+h.eq(route(GDOT, "https://google.de/"), FF, "dot-ended: google.de")
+h.eq(route(GDOT, "https://google.co.uk/"), FF, "dot-ended: google.co.uk")
+h.eq(route(GDOT, "https://www.google.com/"), FF, "dot-ended: www.google.com (after a label boundary)")
+h.eq(route(GDOT, "https://WWW.Google.COM:443/"), FF, "dot-ended: case and port")
+h.eq(route(GDOT, "https://notgoogle.com/"), SAF, "dot-ended: notgoogle.com")
+h.eq(route(GDOT, "https://mygoogle.de/"), SAF, "dot-ended: mygoogle.de")
+h.eq(route(GDOT, "https://evil.example/google.com"), SAF, "dot-ended: google.com in the path")
+h.eq(route(GDOT, "https://google/"), SAF, "dot-ended: the bare label needs an ending")
+h.eq(route({ { match = "docs.google.", browser = FF } }, "https://docs.google.com/d"), FF, "dot-ended: two labels")
+h.eq(route({ { match = "docs.google.", browser = FF } }, "https://xdocs.google.com/d"), SAF, "dot-ended: two labels, boundary")
+-- 50. a rule of numbers: an address or its start, compared from the left of a dotted-number host
+local NET = { { match = "192.168", browser = FF } }
+h.eq(route(NET, "http://192.168.1.5:8080/"), FF, "address: 192.168 matches 192.168.1.5")
+h.eq(route({ { match = "192.168.", browser = FF } }, "http://192.168.1.5/"), FF, "address: dot-ended 192.168.")
+h.eq(route({ { match = "10.0.0", browser = FF } }, "http://10.0.0.7/"), FF, "address: 10.0.0")
+h.eq(route(NET, "http://192.1680.1.1/"), SAF, "address: label boundary, 192.1680")
+h.eq(route(NET, "http://10.192.168.1/"), SAF, "address: compared from the left")
+h.eq(route(NET, "https://5.192.168.in-addr.example/"), SAF, "address: a name with the digits in it")
+h.eq(route(NET, "https://192.168.evil.example/"), SAF, "address: a name starting with the digits")
+h.eq(route(NET, "https://evil.example/192.168.1.5"), SAF, "address: digits in the path")
+h.eq(route({ { match = "192.168.1.5", browser = FF } }, "http://192.168.1.5/"), FF, "address: full address, that host")
+h.eq(route({ { match = "192.168.1.5", browser = FF } }, "http://192.168.1.50/"), SAF, "address: full address, label boundary")
+h.eq(route({ { match = "192.168.1.5", browser = FF } }, "http://192.168.1.5.6/"), SAF, "address: full address, that host only")
+h.eq(route({ { match = "1password.example", browser = FF } }, "https://my.1password.example/"), FF,
+     "address: a domain that starts with a digit is still a domain")
+-- 51. OQ-112 (with the operator): a domain without its ending stays strict, as built
+h.eq(route({ { match = "docs.google", browser = FF } }, "https://docs.google.com/"), SAF,
+     "OQ-112: docs.google does not match docs.google.com")
+-- 52. a decoded host holding a delimiter or a space is no host: host rules match nothing,
+-- and the substring match never re-admits it for a domain-shaped rule
+h.eq(route(GOOD, "https://evil.example%23.good.example/"), SAF, "decoded host: %23 is no host")
+h.eq(route(GOOD, "https://evil.example%2F.good.example/"), SAF, "decoded host: %2F is no host")
+h.eq(route(GOOD, "https://evil.example%20.good.example/"), SAF, "decoded host: a decoded space is no host")
+h.eq(route(GOOD, "https://evil.example%00.good.example/"), SAF, "decoded host: a control byte is no host")
+h.eq(route({ { match = "%23", browser = FF } }, "https://evil.example%23.good.example/"), FF,
+     "decoded host: a non-domain rule still substring-matches such a link")
+h.eq(route(GOOD, "https://a_b.good.example/"), FF, "decoded host: '_' is a host character")
+host.prefs.set("routes", J{ { match = "github.com", browser = "com.google.Chrome" } })
+
 -- ── performance: on_url hot path ─────────────────────────────────────────────
 host.prefs.set("routes", J{
     { match = "github.com", browser = "com.google.Chrome" },
