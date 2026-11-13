@@ -530,6 +530,11 @@ final class AgentWindowPlanTests: XCTestCase {
                        ("~~~\nrm -rf build\n~~~", "~~~\necho hi\n~~~"), ("<ftp://example.com>", "ftp://example.com")] {
             XCTAssertNotEqual(flat(a), flat(b), a)
         }
+        // Pipes with no delimiter row on the next line are not a table: the pipes stay compared.
+        XCTAssertNotEqual(flat("a | b\nc | d"), flat("ab\ncd"))
+        XCTAssertEqual(flat("a | b\nc | d"), "a|bc|d")
+        XCTAssertEqual(flat("x | y\np - q | r"), "x|yp-q|r")
+        XCTAssertEqual(flat("a | b\n| |"), "a|b")
         // Still not mapped, so still refused: renumbered ordered lists, "1)" markers.
         XCTAssertNotEqual(flat("1. a\n1. b"), AgentPlanInput.flat(["1. a", "2. b"]))
         XCTAssertNotEqual(flat("1) a"), flat("1. a"))
