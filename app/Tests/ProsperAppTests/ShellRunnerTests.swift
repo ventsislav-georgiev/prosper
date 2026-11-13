@@ -267,9 +267,14 @@ final class ShellRunnerTests: XCTestCase {
         XCTAssertEqual(pending["at"] as? Double, 1_700_000_000)
         XCTAssertEqual(pending["file"] as? String, "/fake-tmp/prosper-appupdates-1700000000000/status")
         // QA #730 INFO-1: the status file sits in a 0700 dir the same line creates before brew runs.
-        XCTAssertTrue(fake.upgradeCommand?.hasPrefix(
-            "/bin/mkdir -m 700 '/fake-tmp/prosper-appupdates-1700000000000' 2>&1 || exit; /opt/homebrew/bin/brew upgrade 2>&1;") == true,
-            fake.upgradeCommand ?? "nil")
+        // #1011: brew writes into that file, not the pipe; the file gets the status and is printed,
+        // and when it cannot be, the bare status is (`|| echo $s`).
+        let d = "'/fake-tmp/prosper-appupdates-1700000000000'"
+        let part = "'/fake-tmp/prosper-appupdates-1700000000000/status.part'"
+        let file = "'/fake-tmp/prosper-appupdates-1700000000000/status'"
+        XCTAssertEqual(fake.upgradeCommand, "/bin/mkdir -m 700 \(d) 2>&1 || { echo 'brew upgrade did not start'; exit; }; "
+            + "/opt/homebrew/bin/brew upgrade > \(part) 2>&1; s=$?; [ ! -L \(d) ] && [ -O \(d) ] && "
+            + "{ echo $s >> \(part) && /bin/mv -f \(part) \(file) && /bin/cat \(file); } || echo $s")
         XCTAssertEqual(fake.cleanups, [], "the watch owns the file now")
     }
 
@@ -284,7 +289,56 @@ final class ShellRunnerTests: XCTestCase {
         try appupdates(fake)
         let d = "'/fake-tmp/prosper-appupdates-1700000000000'"
         XCTAssertEqual(fake.cleanups, ["[ ! -L \(d) ] && [ -O \(d) ] && { /bin/rm -f "
-            + "'/fake-tmp/prosper-appupdates-1700000000000/status'; /bin/rmdir \(d); }"])
+            + "'/fake-tmp/prosper-appupdates-1700000000000/status' '/fake-tmp/prosper-appupdates-1700000000000/status.part'; "
+            + "/bin/rmdir \(d); }"])
+    }
+
+    private let brewOutdated = "/opt/homebrew/bin/brew outdated --json=v2 2>/dev/null"
+
+    /// #1011 (QA #730 INFO-4): the count is taken against `brew outdated` read right before the
+    /// upgrade, not the cache. The cache holds 1 (jq), brew says 2 before and 1 after: 1 upgraded
+    /// (the cache would say none, and so would a read after the upgrade).
+    func testAppUpdatesCountsAgainstTheListReadBeforeTheUpgrade() throws {
+        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedBefore: 2, outdatedAfter: 1)
+        try appupdates(fake)
+        XCTAssertEqual(fake.notifications, ["1 package upgraded"])
+        XCTAssertEqual(fake.commands, [brewOutdated, brewOutdated], "one read before the upgrade, one after")
+    }
+
+    /// #1011: no answer from the read before the upgrade claims no count, in the foreground and
+    /// through the watch; the re-check after it still refreshes the list.
+    func testAppUpdatesNoAnswerBeforeTheUpgradeClaimsNoCount() throws {
+        for reply in ["", "error: spawn failed"] {
+            let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, outdatedBeforeReply: reply)
+            try appupdates(fake)
+            XCTAssertEqual(fake.notifications, ["brew upgrade finished"], reply)
+            XCTAssertEqual(fake.cachedBrew, [], reply)
+        }
+        let fake = BrewFakeServices(upgradeSeconds: 2, outdatedAfter: 0, outdatedBeforeReply: "")
+        try appupdates(fake)
+        let pending = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data((fake.pref("upgrade_pending") ?? "").utf8)) as? [String: Any])
+        XCTAssertTrue(pending["before"] == nil, "\(pending)")
+        fake.statusFileExists = true
+        try appupdates(fake, "on_upgrade_poll()")
+        XCTAssertEqual(fake.notifications, ["brew upgrade is still running in the background", "brew upgrade finished"])
+    }
+
+    /// #1011 r2: when the status file cannot be printed (the folder is no longer ours after brew)
+    /// the shell prints the bare status, and a foreground run ends there: failed or counted, with
+    /// no watch record and no timer, its folder removed.
+    func testForegroundBareStatusEndsTheUpgrade() throws {
+        let failed = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 1, upgradeStatus: 1, folderLost: true)
+        try appupdates(failed)
+        XCTAssertEqual(failed.notifications, ["brew upgrade failed (exit 1)"])
+        let counted = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, folderLost: true)
+        try appupdates(counted)
+        XCTAssertEqual(counted.notifications, ["1 package upgraded"])
+        for fake in [failed, counted] {
+            XCTAssertNil(fake.pref("upgrade_pending"))
+            XCTAssertNil(fake.timers["appupdates.upgrade_poll"])
+            XCTAssertEqual(fake.cleanups.count, 1)
+        }
     }
 
     /// QA #730 F1: brew exits non-zero when some packages fail and the rest upgrade. The list
@@ -306,19 +360,20 @@ final class ShellRunnerTests: XCTestCase {
         XCTAssertTrue(fake.commands.contains { $0.contains(" outdated ") }, "\(fake.commands)")
     }
 
-    /// A failed upgrade whose re-check gets no answer: the cached list stays, no count.
+    /// A failed upgrade whose re-check gets no answer: the cached list stays, no count, and the
+    /// notice says the list is stale (#1011, QA #730 r2 INFO-3).
     func testAppUpdatesFailureWithNoAnswerKeepsTheList() throws {
         let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, upgradeStatus: 1, outdatedReply: "")
         let before = fake.pref("cache")
         try appupdates(fake)
-        XCTAssertEqual(fake.notifications, ["brew upgrade failed (exit 1)"])
+        XCTAssertEqual(fake.notifications, ["brew upgrade failed (exit 1); the list could not be refreshed"])
         XCTAssertEqual(fake.pref("cache"), before)
     }
 
     /// QA #714 INFO-2 / #730 F1: Homebrew's lock refusal while our own backgrounded upgrade is
     /// watched, its record written after this call began (a record there at the start refuses
-    /// before brew runs): no `brew outdated` mid-upgrade, the cache untouched, no count, and the
-    /// first upgrade's watch and its pref survive the refused call.
+    /// before brew runs): no `brew outdated` after the refusal (only the read before the upgrade),
+    /// the cache untouched, no count, and the first upgrade's watch and its pref survive the refused call.
     func testAppUpdatesLockRefusalDuringOurWatchKeepsCacheAndWatch() throws {
         let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0, upgradeStatus: 1, locked: true)
         let pending = #"{"file":"/fake-tmp/prosper-appupdates-1/status","at":1700000000,"before":1}"#
@@ -328,7 +383,7 @@ final class ShellRunnerTests: XCTestCase {
         try appupdates(fake)
         XCTAssertEqual(fake.notifications, ["brew upgrade refused: an upgrade Prosper started is still running"])
         XCTAssertEqual(fake.pref("cache"), before)
-        XCTAssertEqual(fake.commands, [], "no brew outdated, no softwareupdate")
+        XCTAssertEqual(fake.commands, [brewOutdated], "only the read before the upgrade: no re-check, no softwareupdate")
         XCTAssertEqual(fake.cleanups.count, 1, "the refused call removes only its own status file")
         XCTAssertEqual(fake.timers["appupdates.upgrade_poll"], "60.0:on_upgrade_poll")
         XCTAssertEqual(fake.pref("upgrade_pending"), pending)
@@ -345,7 +400,7 @@ final class ShellRunnerTests: XCTestCase {
         XCTAssertEqual(fake.notifications, ["brew upgrade is still running in the background",
                                             "brew upgrade refused: an upgrade Prosper started is still running"])
         XCTAssertEqual(fake.upgradeRuns, 1, "no second mkdir + brew upgrade line")
-        XCTAssertEqual(fake.commands, [])
+        XCTAssertEqual(fake.commands, [brewOutdated], "only the first call's read before its upgrade")
         XCTAssertEqual(fake.cleanups, [])
         XCTAssertEqual(fake.pref("upgrade_pending"), pending)
         XCTAssertEqual(fake.timers, ["appupdates.upgrade_poll": "60.0:on_upgrade_poll"])
@@ -361,9 +416,14 @@ final class ShellRunnerTests: XCTestCase {
         try appupdates(fake)
         XCTAssertEqual(fake.notifications, ["brew upgrade is still running in the background", "1 package upgraded",
                                             "brew upgrade is still running in the background"])
+        // The first call's read before its upgrade; then the ended one read and removed, its
+        // re-check, and the second call's read before its upgrade.
         let d = "'/fake-tmp/prosper-appupdates-1700000000000'"
-        XCTAssertEqual(fake.commands.first, "/bin/cat '/fake-tmp/prosper-appupdates-1700000000000/status'; "
-            + "[ ! -L \(d) ] && [ -O \(d) ] && { /bin/rm -f '/fake-tmp/prosper-appupdates-1700000000000/status'; /bin/rmdir \(d); }")
+        XCTAssertEqual(fake.commands, [brewOutdated,
+            "/bin/cat '/fake-tmp/prosper-appupdates-1700000000000/status'; [ ! -L \(d) ] && [ -O \(d) ] && "
+            + "{ /bin/rm -f '/fake-tmp/prosper-appupdates-1700000000000/status' "
+            + "'/fake-tmp/prosper-appupdates-1700000000000/status.part'; /bin/rmdir \(d); }",
+            brewOutdated, brewOutdated])
         XCTAssertEqual(fake.upgradeRuns, 2)
         XCTAssertTrue(fake.upgradeCommand?.hasPrefix("/bin/mkdir -m 700 '/fake-tmp/prosper-appupdates-1700000040000'") == true,
                       fake.upgradeCommand ?? "nil")
@@ -401,17 +461,18 @@ final class ShellRunnerTests: XCTestCase {
             XCTAssertEqual(fake.cachedBrew, ["jq"], reply)
         }
         // brew's own empty answer does empty the list.
-        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: 0)
+        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedBefore: 0, outdatedAfter: 0)
         try appupdates(fake, "appupdates_refresh()")
         XCTAssertEqual(fake.cachedBrew, [])
     }
 
     // MARK: the backgrounded-upgrade watch (QA #714 INFO-5)
 
-    /// A fake whose earlier upgrade went to the background at `fake.now` with 1 package outdated.
+    /// A fake whose earlier upgrade went to the background at `fake.now` with 1 package outdated
+    /// (that upgrade already ran, so brew's list is `outdatedAfter`).
     private func watching(statusFile: Bool, outdatedAfter: Int = 0, upgradeStatus: Int = 0) -> BrewFakeServices {
-        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedAfter: outdatedAfter, upgradeStatus: upgradeStatus,
-                                    statusFileExists: statusFile)
+        let fake = BrewFakeServices(upgradeSeconds: 0, outdatedBefore: outdatedAfter, outdatedAfter: outdatedAfter,
+                                    upgradeStatus: upgradeStatus, statusFileExists: statusFile)
         fake.prefSet(extensionID: "", key: "upgrade_pending",
                      value: #"{"file":"/fake-tmp/prosper-appupdates-1/status","at":1700000000,"before":1}"#)
         fake.timerSchedule(extensionID: "", id: "appupdates.upgrade_poll", every: true, seconds: 60, handler: "on_upgrade_poll")
@@ -438,7 +499,23 @@ final class ShellRunnerTests: XCTestCase {
         // QA #730 INFO-3: the same line reads and removes the status file and its dir.
         let d = "'/fake-tmp/prosper-appupdates-1'"
         XCTAssertEqual(fake.commands.first, "/bin/cat '/fake-tmp/prosper-appupdates-1/status'; [ ! -L \(d) ] && [ -O \(d) ] && "
-            + "{ /bin/rm -f '/fake-tmp/prosper-appupdates-1/status'; /bin/rmdir \(d); }")
+            + "{ /bin/rm -f '/fake-tmp/prosper-appupdates-1/status' '/fake-tmp/prosper-appupdates-1/status.part'; /bin/rmdir \(d); }")
+    }
+
+    /// #1011: a record whose `at` is this very second is fresh: the poll keeps it and its timer,
+    /// and an Upgrade at the same instant is refused and runs nothing.
+    func testUpgradeWatchRecordFromThisSecondIsFresh() throws {
+        let fake = watching(statusFile: false)   // its at == fake.now
+        let record = fake.pref("upgrade_pending")
+        try appupdates(fake, "on_upgrade_poll()")
+        XCTAssertEqual(fake.timers["appupdates.upgrade_poll"], "60.0:on_upgrade_poll")
+        XCTAssertEqual(fake.pref("upgrade_pending"), record)
+        try appupdates(fake)
+        XCTAssertEqual(fake.notifications, ["brew upgrade refused: an upgrade Prosper started is still running"])
+        XCTAssertEqual(fake.upgradeRuns, 0)
+        XCTAssertEqual(fake.commands, [])
+        XCTAssertEqual(fake.cleanups, [])
+        XCTAssertEqual(fake.pref("upgrade_pending"), record)
     }
 
     /// QA #730 F1 through the watch: a non-zero status refreshes and reports both.
@@ -458,7 +535,13 @@ final class ShellRunnerTests: XCTestCase {
         XCTAssertEqual(fake.commands, [])
         XCTAssertNil(fake.timers["appupdates.upgrade_poll"], "the watch ends at the cap")
         XCTAssertEqual(fake.pref("upgrade_pending"), "")
+        XCTAssertEqual(fake.cleanups, [Self.watchedCleanup], "#1011: its folder goes too")
     }
+
+    /// The cleanup of the folder `watching` records, verbatim.
+    private static let watchedCleanup = "[ ! -L '/fake-tmp/prosper-appupdates-1' ] && [ -O '/fake-tmp/prosper-appupdates-1' ] && "
+        + "{ /bin/rm -f '/fake-tmp/prosper-appupdates-1/status' '/fake-tmp/prosper-appupdates-1/status.part'; "
+        + "/bin/rmdir '/fake-tmp/prosper-appupdates-1'; }"
 
     // MARK: QA #714 r4 pins
 
@@ -486,6 +569,7 @@ final class ShellRunnerTests: XCTestCase {
         try appupdates(fake, "on_launch()")
         XCTAssertEqual(fake.pref("upgrade_pending"), "")
         XCTAssertNil(fake.timers["appupdates.upgrade_poll"])
+        XCTAssertEqual(fake.cleanups, [Self.watchedCleanup], "#1011: its folder goes too")
         try appupdates(fake, "on_upgrade_poll()")
         XCTAssertEqual(fake.notifications, [])
         XCTAssertEqual(fake.commands, [])
@@ -508,16 +592,22 @@ final class ShellRunnerTests: XCTestCase {
     }
 }
 
-/// A Mac with one outdated brew formula: `brew upgrade` takes `upgradeSeconds`, prints a
-/// package error when `upgradeStatus` is not 0 (Homebrew's lock refusal when `locked`), and
-/// only the trailing `echo $s` adds the status (the status file holds the same). Then `outdatedAfter` remain, or `outdatedReply` comes
-/// back verbatim. Nothing here touches a real file, process or timer.
+/// A Mac with `outdatedBefore` (one) outdated brew formulae: `brew upgrade` takes `upgradeSeconds`,
+/// prints a package error when `upgradeStatus` is not 0 (Homebrew's lock refusal when `locked`)
+/// into the status file, which the shell then prints with the status line appended; when the
+/// folder is no longer ours after brew (`folderLost`) only the closing `|| echo $s` prints, the
+/// bare status. Once the upgrade ran, `outdatedAfter` remain. `outdatedReply` comes back verbatim
+/// for every `brew outdated`, `outdatedBeforeReply` for those before the upgrade.
+/// Nothing here touches a real file, process or timer.
 private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable {
     let upgradeSeconds: Double
+    let outdatedBefore: Int
     let outdatedAfter: Int
     let upgradeStatus: Int
     let locked: Bool
     let outdatedReply: String?
+    let outdatedBeforeReply: String?
+    let folderLost: Bool
     private var fileThere: Bool
     var statusFileExists: Bool {
         get { lock.lock(); defer { lock.unlock() }; return fileThere }
@@ -539,9 +629,9 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
     private var armed: [String: String] = [:]
     private var clock: Double = 1_700_000_000
     var notifications: [String] { lock.lock(); defer { lock.unlock() }; return bodies }
-    /// Every shell command except the upgrade itself and the synchronous status-file cleanup.
+    /// Every shell command except the upgrade itself and the bare folder cleanups.
     var commands: [String] { lock.lock(); defer { lock.unlock() }; return ran }
-    /// The synchronous path's status-file cleanups, verbatim.
+    /// The bare folder cleanups (synchronous path, the watch's cap, a relaunch), verbatim.
     var cleanups: [String] { lock.lock(); defer { lock.unlock() }; return cleaned }
     /// The last `brew upgrade` shell line, verbatim.
     var upgradeCommand: String? { lock.lock(); defer { lock.unlock() }; return upgradeLine }
@@ -569,16 +659,19 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
         return doc["macos"] as? [String]
     }
 
-    init(upgradeSeconds: Double, outdatedAfter: Int, upgradeStatus: Int = 0, locked: Bool = false,
-         outdatedReply: String? = nil, statusFileExists: Bool = false,
-         statusText: String? = nil, suReply: String = "") {
+    init(upgradeSeconds: Double, outdatedBefore: Int = 1, outdatedAfter: Int, upgradeStatus: Int = 0, locked: Bool = false,
+         outdatedReply: String? = nil, outdatedBeforeReply: String? = nil, folderLost: Bool = false,
+         statusFileExists: Bool = false, statusText: String? = nil, suReply: String = "") {
         self.statusText = statusText
         self.suReply = suReply
         self.upgradeSeconds = upgradeSeconds
+        self.outdatedBefore = outdatedBefore
         self.outdatedAfter = outdatedAfter
         self.upgradeStatus = upgradeStatus
         self.locked = locked
         self.outdatedReply = outdatedReply
+        self.outdatedBeforeReply = outdatedBeforeReply
+        self.folderLost = folderLost
         self.fileThere = statusFileExists
     }
 
@@ -587,7 +680,10 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
             noteUpgrade(command)
             if let pendingWrittenByUpgrade { prefSet(extensionID: "", key: "upgrade_pending", value: pendingWrittenByUpgrade) }
             try? await Task.sleep(nanoseconds: UInt64(upgradeSeconds * 1_000_000_000))
-            guard command.hasSuffix("; echo $s") else { return "" }
+            // What the shell prints: only the fallback's bare status once the folder is not ours,
+            // else the status file, when the line appends the status to it.
+            if folderLost { return command.hasSuffix(" || echo $s") ? "\(upgradeStatus)" : "" }
+            guard command.contains("{ echo $s >> ") else { return "" }
             if let statusText { return statusText }
             if upgradeStatus == 0 { return "0" }
             // Homebrew's text, read in Library/Homebrew/exceptions.rb (OperationInProgressError).
@@ -601,9 +697,11 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
         if command.hasPrefix("/bin/cat ") { return statusFileExists ? (statusText ?? "\(upgradeStatus)") : "" }
         if command.hasPrefix("softwareupdate ") { return suReply }
         guard command.contains(" outdated ") else { return "" }
+        let before = upgradeRuns == 0
+        if before, let outdatedBeforeReply { return outdatedBeforeReply }
         if let outdatedReply { return outdatedReply }
         let formulae = Array(repeating: #"{"name":"jq","installed_versions":["1.6"],"current_version":"1.7"}"#,
-                             count: outdatedAfter).joined(separator: ",")
+                             count: before ? outdatedBefore : outdatedAfter).joined(separator: ",")
         return #"{"formulae":[\#(formulae)],"casks":[]}"#
     }
     private func record(_ command: String) { lock.lock(); ran.append(command); lock.unlock() }

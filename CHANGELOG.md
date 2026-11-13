@@ -441,6 +441,14 @@ tag from the now-released section and put it on the new top draft.
 - When macOS refuses Prosper access to a browser file (search engines for Fallback Search, or
   bookmarks), Prosper now logs which browser could not be read instead of silently treating it as
   empty; browsers that are not installed stay silent.
+- App Updates: the "N packages upgraded" count now compares against Homebrew's list right before the
+  upgrade, so packages you upgraded in Terminal are no longer counted; brew's output goes to a file
+  in Prosper's private folder, so quitting Prosper during an upgrade no longer stops brew partway; a
+  background upgrade stopped by another Homebrew process now says so; a lock message from Homebrew's
+  auto-update no longer turns a later failure into a "lock" notice; a failed upgrade whose list
+  could not be re-read says the list is stale; a folder that could not be created reads "brew
+  upgrade did not start" instead of "failed (exit ?)"; the private folder is removed when the watch
+  gives up or Prosper relaunches; and a clock set back no longer blocks Upgrade for two hours.
 
 ## v2.174.0
 
