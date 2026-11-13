@@ -667,7 +667,8 @@ final class ManagedConfigTests: XCTestCase {
         XCTAssertEqual(env.consent.seen.count, 2, "same masked diff over other bytes: asked again")
         var expected = try XCTUnwrap(env.consent.seen.first)
         XCTAssertEqual(expected.files.count, 1)
-        expected.files[0].notes.append("This file changed after the sheet opened, in a place the diff does not show "
+        let i = try XCTUnwrap(expected.files.indices.first, "#1025 (a): an emptied sheet fails here, it never traps")
+        expected.files[i].notes.append("This file changed after the sheet opened, in a place the diff does not show "
                                        + "(a hidden value or line endings): this approval is for the file as it is now.")
         XCTAssertEqual(env.consent.seen.last, expected, "the same sheet again, with the reason it is back")
         XCTAssertEqual(env.files(under: env.claude).filter { $0.contains(".prosper-") }, [])

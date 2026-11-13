@@ -294,7 +294,10 @@ final class ManagedConfig: Sendable {
                             return .failed("removing \(f.target) failed: \(String(cString: strerror(errno)))", committed: committed)
                         }
                     } else if let bytes = f.newBytes {
-                        let temp = try writer.writeTemp(bytes, besides: f.url, mode: f.mode)
+                        // #1025 (c): the mode as it is now; a chmod while the sheet was up changes no byte and stays
+                        var st = stat()
+                        let mode = stat(f.url.path, &st) == 0 ? st.st_mode & 0o7777 : f.mode
+                        let temp = try writer.writeTemp(bytes, besides: f.url, mode: mode)
                         // errata C9: re-read and compare right before rename; Claude Code writes this file too.
                         guard hash(read(f.url)) == f.baseHash else {
                             _ = unlink(temp.path)

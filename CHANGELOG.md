@@ -531,6 +531,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: a Restart whose master fails now shows dch's own error line, and a Resume that could
   not start the program shows the exec error (for example "No such file or directory") instead of a
   generic "did not start".
+- Managed config: a text config file that starts with a byte order mark keeps it at the very start
+  when an extension adds, updates or removes a block at the top of the file, and such a block no
+  longer reads as corrupt. Seed files are copied byte for byte, byte order mark included. A
+  permission change made to a file while the confirmation sheet is open is kept by the write.
 
 ## v2.174.0
 

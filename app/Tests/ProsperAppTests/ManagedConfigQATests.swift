@@ -398,7 +398,8 @@ extension ManagedConfigQATests {
     private func withChangedNote(_ sheet: ManagedConfigChangeSet?) -> ManagedConfigChangeSet? {
         guard var sheet else { return nil }
         XCTAssertEqual(sheet.files.count, 1)
-        sheet.files[0].notes.append(Self.changedNote)
+        // #1025 (a): an emptied sheet fails the count above, it never traps on an index
+        if let i = sheet.files.indices.first { sheet.files[i].notes.append(Self.changedNote) }
         return sheet
     }
 
@@ -766,5 +767,30 @@ extension ManagedConfigQATests {
         XCTAssertEqual(consent.seen.count, 2, "another file under the same lines: asked again")
         XCTAssertEqual(consent.seen.last, withChangedNote(consent.seen.first))
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    /// #1025 (b): two files in one sheet, one re-saved under the sheet with other bytes under the same
+    /// lines (LF to CRLF): the second sheet carries the note on that file only.
+    func testA7R2TwoFilesOnlyTheResavedOneCarriesTheNote() async throws {
+        let env = makeMCEnv()
+        let url = env.claudeMD, notes = env.claude.appendingPathComponent("NOTES.md")
+        try env.write("# one\n# two\n# three\n# four\n", url)
+        try env.write("# notes\n", notes)
+        let consent = MCScriptedConsent { call, _ in
+            if call == 1 { try? Data("# one\r\n# two\r\n# three\r\n# four\r\n".utf8).write(to: url) }
+            return true
+        }
+        let mc = ManagedConfig(roots: env.mc.roots, consent: consent, writer: env.writer)
+        let r = await mc.apply([MCPieces.block(), MCPieces.block("notes", target: "claude:NOTES.md")], owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        XCTAssertEqual(consent.seen.count, 2, "CLAUDE.md differs in bytes: asked again")
+        var expected = try XCTUnwrap(consent.seen.first)
+        XCTAssertEqual(expected.files.map(\.target), ["claude:CLAUDE.md", "claude:NOTES.md"])
+        let i = try XCTUnwrap(expected.files.firstIndex(where: { $0.target == "claude:CLAUDE.md" }))
+        expected.files[i].notes.append(Self.changedNote)
+        XCTAssertEqual(consent.seen.last, expected, "the note on the re-saved file only")
+        XCTAssertEqual(consent.seen.last?.files.first(where: { $0.target == "claude:NOTES.md" })?.notes.contains(Self.changedNote), false)
+        XCTAssertTrue(has(env.bytes(url), "# four\r\n\r\n<!-- >>> prosper:kit-a:rules "))
+        XCTAssertTrue(has(env.bytes(notes), "# notes\n\n<!-- >>> prosper:kit-a:notes "))
     }
 }

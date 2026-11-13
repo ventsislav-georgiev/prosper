@@ -142,9 +142,13 @@ enum ManagedConfigPaths {
         let realDir = dir.resolvingSymlinksInPath()
         let file = dir.appendingPathComponent(rel).resolvingSymlinksInPath()
         guard file.path.hasPrefix(realDir.path + "/") else { return .failure(.outsideRoot) }
-        guard let data = FileManager.default.contents(atPath: file.path), let text = String(data: data, encoding: .utf8) else {
+        // #1025: String(data:encoding:) may drop a leading BOM; the round trip keeps the copy byte for byte
+        // and still refuses bytes that are not UTF-8 (they decode to U+FFFD and differ).
+        guard let data = FileManager.default.contents(atPath: file.path) else {
             return .failure(.invalidPiece("seed source is missing or not UTF-8 text"))
         }
+        let text = String(decoding: data, as: UTF8.self)
+        guard text.utf8.elementsEqual(data) else { return .failure(.invalidPiece("seed source is missing or not UTF-8 text")) }
         return .success(text)
     }
 

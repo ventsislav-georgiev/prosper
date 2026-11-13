@@ -79,8 +79,10 @@ enum ManagedTextBlock {
         let nl = OrderedJSON.newline(of: t)
         let b = Array(block.replacingOccurrences(of: "\n", with: nl).utf8)
         let n = Array(nl.utf8)
-        if t.isEmpty { return b + n }
-        if position == .top { return b + n + n + t }
+        // #1025: a byte order mark stays at byte 0; the block goes after it
+        let bom = t.starts(with: Lines.bom) ? Lines.bom : []
+        if t.count == bom.count { return bom + b + n }
+        if position == .top { return bom + b + n + n + Array(t.dropFirst(bom.count)) }
         if t.last == 0x0A { return t + n + b + n }
         return t + n + n + b // the file had no final newline: keep it that way
     }
@@ -110,14 +112,16 @@ enum ManagedTextBlock {
 }
 
 /// Line ranges of a byte buffer. A line ends at "\n"; a "\r" before it belongs to the terminator.
-/// Plain value type, no isolation.
+/// A UTF-8 byte order mark at byte 0 belongs to no line (#1025): line 0 starts after it, so a
+/// marker behind it is found and a splice at line 0 keeps it. Plain value type, no isolation.
 struct Lines {
+    static let bom: [UInt8] = [0xEF, 0xBB, 0xBF]
     let bytes: [UInt8]
     private(set) var starts: [Int] = []
 
     init(_ bytes: [UInt8]) {
         self.bytes = bytes
-        var s = 0
+        var s = bytes.starts(with: Lines.bom) ? Lines.bom.count : 0
         for (i, c) in bytes.enumerated() where c == 0x0A {
             starts.append(s)
             s = i + 1
