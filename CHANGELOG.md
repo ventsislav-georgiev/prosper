@@ -652,6 +652,12 @@ tag from the now-released section and put it on the new top draft.
   the call ends with "execution budget exceeded", and pcall, xpcall, coroutine.resume, an error
   handler or a close handler cannot keep it going. An extension that sets a `__gc` finalizer now
   gets an error from setmetatable, and collectgarbage only reports ("count", "isrunning"). (#1126)
+- Ships dch 1.62.0 (was 1.60.0). A paste into a program that is busy printing no longer freezes the
+  session. In an attach, a key typed right after the detach key counts even on a busy machine. The
+  X-ray view lists pull requests, issues and tickets with the one mentioned last at the top, `a`
+  shows files, commits and URLs too, and `Ctrl-R` looks up a ref typed in the filter; on a ref's
+  card `o` opens the session and the other-projects scan moved to `p`. The view says why it has
+  nothing to show, and comes back whole after a stop and `fg`.
 
 ## v2.174.0
 
