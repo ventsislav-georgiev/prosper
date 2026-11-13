@@ -269,24 +269,50 @@ extension AgentWindowD1Tests {
 
     // MARK: INFO-6, INFO-7
 
-    /// QA #747 INFO-6: the form's fields are read by their labels, not their placeholders, and the recents menu has one.
-    /// A never-shown window builds no accessibility tree (its fields answer nil to accessibilityLabel(); probed in
-    /// #887's first run), so the labels are pinned in the form's source, each on its own control.
-    func testAgentWindowNewSessionFieldsCarryTheirLabels() throws {
-        let src = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AgentWindow/AgentNewSession.swift"), encoding: .utf8)
-        let lines = src.components(separatedBy: "\n")
-        for (control, label) in [("TextField(\"~\"", "Folder"), ("Menu {", "Recent folders"),
-                                 ("TextField(model.newSessionAutoName", "Name"), ("TextField(\"Empty: your login shell\"", "Command")] {
-            let at = lines.firstIndex { $0.contains(control) }
-            let labelled = lines.firstIndex { $0.contains(".accessibilityLabel(\"\(label)\")") }
-            XCTAssertNotNil(at, control)
-            XCTAssertNotNil(labelled, label)
-            if let at, let labelled {
-                // On that control: after it, before the next control of the form.
-                let next = lines[(at + 1)...].firstIndex { $0.contains("TextField(") || $0.contains("Menu {") } ?? lines.count
-                XCTAssertTrue(labelled > at && labelled < next, "\(label) labels \(control)")
-            }
+    /// Every element under `e` in an AX client's walk (accessibilityChildren), depth first: role, label (AXDescription)
+    /// and title (AXTitle). Read through KVC because a SwiftUI button's title is an attributed string.
+    @MainActor
+    func axWalk(_ e: Any, _ out: inout [(role: String, label: String, title: String)], depth: Int = 0) {
+        guard depth < 40, let o = e as? NSObject else { return }
+        func text(_ key: String) -> String {
+            let v = o.value(forKey: key)
+            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
+        }
+        out.append((text("accessibilityRole"), text("accessibilityLabel"), text("accessibilityTitle")))
+        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axWalk(k, &out, depth: depth + 1) }
+    }
+
+    /// QA #747 INFO-6, QA #826: VoiceOver reads the form's fields by name, not by placeholder (their label), and the
+    /// recents menu by its title. Read off the real accessibility tree: SwiftUI builds it in a never-shown window once
+    /// this process (only) is asked to, as an AX client's attribute write would; both attributes are put back after.
+    /// Named to run first in AgentWindowD1Tests.
+    @MainActor
+    func testAccessibilityTreeReadsTheNewSessionFormByName() {
+        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
+        // NSApp is nil until something creates the application; this test may run first in the process.
+        let app = NSApplication.shared
+        XCTAssertTrue(app.responds(to: set))
+        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
+        withNewSessionPrefs {
+            let m = wiringModel(store([mapped("a", ago: 1)]), SpawnCalls())
+            defer { m.close() }
+            let (win, host) = focusWindow(m)
+            defer { win.close() }
+            for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
+            m.openNewSession()
+            XCTAssertFalse(m.newSessionRecents.isEmpty, "the menu is enabled")
+            // The tree fills in on the run loop: poll for the form's four controls, with a deadline.
+            var tree: [(role: String, label: String, title: String)] = []
+            let deadline = Date().addingTimeInterval(5)
+            repeat {
+                settle(host)
+                tree = []
+                axWalk(host, &tree)
+            } while (tree.filter { $0.role == "AXTextField" }.count < 3 || !tree.contains { $0.role == "AXMenuButton" })
+                && Date() < deadline
+            print("#887 a11y tree:\n" + tree.map { "  \($0.role) label=\($0.label) title=\($0.title)" }.joined(separator: "\n"))
+            XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.map(\.label), ["Folder", "Name", "Command"])
+            XCTAssertEqual(tree.filter { $0.role == "AXMenuButton" }.map(\.title), ["Recent folders"])
         }
     }
 
