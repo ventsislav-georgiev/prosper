@@ -457,6 +457,7 @@ final class AgentIslandController {
                      bound: TimeInterval? = nil, spawn: Bool = false, history: Bool = false,
                      yields: Bool = false, kill: Bool = false,
                      onLine: (@MainActor @Sendable (String) -> Void)? = nil,
+                     prepare: (@Sendable () -> (args: [String]?, out: Data))? = nil,
                      done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
         guard let args else { return false }
         let env = controlEnv
@@ -464,7 +465,7 @@ final class AgentIslandController {
         if let onLine { hook = { line in DispatchQueue.main.async { MainActor.assumeIsolated { onLine(line) } } } }
         let started = runner.start(key, path: dch, args: args, cwd: cwd, bound: bound, yields: yields, kill: kill,
                                    env: { spawn ? AgentIsland.spawnEnv(env(key.dir)) : env(key.dir) },
-                                   onLine: hook) { [weak self] r in
+                                   onLine: hook, prepare: prepare) { [weak self] r in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, self.store != nil else { return }
@@ -505,8 +506,9 @@ final class AgentIslandController {
     /// the job's own running text is up, when it failed, or when dch 1.24.1
     /// skipped a claude typed into the shell (in_shell). The master pass is
     /// Restart all's summary only.
-    private func dirLine(_ line: String, dir: String, _ verb: AgentIsland.Verb) {
-        guard let store, let o = AgentIsland.jsonLine(line) else { return }
+    /// #584: `only`, the names the job asked about; a line for any other is ignored.
+    private func dirLine(_ line: String, dir: String, _ verb: AgentIsland.Verb, only: Set<String>? = nil) {
+        guard let store, let o = AgentIsland.jsonLine(line), only?.contains(o.name) ?? true else { return }
         let history = verb == .resume || verb == .resumeNoMessage
         var key = AgentSessionKey(dir: dir, name: o.name), record: DchHistoryRecord?, named = false
         if history {
@@ -584,7 +586,7 @@ final class AgentIslandController {
     /// an outcome ("Killed") outlives the refusal. Goes once the job that refused it ends.
     private func refuseBusy(_ key: AgentSessionKey, _ text: String) {
         if let now = store?.actions[key], ![AgentIsland.restartBusyText, AgentIsland.stopBusyText, AgentIsland.killBusyText,
-                                            AgentIsland.renameBusyText].contains(now) {
+                                            AgentIsland.renameBusyText, AgentIsland.messageBusyText].contains(now) {
             return
         }
         store?.actions[key] = text
@@ -610,6 +612,87 @@ final class AgentIslandController {
         }
         if !started, sayBusy { refuseBusy(key, AgentIsland.stopBusyText) }
         return started
+    }
+
+    // MARK: - Message (#584)
+
+    /// A row's Message…: the composer in the control line, for this row (any other question goes).
+    /// Only while open (the panel is key then), on the base gate, for a live row dch can name; a busy
+    /// row (a job, or a window action in flight) refuses here and says so, before anything is typed.
+    func askMessage(_ s: AgentSession) {
+        guard let store, store.expanded, store.resumeGate.isOK, AgentIsland.passable(s.name),
+              store.sessions.contains(where: { $0.key == s.key }) else { return }
+        if runner.isBusy(s.key) || inFlight.contains(s.key) { return refuseBusy(s.key, AgentIsland.messageBusyText) }
+        store.dropQuestions()
+        store.ask([s], skipped: 0, global: true)
+        store.messageDraft = ""
+        layout()
+    }
+
+    /// The "⋯" menu's Message all in <tab>…: the composer for the shown tab's live rows, fixed now.
+    func askMessageAll() {
+        guard let store, store.expanded, store.resumeGate.isOK else { return }
+        let t = store.messageAllTargets
+        guard !t.rows.isEmpty else { return }
+        store.dropQuestions()
+        store.ask(t.rows, skipped: t.skipped, global: false)
+        store.messageDraft = ""
+        layout()
+    }
+
+    /// Cancel or Esc: the composer closes and its draft goes.
+    func cancelMessage() {
+        guard let store, store.messageDraft != nil else { return }
+        store.dropQuestions()
+        layout()
+    }
+
+    /// The panel's Esc: the composer first, else the island collapses.
+    func escape() {
+        if store?.messageDraft != nil { cancelMessage() } else { setExpanded(false) }
+    }
+
+    /// Send or Enter: `--say <names…> --json -- <text>` on the composer's rows still live, the text one argv
+    /// element. A row's Message is a job on the row's key; Message all one job per dir under the dir-wide key,
+    /// like Stop all, so a dir with any job running (or a row with a window action in flight) is refused whole
+    /// and says so. The composer closes; the text goes nowhere but dch's argv.
+    /// #584 r2: in the job, before the say, the window's screen guard reads each name (messageScreens): a
+    /// refused one is left out of the say and reads as skipped in the window's words. The job's hold (its
+    /// key in the runner, its running text, which the window's input lock reads) covers the reads and the say.
+    /// A gate that fell while the composer was open closes it and says why on its rows' line.
+    func sendMessage() {
+        guard let store, let draft = store.messageDraft, let text = AgentIsland.messageText(draft) else { return }
+        let rows = store.messageTargets, all = store.asked.tab != nil, io = io
+        store.dropQuestions()
+        guard case .ok(let dch) = store.resumeGate else {
+            let why = "Controls \(store.resumeGate.refusal ?? "")"
+            for s in rows { store.actions[all ? AgentSessionKey(dir: s.key.dir, name: "") : s.key] = why }
+            return layout()
+        }
+        for (dir, group) in Dictionary(grouping: rows, by: \.key.dir).sorted(by: { $0.key < $1.key }) {
+            let names = group.map(\.name), only = Set(names)
+            let key = all ? AgentSessionKey(dir: dir, name: "") : group[0].key
+            let line: (@MainActor @Sendable (String) -> Void)? = { [weak self] in self?.dirLine($0, dir: dir, .message, only: only) }
+            let screens: @Sendable () -> (args: [String]?, out: Data) = {
+                let g = AgentIsland.messageScreens(io, dir: dir, names: names)
+                return (g.names.isEmpty ? nil : AgentIsland.messageArgs(g.names, text), g.out)
+            }
+            var started = false
+            if !group.contains(where: { inFlight.contains($0.key) }) {
+                started = run(key, dch: dch, args: AgentIsland.messageArgs(names, text), running: AgentIsland.sendingText,
+                              bound: DchActionRunner.messageBound, onLine: all ? line : nil, prepare: screens) { [weak self] r in
+                    if all { self?.dirDone(dir, AgentIsland.messageTally(r, names: names)) } else {
+                        self?.setRow(key, AgentIsland.rowText(r, name: key.name, .message))
+                    }
+                }
+            }
+            if !started {
+                if all { store.actions[key] = AgentIsland.messageBusyText } else { refuseBusy(key, AgentIsland.messageBusyText) }
+            } else if all {
+                for s in group { store.actions[s.key] = AgentIsland.sendingText }
+            }
+        }
+        layout()
     }
 
     // MARK: - Rename (#829 G4)
@@ -907,6 +990,11 @@ final class AgentIslandController {
         menu.addItem(AgentIslandMenuItem(AgentIsland.killAllGlobalLabel, enabled: on && killable(true)) {
             [weak self] in self?.askKillAll(global: true)
         })
+        // #584: the shown tab's live sessions, by name; the base gate only (dch answers an old master itself).
+        menu.addItem(AgentIslandMenuItem(AgentIsland.messageAllLabel(tab: tab),
+                                         enabled: on && !(store?.messageAllTargets.rows.isEmpty ?? true)) {
+            [weak self] in self?.askMessageAll()
+        })
         if let why = m.refused {
             menu.addItem(.separator())
             menu.addItem(AgentIslandMenuItem("Controls \(why)", enabled: false))
@@ -1056,7 +1144,7 @@ final class AgentIslandController {
         // Above the menu bar (24) and status items, below menus (101).
         p.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
-        p.onEscape = { [weak self] in self?.setExpanded(false) }
+        p.onEscape = { [weak self] in self?.escape() }
         let host = FirstClickHostingView(rootView: AgentIslandView(
             store: store,
             onToggle: { [weak self] in self?.setExpanded(!(self?.store?.expanded ?? true)) },
@@ -1080,7 +1168,10 @@ final class AgentIslandController {
             onPin: { [weak self] in self?.pin($0) },
             onRemove: { [weak self] in self?.remove($0) },
             onClearUnpinned: { [weak self] in self?.askClearUnpinned() },
-            onConfirmClear: { [weak self] in self?.confirmClearUnpinned($0) }))
+            onConfirmClear: { [weak self] in self?.confirmClearUnpinned($0) },
+            onMessage: { [weak self] in self?.askMessage($0) },
+            onSendMessage: { [weak self] in self?.sendMessage() },
+            onCancelMessage: { [weak self] in self?.cancelMessage() }))
         host.sizingOptions = []
         p.contentView = host
         panel = p

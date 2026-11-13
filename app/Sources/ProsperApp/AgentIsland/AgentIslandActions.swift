@@ -407,6 +407,8 @@ extension AgentIsland {
         case resumeNoMessage = "Resume (no message)"
         /// #605: a History row's pin toggle and X, and Clear unpinned.
         case pin = "Pin", unpin = "Unpin", remove = "Remove", clear = "Clear"
+        /// #584: a row's Message… and Message all (`--say`).
+        case message = "Message"
 
         var done: String {
             switch self {
@@ -418,9 +420,13 @@ extension AgentIsland {
             case .unpin: "Unpinned"
             case .remove: "Removed"
             case .clear: "Cleared"
+            case .message: "Sent"
             }
         }
-        var minutes: Int { Int((self == .restart || self == .stop ? DchActionRunner.restartBound : DchActionRunner.bound) / 60) }
+        var minutes: Int {
+            Int((self == .restart || self == .stop ? DchActionRunner.restartBound
+                 : self == .message ? DchActionRunner.messageBound : DchActionRunner.bound) / 60)
+        }
     }
 
     /// One output line as a --json object; nil for anything else (stderr's text,
@@ -442,7 +448,7 @@ extension AgentIsland {
 
     /// The texts a row shows while a job runs; a dir job clears any left when it ends.
     static var runningTexts: Set<String> {
-        Set(phaseWords.map { $0.prefix(1).uppercased() + $0.dropFirst() + "…" } + [restartingText, stoppingText, resumingText])
+        Set(phaseWords.map { $0.prefix(1).uppercased() + $0.dropFirst() + "…" } + [restartingText, stoppingText, resumingText, sendingText])
     }
 
     /// A result as its row's text: a short word for ok, else dch's detail
@@ -527,10 +533,18 @@ extension AgentIsland {
 
     /// A one-row job's text: its last result for `name` (for --restart the
     /// agent's, else the master pass's), else the exit.
+    /// QA #453 L2: a failed master pass reads dch's "dch: " line (its detail only points at stderr).
+    /// QA #453 L3: a Resume that did not start reads its exec line, "dch: <as>: …", as spawnText does.
+    /// #584: a Message with no line for its name failed, whatever the exit.
     static func rowText(_ r: DchActionResult, name: String, _ verb: Verb) -> String {
         if r.stopped { return "\(verb.rawValue) cancelled: no answer in \(verb.minutes)m" }
-        if let f = r.json.last(where: { $0.name == name && ($0.isFinal || $0.isMaster) }) { return finalText(f, verb) }
-        return r.status == 0 ? verb.done : "\(verb.rawValue) \(failedText(r))"
+        if let f = r.json.last(where: { $0.name == name && ($0.isFinal || $0.isMaster) }) {
+            let started = f.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? f.name
+            let exec = f.isFinal && f.reason == "not_started" && !dashRefused(f, verb)
+                ? r.text.last { $0.hasPrefix("dch: \(started): ") } : nil
+            return (f.isMaster && f.failed ? r.dchLine : exec).map { "\(verb.rawValue) failed: \($0)" } ?? finalText(f, verb)
+        }
+        return r.status == 0 && verb != .message ? verb.done : "\(verb.rawValue) \(failedText(r))"
     }
 
     /// Restart all's one line: the masters moved to this dch, the agents
@@ -621,6 +635,54 @@ extension AgentIsland {
         let finals = r.json.filter(\.isFinal)
         return (finals.filter { $0.result == "ok" }.count, finals.filter(\.failed).count,
                 finals.filter { $0.result == "skipped" }.count)
+    }
+
+    // MARK: - Message (#584)
+
+    static let messageLabel = "Message…"
+    static func messageAllLabel(tab: String) -> String { "Message all in \(tab)…" }
+    static let sendingText = "Sending…"
+    static let messageBusyText = "Message not sent: another job is running"
+
+    /// The composer's text as sent: the window's sanitizer (AgentWindowDriver.message: controls but LF
+    /// and tab dropped, CR to LF, trimmed), then its line breaks as spaces: one line, one argv element.
+    static func messageText(_ draft: String) -> String? {
+        AgentWindowDriver.message(draft).map { $0.split(whereSeparator: \.isNewline).joined(separator: " ") }
+    }
+
+    /// `--say <names…> --json -- <text>`: named sessions only, never `--all`; the text after "--", so a
+    /// leading "-" is text.
+    static func messageArgs(_ names: [String], _ text: String) -> [String]? { named("--say", names, ["--json", "--", text]) }
+
+    /// #584 r2: the window's screen guard before its say (#820, QA #651 F1: dch can say idle over a prompt it
+    /// misreads, and a pasted digit then picks a row), per name, on the job's thread: one `--read` each (and
+    /// `--read`'s no-mirror probe after an empty one). The names it clears, and a skipped line in the window's
+    /// words for each it refuses: a prompt on screen, or an empty read (fails closed; no mirror: noScreen).
+    static func messageScreens(_ io: AgentPromptIO, dir: String, names: [String]) -> (names: [String], out: Data) {
+        var clear: [String] = [], out = Data()
+        for name in names {
+            let key = AgentSessionKey(dir: dir, name: name), shown = io.read(key)
+            guard let why = AgentWindowDriver(key: key, io: io).refusal(shown, lite: AgentWindowText.noScreen) else {
+                clear.append(name)
+                continue
+            }
+            let line = ["name": name, "result": "skipped", "reason": "screen", "detail": why]
+            out += ((try? JSONSerialization.data(withJSONObject: line, options: .sortedKeys)) ?? Data()) + Data("\n".utf8)
+        }
+        return (clear, out)
+    }
+
+    /// Message all's dir line, "N sent, K skipped, F failed", over the asked names only: a line naming
+    /// another session is ignored, and an asked name with no result line counts as failed.
+    static func messageTally(_ r: DchActionResult, names: [String]) -> String {
+        if r.stopped { return "Message all cancelled: no answer in \(Verb.message.minutes)m" }
+        let asked = Set(names)
+        var last: [String: String] = [:]
+        for o in r.json where o.isFinal && asked.contains(o.name) { last[o.name] = o.result }
+        let sent = last.values.filter { $0 == "ok" }.count, skipped = last.values.filter { $0 == "skipped" }.count
+        // sent + skipped <= last.count <= asked.count: `last` holds asked names only.
+        return [(sent, "sent"), (skipped, "skipped"), (asked.count - sent - skipped, "failed")]
+            .filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }.joined(separator: ", ")
     }
 
     // MARK: - Pin, Remove and Clear unpinned (#605)
@@ -1274,6 +1336,8 @@ final class DchActionRunner: @unchecked Sendable {
     /// #579: a restart waits up to DCH_AGENT_TIMEOUT_MS (10 min) for its agents
     /// to pause, then up to DCH_AGENT_STEP_MS per step. #580: --stop waits the same.
     static let restartBound: TimeInterval = 900
+    /// #584: `--say` waits up to 30 s for its paste, then re-presses Enter (AgentPromptIO.sayTimeout).
+    static let messageBound: TimeInterval = 60
     /// #591 r2 (QA #462 M2): the one runner the island's buttons and the phone's
     /// verbs share, so a phone job and an island job on one row or dir exclude each other.
     static let shared = DchActionRunner()
@@ -1338,10 +1402,13 @@ final class DchActionRunner: @unchecked Sendable {
     /// #579: `cwd` for --spawn, `bound` overrides the runner's, and `onLine` gets
     /// each non-empty output line (trimmed) as it comes, all before `done`.
     /// #744: `yields` marks a Stop or Restart, which a `kill` job may run beside.
+    /// #584 r2: `prepare` runs on the job's thread, under its hold, before the launch: the argv to run
+    /// (nil: nothing runs) and lines of its own, read as if dch had printed them first (a guard's skips).
     @discardableResult
     func start(_ key: AgentSessionKey, path: String, args: [String], cwd: String? = nil, bound: TimeInterval? = nil,
                yields: Bool = false, kill: Bool = false,
                env: @escaping @Sendable () -> [String: String], onLine: (@Sendable (String) -> Void)? = nil,
+               prepare: (@Sendable () -> (args: [String]?, out: Data))? = nil,
                done: @escaping @Sendable (DchActionResult) -> Void) -> Bool {
         let job = Job()
         guard lock.withLock({ () -> Bool in
@@ -1352,7 +1419,10 @@ final class DchActionRunner: @unchecked Sendable {
         }) else { return false }
         let launch = launch, lines = LineSplitter(onLine)
         DispatchQueue.global(qos: .utility).async { [self] in
-            let r = launch(path, args, env(), cwd, { pid in
+            let prepared: (args: [String]?, out: Data) = prepare?() ?? (args, Data())
+            let pre = prepared.out
+            lines.add(pre)
+            let r = prepared.args.map { argv in launch(path, argv, env(), cwd, { pid in
                 // Cancelled before the pid was known: its one SIGTERM goes now.
                 let late = self.lock.withLock { () -> pid_t? in
                     job.pid = pid
@@ -1362,9 +1432,9 @@ final class DchActionRunner: @unchecked Sendable {
             }, { chunk in
                 self.lock.withLock { job.lastOutput = .now() }
                 lines.add(chunk)
-            })
+            }) } ?? (status: 0, out: Data())
             lines.flush()
-            var result = AgentIsland.actionResult(status: r.status, output: r.out)
+            var result = AgentIsland.actionResult(status: r.status, output: pre + r.out)
             lock.withLock {
                 if kill { kills[key] = nil } else { jobs[key] = nil }
                 job.pid = nil   // reaped: never signalled again (the pid may be reused)

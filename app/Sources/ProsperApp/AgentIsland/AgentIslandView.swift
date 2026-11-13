@@ -306,6 +306,9 @@ final class AgentIslandStore: ObservableObject {
     @Published var confirmingKill: AgentSessionKey?
     /// #605: the History header asks "Clear N unpinned?".
     @Published var confirmingClear = false
+    /// #584: the composer in the control line, its draft; nil: closed. Its rows are `asked` (tab nil: one row's
+    /// Message…, else Message all in that tab). Never logged, never shown on a row.
+    @Published var messageDraft: String?
 
     /// At most one inline question shows: every ask drops the others first.
     func dropQuestions() {
@@ -314,6 +317,7 @@ final class AgentIslandStore: ObservableObject {
         confirmingKillAll = false
         confirmingKill = nil
         confirmingClear = false
+        messageDraft = nil
         asked = Asked()
     }
 
@@ -326,6 +330,7 @@ final class AgentIslandStore: ObservableObject {
         if confirmingStopAll, stopAllTargets.count != asked.keys.count { confirmingStopAll = false }
         if confirmingKillAll, killAllTargets.count != asked.keys.count { confirmingKillAll = false }
         if confirmingKill != nil, killTarget == nil { confirmingKill = nil }
+        if messageDraft != nil, messageTargets.isEmpty { messageDraft = nil }   // #584: nobody left to message
     }
 
     init(geometry: AgentIslandGeometry, details: AgentIslandRowDetails = .all,
@@ -386,6 +391,25 @@ final class AgentIslandStore: ObservableObject {
     /// only while it is the shown one): all the answer acts on.
     var stopAllTargets: [AgentSession] { askedRows(stopTargets(global: asked.tab == nil).stop) }
     var killAllTargets: [AgentSession] { askedRows(killTargets(global: asked.tab == nil).kill) }
+    /// #584: the composer's rows still live (Message all's only while its tab shows); asked only passable names.
+    var messageTargets: [AgentSession] { askedRows(sessions) }
+
+    /// #584: Message all's rows, the shown tab's whose name dch takes, and how many it leaves out.
+    var messageAllTargets: (rows: [AgentSession], skipped: Int) {
+        let rows = sessionTab.sessions, ok = rows.filter { AgentIsland.passable($0.name) }
+        return (ok, rows.count - ok.count)
+    }
+
+    /// #584: the composer's name for its field: "Message api", "Message 3 sessions in Sessions".
+    var messagePrompt: String {
+        let rows = messageTargets
+        guard let tab = asked.tab else { return "Message \(rows.first?.title ?? "")" }
+        return "Message \(rows.count) session\(rows.count == 1 ? "" : "s") in \(tab)"
+    }
+
+    /// #584: what the field types, only while the composer is open: a late write from a field that is
+    /// going away never opens it again.
+    func typeMessage(_ text: String) { if messageDraft != nil { messageDraft = text } }
 
     private func askedRows(_ scope: [AgentSession]) -> [AgentSession] {
         asked.tab == nil || asked.tab == sessionTab.label ? scope.filter { asked.keys.contains($0.key) } : []
@@ -508,7 +532,7 @@ final class AgentIslandStore: ObservableObject {
     /// #579: the line over the rows: the Restart all question on any tab, else
     /// under Sessions the dir-wide status (History's header has its own).
     var showsControlLine: Bool {
-        confirmingRestartAll || confirmingStopAll || confirmingKillAll || killTarget != nil
+        confirmingRestartAll || confirmingStopAll || confirmingKillAll || killTarget != nil || messageDraft != nil
             || (!historyTab && !dirStatus.isEmpty)
     }
 
@@ -570,6 +594,10 @@ struct AgentIslandView: View {
     var onRemove: (DchHistoryRecord) -> Void = { _ in }
     var onClearUnpinned: () -> Void = {}
     var onConfirmClear: (Bool) -> Void = { _ in }
+    /// #584: a row's Message… (opens the composer), and the composer's Send (or Enter) and Cancel (or Esc).
+    var onMessage: (AgentSession) -> Void = { _ in }
+    var onSendMessage: () -> Void = {}
+    var onCancelMessage: () -> Void = {}
 
     private var g: AgentIslandGeometry { store.geometry }
 
@@ -675,6 +703,8 @@ struct AgentIslandView: View {
         var needs: String? = nil
         /// #744: its Kill (asks first); any master, only the base gate and a passable name.
         var kill: () -> Void = {}
+        /// #584: its Message… (opens the composer); the base gate and a passable name, any master.
+        var message: () -> Void = {}
         var id: AgentSessionKey { session.key }
         var restartTitle: String { AgentIsland.label(AgentIsland.restartLabel, needs: needs) }
         /// One hint, never both: the dch one wins over "restart this session first".
@@ -686,6 +716,7 @@ struct AgentIslandView: View {
         var restartEnabled: Bool { refused == nil && needs == nil && controls }
         var stopEnabled: Bool { restartEnabled && canStop }
         var killEnabled: Bool { refused == nil && AgentIsland.killArgs(session.name) != nil }
+        var messageEnabled: Bool { refused == nil && controls }
     }
 
     var drawn: [Drawn] {
@@ -693,7 +724,7 @@ struct AgentIslandView: View {
         return store.visible.map { s in
             Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) },
                   restart: { onRestart(s) }, refused: refused, stop: { onStop(s) }, canStop: AgentIsland.canStop(s),
-                  needs: needs, kill: { onKill(s) })
+                  needs: needs, kill: { onKill(s) }, message: { onMessage(s) })
         }
     }
 
@@ -705,6 +736,7 @@ struct AgentIslandView: View {
     @ViewBuilder
     private func restartItem(_ r: Drawn) -> some View {
         if r.controls {
+            Button(AgentIsland.messageLabel, action: r.message).disabled(!r.messageEnabled)   // #584
             Button(r.restartTitle, action: r.restart).disabled(!r.restartEnabled)
             Button(r.stopTitle, action: r.stop).disabled(!r.stopEnabled)
             Button(AgentIsland.killLabel, action: r.kill).disabled(!r.killEnabled)   // #744
@@ -746,7 +778,9 @@ struct AgentIslandView: View {
     /// Cancel; no modal, no animation), else the dir-wide statuses. Static text.
     private var controlLine: some View {
         HStack(spacing: 10) {
-            if store.confirmingRestartAll {
+            if store.messageDraft != nil {
+                AgentIslandComposer(store: store, onSend: onSendMessage, onCancel: onCancelMessage)
+            } else if store.confirmingRestartAll {
                 Text(verbatim: store.restartAllForce ? AgentIsland.restartAllForceQuestion : AgentIsland.restartAllQuestion)
                     .foregroundStyle(Color.white.opacity(0.8))
                 Spacer(minLength: 0)
@@ -791,6 +825,10 @@ struct AgentIslandView: View {
     }
 
     private func lineButton(_ title: String, action: @escaping () -> Void) -> some View {
+        AgentIslandView.lineButton(title, action: action)
+    }
+
+    static func lineButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(verbatim: title)
                 .font(.system(size: 11, weight: .semibold))
@@ -1544,5 +1582,37 @@ struct AgentPromptCardView: View {
         }
         .buttonStyle(.plain)
         .padding(.bottom, 4)
+    }
+}
+
+/// #584: the one-line composer in the control line: the field, Send and Cancel. Enter sends, Esc
+/// cancels, Send is off while the text (as sent) is empty. The panel is key while the island is open.
+struct AgentIslandComposer: View {
+    @ObservedObject var store: AgentIslandStore
+    var onSend: () -> Void
+    var onCancel: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let prompt = store.messagePrompt, empty = AgentIsland.messageText(store.messageDraft ?? "") == nil
+        HStack(spacing: 10) {
+            TextField(text: Binding(get: { store.messageDraft ?? "" }, set: { store.typeMessage($0) }),
+                      prompt: Text(verbatim: prompt)) { Text(verbatim: prompt) }
+                .textFieldStyle(.plain)
+                .foregroundStyle(Color.white.opacity(0.9))
+                .focused($focused)
+                .onSubmit(onSend)
+                .onExitCommand(perform: onCancel)
+                .accessibilityLabel(Text(verbatim: prompt))
+            AgentIslandView.lineButton("Send", action: onSend)
+                .disabled(empty)
+                .opacity(empty ? 0.4 : 1)
+                .fixedSize()
+                .accessibilityLabel(Text(verbatim: "Send message"))
+            AgentIslandView.lineButton("Cancel", action: onCancel)
+                .fixedSize()
+                .accessibilityLabel(Text(verbatim: "Cancel message"))
+        }
+        .onAppear { focused = true }
     }
 }

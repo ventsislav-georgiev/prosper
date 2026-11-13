@@ -517,6 +517,19 @@ tag from the now-released section and put it on the new top draft.
   threads are still declined, and a card you have not answered when the turn ends is declined then.
   A turn you stopped that ends late no longer takes the next turn's approval cards with it, and
   resuming a session that codex answers under another thread id keeps that thread's token usage.
+- Agent Island: a session row's right-click menu has "Message…". It opens a one-line box in the
+  island: type, press Enter or Send, and dch types the message into that session's Claude. Esc or
+  Cancel closes it, and so does closing the island; the draft is not kept. The row reads "Sending…",
+  then "Sent" or dch's reason (for example "no claude runs in the session"). A session whose Claude
+  is showing a prompt (a permission question, a plan approval) is not messaged: Prosper reads its
+  screen first and the row says to open it in a terminal.
+- Agent Island: the "⋯" menu has "Message all in Sessions…" (or "…Sidekicks…"), which sends one
+  message to every live session in that tab, by name, and shows "N sent, K skipped, F failed" per
+  folder. A session that is showing a prompt, or that is busy with another island action, is not
+  messaged and says so.
+- Agent Island: a Restart whose master fails now shows dch's own error line, and a Resume that could
+  not start the program shows the exec error (for example "No such file or directory") instead of a
+  generic "did not start".
 
 ## v2.174.0
 
