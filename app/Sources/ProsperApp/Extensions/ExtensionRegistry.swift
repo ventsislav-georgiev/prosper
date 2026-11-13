@@ -276,8 +276,8 @@ final class ExtensionRegistry: ObservableObject {
             } else if isDevHost {
                 try? fm.removeItem(at: dest)
                 try? fm.copyItem(at: child, to: dest)
-            } else if let bundled = manifestVersion(at: child),
-                      let installed = manifestVersion(at: dest),
+            } else if let bundled = Self.manifestVersion(at: child),
+                      let installed = Self.manifestVersion(at: dest),
                       installed < bundled {
                 try? fm.removeItem(at: dest)
                 try? fm.copyItem(at: child, to: dest)
@@ -288,9 +288,11 @@ final class ExtensionRegistry: ObservableObject {
 
     /// Reads just the `version` from an extension directory's `extension.toml`,
     /// without a full validating load (used by seeding to compare versions).
-    private func manifestVersion(at dir: URL) -> SemanticVersion? {
+    /// Static and internal so ExtensionManifestVersionTests can call it without a registry;
+    /// reads through `ExtensionLoader.readManifest` so an oversized file is never read whole (QA 787 F1).
+    static func manifestVersion(at dir: URL) -> SemanticVersion? {
         let toml = dir.appendingPathComponent("extension.toml")
-        guard let text = try? String(contentsOf: toml, encoding: .utf8) else { return nil }
+        guard let text = try? ExtensionLoader.readManifest(toml) else { return nil }
         for line in text.split(whereSeparator: \.isNewline) {
             let t = line.trimmingCharacters(in: .whitespaces)
             guard t.hasPrefix("version") else { continue }
@@ -1136,7 +1138,7 @@ final class ExtensionRegistry: ObservableObject {
                 let remoteDir = try await RemoteInstaller.fetch(cand.url)
                 let temp = remoteDir.deletingLastPathComponent().deletingLastPathComponent()
                 defer { try? FileManager.default.removeItem(at: temp) }
-                guard let remote = manifestVersion(at: remoteDir), cand.version < remote else { continue }
+                guard let remote = Self.manifestVersion(at: remoteDir), cand.version < remote else { continue }
                 // Same clobber guard as the market path: installLocal installs under the
                 // tarball's OWN manifest id, so a (compromised) update feed for A that ships
                 // a tarball declaring id B would overwrite userDir/B and inherit B's trust.
