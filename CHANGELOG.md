@@ -471,8 +471,8 @@ tag from the now-released section and put it on the new top draft.
   when at least one session resumed and the only other sessions are old ones whose names start with
   "-" (which dch can no longer start), instead of an error.
 - Default, Daylight, Graphite and Silver now come in accent tints, picked from the dots on the
-  theme's row in Settings > Appearance; Daylight's highlight blue and Silver's and Graphite's accent
-  greys are a shade adjusted so accent text stays readable.
+  theme's row in Settings > Appearance. The Violet tints (Default, Daylight) and Daylight Ink keep
+  the theme's base blue as their secondary colour. (#911)
 - Agent Sessions window, New session: a session that dch started but that never shows up within 15
   seconds (its command ended at once, or never started) now leaves the form open, ready to start
   again, with "<name> ended at once or never started: check the command"; a ">_" shell in that case
@@ -582,6 +582,9 @@ tag from the now-released section and put it on the new top draft.
   (#1103).
 - Agent Sessions window: the sidebar's "Agent Sessions" title sits on the same line as the session
   title beside it again (#1103).
+- Theme tints: accent text in Daylight, Graphite and Silver now stays readable everywhere it is
+  drawn (the lower part of windows, the sidebar, highlighted rows such as your messages in Agent
+  Sessions); a few accent shades moved slightly darker or lighter, with the same hue. (#1095)
 
 ## v2.174.0
 

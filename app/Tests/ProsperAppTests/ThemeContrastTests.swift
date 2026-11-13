@@ -67,14 +67,28 @@ final class ThemeContrastTests: XCTestCase {
         XCTAssertEqual(Self.contrast(grey, on: .white), 4.54, accuracy: 0.01)
     }
 
+    /// Every surface token text is painted on, written out. #1095: the tint rule
+    /// (ThemeTests.testBundledThemeTintsPassTheTextContrastRule) walks the same list, since
+    /// accent text sits on all five (window gradient bgTop to bgBottom, the clipboard chip on
+    /// bgBottom, the rail's accented titles on sidebar, "You" on cardHi in the transcript).
+    static var surfaces: [(String, KeyPath<ThemePalette, Color>)] {
+        [("bgTop", \.bgTop), ("bgBottom", \.bgBottom), ("sidebar", \.sidebar),
+         ("card", \.card), ("cardHi", \.cardHi)]
+    }
+
+    /// #1095: the list above is every surface token the palette has (every token that is not
+    /// a foreground role), so dropping one from it fails here by name.
+    func testSurfaceListIsEveryPaletteSurfaceToken() {
+        let foregrounds: Set = ["blue", "blueBright", "indigo", "magenta", "terminal", "textPrimary", "textSecondary"]
+        XCTAssertEqual(Set(Self.surfaces.map { $0.0 }), Set(ThemePalette.tokenNames).subtracting(foregrounds))
+        XCTAssertEqual(Self.surfaces.count, 5)
+    }
+
     /// Text tokens on the surfaces they are painted on (window backdrop, sidebar,
     /// cards, selected rows). Token colours do not depend on the system appearance,
     /// so this holds in light and dark alike.
     func testThemeTextClearsEverySurfaceToken() throws {
-        let surfaces: [(String, KeyPath<ThemePalette, Color>)] = [
-            ("bgTop", \.bgTop), ("bgBottom", \.bgBottom), ("sidebar", \.sidebar),
-            ("card", \.card), ("cardHi", \.cardHi),
-        ]
+        let surfaces = Self.surfaces
         let texts: [(String, KeyPath<ThemePalette, Color>)] = [
             ("textPrimary", \.textPrimary), ("textSecondary", \.textSecondary),
         ]

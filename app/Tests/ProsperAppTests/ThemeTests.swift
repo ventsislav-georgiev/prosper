@@ -262,30 +262,35 @@ final class ThemeTests: XCTestCase {
 
     /// #862: every tint (base and variants) of a bundled theme that declares variants
     /// keeps its accent family readable as text: the extensions.md section 7 rule for
-    /// text (WCAG AA 4.5:1, ThemeContrastTests.minimum) against bgTop and card.
+    /// text (WCAG AA 4.5:1, ThemeContrastTests.minimum) against every surface token.
     /// #911: the themes are the literal `tintedThemes` list, which must equal the set that ships.
+    /// #1095: every surface token, not only bgTop and card (ThemeContrastTests.surfaces: accent
+    /// text is drawn on all five; QA #825 found Graphite indigo 3.88 on cardHi, Daylight and
+    /// Silver blueBright 4.07/4.08 on bgBottom).
     @MainActor
     func testBundledThemeTintsPassTheTextContrastRule() throws {
         let minimum: CGFloat = 4.5
         let all = try bundledTints()
         XCTAssertEqual(Set(all.themes.filter { $0.tints.count > 1 }.map(\.name)), Set(Self.tintedThemes.keys),
                        "the tinted bundled themes are exactly the listed ones")
-        var checked = 0
+        var checked = 0, pairs = 0
         for (name, labels) in Self.tintedThemes.sorted(by: { $0.key < $1.key }) {
             guard let t = all.themes.first(where: { $0.name == name }) else { XCTFail("\(name) is not bundled"); continue }
             XCTAssertEqual(t.tints.map(\.label), labels, name)
             for tint in t.tints {
                 let p = tint.palette
                 for (tn, c) in [("blue", p.blue), ("blueBright", p.blueBright), ("indigo", p.indigo)] {
-                    for (sn, bg) in [("bgTop", p.bgTop), ("card", p.card)] {
-                        let r = ThemeContrastTests.contrast(NSColor(c), on: NSColor(bg))
+                    for (sn, s) in ThemeContrastTests.surfaces {
+                        let r = ThemeContrastTests.contrast(NSColor(c), on: NSColor(p[keyPath: s]))
                         XCTAssertGreaterThanOrEqual(r, minimum, "\(t.name) \(tint.label): \(tn) on \(sn) is \(r):1")
+                        pairs += 1
                     }
                 }
                 checked += 1
             }
         }
         XCTAssertEqual(checked, 27, "HC Dark 5, HC Light 6, Default, Daylight, Graphite and Silver 4 each")
+        XCTAssertEqual(pairs, 27 * 3 * 5, "three accent tokens on five surfaces per tint")
     }
 
     /// #911 (OQ-91): the base tokens nudged to pass the tint rule, by the smallest change. The
@@ -293,10 +298,11 @@ final class ThemeTests: XCTestCase {
     /// by name, not only as a contrast number.
     func testNudgedBaseTokensArePinned() throws {
         let pinned: [(theme: String, token: String, hex: String)] = [
-            ("theme-daylight", "blueBright", "#006DD4"),   // was #1F8CF9 (3.02:1 on bgTop)
-            ("theme-graphite", "indigo", "#798796"),       // was #717F8E (4.04:1 on card)
-            ("theme-silver", "blueBright", "#607086"),     // was #637288 (4.37:1 on bgTop)
-            ("theme-silver", "indigo", "#636F84"),         // was #657186 (4.40:1 on bgTop)
+            // #1095: nudged again for bgBottom, sidebar and cardHi (margin >= 0.05 on every surface).
+            ("theme-daylight", "blueBright", "#0065C7"),   // #911 #006DD4 (4.07:1 on bgBottom); #1F8CF9 before
+            ("theme-graphite", "indigo", "#8794A2"),       // #911 #798796 (3.88:1 on cardHi); #717F8E before
+            ("theme-silver", "blueBright", "#59687D"),     // #911 #607086 (4.08:1 on bgBottom); #637288 before
+            ("theme-silver", "indigo", "#5C677A"),         // #911 #636F84 (4.10:1 on bgBottom); #657186 before
         ]
         let all = try bundledTints()
         for (theme, token, hex) in pinned {

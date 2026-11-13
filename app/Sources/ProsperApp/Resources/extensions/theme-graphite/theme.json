@@ -3,7 +3,7 @@
   "colors": {
     "blue":          "#9CA7B4",
     "blueBright":    "#CAD1D8",
-    "indigo":        "#798796",
+    "indigo":        "#8794A2",
     "magenta":       "#E05C69",
     "terminal":      "#65C394",
     "bgTop":         "#111214",
@@ -16,8 +16,8 @@
   },
   "tintLabel": "Steel",
   "variants": [
-    { "key": "ice",   "label": "Ice",   "colors": { "blue": "#6FC0F2", "blueBright": "#B5DDF7", "indigo": "#798796" } },
-    { "key": "sand",  "label": "Sand",  "colors": { "blue": "#CDB48A", "blueBright": "#E6D7B8", "indigo": "#798796" } },
-    { "key": "lilac", "label": "Lilac", "colors": { "blue": "#B3A3D9", "blueBright": "#D6CCEE", "indigo": "#798796" } }
+    { "key": "ice",   "label": "Ice",   "colors": { "blue": "#6FC0F2", "blueBright": "#B5DDF7", "indigo": "#8794A2" } },
+    { "key": "sand",  "label": "Sand",  "colors": { "blue": "#CDB48A", "blueBright": "#E6D7B8", "indigo": "#8794A2" } },
+    { "key": "lilac", "label": "Lilac", "colors": { "blue": "#B3A3D9", "blueBright": "#D6CCEE", "indigo": "#8794A2" } }
   ]
 }
