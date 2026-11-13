@@ -363,10 +363,11 @@ struct TranscriptBlockView: View {
 
 // MARK: - Pieces
 
-/// #797: the one "Open in terminal" look (the window header and the terminal-first state).
+/// #797: the one "Open in terminal" look (the terminal-first state, the failed-attach card, a notice that names it;
+/// #1103: the header's moved into its "⋯" menu, AgentWindowControls.sessionMenu).
 struct OpenInTerminalButton: View {
     let action: () -> Void
-    /// Icon only (a narrow window's header).
+    /// Icon only (beside a notice or a card's other button).
     var compact = false
     /// QA #668 F1: the session ended: off and dimmed in its slot; QA #672 #4: its help says why.
     var ended = false
@@ -374,7 +375,7 @@ struct OpenInTerminalButton: View {
     var help: String { ended ? AgentPaneModeToggle.endedReason : Self.help }
     var body: some View {
         Button(action: action) {
-            Label("Open in terminal", systemImage: "terminal")
+            Label(AgentWindowControls.openLabel, systemImage: "terminal")
                 .labelStyle(OpenInTerminalLabelStyle(compact: compact))
                 .font(Neon.font(11, weight: .semibold))
                 .foregroundStyle(Neon.terminal)
@@ -387,7 +388,7 @@ struct OpenInTerminalButton: View {
         .buttonStyle(.plain)
         .disabled(ended).opacity(ended ? 0.45 : 1)
         .help(help)
-        .accessibilityLabel("Open in terminal")
+        .accessibilityLabel(AgentWindowControls.openLabel)
     }
 }
 

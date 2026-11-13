@@ -305,13 +305,13 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(pair.height, sz(18), accuracy: 1, "at \(scale)")
                 let heights = models.map { NSHostingView(rootView: AgentSidebarTitleRow(model: $0).frame(width: sz(290))).fittingSize.height }
                 XCTAssertEqual(Set(heights).count, 1, "one row height for 0, 1 and 999 at \(scale): \(heights)")
-                for h in heights { XCTAssertEqual(h, sz(30) + sz(18) + sz(8), accuracy: 1, "row height at \(scale): \(heights)") }
+                for h in heights { XCTAssertEqual(h, AgentSidebarTitleRow.padTop + sz(18) + sz(8), accuracy: 1, "row height at \(scale): \(heights)") }
                 for backing: CGFloat in [1, 2] {
                     let tol = 1 / backing
                     let tag = "scale \(scale) backing \(backing)"
                     let full = CGSize(width: sz(290), height: sz(70))
                     let reps = try models.map { try wiringRender(AgentSidebarTitleRow(model: $0), full, backing: backing) }
-                    let slot = CGRect(x: full.width - sz(14) - sz(40), y: sz(30), width: sz(40), height: sz(18))
+                    let slot = CGRect(x: full.width - sz(14) - sz(40), y: AgentSidebarTitleRow.padTop, width: sz(40), height: sz(18))
                     let wide = slot.insetBy(dx: -sz(3), dy: -sz(3))
                     for (i, r) in reps.enumerated() {
                         XCTAssertEqual(regionBytes(r, wide), regionBytes(reps[0], wide), "the buttons' pixels with \([0, 1, 999][i]) \(tag)")
@@ -323,7 +323,7 @@ extension AgentWindowD1Tests {
                                      "nothing in the trailing padding \(tag)")
                     }
                     // The count's ink: none with 0 sessions, then wider for 999 than for 1.
-                    let gap = CGRect(x: sz(130), y: sz(26), width: slot.minX - sz(2) - sz(130), height: sz(26))
+                    let gap = CGRect(x: sz(130), y: AgentSidebarTitleRow.padTop - sz(4), width: slot.minX - sz(2) - sz(130), height: sz(26))
                     XCTAssertNil(ink(reps[0], gap), "no count with 0 sessions \(tag)")
                     let c1 = try XCTUnwrap(ink(reps[1], gap), tag), c999 = try XCTUnwrap(ink(reps[2], gap), tag)
                     XCTAssertGreaterThan(c999.width, c1.width, tag)
@@ -331,7 +331,7 @@ extension AgentWindowD1Tests {
                     let narrow = CGSize(width: sz(205), height: sz(70))
                     let n0 = try wiringRender(AgentSidebarTitleRow(model: models[0]), narrow, backing: backing)
                     let n999 = try wiringRender(AgentSidebarTitleRow(model: models[2]), narrow, backing: backing)
-                    let nslot = CGRect(x: narrow.width - sz(14) - sz(40), y: sz(30), width: sz(40), height: sz(18)).insetBy(dx: -sz(3), dy: -sz(3))
+                    let nslot = CGRect(x: narrow.width - sz(14) - sz(40), y: AgentSidebarTitleRow.padTop, width: sz(40), height: sz(18)).insetBy(dx: -sz(3), dy: -sz(3))
                     // R2 F6a (r7): the overlay's frame is the width offered, whatever the cut count: the same pixels.
                     XCTAssertEqual(regionBytes(n999, nslot), regionBytes(n0, nslot), "the buttons stay \(tag)")
                     XCTAssertNotNil(ink(n0, nslot), "the buttons drawn \(tag)")
@@ -371,7 +371,7 @@ extension AgentWindowD1Tests {
                 let content = win.contentLayoutRect
                 XCTAssertGreaterThan(win.frame.height - content.maxY, 0, "a title bar band above the content")
                 for (i, x) in [sz(290 - 14 - 40), sz(290 - 14 - 18)].enumerated() {
-                    let button = CGRect(x: x, y: content.maxY - sz(30) - sz(18), width: sz(18), height: sz(18))
+                    let button = CGRect(x: x, y: content.maxY - AgentSidebarTitleRow.padTop - sz(18), width: sz(18), height: sz(18))
                     XCTAssertTrue(content.contains(button), "button \(i) in the content at \(scale): \(button) in \(content)")
                     let hit = try XCTUnwrap(cv.hitTest(try XCTUnwrap(cv.superview).convert(NSPoint(x: button.midX, y: button.midY), from: nil)),
                                             "button \(i) hits a view at \(scale)")

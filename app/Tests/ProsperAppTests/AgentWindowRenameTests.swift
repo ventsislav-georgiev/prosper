@@ -669,9 +669,9 @@ extension AgentWindowD1Tests {
             AgentWindowControls.menu(s, store: st).compactMap { if case .item(_, _, let v) = $0 { v } else { nil } }
         }
         XCTAssertEqual(verbs(dash), [.rename])
-        XCTAssertEqual(AgentSessionMenuButton.help(dash), "Rename this session")
+        XCTAssertEqual(AgentSessionMenuButton.help(dash), "Open in terminal or rename this session")
         XCTAssertEqual(verbs(a), [.rename, .restart, .stop, .kill])
-        XCTAssertEqual(AgentSessionMenuButton.help(a), "Rename, restart, stop or kill this session")
+        XCTAssertEqual(AgentSessionMenuButton.help(a), "Open in terminal, rename, restart, stop or kill this session")
     }
 
     /// QA #693 INFO-5 (#2): while the field lies over it, the title and the state chip are hidden from
@@ -700,9 +700,8 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(visibility(nil), "0", "not renaming: the title reads")
     }
 
-    /// QA #693 INFO-5 (#3): the header passes `ended` to its Open in terminal: an ended session's button
-    /// draws dimmed in its slot (the other call sites have their own checks). The button's columns on the
-    /// title line, between the mode controls and the "⋯".
+    /// QA #693 INFO-5 (#3): the header passes `ended` to its Open in terminal, which #1103 moved into the "⋯": an
+    /// ended session's "⋯" is off and its one item, Open in terminal, is off too (the other call sites have their own checks).
     @MainActor
     func testAgentSessionHeaderDimsOpenInTerminalForAnEndedSession() throws {
         let a = session("a", .idle, alias: "Alpha Title")
@@ -713,20 +712,15 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        let size = CGSize(width: 900, height: 120)
-        func header(_ ended: Bool) throws -> NSBitmapImageRep {
-            try render(AgentSessionHeader(row: row, session: a, cwd: nil, open: {}, store: st, ended: ended), size: size, dark: true)
+        func header(_ ended: Bool) -> AgentSessionHeader {
+            AgentSessionHeader(row: row, session: a, cwd: nil, open: {}, store: st, ended: ended)
         }
-        let live = try header(false), again = try header(false), ended = try header(true)
-        let px = CGFloat(live.pixelsWide) / (size.width + 24)
-        let menuW = NSHostingView(rootView: AgentSessionMenuButton(store: nil, session: a, ask: { _ in })).fittingSize.width
-        let openW = NSHostingView(rootView: OpenInTerminalButton(action: {})).fittingSize.width
-        let right = size.width - sz(16) - menuW - sz(6)
-        let open = Int((right - openW) * px) + 2..<Int(right * px) - 2
-        let line = Int(sz(28) * px)..<Int(sz(56) * px)
-        XCTAssertGreaterThan(open.count, Int(20 * px))
-        XCTAssertEqual(differing(live, again, x: open, y: line), 0, "control: a render is stable")
-        XCTAssertGreaterThan(differing(live, ended, x: open, y: line), 0, "ended: the header's Open in terminal dims")
+        XCTAssertTrue(header(true).menuButton.ended, "ended: the \"⋯\" is off")
+        XCTAssertEqual(header(true).menuButton.entries, [.open(enabled: false)], "ended: Open in terminal, off, alone")
+        XCTAssertFalse(header(false).menuButton.ended)
+        XCTAssertEqual(header(false).menuButton.entries.first, .open(enabled: true), "live: Open in terminal, on, first")
+        XCTAssertEqual(header(false).menuButton.help, "Open in terminal, rename, restart, stop or kill this session")
+        XCTAssertEqual(header(true).menuButton.help, AgentPaneModeToggle.endedReason, "ended: the \"⋯\" says why, as the button did")
     }
 
     // MARK: Offscreen renders: the field takes the title's slot and moves nothing
@@ -783,12 +777,12 @@ extension AgentWindowD1Tests {
                                                "nothing under the header moved (\(tag))")
                                 // The right-hand controls: from the picker's left edge (the first gap of the
                                 // slot's spacer, read off the plain render) to the "⋯", untouched.
-                                let line = (Int(sz(30) * px))..<(Int(sz(30) * px) + Int(sz(20) * px))
+                                let line = Int(AgentSessionHeader.padTop * px)..<Int((AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
                                 let left = try XCTUnwrap(controlsLeft(plain, line: line, from: width - Int(sz(16) * px), to: detail,
                                                                       gap: Int(sz(14) * px)), tag)
                                 let menuLeft = width - Int(sz(16 + 18 + 2) * px)
                                 XCTAssertEqual(differing(plain, editing, x: left..<menuLeft, y: 0..<hb), 0,
-                                               "picker, toggle and Open in terminal unmoved (\(tag))")
+                                               "picker and toggle unmoved (\(tag))")
                                 XCTAssertEqual([-1, 0, 1].map { differing(plain, editing, x: menuLeft..<width, y: 0..<hb, dx: $0, tolerance: 0.06) }.min(), 0,
                                                "\"⋯\" unmoved (\(tag))")
                                 // The field shows, and only in the title line's band.
@@ -945,7 +939,7 @@ extension AgentWindowD1Tests {
             let titleW = NSHostingView(rootView: Text("a").font(Neon.font(15, weight: .semibold))).fittingSize.width
             let chipW = NSHostingView(rootView: AgentStateChip(state: .idle)).fittingSize.width
             let chipX = Int((sz(16) + titleW + sz(8)) * px)
-            let line = Int(sz(28) * px)..<Int(sz(52) * px)
+            let line = Int(AgentSessionHeader.padTop * px)..<Int((AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
             XCTAssertGreaterThan(differing(h, l, x: chipX..<(chipX + Int(chipW * px)), y: line), 0, "the header draws Ended")
             XCTAssertEqual(differing(h, l, x: 0..<(chipX - 2), y: line), 0, "the title itself is the same")
             // The transcript's band (between the header and the input box): its Open in terminal dims.

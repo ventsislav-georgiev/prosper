@@ -366,7 +366,9 @@ struct AgentSidebarView: View {
                                         .buttonStyle(.plain)
                                         .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
                                             if let s = row.session, let store = model.store {
-                                                AgentSessionMenuItems(store: store, session: s) { model.ask($0, s) }
+                                                // #1103: the header's list, Open in terminal first (selects the row, as ask does).
+                                                AgentSessionMenuItems(store: store, session: s, ask: { model.ask($0, s) },
+                                                                      open: { open(s) })
                                             } else if let r = row.record, let store = model.store {
                                                 AgentHistoryMenuItems(store: store, record: r) { model.act($0, r) }
                                             }
@@ -386,6 +388,12 @@ struct AgentSidebarView: View {
             if let store = model.store { AgentDirStatusStrip(store: store) }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// #1103: a live row's Open in terminal: that row selected first (as ask does), then the header's action.
+    func open(_ s: AgentSession) {
+        model.select(.live(s.key))
+        model.openSelected()
     }
 }
 
@@ -414,8 +422,12 @@ struct AgentSidebarTitleRow: View {
         .overlay(alignment: .trailing) {
             if let store = model.store { AgentNewSessionButtons(model: model, store: store) }
         }
-        .padding(.horizontal, sz(14)).padding(.top, sz(30)).padding(.bottom, sz(8))
+        .padding(.horizontal, sz(14)).padding(.top, Self.padTop).padding(.bottom, sz(8))
     }
+
+    /// #1103 F2: the content starts under the titlebar (no .fullSizeContentView), so the row's centre sits on the
+    /// session header's title line: 14 + 18 / 2 = AgentSessionHeader's 10 + 26 / 2.
+    static var padTop: CGFloat { sz(14) }
 }
 
 struct AgentSectionHeader: View {
@@ -651,7 +663,8 @@ struct AgentDetailView: View {
     func overTop(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
         VStack(spacing: 0) {
             if let store = model.store {
-                AgentNoticeLine(store: store, key: s.key, refusal: model.refusalText(row.id))
+                AgentNoticeLine(store: store, key: s.key, refusal: model.refusalText(row.id),
+                                open: { model.openSelected() }, ended: model.selectionIsHeld)
             }
             confirmStrip
         }
@@ -689,7 +702,7 @@ struct AgentSessionHeader: View {
     /// #829: the "⋯" menu's store (its gates) and its ask.
     var store: AgentIslandStore?
     var ask: (AgentWindowVerb) -> Void = { _ in }
-    /// QA #668 F1: the session ended (a held row): Open in terminal and the "⋯" are off, in their slots.
+    /// QA #668 F1: the session ended (a held row): the "⋯" (Open in terminal's home since #1103) is off, in its slot.
     var ended = false
     /// The "⋯" menu's store: none for an ended session, so it offers nothing and is disabled.
     var menuStore: AgentIslandStore? { ended ? nil : store }
@@ -700,7 +713,7 @@ struct AgentSessionHeader: View {
     var rename: AgentRenameEdit?
     var renaming: Bool { rename != nil }
     var endRename: (AgentRenameEdit, String?) -> Bool = { _, _ in false }
-    /// #822: Transcript | Terminal (the window passes `setMode`; without it there is no toggle).
+    /// #822: Terminal | Transcript (the window passes `setMode`; without it there is no toggle).
     var mode = AgentPaneMode.transcript
     var setMode: ((AgentPaneMode) -> Void)?
 
@@ -709,45 +722,71 @@ struct AgentSessionHeader: View {
         return session.key.dir == DchCommand.defaultSocketDir ? "dch \(session.name)" : "dch \(session.name) in \(session.key.dir)"
     }
 
+    /// #1103: the header's padding above and below its one line. The content view starts under the titlebar
+    /// (no .fullSizeContentView, SettingsWindow.applyWindowOpacity), so nothing up there needs clearing.
+    static var padTop: CGFloat { sz(10) }
+    static var padBottom: CGFloat { sz(10) }
+    /// The title line's own height, the same in both modes, so the toggle and the "⋯" sit at one height: the drawn
+    /// controls differ (no picker in Terminal mode) and an AppKit Menu keeps a 20 pt minimum at every scale, so the
+    /// content alone gave Transcript mode a taller line below 1.0. Fits the tallest control at 1.0 (a capsule, about
+    /// 23 pt) and the Rename field.
+    static var lineHeight: CGFloat { sz(26) }
+    /// Terminal mode's header (one line) without an open todo list; Transcript mode adds the folder line.
+    static var height: CGFloat { padTop + lineHeight + padBottom }
+
     var body: some View {
         VStack(alignment: .leading, spacing: sz(4)) {
             // The whole title and the labelled controls when they fit, else smaller ones.
-            titleLines
-            HStack(spacing: sz(6)) {
-                Image(systemName: "folder").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
+            titleLines.frame(height: Self.lineHeight)
+            // #1103: Transcript mode keeps its second line: the picker takes the first line's room the folder needs.
+            if mode == .transcript {
+                HStack(spacing: sz(6)) {
+                    folder
+                    Spacer(minLength: 0)
+                    if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+                }
+            }
+            if todosOpen.wrappedValue, let todos = shownTodos { AgentTodosList(todos: todos) }
+        }
+        .padding(.horizontal, sz(16)).padding(.top, Self.padTop).padding(.bottom, Self.padBottom)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // #860: on the window's backdrop, as Settings' pane title (no opaque band under the titlebar).
+    }
+
+    /// The folder, the path (cut in the middle) and the row's detail (whole or not at all): Transcript mode's second
+    /// line, the title line's tail in Terminal mode (#1103).
+    var folder: some View {
+        HStack(spacing: sz(6)) {
+            Image(systemName: "folder").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
+                .accessibilityHidden(true)   // #1103 F4: decoration (AppKit read the symbol as "Move")
+            AgentWidthFloor(floor: Self.pathFloor) {
                 Text(project).font(Neon.font(11, design: .monospaced)).foregroundStyle(Neon.textSecondary)
                     .lineLimit(1).truncationMode(.middle)
-                let extra = [row.detail.split(separator: " · ").dropFirst().joined(separator: " · "),
-                             row.age.isEmpty ? "" : "\(row.age) ago"].filter { !$0.isEmpty }
-                if !extra.isEmpty {
-                    // Whole or not at all: a squeezed low-priority Text overshot the line by a
-                    // fraction of a point next to the #821 todo chip.
+            }
+            let extra = [row.detail.split(separator: " · ").dropFirst().joined(separator: " · "),
+                         row.age.isEmpty ? "" : "\(row.age) ago"].filter { !$0.isEmpty }
+            if !extra.isEmpty {
+                // Whole or not at all: a squeezed low-priority Text overshot the line by a
+                // fraction of a point next to the #821 todo chip.
+                AgentWidthFloor(floor: 0) {   // #1103 F1: an extra, never part of what the line must hold
                     ViewThatFits(in: .horizontal) {
                         Text("· " + extra.joined(separator: " · ")).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                             .lineLimit(1)
                         Color.clear.frame(width: 0, height: 0)
                     }
-                    .layoutPriority(-1)
                 }
-                Spacer(minLength: 0)
-                if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+                .layoutPriority(-1)
             }
-            if todosOpen.wrappedValue, let todos = shownTodos { AgentTodosList(todos: todos) }
         }
-        .padding(.horizontal, sz(16)).padding(.top, sz(30)).padding(.bottom, sz(12))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // #860: on the window's backdrop, as Settings' pane title (no opaque band under the titlebar).
     }
 
-    /// The title, the state chip and the room after them: one slot. G4: while renaming, the field
-    /// lies over the whole slot and the title and chip only go transparent, so nothing moves.
+    /// The title, the state chip, in Terminal mode the folder, and the room after them: one slot. G4: while renaming,
+    /// the field lies over the whole slot and its parts only go transparent, so nothing moves. The title cuts at its
+    /// tail and gives way first, down to its floor; the path cuts in the middle and keeps its own floor.
     var titleSlot: some View {
-        HStack(alignment: .center, spacing: sz(8)) {
-            Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                .lineLimit(1).truncationMode(.middle)
-            stateChip
-            Spacer(minLength: sz(8))
-        }
+        // #1103 F4, left open: accessibilityHidden(false) here overrides the folder icon's own hidden in Terminal mode
+        // (its AX tree still reads "Move"); a conditional hidden fixed the tree but rebuilt the parts and broke Rename.
+        Group { slotParts }
         .opacity(renaming ? 0 : 1)
         .accessibilityHidden(renaming)
         .overlay(alignment: .leading) {
@@ -759,34 +798,108 @@ struct AgentSessionHeader: View {
         }
     }
 
-    /// Focused hides todos; Verbose draws the todo/task cards in the conversation instead.
-    var shownTodos: AgentTodos? { level.wrappedValue == .default ? todos : nil }
-
-    /// Widest first: the labelled picker and button, the icon button, the icon picker, a menu.
-    @ViewBuilder var titleLines: some View {
-        ViewThatFits(in: .horizontal) {
-            titleLine(picker: .labels, compact: false)
-            titleLine(picker: .labels, compact: true)
-            titleLine(picker: .icons, compact: true)
-            titleLine(picker: .menu, compact: true)
+    /// #1103 F1: the folder only with a readable title, the chip and the path's floor; never its icon alone.
+    @ViewBuilder var slotParts: some View {
+        if mode == .terminal {
+            ViewThatFits(in: .horizontal) {
+                slotLine(folder: true)
+                slotLine(folder: false)
+            }
+        } else {
+            slotLine(folder: false)
         }
     }
 
-    func titleLine(picker: AgentVerbosityPicker.Style, compact: Bool) -> some View {
+    /// #1103 F1: a path keeps 16 or so monospaced characters (its head and its last folder), or all of it when
+    /// shorter; a title keeps about 9 characters before the folder is dropped.
+    static var pathFloor: CGFloat { sz(110) }
+    static var titleFloor: CGFloat { sz(80) }
+
+    /// With the folder the title gives way first, down to its floor (each floor counts as the part's ideal width, so
+    /// ViewThatFits takes this line exactly when the floors fit).
+    func slotLine(folder withFolder: Bool) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
-            titleSlot
-            AgentVerbosityPicker(level: level, style: picker)   // #822: in its slot, off in Terminal mode
-                .disabled(mode == .terminal).opacity(mode == .terminal ? 0.45 : 1)
+            let title = Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                .lineLimit(1).truncationMode(.tail)
+            if withFolder {
+                AgentWidthFloor(floor: Self.titleFloor) { title }.layoutPriority(1)
+            } else {
+                title.layoutPriority(1)
+            }
+            stateChip
+            if withFolder { folder }
+            Spacer(minLength: sz(8))
+        }
+    }
+
+    /// Focused hides todos; Verbose draws the todo/task cards in the conversation instead.
+    var shownTodos: AgentTodos? { level.wrappedValue == .default ? todos : nil }
+
+    /// Widest first: the labelled picker and toggle, the icons, menus.
+    @ViewBuilder var titleLines: some View {
+        ViewThatFits(in: .horizontal) {
+            titleLine(picker: .labels)
+            titleLine(picker: .icons)
+            titleLine(picker: .menu)
+        }
+    }
+
+    /// #1103: the title line. Its size (and so the tier ViewThatFits picks) is the same in both modes: the whole
+    /// title, the chips, the picker, the toggle and the "⋯", measured hidden. The line drawn over it puts the toggle
+    /// and the "⋯" at the right edge, so a mode change never moves them; Terminal mode draws no picker, and its
+    /// folder takes that room.
+    func titleLine(picker: AgentVerbosityPicker.Style) -> some View {
+        HStack(alignment: .center, spacing: sz(8)) {
+            Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1)
+            stateChip
+            if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+            AgentVerbosityPicker(level: level, style: picker)
+            if setMode != nil { AgentPaneModeToggle(mode: mode, style: picker, set: { _ in }) }
+            Color.clear.frame(width: sz(18), height: sz(18))   // the "⋯"
+        }
+        .hidden()
+        .accessibilityHidden(true)
+        .frame(maxWidth: .infinity)
+        .overlay { shownLine(picker: picker) }
+    }
+
+    func shownLine(picker: AgentVerbosityPicker.Style) -> some View {
+        HStack(alignment: .center, spacing: sz(8)) {
+            // The slot takes what the controls leave and nothing more (its parts cut, then clip): the controls never
+            // push the line past the header, so they sit at the right edge, where the mode does not move them.
+            titleSlot.frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
+            if mode == .terminal, let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+            if mode == .transcript { AgentVerbosityPicker(level: level, style: picker) }   // #1103: none in Terminal mode
             if let setMode {
                 AgentPaneModeToggle(mode: mode, style: picker, set: setMode,
                                     off: ended ? AgentPaneModeToggle.endedReason : nil)
                     .disabled(ended).opacity(ended ? 0.45 : 1)
             }
-            HStack(spacing: sz(6)) {   // #829: the "⋯" sits close to the button, always last, fixed size
-                OpenInTerminalButton(action: open, compact: compact, ended: ended)
-                AgentSessionMenuButton(store: menuStore, session: session, ask: ask)
-            }
+            menuButton   // #829: always last, fixed size
         }
+    }
+
+    /// #1103: Open in terminal is its first item, with the header's `open` and `ended`.
+    var menuButton: AgentSessionMenuButton {
+        AgentSessionMenuButton(store: menuStore, session: session, ask: ask, open: open, ended: ended)
+    }
+}
+
+/// #1103 F1: its child is never narrower than min(its ideal width, `floor`), and that is the width it asks for when
+/// asked for its ideal: in an HStack the other parts give way before it, in a ViewThatFits it counts only its floor.
+struct AgentWidthFloor: Layout {
+    let floor: CGFloat
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let s = subviews.first else { return .zero }
+        let ideal = s.sizeThatFits(.unspecified)
+        let least = min(ideal.width, floor)
+        guard let w = proposal.width else { return CGSize(width: least, height: ideal.height) }
+        let fit = s.sizeThatFits(ProposedViewSize(width: max(w, least), height: proposal.height))
+        return CGSize(width: max(fit.width, least), height: fit.height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                              proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
 }
 
@@ -837,8 +950,8 @@ struct AgentVerbosityPicker: View {
     }
 }
 
-/// #822: Transcript | Terminal, built like AgentVerbosityPicker (same tiers). Every label keeps its
-/// width whichever is on, so a toggle never moves a neighbour.
+/// #822: Terminal | Transcript, built like AgentVerbosityPicker (same tiers). Every label keeps its
+/// width whichever is on, so a toggle never moves a neighbour. #1103: the default (Terminal) on the left.
 struct AgentPaneModeToggle: View {
     let mode: AgentPaneMode
     var style = AgentVerbosityPicker.Style.labels
@@ -848,7 +961,7 @@ struct AgentPaneModeToggle: View {
 
     static let endedReason = "This session ended: there is no terminal to attach to"
     static let modes: [(mode: AgentPaneMode, title: String, icon: String)] = [
-        (.transcript, "Transcript", "text.bubble"), (.terminal, "Terminal", "terminal"),
+        (.terminal, "Terminal", "terminal"), (.transcript, "Transcript", "text.bubble"),
     ]
 
     var body: some View {
@@ -860,8 +973,10 @@ struct AgentPaneModeToggle: View {
                     .font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden)
-            .fixedSize()
-            .help(off ?? "Transcript or terminal (⌘T)")
+            // #1103: framed as the "⋯" is: a fixed-size Menu took each glyph's own width, so the switch's left edge
+            // moved by a point with the mode.
+            .frame(width: sz(22), height: sz(18))
+            .help(off ?? "Terminal or transcript (⌘T)")
             .accessibilityLabel("Showing: \(mode == .terminal ? "Terminal" : "Transcript")")
         } else {
             HStack(spacing: 0) {

@@ -811,12 +811,15 @@ final class AgentWindowD1Tests: XCTestCase {
                 try save(hrep, "header-min-\(tag)")
                 XCTAssertEqual(overflow(hrep, content: hsize, canvas: CGSize(width: hsize.width + 24, height: hsize.height + 24)),
                                0, "header \(tag)")
+                // #1103: the header's button left for its "⋯"; the toggle (icons) stands in as the widest fixed control.
+                let shown = try XCTUnwrap(m.selectedRow?.session)
                 let chips = NSHostingView(rootView: HStack(spacing: sz(12)) {
                     AgentStateChip(state: .blocked)
-                    OpenInTerminalButton(action: {})
+                    AgentPaneModeToggle(mode: .terminal, style: .icons, set: { _ in })
+                    AgentSessionMenuButton(store: nil, session: shown, ask: { _ in })
                 }.fixedSize())
                 XCTAssertLessThan(chips.fittingSize.width + sz(32) + sz(60), room,
-                                  "state, button, padding and a readable title fit at \(scale)")
+                                  "state, toggle, \"⋯\", padding and a readable title fit at \(scale)")
             }
         }
         // History selected, the empty states, and the island off.

@@ -437,7 +437,7 @@ extension AgentWindowD1Tests {
                 XCTAssertFalse(rows.isEmpty, "the strip shows (\(label) \(scale))")
                 XCTAssertLessThan(CGFloat((rows.max() ?? 0) - (rows.min() ?? 0)) / k, size.height * 0.6,
                                   "only a band changed (\(label) \(scale))")
-                XCTAssertGreaterThan(CGFloat(rows.min() ?? 0) / k, 60 * scale, "the header stays put (\(label) \(scale))")
+                XCTAssertGreaterThanOrEqual(CGFloat(rows.min() ?? 0) / k, AgentSessionHeader.height, "the header stays put (\(label) \(scale))")
                 XCTAssertLessThan(CGFloat(rows.max() ?? 0) / k, size.height - 120 * scale,
                                   "the input box stays put (\(label) \(scale))")
                 // The dir strip: over the sidebar's reserved bottom, so no row moves.
@@ -457,7 +457,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(overflow(refused, content: size, canvas: canvas), 0, "\(label) \(scale)")
                 let band = diffRows(plain, refused)
                 XCTAssertFalse(band.isEmpty, "the refusal shows (\(label) \(scale))")
-                XCTAssertGreaterThan(CGFloat(band.min() ?? 0) / k, 60 * scale, "the header stays put (\(label) \(scale))")
+                XCTAssertGreaterThanOrEqual(CGFloat(band.min() ?? 0) / k, AgentSessionHeader.height, "the header stays put (\(label) \(scale))")
                 XCTAssertLessThan(CGFloat((band.max() ?? 0) - (band.min() ?? 0)) / k, 40 * scale,
                                   "one line's band, the transcript under it unmoved (\(label) \(scale))")
                 st.actions[s.key] = "Pausing…"

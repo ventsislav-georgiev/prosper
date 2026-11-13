@@ -32,6 +32,9 @@ enum AgentWindowMenuEntry: Equatable {
     case divider
     /// A disabled line: the gate's reason ("Controls <refusal>").
     case note(String)
+    /// #1103: "Open in terminal" (the header's button until then): the window's own action, no verb (it asks
+    /// nothing and runs no dch); off for an ended session.
+    case open(enabled: Bool)
 }
 
 enum AgentWindowControls {
@@ -55,6 +58,17 @@ enum AgentWindowControls {
         }
         if let why = d.refused { out.append(.note("Controls \(why)")) }
         return out
+    }
+
+    /// #1103: Open in terminal's title, the words of the button it replaced (and of every text that names it).
+    static let openLabel = "Open in terminal"
+
+    /// #1103: the header "⋯" and a live row's context menu: Open in terminal first, then `menu`. An ended session's
+    /// (a held row; the header passes no store) offers Open in terminal, off, and nothing else.
+    @MainActor
+    static func sessionMenu(_ s: AgentSession, store: AgentIslandStore?, ended: Bool) -> [AgentWindowMenuEntry] {
+        let rest: [AgentWindowMenuEntry] = ended ? [] : store.map { menu(s, store: $0) } ?? []
+        return [.open(enabled: !ended)] + (rest.isEmpty ? [] : [.divider] + rest)
     }
 
     /// #829 G6-G8: a History row's context menu and its detail buttons: the island row's items and
@@ -184,8 +198,13 @@ struct AgentSessionMenuItems: View {
     @ObservedObject var store: AgentIslandStore
     let session: AgentSession
     let ask: (AgentWindowVerb) -> Void
+    /// #1103: Open in terminal's action and the session's end (the item is off).
+    var open: () -> Void = {}
+    var ended = false
 
-    var body: some View { AgentMenuEntries(entries: AgentWindowControls.menu(session, store: store), act: ask) }
+    var body: some View {
+        AgentMenuEntries(entries: AgentWindowControls.sessionMenu(session, store: store, ended: ended), act: ask, open: open)
+    }
 }
 
 /// #829 Phase 2: a History row's context menu.
@@ -200,10 +219,13 @@ struct AgentHistoryMenuItems: View {
 struct AgentMenuEntries: View {
     let entries: [AgentWindowMenuEntry]
     let act: (AgentWindowVerb) -> Void
+    var open: () -> Void = {}
 
     var body: some View {
         ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
             switch e {
+            case .open(let enabled):
+                Button(AgentWindowControls.openLabel, action: open).disabled(!enabled)
             case .item(let title, let enabled, let verb):
                 Button(title) { act(verb) }.disabled(!enabled)
             case .divider:
@@ -215,16 +237,22 @@ struct AgentMenuEntries: View {
     }
 }
 
-/// The header's "⋯": always there, one fixed size, the title line's last control. Off when
-/// there is nothing to offer (no store, or a name dch would read as a flag and no refusal).
+/// The header's "⋯": always there, one fixed size, the title line's last control. #1103: Open in terminal is its
+/// first item, so it is off only for an ended session (whose item is off too).
 struct AgentSessionMenuButton: View {
     let store: AgentIslandStore?
     let session: AgentSession
     let ask: (AgentWindowVerb) -> Void
+    var open: () -> Void = {}
+    var ended = false
 
     var body: some View {
         Menu {
-            if let store { AgentSessionMenuItems(store: store, session: session, ask: ask) }
+            if let store {
+                AgentSessionMenuItems(store: store, session: session, ask: ask, open: open, ended: ended)
+            } else {
+                AgentMenuEntries(entries: entries, act: ask, open: open)
+            }
         } label: {
             Image(systemName: "ellipsis").font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                 .contentShape(Rectangle())
@@ -233,14 +261,21 @@ struct AgentSessionMenuButton: View {
         // A borderless Menu's own minimum is 20 pt at every UI scale; framed, it scales with the
         // header and leaves the narrowest title line its room (#822's pill included).
         .frame(width: sz(18), height: sz(18))
-        .disabled(store.map { AgentWindowControls.menu(session, store: $0).isEmpty } ?? true)
-        .help(Self.help(session))
+        .disabled(ended)
+        .help(help)
         .accessibilityLabel("Session actions")
     }
 
+    /// QA #672 #4 (the button's, before #1103): an ended session's says why.
+    var help: String { ended ? AgentPaneModeToggle.endedReason : Self.help(session) }
+
+    /// The list the menu is built from (AgentSessionMenuItems re-reads it as the store changes).
+    var entries: [AgentWindowMenuEntry] { AgentWindowControls.sessionMenu(session, store: store, ended: ended) }
+
     /// QA #693 INFO-6: what the menu holds: Rename alone for a name dch would read as a flag (#627).
     static func help(_ s: AgentSession) -> String {
-        AgentIsland.passable(s.name) ? "Rename, restart, stop or kill this session" : "Rename this session"
+        AgentIsland.passable(s.name) ? "Open in terminal, rename, restart, stop or kill this session"
+            : "Open in terminal or rename this session"
     }
 }
 
@@ -316,12 +351,17 @@ struct AgentNoticeLine: View {
     @ObservedObject var store: AgentIslandStore
     let key: AgentSessionKey
     var refusal: String?
+    /// #1103: a line that says "Open in terminal" (the island's Message refusals) gets the button beside it: the
+    /// header's moved into the "⋯".
+    var open: (() -> Void)?
+    var ended = false
     var body: some View {
         if let text = refusal ?? AgentWindowControls.notice(store, key) {
             HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
                 Image(systemName: "info.circle").foregroundStyle(Neon.blue)
                 Text(text).foregroundStyle(Neon.textSecondary).lineLimit(3)
                 Spacer(minLength: 0)
+                if let open, Self.offersOpen(text) { OpenInTerminalButton(action: open, compact: true, ended: ended) }
             }
             .font(Neon.font(11))
             .padding(.horizontal, sz(16)).padding(.vertical, sz(6))
@@ -331,6 +371,8 @@ struct AgentNoticeLine: View {
             .help(text)
         }
     }
+
+    static func offersOpen(_ text: String) -> Bool { text.contains(AgentWindowControls.openLabel) }
 }
 
 /// Spec 3.5: the input box under the store's eye: while a Restart or Stop's running text shows

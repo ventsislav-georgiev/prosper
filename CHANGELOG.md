@@ -558,6 +558,15 @@ tag from the now-released section and put it on the new top draft.
 - **Shortcuts**: a custom runner shortcut closes the runner when the runner already has focus on
   that shortcut's prefix. Pressed while the runner shows a different prefix, it switches to its own
   prefix instead of closing (#1113).
+- Agent Sessions: the session header is lower: one line in Terminal mode, with the folder path
+  beside the title (shortened in the middle, and left out entirely when the window is too narrow for
+  it); Transcript mode keeps the path on a second line. Terminal mode no longer shows the dimmed
+  view picker, and the Terminal | Transcript switch (Terminal, the default, now on the left) and the
+  "⋯" button stay in place when you switch modes.
+- Agent Sessions: "Open in terminal" moved from the header into the "⋯" menu (first item) and a
+  session's right-click menu; a notice that says "Open in terminal" now has the button next to it.
+- Agent Sessions: the sidebar's "Agent Sessions" title sits on the same line as the session title
+  beside it again.
 
 ## v2.174.0
 
