@@ -2153,14 +2153,32 @@ test("#1022: the cron's online-Mac read counts each Mac's own cards once, throug
     [BOB, BOB_MAC, "Bob's Mac", 0, 0],
   ].sort());
 
-  // Without sqlite_stat1 (D1 has none unless someone ran ANALYZE) and with it.
-  for (const stats of [false, true]) {
-    if (stats) t.raw.exec("ANALYZE");
-    const plan = planOf(t.raw, sql).join(" | ");
-    assert.match(plan, /SEARCH t USING INDEX idx_push_tokens_mac \(email=\? AND mac_id=\?\)/, plan);
-    assert.doesNotMatch(plan, /idx_push_tokens_kind|SCAN t\b|SUBQUERY/, plan);
-    if (!stats) assert.match(plan, /^SEARCH m USING INDEX idx_push_macs_online \(online=\?\)/, plan);
-  }
+  // The plan's push_tokens steps, read step by step. Which table drives and how push_macs and
+  // devices are read is the engine's choice (SQLite 3.53 and 3.54 differ under sqlite_stat1);
+  // what #1022 needs is that t is read through (email, mac_id), once, and never by kind.
+  const checkPlan = (label) => {
+    const plan = planOf(t.raw, sql);
+    const steps = plan.filter((d) => /^(SEARCH|SCAN) t\b/.test(d));
+    const why = `${label}: ${plan.join(" | ")}`;
+    assert.equal(steps.length, 1, why);
+    assert.ok(steps[0].startsWith("SEARCH t USING INDEX idx_push_tokens_mac (email=? AND mac_id=?)"), why);
+    assert.ok(!plan.some((d) => d.includes("idx_push_tokens_kind") || d.includes("SUBQUERY")), why);
+  };
+  // D1 has no sqlite_stat1 unless someone ran ANALYZE.
+  checkPlan("fixture, no sqlite_stat1");
+  // With stats, a table of a few rows is cheaper to scan whole (SQLite 3.54 does): judge it at
+  // a size where a scan would cost, 1,000 more Macs and 5,000 more tokens of fake accounts.
+  t.raw.exec("BEGIN");
+  const addMac = t.raw.prepare(`INSERT INTO push_macs (email, mac_id, seq, last_seen, online) VALUES (?, ?, 1, 0, ?)`);
+  const addTok = t.raw.prepare(`INSERT INTO push_tokens (email, device_id, kind, activity_id, mac_id, token, env, created_at, updated_at, token_hash)
+    VALUES (?, ?, ?, ?, ?, ?, 'production', 0, 0, '')`);
+  const fake = (i) => [`user${i % 500}@example.com`, `fake-mac-${i}`];
+  for (let i = 0; i < 1000; i++) addMac.run(...fake(i), i % 3 ? 1 : 0);
+  for (let j = 0; j < 5000; j++) addTok.run(fake(j % 1000)[0], `phone-${j}`, ["la_update", "alert", "la_start"][j % 3], `act-${j}`, fake(j % 1000)[1], `tok-${j}`);
+  t.raw.exec("COMMIT");
+  checkPlan("1,000 Macs, no sqlite_stat1");
+  t.raw.exec("ANALYZE");
+  checkPlan("1,000 Macs, sqlite_stat1");
 });
 
 // Runs last: it reads the SQL every test above made the store prepare.
