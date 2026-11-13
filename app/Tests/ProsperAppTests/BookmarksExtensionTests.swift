@@ -744,6 +744,7 @@ final class BookmarksExtensionTests: XCTestCase {
     /// #211: the real /bin/zsh texts the Lua matcher depends on, through the shipped
     /// Safari command: a refused plist reads as a denial, a missing one as ENOENT.
     func testShippedSafariReadClassifiesDeniedAndMissingThroughRealShell() throws {
+        try XCTSkipIf(geteuid() == 0, "running as root: 0o000 permissions do not deny the read")
         let dir = tempDir()
         let plist = dir.appendingPathComponent("Bookmarks.plist")
         try Data("<plist version=\"1.0\"><dict/></plist>".utf8).write(to: plist)
@@ -759,6 +760,25 @@ final class BookmarksExtensionTests: XCTestCase {
         let missing = Self.run("/bin/zsh", ["-c", Self.shippedSafariRead(dir.appendingPathComponent("Absent.plist").path)])
         let gone = try XCTUnwrap(Self.markerReason(missing), "a missing plist prints the marker; got: \(missing)")
         XCTAssertTrue(gone.contains("no such file"), "the Lua stays silent on this; got: \(missing)")
+    }
+
+    /// #1085: the real /bin/zsh texts behind init.lua's profile-list probe (the exact
+    /// command list_dirs sends when host.fs.list_dirs comes back empty).
+    func testShippedProfileListProbeClassifiesDeniedMissingAndEmptyThroughRealShell() throws {
+        try XCTSkipIf(geteuid() == 0, "running as root: 0o000 permissions do not deny the listing")
+        let dir = tempDir()
+        let probe = { (path: String) in Self.run("/bin/zsh", ["-c", "ls '\(path)' 2>&1 >/dev/null"]) }
+        let locked = dir.appendingPathComponent("Locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+
+        let denied = probe(locked.path).lowercased()
+        XCTAssertTrue(denied.contains("permission denied") || denied.contains("not permitted"),
+                      "the Lua classes this as a denial; got: \(denied)")
+        XCTAssertTrue(probe(dir.appendingPathComponent("Absent").path).lowercased().contains("no such file"),
+                      "the Lua stays silent on this")
+        XCTAssertEqual(probe(dir.path), "", "a readable dir prints nothing (its entries go to /dev/null)")
     }
 
     /// Run a process to completion, returning combined stdout (test helper only).

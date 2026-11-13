@@ -17,7 +17,7 @@ enum BrowserSearchImporter {
         if let vendor = chromiumVendorPath(for: bundleID) {
             guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory,
                                                             in: .userDomainMask).first else { return [] }
-            return chromiumProviders(webData: appSupport.appendingPathComponent(vendor)
+            return chromiumProviders(browser: vendor.browser, webData: appSupport.appendingPathComponent(vendor.path)
                 .appendingPathComponent("Web Data"))
         }
         if bundleID == "com.apple.Safari" {
@@ -30,16 +30,16 @@ enum BrowserSearchImporter {
 
     // MARK: Chromium
 
-    /// Application-Support subpath of the Chromium profile dir for a known browser
-    /// bundle id, or nil for non-Chromium browsers. We read the `Default` profile.
-    private static func chromiumVendorPath(for bundleID: String) -> String? {
+    /// Display name (for the log) and Application-Support subpath of the Chromium profile
+    /// dir for a known browser bundle id, or nil for non-Chromium browsers. We read `Default`.
+    private static func chromiumVendorPath(for bundleID: String) -> (browser: String, path: String)? {
         switch bundleID {
-        case "com.google.Chrome":            return "Google/Chrome/Default"
-        case "com.google.Chrome.beta":       return "Google/Chrome Beta/Default"
-        case "com.brave.Browser":            return "BraveSoftware/Brave-Browser/Default"
-        case "com.microsoft.edgemac":        return "Microsoft Edge/Default"
-        case "company.thebrowser.Browser":   return "Arc/User Data/Default"
-        case "com.vivaldi.Vivaldi":          return "Vivaldi/Default"
+        case "com.google.Chrome":            return ("Chrome", "Google/Chrome/Default")
+        case "com.google.Chrome.beta":       return ("Chrome Beta", "Google/Chrome Beta/Default")
+        case "com.brave.Browser":            return ("Brave", "BraveSoftware/Brave-Browser/Default")
+        case "com.microsoft.edgemac":        return ("Edge", "Microsoft Edge/Default")
+        case "company.thebrowser.Browser":   return ("Arc", "Arc/User Data/Default")
+        case "com.vivaldi.Vivaldi":          return ("Vivaldi", "Vivaldi/Default")
         default:                             return nil
         }
     }
@@ -52,11 +52,11 @@ enum BrowserSearchImporter {
     /// and open that read-only. A browser that is not installed (ENOENT) is silent; a
     /// file that is there but cannot be copied or opened (a privacy/XProtect denial,
     /// corruption) goes to `report` so it does not look like "no search engines" (#211).
-    static func chromiumProviders(webData: URL,
+    static func chromiumProviders(browser: String, webData: URL,
                                   tempDir: URL = FileManager.default.temporaryDirectory,
                                   report: (String) -> Void = { log.error("\($0, privacy: .public)") }) -> [FallbackProvider] {
-        // Last two components only ("Default/Web Data"): never the user's home path.
-        let label = webData.deletingLastPathComponent().lastPathComponent + "/" + webData.lastPathComponent
+        // The browser plus the last two components ("Chrome Default/Web Data"): never the home path.
+        let label = browser + " " + webData.deletingLastPathComponent().lastPathComponent + "/" + webData.lastPathComponent
         let temp = tempDir.appendingPathComponent("prosper-webdata-\(UUID().uuidString).sqlite")
         defer {
             try? FileManager.default.removeItem(at: temp)

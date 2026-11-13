@@ -79,17 +79,21 @@ local function p(rel) return home() .. "/" .. rel end
 -- string cannot hold a raw newline, so content can never produce that line. The bare
 -- `echo;` first ends a partial last line a failing reader may have left.
 local READ_FAILED = "__prosper_read_failed__"
+-- The shell's reason for a failure, classed for the log: nil for ENOENT (not installed).
+local function failure_kind(why)
+    why = why:lower()
+    if why:find("no such file", 1, true) then return nil end
+    local denied = why:find("not permitted", 1, true) or why:find("permission denied", 1, true)
+    return denied and "permission denied" or "unreadable"
+end
 local function read_cmd(cmd, path, browser)
     local out = sh("setopt pipefail; " .. cmd .. " || { echo; echo " .. READ_FAILED .. "; : < " .. shq(path) .. "; }")
     -- host output is trimmed, so the marker line may also be the first or the last.
     local padded = "\n" .. out .. "\n"
     local at = padded:find("\n" .. READ_FAILED .. "\n", 1, true)
     if not at then return out end
-    local why = padded:sub(at + #READ_FAILED + 2):lower()
-    if why:find("no such file", 1, true) then return "" end
-    local denied = why:find("not permitted", 1, true) or why:find("permission denied", 1, true)
-    host.log.warn("bookmarks: " .. browser .. " read failed ("
-        .. (denied and "permission denied" or "unreadable") .. ")")
+    local kind = failure_kind(padded:sub(at + #READ_FAILED + 2))
+    if kind then host.log.warn("bookmarks: " .. browser .. " read failed (" .. kind .. ")") end
     return ""
 end
 
@@ -108,9 +112,17 @@ local function decode(str)
     return t
 end
 
-local function list_dirs(path)
+-- host.fs.list_dirs answers {} for a missing dir and for one macOS refuses alike. On {},
+-- ask `ls` why (its stderr only): nothing or ENOENT stays silent (no profiles, not
+-- installed); a refusal is logged naming the browser, never the path (#1085).
+local function list_dirs(path, browser)
     local d = host.fs.list_dirs(path)
-    if type(d) ~= "table" then return {} end
+    if type(d) ~= "table" then d = {} end
+    if #d == 0 then
+        local why = sh("ls " .. shq(path) .. " 2>&1 >/dev/null")
+        local kind = (why ~= "") and failure_kind(why) or nil
+        if kind then host.log.warn("bookmarks: " .. browser .. " profile list failed (" .. kind .. ")") end
+    end
     return d
 end
 
@@ -151,7 +163,7 @@ local function parse_chromium(support, browser, single, acc)
         profiles = { "" }
     else
         profiles = {}
-        for _, name in ipairs(list_dirs(support)) do
+        for _, name in ipairs(list_dirs(support, browser)) do
             if name == "Default" or name:match("^Profile %d+$") then
                 profiles[#profiles + 1] = name
             end
@@ -224,7 +236,7 @@ local function parse_mozilla(profiles_root, browser, acc)
     local count0 = #acc
     local sql = "SELECT b.title AS title, p.url AS url FROM moz_bookmarks b "
         .. "JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url LIKE 'http%';"
-    for _, prof in ipairs(list_dirs(profiles_root)) do
+    for _, prof in ipairs(list_dirs(profiles_root, browser)) do
         local db = profiles_root .. "/" .. prof .. "/places.sqlite"
         local cmd = "sqlite3 -readonly -json " .. shq(file_uri(db)) .. " " .. shq(sql) .. " 2>/dev/null"
         local rows = decode(read_cmd(cmd, db, browser))

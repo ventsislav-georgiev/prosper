@@ -497,6 +497,9 @@ tag from the now-released section and put it on the new top draft.
   copy of one it already has, removes files left behind by a quit in the middle of saving a phone
   clip when it next starts, and no longer stalls on a phone file with an extremely long or unusual
   name.
+- When macOS refuses to let Prosper read a browser's search engines or bookmarks, the log now says
+  which browser it was (for example "Chrome Default/Web Data copy failed"), and the bookmarks import
+  also logs when it cannot list a browser's profiles instead of quietly finding nothing.
 
 ## v2.174.0
 

@@ -26,7 +26,8 @@ final class BrowserSearchImporterTests: XCTestCase {
 
     private func run(_ f: Fixture) -> (providers: [FallbackProvider], reports: [String]) {
         var reports: [String] = []
-        let providers = BrowserSearchImporter.chromiumProviders(webData: f.webData, tempDir: f.copies) {
+        let providers = BrowserSearchImporter.chromiumProviders(browser: "Brave", webData: f.webData,
+                                                                tempDir: f.copies) {
             reports.append($0)
         }
         return (providers, reports)
@@ -36,7 +37,26 @@ final class BrowserSearchImporterTests: XCTestCase {
         (try? FileManager.default.contentsOfDirectory(atPath: f.copies.path)) ?? ["unreadable"]
     }
 
+    /// root ignores 0o000, so a "denied" fixture would read fine and the test would mean nothing (#1085).
+    private func skipIfRoot() throws {
+        try XCTSkipIf(geteuid() == 0, "running as root: 0o000 permissions do not deny the read")
+    }
+
+    /// A real SQLite file at `url` built from `sql`.
+    private func makeDB(_ url: URL, _ sql: String) {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+    }
+
+    private static let goodKeywords = """
+        CREATE TABLE keywords (short_name TEXT, url TEXT);
+        INSERT INTO keywords VALUES ('Example Search', 'https://search.example.com/?q={searchTerms}');
+        """
+
     func testUnreadableWebDataReportsTheCopyFailureOnce() throws {
+        try skipIfRoot()
         let f = try fixture()
         try Data("SQLite format 3\0".utf8).write(to: f.webData)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: f.webData.path)
@@ -46,7 +66,7 @@ final class BrowserSearchImporterTests: XCTestCase {
         XCTAssertTrue(r.providers.isEmpty)
         XCTAssertEqual(r.reports.count, 1, "\(r.reports)")
         let line = r.reports.first ?? ""
-        XCTAssertTrue(line.contains("Default/Web Data copy failed"), line)
+        XCTAssertTrue(line.hasPrefix("browser search import: Brave Default/Web Data copy failed: "), line)
         XCTAssertFalse(line.contains(f.copies.deletingLastPathComponent().path), "never the full path: \(line)")
         XCTAssertEqual(leftovers(f), [])
     }
@@ -54,6 +74,7 @@ final class BrowserSearchImporterTests: XCTestCase {
     /// A denial that already fails the stat (a privacy-protected profile dir; here a dir
     /// with no search permission) must not pass for "not installed": no fileExists pre-check.
     func testUnsearchableProfileDirReportsTheCopyFailureOnce() throws {
+        try skipIfRoot()
         let f = try fixture()
         try Data("SQLite format 3\0".utf8).write(to: f.webData)
         let profile = f.webData.deletingLastPathComponent().path
@@ -63,7 +84,8 @@ final class BrowserSearchImporterTests: XCTestCase {
         let r = run(f)
         XCTAssertTrue(r.providers.isEmpty)
         XCTAssertEqual(r.reports.count, 1, "\(r.reports)")
-        XCTAssertTrue((r.reports.first ?? "").contains("Default/Web Data copy failed"), "\(r.reports)")
+        XCTAssertTrue((r.reports.first ?? "").hasPrefix("browser search import: Brave Default/Web Data copy failed: "),
+                      "\(r.reports)")
     }
 
     func testMissingWebDataIsSilent() throws {
@@ -88,21 +110,48 @@ final class BrowserSearchImporterTests: XCTestCase {
         let r = run(f)
         XCTAssertTrue(r.providers.isEmpty)
         XCTAssertEqual(r.reports.count, 1, "\(r.reports)")
-        XCTAssertTrue((r.reports.first ?? "").contains("Default/Web Data"), "\(r.reports)")
+        // GRDB checks the format on open (SELECT FROM sqlite_master), so text fails the open.
+        XCTAssertTrue((r.reports.first ?? "").hasPrefix("browser search import: Brave Default/Web Data open failed: "),
+                      "\(r.reports)")
+        XCTAssertEqual(leftovers(f), [])
+    }
+
+    /// A WAL that is there but cannot be copied is named with the browser; the import
+    /// still reads the last checkpoint.
+    func testUnreadableWalReportsWithTheBrowserAndStillImports() throws {
+        try skipIfRoot()
+        let f = try fixture()
+        makeDB(f.webData, Self.goodKeywords)
+        let wal = f.webData.path + "-wal"
+        try Data("wal".utf8).write(to: URL(fileURLWithPath: wal))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: wal)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: wal) }
+
+        let r = run(f)
+        XCTAssertEqual(r.reports.count, 1, "\(r.reports)")
+        XCTAssertTrue((r.reports.first ?? "").hasPrefix("browser search import: Brave Default/Web Data-wal copy failed: "),
+                      "\(r.reports)")
+        XCTAssertEqual(r.providers.map(\.id), ["example-search"])
+        XCTAssertEqual(leftovers(f), [])
+    }
+
+    /// A real database without a keywords table: the open works, the read fails.
+    func testDatabaseWithoutKeywordsReportsTheReadWithTheBrowser() throws {
+        let f = try fixture()
+        makeDB(f.webData, "CREATE TABLE other (x TEXT);")
+        let r = run(f)
+        XCTAssertTrue(r.providers.isEmpty)
+        XCTAssertEqual(r.reports.count, 1, "\(r.reports)")
+        let line = r.reports.first ?? ""
+        XCTAssertTrue(line.hasPrefix("browser search import: Brave Default/Web Data read failed: "), line)
+        XCTAssertFalse(line.contains(f.copies.deletingLastPathComponent().path), "never the full path: \(line)")
         XCTAssertEqual(leftovers(f), [])
     }
 
     func testGoodWebDataImportsAndReportsNothing() throws {
         let f = try fixture()
-        var db: OpaquePointer?
-        XCTAssertEqual(sqlite3_open(f.webData.path, &db), SQLITE_OK)
-        let sql = """
-            CREATE TABLE keywords (short_name TEXT, url TEXT);
-            INSERT INTO keywords VALUES ('Example Search', 'https://search.example.com/?q={searchTerms}');
-            INSERT INTO keywords VALUES ('Extension', 'chrome-extension://abc/?q={searchTerms}');
-            """
-        XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
-        sqlite3_close(db)
+        makeDB(f.webData, Self.goodKeywords
+            + "INSERT INTO keywords VALUES ('Extension', 'chrome-extension://abc/?q={searchTerms}');")
 
         let r = run(f)
         XCTAssertEqual(r.reports, [])

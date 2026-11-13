@@ -248,4 +248,43 @@ do  -- the marker as the whole output (nothing printed before the failure)
     h.eq(e.logs[#e.logs], "bookmarks: Chrome read failed (unreadable)", "bare marker is a failure")
 end
 
+-- ── #1085: a profile dir that cannot be listed is logged; a missing one is not ─
+-- host.fs.list_dirs gives {} either way, so an empty listing asks `ls` why.
+local function listing(root, answer)
+    local sent = {}
+    return function(cmd)
+        if cmd:find("printf", 1, true) then return HOME end
+        sent[#sent + 1] = cmd
+        if cmd == "ls '" .. root .. "' 2>&1 >/dev/null" then return answer end
+        return ""
+    end, sent
+end
+for _, c in ipairs({
+    { only = "chrome",  label = "Chrome",  root = CHROME },
+    { only = "firefox", label = "Firefox", root = SUPPORT .. "/Firefox/Profiles" },
+}) do
+    local r, sent = listing(c.root, "ls: " .. c.root .. ": Operation not permitted")
+    local g, e = fresh(r, { only = c.only, fsDirs = {} })
+    h.eq(g.bookmarks_run("bm import"), "No bookmarks found.", c.label .. " unlistable: nothing imported")
+    h.eq(#e.logs, 1, c.label .. " unlistable: logged once")
+    h.eq(e.logs[#e.logs], "bookmarks: " .. c.label .. " profile list failed (permission denied)",
+         c.label .. " unlistable: names the browser and the kind")
+    h.eq((e.logs[#e.logs] or ""):find(HOME, 1, true), nil, c.label .. " unlistable: never the path")
+    h.eq(sent[#sent], "ls '" .. c.root .. "' 2>&1 >/dev/null", c.label .. ": ls stderr only, same path")
+end
+do  -- not installed (ENOENT), or there and empty (ls says nothing): silent
+    for _, answer in ipairs({ "ls: " .. CHROME .. ": No such file or directory", "" }) do
+        local g, e = fresh(listing(CHROME, answer), { fsDirs = {} })
+        h.eq(g.bookmarks_run("bm import"), "No bookmarks found.", "no profiles: nothing imported")
+        h.eq(#e.logs, 0, "no profiles logs nothing: '" .. answer .. "'")
+    end
+end
+do  -- a listing that worked never shells out to ls
+    local r, sent = listing(CHROME, "ls: x: Operation not permitted")
+    local g, e = fresh(r)
+    g.bookmarks_run("bm import")
+    for _, cmd in ipairs(sent) do h.eq(cmd:find("^ls ") , nil, "no ls probe after a good listing") end
+    h.eq(#e.logs, 0, "a good listing logs nothing")
+end
+
 print("ok bookmarks")
