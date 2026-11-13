@@ -537,10 +537,21 @@ private final class ExtensionWindow: NSWindow {
 /// commands. Action dispatch is supplied by the registry.
 @MainActor
 final class ExtensionViewPanel {
-    private var window: NSWindow?
+    private(set) var window: NSWindow?
+    /// #1113: the extension whose view the window holds, nil once it closes (either way: the close
+    /// button or host.window.close). A hotkey on that extension's window command toggles the window.
+    private(set) var owner: String?
     private var closeObserver: NSObjectProtocol?
 
+    /// The on-screen calls, a seam (#1113): a test must not order the window front or make it key.
+    var onScreen: (NSWindow) -> Void = { win in
+        DockPolicy.windowDidShow(win)
+        NSApp.activate(ignoringOtherApps: true)
+        win.makeKeyAndOrderFront(nil)
+    }
+
     func present(
+        owner: String? = nil,
         node: ExtensionViewNode,
         transform: ((_ fnName: String, _ input: String) -> String)? = nil,
         onAction: @escaping (_ id: String, _ value: String?, _ formValues: [String: String]) async -> ExtensionViewNode?
@@ -584,13 +595,20 @@ final class ExtensionViewPanel {
             // the extension window is up and hide it again when it's dismissed.
             closeObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: win, queue: .main
-            ) { _ in
-                MainActor.assumeIsolated { DockPolicy.windowDidHide(win) }
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.owner = nil
+                    DockPolicy.windowDidHide(win)
+                }
             }
         }
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        self.owner = owner
+        onScreen(win)
+    }
+
+    /// #1113: WindowToggle's focus: the window back in front with the view the user left, no re-render.
+    func focus() {
+        if let window { onScreen(window) }
     }
 
     /// Dismiss the open window (host.window.close). Posts willClose, so the Dock

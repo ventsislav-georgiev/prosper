@@ -129,6 +129,111 @@ final class WindowShortcutToggleMoreTests: XCTestCase {
         XCTAssertFalse(p.isVisible, "never on screen")
     }
 
+    /// A fresh runner whose presses are counted; never on screen.
+    private func countedRunner() -> (RunnerPanel, on: () -> Int, off: () -> Int) {
+        let rp = RunnerPanel()
+        let p = rp.panel
+        addTeardownBlock { MainActor.assumeIsolated { rp.model.reset(); p.contentView = NSView() } }
+        var on = 0, off = 0
+        rp.onScreen = { _ in on += 1 }
+        rp.offScreen = { _ in off += 1 }
+        return (rp, { on }, { off })
+    }
+
+    /// QA 844: one shortcut's prefix starting another's (a bound quickdir "qd Dev" on a runner a
+    /// "qd Devices" shortcut opened; "g " on one "g x" opened) is another prefix: the press switches.
+    func testAPrefixStartingAnotherSwitches() {
+        stubState()
+        XCTAssertNil(ModeTrigger.resolve("qd Dev"), "no registry: a universal prefill")
+        XCTAssertNotNil(ModeTrigger.resolve("g x"), "the built-in agent mode")
+        let (rp, on, off) = countedRunner()
+        let p = rp.panel
+        for (a, b) in [("qd Devices", "qd Dev"), ("qd Dev", "qd Devices"), ("g x", "g "), ("g ", "g x")] {
+            set(p, shown: false, focused: false)
+            rp.toggle(prefix: a)
+            let (on0, off0) = (on(), off())
+            XCTAssertEqual(rp.shortcutPrefix, a)
+
+            set(p, shown: true, focused: true)
+            rp.toggle(prefix: b)
+            XCTAssertEqual(off(), off0, "\(b) on \(a), focused: no close")
+            XCTAssertEqual(on(), on0 + 1, "\(b) on \(a), focused: it switches")
+            XCTAssertEqual(rp.shortcutPrefix, b)
+
+            set(p, shown: true, focused: false)
+            rp.toggle(prefix: a)
+            XCTAssertEqual(off(), off0, "\(a) on \(b), not focused: no close")
+            XCTAssertEqual(on(), on0 + 2, "\(a) on \(b), not focused: it switches")
+
+            set(p, shown: true, focused: true)
+            rp.toggle(prefix: a)
+            XCTAssertEqual(off(), off0 + 1, "\(a) on \(a), focused: it closes")
+        }
+
+        // The user left the prefix's mode (backspaced out of "g "): the press switches back, no close.
+        set(p, shown: false, focused: false)
+        rp.toggle(prefix: "g ")
+        rp.model.mode = .universal
+        set(p, shown: true, focused: true)
+        let (on0, off0) = (on(), off())
+        rp.toggle(prefix: "g ")
+        XCTAssertEqual(off(), off0, "out of the mode: no close")
+        XCTAssertEqual(on(), on0 + 1, "it switches")
+        XCTAssertEqual(rp.model.mode, ModeTrigger.resolve("g ")?.mode)
+        XCTAssertFalse(p.isVisible, "never on screen")
+    }
+
+    /// Typing after a prefix keeps it this shortcut's runner: ":" then ":abc", focused, closes.
+    func testTypingAfterThePrefixStillCloses() {
+        stubState()
+        XCTAssertNil(ModeTrigger.resolve(":"), "\":\" has no mode")
+        let (rp, on, off) = countedRunner()
+        rp.toggle(prefix: ":")
+        XCTAssertEqual(on(), 1, "closed: the press opens")
+        XCTAssertEqual(rp.model.input, ":")
+        rp.model.input = ":abc"
+        set(rp.panel, shown: true, focused: true)
+        rp.toggle(prefix: ":")
+        XCTAssertEqual(off(), 1, "focused on \":abc\": the press closes")
+        XCTAssertEqual(on(), 1)
+
+        // Round 3: the prefix deleted and something else typed is no longer this shortcut's runner.
+        set(rp.panel, shown: false, focused: false)
+        rp.toggle(prefix: ":")
+        XCTAssertEqual(on(), 2, "closed: the press opens")
+        rp.model.input = "safari"
+        set(rp.panel, shown: true, focused: true)
+        rp.toggle(prefix: ":")
+        XCTAssertEqual(off(), 1, "focused on \"safari\": no close")
+        XCTAssertEqual(on(), 3, "it switches back to \":\"")
+        XCTAssertEqual(rp.model.input, ":")
+    }
+
+    /// Presented any other way (the main hotkey, the status menu), the runner is on no shortcut's
+    /// prefix: a prefix press switches, whatever the input.
+    func testAnotherPresentPathThenAPrefixSwitches() {
+        stubState()
+        let (rp, on, off) = countedRunner()
+        let p = rp.panel
+        let paths: [(String, () -> Void)] = [
+            ("the main hotkey", { rp.toggle(mode: .universal, closing: true) }),
+            ("the status menu", { rp.toggle(closing: false) }),
+        ]
+        for (name, path) in paths {
+            set(p, shown: false, focused: false)
+            rp.toggle(prefix: ":")
+            set(p, shown: false, focused: false)
+            path()
+            XCTAssertNil(rp.shortcutPrefix, "\(name) clears the shortcut's prefix")
+            rp.model.input = ":"
+            set(p, shown: true, focused: true)
+            let (on0, off0) = (on(), off())
+            rp.toggle(prefix: ":")
+            XCTAssertEqual(off(), off0, "after \(name), focused on \":\": no close")
+            XCTAssertEqual(on(), on0 + 1, "it switches")
+        }
+    }
+
     // MARK: - Paste target on a hotkey refocus (point 5)
 
     func testRunnerFocusMovesThePasteTargetToTheAppInFront() {
@@ -169,6 +274,41 @@ final class WindowShortcutToggleMoreTests: XCTestCase {
         XCTAssertTrue(cp.previousApp === other, "nothing in front: the target stays")
     }
 
+    /// QA 844, round 3: only a switch press (a present on the key runner, Prosper frontmost because the
+    /// runner activated it) keeps the target. Any other present takes the app in front, Prosper
+    /// included: a paste from a runner opened over a Prosper window lands in that window, as on main.
+    func testRunnerPresentKeepsTheTargetOnlyOnASwitch() {
+        fakeFrontmost()
+        stubState()
+        let (rp, _, _) = countedRunner()
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        rp.present()
+        XCTAssertEqual(rp.previousApp?.processIdentifier, getpid(), "closed, Prosper in front: Prosper")
+        let other = OtherApp()
+        WindowToggle.frontmost = { other }
+        rp.toggle(prefix: ":")
+        XCTAssertTrue(rp.previousApp === other, "opened from another app: that app")
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        set(rp.panel, shown: true, focused: true)
+        rp.toggle(prefix: "g ")
+        XCTAssertTrue(rp.previousApp === other, "a switch press on the key runner: the target stays")
+    }
+
+    func testClipboardPresentTakesTheAppInFrontProsperIncluded() {
+        fakeFrontmost()
+        let cp = ClipboardPanel(store: ClipboardStore(dir: tempDir()))
+        let p = cp.panel
+        addTeardownBlock { MainActor.assumeIsolated { p.contentView = NSView() } }
+        cp.onScreen = { _ in }
+        let other = OtherApp()
+        WindowToggle.frontmost = { other }
+        cp.present()
+        XCTAssertTrue(cp.previousApp === other, "opened from another app: that app")
+        WindowToggle.frontmost = { NSRunningApplication.current }
+        cp.present()
+        XCTAssertEqual(cp.previousApp?.processIdentifier, getpid(), "Prosper in front: Prosper")
+    }
+
     // MARK: - The hotkey hookups (point 5)
 
     /// Each window hotkey is registered with that surface's toggle: run on a focused window it closes
@@ -204,15 +344,24 @@ final class WindowShortcutToggleMoreTests: XCTestCase {
                        "the hotkeys that open a window, and only those")
 
         set(rpPanel, shown: true, focused: true)
-        for a in [ShortcutAction.runner, .runnerSpace, .runnerBackslash, .translate] {
+        for a in [ShortcutAction.runner, .runnerSpace, .runnerBackslash] {
             try XCTUnwrap(hotkey(a))()
         }
-        XCTAssertEqual(runnerOff, 4, "every runner trigger and Translate close a focused runner")
+        XCTAssertEqual(runnerOff, 3, "every runner trigger closes a focused runner")
         XCTAssertEqual(runnerOn, 0)
+        // Translate is the "l " prefix's custom shortcut: on a focused plain runner it switches.
+        try XCTUnwrap(hotkey(.translate))()
+        XCTAssertEqual(runnerOff, 3, "Translate on a focused plain runner does not close it")
+        XCTAssertEqual(runnerOn, 1, "it switches to Translate")
+        XCTAssertEqual(rp.shortcutPrefix, "l ", "on Translate's prefix")
+        try XCTUnwrap(hotkey(.translate))()
+        XCTAssertEqual(runnerOff, 4, "focused in Translate: Translate closes")
+        try XCTUnwrap(hotkey(.runner))()
+        XCTAssertEqual(runnerOff, 5, "the runner trigger closes a focused runner in Translate too")
         set(rpPanel, shown: false, focused: false)
         try XCTUnwrap(hotkey(.translate))()
-        XCTAssertEqual(runnerOn, 1, "Translate on a closed runner opens it")
-        XCTAssertTrue(rp.model.mode != .universal || rp.model.input == "l ", "on Translate's prefix")
+        XCTAssertEqual(runnerOn, 2, "Translate on a closed runner opens it")
+        XCTAssertEqual(rp.shortcutPrefix, "l ", "on Translate's prefix")
         rp.model.reset()   // no debounced query outlives the row
 
         set(cpPanel, shown: true, focused: true)

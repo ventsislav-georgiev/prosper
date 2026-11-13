@@ -329,6 +329,18 @@ enum ExtensionShortcuts {
         }
     }
 
+    /// #1113: a hotkey (or a custom shortcut's prefix) on a `launches_window` command whose
+    /// extension's view the panel holds follows WindowToggle's rule: not focused, the window comes
+    /// back with the view kept; focused, it closes. Anything else fires as before: it opens the
+    /// window, or replaces another extension's view, and never closes it.
+    @MainActor
+    static func toggleWindow(commandID: String, registry: ExtensionRegistry, panel: ExtensionViewPanel,
+                             fire: () -> Void) {
+        guard let cmd = registry.command(id: commandID), cmd.command.launchesWindow,
+              panel.owner == cmd.record.id else { return fire() }
+        WindowToggle.apply(panel.window, open: fire, focus: panel.focus, close: panel.close)
+    }
+
     // MARK: - Registration input
 
     /// One hotkey to claim for an extension command: the manifest keybindings of

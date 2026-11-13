@@ -227,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.runnerPanel?.dismiss()
             self.extensionViewPanel.present(
+                owner: extID,
                 node: node,
                 transform: { fn, input in
                     self.extensions.callExtensionString(extensionID: extID, function: fn, arg: input) ?? ""
@@ -769,14 +770,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// path (closed or unfocused: open and focus; focused: close), nil for any other action. Static
     /// over its targets, so a test reads the closure an action is registered with and runs it on fakes.
     /// The command-runner triggers (⌘Space main, ⌥Space alt 1, alt 2 unset) open the universal
-    /// launcher, no prefix assumed. Translate (⌥L, the com.prosper.translate extension) opens it
-    /// prefilled with the "l " mode prefix, which the runner resolves into the Translate mode.
+    /// launcher, no prefix assumed, and close a focused runner whatever it shows. Translate (⌥L, the
+    /// com.prosper.translate extension) is a custom shortcut on the "l " prefix (#1113): a focused runner
+    /// showing something else switches to Translate, one already in Translate closes.
     static func windowHotkey(_ action: ShortcutAction, runner: @escaping () -> RunnerPanel,
                              clipboard: @escaping () -> ClipboardPanel,
                              settings: @escaping () -> SettingsWindow) -> (() -> Void)? {
         switch action {
         case .runner, .runnerSpace, .runnerBackslash: return { runner().toggle(mode: .universal, closing: true) }
-        case .translate: return { runner().toggle(mode: .universal, prefill: "l ", closing: true) }
+        case .translate: return { runner().toggle(prefix: "l ") }
         case .clipboard: return { clipboard().toggle(closing: true) }
         case .settings: return { settings().toggleFromShortcut() }
         case .agent: return { ChatWindow.shared.toggleFromShortcut() }
@@ -939,8 +941,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               id: GlobalHotKey.extensionIdBase + UInt32(i)) { [weak self] in
                     Task { @MainActor in
                         guard let self else { return }
-                        await ExtensionShortcuts.fire(commandID: commandID, item: item,
-                                                      registry: self.extensions)
+                        // #1113: a window command whose window is up toggles it instead.
+                        ExtensionShortcuts.toggleWindow(commandID: commandID, registry: self.extensions,
+                                                        panel: self.extensionViewPanel) {
+                            Task { @MainActor in
+                                await ExtensionShortcuts.fire(commandID: commandID, item: item,
+                                                              registry: self.extensions)
+                            }
+                        }
                     }
                 },
                  reg.label, false)
@@ -1009,7 +1017,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // handler opens its own window via host.window.open (→ windowPresenter).
         if let routed = extensions.route(query: prefill), routed.command.launchesWindow {
             let id = routed.command.id
-            Task { @MainActor in _ = await self.extensions.invokeAsync(commandID: id, query: prefill) }
+            // #1113: its window up and owned by this extension: WindowToggle's rule instead.
+            ExtensionShortcuts.toggleWindow(commandID: id, registry: extensions, panel: extensionViewPanel) {
+                Task { @MainActor in _ = await self.extensions.invokeAsync(commandID: id, query: prefill) }
+            }
             return
         }
         let panel = runnerPanel ?? RunnerPanel()
@@ -1111,12 +1122,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    /// #1102: `closing` is the hotkeys' (WindowToggle's rule: a focused panel closes); the status
-    /// menu leaves it false, so its items open or focus and never close.
-    private func toggleRunnerPanel(mode: RunnerMode = .universal, prefill: String? = nil, closing: Bool = false) {
+    /// The status menu's: opens or focuses, never closes (the hotkeys go through `windowHotkey`).
+    private func toggleRunnerPanel(mode: RunnerMode = .universal, prefill: String? = nil) {
         let panel = runnerPanel ?? RunnerPanel()
         runnerPanel = panel
-        panel.toggle(mode: mode, prefill: prefill ?? "", closing: closing)
+        panel.toggle(mode: mode, prefill: prefill ?? "", closing: false)
     }
 
     private func toggleClipboardPanel(closing: Bool = false) {
@@ -1125,11 +1135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.toggle(closing: closing)
     }
 
-    /// #1102: `toggle` is the hotkey's (WindowToggle's rule); every other caller opens or focuses.
-    private func openSettings(toggle: Bool = false) {
+    /// Opens or focuses, never closes (the hotkey goes through `windowHotkey`).
+    private func openSettings() {
         let window = settingsWindow ?? SettingsWindow()
         settingsWindow = window
-        if toggle { window.toggleFromShortcut() } else { window.show() }
+        window.show()
     }
 
     private func setClipboardHistory(enabled: Bool) {

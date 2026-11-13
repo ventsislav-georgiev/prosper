@@ -207,7 +207,10 @@ final class RunnerPanel {
         // #195: present → this transaction's animations finished (CATransaction completion block).
         let signpost = Perf.signposter.beginInterval("palette.present")
         CATransaction.setCompletionBlock { Perf.signposter.endInterval("palette.present", signpost) }
-        previousApp = NSWorkspace.shared.frontmostApplication
+        // #1113 (QA 844): a switch press presents the key runner, Prosper frontmost only because the runner
+        // activated it: the target stays. Any other present takes the app in front, Prosper included.
+        if !WindowToggle.state(panel).focused { previousApp = WindowToggle.frontmost() }
+        shortcutPrefix = nil
         model.reset()
         model.mode = mode
         model.input = prefill
@@ -229,14 +232,24 @@ final class RunnerPanel {
                            close: { closing ? dismiss() : focus() })
     }
 
-    /// #1113: a custom shortcut's press (its activation prefix, e.g. "o " or ":"). On a runner showing
-    /// that prefix (its mode, the input starting with what the prefix leaves) WindowToggle's rule holds;
-    /// showing another prefix, or closed, the press opens the runner on this one, never closes it.
+    /// #1113: a custom shortcut's press (its activation prefix, e.g. "o ", ":" or Translate's "l "). On
+    /// a runner this shortcut presented, still in the prefix's mode and still starting with what the
+    /// prefix leaves, WindowToggle's rule holds (typing after the prefix included); presented any other
+    /// way, on another prefix, or left by the user (mode changed, prefix deleted), the press opens the
+    /// runner on this prefix and never closes it. The input alone cannot tell: "qd Dev" starts
+    /// "qd Devices", which another shortcut may have prefilled.
     func toggle(prefix: String) {
         let (mode, prefill) = ModeTrigger.resolve(prefix) ?? (mode: .universal, stripped: prefix)
-        guard model.mode == mode, model.input.hasPrefix(prefill) else { return present(mode: mode, prefill: prefill) }
-        toggle(mode: mode, prefill: prefill)
+        if shortcutPrefix == prefix, model.mode == mode, model.input.hasPrefix(prefill) {
+            toggle(mode: mode, prefill: prefill)
+        } else {
+            present(mode: mode, prefill: prefill)
+        }
+        shortcutPrefix = prefix
     }
+
+    /// The prefix of the shortcut that last presented the runner; nil after any other present.
+    private(set) var shortcutPrefix: String?
 
     /// #1102: back in front and key, the query kept. The paste and menu-command target follows the
     /// app the user went to meanwhile (never Prosper itself).

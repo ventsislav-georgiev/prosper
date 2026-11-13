@@ -107,7 +107,7 @@ final class ClipboardPanel {
     // the app's lifetime (lazily created, never released), so deinit never fires.
 
     func present() {
-        previousApp = NSWorkspace.shared.frontmostApplication
+        previousApp = WindowToggle.frontmost()   // Prosper included: a paste into its own window lands there
         model.reset(selecting: store.historyRows.first?.id)
         isProgrammaticMove = true
         positionRelativeToRunner()

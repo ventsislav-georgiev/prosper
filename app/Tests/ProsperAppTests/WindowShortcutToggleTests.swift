@@ -222,10 +222,11 @@ final class WindowShortcutToggleTests: XCTestCase {
         XCTAssertEqual(on, 1, "closed: the press opens")
         XCTAssertEqual(rp.model.input, "", "through present (a fresh query)")
 
-        // A Translate press on the plain runner left open with a query: it comes back as it was.
+        // A press on the runner left open with a query: it comes back as it was. (#1113: Translate is
+        // the "l " prefix's toggle now, WindowShortcutToggleMoreTests.testEachWindowHotkeyRunsItsToggle.)
         rp.model.input = "typed"
         set(p, shown: true, focused: false)
-        rp.toggle(prefill: "l ")
+        rp.toggle()
         XCTAssertEqual(on, 2, "open, not focused: the press focuses")
         XCTAssertEqual(off, 0, "and does not close")
         XCTAssertEqual(rp.model.input, "typed", "the query survives a refocus")
@@ -235,8 +236,8 @@ final class WindowShortcutToggleTests: XCTestCase {
         rp.toggle(closing: false)
         XCTAssertEqual(on, 3, "the status menu never closes")
         XCTAssertEqual(off, 0)
-        rp.toggle(prefill: "l ")
-        XCTAssertEqual(off, 1, "focused: a press closes, Translate's too, through dismiss")
+        rp.toggle()
+        XCTAssertEqual(off, 1, "focused: a press closes, through dismiss")
         XCTAssertEqual(on, 3)
         XCTAssertFalse(p.isVisible, "never on screen")
     }

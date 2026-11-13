@@ -555,18 +555,33 @@ tag from the now-released section and put it on the new top draft.
 - **Shortcuts**: the Calendar shortcut now works like the other window shortcuts. If the popup is
   closed, it opens. If it is pinned and you clicked away from it, the shortcut brings it back
   instead of closing it. If it already has focus, it closes (#1113).
-- **Shortcuts**: a custom runner shortcut closes the runner when the runner already has focus on
-  that shortcut's prefix. Pressed while the runner shows a different prefix, it switches to its own
-  prefix instead of closing (#1113).
-- Agent Sessions: the session header is lower: one line in Terminal mode, with the folder path
-  beside the title (shortened in the middle, and left out entirely when the window is too narrow for
-  it); Transcript mode keeps the path on a second line. Terminal mode no longer shows the dimmed
-  view picker, and the Terminal | Transcript switch (Terminal, the default, now on the left) and the
-  "⋯" button stay in place when you switch modes.
-- Agent Sessions: "Open in terminal" moved from the header into the "⋯" menu (first item) and a
-  session's right-click menu; a notice that says "Open in terminal" now has the button next to it.
-- Agent Sessions: the sidebar's "Agent Sessions" title sits on the same line as the session title
-  beside it again.
+- **Shortcuts**: a custom runner shortcut, or a bound quickdir hotkey (which uses the "qd <name>"
+  prefix), closes the runner only if that same shortcut opened it, the runner has focus, it is still
+  in that shortcut's mode, and the text still starts with the prefix. Text typed after the prefix
+  does not change that; deleting the prefix and typing something else makes the next press switch
+  back instead of closing. If one shortcut's prefix starts another's ("qd Dev" and "qd Devices"),
+  the press switches between them instead of closing. If the runner was opened some other way (the
+  main hotkey, the menu bar item), a shortcut press switches it to that shortcut's prefix (#1113).
+- **Shortcuts**: Translate (⌥L) now works like a custom shortcut on the "l " prefix. Pressed while
+  the runner has focus but shows something else, it switches the runner to Translate. Pressed while
+  the runner is already in Translate, it closes the runner (#1113).
+- **Shortcuts**: a shortcut for an extension command that opens a window (such as Base64 or Add
+  Quicklink) now works like the other window shortcuts. If that window is open but you clicked away
+  from it, the shortcut brings it back with what you typed still there, instead of starting a fresh
+  one. If the window already has focus, it closes (#1113).
+- **Shortcuts**: when a shortcut switches an open runner to its prefix, paste, snippet fill-in and
+  menu commands still go to the app you were using before the runner opened (#1113, QA 844).
+- Agent Sessions window: the session header is lower: one line in Terminal mode, with the folder
+  path beside the title (shortened in the middle, and left out entirely when the window is too
+  narrow for it); Transcript mode keeps the path on a second line. A title too long for the line is
+  now cut at its end, not in the middle. Terminal mode no longer shows the dimmed view picker, and
+  the Terminal | Transcript switch (Terminal, the default, now on the left) and the "⋯" button stay
+  in place when you switch modes (#1103).
+- Agent Sessions window: "Open in terminal" moved from the header into the "⋯" menu (first item) and
+  a session's right-click menu; a notice that says "Open in terminal" now has the button next to it
+  (#1103).
+- Agent Sessions window: the sidebar's "Agent Sessions" title sits on the same line as the session
+  title beside it again (#1103).
 
 ## v2.174.0
 
