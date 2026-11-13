@@ -88,7 +88,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         }
         r.anthropic.set { $0.reject = ["tok-e": 401, "tok-g": 403] }
         try r.secrets.remove(id: try XCTUnwrap(r.store.snapshot.accounts["f"]?.id))   // f's probe cannot answer
-        await r.model.refreshUsage().value
+        await r.model.refreshUsage()?.value
 
         let want: [(String, CCPoolPaneModel.RowState, String)] = [
             ("a", .active, "active"),
@@ -113,7 +113,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(row(r.model, "c")?.state, .ready)
         XCTAssertEqual(row(r.model, "d")?.state, .ready)
         r.anthropic.set { $0.reject = [:] }
-        await r.model.refreshUsage().value
+        await r.model.refreshUsage()?.value
         XCTAssertEqual(row(r.model, "e")?.state, .ready)
         XCTAssertEqual(row(r.model, "f")?.state, .unverified, "still no token: never healthy")
     }
@@ -123,7 +123,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         try r.add(["a", "b"])
         XCTAssertEqual(row(r.model, "a")?.usageText, "no usage seen yet")
         r.anthropic.set { $0.usage = ["tok-a": 0.5] }
-        await r.model.refreshUsage().value
+        await r.model.refreshUsage()?.value
         XCTAssertEqual(row(r.model, "a")?.usageText, "5h 50% · week 10% · fable 34% · just now")
         r.clock.advance(180)
         XCTAssertEqual(row(r.model, "a")?.usageText, "5h 50% · week 10% · fable 34% · 3 min ago")
@@ -246,7 +246,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(row(r.model, "z")?.state, .unverified)
         XCTAssertEqual(row(r.model, "z")?.stateText, "not verified")
         XCTAssertEqual(r.secrets.count, 1)
-        await r.model.refreshUsage().value
+        await r.model.refreshUsage()?.value
         XCTAssertEqual(row(r.model, "z")?.state, .unverified, "Refresh could not answer either")
         XCTAssertNil(r.model.poolText, "no headroom from nothing")
     }
@@ -327,6 +327,8 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertFalse(m.importVisible, "no old vault: no import row")
         try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(#"{"accounts": {"a": {"token": "tok-new-a"}, "n": {"token": "tok-n"}}}"#.utf8).write(to: r.vault)
+        XCTAssertFalse(m.importVisible, "QA #739 INFO-8: checked on appearance and Refresh, not per render")
+        m.checkVault()
         XCTAssertTrue(m.importVisible)
         try r.add(["a"])
         await m.beginImport().value
@@ -355,7 +357,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertTrue(r.service.upstream.hasSession(accountID: oldA))
         await m.runImport()?.value
         XCTAssertFalse(r.service.upstream.hasSession(accountID: oldA), "a replaced token's session is dropped")
-        m.finishImport(trash: true)
+        await m.finishImport(trash: true)?.value
         XCTAssertEqual(r.trashed.urls, [r.vault], "the default moves the old vault to the Trash")
         XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
 
@@ -421,7 +423,7 @@ final class CCPoolPaneModelTests: XCTestCase {
             $0.usage = ["tok-b": 0.5]
         }
         try r.secrets.remove(id: try XCTUnwrap(r.store.snapshot.accounts["c"]?.id))
-        await m.refreshUsage().value
+        await m.refreshUsage()?.value
         XCTAssertEqual(row(m, "a")?.state, .rejected)
         XCTAssertTrue(row(m, "b")?.usageText.hasPrefix("5h 50%") ?? false, row(m, "b")?.usageText ?? "")
         XCTAssertEqual(row(m, "c")?.state, .unverified)
@@ -499,6 +501,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         try Data(#"{"accounts": {"a": {"token": "tok-a"}}}"#.utf8).write(to: target)
         try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: r.vault, withDestinationURL: target)
+        m.checkVault()
         XCTAssertTrue(m.importVisible)
         await m.beginImport().value
         await m.runImport()?.value
@@ -508,11 +511,88 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(o.vaultLink, target.path)
         let why = "The old vault is a link to \(target.path). Prosper moves nothing: delete that file yourself once you no longer need it."
         XCTAssertEqual(m.trashBlockedReason, why)
-        m.finishImport(trash: true)
+        await m.finishImport(trash: true)?.value
         XCTAssertEqual(r.trashed.urls, [], "neither the link nor its target goes to the Trash")
         XCTAssertEqual(m.importPhase, .finished(why))
         XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
         XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: r.vault.path))
+    }
+
+    // QA #751 INFO-1 (mutant h11): a Refresh and an import never overlap, so a Refresh of the old
+    // token never puts its verdict on the token a Replace brings.
+    func testCCPoolRefreshAndImportNeverOverlap() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try r.add(["a"])
+        r.anthropic.set { $0.reject = ["tok-a": 401] }
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-a2"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .replace]
+        let refresh = m.refreshUsage()   // probes the old token: 401
+        XCTAssertNotNil(refresh)
+        XCTAssertFalse(m.canRunImport, "the import waits for the Refresh")
+        XCTAssertNil(m.runImport())
+        await refresh?.value
+        XCTAssertEqual(row(m, "a")?.state, .rejected)
+        let run = m.runImport()
+        XCTAssertNotNil(run)
+        XCTAssertTrue(m.importRunning)
+        XCTAssertNil(m.refreshUsage(), "the Refresh waits for the import")
+        XCTAssertFalse(m.refreshing)
+        await run?.value
+        guard case .imported(let o) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(o.replaced, ["a"])
+        XCTAssertEqual(row(m, "a")?.state, .ready, "the new token carries no old verdict")
+    }
+
+    // QA #751 INFO-6 (mutants h8, h12, h13): the Trash decides again at the click. A link, a second
+    // name, or an account the pool does not hold keeps the vault, with one fixed sentence.
+    func testCCPoolTrashDecidesAgainAtTheClick() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        let fm = FileManager.default
+        let held = Data(#"{"accounts": {"a": {"token": "tok-a"}}}"#.utf8)
+        try fm.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        func imported() async throws {
+            m.dismissImport()
+            try? fm.removeItem(at: r.vault)
+            try held.write(to: r.vault)
+            await m.beginImport().value
+            m.importChoices = ["a": .skip]
+            await m.runImport()?.value
+            XCTAssertNil(m.trashBlockedReason, "the import itself offers the Trash")
+        }
+        let changed = CCPoolPaneModel.ImportPhase.finished(CCPoolPaneModel.trashChangedReason)
+
+        try await imported()   // a link made after the import, to a file with the same accounts
+        let target = tempDir().appendingPathComponent("elsewhere.json")
+        try held.write(to: target)
+        try fm.removeItem(at: r.vault)
+        try fm.createSymbolicLink(at: r.vault, withDestinationURL: target)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, changed, "a link")
+
+        try await imported()   // a second name for the same file
+        try fm.linkItem(at: r.vault, to: tempDir().appendingPathComponent("second.json"))
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, changed, "a hard link")
+
+        try await imported()   // an account the pool does not hold (a CLI `add` in between)
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}, "b": {"token": "tok-b"}}}"#.utf8).write(to: r.vault)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, changed, "a new account")
+
+        try await imported()   // a new token under a held label
+        try Data(#"{"accounts": {"a": {"token": "tok-a-new"}}}"#.utf8).write(to: r.vault)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, changed, "a new token")
+        XCTAssertEqual(r.trashed.urls, [], "nothing went to the Trash")
+
+        try await imported()   // unchanged: trashed
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
+        XCTAssertEqual(r.trashed.urls, [r.vault])
     }
 
     // QA #739 INFO-2 (B2): the Trash is offered only when every vault token is in the pool.
@@ -532,7 +612,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertFalse(o.allHeld)
         let why = "Not every account in the old vault is in the pool, so it stays where it is."
         XCTAssertEqual(m.trashBlockedReason, why)
-        m.finishImport(trash: true)
+        await m.finishImport(trash: true)?.value
         XCTAssertEqual(r.trashed.urls, [], "an import with failures keeps the vault")
         XCTAssertEqual(m.importPhase, .finished(why))
 
@@ -561,7 +641,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         guard case .imported(let ok) = m.importPhase else { return XCTFail("\(m.importPhase)") }
         XCTAssertTrue(ok.allHeld, "\(ok)")
         XCTAssertNil(m.trashBlockedReason)
-        m.finishImport(trash: true)
+        await m.finishImport(trash: true)?.value
         XCTAssertEqual(r.trashed.urls, [r.vault])
         XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
     }
@@ -596,7 +676,7 @@ final class CCPoolPaneModelTests: XCTestCase {
             return log.lines.filter { $0.contains("proxy listening") }.count > binds
         }, "restart finished with main blocked")
         await add.value
-        await refresh.value
+        await refresh?.value
         await restart.value
         XCTAssertEqual(r.model.notice, "Added two.")
         XCTAssertNotNil(r.model.report)

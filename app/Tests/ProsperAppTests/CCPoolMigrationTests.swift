@@ -226,12 +226,66 @@ final class CCPoolMigrationTests: XCTestCase {
 
     // QA #739 INFO-6 (B3): vault labels follow the typed-label rule; a bad one is refused with a
     // fixed reason and never shown, logged or stored as it is.
+    // QA #751 INFO-2 (mutant h14): a Replace is a new token: the old one's benches and resets go,
+    // and a hand hold stays to its own end.
+    func testCCPoolReplaceDropsTheOldBenchesKeepsAHold() throws {
+        let vault = try write(tempDir(), CCPoolMigration.vaultFileName,
+                              #"{"accounts": {"alpha": {"token": "tok-a2"}, "beta": {"token": "tok-b2"}}}"#)
+        let st = store()
+        let secrets = CCPoolMemorySecrets()
+        try st.addAccount(label: "alpha", token: "tok-a", secrets: secrets)
+        try st.addAccount(label: "beta", token: "tok-b", secrets: secrets)
+        st.mutate { s in
+            s.bench("alpha", claim: "seven_day", until: Int(t0) + 86400, now: t0)
+            s.accounts["alpha"]?.reset = ["seven_day": Int(t0) + 86400]
+            s.hold("beta", hours: 2, now: t0)
+            s.bench("beta", claim: "seven_day", until: Int(t0) + 86400, now: t0)
+        }
+        let out = try CCPoolMigration.run(vault: vault, store: st, secrets: secrets,
+                                          choices: ["alpha": .replace, "beta": .replace], now: t0)
+        XCTAssertEqual(out.replaced, ["alpha", "beta"])
+        let snap = st.snapshot
+        XCTAssertEqual(snap.accounts["alpha"]?.cooldown, [:], "the old token's bench is not the new one's")
+        XCTAssertEqual(snap.accounts["alpha"]?.reset, [:])
+        XCTAssertEqual(snap.accounts["beta"]?.cooldown, [CCPoolCore.fiveHour: Int(t0) + 7200], "the hold stays, the bench goes")
+        XCTAssertEqual(snap.accounts["beta"]?.held, Int(t0) + 7200)
+    }
+
+    // QA #751 INFO-5: a new item this import could not delete again is named in the notes, label only.
+    func testCCPoolImportNamesAnItemItCouldNotDelete() throws {
+        let vault = try fixture()
+        let secrets = TruncatingSecrets()
+        secrets.inner.refuseRemove = true
+        let out = try CCPoolMigration.run(vault: vault, store: store(), secrets: secrets, choices: [:], now: t0)
+        XCTAssertEqual(out.failures.map(\.label), ["alpha", "beta", "gamma"])
+        XCTAssertEqual(out.notes, ["alpha: " + CCPoolMigration.noteOrphan, "beta: " + CCPoolMigration.noteOrphan])
+        XCTAssertTrue(CCPoolPaneModel.summary(out).contains("alpha: " + CCPoolMigration.noteOrphan))
+        XCTAssertEqual(secrets.inner.count, 2)
+    }
+
     func testCCPoolVaultLabelsFollowTheLabelRule() async throws {
         let long = String(repeating: "x", count: CCPoolStore.labelMax + 1)
         let bad = ["bell\u{7}x", "zero\u{200B}width", "rtl\u{202E}abc", "line\u{2028}x", "tab\tx", long, "", "  "]
         for label in bad {
             XCTAssertNotNil(CCPoolStore.labelProblem(label), label.debugDescription)
         }
+        // Mutant g13: default-ignorable scalars that are neither format characters nor whitespace,
+        // caught only by isDefaultIgnorableCodePoint (U+3164 is a letter, U+034F a combining mark).
+        for label in ["hangul\u{3164}filler", "cgj\u{034F}x", "\u{3164}"] {
+            XCTAssertEqual(CCPoolStore.labelProblem(label), .badLabel, label.debugDescription)
+        }
+        // QA #751 INFO-8: U+00A0 (Zs) is caught only by the non-space whitespace clause, U+E000 (Co)
+        // only by the private-use category. INFO-7: U+2800 (So) renders blank and is refused by name.
+        for label in ["nbsp\u{00A0}x", "pua\u{E000}x", "\u{2800}", "blank\u{2800}x"] {
+            XCTAssertEqual(CCPoolStore.labelProblem(label), .badLabel, label.debugDescription)
+        }
+        // Review INFO 8 (kept): emoji sequences carry U+200D or U+FE0F and are refused, and the hint
+        // says so; a plain emoji and a flag (regional indicators) pass.
+        for label in ["dev \u{1F469}\u{200D}\u{1F4BB}", "love \u{2764}\u{FE0F}"] {
+            XCTAssertEqual(CCPoolStore.labelProblem(label), .badLabel, label.debugDescription)
+        }
+        for label in ["dev \u{1F4BB}", "flag \u{1F1E7}\u{1F1EC}"] { XCTAssertNil(CCPoolStore.labelProblem(label), label) }
+        XCTAssertTrue(CCPoolStoreError.badLabel.description.contains("emoji"))
         for label in ["work-account@example.com", "personal", "Zoë 2", String(repeating: "x", count: CCPoolStore.labelMax)] {
             XCTAssertNil(CCPoolStore.labelProblem(label), label)
         }
@@ -250,7 +304,9 @@ final class CCPoolMigrationTests: XCTestCase {
         XCTAssertEqual(try CCPoolMigration.inspect(vault: vault, store: st).labels, shown)
         let out = try CCPoolMigration.run(vault: vault, store: st, secrets: secrets, choices: [:], now: t0)
         XCTAssertEqual(out.imported, ["ok"])
-        XCTAssertEqual(out.failures, (2...8).map { CCPoolMigration.Failure(label: "entry \($0) (unusable label)", reason: CCPoolMigration.reasonBadLabel) })
+        // Review INFO 3: the empty label (entry 8) gets its own reason.
+        XCTAssertEqual(out.failures, (2...7).map { CCPoolMigration.Failure(label: "entry \($0) (unusable label)", reason: CCPoolMigration.reasonBadLabel) }
+            + [CCPoolMigration.Failure(label: "entry 8 (unusable label)", reason: CCPoolMigration.reasonEmptyLabel)])
         XCTAssertEqual(st.snapshot.order, ["ok"])
         XCTAssertEqual(secrets.count, 1, "no item for a refused entry")
         XCTAssertFalse(out.allHeld, "the vault keeps what was refused")

@@ -166,6 +166,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AgentIslandController.shared.onRowDetails = { DchSessionServer.shared.sidekickChanged() }
         LiveStatusPublisher.shared.start()
         AgentIslandController.shared.reload()
+        // ccpool (#871): opt-in account pool; no store, no Keychain read and no listener until the
+        // user enables it. Live with an account: the proxy starts off main.
+        CCPoolRuntime.setExtensionLive(ccpoolExtLive)
 
         // Per-app volume mixer: opt-in, so no status item and no audio taps
         // until the preference is on (the controller re-checks it on reload).
@@ -368,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CalendarBarController.shared.reload()
             AgentIslandController.shared.extLive = self.agentIslandExtLive
             AgentIslandController.shared.reload()
+            CCPoolRuntime.setExtensionLive(self.ccpoolExtLive)
             self.reconcileMouse()
         }
 
@@ -1068,6 +1072,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autocomplete.stop()
         hotKeys.forEach { $0.unregister() }
         BunHarness.shared.shutdown()
+        // ccpool (#871): the loopback proxy stops with the app (spec 3.2).
+        CCPoolRuntime.shared?.quit()
         // codex app-server and the command it runs: SIGTERM, SIGKILL after 1 s, inline (#361).
         CodexHarness.killLiveGroupsBlocking(grace: 1)
         // Release every extension's native resources (power assertions, pmset lid
@@ -1156,6 +1162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether the Agent Island extension is enabled + trusted (#474).
     private var agentIslandExtLive: Bool {
         extensions.record(id: "com.prosper.agentisland")?.isLive ?? false
+    }
+
+    /// Whether the ccpool extension is enabled + trusted (#871). The proxy runs only while it is.
+    private var ccpoolExtLive: Bool {
+        extensions.record(id: "com.prosper.ccpool")?.isLive ?? false
     }
 
     /// Whether the Mouse extension is enabled + trusted. Every mouse service (scroll

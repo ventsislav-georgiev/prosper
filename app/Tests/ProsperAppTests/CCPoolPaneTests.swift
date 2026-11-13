@@ -74,12 +74,13 @@ final class CCPoolPaneTests: XCTestCase {
             st.hold("personal", hours: 3, now: 1_800_000_000)
             st.accounts["spare"]?.cooldown["mystery_claim"] = 1_800_000_000 + 60
         }
-        await r.model.refreshUsage().value
+        await r.model.refreshUsage()?.value
         r.model.select("work-account-with-a-long-label@example.com")
         r.model.requestRemove("work-account-with-a-long-label@example.com")
         r.model.notice = "Token rejected: someone-with-a-long-label@example.com was not added."
         try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(#"{"accounts": {"personal": {"token": "tok-p"}, "other": {"token": "tok-o"}}}"#.utf8).write(to: r.vault)
+        r.model.checkVault()
         return r
     }
 
@@ -126,6 +127,74 @@ final class CCPoolPaneTests: XCTestCase {
                 }
             }
         }
+    }
+
+    // P2b-1 item 8: the mounted pane's own states fit at 0.7, 0.85 and 1.0 (both backings), offscreen.
+    func testCCPoolPaneMountedStatesFit() async throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let t0 = 1_800_000_000
+        var states: [(String, CCPoolPaneModel)] = []
+        let empty = try ccpoolPaneRig()
+        states.append(("no accounts", empty.model))
+
+        let two = try ccpoolPaneRig()
+        try two.add(["work-account-with-a-long-label@example.com", "personal"])
+        two.store.mutate { $0.bench("personal", claim: "seven_day", until: t0 + 86400, now: Double(t0)) }
+        guard case .limited? = two.model.rows.last?.state else { return XCTFail("\(two.model.rows)") }
+        states.append(("two accounts, one limited", two.model))
+
+        // The Python ccpool holds the port: the probe is a fake, nothing is dialled or bound.
+        let held = try ccpoolPaneRig()
+        try held.add(["personal"])
+        var cfg = held.service.config
+        cfg.port = 47_011
+        cfg.portProbe = { _, _ in .ccpool(pid: 4242, impl: "python") }
+        let svc = CCPoolService(config: cfg, store: held.store, secrets: held.secrets, logger: held.log)
+        XCTAssertEqual(svc.start(), .heldByCCPool(pid: 4242))
+        let heldModel = CCPoolPaneModel(store: held.store, secrets: held.secrets, service: svc, logger: held.log,
+                                        defaults: held.defaults, probeBase: held.base, vaultURL: held.vault)
+        XCTAssertTrue(heldModel.proxyText.hasPrefix("Another ccpool proxy (pid 4242)"), heldModel.proxyText)
+        states.append(("python proxy holds the port", heldModel))
+
+        let offered = try ccpoolPaneRig()
+        try offered.add(["personal"])
+        try FileManager.default.createDirectory(at: offered.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"personal": {"token": "tok-p"}}}"#.utf8).write(to: offered.vault)
+        offered.model.checkVault()
+        XCTAssertTrue(offered.model.importVisible)
+        states.append(("import offered", offered.model))
+
+        for (name, m) in states {
+            for backing in [1, 2] as [CGFloat] {
+                for scale in [1.0, 0.85, 0.7] as [CGFloat] {
+                    ThemeRuntime.scale = scale
+                    let width = room(scale) - 2 * sz(16)
+                    let (hc, win) = host(m, width: width, backing: backing)
+                    defer { win.contentView = NSView() }
+                    let fit = hc.sizeThatFits(in: CGSize(width: width, height: 100_000))
+                    XCTAssertLessThanOrEqual(fit.width, width + 1 / win.backingScaleFactor,
+                                             "\(name): wider than its room at scale \(scale), backing \(backing): \(fit.width) > \(width)")
+                    XCTAssertGreaterThan(fit.height, 200, "\(name): laid out at scale \(scale)")
+                }
+            }
+        }
+    }
+
+    // P2b-1 item 5 (mutant h5): the pane as Settings mounts it, on a runtime's model, has no routing row.
+    func testCCPoolMountedPaneHidesTheRoutingRow() throws {
+        let dir = tempDir()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:9")!
+        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+                               vaultURL: dir.appendingPathComponent("old"), defaults: scratchDefaults("ccpool-mounted"),
+                               probeBase: cfg.upstream, logger: CCPoolCapturingLogger())
+        try rt.store.addAccount(label: "alpha", token: "tok-alpha", secrets: rt.secrets)
+        let s = viewStrings(rt.model)
+        XCTAssertTrue(s.contains { $0.contains("alpha") }, "the walk saw the pane")
+        XCTAssertFalse(s.contains { $0.contains(CCPoolPane.routeTitle) }, "no routing switch while nothing applies it")
+        XCTAssertFalse(s.contains { $0.contains("Agent Sessions") })
     }
 
     // The token is in none of: the view tree, the published state, the log seam, any error.
@@ -209,12 +278,14 @@ final class CCPoolPaneTests: XCTestCase {
         XCTAssertFalse(CCPoolPane.accountsFooter.contains("Tried in this order"))
         XCTAssertTrue(CCPoolPane.accountsFooter.contains("five-hour window resets soonest"))
         var s = viewStrings(r.model)
-        XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeTitle) })
-        XCTAssertTrue(s.contains { $0.contains("Add an account first.") }, "the toggle says why it is off")
+        // P2b-1: the routing row is hidden until the spawn path applies it (CCPool.routingWired).
+        XCTAssertEqual(s.contains { $0.contains(CCPoolPane.routeTitle) }, CCPool.routingWired)
+        XCTAssertTrue(s.contains { $0.contains("Starts when the first account is added.") }, "the proxy row says why it is stopped")
         XCTAssertTrue(s.contains { $0.contains("ANTHROPIC_BASE_URL=") }, "terminal use, read-only text")
         XCTAssertFalse(s.contains { $0.contains("Import from ccpool") }, "no old vault: no import row")
         try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(#"{"accounts": {}}"#.utf8).write(to: r.vault)
+        r.model.checkVault()
         s = viewStrings(r.model)
         XCTAssertTrue(s.contains { $0.contains("Import from ccpool") }, "shown while a vault exists")
     }

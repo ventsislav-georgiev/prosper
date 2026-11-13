@@ -81,9 +81,12 @@ enum CCPoolMigration {
 
     static let reasonNoToken = "no token in the old vault"
     static let reasonBadLabel = "its label is too long or holds a control or invisible character; not imported"
+    /// Review INFO 3: an empty or blank vault label is not "too long or invisible".
+    static let reasonEmptyLabel = "its label is empty; not imported"
     static let reasonKeychain = "the Keychain did not take the token"
     static let reasonReadBack = "the stored token did not read back intact; not imported"
     static let reasonState = "the account list could not be saved; not imported"
+    static let noteOrphan = "a Keychain item made for this import could not be deleted; it is listed nowhere"
     static let noteStateUnreadable = "the old state file could not be read; cooldowns were not carried"
 
     // MARK: Read
@@ -132,6 +135,17 @@ enum CCPoolMigration {
 
     // MARK: Import
 
+    /// QA #751 INFO-6: at the Trash click, the vault again: every entry a valid label whose token
+    /// the pool holds under it. Compared in memory; false when the vault cannot be read.
+    static func allHeld(vault: URL, store: CCPoolStore, secrets: CCPoolSecrets) -> Bool {
+        guard let entries = try? readVault(vault) else { return false }
+        return entries.allSatisfy { label, token in
+            guard CCPoolStore.labelProblem(label) == nil, let token, !token.isEmpty,
+                  let id = store.read({ $0.accounts[label]?.id }) else { return false }
+            return ((try? secrets.token(id: id)) ?? nil) == token
+        }
+    }
+
     /// Reads the vault for its labels only. Nothing is written.
     static func inspect(vault: URL, store: CCPoolStore) throws -> Plan {
         let labels = try readVault(vault).map(\.label)
@@ -158,10 +172,18 @@ enum CCPoolMigration {
             let have = id.flatMap { (try? secrets.token(id: $0)) ?? nil }
             if have != token { out.notHeld.append(label) }
         }
+        /// QA #751 INFO-5: a new item this import made and could not delete again is named, label only.
+        func dropNew(_ id: String, _ label: String) {
+            do { try secrets.remove(id: id) } catch {
+                store.logger.note(label, "import undone; its new Keychain item could not be deleted")
+                out.notes.append("\(label): \(noteOrphan)")
+            }
+        }
 
         for (i, (label, token)) in entries.enumerated() {
-            guard CCPoolStore.labelProblem(label) == nil else {
-                out.failures.append(Failure(label: shownLabel(label, at: i), reason: reasonBadLabel))
+            if let problem = CCPoolStore.labelProblem(label) {
+                out.failures.append(Failure(label: shownLabel(label, at: i),
+                                            reason: problem == .emptyLabel ? reasonEmptyLabel : reasonBadLabel))
                 continue
             }
             guard let token, !token.isEmpty else {
@@ -185,7 +207,7 @@ enum CCPoolMigration {
             // Read back and compare lengths in memory; nothing is printed.
             let back = (try? secrets.token(id: id)) ?? nil
             guard back?.utf8.count == token.utf8.count else {
-                try? secrets.remove(id: id)
+                dropNew(id, label)
                 out.failures.append(Failure(label: label, reason: reasonReadBack))
                 continue
             }
@@ -193,8 +215,12 @@ enum CCPoolMigration {
                 let old = st.accounts[label]
                 // Decided under the lock: a label that appeared since the check still asks.
                 if old != nil, choices[label] != .replace { return .conflict }
-                st.accounts[label] = CCPoolState.Account(id: id, cooldown: old?.cooldown ?? [:],
-                                                         reset: old?.reset ?? [:], held: old?.held)
+                // QA #751 INFO-2: a Replace is a new token, maybe another subscription: the old token's
+                // benches and resets go. A hand hold (`held`, set only by Hold) is the user's choice
+                // for the label and stays, to its own end.
+                let hold = old?.held.flatMap { Double($0) > now ? $0 : nil }
+                st.accounts[label] = CCPoolState.Account(id: id, cooldown: hold.map { [CCPoolCore.fiveHour: $0] } ?? [:],
+                                                         held: hold)
                 if old == nil { st.order.append(label) }
                 if let c = carried?.accounts[label] {
                     for (claim, until) in c.cooldown where Double(until) > now {
@@ -207,11 +233,11 @@ enum CCPoolMigration {
             }
             switch (step, saved) {
             case (.conflict, _):
-                try? secrets.remove(id: id)
+                dropNew(id, label)
                 out.undecided.append(label)
                 checkHeld(label, token)
             case (_, false):
-                try? secrets.remove(id: id)
+                dropNew(id, label)
                 out.failures.append(Failure(label: label, reason: reasonState))
             case (.added, true):
                 out.imported.append(label)

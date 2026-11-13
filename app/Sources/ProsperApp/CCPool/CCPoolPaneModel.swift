@@ -50,11 +50,19 @@ final class CCPoolPaneModel: ObservableObject {
     let vaultURL: URL
     let trash: CCPoolMigration.Trash
     let launcherPath: String?
+    /// P2b-1 (spec 3.2): starts and stops the proxy with the extension and the account list. nil
+    /// for a model built without it (the P2a tests drive the service directly).
+    let lifecycle: CCPoolLifecycle?
 
     @Published var labelDraft = ""
     @Published var tokenDraft = ""
     @Published private(set) var busy = false
-    @Published private(set) var proxyBusy = false
+    /// Proxy starts, stops and restarts in flight (several events can queue one each).
+    @Published private var proxyJobs = 0
+    var proxyBusy: Bool { proxyJobs > 0 }
+    /// QA #739 INFO-8: whether the old vault exists, checked once per appearance and on Refresh,
+    /// never per render.
+    @Published private(set) var vaultExists = false
     @Published private(set) var refreshing = false
     @Published var notice: String?
     /// The account whose actions are open.
@@ -74,7 +82,7 @@ final class CCPoolPaneModel: ObservableObject {
          clock: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 },
          timeZone: TimeZone = .current, probeBase: URL = CCPoolService.productionUpstream,
          vaultURL: URL, trash: @escaping CCPoolMigration.Trash = CCPoolMigration.moveToTrash,
-         launcherPath: String? = nil) {
+         launcherPath: String? = nil, lifecycle: CCPoolLifecycle? = nil) {
         self.store = store
         self.secrets = secrets
         self.service = service
@@ -86,6 +94,18 @@ final class CCPoolPaneModel: ObservableObject {
         self.vaultURL = vaultURL
         self.trash = trash
         self.launcherPath = launcherPath
+        self.lifecycle = lifecycle
+        store.onChange = Self.republisher(self)
+    }
+
+    /// QA #739 INFO-9: a state change made by the proxy (a limit, `current`) or by a hold reaches
+    /// the visible pane at once instead of at the next 30 s tick. Formed in a nonisolated static,
+    /// so the closure the store calls off main is never @MainActor (errata C7).
+    nonisolated static func republisher(_ model: CCPoolPaneModel) -> @Sendable () -> Void {
+        { [weak model] in
+            guard let model else { return }
+            Task { @MainActor in model.objectWillChange.send() }
+        }
     }
 
     // MARK: Proxy row
@@ -114,6 +134,11 @@ final class CCPoolPaneModel: ObservableObject {
     }
 
     var currentText: String { store.snapshot.current ?? "none yet" }
+
+    /// The proxy row's second line: with no account the proxy does not run (spec 3.2).
+    var proxySubtitle: String {
+        store.hasAccounts ? "Current account: \(currentText)" : "Starts when the first account is added."
+    }
 
     /// QA #734 INFO-4: state.json exists but could not be read; account changes are refused.
     var storeProblem: String? { store.unreadable ? CCPoolStore.unreadableNote : nil }
@@ -281,6 +306,7 @@ final class CCPoolPaneModel: ObservableObject {
             if verified { unverified.remove(label) } else { unverified.insert(label) }
             rejected.remove(label)
             notice = verified ? "Added \(label)." : "Added \(label), not verified: the check could not reach Anthropic."
+            reconcileProxy()   // the first account starts the proxy
         case .rejected:
             notice = "Token rejected: \(label) was not added."
         case .failed(let why):
@@ -330,6 +356,7 @@ final class CCPoolPaneModel: ObservableObject {
             if selected == label { selected = nil }
             rejected.remove(label)
             unverified.remove(label)
+            reconcileProxy()   // the last account stops the proxy
         }
         notice = failure ?? (itemDeleted ? "Removed \(label)."
             : "Removed \(label), but its Keychain item could not be deleted; it stays in the Keychain, listed nowhere.")
@@ -375,9 +402,14 @@ final class CCPoolPaneModel: ObservableObject {
     // MARK: Actions: usage and proxy
 
     /// B21: one tiny request per account, straight to Anthropic (never through the proxy).
+    /// QA #751 INFO-1: a Refresh reads each token by id before its probe, so one in flight across a
+    /// Replace would put the old token's verdict (and benches) on the new one. The two never overlap:
+    /// Refresh waits while an import runs, and an import waits while a Refresh runs.
     @discardableResult
-    func refreshUsage() -> Task<Void, Never> {
+    func refreshUsage() -> Task<Void, Never>? {
+        guard !importRunning else { return nil }
         refreshing = true
+        checkVault()
         let store = store, secrets = secrets, base = probeBase, logger = logger
         return Task.detached { [weak self] in
             let report = await CCPoolUsage.refresh(store: store, secrets: secrets, base: base, logger: logger)
@@ -402,36 +434,60 @@ final class CCPoolPaneModel: ObservableObject {
         }
     }
 
-    /// Start (or restart) the listener off the main actor, with the brief bind retry.
+    /// "Restart proxy": a listener restart off the main actor, with the brief bind retry. With a
+    /// life cycle it restarts only while the proxy should run (and stops it otherwise).
     @discardableResult
-    func restartProxy() -> Task<Void, Never> {
-        proxyBusy = true
-        let service = service
+    func restartProxy() -> Task<Void, Never> { proxyTask(restart: true) }
+
+    /// "Start proxy". With a life cycle: start if the extension is live and the pool lists an account.
+    @discardableResult
+    func startProxy() -> Task<Void, Never> { proxyTask(restart: false) }
+
+    /// P2b-1: re-evaluate the life cycle after an event (the extension turned on or off, an account
+    /// added or removed, an import). nil without a life cycle.
+    @discardableResult
+    func reconcileProxy() -> Task<Void, Never>? {
+        lifecycle == nil ? nil : proxyTask(restart: false)
+    }
+
+    /// start() blocks on the port probe and the bind (P1 review INFO d): never on main. The work
+    /// runs in a detached task and, with a life cycle, on its serial queue.
+    private func proxyTask(restart: Bool) -> Task<Void, Never> {
+        proxyJobs += 1
+        let service = service, lifecycle = lifecycle
         return Task.detached { [weak self] in
-            service.restart()
+            if let lifecycle {
+                await lifecycle.settle(restart: restart)
+            } else if restart {
+                service.restart()
+            } else {
+                service.start(bindRetry: 3)
+            }
             await self?.finishProxy()
         }
     }
 
-    @discardableResult
-    func startProxy() -> Task<Void, Never> {
-        proxyBusy = true
-        let service = service
-        return Task.detached { [weak self] in
-            service.start(bindRetry: 3)
-            await self?.finishProxy()
-        }
-    }
-
-    private func finishProxy() { proxyBusy = false }
+    private func finishProxy() { proxyJobs -= 1 }
 
     // MARK: Actions: import (spec 3.7)
 
     /// Shown only while there is an old vault, or an import in progress.
-    var importVisible: Bool { importPhase != .idle || FileManager.default.fileExists(atPath: vaultURL.path) }
+    var importVisible: Bool { importPhase != .idle || vaultExists }
+
+    /// One stat of the vault path: on appearance, on Refresh, after the Trash and on Done.
+    func checkVault() {
+        let exists = FileManager.default.fileExists(atPath: vaultURL.path)
+        if exists != vaultExists { vaultExists = exists }
+    }
+
+    /// An import is writing the pool (Refresh waits for it, INFO-1).
+    var importRunning: Bool {
+        if case .review = importPhase { return busy }
+        return false
+    }
 
     var canRunImport: Bool {
-        guard case .review(let plan) = importPhase, !busy else { return false }
+        guard case .review(let plan) = importPhase, !busy, !refreshing else { return false }
         return plan.conflicts.allSatisfy { importChoices[$0] != nil }
     }
 
@@ -481,6 +537,7 @@ final class CCPoolPaneModel: ObservableObject {
                 unverified.remove(label)
             }
             importPhase = .imported(o)
+            reconcileProxy()   // an import into an empty pool starts the proxy
         case .failure(let e):
             importPhase = .idle
             notice = e.description
@@ -492,33 +549,70 @@ final class CCPoolPaneModel: ObservableObject {
     /// the target. B2: an import with failures, or a kept label holding another token, keeps it.
     var trashBlockedReason: String? {
         guard case .imported(let o) = importPhase else { return nil }
-        if let target = o.vaultLink {
-            return "The old vault is a link to \(target). Prosper moves nothing: delete that file yourself once you no longer need it."
-        }
-        if !o.allHeld { return "Not every account in the old vault is in the pool, so it stays where it is." }
-        return nil
+        // QA #751 INFO-6 (c): a link with accounts left behind says both.
+        let reasons = [o.allHeld ? nil : "Not every account in the old vault is in the pool, so it stays where it is.",
+                       o.vaultLink.map(Self.linkReason)].compactMap { $0 }
+        return reasons.isEmpty ? nil : reasons.joined(separator: " ")
     }
 
-    /// The last step: "Move the old vault to the Trash" (the default) or "Keep it".
-    func finishImport(trash moveToTrash: Bool) {
-        guard case .imported = importPhase else { return }
+    /// B1: why a vault that is a link stays. The target is an outside string: shown only after
+    /// CCPoolStore.shown drops invisible characters and caps its length (review INFO 2).
+    nonisolated static func linkReason(_ target: String) -> String {
+        "The old vault is a link to \(CCPoolStore.shown(target)). Prosper moves nothing: delete that file yourself once you no longer need it."
+    }
+
+    /// The last step: "Move the old vault to the Trash" (the default) or "Keep it". The Trash runs
+    /// off main (QA #739 INFO-8); nil when nothing is left to wait for.
+    @discardableResult
+    func finishImport(trash moveToTrash: Bool) -> Task<Void, Never>? {
+        guard case .imported = importPhase, !busy else { return nil }
         if moveToTrash, let why = trashBlockedReason {
             importPhase = .finished(why)
-            return
+            return nil
         }
         guard moveToTrash else {
             importPhase = .finished("Kept the old vault. The Homebrew ccpool keeps using it; it and Prosper never share state.")
-            return
+            return nil
         }
-        do {
-            try trash(vaultURL)
-            importPhase = .finished("Moved the old vault to the Trash.")
-        } catch {
-            importPhase = .finished("The old vault could not be moved to the Trash; it is still in place.")
+        busy = true
+        let vault = vaultURL, trash = trash, store = store, secrets = secrets
+        return Task.detached { [weak self] in
+            let text = Self.trashVault(vault, store: store, secrets: secrets, trash: trash)
+            await self?.finishTrash(text)
         }
     }
 
-    func dismissImport() { importPhase = .idle }
+    nonisolated static let trashChangedReason = "The old vault changed after the import, so Prosper moved nothing; it stays where it is."
+
+    /// Review INFO 1 + QA #751 INFO-6: decided again at the click, since the vault may have changed
+    /// since the import read it. Only a regular file (not a link) with one name (a hard link would
+    /// keep the plaintext under the other) whose every account the pool holds goes to the Trash.
+    /// Blocking file I/O and Keychain reads: off main.
+    nonisolated static func trashVault(_ vault: URL, store: CCPoolStore, secrets: CCPoolSecrets,
+                                       trash: CCPoolMigration.Trash) -> String {
+        var st = stat()
+        guard lstat(vault.path, &st) == 0,
+              (st.st_mode & S_IFMT) == S_IFREG,
+              st.st_nlink == 1,
+              CCPoolMigration.allHeld(vault: vault, store: store, secrets: secrets) else { return trashChangedReason }
+        do {
+            try trash(vault)
+            return "Moved the old vault to the Trash."
+        } catch {
+            return "The old vault could not be moved to the Trash; it is still in place."
+        }
+    }
+
+    private func finishTrash(_ text: String) {
+        busy = false
+        importPhase = .finished(text)
+        checkVault()
+    }
+
+    func dismissImport() {
+        importPhase = .idle
+        checkVault()
+    }
 
     /// Lines summarising an import, labels only.
     nonisolated static func summary(_ o: CCPoolMigration.Outcome) -> [String] {

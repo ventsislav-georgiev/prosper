@@ -3,6 +3,11 @@ import Foundation
 /// #871 spec 3.6 + errata C8: which env a new Agent Session gets when "Start new Claude sessions
 /// through the pool" is on. Pure; the spawn path applies the delta (P2b).
 enum CCPool {
+    /// #871 P2b-1: no spawn path applies `sessionEnv` yet, so the pane hides the "Start new Claude
+    /// sessions through the pool" row rather than show a switch that does nothing. P2b-2 hooks the
+    /// spawn path and flips this.
+    static let routingWired = false
+
     /// What to change in a spawned session's environment. Empty: leave it as it is.
     struct EnvDelta: Equatable, Sendable {
         var set: [String: String] = [:]

@@ -76,18 +76,30 @@ final class CCPoolGuardTests: XCTestCase {
         XCTAssertEqual(hits, [])
     }
 
-    // P1 starts the proxy from nothing: no call site outside the CCPool directory.
+    // P2b-1: outside CCPool/, exactly two Swift files name a CCPool symbol: AppDelegate owns the
+    // runtime (launch, enable/disable, quit) and SettingsWindow mounts the pane. Nothing outside
+    // calls sessionEnv (wired in P2b-2).
     func testCCPoolNoCallSiteOutsideItsDirectory() throws {
-        // P2a adds the pane (not mounted), its model, the import and the session env (wired in P2b).
-        let names = ["CCPoolService", "CCPoolStore", "CCPoolKeychainSecrets", "CCPoolUsage", "CCPoolPane",
-                     "CCPoolMigration", "CCPool.sessionEnv", "CCPool.EnvDelta"]
-        var hits: [String] = []
+        let symbol = try NSRegularExpression(pattern: #"\bCCPool\w*|\bsessionEnv\b"#)
+        var hits: Set<String> = []
         for f in swiftFiles(under: sourcesDir) where !f.path.contains("/CCPool/") {
             let text = try String(contentsOf: f, encoding: .utf8)
-            hits += names.filter { text.contains($0) }.map { "\(f.lastPathComponent): \($0)" }
+            for m in symbol.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                hits.insert("\(f.lastPathComponent): \((text as NSString).substring(with: m.range))")
+            }
         }
         XCTAssertFalse(swiftFiles(under: sourcesDir.appendingPathComponent("CCPool")).isEmpty, "the guard found the sources")
-        XCTAssertEqual(hits, [])
+        XCTAssertEqual(hits, ["AppDelegate.swift: CCPoolRuntime", "SettingsWindow.swift: CCPoolRuntime", "SettingsWindow.swift: CCPoolPane"])
+    }
+
+    // P2b-1: under XCTest the app's runtime is never built, not even by a live push.
+    @MainActor
+    func testCCPoolRuntimeNeverBuiltUnderTest() {
+        XCTAssertNil(CCPoolRuntime.shared)
+        XCTAssertNil(CCPoolRuntime.production())
+        CCPoolRuntime.setExtensionLive(false)
+        CCPoolRuntime.setExtensionLive(true)
+        XCTAssertNil(CCPoolRuntime.shared, "no store, Keychain or listener from a test run")
     }
 
     // P2a: the Python ccpool's path names exist once, in the one path rule (CCPoolMigration.vaultURL).

@@ -42,7 +42,10 @@ enum CCPoolStoreError: Error, Equatable, CustomStringConvertible {
     var description: String {
         switch self {
         case .emptyLabel: return "ccpool: an account needs a label"
-        case .badLabel: return "ccpool: a label is at most \(CCPoolStore.labelMax) characters, with no control or invisible characters"
+        // Review INFO 8: emoji sequences stay refused (they carry U+200D or U+FE0F); the hint says so.
+        // QA #751 INFO-7: the limit counts code points (an accented letter typed in two parts is two).
+        case .badLabel: return "ccpool: a label is at most \(CCPoolStore.labelMax) code points, with no control or invisible characters "
+            + "(emoji joined from several, like 👩‍💻 or ❤️, hold invisible ones)"
         case .duplicateLabel: return "ccpool: an account with that label already exists"
         case .emptyToken: return "ccpool: empty token, nothing stored"
         case .noSuchAccount: return "ccpool: no such account"
@@ -78,6 +81,7 @@ final class CCPoolStore: @unchecked Sendable {
     private let lock = NSLock()
     private var state: CCPoolState
     private var usage: [String: CCPoolUsageSample] = [:]
+    private var _onChange: (@Sendable () -> Void)?
     /// Set when state.json exists but could not be read (QA #734 INFO-4): the store then starts
     /// empty in memory, never writes the file, and refuses account changes.
     let unreadable: Bool
@@ -134,37 +138,47 @@ final class CCPoolStore: @unchecked Sendable {
 
     func read<T>(_ body: (CCPoolState) -> T) -> T { lock.withLock { body(state) } }
 
+    /// QA #739 INFO-9: called after every change to the state (a bench, a hold, `current`, the
+    /// account set), on the thread that made it and outside the lock. The pane model republishes.
+    var onChange: (@Sendable () -> Void)? {
+        get { lock.withLock { _onChange } }
+        set { lock.withLock { _onChange = newValue } }
+    }
+
     var snapshot: CCPoolState { read { $0 } }
 
     /// Apply `body` under the lock; write the file only when the state changed.
     @discardableResult
     func mutate<T>(_ body: (inout CCPoolState) -> T) -> T {
-        lock.withLock {
+        let (out, hook) = lock.withLock { () -> (T, (@Sendable () -> Void)?) in
             var next = state
             let out = body(&next)
-            if next != state {
-                state = next
-                if !persist(next), !unreadable { logger.note(nil, "state write failed") }
-            }
-            return out
+            guard next != state else { return (out, nil) }
+            state = next
+            if !persist(next), !unreadable { logger.note(nil, "state write failed") }
+            return (out, _onChange)
         }
+        hook?()
+        return out
     }
 
     /// Like `mutate`, but a change that cannot be written is undone in memory too: `saved` is false
     /// and the state is as before. For changes that pair with a Keychain write (P2a follow-up c).
     func mutateOrUndo<T>(_ body: (inout CCPoolState) -> T) -> (out: T, saved: Bool) {
         // Every account-set change comes through here (QA #734 INFO-6).
-        lock.withLock {
+        let (out, saved, hook) = lock.withLock { () -> (T, Bool, (@Sendable () -> Void)?) in
             var next = state
             let out = body(&next)
-            guard next != state else { return (out, true) }
+            guard next != state else { return (out, true, nil) }
             guard persist(next) else {
                 logger.note(nil, "state write failed; change undone")
-                return (out, false)
+                return (out, false, nil)
             }
             state = next
-            return (out, true)
+            return (out, true, _onChange)
         }
+        hook?()
+        return (out, saved)
     }
 
     // MARK: Usage (in memory)
@@ -194,13 +208,27 @@ final class CCPoolStore: @unchecked Sendable {
     static func labelProblem(_ label: String) -> CCPoolStoreError? {
         if label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .emptyLabel }
         guard label.unicodeScalars.count <= labelMax else { return .badLabel }
-        let unseen: Set<Unicode.GeneralCategory> = [.control, .format, .lineSeparator, .paragraphSeparator,
-                                                     .privateUse, .surrogate, .unassigned]
-        let bad = label.unicodeScalars.contains { s in
-            unseen.contains(s.properties.generalCategory) || s.properties.isDefaultIgnorableCodePoint
-                || (s.properties.isWhitespace && s != " ")
-        }
-        return bad ? .badLabel : nil
+        return label.unicodeScalars.contains(where: isUnseen) ? .badLabel : nil
+    }
+
+    private static let unseenCategories: Set<Unicode.GeneralCategory> = [.control, .format, .lineSeparator, .paragraphSeparator,
+                                                                         .privateUse, .surrogate, .unassigned]
+
+    /// A scalar no label may hold: a control, format, separator, private-use, surrogate, unassigned
+    /// or default-ignorable code point (U+3164, U+034F, U+FE0F, ...), or whitespace other than U+0020.
+    static func isUnseen(_ s: Unicode.Scalar) -> Bool {
+        unseenCategories.contains(s.properties.generalCategory) || s.properties.isDefaultIgnorableCodePoint
+            || (s.properties.isWhitespace && s != " ")
+            || s == "\u{2800}"   // QA #751 INFO-7: BRAILLE PATTERN BLANK is a symbol that renders blank
+    }
+
+    /// Review INFO 2: an outside string (a symbolic link's target) as the pane may show it: every
+    /// scalar the label rule refuses dropped, then at most `max` characters.
+    static func shown(_ outside: String, max: Int = 160) -> String {
+        var view = String.UnicodeScalarView()
+        view.append(contentsOf: outside.unicodeScalars.lazy.filter { !isUnseen($0) })
+        let s = String(view)
+        return s.count <= max ? s : String(s.prefix(Swift.max(0, max - 1))) + "…"
     }
 
     /// Why a state write failed, for callers that report it.
@@ -226,7 +254,8 @@ final class CCPoolStore: @unchecked Sendable {
             return true
         }
         if !added || !saved {
-            try? secrets.remove(id: id)
+            // QA #751 INFO-5: an item left behind is logged (label only); the thrown error is the notice.
+            do { try secrets.remove(id: id) } catch { logger.note(label, "add undone; its Keychain item could not be deleted") }
             throw added ? writeFailure : CCPoolStoreError.duplicateLabel
         }
     }

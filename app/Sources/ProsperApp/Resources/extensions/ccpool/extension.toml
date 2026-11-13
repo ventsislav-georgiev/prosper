@@ -1,0 +1,35 @@
+# Claude Account Pool — several Claude subscription accounts behind one local
+# proxy on 127.0.0.1. Each request goes out under one account; when that account
+# hits its usage limit the proxy moves on to the next one before any byte reaches
+# the client. Tokens live in the Keychain only. Implemented natively (CCPool/,
+# CCPoolRuntime); this extension is the enable/disable gate and the declarative
+# Settings header.
+[extension]
+id          = "com.prosper.ccpool"
+name        = "ccpool"
+title       = "Claude Account Pool"
+description = "Rotate several Claude subscription accounts behind one local proxy; tokens stay in the Keychain."
+version     = "1.0.0"
+author      = "Prosper"
+license     = "MIT"
+icon        = "person.2.circle"
+system      = true
+# Opt-in: enabling this opens a loopback listener and reads tokens from the
+# Keychain, so it ships OFF. The user turns it on in Settings › Extensions.
+default_disabled = true
+
+[extension.host]
+min_version = "2.0.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+# Declarative (Tier-A) settings header only; the proxy, accounts, usage and
+# import controls render natively as the footer pane (CCPoolPane).
+[[contributes.settings_sections]]
+id        = "ccpool"
+title     = "Claude Account Pool"
+icon      = "person.2.circle"
+accent    = "Pool"
+subtitle  = "Several Claude subscription accounts behind one local proxy"

@@ -378,6 +378,14 @@ tag from the now-released section and put it on the new top draft.
   reads it, instead of crashing Prosper while it loads; an Agent Kit nested deeper than that is
   refused with a reason. An extension.toml over 1 MiB is refused without being read whole into
   memory, for built-in, local, GitHub and market installs alike (#883).
+- Claude Account Pool (opt-in extension, off by default): turn on "Claude Account Pool" in
+  Settings › Extensions to rotate several Claude subscription accounts behind one local proxy on
+  127.0.0.1. Tokens live in the Keychain only. The proxy runs while the extension is on and the pool
+  lists an account; it starts with the first account, stops with the last one or when the extension
+  is turned off, and stops when Prosper quits. Its Settings page adds, renames, orders, holds and
+  removes accounts, refreshes usage, and imports the accounts of the Homebrew ccpool once; the old
+  vault goes to the Trash only if it is still the same plain file holding only accounts the pool
+  now has (#871).
 
 ## v2.174.0
 

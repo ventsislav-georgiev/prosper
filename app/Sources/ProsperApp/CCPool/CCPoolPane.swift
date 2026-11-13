@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// #871 P2a: the ccpool Settings pane. Not mounted anywhere in this phase (P2b adds the Settings
-/// entry). House Neon components and `sz()` throughout; rows that may not fit at a small UI scale
+/// #871 P2a: the ccpool Settings pane, mounted (P2b-1) as the footer of the bundled ccpool
+/// extension's Settings page on `CCPoolRuntime.shared.model`. House Neon components and `sz()` throughout; rows that may not fit at a small UI scale
 /// fall back to a stacked layout through `ViewThatFits`. No NSAlert: Remove confirms inline.
 struct CCPoolPane: View {
     @ObservedObject var model: CCPoolPaneModel
@@ -17,8 +17,11 @@ struct CCPoolPane: View {
         + "this order breaks ties. Remove deletes the Keychain item too."
 
     var body: some View {
-        // Re-render on the minute so "limited until", "held until" and usage ages stay true.
+        // QA #739 INFO-9: a state change in the store (a limit, a hold, `current`) republishes the
+        // model at once (CCPoolPaneModel.republisher); this tick only keeps the clock texts true
+        // ("limited until" lapsing, usage ages), which move on the minute.
         TimelineView(.periodic(from: .now, by: 30)) { _ in sections }
+            .onAppear { model.checkVault() }
     }
 
     /// The pane without its clock (the tests read its strings from here).
@@ -28,7 +31,8 @@ struct CCPoolPane: View {
             accountsSection
             addSection
             usageSection
-            sessionsSection
+            // Hidden until the spawn path applies the env (P2b-2 flips CCPool.routingWired).
+            if CCPool.routingWired { sessionsSection }
             terminalSection
             if model.importVisible { importSection }
         }
@@ -39,12 +43,12 @@ struct CCPoolPane: View {
     private var proxySection: some View {
         NeonSection("Proxy") {
             VStack(alignment: .leading, spacing: sz(10)) {
-                NeonRow(model.proxyText, subtitle: "Current account: \(model.currentText)") {
+                NeonRow(model.proxyText, subtitle: model.proxySubtitle) {
                     Button(model.proxyRunning ? "Restart proxy" : "Start proxy") {
                         if model.proxyRunning { _ = model.restartProxy() } else { _ = model.startProxy() }
                     }
                     .buttonStyle(.neon)
-                    .disabled(model.proxyBusy)
+                    .disabled(model.proxyBusy || !model.store.hasAccounts)
                     .fixedSize()
                 }
                 if let warn = model.unreachableWarning {
@@ -69,6 +73,7 @@ struct CCPoolPane: View {
                     NeonRow(row.label, subtitle: "\(row.stateText) · \(row.usageText)") {
                         Button(model.selected == row.label ? "Done" : "Edit") { model.select(row.label) }
                             .buttonStyle(.neon).fixedSize()
+                            .accessibilityLabel(model.selected == row.label ? "Close the actions for \(row.label)" : "Edit \(row.label)")
                     }
                     if model.selected == row.label { actions(row.label, index: i, count: rows.count) }
                 }
@@ -91,19 +96,28 @@ struct CCPoolPane: View {
                 TextField("Label", text: $model.renameDraft).textFieldStyle(.roundedBorder).frame(maxWidth: sz(200))
                 Button("Rename") { model.rename(label, to: model.renameDraft) }.buttonStyle(.neon).fixedSize()
                     .disabled(model.renameDraft.trimmingCharacters(in: .whitespaces).isEmpty || model.renameDraft == label)
+                    .accessibilityLabel("Rename \(label)")
             }
             fitting {
                 Button("Move up") { model.move(label, by: -1) }.buttonStyle(.neon).fixedSize().disabled(index == 0)
+                    .accessibilityLabel("Move \(label) up")
                 Button("Move down") { model.move(label, by: 1) }.buttonStyle(.neon).fixedSize().disabled(index == count - 1)
+                    .accessibilityLabel("Move \(label) down")
                 Button("Remove…") { model.requestRemove(label) }.buttonStyle(.neonDestructive).fixedSize()
                     .disabled(model.busy || model.confirmingRemove == label)
+                    .accessibilityLabel("Remove \(label)")
             }
             fitting {
                 Button("Hold 1 h") { model.hold(label, hours: 1) }.buttonStyle(.neon).fixedSize()
+                    .accessibilityLabel("Hold \(label) for 1 hour")
                 Button("Hold 5 h") { model.hold(label, hours: 5) }.buttonStyle(.neon).fixedSize()
+                    .accessibilityLabel("Hold \(label) for 5 hours")
                 TextField("Hours", text: $model.customHours).textFieldStyle(.roundedBorder).frame(width: sz(64))
+                    .accessibilityLabel("Hours to hold \(label)")
                 Button("Hold") { model.holdCustom(label) }.buttonStyle(.neon).fixedSize()
+                    .accessibilityLabel("Hold \(label) for the hours entered")
                 Button("Release") { model.release(label) }.buttonStyle(.neon).fixedSize()
+                    .accessibilityLabel("Release \(label)")
             }
         }
         .padding(.leading, sz(12))
@@ -140,7 +154,7 @@ struct CCPoolPane: View {
                 NeonRow("Refresh usage", subtitle: Self.refreshHint) {
                     Button(model.refreshing ? "Refreshing…" : "Refresh") { model.refreshUsage() }
                         .buttonStyle(.neon).fixedSize()
-                        .disabled(model.refreshing || model.rows.isEmpty)
+                        .disabled(model.refreshing || model.importRunning || model.rows.isEmpty)
                 }
                 if let pool = model.poolText {
                     NeonDivider()
@@ -206,11 +220,12 @@ struct CCPoolPane: View {
                     ForEach(CCPoolPaneModel.summary(outcome), id: \.self) { caption($0) }
                     if let why = model.trashBlockedReason {
                         caption(why, color: Neon.magenta)
-                        Button("Keep it") { model.finishImport(trash: false) }.buttonStyle(.neon).fixedSize()
+                        Button("Keep it") { model.finishImport(trash: false) }.buttonStyle(.neon).fixedSize().disabled(model.busy)
                     } else {
                         fitting {
                             Button("Move the old vault to the Trash") { model.finishImport(trash: true) }.buttonStyle(.neon).fixedSize()
-                            Button("Keep it") { model.finishImport(trash: false) }.buttonStyle(.neon).fixedSize()
+                                .disabled(model.busy)
+                            Button("Keep it") { model.finishImport(trash: false) }.buttonStyle(.neon).fixedSize().disabled(model.busy)
                         }
                     }
                 case .finished(let text):
