@@ -619,8 +619,8 @@ tag from the now-released section and put it on the new top draft.
   opening the same file again brings its window forward. Markdown is shown as its source for now. A
   binary file, a file over 16 MiB, a folder or a pipe is refused with a message. (#1106)
 - Files search: Markdown and .txt results have a new action, Open in Prosper. (#1106)
-- Themes: in Daylight and Silver, accent-coloured text at the top of the Settings sidebar and the
-  Agent Sessions sidebar is a shade darker, so it stays readable on the sidebar's blue tint. (#1124)
+- Themes: the accent colours of Daylight and Silver are a shade darker, so accent text stays
+  readable on the tinted top of the Settings and Agent Sessions sidebars. (#1124)
 
 ## v2.174.0
 
