@@ -487,10 +487,15 @@ tag from the now-released section and put it on the new top draft.
   subdomains, so a link that merely mentions the domain in its path, query or login part, or a
   look-alike such as github.com.example.net, no longer opens in that rule's browser. A rule ending
   in a dot (google.) matches that name with any ending (google.com, www.google.de, but also
-  google.evil.example), and a rule of numbers (192.168) matches addresses that start with it. A
-  domain written without its ending (docs.google) no longer matches docs.google.com: write
-  docs.google.com or docs.google. instead. Other rules (localhost, /index.html, a word) still match
-  anywhere in the link.
+  google.evil.example), and a rule of numbers (192.168) matches addresses that start with it. Some
+  saved rules stop matching: a domain written without its ending (docs.google no longer matches
+  docs.google.com), a domain that is the start of a longer one (google.com no longer matches
+  google.com.au), a rule that is only part of a name (my.sharepoint.com no longer matches
+  contoso-my.sharepoint.com), and a file name (index.html now matches only file links). Write the
+  whole host (docs.google.com), end the rule with a dot (google.), or start a file name with a slash
+  (/index.html). Other rules (localhost, /index.html, -my.sharepoint.com, a word) still match
+  anywhere in the link, and the rule field is now labelled "Domain or text". A copied link that
+  contains some accented letters (such as à) is now cleaned of tracking parameters reliably.
 - Agent Sessions: plans written with a table without outer pipes, "~~~" code fences, "===" or
   closing-"#" headings, a "[X]" task or a <https://…> link can now be approved from the window, a
   plan file under a symlinked ~/.claude or plans folder is read (links inside the folder are still

@@ -419,6 +419,41 @@ h.eq(route(GOOD, "https://evil.example%00.good.example/"), SAF, "decoded host: a
 h.eq(route({ { match = "%23", browser = FF } }, "https://evil.example%23.good.example/"), FF,
      "decoded host: a non-domain rule still substring-matches such a link")
 h.eq(route(GOOD, "https://a_b.good.example/"), FF, "decoded host: '_' is a host character")
+-- 53. round 3. A label starting or ending with '-' is no host label: such a rule stays a substring rule
+h.eq(route({ { match = "-my.sharepoint.com", browser = FF } }, "https://contoso-my.sharepoint.com/x"), FF,
+     "leading '-': substring, matches contoso-my.sharepoint.com")
+h.eq(route({ { match = "tenant-.example", browser = FF } }, "https://x.example/tenant-.example/p"), FF,
+     "label ending in '-': substring")
+-- 53b. what the strict host match does today, pinned as built (OQ-115 is with the operator)
+h.eq(route({ { match = "my.sharepoint.com", browser = FF } }, "https://contoso-my.sharepoint.com/x"), SAF,
+     "OQ-115: my.sharepoint.com is only part of contoso-my.sharepoint.com")
+h.eq(route({ { match = "github.com.", browser = FF } }, "https://github.com/"), SAF,
+     "OQ-115: github.com. (dot-ended) needs more labels, not github.com")
+h.eq(route({ { match = "github.com.", browser = FF } }, "https://github.com.evil.example/"), FF,
+     "OQ-115: github.com. matches github.com.evil.example")
+h.eq(route({ { match = "google.com", browser = FF } }, "https://google.com.au/"), SAF, "OQ-115: google.com is not google.com.au")
+h.eq(route({ { match = "index.html", browser = FF } }, "https://example.com/index.html"), SAF,
+     "OQ-115: index.html is domain-shaped, no match on a web link's path")
+h.eq(route({ { match = "index.html", browser = FF } }, "file:///Users/example/index.html"), FF,
+     "OQ-115: index.html still matches a file link")
+-- 53c. a non-special scheme reads its host after "//" only
+h.eq(route(GOOD, "ssh://good.example@evil.example/"), SAF, "non-special scheme: host after the last '@'")
+h.eq(route(GOOD, "ssh://git@good.example/repo"), FF, "non-special scheme: host good.example")
+-- 53d. non-ASCII upper case is not folded (lowercase is ASCII-only, in every locale)
+h.eq(route({ { match = "CAFÉ.example", browser = FF } }, "https://café.example/"), SAF, "É is not folded: café.example misses")
+h.eq(route({ { match = "CAFÉ.example", browser = FF } }, "https://xn--caf-dma.example/"), SAF, "É is not folded: punycode misses")
+h.eq(route({ { match = "CAFÉ.example", browser = FF } }, "https://cafÉ.example/"), FF, "É is not folded: the same É matches")
+-- 53e. invalid UTF-8 (a Latin-1 é, byte E9) on either side: no error. Such a rule is no host
+-- rule (substring match); such a link host is "" (no host rule matches it)
+h.eq(route({ { match = "caf\xE9.example", browser = FF } }, "https://x.example/caf\xE9.example"), FF,
+     "invalid UTF-8 rule: substring match")
+h.eq(route({ { match = "caf\xE9.example", browser = FF } }, "https://caf\xE9.example/"), FF,
+     "invalid UTF-8 rule and host: substring match")
+h.eq(route(GOOD, "https://caf\xE9.good.example/"), SAF, "invalid UTF-8 host: no host rule matches")
+h.eq(route({ { match = "café.example", browser = FF } }, "https://caf\xE9.example/"), SAF,
+     "invalid UTF-8 host vs a Unicode rule: no match")
+-- 53f. a scheme is ASCII letters: "xê" (C3 AA, letters to a UTF-8 LC_CTYPE) is no scheme, so no host, substring
+h.eq(route(GOOD, "xê://good.example@evil.example/"), FF, "non-ASCII scheme: no host, substring match")
 host.prefs.set("routes", J{ { match = "github.com", browser = "com.google.Chrome" } })
 
 -- ── performance: on_url hot path ─────────────────────────────────────────────
@@ -535,6 +570,11 @@ h.eq(writes(), 0, "image/file copies -> no write")
 -- back — that would silently destroy everything past the cap.
 clip("text", "https://x.com/a?utm_source=nl&pad=" .. string.rep("z", 8 * 1024))
 h.eq(writes(), 0, "8 KB-capped payload -> no write (never truncate the user's copy)")
+
+-- 22b. a link with "à" (C3 A0): A0 is a space to a UTF-8 LC_CTYPE (%s); the link is still one token
+clip("text", "https://x.example/caf\xC3\xA0?utm_source=nl")
+h.eq(writes(), 1, "link with C3 A0 -> one write in every locale")
+h.eq(env.clipboard, "https://x.example/caf\xC3\xA0", "link with C3 A0 -> cleaned, bytes intact")
 
 -- 23. malformed payloads never crash or write
 env.actions = {}

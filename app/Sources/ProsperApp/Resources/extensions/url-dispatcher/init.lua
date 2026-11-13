@@ -51,7 +51,8 @@ end
 local ROUTES_KEY, FALLBACK_KEY, CLEAN_KEY = "routes", "fallback", "clean_tracking"
 local COPIED_KEY = "clean_copied"
 
--- routes: JSON array of { match = "<domain substring>", browser = "<bundle id>" }.
+-- routes: JSON array of { match = "<a domain, or text in the link>", browser = "<bundle id>" };
+-- how a rule matches: MARK host rules below.
 local function load_routes()
     local raw = host.prefs.get(ROUTES_KEY)
     if not raw or #raw == 0 then return {} end
@@ -126,6 +127,12 @@ for _, p in ipairs(TRACK_PREFIX) do
     g[#g + 1] = p
 end
 
+-- ASCII-only lowercase. Lua's lower() is C tolower: under any LC_CTYPE but "C" (the app's) it rewrites
+-- UTF-8 lead bytes (C3 -> E3) and breaks the text. [A-Z] is a byte range, the same in every locale.
+local LOWER = {}
+for b = 65, 90 do LOWER[string.char(b)] = string.char(b + 32) end
+local function ascii_lower(s) return (s:gsub("[A-Z]", LOWER)) end
+
 local function is_tracker(key)
     if TRACK_EXACT[key] then return true end
     local g = PREFIX_BY_FIRST[key:byte(1)]
@@ -152,7 +159,7 @@ local function clean_url(url)
     local kept, removed = {}, false
     for pair in query:gmatch("[^&]+") do
         local key = pair:match("^([^=]+)") or pair
-        if is_tracker(key:lower()) then
+        if is_tracker(ascii_lower(key)) then
             removed = true
         else
             kept[#kept + 1] = pair
@@ -188,10 +195,11 @@ end
 
 -- MARK: host rules (#1021)
 -- A rule shaped like a domain (letters, digits, '-', non-ASCII, at least one dot,
--- no empty label: github.com, docs.google.com, café.example) matches the link's
--- HOST only: the host itself or a subdomain, on label boundaries, case-insensitive,
--- port and userinfo left out, IDN labels compared as punycode. Every other rule
--- (localhost, /Sites/, My Sites, a path, a port, a %-escape) keeps the whole-link
+-- no empty label, no label starting or ending with '-': github.com, docs.google.com,
+-- café.example) matches the link's HOST only: the host itself or a subdomain, on label
+-- boundaries, case-insensitive (ASCII letters; É is not folded), port and userinfo left
+-- out, IDN labels compared as punycode. Every other rule (localhost, /Sites/, My Sites,
+-- a path, a port, a %-escape, .good.example, -my.sharepoint.com) keeps the whole-link
 -- substring match below. Told apart by shape alone, so stored rules need no migration.
 -- Two domain shapes keep what a "contains" rule was written for (round 2):
 --   ends in a dot ("google.", "docs.google.") -> those labels at a label boundary of the
@@ -244,7 +252,7 @@ end
 -- the text is not valid UTF-8 or a label has more than 63 characters (its punycode
 -- could not fit a DNS label; the cap also bounds punycode's quadratic loop).
 local function ascii_host(s)
-    s = s:lower():gsub("%.$", "")
+    s = ascii_lower(s):gsub("%.$", "")
     if not s:find("[\128-\255]") then return s end
     if not utf8.len(s) then return nil end
     local labels = {}
@@ -266,7 +274,7 @@ local SPECIAL = { http = true, https = true, ws = true, wss = true, ftp = true }
 -- usable host (host rules then match nothing); nil when the link has no host at all
 -- (file://, about:, mailto:) and every rule falls back to the substring match.
 local function link_host(url)
-    local scheme, rest = url:match("^(%a[%w+.-]*):(.*)$")
+    local scheme, rest = url:match("^([A-Za-z][A-Za-z0-9+.-]*):(.*)$")
     if not scheme then return nil end
     scheme = scheme:lower()
     if scheme == "file" then return nil end -- a local path: keep matching it as text
@@ -282,13 +290,15 @@ local function link_host(url)
     local host = decoded(auth:match("^[^:]*"))
     -- A decoded host holding a delimiter, a space or a control byte ("evil.example%23.good.example")
     -- is no host; '_' stays, browsers accept it in hosts.
-    if host:find("[^%w%-%._\128-\255]") then return "" end
+    if host:find("[^A-Za-z0-9%-%._\128-\255]") then return "" end
     return ascii_host(host) or ""
 end
 
 -- Rule kinds: "domain" (the host or a subdomain), "prefix" (dot-ended), "address" (digits).
 local function host_rule(m)
-    if not m:find("^[%w\128-\255%-]+%.[%w\128-\255%-%.]*$") or m:find("..", 1, true) then return nil end
+    local d = "." .. m .. "." -- a label starting or ending with '-' is no host label (-my.sharepoint.com)
+    if not m:find("^[A-Za-z0-9\128-\255%-]+%.[A-Za-z0-9\128-\255%-%.]*$") or m:find("..", 1, true)
+        or d:find(".-", 1, true) or d:find("-.", 1, true) then return nil end
     local hr = ascii_host(m)
     if not hr then return nil end
     if hr:find("^[%d.]+$") then return hr, "address" end
@@ -337,7 +347,7 @@ function on_url(payload)
     local url = data.url
     if type(url) ~= "string" or #url == 0 then return end
     -- A file:// URL's query is the page's own (local app state), never a tracker.
-    if load_clean() and url:sub(1, 7):lower() ~= "file://" then url = clean_url(url) end
+    if load_clean() and ascii_lower(url:sub(1, 7)) ~= "file://" then url = clean_url(url) end
     local browser = pick(url) or load_fallback()
     -- Loop guard: Prosper IS the system default now, so opening with a nil/own
     -- bundle id would bounce the link straight back to us forever. Fall back to a
@@ -369,8 +379,8 @@ function on_clipboard(payload)
     if type(text) ~= "string" or #text >= MAX_EVENT_TEXT then return end
     -- Only a bare, single-token link — anything with surrounding prose is the
     -- user's text, not ours to rewrite.
-    local url = text:match("^%s*(%S+)%s*$")
-    if not url or not url:lower():match("^https?://") then return end
+    local url = text:match("^[ \t\n\v\f\r]*([^ \t\n\v\f\r]+)[ \t\n\v\f\r]*$") -- %s is locale-dependent
+    if not url or not ascii_lower(url):match("^https?://") then return end
     local cleaned = clean_url(url)
     if cleaned == url then return end -- nothing stripped: no write, no loop
     host.clipboard.write(cleaned)
@@ -398,7 +408,7 @@ end
 
 local function route_fields(match, browser)
     return {
-        { id = "match",   label = "Domain contains", kind = "text", value = match,
+        { id = "match",   label = "Domain or text", kind = "text", value = match,
           placeholder = "github.com" },
         { id = "browser", label = "Open in", kind = "enum",
           value = name_of(browser), options = browser_names() },
