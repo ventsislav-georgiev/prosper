@@ -16,6 +16,7 @@ h.eq(out.style, "rows", "compact rows")
 h.eq(out.items[1].title, "hi", "captured output, trimmed")
 h.eq(out.items[1].subtitle, "$ echo hi", "command echoed (trigger stripped)")
 h.eq(env.calls.shell, 1, "shells exactly once")
+h.eq(env.shellCalls[1].keep_running, true, "keep_running: a command outliving the timeout finishes")
 
 -- ── '>' trigger and tight (no-space) prefix both strip ───────────────────────
 out = run("> pwd", "/tmp\n")

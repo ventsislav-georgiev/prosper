@@ -43,6 +43,7 @@ h.eq(G.scripts_run("sc zzz"), "No script matching 'zzz'", "no match message")
 G, env = setup{ shellOut = "deployed\n" }
 out = G.scripts_run("sc deploy")
 h.eq(env.calls.shell, 1, "shells exactly once")
+h.eq(env.shellCalls[1].keep_running, true, "keep_running: a script outliving the timeout finishes")
 h.eq(out.items[1].title, "deployed", "captured output, trimmed")
 h.eq(out.items[1].subtitle, "$ make deploy", "command echoed")
 h.eq(out.title, "deploy", "titled with the script name")

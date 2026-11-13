@@ -158,6 +158,13 @@ do
     G.settings_action("migration", "alfred_zip", "", "{}")
     h.eq(extracted ~= nil, true, "zip extracted with ditto")
     h.eq(cleaned ~= nil, true, "temp dir removed")
+    local keep = {}
+    for _, c in ipairs(env.shellCalls) do
+        if c.cmd == extracted then keep.ditto = c.keep_running end
+        if c.cmd == cleaned then keep.rm = c.keep_running end
+    end
+    h.eq(keep.ditto, true, "ditto extract passes keep_running")
+    h.eq(keep.rm, true, "temp dir removal passes keep_running")
     h.eq(#env.snippets, 1, "zip snippet imported")
     h.eq(env.snippets[1].collection, "Emoji Pack", "collection named after the file")
 end

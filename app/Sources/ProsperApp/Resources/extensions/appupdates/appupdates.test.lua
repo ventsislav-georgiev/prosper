@@ -263,9 +263,10 @@ brewOut = BREW_OUTDATED_2
 G.appupdates_refresh()                 -- cache: 2 outdated
 reset()
 env.timers, env.calls.timerSchedule = {}, 0
-upgradeOut = ""                        -- the host timeout wins: brew goes on in the background
+upgradeOut = h.TIMEOUT                 -- the host timeout wins: brew goes on in the background
 G.appupdates_upgrade()
 h.eq(env.notifications[1].body, "brew upgrade is still running in the background", "first Upgrade backgrounds")
+h.eq(env.shellCalls[#env.shellCalls].keep_running, true, "brew upgrade passes keep_running: the timeout spares it")
 local rec = env.prefs[PENDING]
 local recFile = host.json.decode(rec).file
 

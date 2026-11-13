@@ -91,6 +91,75 @@ do  -- nil fixture → total failure (nil, err), matching the real contract
     h.eq(err, "request failed", "error string on total failure")
 end
 
+-- ── shell.run stub mirrors the real host.shell.run (ExtensionHostAPI bootstrap) ─
+do  -- opts checks: the exact texts the real shim raises (ShellRunnerTests testBadOptsRaiseNamingTheKey)
+    local host, env = h.makeHost{ shellOut = "out" }
+    local function e(o)
+        local ok, err = pcall(host.shell.run, "true", o)
+        return ok and "ok" or tostring(err)
+    end
+    h.eq(table.concat({ e("yes"), e({ keep_runing = true }), e({ keep_running = 1 }),
+                        e({ keep_running = false }), e(nil), e(false), e(true), e(1) }, "|"),
+         "host.shell.run: opts must be a table, got string"
+         .. "|host.shell.run: unknown option 'keep_runing'"
+         .. "|host.shell.run: keep_running must be a boolean, got number|ok|ok|ok"
+         .. "|host.shell.run: opts must be a table, got boolean"
+         .. "|host.shell.run: opts must be a table, got number", "bad opts raise like the host")
+    h.eq(env.calls.shell, 3, "a rejected call is not counted: nothing ran")
+    h.eq(#env.shellCalls, 3, "a rejected call is not recorded")
+    -- level 2: the error names the caller's line, as the real shim does
+    local _, err = pcall(function() host.shell.run("x", { timeout = 5 }) end)
+    h.eq(err:match("^[^:]*harness%.test%.lua:%d+: host%.shell%.run: unknown option 'timeout'$") ~= nil,
+         true, "error blames the calling line: " .. tostring(err))
+end
+do  -- the record: per call, the command and whether keep_running was set
+    local host, env = h.makeHost{ shellOut = "out" }
+    host.shell.run("a")
+    host.shell.run("b", { keep_running = true })
+    host.shell.run("c", { keep_running = false })
+    host.shell.run("d", false)
+    h.eq(env.calls.shell, 4, "calls.shell still counts every call")
+    h.eq(#env.shellCalls, 4, "one record per call")
+    local got = {}
+    for _, c in ipairs(env.shellCalls) do got[#got + 1] = c.cmd .. "=" .. tostring(c.keep_running) end
+    h.eq(table.concat(got, ","), "a=false,b=true,c=false,d=false", "cmd and keep_running recorded")
+    h.eq(env.shellCalls[1].timed_out, false, "a normal call did not time out")
+    h.eq(env.shellCalls[1].killed, false, "a normal call was not killed")
+end
+do  -- return shape: one value by default, (out, true) when truncated, never nil
+    local host = h.makeHost{ shellOut = "out" }
+    local r = table.pack(host.shell.run("x"))
+    h.eq(r.n .. ":" .. r[1], "1:out", "canned output: one value")
+    host = h.makeHost{ shellOut = "big", shellTruncated = true }
+    r = table.pack(host.shell.run("x"))
+    h.eq(r.n .. ":" .. r[1] .. ":" .. tostring(r[2]), "2:big:true", "canned truncated: two values")
+    host = h.makeHost{ shellRouter = function(cmd) return cmd .. "!" end }
+    r = table.pack(host.shell.run("one"))
+    h.eq(r.n .. ":" .. r[1], "1:one!", "a one-value router keeps working, one value")
+    host = h.makeHost{ shellRouter = function() return "cut", true end }
+    r = table.pack(host.shell.run("x"))
+    h.eq(r.n .. ":" .. r[1] .. ":" .. tostring(r[2]), "2:cut:true", "router truncated: two values")
+    host = h.makeHost{ shellRouter = function() return "x", false, "junk" end }
+    r = table.pack(host.shell.run("x"))
+    h.eq(r.n .. ":" .. r[1], "1:x", "false truncated and extra values are dropped")
+    host = h.makeHost{ shellRouter = function() return nil end }
+    r = table.pack(host.shell.run("x"))
+    h.eq(r.n .. ":" .. r[1], "1:", "the host never answers nil: \"\"")
+end
+do  -- h.TIMEOUT: "" (one value) like the host, recorded, killed unless keep_running
+    local host, env = h.makeHost{ shellRouter = function() return h.TIMEOUT end }
+    local r = table.pack(host.shell.run("slow"))
+    h.eq(r.n .. ":" .. r[1], "1:", "timeout answers one empty value")
+    r = table.pack(host.shell.run("slow", { keep_running = true }))
+    h.eq(r.n .. ":" .. r[1], "1:", "keep_running timeout answers the same")
+    local a, b = env.shellCalls[1], env.shellCalls[2]
+    h.eq(tostring(a.timed_out) .. "," .. tostring(a.killed), "true,true", "timeout without keep_running kills")
+    h.eq(tostring(b.timed_out) .. "," .. tostring(b.killed), "true,false", "keep_running timeout leaves it running")
+    host, env = h.makeHost{ shellOut = h.TIMEOUT }
+    h.eq(host.shell.run("x"), "", "canned shellOut can time out too")
+    h.eq(env.shellCalls[1].timed_out, true, "canned timeout recorded")
+end
+
 -- ── bench/le helpers behave ──────────────────────────────────────────────────
 local per = h.bench(1000, function() return 1 + 1 end)
 h.eq(type(per) == "number" and per >= 0, true, "bench returns a per-call time")

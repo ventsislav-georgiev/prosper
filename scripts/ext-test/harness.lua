@@ -222,7 +222,13 @@ local function uiNode(kind)
     end
 end
 
--- Build a stub host. opts: { power, pct, shellOut, screens, date, now, frame,
+-- A shellRouter (or shellOut) returns M.TIMEOUT for "this command hit the host
+-- timeout": the call answers "" like the real host, and env.shellCalls records it
+-- (killed unless the call passed keep_running).
+local TIMEOUT = setmetatable({}, { __tostring = function() return "TIMEOUT" end })
+M.TIMEOUT = TIMEOUT
+
+-- Build a stub host. opts: { power, pct, shellOut, shellTruncated, screens, date, now, frame,
 -- apps, files, fsDirs, fsExists, translateResult, agentResult, httpResponse,
 -- setDefaultOK, perms, snippets, shellRouter }.
 -- Returns (host, env); inspect env.* and mutate env.* between steps.
@@ -261,8 +267,12 @@ function M.makeHost(opts)
         snippetConfig = opts.snippetConfig or { enabled = true, autoExpand = true,
             wordBoundary = true, restoreClipboard = false },
         windowClosed = 0,
-        -- shellRouter(cmd) -> string lets a test return different output per command.
+        -- shellRouter(cmd) -> string [, truncated] lets a test return different output
+        -- per command; return h.TIMEOUT to say the command hit the host timeout.
+        -- shellTruncated = true makes the canned shellOut come back truncated.
         shellRouter = opts.shellRouter,
+        shellTruncated = opts.shellTruncated,
+        shellCalls = {},                      -- every host.shell.run: { cmd, keep_running, timed_out, killed }
         -- host.process (native KillProcessSupport in production). The refusal rules
         -- are NOT reimplemented here — a test states the answers it wants as
         -- { [pid string] = "reason" }; anything absent is killable. env.kills is the
@@ -285,10 +295,37 @@ function M.makeHost(opts)
                   timerCancel = 0, menubarSet = 0, screen = 0, battery = 0, http = 0,
                   kbdLayouts = 0, osascript = 0, menusList = 0 },
     }
-    local function shell_run(cmd)
+    -- Mirrors the real host.shell.run (ExtensionHostAPI.swift bootstrap): the same
+    -- opts checks and error texts, raised before anything runs; two returns at most,
+    -- (output, true) only when truncated. Every call lands in env.shellCalls as
+    -- { cmd =, keep_running =, timed_out =, killed = }.
+    local function shell_run(cmd, opts)
+        if opts == false then opts = nil end   -- `cond and { keep_running = true }`
+        if opts ~= nil then
+            if type(opts) ~= "table" then
+                error("host.shell.run: opts must be a table, got " .. type(opts), 2)
+            end
+            for k, v in pairs(opts) do
+                if k ~= "keep_running" then
+                    error("host.shell.run: unknown option '" .. tostring(k) .. "'", 2)
+                end
+                if type(v) ~= "boolean" then
+                    error("host.shell.run: keep_running must be a boolean, got " .. type(v), 2)
+                end
+            end
+        end
+        local keep = opts ~= nil and opts.keep_running == true
         env.calls.shell = env.calls.shell + 1
-        if env.shellRouter then return env.shellRouter(cmd) end
-        return env.shellOut
+        local out, truncated
+        if env.shellRouter then out, truncated = env.shellRouter(cmd)
+        else out, truncated = env.shellOut, env.shellTruncated end
+        local timedOut = out == TIMEOUT
+        env.shellCalls[#env.shellCalls + 1] = { cmd = cmd, keep_running = keep,
+            timed_out = timedOut, killed = timedOut and not keep }
+        -- The host answers a timeout with one "" either way; keep_running only spares the command.
+        if timedOut or out == nil then return "" end
+        if truncated == true then return out, true end
+        return out
     end
     local settings = {
         ui = uiNode("settings.ui"),

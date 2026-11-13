@@ -114,6 +114,7 @@ do
     h.resetCalls(env)
     h.eq(G.toggles_eject(), "Ejected 2 disks", "eject: both gone")
     h.eq(env.calls.shell, 2, "eject: enumerate + ONE eject call")
+    h.eq(env.shellCalls[2].keep_running, true, "eject: keep_running, a timeout must not abort queued ejects")
     h.eq(log[2]:find("disk4", 1, true) ~= nil and log[2]:find("disk6", 1, true) ~= nil, true,
          "eject: both identifiers in the same call")
 end
