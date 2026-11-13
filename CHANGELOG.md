@@ -585,9 +585,9 @@ tag from the now-released section and put it on the new top draft.
   (#1103).
 - Agent Sessions window: the sidebar's "Agent Sessions" title sits on the same line as the session
   title beside it again (#1103).
-- Theme tints: accent text in Daylight, Graphite and Silver now stays readable everywhere it is
-  drawn (the lower part of windows, the sidebar, highlighted rows such as your messages in Agent
-  Sessions); a few accent shades moved slightly darker or lighter, with the same hue. (#1095)
+- Theme tints: accent text in Daylight, Graphite and Silver is easier to read on the lower part of
+  windows, in the sidebar and on highlighted rows such as your messages in Agent Sessions; a few
+  accent shades moved slightly darker or lighter, with the same hue. (#1095)
 
 ## v2.174.0
 
