@@ -45,7 +45,8 @@ actor CodexHarness: CodingHarness {
     /// Maps an `ApprovalID` back to the server-request JSON-RPC id we must reply to,
     /// the request method (each has its own response shape, see `approvalResult`) and,
     /// for a permissions request, the requested profile a grant echoes back.
-    private var approvalReplies: [String: (rpcID: Any, method: String, requested: [String: Any])] = [:]
+    /// `subAgent`: asked by a sub-agent of the session (#1086), declined when the session's turn ends.
+    private var approvalReplies: [String: (rpcID: Any, method: String, requested: [String: Any], subAgent: Bool)] = [:]
     /// `fileChange` items from `item/started`, by item id: `item/fileChange/requestApproval`
     /// carries only the `itemId`, so the approval's diff comes from here. Cleared per turn.
     private var fileChanges: [String: [[String: Any]]] = [:]
@@ -55,6 +56,19 @@ actor CodexHarness: CodingHarness {
     /// The thread the controller drives (#184): last started, resumed or prompted. codex sends
     /// other threads' frames on the same connection (a fork, a sub-agent, a thread switched away from).
     private var activeThread: String?
+    /// #1086: child -> parent of every thread codex announced as spawned (`thread/started` with
+    /// `source.subAgent.thread_spawn`), so a sub-agent's approval can be shown. Ids are the peer's:
+    /// capped at `spawnCap` entries (later announcements are ignored and their approvals declined),
+    /// first write wins, cleared with the session.
+    private var spawnParents: [String: String] = [:]
+    static let spawnCap = 256
+    /// Hops from a thread up to the active one that still count as its sub-agent.
+    static let spawnHops = 16
+    /// The rpc id of the in-flight thread/resume: its reply moves the active thread inside `ingest`.
+    private var resumeRPC: Int?
+    /// A turn of the session's thread is in flight: from its turn/start request to its turn/completed.
+    /// A sub-agent's request outside one is declined: the controller would show it as an idle session's card.
+    private var turnRunning = false
     /// Seconds a request waits for its reply before failing with `HarnessError.timeout`.
     private var replyTimeout: @Sendable (String) -> TimeInterval = { CodexHarness.defaultReplyTimeout(for: $0) }
 
@@ -285,6 +299,7 @@ actor CodexHarness: CodingHarness {
         consumer = nil
         approvalReplies.removeAll()   // codex is gone; no reply can land
         fileChanges.removeAll()
+        spawnParents.removeAll(); turnRunning = false
         inboundContinuation.finish()
         eventContinuation.finish()
     }
@@ -305,6 +320,7 @@ actor CodexHarness: CodingHarness {
         }
         sandboxPolicies[id] = Self.sandboxJSON(opts.sandbox, cwd: opts.cwd)
         activeThread = id
+        spawnParents.removeAll(); turnRunning = false
         let session = SessionID(raw: id)
         eventContinuation.yield(.sessionStarted(session))
         return session
@@ -312,15 +328,16 @@ actor CodexHarness: CodingHarness {
 
     func resumeSession(_ id: SessionID, options opts: SessionOptions) async throws -> SessionID {
         activeThread = id.raw   // before the request: codex sends the thread's usage right after its reply
+        spawnParents.removeAll(); turnRunning = false
         let result = try await sendRequest(method: Wire.threadResume, params: [
             "threadId": id.raw,
             "approvalPolicy": opts.approvalPolicy.rawValue,
             "sandbox": Self.sandboxMode(opts.sandbox),
             "config": Self.threadConfig,
         ])
+        // activeThread already moved to the answered id when ingest handled the reply (#1086 rider).
         let resumed = Self.threadID(from: result) ?? id.raw
         sandboxPolicies[resumed] = Self.sandboxJSON(opts.sandbox, cwd: opts.cwd)
-        activeThread = resumed
         return SessionID(raw: resumed)
     }
 
@@ -343,9 +360,12 @@ actor CodexHarness: CodingHarness {
         ]
         params["sandboxPolicy"] = sandboxPolicies[session.raw]
         activeThread = session.raw   // before the request: the turn's frames can beat its reply
-        let result = try await sendRequest(method: Wire.turnStart, params: params)
+        turnRunning = true
+        let result: [String: Any]
+        do { result = try await sendRequest(method: Wire.turnStart, params: params) } catch { turnRunning = false; throw error }
         // TurnStartResponse = { turn: Turn { id, items, status } }.
         guard let id = (result["turn"] as? [String: Any])?["id"] as? String else {
+            turnRunning = false
             throw HarnessError.protocolError("turn/start returned no turn id")
         }
         let turnID = TurnID(raw: id)
@@ -406,6 +426,7 @@ actor CodexHarness: CodingHarness {
                              timeout: TimeInterval? = nil) async throws -> [String: Any] {
         guard process != nil, !terminated else { throw HarnessError.notStarted }
         let (id, line) = try rpc.request(method: method, params: params)
+        if method == Wire.threadResume { resumeRPC = id }
         let timeout = timeout ?? replyTimeout(method)
         let result: RPCResult = try await withCheckedThrowingContinuation { cont in
             // shutdown/handleTermination drain `pending` synchronously on the actor; if
@@ -454,6 +475,11 @@ actor CodexHarness: CodingHarness {
                     log.error("dropped a codex response for unknown request id \(id) (timed out or never sent)")
                     continue
                 }
+                // #1086 rider: the answered thread's frames can share the reply's stdout chunk.
+                if id == resumeRPC {
+                    resumeRPC = nil
+                    if error == nil, let answered = result.flatMap(Self.threadID(from:)) { activeThread = answered }
+                }
                 if let error {
                     cont.resume(throwing: HarnessError.backendError(
                         (error["message"] as? String) ?? String(describing: error)))
@@ -463,10 +489,18 @@ actor CodexHarness: CodingHarness {
             case .serverRequest(let id, let method, let params):
                 handleServerRequest(id: id, method: method, params: params)
             case .notification(let method, let params):
+                if method == Wire.threadStarted { noteSpawn(params) }
+                let thread = params["threadId"] as? String
+                // #1086: a sub-agent's file-change item is kept so its approval card shows the diff.
+                if method == Wire.itemStarted, let item = params["item"] as? [String: Any],
+                   item["type"] as? String == "fileChange", let id = item["id"] as? String,
+                   thread.map({ $0 == activeThread || isSubAgent($0) }) ?? true {
+                    fileChanges[id] = item["changes"] as? [[String: Any]] ?? []
+                }
                 // #184: another thread's frame is not this session's: its text must not reach the
                 // transcript, nor its turn end settle the user's turn or clear the mappings below.
                 // A frame with no threadId (none of the mapped methods) passes as before.
-                if let thread = params["threadId"] as? String, thread != activeThread {
+                if let thread, thread != activeThread {
                     log.info("dropped \(method, privacy: .public) of thread \(thread, privacy: .public), not the session's")
                     continue
                 }
@@ -474,10 +508,14 @@ actor CodexHarness: CodingHarness {
                 // re-request); drop the mappings so they can't accumulate across turns.
                 // fileChanges is unbounded within a turn and cleared by the turn end
                 // (accepted: one turn's patches are small, approvals are rare).
-                if method == Wire.turnCompleted { approvalReplies.removeAll(); fileChanges.removeAll() }
-                if method == Wire.itemStarted, let item = params["item"] as? [String: Any],
-                   item["type"] as? String == "fileChange", let id = item["id"] as? String {
-                    fileChanges[id] = item["changes"] as? [[String: Any]] ?? []
+                // A sub-agent's request outlives it but loses its card (the controller drops cards at the
+                // turn end): decline it, or the sub-agent waits forever (#1086).
+                if method == Wire.turnCompleted {
+                    for reply in approvalReplies.values where reply.subAgent {
+                        try? writeLine(JSONRPC.response(id: reply.rpcID, result: Self.approvalResult(
+                            method: reply.method, requested: [:], decision: .decline)))
+                    }
+                    approvalReplies.removeAll(); fileChanges.removeAll(); turnRunning = false
                 }
                 for event in Self.mapNotification(method: method, params: params) {
                     eventContinuation.yield(event)
@@ -498,15 +536,16 @@ actor CodexHarness: CodingHarness {
         // Legacy execCommandApproval/applyPatchApproval name the thread `conversationId`.
         let thread = (params["threadId"] ?? params["conversationId"]) as? String
         // #184: another thread's approval is not shown as the session's. Declined, not left
-        // unanswered: codex would wait on it forever.
-        if let thread, thread != activeThread {
+        // unanswered: codex would wait on it forever. #1086: a sub-agent the session spawned is shown, labelled.
+        let foreign = thread != nil && thread != activeThread
+        if let thread, foreign, !isSubAgent(thread) {
             log.info("declined \(method, privacy: .public) of thread \(thread, privacy: .public), not the session's")
             try? writeLine(JSONRPC.response(id: id, result: Self.approvalResult(method: method, requested: [:], decision: .decline)))
             return
         }
         let approvalID = ApprovalID(raw: UUID().uuidString)
         approvalReplies[approvalID.raw] = (rpcID: id, method: method,
-                                           requested: params["permissions"] as? [String: Any] ?? [:])
+                                           requested: params["permissions"] as? [String: Any] ?? [:], subAgent: foreign)
         let session = SessionID(raw: thread ?? "")
         // Modern requests carry only `itemId` (diff comes from the item); legacy
         // `applyPatchApproval` carries `fileChanges` keyed by path: show its paths.
@@ -515,12 +554,45 @@ actor CodexHarness: CodingHarness {
             : method == Wire.legacyPatchApproval
             ? ((params["fileChanges"] as? [String: Any])?.keys.sorted() ?? []).map { ["path": $0] }
             : []
+        // The label is a line of its own: the peer's summary is escaped to one line, so it cannot forge this one.
+        let summary = Self.approvalSummary(kind: kind, params: params, changes: changes)
         let request = ApprovalRequest(
             id: approvalID, kind: kind, session: session,
-            summary: CardText.ltr(Self.approvalSummary(kind: kind, params: params, changes: changes)),
+            summary: CardText.ltr(foreign ? Self.subAgentLabel + "\n" + summary : summary),
             detail: Self.approvalDetail(kind: kind, params: params, changes: changes).map(CardText.detail)
         )
         eventContinuation.yield(.approvalRequest(request))
+    }
+
+    static let subAgentLabel = "Asked by a sub-agent of this session"
+
+    /// #1086: records a `thread/started` thread_spawn's parent. Forks, reviews and other sub-agent
+    /// kinds carry no thread_spawn and are never recorded, so their approvals stay declined.
+    private func noteSpawn(_ params: [String: Any]) {
+        guard let thread = params["thread"] as? [String: Any], let id = thread["id"] as? String,
+              let spawn = ((thread["source"] as? [String: Any])?["subAgent"] as? [String: Any])?["thread_spawn"] as? [String: Any],
+              let parent = spawn["parent_thread_id"] as? String, parent != id, spawnParents[id] == nil else { return }
+        guard spawnParents.count < Self.spawnCap else {
+            log.error("ignored the spawn of thread \(id, privacy: .public): \(Self.spawnCap) sub-agents already known")
+            return
+        }
+        spawnParents[id] = parent
+    }
+
+    /// Whether a turn of the session is running and `thread`'s spawn chain reaches the active thread
+    /// within `spawnHops` hops. The hop limit bounds the walk whatever the peer announced; the seen-set
+    /// ends a cycle early.
+    private func isSubAgent(_ thread: String) -> Bool {
+        guard turnRunning, let active = activeThread else { return false }
+        var seen: Set<String> = [thread]
+        var current = thread
+        for _ in 0..<Self.spawnHops {
+            guard let parent = spawnParents[current] else { return false }
+            if parent == active { return true }
+            guard seen.insert(parent).inserted else { return false }
+            current = parent
+        }
+        return false
     }
 
     private func logStderr(_ s: String) {
@@ -960,6 +1032,7 @@ private enum Wire {
     // Notifications (ServerNotification methods, protocol v1)
     static let turnStarted = "turn/started"
     static let turnCompleted = "turn/completed"
+    static let threadStarted = "thread/started"
     static let agentMessageDelta = "item/agentMessage/delta"
     static let reasoningDelta = "item/reasoning/textDelta"
     static let reasoningSummaryDelta = "item/reasoning/summaryTextDelta"

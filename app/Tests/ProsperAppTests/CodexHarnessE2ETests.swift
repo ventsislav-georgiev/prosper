@@ -82,6 +82,17 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// SPAWNCHILD: a file `spawn-child` beside the script makes the mock start a child that
     /// ignores SIGTERM (an MCP server stand-in), which writes its pid to `child-pid` once
     /// the ignore is in place. It sends no frame.
+    /// RESUMEAS with a second word ("thread-3 now") sends the answered thread's tokenUsage in the same
+    /// write as, and after, the resume reply instead of holding it (#1086 rider).
+    /// SPAWNPLAN (#1086): the turn runs the steps of `spawn-plan.json` beside the script, each a list:
+    /// ["spawn", child, parent] a `thread/started` of a thread_spawn sub-agent; ["chain", prefix, n, root]
+    /// n of them in one write, prefix-1 spawned by root and prefix-k by prefix-(k-1); ["fork", id, from]
+    /// a fork's thread/started (forkedFromId); ["review", id, parent] a review sub-agent's
+    /// (source subAgent "review", parentThreadId set); ["text", thread] / ["end", thread] that thread's
+    /// message delta / turn/completed; ["ask", thread, id] / ["patch", thread, id] that thread's command
+    /// approval / fileChange item then file-change approval, with JSON-RPC id `id`; ["finish"] ends the
+    /// session's turn at once. Otherwise the turn ends once every ask is answered (a reply not in the
+    /// method's shape fails it).
     private static let mockServer = #"""
     import sys, json, os, time, subprocess
 
@@ -238,6 +249,54 @@ final class CodexHarnessE2ETests: XCTestCase {
                 return None
         return "decision " + json.dumps(d)
 
+    PLAN = os.path.join(os.path.dirname(LOG), "spawn-plan.json")
+    asks = {}   # SPAWNPLAN: the plan's unanswered server requests, method by id
+    plan_problem = None
+
+    def thread_started(tid, **fields):   # a ThreadStartedNotification in the recorded shape
+        params = recorded("thread/started")
+        params["thread"].update(id=tid, sessionId=tid, **fields)
+        return {"jsonrpc": "2.0", "method": "thread/started", "params": params}
+
+    def spawned(tid, parent, depth=1):
+        return thread_started(tid, parentThreadId=parent,
+                              source={"subAgent": {"thread_spawn": {"parent_thread_id": parent, "depth": depth}}})
+
+    def run_plan(steps):
+        for step in steps:
+            kind, args = step[0], step[1:]
+            if kind == "spawn":
+                send(spawned(*args))
+            elif kind == "chain":
+                prefix, n, root = args
+                send(*(spawned("%s-%d" % (prefix, k), root if k == 1 else "%s-%d" % (prefix, k - 1), k) for k in range(1, n + 1)))
+            elif kind == "fork":
+                send(thread_started(args[0], forkedFromId=args[1]))
+            elif kind == "review":
+                send(thread_started(args[0], parentThreadId=args[1], source={"subAgent": "review"}))
+            elif kind == "text":
+                send({"jsonrpc": "2.0", "method": "item/agentMessage/delta", "params": {"threadId": args[0],
+                      "turnId": args[0] + "-turn", "itemId": args[0] + "-m1", "delta": "Hello from " + args[0]}})
+            elif kind == "end":
+                send({"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": args[0],
+                      "turn": dict(TURN, id=args[0] + "-turn", rootTurnId=args[0] + "-turn", items=[], status="completed")}})
+            elif kind in ("ask", "patch"):
+                tid, rid = args
+                t = {"threadId": tid, "turnId": tid + "-turn", "startedAtMs": 0}
+                if kind == "patch":
+                    send({"jsonrpc": "2.0", "method": "item/started", "params": dict(t, item={
+                        "id": "fc-" + rid, "type": "fileChange", "status": "inProgress",
+                        "changes": [{"path": "/tmp/a.txt", "diff": "@@ -1 +1 @@\n-old\n+new\n",
+                                     "kind": {"type": "update", "move_path": None}}]})})
+                    asks[rid] = "item/fileChange/requestApproval"
+                    req = dict(t, itemId="fc-" + rid, reason=None)
+                else:
+                    asks[rid] = "item/commandExecution/requestApproval"
+                    req = dict(t, itemId="cmd-" + rid, command="rm -rf build", cwd="/tmp")
+                send({"jsonrpc": "2.0", "id": rid, "method": asks[rid], "params": req})
+            elif kind == "finish":
+                finish_turn()
+
     awaiting = None   # method of the outstanding "srv-1" request
     want_decline = False   # SUBAGENT: only a decline finishes the turn cleanly
 
@@ -298,6 +357,11 @@ final class CodexHarnessE2ETests: XCTestCase {
             time.sleep(1.0)
         # A client reply to one of our server requests (result or error, no method).
         if method is None and ("result" in msg or "error" in msg):
+            if isinstance(mid, str) and mid in asks:   # SPAWNPLAN: the turn ends once every ask is answered
+                plan_problem = plan_problem or reply_error(asks.pop(mid), msg)
+                if not asks and current_turn is not None:
+                    finish_turn(plan_problem)
+                continue
             if awaiting and mid == "srv-1":
                 problem = reply_error(awaiting, msg)
                 if not problem and want_decline and msg["result"] != {"decision": "decline"}:
@@ -317,8 +381,9 @@ final class CodexHarnessE2ETests: XCTestCase {
                 continue
             tid = {"thread/start": "thread-1", "thread/fork": "thread-2"}.get(method, params.get("threadId"))
             answered_as = method == "thread/resume" and os.path.exists(RESUME_AS)
+            now = []
             if answered_as:
-                tid = open(RESUME_AS).read().strip()
+                tid, *now = open(RESUME_AS).read().split()
                 os.remove(RESUME_AS)
             result = recorded(method)
             result["thread"]["id"] = tid
@@ -329,7 +394,7 @@ final class CodexHarnessE2ETests: XCTestCase {
                 continue
             usage = {"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
                      "params": dict(recorded("thread/tokenUsage/updated"), threadId=tid)}
-            if answered_as:
+            if answered_as and not now:
                 held.append(usage)
                 send(reply)
             else:
@@ -383,6 +448,13 @@ final class CodexHarnessE2ETests: XCTestCase {
                       "params": {"threadId": current_thread, "turnId": current_turn, "startedAtMs": 0,
                                  "item": {"id": "cmd-" + current_turn, "type": "commandExecution", "cwd": "/tmp",
                                           "command": "sleep 600", "commandActions": [], "status": "inProgress"}}})
+                continue
+            if "SPAWNPLAN" in prompt:
+                asks, plan_problem = {}, None
+                with open(PLAN) as f:
+                    run_plan(json.load(f))
+                if not asks and current_turn is not None:
+                    finish_turn()
                 continue
             if want_approval:
                 # Server→client request; client must reply before we proceed.
@@ -576,6 +648,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// plain-turn.jsonl:29; sub-agents and detached reviews have their own threads). Their text
     /// stays out, their turn end does not end the session's turn, and their approval is declined
     /// (unanswered, codex would wait on it forever) instead of shown as the session's.
+    /// #1086: thread-sub was never announced as spawned by the session, so it stays a stranger.
     func testOtherThreadsFramesAreDroppedAndItsApprovalDeclined() async throws {
         let (exe, home) = try makeMock()
         let harness = CodexHarness(executableURL: exe, codexHome: home,
@@ -668,9 +741,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     }
 
     /// #184 (b): a resume codex answers with another thread id (`threadID(from:)` takes the
-    /// answer); a frame of the answered thread after the reply is delivered. Pins resumeSession's
-    /// assignment after the reply: the mock holds that frame until the next request, a fork (which
-    /// does not move the driven thread), and that request leaves only after resumeSession returned.
+    /// answer); a frame of the answered thread after the reply is delivered. The mock holds that frame
+    /// until the next request, a fork (which does not move the driven thread), and that request leaves
+    /// only after resumeSession returned. #1086: the move now happens in ingest, at the reply.
     func testResumeAnsweredWithAnotherIdFollowsTheAnsweredThread() async throws {
         let (harness, _, exe) = try await harnessOnThread1()
         try "thread-3".write(to: exe.deletingLastPathComponent().appendingPathComponent("resume-as"), atomically: true, encoding: .utf8)
@@ -695,6 +768,163 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(Self.ended(before), ["turn-1 completed"], "\(before)")
         XCTAssertEqual(Self.ended(after), ["turn-2 completed"], "thread-1's late turn end must not end thread-2's turn: \(after)")
         XCTAssertEqual(Self.texts(after), ["Hello from mock"], "thread-1's late text must not show: \(after)")
+    }
+
+    /// #1086 rider: codex answers a resume with another id and sends that thread's usage in the same
+    /// write, after the reply (as it does for its own id, plain-turn.jsonl:32-33). ingest handles the
+    /// whole chunk before resumeSession resumes, so the driven thread must move while the reply is
+    /// handled; moved after the await (the parent commit), the usage was dropped.
+    func testResumeAnsweredWithAnotherIdInOneWriteDeliversItsUsage() async throws {
+        let (harness, _, exe) = try await harnessOnThread1()
+        try "thread-3 now".write(to: exe.deletingLastPathComponent().appendingPathComponent("resume-as"), atomically: true, encoding: .utf8)
+        async let usage = Self.collect(from: harness, timeout: 5) { if case .usage = $0 { return true }; return false }
+        let resumed = try await harness.resumeSession(SessionID(raw: "thread-2"), options: Self.threadOpts)
+        let events = await usage
+        await harness.shutdown()
+        XCTAssertEqual(resumed.raw, "thread-3")
+        XCTAssertTrue(events.contains { if case .usage(let u) = $0 { return u.inputTokens == 10 && u.outputTokens == 5 }; return false },
+                      "the answered thread's usage in the reply's write was dropped: \(events)")
+    }
+
+    // MARK: - #1086: approvals of sub-agents the session spawned
+
+    private static let label = CodexHarness.subAgentLabel
+    private static var declined: NSDictionary { ["decision": "decline"] }
+    private static var accepted: NSDictionary { ["decision": "accept"] }
+
+    /// Every reply the client sent to a server request with a string id, results by id in order.
+    private static func replies(exe: URL) -> [String: [NSDictionary]] {
+        let log = exe.deletingLastPathComponent().appendingPathComponent("received.jsonl")
+        var out: [String: [NSDictionary]] = [:]
+        for line in ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n") {
+            guard let frame = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  frame["method"] == nil, let id = frame["id"] as? String, let result = frame["result"] as? NSDictionary else { continue }
+            out[id, default: []].append(result)
+        }
+        return out
+    }
+
+    /// Each approval card as "<thread>: <summary>".
+    private static func cards(_ events: [HarnessEvent]) -> [String] {
+        events.compactMap { if case .approvalRequest(let r) = $0 { return "\(r.session.raw): \(r.summary)" }; return nil }
+    }
+
+    /// Prompts thread-1 with SPAWNPLAN running `plan` (see the mock), answers every card with `answer`
+    /// (nil: leaves it), and returns the events up to thread-1's turn end ([] past 10 s). Before the
+    /// shutdown it waits (polls) until every ask of the plan has a reply in the mock's log.
+    private func runPlan(_ plan: [[Any]], answer: ApprovalDecision?) async throws -> (events: [HarnessEvent], exe: URL) {
+        let (harness, session, exe) = try await harnessOnThread1()
+        try JSONSerialization.data(withJSONObject: plan)
+            .write(to: exe.deletingLastPathComponent().appendingPathComponent("spawn-plan.json"))
+        let collector = Task { () -> [HarnessEvent] in
+            var seen: [HarnessEvent] = []
+            for await event in harness.events {
+                seen.append(event)
+                if case .approvalRequest(let req) = event, let answer { try? await harness.respondToApproval(req.id, decision: answer) }
+                if case .turnCompleted(let t, _) = event, t.raw == "turn-1" { break }
+            }
+            return seen
+        }
+        try await harness.sendPrompt(session: session, input: [.text("SPAWNPLAN")])
+        let events = await withTaskGroup(of: [HarnessEvent]?.self) { group in
+            group.addTask { await collector.value }
+            group.addTask { try? await Task.sleep(nanoseconds: 10 * 1_000_000_000); return nil }
+            let r = await group.next() ?? nil
+            group.cancelAll()
+            collector.cancel()   // unstructured: cancelAll does not reach it, and the group waits for every child
+            return r ?? []
+        }
+        let asked = Set(plan.compactMap { ["ask", "patch"].contains($0.first as? String ?? "") ? ($0.last as? String) : nil })
+        var polls = 1000   // 10 s of polls, not wall time (#709, see `wait`)
+        while !Set(Self.replies(exe: exe).keys).isSuperset(of: asked), polls > 0 {
+            polls -= 1
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(Set(Self.replies(exe: exe).keys).isSuperset(of: asked), "a request of the plan got no reply: \(Self.replies(exe: exe))")
+        await harness.shutdown()
+        return (events, exe)
+    }
+
+    /// A sub-agent the session's thread spawned asks: its card shows, labelled, under the child's thread;
+    /// the answer goes back on the child's request id; the child's text and turn end stay out, and the
+    /// session's turn ends only once the child's request is answered.
+    func testSubAgentOfTheSessionGetsALabelledCardAndItsAnswerBack() async throws {
+        let (events, exe) = try await runPlan([["spawn", "child-1", "thread-1"], ["text", "child-1"],
+                                               ["ask", "child-1", "srv-child"], ["end", "child-1"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), ["child-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
+        XCTAssertEqual(Self.texts(events), ["Hello from mock"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-child": [Self.accepted]])
+    }
+
+    /// A grandchild (spawned by the session's sub-agent) is the session's sub-agent too.
+    func testGrandchildOfTheSessionGetsACard() async throws {
+        let (events, exe) = try await runPlan([["spawn", "child-1", "thread-1"], ["spawn", "grand-1", "child-1"],
+                                               ["ask", "grand-1", "srv-grand"]], answer: .acceptForSession)
+        XCTAssertEqual(Self.cards(events), ["grand-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-grand": [["decision": "acceptForSession"] as NSDictionary]])
+    }
+
+    /// Declined with no card: a sub-agent of another thread, a fork of the session (forkedFromId), a
+    /// review sub-agent (parentThreadId set, no thread_spawn) and a thread never announced.
+    func testStrangerForkReviewAndUnknownThreadsAreDeclined() async throws {
+        let (events, exe) = try await runPlan([["spawn", "other-1", "thread-9"], ["fork", "thread-f", "thread-1"],
+                                               ["review", "thread-r", "thread-1"], ["ask", "other-1", "srv-other"],
+                                               ["ask", "thread-f", "srv-fork"], ["ask", "thread-r", "srv-review"],
+                                               ["ask", "thread-x", "srv-unknown"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), [], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-other": [Self.declined], "srv-fork": [Self.declined],
+                                                "srv-review": [Self.declined], "srv-unknown": [Self.declined]])
+    }
+
+    /// The schema orders nothing: a child whose thread/started comes after its request is a stranger
+    /// for that request (declined, as before #1086); its next request, once announced, gets a card.
+    func testChildAnnouncedAfterItsRequestIsDeclinedForThatRequestOnly() async throws {
+        let (events, exe) = try await runPlan([["ask", "late-1", "srv-early"], ["spawn", "late-1", "thread-1"],
+                                               ["ask", "late-1", "srv-later"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), ["late-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-early": [Self.declined], "srv-later": [Self.accepted]])
+    }
+
+    /// The peer's ids bound nothing on their own: a parent cycle (cyc-a <-> cyc-b) ends the walk, a chain
+    /// reaches the session within `spawnHops` (16) hops only, and past `spawnCap` (256) announcements a
+    /// new one is ignored, even a direct child's. 2 cycle threads + deep-1…deep-254 fill the map.
+    func testParentCycleDeepChainAndAnnouncementCapAreBounded() async throws {
+        XCTAssertEqual(CodexHarness.spawnHops, 16)
+        XCTAssertEqual(CodexHarness.spawnCap, 256)
+        let (events, exe) = try await runPlan([["spawn", "cyc-a", "cyc-b"], ["spawn", "cyc-b", "cyc-a"],
+                                               ["ask", "cyc-a", "srv-cycle"], ["chain", "deep", 300, "thread-1"],
+                                               ["ask", "deep-16", "srv-16"], ["ask", "deep-17", "srv-17"],
+                                               ["ask", "deep-300", "srv-300"], ["spawn", "late-child", "thread-1"],
+                                               ["ask", "late-child", "srv-past-cap"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), ["deep-16: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-cycle": [Self.declined], "srv-16": [Self.accepted],
+                                                "srv-17": [Self.declined], "srv-300": [Self.declined],
+                                                "srv-past-cap": [Self.declined]])
+    }
+
+    /// The session's turn ends with a sub-agent's card unanswered: the controller drops the card then,
+    /// so the harness declines the request instead of leaving the sub-agent waiting forever.
+    func testSessionTurnEndDeclinesAnUnansweredSubAgentRequest() async throws {
+        let (events, exe) = try await runPlan([["spawn", "child-1", "thread-1"], ["ask", "child-1", "srv-child"],
+                                               ["finish"]], answer: nil)
+        XCTAssertEqual(Self.cards(events), ["child-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-child": [Self.declined]])
+    }
+
+    /// A sub-agent that outlives the session's turn and asks with no turn running is declined with no
+    /// card: shown, the controller would wait on an idle session's approval as if a turn ran (#1086 r2).
+    /// The collector stops at the turn end, so runPlan's reply poll is what waits for srv-after.
+    func testSubAgentAskingAfterTheSessionTurnEndedIsDeclined() async throws {
+        let (events, exe) = try await runPlan([["spawn", "child-1", "thread-1"], ["finish"],
+                                               ["ask", "child-1", "srv-after"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), [], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-after": [Self.declined]])
     }
 
     /// Every JSON-RPC message the mock received with the given method, in order.
@@ -1886,9 +2116,13 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// expects none), and returns that approval plus the reply codex got. The turn must
     /// finish cleanly: the mock fails it when the reply isn't in the method's shape.
     @MainActor
-    private func answer(_ goal: String, with decision: ApprovalDecision?) async throws
+    private func answer(_ goal: String, with decision: ApprovalDecision?, plan: [[Any]]? = nil) async throws
         -> (approval: ApprovalRequest?, reply: [String: Any]?) {
         let (exe, home) = try makeMock()
+        if let plan {   // SPAWNPLAN's steps (#1086)
+            try JSONSerialization.data(withJSONObject: plan)
+                .write(to: exe.deletingLastPathComponent().appendingPathComponent("spawn-plan.json"))
+        }
         let (controller, _) = makeController(exe: exe, home: home)
         controller.submit(goal: goal)
         var approval: ApprovalRequest?
@@ -1975,6 +2209,20 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(approval?.summary, "Apply changes to /tmp/a.txt")
         XCTAssertEqual(approval?.detail, "/tmp/a.txt\n@@ -1 +1 @@\n-old\n+new\n")
         XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "accept"] as NSDictionary)
+    }
+
+    /// #1086: through the controller, a sub-agent's file change shows as the user's card, labelled, with
+    /// the diff of the child's own item (kept although the child's other frames are dropped), and the
+    /// session's turn finishes cleanly once it is answered.
+    @MainActor
+    func testControllerShowsTheSubAgentsFileChangeCardWithItsDiff() async throws {
+        let (approval, reply) = try await answer("SPAWNPLAN", with: .accept,
+                                                 plan: [["spawn", "child-1", "thread-1"], ["patch", "child-1", "srv-1"]])
+        XCTAssertEqual(approval?.kind, .fileChange)
+        XCTAssertEqual(approval?.session.raw, "child-1")
+        XCTAssertEqual(approval?.summary, "\(Self.label)\nApply changes to /tmp/a.txt")
+        XCTAssertEqual(approval?.detail, "/tmp/a.txt\n@@ -1 +1 @@\n-old\n+new\n")
+        XCTAssertEqual(reply?["result"] as? NSDictionary, Self.accepted)
     }
 
     /// #357: the diff body is escaped per line, so a Trojan Source line shows its bidi controls
