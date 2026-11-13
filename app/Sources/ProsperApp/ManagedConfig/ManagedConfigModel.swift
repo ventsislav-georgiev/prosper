@@ -119,6 +119,12 @@ struct ManagedConfigResult: Equatable, Sendable {
     var ok: Bool { status == .done || status == .nothingToDo }
 }
 
+extension Sequence where Element == String {
+    /// A-INFO-3: membership by UTF-8 bytes. Swift's == takes NFC and NFD forms for one string; JSON
+    /// (RFC 8259 8.3) and Claude Code compare code units, so a union string is matched as written.
+    func containsBytes(_ s: String) -> Bool { contains { $0.utf8.elementsEqual(s.utf8) } }
+}
+
 // MARK: - State (Prosper's own file; never a user value beyond what Prosper wrote)
 
 struct ManagedConfigRecord: Codable, Sendable, Equatable {

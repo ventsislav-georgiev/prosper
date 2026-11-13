@@ -73,7 +73,8 @@ enum ManagedConfigDiff {
             if t.last == "," { t.removeLast() }
             return t
         }
-        return x != y ? core(x) == core(y) : true
+        // A-INFO-3: bytes; String == would show an NFC/NFD change as an unchanged line
+        return x.utf8.elementsEqual(y.utf8) || core(x).utf8.elementsEqual(core(y).utf8)
     }
 
     /// A JSON line with no value on it: a key opening a container, or brackets and commas.

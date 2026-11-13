@@ -418,6 +418,18 @@ tag from the now-released section and put it on the new top draft.
 - A model download that was stopped or interrupted is no longer shown as downloaded when its small
   setup files never arrived; the app now records when a download finishes, and models downloaded
   before this update still count as downloaded.
+- Managed config: an approval now covers the exact bytes Prosper writes, so if a config file changes
+  under the sheet in a way the masked diff cannot show (a hidden env value, line endings, a BOM),
+  you are asked again instead of the old approval being reused, and the repeated sheet says the file
+  changed after it opened.
+- Managed config: the Remove and Repair sheets now say when a Prosper block holds your own edits, so
+  deleting or replacing them is never a silent part of the diff.
+- Managed config: a block you edited after Prosper lost its record can be repaired from the
+  extension's declared pieces after the sheet shows your edits (core only; the button comes with the
+  sheet update), after which Remove and uninstall can take it out.
+- Managed config: text blocks and permission strings are compared byte for byte, so a file re-saved
+  in another Unicode normalization shows as drift instead of passing as unchanged, and a permission
+  that differs only in normalization is added as its own entry.
 
 ## v2.174.0
 

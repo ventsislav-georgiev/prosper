@@ -180,12 +180,14 @@ struct ManagedConfigPlanner {
             throw .corrupt("broken prosper markers at line(s) \(lines.map(String.init).joined(separator: ", "))")
         case .present(let b, let e):
             let onDisk = ManagedTextBlock.text(of: w.text, begin: b, end: e)
-            if onDisk == block {
+            if onDisk.utf8.elementsEqual(block.utf8) { // A-INFO-3: bytes, not String ==
                 if existing == nil { upsert(&w, record); return .adopt }
                 return .noop
             }
             // F1 (QA #723): with no record, only the byte-equal block is ours; anything else is an edit.
-            if (existing?.written ?? block) != onDisk, !repair { throw .drifted }
+            let edited = !(existing?.written ?? block).utf8.elementsEqual(onDisk.utf8)
+            if edited, !repair { throw .drifted }
+            if edited { driftNote(&w, piece.id, "Repair replaces") }
             step(&w, ManagedTextBlock.replacing(begin: b, end: e, with: block, in: w.text))
             upsert(&w, record)
             notes(&w)
@@ -271,7 +273,7 @@ struct ManagedConfigPlanner {
             case .array(let els):
                 for e in els {
                     guard case .string(let s) = e.value else { throw .invalidPiece("union values are strings") }
-                    if !strings.contains(s) { strings.append(s) }
+                    if !strings.containsBytes(s) { strings.append(s) }
                 }
             default: throw .invalidPiece("union values are strings")
             }
@@ -281,12 +283,12 @@ struct ManagedConfigPlanner {
                 present = els.compactMap { if case .string(let s) = $0.value { return s } else { return nil } }
             }
             // union adopts nothing, lost state included: a string already present is the user's and is
-            // never claimed, so Remove leaves it.
+            // never claimed, so Remove leaves it. A-INFO-3: "present" is by bytes (containsBytes).
             let others = claims(on: w.url.path, path: path, except: existing)
-            if let existing, !repair, existing.claimed.contains(where: { !present.contains($0) }) { throw .missing }
-            let toAdd = strings.filter { !present.contains($0) }
-            let toDrop = (existing?.claimed ?? []).filter { !strings.contains($0) && !others.contains($0) && present.contains($0) }
-            let claimed = strings.filter { toAdd.contains($0) || others.contains($0) || (existing?.claimed.contains($0) ?? false) }
+            if let existing, !repair, existing.claimed.contains(where: { !present.containsBytes($0) }) { throw .missing }
+            let toAdd = strings.filter { !present.containsBytes($0) }
+            let toDrop = (existing?.claimed ?? []).filter { !strings.containsBytes($0) && !others.containsBytes($0) && present.containsBytes($0) }
+            let claimed = strings.filter { toAdd.containsBytes($0) || others.containsBytes($0) || (existing?.claimed.containsBytes($0) ?? false) }
             for s in toDrop { removeLastString(s, at: path, &w) }
             if !toAdd.isEmpty {
                 if let doc = try? OrderedJSON(bytes: w.text), doc.node(at: path) != nil {
@@ -376,13 +378,14 @@ struct ManagedConfigPlanner {
         }
     }
 
-    private func claims(on file: String, path: [String], except: ManagedConfigRecord?) -> Set<String> {
-        Set(state.records.filter { $0.path == file && $0.piece.path == path && $0.piece.op == .union && $0 != except }.flatMap(\.claimed))
+    /// An array, not a Set: a Set<String> merges NFC and NFD forms (A-INFO-3).
+    private func claims(on file: String, path: [String], except: ManagedConfigRecord?) -> [String] {
+        state.records.filter { $0.path == file && $0.piece.path == path && $0.piece.op == .union && $0 != except }.flatMap(\.claimed)
     }
 
     private func removeLastString(_ s: String, at path: [String], _ w: inout Work) {
         guard let doc = try? OrderedJSON(bytes: w.text), case .array(let els)? = doc.node(at: path)?.value,
-              let i = els.lastIndex(where: { if case .string(let x) = $0.value { return x == s } else { return false } }) else { return }
+              let i = els.lastIndex(where: { if case .string(let x) = $0.value { return x.utf8.elementsEqual(s.utf8) } else { return false } }) else { return }
         step(&w, doc.removingElement(i, fromArrayAt: path))
     }
 
@@ -430,6 +433,10 @@ struct ManagedConfigPlanner {
             case .corrupt(let lines):
                 return refuse(.corrupt("broken prosper markers at line(s) \(lines.map(String.init).joined(separator: ", "))"))
             case .present(let b, let e):
+                // A-INFO-10: an edited block is drift here too; Remove asks (spec 2.5) and the sheet names it
+                if !ManagedTextBlock.text(of: w.text, begin: b, end: e).utf8.elementsEqual(r.written.utf8) {
+                    driftNote(&w, r.piece.id, "Remove deletes")
+                }
                 step(&w, ManagedTextBlock.removing(begin: b, end: e, from: w.text))
                 action = .remove
             case .absent:
@@ -452,7 +459,7 @@ struct ManagedConfigPlanner {
             case .union?:
                 let others = claims(on: w.url.path, path: path, except: state.records.first { $0.owner == r.owner && $0.piece.id == r.piece.id })
                 let before = w.text
-                for s in r.claimed where !others.contains(s) { removeLastString(s, at: path, &w) }
+                for s in r.claimed where !others.containsBytes(s) { removeLastString(s, at: path, &w) }
                 if w.text != before { action = .remove }
             case .set?:
                 if let n = doc.node(at: path) {
@@ -495,6 +502,13 @@ struct ManagedConfigPlanner {
     private func notes(_ w: inout Work) {
         guard w.target.hasPrefix("claude:") else { return }
         let note = "Read by new Claude Code sessions and after /compact."
+        if !w.notes.contains(note) { w.notes.append(note) }
+    }
+
+    /// A-INFO-10 / A-INFO-1: the sheet says when a block it deletes or replaces holds hand edits.
+    /// Piece id only, never the text (errata C11). Every write of an existing file backs it up first.
+    private func driftNote(_ w: inout Work, _ id: String, _ verb: String) {
+        let note = "The \(id) block was edited by hand: \(verb) those edits too (the file as it is now goes to the backups)."
         if !w.notes.contains(note) { w.notes.append(note) }
     }
 

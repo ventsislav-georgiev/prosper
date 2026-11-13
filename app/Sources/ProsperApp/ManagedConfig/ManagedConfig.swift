@@ -8,6 +8,8 @@ struct ManagedConfigPlan: Sendable {
         case apply([ManagedConfigPiece])
         case remove([String]?)
         case repair([String]?)
+        /// A-INFO-1: repair by declared pieces, record or not
+        case repairPieces([ManagedConfigPiece])
     }
 
     struct FileChange: Sendable {
@@ -38,6 +40,20 @@ struct ManagedConfigPlan: Sendable {
 
     var actions: [ManagedConfigPieceAction] { changes.pieces }
     var writesUserFiles: Bool { files.contains { $0.writes } }
+
+    /// A-INFO-7/9: what a consent covers. The sheet's lines are masked, elided and trimmed, so two
+    /// different writes can show the same lines; this is a digest per written file (path -> hash of the
+    /// exact bytes it gets, or of the file a deletion takes). Keyed by path, so file order plays no part.
+    /// Kept in memory for one apply only, never stored or logged.
+    var writtenDigests: [String: String] {
+        Dictionary(files.filter(\.writes).map { f in
+            (f.url.path, f.delete ? "delete " + f.baseHash : f.newBytes.map(OrderedJSON.sha256) ?? "")
+        }, uniquingKeysWith: { _, last in last }) // one FileChange per path (planner.order is unique)
+    }
+
+    /// #946 r2: a re-ask only because the bytes differ would show the very sheet already approved.
+    static let changedUnderSheetNote = "This file changed after the sheet opened, in a place the diff does not show "
+        + "(a hidden value or line endings): this approval is for the file as it is now."
 }
 
 /// #870: the managed-config primitive. Writes only what it can later find and remove exactly,
@@ -91,11 +107,18 @@ final class ManagedConfig: Sendable {
     /// `ids == nil` removes every piece of `owner`.
     func remove(owner: ManagedConfigOwner, ids: [String]? = nil) async -> ManagedConfigResult { await apply(planRemove(owner: owner, ids: ids)) }
     func repair(owner: ManagedConfigOwner, ids: [String]? = nil) async -> ManagedConfigResult { await apply(planRepair(owner: owner, ids: ids)) }
+    /// A-INFO-1: Repair by the owner's declared pieces, recorded or not. A block whose record was lost
+    /// and whose text was edited (apply refuses it as drift, repair(owner:ids:) does not know it) is
+    /// replaced by the piece's block after the sheet shows the edits, then recorded, so Remove and
+    /// uninstall can take it later. Declining writes nothing.
+    func repair(_ pieces: [ManagedConfigPiece], owner: ManagedConfigOwner) async -> ManagedConfigResult {
+        await apply(prepare(.repairPieces(pieces), owner: owner))
+    }
 
     /// Executes a plan: consent, then write with the concurrent-write checks (errata C9).
     func apply(_ initial: ManagedConfigPlan) async -> ManagedConfigResult {
         var plan = initial
-        var consented: ManagedConfigChangeSet?
+        var consented: (changes: ManagedConfigChangeSet, digests: [String: String])?
         var replans = 0
         var landed: [ManagedConfigPieceAction] = [] // committed in an earlier round of this call
         func merged(_ actions: [ManagedConfigPieceAction]) -> [ManagedConfigPieceAction] {
@@ -106,13 +129,22 @@ final class ManagedConfig: Sendable {
                 return .init(status: .refused, pieces: landed, refusals: plan.refusals, message: plan.refusals.map(\.description).joined(separator: "; "))
             }
             if plan.files.isEmpty { return .init(status: landed.isEmpty ? .nothingToDo : .done, pieces: merged(plan.actions)) }
-            if plan.writesUserFiles, plan.changes != consented {
-                guard await consent.confirm(plan.changes) else {
+            // A-INFO-7/9: the same lines over other bytes is a change the user never saw: ask again
+            let digests = plan.writtenDigests
+            if plan.writesUserFiles, plan.changes != consented?.changes || digests != consented?.digests {
+                var sheet = plan.changes
+                // the same sheet again: name each file whose bytes differ (compared above without the note)
+                if let consented, consented.changes == plan.changes {
+                    for i in sheet.files.indices where digests[sheet.files[i].path] != consented.digests[sheet.files[i].path] {
+                        sheet.files[i].notes.append(ManagedConfigPlan.changedUnderSheetNote)
+                    }
+                }
+                guard await consent.confirm(sheet) else {
                     // QA #743 F1: only what an earlier round landed; the planned rest was never written
                     return .init(status: .denied, pieces: landed,
                                  message: landed.isEmpty ? "cancelled: nothing was written" : "cancelled: the rest was not written")
                 }
-                consented = plan.changes
+                consented = (plan.changes, digests)
             }
             switch commit(plan) {
             case .done:
@@ -136,7 +168,7 @@ final class ManagedConfig: Sendable {
         switch operation {
         case .apply: action = .apply
         case .remove: action = .remove
-        case .repair: action = .repair
+        case .repair, .repairPieces: action = .repair
         }
         func refused(_ reason: ManagedConfigRefusalReason) -> ManagedConfigPlan {
             ManagedConfigPlan(owner: owner, operation: operation, changes: .init(action: action, owner: owner.id, files: [], pieces: []),
@@ -150,10 +182,11 @@ final class ManagedConfig: Sendable {
         }
         var planner = ManagedConfigPlanner(roots: roots, owner: owner, now: now(), state: state)
         switch operation {
-        case .apply(let pieces):
+        case .apply(let pieces), .repairPieces(let pieces):
             let ids = pieces.map(\.id)
             if Set(ids).count != ids.count { return refused(.invalidPiece("two pieces share an id")) }
-            for p in pieces { planner.apply(p, repair: false) }
+            let repair = if case .repairPieces = operation { true } else { false }
+            for p in pieces { planner.apply(p, repair: repair) }
         case .remove(let ids), .repair(let ids):
             let mine = state.records.filter { $0.owner == owner.id }
             for id in ids ?? [] where !mine.contains(where: { $0.piece.id == id }) {
@@ -408,7 +441,8 @@ final class ManagedConfig: Sendable {
                         ManagedTextBlock.render(owner: owner.id, piece: p.id, version: owner.version, body: body, syntax: $0)
                     } }
                     // F1 (QA #723): adopt only the byte-equal block; an edited one is drift and stays unowned.
-                    guard text == block else { s.state = .drifted; out.append(s); continue }
+                    // A-INFO-3: bytes, not String == (which takes an NFD re-save for the same text).
+                    guard let block, text.utf8.elementsEqual(block.utf8) else { s.state = .drifted; out.append(s); continue }
                     adopted.append(.init(owner: owner.id, piece: p, target: t.display, path: t.url.path, written: text,
                                          hash: OrderedJSON.sha256(Array(text.utf8)), version: owner.version, appliedAt: now(),
                                          sourceDir: owner.extensionDir?.path))
@@ -454,7 +488,7 @@ final class ManagedConfig: Sendable {
             case .absent: return .missing
             case .corrupt: return .corrupt
             case .present(let b, let e):
-                guard ManagedTextBlock.text(of: bytes, begin: b, end: e) == r.written else { return .drifted }
+                guard ManagedTextBlock.text(of: bytes, begin: b, end: e).utf8.elementsEqual(r.written.utf8) else { return .drifted } // A-INFO-3
                 for line in ManagedTextBlock.bodyLines(of: r.written) where line.hasPrefix("@/") {
                     let path = String(line.dropFirst()).replacingOccurrences(of: "\\ ", with: " ")
                     if !FileManager.default.fileExists(atPath: path) { return .importMissing }
@@ -470,8 +504,8 @@ final class ManagedConfig: Sendable {
                 return .applied
             case .union?:
                 guard case .array(let els)? = node?.value else { return .missing }
-                let present = Set(els.compactMap { if case .string(let s) = $0.value { return s } else { return nil } })
-                return r.claimed.allSatisfy(present.contains) ? .applied : .missing
+                let present = els.compactMap { if case .string(let s) = $0.value { return s } else { return nil } }
+                return r.claimed.allSatisfy(present.containsBytes) ? .applied : .missing
             case .set?:
                 guard let node else { return .missing }
                 let h = OrderedJSON.hash(node.value)

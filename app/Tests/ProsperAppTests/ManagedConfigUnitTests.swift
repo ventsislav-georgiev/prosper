@@ -22,6 +22,15 @@ final class ManagedConfigUnitTests: XCTestCase {
         XCTAssertNotEqual(OrderedJSON.hash(a), OrderedJSON.hash(c))
     }
 
+    /// #946 A-INFO-3: a line that changed only by Unicode normalization is a change in the sheet, not
+    /// context (String == takes NFC and NFD for one).
+    func testPunctuationOnlyComparesBytes() {
+        XCTAssertTrue(ManagedConfigDiff.punctuationOnly("  \"a\": 1", "  \"a\": 1,"))
+        XCTAssertTrue(ManagedConfigDiff.punctuationOnly("  \"a\": 1", "  \"a\": 1"))
+        XCTAssertFalse(ManagedConfigDiff.punctuationOnly("\"Zo\u{00EB}\"", "\"Zoe\u{0308}\""))
+        XCTAssertFalse(ManagedConfigDiff.punctuationOnly("\"Zo\u{00EB}\",", "\"Zoe\u{0308}\""))
+    }
+
     func testOrderedJSONRefusals() {
         let cases: [(String, String)] = [
             (#"{"a": 1, "a": 2}"#, "duplicate key"),

@@ -377,3 +377,394 @@ final class ManagedConfigQATests: XCTestCase {
         XCTAssertEqual(env.read(env.settings), original)
     }
 }
+
+// MARK: - #946 (QA 742): A-INFO-7/9, A-INFO-10, A-INFO-1, A-INFO-3
+
+extension ManagedConfigQATests {
+    /// `needle` occurs in `hay` byte for byte (Data.range is byte-wise; String.contains is not).
+    private func has(_ hay: [UInt8]?, _ needle: String) -> Bool { hay.map { Data($0).range(of: Data(needle.utf8)) != nil } ?? false }
+
+    private func replacingBytes(_ bytes: [UInt8], _ a: String, _ b: String) -> [UInt8] {
+        var d = Data(bytes)
+        if let r = d.range(of: Data(a.utf8)) { d.replaceSubrange(r, with: Data(b.utf8)) }
+        return Array(d)
+    }
+
+    /// The note text typed out once: the tests pin the words, not a reference to the constant.
+    private static let changedNote = "This file changed after the sheet opened, in a place the diff does not show "
+        + "(a hidden value or line endings): this approval is for the file as it is now."
+
+    /// `sheet` with the changed-under-the-sheet note on its one file.
+    private func withChangedNote(_ sheet: ManagedConfigChangeSet?) -> ManagedConfigChangeSet? {
+        guard var sheet else { return nil }
+        XCTAssertEqual(sheet.files.count, 1)
+        sheet.files[0].notes.append(Self.changedNote)
+        return sheet
+    }
+
+    /// One apply whose file the user saves as `during` while the first sheet is up. `second`: the
+    /// answer on any later sheet.
+    private func applyWhileSaving(_ label: String, file: String, before: String, during: String, piece: ManagedConfigPiece,
+                                  second: Bool) async throws -> (consent: MCScriptedConsent, result: ManagedConfigResult, bytes: [UInt8]?) {
+        let env = makeMCEnv(label: label)
+        let url = env.claude.appendingPathComponent(file)
+        try env.write(before, url)
+        let consent = MCScriptedConsent { call, _ in
+            if call == 1 { try? Data(during.utf8).write(to: url) }
+            return call == 1 || second
+        }
+        let mc = ManagedConfig(roots: env.mc.roots, consent: consent, writer: env.writer)
+        let result = await mc.apply([piece], owner: env.owner)
+        return (consent, result, env.bytes(url))
+    }
+
+    /// A-INFO-7/9: the consent covers the exact bytes. A change the sheet's lines cannot show (a masked
+    /// env value, a line ending, a BOM outside the context lines) asks again; a no on that sheet writes
+    /// nothing. A replan whose written bytes are the same does not ask again.
+    func testA7ConsentCoversTheExactBytesNotTheMaskedLines() async throws {
+        // (a) the env value sits on a masked context line: dummy-a and dummy-b show the same lines
+        let during = "{\n  \"env\": {\"API_TOKEN\": \"dummy-b\"},\n  \"theme\": \"dark\"\n}\n"
+        let env = try await applyWhileSaving("a7-env", file: "settings.json",
+                                             before: "{\n  \"env\": {\"API_TOKEN\": \"dummy-a\"},\n  \"theme\": \"dark\"\n}\n",
+                                             during: during, piece: MCPieces.hook(), second: false)
+        XCTAssertEqual(env.consent.seen.count, 2, "other bytes under the same masked lines: asked again")
+        XCTAssertEqual(env.consent.seen.last, withChangedNote(env.consent.seen.first), "the second sheet says why it is back")
+        XCTAssertFalse(env.consent.seen.first?.files.first?.notes.contains(ManagedConfigPlan.changedUnderSheetNote) ?? true, "not on the first")
+        XCTAssertTrue(env.consent.seen.first?.files.first?.lines.contains { $0.text == ManagedConfigChangeSet.maskedLine } ?? false)
+        XCTAssertEqual(env.result.status, .denied)
+        XCTAssertEqual(env.bytes, Array(during.utf8), "a no on the second sheet: nothing written under the first")
+
+        // (b) the file turns CRLF: line texts carry no terminator, the block would go in with CRLF
+        let crlf = try await applyWhileSaving("a7-crlf", file: "CLAUDE.md", before: "# one\n# two\n# three\n# four\n",
+                                              during: "# one\r\n# two\r\n# three\r\n# four\r\n", piece: MCPieces.block(), second: true)
+        XCTAssertEqual(crlf.consent.seen.count, 2, "LF to CRLF differs in bytes: asked again")
+        XCTAssertEqual(crlf.consent.seen.last, withChangedNote(crlf.consent.seen.first))
+        XCTAssertFalse(crlf.consent.seen.first?.files.first?.notes.contains(ManagedConfigPlan.changedUnderSheetNote) ?? true)
+        XCTAssertEqual(crlf.result.status, .done)
+        XCTAssertTrue(has(crlf.bytes, "# four\r\n\r\n<!-- >>> prosper:kit-a:rules "))
+
+        // (c) a BOM on line 1, outside the two context lines
+        let bom = try await applyWhileSaving("a7-bom", file: "CLAUDE.md", before: "# one\n# two\n# three\n# four\n",
+                                             during: "\u{FEFF}# one\n# two\n# three\n# four\n", piece: MCPieces.block(), second: true)
+        XCTAssertEqual(bom.consent.seen.count, 2, "a BOM differs in bytes: asked again")
+        XCTAssertEqual(bom.consent.seen.last, withChangedNote(bom.consent.seen.first))
+        XCTAssertFalse(bom.consent.seen.first?.files.first?.notes.contains(ManagedConfigPlan.changedUnderSheetNote) ?? true)
+        XCTAssertEqual(bom.result.status, .done)
+        XCTAssertEqual(bom.bytes.map { Array($0.prefix(3)) }, [0xEF, 0xBB, 0xBF], "the user's BOM is kept")
+
+        // (d) the user's own statusLine changes under the sheet; Prosper writes the same bytes either way
+        let same = try await applyWhileSaving("a7-same", file: "settings.json",
+                                              before: "{\n  \"statusLine\": {\"type\": \"command\", \"command\": \"my-a\"}\n}\n",
+                                              during: "{\n  \"statusLine\": {\"type\": \"command\", \"command\": \"my-b\"}\n}\n",
+                                              piece: MCPieces.statusLine(), second: false)
+        XCTAssertEqual(same.consent.seen.count, 1, "same lines, same written bytes: not asked twice")
+        XCTAssertEqual(same.consent.seen.first?.files.first?.notes.contains(ManagedConfigPlan.changedUnderSheetNote), false)
+        XCTAssertEqual(same.result.status, .done)
+        XCTAssertTrue(has(same.bytes, "kit-status") && !has(same.bytes, "my-b"))
+    }
+
+    /// A-INFO-10: an edited block is drift for Remove too. Remove asks (spec 2.5: "shows the hand edits
+    /// that will be lost and asks first") and the sheet now says the block holds hand edits.
+    func testA10RemoveOfAnEditedBlockNamesTheDriftInTheSheet() async throws {
+        let clean = makeMCEnv(label: "a10-clean")
+        try clean.write("# mine\n", clean.claudeMD)
+        _ = await clean.mc.apply([MCPieces.block()], owner: clean.owner)
+        _ = await clean.mc.remove(owner: clean.owner)
+        XCTAssertEqual(clean.consent.seen.count, 2)
+        XCTAssertEqual(clean.consent.seen.last?.files.first?.notes, [], "nothing edited: no drift note")
+
+        let env = makeMCEnv(label: "a10-edited")
+        try env.write("# mine\n", env.claudeMD)
+        _ = await env.mc.apply([MCPieces.block()], owner: env.owner)
+        try env.write(try XCTUnwrap(env.read(env.claudeMD)).replacingOccurrences(of: "Follow the kit rules.", with: "Follow the kit rules, and mine."),
+                      env.claudeMD)
+        XCTAssertEqual(env.mc.status(owner: env.owner).map(\.state), [.drifted])
+        let r = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        XCTAssertEqual(r.pieces, [.init(id: "rules", action: .remove)])
+        XCTAssertEqual(env.consent.seen.count, 2, "the Remove asked")
+        XCTAssertEqual(env.consent.seen.last?.files.first?.notes,
+                       ["The rules block was edited by hand: Remove deletes those edits too (the file as it is now goes to the backups)."])
+        XCTAssertTrue(env.consent.seen.last?.files.first?.lines.contains(.init(sign: .removed, text: "Follow the kit rules, and mine.")) ?? false)
+        XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
+        let pre = backups(env, suffix: ".pre")
+        XCTAssertEqual(pre.count, 1, "the edited file went to the backups first")
+        if let name = pre.first { XCTAssertTrue(env.read(env.backups.appendingPathComponent(name))?.contains("and mine.") ?? false) }
+    }
+
+    /// A-INFO-1: a block edited after its record was lost. Apply refuses it as drift, repair by ids knows
+    /// only records; Repair by the declared piece replaces it after the sheet shows the edit, records it,
+    /// and a later Remove (the uninstall path) takes it out byte for byte. A no writes nothing.
+    func testA1LostRecordEditedBlockIsRepairedByThePieceAfterShowingTheEdit() async throws {
+        let env = makeMCEnv()
+        try env.write("# mine\n", env.claudeMD)
+        let piece = MCPieces.block()
+        _ = await env.mc.apply([piece], owner: env.owner)
+        let applied = try XCTUnwrap(env.bytes(env.claudeMD))
+        try FileManager.default.removeItem(at: stateFile(env))
+        try env.write(try XCTUnwrap(env.read(env.claudeMD)).replacingOccurrences(of: "Follow the kit rules.", with: "Follow my rules instead."),
+                      env.claudeMD)
+        let edited = env.bytes(env.claudeMD)
+
+        let byIDs = await env.mc.repair(owner: env.owner)
+        XCTAssertEqual(byIDs.status, .nothingToDo, "repair by ids knows only records")
+        let no = ManagedConfig(roots: env.mc.roots, consent: MCRecordingConsent(false), writer: env.writer)
+        let denied = await no.repair([piece], owner: env.owner)
+        XCTAssertEqual(denied.status, .denied)
+        XCTAssertEqual(env.bytes(env.claudeMD), edited, "declined: the user's text stays")
+
+        let r = await env.mc.repair([piece], owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        XCTAssertEqual(r.pieces, [.init(id: "rules", action: .update)])
+        XCTAssertEqual(env.consent.seen.count, 2)
+        let file = env.consent.seen.last?.files.first
+        XCTAssertTrue(file?.lines.contains(.init(sign: .removed, text: "Follow my rules instead.")) ?? false, "the sheet shows the edit it replaces")
+        XCTAssertTrue(file?.notes.contains("The rules block was edited by hand: Repair replaces those edits too (the file as it is now goes to the backups).") ?? false)
+        XCTAssertEqual(env.bytes(env.claudeMD), applied)
+        XCTAssertEqual(env.mc.status(owner: env.owner).map(\.state), [.applied], "recorded now")
+        let removed = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(removed.status, .done)
+        XCTAssertEqual(env.read(env.claudeMD), "# mine\n", "Remove, and so uninstall, can take it now")
+    }
+
+    /// A-INFO-3: a block re-saved in NFD differs in bytes from the NFC block Prosper wrote. Swift's ==
+    /// takes the two for one; the core does not: drift, not applied, never a noop, never adopted.
+    func testA3NFDResaveOfABlockIsDriftByBytes() async throws {
+        let nfc = "Ask Zo\u{00EB} before a release.", nfd = "Ask Zoe\u{0308} before a release."
+        XCTAssertTrue(nfc == nfd, "the premise: String == takes them for one")
+        XCTAssertNotEqual(Array(nfc.utf8), Array(nfd.utf8))
+        let env = makeMCEnv()
+        try env.write("# mine\n", env.claudeMD)
+        let piece = MCPieces.block(text: nfc)
+        _ = await env.mc.apply([piece], owner: env.owner)
+        let applied = try XCTUnwrap(env.bytes(env.claudeMD))
+        let resaved = replacingBytes(applied, nfc, nfd)
+        XCTAssertNotEqual(resaved, applied)
+        try Data(resaved).write(to: env.claudeMD)
+
+        XCTAssertEqual(env.mc.status(owner: env.owner).map(\.state), [.drifted])
+        let again = await env.mc.apply([piece], owner: env.owner)
+        XCTAssertEqual(again.refusals.map(\.reason), [.drifted], "not a noop over other bytes")
+        XCTAssertEqual(env.bytes(env.claudeMD), resaved)
+        try FileManager.default.removeItem(at: stateFile(env))
+        XCTAssertEqual(env.mc.status(owner: env.owner, declared: [piece]).map(\.state), [.drifted], "never adopted")
+        XCTAssertEqual(env.mc.status(owner: env.owner).count, 0)
+    }
+
+    /// A-INFO-3: union strings are matched by bytes, as JSON (RFC 8259 8.3) and Claude Code compare them.
+    /// The user's NFD entry does not make the piece's NFC one present; Remove takes back only Prosper's.
+    func testA3UnionStringsAreMatchedByBytes() async throws {
+        let mine = "Read(/Users/example/Zoe\u{0308}/**)", ours = "Read(/Users/example/Zo\u{00EB}/**)"
+        let env = makeMCEnv()
+        let original = "{\n  \"permissions\": {\n    \"allow\": [\(OrderedJSON.quote(mine))]\n  }\n}\n"
+        try env.write(original, env.settings)
+        let r = await env.mc.apply([MCPieces.allow([ours])], owner: env.owner)
+        XCTAssertEqual(r.pieces, [.init(id: "perms", action: .insert)])
+        let after = env.bytes(env.settings)
+        XCTAssertTrue(has(after, OrderedJSON.quote(ours)) && has(after, OrderedJSON.quote(mine)), "both forms, as written")
+        XCTAssertEqual(env.mc.status(owner: env.owner).map(\.state), [.applied])
+        _ = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(env.bytes(env.settings), Array(original.utf8), "the user's NFD entry stays, ours goes")
+    }
+}
+
+/// #946 round 2: every byte compare the A-INFO-3 change introduced, pinned by a literal case that a
+/// String == (or a Set<String>) gets wrong. NFC and NFD of one path: String == takes them for one.
+extension ManagedConfigQATests {
+    private static let nfc = "Read(/Users/example/Zo\u{00EB}/**)", nfd = "Read(/Users/example/Zoe\u{0308}/**)"
+    private static let plain = "{\n  \"theme\": \"dark\"\n}\n"
+
+    /// permissions.allow as the bytes of each string, in file order.
+    private func allowed(_ env: MCEnv) -> [[UInt8]] {
+        guard let bytes = env.bytes(env.settings), let doc = try? OrderedJSON(bytes: bytes),
+              case .array(let els)? = doc.node(at: ["permissions", "allow"])?.value else { return [] }
+        return els.compactMap { if case .string(let s) = $0.value { return Array(s.utf8) } else { return nil } }
+    }
+
+    private var nfcBytes: [UInt8] { Array(Self.nfc.utf8) }
+    private var nfdBytes: [UInt8] { Array(Self.nfd.utf8) }
+
+    /// 1a status, 1f the .missing refusal, 1e the "present" test of toDrop: Prosper's NFC entry
+    /// replaced by hand with the NFD twin.
+    func testA3R2UnionEntryReplacedByItsTwinIsMissing() async throws {
+        XCTAssertTrue(Self.nfc == Self.nfd, "the premise")
+        let env = makeMCEnv()
+        try env.write(Self.plain, env.settings)
+        _ = await env.mc.apply([MCPieces.allow([Self.nfc])], owner: env.owner)
+        let applied = try XCTUnwrap(env.bytes(env.settings))
+        try Data(replacingBytes(applied, OrderedJSON.quote(Self.nfc), OrderedJSON.quote(Self.nfd))).write(to: env.settings)
+        XCTAssertEqual(allowed(env), [nfdBytes])
+        XCTAssertEqual(env.mc.status(owner: env.owner).map(\.state), [.missing], "1a: ours is gone, the twin is the user's")
+        let again = await env.mc.apply([MCPieces.allow([Self.nfc])], owner: env.owner)
+        XCTAssertEqual(again.refusals.map(\.reason), [.missing], "1f: the twin does not make ours present")
+        let repaired = await env.mc.repair([MCPieces.allow([Self.nfd])], owner: env.owner)
+        XCTAssertEqual(repaired.pieces, [.init(id: "perms", action: .noop)], "1e: the claimed NFC is not in the file: nothing to drop")
+        XCTAssertEqual(allowed(env), [nfdBytes])
+    }
+
+    /// 1b removeLastString: the user's twin sits after Prosper's entry; Remove takes Prosper's.
+    func testA3R2RemoveTakesOursWhenTheUsersTwinComesAfterIt() async throws {
+        let env = makeMCEnv()
+        try env.write(Self.plain, env.settings)
+        _ = await env.mc.apply([MCPieces.allow([Self.nfc])], owner: env.owner)
+        let applied = try XCTUnwrap(env.bytes(env.settings))
+        let q = OrderedJSON.quote(Self.nfc)
+        try Data(replacingBytes(applied, q, q + ", " + OrderedJSON.quote(Self.nfd))).write(to: env.settings)
+        XCTAssertEqual(allowed(env), [nfcBytes, nfdBytes])
+        let r = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(r.pieces, [.init(id: "perms", action: .remove)])
+        XCTAssertEqual(allowed(env), [nfdBytes], "1b: ours went, the user's later twin stays")
+    }
+
+    /// 1c Remove's others, 1e others in toDrop and in claimed: two owners holding the two twins.
+    func testA3R2TwoOwnersHoldingTwinsEachKeepTheirOwn() async throws {
+        // 1c: A claims NFC, B claims NFD. Remove of A takes A's string; B's is no claim on it.
+        let env = makeMCEnv(label: "twins-c")
+        let b = env.owner("kit-b")
+        try env.write(Self.plain, env.settings)
+        _ = await env.mc.apply([MCPieces.allow([Self.nfc])], owner: env.owner)
+        _ = await env.mc.apply([MCPieces.allow([Self.nfd])], owner: b)
+        XCTAssertEqual(allowed(env), [nfcBytes, nfdBytes])
+        let removed = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(removed.pieces, [.init(id: "perms", action: .remove)])
+        XCTAssertEqual(allowed(env), [nfdBytes], "1c: A's NFC went")
+        XCTAssertEqual(env.mc.status(owner: b).map(\.state), [.applied])
+
+        // 1e toDrop others: A moves from NFC to NFD while B holds NFD: A's NFC is dropped, NFD shared.
+        let upd = makeMCEnv(label: "twins-e")
+        let b2 = upd.owner("kit-b")
+        try upd.write(Self.plain, upd.settings)
+        _ = await upd.mc.apply([MCPieces.allow([Self.nfc])], owner: upd.owner)
+        _ = await upd.mc.apply([MCPieces.allow([Self.nfd])], owner: b2)
+        let moved = await upd.mc.apply([MCPieces.allow([Self.nfd])], owner: upd.owner)
+        XCTAssertEqual(moved.pieces, [.init(id: "perms", action: .update)])
+        XCTAssertEqual(allowed(upd), [nfdBytes], "1e: B's NFD is no claim on A's NFC")
+        _ = await upd.mc.remove(owner: b2)
+        XCTAssertEqual(allowed(upd), [nfdBytes], "A claims the NFD too")
+        _ = await upd.mc.remove(owner: upd.owner)
+        XCTAssertEqual(upd.bytes(upd.settings), Array(Self.plain.utf8))
+
+        // 1e claimed others: the user's NFC, B's NFD. A declaring NFC claims nothing (B's NFD is not it).
+        let mine = makeMCEnv(label: "twins-claimed")
+        let b3 = mine.owner("kit-b")
+        let original = "{\n  \"permissions\": {\n    \"allow\": [\(OrderedJSON.quote(Self.nfc))]\n  }\n}\n"
+        try mine.write(original, mine.settings)
+        _ = await mine.mc.apply([MCPieces.allow([Self.nfd])], owner: b3)
+        let a = await mine.mc.apply([MCPieces.allow([Self.nfc])], owner: mine.owner)
+        XCTAssertEqual(a.pieces, [.init(id: "perms", action: .noop)])
+        _ = await mine.mc.remove(owner: mine.owner)
+        XCTAssertEqual(allowed(mine), [nfcBytes, nfdBytes], "1e: the user's NFC stays after A's Remove")
+        _ = await mine.mc.remove(owner: b3)
+        XCTAssertEqual(mine.bytes(mine.settings), Array(original.utf8))
+    }
+
+    /// 1d the piece's own list, 1e toAdd in claimed: a piece declaring both forms over the user's NFC.
+    func testA3R2APieceDeclaringBothFormsWritesAndClaimsOnlyWhatItAdds() async throws {
+        let env = makeMCEnv()
+        let original = "{\n  \"permissions\": {\n    \"allow\": [\(OrderedJSON.quote(Self.nfc))]\n  }\n}\n"
+        try env.write(original, env.settings)
+        let r = await env.mc.apply([MCPieces.allow([Self.nfc, Self.nfd])], owner: env.owner)
+        XCTAssertEqual(r.pieces, [.init(id: "perms", action: .insert)])
+        XCTAssertEqual(allowed(env), [nfcBytes, nfdBytes], "1d: both forms, NFD added")
+        _ = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(env.bytes(env.settings), Array(original.utf8), "1e: only the NFD was claimed; the user's NFC stays")
+    }
+
+    /// 1e strings in toDrop, existing.claimed in claimed: a piece updated from the NFC string to the NFD one.
+    func testA3R2APieceUpdatedFromNFCToNFDSwapsItsEntry() async throws {
+        // the file holds only Prosper's NFC: dropped, NFD added and claimed, Remove restores the file
+        let env = makeMCEnv(label: "swap-own")
+        try env.write(Self.plain, env.settings)
+        _ = await env.mc.apply([MCPieces.allow([Self.nfc])], owner: env.owner)
+        let r = await env.mc.apply([MCPieces.allow([Self.nfd])], owner: env.owner)
+        XCTAssertEqual(r.pieces, [.init(id: "perms", action: .update)])
+        XCTAssertEqual(allowed(env), [nfdBytes], "1e: the NFC entry is dropped, the NFD one added")
+        _ = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(env.bytes(env.settings), Array(Self.plain.utf8), "the NFD was claimed: Remove restores the file")
+
+        // the user's own NFD was there first: the update drops ours and claims nothing
+        let mine = makeMCEnv(label: "swap-users")
+        let original = "{\n  \"permissions\": {\n    \"allow\": [\(OrderedJSON.quote(Self.nfd))]\n  }\n}\n"
+        try mine.write(original, mine.settings)
+        _ = await mine.mc.apply([MCPieces.allow([Self.nfc])], owner: mine.owner)
+        let u = await mine.mc.apply([MCPieces.allow([Self.nfd])], owner: mine.owner)
+        XCTAssertEqual(u.pieces, [.init(id: "perms", action: .update)])
+        XCTAssertEqual(allowed(mine), [nfdBytes])
+        _ = await mine.mc.remove(owner: mine.owner)
+        XCTAssertEqual(mine.bytes(mine.settings), Array(original.utf8), "1e: the record's NFC is no claim on the user's NFD")
+    }
+
+    /// 1i claims() as an array: two other owners hold the two twins; a Set would keep one of them.
+    func testA3R2ClaimsOfOtherOwnersKeepBothTwins() async throws {
+        let env = makeMCEnv()
+        let b = env.owner("kit-b"), c = env.owner("kit-c")
+        try env.write(Self.plain, env.settings)
+        _ = await env.mc.apply([MCPieces.allow([Self.nfc, Self.nfd])], owner: b)
+        _ = await env.mc.apply([MCPieces.allow([Self.nfd])], owner: env.owner)
+        _ = await env.mc.apply([MCPieces.allow([Self.nfc])], owner: c)
+        XCTAssertEqual(allowed(env), [nfcBytes, nfdBytes])
+        _ = await env.mc.remove(owner: b)
+        XCTAssertEqual(allowed(env), [nfcBytes, nfdBytes], "1i: A holds the NFD, C the NFC: B's Remove takes neither")
+        XCTAssertEqual(env.mc.status(owner: env.owner).map(\.state), [.applied])
+        XCTAssertEqual(env.mc.status(owner: c).map(\.state), [.applied])
+    }
+
+    /// 1h: Remove of a block re-saved in NFD names the drift in the sheet.
+    func testA3R2RemoveOfAnNFDResavedBlockNamesTheDrift() async throws {
+        let nfcText = "Ask Zo\u{00EB} before a release.", nfdText = "Ask Zoe\u{0308} before a release."
+        let env = makeMCEnv()
+        try env.write("# mine\n", env.claudeMD)
+        _ = await env.mc.apply([MCPieces.block(text: nfcText)], owner: env.owner)
+        try Data(replacingBytes(try XCTUnwrap(env.bytes(env.claudeMD)), nfcText, nfdText)).write(to: env.claudeMD)
+        let r = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        XCTAssertEqual(env.consent.seen.last?.files.first?.notes,
+                       ["The rules block was edited by hand: Remove deletes those edits too (the file as it is now goes to the backups)."])
+        XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
+    }
+
+    /// r2 item 2: a third round over the bytes the second sheet showed is not asked again (the note is
+    /// not part of what was consented). Round 1 sees a hidden value change, round 2 the user's own
+    /// statusLine (shown as one line either way, and replaced by the same bytes).
+    func testA7R2ThirdRoundOverTheApprovedBytesIsNotAskedAgain() async throws {
+        let env = makeMCEnv()
+        let url = env.settings
+        func file(_ token: String, _ command: String) -> String {
+            "{\n  \"env\": {\"API_TOKEN\": \"\(token)\"},\n  \"statusLine\": {\"type\": \"command\", \"command\": \"\(command)\"}\n}\n"
+        }
+        try env.write(file("dummy-a", "my-a"), url)
+        let r1 = file("dummy-b", "my-a"), r2 = file("dummy-b", "my-b")
+        let consent = MCScriptedConsent { call, _ in
+            try? Data((call == 1 ? r1 : r2).utf8).write(to: url)
+            return true
+        }
+        let mc = ManagedConfig(roots: env.mc.roots, consent: consent, writer: env.writer)
+        let r = await mc.apply([MCPieces.statusLine()], owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        XCTAssertEqual(consent.seen.count, 2, "round 3 writes what round 2 approved: no third sheet")
+        XCTAssertEqual(consent.seen.last, withChangedNote(consent.seen.first))
+        XCTAssertFalse(consent.seen.first?.files.first?.notes.contains(Self.changedNote) ?? true)
+        XCTAssertTrue(has(env.bytes(url), "dummy-b") && has(env.bytes(url), "kit-status") && !has(env.bytes(url), "\"my-b\""), "dummy-b holds the text my-b: match the quoted command")
+    }
+
+    /// r2 item 3b: a file Prosper created and Remove deletes, re-saved with CRLF under the sheet. The
+    /// deletion's lines carry no terminators, so only the base bytes tell the two files apart.
+    func testA7R2DeletionOfAFileResavedUnderTheSheetAsksAgain() async throws {
+        let env = makeMCEnv()
+        _ = await env.mc.apply([MCPieces.block()], owner: env.owner)
+        XCTAssertEqual(env.consent.seen.first?.files.first?.notes.contains(Self.changedNote), false, "a plain apply: no note")
+        let url = env.claudeMD
+        let lf = try XCTUnwrap(env.read(url))
+        let consent = MCScriptedConsent { call, _ in
+            if call == 1 { try? Data(lf.replacingOccurrences(of: "\n", with: "\r\n").utf8).write(to: url) }
+            return true
+        }
+        let mc = ManagedConfig(roots: env.mc.roots, consent: consent, writer: env.writer)
+        let r = await mc.remove(owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        XCTAssertEqual(consent.seen.first?.files.first?.deletesFile, true)
+        XCTAssertEqual(consent.seen.count, 2, "another file under the same lines: asked again")
+        XCTAssertEqual(consent.seen.last, withChangedNote(consent.seen.first))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+}
