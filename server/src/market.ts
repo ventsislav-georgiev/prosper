@@ -103,7 +103,7 @@ async function publish(c: Ctx) {
   // Preview is shown to every browser pre-install — cap it so a publish can't
   // bloat the row / browse payload. 16 KB fits many themes' flat color maps.
   if (preview != null && preview.length > 16_384) {
-    return c.json({ error: "preview_too_large", max: 16_384 }, 413);
+    return c.json({ error: "preview_too_large", max: "16384" }, 413);
   }
 
   const m = body.manifest;
@@ -119,14 +119,34 @@ async function publish(c: Ctx) {
   // Bound the encoded string before atob so an oversized blob can't force a large
   // allocation ahead of the byte-length check (base64 expands ~4/3 over raw).
   if (body.blob.length > Math.ceil(max * 4 / 3) + 16) {
-    return c.json({ error: "too_large", max }, 413);
+    return c.json({ error: "too_large", max: String(max) }, 413);
   }
   const bytes = b64ToBytes(body.blob);
   if (bytes.length === 0) return c.json({ error: "empty_artifact" }, 400);
-  if (bytes.length > max) return c.json({ error: "too_large", max }, 413);
+  // max as a string: the app decodes error bodies as [String: String] (MarketClient.errorText).
+  if (bytes.length > max) return c.json({ error: "too_large", max: String(max) }, 413);
   // gzip magic — the app uploads a .tar.gz.
   if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) {
     return c.json({ error: "not_gzip" }, 400);
+  }
+  // #1140: what a publish makes public. Older Prosper builds pack hidden members
+  // (.DS_Store, AppleDouble "._x", tool state folders) and the account's user and
+  // group name; refuse before any D1 or KV access. Bodies carry strings only: the
+  // app decodes them as [String: String] and shows "error" as is.
+  const tar = await gunzipCapped(bytes, max * UNPACK_FACTOR);
+  if (tar === "too_large") {
+    return c.json({ error: `The extension is too large to publish once unpacked (${Math.floor((max * UNPACK_FACTOR) / 1024)} KB max).` }, 413);
+  }
+  const members = tar === "bad" ? null : tarMembers(tar);
+  if (!members) return c.json({ error: "not_gzip" }, 400); // the app shows "wasn't a valid .tar.gz"
+  const hidden = members.names.filter(isHiddenPath);
+  if (hidden.length > 0) {
+    const shown = hidden.slice(0, 10).map(showName).join(", ");
+    const more = hidden.length > 10 ? ` (+${hidden.length - 10} more)` : "";
+    return c.json({ error: `Hidden files can't be published: ${shown}${more}. Update Prosper and publish again.` }, 400);
+  }
+  if (members.owner) {
+    return c.json({ error: "The archive carries the account's user or group name. Update Prosper and publish again." }, 400);
   }
 
   // Ownership: first publisher owns the id; only they may push more versions.
@@ -345,6 +365,134 @@ async function yank(c: Ctx) {
 }
 
 // --- helpers ---
+
+/** #1140: publish inflates at most MARKET_MAX_BYTES * 8 (2 MiB at the default 256 KB);
+ *  the largest bundled extension unpacks to ~115 KB. */
+const UNPACK_FACTOR = 8;
+
+/** The app's isHiddenMember rule (RemoteInstaller.swift, #1131): a path component that
+ *  starts with "." other than the root "." itself (so "..", "._x" and ".a/b" count). */
+const isHiddenPath = (p: string) => p.split("/").some((part) => part !== "." && part.startsWith("."));
+
+/** A member name as the publisher may see it: no control characters, at most 100 code points
+ *  (a longer one keeps its head and its tail, where the file name is; cut by code point so no
+ *  surrogate pair is split and the JSON stays well formed for the app's decoder). */
+function showName(n: string): string {
+  const cp = [...n];
+  return (cp.length > 100 ? `${cp.slice(0, 40).join("")}…${cp.slice(-59).join("")}` : n).replace(/[\u0000-\u001f\u007f]/g, "?");
+}
+
+/** Inflate a gzip body. Stops reading and refuses once the output would pass `cap`,
+ *  so at most `cap` bytes are ever kept; a corrupt or truncated stream is "bad". */
+async function gunzipCapped(bytes: Uint8Array, cap: number): Promise<Uint8Array | "too_large" | "bad"> {
+  const reader = new Response(bytes).body!.pipeThrough(new DecompressionStream("gzip")).getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (let r = await reader.read(); !r.done; r = await reader.read()) {
+      if (r.value.length > cap - total) {
+        reader.cancel().catch(() => {});
+        return "too_large";
+      }
+      chunks.push(r.value);
+      total += r.value.length;
+    }
+  } catch {
+    return "bad";
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const ch of chunks) {
+    out.set(ch, at);
+    at += ch.length;
+  }
+  return out;
+}
+
+const utf8 = new TextDecoder();
+/** A NUL-terminated header field (or the whole field when it has no NUL). */
+function field(b: Uint8Array, at: number, len: number): string {
+  const f = b.subarray(at, at + len);
+  const z = f.indexOf(0);
+  return utf8.decode(z < 0 ? f : f.subarray(0, z));
+}
+
+/** An octal header number, or null when the field holds anything but spaces, octal
+ *  digits and a NUL/space end (a GNU base-256 number included). At most 12 digits:
+ *  below 8^12, exact in a double. */
+function octal(h: Uint8Array, at: number, len: number): number | null {
+  let i = at;
+  while (i < at + len && h[i] === 0x20) i++;
+  let n = 0;
+  for (; i < at + len && h[i] !== 0 && h[i] !== 0x20; i++) {
+    if (h[i] < 0x30 || h[i] > 0x37) return null;
+    n = n * 8 + (h[i] - 0x30);
+  }
+  return n;
+}
+
+/** The records of a pax extended header ("<len> <key>=<value>\n"); null when malformed. */
+function paxRecords(b: Uint8Array): Map<string, string> | null {
+  const out = new Map<string, string>();
+  for (let i = 0; i < b.length; ) {
+    let j = i;
+    let len = 0;
+    while (j < b.length && j - i < 10 && b[j] >= 0x30 && b[j] <= 0x39) len = len * 10 + (b[j++] - 0x30);
+    // len is checked against the bytes left before it is used as an offset.
+    if (j === i || b[j] !== 0x20 || len > b.length - i || len < j - i + 3 || b[i + len - 1] !== 0x0a) return null;
+    const rec = b.subarray(j + 1, i + len - 1);
+    const eq = rec.indexOf(0x3d);
+    if (eq < 0) return null;
+    out.set(utf8.decode(rec.subarray(0, eq)), utf8.decode(rec.subarray(eq + 1)));
+    i += len;
+  }
+  return out;
+}
+
+/** Walks the tar headers of an inflated archive: every member's name (a pax "path=" from
+ *  an 'x' record or a GNU 'L' long name replaces the next header's own; a ustar prefix is
+ *  joined; a global 'g' path counts as a name) and whether any header or pax record holds
+ *  a user or group name. A type it does not know is a member: its name is read, its data
+ *  skipped by its size. null when the bytes are not a whole tar (bad checksum, a size past
+ *  the bytes, no end-of-archive block). Stops at the first zero block, as bsdtar does. */
+function tarMembers(data: Uint8Array): { names: string[]; owner: boolean } | null {
+  const names: string[] = [];
+  let owner = false;
+  let next: string | null = null;
+  for (let off = 0; ; ) {
+    if (data.length - off < 512) return null;
+    const h = data.subarray(off, off + 512);
+    if (h.every((b) => b === 0)) return { names, owner };
+    let sum = 0;
+    for (let i = 0; i < 512; i++) sum += i >= 148 && i < 156 ? 0x20 : h[i];
+    const size = octal(h, 124, 12);
+    if (size === null || octal(h, 148, 8) !== sum) return null;
+    off += 512;
+    const room = data.length - off;
+    if (size > room) return null;
+    const padded = Math.ceil(size / 512) * 512;
+    if (padded > room) return null;
+    const body = data.subarray(off, off + size);
+    off += padded;
+    if (field(h, 265, 32) || field(h, 297, 32)) owner = true;
+    const type = h[156];
+    if (type === 0x78 || type === 0x67) { // 'x' per-file, 'g' global pax
+      const rec = paxRecords(body);
+      if (!rec) return null;
+      if (rec.get("uname") || rec.get("gname")) owner = true;
+      const path = rec.get("path");
+      if (path !== undefined && type === 0x78) next = path;
+      else if (path !== undefined) names.push(path);
+    } else if (type === 0x4c) { // 'L' GNU long name
+      next = field(body, 0, body.length);
+    } else if (type !== 0x4b) { // 'K' is a GNU long link target, not a name
+      const name = field(h, 0, 100);
+      const prefix = field(h, 257, 6) === "ustar" ? field(h, 345, 155) : ""; // POSIX "ustar\0" only
+      names.push(next ?? (prefix ? `${prefix}/${name}` : name));
+      next = null;
+    }
+  }
+}
 
 async function sha256HexBytes(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
