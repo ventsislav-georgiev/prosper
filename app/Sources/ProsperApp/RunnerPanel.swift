@@ -16,7 +16,7 @@ final class RunnerPanel {
     /// panel is never ordered front there.
     let panel: KeyablePanel
     let model: RunnerModel
-    private var previousApp: NSRunningApplication?
+    private(set) var previousApp: NSRunningApplication?   // read by the #1113 focus row
     /// Guards saving the origin while we move the panel programmatically (resize
     /// keeps the top edge fixed, which fires didMove).
     private var isProgrammaticMove = false
@@ -229,10 +229,19 @@ final class RunnerPanel {
                            close: { closing ? dismiss() : focus() })
     }
 
+    /// #1113: a custom shortcut's press (its activation prefix, e.g. "o " or ":"). On a runner showing
+    /// that prefix (its mode, the input starting with what the prefix leaves) WindowToggle's rule holds;
+    /// showing another prefix, or closed, the press opens the runner on this one, never closes it.
+    func toggle(prefix: String) {
+        let (mode, prefill) = ModeTrigger.resolve(prefix) ?? (mode: .universal, stripped: prefix)
+        guard model.mode == mode, model.input.hasPrefix(prefill) else { return present(mode: mode, prefill: prefill) }
+        toggle(mode: mode, prefill: prefill)
+    }
+
     /// #1102: back in front and key, the query kept. The paste and menu-command target follows the
     /// app the user went to meanwhile (never Prosper itself).
     func focus() {
-        if let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() { previousApp = app }
+        previousApp = WindowToggle.pasteTarget(kept: previousApp)
         onScreen(self)
     }
 

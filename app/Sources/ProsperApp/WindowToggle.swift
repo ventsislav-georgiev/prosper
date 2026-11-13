@@ -30,4 +30,14 @@ enum WindowToggle {
         case .close: close()
         }
     }
+
+    /// The frontmost app, a seam (#1113): a test hands the panels a fake one.
+    @MainActor static var frontmost: () -> NSRunningApplication? = { NSWorkspace.shared.frontmostApplication }
+
+    /// #1102: a panel brought back by its hotkey pastes into the app the user went to meanwhile, never
+    /// into Prosper itself; with Prosper (or nothing) frontmost the old target stays.
+    @MainActor static func pasteTarget(kept: NSRunningApplication?) -> NSRunningApplication? {
+        guard let app = frontmost(), app.processIdentifier != getpid() else { return kept }
+        return app
+    }
 }

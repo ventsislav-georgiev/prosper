@@ -221,10 +221,35 @@ final class CalendarBarController {
         togglePopup()
     }
 
-    /// Toggle the popup — shared by the status-item click and the rebindable
-    /// global shortcut.
+    /// Toggle the popup — the status-item click (and its macOS 27 session begin). The
+    /// rebindable global shortcut has its own `toggleFromShortcut` (#1113).
     func togglePopup() {
         if popover.isShown { popover.performClose(nil); return }
+        showPopup()
+    }
+
+    /// #1113: the hotkey follows WindowToggle's rule: closed opens, shown but not key (a pinned popup
+    /// the user clicked away from) becomes key again, key closes.
+    func toggleFromShortcut() {
+        let win = popupWindow()
+        WindowToggle.apply(win, open: { shortcutEffect(.open, win) }, focus: { shortcutEffect(.focus, win) },
+                           close: { shortcutEffect(.close, win) })
+    }
+
+    // Seams (#1113): the hotkey's read (the shown popover's window, nil while closed) and its effects,
+    // so a test needs no status item and shows no popover.
+    lazy var popupWindow: () -> NSWindow? = { [unowned self] in
+        self.popover.isShown ? self.popover.contentViewController?.view.window : nil
+    }
+    lazy var shortcutEffect: (WindowToggle.Effect, NSWindow?) -> Void = { [unowned self] effect, win in
+        switch effect {
+        case .open: self.showPopup()
+        case .focus: win?.makeKey()   // as the open path below: key, without activating the app
+        case .close: self.popover.performClose(nil)
+        }
+    }
+
+    private func showPopup() {
         guard let button = item?.button else { return }
         // #195: click → popover transaction committed.
         let signpost = Perf.signposter.beginInterval("popover.show", id: Perf.signposter.makeSignpostID(), "calendar")

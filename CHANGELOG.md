@@ -552,6 +552,12 @@ tag from the now-released section and put it on the new top draft.
   Settings or Agent Sessions, or when another Prosper window takes the keyboard; before, only a
   click in another app closed it. A window that takes the keyboard by itself never drops a message
   you were typing in the island; a click elsewhere still closes the island and drops it.
+- **Shortcuts**: the Calendar shortcut now works like the other window shortcuts. If the popup is
+  closed, it opens. If it is pinned and you clicked away from it, the shortcut brings it back
+  instead of closing it. If it already has focus, it closes (#1113).
+- **Shortcuts**: a custom runner shortcut closes the runner when the runner already has focus on
+  that shortcut's prefix. Pressed while the runner shows a different prefix, it switches to its own
+  prefix instead of closing (#1113).
 
 ## v2.174.0
 

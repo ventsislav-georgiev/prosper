@@ -15,7 +15,7 @@ final class ClipboardPanel {
     private let store: ClipboardStore
     let model = ClipboardPanelModel()
     private let wait: ClipboardPasteWait
-    private var previousApp: NSRunningApplication?
+    private(set) var previousApp: NSRunningApplication?   // read by the #1113 focus row
     /// Opens the Settings window so the user can grant the Accessibility permission
     /// the auto-paste needs. Wired by AppDelegate to its shared settings opener.
     private let onOpenSettings: () -> Void
@@ -125,7 +125,7 @@ final class ClipboardPanel {
     /// #1102: back in front and key, the search kept. The paste target follows the app the user
     /// went to meanwhile (never Prosper itself).
     func focus() {
-        if let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() { previousApp = app }
+        previousApp = WindowToggle.pasteTarget(kept: previousApp)
         onScreen(self)
     }
 

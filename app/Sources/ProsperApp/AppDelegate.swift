@@ -765,33 +765,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// #1102/#1113: what each hotkey that opens a window or panel runs: that surface's WindowToggle
+    /// path (closed or unfocused: open and focus; focused: close), nil for any other action. Static
+    /// over its targets, so a test reads the closure an action is registered with and runs it on fakes.
+    /// The command-runner triggers (⌘Space main, ⌥Space alt 1, alt 2 unset) open the universal
+    /// launcher, no prefix assumed. Translate (⌥L, the com.prosper.translate extension) opens it
+    /// prefilled with the "l " mode prefix, which the runner resolves into the Translate mode.
+    static func windowHotkey(_ action: ShortcutAction, runner: @escaping () -> RunnerPanel,
+                             clipboard: @escaping () -> ClipboardPanel,
+                             settings: @escaping () -> SettingsWindow) -> (() -> Void)? {
+        switch action {
+        case .runner, .runnerSpace, .runnerBackslash: return { runner().toggle(mode: .universal, closing: true) }
+        case .translate: return { runner().toggle(mode: .universal, prefill: "l ", closing: true) }
+        case .clipboard: return { clipboard().toggle(closing: true) }
+        case .settings: return { settings().toggleFromShortcut() }
+        case .agent: return { ChatWindow.shared.toggleFromShortcut() }
+        case .agentSessions: return { AgentsWindow.toggleFromShortcut() }
+        case .calendarTogglePopup: return { CalendarBarController.shared.toggleFromShortcut() }
+        default: return nil
+        }
+    }
+
+    /// Runs `windowHotkey` on this app's panels and windows, each built on first use.
+    private func runWindowHotkey(_ action: ShortcutAction) {
+        let openSettings: () -> Void = { [weak self] in self?.openSettings() }
+        Self.windowHotkey(action, runner: {
+            let p = self.runnerPanel ?? RunnerPanel(); self.runnerPanel = p; return p
+        }, clipboard: {
+            let p = self.clipboardPanel ?? ClipboardPanel(onOpenSettings: openSettings)
+            self.clipboardPanel = p; return p
+        }, settings: {
+            let w = self.settingsWindow ?? SettingsWindow(); self.settingsWindow = w; return w
+        })?()
+    }
+
     private func registerHotKeys() {
         hotKeys.forEach { $0.unregister() }
         hotKeys.removeAll()
 
-        // The command-runner triggers (⌘Space main, ⌥Space alt 1, alt 2 unset)
-        // open the universal launcher (apps + commands), no prefix assumed.
-        // Translate has its own trigger (⌥L), and Settings opens on ⌥\.
-        // Translate is now a Lua system extension (com.prosper.translate). Its ⌥L
-        // hotkey opens the universal launcher prefilled with the extension's "l "
-        // mode prefix, which the runner resolves into the Translate mode.
-        // #1102: every hotkey below that opens a window or panel follows WindowToggle's rule
-        // (closed or unfocused: open and focus; focused: close).
-        let toggleTranslate: () -> Void = { [weak self] in
-            DispatchQueue.main.async { self?.toggleRunnerPanel(mode: .universal, prefill: "l ", closing: true) }
-        }
-        let toggle: () -> Void = { [weak self] in
-            DispatchQueue.main.async { self?.toggleRunnerPanel(mode: .universal, closing: true) }
-        }
-        let toggleClipboard: () -> Void = { [weak self] in
-            DispatchQueue.main.async { self?.toggleClipboardPanel(closing: true) }
-        }
-        let openSettings: () -> Void = { [weak self] in
-            DispatchQueue.main.async { self?.openSettings(toggle: true) }
-        }
-        let openAgent: () -> Void = {
-            DispatchQueue.main.async { ChatWindow.shared.toggleFromShortcut() }
-        }
         let toggleAutocomplete: () -> Void = { [weak self] in
             DispatchQueue.main.async { self?.setAutocomplete(enabled: !Preferences.autocompleteEnabled) }
         }
@@ -815,23 +826,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
+        // The hotkeys that open a window or panel run `windowHotkey`'s closure for their action,
+        // on the next main-queue turn. Registered in this order (the first claim of a combo wins).
+        func addWindow(_ action: ShortcutAction) {
+            add(action) { [weak self] in DispatchQueue.main.async { self?.runWindowHotkey(action) } }
+        }
+
         // Command runner (universal launcher) on its three rebindable triggers,
         // translate on its own, settings on its own. All rebindable / clearable.
-        add(.runner, toggle)
-        add(.runnerSpace, toggle)
-        add(.runnerBackslash, toggle)
-        add(.translate, toggleTranslate)
-        add(.settings, openSettings)
-        add(.clipboard, toggleClipboard)
-        add(.agent, openAgent)
+        addWindow(.runner)
+        addWindow(.runnerSpace)
+        addWindow(.runnerBackslash)
+        addWindow(.translate)
+        addWindow(.settings)
+        addWindow(.clipboard)
+        addWindow(.agent)
         add(.toggleAutocomplete, toggleAutocomplete)
         add(.menuBarToggleHidden) { MenuBarManager.shared.toggleHidden() }
-        add(.calendarTogglePopup) { CalendarBarController.shared.togglePopup() }
+        addWindow(.calendarTogglePopup)
         add(.mixerCycleOutput) { AppVolumeMixer.shared.cycleSoundOutput() }
         add(.mixerToggleMicMute) { AudioInputDeviceManager.shared.toggleMicMute() }
         add(.copyScreenText) { ScreenTools.copyScreenText() }
         add(.pickColor) { ScreenTools.pickColor() }
-        add(.agentSessions) { AgentsWindow.toggleFromShortcut() }
+        addWindow(.agentSessions)
 
         // Built-in window management: snap the frontmost window to a screen edge,
         // maximize, or centre it. Applied via Accessibility to whatever app is
@@ -984,7 +1001,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// prefix is mapped to a locked runner mode (e.g. "o " → openApp, "l " →
     /// translate) so the user lands inside that capability with no prefix to type.
     /// Prefixes without a dedicated mode (":", "base64 ", blank) open the universal
-    /// runner pre-seeded with the prefix.
+    /// runner pre-seeded with the prefix. #1113: WindowToggle's rule on a runner showing
+    /// this prefix (RunnerPanel.toggle(prefix:)).
     private func openRunner(prefill: String) {
         // Window-launching extension commands (manifest `launches_window`) bound to a
         // custom shortcut fire IMMEDIATELY — no visible runner, no typed prefix. The
@@ -996,11 +1014,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let panel = runnerPanel ?? RunnerPanel()
         runnerPanel = panel
-        if let (mode, stripped) = ModeTrigger.resolve(prefill) {
-            panel.present(mode: mode, prefill: stripped)
-        } else {
-            panel.present(prefill: prefill)
-        }
+        panel.toggle(prefix: prefill)   // #1113: every caller is a hotkey (custom shortcut, bound quickdir)
     }
 
     private func startAutocompleteIfReady() {
