@@ -237,8 +237,8 @@ jobs:
         # bump DCH_TAG deliberately. A sha256 mismatch, a tarball not named for the
         # tag, or a binary whose version string is not the tag fails the step; there
         # is no fallback build. dch is never executed here (#181, #448).
-        # No `shell:` on this step on purpose: `strings | grep -q` is safe only under
-        # the default bash -e without pipefail (grep -q closes the pipe early).
+        # grep reads strings' whole output (no -q): -q closed the pipe early, and strings
+        # then printed "failed to flush output" into every release log (QA #827).
         env:
           DCH_TAG: v1.59.0
           # sha256 of dch-<version>-darwin-arm64.tar.gz, pinned here (#875): the
@@ -264,7 +264,7 @@ jobs:
           test -x "$D/$T/dch" || { echo "::error::$T.tar.gz has no $T/dch"; exit 1; }
           # Matches dch's usage line ("dch X.Y.Z ..."). If dch rewords it this step fails:
           # update the pattern to the new text, never drop the check.
-          strings "$D/$T/dch" | grep -qE "^dch ${V//./\\.}( |$)" \
+          strings "$D/$T/dch" | grep -E "^dch ${V//./\\.}( |$)" > /dev/null \
             || { echo "::error::$T/dch carries no 'dch $V' version string"; exit 1; }
           lipo -info "$D/$T/dch" | grep -q 'architecture: arm64$' \
             || { echo "::error::$T/dch is not arm64"; lipo -info "$D/$T/dch"; exit 1; }
