@@ -1664,34 +1664,52 @@ private struct CompletionsPane: View {
 
 // MARK: - Context
 
+/// ContextPane's TCC state, outside the private view so a test can drive the #236
+/// wiring (QA #64). `last` is a lazy static: ONE synchronous preflight per process,
+/// on first open; its generation is static too, so a closed pane's refresh cannot
+/// publish last.
+@MainActor
+enum ContextTCC {
+    /// Test seam: the two synchronous preflights. No production caller writes it.
+    nonisolated(unsafe) static var probe: @Sendable () -> (screen: Bool, ax: Bool) = {
+        (VisionContext.hasScreenRecordingPermission(), PermissionsManager.isAccessibilityTrusted())
+    }
+    static var last = GenerationCache(probe())
+
+    /// Begins a refresh, probes off-main, then on the main actor stores the result and
+    /// calls `apply` only if no newer refresh began meanwhile.
+    @discardableResult
+    static func refresh(apply: @escaping @MainActor @Sendable (_ screen: Bool, _ ax: Bool) -> Void) -> Task<Void, Never> {
+        let gen = last.begin()
+        let probe = Self.probe
+        return Task.detached(priority: .userInitiated) {
+            let (s, a) = probe()
+            await MainActor.run {
+                guard last.publish((s, a), from: gen) else { return }
+                apply(s, a)
+            }
+        }
+    }
+}
+
 private struct ContextPane: View {
     @ObservedObject var model: SettingsModel
     // Seeded from the last check (not a fresh TCC call per view init, #196);
-    // onAppear's refreshPermissions() replaces them off-main. `lastTCC` is a lazy
-    // static: ONE synchronous preflight per process, on first open, so the first
-    // render already shows the true grant state (no not-granted → granted flip). Its
-    // generation is static too, so a closed pane's refresh cannot publish last (#236).
-    @State private var hasScreenPermission = ContextPane.lastTCC.value.screen
-    @State private var hasAccessibility = ContextPane.lastTCC.value.ax
+    // onAppear's refreshPermissions() replaces them off-main. `ContextTCC.last` is
+    // seeded on first open, so the first render already shows the true grant state
+    // (no not-granted → granted flip).
+    @State private var hasScreenPermission = ContextTCC.last.value.screen
+    @State private var hasAccessibility = ContextTCC.last.value.ax
     @State private var hasNotifications = false
-    @MainActor private static var lastTCC = GenerationCache(
-        (screen: VisionContext.hasScreenRecordingPermission(),
-         ax: PermissionsManager.isAccessibilityTrusted()))
 
     /// Re-reads every privacy grant. The synchronous TCC preflights run on a detached
     /// task (#196) and publish on the main actor unless a newer refresh started; the
     /// notification authorization is fetched async and applied on the main actor.
     private func refreshPermissions() {
-        let gen = Self.lastTCC.begin()
         let screen = $hasScreenPermission, ax = $hasAccessibility
-        Task.detached(priority: .userInitiated) {
-            let s = VisionContext.hasScreenRecordingPermission()
-            let a = PermissionsManager.isAccessibilityTrusted()
-            await MainActor.run {
-                guard ContextPane.lastTCC.publish((s, a), from: gen) else { return }
-                screen.wrappedValue = s
-                ax.wrappedValue = a
-            }
+        ContextTCC.refresh { s, a in
+            screen.wrappedValue = s
+            ax.wrappedValue = a
         }
         Task { @MainActor in hasNotifications = await PermissionsManager.notificationStatus() }
     }

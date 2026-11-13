@@ -692,6 +692,9 @@ final class RunnerModel: ObservableObject {
             self.selectedIndex = (self.selectedIndex + step + n) % n
         }
     }
+    /// ↑ and ↓ in the runner field (QA #80: the step signs live here so a test reaches them).
+    func selectPrev(count: @escaping () -> Int) { scheduleSelect(step: -1, count: count) }
+    func selectNext(count: @escaping () -> Int) { scheduleSelect(step: 1, count: count) }
 
     /// Measured row y-spans + scroll-viewport height for the ⌘-digit quick-select
     /// ladder (issue: badges must stay fixed in the viewport and map to whichever
@@ -1416,8 +1419,8 @@ private struct RunnerView: View {
     /// "Publishing changes from within view updates is not allowed" once per
     /// arrow press (#201). Index and row count are read inside the hop, so key
     /// repeats queued before it runs still each advance by one.
-    private func selectPrev() { model.scheduleSelect(step: -1) { rows.count } }
-    private func selectNext() { model.scheduleSelect(step: 1) { rows.count } }
+    private func selectPrev() { model.selectPrev { rows.count } }
+    private func selectNext() { model.selectNext { rows.count } }
 
     private var selectedRow: ResultRow? {
         guard !rows.isEmpty,

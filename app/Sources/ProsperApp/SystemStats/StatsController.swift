@@ -170,10 +170,15 @@ final class StatsController {
                 self.resizeItems()
             }
         }
-        p.start()
-        p.setPopupActive(popover.isShown)   // rebuilt while open: keep the popup-only readers on
-        p.setPaused(screenHidden)   // config change while the screen is off
+        Self.startPrimed(p, popupShown: popover.isShown, screenHidden: screenHidden)
         poller = p
+    }
+
+    /// Starts a (re)built poller in the controller's current state (QA #265 seam).
+    nonisolated static func startPrimed(_ p: StatsPoller, popupShown: Bool, screenHidden: Bool) {
+        p.start()
+        p.setPopupActive(popupShown)   // rebuilt while open: keep the popup-only readers on
+        p.setPaused(screenHidden)   // config change while the screen is off
     }
 
     // MARK: - Status items

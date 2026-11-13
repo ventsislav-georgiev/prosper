@@ -9,7 +9,9 @@ enum SystemStatsStore {
     private static let key = "systemStatsWidgetStyle"
     private static var defaults: UserDefaults { Preferences.defaults }
 
-    static func load() -> StatsWidgetStyle {
+    static func load() -> StatsWidgetStyle { load(from: defaults) }
+
+    static func load(from defaults: UserDefaults) -> StatsWidgetStyle {
         guard let data = defaults.data(forKey: key),
               var style = try? JSONDecoder().decode(StatsWidgetStyle.self, from: data)
         else { return .default }
@@ -18,8 +20,11 @@ enum SystemStatsStore {
         // in settings and never reach the menu bar (Disk, added after the first
         // beta, hit exactly this). Keep the user's arrangement, drop stale keys,
         // append anything the current default order has that the blob is missing.
+        // A repeated key keeps its first slot only (QA #71): a foreign blob's duplicate
+        // would otherwise ride through enabledModules and be re-saved by the pane.
         let known = Set(StatsModule.allCases.map(\.rawValue))
-        let kept = style.order.filter(known.contains)
+        var seen = Set<String>()
+        let kept = style.order.filter { known.contains($0) && seen.insert($0).inserted }
         style.order = kept + StatsWidgetStyle.default.order.filter { !kept.contains($0) }
         return style
     }

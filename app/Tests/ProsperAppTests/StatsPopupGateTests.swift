@@ -1,5 +1,6 @@
 import XCTest
 
+@testable import ProsperApp
 @testable import StatsCore
 
 /// #188: the CPU clock, the voltage/current rails and the ping thread are popup-only
@@ -109,6 +110,54 @@ final class StatsPopupGateTests: XCTestCase {
         p.setPaused(false)
         n = settled()
         XCTAssertEqual(settled(), n, "resume with a closed popup must not ping")
+    }
+
+    /// QA #265 G6: each run (one per popup open) starts with an empty history, so the
+    /// popup never stitches a closed period into its connectivity strip.
+    func testEachPingRunStartsWithAFreshHistory() {
+        let lock = NSLock()
+        var calls = 0
+        let hold = DispatchSemaphore(value: 0)
+        let secondRun = expectation(description: "the second run's first echo started")
+        NetPingReader.pinger = { _, seq, _ in
+            let n = lock.withLock { calls += 1; return calls }
+            if n == 1 { return 5 }
+            if seq == 0 { secondRun.fulfill() }   // seq restarts at 0 per run
+            hold.wait()   // later echoes wait for the test: nothing lands mid-assert
+            return 7
+        }
+        let reader = NetPingReader(historyLength: 10, interval: 1)
+        reader.start()
+        let landed = expectation(for: NSPredicate { _, _ in reader.connectivity() == [true] }, evaluatedWith: nil)
+        wait(for: [landed], timeout: 5)
+
+        reader.stop()
+        reader.start()   // the next popup open
+        wait(for: [secondRun], timeout: 5)
+        XCTAssertEqual(reader.connectivity(), [], "a new run keeps nothing from the last one")
+        XCTAssertTrue(reader.latest() == nil, "no latency until this run's first echo")
+        reader.stop()
+        hold.signal(); hold.signal()
+    }
+
+    /// QA #265 G7: a poller rebuilt while the popup is open (a config change) is told so
+    /// at once, so its ping thread runs without waiting for the next open.
+    func testPollerRebuiltWithPopupOpenPingsAtOnce() {
+        URLProtocol.registerClass(NoNetwork.self)
+        let lock = NSLock()
+        let echo = expectation(description: "echo from the rebuilt poller")
+        var firstPing: XCTestExpectation? = echo
+        NetPingReader.pinger = { _, _, _ in
+            lock.withLock { firstPing?.fulfill(); firstPing = nil }
+            return 5
+        }
+        var cfg = StatsPoller.Config()
+        cfg.baseInterval = 0.05; cfg.activeInterval = 0.05; cfg.slowDivider = 1
+        let p = StatsPoller(modules: [.network], config: cfg, deliverQueue: DispatchQueue(label: "test.stats.rebuilt"))
+        StatsController.startPrimed(p, popupShown: true, screenHidden: false)
+        wait(for: [echo], timeout: 5)
+        p.stop()
+        _ = p.history("net.up")   // queue.sync: the stop has been applied
     }
 }
 
