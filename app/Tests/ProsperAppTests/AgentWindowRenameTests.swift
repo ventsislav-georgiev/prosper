@@ -773,24 +773,42 @@ extension AgentWindowD1Tests {
                                 let hb = try XCTUnwrap(headerBottom(plain, x: side + Int(sz(8) * px)))
                                 XCTAssertEqual(headerBottom(editing, x: side + Int(sz(8) * px)), hb, "the header keeps its height (\(tag))")
                                 XCTAssertEqual(differing(plain, editing, x: 0..<side, y: 0..<height), 0, "the sidebar (\(tag))")
-                                XCTAssertEqual(differing(plain, editing, x: 0..<width, y: hb..<height), 0,
-                                               "nothing under the header moved (\(tag))")
-                                // The right-hand controls: from the picker's left edge (the first gap of the
-                                // slot's spacer, read off the plain render) to the "⋯", untouched.
+                                if let below = span(hb, height, "under the header (\(tag))") {
+                                    XCTAssertEqual(differing(plain, editing, x: 0..<width, y: below), 0, "nothing under the header moved (\(tag))")
+                                }
+                                // The "⋯" box: the header's right padding sz(16) (AgentsWindow.swift:780), the "⋯" frame
+                                // sz(18) (AgentWindowControls.swift:263) and 2 of slack. Left of it, the line's spacing
+                                // sz(8) (AgentsWindow.swift:903) is blank: its right sz(4) pins the box's edge.
                                 let line = Int(AgentSessionHeader.padTop * px)..<Int((AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
-                                let left = try XCTUnwrap(controlsLeft(plain, line: line, from: width - Int(sz(16) * px), to: detail,
-                                                                      gap: Int(sz(14) * px)), tag)
                                 let menuLeft = width - Int(sz(16 + 18 + 2) * px)
-                                XCTAssertEqual(differing(plain, editing, x: left..<menuLeft, y: 0..<hb), 0,
-                                               "picker and toggle unmoved (\(tag))")
+                                XCTAssertTrue((menuLeft - Int(sz(4) * px)..<menuLeft).allSatisfy { blankColumn(plain, x: $0, line: line) },
+                                              "nothing of the controls in the spacing before the \"⋯\" box (\(tag))")
+                                XCTAssertTrue((menuLeft..<width - Int(sz(16) * px)).contains { !blankColumn(plain, x: $0, line: line) },
+                                              "the \"⋯\" in its box (\(tag))")
+                                // The controls' box: from the picker's left edge (Terminal mode: the toggle's) to the "⋯"
+                                // box, read off the plain render. It ends at the first sz(16) blank run left of the "⋯" box:
+                                // the slot keeps at least that much before the controls (the line's spacing sz(8) and
+                                // slotLine's Spacer(minLength: sz(8)), :867); between two controls the blank is the line's
+                                // spacing and the icons' insets, 14 at most (the menu tier at 1.0). #1103 r: the walk used
+                                // to start at the padding and take sz(14): with Open in terminal gone, the toggle's icon and
+                                // the "⋯" glyph stand 15 apart at 1.0, so it stopped at the "⋯" itself, right of menuLeft.
+                                let left = try XCTUnwrap(controlsLeft(plain, line: line, from: menuLeft, to: detail, gap: Int(sz(16) * px)), tag)
+                                if let controls = span(left, menuLeft, "the controls' box (\(tag))") {
+                                    XCTAssertEqual(controlCount(plain, x: controls, line: line, gap: Int(sz(4) * px)), mode == .transcript ? 2 : 1,
+                                                   "the box holds the picker and the toggle, Terminal mode the toggle (\(tag))")
+                                    XCTAssertEqual(differing(plain, editing, x: controls, y: 0..<hb), 0, "picker and toggle unmoved (\(tag))")
+                                }
                                 XCTAssertEqual([-1, 0, 1].map { differing(plain, editing, x: menuLeft..<width, y: 0..<hb, dx: $0, tolerance: 0.06) }.min(), 0,
                                                "\"⋯\" unmoved (\(tag))")
                                 // The field shows, and only in the title line's band.
-                                XCTAssertGreaterThan(differing(plain, editing, x: detail..<left, y: line), 0, "the field shows (\(tag))")
+                                if let slot = span(detail, left, "the title slot (\(tag))") {
+                                    XCTAssertGreaterThan(differing(plain, editing, x: slot, y: line), 0, "the field shows (\(tag))")
+                                }
                                 XCTAssertEqual(differing(plain, editing, x: detail..<width, y: 0..<max(0, line.lowerBound - Int(sz(4) * px))), 0,
                                                "above the title line (\(tag))")
-                                XCTAssertEqual(differing(plain, editing, x: detail..<width, y: (line.upperBound + Int(sz(4) * px))..<hb), 0,
-                                               "the folder line (\(tag))")
+                                if let under = span(line.upperBound + Int(sz(4) * px), hb, "under the title line (\(tag))") {
+                                    XCTAssertEqual(differing(plain, editing, x: detail..<width, y: under), 0, "the folder line (\(tag))")
+                                }
                                 // Leaving edit mode draws the title exactly as before.
                                 XCTAssertEqual([-1, 0, 1].map { differing(plain, back, x: menuLeft..<width, y: 0..<height, dx: $0, tolerance: 0.06) }.min(), 0, tag)
                                 XCTAssertEqual(differing(plain, back, x: 0..<menuLeft, y: 0..<height), 0, "back to the title (\(tag))")
@@ -877,6 +895,30 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(differing(a, c, x: 0..<w, y: 0..<h, dx: 1), slowDiffering(a, c, x: 0..<w, y: 0..<h, dx: 1))
     }
 
+    /// #1103 r: a box edge from measured values, or nil after a failure that names the bounds: Range traps when its
+    /// bounds are out of order, and a trap ends every row after it in a full suite (the heavy suite of 2026-11-14).
+    func span(_ lo: Int, _ hi: Int, _ what: String, file: StaticString = #filePath, line: UInt = #line) -> Range<Int>? {
+        guard lo < hi else {
+            XCTFail("\(what): \(lo)..<\(hi) is empty or reversed", file: file, line: line)
+            return nil
+        }
+        return lo..<hi
+    }
+
+    /// A column of the title line that holds nothing but the header's backdrop: controlsLeft's own test, on one column.
+    func blankColumn(_ rep: NSBitmapImageRep, x: Int, line: Range<Int>) -> Bool {
+        controlsLeft(rep, line: line, from: x, to: x, gap: 1) == x + 1
+    }
+
+    /// The controls in a box of the title line: runs of ink parted by at least `gap` blank columns.
+    func controlCount(_ rep: NSBitmapImageRep, x: Range<Int>, line: Range<Int>, gap: Int) -> Int {
+        var n = 0, blank = gap
+        for xx in x {
+            if blankColumn(rep, x: xx, line: line) { blank += 1 } else { if blank >= gap { n += 1 }; blank = 0 }
+        }
+        return n
+    }
+
     /// Scanning the title line leftwards from `from`: the x where a run of `gap` columns of the
     /// header's own colour starts (the spacer between the title slot and the controls), plus one run.
     /// #860: the header sits on the window's backdrop gradient, so a column is blank when it matches its
@@ -940,12 +982,17 @@ extension AgentWindowD1Tests {
             let chipW = NSHostingView(rootView: AgentStateChip(state: .idle)).fittingSize.width
             let chipX = Int((sz(16) + titleW + sz(8)) * px)
             let line = Int(AgentSessionHeader.padTop * px)..<Int((AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
-            XCTAssertGreaterThan(differing(h, l, x: chipX..<(chipX + Int(chipW * px)), y: line), 0, "the header draws Ended")
-            XCTAssertEqual(differing(h, l, x: 0..<(chipX - 2), y: line), 0, "the title itself is the same")
+            if let chip = span(chipX, chipX + Int(chipW * px), "the chip's columns") {
+                XCTAssertGreaterThan(differing(h, l, x: chip, y: line), 0, "the header draws Ended")
+            }
+            if let title = span(0, chipX - 2, "the title's columns") {
+                XCTAssertEqual(differing(h, l, x: title, y: line), 0, "the title itself is the same")
+            }
             // The transcript's band (between the header and the input box): its Open in terminal dims.
             let input = Int((size.height - 130) * px)
-            XCTAssertGreaterThan(differing(h, l, x: 0..<Int(size.width * px), y: (hb + 2)..<input), 0,
-                                 "the transcript draws ended")
+            if let band = span(hb + 2, input, "the transcript's band") {
+                XCTAssertGreaterThan(differing(h, l, x: 0..<Int(size.width * px), y: band), 0, "the transcript draws ended")
+            }
         }
     }
 
