@@ -26,6 +26,21 @@
 #include "lualib.h"
 
 
+/* #1099: C-locale ctype whatever the process locale (Ghostty's init sets LC_ALL);
+** isdigit/isxdigit are locale-independent in C99 */
+#include <xlocale.h>
+#define tolower(c)	tolower_l(c, LC_C_LOCALE)
+#define toupper(c)	toupper_l(c, LC_C_LOCALE)
+#define isalpha(c)	isalpha_l(c, LC_C_LOCALE)
+#define iscntrl(c)	iscntrl_l(c, LC_C_LOCALE)
+#define isgraph(c)	isgraph_l(c, LC_C_LOCALE)
+#define islower(c)	islower_l(c, LC_C_LOCALE)
+#define ispunct(c)	ispunct_l(c, LC_C_LOCALE)
+#define isspace(c)	isspace_l(c, LC_C_LOCALE)
+#define isupper(c)	isupper_l(c, LC_C_LOCALE)
+#define isalnum(c)	isalnum_l(c, LC_C_LOCALE)
+
+
 /*
 ** maximum number of captures that a pattern can do during
 ** pattern-matching. This limit is arbitrary, but must fit in

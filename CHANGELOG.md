@@ -588,6 +588,11 @@ tag from the now-released section and put it on the new top draft.
 - Theme tints: accent text in Daylight, Graphite and Silver is easier to read on the lower part of
   windows, in the sidebar and on highlighted rows such as your messages in Agent Sessions; a few
   accent shades moved slightly darker or lighter, with the same hue. (#1095)
+- Extensions: once the first Agent Sessions terminal had opened, the embedded Lua followed the
+  system language settings. On a Mac whose region uses a decimal comma, Calculator, Units, Currency
+  and Kill Process then showed numbers with a comma and stopped reading "1.5", and lower/upper case
+  and pattern matching corrupted text with accented letters. Lua now ignores the process locale for
+  text case, character classes and numbers, for third-party extensions too. (#1099)
 
 ## v2.174.0
 

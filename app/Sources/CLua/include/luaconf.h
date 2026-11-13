@@ -481,7 +481,8 @@
 
 #define l_mathop(op)		op
 
-#define lua_str2number(s,p)	strtod((s), (p))
+/* #1099: C-locale decimal point whatever the process locale */
+#define lua_str2number(s,p)	strtod_l((s), (p), LC_C_LOCALE)
 
 #else						/* }{ */
 
@@ -594,7 +595,11 @@
 ** (All uses in Lua have only one format item.)
 */
 #if !defined(LUA_USE_C89)
-#define l_sprintf(s,sz,f,i)	snprintf(s,sz,f,i)
+/* #1099: C-locale number formatting whatever the process locale (Ghostty's init sets LC_ALL) */
+#include <stdio.h>
+#include <stdlib.h>
+#include <xlocale.h>
+#define l_sprintf(s,sz,f,i)	snprintf_l(s,sz,LC_C_LOCALE,f,i)
 #else
 #define l_sprintf(s,sz,f,i)	((void)(sz), sprintf(s,f,i))
 #endif
@@ -668,7 +673,8 @@
 ** macro must include the header 'locale.h'.)
 */
 #if !defined(lua_getlocaledecpoint)
-#define lua_getlocaledecpoint()		(localeconv()->decimal_point[0])
+/* #1099: '.' to match the C-locale l_sprintf and lua_str2number above */
+#define lua_getlocaledecpoint()		'.'
 #endif
 
 

@@ -131,6 +131,16 @@ final class ExtensionLuaSuiteTests: XCTestCase {
     }
 
     func testEveryLuaTestFilePasses() throws {
+        try withProcessLocale("C") { try runEveryLuaTestFile(under: "C") }
+    }
+
+    /// #1099: the same files under the locale Ghostty's init can leave the process in (UTF-8 LC_CTYPE, comma
+    /// LC_NUMERIC). Only this leg skips when that locale is missing.
+    func testEveryLuaTestFilePassesUnderANonCLocale() throws {
+        try withProcessLocale(luaTestLocale) { try runEveryLuaTestFile(under: luaTestLocale) }
+    }
+
+    private func runEveryLuaTestFile(under locale: String) throws {
         let root = try XCTUnwrap(Self.repoRoot(), "no app/Package.swift above \(#filePath)")
         let (files, missing) = Self.discover(in: root)
         XCTAssertTrue(missing.isEmpty, "Lua test roots missing: \(missing)")
@@ -143,10 +153,10 @@ final class ExtensionLuaSuiteTests: XCTestCase {
         for rel in files {
             if case .failed(let message) = runLuaTestFile(root.appendingPathComponent(rel).path, harnessDir: harnessDir(root)) {
                 failed += 1
-                XCTFail("\(rel) failed on the embedded Lua: \(message)")
+                XCTFail("\(rel) failed on the embedded Lua under locale \(locale): \(message)")
             }
         }
-        print(String(format: "ExtensionLuaSuite: %d Lua test file(s), %d failed, %.2f s", files.count, failed, Date().timeIntervalSince(started)))
+        print(String(format: "ExtensionLuaSuite (%@): %d Lua test file(s), %d failed, %.2f s", locale, files.count, failed, Date().timeIntervalSince(started)))
     }
 
     func testTheSuiteRunsOnTheLuaTheAppEmbeds() throws {

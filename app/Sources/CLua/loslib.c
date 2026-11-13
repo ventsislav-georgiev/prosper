@@ -379,6 +379,7 @@ static int os_difftime (lua_State *L) {
 /* }====================================================== */
 
 
+#if 0  /* #1099: no os.setlocale; extensions must not change the process locale */
 static int os_setlocale (lua_State *L) {
   static const int cat[] = {LC_ALL, LC_COLLATE, LC_CTYPE, LC_MONETARY,
                       LC_NUMERIC, LC_TIME};
@@ -389,6 +390,7 @@ static int os_setlocale (lua_State *L) {
   lua_pushstring(L, setlocale(cat[op], l));
   return 1;
 }
+#endif
 
 
 static int os_exit (lua_State *L) {
@@ -413,7 +415,6 @@ static const luaL_Reg syslib[] = {
   {"getenv",    os_getenv},
   {"remove",    os_remove},
   {"rename",    os_rename},
-  {"setlocale", os_setlocale},
   {"time",      os_time},
   {"tmpname",   os_tmpname},
   {NULL, NULL}
