@@ -386,6 +386,11 @@ tag from the now-released section and put it on the new top draft.
   removes accounts, refreshes usage, and imports the accounts of the Homebrew ccpool once; the old
   vault goes to the Trash only if it is still the same plain file holding only accounts the pool
   now has (#871).
+- Theme tints: VoiceOver now says which theme is active and reads only its ringed tint dot as
+  selected (another theme's remembered dot says "remembered"); every dot shows its name on hover;
+  tint names from third-party themes are cleaned of invisible characters and capped at 32; a
+  refused tint list is no longer logged again on every rescan, only when its reason changes or it
+  comes back after a fix (#862, QA #744).
 
 ## v2.174.0
 

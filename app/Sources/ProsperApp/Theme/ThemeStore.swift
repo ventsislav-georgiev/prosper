@@ -75,6 +75,13 @@ final class ThemeStore: ObservableObject {
     private var assetTask: Task<Void, Never>?
     private var lastAssets: [String: String] = [:]
     private let log = Logger(subsystem: "com.prosper", category: "theme")
+    /// QA #744 INFO-4: theme id -> the refusal line last logged for it. A rescan re-reads every
+    /// theme.json; the same line is not repeated, a different one is logged. An entry goes when
+    /// the theme's list decodes or the theme leaves `available`, so it holds at most one line per
+    /// theme with a refused list right now.
+    private var loggedRefusals: [String: String] = [:]
+    /// Test seam: each refusal line as it is logged.
+    var onVariantRefusalLogged: ((String) -> Void)?
 
     private static let activeKey = "prosper.activeThemeID"
     /// #862: theme id -> remembered variant key, beside `activeKey` in the same store.
@@ -270,10 +277,15 @@ final class ThemeStore: ObservableObject {
         // selector renders from `previews` instead of decoding theme.json in a
         // view body on every redraw.
         let specs = available.map { ($0.id, ThemeSpec.load(for: $0)) }
+        loggedRefusals = loggedRefusals.filter { id, _ in available.contains { $0.id == id } }
         for (id, spec) in specs {
-            if let e = spec.variantError {
-                log.error("theme \(id, privacy: .public): variants refused (\(e.description, privacy: .public)); base palette only")
-            }
+            guard let e = spec.variantError else { loggedRefusals[id] = nil; continue }
+            // The description shows theme-file strings through ThemeVariantError.shown.
+            let line = "theme \(ThemeVariantError.shown(id, max: 128)): variants refused (\(e.description)); base palette only"
+            guard loggedRefusals[id] != line else { continue }
+            loggedRefusals[id] = line
+            log.error("\(line, privacy: .public)")
+            onVariantRefusalLogged?(line)
         }
         tints = Dictionary(uniqueKeysWithValues: specs.compactMap { id, spec in
             ThemeTint.options(spec).map { (id, $0) }

@@ -313,15 +313,16 @@ a dot selects the theme with that tint; Prosper remembers the tint per theme on 
 }
 ```
 
-- `tintLabel` (optional) names the base palette's tint on its dot ("Default" when absent).
+- `tintLabel` (optional) names the base palette's tint on its dot. Labels lose control and
+  invisible characters and are cut at 32 Unicode scalars; "Default" when nothing usable is left.
 - `variants` (optional) is an ordered list of at most **5** entries. Each has a `key` (1 to 24
-  bytes of `a-z`, `0-9` and `-`, unique within the theme), a `label` (the dot's name; the key
-  when absent) and `colors`.
+  bytes of `a-z`, `0-9` and `-`, unique within the theme), a `label` (the dot's name, cleaned and
+  cut the same way; the key when nothing usable is left) and `colors`.
 - A variant's `colors` may set **only the accent family**: `blue`, `blueBright` and `indigo`.
   Keys it omits keep the base value. Grounds, cards, text, `magenta` and `terminal` always stay
   the theme's, so a tint never changes what an error or a success looks like.
 - The list is all or nothing: any other color key, a bad hex, a malformed or duplicate key, a
-  sixth variant or an entry without `key` and `colors` refuses the **whole list**. The theme
+  sixth variant or an entry without `key` or `colors` refuses the **whole list**. The theme
   still loads with its base palette and no dots; the reason is logged (subsystem `com.prosper`,
   category `theme`).
 - A remembered tint the theme no longer declares (renamed, removed, or the list was refused)
@@ -331,7 +332,7 @@ a dot selects the theme with that tint; Prosper remembers the tint per theme on 
   and `indigo` at WCAG AA (4.5:1) against `bgTop` and `card`. Tints never count as a collision
   with another theme's accent.
 
-Pick a theme in **Settings → Personalization**; the whole app (and the AppKit menu-bar / dock chrome) redraws instantly. Missing tokens fall back to the default palette, so a partial palette is valid. Selecting a theme **never spawns the extension's Lua VM** — it is pure declarative data.
+Pick a theme in **Settings → Appearance**; the whole app (and the AppKit menu-bar / dock chrome) redraws instantly. Missing tokens fall back to the default palette, so a partial palette is valid. Selecting a theme **never spawns the extension's Lua VM** — it is pure declarative data.
 
 ---
 

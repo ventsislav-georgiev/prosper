@@ -243,7 +243,7 @@ struct ThemeSpec: Sendable, Equatable {
             for (k, v) in raw where v is String { assets[k] = v as? String }
         }
         var spec = ThemeSpec(appearance: appearance, colors: colors, assets: assets)
-        spec.tintLabel = obj["tintLabel"] as? String
+        spec.tintLabel = ThemeVariant.cleanLabel(obj["tintLabel"])
         if let raw = obj["variants"] {
             // A broken tint list never takes the theme away: refuse the list, keep the palette.
             do { spec.variants = try ThemeVariant.decodeList(raw) } catch { spec.variantError = error as? ThemeVariantError }
@@ -278,10 +278,33 @@ struct ThemeVariant: Sendable, Equatable {
                 guard let s = value as? String, let c = Color(hex: s) else { throw ThemeVariantError.badHex(variant: key, token: token) }
                 parsed[token] = c
             }
-            let label = (obj["label"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? key
+            let label = cleanLabel(obj["label"]) ?? key
             out.append(ThemeVariant(key: key, label: label, colors: parsed))
         }
         return out
+    }
+
+    /// QA #744 INFO-4: a label reaches VoiceOver and a tooltip only, so 32 is room for a two-word
+    /// name in any script. Counted in Unicode scalars, which bound the bytes (one Character can
+    /// carry any number of combining marks).
+    static let labelMax = 32
+
+    /// A label from a theme file (`tintLabel`, a variant's `label`): control, format and other
+    /// invisible characters dropped, ends trimmed, at most `labelMax` scalars. nil when it is not
+    /// a string or nothing visible is left, so the caller's default applies (the key, "Default").
+    static func cleanLabel(_ raw: Any?) -> String? {
+        guard let s = raw as? String else { return nil }
+        let hidden: Set<Unicode.GeneralCategory> = [.control, .format, .lineSeparator, .paragraphSeparator,
+                                                    .privateUse, .surrogate, .unassigned]
+        var kept = String.UnicodeScalarView()
+        kept.append(contentsOf: s.unicodeScalars.filter {
+            !$0.properties.isDefaultIgnorableCodePoint && !hidden.contains($0.properties.generalCategory)
+        })
+        let trimmed = String(kept).trimmingCharacters(in: .whitespaces)
+        var capped = String.UnicodeScalarView()
+        capped.append(contentsOf: trimmed.unicodeScalars.prefix(labelMax))
+        let out = String(capped).trimmingCharacters(in: .whitespaces)
+        return out.isEmpty ? nil : out
     }
 
     /// a-z, 0-9 and "-", 1 to 24 bytes.
@@ -321,11 +344,18 @@ enum ThemeVariantError: Error, Equatable, Sendable, CustomStringConvertible {
         case .notAList: return "variants is not a list"
         case .tooMany(let n): return "\(n) variants, at most \(ThemeVariant.maxCount)"
         case .malformedEntry(let i): return "variant \(i) needs a key and a colors object"
-        case .malformedKey(let k): return "variant key \"\(k)\" must be 1-24 of a-z, 0-9, -"
+        case .malformedKey(let k): return "variant key \"\(Self.shown(k))\" must be 1-24 of a-z, 0-9, -"
         case .duplicateKey(let k): return "variant key \"\(k)\" appears twice"
-        case .notAnAccentKey(let v, let t): return "variant \"\(v)\" sets \(t); only blue, blueBright, indigo"
+        case .notAnAccentKey(let v, let t): return "variant \"\(v)\" sets \(Self.shown(t)); only blue, blueBright, indigo"
         case .badHex(let v, let t): return "variant \"\(v)\" has a bad color for \(t)"
         }
+    }
+
+    /// QA #744 INFO-4: a theme-file string as a log line shows it: printable ASCII kept, every
+    /// other scalar as "?", at most `max` of them, "…" when cut. (A refused key is anything.)
+    static func shown(_ s: String, max: Int = 32) -> String {
+        let head = s.unicodeScalars.prefix(max).map { (0x20...0x7E).contains($0.value) ? Character($0) : "?" }
+        return String(head) + (s.unicodeScalars.count > max ? "…" : "")
     }
 }
 

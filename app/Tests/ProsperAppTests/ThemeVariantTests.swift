@@ -414,6 +414,298 @@ final class ThemeVariantTests: XCTestCase {
         }
     }
 
+    // MARK: QA #744 follow-ups (#862 A2)
+
+    /// INFO-6: a tint pick refreshes the picked theme's swatch strip (`previews`), so the row
+    /// never shows the palette it had before the pick.
+    func testTintPickRefreshesTheSwatchPreview() throws {
+        let a = descriptor("t.a", Self.twoTints("cyan", "amber"))
+        let s = store()
+        s.setAvailable([a])
+        XCTAssertTrue(Self.same(try XCTUnwrap(s.previews["t.a"]).blue, Color(hex: "#E0FF00")!), "nothing picked: the base")
+        s.select(id: "t.a", tint: "cyan")
+        XCTAssertTrue(Self.same(try XCTUnwrap(s.previews["t.a"]).blue, Color(hex: "#00E5FF")!), "the strip shows the picked tint")
+        s.select(id: "t.a", tint: "amber")
+        XCTAssertTrue(Self.same(try XCTUnwrap(s.previews["t.a"]).blue, Color(hex: "#FFB000")!), "and the next one")
+        s.select(id: "t.a", tint: nil)
+        XCTAssertTrue(Self.same(try XCTUnwrap(s.previews["t.a"]).blue, Color(hex: "#E0FF00")!), "and back to the base")
+    }
+
+    /// INFO-6: the no-op guard compares the tint too. A variant whose colours equal the base
+    /// palette still becomes the active tint (the palette alone would call the pick a no-op).
+    func testTintWithTheBaseColoursStillBecomesTheActiveTint() {
+        let json = """
+        { \(Self.baseColors), "variants": [ { "key": "same", "label": "Same", "colors": { "blue": "#E0FF00" } } ] }
+        """
+        let a = descriptor("t.a", json)
+        let s = store()
+        s.setAvailable([a])
+        s.select(id: "t.a")
+        XCTAssertNil(s.activeTint)
+        s.select(id: "t.a", tint: "same")
+        XCTAssertEqual(s.activeTint, "same", "the palette is unchanged, the tint is not")
+        s.select(id: "t.a", tint: nil)
+        XCTAssertNil(s.activeTint, "and back")
+    }
+
+    /// INFO-6: the key cap is exactly 24 bytes: 24 decodes, 25 refuses the list.
+    func testVariantKeyCapIsExactly24Bytes() throws {
+        func list(_ key: String) -> String {
+            "{ \(Self.baseColors), \"variants\": [ { \"key\": \"\(key)\", \"colors\": { \"blue\": \"#00E5FF\" } } ] }"
+        }
+        let k24 = String(repeating: "a", count: 23) + "-", k25 = String(repeating: "a", count: 25)
+        XCTAssertTrue(ThemeVariant.isValidKey(k24))
+        XCTAssertFalse(ThemeVariant.isValidKey(k25))
+        let ok = try ThemeSpec.decode(Data(list(k24).utf8))
+        XCTAssertNil(ok.variantError)
+        XCTAssertEqual(ok.variants.map(\.key), [k24], "24 bytes: kept")
+        let refused = try ThemeSpec.decode(Data(list(k25).utf8))
+        XCTAssertEqual(refused.variantError, .malformedKey(k25), "25 bytes: refused")
+        XCTAssertTrue(refused.variants.isEmpty)
+    }
+
+    /// INFO-6: dot N picks tint N. Each dot's press runs the closure its button holds
+    /// (`ThemeTintDots.action`), on the dots the row builds (`ThemeList.dots`).
+    func testEachDotPicksItsOwnTint() throws {
+        ThemeRuntime.scale = 1
+        let s = try listStore()
+        let list = ThemeList(theme: s, paneID: "appearance")
+        for id in [Self.hcDarkID, Self.hcLightID] {
+            let d = try XCTUnwrap(s.available.first { $0.id == id })
+            let options = try XCTUnwrap(s.tints[id])
+            // Last to first, so every press moves off the tint before it.
+            for i in options.indices.reversed() {
+                list.dots(d, options: options, selected: s.activeID == id).action(i)()
+                XCTAssertEqual(s.activeID, id, "\(id) dot \(i)")
+                XCTAssertEqual(s.activeTint, options[i].key, "\(id) dot \(i) picks its own tint")
+                XCTAssertEqual(s.rememberedTint(for: id), options[i].key)
+            }
+        }
+    }
+
+    /// INFO-6 and INFO-4: the label defaults. A variant without a usable label is named by its
+    /// key; a base without a usable `tintLabel` is "Default". Empty, blank and invisible-only
+    /// labels are not usable; a non-string is ignored.
+    func testTintLabelDefaults() throws {
+        for (name, raw) in [("absent", nil), ("empty", "\"\""), ("blank", "\"   \""), ("invisible", "\"\\u200B\\u2028\\u202E\""),
+                            ("control", "\"\\u0007\\t\\n\""), ("number", "42")] as [(String, String?)] {
+            let label = raw.map { ", \"label\": \($0)" } ?? ""
+            let tintLabel = raw.map { "\"tintLabel\": \($0), " } ?? ""
+            let json = "{ \(Self.baseColors), \(tintLabel)\"variants\": [ { \"key\": \"cyan\"\(label), \"colors\": { \"blue\": \"#00E5FF\" } } ] }"
+            let spec = try ThemeSpec.decode(Data(json.utf8))
+            XCTAssertNil(spec.variantError, name)
+            XCTAssertNil(spec.tintLabel, "\(name): no usable tintLabel")
+            XCTAssertEqual(try XCTUnwrap(ThemeTint.options(spec), name).map(\.label), ["Default", "cyan"], name)
+        }
+    }
+
+    /// INFO-4: a label loses control, format and invisible characters, is trimmed, and is cut
+    /// at 32 Unicode scalars: 32 kept whole, 33 cut to 32. Combining marks count one each.
+    func testTintLabelIsCleanedAndCappedAt32Scalars() throws {
+        func labels(_ base: String, _ variant: String) throws -> [String] {
+            let enc = { (v: String) in String(data: try JSONSerialization.data(withJSONObject: [v], options: [.fragmentsAllowed]), encoding: .utf8)!.dropFirst().dropLast() }
+            let b = try enc(base), v = try enc(variant)
+            let json = "{ \(Self.baseColors), \"tintLabel\": \(b), \"variants\": [ { \"key\": \"cyan\", \"label\": \(v), \"colors\": { \"blue\": \"#00E5FF\" } } ] }"
+            return try XCTUnwrap(ThemeTint.options(try ThemeSpec.decode(Data(json.utf8)))).map(\.label)
+        }
+        XCTAssertEqual(try labels(" Li\u{200B}me\n", "\u{202E}Cy\u{0000}an\u{2028}"), ["Lime", "Cyan"], "invisible characters dropped, ends trimmed")
+        let x32 = String(repeating: "x", count: 32), x33 = x32 + "y"
+        XCTAssertEqual(try labels(x32, x32), [x32, x32], "32 scalars: kept whole")
+        XCTAssertEqual(try labels(x33, x33), [x32, x32], "33 scalars: cut to 32")
+        let marks = "a" + String(repeating: "\u{0301}", count: 200)
+        XCTAssertEqual(try labels(marks, "Amber")[0].unicodeScalars.count, 32, "one Character of 201 scalars is cut by scalars")
+        XCTAssertEqual(try labels("Two words", "  Amber  "), ["Two words", "Amber"], "inner spaces stay")
+        XCTAssertEqual(ThemeVariant.cleanLabel(String(repeating: "\u{200B}", count: 40) + "Lime"), "Lime", "the cap counts what is kept")
+    }
+
+    /// INFO-4: a refused list is not logged again by a rescan that finds the same refusal, and
+    /// the refused key reaches the log as printable ASCII, cut at 32.
+    func testRefusedVariantListIsNotRepeatedOnRescanAndShownSafely() {
+        let badKey = "Bad\\u0007\\u202E" + String(repeating: "x", count: 200)   // JSON escapes: BEL, RLO
+        let bad = descriptor("t.bad", "{ \(Self.baseColors), \"variants\": [ { \"key\": \"\(badKey)\", \"colors\": { \"blue\": \"#00E5FF\" } } ] }")
+        let six = descriptor("t.six", "{ \(Self.baseColors), \"variants\": [\((1...6).map { _ in "{}" }.joined(separator: ","))] }")
+        let ok = descriptor("t.ok", Self.twoTints("cyan", "amber"))
+        let s = store()
+        var lines: [String] = []
+        s.onVariantRefusalLogged = { lines.append($0) }
+        s.setAvailable([bad, ok])
+        s.setAvailable([bad, ok])
+        XCTAssertEqual(lines.count, 1, "a rescan does not log the same theme again")
+        s.setAvailable([bad, six, ok])
+        s.setAvailable([bad, six, ok])
+        XCTAssertEqual(lines.count, 2, "another theme's refusal is logged once")
+        XCTAssertTrue(lines.allSatisfy { $0.unicodeScalars.allSatisfy { (0x20...0x7E).contains($0.value) || $0 == "…" } },
+                      "printable ASCII only: \(lines)")
+        XCTAssertTrue(lines[0].contains("\"Bad??" + String(repeating: "x", count: 27) + "…\""), lines[0])
+        XCTAssertLessThan(lines[0].count, 200, lines[0])
+        XCTAssertTrue(lines[1].contains("t.six") && lines[1].contains("6 variants"), lines[1])
+        // Both sides of the shown bound.
+        let k32 = String(repeating: "k", count: 32)
+        XCTAssertEqual(ThemeVariantError.shown(k32), k32)
+        XCTAssertEqual(ThemeVariantError.shown(k32 + "k"), k32 + "…")
+        XCTAssertEqual(ThemeVariantError.notAnAccentKey(variant: "a", token: "bg\u{0000}Top").description,
+                       "variant \"a\" sets bg?Top; only blue, blueBright, indigo")
+    }
+
+    /// #862 A2 review r2: the log dedupe remembers the LAST line per theme. The same refusal
+    /// over rescans is one line; a new reason, a fix then the same refusal again, and a removal
+    /// then the same refusal again each log again.
+    func testRefusalLogRepeatsOnlyForANewReasonAFixOrARemoval() throws {
+        let url = writeJSON("{}")
+        let d = ThemeDescriptor(id: "t.x", title: "X", appearance: .dark, extensionID: "e", jsonPath: url)
+        let other = descriptor("t.six", "{ \(Self.baseColors), \"variants\": [\((1...6).map { _ in "{}" }.joined(separator: ","))] }")
+        func write(_ variants: String) throws {
+            try "{ \(Self.baseColors), \"variants\": \(variants) }".write(to: url, atomically: true, encoding: .utf8)
+        }
+        let badHex = ##"[{ "key": "a", "colors": { "blue": "#00E5FG" } }]"##
+        let dup = ##"[{ "key": "a", "colors": { "blue": "#00E5FF" } }, { "key": "a", "colors": { "blue": "#FFB000" } }]"##
+        let fixed = ##"[{ "key": "a", "colors": { "blue": "#00E5FF" } }]"##
+        let s = store()
+        var lines: [String] = []
+        s.onVariantRefusalLogged = { lines.append($0) }
+
+        try write(badHex)
+        s.setAvailable([d, other])
+        s.setAvailable([d, other])
+        XCTAssertEqual(lines.count, 2, "the same refusals over two rescans: one line each")
+        try write(dup)
+        s.setAvailable([d, other])
+        XCTAssertEqual(lines.count, 3, "the reason changed: logged")
+        XCTAssertTrue(lines.last?.contains("appears twice") == true, "\(lines)")   // never index: a red row must not trap
+        s.setAvailable([d, other])
+        XCTAssertEqual(lines.count, 3, "and not again")
+        try write(fixed)
+        s.setAvailable([d, other])
+        XCTAssertEqual(lines.count, 3, "a fixed list logs nothing")
+        try write(dup)
+        s.setAvailable([d, other])
+        XCTAssertEqual(lines.count, 4, "fixed, then broken the same way: logged again")
+        s.setAvailable([other])
+        XCTAssertEqual(lines.count, 4, "the theme left: nothing to log")
+        s.setAvailable([d, other])
+        XCTAssertEqual(lines.count, 5, "back with the same refusal: logged again")
+        XCTAssertEqual(lines.filter { $0.contains("t.six") }.count, 1, "the other theme's unchanged refusal: once")
+    }
+
+    /// The dump of `v`'s outermost modifier: the lines from its top-level "modifier" child on.
+    /// SwiftUI builds no accessibility tree for a never-shown window, so the accessibility
+    /// attachment is read off the view value, as AgentWindowRenameTests does.
+    private static func outerModifier<V: View>(_ v: V) -> String {
+        var out = ""
+        dump(v, to: &out)
+        let lines = out.components(separatedBy: "\n")
+        guard let i = lines.lastIndex(where: { $0.hasPrefix("  ▿ modifier:") || $0.hasPrefix("  - modifier:") }) else { return "" }
+        // Class instances are numbered per dump ("#3"): the same attachment sits at another number.
+        return lines[i...].joined(separator: "\n")
+            .replacingOccurrences(of: "#[0-9]+", with: "#", options: .regularExpression)
+            .replacingOccurrences(of: "0x[0-9a-fA-F]+", with: "0x", options: .regularExpression)
+    }
+
+    private static func dumped<V: View>(_ v: V) -> String {
+        var out = ""
+        dump(v, to: &out)
+        return out
+    }
+
+    /// INFO-3: on the dots, only the active theme's ringed dot carries the selected trait; an
+    /// inactive theme's ringed dot says "remembered"; every dot has its label as a tooltip.
+    /// Each dot's accessibility attachment is compared with the one the same modifiers build
+    /// with and without the trait.
+    func testOnlyTheActiveThemesDotIsSelectedAndEachDotHasAHelpTag() throws {
+        ThemeRuntime.scale = 1
+        let s = try listStore()
+        s.select(id: Self.hcLightID, tint: "amber")
+        s.select(id: Self.hcDarkID, tint: "cyan")
+        XCTAssertEqual(s.activeID, Self.hcDarkID)
+        let list = ThemeList(theme: s, paneID: "appearance")
+        func expected(_ title: String, _ label: String, remembered: Bool, selected: Bool) -> String {
+            let themeTitle = title, t = (label: label, x: 0)
+            return Self.outerModifier(Color.clear
+                .accessibilityLabel("\(themeTitle), \(t.label)")
+                .accessibilityValue(remembered ? "remembered" : "")
+                .accessibilityAddTraits(selected ? .isSelected : []))
+        }
+        XCTAssertNotEqual(expected("T", "L", remembered: false, selected: true), expected("T", "L", remembered: false, selected: false),
+                          "the trait shows in the attachment")
+        var selectedDots = 0
+        for (id, remembered) in [(Self.hcDarkID, "cyan"), (Self.hcLightID, "amber")] {
+            let d = try XCTUnwrap(s.available.first { $0.id == id })
+            let options = try XCTUnwrap(s.tints[id])
+            let active = s.activeID == id
+            let dots = list.dots(d, options: options, selected: active)
+            for (i, t) in options.enumerated() {
+                let on = t.key == remembered
+                let got = Self.outerModifier(dots.dot(i))
+                let want = expected(d.title, t.label, remembered: on && !active, selected: on && active)
+                XCTAssertEqual(got, want, "\(d.title) \(t.label): selected only on the active theme, remembered on another")
+                if got == expected(d.title, t.label, remembered: false, selected: true) { selectedDots += 1 }
+                // The label also rides in the accessibility label; the help tag is one more copy.
+                func copies(_ x: String) -> Int { x.components(separatedBy: "\"\(t.label)\"").count - 1 }
+                XCTAssertGreaterThan(copies(Self.dumped(dots.dot(i))), copies(want), "\(d.title) \(t.label): a help tag with the label")
+            }
+        }
+        XCTAssertEqual(selectedDots, 1, "one selected tint in the whole list")
+    }
+
+    /// INFO-3: a theme row says it is the active theme (the checkmark beside it is hidden from
+    /// VoiceOver): the selected trait on the active row's button, on a tinted and a plain row.
+    func testTheActiveThemeRowCarriesTheSelectedTrait() throws {
+        ThemeRuntime.scale = 1
+        let s = try listStore()
+        let list = ThemeList(theme: s, paneID: "appearance")
+        func expected(_ id: String, _ selected: Bool) -> String {
+            Self.outerModifier(Color.clear.accessibilityIdentifier("theme-row:\(id)").accessibilityAddTraits(selected ? .isSelected : []))
+        }
+        XCTAssertNotEqual(expected("x", true), expected("x", false), "the trait shows in the attachment")
+        let dark = try XCTUnwrap(s.available.first { $0.id == Self.hcDarkID })
+        let plain = try XCTUnwrap(s.available.first { $0.id == "t.plain" })
+        for selected in [true, false] {
+            XCTAssertEqual(Self.outerModifier(list.tintedRowButton(dark, selected: selected, palette: .default)),
+                           expected(dark.id, selected), "tinted row, selected \(selected)")
+            XCTAssertEqual(Self.outerModifier(list.plainRow(plain, selected: selected, palette: .default)),
+                           expected(plain.id, selected), "plain row, selected \(selected)")
+        }
+    }
+
+    /// INFO-2: the list at the real room. The Settings window's minimum width
+    /// (`SettingsWindow.contentMinSize`, floored at the 85% row) less the sidebar (218), the
+    /// pane's (2 x 26) and the card's (2 x 16) insets: 518 pt at 1.0, 440 at 0.85, 486 at 0.7.
+    /// Nothing overflows that width (a dot slot or the checkmark pushed past the card edge would),
+    /// and the High Contrast captions wrap by the pinned number of lines, on 1x and 2x.
+    func testHighContrastRowsFitTheMinimumSettingsWidth() throws {
+        // Extra caption lines across the two High Contrast rows at the minimum width. Measured
+        // (#862 A2): none at any scale; QA #744's estimate of a wrapped caption did not hold.
+        let wraps: [CGFloat: Int] = [1.0: 0, 0.85: 0, 0.7: 0]
+        for backing in [1, 2] as [CGFloat] {
+            for scale in [1.0, 0.85, 0.7] as [CGFloat] {
+                let s = try listStore()
+                s.select(id: Self.hcLightID, tint: "amber")
+                ThemeRuntime.scale = scale
+                let room = SettingsWindow.contentMinSize(scale: scale).width - sz(218 + 2 * 26 + 2 * 16)
+                let hc = NSHostingController(rootView: ThemeList(theme: s, paneID: "appearance"))
+                let win = FixedBacking862Window(contentRect: CGRect(x: 0, y: 0, width: room, height: 600), styleMask: [.titled],
+                                                backing: .buffered, defer: false)
+                win.fixedBacking = backing
+                win.isReleasedWhenClosed = false
+                win.setFrameOrigin(NSPoint(x: -30000, y: -30000))
+                win.contentView = hc.view
+                defer { win.contentView = NSView(); win.close() }
+                flush(hc.view)
+                let fit = hc.sizeThatFits(in: CGSize(width: room, height: 10_000))
+                let wide = hc.sizeThatFits(in: CGSize(width: 4_000, height: 10_000))
+                let line = NSHostingView(rootView: Text("Ag").font(Neon.font(.caption))).fittingSize.height
+                let pixel = 1 / win.backingScaleFactor, n = CGFloat(wraps[scale] ?? 0)
+                let tag = "scale \(scale), backing \(win.backingScaleFactor), room \(room)"
+                print("#862a2 layout \(tag): fit \(fit), wide \(wide), caption line \(line)")
+                XCTAssertLessThanOrEqual(fit.width, room + pixel, "\(tag): something overflows the card")
+                XCTAssertGreaterThan(hc.sizeThatFits(in: CGSize(width: 150, height: 10_000)).width, 150 + pixel,
+                                     "\(tag): the measure reports an overflow (fixed dot slots do not shrink)")
+                XCTAssertEqual(fit.height - wide.height, n * line, accuracy: (n + 1) * pixel, "\(tag): caption lines added")
+            }
+        }
+        ThemeRuntime.scale = 1
+    }
+
     // MARK: evidence renders (operator review; skipped in the normal suite)
 
     static var renderDir: URL? {

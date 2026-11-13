@@ -449,8 +449,8 @@ struct ThemeList: View {
         }
     }
 
-    /// A theme with no variants: the row exactly as before #862.
-    private func plainRow(_ d: ThemeDescriptor, selected: Bool, palette: ThemePalette) -> some View {
+    /// A theme with no variants: the row as before #862, plus the selected trait (QA #744 INFO-3).
+    func plainRow(_ d: ThemeDescriptor, selected: Bool, palette: ThemePalette) -> some View {
         Button {
             // Selecting is all a click does — it never touches first responder,
             // so keyboard focus (e.g. the sidebar search field) stays exactly
@@ -469,6 +469,7 @@ struct ThemeList: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("theme-row:\(d.id)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// #862: a theme with variants. The dots sit right of the row, before the
@@ -481,24 +482,36 @@ struct ThemeList: View {
     private func tintedRow(_ d: ThemeDescriptor, selected: Bool, palette: ThemePalette,
                            options: [ThemeTint]) -> some View {
         HStack(spacing: sz(12)) {
-            Button { theme.select(id: d.id) } label: {
-                HStack(spacing: sz(12)) {
-                    swatches(palette)
-                    titles(d)
-                    Spacer(minLength: sz(12))
-                }
-                .padding(.vertical, sz(6))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("theme-row:\(d.id)")
-            ThemeTintDots(themeTitle: d.title, options: options,
-                          selectedKey: theme.rememberedTint(for: d.id)) { key in pickTint(d, key) }
+            tintedRowButton(d, selected: selected, palette: palette)
+            dots(d, options: options, selected: selected)
+            // Hidden from VoiceOver: the row button says the theme is active (QA #744 INFO-3).
             Button { theme.select(id: d.id) } label: { checkmark.opacity(selected ? 1 : 0) }
                 .buttonStyle(.plain)
                 .accessibilityHidden(true)
         }
         .background(highlight(selected))
+    }
+
+    /// The tinted row's own button: swatches and titles; selected to VoiceOver on the active theme.
+    func tintedRowButton(_ d: ThemeDescriptor, selected: Bool, palette: ThemePalette) -> some View {
+        Button { theme.select(id: d.id) } label: {
+            HStack(spacing: sz(12)) {
+                swatches(palette)
+                titles(d)
+                Spacer(minLength: sz(12))
+            }
+            .padding(.vertical, sz(6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("theme-row:\(d.id)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// The dots on theme `d`'s row, wired to `pickTint`.
+    func dots(_ d: ThemeDescriptor, options: [ThemeTint], selected: Bool) -> ThemeTintDots {
+        ThemeTintDots(themeTitle: d.title, options: options, selectedKey: theme.rememberedTint(for: d.id),
+                      themeActive: selected) { key in pickTint(d, key) }
     }
 
     /// A dot press: that theme with that tint, in one apply, from any active theme.
@@ -546,31 +559,47 @@ struct ThemeList: View {
 /// #862: a theme's tint dots — the base tint first, then the variants in file
 /// order. A dot is a plain shape in a fixed sz(18) slot; the selected one wears a
 /// ring drawn in the same slot, so the ring moving never moves a dot.
+///
+/// QA #744 INFO-3: the ring marks the theme's remembered tint on every row, but only the
+/// active theme's ringed dot is "selected" to VoiceOver; an inactive theme's says
+/// "remembered" (the tint its row brings back), so one list never has two selected tints.
+/// Keyboard: plain buttons, reachable with Full Keyboard Access like the Menu Bar Icon
+/// swatches above them; the rows themselves move with the arrow keys.
 struct ThemeTintDots: View {
     let themeTitle: String
     let options: [ThemeTint]
     let selectedKey: String?
+    var themeActive = false
     let pick: (String?) -> Void
 
     var body: some View {
         HStack(spacing: sz(4)) {
-            ForEach(Array(options.enumerated()), id: \.offset) { _, t in
-                let on = t.key == selectedKey
-                Button { pick(t.key) } label: {
-                    ZStack {
-                        Circle().strokeBorder(Neon.textPrimary, lineWidth: sz(1.5)).opacity(on ? 1 : 0)
-                        Circle().fill(t.color)
-                            .overlay(Circle().strokeBorder(Neon.textSecondary.opacity(0.6), lineWidth: 1))
-                            .frame(width: sz(12), height: sz(12))
-                    }
-                    .frame(width: sz(18), height: sz(18))
-                    .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(themeTitle), \(t.label)")
-                .accessibilityAddTraits(on ? .isSelected : [])
-            }
+            ForEach(Array(options.enumerated()), id: \.offset) { i, _ in dot(i) }
         }
+    }
+
+    /// What a press on dot `i` runs: the closure its button holds.
+    func action(_ i: Int) -> () -> Void {
+        { pick(options[i].key) }
+    }
+
+    func dot(_ i: Int) -> some View {
+        let t = options[i], on = t.key == selectedKey
+        return Button(action: action(i)) {
+            ZStack {
+                Circle().strokeBorder(Neon.textPrimary, lineWidth: sz(1.5)).opacity(on ? 1 : 0)
+                Circle().fill(t.color)
+                    .overlay(Circle().strokeBorder(Neon.textSecondary.opacity(0.6), lineWidth: 1))
+                    .frame(width: sz(12), height: sz(12))
+            }
+            .frame(width: sz(18), height: sz(18))
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(t.label)
+        .accessibilityLabel("\(themeTitle), \(t.label)")
+        .accessibilityValue(on && !themeActive ? "remembered" : "")
+        .accessibilityAddTraits(on && themeActive ? .isSelected : [])
     }
 }
 
