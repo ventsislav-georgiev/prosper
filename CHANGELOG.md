@@ -510,9 +510,13 @@ tag from the now-released section and put it on the new top draft.
 - When macOS refuses to let Prosper read a browser's search engines, the log now says which browser
   it was (for example "Chrome Default/Web Data copy failed"), and the bookmarks import now logs when
   it cannot list a browser's profiles instead of quietly finding nothing.
-- Coding agent: when a sub-agent that your codex session started asks for approval, you now get the
-  approval card, marked "Asked by a sub-agent of this session", instead of the request being
-  declined without asking you; requests from other threads are still declined.
+- Coding agent: when a sub-agent that your codex session started asks for approval while the
+  session's turn is running, you now get the approval card, marked "Asked by a sub-agent of this
+  session", instead of the request being declined without asking you. This covers sub-agents that
+  codex spawns from the session (and their own sub-agents); forks, review sub-agents and other
+  threads are still declined, and a card you have not answered when the turn ends is declined then.
+  A turn you stopped that ends late no longer takes the next turn's approval cards with it, and
+  resuming a session that codex answers under another thread id keeps that thread's token usage.
 
 ## v2.174.0
 

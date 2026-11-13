@@ -84,6 +84,9 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// the ignore is in place. It sends no frame.
     /// RESUMEAS with a second word ("thread-3 now") sends the answered thread's tokenUsage in the same
     /// write as, and after, the resume reply instead of holding it (#1086 rider).
+    /// AFTERPLAN (#1086): a file `after-plan.json` beside the script maps a thread/start, thread/resume or
+    /// thread/fork method to SPAWNPLAN steps the mock runs once, right after its reply. "NOID" answers
+    /// turn/start with a turn that has no id, unlogged (no schema-valid reply lacks it), and starts no turn.
     /// SPAWNPLAN (#1086): the turn runs the steps of `spawn-plan.json` beside the script, each a list:
     /// ["spawn", child, parent] a `thread/started` of a thread_spawn sub-agent; ["chain", prefix, n, root]
     /// n of them in one write, prefix-1 spawned by root and prefix-k by prefix-(k-1); ["fork", id, from]
@@ -91,7 +94,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// (source subAgent "review", parentThreadId set); ["text", thread] / ["end", thread] that thread's
     /// message delta / turn/completed; ["ask", thread, id] / ["patch", thread, id] that thread's command
     /// approval / fileChange item then file-change approval, with JSON-RPC id `id`; ["finish"] ends the
-    /// session's turn at once. Otherwise the turn ends once every ask is answered (a reply not in the
+    /// session's turn at once; ["complete", thread, turn] a turn/completed{interrupted} naming that turn. Otherwise the turn ends once every ask is answered (a reply not in the
     /// method's shape fails it).
     private static let mockServer = #"""
     import sys, json, os, time, subprocess
@@ -296,6 +299,22 @@ final class CodexHarnessE2ETests: XCTestCase {
                 send({"jsonrpc": "2.0", "id": rid, "method": asks[rid], "params": req})
             elif kind == "finish":
                 finish_turn()
+            elif kind == "complete":
+                send({"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": args[0],
+                      "turn": dict(TURN, id=args[1], rootTurnId=args[1], items=[], status="interrupted")}})
+
+    AFTER = os.path.join(os.path.dirname(LOG), "after-plan.json")
+
+    def run_after(method):   # AFTERPLAN: that method's steps, once
+        if not os.path.exists(AFTER):
+            return
+        with open(AFTER) as f:
+            plans = json.load(f)
+        steps = plans.pop(method, None)
+        with open(AFTER, "w") as f:
+            json.dump(plans, f)
+        if steps:
+            run_plan(steps)
 
     awaiting = None   # method of the outstanding "srv-1" request
     want_decline = False   # SUBAGENT: only a decline finishes the turn cleanly
@@ -391,6 +410,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             if method != "thread/resume":
                 send(*held, reply)
                 held = []
+                run_after(method)
                 continue
             usage = {"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
                      "params": dict(recorded("thread/tokenUsage/updated"), threadId=tid)}
@@ -399,12 +419,17 @@ final class CodexHarnessE2ETests: XCTestCase {
                 send(reply)
             else:
                 send(reply, usage)
+            run_after(method)
         elif method == "turn/start":
             problem = turn_params_error(params)
             if problem:
                 error(mid, problem)
                 continue
             prompt = json.dumps(params.get("input"))
+            if "NOID" in prompt:
+                sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": mid, "result": {"turn": {"items": [], "status": "inProgress"}}}) + "\n")
+                sys.stdout.flush()
+                continue
             if "JUNK" in prompt:
                 sys.stdout.write("not json " + "x" * 1000 + "\n[1, 2]\n" + "".join(json.dumps(o) + "\n" for o in (
                     {"jsonrpc": "2.0", "params": {}},
@@ -632,6 +657,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             group.addTask { try? await Task.sleep(nanoseconds: 10 * 1_000_000_000); return nil }
             let r = await group.next() ?? nil
             group.cancelAll()
+            collector.cancel()   // unstructured: cancelAll does not reach it, and the group waits for every child
             return r ?? []
         }
         await harness.shutdown()
@@ -788,7 +814,7 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     // MARK: - #1086: approvals of sub-agents the session spawned
 
-    private static let label = CodexHarness.subAgentLabel
+    private static let label = "Asked by a sub-agent of this session"   // literal: the CHANGELOG quotes it
     private static var declined: NSDictionary { ["decision": "decline"] }
     private static var accepted: NSDictionary { ["decision": "accept"] }
 
@@ -810,10 +836,13 @@ final class CodexHarnessE2ETests: XCTestCase {
     }
 
     /// Prompts thread-1 with SPAWNPLAN running `plan` (see the mock), answers every card with `answer`
-    /// (nil: leaves it), and returns the events up to thread-1's turn end ([] past 10 s). Before the
-    /// shutdown it waits (polls) until every ask of the plan has a reply in the mock's log.
-    private func runPlan(_ plan: [[Any]], answer: ApprovalDecision?) async throws -> (events: [HarnessEvent], exe: URL) {
+    /// (nil: leaves it), and returns the events up to the end of turn `endTurn` ([] past 10 s). Before the
+    /// shutdown it waits (polls) until every ask of the plan has a reply in the mock's log. `before` runs
+    /// on the fresh session first.
+    private func runPlan(_ plan: [[Any]], answer: ApprovalDecision?, endTurn: String = "turn-1",
+                         before: ((CodexHarness, SessionID) async throws -> Void)? = nil) async throws -> (events: [HarnessEvent], exe: URL) {
         let (harness, session, exe) = try await harnessOnThread1()
+        try await before?(harness, session)
         try JSONSerialization.data(withJSONObject: plan)
             .write(to: exe.deletingLastPathComponent().appendingPathComponent("spawn-plan.json"))
         let collector = Task { () -> [HarnessEvent] in
@@ -821,7 +850,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             for await event in harness.events {
                 seen.append(event)
                 if case .approvalRequest(let req) = event, let answer { try? await harness.respondToApproval(req.id, decision: answer) }
-                if case .turnCompleted(let t, _) = event, t.raw == "turn-1" { break }
+                if case .turnCompleted(let t, _) = event, t.raw == endTurn { break }
             }
             return seen
         }
@@ -835,14 +864,37 @@ final class CodexHarnessE2ETests: XCTestCase {
             return r ?? []
         }
         let asked = Set(plan.compactMap { ["ask", "patch"].contains($0.first as? String ?? "") ? ($0.last as? String) : nil })
-        var polls = 1000   // 10 s of polls, not wall time (#709, see `wait`)
-        while !Set(Self.replies(exe: exe).keys).isSuperset(of: asked), polls > 0 {
+        let replied = try await Self.awaitReplies(asked, exe: exe)
+        XCTAssertTrue(Set(replied.keys).isSuperset(of: asked), "a request of the plan got no reply: \(replied)")
+        await harness.shutdown()
+        return (events, exe)
+    }
+
+    /// The mock's replies once every id in `ids` has one, or after 10 s of polls (not wall time, #709).
+    private static func awaitReplies(_ ids: Set<String>, exe: URL) async throws -> [String: [NSDictionary]] {
+        var polls = 1000
+        while !Set(replies(exe: exe).keys).isSuperset(of: ids), polls > 0 {
             polls -= 1
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        XCTAssertTrue(Set(Self.replies(exe: exe).keys).isSuperset(of: asked), "a request of the plan got no reply: \(Self.replies(exe: exe))")
-        await harness.shutdown()
-        return (events, exe)
+        return replies(exe: exe)
+    }
+
+    /// Writes `object` as JSON (or a String as is) beside the mock, as `name`.
+    private static func put(_ object: Any, _ name: String, exe: URL) throws {
+        let url = exe.deletingLastPathComponent().appendingPathComponent(name)
+        if let text = object as? String { try text.write(to: url, atomically: true, encoding: .utf8) }
+        else { try JSONSerialization.data(withJSONObject: object).write(to: url) }
+    }
+
+    /// Prompts SPAWNPLAN with `plan` on a fresh thread-1 and returns once its first card shows (nil: none
+    /// in 10 s), the turn left running.
+    private func openTurnWithCard(_ plan: [[Any]]) async throws -> (CodexHarness, SessionID, URL, TurnID, [String]) {
+        let (harness, session, exe) = try await harnessOnThread1()
+        try Self.put(plan, "spawn-plan.json", exe: exe)
+        async let card = Self.collect(from: harness, timeout: 10) { if case .approvalRequest = $0 { return true }; return false }
+        let turn = try await harness.sendPrompt(session: session, input: [.text("SPAWNPLAN")])
+        return (harness, session, exe, turn, Self.cards(await card))
     }
 
     /// A sub-agent the session's thread spawned asks: its card shows, labelled, under the child's thread;
@@ -890,20 +942,23 @@ final class CodexHarnessE2ETests: XCTestCase {
 
     /// The peer's ids bound nothing on their own: a parent cycle (cyc-a <-> cyc-b) ends the walk, a chain
     /// reaches the session within `spawnHops` (16) hops only, and past `spawnCap` (256) announcements a
-    /// new one is ignored, even a direct child's. 2 cycle threads + deep-1…deep-254 fill the map.
+    /// new one is ignored, even a direct child's. 2 cycle threads + deep-1…deep-253 hold 255 entries:
+    /// child-256 is the 256th (shown), late-child the 257th (declined).
     func testParentCycleDeepChainAndAnnouncementCapAreBounded() async throws {
         XCTAssertEqual(CodexHarness.spawnHops, 16)
         XCTAssertEqual(CodexHarness.spawnCap, 256)
         let (events, exe) = try await runPlan([["spawn", "cyc-a", "cyc-b"], ["spawn", "cyc-b", "cyc-a"],
-                                               ["ask", "cyc-a", "srv-cycle"], ["chain", "deep", 300, "thread-1"],
+                                               ["ask", "cyc-a", "srv-cycle"], ["chain", "deep", 253, "thread-1"],
                                                ["ask", "deep-16", "srv-16"], ["ask", "deep-17", "srv-17"],
-                                               ["ask", "deep-300", "srv-300"], ["spawn", "late-child", "thread-1"],
+                                               ["ask", "deep-253", "srv-253"], ["spawn", "child-256", "thread-1"],
+                                               ["ask", "child-256", "srv-256"], ["spawn", "late-child", "thread-1"],
                                                ["ask", "late-child", "srv-past-cap"]], answer: .accept)
-        XCTAssertEqual(Self.cards(events), ["deep-16: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.cards(events), ["deep-16: \(Self.label)\nrm -rf build",
+                                            "child-256: \(Self.label)\nrm -rf build"], "\(events)")
         XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
         XCTAssertEqual(Self.replies(exe: exe), ["srv-cycle": [Self.declined], "srv-16": [Self.accepted],
-                                                "srv-17": [Self.declined], "srv-300": [Self.declined],
-                                                "srv-past-cap": [Self.declined]])
+                                                "srv-17": [Self.declined], "srv-253": [Self.declined],
+                                                "srv-256": [Self.accepted], "srv-past-cap": [Self.declined]])
     }
 
     /// The session's turn ends with a sub-agent's card unanswered: the controller drops the card then,
@@ -925,6 +980,85 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(Self.cards(events), [], "\(events)")
         XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
         XCTAssertEqual(Self.replies(exe: exe), ["srv-after": [Self.declined]])
+    }
+
+    /// #1086 r3 (QA 835 INFO-1): Stop times out on a wedged turn-1, turn-2 starts, and codex then ends
+    /// turn-1 late (the mock's WEDGE completion right after turn-2 starts, and a second one after turn-2's
+    /// cards show). Neither ends turn-2 in the harness: its sub-agent card and its own card stay answerable.
+    func testAStoppedTurnsLateCompletionLeavesTheNextTurnsCards() async throws {
+        let (events, exe) = try await runPlan([["spawn", "child-1", "thread-1"], ["ask", "child-1", "srv-child"],
+                                               ["ask", "thread-1", "srv-own"], ["complete", "thread-1", "turn-1"]],
+                                              answer: .accept, endTurn: "turn-2") { harness, session in
+            let turn = try await harness.sendPrompt(session: session, input: [.text("WEDGE")])
+            do { try await harness.abort(session: session, turn: turn, timeout: 0.3); XCTFail("the wedged turn answered") } catch {}
+        }
+        XCTAssertEqual(Self.cards(events), ["child-1: \(Self.label)\nrm -rf build", "thread-1: rm -rf build"], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 aborted", "turn-1 aborted", "turn-2 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-child": [Self.accepted], "srv-own": [Self.accepted]])
+    }
+
+    /// #1086 r3 (QA 835 INFO-2): a Stop whose interrupt fails leaves the controller idle, so the harness
+    /// declines the open sub-agent request and closes the gate (a later sub-agent request is declined).
+    /// The later one is sent after the thread/fork reply, once abort has returned.
+    func testAFailedStopDeclinesOpenSubAgentRequestsAndClosesTheGate() async throws {
+        let (harness, session, exe, turn, cards) = try await openTurnWithCard([["spawn", "child-1", "thread-1"],
+                                                                               ["ask", "child-1", "srv-open"]])
+        XCTAssertEqual(cards, ["child-1: \(Self.label)\nrm -rf build"])
+        try Self.put("turn/interrupt", "error-on", exe: exe)
+        do { try await harness.abort(session: session, turn: turn); XCTFail("the interrupt was answered") } catch {}
+        try Self.put(["thread/fork": [["ask", "child-1", "srv-after"]]], "after-plan.json", exe: exe)
+        _ = try await harness.forkSession(session)
+        let replies = try await Self.awaitReplies(["srv-open", "srv-after"], exe: exe)
+        await harness.shutdown()
+        XCTAssertEqual(replies, ["srv-open": [Self.declined], "srv-after": [Self.declined]])
+    }
+
+    /// newSession / resumeSession during a running turn forget that turn and its sub-agents: child-1's
+    /// next request (sent after a later thread/fork reply) is declined.
+    private func assertSessionResetForgetsTheTurn(_ reset: (CodexHarness, SessionID) async throws -> Void) async throws {
+        let (harness, session, exe, _, cards) = try await openTurnWithCard([["spawn", "child-1", "thread-1"],
+                                                                            ["ask", "child-1", "srv-open"]])
+        XCTAssertEqual(cards, ["child-1: \(Self.label)\nrm -rf build"])
+        try await reset(harness, session)
+        try Self.put(["thread/fork": [["ask", "child-1", "srv-after"]]], "after-plan.json", exe: exe)
+        _ = try await harness.forkSession(session)
+        let replies = try await Self.awaitReplies(["srv-after"], exe: exe)
+        await harness.shutdown()
+        XCTAssertEqual(replies, ["srv-after": [Self.declined]])
+    }
+
+    func testNewSessionForgetsTheRunningTurnAndItsSubAgents() async throws {
+        try await assertSessionResetForgetsTheTurn { harness, _ in
+            let fresh = try await harness.newSession(Self.threadOpts)
+            XCTAssertEqual(fresh.raw, "thread-1")
+        }
+    }
+
+    func testResumeSessionForgetsTheRunningTurnAndItsSubAgents() async throws {
+        try await assertSessionResetForgetsTheTurn { harness, session in
+            let resumed = try await harness.resumeSession(session, options: Self.threadOpts)
+            XCTAssertEqual(resumed.raw, "thread-1")
+        }
+    }
+
+    /// A turn/start that fails starts no turn: a sub-agent request after it is declined. NOID: the reply
+    /// has no turn id. Timeout: the reply comes after the client's bound (LATEON) and the turn it starts
+    /// (HANG) never completes, so only the failure itself can close the gate.
+    func testAFailedTurnStartLeavesTheGateClosed() async throws {
+        for (prompt, late) in [("NOID", false), ("HANG", true)] {
+            let (harness, session, exe) = try await harnessOnThread1()
+            if late {
+                try Self.put("turn/start", "late-on", exe: exe)
+                await harness.setReplyTimeoutForTesting(0.3)
+            }
+            do { try await harness.sendPrompt(session: session, input: [.text(prompt)]); XCTFail("\(prompt): turn/start succeeded") } catch {}
+            await harness.setReplyTimeoutForTesting(60)
+            try Self.put(["thread/fork": [["spawn", "child-1", "thread-1"], ["ask", "child-1", "srv-after"]]], "after-plan.json", exe: exe)
+            _ = try await harness.forkSession(session)
+            let replies = try await Self.awaitReplies(["srv-after"], exe: exe)
+            await harness.shutdown()
+            XCTAssertEqual(replies, ["srv-after": [Self.declined]], prompt)
+        }
     }
 
     /// Every JSON-RPC message the mock received with the given method, in order.

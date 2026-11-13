@@ -69,6 +69,9 @@ actor CodexHarness: CodingHarness {
     /// A turn of the session's thread is in flight: from its turn/start request to its turn/completed.
     /// A sub-agent's request outside one is declined: the controller would show it as an idle session's card.
     private var turnRunning = false
+    /// That turn's id once codex names it (its turn/started or the turn/start reply): a turn/completed
+    /// naming another turn of the thread is a stopped turn's late end, not this turn's.
+    private var currentTurn: String?
     /// Seconds a request waits for its reply before failing with `HarnessError.timeout`.
     private var replyTimeout: @Sendable (String) -> TimeInterval = { CodexHarness.defaultReplyTimeout(for: $0) }
 
@@ -299,7 +302,7 @@ actor CodexHarness: CodingHarness {
         consumer = nil
         approvalReplies.removeAll()   // codex is gone; no reply can land
         fileChanges.removeAll()
-        spawnParents.removeAll(); turnRunning = false
+        spawnParents.removeAll(); turnRunning = false; currentTurn = nil
         inboundContinuation.finish()
         eventContinuation.finish()
     }
@@ -320,7 +323,7 @@ actor CodexHarness: CodingHarness {
         }
         sandboxPolicies[id] = Self.sandboxJSON(opts.sandbox, cwd: opts.cwd)
         activeThread = id
-        spawnParents.removeAll(); turnRunning = false
+        spawnParents.removeAll(); turnRunning = false; currentTurn = nil
         let session = SessionID(raw: id)
         eventContinuation.yield(.sessionStarted(session))
         return session
@@ -328,7 +331,7 @@ actor CodexHarness: CodingHarness {
 
     func resumeSession(_ id: SessionID, options opts: SessionOptions) async throws -> SessionID {
         activeThread = id.raw   // before the request: codex sends the thread's usage right after its reply
-        spawnParents.removeAll(); turnRunning = false
+        spawnParents.removeAll(); turnRunning = false; currentTurn = nil
         let result = try await sendRequest(method: Wire.threadResume, params: [
             "threadId": id.raw,
             "approvalPolicy": opts.approvalPolicy.rawValue,
@@ -360,7 +363,7 @@ actor CodexHarness: CodingHarness {
         ]
         params["sandboxPolicy"] = sandboxPolicies[session.raw]
         activeThread = session.raw   // before the request: the turn's frames can beat its reply
-        turnRunning = true
+        turnRunning = true; currentTurn = nil
         let result: [String: Any]
         do { result = try await sendRequest(method: Wire.turnStart, params: params) } catch { turnRunning = false; throw error }
         // TurnStartResponse = { turn: Turn { id, items, status } }.
@@ -368,6 +371,7 @@ actor CodexHarness: CodingHarness {
             turnRunning = false
             throw HarnessError.protocolError("turn/start returned no turn id")
         }
+        if turnRunning, currentTurn == nil { currentTurn = id }   // not when its turn/completed beat the reply
         let turnID = TurnID(raw: id)
         eventContinuation.yield(.turnStarted(turnID))
         return turnID
@@ -391,9 +395,16 @@ actor CodexHarness: CodingHarness {
     /// the interrupt isn't answered within `timeout` seconds.
     func abort(session: SessionID, turn: TurnID?, timeout: TimeInterval) async throws {
         guard let turn else { return }
-        _ = try await sendRequest(method: Wire.turnInterrupt, params: [
-            "threadId": session.raw, "turnId": turn.raw,
-        ], timeout: timeout)
+        do {
+            _ = try await sendRequest(method: Wire.turnInterrupt, params: [
+                "threadId": session.raw, "turnId": turn.raw,
+            ], timeout: timeout)
+        } catch {
+            // The controller settles the turn on this throw while codex's may run on (#1086): no sub-agent
+            // card on an idle session, and none left waiting.
+            turnRunning = false; declineSubAgentRequests()
+            throw error
+        }
     }
 
     func respondToApproval(_ id: ApprovalID, decision: ApprovalDecision) async throws {
@@ -510,12 +521,20 @@ actor CodexHarness: CodingHarness {
                 // (accepted: one turn's patches are small, approvals are rare).
                 // A sub-agent's request outlives it but loses its card (the controller drops cards at the
                 // turn end): decline it, or the sub-agent waits forever (#1086).
+                // #1086: a turn/completed naming another turn than the current one is a stopped turn's
+                // late end (the controller settled it on an abort timeout): the current turn goes on. Unknown
+                // ids on either side end the turn as before.
+                if method == Wire.turnStarted, turnRunning, currentTurn == nil {
+                    currentTurn = (params["turn"] as? [String: Any])?["id"] as? String
+                }
                 if method == Wire.turnCompleted {
-                    for reply in approvalReplies.values where reply.subAgent {
-                        try? writeLine(JSONRPC.response(id: reply.rpcID, result: Self.approvalResult(
-                            method: reply.method, requested: [:], decision: .decline)))
+                    if let ended = (params["turn"] as? [String: Any])?["id"] as? String,
+                       let current = currentTurn, ended != current {
+                        log.info("late turn/completed of \(ended, privacy: .public) during \(current, privacy: .public)")
+                    } else {
+                        declineSubAgentRequests()
+                        approvalReplies.removeAll(); fileChanges.removeAll(); turnRunning = false; currentTurn = nil
                     }
-                    approvalReplies.removeAll(); fileChanges.removeAll(); turnRunning = false
                 }
                 for event in Self.mapNotification(method: method, params: params) {
                     eventContinuation.yield(event)
@@ -565,6 +584,15 @@ actor CodexHarness: CodingHarness {
     }
 
     static let subAgentLabel = "Asked by a sub-agent of this session"
+
+    /// Declines every shown sub-agent request: its card is gone, and codex would wait on it forever.
+    private func declineSubAgentRequests() {
+        for (key, reply) in approvalReplies where reply.subAgent {
+            try? writeLine(JSONRPC.response(id: reply.rpcID, result: Self.approvalResult(
+                method: reply.method, requested: [:], decision: .decline)))
+            approvalReplies[key] = nil
+        }
+    }
 
     /// #1086: records a `thread/started` thread_spawn's parent. Forks, reviews and other sub-agent
     /// kinds carry no thread_spawn and are never recorded, so their approvals stay declined.
