@@ -402,7 +402,12 @@ tag from the now-released section and put it on the new top draft.
 - opencode plugins in Prosper now get the same hook inputs opencode gives them: tool.execute.after
   receives the tool's arguments, permission.ask receives a Permission object (id, type, sessionID,
   messageID, title, metadata, time), and plugins that register an experimental workspace no longer
-  fail to load (#183).
+  fail to load. `type` is opencode's permission kind ("bash" for shell commands, "edit" for file
+  patches; other tools, such as MCP tools, keep their codex name), and codex's own tool name stays
+  in `tool` and `title`. Plugins written as `export default { server }` now load, a function
+  exported twice (by name and as default) runs once, and plugins get `project.worktree` and
+  `project.time.created`; `serverUrl` is present but undefined, because Prosper runs no opencode
+  server (#183, #949).
 - The volume mixer no longer risks reading past its own memory, or reserving an outsized buffer,
   when an output device reports a stream layout that changed mid-read or looks implausible; it falls
   back to stereo limiting.

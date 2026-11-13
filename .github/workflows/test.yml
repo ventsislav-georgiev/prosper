@@ -88,6 +88,20 @@ jobs:
           restore-keys: |
             spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-
 
+      - name: Plugin host test (bun pin)
+        run: |
+          # Same pin and hash as BunHarness.swift (bunVersion, bunSHA256) and bundle-bun.sh
+          # PINNED_BUN; bump all three together.
+          BUN_VERSION=bun-v1.4.3
+          BUN_SHA256=80afd4c069b46a6fa8f3ec520bebc750a7843e4a8d5b9583d29ad436c00a3403   # bun-darwin-aarch64.zip
+          [[ "$(uname -m)" == arm64 ]] || { echo "::error::pinned hash is for aarch64"; exit 1; }
+          d="$RUNNER_TEMP/bun"; mkdir -p "$d"
+          curl -fsSL -o "$d/bun.zip" "https://github.com/oven-sh/bun/releases/download/$BUN_VERSION/bun-darwin-aarch64.zip"
+          echo "$BUN_SHA256  $d/bun.zip" | shasum -a 256 -c -
+          unzip -q -o "$d/bun.zip" -d "$d"
+          "$d/bun-darwin-aarch64/bun" --version
+          "$d/bun-darwin-aarch64/bun" test ./app/plugin-host/plugin-host.test.js
+
       - name: Test
         id: test
         working-directory: app

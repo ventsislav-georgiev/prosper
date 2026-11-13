@@ -35,6 +35,11 @@ const EVENTS_FILE = join(PLUGINS_DIR, ".events.json");
 
 // opencode hook name -> codex event it maps to. Drives both dispatch and the event
 // set we advertise to Swift (so codex only wires hooks a plugin actually handles).
+// codex hook tool_name -> opencode permission kind (permission.ask `type`). A Map, so a
+// tool_name like "constructor" cannot hit Object.prototype. Other names (MCP tools) pass as is.
+const PERMISSION_TYPE = new Map([["Bash", "bash"], ["apply_patch", "edit"]]);
+const HOST_STARTED = Date.now();
+
 const HOOK_TO_EVENT = {
   "tool.execute.before": "PreToolUse",
   "tool.execute.after": "PostToolUse",
@@ -43,17 +48,28 @@ const HOOK_TO_EVENT = {
 
 // ---- plugin loading -------------------------------------------------------
 
-/** Call every exported plugin factory in a module and collect the hooks it returns. */
+/** Call every exported plugin factory in a module and collect the hooks it returns.
+ *  A factory is a function export, or the `server` of a `export default { id?, server }`
+ *  (opencode's PluginModule). Each distinct function runs once: a module may export the
+ *  same factory under a name and as default. */
 async function loadModule(path, ctx) {
   const mod = await import(path);
   const collected = [];
-  for (const value of Object.values(mod)) {
-    if (typeof value !== "function") continue;
+  const seen = new Set();
+  for (const [name, value] of Object.entries(mod)) {
     try {
-      const hooks = await value(ctx);
+      const fn = typeof value === "function" ? value
+        : name === "default" && value && typeof value === "object" ? value.server : undefined;
+      if (typeof fn !== "function") {
+        if (name === "default") console.error(`prosper-plugin-host: default export of ${path} is not a plugin, skipped`);
+        continue;
+      }
+      if (seen.has(fn)) continue;
+      seen.add(fn);
+      const hooks = await fn(ctx);
       if (hooks && typeof hooks === "object") collected.push(hooks);
     } catch (err) {
-      console.error(`prosper-plugin-host: factory in ${path} threw:`, err);
+      console.error(`prosper-plugin-host: factory ${name} in ${path} threw:`, err);
     }
   }
   return collected;
@@ -63,11 +79,15 @@ async function loadPlugins() {
   if (!existsSync(PLUGINS_DIR)) return [];
   // opencode plugin context. `client` (HTTP to an opencode server) is absent here —
   // almost no community plugin uses it; the ones that do degrade gracefully.
+  // Prosper runs no opencode server, so serverUrl is undefined like client, never a
+  // made-up URL. project.time.created is when this host started: Prosper keeps no
+  // project record older than that.
   const ctx = {
-    project: { id: "prosper" },
+    project: { id: "prosper", worktree: process.cwd(), time: { created: HOST_STARTED } },
     directory: process.cwd(),
     worktree: process.cwd(),
     client: undefined,
+    serverUrl: undefined,
     // Prosper has no workspaces: a no-op register keeps a plugin that calls it from
     // throwing in its factory and losing all its other hooks.
     experimental_workspace: { register() {} },
@@ -142,15 +162,17 @@ async function dispatch(plugins, evt) {
 
   if (event === "PermissionRequest") {
     // opencode's Permission shape. codex sends no permission id, message id or title, so
-    // the nearest fields stand in (turn_id, tool_name). `tool` stays for older plugins.
+    // the nearest fields stand in (turn_id, tool_name). `type` is opencode's kind where
+    // one maps; `tool` keeps codex's own name, as older plugins read it.
     const args = evt.tool_input;
+    const tool = typeof evt.tool_name === "string" ? evt.tool_name : "";
     const input = {
       id: crypto.randomUUID(),
-      type: evt.tool_name ?? "",
+      type: PERMISSION_TYPE.get(tool) ?? tool,
       sessionID: evt.session_id ?? "",
       messageID: evt.turn_id ?? "",
       callID: evt.tool_use_id,
-      title: evt.tool_name ?? "",
+      title: tool,
       metadata: args && typeof args === "object" && !Array.isArray(args) ? args : {},
       time: { created: Date.now() },
       tool: evt.tool_name,

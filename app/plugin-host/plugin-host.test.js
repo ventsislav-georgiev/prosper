@@ -1,15 +1,17 @@
 // Runs plugin-host.js in a child bun against fake plugins in a temp dir and checks the
-// opencode hook inputs it builds from codex events (#183). Run: bun test app/plugin-host
+// opencode hook inputs it builds from codex events (#183, #949). Run: bun test app/plugin-host
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "node:net";
 
+const startedBefore = Date.now() - 1;
 const root = mkdtempSync(join(tmpdir(), "pph-"));
 const pluginsDir = join(root, "plugins");
 const outDir = join(root, "out");
 const sock = join(root, "s.sock");
+const logFile = join(root, "host.log");
 let host;
 
 // Each recording hook writes what it received to out/<plugin>-<hook>-<session>.json.
@@ -17,6 +19,16 @@ const record = (name) => `(hook) => async (input, output) => {
   writeFileSync(${JSON.stringify(outDir)} + "/${name}-" + hook + "-" + (input.sessionID || "none") + ".json",
     JSON.stringify(input));
 }`;
+// A counting hook appends one line per call to out/<name>-<session>.count.
+const count = (name) => `async (input) => {
+  appendFileSync(${JSON.stringify(outDir)} + "/${name}-" + input.sessionID + ".count", "x\\n");
+}`;
+// Bad default exports beside a working named factory; "zok" sorts after "default" in the
+// module namespace, so it proves a skipped default does not stop the loop.
+const badDefault = (file, def) => `import { writeFileSync } from "node:fs";
+const rec = ${record(file)};
+export default ${def};
+export const zok = async () => ({ "tool.execute.after": rec("after") });`;
 
 const plugins = {
   // Uses PluginInput.experimental_workspace like the published example-workspace plugin does.
@@ -42,6 +54,34 @@ export const AThrows = async () => { throw new Error("factory boom"); };
 export const BWorks = async () => ({ "tool.execute.after": rec("after") });`,
   // A module that fails to import must not take the host down.
   "bad.js": "export const = ;",
+  // opencode's PluginModule form; its server reads serverUrl and project like a plugin may.
+  "objdefault.js": `import { writeFileSync } from "node:fs";
+const rec = ${record("objdefault")};
+export default {
+  id: "objdefault",
+  server: async (ctx) => {
+    const { serverUrl, project, worktree } = ctx;
+    writeFileSync(${JSON.stringify(outDir)} + "/ctx.json", JSON.stringify({ hasServerUrlKey: "serverUrl" in ctx,
+      serverUrl: serverUrl === undefined ? "undefined" : String(serverUrl),
+      projectWorktreeIsWorktree: project?.worktree === worktree, project }));
+    return { "tool.execute.after": rec("after") };
+  },
+};`,
+  // The same factory exported twice runs once; a second, different factory still runs.
+  "twice.js": `import { appendFileSync } from "node:fs";
+const P = async () => ({ "tool.execute.after": ${count("twiceP")} });
+export const Named = P;
+export default P;
+export const Other = async () => ({ "tool.execute.after": ${count("twiceOther")} });`,
+  // The same factory as a named export and as the default's server runs once.
+  "twice2.js": `import { appendFileSync } from "node:fs";
+export const Q = async () => ({ "tool.execute.after": ${count("twiceQ")} });
+export default { server: Q };`,
+  "def-str.js": badDefault("defstr", '"not a plugin"'),
+  "def-null.js": badDefault("defnull", "null"),
+  "def-arr.js": badDefault("defarr", "[async () => ({})]"),
+  "def-obj.js": badDefault("defobj", '{ id: "x", server: "nope" }'),
+  "def-getter.js": badDefault("defgetter", '{ get server() { throw new Error("getter boom"); } }'),
 };
 
 function ask(payload) {
@@ -70,7 +110,7 @@ beforeAll(async () => {
   for (const [name, src] of Object.entries(plugins)) writeFileSync(join(pluginsDir, name), src);
   host = Bun.spawn([process.execPath, join(import.meta.dir, "plugin-host.js")], {
     env: { PATH: process.env.PATH ?? "/usr/bin:/bin", PROSPER_PLUGINS_DIR: pluginsDir, PROSPER_PLUGIN_SOCKET: sock },
-    stdout: "ignore", stderr: "ignore",
+    stdout: "ignore", stderr: Bun.file(logFile),
   });
   for (let i = 0; i < 200 && !existsSync(sock); i++) await Bun.sleep(50);
   if (!existsSync(sock)) throw new Error("plugin host did not start");
@@ -118,7 +158,7 @@ test("permission.ask gets a Permission-shaped input", async () => {
   expect(got?.time?.created).toBeLessThanOrEqual(Date.now());
   const { id, time, ...rest } = got ?? {};
   // callID is undefined (codex sends no tool_use_id here) and drops out of the JSON.
-  expect(rest).toEqual({ type: "Bash", sessionID: "s-perm", messageID: "turn-9", title: "Bash",
+  expect(rest).toEqual({ type: "bash", sessionID: "s-perm", messageID: "turn-9", title: "Bash",
     metadata: { command: "rm -rf /Users/example/tmp" }, tool: "Bash" });
 });
 
@@ -141,4 +181,64 @@ test("an old-shape permission.ask plugin still decides", async () => {
 
 test("a non-object event fails open", async () => {
   expect(await ask("null")).toEqual({});
+});
+
+// ---- #949 ----
+
+const lines = (name) => {
+  const p = join(outDir, `${name}.count`);
+  return existsSync(p) ? readFileSync(p, "utf8").split("\n").filter(Boolean).length : 0;
+};
+
+test("a default-export object (PluginModule) has its server loaded", async () => {
+  await ask({ hook_event_name: "PostToolUse", session_id: "s-obj", tool_name: "Read", tool_use_id: "c" });
+  expect(seen("objdefault-after-s-obj")?.tool).toBe("Read");
+});
+
+test("a factory exported twice runs once; a second factory in the module runs too", async () => {
+  await ask({ hook_event_name: "PostToolUse", session_id: "s-twice", tool_name: "Read", tool_use_id: "c" });
+  expect(lines("twiceP-s-twice")).toBe(1);
+  expect(lines("twiceOther-s-twice")).toBe(1);
+  expect(lines("twiceQ-s-twice")).toBe(1);
+});
+
+test("a default export that is not a plugin is skipped with one log line, siblings load", async () => {
+  await ask({ hook_event_name: "PostToolUse", session_id: "s-bad", tool_name: "Read", tool_use_id: "c" });
+  for (const f of ["defstr", "defnull", "defarr", "defobj", "defgetter"]) {
+    expect(seen(`${f}-after-s-bad`)?.tool).toBe("Read");
+  }
+  const log = readFileSync(logFile, "utf8");
+  for (const f of ["def-str.js", "def-null.js", "def-arr.js", "def-obj.js"]) {
+    expect(log.split(`default export of ${join(pluginsDir, f)} is not a plugin, skipped`).length).toBe(2);
+  }
+  expect(log).toContain(`factory default in ${join(pluginsDir, "def-getter.js")} threw`);
+});
+
+test("permission.ask type is opencode's kind; codex's name stays in tool", async () => {
+  const cases = [
+    ["Bash", "bash"],
+    ["apply_patch", "edit"],
+    ["mcp__fs__read_file", "mcp__fs__read_file"],
+    ["constructor", "constructor"],
+  ];
+  for (const [i, [name, kind]] of cases.entries()) {
+    await ask({ hook_event_name: "PermissionRequest", session_id: `s-kind${i}`, tool_name: name, tool_input: {} });
+    const got = seen(`recorder-ask-s-kind${i}`);
+    expect({ type: got?.type, tool: got?.tool, title: got?.title }).toEqual({ type: kind, tool: name, title: name });
+  }
+  await ask({ hook_event_name: "PermissionRequest", session_id: "s-kindnum", tool_name: 5, tool_input: {} });
+  const got = seen("recorder-ask-s-kindnum");
+  expect({ type: got?.type, tool: got?.tool, title: got?.title }).toEqual({ type: "", tool: 5, title: "" });
+});
+
+test("PluginInput: serverUrl is undefined, project has worktree and time.created", () => {
+  const ctx = JSON.parse(readFileSync(join(outDir, "ctx.json"), "utf8"));
+  expect(ctx.serverUrl).toBe("undefined");
+  expect(ctx.hasServerUrlKey).toBe(true);   // declared, not forgotten
+  expect(ctx.projectWorktreeIsWorktree).toBe(true);
+  expect(ctx.project.id).toBe("prosper");
+  expect(typeof ctx.project.worktree).toBe("string");
+  expect(ctx.project.worktree.length).toBeGreaterThan(0);
+  expect(ctx.project.time.created).toBeGreaterThan(startedBefore);
+  expect(ctx.project.time.created).toBeLessThanOrEqual(Date.now());
 });
