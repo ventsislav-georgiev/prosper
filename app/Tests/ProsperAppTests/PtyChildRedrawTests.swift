@@ -32,6 +32,19 @@ final class PtyChildRedrawTests: XCTestCase {
         }
     }
 
+    /// Holds redraw()'s restore until the test runs it (#1003, QA #16): the resize then lands
+    /// mid-jiggle by construction instead of by racing a 120 ms timer.
+    private final class HeldRestore: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: [@Sendable () -> Void] = []
+        func hold(_ restore: @escaping @Sendable () -> Void) { lock.withLock { held.append(restore) } }
+        var count: Int { lock.withLock { held.count } }
+        func runAll() {
+            let restores = lock.withLock { () -> [@Sendable () -> Void] in defer { held.removeAll() }; return held }
+            restores.forEach { $0() }
+        }
+    }
+
     /// Inner program: print `R<rows>x<cols>` on every SIGWINCH. Reads the size in the
     /// handler itself — a `sh` trap running `stty | awk` forks twice, which under load
     /// takes longer than the jiggle's 120 ms restore and reports the size AFTER the
@@ -52,12 +65,16 @@ final class PtyChildRedrawTests: XCTestCase {
     """
 
     private func spawnReporter(
-        blockingWinch: Bool = false, onLine: @escaping (String) -> Void
+        blockingWinch: Bool = false, restore: HeldRestore? = nil, onLine: @escaping (String) -> Void
     ) throws -> PtyChild {
         let make = {
             try PtyChild(
                 exe: "/usr/bin/python3", args: ["-u", "-c", Self.reporter],
                 env: ["PATH": "/usr/bin:/bin"], cols: 80, rows: 24,
+                scheduleRestore: { work in
+                    if let restore { restore.hold(work) }
+                    else { DispatchQueue.global().asyncAfter(deadline: .now() + 0.12, execute: work) }
+                },
                 onOutput: { bytes in
                     // Scan for tokens rather than splitting lines: a re-entrant WINCH
                     // handler interleaves its write with the one it interrupted, so two
@@ -122,9 +139,11 @@ final class PtyChildRedrawTests: XCTestCase {
     /// pty's actual size once the restore has run, not by the last SIGWINCH
     /// report: under load the shrink's handler can print its stale 23x80 after
     /// the resize's 30x100 (re-entrant handler), which failed this test with a
-    /// correct restore.
+    /// correct restore. The restore is held (#1003, QA #16): a stalled test thread
+    /// can no longer let it run before the resize and pass without a mid-jiggle resize.
     func testResizeDuringJiggleWins() throws {
         let state = Lines()
+        let held = HeldRestore()
         let gotReady = expectation(description: "inner program started")
         let gotNew = expectation(description: "new size reported after jiggle")
         gotReady.assertForOverFulfill = false
@@ -132,22 +151,23 @@ final class PtyChildRedrawTests: XCTestCase {
         let gotNow = expectation(description: "current size answered")
         let now = Lines()
 
-        let child = try spawnReporter { line in
+        let child = try spawnReporter(restore: held) { line in
             _ = state.record(line)
             if line == "READY" { gotReady.fulfill() }
             if line == "R30x100" { gotNew.fulfill() }
             if line.hasPrefix("NOW") { _ = now.record(line); gotNow.fulfill() }
         }
         child.run()
-        defer { child.terminate() }
+        defer { held.runAll(); child.terminate() }
 
         wait(for: [gotReady], timeout: 15)
-        child.redraw()                      // shrink to 23 rows, restore in 120 ms
-        child.resize(cols: 100, rows: 30)   // real resize lands mid-jiggle
+        child.redraw()                      // shrink to 23 rows; the restore is held
+        XCTAssertEqual(held.count, 1, "redraw must schedule exactly one restore")
+        child.resize(cols: 100, rows: 30)   // real resize, before the restore
+        XCTAssertTrue(child.isJiggling, "the resize did not land mid-jiggle")
         wait(for: [gotNew], timeout: 15)
-        // Wait for the delayed restore to have run, however late load makes it.
-        let restored = expectation(for: NSPredicate { _, _ in !child.isJiggling }, evaluatedWith: nil)
-        wait(for: [restored], timeout: 15)
+        held.runAll()                       // now the restore runs, after the resize
+        XCTAssertFalse(child.isJiggling, "the restore must release the jiggle")
 
         // The restore must NOT bring back 80x24.
         child.write(Array("?\n".utf8))

@@ -276,4 +276,20 @@ final class ModelSelectionTests: XCTestCase {
         XCTAssertTrue(ModelSetup.isNetworkError(wrapped(URLError(.timedOut))))
         XCTAssertFalse(ModelSetup.isNetworkError(wrapped(CocoaError(.fileReadNoSuchFile))))
     }
+
+    /// QA 268 A1: the launch crash-loop guard already wrote the per-Mac prefs, so an empty
+    /// fallback only drops the UI (showNoModel); dropToNoModel there would rewrite the
+    /// synced prefs. No test can drive applicationDidFinishLaunching, so pin the call site.
+    func testLaunchFallbackCallSiteOnlyDropsTheUI() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AppDelegate.swift")
+        let src = try String(contentsOf: file, encoding: .utf8)
+        guard let start = src.range(of: "Preferences.applyLaunchFallback(for: id)"),
+              let end = src.range(of: "runModelSetup(force: false)", range: start.upperBound..<src.endIndex) else {
+            return XCTFail("the launch fallback block moved")
+        }
+        let block = String(src[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(block.contains("if fallback.isEmpty { showNoModel() }"), block)
+        XCTAssertFalse(block.contains("dropToNoModel"), block)
+    }
 }

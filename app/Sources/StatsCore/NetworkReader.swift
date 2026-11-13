@@ -81,8 +81,8 @@ public struct NetworkReader: StatsReader {
         return (name, Self.ipv4(for: name), ssid)
     }
 
-    /// First AF_INET address bound to `iface`.
-    private static func ipv4(for iface: String) -> String? {
+    /// First AF_INET address bound to `iface`. Internal for SystemStringDecodeTests (#1003).
+    static func ipv4(for iface: String) -> String? {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
         defer { freeifaddrs(ifaddr) }

@@ -140,7 +140,15 @@ final class Lexicon: @unchecked Sendable {
             log.warning("Bundled unigram dictionary not found; completion candidates limited to OS lexicon.")
             return .empty
         }
+        return load(unigramURL: unigramURL,
+                    bigramURL: Bundle.main.url(forResource: "frequency_bigramdictionary_en_243_342",
+                                               withExtension: "txt", subdirectory: "lexicon"),
+                    maxNextPerHead: maxNextPerHead)
+    }
 
+    /// Parses the two dictionary files; a missing or unreadable bigram file leaves the bigrams
+    /// empty. Split from the bundle lookup so LexiconLoaderTests parses fixtures (#1003, QA #268).
+    static func load(unigramURL: URL, bigramURL: URL?, maxNextPerHead: Int = 8) -> Lexicon {
         var frequency: [String: Int] = [:]
         if let text = try? String(contentsOf: unigramURL, encoding: .utf8) {
             frequency.reserveCapacity(90_000)
@@ -155,9 +163,7 @@ final class Lexicon: @unchecked Sendable {
         }
 
         var bigrams: [String: [(String, Int)]] = [:]
-        if let bigramURL = Bundle.main.url(
-            forResource: "frequency_bigramdictionary_en_243_342", withExtension: "txt", subdirectory: "lexicon"),
-           let text = try? String(contentsOf: bigramURL, encoding: .utf8) {
+        if let bigramURL, let text = try? String(contentsOf: bigramURL, encoding: .utf8) {
             text.enumerateLines { line, _ in
                 // "word1 word2 count"
                 let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)

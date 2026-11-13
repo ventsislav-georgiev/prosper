@@ -18,6 +18,14 @@ actor TypingHistoryStore {
     private var dbQueue: DatabaseQueue?
     private var didSetup = false
 
+    /// Directory of the SQLite file; nil = Application Support/Prosper. Tests pass a
+    /// tempDir() so they never open the user's history (#1003, as AgentSessionStore).
+    private let overrideDirectory: URL?
+
+    init(directory: URL? = nil) {
+        self.overrideDirectory = directory
+    }
+
     /// ponytail: hard cap on stored accepted-completion rows so the on-device
     /// history file can't grow without bound (the disk guard). Pruned lazily
     /// every `pruneEvery` inserts, not per-write. Bump if retrieval wants deeper
@@ -74,7 +82,7 @@ actor TypingHistoryStore {
         didSetup = true
         do {
             let fm = FileManager.default
-            let base = try fm.url(
+            let base = try overrideDirectory ?? fm.url(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask,
                 appropriateFor: nil,

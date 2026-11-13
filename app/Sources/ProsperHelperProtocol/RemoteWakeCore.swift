@@ -1,5 +1,20 @@
 import Foundation
 
+/// powerd capability bits (RemoteWakeSPI.h), here so tests pin the observer's interest mask
+/// and its decode; the helper target itself has no tests.
+public enum WakeCapability {
+    public static let cpu: UInt32 = 1 << 0
+    public static let video: UInt32 = 1 << 1
+    public static let network: UInt32 = 1 << 3
+    /// What RemoteWakeObserver subscribes to.
+    public static let interests: UInt32 = cpu | network
+
+    /// Video up = a user (full) wake, not a dark one.
+    public static func decode(_ caps: UInt32) -> (cpu: Bool, net: Bool, user: Bool) {
+        (caps & cpu != 0, caps & network != 0, caps & video != 0)
+    }
+}
+
 /// Validated remote-wake config. The app sends this as a JSON string over XPC;
 /// the daemon decodes + `sanitized()`s it before acting. Carries the poll URL
 /// (app injects the derived wake id + worker base — the daemon never sees the

@@ -107,9 +107,7 @@ final class TimerScheduler: @unchecked Sendable {
         // A corrupt store (interval <= 0 or NaN) must not trap or spin at every launch.
         let interval = Self.clamp(entry.interval, floor: 0.05)
         if entry.every {
-            // 10 % leeway, capped at 1 s so a short UI-refresh interval stays steady.
-            let leeway = DispatchTimeInterval.milliseconds(Int(min(interval * 100, 1000)))
-            src.schedule(deadline: .now() + delay, repeating: interval, leeway: leeway)
+            src.schedule(deadline: .now() + delay, repeating: interval, leeway: Self.repeatLeeway(interval))
         } else {
             src.schedule(deadline: .now() + delay)
         }
@@ -132,6 +130,12 @@ final class TimerScheduler: @unchecked Sendable {
             removeLocked(k)        // one-shot: durable removal must survive relaunch
             persistLocked()
         }
+    }
+
+    /// 10 % leeway, capped at 1 s so a short UI-refresh interval stays steady. Clamped again
+    /// here (a no-op after armLocked's clamp) so NaN never reaches Int(); pinned by TimerLeewayTests (#1003).
+    static func repeatLeeway(_ interval: Double) -> DispatchTimeInterval {
+        .milliseconds(Int(min(clamp(interval, floor: 0.05) * 100, 1000)))
     }
 
     /// `{ "id": <name> }` with the extension-controlled id properly escaped — a name

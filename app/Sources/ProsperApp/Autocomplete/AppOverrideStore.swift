@@ -129,6 +129,16 @@ actor AppOverrideStore {
     private var dbQueue: DatabaseQueue?
     private var didSetup = false
 
+    /// Directory of the SQLite file (nil = Application Support/Prosper) and the cache the
+    /// store mirrors into. Tests pass a tempDir() and a private cache (#1003).
+    private let overrideDirectory: URL?
+    private let cache: AppOverrideCache
+
+    init(directory: URL? = nil, cache: AppOverrideCache = .shared) {
+        self.overrideDirectory = directory
+        self.cache = cache
+    }
+
     // MARK: - Setup
 
     /// Opens (and migrates) the database on first use, then primes the sync cache.
@@ -138,7 +148,7 @@ actor AppOverrideStore {
         didSetup = true
         do {
             let fm = FileManager.default
-            let base = try fm.url(
+            let base = try overrideDirectory ?? fm.url(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask,
                 appropriateFor: nil,
@@ -265,7 +275,7 @@ actor AppOverrideStore {
     /// Called after every write so the hot path never observes stale data.
     private func refreshCache(_ queue: DatabaseQueue) {
         let rows = (try? queue.read { db in try AppOverride.fetchAll(db) }) ?? []
-        AppOverrideCache.shared.replace(with: rows)
+        cache.replace(with: rows)
     }
 
     /// Eagerly opens the DB and primes the cache at launch (call once from app
@@ -343,7 +353,8 @@ final class AppOverrideCache: @unchecked Sendable {
     private let lock = NSLock()
     private var byBundleId: [String: AppOverride] = [:]
 
-    private init() {}
+    /// Internal so a test store mirrors into its own cache, never `.shared` (#1003).
+    init() {}
 
     /// Replaces the whole snapshot (called by the store after every write).
     func replace(with overrides: [AppOverride]) {

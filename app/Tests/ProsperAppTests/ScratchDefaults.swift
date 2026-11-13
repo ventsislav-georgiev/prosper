@@ -76,24 +76,10 @@ enum DefaultsProbe {
             + "read back \(back.map { "\"\($0)\"" } ?? "nil") for \"\(value)\", "
             + "plist on disk has it: \(onDisk?[key] as? String == value); "
             + "suite \(path); dir \(describe(dir)); plist \(describe(path + ".plist")); free \(free) bytes; "
-            + "pid \(getpid()); cfprefsd \(cfprefsdPIDs()) (at first probe \(firstCfprefsd ?? "?")); "
+            + "pid \(getpid()); "
             + "previous test \(previousTest ?? "none"); \(keys.count) app keys held: "
             + keys.prefix(40).joined(separator: ",")
     }
-
-    /// The user's cfprefsd pids. A different value than at the first probe means cfprefsd restarted
-    /// mid-run, the lead the QA read points at (a path suite frozen at its last good state).
-    static func cfprefsdPIDs() -> String {
-        let p = Process(), out = Pipe()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        p.arguments = ["-U", "\(getuid())", "-x", "cfprefsd"]
-        p.standardOutput = out
-        guard (try? p.run()) != nil else { return "?" }
-        p.waitUntilExit()
-        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        return text.split(separator: "\n").joined(separator: "+")
-    }
-    nonisolated(unsafe) static var firstCfprefsd: String?
 }
 
 /// Registered once at bundle load (below); probes `Preferences.defaults` before each test starts.
@@ -105,7 +91,6 @@ final class DefaultsProbeObserver: NSObject, XCTestObservation {
     private(set) var reported = false
 
     func testCaseWillStart(_ testCase: XCTestCase) {
-        if DefaultsProbe.firstCfprefsd == nil { DefaultsProbe.firstCfprefsd = DefaultsProbe.cfprefsdPIDs() }
         check(testCase, Preferences.defaults, path: Preferences.scratchSuitePath, previousTest: lastProbed)
         lastProbed = testCase.name
     }
@@ -173,7 +158,7 @@ final class DefaultsProbeTests: XCTestCase {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir) }
         let message = try XCTUnwrap(DefaultsProbe.failure(d, path: path, previousTest: "-[X testBefore]"))
         for part in ["synchronize()=false", "suite \(path);", "dir mode 555 owner \(NSUserName())", "plist mode ",
-                     "free ", "pid \(getpid());", "cfprefsd ", "previous test -[X testBefore]", "1 app keys held: userName"] {
+                     "free ", "pid \(getpid());", "previous test -[X testBefore]", "1 app keys held: userName"] {
             XCTAssertTrue(message.contains(part), "missing \"\(part)\" in: \(message)")
         }
     }
@@ -306,6 +291,29 @@ final class PreferencesScratchStoreTests: XCTestCase {
         d.set(list, forKey: key)
         list.add("b")
         XCTAssertEqual(d.stringArray(forKey: key), ["a"], "a property-list copy, as the real store keeps")
+    }
+
+    /// QA 505 INFO-3: XCTestDefaults overrides only the key and dictionary paths; the domain
+    /// APIs (register(defaults:), persistent/volatile domains, suites) fall through to CFPreferences
+    /// and would reach the real store under test. No ProsperApp source calls one, Preferences.swift
+    /// included. Exact-line allowlist, comment lines skipped.
+    func testNoSourceCallsADefaultsDomainAPI() throws {
+        let allowed = [
+            // e2e-only throwaway suite (PROSPER_HOME set), cleared before use; never Preferences.defaults.
+            "SnippetStore.swift: suite.removePersistentDomain(forName: suiteName)",
+        ]
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        let rule = /\.\s*(register\s*\(\s*defaults\s*:|setPersistentDomain\b|removePersistentDomain\b|setVolatileDomain\b|removeVolatileDomain\b|addSuite\b|removeSuite\b)/
+        var hits: [String] = []
+        for case let url as URL in files where url.pathExtension == "swift" {
+            for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n") {
+                let text = line.trimmingCharacters(in: .whitespaces)
+                if !text.hasPrefix("//"), text.contains(rule) { hits.append("\(url.lastPathComponent): \(text)") }
+            }
+        }
+        XCTAssertEqual(hits.sorted(), allowed, "a source calls a UserDefaults domain API XCTestDefaults does not override")
     }
 
     /// #342 (#305 M4): no ProsperApp source other than Preferences.swift opens its own defaults

@@ -169,6 +169,8 @@ actor LoRATrainer {
     }
 
     @MainActor static var isSchedulerRunning: Bool { scheduler?.isValid ?? false }
+    /// The live scheduler's tolerance, nil when it is off. Read-only, for LoRAWS6Tests (#1003).
+    @MainActor static var schedulerTolerance: TimeInterval? { scheduler?.tolerance }
 
     @MainActor private static var scheduler: Timer?
     @MainActor private static var prefsObserver: NSObjectProtocol?

@@ -521,7 +521,7 @@ actor LlamaInlineEngine {
                 guard let logits = llama_get_logits_ith(ctx, beam.logitsRow) else { continue }
                 let cands = beam.prefixConsumed < required.count
                     ? topAdmissible(logits, k: 8, among: admissibleTokens(consumed: beam.prefixConsumed))
-                    : topCandidates(logits, k: 8)
+                    : Self.topCandidates(logits, nVocab: nVocab, k: 8, scratch: &scratch)
                 guard let pMax = cands.first?.p else { continue }
                 var extended = false
                 for c in cands {
@@ -784,9 +784,10 @@ actor LlamaInlineEngine {
     /// Top-k tokens with log-softmax scores (clamped at -100) over one row.
     /// Fully vDSP-vectorized — this runs per beam per step over the whole
     /// vocab, so a scalar loop here is the difference between a ~300ms and a
-    /// ~1.5s beam (measured, debug build).
-    private func topCandidates(
-        _ logits: UnsafeMutablePointer<Float>, k: Int
+    /// ~1.5s beam (measured, debug build). Static over the engine's `nVocab` and `scratch`
+    /// so LlamaTopCandidatesTests runs it on a literal row without a model (#1003, QA #148).
+    static func topCandidates(
+        _ logits: UnsafeMutablePointer<Float>, nVocab: Int, k: Int, scratch: inout [Float]
     ) -> [(token: llama_token, logprob: Float, p: Float)] {
         let n = vDSP_Length(nVocab)
         var maxv: Float = 0

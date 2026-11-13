@@ -192,8 +192,11 @@ final class AppUpdater: NSObject {
 /// toggle takes effect without a relaunch.
 final class UpdaterChannelDelegate: NSObject, SPUUpdaterDelegate {
     func allowedChannels(for updater: SPUUpdater) -> Set<String> {
-        Preferences.allowBetaUpdates ? ["beta"] : []
+        Self.channels(allowBeta: Preferences.allowBetaUpdates)
     }
+
+    /// Pure, so AppUpdaterDriverTests pins it without a Sparkle updater (none is built under XCTest).
+    static func channels(allowBeta: Bool) -> Set<String> { allowBeta ? ["beta"] : [] }
 }
 
 // MARK: - Silent user driver

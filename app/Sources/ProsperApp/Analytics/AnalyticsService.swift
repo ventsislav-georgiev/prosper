@@ -146,8 +146,8 @@ final class AnalyticsService {
     }
 
     /// Coarse hardware class (e.g. "Mac15,3") — shared by millions of units, not
-    /// identifying; matches what aptabase-swift sent before.
-    private static var deviceModel: String {
+    /// identifying; matches what aptabase-swift sent before. Internal for SystemStringDecodeTests (#1003).
+    static var deviceModel: String {
         var size = 0
         sysctlbyname("hw.model", nil, &size, nil, 0)
         guard size > 0 else { return "" }

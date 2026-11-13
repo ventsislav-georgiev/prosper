@@ -16,6 +16,8 @@ final class PtyChild: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     /// #885: redraw(rearm:)'s SIGURG; tests record (pid, signal) instead of sending it.
     private let signal: @Sendable (pid_t, Int32) -> Void
+    /// Runs redraw()'s restore; 120 ms on a global queue. Tests hold it to resize mid-jiggle (#1003).
+    private let scheduleRestore: @Sendable (@escaping @Sendable () -> Void) -> Void
     private var lastCols = 80
     private var lastRows = 24
     private var jiggling = false
@@ -27,10 +29,14 @@ final class PtyChild: @unchecked Sendable {
     init(exe: String, args: [String], env: [String: String], cols: Int, rows: Int,
          cwd: String = NSHomeDirectory(),
          signal: @escaping @Sendable (pid_t, Int32) -> Void = { _ = Darwin.kill($0, $1) },
+         scheduleRestore: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = {
+             DispatchQueue.global().asyncAfter(deadline: .now() + 0.12, execute: $0)
+         },
          onOutput: @escaping ([UInt8]) -> Void, onExit: @escaping (Int32) -> Void) throws {
         self.onOutput = onOutput
         self.onExit = onExit
         self.signal = signal
+        self.scheduleRestore = scheduleRestore
 
         // Build C argv/envp BEFORE forking — the child (post-fork, pre-exec) must not
         // allocate or call non-async-signal-safe functions, so everything is ready.
@@ -169,7 +175,7 @@ final class PtyChild: @unchecked Sendable {
                                 ws_xpixel: 0, ws_ypixel: 0)
             _ = ioctl(masterFD, TIOCSWINSZ, &small)
             // Runs on a global queue, 120 ms on; it takes the lock itself.
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            scheduleRestore { [weak self] in
                 guard let self else { return }
                 self.lock.lock()
                 defer { self.lock.unlock() }

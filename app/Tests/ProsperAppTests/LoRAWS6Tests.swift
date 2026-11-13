@@ -346,6 +346,7 @@ final class LoRAWS6Tests: XCTestCase {
         Preferences.loraEnabled = true
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertTrue(LoRATrainer.isSchedulerRunning, "on: timer")
+        XCTAssertEqual(LoRATrainer.schedulerTolerance, 120, "10 % of the 1200 s default (#193, QA #19)")
 
         Preferences.loraEnabled = false
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))

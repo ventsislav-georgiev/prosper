@@ -96,11 +96,12 @@ final class DragSnapController {
     private let layoutOverlay = LayoutOverlayWindow()
     private let palette = LayoutPaletteWindow()
 
-    // Drag state.
+    // Drag state. dragging/win/moveConfirmed/currentZone/currentScreen are internal so
+    // DragSnapCancelTests can stage a confirmed drag (#1003, QA #19); nothing else writes them.
     private var mouseDownAX: CGPoint?
-    private var dragging = false
+    var dragging = false
     private var aborted = false
-    private var win: AXUIElement?
+    var win: AXUIElement?
     private var winID: CGWindowID?
     private var winInitialOrigin: CGPoint?
     private var winInitialServerOrigin: CGPoint?
@@ -108,10 +109,12 @@ final class DragSnapController {
     /// A moveOnly palette-cell preview needs the size; the window can't resize while
     /// the user is dragging it, so caching kills a per-hover AX IPC.
     private var winSize: CGSize?
-    private var moveConfirmed = false
+    var moveConfirmed = false
     private var preConfirmPolls = 0
-    private var currentZone: SnapZone?
-    private var currentScreen: NSScreen?
+    var currentZone: SnapZone?
+    var currentScreen: NSScreen?
+    /// The edges-mode drop. A seam so DragSnapCancelTests records the drop instead of moving a window.
+    var snapToEdge: (AXUIElement, WindowAction, NSScreen) -> Void = { WindowManager.snap($0, to: $1, onScreen: $2) }
     // Layout-mode drag state (snapMode == .layouts). Mode + layout are snapshotted
     // at drag start so a mid-drag settings change can't swap them under the user.
     private var dragMode: SnapMode = .edges
@@ -168,11 +171,17 @@ final class DragSnapController {
         }
     }
 
-    private func start() {
-        guard globalMonitor == nil else { return }
+    /// The events both monitors ask for. Static so DragSnapCancelTests pins it (#1003).
+    static var monitorMask: NSEvent.EventTypeMask {
         var mask: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         // The system took the mouse mid-drag (Mission Control, a modal, screen lock).
         if #available(macOS 26, *) { mask.insert(.mouseCancelled) }
+        return mask
+    }
+
+    private func start() {
+        guard globalMonitor == nil else { return }
+        let mask = Self.monitorMask
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { ev in
             MainActor.assumeIsolated { DragSnapController.shared.handle(ev) }
         }
@@ -194,17 +203,33 @@ final class DragSnapController {
 
     // MARK: - Event handling
 
-    private func handle(_ ev: NSEvent) {
-        switch ev.type {
-        case .leftMouseDown: beginPending()
-        case .leftMouseDragged: updateDrag(ev)
-        case .leftMouseUp: endDrag()
+    enum Step: Equatable { case begin, drag, drop, cancel }
+
+    /// What a monitored event does. Pure, so DragSnapCancelTests pins it (#1003).
+    static func step(for type: NSEvent.EventType) -> Step? {
+        switch type {
+        case .leftMouseDown: return .begin
+        case .leftMouseDragged: return .drag
+        case .leftMouseUp: return .drop
         // .mouseCancelled (raw 40, macOS 26+; the case is unavailable below our
-        // macOS 14 target). Abort so endDrag clears every overlay without snapping.
-        case let t where t.rawValue == 40: aborted = true; endDrag()
-        default: break
+        // macOS 14 target).
+        case let t where t.rawValue == 40: return .cancel
+        default: return nil
         }
     }
+
+    private func handle(_ ev: NSEvent) {
+        switch Self.step(for: ev.type) {
+        case .begin: beginPending()
+        case .drag: updateDrag(ev)
+        case .drop: endDrag()
+        case .cancel: cancelDrag()
+        case nil: break
+        }
+    }
+
+    /// The system took the mouse mid-drag: abort so endDrag clears every overlay without snapping.
+    func cancelDrag() { aborted = true; endDrag() }
 
     private func beginPending() {
         resetDrag()
@@ -443,14 +468,14 @@ final class DragSnapController {
                        zoneChanged: changed)
     }
 
-    private func endDrag() {
+    func endDrag() {
         defer { resetDrag(); footprint.hide(); layoutOverlay.hide(); palette.hide() }
         guard dragging, !aborted, moveConfirmed,
               let el = win, let screen = currentScreen else { return }
         switch dragMode {
         case .edges:
             guard let zone = currentZone else { return }
-            WindowManager.snap(el, to: zone.action, onScreen: screen)
+            snapToEdge(el, zone.action, screen)
         case .layouts:
             guard let layout = dragLayout, let idx = currentZoneIdx,
                   layout.zones.indices.contains(idx) else { return }

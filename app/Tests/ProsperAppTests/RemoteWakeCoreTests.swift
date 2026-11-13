@@ -412,3 +412,42 @@ final class RemoteWakeCorePerfTests: XCTestCase {
         }.min()!
     }
 }
+
+/// #1003 (QA 598 INFO-4): the powerd capability bits RemoteWakeObserver subscribes to and decodes.
+final class WakeCapabilityTests: XCTestCase {
+    /// The observer subscribes to CPU|Network and reads CPU, Network and Video
+    /// (user) from what powerd hands it.
+    func testWakeCapabilityInterestsAndDecode() {
+        XCTAssertEqual(WakeCapability.interests, 9)
+        let none = WakeCapability.decode(0)
+        XCTAssertEqual([none.cpu, none.net, none.user], [false, false, false])
+        let cpu = WakeCapability.decode(1)
+        XCTAssertEqual([cpu.cpu, cpu.net, cpu.user], [true, false, false])
+        let video = WakeCapability.decode(2)
+        XCTAssertEqual([video.cpu, video.net, video.user], [false, false, true])
+        let audio = WakeCapability.decode(4)
+        XCTAssertEqual([audio.cpu, audio.net, audio.user], [false, false, false])
+        let net = WakeCapability.decode(8)
+        XCTAssertEqual([net.cpu, net.net, net.user], [false, true, false])
+        let full = WakeCapability.decode(0x1F)
+        XCTAssertEqual([full.cpu, full.net, full.user], [true, true, true])
+    }
+
+    /// The bit values match the SPI header the observer links against, and the observer reads
+    /// them only through WakeCapability (a scan: the helper target has no test target).
+    func testObserverUsesWakeCapabilityAndTheHeaderAgrees() throws {
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let header = try String(contentsOf: app.appendingPathComponent("Sources/ProsperHelper/include/RemoteWakeSPI.h"),
+                                encoding: .utf8)
+        for line in ["kIOPMCapabilityCPU     = (1 << 0),", "kIOPMCapabilityVideo   = (1 << 1),",
+                     "kIOPMCapabilityNetwork = (1 << 3),"] {
+            XCTAssertTrue(header.contains(line), line)
+        }
+        let observer = try String(contentsOf: app.appendingPathComponent("Sources/ProsperHelper/RemoteWakeObserver.swift"),
+                                  encoding: .utf8)
+        XCTAssertTrue(observer.contains("let interests = IOPMCapabilityBits(WakeCapability.interests)"))
+        XCTAssertTrue(observer.contains("let (cpu, net, user) = WakeCapability.decode(caps)"))
+        XCTAssertFalse(observer.contains("kIOPMCapability"), "a capability bit read outside WakeCapability")
+    }
+}

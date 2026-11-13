@@ -25,24 +25,23 @@ final class QuarantineStripperTests: XCTestCase {
     }
 
     /// A hung xattr must not wedge registerLock: the run is terminated at the bound.
+    /// The child is recorded at launch and SIGKILLed by its own pid on every path, so a
+    /// failing run leaves no 30 s sleep behind (#1003, QA #52).
     func testHungProcessIsTerminatedAtTimeout() {
         let start = Date()
-        // Unique duration so pgrep matches only this test's child.
-        let marker = "30.\(Int.random(in: 100_000...999_999))"
-        XCTAssertEqual(QuarantineStripper.run(["/bin/sleep", marker], timeout: 0.3), .timedOut)
+        var child: Process?
+        defer { if let child, child.isRunning { kill(child.processIdentifier, SIGKILL) } }
+        XCTAssertEqual(QuarantineStripper.run(["/bin/sleep", "30"], timeout: 0.3, launched: { child = $0 }), .timedOut)
         XCTAssertLessThan(Date().timeIntervalSince(start), 5)
-        // The child must actually be gone, not orphaned still sleeping.
-        var alive = true
-        for _ in 0..<20 where alive {
-            let pg = Process()
-            pg.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-            pg.arguments = ["-f", "^/bin/sleep \(marker)$"]
-            try? pg.run()
-            pg.waitUntilExit()
-            alive = pg.terminationStatus == 0
-            if alive { usleep(100_000) }
-        }
-        XCTAssertFalse(alive, "hung child survived the timeout")
+        guard let proc = child else { return XCTFail("run never reported its child") }
+        // The child must actually be gone, not orphaned still sleeping. A poll with a ceiling:
+        // SIGTERM lands at once, and Foundation reaps it on its own queue.
+        let deadline = Date().addingTimeInterval(5)
+        while proc.isRunning, Date() < deadline { usleep(20_000) }
+        XCTAssertFalse(proc.isRunning, "hung child survived the timeout")
+        guard !proc.isRunning else { return }   // terminationReason raises on a live process
+        XCTAssertEqual(proc.terminationReason, .uncaughtSignal)
+        XCTAssertEqual(proc.terminationStatus, SIGTERM)
     }
 
     func testOnlyNotNeededAndStrippedAreClean() {

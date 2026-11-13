@@ -70,8 +70,9 @@ enum QuarantineStripper {
         getxattr(path, attribute, nil, 0, 0, 0) >= 0
     }
 
-    /// Runs the command, terminating it after `timeout` seconds.
-    static func run(_ args: [String], timeout: TimeInterval) -> Outcome {
+    /// Runs the command, terminating it after `timeout` seconds. `launched` sees the running
+    /// process, so a test can reap its own child on every path (#1003, QA #52).
+    static func run(_ args: [String], timeout: TimeInterval, launched: (Process) -> Void = { _ in }) -> Outcome {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: args[0])
         proc.arguments = Array(args.dropFirst())
@@ -82,6 +83,7 @@ enum QuarantineStripper {
         } catch {
             return .failed("launch: \(error.localizedDescription)")
         }
+        launched(proc)
         guard done.wait(timeout: .now() + timeout) == .success else {
             proc.terminate()
             return .timedOut

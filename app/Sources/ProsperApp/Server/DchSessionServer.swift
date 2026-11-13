@@ -570,7 +570,8 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
     /// First IPv4 address on any interface that falls in the Tailscale CGNAT range.
     /// Relies on the range, not the interface name (utun numbering varies; App
     /// Store vs brew Tailscale differ) — this is the variant-independent floor.
-    static func tailscaleIPv4() -> String? {
+    /// `matching` is a seam: SystemStringDecodeTests asks for lo0's 127.0.0.1 (#1003).
+    static func tailscaleIPv4(matching: (in_addr) -> Bool = isCGNAT) -> String? {
         var ifap: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifap) == 0, let first = ifap else { return nil }
         defer { freeifaddrs(ifap) }
@@ -580,7 +581,7 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
             guard let sa = cur.pointee.ifa_addr, sa.pointee.sa_family == sa_family_t(AF_INET)
             else { continue }
             var addr = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
-            guard isCGNAT(addr) else { continue }
+            guard matching(addr) else { continue }
             var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
             inet_ntop(AF_INET, &addr, &buf, socklen_t(INET_ADDRSTRLEN))
             return String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)

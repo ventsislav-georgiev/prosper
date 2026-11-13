@@ -88,7 +88,7 @@ final class RemoteWakeObserver: @unchecked Sendable {
     private func registerObserver() {
         guard connection == nil else { return }
         var conn: IOPMConnection?
-        let interests = IOPMCapabilityBits(UInt32(kIOPMCapabilityCPU) | UInt32(kIOPMCapabilityNetwork))
+        let interests = IOPMCapabilityBits(WakeCapability.interests)
         let cr = IOPMConnectionCreate("ProsperRemoteWake" as CFString, interests, &conn)
         guard cr == kIOReturnSuccess, let c = conn else {
             NSLog("RemoteWake: IOPMConnectionCreate failed 0x%x", cr)
@@ -107,10 +107,8 @@ final class RemoteWakeObserver: @unchecked Sendable {
     /// serializes the decision on `q` (poll blocks up to ~6s; the assertion keeps
     /// the system awake across it). Acknowledge last so powerd may re-sleep.
     func handleWake(conn: IOPMConnection?, token: IOPMConnectionMessageToken, caps: IOPMCapabilityBits) {
-        let cpu = (caps & UInt32(kIOPMCapabilityCPU)) != 0
-        let net = (caps & UInt32(kIOPMCapabilityNetwork)) != 0
         // Graphics up = a user (full) wake, not a dark one: resets the AC back-off.
-        let user = (caps & UInt32(kIOPMCapabilityVideo)) != 0
+        let (cpu, net, user) = WakeCapability.decode(caps)
         dtrace("handleWake: caps cpu=\(cpu) net=\(net) user=\(user)")
         if cpu {
             var hold: IOPMAssertionID = 0

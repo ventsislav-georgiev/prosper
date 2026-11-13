@@ -301,6 +301,29 @@ final class ProcessGroupKillTests: XCTestCase {
         XCTAssertLessThan(call.lowerBound, exit.lowerBound, "codex teardown must run before atexit { _exit(0) }")
     }
 
+    /// QA 270 (#446): shutdown never waits on codex, and the non-blocking escalate runs on its
+    /// own thread. A detached waitUntilExit parked a cooperative thread past the reap; with ncpu
+    /// of them parked, a GCD/cooperative escalate starved. Only a whole-process starvation shows
+    /// it at run time, so a scan.
+    func testShutdownNeverWaitsAndEscalateOwnsAThread() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Harness/CodexHarness.swift"), encoding: .utf8)
+        func body(_ signature: String) throws -> Substring {
+            let start = try XCTUnwrap(source.range(of: signature), signature)
+            let end = try XCTUnwrap(source.range(of: "\n    }\n", range: start.upperBound..<source.endIndex))
+            return source[start.upperBound..<end.lowerBound]
+        }
+        let shutdown = try body("func shutdown() async {")
+        XCTAssertTrue(shutdown.contains("Self.killGroup(proc.processIdentifier)"), String(shutdown))
+        XCTAssertFalse(shutdown.contains("waitUntilExit("), String(shutdown))
+        XCTAssertFalse(shutdown.contains("Task.detached"), String(shutdown))
+        let kill = try body("static func killGroup(_ pgid: pid_t")
+        XCTAssertTrue(kill.contains("else { Thread.detachNewThread { escalate(pgid, grace: grace) } }"), String(kill))
+        XCTAssertFalse(kill.contains("DispatchQueue"), String(kill))
+        XCTAssertFalse(kill.contains("Task"), String(kill))
+    }
+
     /// BunHarness.stopHost (the process half of shutdown, minus the socket unlink) leaves
     /// no live group behind when it returns.
     @MainActor func testBunHarnessStopHostKillsTheHostGroup() throws {
