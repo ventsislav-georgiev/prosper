@@ -631,7 +631,8 @@ tag from the now-released section and put it on the new top draft.
   or string.dump gets an error at that call. (#1125)
 - Remote Terminal: "Resume interrupted" from the iPhone now reports a failure in any one folder
   instead of answering as if everything resumed, and when a resume message was not sent beside a
-  session dch can no longer start, the phone names that session again. (#951)
+  session dch can no longer start, the phone names that session again. "Restart all" names such a
+  folder in its error too. (#951)
 
 ## v2.174.0
 
