@@ -392,8 +392,9 @@ tag from the now-released section and put it on the new top draft.
   refused tint list is no longer logged again on every rescan, only when its reason changes or it
   comes back after a fix (#862, QA #744).
 - Settings shortcut fields now draw Home, End, keypad Enter and Clear with the glyphs macOS menus
-  use, keypad keys read "Pad1", "Pad+" and the like instead of "Key<n>", Help reads as a word, and
-  VoiceOver reads a shortcut field as a button with the combo in words (#890).
+  use, keypad keys read "Pad1", "Pad+" and the like instead of "Key<n>", the ISO and JIS keys (§, ¥,
+  _, 英数, かな) show their own names, Help reads as a word, and VoiceOver reads a shortcut field as
+  a button with the combo in words (#890).
 - The coding agent now defaults to Qwen3.6 35B-A3B on Macs with 32 GB of RAM or more. A Mac that
   already has Qwen3-Coder 30B downloaded and never picked a model keeps using it until Qwen3.6 is
   downloaded; smaller Macs are unchanged (#892).
