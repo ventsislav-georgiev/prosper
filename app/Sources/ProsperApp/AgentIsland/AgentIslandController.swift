@@ -1473,7 +1473,8 @@ final class AgentIslandController {
     func checkAutoAllow() {
         guard let store else { return }
         // #935: no id (another program, two Claudes, an older dch, no list yet) is not Claude Code.
-        let claude = Set(store.sessions.filter { $0.claudeSessionID?.isEmpty == false }.map(\.key))
+        // #1133: nor is a row kept from an earlier list while both list forms fail (not fresh).
+        let claude = Set(store.sessions.filter { $0.fresh && $0.claudeSessionID?.isEmpty == false }.map(\.key))
         // QA #849 INFO-5: before the setting's guard, so a check an off-toggle orphaned reads a fresh set at its
         // send when the setting is back on before autoAllowChanged runs here.
         claudeKeys.withLock { $0 = claude }

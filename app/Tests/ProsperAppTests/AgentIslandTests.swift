@@ -1825,7 +1825,9 @@ final class AgentIslandTests: XCTestCase {
         try wedgedDch()
         let dir = tempDir(), start = Date()
         let last = [session("s", .blocked, dir: dir.path), session("t", .idle, dir: "/other")]
-        XCTAssertEqual(AgentIsland.list(dirs: [dir.path], keeping: last), [last[0]],
+        var kept = last[0]
+        kept.fresh = false   // #1133: kept, so not answerable by Always allow
+        XCTAssertEqual(AgentIsland.list(dirs: [dir.path], keeping: last), [kept],
                        "--ls-json and -lj both timed out: this dir's last rows stand")
         XCTAssertLessThan(Date().timeIntervalSince(start), 5, "two 0.3 s bounds, not two 10 s sleeps")
     }
@@ -1860,12 +1862,16 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(p.tick()?.map(\.state), [.blocked])
         dch.out = nil
         f.now += AgentPollGate.backstop
-        XCTAssertNil(p.tick(), "both calls timed out: no change, the blocked row stays")
+        // #1133: the first kept list differs from the last good one only in `fresh`: out once, then no change.
+        XCTAssertEqual(p.tick()?.map(\.fresh), [false], "both calls timed out: the blocked row stays, marked kept")
         XCTAssertEqual(dch.calls, 3, "it did list: --ls-json, then --ls-json and -lj")
+        f.now += AgentPollGate.backstop
+        XCTAssertNil(p.tick(), "still timed out: no change, the blocked row stays")
+        XCTAssertEqual(dch.calls, 5)
         dch.out = Data()
         f.now += AgentPollGate.backstop
         XCTAssertEqual(p.tick(), [], "dch answered with no rows: gone")
-        XCTAssertEqual(dch.calls, 5)
+        XCTAssertEqual(dch.calls, 7)
     }
 
     /// #486 r2: --ls-json timing out is not the -lj answer; the -lj rows replace the kept ones.

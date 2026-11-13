@@ -644,6 +644,9 @@ tag from the now-released section and put it on the new top draft.
 - Closing a text viewer window no longer leaves its file open in the background, and "Open in
   Prosper" on a file that is not a text document no longer moves that file up in search
   results. (#1130)
+- Agent Island: while dch cannot list its sessions, Always allow no longer answers prompts in the
+  sessions it still shows from the last list; those prompts keep their card and send Needs input
+  until dch lists again. (#1133)
 
 ## v2.174.0
 

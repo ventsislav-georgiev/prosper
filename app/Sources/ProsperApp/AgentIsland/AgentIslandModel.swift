@@ -85,6 +85,9 @@ struct AgentSession: Equatable, Identifiable {
     var transcriptPath: String? = nil
     /// #877: dch 1.52's `cwd`, carried for Remote Terminal's list (DchWatchHub.cache); "" when unknown.
     var cwd: String = ""
+    /// #1133 (QA #849 INFO-3): false on a row kept from an earlier list because both list forms failed
+    /// (#486); Always allow answers fresh rows only. Never sent to the phone.
+    var fresh = true
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -525,7 +528,9 @@ enum AgentIsland {
             var rows = DchCommand.parseListJSON(json)
             let mapping = AgentTranscriptMapping.parse(json)   // #797: the same bytes, no second fork
             if rows.isEmpty {
-                guard let tsv = run(["-lj"], env) else { return previous.filter { $0.key.dir == dir } }
+                guard let tsv = run(["-lj"], env) else {
+                    return previous.filter { $0.key.dir == dir }.map { var s = $0; s.fresh = false; return s }
+                }
                 rows = DchCommand.parseListTSV(String(decoding: tsv, as: UTF8.self))
             }
             return rows.map {
