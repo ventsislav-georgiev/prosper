@@ -159,6 +159,59 @@ do  -- h.TIMEOUT: "" (one value) like the host, recorded, killed unless keep_run
     h.eq(host.shell.run("x"), "", "canned shellOut can time out too")
     h.eq(env.shellCalls[1].timed_out, true, "canned timeout recorded")
 end
+-- ── the level: privileged = false is the real non-system answer (ExtensionHostAPI.swift:521-523) ─
+local REFUSED = "error: host.shell is restricted to system extensions"
+local function routed() -- a router that counts its calls
+    local seen = { n = 0 }
+    return seen, function(cmd) seen.n = seen.n + 1; seen.last = cmd; return "ran:" .. tostring(cmd) end
+end
+do  -- refused level, valid call: one value, the refusal, nothing ran
+    local seen, router = routed()
+    local host, env = h.makeHost{ privileged = false, shellRouter = router }
+    h.eq(select("#", host.shell.run("echo hi")), 1, "refused: exactly one return value")
+    h.eq(host.shell.run("echo hi", { keep_running = true }), REFUSED, "refused: the host's string")
+    h.eq(select("#", host.shell.run(nil)), 1, "refused, nil cmd: still one value")
+    h.eq(host.shell.run(42), REFUSED, "refused: cmd is never looked at")
+    h.eq(seen.n, 0, "refused: the router was never called")
+    h.eq(#env.shellCalls, 0, "refused: nothing recorded as run")
+    h.eq(env.calls.shell, 4, "refused: each bridge hop still counted")
+end
+do  -- refused level, bad option: the shim's opts check wins over the gate
+    local host, env = h.makeHost{ privileged = false }
+    local ok, err = pcall(host.shell.run, "echo hi", { bogus = true })
+    h.eq(ok, false, "refused + bad option raises")
+    h.eq(err:match("host%.shell%.run: .*$"), "host.shell.run: unknown option 'bogus'", "the opts error, not the refusal")
+    h.eq(env.calls.shell, 0, "a raised call is not counted")
+end
+do  -- system level (control) and the default when the option is absent
+    local seen, router = routed()
+    local host, env = h.makeHost{ privileged = true, shellRouter = router }
+    h.eq(host.shell.run("echo hi"), "ran:echo hi", "privileged = true runs")
+    host, env = h.makeHost{ shellRouter = router }
+    h.eq(env.privileged, true, "default level is the system one")
+    h.eq(select("#", host.shell.run("echo hi")), 1, "default: one value")
+    h.eq(seen.n .. ":" .. #env.shellCalls, "2:1", "default: routed and recorded")
+end
+do  -- a cmd that is not a string, privileged: lua_tostring semantics (ExtensionHostAPI.swift:507)
+    local seen, router = routed()
+    local host, env = h.makeHost{ shellRouter = router }
+    for _, c in ipairs({ { nil, "nil" }, { {}, "table" }, { true, "true" }, { false, "false" } }) do
+        h.eq(select("#", host.shell.run(c[1])), 1, c[2] .. " cmd: one value")
+        h.eq(host.shell.run(c[1]), "", c[2] .. " cmd answers \"\"")
+    end
+    h.eq(host.shell.run(""), "", "empty string cmd answers \"\"")
+    h.eq(host.shell.run(" \n\t"), "", "blank string cmd answers \"\"")
+    h.eq(host.shell.run(), "", "missing cmd answers \"\"")
+    h.eq(seen.n .. ":" .. #env.shellCalls, "0:0", "none of them reached the router or the record")
+    h.eq(env.calls.shell, 11, "each still a counted hop")
+    h.eq(host.shell.run(42), "ran:42", "an integer runs as its string")
+    h.eq(type(seen.last) .. ":" .. seen.last, "string:42", "the router gets a string, not a number")
+    h.eq(host.shell.run(1.5), "ran:1.5", "a float runs as its string")
+    h.eq(env.shellCalls[#env.shellCalls].cmd, "1.5", "recorded as the string")
+    local ok, err = pcall(host.shell.run, nil, { keep_running = 1 })
+    h.eq(ok, false, "opts still checked for a non-string cmd")
+    h.eq(err:match("host%.shell%.run: .*$"), "host.shell.run: keep_running must be a boolean, got number", "opts error text")
+end
 
 -- ── bench/le helpers behave ──────────────────────────────────────────────────
 local per = h.bench(1000, function() return 1 + 1 end)

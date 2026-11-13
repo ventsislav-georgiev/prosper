@@ -230,7 +230,9 @@ M.TIMEOUT = TIMEOUT
 
 -- Build a stub host. opts: { power, pct, shellOut, shellTruncated, screens, date, now, frame,
 -- apps, files, fsDirs, fsExists, translateResult, agentResult, httpResponse,
--- setDefaultOK, perms, snippets, shellRouter }.
+-- setDefaultOK, perms, snippets, shellRouter, privileged }.
+-- privileged = false gives the extension the real host's non-system tier for host.shell
+-- (ExtensionHost.privileged); absent or true = the system tier, as every bundled extension.
 -- Returns (host, env); inspect env.* and mutate env.* between steps.
 function M.makeHost(opts)
     opts = opts or {}
@@ -273,6 +275,7 @@ function M.makeHost(opts)
         shellRouter = opts.shellRouter,
         shellTruncated = opts.shellTruncated,
         shellCalls = {},                      -- every host.shell.run: { cmd, keep_running, timed_out, killed }
+        privileged = (opts.privileged ~= false), -- false = host.shell.run answers the refusal string
         -- host.process (native KillProcessSupport in production). The refusal rules
         -- are NOT reimplemented here — a test states the answers it wants as
         -- { [pid string] = "reason" }; anything absent is killable. env.kills is the
@@ -295,10 +298,17 @@ function M.makeHost(opts)
                   timerCancel = 0, menubarSet = 0, screen = 0, battery = 0, http = 0,
                   kbdLayouts = 0, osascript = 0, menusList = 0 },
     }
-    -- Mirrors the real host.shell.run (ExtensionHostAPI.swift bootstrap): the same
-    -- opts checks and error texts, raised before anything runs; two returns at most,
-    -- (output, true) only when truncated. Every call lands in env.shellCalls as
-    -- { cmd =, keep_running =, timed_out =, killed = }.
+    -- Mirrors the real host.shell.run (ExtensionHostAPI.swift bootstrap + __h_shell_run):
+    -- - the same opts checks and error texts, raised before anything else (they live in
+    --   the Lua shim, so even a refused extension sees them first);
+    -- - env.privileged == false (makeHost{ privileged = false }): ONE value, the string
+    --   "error: host.shell is restricted to system extensions", whatever cmd is;
+    -- - cmd goes through lua_tostring: a number runs as its string ("42"), nil / table /
+    --   boolean become "", and "" (or all-blank) spawns nothing and answers one "";
+    -- - two returns at most, (output, true) only when truncated; a timeout answers "".
+    -- env.calls.shell counts every bridge hop that passed the opts checks (refused and
+    -- empty calls included); env.shellCalls lists only commands that ran, as
+    -- { cmd =, keep_running =, timed_out =, killed = }, so #env.shellCalls == 0 = nothing ran.
     local function shell_run(cmd, opts)
         if opts == false then opts = nil end   -- `cond and { keep_running = true }`
         if opts ~= nil then
@@ -316,6 +326,11 @@ function M.makeHost(opts)
         end
         local keep = opts ~= nil and opts.keep_running == true
         env.calls.shell = env.calls.shell + 1
+        if not env.privileged then return "error: host.shell is restricted to system extensions" end
+        if type(cmd) == "number" then cmd = tostring(cmd)
+        elseif type(cmd) ~= "string" then cmd = "" end
+        -- shortcut: ASCII blanks only (Swift also trims Unicode spaces), upgrade if a test needs them.
+        if not cmd:find("%S") then return "" end
         local out, truncated
         if env.shellRouter then out, truncated = env.shellRouter(cmd)
         else out, truncated = env.shellOut, env.shellTruncated end
