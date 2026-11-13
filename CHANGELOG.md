@@ -458,7 +458,8 @@ tag from the now-released section and put it on the new top draft.
   hand edit, for example).
 - Resume and Resume interrupted (in Agent Island and from the iPhone) now count a session as resumed
   whenever dch says its Claude is running, even if the resume message could not be sent (for example
-  a prompt was on screen); the line says the message wasn't sent, and a session whose Claude is not
+  a prompt was on screen); the island's line says the message wasn't sent (the iPhone app reports
+  the resume as done and shows that note after its next update), and a session whose Claude is not
   running is reported as failed. The island's tally now puts that note next to the resumed count ("2
   resumed (1 resume message not sent), 1 failed"). On the iPhone, Resume all now reports success
   when at least one session resumed and the only other sessions are old ones whose names start with
