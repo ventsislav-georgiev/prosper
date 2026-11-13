@@ -99,7 +99,7 @@ final class CalendarBarController {
     /// #149: shared outside-click dismisser (window-owner rule); a pinned popover never closes.
     private lazy var outsideClick = PopoverOutsideClickDismisser(
         popover: popover, canDismiss: { [weak self] in !(self?.store.pinned ?? false) },
-        systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
+        systemOwnedFrames: { [weak self] p in self?.expanded.itemFrames(at: p) ?? [] })
     /// #197: macOS 27 opens/closes through the status item's session. Pinned =
     /// outside any session: pinning (or opening pinned) cancels it, and the
     /// didEnd that follows — or one from another status menu opening — keeps
@@ -112,7 +112,7 @@ final class CalendarBarController {
                                                                 showingThisItem: popover.isShown)
             else { return }
             popover.performClose(nil)
-        })
+        }, hostSlots: { ExpandedInterfaceBridge.liveHostSlots() })   // #978
     private var minuteTimer: DispatchSourceTimer?
     /// Process-lifetime observers; the controller is a singleton, never removed.
     private var configObserver: NSObjectProtocol?

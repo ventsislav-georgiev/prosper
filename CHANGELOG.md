@@ -430,6 +430,8 @@ tag from the now-released section and put it on the new top draft.
 - Managed config: text blocks and permission strings are compared byte for byte, so a file re-saved
   in another Unicode normalization shows as drift instead of passing as unchanged, and a permission
   that differs only in normalization is added as its own entry.
+- On macOS 27, a click on another app's menu-bar icon now closes an open Stats, Mixer or Calendar
+  popover even when one of Prosper's own icons was moved into the menu bar's overflow or hidden.
 
 ## v2.174.0
 

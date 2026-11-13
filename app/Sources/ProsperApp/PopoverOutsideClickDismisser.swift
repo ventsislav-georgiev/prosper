@@ -52,11 +52,12 @@ final class PopoverOutsideClickDismisser {
     }
 
     /// #197: screen frames of our status items whose clicks the macOS 27 session
-    /// owns (empty below 27 — nothing changes there).
-    private let systemOwnedFrames: () -> [NSRect]
+    /// owns (empty below 27 — nothing changes there). Given the click (#978: the
+    /// host is read only for a click inside a frame).
+    private let systemOwnedFrames: (NSPoint) -> [NSRect]
 
     init(popover: NSPopover, canDismiss: @escaping () -> Bool = { true },
-         systemOwnedFrames: @escaping () -> [NSRect] = { [] }) {
+         systemOwnedFrames: @escaping (NSPoint) -> [NSRect] = { _ in [] }) {
         self.popover = popover
         self.canDismiss = canDismiss
         self.systemOwnedFrames = systemOwnedFrames
@@ -94,13 +95,14 @@ final class PopoverOutsideClickDismisser {
 
     /// The monitor's body; internal so tests can drive a click without an event tap.
     func handleClick(_ event: NSEvent, at p: NSPoint) {
-        guard canDismiss(),
-              !ExpandedInterfacePolicy.systemOwnsClick(p, itemFrames: systemOwnedFrames())
-        else { return }
+        guard canDismiss() else { return }
+        // Read once: on 27 the frames cost an Accessibility read of the host (#978).
+        let owned = systemOwnedFrames(p)
+        guard !ExpandedInterfacePolicy.systemOwnsClick(p, itemFrames: owned) else { return }
         let frame = popover.contentViewController?.view.window?.frame
         if Self.shouldDismiss(ownerPID: Self.ownerPID(at: p), ourPID: getpid(),
                               click: p, popoverFrame: frame) {
-            let n = systemOwnedFrames().count
+            let n = owned.count
             popoverLog.debug("dismisser closes at (\(p.x, privacy: .public), \(p.y, privacy: .public)), item frames \(n, privacy: .public)")
             lastDismissClick = ClickStamp(event)
             popover.performClose(nil)
@@ -196,8 +198,28 @@ enum ExpandedInterfacePolicy {
     /// session's own click monitor, NSStatusItemCancelOnClickMonitor, is off), so the
     /// dismisser closes the popover; a begin the same click sends after that is
     /// dropped by AppKit's dismiss timestamp or refused by `isReopenOfSameClick`.
-    static func systemOwnedFrames(_ items: [(frame: NSRect, sessionLive: Bool)]) -> [NSRect] {
-        items.filter { !$0.sessionLive }.map(\.frame)
+    ///
+    /// #978: the frames are the buttons' client window frames, which hold the item's
+    /// last laid-out position while the host keeps it in the overflow or drops it, and
+    /// another app's item may sit there now. `hostSlots` are the slots the host lays our
+    /// items out in (nil when unreadable); a frame with no slot at its x is dropped, so
+    /// a click there stays the dismisser's. Unreadable keeps every frame, as before.
+    /// With `click`, the host is read only when the click is inside a frame: outside
+    /// all of them the answer for that click is the same without it.
+    static func systemOwnedFrames(_ items: [(frame: NSRect, sessionLive: Bool)], click: NSPoint? = nil,
+                                  hostSlots: () -> [CGRect]? = { nil }) -> [NSRect] {
+        let frames = items.filter { !$0.sessionLive }.map(\.frame)
+        guard !frames.isEmpty, click.map({ systemOwnsClick($0, itemFrames: frames) }) ?? true,
+              let slots = hostSlots() else { return frames }
+        // x only, as MenuBarAX.place matches: AX slots are top-left, client frames bottom-left.
+        return frames.filter { f in slots.contains { abs($0.minX - f.minX) < 3 } }
+    }
+
+    /// #978: `pid`'s slots in a host layout (MenuBarAX.layout). nil for an empty one:
+    /// the bar always holds the agent's own items (clock, Control Center), so empty is
+    /// a failed read, not "none of ours laid out".
+    static func ownSlots(in laid: [MenuBarAX.Laid], pid: pid_t) -> [CGRect]? {
+        laid.isEmpty ? nil : laid.filter { $0.pid == pid }.map(\.frame)
     }
 
     /// #414/#415: how soon after a close a new open counts as the click that closed
@@ -237,12 +259,22 @@ final class ExpandedInterfaceBridge: NSObject {
     /// #414: when each item's session last ended or was cancelled by us.
     private let endedAt = NSMapTable<NSStatusItem, NSNumber>.weakToStrongObjects()
     private let now: () -> TimeInterval
+    /// #978: the host's slots for our items (see `systemOwnedFrames`); the controllers
+    /// pass `liveHostSlots`, tests a fake. Default: unreadable.
+    private let hostSlots: () -> [CGRect]?
+    /// Test seam: client frames and live flags fed instead of the installed items'
+    /// (nil reads the items), so no test needs a real status item.
+    private let clientFrames: (() -> [(frame: NSRect, sessionLive: Bool)])?
 
     init(begin: @escaping (NSStatusItem) -> Void, end: @escaping (NSStatusItem) -> Void,
-         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         hostSlots: @escaping () -> [CGRect]? = { nil },
+         clientFrames: (() -> [(frame: NSRect, sessionLive: Bool)])? = nil) {
         self.begin = begin
         self.end = end
         self.now = now
+        self.hostSlots = hostSlots
+        self.clientFrames = clientFrames
     }
 
     /// true on macOS 27: the system now opens/closes, so the caller must NOT also
@@ -301,10 +333,19 @@ final class ExpandedInterfaceBridge: NSObject {
 
     /// Our items' frames, for the dismisser to leave their clicks to the system —
     /// all but the item with a live session (#430).
-    var itemFrames: [NSRect] {
-        ExpandedInterfacePolicy.systemOwnedFrames(items.allObjects.compactMap { i in
-            i.button?.window.map { ($0.frame, Self.hasLiveSession(i)) }
-        })
+    var itemFrames: [NSRect] { itemFrames(at: nil) }
+
+    /// The same for a click at `click` (#978: the host is read only when it is inside one).
+    func itemFrames(at click: NSPoint?) -> [NSRect] {
+        ExpandedInterfacePolicy.systemOwnedFrames(clientFrames?() ?? items.allObjects.compactMap { i in
+            i.button?.window.map { (frame: $0.frame, sessionLive: Self.hasLiveSession(i)) }
+        }, click: click, hostSlots: hostSlots)
+    }
+
+    /// #978: our slots in MenuBarAgent's live layout; nil without Accessibility, without
+    /// the agent (below 27) or on a failed read (layout() is [] for all three).
+    static func liveHostSlots() -> [CGRect]? {
+        ExpandedInterfacePolicy.ownSlots(in: MenuBarAX.layout(), pid: getpid())
     }
 
     private static func hasLiveSession(_ item: NSStatusItem) -> Bool {

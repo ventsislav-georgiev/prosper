@@ -206,7 +206,7 @@ final class ExpandedInterfacePolicyTests: XCTestCase {
         let e = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 10,
                                    windowNumber: 0, context: nil, eventNumber: 9, clickCount: 1, pressure: 1)!
         let d = PopoverOutsideClickDismisser(popover: NSPopover(),
-                                             systemOwnedFrames: { [NSRect(origin: p, size: NSSize(width: 1, height: 1))] })
+                                             systemOwnedFrames: { _ in [NSRect(origin: p, size: NSSize(width: 1, height: 1))] })
         d.handleClick(e, at: p)
         XCTAssertFalse(d.dismissed(by: e))
     }
@@ -339,8 +339,115 @@ final class OpenItemPopoverOutsideClickDismisserTests: XCTestCase {
                                    windowNumber: 0, context: nil, eventNumber: 9, clickCount: 1, pressure: 1)!
         let open = NSRect(origin: p, size: NSSize(width: 1, height: 1))
         let d = PopoverOutsideClickDismisser(popover: NSPopover(),
-                                             systemOwnedFrames: { ExpandedInterfacePolicy.systemOwnedFrames([(open, sessionLive: true)]) })
+                                             systemOwnedFrames: { _ in ExpandedInterfacePolicy.systemOwnedFrames([(open, sessionLive: true)]) })
         d.handleClick(e, at: p)
         XCTAssertTrue(d.dismissed(by: e))
+    }
+}
+
+// #978: on macOS 27 the item frames are the buttons' client window frames, which keep
+// the last laid-out position while the host overflows or drops the item. Fed through the
+// bridge's seams: no status item, no Accessibility read. Named to match the
+// PopoverOutsideClickDismisserTests filter.
+@MainActor
+final class StaleFramePopoverOutsideClickDismisserTests: XCTestCase {
+    private typealias Frames = [(frame: NSRect, sessionLive: Bool)]
+    // Off every screen: no window there and the popover not shown, so the dismisser
+    // closes unless an item frame takes the click.
+    private let p = NSPoint(x: -100_000, y: -100_000)
+    /// The client frame around `p` (Cocoa, bottom-left).
+    private var client: NSRect { NSRect(x: p.x - 10, y: p.y - 10, width: 40, height: 24) }
+    /// A host slot (AX, top-left: only x is comparable) `dx` right of the client frame.
+    private func slot(_ dx: CGFloat) -> CGRect { CGRect(x: client.minX + dx, y: 0, width: 40, height: 24) }
+
+    private func bridge(_ frames: Frames, slots: [CGRect]?) -> ExpandedInterfaceBridge {
+        ExpandedInterfaceBridge(begin: { _ in }, end: { _ in }, hostSlots: { slots }, clientFrames: { frames })
+    }
+
+    /// true when the dismisser took a click at `at` (closed and stamped it).
+    private func closes(_ b: ExpandedInterfaceBridge, at q: NSPoint? = nil) -> Bool {
+        let d = PopoverOutsideClickDismisser(popover: NSPopover(), systemOwnedFrames: { b.itemFrames(at: $0) })
+        let e = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 10,
+                                   windowNumber: 0, context: nil, eventNumber: 9, clickCount: 1, pressure: 1)!
+        d.handleClick(e, at: q ?? p)
+        return d.dismissed(by: e)
+    }
+
+    // QA #65 F: the stale frame lies over another app's item; that click is an outside click.
+    func testStaleFrameOverAnotherItemIsTheDismissers() {
+        XCTAssertTrue(closes(bridge([(client, false)], slots: [slot(200)])), "overflowed: the host lays it out elsewhere")
+        XCTAssertTrue(closes(bridge([(client, false)], slots: [])), "dropped: no slot of ours")
+        XCTAssertTrue(closes(bridge([(client, false)], slots: [slot(3)])), "the match is under 3 pt")
+    }
+
+    // A laid-out item keeps its frame: its click still begins its session (Stats B while A is open).
+    func testLaidOutOwnItemStaysTheSystems() {
+        XCTAssertFalse(closes(bridge([(client, false)], slots: [slot(200), slot(2)])))
+        XCTAssertEqual(bridge([(client, false)], slots: [slot(-2)]).itemFrames, [client], "the client frame is kept")
+    }
+
+    // No Accessibility or no agent: nothing says a frame is stale, the parent's rule stands.
+    func testUnreadableHostKeepsTheClientFrames() {
+        XCTAssertFalse(closes(bridge([(client, false)], slots: nil)))
+    }
+
+    // Below 27 nothing is installed; with only the live item there is nothing to check.
+    // Either way the frames stay empty and the host is never read.
+    func testNoCandidateFramesNeverReadsTheHost() {
+        var reads = 0
+        let cases: [Frames] = [[], [(client, true)]]
+        for frames in cases {
+            let b = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in },
+                                            hostSlots: { reads += 1; return [] }, clientFrames: { frames })
+            XCTAssertTrue(b.itemFrames.isEmpty)
+        }
+        let noItems = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in }, hostSlots: { reads += 1; return [] })
+        XCTAssertTrue(noItems.itemFrames.isEmpty, "no installed item, as below 27")
+        XCTAssertEqual(reads, 0)
+    }
+
+    // The frames (an Accessibility read on 27) are read once per click, never for a pinned popover.
+    func testDismisserReadsTheFramesOncePerClick() {
+        var reads = 0
+        let e = NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 10,
+                                   windowNumber: 0, context: nil, eventNumber: 9, clickCount: 1, pressure: 1)!
+        let d = PopoverOutsideClickDismisser(popover: NSPopover(), systemOwnedFrames: { _ in reads += 1; return [] })
+        d.handleClick(e, at: p)
+        XCTAssertTrue(d.dismissed(by: e))
+        XCTAssertEqual(reads, 1)
+        let pinned = PopoverOutsideClickDismisser(popover: NSPopover(), canDismiss: { false },
+                                                  systemOwnedFrames: { _ in reads += 1; return [] })
+        pinned.handleClick(e, at: p)
+        XCTAssertEqual(reads, 1, "a pinned popover reads nothing")
+    }
+
+    // r2: the host is read only for a click inside a client frame, once.
+    func testHostIsReadOnlyForAClickInsideAClientFrame() {
+        var reads = 0
+        let stale = slot(200), laid = slot(0)
+        let b = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in },
+                                        hostSlots: { reads += 1; return [stale] }, clientFrames: { [(self.client, false)] })
+        XCTAssertTrue(closes(b, at: NSPoint(x: p.x - 500, y: p.y)), "outside every client frame: the dismisser's")
+        XCTAssertEqual(reads, 0, "outside every client frame: no host read")
+        XCTAssertTrue(closes(b, at: p), "inside a stale frame: the dismisser's")
+        XCTAssertEqual(reads, 1)
+        let c = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in },
+                                        hostSlots: { reads += 1; return [laid] }, clientFrames: { [(self.client, false)] })
+        XCTAssertFalse(closes(c, at: p), "inside a laid-out frame: the system's")
+        XCTAssertEqual(reads, 2)
+    }
+
+    // r2: our slots in a host layout; an empty layout is a failed read.
+    func testOwnSlotsInAHostLayout() {
+        typealias L = MenuBarAX.Laid
+        let me: pid_t = 100, agent: pid_t = 50, other: pid_t = 200
+        let a = CGRect(x: 10, y: 0, width: 30, height: 24), b = CGRect(x: 50, y: 0, width: 30, height: 24)
+        let c = CGRect(x: 90, y: 0, width: 30, height: 24), d = CGRect(x: 130, y: 0, width: 30, height: 24)
+        XCTAssertTrue(ExpandedInterfacePolicy.ownSlots(in: [], pid: me) == nil, "empty: a failed read")
+        XCTAssertEqual(ExpandedInterfacePolicy.ownSlots(in: [L(frame: a, pid: agent), L(frame: b, pid: other)], pid: me), [],
+                       "ours all overflowed or dropped")
+        XCTAssertEqual(ExpandedInterfacePolicy.ownSlots(in: [L(frame: a, pid: agent), L(frame: b, pid: me),
+                                                             L(frame: c, pid: other), L(frame: d, pid: me)], pid: me),
+                       [b, d])
     }
 }

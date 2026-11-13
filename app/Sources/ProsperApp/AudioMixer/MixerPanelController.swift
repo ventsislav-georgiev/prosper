@@ -17,7 +17,7 @@ final class MixerPanelController {
 
     /// #149: shared outside-click dismisser (see its file for why).
     private lazy var outsideClick = PopoverOutsideClickDismisser(
-        popover: popover, systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
+        popover: popover, systemOwnedFrames: { [weak self] p in self?.expanded.itemFrames(at: p) ?? [] })
 
     /// #197: macOS 27 opens/closes through the status item's session; below 27
     /// the button's target/action does (see ExpandedInterfaceBridge).
@@ -27,7 +27,7 @@ final class MixerPanelController {
             guard let self, ExpandedInterfacePolicy.hidesOnEnd(pinned: false, showingThisItem: popover.isShown)
             else { return }
             popover.performClose(nil)
-        })
+        }, hostSlots: { ExpandedInterfaceBridge.liveHostSlots() })   // #978
 
     private lazy var popover: NSPopover = {
         let p = NSPopover()

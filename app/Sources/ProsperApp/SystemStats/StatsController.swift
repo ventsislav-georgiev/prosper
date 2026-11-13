@@ -58,7 +58,7 @@ final class StatsController {
     /// misses desktop / non-activating clicks for an accessory app; the shared
     /// dismisser decides by the owner of the window under the click.
     private lazy var outsideClick = PopoverOutsideClickDismisser(
-        popover: popover, systemOwnedFrames: { [weak self] in self?.expanded.itemFrames ?? [] })
+        popover: popover, systemOwnedFrames: { [weak self] p in self?.expanded.itemFrames(at: p) ?? [] })
     /// #197: macOS 27 opens/closes through each item's session. Switching A → B
     /// may begin B before ending A, so didEnd only hides A's own popover.
     private lazy var expanded = ExpandedInterfaceBridge(
@@ -70,7 +70,7 @@ final class StatsController {
                     showingThisItem: popover.isShown && openModule == buttonModule[ObjectIdentifier(b)])
             else { return }
             popover.performClose(nil)
-        })
+        }, hostSlots: { ExpandedInterfaceBridge.liveHostSlots() })   // #978
     /// Process-lifetime observer token. The controller is a `static let` singleton
     /// meant to live forever, so this is intentionally never removed.
     private var configObserver: NSObjectProtocol?
