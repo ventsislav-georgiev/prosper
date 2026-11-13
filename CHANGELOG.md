@@ -440,7 +440,7 @@ tag from the now-released section and put it on the new top draft.
   a review or a forked thread) no longer show up in your session or end your turn early; that
   thread's approval requests are declined instead of being shown as yours.
 - When macOS refuses Prosper access to a browser file (search engines for Fallback Search, or
-  bookmarks), Prosper now logs which browser could not be read instead of silently treating it as
+  bookmarks), Prosper now logs that the file could not be read instead of silently treating it as
   empty; browsers that are not installed stay silent.
 - App Updates: the "N packages upgraded" count now compares against Homebrew's list right before the
   upgrade, so packages you upgraded in Terminal are no longer counted; brew's output goes to a file
