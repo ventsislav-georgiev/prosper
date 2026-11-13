@@ -1253,29 +1253,7 @@ private struct GeneralPane: View {
                 }
             }
 
-            NeonSection("Clipboard",
-                        footer: "History is encrypted at rest. Pinned items are always kept and don't count toward the limit.") {
-                Toggle("Enable clipboard history", isOn: Binding(
-                    get: { model.clipboardHistoryEnabled },
-                    set: { model.setClipboardHistory($0) }))
-                NeonDivider()
-                NeonRow("History size",
-                        subtitle: "Most recent entries kept (\(Preferences.clipboardHistoryMaxRange.lowerBound)–\(Preferences.clipboardHistoryMaxRange.upperBound)).") {
-                    HStack(spacing: sz(10)) {
-                        Text("\(model.clipboardHistoryMaxItems)")
-                            .font(Neon.font(13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Neon.textPrimary)
-                            .frame(minWidth: sz(44), alignment: .trailing)
-                        Stepper("", value: $model.clipboardHistoryMaxItems,
-                                in: Preferences.clipboardHistoryMaxRange, step: 50)
-                            .labelsHidden()
-                    }
-                }
-                .disabled(!model.clipboardHistoryEnabled)
-                NeonDivider()
-                Toggle("Use clipboard text as completion context",
-                       isOn: $model.useClipboardContext)
-            }
+            ClipboardSettingsSection(model: model)
 
             // Own group: the modifier drives BOTH runner results and clipboard rows.
             NeonSection("Quick-select") {
@@ -1355,6 +1333,66 @@ private struct GeneralPane: View {
             }
         }
         .onAppear { hasAccessibility = PermissionsManager.isAccessibilityTrusted() }
+    }
+}
+
+/// The General pane's Clipboard section. #210: leads with a line when macOS is set to keep Prosper
+/// from reading what other apps copy; `readAccess` is the seam tests replace.
+struct ClipboardSettingsSection: View {
+    @ObservedObject var model: SettingsModel
+    var readAccess: () -> ClipboardAccess = Pasteboard.access
+    @State private var access = ClipboardAccess.unknown
+
+    var body: some View {
+        NeonSection("Clipboard",
+                    footer: "History is encrypted at rest. Pinned items are always kept and don't count toward the limit.") {
+            ClipboardAccessNote(access: access)
+            Toggle("Enable clipboard history", isOn: Binding(
+                get: { model.clipboardHistoryEnabled },
+                set: { model.setClipboardHistory($0) }))
+            NeonDivider()
+            NeonRow("History size",
+                    subtitle: "Most recent entries kept (\(Preferences.clipboardHistoryMaxRange.lowerBound)–\(Preferences.clipboardHistoryMaxRange.upperBound)).") {
+                HStack(spacing: sz(10)) {
+                    Text("\(model.clipboardHistoryMaxItems)")
+                        .font(Neon.font(13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Neon.textPrimary)
+                        .frame(minWidth: sz(44), alignment: .trailing)
+                    Stepper("", value: $model.clipboardHistoryMaxItems,
+                            in: Preferences.clipboardHistoryMaxRange, step: 50)
+                        .labelsHidden()
+                }
+            }
+            .disabled(!model.clipboardHistoryEnabled)
+            NeonDivider()
+            Toggle("Use clipboard text as completion context",
+                   isOn: $model.useClipboardContext)
+        }
+        // No change notification exists for the setting (#210): re-read on appear and on every return to Prosper.
+        .onAppear { access = readAccess() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            access = readAccess()
+        }
+    }
+}
+
+/// #210: nothing for allowed / never asked / unknown, so the section keeps its layout.
+private struct ClipboardAccessNote: View {
+    let access: ClipboardAccess
+
+    var body: some View {
+        if let note = access.settingsNote {
+            if access.warns {
+                PermissionWarningRow(title: "macOS blocks clipboard reading", message: note) {
+                    NSWorkspace.shared.open(ClipboardAccess.settingsURL)
+                }
+            } else {
+                Text(note)
+                    .font(Neon.font(12))
+                    .foregroundStyle(Neon.textSecondary)
+            }
+            NeonDivider()
+        }
     }
 }
 

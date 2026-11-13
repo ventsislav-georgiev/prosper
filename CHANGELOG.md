@@ -432,6 +432,9 @@ tag from the now-released section and put it on the new top draft.
   that differs only in normalization is added as its own entry.
 - On macOS 27, a click on another app's menu-bar icon now closes an open Stats, Mixer or Calendar
   popover even when one of Prosper's own icons was moved into the menu bar's overflow or hidden.
+- Clipboard settings now say when macOS is set to keep Prosper from reading what other apps copy (or
+  to ask every time), and link to System Settings › Privacy & Security › Paste from Other Apps to
+  change it.
 
 ## v2.174.0
 
