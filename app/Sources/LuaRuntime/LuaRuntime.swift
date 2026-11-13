@@ -8,10 +8,14 @@ import Foundation
 /// docs/ADR-002-extensibility.md.
 ///
 /// Safety model:
-/// - **Sandbox**: dangerous standard libraries (`io`, `os`, `package`, `require`,
-///   `dofile`, `loadfile`, `load`) are removed before any user code runs, so a
-///   script cannot touch the filesystem, spawn processes, or load native modules.
-///   Capabilities are granted back explicitly through host functions (task #22).
+/// - **Sandbox** (#1125): only the base, `coroutine`, `table`, `string`, `math`
+///   and `utf8` libraries are opened, so `io`, `os`, `package` and `debug` never
+///   exist in the state (not even in the registry's `_LOADED`). From base,
+///   `dofile` and `loadfile` are removed, and `load` too unless `allowLoad`;
+///   `string.dump` is removed; `debug` is a table holding `traceback` only.
+///   A script cannot touch the filesystem, spawn processes, load native modules,
+///   reach the registry or clear its budget hook. Capabilities are granted back
+///   explicitly through host functions (task #22).
 /// - **Budget**: an instruction-count debug hook aborts any call that runs longer
 ///   than `maxInstructions`, so a runaway loop cannot wedge the host.
 public final class LuaRuntime {
@@ -30,7 +34,8 @@ public final class LuaRuntime {
     /// `lua_State *`. Recreated on `reset()`.
     private var L: OpaquePointer!
     private let maxInstructions: Int32
-    /// When true, `load` (text-mode source) survives the sandbox so a privileged
+    /// When true, `load` survives the sandbox, text chunks only (a binary chunk is
+    /// refused: Lua byte code is not verified), so a privileged
     /// runtime can compile source it fetched itself — the hammerspoon-compat shim
     /// loads the user's `~/.hammerspoon/init.lua` this way. Still no `io`/`os`/
     /// `require`/`loadfile`, so the only source it can reach is what the host hands it.
@@ -62,7 +67,6 @@ public final class LuaRuntime {
     private func open() throws {
         guard let state = luaL_newstate() else { throw LuaError.stateCreationFailed }
         L = state
-        luaL_openlibs(L)
         applySandbox()
         replayRegistrations()
     }
@@ -76,14 +80,50 @@ public final class LuaRuntime {
         try open()
     }
 
-    /// Remove filesystem/process/loader access. Capabilities come back only via
-    /// explicitly registered host functions.
+    /// Open only what the sandbox grants (#1125): never `luaL_openlibs`, whose
+    /// `io`/`os`/`package`/`debug` stay reachable through the registry even after
+    /// their globals are cleared. Capabilities come back only via explicitly
+    /// registered host functions.
     private func applySandbox() {
-        var stripped = ["io", "os", "package", "require", "dofile", "loadfile", "load"]
-        if allowLoad { stripped.removeAll { $0 == "load" } }
-        for global in stripped {
+        let libraries: [(String, lua_CFunction)] = [
+            ("_G", luaopen_base), ("coroutine", luaopen_coroutine), ("table", luaopen_table),
+            ("string", luaopen_string), ("math", luaopen_math), ("utf8", luaopen_utf8),
+        ]
+        for (name, openLibrary) in libraries {
+            luaL_requiref(L, name, openLibrary, 1)
+            clua_pop(L, 1)
+        }
+        // `debug` holds traceback only, for xpcall(f, debug.traceback); luaopen_debug
+        // just builds its table (it touches neither the registry nor the globals).
+        lua_createtable(L, 0, 1)
+        clua_pushcfunction(L, luaopen_debug)
+        lua_callk(L, 0, 1, 0, nil)
+        lua_getfield(L, -1, "traceback")
+        lua_setfield(L, -3, "traceback")
+        clua_pop(L, 1)
+        lua_setglobal(L, "debug")
+
+        for global in ["dofile", "loadfile"] + (allowLoad ? [] : ["load"]) {
             lua_pushnil(L)
             lua_setglobal(L, global)
+        }
+        lua_getglobal(L, "string")
+        lua_pushnil(L)
+        lua_setfield(L, -2, "dump")
+        clua_pop(L, 1)
+        if allowLoad {
+            // Text chunks only: Lua byte code is not verified. `...` keeps an absent
+            // env absent (luaB_load tests lua_isnone on argument 4).
+            let wrapper = """
+                local load0 = load
+                load = function(chunk, name, mode, ...) return load0(chunk, name, "t", ...) end
+                """
+            if luaL_loadstring(L, wrapper) != 0 || clua_pcall(L, 0, 0, 0) != 0 {
+                // Fail closed: only an allocation failure reaches here; no load beats the raw one.
+                clua_pop(L, 1)
+                lua_pushnil(L)
+                lua_setglobal(L, "load")
+            }
         }
     }
 

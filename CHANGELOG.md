@@ -624,6 +624,11 @@ tag from the now-released section and put it on the new top draft.
 - Extensions: comparing text with < and table.sort now order it byte by byte whatever the system
   language. Before, once a terminal had opened, the system's sorting rules applied: "a" came before
   "B" and accented letters moved between the plain ones. (#1099)
+- Security: an extension's Lua code could get past the sandbox to the whole Lua standard library,
+  and through it run commands, read and write files and load native code with no permission asked.
+  Extensions now get only the base functions, coroutine, table, string, math, utf8 and
+  debug.traceback, and load takes source text only. An extension that called another debug function
+  or string.dump gets an error at that call. (#1125)
 
 ## v2.174.0
 

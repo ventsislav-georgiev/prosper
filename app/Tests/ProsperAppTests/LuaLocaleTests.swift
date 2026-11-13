@@ -6,12 +6,13 @@ import XCTest
 /// comma decimal point.
 let luaTestLocale = "de_DE.UTF-8"
 
-/// Runs `body` with LC_CTYPE and LC_NUMERIC set to `locale` and restores both after; skips when it is missing.
+/// Runs `body` with LC_CTYPE, LC_NUMERIC and LC_COLLATE set to `locale` and restores all three after; skips
+/// when it is missing.
 func withProcessLocale(_ locale: String, _ body: () throws -> Void) throws {
     // Copied now: the pointer setlocale returns is reused by the next call.
-    let saved = [LC_CTYPE, LC_NUMERIC].map { ($0, String(cString: setlocale($0, nil))) }
+    let saved = [LC_CTYPE, LC_NUMERIC, LC_COLLATE].map { ($0, String(cString: setlocale($0, nil))) }
     defer { for (category, name) in saved { setlocale(category, name) } }
-    for category in [LC_CTYPE, LC_NUMERIC] where setlocale(category, locale) == nil {
+    for category in [LC_CTYPE, LC_NUMERIC, LC_COLLATE] where setlocale(category, locale) == nil {
         throw XCTSkip("locale \(locale) is not available")
     }
     try body()
@@ -22,7 +23,7 @@ func withProcessLocale(_ locale: String, _ body: () throws -> Void) throws {
 /// a comma LC_NUMERIC tostring(1.5) was "1,5", so extensions changed behaviour once the first terminal opened.
 final class LuaLocaleTests: XCTestCase {
     private func currentLocale() -> [String] {
-        [LC_CTYPE, LC_NUMERIC].map { String(cString: setlocale($0, nil)) }
+        [LC_CTYPE, LC_NUMERIC, LC_COLLATE].map { String(cString: setlocale($0, nil)) }
     }
 
     /// Each row: a Lua expression evaluated in the app's sandboxed runtime, loaded and run under the test
@@ -30,7 +31,7 @@ final class LuaLocaleTests: XCTestCase {
     private func assertUnderTestLocale(_ rows: [(String, String)], line: UInt = #line) throws {
         try withProcessLocale(luaTestLocale) {
             // A leg that silently ran in "C" would pin nothing.
-            XCTAssertEqual(currentLocale(), [luaTestLocale, luaTestLocale], line: line)
+            XCTAssertEqual(currentLocale(), [luaTestLocale, luaTestLocale, luaTestLocale], line: line)
             XCTAssertEqual(String(cString: localeconv().pointee.decimal_point), ",", line: line)
             let lua = try LuaRuntime(allowLoad: true)
             for (expr, expected) in rows {
@@ -88,22 +89,38 @@ final class LuaLocaleTests: XCTestCase {
     }
 
     func testExtensionsCannotReachOsSetlocale() throws {
-        // The sandbox nils the os global, but the debug library still reaches the registry's _LOADED.os.
-        let lua = try LuaRuntime()
-        try lua.run("""
-            function probe()
-              local ok, f = pcall(function() return debug.getregistry()._LOADED.os.setlocale end)
-              return tostring(not ok or f == nil)
-            end
-            """)
-        XCTAssertEqual(try lua.callGlobal("probe"), "true")
+        // #1125: os is never opened and the registry (_LOADED.os) is out of reach; loslib has no setlocale
+        // either (#1099). Before #1125 debug.getregistry()._LOADED.os was there in both runtimes.
+        for allowLoad in [false, true] {
+            let lua = try LuaRuntime(allowLoad: allowLoad)
+            try lua.run("function probe() return tostring(os) .. ' ' .. tostring(debug.getregistry) end")
+            XCTAssertEqual(try lua.callGlobal("probe"), "nil nil", "allowLoad: \(allowLoad)")
+        }
+    }
+
+    /// Round 2: comparison and table.sort use byte order (strcoll_l with the C locale in lvm.c l_strcmp).
+    /// Under de_DE.UTF-8's collation 'a' < 'B' was true, 'f' < 'é' false, and sort interleaved the cases.
+    func testStringOrderIsByteOrderWhateverTheLocale() throws {
+        try assertUnderTestLocale([
+            ("tostring('a' < 'B')", "false"),
+            ("tostring('f' < 'é')", "true"),
+            ("(function() local t = {'b', 'B', 'é', 'e', 'A', 'a', 'Z', 'É', 'z', 'E'} table.sort(t) "
+                + "return table.concat(t, ' ') end)()", "A B E Z a b e z É é"),
+        ])
+    }
+
+    /// %q escapes control characters only (iscntrl, lstrlib.c #1099), not the bytes of a UTF-8 letter.
+    func testQuotedFormatKeepsUTF8Letters() throws {
+        try assertUnderTestLocale([
+            ("string.format('%q', 'É\\1')", "\"É\\1\""),
+        ])
     }
 
     func testLocaleHelperRestoresTheProcessLocale() throws {
         let before = currentLocale()
         var inside: [String] = []
         try withProcessLocale(luaTestLocale) { inside = currentLocale() }
-        XCTAssertEqual(inside, [luaTestLocale, luaTestLocale])
+        XCTAssertEqual(inside, [luaTestLocale, luaTestLocale, luaTestLocale])
         XCTAssertNotEqual(before, inside, "the process already ran under \(luaTestLocale): a leak would not show")
         XCTAssertEqual(currentLocale(), before, "withProcessLocale leaked the process locale")
     }

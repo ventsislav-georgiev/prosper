@@ -188,6 +188,8 @@ Each extension's off-main work runs on its **own serial lane**, so a slow handle
 
 **Runtime:** Lua 5.4 vendored in-process (pure C, no JIT → notarization-clean), sandboxed — no `io`/`os`/`package`/`require`/file/net — with an instruction budget that aborts runaways. See [`LuaRuntime.swift`](app/Sources/LuaRuntime/LuaRuntime.swift).
 
+**What a script can use:** only these standard libraries are opened: the base functions, `coroutine`, `table`, `string`, `math` and `utf8`. `io`, `os`, `package` and the `debug` library are never opened. From the base functions, `dofile` and `loadfile` are removed; `load`, where the host keeps it (trusted and built-in extensions), takes source text only (a precompiled binary chunk is refused); `string.dump` is removed. `debug` is a table holding `debug.traceback` only, so `xpcall(f, debug.traceback)` works. Everything else an extension does goes through `host.*`.
+
 **Keystroke path:** fully native and **keyCode-indexed** ([`ExtensionKeyRules.swift`](app/Sources/ProsperApp/Extensions/ExtensionKeyRules.swift)) — a keypress only scans rules bound to that key (≈0–2), budgeted under 5 µs and typically a few hundred ns. **No Lua runs in the keystroke path** (the one opt-in exception is raw event taps, §5).
 
 ---
