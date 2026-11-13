@@ -435,6 +435,9 @@ tag from the now-released section and put it on the new top draft.
 - Clipboard settings now say when macOS is set to keep Prosper from reading what other apps copy (or
   to ask every time), and link to System Settings › Privacy & Security › Paste from Other Apps to
   change it.
+- Coding agent: messages, turn endings and approval requests from another codex thread (a sub-agent,
+  a review or a forked thread) no longer show up in your session or end your turn early; that
+  thread's approval requests are declined instead of being shown as yours.
 
 ## v2.174.0
 

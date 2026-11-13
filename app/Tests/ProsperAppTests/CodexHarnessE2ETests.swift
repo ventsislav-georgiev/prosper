@@ -70,6 +70,15 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// Thread and turn params are checked against the codex 0.139/0.161/0.162 schemas
     /// (`ThreadStartParams.sandbox: SandboxMode`, no `sandboxPolicy` there;
     /// `TurnStartParams.sandboxPolicy: SandboxPolicy`); a mismatch is a JSON-RPC error.
+    /// SUBAGENT sends a second thread's ("thread-sub") message delta and turn/completed, then its
+    /// command approval as "srv-1": only a `decline` reply finishes the turn cleanly (#184).
+    /// Every turn frame carries the threadId its turn/start named (#184). STRAGGLER first sends a
+    /// late message delta and turn/completed of the previous turn's thread and turn. A thread/resume
+    /// reply goes out in one stdout write with that thread's tokenUsage, as codex sends it
+    /// (plain-turn.jsonl:32-33). RESUMEAS: a file `resume-as` beside the script naming an id makes
+    /// the mock delete it and answer the next thread/resume with that id instead, holding that
+    /// thread's tokenUsage and sending it in the same write as, and before, the next thread/start
+    /// or thread/fork reply.
     /// SPAWNCHILD: a file `spawn-child` beside the script makes the mock start a child that
     /// ignores SIGTERM (an MCP server stand-in), which writes its pid to `child-pid` once
     /// the ignore is in place. It sends no frame.
@@ -91,8 +100,11 @@ final class CodexHarnessE2ETests: XCTestCase {
             "time.sleep(600)", CHILD_PID],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     current_turn = None
+    current_thread = "thread-1"   # the last turn/start's threadId
     wedged = False
     turn_seq = 0
+    RESUME_AS = os.path.join(os.path.dirname(LOG), "resume-as")
+    held = []   # RESUMEAS: the answered thread's usage, sent ahead of the next start/fork reply
 
     def log(direction, frame):
         with open(WIRE, "a") as f:
@@ -125,18 +137,18 @@ final class CodexHarnessE2ETests: XCTestCase {
     def finish_turn(problem=None):
         global current_turn
         send({"jsonrpc": "2.0", "method": "item/agentMessage/delta",
-              "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "m1", "delta": "Hello from mock"}})
+              "params": {"threadId": current_thread, "turnId": current_turn, "itemId": "m1", "delta": "Hello from mock"}})
         send({"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
-              "params": dict(recorded("thread/tokenUsage/updated"), threadId="thread-1", turnId=current_turn)})
+              "params": dict(recorded("thread/tokenUsage/updated"), threadId=current_thread, turnId=current_turn)})
         done = turn("failed" if problem else "completed")
         if problem:
             done["error"] = {"message": "bad reply: " + problem}
-        send({"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": "thread-1", "turn": done}})
+        send({"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": current_thread, "turn": done}})
         current_turn = None
 
     # Server requests per prompt word, params per the 0.162 schema (ServerRequest.json).
     def server_request(word):
-        t = {"threadId": "thread-1", "turnId": current_turn, "startedAtMs": 0}
+        t = {"threadId": current_thread, "turnId": current_turn, "startedAtMs": 0}
         if word == "PERMS":
             return "item/permissions/requestApproval", dict(t, itemId="perm-1", cwd="/tmp",
                 reason="needs network", permissions={"network": {"enabled": True}, "fileSystem": {
@@ -163,12 +175,12 @@ final class CodexHarnessE2ETests: XCTestCase {
                 "changes": [dict(change, kind={"type": "update", "move_path": None})]})})
             return "item/fileChange/requestApproval", dict(t, itemId="fc-1", reason=None)
         if word == "LEGACY":   # ApplyPatchApprovalParams: paths are fileChanges keys
-            return "applyPatchApproval", {"conversationId": "thread-1", "callId": "call-1", "reason": None,
+            return "applyPatchApproval", {"conversationId": current_thread, "callId": "call-1", "reason": None,
                 "grantRoot": None, "fileChanges": {
                     "/tmp/b.txt": {"type": "add", "content": "b\n"},
                     "/tmp/a.txt\nApply changes to /etc/passwd": {"type": "delete", "content": ""}}}
         if word == "EXEC":   # #318: legacy ExecCommandApprovalParams, `command` is an argv array
-            return "execCommandApproval", {"conversationId": "thread-1", "callId": "call-1", "cwd": "/tmp",
+            return "execCommandApproval", {"conversationId": current_thread, "callId": "call-1", "cwd": "/tmp",
                 "parsedCmd": [], "command": ["echo", "ok", "\n\n\nrm -rf ~", "a\u202eb\u200bc"]}
         if word == "CMDSTR":   # #318: modern `command` string with a newline tail, format and control scalars
             return "item/commandExecution/requestApproval", dict(t, itemId="cmd-2", cwd="/tmp",
@@ -227,6 +239,7 @@ final class CodexHarnessE2ETests: XCTestCase {
         return "decision " + json.dumps(d)
 
     awaiting = None   # method of the outstanding "srv-1" request
+    want_decline = False   # SUBAGENT: only a decline finishes the turn cleanly
 
     def error(mid, message):
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32600, "message": message}})
@@ -286,8 +299,12 @@ final class CodexHarnessE2ETests: XCTestCase {
         # A client reply to one of our server requests (result or error, no method).
         if method is None and ("result" in msg or "error" in msg):
             if awaiting and mid == "srv-1":
-                finish_turn(reply_error(awaiting, msg))
+                problem = reply_error(awaiting, msg)
+                if not problem and want_decline and msg["result"] != {"decision": "decline"}:
+                    problem = "want a decline, got " + json.dumps(msg)
+                finish_turn(problem)
                 awaiting = None
+                want_decline = False
             continue
         if method == "initialize":
             send({"jsonrpc": "2.0", "id": mid, "result": recorded("initialize")})
@@ -299,9 +316,24 @@ final class CodexHarnessE2ETests: XCTestCase {
                 error(mid, problem)
                 continue
             tid = {"thread/start": "thread-1", "thread/fork": "thread-2"}.get(method, params.get("threadId"))
+            answered_as = method == "thread/resume" and os.path.exists(RESUME_AS)
+            if answered_as:
+                tid = open(RESUME_AS).read().strip()
+                os.remove(RESUME_AS)
             result = recorded(method)
             result["thread"]["id"] = tid
-            send({"jsonrpc": "2.0", "id": mid, "result": result})
+            reply = {"jsonrpc": "2.0", "id": mid, "result": result}
+            if method != "thread/resume":
+                send(*held, reply)
+                held = []
+                continue
+            usage = {"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
+                     "params": dict(recorded("thread/tokenUsage/updated"), threadId=tid)}
+            if answered_as:
+                held.append(usage)
+                send(reply)
+            else:
+                send(reply, usage)
         elif method == "turn/start":
             problem = turn_params_error(params)
             if problem:
@@ -316,6 +348,8 @@ final class CodexHarnessE2ETests: XCTestCase {
             if "SLOWSTART" in prompt:
                 time.sleep(1.0)
             stale = current_turn if wedged else None
+            prev_thread, prev_turn = current_thread, "turn-%d" % turn_seq
+            current_thread = params.get("threadId")
             turn_seq += 1
             current_turn = "turn-%d" % turn_seq
             if "FAST" in prompt:
@@ -323,25 +357,30 @@ final class CodexHarnessE2ETests: XCTestCase {
                 if "FAIL" in prompt:
                     done["error"] = {"message": "mock turn failed"}
                 send({"jsonrpc": "2.0", "method": "turn/started",
-                      "params": {"threadId": "thread-1", "turn": turn("inProgress")}},
-                     {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": "thread-1", "turn": done}},
+                      "params": {"threadId": current_thread, "turn": turn("inProgress")}},
+                     {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": current_thread, "turn": done}},
                      {"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
                 current_turn = None
                 continue
             send({"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
             want_approval = "APPROVE" in prompt
             send({"jsonrpc": "2.0", "method": "turn/started",
-                  "params": {"threadId": "thread-1", "turn": turn("inProgress")}})
+                  "params": {"threadId": current_thread, "turn": turn("inProgress")}})
             if stale:
                 send({"jsonrpc": "2.0", "method": "turn/completed",
-                      "params": {"threadId": "thread-1", "turn": {"id": stale, "items": [], "status": "interrupted"}}})
+                      "params": {"threadId": prev_thread, "turn": {"id": stale, "items": [], "status": "interrupted"}}})
+            if "STRAGGLER" in prompt:   # #184: the previous thread's late frames inside this turn
+                send({"jsonrpc": "2.0", "method": "item/agentMessage/delta", "params": {"threadId": prev_thread,
+                      "turnId": prev_turn, "itemId": "late-m1", "delta": "Late from the old thread"}},
+                     {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": prev_thread,
+                      "turn": dict(TURN, id=prev_turn, rootTurnId=prev_turn, items=[], status="completed")}})
             wedged = "WEDGE" in prompt
             if "EXIT0" in prompt:
                 time.sleep(0.3)
                 sys.exit(0)
             if "HANG" in prompt or wedged:
                 send({"jsonrpc": "2.0", "method": "item/started",
-                      "params": {"threadId": "thread-1", "turnId": current_turn, "startedAtMs": 0,
+                      "params": {"threadId": current_thread, "turnId": current_turn, "startedAtMs": 0,
                                  "item": {"id": "cmd-" + current_turn, "type": "commandExecution", "cwd": "/tmp",
                                           "command": "sleep 600", "commandActions": [], "status": "inProgress"}}})
                 continue
@@ -349,8 +388,18 @@ final class CodexHarnessE2ETests: XCTestCase {
                 # Server→client request; client must reply before we proceed.
                 send({"jsonrpc": "2.0", "id": "appr-1",
                       "method": "item/commandExecution/requestApproval",
-                      "params": {"threadId": "thread-1", "turnId": current_turn, "itemId": "cmd-1",
+                      "params": {"threadId": current_thread, "turnId": current_turn, "itemId": "cmd-1",
                                  "startedAtMs": 0, "command": "rm -rf build", "cwd": "/tmp"}})
+            if "SUBAGENT" in prompt:   # #184: another thread's frames mid-turn, then its approval request
+                sub = {"threadId": "thread-sub", "turnId": "sub-turn-1"}
+                send({"jsonrpc": "2.0", "method": "item/agentMessage/delta",
+                      "params": dict(sub, itemId="sub-m1", delta="Hello from sub-agent")},
+                     {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": "thread-sub",
+                      "turn": dict(TURN, id="sub-turn-1", rootTurnId="sub-turn-1", items=[], status="completed")}})
+                awaiting, want_decline = "item/commandExecution/requestApproval", True
+                send({"jsonrpc": "2.0", "id": "srv-1", "method": awaiting,
+                      "params": dict(sub, itemId="sub-cmd-1", startedAtMs=0, command="rm -rf build", cwd="/tmp")})
+                continue
             word = next((w for w in ("PERMS", "GRANTS", "ODDKEYS", "PATCH", "TROJAN", "HEBREW", "HUGE", "LEGACY", "EXEC", "CMDSTR", "RTLCMD", "FILLER", "PAD", "AMEND", "ELICIT") if w in prompt), None)
             if word:
                 awaiting, req_params = server_request(word)
@@ -375,7 +424,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             else:
                 send({"jsonrpc": "2.0", "id": mid, "result": {}})
                 send({"jsonrpc": "2.0", "method": "turn/completed",
-                      "params": {"threadId": "thread-1", "turn": turn("interrupted")}})
+                      "params": {"threadId": current_thread, "turn": turn("interrupted")}})
                 current_turn = None
         elif mid is not None:
             error(mid, "unknown method " + str(method))
@@ -521,6 +570,131 @@ final class CodexHarnessE2ETests: XCTestCase {
         let completed = events.contains { if case .turnCompleted = $0 { return true }; return false }
         XCTAssertTrue(sawApproval, "expected a command approval request; got \(events)")
         XCTAssertTrue(completed, "turn should complete after the approval reply; got \(events)")
+    }
+
+    /// #184: codex sends other threads' frames on the same connection (a fork's usage is in
+    /// plain-turn.jsonl:29; sub-agents and detached reviews have their own threads). Their text
+    /// stays out, their turn end does not end the session's turn, and their approval is declined
+    /// (unanswered, codex would wait on it forever) instead of shown as the session's.
+    func testOtherThreadsFramesAreDroppedAndItsApprovalDeclined() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(SessionOptions(
+            cwd: home.path, model: "test-model",
+            approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false)))
+        async let eventsTask = Self.collect(from: harness, timeout: 10) {
+            if case .turnCompleted(let t, _) = $0 { return t.raw == "turn-1" }; return false
+        }
+        _ = try await harness.sendPrompt(session: session, input: [.text("a SUBAGENT runs")])
+        let events = await eventsTask
+        await harness.shutdown()
+
+        let ended = events.compactMap { e -> String? in
+            if case .turnCompleted(let t, let outcome) = e { return "\(t.raw) \(outcome)" }; return nil
+        }
+        XCTAssertEqual(ended, ["turn-1 completed"], "only the session's turn ends, cleanly: \(events)")
+        XCTAssertTrue(events.contains { if case .textDelta(_, _, "Hello from mock") = $0 { return true }; return false }, "\(events)")
+        XCTAssertFalse(events.contains { if case .textDelta(_, _, let t) = $0 { return t.contains("sub-agent") }; return false }, "\(events)")
+        XCTAssertFalse(events.contains { if case .approvalRequest = $0 { return true }; return false }, "\(events)")
+        XCTAssertEqual(try Self.reply(exe: exe)?["result"] as? NSDictionary, ["decision": "decline"] as NSDictionary)
+    }
+
+    // MARK: - #184: the thread the harness drives (activeThread) follows starts, resumes and prompts
+
+    private static let threadOpts = SessionOptions(cwd: "/tmp", model: "test-model",
+                                                   approvalPolicy: .onRequest, sandbox: .workspaceWrite(networkAccess: false))
+
+    /// A started mock harness with thread-1 opened on it.
+    private func harnessOnThread1() async throws -> (CodexHarness, SessionID, URL) {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(Self.threadOpts)
+        XCTAssertEqual(session.raw, "thread-1")
+        return (harness, session, exe)
+    }
+
+    /// Prompts `session`; the events up to the first turn end ([] if none comes in 10 s).
+    private static func runTurn(_ harness: CodexHarness, _ session: SessionID, _ prompt: String) async throws -> [HarnessEvent] {
+        async let events = collect(from: harness, timeout: 10) { if case .turnCompleted = $0 { return true }; return false }
+        try await harness.sendPrompt(session: session, input: [.text(prompt)])
+        return await events
+    }
+
+    private static func ended(_ events: [HarnessEvent]) -> [String] {
+        events.compactMap { if case .turnCompleted(let t, let outcome) = $0 { return "\(t.raw) \(outcome)" }; return nil }
+    }
+
+    private static func texts(_ events: [HarnessEvent]) -> [String] {
+        events.compactMap { if case .textDelta(_, _, let text) = $0 { return text }; return nil }
+    }
+
+    /// #184 (a): two threads on one live harness, as when the controller switches session: a fork
+    /// (which does not move the driven thread) is prompted and gets its own text and turn end; then
+    /// thread-1 is prompted again and gets its turn back, while the fork's late frames are dropped.
+    /// Pins sendPrompt's assignment.
+    func testTwoThreadsOnOneHarnessEachGetTheirOwnTurn() async throws {
+        let (harness, session, exe) = try await harnessOnThread1()
+        let fork = try await harness.forkSession(session)
+        XCTAssertEqual(fork.raw, "thread-2")
+        let second = try await Self.runTurn(harness, fork, "say hello")
+        let first = try await Self.runTurn(harness, session, "say hello, STRAGGLER")
+        await harness.shutdown()
+
+        XCTAssertEqual(Self.ended(second), ["turn-1 completed"], "\(second)")
+        XCTAssertEqual(Self.texts(second), ["Hello from mock"], "\(second)")
+        XCTAssertEqual(Self.ended(first), ["turn-2 completed"], "\(first)")
+        XCTAssertEqual(Self.texts(first), ["Hello from mock"], "thread-2's late text must not show: \(first)")
+        let prompted = try Self.received("turn/start", exe: exe).map { ($0["params"] as? [String: Any])?["threadId"] as? String }
+        XCTAssertEqual(prompted, ["thread-2", "thread-1"])
+    }
+
+    /// #184 (b): codex sends the resumed thread's usage in the same write as the resume reply
+    /// (plain-turn.jsonl:32-33), so the harness reads both in one chunk and maps the usage before
+    /// resumeSession can continue: it is delivered only because the driven thread moves BEFORE
+    /// the request. Pins resumeSession's first assignment.
+    func testResumedThreadsUsageRightAfterTheReplyIsDelivered() async throws {
+        let (harness, _, _) = try await harnessOnThread1()
+        async let usage = Self.collect(from: harness, timeout: 5) { if case .usage = $0 { return true }; return false }
+        let resumed = try await harness.resumeSession(SessionID(raw: "thread-2"), options: Self.threadOpts)
+        let events = await usage
+        await harness.shutdown()
+        XCTAssertEqual(resumed.raw, "thread-2")
+        XCTAssertTrue(events.contains { if case .usage(let u) = $0 { return u.inputTokens == 10 && u.outputTokens == 5 }; return false },
+                      "the resumed thread's usage was dropped: \(events)")
+    }
+
+    /// #184 (b): a resume codex answers with another thread id (`threadID(from:)` takes the
+    /// answer); a frame of the answered thread after the reply is delivered. Pins resumeSession's
+    /// assignment after the reply: the mock holds that frame until the next request, a fork (which
+    /// does not move the driven thread), and that request leaves only after resumeSession returned.
+    func testResumeAnsweredWithAnotherIdFollowsTheAnsweredThread() async throws {
+        let (harness, _, exe) = try await harnessOnThread1()
+        try "thread-3".write(to: exe.deletingLastPathComponent().appendingPathComponent("resume-as"), atomically: true, encoding: .utf8)
+        let resumed = try await harness.resumeSession(SessionID(raw: "thread-2"), options: Self.threadOpts)
+        _ = try await harness.forkSession(resumed)
+        // The usage was mapped in the fork reply's chunk, before forkSession returned; the events stream buffers it.
+        let events = await Self.collect(from: harness, timeout: 5) { if case .usage = $0 { return true }; return false }
+        await harness.shutdown()
+        XCTAssertEqual(resumed.raw, "thread-3")
+        XCTAssertTrue(events.contains { if case .usage = $0 { return true }; return false }, "the answered thread's usage was dropped: \(events)")
+    }
+
+    /// #184 (c): after a resume switched the harness to thread-2, a late frame of thread-1 (the
+    /// thread switched away from) is dropped: no text, and its turn end does not end thread-2's turn.
+    func testLateFrameOfTheThreadSwitchedAwayFromIsDropped() async throws {
+        let (harness, session, _) = try await harnessOnThread1()
+        let before = try await Self.runTurn(harness, session, "say hello")
+        let resumed = try await harness.resumeSession(SessionID(raw: "thread-2"), options: Self.threadOpts)
+        let after = try await Self.runTurn(harness, resumed, "go on, STRAGGLER")
+        await harness.shutdown()
+
+        XCTAssertEqual(Self.ended(before), ["turn-1 completed"], "\(before)")
+        XCTAssertEqual(Self.ended(after), ["turn-2 completed"], "thread-1's late turn end must not end thread-2's turn: \(after)")
+        XCTAssertEqual(Self.texts(after), ["Hello from mock"], "thread-1's late text must not show: \(after)")
     }
 
     /// Every JSON-RPC message the mock received with the given method, in order.
@@ -1999,6 +2173,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testControllerLegacyPatchApprovalShowsOneLinePaths() async throws {
         let (approval, reply) = try await answer("LEGACY please", with: .accept)
         XCTAssertEqual(approval?.kind, .fileChange)
+        XCTAssertEqual(approval?.session.raw, "thread-1", "#184: a legacy request names its thread conversationId")
         XCTAssertEqual(approval?.summary, "Apply changes to /tmp/a.txt\\nApply changes to /etc/passwd, /tmp/b.txt")
         XCTAssertEqual(approval?.detail, "/tmp/a.txt\\nApply changes to /etc/passwd\n\n/tmp/b.txt\n")
         XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "approved"] as NSDictionary)
@@ -2011,6 +2186,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testControllerCommandArraySummaryIsOneEscapedLine() async throws {
         let (approval, reply) = try await answer("EXEC please", with: .accept)
         XCTAssertEqual(approval?.kind, .command)
+        XCTAssertEqual(approval?.session.raw, "thread-1", "#184: a legacy request names its thread conversationId")
         XCTAssertEqual(approval?.summary, #"echo ok '\n\n\nrm -rf ~' 'a\u{202E}b\u{200B}c'"#)
         XCTAssertEqual(reply?["result"] as? NSDictionary, ["decision": "approved"] as NSDictionary)
     }

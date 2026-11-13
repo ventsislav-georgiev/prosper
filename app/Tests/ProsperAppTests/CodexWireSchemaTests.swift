@@ -323,6 +323,21 @@ final class CodexWireSchemaTests: XCTestCase {
         }
     }
 
+    /// #184 W13: the command output delta has no `stream` (only command/exec's has one), so stdout
+    /// and stderr arrive merged: every chunk is stdout, whatever extra key a frame carries.
+    func testCommandOutputDeltaHasNoStreamSoEveryChunkIsStdout() throws {
+        let schema = try CodexWireSchema.shared()
+        let delta = schema.def("#/definitions/v2/CommandExecutionOutputDeltaNotification")
+        XCTAssertEqual((delta["properties"] as? [String: Any]).map { Set($0.keys) }, ["delta", "itemId", "threadId", "turnId"])
+        let params: [String: Any] = ["threadId": "th1", "turnId": "t1", "itemId": "c1", "delta": "oops\n", "stream": "stderr"]
+        let frame: CodexWireSchema.Transcript = [(out: false, frame: ["method": "item/commandExecution/outputDelta", "params": params])]
+        XCTAssertEqual(schema.violations(in: frame), [])   // codex's frames are not strict
+        let events = CodexHarness.mapNotification(method: "item/commandExecution/outputDelta", params: params)
+        guard events.count == 1, case .toolCallOutput("c1", let chunk)? = events.first else { return XCTFail("\(events)") }
+        XCTAssertEqual(chunk.stream, .stdout)
+        XCTAssertEqual(chunk.text, "oops\n")
+    }
+
     /// Replaces scripts/verify-codex-wire.sh: every method name in `CodexHarness.Wire` is in
     /// the schema, in the union its direction needs (requests where codex expects requests).
     func testWireMethodsAreInTheirUnions() throws {

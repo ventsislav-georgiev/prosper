@@ -52,6 +52,9 @@ actor CodexHarness: CodingHarness {
     /// `turn/start.sandboxPolicy` per thread id. Thread start/resume only take the mode
     /// string, so the writable roots and the network toggle ride on every turn.
     private var sandboxPolicies: [String: [String: Any]] = [:]
+    /// The thread the controller drives (#184): last started, resumed or prompted. codex sends
+    /// other threads' frames on the same connection (a fork, a sub-agent, a thread switched away from).
+    private var activeThread: String?
     /// Seconds a request waits for its reply before failing with `HarnessError.timeout`.
     private var replyTimeout: @Sendable (String) -> TimeInterval = { CodexHarness.defaultReplyTimeout(for: $0) }
 
@@ -301,12 +304,14 @@ actor CodexHarness: CodingHarness {
             throw HarnessError.protocolError("thread/start returned no thread id")
         }
         sandboxPolicies[id] = Self.sandboxJSON(opts.sandbox, cwd: opts.cwd)
+        activeThread = id
         let session = SessionID(raw: id)
         eventContinuation.yield(.sessionStarted(session))
         return session
     }
 
     func resumeSession(_ id: SessionID, options opts: SessionOptions) async throws -> SessionID {
+        activeThread = id.raw   // before the request: codex sends the thread's usage right after its reply
         let result = try await sendRequest(method: Wire.threadResume, params: [
             "threadId": id.raw,
             "approvalPolicy": opts.approvalPolicy.rawValue,
@@ -315,6 +320,7 @@ actor CodexHarness: CodingHarness {
         ])
         let resumed = Self.threadID(from: result) ?? id.raw
         sandboxPolicies[resumed] = Self.sandboxJSON(opts.sandbox, cwd: opts.cwd)
+        activeThread = resumed
         return SessionID(raw: resumed)
     }
 
@@ -336,6 +342,7 @@ actor CodexHarness: CodingHarness {
             "input": input.map(Self.inputJSON),
         ]
         params["sandboxPolicy"] = sandboxPolicies[session.raw]
+        activeThread = session.raw   // before the request: the turn's frames can beat its reply
         let result = try await sendRequest(method: Wire.turnStart, params: params)
         // TurnStartResponse = { turn: Turn { id, items, status } }.
         guard let id = (result["turn"] as? [String: Any])?["id"] as? String else {
@@ -456,10 +463,17 @@ actor CodexHarness: CodingHarness {
             case .serverRequest(let id, let method, let params):
                 handleServerRequest(id: id, method: method, params: params)
             case .notification(let method, let params):
+                // #184: another thread's frame is not this session's: its text must not reach the
+                // transcript, nor its turn end settle the user's turn or clear the mappings below.
+                // A frame with no threadId (none of the mapped methods) passes as before.
+                if let thread = params["threadId"] as? String, thread != activeThread {
+                    log.info("dropped \(method, privacy: .public) of thread \(thread, privacy: .public), not the session's")
+                    continue
+                }
                 // A turn ending orphans any approval it left unanswered (codex won't
                 // re-request); drop the mappings so they can't accumulate across turns.
-                // fileChanges is unbounded within a turn and cleared by ANY thread's
-                // turn end (accepted: one turn's patches are small, approvals are rare).
+                // fileChanges is unbounded within a turn and cleared by the turn end
+                // (accepted: one turn's patches are small, approvals are rare).
                 if method == Wire.turnCompleted { approvalReplies.removeAll(); fileChanges.removeAll() }
                 if method == Wire.itemStarted, let item = params["item"] as? [String: Any],
                    item["type"] as? String == "fileChange", let id = item["id"] as? String {
@@ -481,10 +495,19 @@ actor CodexHarness: CodingHarness {
                 id: id, code: -32601, message: "\(method) is not supported by this client"))
             return
         }
+        // Legacy execCommandApproval/applyPatchApproval name the thread `conversationId`.
+        let thread = (params["threadId"] ?? params["conversationId"]) as? String
+        // #184: another thread's approval is not shown as the session's. Declined, not left
+        // unanswered: codex would wait on it forever.
+        if let thread, thread != activeThread {
+            log.info("declined \(method, privacy: .public) of thread \(thread, privacy: .public), not the session's")
+            try? writeLine(JSONRPC.response(id: id, result: Self.approvalResult(method: method, requested: [:], decision: .decline)))
+            return
+        }
         let approvalID = ApprovalID(raw: UUID().uuidString)
         approvalReplies[approvalID.raw] = (rpcID: id, method: method,
                                            requested: params["permissions"] as? [String: Any] ?? [:])
-        let session = SessionID(raw: (params["threadId"] as? String) ?? "")
+        let session = SessionID(raw: thread ?? "")
         // Modern requests carry only `itemId` (diff comes from the item); legacy
         // `applyPatchApproval` carries `fileChanges` keyed by path: show its paths.
         let changes: [[String: Any]] = method == Wire.fileChangeApproval
@@ -783,8 +806,9 @@ actor CodexHarness: CodingHarness {
 
         case Wire.commandOutputDelta:
             let itemID = (params["itemId"] as? String) ?? (params["id"] as? String) ?? ""
-            let stream: ToolOutputChunk.Stream = (params["stream"] as? String) == "stderr" ? .stderr : .stdout
-            return [.toolCallOutput(id: itemID, chunk: ToolOutputChunk(stream: stream, text: (params["delta"] as? String) ?? ""))]
+            // #184: this notification has no `stream` field (only command/exec's does): stdout and
+            // stderr arrive merged, so every chunk is stdout.
+            return [.toolCallOutput(id: itemID, chunk: ToolOutputChunk(stream: .stdout, text: (params["delta"] as? String) ?? ""))]
 
         case Wire.itemStarted:
             guard let item = params["item"] as? [String: Any] else { return [] }
