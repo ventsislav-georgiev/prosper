@@ -60,6 +60,8 @@ public final class FanControlCore {
     public func manualRequest(index: Int, rpm: Double, holder: ObjectIdentifier,
                               maxCelsius: @autoclosure () -> Double?,
                               macOSRPM: @autoclosure () -> Double?) -> Bool {
+        // A NaN or infinite speed from the app is refused first: nothing read, recorded or armed, lastRefusal kept.
+        guard rpm.isFinite else { return false }
         guard mayEngageManual(rpm: rpm, maxCelsius: maxCelsius(), macOSRPM: macOSRPM()) else { return false }
         didSetManual()
         self.holder = holder

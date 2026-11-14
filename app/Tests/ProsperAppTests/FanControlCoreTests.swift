@@ -661,7 +661,7 @@ final class FanControlCoreTests: XCTestCase {
         func currentRPM(_ i: Int) -> Double? { calls.append("Ac \(i)"); return actual[i] }
         func targetRPM(_ i: Int) -> Double? { calls.append("Tg \(i)"); return target[i] }
         func setManual(_ i: Int, rpm: Double) throws {
-            calls.append("write \(i) \(Int(rpm))")
+            calls.append("write \(i) \(rpm.isFinite ? "\(Int(rpm))" : "\(rpm)")")
             if writeFails { throw WriteFailed() }
         }
         // engage makes none of these; recorded so a stray one shows in `calls`.
@@ -741,5 +741,37 @@ final class FanControlCoreTests: XCTestCase {
         XCTAssertTrue(core.manualHeld)
         core.connectionClosed(idA)
         XCTAssertEqual(resets(), 1)
+    }
+
+    /// #1218: a non-finite speed is refused in manualRequest before the gate, so before anything is read,
+    /// recorded, armed or written, latch off or set; lastRefusal and every held value stay as they were.
+    func testEngageRefusesANonFiniteSpeedBeforeAnything() throws {
+        for latched in [false, true] {
+            for rpm in [Double.nan, .infinity, -.infinity] {
+                let clock = Clock()
+                let core = latched ? makeTripped(clock) : makeCore().0
+                if latched { clock.advance(60) }
+                let fan = FakeFan()
+                fan.temperature = 50
+                fan.actual = [0: 2000]
+                fan.target = [0: 2000]
+                let before = (core.holder, core.heldTargets, core.manualHeld, core.unlockHeld, core.lastRefusal, core.tripLatched)
+                XCTAssertFalse(try core.engage(fan, index: 0, rpm: rpm, holder: idA, arm: { fan.calls.append("arm") },
+                                               refused: { XCTFail("refused \($0)") }), "latched \(latched) \(rpm)")
+                XCTAssertEqual(fan.calls, [], "latched \(latched) \(rpm): no read, no arm, no write")
+                XCTAssertTrue(core.holder == before.0 && core.heldTargets == before.1 && core.manualHeld == before.2
+                              && core.unlockHeld == before.3 && core.lastRefusal == before.4 && core.tripLatched == before.5,
+                              "latched \(latched) \(rpm): state unchanged")
+                XCTAssertFalse(core.manualRequest(index: 0, rpm: rpm, holder: idA, maxCelsius: 50, macOSRPM: 0),
+                               "a direct manualRequest is refused too")
+            }
+        }
+        // A refused NaN does not disturb a pin already held, nor the re-assert budget.
+        let (core, _) = makeCore()
+        XCTAssertTrue(core.manualRequest(index: 0, rpm: 3000, holder: idA, maxCelsius: 50, macOSRPM: nil))
+        XCTAssertFalse(core.manualRequest(index: 0, rpm: .nan, holder: idB, maxCelsius: 50, macOSRPM: nil))
+        XCTAssertEqual(core.heldTargets, [0: 3000])
+        XCTAssertEqual(core.holder, idA)
+        XCTAssertEqual(core.supervise(maxCelsius: 50, isManualEngaged: { _ in false }), .reassert([0]))
     }
 }

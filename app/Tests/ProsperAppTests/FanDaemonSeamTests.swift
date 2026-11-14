@@ -22,7 +22,7 @@ final class FanDaemonSeamTests: XCTestCase {
         func currentRPM(_ i: Int) -> Double? { calls.append("Ac \(i)"); return nil }
         func targetRPM(_ i: Int) -> Double? { calls.append("Tg \(i)"); return nil }
         func setManual(_ i: Int, rpm: Double) throws {
-            calls.append("write \(i) \(Int(rpm))")
+            calls.append("write \(i) \(rpm.isFinite ? "\(Int(rpm))" : "\(rpm)")")
             if failWrites.contains(i) { throw Failed() }
         }
         func isManualEngaged(_ i: Int) -> Bool { calls.append("engaged \(i)"); return !disengaged.contains(i) }
@@ -364,7 +364,7 @@ final class FanDaemonSeamTests: XCTestCase {
             XCTAssertEqual(SMCFanController.clampRPM(rpm, b), want, "\(b) \(rpm)")
         }
         XCTAssertTrue(SMCFanController.clampRPM(.nan, FanBounds(min: 1000, max: 6000)).isNaN,
-                      "today a NaN passes setManual's clamp (Swift.max/min keep it); #1207 left.txt")
+                      "the clamp still lets a NaN through (Swift.max/min keep it); #1218: writeTarget throws on it, see testSetManualNaNThrowsAndHandsBack")
     }
 
     func testTargetWriteClampRows() {
@@ -408,7 +408,7 @@ final class FanDaemonSeamTests: XCTestCase {
             smc.set("F0Tg", "flt ", 2000)
             return (SMCFanController(access: smc), smc)
         }
-        let rows: [(Double, Float)] = [(999, 1000), (6001, 6000), (.nan, 200)]
+        let rows: [(Double, Float)] = [(999, 1000), (6001, 6000), (.infinity, 6000), (-.infinity, 1000)]
         for (rpm, want) in rows {
             let (fc, smc) = manualBoard()
             try fc.setManual(0, rpm: rpm)
@@ -421,5 +421,32 @@ final class FanDaemonSeamTests: XCTestCase {
         smc.values["F0Mn"] = nil
         XCTAssertThrowsError(try fc.setManual(0, rpm: 3000)) { XCTAssertEqual($0 as? SMCError, SMCError.clampUnsafe("F0")) }
         XCTAssertEqual(smc.writes, ["F0Md [0]", "Ftst [0]"])
+    }
+
+    /// #1218: a NaN speed throws clampUnsafe before any conversion (Int(NaN) would trap on an fpe2 board),
+    /// and the only writes are setManual's hand-back to automatic. Float board and fpe2 board; the fpe2
+    /// row relies on the check in writeTarget (without it the test process traps), so its mutant is described only.
+    func testSetManualNaNThrowsAndHandsBack() {
+        func manualBoard(type: String, ftst: Bool) -> (SMCFanController, FakeSMC) {
+            let smc = FakeSMC()
+            smc.set("FNum", "ui8 ", 1)
+            if ftst { smc.set("Ftst", "ui8 ", 1) }
+            smc.set("F0Md", "ui8 ", 1)
+            smc.set("F0Mn", type, 1000)
+            smc.set("F0Mx", type, 6000)
+            smc.set("F0Tg", type, 2000)
+            return (SMCFanController(access: smc), smc)
+        }
+        var (fc, smc) = manualBoard(type: "flt ", ftst: true)
+        XCTAssertThrowsError(try fc.setManual(0, rpm: .nan)) { XCTAssertEqual($0 as? SMCError, SMCError.clampUnsafe("F0")) }
+        XCTAssertEqual(smc.writes, ["F0Md [0]", "Ftst [0]"], "float board: only the hand-back, no F0Tg write")
+        (fc, smc) = manualBoard(type: "fpe2", ftst: false)
+        XCTAssertThrowsError(try fc.setManual(0, rpm: .nan)) { XCTAssertEqual($0 as? SMCError, SMCError.clampUnsafe("F0")) }
+        XCTAssertEqual(smc.writes, ["F0Md [0]"], "fpe2 board: only the hand-back, no F0Tg write")
+        for (rpm, want) in [(Double.infinity, 6000), (-Double.infinity, 1000)] {
+            (fc, smc) = manualBoard(type: "fpe2", ftst: false)
+            XCTAssertNoThrow(try fc.setManual(0, rpm: rpm))
+            XCTAssertEqual(smc.writes, ["F0Tg \(SMCDecode.encodeFPE2(want))"], "fpe2 \(rpm)")
+        }
     }
 }

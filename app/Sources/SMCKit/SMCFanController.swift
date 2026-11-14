@@ -318,6 +318,8 @@ public final class SMCFanController {
     private func writeTarget(_ i: Int, rpm: Double) throws {
         // Encode to the key's ACTUAL type (read it), not a hasFtst() guess: AS reports
         // `flt ` (LE Float32), Intel `fpe2`. Matches Stats reading value.dataType.
+        // clampRPM lets a NaN through; throw before Int(rpm) (setManual hands the fan back on a throw).
+        guard rpm.isFinite else { throw SMCError.clampUnsafe("F\(i)") }
         let type = smc.read("F\(i)Tg")?.type ?? (hasFtst() ? "flt " : "fpe2")
         let bytes = type == "fpe2" ? SMCDecode.encodeFPE2(Int(rpm))
                                    : SMCDecode.encodeFloatLE(Float(rpm))
