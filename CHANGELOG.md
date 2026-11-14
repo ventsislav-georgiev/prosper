@@ -943,6 +943,9 @@ tag from the now-released section and put it on the new top draft.
   that stops on its own shows at once in Settings and in the New session form's "via ccpool" hint,
   and an already open New session form shows that hint as soon as the pool extension is turned on.
   (#1219)
+- A Markdown link whose text starts with "![" but holds no image (for example [![x]](#top)) shows
+  its text as a link again instead of "[image: ![x]]", and a picture inside a link now also draws in
+  a file that starts with a byte-order mark or holds a NUL byte. (#1222)
 
 ## v2.174.0
 

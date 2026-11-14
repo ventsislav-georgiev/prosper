@@ -89,30 +89,38 @@ enum MarkdownRenderer {
         guard nestingBound(source) <= maxNesting else { return plain(source, style: style, note: tooDeepNote) }
         guard markupCount(source) <= maxMarkup else { return plain(source, style: style, note: tooMuchMarkupNote) }
         let options = parsingOptions(for: source)
-        guard let parsed = try? AttributedString(markdown: source, options: options) else {
+        // #1222: with positions on, the parser reads the text its columns are counted in (positionSource).
+        let text = options.appliesSourcePositionAttributes ? positionSource(source) : source
+        guard let parsed = try? AttributedString(markdown: text, options: options) else {
             return plain(source, style: style, note: unparsedNote)
         }
         // #1213: the parser drops an image inside a link and keeps its alt text as the link text. With source positions
         // on, that run's range is the image's own source, which is parsed alone to recover the image.
-        let map = options.appliesSourcePositionAttributes ? SourceMap(source) : nil
+        let map = options.appliesSourcePositionAttributes ? SourceMap(text) : nil
+        let budget = source.utf8.count
         var sliceParses = 0, sliceBytes = 0
         let c = Converter(style: style, document: document, loader: loader)
         for run in parsed.runs {
             if Task.isCancelled { break }
             var image = run.imageURL, badge = false
+            let shown = String(parsed[run.range].characters)
             if let map, run.link != nil, image == nil, let pos = run.markdownSourcePosition,
                let slice = map.slice(line: pos.startLine, column: pos.startColumn, toLine: pos.endLine, column: pos.endColumn),
                slice.starts(with: [UInt8(ascii: "!"), UInt8(ascii: "[")]) {
                 badge = true
                 // Capped and counted: at most maxImages slice parses, together at most the source's own bytes; past
                 // either the form is marked without a parse.
-                if sliceParses < maxImages, slice.count <= map.bytes.count - sliceBytes {
+                if sliceParses < maxImages, slice.count <= budget - sliceBytes {
                     sliceParses += 1
                     sliceBytes += slice.count
-                    image = linkedImage(String(decoding: slice, as: UTF8.self), options: options)
+                    switch linkedImage(String(decoding: slice, as: UTF8.self), shown: shown, options: options) {
+                    case .image(let url): image = url
+                    case .mark: break
+                    case .text: badge = false   // #1222: literal "![" link text: drawn as before #1213
+                    }
                 }
             }
-            c.add(String(parsed[run.range].characters), block: run.presentationIntent,
+            c.add(shown, block: run.presentationIntent,
                   inline: run.inlinePresentationIntent ?? [], link: run.link, image: image, badge: badge)
         }
         return c.finish()
@@ -129,13 +137,35 @@ enum MarkdownRenderer {
         return options
     }
 
-    /// #1213: the image of an image inside a link, from its source slice parsed alone: only when the slice is exactly
-    /// one run with an image (no text around it, not two images, not a reference whose definition is elsewhere).
-    nonisolated static func linkedImage(_ slice: String, options: AttributedString.MarkdownParsingOptions) -> URL? {
-        guard let parsed = try? AttributedString(markdown: slice, options: options) else { return nil }
+    /// #1222: the text the parser's source positions are counted in. The parser reads a NUL as U+FFFD (three bytes) and
+    /// skips a leading BOM yet adds its three bytes to the later lines of the block that started on line 1 (#1222
+    /// report); with both written out here its columns are this text's bytes. It draws the same characters either way.
+    /// A second leading BOM and a lazy continuation line still shift: those forms fall back (not a form, or the mark).
+    nonisolated static func positionSource(_ s: String) -> String {
+        var t = s.unicodeScalars.first == "\u{FEFF}" ? String(s.unicodeScalars.dropFirst()) : s
+        if t.utf8.contains(0) { t = String(String.UnicodeScalarView(t.unicodeScalars.map { $0 == "\u{0}" ? "\u{FFFD}" : $0 })) }
+        return t
+    }
+
+    /// What a link run's source slice that starts "![" holds, parsed alone.
+    enum LinkedImage: Equatable {
+        /// Exactly one run, with an image: drawn.
+        case image(URL)
+        /// An image the outer parse dropped but not exactly one image run (text around it, two images, a reference
+        /// whose definition is elsewhere), or a slice the parser refuses: "[image: text]".
+        case mark
+        /// #1222: no image, and the slice reads as the run's own text: the link text is literally "![...": drawn as before.
+        case text
+    }
+
+    /// #1213: the image of an image inside a link, from its source slice parsed alone. `shown` is the outer run's text: a
+    /// reference image reads differently alone ("![x]" against the outer "x"), so only literal text is `.text`.
+    nonisolated static func linkedImage(_ slice: String, shown: String, options: AttributedString.MarkdownParsingOptions) -> LinkedImage {
+        guard let parsed = try? AttributedString(markdown: slice, options: options) else { return .mark }
         var runs = parsed.runs.makeIterator()
-        guard let first = runs.next(), runs.next() == nil else { return nil }
-        return first.imageURL
+        if let first = runs.next(), runs.next() == nil, let url = first.imageURL { return .image(url) }
+        if !parsed.runs.contains(where: { $0.imageURL != nil }), String(parsed.characters) == shown { return .text }
+        return .mark
     }
 
     /// #1213: the source's UTF-8 bytes and where each line starts, to turn a parser's source position (1-based line and
@@ -323,6 +353,7 @@ private final class Converter {
 
     /// `badge` (#1213): the run is an image inside a link, `link` is the outer link and `image` its image if the slice
     /// parse found one; with no image it is marked "[image: text]". Past a cap that drops the link it is plain text.
+    /// #1222: a link whose text is literally "![..." with no image never gets the badge.
     func add(_ text: String, block: PresentationIntent?, inline: InlinePresentationIntent, link: URL?, image: URL?,
              badge: Bool = false) {
         var text = text

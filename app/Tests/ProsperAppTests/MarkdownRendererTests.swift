@@ -508,7 +508,8 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(s(1, 3, 1, 3), "\n", "a line's end byte is on it")
         for bad in [(0, 1, 1, 1), (1, 0, 1, 1), (1, 1, 1, 4), (5, 1, 5, 1), (4, 2, 4, 2), (1, 2, 1, 1), (2, 1, 1, 1),
                     (Int.max, 1, 1, 1), (1, Int.max, 1, Int.max), (Int.min, Int.min, Int.min, Int.min), (1, 1, Int.max, Int.max),
-                    (-1, -1, -1, -1)] {
+                    (-1, -1, -1, -1), (Int.max, Int.max, Int.max, Int.max), (1, Int.max - 1, 1, Int.max), (1, -5, 1, 2),
+                    (2, Int.min, 2, 1), (4, 1, 4, Int.min), (Int.min, 1, 4, 1), (1, 1, -1, 1), (3, 3, 3, 4)] {
             XCTAssertTrue(s(bad.0, bad.1, bad.2, bad.3) == nil, "\(bad)")
         }
         let empty = R.SourceMap("")
@@ -516,6 +517,138 @@ final class MarkdownRendererTests: XCTestCase {
         let ends = R.SourceMap("a\n")
         XCTAssertEqual(ends.starts, [0, 2])
         XCTAssertTrue(ends.slice(line: 2, column: 1, toLine: 2, column: 1) == nil, "the empty last line holds nothing")
+        let nul = R.SourceMap(R.positionSource("\u{0}\n\u{0}"))   // #1222: a NUL is three bytes in the table
+        XCTAssertEqual(nul.starts, [0, 4])
+        XCTAssertEqual(nul.bytes.count, 7)
+        XCTAssertTrue(nul.slice(line: 2, column: 1, toLine: 2, column: 4) == nil)
+    }
+
+    /// #1222 (R1213b-1): the parser's columns after a NUL, after a leading BOM and on a lazy continuation line, as a literal
+    /// table from the real parser (the #1222 report's probe). With positionSource the NUL and BOM shapes slice exactly the
+    /// image's source; a second leading BOM and the lazy lines still shift and stay a fallback.
+    func testParserColumnShifts() throws {
+        var opts = R.parsingOptions(for: "[![")
+        XCTAssertTrue(opts.appliesSourcePositionAttributes)
+        opts.appliesSourcePositionAttributes = true
+        func pos(_ md: String) throws -> [Int] {
+            let p = try AttributedString(markdown: md, options: opts)
+            let q = try XCTUnwrap(p.runs.first { $0.link != nil }?.markdownSourcePosition, md.debugDescription)
+            return [q.startLine, q.startColumn, q.endLine, q.endColumn]
+        }
+        let form = "[![a](p.png)](#top)"
+        // (source, the parser's position as given, its position in positionSource's text; nil = still shifted)
+        let table: [(String, [Int], [Int]?)] = [
+            (form, [1, 2, 1, 12], [1, 2, 1, 12]),
+            ("\u{0}" + form, [1, 5, 1, 15], [1, 5, 1, 15]),                     // +2 per NUL earlier on the line
+            ("\u{0}\u{0}" + form, [1, 8, 1, 18], [1, 8, 1, 18]),
+            ("[![a\u{0}b](p.png)](#top)", [1, 2, 1, 16], [1, 2, 1, 16]),       // the end moves too
+            ("\u{0}\n" + form, [2, 2, 2, 12], [2, 2, 2, 12]),                   // a NUL on an earlier line: no shift
+            ("\u{0}\r\n\u{0}" + form, [2, 5, 2, 15], [2, 5, 2, 15]),
+            ("\u{FEFF}" + form, [1, 5, 1, 15], [1, 2, 1, 12]),                  // line 1 counts the BOM
+            ("\u{FEFF}x\n" + form, [2, 5, 2, 15], [2, 2, 2, 12]),               // a later line of the same block: +3
+            ("\u{FEFF}x\ny\n" + form, [3, 5, 3, 15], [3, 2, 3, 12]),
+            ("\u{FEFF}x\r" + form, [2, 5, 2, 15], [2, 2, 2, 12]),
+            ("\u{FEFF}> x\n> " + form, [2, 7, 2, 17], [2, 4, 2, 14]),
+            ("\u{FEFF}# h\n" + form, [2, 2, 2, 12], [2, 2, 2, 12]),             // a block that starts on line 2: true
+            ("\u{FEFF}x\n\ny\n" + form, [4, 2, 4, 12], [4, 2, 4, 12]),
+            ("\u{FEFF}\u{0}" + form, [1, 8, 1, 18], [1, 5, 1, 15]),
+            ("\u{FEFF}x\n\u{0}" + form, [2, 8, 2, 18], [2, 5, 2, 15]),
+            ("x\u{FEFF}" + form, [1, 6, 1, 16], [1, 6, 1, 16]),                 // a BOM later in the text is text
+            ("\u{FEFF}\u{FEFF}x\n" + form, [2, 5, 2, 15], nil),                 // the parser skips the second one too
+            ("> x\n" + form, [2, 4, 2, 14], nil),                               // lazy: + the first line's prefix
+            ("> > x\n" + form, [2, 6, 2, 16], nil),
+            ("- x\n" + form, [2, 4, 2, 14], nil),
+        ]
+        for (md, raw, fixed) in table {
+            XCTAssertEqual(try pos(md), raw, md.debugDescription)
+            let text = R.positionSource(md)
+            let p = try pos(text)
+            let m = R.SourceMap(text)
+            let slice = m.slice(line: p[0], column: p[1], toLine: p[2], column: p[3]).map { String(decoding: $0, as: UTF8.self) }
+            if let fixed {
+                XCTAssertEqual(p, fixed, md.debugDescription)
+                XCTAssertTrue(slice?.hasPrefix("![a") == true && slice?.hasSuffix("](p.png)") == true, "\(md.debugDescription): \(slice ?? "nil")")
+            } else {
+                XCTAssertFalse(slice?.hasPrefix("![") == true, "\(md.debugDescription): still shifted, not a form")
+            }
+            let plain = R.parsingOptions(for: "")
+            XCTAssertEqual(String(try AttributedString(markdown: text, options: opts).characters),
+                           String(try AttributedString(markdown: md, options: plain).characters), "the same text drawn")
+        }
+        XCTAssertEqual(R.positionSource("\u{FEFF}a\u{0}b"), "a\u{FFFD}b")
+        XCTAssertEqual(R.positionSource("\u{FEFF}\u{FEFF}"), "\u{FEFF}", "one leading BOM only")
+        XCTAssertEqual(R.positionSource("a\u{FEFF}"), "a\u{FEFF}")
+        XCTAssertEqual(R.positionSource(""), "")
+    }
+
+    /// #1222: a picture inside a link after a NUL or a leading BOM is drawn; a doubled BOM and a lazy line fall back to
+    /// the link text, never a trap.
+    func testImageInsideLinkAfterNulAndBom() throws {
+        let form = "[![a](p.png)](#top)"
+        for md in ["\u{0}" + form, "\u{0}\u{0}" + form, "[![a\u{0}b](p.png)](#top)", "\u{0}\r\n\u{0}" + form,
+                   "\u{FEFF}" + form, "\u{FEFF}x\n" + form, "\u{FEFF}x\ny\n" + form, "\u{FEFF}> x\n> " + form,
+                   "\u{FEFF}x\n\u{0}" + form, "\u{FEFF}\u{0}" + form] {
+            let loader = try drawingLoader()
+            let out = render(md, loader)
+            XCTAssertEqual(loader.requests, ["p.png"], md.debugDescription)
+            XCTAssertTrue(out.text.string.hasSuffix("\u{FFFC}"), "\(md.debugDescription): \(out.text.string.debugDescription)")
+            XCTAssertEqual(linkString(out, at: out.text.length - 1), "#top", md.debugDescription)
+        }
+        let nulLoader = try drawingLoader()
+        XCTAssertEqual(render("\u{0}" + form, nulLoader).text.string, "\u{FFFD}\u{FFFC}", "the NUL drawn as the parser draws it")
+        for md in ["\u{FEFF}\u{FEFF}x\n" + form, "> x\n" + form, "- x\n" + form] {
+            let loader = try drawingLoader()
+            let out = render(md, loader)
+            XCTAssertEqual(loader.requests, [], md.debugDescription)
+            XCTAssertTrue(out.text.string.hasSuffix("a"), "\(md.debugDescription): as before #1213, the alt as link text")
+            XCTAssertEqual(linkString(out, at: out.text.length - 1), "#top", md.debugDescription)
+        }
+    }
+
+    /// #1222 (R1213-1): a link whose text is literally "![..." with no image is drawn as before #1213 (its text, linked);
+    /// a slice that does hold an image the outer parse dropped keeps the mark (testImageInsideLinkFallbacks).
+    func testImageInsideLinkLiteralText() throws {
+        for (md, shown) in [("[![x]](#top)", "![x]"), ("[![x&amp;]](#top)", "![x&]"), ("[![x] y](#top)", "![x] y"),
+                            ("[\\![x]](#top)", "![x]")] {
+            let loader = try drawingLoader()
+            let out = render(md, loader)
+            XCTAssertEqual(out.text.string, shown, md)
+            XCTAssertEqual(loader.requests, [], md)
+            XCTAssertEqual(linkString(out, at: 0), "#top", md)
+            XCTAssertEqual(out.text.attribute(.toolTip, at: 0, effectiveRange: nil) as? String, "#top", md)
+        }
+        let ref = render("[![x]](#top)\n\n[x]: p.png")   // a shortcut reference image: the outer parse dropped it
+        XCTAssertEqual(ref.text.string, "[image: x]")
+        XCTAssertEqual(linkString(ref, at: 0), "#top")
+        let o = R.parsingOptions(for: "[![")
+        XCTAssertEqual(R.linkedImage("![x]", shown: "![x]", options: o), .text)
+        XCTAssertEqual(R.linkedImage("![x]", shown: "x", options: o), .mark, "a reference: reads differently alone")
+        XCTAssertEqual(R.linkedImage("![alt][r]", shown: "alt", options: o), .mark)
+        XCTAssertEqual(R.linkedImage("![a](p.png) and text", shown: "a and text", options: o), .mark, "holds an image")
+        XCTAssertEqual(R.linkedImage("![a](p.png)![b](q.png)", shown: "ab", options: o), .mark)
+        if case .image(let u) = R.linkedImage("![a](p.png)", shown: "a", options: o) { XCTAssertEqual(u.absoluteString, "p.png") } else { XCTFail("one image run") }
+    }
+
+    /// #1222 (Q1, QA 957): the outer link of a picture goes through the link policy like any link: a refused target
+    /// leaves the picture with no link and its alt as the tooltip, and a remote image's mark with no link at all (never
+    /// the image's own URL). The target is a literal that is never opened.
+    func testImageInsideRefusedLink() throws {
+        let loader = try drawingLoader()
+        let out = render("[![alt](p.png)](javascript:x)", loader)
+        XCTAssertEqual(loader.requests, ["p.png"])
+        XCTAssertEqual(out.text.string, "\u{FFFC}")
+        XCTAssertTrue(out.text.attribute(.attachment, at: 0, effectiveRange: nil) is NSTextAttachment)
+        XCTAssertTrue(out.text.attribute(.link, at: 0, effectiveRange: nil) == nil, "a refused outer link is not kept")
+        XCTAssertEqual(out.text.attribute(.toolTip, at: 0, effectiveRange: nil) as? String, "alt")
+
+        let remoteLoader = try drawingLoader()
+        let remote = render("[![badge](https://example.com/b.svg)](javascript:x)", remoteLoader)
+        XCTAssertEqual(remoteLoader.requests, [])
+        XCTAssertEqual(remote.text.string, "[image: badge]")
+        var links = 0
+        remote.text.enumerateAttribute(.link, in: NSRange(location: 0, length: remote.text.length)) { v, _, _ in if v != nil { links += 1 } }
+        XCTAssertEqual(links, 0, "no link at all, not the image's own URL")
+        XCTAssertTrue(remote.text.attribute(.toolTip, at: 0, effectiveRange: nil) == nil)
     }
 
     /// R886-3: exactly 1 MiB is parsed; one byte more, or 1 MiB of characters over 1 MiB of bytes, is source.
