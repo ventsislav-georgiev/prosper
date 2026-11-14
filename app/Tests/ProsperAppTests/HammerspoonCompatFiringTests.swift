@@ -166,4 +166,78 @@ final class HammerspoonCompatFiringTests: XCTestCase {
         try lua.callGlobal("hs_eventtap_probe")
         XCTAssertEqual(hidden(), [Self.front], "the rebuild after it hides nothing")
     }
+
+    // MARK: - #1156: the register window ends with the register run's top level
+
+    /// #1156: an app object a register run stores in a table every run shares (the standard `table` library)
+    /// hides only from that run's own fired callback: not from a later rebuild's or register's top level, and
+    /// not from another run's callback. A register's own top-level hide is the once-per-register row above.
+    func testAnAppObjectParkedByARegisterRunHidesOnlyFromThatRunsCallback() throws {
+        let config = """
+        if table.parked then table.parked:hide() end
+        table.parked = table.parked or hs.application.frontmostApplication()
+        hs.hotkey.bind({"cmd", "alt"}, "p", function() table.parked:hide() end)
+        """
+        let (lua, hidden) = try makeRuntime(config: config)
+        try lua.callGlobal("on_launch", [""])
+        XCTAssertEqual(hidden(), [], "register parks the object and hides nothing")
+        try lua.callGlobal("hs_dispatch", ["1"])
+        XCTAssertEqual(hidden(), [Self.front], "the register run's fired callback hides through it")
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(hidden(), [Self.front], "a later rebuild's top level must not hide through it")
+        try lua.callGlobal("on_launch", [""])
+        XCTAssertEqual(hidden(), [Self.front], "a later register's top level must not hide through it")
+        try lua.callGlobal("hs_dispatch", ["1"])
+        XCTAssertEqual(hidden(), [Self.front], "another run's fired callback must not hide through it")
+    }
+
+    /// #1156: config code that runs after a register's top level has returned (here the error value's
+    /// __tostring, run when the shim logs the error) gets no register effects; the top-level hide before
+    /// the error still runs, once.
+    func testConfigCodeRunAfterARegisterTopLevelReturnedDoesNotHide() throws {
+        let config = """
+        local front = hs.application.frontmostApplication()
+        front:hide()
+        error(setmetatable({}, { __tostring = function() front:hide(); return "stopped" end }))
+        """
+        let (lua, hidden) = try makeRuntime(config: config)
+        try lua.callGlobal("on_launch", [""])
+        XCTAssertEqual(hidden(), [Self.front], "the top-level hide only")
+    }
+
+    /// Run 1 parks nothing it can use; run 2 (the register below) parks its own app object, then spends
+    /// its budget in the top level (a bounded loop, as in spinConfig). Every dispatcher fires `use`.
+    private static let parkConfig = """
+    if table.parked then table.parked:hide() end
+    table.parked = hs.application.frontmostApplication()
+    local function use() table.parked:hide() end
+    hs.hotkey.bind({"cmd", "alt"}, "j", use)
+    hs.timer.doAfter(60, use)
+    hs.urlevent.httpCallback = use
+    hs.application.watcher.new(use):start()
+    hs.eventtap.new({ hs.eventtap.event.types.keyDown }, use):start()
+    table.runs = (table.runs or 0) + 1
+    if table.runs == 2 then for i = 1, 5000000 do end end
+    """
+
+    /// #1156: a register run that spends its budget in the top level never reaches the line that ends its
+    /// register window. The object it parked before that must not hide from what runs next on the same warm
+    /// VM: a callback of the run still published (each dispatcher), then the next rebuild's top level.
+    func testAnObjectParkedByARegisterRunAbortedOnItsBudgetDoesNotHideLater() throws {
+        XCTAssertEqual(Self.dispatches.map { $0.0 }, ["hs_dispatch", "hs_timer_fired", "hs_url_open",
+                                                  "hs_app_activated", "hs_eventtap_dispatch"])
+        for (name, arg) in Self.dispatches {
+            let (lua, hidden) = try makeRuntime(config: Self.parkConfig)
+            try lua.run("function __t_runs() return tostring(table.runs) end", name: "=probe")
+            XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "keyDown", name)   // run 1: published
+            assertSpent(lua, "on_launch", "")                                          // run 2: register, aborted
+            XCTAssertEqual(try lua.callGlobal("__t_runs"), "2", "\(name): the register got past the park line")
+            XCTAssertEqual(hidden(), [], "\(name): the register's top level must not hide through run 1's object")
+            try lua.callGlobal(name, [arg])
+            XCTAssertEqual(hidden(), [], "\(name): run 1's callback must not hide through the aborted register's object")
+            XCTAssertEqual(try lua.callGlobal("__t_firing"), "false", name)
+            XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "keyDown", name)   // run 3: a rebuild
+            XCTAssertEqual(hidden(), [], "\(name): the next rebuild's top level must not hide through it")
+        }
+    }
 }

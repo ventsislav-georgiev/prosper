@@ -78,9 +78,18 @@ local function to_combo(mods, key)
 end
 
 -- ============ The hs shim ============
--- `binds` is rebuilt on every run (register or dispatch). `mode`/`firing` gate
--- side effects: a side-effecting host call runs only at register time (top-level
--- config intent, once) OR while a fired callback is executing (the action itself).
+-- `binds` is rebuilt on every run (register or dispatch). `registering`/`firing` gate
+-- side effects: a side-effecting host call runs only while a register run's top level
+-- runs (config intent, once) OR while a fired callback is executing (the action itself).
+
+-- The register ctx whose config top level is running right now, else nil (#1156). An object
+-- made in a register run acts at register time only while this names its ctx, so one the
+-- config stores where a later run can reach it (the shared string/table/math tables) cannot
+-- act from that later run. run_user_config sets it around the chunk; a run that spends its
+-- budget never reaches the line that clears it, so ensure_ctx and hs_eventtap_dispatch, which
+-- can run config code without a new run_user_config, clear it first.
+local registering = nil
+
 local function build_hs(ctx)
     local warned = {}
     local function warn_once(api)
@@ -90,10 +99,10 @@ local function build_hs(ctx)
         end
     end
 
-    -- A side effect is allowed when applying config (register) or running a
-    -- fired hotkey callback (dispatch + firing). Top-level calls during a dispatch
-    -- re-run are suppressed so they don't fire again on every keypress.
-    local function allowed() return ctx.mode == "register" or ctx.firing end
+    -- A side effect is allowed while this ctx's register top level runs or while one of
+    -- its callbacks fires (dispatch + firing). Top-level calls during a dispatch re-run
+    -- are suppressed so they don't fire again on every keypress.
+    local function allowed() return registering == ctx or ctx.firing end
 
     -- Chainable no-op: both indexing AND calling return the object itself, so an
     -- unmodified config can index arbitrarily deep AND call at any point —
@@ -569,8 +578,8 @@ end
 -- and the app.activated watcher so configs like hideAppIfNoWindows(app) work.
 -- allWindows() returns a list whose LENGTH equals the AX window count (configs use
 -- `#app:allWindows()`); each element is an inert window stub. hide() is a side
--- effect, so it is gated like every other shim effect: only in register mode or
--- while a callback fires — of the ctx the object was made under, never the global
+-- effect, so it is gated like every other shim effect: only while the register top level
+-- runs or while a callback fires — of the ctx the object was made under, never the global
 -- _HS.ctx, which during a rebuild is still the previous run's (a register ctx, or
 -- one whose dispatch was aborted with firing left on). Unknown app methods stay
 -- inert no-ops.
@@ -597,7 +606,7 @@ function make_app(name, bid, pid, ctx)
               return t
           end,
           hide = function()
-              if ctx.mode == "register" or ctx.firing then host.apps.hide(bid or "") end
+              if registering == ctx or ctx.firing then host.apps.hide(bid or "") end
           end },
         { __index = function() return inert(nil) end })
 end
@@ -758,7 +767,9 @@ local function run_user_config(mode)
         _HS = nil
         return nil
     end
+    registering = mode == "register" and ctx or nil
     local ok, rerr = pcall(chunk)
+    registering = nil -- the top level is over; the error's tostring below can run config code
     if not ok then
         host.log.error("hammerspoon-compat: init.lua error: " .. tostring(rerr))
         -- partial bindings may still be usable; fall through
@@ -773,6 +784,7 @@ end
 -- out / retargeting an hs.application.watcher) takes effect on the next event
 -- without a manual re-read, instead of the stale closure glitch-switching the layout.
 local function ensure_ctx()
+    registering = nil -- left set by a register run that spent its budget; no top level runs here
     if not (_HS and _HS.ctx) or _HS.mtime ~= config_mtime() then
         run_user_config("rebuild")
     end
@@ -964,6 +976,7 @@ end
 -- rebuilds once. firing=true lets the callback's side-effecting hs.* run.
 function hs_eventtap_dispatch(payload)
     if not is_enabled() then return "false" end
+    registering = nil -- as in ensure_ctx: this hot path fires without a new run_user_config
     if not (_HS and _HS.ctx and _HS.ctx.eventtaps) then run_user_config("rebuild") end
     local ctx = _HS and _HS.ctx
     if not (ctx and ctx.eventtaps) then return "false" end

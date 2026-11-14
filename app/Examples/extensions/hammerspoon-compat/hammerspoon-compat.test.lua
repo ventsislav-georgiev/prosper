@@ -510,6 +510,39 @@ hs_app_activated('{"name":"Slack"}')
 check(#hidden == 1, "hide on the app object an app watcher receives still hides")
 check(env._HS.ctx.firing == false, "firing is off again after the dispatch")
 
+-- 9m. A register ctx allows effects only while its top level runs or one of its callbacks
+--     fires (#1156). An app object a register run stores in a table every run shares (the
+--     standard `table` library here) cannot hide from a later run's top level; its own fired
+--     callback still hides; config code run after the top level has returned (an error
+--     value's tostring) is refused. The budget-aborted register run needs an instruction
+--     budget this file does not have: HammerspoonCompatFiringTests covers it.
+FAKE_INIT = [[
+if table.__t_parked then table.__t_parked:hide() end
+table.__t_parked = table.__t_parked or hs.application.frontmostApplication()
+hs.hotkey.bind({"cmd", "alt"}, "p", function() table.__t_parked:hide() end)
+]]
+table.__t_parked = nil
+env._HS = nil; hidden = {}
+on_launch(nil)
+check(#hidden == 0 and table.__t_parked ~= nil, "register parks an app object, hides nothing")
+hs_dispatch("1")
+check(#hidden == 1 and hidden[1] == "com.apple.finder", "the register run's fired callback hides through it")
+hidden = {}
+settings_render("hammerspoon-compat", "{}") -- a rebuild's top level
+check(#hidden == 0, "parked register object: hide refused from a later rebuild's top level")
+on_launch(nil)
+check(#hidden == 0, "parked register object: hide refused from a later register's top level")
+hs_dispatch("1")
+check(#hidden == 0, "parked register object: hide refused from another run's fired callback")
+FAKE_INIT = [[
+local front = hs.application.frontmostApplication()
+error(setmetatable({}, { __tostring = function() front:hide(); return "stopped" end }))
+]]
+env._HS = nil; hidden = {}
+on_launch(nil)
+check(#hidden == 0, "config code run after the top level returned (error tostring): hide refused")
+table.__t_parked = nil
+
 -- restore the URL-routing config for the perf tests below
 FAKE_INIT = [[
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)

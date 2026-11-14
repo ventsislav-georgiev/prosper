@@ -696,6 +696,10 @@ tag from the now-released section and put it on the new top draft.
 - Two shortcuts on one extension's window (another text, such as "ql add GitHub" and "ql add Jira",
   or another window command of the same extension) now each open their own view; only the shortcut
   that opened the view brings it back or closes it. (#1123)
+- Hammerspoon Compat: an object your init.lua made while it was being applied (for example an app
+  object kept in a shared table) can no longer act later from a background re-read of the config; it
+  acts only while the config is being applied or from its own hotkey, timer, URL, app-watcher or
+  event-tap callbacks. (#1156)
 
 ## v2.174.0
 
