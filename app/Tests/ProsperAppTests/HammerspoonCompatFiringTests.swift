@@ -10,7 +10,8 @@ import LuaRuntime
 ///
 /// Every host call is a stub: `host.apps.frontmost` returns a fixed fake app, `host.apps.hide` only records
 /// the bundle id it was given, `host.apps.windows` answers 0, `host.fs.read` returns the config string of
-/// the row, `host.timer.schedule`/`cancel` and `host.alert.show` only append to a list, `host.keyboard` answers a
+/// the row, `host.timer.schedule`/`cancel` and `host.alert.show` only append to a list (schedule/cancel also
+/// keep the row's own timer table, which `host.timer.scheduled` answers from), `host.keyboard` answers a
 /// fixed layout and no layouts, and everything else the paths touch is a no-op. No app is hidden, no event is
 /// posted, no tap is installed, no timer is armed, and no file is read.
 final class HammerspoonCompatFiringTests: XCTestCase {
@@ -43,10 +44,26 @@ final class HammerspoonCompatFiringTests: XCTestCase {
          #"{"type":"keyDown","keyCode":0,"flags":{"cmd":false,"alt":false,"ctrl":false,"shift":false,"fn":false}}"#),
     ]
 
-    /// A runtime with the shipped init.lua and a stub `host`; returns the hide recorder.
-    private func makeRuntime(config: String) throws -> (LuaRuntime, () -> [String]) {
+    /// The host's timer table, id -> repeating, as TimerScheduler keeps one per extension. A row hands one
+    /// table to two runtimes to stand for the host outliving a dropped runtime (#1165). Nothing is armed.
+    private final class FakeTimers { var every: [String: Bool] = [:] }
+
+    /// The host fires timer `id`: a one-shot leaves the table first (TimerScheduler.fireLocked drops it in
+    /// the block that delivers, before the lane runs the handler), then the shim's handler runs.
+    private func hostFires(_ lua: LuaRuntime, _ timers: FakeTimers, _ id: String) throws {
+        if timers.every[id] == false { timers.every[id] = nil }
+        try lua.callGlobal("hs_timer_fired", [#"{"id":""# + id + #""}"#])
+    }
+
+    /// A runtime with the shipped init.lua and a stub `host`; returns the hide recorder. `timerQuery: false`
+    /// loads the shim over a host without `host.timer.scheduled`, as Prosper before #1165 was.
+    private func makeRuntime(config: String, timers: FakeTimers = FakeTimers(),
+                             timerQuery: Bool = true) throws -> (LuaRuntime, () -> [String]) {
         let lua = try LuaRuntime(allowLoad: true)
         var hidden: [String] = []
+        lua.register("__t_arm") { rt in timers.every[rt.stringArgument(1) ?? ""] = rt.boolArgument(2) ?? false; return 0 }
+        lua.register("__t_disarm") { rt in timers.every[rt.stringArgument(1) ?? ""] = nil; return 0 }
+        lua.register("__t_armed") { rt in rt.push(timers.every[rt.stringArgument(1) ?? ""] != nil); return 1 }
         lua.register("__t_read") { rt in rt.push(config); return 1 }
         lua.register("__t_hide") { rt in hidden.append(rt.stringArgument(1) ?? "<nil>"); return 0 }
         lua.register("__t_jdec") { rt in
@@ -75,8 +92,12 @@ final class HammerspoonCompatFiringTests: XCTestCase {
             -- The settings diagnostics list layouts with ipairs: the catch-all stub below never ends that list.
             keyboard = { current_source = function() return "com.example.layout" end, layouts = function() return {} end },
             timer = {
-                schedule = function(o) __t_timer_log[#__t_timer_log + 1] = "schedule " .. tostring(o.id) end,
-                cancel = function(id) __t_timer_log[#__t_timer_log + 1] = "cancel " .. tostring(id) end,
+                schedule = function(o)
+                    __t_timer_log[#__t_timer_log + 1] = "schedule " .. tostring(o.id)
+                    __t_arm(o.id, o.every ~= nil)
+                end,
+                cancel = function(id) __t_timer_log[#__t_timer_log + 1] = "cancel " .. tostring(id); __t_disarm(id) end,
+                scheduled = function(id) return __t_armed(id) end,
             },
             apps = {
                 frontmost = function() return { name = "Example", bundleID = "com.example.front", pid = 42 } end,
@@ -114,6 +135,7 @@ final class HammerspoonCompatFiringTests: XCTestCase {
             __t_before = before
         end
         """#, name: "=hoststub")
+        if !timerQuery { try lua.run("host.timer.scheduled = nil", name: "=oldhost") }
         try lua.run(Self.facadeSource(), name: "@hammerspoon-compat")
         return (lua, { hidden })
     }
@@ -461,9 +483,9 @@ final class HammerspoonCompatFiringTests: XCTestCase {
         XCTAssertEqual(try lua.callGlobal("__t_alerts"), "HI! abc 1")
     }
 
-    /// #1161: timer:running() answers what this VM did to the host timer: armed at register, stopped and
-    /// started from a callback, a one-shot that fired, the same answers from a rebuild's objects, and a
-    /// repeating timer that fires on a VM that never armed it. The host timer is the recorder above.
+    /// #1161, #1165: timer:running() asks the host whether the timer is scheduled: armed at register, stopped
+    /// and started from a callback, a one-shot that fired, the same answers from a rebuild's objects. The host
+    /// timer is the recorder above with its own table; `hostFires` stands for a fire.
     func testATimersRunningFollowsStartStopAndFiring() throws {
         let config = """
         local once = hs.timer.doAfter(60, function() end)
@@ -478,7 +500,85 @@ final class HammerspoonCompatFiringTests: XCTestCase {
             return tostring(table.timers[1]:running()) .. "," .. tostring(table.timers[2]:running())
         end
         """
-        let (lua, _) = try makeRuntime(config: config)
+        let timers = FakeTimers()
+        let (lua, _) = try makeRuntime(config: config, timers: timers)
+        try lua.run(probe, name: "=probe")
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "false,false", "a rebuild arms nothing")
+        try lua.callGlobal("on_launch", [""])
+        XCTAssertEqual(try lua.callGlobal("__t_timers"), "schedule hst_1,schedule hst_2")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,true", "register arms both")
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,true", "a rebuild's objects name the same timers")
+        try lua.callGlobal("hs_dispatch", ["1"])
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,false", "stopped from a callback")
+        try lua.callGlobal("hs_dispatch", ["2"])
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,true", "started again from a callback")
+        try hostFires(lua, timers, "hst_1")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "false,true", "a one-shot that fired is spent")
+        try hostFires(lua, timers, "hst_2")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "false,true", "a repeating one runs on")
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "false,true", "the next rebuild's objects agree")
+        try lua.callGlobal("hs_dispatch", ["3"])
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,true", "the one-shot started again")
+        XCTAssertEqual(try lua.callGlobal("__t_timers"),
+                       "schedule hst_1,schedule hst_2,cancel hst_2,schedule hst_2,schedule hst_1")
+    }
+
+    /// #1165: the host dropped the runtime that armed the timers and kept the timers (it only drops the VM;
+    /// TimerScheduler holds them). A fresh runtime over the same host table answers running() true before
+    /// any fire, false for a one-shot the host fired, true for a repeating one after a fire, false after a
+    /// stop from its own callback. The host timer is the recorder above; nothing is armed.
+    func testATimersRunningOnAFreshRuntimeAsksTheHost() throws {
+        let config = """
+        local once = hs.timer.doAfter(60, function() end)
+        local every = hs.timer.doEvery(60, function() end)
+        table.timers = { once, every }
+        hs.hotkey.bind({"cmd", "alt"}, "s", function() every:stop() end)
+        """
+        let probe = """
+        function __t_running()
+            return tostring(table.timers[1]:running()) .. "," .. tostring(table.timers[2]:running())
+        end
+        """
+        let timers = FakeTimers()
+        let (first, _) = try makeRuntime(config: config, timers: timers)
+        try first.callGlobal("on_launch", [""])
+        XCTAssertEqual(try first.callGlobal("__t_timers"), "schedule hst_1,schedule hst_2")
+
+        let (fresh, _) = try makeRuntime(config: config, timers: timers)
+        try fresh.run(probe, name: "=probe")
+        XCTAssertEqual(try fresh.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try fresh.callGlobal("__t_running"), "true,true", "armed by the earlier runtime")
+        try hostFires(fresh, timers, "hst_1")
+        XCTAssertEqual(try fresh.callGlobal("__t_running"), "false,true", "a one-shot the host fired")
+        try hostFires(fresh, timers, "hst_2")
+        XCTAssertEqual(try fresh.callGlobal("__t_running"), "false,true", "a repeating one after a fire")
+        try fresh.callGlobal("hs_dispatch", ["1"])
+        XCTAssertEqual(try fresh.callGlobal("__t_running"), "false,false", "cancelled from a callback")
+        XCTAssertEqual(try fresh.callGlobal("__t_timers"), "cancel hst_2", "running() itself calls no schedule or cancel")
+    }
+
+    /// #1165: on a host without `host.timer.scheduled` (Prosper before #1165) timer:running() answers as
+    /// version 1.5.14 did (#1161), from what this VM did to the host timer: armed at register, stopped and
+    /// started from a callback, a one-shot that fired, the same answers from a rebuild's objects, and a
+    /// repeating timer that fires on a VM that never armed it. The host timer is the recorder above.
+    func testATimersRunningOnAHostWithoutTheQueryAnswersFromThisRuntime() throws {
+        let config = """
+        local once = hs.timer.doAfter(60, function() end)
+        local every = hs.timer.doEvery(60, function() end)
+        table.timers = { once, every }
+        hs.hotkey.bind({"cmd", "alt"}, "s", function() every:stop() end)
+        hs.hotkey.bind({"cmd", "alt"}, "t", function() every:start() end)
+        hs.hotkey.bind({"cmd", "alt"}, "o", function() once:start() end)
+        """
+        let probe = """
+        function __t_running()
+            return tostring(table.timers[1]:running()) .. "," .. tostring(table.timers[2]:running())
+        end
+        """
+        let (lua, _) = try makeRuntime(config: config, timerQuery: false)
         try lua.run(probe, name: "=probe")
         XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
         XCTAssertEqual(try lua.callGlobal("__t_running"), "false,false", "a rebuild arms nothing")
@@ -502,7 +602,7 @@ final class HammerspoonCompatFiringTests: XCTestCase {
         XCTAssertEqual(try lua.callGlobal("__t_timers"),
                        "schedule hst_1,schedule hst_2,cancel hst_2,schedule hst_2,schedule hst_1")
 
-        let (cold, _) = try makeRuntime(config: config)
+        let (cold, _) = try makeRuntime(config: config, timerQuery: false)
         try cold.run(probe, name: "=probe")
         try cold.callGlobal("hs_timer_fired", [#"{"id":"hst_2"}"#])
         XCTAssertEqual(try cold.callGlobal("__t_running"), "false,true", "a VM that never armed it learns it on a fire")

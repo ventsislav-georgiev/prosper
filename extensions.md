@@ -238,6 +238,7 @@ passwords, OTPs — never reach a handler. A `host.clipboard.write()` from a han
 host.timer.schedule{ id = "nightly", every = 86400, handler = "on_nightly" }  -- repeating
 host.timer.schedule{ id = "once",    after = 120,   handler = "on_soon" }      -- one-shot
 host.timer.cancel("once")
+host.timer.scheduled("once")  -- true while this extension's timer "once" is scheduled (false once a one-shot fired or after cancel)
 ```
 
 **Raw event taps (opt-in resident VM).** The one exception to the no-live-closures rule: set `event_taps = true` under `[extension.host]` and `hs.eventtap.new(keyDown|systemDefined, fn)` callbacks run synchronously on the keystroke, holding a live closure in a resident VM. The host builds that VM **lazily** (only if your config actually `:start()`s a tap) and evicts it when the extension is disabled, so a config with no taps costs nothing. The callback is on the key path — keep it cheap; for pure remaps/swallows the native key-rule engine (§ Key rules) is faster and needs no Lua per press. Implementation: [`EventTapHost.swift`](app/Sources/ProsperApp/Extensions/EventTapHost.swift); worked example: [`hammerspoon-compat`](app/Examples/extensions/hammerspoon-compat/).

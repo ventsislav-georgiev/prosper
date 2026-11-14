@@ -231,6 +231,76 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertTrue(got?.2.contains("\"id\":\"expiry\"") == true)
     }
 
+    /// #1165: TimerScheduler.isScheduled after a fire: a one-shot that fired is gone, a repeating timer
+    /// stays, another extension's id reads false, a cancel reads false. A private scheduler over a scratch
+    /// store; `deliver` is a recorder on the scheduler's queue (nothing runs), as in the row above.
+    func testTimerSchedulerIsScheduledAfterAFireAndPerOwner() {
+        let scheduler = TimerScheduler(store: scratchDefaults("timer-scheduled"))
+        defer { scheduler.cancelAll(extID: "com.test") }
+        let once = expectation(description: "one-shot fired")
+        let tick = expectation(description: "repeating fired")
+        tick.assertForOverFulfill = false
+        scheduler.deliver = { _, handler, _ in (handler == "on_once" ? once : tick).fulfill() }
+        scheduler.schedule(extID: "com.test", id: "once", every: false, seconds: 0.05, handler: "on_once")
+        scheduler.schedule(extID: "com.test", id: "tick", every: true, seconds: 0.05, handler: "on_tick")
+        wait(for: [once, tick], timeout: 10)
+        XCTAssertFalse(scheduler.isScheduled(extID: "com.test", id: "once"), "a one-shot that fired is spent")
+        XCTAssertTrue(scheduler.isScheduled(extID: "com.test", id: "tick"), "a repeating timer stays after a fire")
+        XCTAssertFalse(scheduler.isScheduled(extID: "com.other", id: "tick"), "another extension's id")
+        scheduler.cancel(extID: "com.test", id: "tick")
+        XCTAssertFalse(scheduler.isScheduled(extID: "com.test", id: "tick"), "cancelled")
+    }
+
+    /// #1165: host.timer.scheduled through the live host and TimerScheduler.shared, run off main on a GCD
+    /// queue (offMain), as AsyncExtensionRuntimes.invoke runs the extension's lane (q.async). It answers for
+    /// the calling extension's own timer only, changes nothing in the scheduler, and a missing, non-string,
+    /// empty, very long or never-scheduled id reads false. The one timer armed is a one-shot an hour out, cancelled before the row ends: nothing fires.
+    func testTimerScheduledAnswersForTheCallersOwnTimerFromTheLane() throws {
+        let owner = "com.example.hsrunning-\(UUID().uuidString)"
+        let other = "com.example.hsrunning-other-\(UUID().uuidString)"
+        defer { TimerScheduler.shared.cancelAll(extID: owner) }
+        var answers = ""
+        try offMain(timeout: 30) {
+            dispatchPrecondition(condition: .notOnQueue(.main))
+            answers = try Self.timerScheduledAnswers(owner: owner, other: other)
+        }
+        XCTAssertEqual(answers, "false|true|false|false,false,false,false,false,false,false|true|false",
+                       "before arm | owner | other extension | odd ids | after the queries | after cancel")
+    }
+
+    /// The body of the row above, on the lane: two extensions' VMs over the live host.
+    private static func timerScheduledAnswers(owner: String, other: String) throws -> String {
+        let probe = """
+        function q(id) return tostring(host.timer.scheduled(id)) end
+        function odd()
+            local out = {}
+            for _, id in ipairs({ {}, true, "", string.rep("x", 1 << 20), "never", 1 }) do
+                out[#out + 1] = tostring(host.timer.scheduled(id))
+            end
+            out[#out + 1] = tostring(host.timer.scheduled())
+            return table.concat(out, ",")
+        end
+        function arm() host.timer.schedule{ id = "hst_1", after = 3600, handler = "h" }; return "ok" end
+        function stop() host.timer.cancel("hst_1"); return "ok" end
+        """
+        let a = try LuaRuntime()
+        try ExtensionHost(extensionID: owner, services: LiveExtensionHostServices.shared).install(into: a)
+        try a.run(probe)
+        let b = try LuaRuntime()
+        try ExtensionHost(extensionID: other, services: LiveExtensionHostServices.shared).install(into: b)
+        try b.run(probe)
+        var out: [String] = []
+        out.append(try a.callGlobal("q", ["hst_1"]) ?? "nil")
+        try a.callGlobal("arm")
+        out.append(try a.callGlobal("q", ["hst_1"]) ?? "nil")
+        out.append(try b.callGlobal("q", ["hst_1"]) ?? "nil")
+        out.append(try a.callGlobal("odd") ?? "nil")
+        out.append(try a.callGlobal("q", ["hst_1"]) ?? "nil")
+        try a.callGlobal("stop")
+        out.append(try a.callGlobal("q", ["hst_1"]) ?? "nil")
+        return out.joined(separator: "|")
+    }
+
     func testTimerFirePayloadEscapesID() throws {
         // A timer id is extension-controlled; a `"` / `\` in it must not corrupt the
         // JSON payload the handler decodes via host.json.

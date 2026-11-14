@@ -792,6 +792,12 @@ tag from the now-released section and put it on the new top draft.
   packing data) runs as before. (#1166)
 - Agent Sessions window: in Terminal mode, VoiceOver no longer reads the folder icon on the
   session's title line as an image named "Move". (#1120)
+- Hammerspoon Compat: a timer's running() now asks Prosper whether the timer is scheduled, so it
+  stays right after Prosper reloads the extension (it used to answer false for a timer started
+  before the reload until that timer fired). On an older Prosper without that check, running() works
+  as before. (#1165)
+- Extensions: new `host.timer.scheduled(id)` tells an extension whether one of its own timers is
+  scheduled. (#1165)
 
 ## v2.174.0
 

@@ -89,6 +89,14 @@ final class TimerScheduler: @unchecked Sendable {
         }
     }
 
+    /// Whether `extID` has a timer named `id` scheduled now (#1165). Read-only. Runs on the
+    /// caller's thread and waits on `queue`, so a schedule, cancel or fire queued before it
+    /// is already applied (a fired one-shot reads false). The owner is part of the key: another
+    /// extension's id reads false. Never call it on `queue` (from `deliver`): that deadlocks.
+    func isScheduled(extID: String, id: String) -> Bool {
+        queue.sync { entries[Self.key(extID, id)] != nil }
+    }
+
     /// Re-arm persisted timers at launch. Overdue one-shots fire once immediately.
     func restore() {
         queue.async {
@@ -166,6 +174,13 @@ final class TimerScheduler: @unchecked Sendable {
         if list.count != entries.count {
             NSLog("prosper: timers — dropped %d duplicate persisted timer(s)", list.count - entries.count)
         }
+    }
+}
+
+/// The live `host.timer.scheduled` (#1165), kept next to the scheduler it reads.
+extension LiveExtensionHostServices {
+    func timerIsScheduled(extensionID: String, id: String) -> Bool {
+        TimerScheduler.shared.isScheduled(extID: extensionID, id: id)
     }
 }
 

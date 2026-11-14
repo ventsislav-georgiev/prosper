@@ -17,6 +17,7 @@ local kbd_set = {} -- host.keyboard.set_source calls (per-app input switching)
 local fake_mtime = 1 -- ~/.hammerspoon/init.lua mtime the fs.attributes mock reports
 local scheduled, alerts, confirms, osascripts = {}, {}, {}, {}
 local cancelled = {}         -- host.timer.cancel calls (id)
+local armed = {}             -- the host's timer table (id -> spec) that host.timer.scheduled answers from
 local confirm_result = true -- what host.dialog.confirm returns (OK vs Cancel)
 local hidden = {}           -- host.apps.hide calls (bundleID) — window API
 local window_count = 0      -- what host.apps.windows returns (AX window count)
@@ -74,8 +75,9 @@ host = {
             error = function(m) print("ERR " .. tostring(m)) end },
     shell = { run = function() shell_calls = shell_calls + 1; return shell_answer, shell_trunc end },
     keys = { set_rules = function() end, stroke = function() end },
-    timer = { cancel = function(id) cancelled[#cancelled + 1] = id end,
-              schedule = function(spec) scheduled[#scheduled + 1] = spec end }, -- doAfter/doEvery
+    timer = { cancel = function(id) cancelled[#cancelled + 1] = id; armed[id] = nil end,
+              schedule = function(spec) scheduled[#scheduled + 1] = spec; armed[spec.id] = spec end, -- doAfter/doEvery
+              scheduled = function(id) return armed[id] ~= nil end },
     alert = { show = function(t) alerts[#alerts + 1] = t end },
     dialog = { confirm = function(o) confirms[#confirms + 1] = o; return confirm_result end },
     osascript = { run = function(src) osascripts[#osascripts + 1] = src
@@ -574,8 +576,8 @@ check(#scheduled == 4 and #cancelled == 2 and cancelled[2] == "hst_1",
       "a fired callback stops and starts it")
 table.__t_stop = nil
 
--- 9p. timer:running() answers what this VM did to the host timer (#1161): armed at
---     register; turning the extension off cancels every timer, so false after that.
+-- 9p. timer:running() asks the host whether the timer is scheduled (#1161, #1165): armed
+--     at register; turning the extension off cancels every timer, so false after that.
 FAKE_INIT = [[
 table.__t_timer = hs.timer.doEvery(60, function() end)
 ]]
@@ -586,6 +588,62 @@ env.settings_action("hammerspoon-compat", "set:enabled", "false", "{}")
 check(table.__t_timer:running() == false, "timer running() after turning the extension off")
 prefs.enabled = "true"
 table.__t_timer = nil
+
+-- 9q. The host dropped the VM and kept its timers (#1165): a fresh VM (init.lua loaded again
+--     over the same host) answers running() for the timers the first VM armed; a one-shot the
+--     host fired (and so dropped) reads false, a repeating one stays true after a fire, and a
+--     stop from the fresh VM's callback reads false.
+FAKE_INIT = [[
+table.__t_once = hs.timer.doAfter(60, function() end)
+table.__t_every = hs.timer.doEvery(60, function() end)
+hs.hotkey.bind({"cmd", "alt"}, "s", function() table.__t_every:stop() end)
+]]
+env._HS = nil; armed = {}
+on_launch(nil)
+local fresh = setmetatable({ host = host }, { __index = _G })
+assert(loadfile(DIR .. "init.lua", "t", fresh))()
+table.__t_once, table.__t_every = nil, nil
+fresh.settings_render("hammerspoon-compat", "{}") -- a rebuild on the fresh VM: arms nothing
+check(table.__t_once:running() == true and table.__t_every:running() == true,
+      "a fresh VM: running() true for the timers an earlier VM armed")
+armed.hst_1 = nil -- the host drops a one-shot as it fires it, then delivers timer.fired
+fresh.hs_timer_fired('{"id":"hst_1"}')
+check(table.__t_once:running() == false, "a fresh VM: a one-shot the host fired reads false")
+fresh.hs_timer_fired('{"id":"hst_2"}')
+check(table.__t_every:running() == true, "a fresh VM: a repeating timer stays true after a fire")
+fresh.hs_dispatch("1")
+check(table.__t_every:running() == false, "a fresh VM: false after a stop from its callback")
+table.__t_once, table.__t_every = nil, nil; env._HS = nil; armed = {}
+
+-- 9r. A host without host.timer.scheduled (Prosper before #1165): running() answers as 1.5.14 did,
+--     from what this VM did (#1161). The shim decides at load, so each VM here is a fresh load of
+--     init.lua with the query removed; it is restored after. A VM true after its register armed
+--     the timers, false for a one-shot that fired and after a stop from a callback; a second VM
+--     that never armed them learns the repeating one on its first fire.
+local query = host.timer.scheduled
+host.timer.scheduled = nil
+local old1 = setmetatable({ host = host }, { __index = _G })
+assert(loadfile(DIR .. "init.lua", "t", old1))()
+local old2 = setmetatable({ host = host }, { __index = _G })
+assert(loadfile(DIR .. "init.lua", "t", old2))()
+FAKE_INIT = [[
+table.__t_once = hs.timer.doAfter(60, function() end)
+table.__t_every = hs.timer.doEvery(60, function() end)
+hs.hotkey.bind({"cmd", "alt"}, "s", function() table.__t_every:stop() end)
+]]
+armed = {}
+old1.on_launch(nil)
+check(table.__t_once:running() == true and table.__t_every:running() == true,
+      "old host: running() true after the register run armed them")
+old1.hs_timer_fired('{"id":"hst_1"}')
+check(table.__t_once:running() == false, "old host: a one-shot that fired is spent")
+old1.hs_dispatch("1")
+check(table.__t_every:running() == false, "old host: false after a stop from a callback")
+old2.hs_timer_fired('{"id":"hst_2"}')
+check(table.__t_every:running() == true and table.__t_once:running() == false,
+      "old host: a VM that never armed them learns the repeating one on its fire")
+host.timer.scheduled = query
+table.__t_once, table.__t_every = nil, nil; armed = {}
 
 -- 9m. A register ctx allows effects only while its top level runs or one of its callbacks
 --     fires (#1156). An app object a register run stores in a table every run shares (the

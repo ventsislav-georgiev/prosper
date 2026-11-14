@@ -98,9 +98,11 @@ local registering = nil
 -- library functions a config can replace (string.match, ...) before it sets a marker, and
 -- that config code must not act under a marker a stopped run left.
 
--- Host timers this VM armed and has not seen cancelled or fired once, by creation index
--- (the id is "hst_<idx>", the same in every run of one config). timer:running() reads it;
--- an evicted VM starts empty and learns a repeating timer again when it fires.
+-- timer:running() asks the host (host.timer.scheduled, #1165); older hosts have no query, so there
+-- it answers from timer_running: the host timers this VM armed and has not seen cancelled or fired
+-- once, by creation index (#1161). Decided once here, at load, before any config code can run.
+local timer_scheduled = type(host) == "table" and type(host.timer) == "table"
+    and type(host.timer.scheduled) == "function" and host.timer.scheduled or nil
 local timer_running = {}
 
 local function build_hs(ctx)
@@ -472,8 +474,12 @@ local function build_hs(ctx)
                 return s
             end end
             if k == "start" then return function(s) if allowed() then arm() end; return s end end
-            -- What this VM did to host timer `id` (#1161), not a host query; see timer_running.
-            if k == "running" then return function() return timer_running[idx] == true end end
+            -- The id "hst_<idx>" is the same in every run of one config, so the host's answer also
+            -- covers a timer an earlier VM armed; see timer_scheduled for an older host.
+            if k == "running" then return function()
+                if timer_scheduled then return timer_scheduled(id) == true end
+                return timer_running[idx] == true
+            end end
             return function(s) return s end -- fire()/setNextTrigger()/… chainable no-op
         end })
     end

@@ -180,6 +180,9 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     // the delay/period. See TimerScheduler + the stateless model in the plan.
     func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String)
     func timerCancel(extensionID: String, id: String)
+    // Whether this extension's timer `id` is scheduled now (host.timer.scheduled, #1165).
+    // Read-only; called on the thread that runs the Lua (an extension lane or main).
+    func timerIsScheduled(extensionID: String, id: String) -> Bool
     // Structured logging (host.log) → os_log. level ∈ {"info","warn","error"}.
     func log(level: String, message: String)
     // Environment variable read (host.env.get) — the sandbox strips Lua's `os`.
@@ -281,6 +284,7 @@ extension ExtensionHostServices {
     /// to drive `TimerScheduler`.
     func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String) {}
     func timerCancel(extensionID: String, id: String) {}
+    func timerIsScheduled(extensionID: String, id: String) -> Bool { false }
 
     /// Default: stderr log + no environment (test / minimal hosts).
     func log(level: String, message: String) {}
@@ -817,6 +821,13 @@ struct ExtensionHost {
             services.timerCancel(extensionID: extID, id: rt.stringArgument(1) ?? "")
             return 0
         }
+        // scheduled(id) -> boolean: read-only; asks about this extension's own timers only
+        // (extID is the owner). A non-string id or "" reads false.
+        lua.register("__h_timer_scheduled") { rt in
+            let id = rt.stringArgument(1) ?? ""
+            rt.push(!id.isEmpty && services.timerIsScheduled(extensionID: extID, id: id))
+            return 1
+        }
 
         // --- log (os_log; sync) ---
         lua.register("__h_log") { rt in
@@ -1093,6 +1104,7 @@ struct ExtensionHost {
         -- via the "timer.fired" event with a JSON payload {id=...}.
         --   host.timer.schedule{ id=, after=|every=, handler= }
         --   host.timer.cancel(id)
+        --   host.timer.scheduled(id) -> true while this extension's timer id is scheduled
         timer  = {
             schedule = function(opts)
                 opts = opts or {}
@@ -1101,6 +1113,7 @@ struct ExtensionHost {
                 _timer_schedule(opts.id or "", every, seconds, opts.handler or "")
             end,
             cancel = function(id) _timer_cancel(id or "") end,
+            scheduled = __h_timer_scheduled,
         },
         log = {
             info  = function(m) _log("info",  m or "") end,
@@ -1131,7 +1144,7 @@ struct ExtensionHost {
     __h_perms_has = nil
     __h_notify = nil
     __h_time = nil; __h_sleep = nil
-    __h_timer_schedule = nil; __h_timer_cancel = nil
+    __h_timer_schedule = nil; __h_timer_cancel = nil; __h_timer_scheduled = nil
     __h_log = nil; __h_env_get = nil
     -- __h_http_request, __h_window_frame/__h_window_set and __h_fs_list_dirs stay
     -- alive; host.http, host.window and host.fs are assembled in the UI bootstrap
