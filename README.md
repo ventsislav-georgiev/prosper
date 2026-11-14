@@ -39,6 +39,7 @@
 **⚡ Instant utilities**
 - [**Clipboard history**](#clipboard-history) — searchable, pinnable history with automatic link / email / color typing.
 - [**Translate**](#translate) — best translation plus alternatives, fully on-device.
+- [**Text Viewer**](#text-viewer) — open Markdown and plain text files in a read-only window, formatted, nothing fetched from the web.
 - [**QuickLinks & QuickDirs**](#quicklinks--quickdirs) — saved URL templates and per-directory actions.
 - [**Snippets**](#snippets) — expand saved text with dynamic placeholders in any app.
 - [**Bookmarks**](#bookmarks) — search and open bookmarks across 9 browsers at once.
@@ -208,6 +209,16 @@ Text is auto-typed into **link / email / color** (with a color swatch preview) f
 `⌥L` (or just type a sentence) — best translation plus alternative renderings, entirely on-device. A single ambiguous word lists its candidate meanings; a full sentence picks up the context.
 
 <p align="center"><img width="960" height="724" alt="prosper-demo-translate" src="https://github.com/user-attachments/assets/0683c69a-955c-434b-8448-b80758b4b64e" /></p>
+
+---
+
+## Text Viewer
+
+A built-in extension. Prosper appears in Finder's **Open With** menu for plain text files (Markdown, logs, CSV, scripts, source code), and Files search rows for Markdown and `.txt` have an **Open in Prosper** action. The file opens in a read-only window with selection, Copy, Find (`⌘F`), Open in the default app and Reveal in Finder, and the window reloads when the file changes.
+
+Markdown is shown formatted: headings, emphasis, code, nested and task lists, quotes, tables. Links show their full target on hover; web and mail links open on a click, links to other text files open in another viewer window, and any other local file is only revealed in Finder, never opened or run. Images inside the file's folder are drawn; images from the web are never downloaded.
+
+Prosper does not make itself the default app for these files. **Settings → Text Viewer → Make Prosper the Default** does that for `.txt` and Markdown when you ask for it.
 
 ---
 

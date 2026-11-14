@@ -39,6 +39,27 @@ final class TextViewerDocumentTests: XCTestCase {
         }
     }
 
+    /// R1118-8: UTF-16 edges. The text shown and the label are pinned for each.
+    func testUTF16Edges() throws {
+        let dir = tempDir("tv-doc")
+        let empty = try doc(try file("e.txt", [0xFF, 0xFE], in: dir))
+        XCTAssertEqual(empty.text, "")
+        XCTAssertEqual(empty.encoding, .utf16LE, "an empty body after the mark")
+        let odd = try doc(try file("o.txt", [0xFF, 0xFE, 0x61], in: dir))
+        XCTAssertEqual(odd.text, "", "an odd last byte is no character")
+        XCTAssertEqual(odd.encoding, .lossy)
+        XCTAssertTrue(odd.readOnly)
+        let odd3 = try doc(try file("o3.txt", [0xFE, 0xFF, 0x00, 0x61, 0x00], in: dir))
+        XCTAssertEqual(odd3.text, "a")
+        XCTAssertEqual(odd3.encoding, .lossy)
+        let lone = try doc(try file("s.txt", [0xFF, 0xFE, 0x00, 0xD8, 0x61, 0x00], in: dir))
+        XCTAssertEqual(lone.text, "\u{FFFD}a", "a lone surrogate")
+        XCTAssertEqual(lone.encoding, .lossy)
+        XCTAssertTrue(lone.readOnly)
+        XCTAssertEqual(TextViewerDocument.load(try file("u32.txt", [0xFF, 0xFE, 0x00, 0x00, 0x61, 0x00, 0x00, 0x00], in: dir)),
+                       .failure(.binary), "a UTF-32 LE mark reads as UTF-16 with NUL units")
+    }
+
     func testInvalidUTF8IsShownReadOnly() throws {
         let d = try doc(try file("latin1.txt", [0x63, 0x61, 0x66, 0xE9, 0x0A], in: tempDir("tv-doc")))
         XCTAssertEqual(d.encoding, .lossy)

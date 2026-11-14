@@ -44,7 +44,7 @@ final class TextViewerRoutingTests: XCTestCase {
     }
 
     /// D3 cold launch and D14's gate: nothing opens before ready(); after it, an enabled viewer
-    /// shows each document in order, a disabled one posts one notice each and shows nothing.
+    /// shows each document in order, a disabled one posts a notice (one per batch, R1118-6) and shows nothing.
     func testIntakeBuffersUntilReadyThenChecksTheGate() {
         let a = URL(fileURLWithPath: "/Users/example/a.md"), b = URL(fileURLWithPath: "/Users/example/b.txt")
         var shown: [URL] = [], notices = 0, enabled = true
@@ -61,5 +61,25 @@ final class TextViewerRoutingTests: XCTestCase {
         intake.receive(a)
         XCTAssertEqual(shown, [a, b])
         XCTAssertEqual(notices, 1)
+    }
+
+    /// R1118-6: with the viewer off, three files opened at once (one batch, one main-queue turn)
+    /// post one notice, before and after ready(); the next batch posts its own.
+    @MainActor
+    func testOffNoticeOncePerBatch() {
+        let urls = ["a.md", "b.md", "c.txt"].map { URL(fileURLWithPath: "/Users/example/\($0)") }
+        var notices = 0
+        let intake = TextViewerIntake()
+        intake.notifyOff = { notices += 1 }
+        intake.show = { XCTFail("shown while off: \($0)") }
+        urls.forEach(intake.receive)
+        intake.ready()
+        XCTAssertEqual(notices, 1, "a batch buffered before ready")
+        let deadline = Date().addingTimeInterval(5)
+        while notices == 1, Date() < deadline {   // the next turn: another batch
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            urls.forEach(intake.receive)
+        }
+        XCTAssertEqual(notices, 2, "a later batch of three: one more notice")
     }
 }

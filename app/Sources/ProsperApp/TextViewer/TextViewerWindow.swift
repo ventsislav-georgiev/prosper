@@ -3,15 +3,20 @@ import SwiftUI
 
 // #1106 (design #1105 D9): one themed window per text file, in Read mode. Built on open and torn
 // down on close, with AgentsWindow's build / present / dismissed seams, so tests run it with no
-// window on screen. A Markdown file shows as its plain source until the renderer (P1b) lands.
+// window on screen. #1118: a Markdown file is rendered (MarkdownRenderer), and the file is read and
+// rendered off the main thread.
 
-/// What the header's Open With menu and the refusal's button do. A seam: tests never reach
-/// NSWorkspace.
+/// What the header's Open With menu, the refusal's button and a clicked link do. A seam: tests never
+/// reach NSWorkspace.
 @MainActor
 struct TextViewerActions {
     var defaultApp: (URL) -> URL?
     var openWith: (URL, URL) -> Void
     var reveal: (URL) -> Void
+    /// D6: http, https and mailto, on a click only: the user's default browser or mail app.
+    var openURL: (URL) -> Void
+    /// D6: a linked text document, in its own viewer window in Read mode.
+    var view: (URL) -> Void
 
     /// The type's default app, never Prosper itself (it would open the same window again).
     static var live: TextViewerActions {
@@ -24,7 +29,9 @@ struct TextViewerActions {
             openWith: { url, app in
                 NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
             },
-            reveal: { NSWorkspace.shared.activateFileViewerSelecting([$0]) })
+            reveal: { NSWorkspace.shared.activateFileViewerSelecting([$0]) },
+            openURL: { NSWorkspace.shared.open($0) },
+            view: { TextViewerWindows.shared.open($0) })
     }
 }
 
@@ -36,39 +43,118 @@ final class TextViewerModel: ObservableObject {
     let resolved: URL
     let isMarkdown: Bool
     let actions: TextViewerActions
-    @Published private(set) var state: Result<TextViewerDocument, TextViewerDocument.Refusal>
-    /// The shown text view, for the window's find keys.
+    let imageLoader: TextViewerImageLoader
+    /// Nil until the first load lands (R1118-2: the file is read off the main thread).
+    @Published private(set) var state: Result<TextViewerDocument, TextViewerDocument.Refusal>?
+    /// What the text view shows: the rendered Markdown, or the plain text (D5). Set with `state`.
+    @Published private(set) var output: MarkdownRenderer.Output?
+    /// The shown text view, for the window's find keys and fragment links.
     weak var textView: TextViewerTextView?
     private(set) lazy var defaultApp: URL? = actions.defaultApp(url)
+    /// Runs once, on the main thread, when the first load lands (the registry starts watching then).
+    var onFirstLoad: (() -> Void)?
+    /// Loads applied so far, changed or not: a test waits on it instead of a timer.
+    private(set) var loads = 0
+    private var job: Task<Void, Never>?
+    private var generation = 0
+    private var requested: MarkdownRenderer.Style?
 
-    init(url: URL, resolved: URL, actions: TextViewerActions) {
+    init(url: URL, resolved: URL, actions: TextViewerActions, imageLoader: @escaping TextViewerImageLoader = ImagePolicy.load) {
         self.url = url
         self.resolved = resolved
         self.actions = actions
+        self.imageLoader = imageLoader
         isMarkdown = TextViewerRouting.isMarkdown(url)
-        state = TextViewerDocument.load(url)
+        refresh(style: .current)
     }
 
     var name: String { url.lastPathComponent }
-    var document: TextViewerDocument? { try? state.get() }
+    var document: TextViewerDocument? { try? state?.get() }
 
     /// The first load found a regular file (shown, or refused for its size or bytes): worth
     /// watching. A missing file, a folder or a FIFO is not watched.
     var isRegularFile: Bool {
         switch state {
-        case .success, .failure(.tooLarge), .failure(.binary): true
+        case .success?, .failure(.tooLarge)?, .failure(.binary)?: true
         default: false
         }
     }
 
-    func reload() {
-        let next = TextViewerDocument.load(url)
-        if next != state { state = next }
+    /// A change on disk: read and render again in the current theme.
+    func reload() { refresh(style: requested ?? .current) }
+
+    /// The theme changed (the text view saw another style): render again, once per style.
+    func restyle(_ style: MarkdownRenderer.Style) {
+        if style != requested { refresh(style: style) }
     }
 
-    func copyText() { if let text = document?.text { put(text) } }   // P1b: the rendered text
-    func copySource() { if let text = document?.text { put(text) } }
-    func copyPath() { put(url.path) }
+    /// Reads and renders off the main thread; the newest request wins. The closure is @Sendable and
+    /// nonisolated (Task.detached): it captures only Sendable values (URLs, the style, the @Sendable
+    /// loader) and calls only nonisolated functions, then hops back to the main actor to publish.
+    /// The resolved path is read, the one the watcher follows (R1118-7).
+    private func refresh(style: MarkdownRenderer.Style) {
+        job?.cancel()
+        generation += 1
+        requested = style
+        let (gen, path, markdown, loader) = (generation, resolved, isMarkdown, imageLoader)
+        job = Task.detached(priority: .userInitiated) { [weak self] in
+            let next = TextViewerDocument.load(path)
+            let output = (try? next.get()).map { doc in
+                markdown ? MarkdownRenderer.render(doc.text, document: path, style: style, loader: loader)
+                         : MarkdownRenderer.plain(doc.text, style: style)
+            }
+            if Task.isCancelled { return }
+            await self?.apply(next, output, generation: gen)
+        }
+    }
+
+    private func apply(_ next: Result<TextViewerDocument, TextViewerDocument.Refusal>, _ out: MarkdownRenderer.Output?,
+                       generation gen: Int) {
+        guard gen == generation else { return }   // a newer load is on its way
+        let first = state == nil
+        // The same bytes in the same theme keep the shown text (and so the selection and scroll).
+        if next != state || out?.style != output?.style || out?.note != output?.note {
+            state = next
+            output = out
+        }
+        if first { onFirstLoad?(); onFirstLoad = nil }
+        loads += 1
+    }
+
+    /// D6: a clicked link. The policy is asked again at the click; only its action runs.
+    func follow(_ link: URL) {
+        switch LinkPolicy.action(link, document: resolved) {
+        case .open(let u): actions.openURL(u)
+        case .view(let u): actions.view(u)
+        case .reveal(let u): actions.reveal(u)
+        case .scroll(let slug):
+            guard let at = output?.anchors[slug], let view = textView, at <= (view.textStorage?.length ?? 0) else { return }
+            view.scrollRangeToVisible(NSRange(location: at, length: 0))
+        case .none: break
+        }
+    }
+
+    struct CopyItem: Equatable { let title: String; let enabled: Bool }
+
+    /// The header's Copy items and whether each is on: a refused file still has a path (R1118-9).
+    var copyItems: [CopyItem] {
+        [CopyItem(title: "Copy Text", enabled: output != nil)]
+            + (isMarkdown ? [CopyItem(title: "Copy Markdown Source", enabled: document != nil)] : [])
+            + [CopyItem(title: "Copy Path", enabled: true)]
+    }
+
+    func copy(_ title: String) {
+        switch title {
+        case "Copy Text": if let text = output?.text.string { put(TextViewerTextView.plainString(text)) }   // the rendered text
+        case "Copy Markdown Source": if let text = document?.text { put(text) }
+        case "Copy Path": put(url.path)
+        default: break
+        }
+    }
+
+    func copyText() { copy("Copy Text") }
+    func copySource() { copy("Copy Markdown Source") }
+    func copyPath() { copy("Copy Path") }
 
     private func put(_ s: String) {
         let pb = Pasteboard.general
@@ -109,6 +195,7 @@ final class TextViewerWindows {
     }
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
     var actions: () -> TextViewerActions = { .live }
+    var imageLoader: TextViewerImageLoader = ImagePolicy.load
 
     /// Opens `url` in its own window, or focuses the one already showing that file: the same path
     /// through symlinks, or the same file resource id (another case of the name, a hard link).
@@ -119,15 +206,18 @@ final class TextViewerWindows {
             $0.model.resolved.path == resolved.path || (fileID != nil && $0.fileID?.isEqual(fileID) == true)
         }) { return present(open.window) }
 
-        let model = TextViewerModel(url: url, resolved: resolved, actions: actions())
+        let model = TextViewerModel(url: url, resolved: resolved, actions: actions(), imageLoader: imageLoader)
         let win = build(model)
         if let last = entries.last?.window {   // cascade from the newest window
             win.setFrameTopLeftPoint(NSPoint(x: last.frame.minX + sz(24), y: last.frame.maxY - sz(24)))
         }
         let entry = Entry(model: model, window: win, fileID: fileID)
-        if model.isRegularFile {
+        // Watched once the first (off-main) load knows what the path is. Set before that load can land:
+        // it publishes on the main actor, after this function returns.
+        model.onFirstLoad = { [weak entry, weak model] in
+            guard let entry, let model, model.isRegularFile else { return }
             entry.watcher = FileWatcher(url: resolved) { [weak model] in
-                MainActor.assumeIsolated { model?.reload() }
+                MainActor.assumeIsolated { model?.reload() }   // FileWatcher fires on the main queue
             }
         }
         entry.observer = NotificationCenter.default.addObserver(
@@ -164,7 +254,10 @@ final class TextViewerWindows {
         guard let i = entries.firstIndex(where: { $0.window === win }) else { return }
         let entry = entries.remove(at: i)
         entry.watcher?.stop()
+        entry.watcher = nil
         if let o = entry.observer { NotificationCenter.default.removeObserver(o) }
+        entry.observer = nil
+        entry.model.onFirstLoad = nil   // a load still on its way starts no watcher for a closed window
         dismissed(win)
         DispatchQueue.main.async { win.contentViewController = nil }
     }
@@ -182,10 +275,10 @@ final class TextViewerNSWindow: NSWindow {
         guard event.type == .keyDown else { return .pass }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = AgentsNSWindow.chordLetter(event)
-        if mods.contains(.command), key == "w" { return .close }
         if mods == [.command, .shift], key == "g" { return .find(.previousMatch) }
-        guard mods == [.command] else { return .pass }
+        guard mods == [.command] else { return .pass }   // ⇧⌘W, ⌥⌘W and the rest are not ours (R1118-4)
         switch key {
+        case "w": return .close
         case "f": return .find(.showFindInterface)
         case "g": return .find(.nextMatch)
         case "e": return .useSelectionForFind
@@ -216,10 +309,15 @@ struct TextViewerRootView: View {
             TextViewerHeader(model: model)
             Rectangle().fill(Neon.stroke).frame(height: 1)
             switch model.state {
-            case .success(let doc):
+            case nil:
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)   // the first load is on its way
+            case .success(let doc)?:
                 if doc.readOnly { banner("Not UTF-8: shown read-only") }
-                TextViewerTextRepresentable(text: doc.text, model: model)
-            case .failure(let refusal):
+                if let note = model.output?.note { banner(note) }
+                if let output = model.output {
+                    TextViewerTextRepresentable(output: output, model: model)
+                }
+            case .failure(let refusal)?:
                 refused(refusal)
             }
         }
@@ -260,14 +358,13 @@ struct TextViewerHeader: View {
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: sz(8))
             Menu {
-                Button("Copy Text") { model.copyText() }
-                if model.isMarkdown { Button("Copy Markdown Source") { model.copySource() } }
-                Button("Copy Path") { model.copyPath() }
+                ForEach(model.copyItems, id: \.title) { item in
+                    Button(item.title) { model.copy(item.title) }.disabled(!item.enabled)
+                }
             } label: {
                 Label("Copy", systemImage: "doc.on.doc").font(Neon.font(11, weight: .medium))
             }
             .menuStyle(.borderlessButton).fixedSize()
-            .disabled(model.document == nil)
             Menu {
                 if let app = model.defaultApp {
                     Button("Open in \(FileManager.default.displayName(atPath: app.path))") { model.openInDefaultApp() }
@@ -316,14 +413,16 @@ struct TextViewerModeSwitch: View {
     }
 }
 
-/// The TextKit 1 view inside SwiftUI. A theme or UI-size change rebuilds it through Themed's id.
+/// The TextKit 1 view inside SwiftUI. A theme or UI-size change rebuilds it through Themed's id; the
+/// model then renders again in the new style, off the main thread, and the old text stays until then.
 struct TextViewerTextRepresentable: NSViewRepresentable {
-    let text: String
+    let output: MarkdownRenderer.Output
     let model: TextViewerModel
 
     func makeNSView(context: Context) -> NSScrollView {
         let (scroll, view) = TextViewerTextView.makeScrollable()
         model.textView = view
+        view.onLink = { [weak model] in model?.follow($0) }
         update(view)
         return scroll
     }
@@ -333,7 +432,7 @@ struct TextViewerTextRepresentable: NSViewRepresentable {
     }
 
     private func update(_ view: TextViewerTextView) {
-        view.show(text, font: .monospacedSystemFont(ofSize: 13 * ThemeRuntime.scale, weight: .regular),
-                  color: NSColor(Neon.textPrimary))
+        view.show(output.text)
+        model.restyle(.current)   // a no-op unless the theme moved since this text was rendered
     }
 }

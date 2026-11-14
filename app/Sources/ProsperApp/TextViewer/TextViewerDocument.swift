@@ -48,7 +48,7 @@ struct TextViewerDocument: Equatable {
 
     /// At most `size` bytes (the fstat size, already checked to be in 0...maxBytes): a file that grows
     /// while it is read (a log) is cut at the size it had, never read past the limit.
-    private static func readAll(_ fd: Int32, size: Int) -> Data? {
+    static func readAll(_ fd: Int32, size: Int) -> Data? {
         var buf = [UInt8](repeating: 0, count: size)
         var total = 0
         while total < size {
@@ -71,9 +71,11 @@ struct TextViewerDocument: Equatable {
             }
             // The NUL rule on code units: a UTF-16 file has a zero byte in every ASCII character.
             if units.prefix(sniffBytes / 2).contains(0) { return .failure(.binary) }
-            let valid = body.count % 2 == 0
-                && String(data: Data(body), encoding: little ? .utf16LittleEndian : .utf16BigEndian) != nil
-            return .success(make(String(decoding: units, as: UTF16.self), valid ? (little ? .utf16LE : .utf16BE) : .lossy))
+            // Valid only when every unit round-trips: an odd byte or a lone surrogate (shown as U+FFFD)
+            // makes the file lossy and read-only (R1118-8).
+            let text = String(decoding: units, as: UTF16.self)
+            let valid = body.count % 2 == 0 && text.utf16.elementsEqual(units)
+            return .success(make(text, valid ? (little ? .utf16LE : .utf16BE) : .lossy))
         }
         if bytes.prefix(sniffBytes).contains(0) { return .failure(.binary) }
         let bom = bytes.starts(with: [0xEF, 0xBB, 0xBF])

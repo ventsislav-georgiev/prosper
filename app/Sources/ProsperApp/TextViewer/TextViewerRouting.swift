@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 enum TextViewerRouting {
     nonisolated static let markdownTypeID = "net.daringfireball.markdown"
-    /// The imported type's extensions (scripts/Info.plist). Checked by name too: under XCTest, or
+    /// Extensions Prosper treats as Markdown by file name (macOS declares the type for md and markdown only). By name because under XCTest, or
     /// on a Mac where nothing declares the type, UTType(filenameExtension: "md") is a dynamic type.
     nonisolated static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
 
@@ -50,15 +50,23 @@ final class TextViewerIntake {
 
     /// The textviewer extension is live. AppDelegate sets it; false until then (and in tests).
     var isEnabled: () -> Bool = { false }
-    /// D14: with the extension off, one notification per document, never a hand-off to another
-    /// app (if Prosper were the default for .md, that would loop).
+    /// D14: with the extension off, one notification per batch (R1118-6: the documents of one
+    /// Open With or one launch arrive in one main-queue turn), never a hand-off to another app (if
+    /// Prosper were the default for .md, that would loop).
     var notifyOff: () -> Void = {}
     var show: (URL) -> Void = { TextViewerWindows.shared.open($0) }
     private var pending: [URL]? = []
+    private var noticed = false
 
     func receive(_ url: URL) {
         if pending != nil { pending?.append(url); return }
-        guard isEnabled() else { return notifyOff() }
+        guard isEnabled() else {
+            guard !noticed else { return }
+            noticed = true
+            notifyOff()
+            Task { @MainActor in self.noticed = false }   // the next turn is the next batch
+            return
+        }
         show(url)
     }
 
