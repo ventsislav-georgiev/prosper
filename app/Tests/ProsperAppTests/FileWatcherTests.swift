@@ -213,4 +213,179 @@ final class FileWatcherTests: XCTestCase {
         XCTAssertFalse(poll(2) { fires.n > 2 }, "one fire for the creation: \(fires.n)")
         XCTAssertFalse(fires.offMain, "onChange ran on main")
     }
+
+    // MARK: R896-1 the retry, on an injected scheduler: no timer fires on its own; delays are values.
+
+    /// Records what a watcher schedules (called on the watcher's queue); a row performs the newest item
+    /// itself, on that queue.
+    final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [(delay: TimeInterval, work: DispatchWorkItem)] = []
+        func add(_ delay: TimeInterval, _ work: DispatchWorkItem) { lock.lock(); items.append((delay, work)); lock.unlock() }
+        var delays: [TimeInterval] { lock.lock(); defer { lock.unlock() }; return items.map(\.delay) }
+        var last: (delay: TimeInterval, work: DispatchWorkItem)? { lock.lock(); defer { lock.unlock() }; return items.last }
+        /// Performs the newest item on `queue` (it re-arms or debounces there, as a timer would).
+        func runLast(on queue: DispatchQueue) {
+            guard let work = last?.work else { return }
+            queue.sync { work.perform() }
+        }
+    }
+
+    /// A path that never appears: 1, 2, 4 ... seconds, then the ceiling, every retry. Then the bound for
+    /// a whole day, on a virtual clock: each retry performed at its delay until 86,400 s pass.
+    func testRetryBacksOffToTheCeiling() throws {
+        let file = tempDir("fw-backoff").appendingPathComponent("never.txt")
+        let clock = Clock()
+        let watcher = FileWatcher(url: file, retryCeiling: 60, schedule: clock.add) {}
+        defer { watcher.stop() }
+        watcher.queue.sync {}   // the first arm (queued by init) looked and scheduled a retry
+        for _ in 0..<8 { clock.runLast(on: watcher.queue) }
+        XCTAssertEqual(clock.delays, [1, 2, 4, 8, 16, 32, 60, 60, 60])
+
+        let day = Clock()
+        let daylong = FileWatcher(url: file, retryCeiling: 60, schedule: day.add) {}
+        defer { daylong.stop() }
+        daylong.queue.sync {}
+        var opens = 1, t: TimeInterval = 0
+        while let d = day.last?.delay, t + d <= 86_400 {
+            t += d
+            day.runLast(on: daylong.queue)
+            opens += 1
+        }
+        XCTAssertEqual(opens, 1_445, "a day on a missing path: the first look, 6 backing off, then one a minute")
+        XCTAssertEqual(day.delays.max(), 60)
+    }
+
+    /// The app-long watchers pass no ceiling: a look every second, as before R896-1.
+    func testDefaultRetryStaysOneSecond() throws {
+        let file = tempDir("fw-default").appendingPathComponent("later.json")
+        let clock = Clock()
+        let watcher = FileWatcher(url: file, schedule: clock.add) {}
+        defer { watcher.stop() }
+        XCTAssertEqual(watcher.retryCeiling, 1)
+        watcher.queue.sync {}
+        for _ in 0..<4 { clock.runLast(on: watcher.queue) }
+        XCTAssertEqual(clock.delays, [1, 1, 1, 1, 1])
+    }
+
+    /// After an arm the back-off starts over: missing (1, 2), created (armed, its fire debounced 0.2),
+    /// deleted (the delete fires, 0.2; that item re-arms and finds nothing): the next retry is 1 s again.
+    func testBackOffStartsOverAfterAnArm() throws {
+        let dir = tempDir("fw-reset")
+        let file = dir.appendingPathComponent("again.txt")
+        let clock = Clock()
+        let watcher = FileWatcher(url: file, retryCeiling: 60, schedule: clock.add) {}
+        defer { watcher.stop() }
+        watcher.queue.sync {}
+        clock.runLast(on: watcher.queue)
+        XCTAssertEqual(clock.delays, [1, 2])
+        try Data("x\n".utf8).write(to: file)
+        clock.runLast(on: watcher.queue)   // armed; the appearance fires
+        XCTAssertEqual(clock.delays, [1, 2, 0.2])
+        XCTAssertEqual(watchedInodes(under: dir).count, 1, "armed on the created file")
+        try FileManager.default.removeItem(at: file)
+        XCTAssertTrue(poll(10) { clock.delays.count == 4 }, "the delete fires within 10 s: \(clock.delays)")
+        clock.runLast(on: watcher.queue)   // the delete's debounced item re-arms: nothing there
+        XCTAssertEqual(clock.delays, [1, 2, 0.2, 0.2, 1])
+    }
+
+    /// `remote` (the viewer's automount or network location): a path never armed gets no look at all.
+    func testRemoteNeverArmedIsNotRetried() throws {
+        let idle = Clock()
+        let missing = FileWatcher(url: tempDir("fw-remote-never").appendingPathComponent("never.txt"),
+                                  retryCeiling: 60, remote: true, schedule: idle.add) {}
+        defer { missing.stop() }
+        missing.queue.sync {}
+        XCTAssertEqual(idle.delays, [], "missing from the start: no look")
+    }
+
+    /// Remote, armed, deleted, never back: 7 looks (1 ... 60 s, up to the first at the ceiling), then none.
+    func testRemoteArmedThenDeletedLooksSevenTimes() throws {
+        let dir = tempDir("fw-remote-gone")
+        let file = try XCTUnwrap(try files(1, in: dir).first)
+        let clock = Clock()
+        let watcher = FileWatcher(url: file, retryCeiling: 60, remote: true, schedule: clock.add) {}
+        defer { watcher.stop() }
+        watcher.queue.sync {}
+        XCTAssertEqual(watchedInodes(under: dir).count, 1, "the present file is armed")
+        try FileManager.default.removeItem(at: file)
+        XCTAssertTrue(poll(10) { clock.delays.count == 1 }, "the delete fires within 10 s: \(clock.delays)")
+        for _ in 0..<8 { clock.runLast(on: watcher.queue) }   // the re-arm, then each look; the last schedules nothing
+        XCTAssertEqual(clock.delays, [0.2, 1, 2, 4, 8, 16, 32, 60])
+        clock.runLast(on: watcher.queue)   // performing the look at 60 again: still nothing new
+        XCTAssertEqual(clock.delays.count, 8, "the allowance is spent: no further look")
+    }
+
+    /// Remote, written again before the third look: armed and fires; a second delete gets all 7 looks again.
+    func testRemoteAllowanceIsGivenBackByAnArm() throws {
+        let dir = tempDir("fw-remote-back")
+        let file = try XCTUnwrap(try files(1, in: dir).first)
+        let clock = Clock()
+        let watcher = FileWatcher(url: file, retryCeiling: 60, remote: true, schedule: clock.add) {}
+        defer { watcher.stop() }
+        watcher.queue.sync {}
+        try FileManager.default.removeItem(at: file)
+        XCTAssertTrue(poll(10) { clock.delays.count == 1 }, "the delete fires within 10 s: \(clock.delays)")
+        clock.runLast(on: watcher.queue)   // re-arm: gone, look 1 s
+        clock.runLast(on: watcher.queue)   // look at 1 s: gone, look 2 s
+        XCTAssertEqual(clock.delays, [0.2, 1, 2])
+        try Data("again\n".utf8).write(to: file)
+        clock.runLast(on: watcher.queue)   // the look at 2 s arms; the appearance fires
+        XCTAssertEqual(clock.delays, [0.2, 1, 2, 0.2])
+        XCTAssertEqual(watchedInodes(under: dir).count, 1, "armed again")
+        try FileManager.default.removeItem(at: file)
+        XCTAssertTrue(poll(10) { clock.delays.count == 5 }, "the second delete fires: \(clock.delays)")
+        for _ in 0..<8 { clock.runLast(on: watcher.queue) }
+        XCTAssertEqual(Array(clock.delays.dropFirst(4)), [0.2, 1, 2, 4, 8, 16, 32, 60], "the full 7 looks again")
+    }
+
+    /// After a failed open for any reason the next successful arm fires once: the watcher saw nothing
+    /// meanwhile. A file behind a folder with no search permission (EACCES) is retried; once the folder is
+    /// opened up the arm fires (delays [1, 0.2]). The folder is the row's own, restored in a defer.
+    func testArmAfterAFailedOpenFires() throws {
+        let dir = tempDir("fw-eacces")
+        let locked = dir.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false)
+        let file = locked.appendingPathComponent("f.txt")
+        try Data("x\n".utf8).write(to: file)
+        XCTAssertEqual(chmod(locked.path, 0), 0)
+        defer { chmod(locked.path, 0o700) }
+        let clock = Clock()
+        let watcher = FileWatcher(url: file, retryCeiling: 60, schedule: clock.add) {}
+        defer { watcher.stop() }
+        watcher.queue.sync {}
+        XCTAssertEqual(clock.delays, [1], "the EACCES arm is retried")
+        XCTAssertEqual(chmod(locked.path, 0o700), 0)
+        clock.runLast(on: watcher.queue)
+        XCTAssertEqual(watchedInodes(under: dir).count, 1, "armed once reachable")
+        XCTAssertEqual(clock.delays, [1, 0.2], "fires: a change made meanwhile must not be lost")
+    }
+
+    /// R896-1 (1): the automount and network rule on a made-up mount table (no real /Volumes, /net or
+    /// /System/Volumes path is read). The longest mount point containing the path decides.
+    func testAutomountAndNetworkLocations() {
+        let local = UInt32(MNT_LOCAL)
+        let mounts = [FileWatcher.Mount(on: "/", type: "apfs", flags: local),
+                      FileWatcher.Mount(on: "/System/Volumes/Data", type: "apfs", flags: local),
+                      FileWatcher.Mount(on: "/net", type: "autofs", flags: local),
+                      FileWatcher.Mount(on: "/Volumes/Share", type: "smbfs", flags: 0),
+                      FileWatcher.Mount(on: "/Volumes/Auto", type: "apfs", flags: local | UInt32(MNT_AUTOMOUNTED))]
+        func remote(_ p: String) -> Bool { FileWatcher.onAutomountOrNetwork(p, mounts: mounts) }
+        XCTAssertFalse(remote("/Users/example/notes.md"))
+        XCTAssertFalse(remote("/System/Volumes/Data/Users/example/notes.md"))
+        XCTAssertTrue(remote("/net/host/notes.md"), "autofs")
+        XCTAssertTrue(remote("/Volumes/Share/notes.md"), "not MNT_LOCAL")
+        XCTAssertTrue(remote("/Volumes/Share"), "the mount point itself")
+        XCTAssertFalse(remote("/Volumes/Shared/notes.md"), "a whole component, not a prefix")
+        XCTAssertTrue(remote("/NET/host/notes.md"), "the system volume ignores case")
+        XCTAssertTrue(remote("/Volumes/Auto/notes.md"), "MNT_AUTOMOUNTED")
+        XCTAssertFalse(FileWatcher.onAutomountOrNetwork("/Users/example/notes.md", mounts: []))
+    }
+
+    /// The live mount table (getfsstat, MNT_NOWAIT: no path is looked up) decodes and holds the root;
+    /// the row's own tempDir() is local.
+    func testLiveMountTableHasTheRoot() {
+        XCTAssertTrue(FileWatcher.mountTable().contains { $0.on == "/" }, "\(FileWatcher.mountTable().map(\.on))")
+        XCTAssertFalse(FileWatcher.onAutomountOrNetwork(tempDir("fw-mounts").path))
+    }
 }

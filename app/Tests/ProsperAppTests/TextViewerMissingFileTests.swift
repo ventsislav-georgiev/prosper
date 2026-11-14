@@ -25,6 +25,7 @@ final class TextViewerMissingFileTests: XCTestCase {
                               openURL: { _ in }, view: { _ in })
         }
         w.imageLoader = { _, _, _ in nil }
+        w.isRemote = { _ in false }   // no row reads the live mount table here (FileWatcherTests does)
         return w
     }
 
@@ -124,8 +125,39 @@ final class TextViewerMissingFileTests: XCTestCase {
         waitUntil("both loaded", { w.entries.allSatisfy { $0.model.state != nil } })
         XCTAssertTrue(w.entries.allSatisfy { $0.model.state == .failure(.missing) && $0.watcher != nil },
                       "both missing at open and watched")
+        weak let folderWatcher = w.entries.first?.watcher
+        weak let fifoWatcher = w.entries.last?.watcher
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
         XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
         waitUntil("both refused as not regular", { w.entries.allSatisfy { $0.model.state == .failure(.notRegular) } })
+        // R896-1 (2): the reload that showed it stopped the watch (set in that same main-actor apply), so a
+        // change inside the folder reloads nothing.
+        XCTAssertTrue(w.entries.allSatisfy { $0.watcher == nil }, "no longer watched once not a regular file")
+        XCTAssertTrue(folderWatcher == nil && fifoWatcher == nil, "the watchers are released, not only stopped")
+    }
+
+    /// R896-1 (1): a path the injected check calls an automount or network location gets a watcher
+    /// that bounds its looks (FileWatcherTests pins what `remote` does);
+    /// a local one backs off to TextViewerWindows.retryCeiling. No real automount or network path:
+    /// both are fakes in the row's tempDir(), told apart by name. The local file exists, so neither
+    /// watcher schedules a retry during the row.
+    func testRemoteLocationIsNotRetried() throws {
+        let dir = tempDir("tv-remote")
+        let remote = dir.appendingPathComponent("remote.txt")
+        let local = dir.appendingPathComponent("local.txt")
+        try Data("here\n".utf8).write(to: local)
+        let w = registry()
+        var asked: [String] = []
+        w.isRemote = { asked.append($0.lastPathComponent); return $0.lastPathComponent == "remote.txt" }
+        defer { closeAll(w) }
+        w.open(remote)
+        w.open(local)
+        XCTAssertEqual(asked, ["remote.txt", "local.txt"], "asked once per window, at open")
+        waitUntil("both loaded and watched", { w.entries.allSatisfy { $0.watcher != nil } })
+        XCTAssertEqual(w.entries.count, 2)
+        XCTAssertEqual(w.entries.first?.watcher?.remote, true, "remote: bounded looks")
+        XCTAssertEqual(w.entries.last?.watcher?.remote, false)
+        XCTAssertEqual(w.entries.last?.watcher?.retryCeiling, TextViewerWindows.retryCeiling)
+        XCTAssertEqual(TextViewerWindows.retryCeiling, 60)
     }
 }

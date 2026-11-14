@@ -53,22 +53,36 @@ final class TextViewerModel: ObservableObject {
     private(set) lazy var defaultApp: URL? = actions.defaultApp(url)
     /// Runs once, on the main thread, when the first load lands (the registry starts watching then).
     var onFirstLoad: (() -> Void)?
+    /// Runs on the main thread after every later load that lands (R896-1: the registry stops
+    /// watching a path that is no longer a regular file).
+    var onReload: (() -> Void)?
     /// Loads applied so far, changed or not: a test waits on it instead of a timer.
     private(set) var loads = 0
-    private var job: Task<Void, Never>?
+    /// The newest load; a row awaits one it kept to know that load has ended.
+    private(set) var job: Task<Void, Never>?
     private var generation = 0
     private var requested: MarkdownRenderer.Style?
+    /// Reads the file, off the main thread. A seam: a row holds a read to order two loads.
+    private let read: @Sendable (URL) -> Result<TextViewerDocument, TextViewerDocument.Refusal>
 
-    init(url: URL, resolved: URL, actions: TextViewerActions, imageLoader: @escaping TextViewerImageLoader = ImagePolicy.load) {
+    init(url: URL, resolved: URL, actions: TextViewerActions, imageLoader: @escaping TextViewerImageLoader = ImagePolicy.load,
+         read: @escaping @Sendable (URL) -> Result<TextViewerDocument, TextViewerDocument.Refusal> = TextViewerDocument.load) {
         self.url = url
         self.resolved = resolved
         self.actions = actions
         self.imageLoader = imageLoader
+        self.read = read
         isMarkdown = TextViewerRouting.isMarkdown(url)
         refresh(style: .current)
     }
 
     var name: String { url.lastPathComponent }
+    /// R1162-1: the name as the title and header show it: each direction control (LinkPolicy.bidiControls)
+    /// written as \u{XXXX}, since the file is already open and cannot be refused.
+    var shownName: String { Self.shown(name) }
+    nonisolated static func shown(_ name: String) -> String {
+        name.unicodeScalars.map { LinkPolicy.bidiControls.contains($0.value) ? "\\u{" + String($0.value, radix: 16, uppercase: true) + "}" : String($0) }.joined()
+    }
     var document: TextViewerDocument? { try? state?.get() }
 
     /// The first load found a regular file (shown, or refused for its size or bytes) or nothing
@@ -92,19 +106,20 @@ final class TextViewerModel: ObservableObject {
     /// Reads and renders off the main thread; the newest request wins. The closure is @Sendable and
     /// nonisolated (Task.detached): it captures only Sendable values (URLs, the style, the @Sendable
     /// loader) and calls only nonisolated functions, then hops back to the main actor to publish.
-    /// The resolved path is read, the one the watcher follows (R1118-7).
+    /// The resolved path is read, the one the watcher follows (R1118-7). A load superseded before its
+    /// render skips the render (the cancellation); one superseded later is dropped by apply's guard.
     private func refresh(style: MarkdownRenderer.Style) {
         job?.cancel()
         generation += 1
         requested = style
-        let (gen, path, markdown, loader) = (generation, resolved, isMarkdown, imageLoader)
+        let (gen, path, markdown, loader, reader) = (generation, resolved, isMarkdown, imageLoader, self.read)
         job = Task.detached(priority: .userInitiated) { [weak self] in
-            let next = TextViewerDocument.load(path)
+            let next = reader(path)
+            if Task.isCancelled { return }
             let output = (try? next.get()).map { doc in
                 markdown ? MarkdownRenderer.render(doc.text, document: path, style: style, loader: loader)
                          : MarkdownRenderer.plain(doc.text, style: style)
             }
-            if Task.isCancelled { return }
             await self?.apply(next, output, generation: gen)
         }
     }
@@ -118,7 +133,7 @@ final class TextViewerModel: ObservableObject {
             state = next
             output = out
         }
-        if first { onFirstLoad?(); onFirstLoad = nil }
+        if first { onFirstLoad?(); onFirstLoad = nil } else { onReload?() }
         loads += 1
     }
 
@@ -197,6 +212,11 @@ final class TextViewerWindows {
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
     var actions: () -> TextViewerActions = { .live }
     var imageLoader: TextViewerImageLoader = ImagePolicy.load
+    /// R896-1: a path on an automount or network location is looked at a bounded number of times (FileWatcher.remote).
+    /// The live check reads the mount table only (FileWatcher.onAutomountOrNetwork); rows inject one.
+    var isRemote: (URL) -> Bool = { FileWatcher.onAutomountOrNetwork($0.path) }
+    /// The longest wait between two looks at a missing path (FileWatcher's back-off ceiling).
+    static let retryCeiling: TimeInterval = 60
 
     /// Opens `url` in its own window, or focuses the one already showing that file: the same path
     /// through symlinks, or the same file resource id (another case of the name, a hard link).
@@ -213,14 +233,24 @@ final class TextViewerWindows {
             win.setFrameTopLeftPoint(NSPoint(x: last.frame.minX + sz(24), y: last.frame.maxY - sz(24)))
         }
         let entry = Entry(model: model, window: win, fileID: fileID)
+        let remote = isRemote(resolved)
         // Watched once the first (off-main) load knows what the path is. Set before that load can land:
-        // it publishes on the main actor, after this function returns.
-        model.onFirstLoad = { [weak entry, weak model] in
+        // it publishes on the main actor, after this function returns. Called on the main actor (apply).
+        model.onFirstLoad = { [weak self, weak entry, weak model] in
             guard let entry, let model, model.isWatched else { return }
             // Created between the first load and the first arm: that arm fires (#1147).
-            entry.watcher = FileWatcher(url: resolved, absent: model.state == .failure(.missing)) { [weak model] in
-                MainActor.assumeIsolated { model?.reload() }   // FileWatcher fires on the main queue
+            entry.watcher = FileWatcher(url: resolved, absent: model.state == .failure(.missing),
+                                        retryCeiling: Self.retryCeiling, remote: remote) { [weak self, weak model] in
+                // @Sendable, called by FileWatcher on the main queue.
+                MainActor.assumeIsolated { if let model { self?.changed(model) } }
             }
+        }
+        // R896-1: a reload that finds a folder or a FIFO there stops the watch (a change inside a folder
+        // would reload the same refusal). Called on the main actor (apply).
+        model.onReload = { [weak entry] in
+            guard let entry, entry.model.state == .failure(.notRegular) else { return }
+            entry.watcher?.stop()
+            entry.watcher = nil
         }
         entry.observer = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self] _ in
@@ -236,7 +266,7 @@ final class TextViewerWindows {
         let hosting = NSHostingController(rootView: Themed { TextViewerRootView(model: model) })
         let win = TextViewerNSWindow(contentViewController: hosting)
         win.model = model
-        win.title = model.name   // the Window list; the header shows the name
+        win.title = model.shownName   // the Window list; the header shows the name
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
@@ -250,6 +280,15 @@ final class TextViewerWindows {
         if !(autosave.map { win.setFrameUsingName($0) } ?? false) { win.centerOnScreen() }
         win.clampToContentMinSize()
         return win
+    }
+
+    /// The watcher saw a change: reload, unless the window has closed (a fire already queued to main
+    /// when it closed does nothing). Returns whether it reloaded.
+    @discardableResult
+    func changed(_ model: TextViewerModel) -> Bool {
+        guard entries.contains(where: { $0.model === model }) else { return false }
+        model.reload()
+        return true
     }
 
     private func teardown(_ win: NSWindow) {
@@ -354,7 +393,7 @@ struct TextViewerHeader: View {
     var body: some View {
         HStack(spacing: sz(10)) {
             TextViewerModeSwitch()
-            Text(model.name)
+            Text(model.shownName)
                 .font(Neon.font(13, weight: .semibold))
                 .foregroundStyle(Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)

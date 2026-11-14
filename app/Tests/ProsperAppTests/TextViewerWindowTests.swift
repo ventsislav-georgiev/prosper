@@ -530,17 +530,29 @@ final class TextViewerWindowTests: XCTestCase {
 
     /// Round 3 (F1): a force click at a link starts no immediate action. NSTextView adds an
     /// NSImmediateActionGestureRecognizer at init, and its force click previews a link's target without
-    /// passing through quickLook(with:); ours refuses every recognizer outside keptRecognizers. Reads
-    /// recognizers only: no event, no preview, nothing shown.
+    /// passing through quickLook(with:). Reads recognizers only: no event, no preview, nothing shown.
+    /// R886-8, what it proves where: on every system, the stock view's one immediate-action recognizer
+    /// is refused and every other stock recognizer kept, in and out of a window. On macOS 27 and later
+    /// (keptRecognizers was read on 27.2) also: no stock class is off the list, and a novel class is
+    /// refused (fail closed). On macOS 14 to 26 the list was never read, so it is not compared there,
+    /// and a novel class is kept (that system's rule). A system whose stock view adds no
+    /// immediate-action recognizer is skipped: the guard has nothing to refuse there.
     func testForceClickHasNoImmediateAction() throws {
         func names(_ v: NSView) -> [String] { v.gestureRecognizers.map { NSStringFromClass(type(of: $0)) }.sorted() }
         let immediate = "NSImmediateActionGestureRecognizer"
         let stock = names(NSTextView(usingTextLayoutManager: false))
         fact("stock TextKit 1 recognizers: \(stock)")
+        let listRule: Bool
+        if #available(macOS 27, *) { listRule = true } else { listRule = false }
+        if !listRule, !stock.contains(immediate) {
+            throw XCTSkip("macOS \(ProcessInfo.processInfo.operatingSystemVersionString) adds no \(immediate): nothing to refuse")
+        }
         XCTAssertEqual(stock.filter { $0 == immediate }.count, 1, "the recognizer this guards against: \(stock)")
-        // A subset, not equality: macOS 27.0 lacks NSDragGestureRecognizer and _NSTextSelectionMouseEmulationBlocker.
-        let unknown = Set(stock).subtracting(TextViewerTextView.keptRecognizers.union([immediate]))
-        XCTAssertTrue(unknown.isEmpty, "a stock recognizer was added or renamed: read what it does before keeping it: \(unknown.sorted())")
+        if listRule {
+            // A subset, not equality: macOS 27.0 lacks NSDragGestureRecognizer and _NSTextSelectionMouseEmulationBlocker.
+            let unknown = Set(stock).subtracting(TextViewerTextView.keptRecognizers.union([immediate]))
+            XCTAssertTrue(unknown.isEmpty, "a stock recognizer was added or renamed: read what it does before keeping it: \(unknown.sorted())")
+        }
         let kept = stock.filter { $0 != immediate }
         let (scroll, view) = TextViewerTextView.makeScrollable()
         XCTAssertEqual(names(view), kept, "everything else the stock view adds is kept")
@@ -554,10 +566,10 @@ final class TextViewerWindowTests: XCTestCase {
         view.isEditable = true
         view.isEditable = false
         XCTAssertEqual(names(view), kept, "in a window, with a link shown, after an editable toggle")
-        // The decision, fail closed: a recognizer of a class not on the list is refused; a kept one is not.
+        // macOS 27+, fail closed: a recognizer of a class not on the list is refused. 14 to 26: kept.
         let novel = Novel()
         view.addGestureRecognizer(novel)
-        XCTAssertFalse(view.gestureRecognizers.contains(novel))
+        XCTAssertEqual(view.gestureRecognizers.contains(novel), !listRule, "list rule \(listRule)")
         let click = NSClickGestureRecognizer()
         view.addGestureRecognizer(click)
         XCTAssertTrue(view.gestureRecognizers.contains(click))
@@ -591,6 +603,26 @@ final class TextViewerWindowTests: XCTestCase {
         XCTAssertTrue(TextViewerTextView.keeps(NSClickGestureRecognizer(), listRule: true))
     }
 
+    /// R1162-1: a direction control in the file's own name is shown escaped in the title and the header.
+    /// Literal table (scalar, expected escape), plus set equality with LinkPolicy's list.
+    func testDirectionControlsInTheNameAreShownEscaped() {
+        let table: [(UInt32, String)] = [
+            (0x202A, "\\u{202A}"), (0x202B, "\\u{202B}"), (0x202C, "\\u{202C}"), (0x202D, "\\u{202D}"),
+            (0x202E, "\\u{202E}"), (0x2066, "\\u{2066}"), (0x2067, "\\u{2067}"), (0x2068, "\\u{2068}"),
+            (0x2069, "\\u{2069}"), (0x200E, "\\u{200E}"), (0x200F, "\\u{200F}"), (0x061C, "\\u{61C}")]
+        XCTAssertEqual(Set(table.map(\.0)), LinkPolicy.bidiControls, "the table covers the whole list")
+        let dir = tempDir("tv-bidi")
+        for (scalar, shown) in table {
+            let name = "a" + String(Unicode.Scalar(scalar) ?? "?") + "b.txt"
+            let url = dir.appendingPathComponent(name)
+            let model = TextViewerModel(url: url, resolved: url, actions: fakeActions())
+            XCTAssertEqual(model.shownName, "a" + shown + "b.txt", String(scalar, radix: 16))
+            XCTAssertEqual(TextViewerWindows.makeWindow(model, autosave: nil).title, "a" + shown + "b.txt")
+        }
+        let plain = dir.appendingPathComponent("Notes.md")
+        XCTAssertEqual(TextViewerModel(url: plain, resolved: plain, actions: fakeActions()).shownName, "Notes.md")
+    }
+
     /// R1118-8: closing a window stops its watcher, removes its close observer and drops its entry.
     func testCloseTearsDown() throws {
         let dir = tempDir("tv-win")
@@ -603,14 +635,116 @@ final class TextViewerWindowTests: XCTestCase {
         waitUntil("watched", { entry.watcher != nil })
         XCTAssertNotNil(entry.observer)
         weak let watcher = entry.watcher
+        let n = entry.model.loads
+        XCTAssertTrue(w.changed(entry.model), "a watcher fire while open reloads")
+        waitUntil("that reload landed", { entry.model.loads > n })
         entry.window.close()
         XCTAssertTrue(w.entries.isEmpty)
-        XCTAssertTrue(entry.watcher == nil && entry.observer == nil && entry.model.onFirstLoad == nil)
+        // onFirstLoad is cleared by the first load already: testCloseBeforeTheFirstLoadStartsNoWatcher pins close's part.
+        XCTAssertTrue(entry.watcher == nil && entry.observer == nil)
         XCTAssertTrue(watcher == nil, "the watcher is released, not only stopped")
         XCTAssertEqual(fakes.dismissed, 1)
-        try write("d\n", url)   // a write after the close reaches no one
+        // A fire already queued to main when the window closed: it reloads nothing.
+        XCTAssertFalse(w.changed(entry.model), "a watcher fire after the close does nothing")
         entry.window.close()
         XCTAssertEqual(fakes.dismissed, 1, "the observer is gone: a second close is not torn down twice")
+    }
+
+    /// R886-2 (QA S3): closed before its first load lands. The load publishes on the main actor, so a
+    /// close in the same main turn as the open comes first; the load lands later and starts no watcher.
+    func testCloseBeforeTheFirstLoadStartsNoWatcher() throws {
+        let dir = tempDir("tv-win")
+        let url = dir.appendingPathComponent("early.txt")
+        try write("e\n", url)
+        let w = registry()
+        w.open(url)
+        let entry = try XCTUnwrap(w.entries.first)
+        XCTAssertTrue(entry.model.state == nil && entry.model.onFirstLoad != nil, "before the first load: the hook is set")
+        entry.window.close()
+        XCTAssertTrue(w.entries.isEmpty)
+        XCTAssertTrue(entry.model.onFirstLoad == nil, "close cleared the hook")
+        loaded(entry.model)
+        XCTAssertEqual(entry.model.document?.text, "e\n")
+        XCTAssertTrue(entry.watcher == nil, "a load landing after the close starts no watcher")
+    }
+
+    /// What the off-main seams saw, lock-guarded; `gate` holds the one call a row picks, 10 s at most
+    /// (a row that fails opens it in a defer, so no thread stays blocked).
+    private final class Held: @unchecked Sendable {
+        let lock = NSLock()
+        let gate = DispatchSemaphore(value: 0)
+        private var seenList: [String] = []
+        @discardableResult func add(_ s: String) -> Int { lock.lock(); defer { lock.unlock() }; seenList.append(s); return seenList.count }
+        var seen: [String] { lock.lock(); defer { lock.unlock() }; return seenList }
+        func hold() { _ = gate.wait(timeout: .now() + 10) }
+    }
+
+    /// A read seam: the n-th read returns the n-th text (the last after that); `holdFirst` holds the
+    /// first read on the gate. @Sendable and nonisolated: the model calls it off the main thread.
+    nonisolated private static func reads(_ texts: [String], into rec: Held, holdFirst: Bool = false)
+        -> @Sendable (URL) -> Result<TextViewerDocument, TextViewerDocument.Refusal> {
+        { _ in
+            let n = rec.add("read")
+            if holdFirst, n == 1 { rec.hold() }
+            return TextViewerDocument.decode(Data((texts.dropFirst(n - 1).first ?? texts.last ?? "").utf8))
+        }
+    }
+
+    /// Waits (5 s ceiling) until `job` has ended; the waiting Task is cancelled after.
+    private func ended(_ job: Task<Void, Never>, file: StaticString = #filePath, line: UInt = #line) {
+        let done = Held()
+        let waiter = Task.detached { await job.value; done.add("ended") }   // nonisolated
+        waitUntil("the held load ended", { done.seen == ["ended"] }, file: file, line: line)
+        waiter.cancel()
+    }
+
+    private static let oldText = "# old\n\n![o](old.png)\n", newText = "# new\n\n![n](new.png)\n"
+
+    /// R886-2 (QA S1, S2): two loads where the older ends last. The first is held in its render (the
+    /// image loader, past its cancellation check); a reload reads and applies the new text; then the
+    /// held render is let go and that load ends: the new text stays and one load was applied.
+    func testStaleLoadEndingLastIsDropped() throws {
+        let url = tempDir("tv-win").appendingPathComponent("order.md")
+        let images = Held()
+        let model = TextViewerModel(url: url, resolved: url, actions: fakeActions(),
+                                    imageLoader: { src, _, _ in   // off the main thread, in the render
+                                        images.add(src.lastPathComponent)
+                                        if src.lastPathComponent == "old.png" { images.hold() }
+                                        return nil
+                                    },
+                                    read: Self.reads([Self.oldText, Self.newText], into: Held()))
+        defer { images.gate.signal() }
+        waitUntil("the first load is in its render", { images.seen == ["old.png"] })
+        let first = try XCTUnwrap(model.job)
+        model.reload()
+        waitUntil("the newer load applied", { model.loads == 1 })
+        XCTAssertEqual(model.document?.text, Self.newText)
+        images.gate.signal()
+        ended(first)
+        XCTAssertEqual(images.seen, ["old.png", "new.png"])
+        XCTAssertEqual(model.loads, 1, "the older load was not applied")
+        XCTAssertEqual(model.document?.text, Self.newText, "the older load ending last does not win")
+    }
+
+    /// R886-2 (the cancellation): a load superseded while it reads skips its render. The first read is
+    /// held; a reload reads, renders and applies the new text; then the held read returns and that load
+    /// ends without rendering (the image loader never sees its image).
+    func testLoadSupersededInItsReadSkipsTheRender() throws {
+        let url = tempDir("tv-win").appendingPathComponent("cancel.md")
+        let reads = Held(), images = Held()
+        let model = TextViewerModel(url: url, resolved: url, actions: fakeActions(),
+                                    imageLoader: { src, _, _ in images.add(src.lastPathComponent); return nil },   // off main
+                                    read: Self.reads([Self.oldText, Self.newText], into: reads, holdFirst: true))
+        defer { reads.gate.signal() }
+        waitUntil("the first load is in its read", { reads.seen.count == 1 })
+        let first = try XCTUnwrap(model.job)
+        model.reload()
+        waitUntil("the newer load applied", { model.loads == 1 })
+        reads.gate.signal()
+        ended(first)
+        XCTAssertEqual(images.seen, ["new.png"], "the superseded load did not render")
+        XCTAssertEqual(model.loads, 1)
+        XCTAssertEqual(model.document?.text, Self.newText)
     }
 
     /// D5 offscreen, light and dark: a rendered Markdown document draws its heading larger than its

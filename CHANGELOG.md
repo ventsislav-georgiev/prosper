@@ -888,6 +888,12 @@ tag from the now-released section and put it on the new top draft.
   look like files that do not exist. The extensions guide lists every path. Bundled system
   extensions and extensions you grant System Access are unchanged, and the guide now says correctly
   that host.fs.read is available to trusted extensions. (#921)
+- Text Viewer: a window on a file that is not there yet checks for it less and less often (up to
+  once a minute) instead of every second; on a network or automounted volume it does not check for a
+  file that was never there, and keeps checking for about two minutes after a watched file
+  disappears. A missing file that turns out to be a folder is no longer watched, and invisible
+  direction-control characters in a file's name are shown spelled out in the window title and
+  header. (#1186)
 
 ## v2.174.0
 
