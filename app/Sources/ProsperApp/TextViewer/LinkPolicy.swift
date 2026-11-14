@@ -14,7 +14,8 @@ enum LinkPolicy {
         case scroll(String)
         /// Any other local target: selected in Finder, never opened.
         case reveal(URL)
-        /// Every other scheme, a host on a file link, a control character, an encoded slash: plain text.
+        /// Every other scheme, a host on a file link, a control character (bidirectional ones too), an
+        /// encoded slash: plain text.
         case none
     }
 
@@ -50,10 +51,16 @@ enum LinkPolicy {
     }
 
     /// C0, DEL and C1 controls: never part of a link a person meant (a tab or newline spoofs the
-    /// tooltip and splits a scheme).
+    /// tooltip and splits a scheme). R886-6: the bidirectional controls too, refused rather than shown
+    /// escaped: they make a tooltip show a name in another order than its bytes, and the server already
+    /// refuses such names (#879).
     nonisolated static func hasControl(_ s: String) -> Bool {
-        s.unicodeScalars.contains { $0.value < 0x20 || (0x7F...0x9F).contains($0.value) }
+        s.unicodeScalars.contains { $0.value < 0x20 || (0x7F...0x9F).contains($0.value) || bidiControls.contains($0.value) }
     }
+
+    /// LRE, RLE, PDF, LRO, RLO; LRI, RLI, FSI, PDI; LRM, RLM; ALM.
+    nonisolated static let bidiControls: Set<UInt32> = [0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                                                         0x2066, 0x2067, 0x2068, 0x2069, 0x200E, 0x200F, 0x061C]
 
     /// Lowercases A-Z by byte range only (never the locale's rules).
     nonisolated static func asciiLowercased(_ s: String) -> String {

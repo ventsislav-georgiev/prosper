@@ -859,6 +859,10 @@ tag from the now-released section and put it on the new top draft.
   it, instead of installing something that could hang Prosper. (#1174)
 - Always allow: when dch's config file holds a NUL byte and dch is slow to answer, Prosper now
   leaves the prompt to dch instead of possibly answering it as well. (#1179)
+- Text Viewer: a link whose target name holds a right-to-left or other text-direction control
+  character is shown as plain text, so its tooltip can no longer show a file name in a different
+  order than it really has; an image is not drawn if a folder on its path is swapped for a link
+  while it loads. (#1162)
 
 ## v2.174.0
 

@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import ProsperApp
 
@@ -81,6 +82,61 @@ final class LinkPolicyTests: XCTestCase {
             let path = url.path
             fputs("tv1b fact URL(string: \"\(raw)\").path = \(path.debugDescription) \(Array(path.utf8)); removingPercentEncoding = \(raw.removingPercentEncoding.debugDescription)\n", stderr)
         }
+    }
+
+    /// R886-6: a bidirectional control in a link refuses it (plain text: no link, no tooltip), raw or
+    /// percent-encoded, in any scheme the policy acts on; its neighbours do not. A literal table: the scalar,
+    /// its UTF-8 percent form, whether it is refused.
+    func testBidiControlsRefused() throws {
+        let table: [(String, String, Bool)] = [
+            ("\u{202A}", "%E2%80%AA", true), ("\u{202B}", "%E2%80%AB", true), ("\u{202C}", "%E2%80%AC", true),
+            ("\u{202D}", "%E2%80%AD", true), ("\u{202E}", "%E2%80%AE", true),
+            ("\u{2066}", "%E2%81%A6", true), ("\u{2067}", "%E2%81%A7", true), ("\u{2068}", "%E2%81%A8", true),
+            ("\u{2069}", "%E2%81%A9", true),
+            ("\u{200E}", "%E2%80%8E", true), ("\u{200F}", "%E2%80%8F", true), ("\u{061C}", "%D8%9C", true),
+            // Neighbours that stay: ZWJ (emoji names), hyphen, narrow no-break space (screenshot names),
+            // the Arabic semicolon and U+061D, superscript zero.
+            ("\u{200D}", "%E2%80%8D", false), ("\u{2010}", "%E2%80%90", false), ("\u{202F}", "%E2%80%AF", false),
+            ("\u{061B}", "%D8%9B", false), ("\u{061D}", "%D8%9D", false), ("\u{2070}", "%E2%81%B0", false),
+        ]
+        XCTAssertEqual(table.count, 18)
+        XCTAssertEqual(Set(table.filter(\.2).map { $0.0.unicodeScalars.first?.value ?? 0 }), LinkPolicy.bidiControls)
+        var got: [String] = []
+        for (scalar, encoded, refused) in table {
+            XCTAssertEqual(encoded.removingPercentEncoding, scalar, encoded)
+            XCTAssertEqual(LinkPolicy.hasControl("a" + scalar + "b"), refused, encoded)
+            let name = "a" + encoded + "b.md"
+            for (link, shown) in [(name, "view /Users/example/docs/a\(scalar)b.md"),
+                                  ("file:///Users/example/docs/" + name, "view /Users/example/docs/a\(scalar)b.md"),
+                                  ("a" + encoded + "b", "reveal /Users/example/docs/a\(scalar)b"),
+                                  ("https://example.com/" + name, "open https://example.com/" + name)] {
+                let url = try XCTUnwrap(URL(string: link), link)
+                got.append("\(link) => \(describe(LinkPolicy.action(url, document: document)))")
+                XCTAssertEqual(got.last, "\(link) => \(refused ? "none" : shown)")
+            }
+            // The raw scalar, as Foundation takes it (it may percent-encode it first).
+            if let raw = URL(string: "a" + scalar + "b.md") {
+                XCTAssertEqual(LinkPolicy.action(raw, document: document) == .none, refused, encoded)
+            }
+        }
+        XCTAssertEqual(got.count, table.count * 4)
+    }
+
+    /// R886-6 at the tooltip: a refused link gets no link and no tooltip in the rendered text; its
+    /// neighbour keeps both. The loader is a fake that draws nothing; nothing is read.
+    func testBidiNameHasNoTooltip() {
+        let c = MarkdownRenderer.Style.RGBA.self
+        let style = MarkdownRenderer.Style(scale: 1, text: c.init(r: 0, g: 0, b: 0, a: 1), secondary: c.init(r: 0.5, g: 0.5, b: 0.5, a: 1),
+                                           accent: c.init(r: 0, g: 0, b: 1, a: 1), card: c.init(r: 0.9, g: 0.9, b: 0.9, a: 1),
+                                           stroke: c.init(r: 0.8, g: 0.8, b: 0.8, a: 1))
+        let out = MarkdownRenderer.render("[rlo](a%E2%80%AEgpj.md) [zwj](a%E2%80%8Db.md)\n", document: document, style: style,
+                                          loader: { _, _, _ in nil })
+        var tips: [String: String] = [:]
+        out.text.enumerateAttribute(.toolTip, in: NSRange(location: 0, length: out.text.length)) { value, range, _ in
+            if let tip = value as? String { tips[(out.text.string as NSString).substring(with: range)] = tip }
+        }
+        XCTAssertEqual(tips, ["zwj": "/Users/example/docs/a\u{200D}b.md"])
+        XCTAssertTrue(out.text.string.contains("rlo zwj"), "the refused link stays as its text")
     }
 
     func testASCIILowercasingOnly() {

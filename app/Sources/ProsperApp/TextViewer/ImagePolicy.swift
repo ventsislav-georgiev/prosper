@@ -31,16 +31,23 @@ enum ImagePolicy {
     /// The live loader: the image inside the tree, regular, at most 20 MiB, a raster type within the
     /// pixel cap, decoded as a thumbnail at most `maxPixelSize` on its long side. Nil for anything else.
     nonisolated static func load(_ src: URL, document: URL, maxPixelSize: Int) -> CGImage? {
-        guard maxPixelSize > 0, let path = inside(src, document: document) else { return nil }
-        // O_NONBLOCK: a FIFO never blocks the open; O_NOFOLLOW: no symlink swapped in after the walk.
-        let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard maxPixelSize > 0, let path = inside(src, document: document), let data = read(path) else { return nil }
+        return decode(data, maxPixelSize: maxPixelSize)
+    }
+
+    /// The bytes of the regular file at `path`, a path inside() resolved: the canonical root plus names
+    /// with no symlink among them at check time. O_NONBLOCK: a FIFO never blocks the open. R886-7:
+    /// O_NOFOLLOW_ANY, not O_NOFOLLOW (last name only): a link anywhere in the path, a folder swapped for
+    /// one after the walk included, fails the open in the kernel, at the open; a second walk would be
+    /// another check before the use.
+    nonisolated static func read(_ path: String) -> Data? {
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW_ANY | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         var st = stat()
         guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
-              st.st_size > 0, st.st_size <= Int64(maxBytes),
-              let data = TextViewerDocument.readAll(fd, size: Int(st.st_size)) else { return nil }
-        return decode(data, maxPixelSize: maxPixelSize)
+              st.st_size > 0, st.st_size <= Int64(maxBytes) else { return nil }
+        return TextViewerDocument.readAll(fd, size: Int(st.st_size))
     }
 
     /// Bytes to a capped thumbnail: the type and the pixel size come from the header first.

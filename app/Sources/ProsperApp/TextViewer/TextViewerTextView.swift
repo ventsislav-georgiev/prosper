@@ -191,8 +191,9 @@ final class TextViewerTextView: NSTextView {
     /// the runtime on macOS 27.2. The immediate-action recognizer is not among them: its force click at a
     /// link previews the target (a web page fetched without a click) and never reaches quickLook(with:).
     /// On macOS 27 and later every class not listed is refused, so one a later macOS adds or renames is
-    /// refused too (testForceClickHasNoImmediateAction pins the stock set). Round 4: macOS 14 to 26 were
-    /// never read, so there only the immediate-action recognizer (and any subclass) is refused.
+    /// refused too (testForceClickHasNoImmediateAction pins that no unknown stock recognizer appears, a
+    /// subset, not the set). Round 4: macOS 14 to 26 were never read, so there only the immediate-action
+    /// recognizer (and any subclass) is refused.
     nonisolated static let keptRecognizers: Set<String> = [
         "NSClickGestureRecognizer", "NSPressGestureRecognizer", "NSDragGestureRecognizer",
         "_NSTextSelectionMouseEmulationBlocker", "_NSTextSelectionTouchTracker",
@@ -206,12 +207,22 @@ final class TextViewerTextView: NSTextView {
         return !recognizer.isKind(of: immediate)
     }
 
+    /// The list rule where the list was read (macOS 27 and later).
+    nonisolated static var listRule: Bool {
+        if #available(macOS 27, *) { return true } else { return false }
+    }
+
     /// NSTextView adds its recognizers here, at init and whenever it sets them up again.
     override func addGestureRecognizer(_ recognizer: NSGestureRecognizer) {
-        let listRule: Bool
-        if #available(macOS 27, *) { listRule = true } else { listRule = false }
-        guard Self.keeps(recognizer, listRule: listRule) else { return }
+        guard Self.keeps(recognizer, listRule: Self.listRule) else { return }
         super.addGestureRecognizer(recognizer)
+    }
+
+    /// R886-1: a set through the setter goes through the same rule (NSView's setter does not call
+    /// addGestureRecognizer on macOS 27, QA 886).
+    override var gestureRecognizers: [NSGestureRecognizer] {
+        get { super.gestureRecognizers }
+        set { super.gestureRecognizers = newValue.filter { Self.keeps($0, listRule: Self.listRule) } }
     }
 
     /// A three-finger tap (or, with no immediate-action recognizer, a force click) at a link does
