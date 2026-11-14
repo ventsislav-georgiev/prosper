@@ -77,4 +77,27 @@ final class CCPoolSessionEnvTests: XCTestCase {
         XCTAssertEqual(delta.applied(to: AgentIsland.spawnEnv(["PATH": "/usr/bin"]))["ANTHROPIC_BASE_URL"], base)
         XCTAssertTrue(env(AgentNewSession.argv("", shell: "/bin/zsh")).isEmpty, "an empty command is the login shell")
     }
+
+    // P2b-2: CCPool.Routing, the spawn-time reads. Only `.running` routes, on its own port; every other
+    // status, the toggle off or an empty pool: no change.
+    func testCCPoolRoutingDeltaByStatus() {
+        func routing(_ on: Bool, _ status: CCPoolService.Status, _ accounts: Bool) -> CCPool.Routing {
+            CCPool.Routing(on: { on }, status: { status }, hasAccounts: { accounts })
+        }
+        let claude = CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"], remove: creds)
+        XCTAssertEqual(routing(true, .running(port: 41234), true).delta(["claude"]), claude)
+        XCTAssertEqual(routing(true, .running(port: 41235), true).delta(["claude"]).set, ["ANTHROPIC_BASE_URL": "http://127.0.0.1:41235"])
+        let none: [(String, CCPool.Routing)] = [
+            ("off", routing(false, .running(port: 41234), true)),
+            ("stopped", routing(true, .stopped, true)),
+            ("held by another ccpool", routing(true, .heldByCCPool(pid: 4242), true)),
+            ("held by another program", routing(true, .heldByOther, true)),
+            ("failed", routing(true, .failed("x"), true)),
+            ("no accounts", routing(true, .running(port: 41234), false)),
+        ]
+        for (name, r) in none {
+            XCTAssertEqual(r.delta(["claude"]), CCPool.EnvDelta(), name)
+            XCTAssertEqual(r.delta(["headroom"]), CCPool.EnvDelta(), name)
+        }
+    }
 }

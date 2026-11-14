@@ -11,6 +11,9 @@ struct CCPoolPane: View {
     static let labelHint = "Labels are visible to local processes (the proxy health answer, the state file, the Keychain item name); the token is not."
     static let refreshHint = "Costs one tiny request per account, straight to Anthropic."
     static let routeTitle = "Start new Claude sessions through the pool"
+    /// P2b-2: what the toggle reaches, as built (spec 3.6; no global routing in v1).
+    static let routeScope = "New sessions started from Prosper that run claude or headroom. "
+        + "Shells, other programs and sessions started in a terminal are not routed."
     /// QA #739 INFO-1: CCPoolCore.pick keeps the current account while it has room, then takes the
     /// soonest five-hour reset; the list order only breaks ties.
     static let accountsFooter = "The current account is used while it has room, then the one whose five-hour window resets soonest; "
@@ -31,7 +34,7 @@ struct CCPoolPane: View {
             accountsSection
             addSection
             usageSection
-            // Hidden until the spawn path applies the env (P2b-2 flips CCPool.routingWired).
+            // Shown since the spawn path applies the env (P2b-2 flipped CCPool.routingWired).
             if CCPool.routingWired { sessionsSection }
             terminalSection
             if model.importVisible { importSection }
@@ -169,11 +172,15 @@ struct CCPoolPane: View {
     private var sessionsSection: some View {
         let reason = model.routeDisabledReason
         return NeonSection("Agent Sessions") {
-            NeonRow(Self.routeTitle, subtitle: reason ?? "Applies to sessions started after the change.") {
-                // Shows off while there is no account; writes only the stored choice (QA #739 F1).
-                Toggle("", isOn: Binding(get: { model.routeToggleShown }, set: { model.routeAgentSessions = $0 }))
-                    .labelsHidden()
-                    .disabled(reason != nil)
+            VStack(alignment: .leading, spacing: sz(6)) {
+                NeonRow(Self.routeTitle, subtitle: reason ?? "Applies to sessions started after the change.") {
+                    // Shows off while there is no account; writes only the stored choice (QA #739 F1).
+                    Toggle("", isOn: Binding(get: { model.routeToggleShown }, set: { model.routeAgentSessions = $0 }))
+                        .labelsHidden()
+                        .disabled(reason != nil)
+                        .accessibilityLabel(Self.routeTitle)
+                }
+                caption(Self.routeScope)
             }
         }
     }

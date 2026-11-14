@@ -87,9 +87,12 @@ final class CCPoolService: @unchecked Sendable {
     /// The env delta for a new Agent Session (P2b's one call): base URL, health and accounts all
     /// come from this service, so no caller can route to a stopped proxy or an empty pool.
     func sessionEnv(command: [String], on: Bool) -> CCPool.EnvDelta {
-        guard case .running(let port) = status else { return CCPool.EnvDelta() }
-        return CCPool.sessionEnv(command: command, base: CCPool.baseURL(port: port), on: on, healthy: true,
-                                 hasAccounts: store.hasAccounts)
+        routing(on: { on }).delta(command)
+    }
+
+    /// P2b-2: this service's status and accounts, read at each call, behind the person's toggle `on`.
+    func routing(on: @escaping @Sendable () -> Bool) -> CCPool.Routing {
+        CCPool.Routing(on: on, status: { [self] in status }, hasAccounts: { [self] in store.hasAccounts })
     }
 
     /// Under XCTest the proxy never binds the production port and never dials the production

@@ -3,10 +3,9 @@ import Foundation
 /// #871 spec 3.6 + errata C8: which env a new Agent Session gets when "Start new Claude sessions
 /// through the pool" is on. Pure; the spawn path applies the delta (P2b).
 enum CCPool {
-    /// #871 P2b-1: no spawn path applies `sessionEnv` yet, so the pane hides the "Start new Claude
-    /// sessions through the pool" row rather than show a switch that does nothing. P2b-2 hooks the
-    /// spawn path and flips this.
-    static let routingWired = false
+    /// #871 P2b-2: the --spawn path applies `Routing` (AgentIslandController.sessionEnvContributors), so
+    /// the pane shows the "Start new Claude sessions through the pool" row.
+    static let routingWired = true
 
     /// What to change in a spawned session's environment. Empty: leave it as it is.
     struct EnvDelta: Equatable, Sendable {
@@ -47,5 +46,26 @@ enum CCPool {
         case "headroom": return EnvDelta(set: ["ANTHROPIC_TARGET_API_URL": base], remove: strippedCredentials)
         default: return EnvDelta()
         }
+    }
+
+    /// spec 3.6 at spawn time: the person's toggle, the proxy's status and the pool's accounts, each read
+    /// when a session starts. One value feeds both the spawn env (`contributor`) and the New session form's
+    /// "via ccpool" hint (AgentNewSession.poolHint), so the two cannot disagree.
+    /// Isolation: none; its closures run on the --spawn runner's queue (DispatchQueue.global) and on main.
+    struct Routing: Sendable {
+        var on: @Sendable () -> Bool
+        var status: @Sendable () -> CCPoolService.Status
+        var hasAccounts: @Sendable () -> Bool
+
+        /// The toggle is read first: off, neither the status nor the store is read, so turning it off holds
+        /// for the next spawn whatever they would say. Only `.running` routes (stopped, held, failed: no).
+        func delta(_ argv: [String]) -> EnvDelta {
+            guard on(), case .running(let port) = status() else { return EnvDelta() }
+            return sessionEnv(command: argv, base: baseURL(port: port), on: true, healthy: true, hasAccounts: hasAccounts())
+        }
+
+        /// spec 6.1's ccpool member. Called on the runner's queue, never main. An empty delta returns `env`
+        /// unchanged, byte for byte.
+        var contributor: SessionEnvContributor { { [self] argv, env in delta(argv).applied(to: env) } }
     }
 }

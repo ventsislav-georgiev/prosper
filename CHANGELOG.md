@@ -873,6 +873,11 @@ tag from the now-released section and put it on the new top draft.
   Kill from the window. (#899)
 - Muted (secondary) text on the tinted top of the sidebar in the Fern and Mint themes is a touch
   darker, so it now meets the 4.5:1 contrast minimum there. (#1129)
+- ccpool: with "Start new Claude sessions through the pool" turned on in the ccpool settings, new
+  sessions you start from Prosper (Agent Island's New session or the New session form) that run
+  claude or headroom now go through the pool, and any Anthropic API key or auth token in their
+  environment is left out. The New session form shows "via ccpool" next to the command when that
+  applies. Shells, other programs and sessions started in a terminal are unchanged. (#914)
 
 ## v2.174.0
 

@@ -92,6 +92,16 @@ enum AgentNewSession {
         return words.isEmpty ? [loginShell(shell), "-l"] : words
     }
 
+    static let viaPoolHint = "via ccpool"
+
+    /// spec 3.6: "via ccpool" beside the command when the pool's routing applies to `argv` (the form's argv, as
+    /// Start spawns it). Decided by the routing value the spawn env applies, so the hint and the env cannot
+    /// disagree. nil routing (the ccpool runtime not built): no hint.
+    static func poolHint(_ argv: [String], routing: CCPool.Routing?) -> String? {
+        guard let routing, !routing.delta(argv).isEmpty else { return nil }
+        return viaPoolHint
+    }
+
     /// $SHELL when absolute, else /bin/zsh (LoginPath.read's rule).
     static func loginShell(_ env: String?) -> String {
         env.flatMap { $0.hasPrefix("/") ? $0 : nil } ?? defaultShell
@@ -153,8 +163,16 @@ struct AgentNewSessionView: View {
                         .focused($focus, equals: .command)
                         .accessibilityLabel("Command")
                     let runs = model.newSessionRuns
-                    Text(verbatim: "Runs: " + runs).font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textSecondary)
-                        .lineLimit(1).truncationMode(.tail).help(runs)
+                    HStack(spacing: sz(6)) {
+                        Text(verbatim: "Runs: " + runs).font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textSecondary)
+                            .lineLimit(1).truncationMode(.tail).help(runs)
+                        // Re-read on each redraw (a keystroke); the Start argv, the spawn path's routing.
+                        if let hint = AgentNewSession.poolHint(AgentNewSession.argv(form.command, shell: model.shell),
+                                                               routing: CCPoolRuntime.shared?.routing) {
+                            Text(verbatim: hint).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.blue)
+                                .fixedSize()
+                        }
+                    }
                 }
             }
             Divider().padding(.vertical, sz(4))

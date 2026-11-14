@@ -28,6 +28,11 @@ private final class FirstClickHostingView<V: View>: NSHostingView<V> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+/// spec 6.1 (#871, #872): one piece of a new session's env, a pure function of the session's command (argv as the
+/// person gave it, before dch's naming) and the env so far. Applied in order after spawnEnv's strip, on the --spawn
+/// runner's queue (DispatchQueue.global), never main.
+typealias SessionEnvContributor = @Sendable (_ argv: [String], _ env: [String: String]) -> [String: String]
+
 @MainActor
 final class AgentIslandController {
     static let shared = AgentIslandController()
@@ -188,6 +193,12 @@ final class AgentIslandController {
         AgentIsland.controlEnv(dir: dir, login: NSClassFromString("XCTestCase") == nil ? LoginPath.read() : nil)
     }
     var runner = DchActionRunner.shared
+    /// spec 6.1: the contributors of the next --spawn's env, asked on main at each spawn (the ccpool runtime is
+    /// built by its extension's first live push). The pool's routing is the only member; no runtime (the
+    /// extension never went live, or XCTest): none, and the env is spawnEnv's alone.
+    var sessionEnvContributors: @MainActor () -> [SessionEnvContributor] = {
+        CCPoolRuntime.shared.map { [$0.routing.contributor] } ?? []
+    }
     /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
     /// only); `done` gets the path, nil when cancelled. Tests never show a real one.
     var chooseFolder: @MainActor (@escaping @MainActor (String?) -> Void) -> Void = { done in
@@ -477,24 +488,26 @@ final class AgentIslandController {
     }
 
     /// One long verb on the runner with the control env (QA #445 M1), plus
-    /// spawnEnv's strip for --spawn. `running` shows in the row meanwhile (a
+    /// spawnEnv's strip and the session env contributors for --spawn (`spawn`: the
+    /// person's command; nil: any other verb). `running` shows in the row meanwhile (a
     /// History row's with `history`); `onLine` and `done` run on main. A busy
     /// key refuses: false, nothing shown; so does nil args (#627: a name dch would read as a flag).
     /// #744: `yields` (a Stop or Restart) lets a `kill` run beside it; any other job
     /// starting hands its rows' text back from an earlier Kill.
     @discardableResult
     private func run(_ key: AgentSessionKey, dch: String, args: [String]?, running: String?, cwd: String? = nil,
-                     bound: TimeInterval? = nil, spawn: Bool = false, history: Bool = false,
+                     bound: TimeInterval? = nil, spawn: [String]? = nil, history: Bool = false,
                      yields: Bool = false, kill: Bool = false,
                      onLine: (@MainActor @Sendable (String) -> Void)? = nil,
                      prepare: (@Sendable () -> (args: [String]?, out: Data))? = nil,
                      done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
         guard let args else { return false }
-        let env = controlEnv
+        // Read on main now, so a toggle turned off before this spawn holds for it.
+        let env = controlEnv, contributors = spawn == nil ? [] : sessionEnvContributors()
         var hook: (@Sendable (String) -> Void)?
         if let onLine { hook = { line in DispatchQueue.main.async { MainActor.assumeIsolated { onLine(line) } } } }
         let started = runner.start(key, path: dch, args: args, cwd: cwd, bound: bound, yields: yields, kill: kill,
-                                   env: { spawn ? AgentIsland.spawnEnv(env(key.dir)) : env(key.dir) },
+                                   env: { spawn.map { Self.spawnEnv(env(key.dir), argv: $0, contributors) } ?? env(key.dir) },
                                    onLine: hook, prepare: prepare) { [weak self] r in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -1073,6 +1086,12 @@ final class AgentIslandController {
         newSessionCommand { [weak self] command in self?.spawn(in: folder, command: command) }
     }
 
+    /// spec 6.1: a --spawn's env: spawnEnv's strip, then each contributor in order. Pure; runs on the runner's queue.
+    nonisolated static func spawnEnv(_ env: [String: String], argv: [String],
+                                     _ contributors: [SessionEnvContributor]) -> [String: String] {
+        contributors.reduce(AgentIsland.spawnEnv(env)) { $1(argv, $0) }
+    }
+
     /// #847: the socket dir a new session goes to.
     func spawnDir() -> String { historyDirs().first ?? DchCommand.defaultSocketDir }
 
@@ -1093,7 +1112,7 @@ final class AgentIslandController {
         let args = AgentIsland.newSessionArgs(folder: folder, command: command, taken: taken,
                                               name: name ?? AgentNewSession.autoName(folder: folder, taken: taken, dir: dir))
         let key = AgentSessionKey(dir: dir, name: args[1])
-        let started = run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: true) { [weak self] r in
+        let started = run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: command) { [weak self] r in
             guard let store = self?.store else { return }
             let failed = AgentIsland.spawnText(r, name: key.name)
             if let failed { store.actions[AgentSessionKey(dir: dir, name: "")] = failed }

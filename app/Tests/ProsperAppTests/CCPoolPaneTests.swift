@@ -181,8 +181,9 @@ final class CCPoolPaneTests: XCTestCase {
         }
     }
 
-    // P2b-1 item 5 (mutant h5): the pane as Settings mounts it, on a runtime's model, has no routing row.
-    func testCCPoolMountedPaneHidesTheRoutingRow() throws {
+    // P2b-2 (was P2b-1 item 5, mutant h5): the pane as Settings mounts it, on a runtime's model, shows the
+    // routing row now that the spawn path applies it; the proxy is not running, so it says why it is off.
+    func testCCPoolMountedPaneShowsTheRoutingRow() throws {
         let dir = tempDir()
         var cfg = CCPoolServiceConfig()
         cfg.port = 0
@@ -193,8 +194,9 @@ final class CCPoolPaneTests: XCTestCase {
         try rt.store.addAccount(label: "alpha", token: "tok-alpha", secrets: rt.secrets)
         let s = viewStrings(rt.model)
         XCTAssertTrue(s.contains { $0.contains("alpha") }, "the walk saw the pane")
-        XCTAssertFalse(s.contains { $0.contains(CCPoolPane.routeTitle) }, "no routing switch while nothing applies it")
-        XCTAssertFalse(s.contains { $0.contains("Agent Sessions") })
+        XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeTitle) }, "the routing switch is shown")
+        XCTAssertTrue(s.contains { $0.contains("Agent Sessions") })
+        XCTAssertTrue(s.contains { $0.contains("The proxy is not running.") }, "stopped: the row says why it is disabled")
     }
 
     // The token is in none of: the view tree, the published state, the log seam, any error.
@@ -278,8 +280,14 @@ final class CCPoolPaneTests: XCTestCase {
         XCTAssertFalse(CCPoolPane.accountsFooter.contains("Tried in this order"))
         XCTAssertTrue(CCPoolPane.accountsFooter.contains("five-hour window resets soonest"))
         var s = viewStrings(r.model)
-        // P2b-1: the routing row is hidden until the spawn path applies it (CCPool.routingWired).
-        XCTAssertEqual(s.contains { $0.contains(CCPoolPane.routeTitle) }, CCPool.routingWired)
+        // P2b-2: the spawn path applies the routing, so the row is shown, with what it reaches as built:
+        // Prosper's own new sessions of claude or headroom, never a terminal's (no global routing in v1).
+        XCTAssertTrue(CCPool.routingWired)
+        XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeTitle) }, "the Agent Sessions row is shown")
+        XCTAssertTrue(s.contains { $0.contains("Add an account first.") }, "no account: the row says why it is disabled")
+        XCTAssertEqual(CCPoolPane.routeScope, "New sessions started from Prosper that run claude or headroom. "
+                       + "Shells, other programs and sessions started in a terminal are not routed.")
+        XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeScope) }, "the scope line is shown")
         XCTAssertTrue(s.contains { $0.contains("Starts when the first account is added.") }, "the proxy row says why it is stopped")
         XCTAssertTrue(s.contains { $0.contains("ANTHROPIC_BASE_URL=") }, "terminal use, read-only text")
         XCTAssertFalse(s.contains { $0.contains("Import from ccpool") }, "no old vault: no import row")

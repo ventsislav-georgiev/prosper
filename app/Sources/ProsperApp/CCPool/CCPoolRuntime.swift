@@ -66,6 +66,8 @@ final class CCPoolRuntime {
     let service: CCPoolService
     let lifecycle: CCPoolLifecycle
     let model: CCPoolPaneModel
+    /// P2b-2: the person's toggle as the pane writes it (the model's defaults), readable off main.
+    private let routeOn: @Sendable () -> Bool
 
     init(directory: URL, secrets: CCPoolSecrets, config: CCPoolServiceConfig, vaultURL: URL,
          defaults: UserDefaults = Preferences.defaults, probeBase: URL = CCPoolService.productionUpstream,
@@ -76,6 +78,9 @@ final class CCPoolRuntime {
         lifecycle = CCPoolLifecycle(service: service)
         model = CCPoolPaneModel(store: store, secrets: secrets, service: service, logger: logger, defaults: defaults,
                                 probeBase: probeBase, vaultURL: vaultURL, trash: trash, lifecycle: lifecycle)
+        // UserDefaults is thread-safe; held the way Preferences.defaults is.
+        nonisolated(unsafe) let routeDefaults = defaults
+        routeOn = { routeDefaults.bool(forKey: CCPoolPaneModel.routeKey) }
     }
 
     /// Launch, enable and disable: the proxy follows the extension (and the account list).
@@ -84,6 +89,10 @@ final class CCPoolRuntime {
         lifecycle.live = live
         return model.reconcileProxy()
     }
+
+    /// P2b-2: what new Agent Sessions route on (AgentIslandController.sessionEnvContributors, the New session
+    /// form's hint): the pane's toggle, this proxy's status and this pool's accounts, read at each call.
+    var routing: CCPool.Routing { service.routing(on: routeOn) }
 
     /// The app quits: the listener goes now, and no queued start binds again.
     func quit() {
