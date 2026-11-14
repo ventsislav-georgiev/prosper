@@ -419,7 +419,7 @@ struct ExtensionHost {
     /// always forced to `extensionID`.
     let configOwner: ManagedConfigOwner?
     /// #1238: false once the call this VM is serving was retired by a teardown (the off-main lane sets it;
-    /// the main-actor VM cannot straddle a teardown and keeps the default). Gates the acquiring functions.
+    /// the main-actor VM cannot straddle a teardown and keeps the default). Gates every host function but a read.
     let isCurrent: @Sendable () -> Bool
 
     init(extensionID: String,
@@ -438,9 +438,69 @@ struct ExtensionHost {
         self.isCurrent = isCurrent
     }
 
+    /// #1238: the host functions a call retired by a teardown may still make: they only read (nothing is held,
+    /// shown, sent or written; `log` and `sleep` stay too). Every other one refuses a retired call.
+    static let retiredReads: Set<String> = [
+        "__h_clip_read", "__h_clip_history", "__h_llm_complete", "__h_llm_translate", "__h_llm_chat",
+        "__h_proc_refusal", "__h_window_frame", "__h_time", "__h_date", "__h_sleep", "__h_pref_get",
+        "__h_perms_has", "__h_json_decode", "__h_json_encode", "__h_fs_list_dirs", "__h_apps_search",
+        "__h_snippets_all", "__h_snippets_get", "__h_snippets_expand", "__h_snippets_phone",
+        "__h_snippets_replacements", "__h_snippets_config", "__h_snippets_collections", "__h_snippets_ignored",
+        "__h_quicklinks_all", "__h_files_search", "__h_timer_scheduled", "__h_log", "__h_env_get",
+        "__h_battery_source", "__h_battery_pct", "__h_network_reachable", "__h_network_addresses",
+        "__h_screen_all", "__h_screen_lid", "__h_dch_sessions", "__h_app_frontmost", "__h_app_windows",
+        "__h_kbd_current", "__h_kbd_layouts", "__h_url_default", "__h_fs_exists", "__h_fs_attrs",
+        "__h_fallback_list", "__h_fallback_mode_get", "__h_fs_read", "__h_menus_list",
+    ]
+
+    /// #1238: what a retired call gets from each refused host function: the value the function gives when it
+    /// declines today. Only a new call is refused: one already inside the function (a shell already started,
+    /// a request in flight) runs to its end.
+    static let retiredRefusals: [String: @Sendable (LuaRuntime) -> Int32] = {
+        var t: [String: @Sendable (LuaRuntime) -> Int32] = [:]
+        for n in ["__h_clip_write", "__h_pref_set", "__h_notify", "__h_snippets_save", "__h_snippets_remove",
+                  "__h_snippets_remove_phone", "__h_snippets_set_config", "__h_snippets_set_collections",
+                  "__h_snippets_set_ignored", "__h_quicklink_save", "__h_files_act", "__h_window_open",
+                  "__h_window_close", "__h_settings_open", "__h_timer_schedule", "__h_timer_cancel", "__h_caf_idle",
+                  "__h_caf_lidsleep", "__h_caf_remotewake", "__h_caf_lock", "__h_caf_screensaver", "__h_caf_sleepnow",
+                  "__h_menubar_set", "__h_menubar_remove", "__h_alert_show", "__h_fallback_save",
+                  "__h_fallback_mode_set", "__h_app_launch", "__h_app_hide", "__h_keys_rules", "__h_keys_stroke",
+                  "__h_keys_system", "__h_fs_watch", "__h_fs_unwatch"] { t[n] = { _ in 0 } }
+        for n in ["__h_shell_run", "__h_snippets_import_file", "__h_choose_app"] { t[n] = { rt in rt.push(""); return 1 } }
+        for n in ["__h_window_set", "__h_dialog_confirm", "__h_url_open", "__h_kbd_set", "__h_url_set_default",
+                  "__h_menus_press"] { t[n] = { rt in rt.push(false); return 1 } }
+        for n in ["__h_http_request", "__h_dialog_prompt"] { t[n] = { rt in rt.pushNil(); return 1 } }
+        t["__h_fallback_import"] = { rt in rt.push(Double(0)); return 1 }
+        t["__h_proc_kill"] = { rt in rt.push("host.process: the extension is switched off"); return 1 }
+        t["__h_osascript"] = { rt in rt.push(#"{"ok":false,"error":"not permitted"}"#); return 1 }
+        t["__h_config"] = { rt in rt.push(ManagedConfigLua.inert(rt.stringArgument(1) ?? "")); return 1 }
+        return t
+    }()
+
+    /// #1238: registers each host function; one that is not a read answers a retired call with its refusal and
+    /// does not act. The closure runs where the Lua runs (the lane, or main, where isCurrent is always true).
+    private struct RetiredGate {
+        let runtime: LuaRuntime
+        let isCurrent: @Sendable () -> Bool
+        let onRegister: ((String, @escaping (LuaRuntime) -> Int32) -> Void)?
+        func register(_ name: String, _ fn: @escaping (LuaRuntime) -> Int32) {
+            var gated = fn
+            if !ExtensionHost.retiredReads.contains(name) {
+                // An unclassed name is refused with no value (fails closed); ExtensionRetiredCallTests names it.
+                let refusal = ExtensionHost.retiredRefusals[name] ?? { _ in 0 }
+                let isCurrent = isCurrent
+                gated = { rt in isCurrent() ? fn(rt) : refusal(rt) }
+            }
+            runtime.register(name, gated)
+            onRegister?(name, gated)
+        }
+        func run(_ source: String, name: String) throws { try runtime.run(source, name: name) }
+    }
+
     /// Register every host function and assemble the `host` table. Call before
-    /// running the extension's entry script.
-    func install(into lua: LuaRuntime) throws {
+    /// running the extension's entry script. `onRegister` (tests) sees each name with the closure registered.
+    func install(into runtime: LuaRuntime,
+                 onRegister: ((String, @escaping (LuaRuntime) -> Int32) -> Void)? = nil) throws {
         let services = self.services
         let extID = self.extensionID
         let timeout = self.callTimeout
@@ -448,6 +508,7 @@ struct ExtensionHost {
         // tier still gates the RCE/destructive surface (host.shell/agent/files.act).
         let automation = privileged || trusted
         let isCurrent = self.isCurrent
+        let lua = RetiredGate(runtime: runtime, isCurrent: isCurrent, onRegister: onRegister)
         // #1238: a take by a retired generation is refused (a no-op: Lua sees the usual empty return). A take a
         // teardown overtook mid-call may land after the teardown's release: undo it at once, since no late
         // release comes if the extension is back on by the time the call returns.

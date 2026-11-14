@@ -1040,6 +1040,10 @@ tag from the now-released section and put it on the new top draft.
   downloaded), Prosper treated it as a new file and replaced it with no backup. Prosper now refuses
   the change and says the file exists but cannot be read; the file is left exactly as it is. The
   same holds for the file where Prosper records its managed changes. (#1240)
+- An extension you switch off, untrust or reset can no longer start anything new from an action that
+  was still running: no command, link, key press, settings change, notification or release of
+  something the extension holds again. A reset now re-registers its shortcuts and themes right away.
+  (#1238)
 
 ## v2.174.0
 

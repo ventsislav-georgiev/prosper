@@ -320,6 +320,17 @@ final class ExtensionReenableLaunchTests: XCTestCase {
         XCTAssertEqual(services.held(s), ["display"], "the old call's late take must go and the launch's take stay")
     }
 
+    /// N1038-c: reset reconciles the host as a toggle does (shortcuts, themes, live flags): onEnabledChanged
+    /// fires once. Parent: never, until the next toggle.
+    func testResetFiresOnEnabledChangedOnce() throws {
+        let services = LaunchRecordingServices()
+        let s = "com.test.reset-changed"
+        let reg = try registry(services, [Fixture(id: s, system: true, launch: false, lua: Self.lua("changed"))])
+        reg.onEnabledChanged = { services.notify(title: "changed", body: "") }
+        try reg.reset(id: s)              // registry inside this row's tempDir: <tempDir>/user/<id> only
+        XCTAssertEqual(services.titles.filter { $0 == "changed" }.count, 1, "reset must reconcile once")
+    }
+
     /// An extension that never ran and subscribes to no launch: untrust and reset release once (a no-op
     /// on the host) and do not crash.
     func testUntrustAndResetOfAnIdleExtensionReleaseOnce() throws {
@@ -344,15 +355,16 @@ final class ExtensionReenableLaunchTests: XCTestCase {
         function on_take() host.notify("wait", ""); host.caffeinate.prevent_idle_sleep("system", true) end
         function on_live() host.caffeinate.prevent_idle_sleep("display", true) end
         function on_launch() host.notify("launch-gen", "") end
+        function on_drop() host.notify("wait", ""); host.caffeinate.prevent_idle_sleep("display", false) end
         """
 
     /// Starts on_take on the extension's lane; returns once it is parked at `site` ("notify" or "idle").
     private func parkedCall(_ reg: ExtensionRegistry, _ services: LaunchRecordingServices, _ id: String,
-                            at site: String) async -> Task<Void, Never> {
+                            at site: String, handler: String = "on_take") async -> Task<Void, Never> {
         let entered = expectation(description: "on_take parked in \(site)")
         services.blockIn = site
         services.blockEntered = entered
-        let call = Task { @MainActor in await reg.deliverEvent(extensionID: id, handler: "on_take", payloadJSON: "{}") }
+        let call = Task { @MainActor in await reg.deliverEvent(extensionID: id, handler: handler, payloadJSON: "{}") }
         await fulfillment(of: [entered], timeout: 30)
         return call
     }
@@ -481,5 +493,32 @@ final class ExtensionReenableLaunchTests: XCTestCase {
         XCTAssertEqual(services.calls(s), ["+display"], "the old generation's take reached the host")
         XCTAssertEqual(services.held(s), ["display"], "the live generation lost its take")
         XCTAssertTrue(reg.record(id: s)?.isLive == true)
+    }
+
+    /// A2: disable, enable, the live generation takes "display", then the old call (parked before its release of
+    /// "display") returns: its release is refused and the live take stays. Parent: the release dropped it.
+    func testRetiredCallsReleaseAfterAReviveKeepsTheLiveTake() async throws {
+        let services = LaunchRecordingServices()
+        let id = "com.test.gen-drop"
+        let reg = try genRegistry(services, id)
+        let old = await parkedCall(reg, services, id, at: "notify", handler: "on_drop")
+        try reg.setEnabled(false, id: id)
+        try reg.setEnabled(true, id: id)
+        try liveTake(reg, id)
+        services.release.signal()
+        await old.value
+        XCTAssertEqual(services.calls(id), ["+display"], "a retired call's release reached the host")
+        XCTAssertEqual(services.held(id), ["display"], "the live generation lost its take")
+    }
+
+    /// A2, the other side: a current call's release still releases.
+    func testCurrentCallsReleaseStillReleases() async throws {
+        let services = LaunchRecordingServices()
+        let id = "com.test.gen-drop-current"
+        let reg = try genRegistry(services, id)
+        try liveTake(reg, id)
+        await reg.deliverEvent(extensionID: id, handler: "on_drop", payloadJSON: "{}")
+        XCTAssertEqual(services.calls(id), ["+display", "-display"])
+        XCTAssertEqual(services.held(id), [])
     }
 }

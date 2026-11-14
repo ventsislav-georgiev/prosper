@@ -1228,6 +1228,7 @@ final class ExtensionRegistry: ObservableObject {
         // the enabled state stay. After the copy, so a failed reset changes nothing.
         teardown(record)
         discover()
+        onEnabledChanged?()   // N1038-c: the pristine manifest's shortcuts, themes and live flags, as a toggle does
         // Like a re-enable: only the launch handler restores what the teardown released (key rules, menu items).
         replayLaunch(id: id)
     }
