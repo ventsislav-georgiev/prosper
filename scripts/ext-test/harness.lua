@@ -228,11 +228,37 @@ end
 local TIMEOUT = setmetatable({}, { __tostring = function() return "TIMEOUT" end })
 M.TIMEOUT = TIMEOUT
 
+-- Swift's CharacterSet.whitespacesAndNewlines beyond ASCII, UTF-8 encoded: Zs, U+0085, U+2028, U+2029.
+local UNICODE_BLANKS = { "\u{85}", "\u{A0}", "\u{1680}", "\u{2000}", "\u{2001}", "\u{2002}",
+    "\u{2003}", "\u{2004}", "\u{2005}", "\u{2006}", "\u{2007}", "\u{2008}", "\u{2009}", "\u{200A}",
+    "\u{2028}", "\u{2029}", "\u{202F}", "\u{205F}", "\u{3000}" }
+
+-- s.trimmingCharacters(in: .whitespacesAndNewlines): ASCII space, \t \n \v \f \r and UNICODE_BLANKS.
+local function swiftTrim(s)
+    repeat
+        local before = s
+        s = s:gsub("^[ \t\n\v\f\r]+", ""):gsub("[ \t\n\v\f\r]+$", "")
+        for _, b in ipairs(UNICODE_BLANKS) do
+            if s:sub(1, #b) == b then s = s:sub(#b + 1) end
+            if #s >= #b and s:sub(-#b) == b then s = s:sub(1, -#b - 1) end
+        end
+    until s == before
+    return s
+end
+
+local PROCESS_REFUSED = "host.process is restricted to system extensions"
+
 -- Build a stub host. opts: { power, pct, shellOut, shellTruncated, screens, date, now, frame,
 -- apps, files, fsDirs, fsExists, translateResult, agentResult, httpResponse,
--- setDefaultOK, perms, snippets, shellRouter, privileged }.
--- privileged = false gives the extension the real host's non-system tier for host.shell
--- (ExtensionHost.privileged); absent or true = the system tier, as every bundled extension.
+-- setDefaultOK, perms, snippets, shellRouter, privileged, trusted }.
+-- The level, named after the real host's words (ExtensionHost.privileged / .trusted):
+--   absent (both true)          = the system tier, as every bundled extension;
+--   privileged = false          = the trusted (automation) tier of a reviewed user extension:
+--                                 the system-only functions answer their refusal;
+--   privileged = trusted = false = neither: the automation functions answer their refusal too
+--                                 (the real app never runs such an extension; the host still has the answers).
+-- A refused call answers what the real host answers (same values, same count) and records
+-- nothing as done; a bridge counter in env.calls still counts it (the hop is real).
 -- Returns (host, env); inspect env.* and mutate env.* between steps.
 function M.makeHost(opts)
     opts = opts or {}
@@ -275,7 +301,8 @@ function M.makeHost(opts)
         shellRouter = opts.shellRouter,
         shellTruncated = opts.shellTruncated,
         shellCalls = {},                      -- every host.shell.run: { cmd, keep_running, timed_out, killed }
-        privileged = (opts.privileged ~= false), -- false = host.shell.run answers the refusal string
+        privileged = (opts.privileged ~= false), -- false = the system-only functions refuse
+        trusted = (opts.trusted ~= false),       -- false with privileged = false: automation refuses too
         -- host.process (native KillProcessSupport in production). The refusal rules
         -- are NOT reimplemented here — a test states the answers it wants as
         -- { [pid string] = "reason" }; anything absent is killable. env.kills is the
@@ -304,11 +331,14 @@ function M.makeHost(opts)
     -- - env.privileged == false (makeHost{ privileged = false }): ONE value, the string
     --   "error: host.shell is restricted to system extensions", whatever cmd is;
     -- - cmd goes through lua_tostring: a number runs as its string ("42"), nil / table /
-    --   boolean become "", and "" (or all-blank) spawns nothing and answers one "";
+    --   boolean become ""; the cmd is trimmed of Swift's .whitespacesAndNewlines (ShellRunner.run)
+    --   and "" (or all-blank) spawns nothing and answers one "";
     -- - two returns at most, (output, true) only when truncated; a timeout answers "".
     -- env.calls.shell counts every bridge hop that passed the opts checks (refused and
     -- empty calls included); env.shellCalls lists only commands that ran, as
     -- { cmd =, keep_running =, timed_out =, killed = }, so #env.shellCalls == 0 = nothing ran.
+    -- The real host's `automation = privileged || trusted` (ExtensionHostAPI.swift install()).
+    local function automation() return env.privileged or env.trusted end
     local function shell_run(cmd, opts)
         if opts == false then opts = nil end   -- `cond and { keep_running = true }`
         if opts ~= nil then
@@ -329,8 +359,8 @@ function M.makeHost(opts)
         if not env.privileged then return "error: host.shell is restricted to system extensions" end
         if type(cmd) == "number" then cmd = tostring(cmd)
         elseif type(cmd) ~= "string" then cmd = "" end
-        -- shortcut: ASCII blanks only (Swift also trims Unicode spaces), upgrade if a test needs them.
-        if not cmd:find("%S") then return "" end
+        cmd = swiftTrim(cmd)
+        if cmd == "" then return "" end
         local out, truncated
         if env.shellRouter then out, truncated = env.shellRouter(cmd)
         else out, truncated = env.shellOut, env.shellTruncated end
@@ -356,9 +386,15 @@ function M.makeHost(opts)
         },
         json = { encode = encode, decode = decode },
         shell = { run = shell_run },
+        -- Below the system tier (privileged = false) both answer ONE string,
+        -- "host.process is restricted to system extensions", and nothing is killed.
         process = {
-            refusal = function(pid) return env.processRefusals[tostring(pid)] end,
+            refusal = function(pid)
+                if not env.privileged then return PROCESS_REFUSED end
+                return env.processRefusals[tostring(pid)]
+            end,
             kill = function(pid, force)
+                if not env.privileged then return PROCESS_REFUSED end
                 local why = env.processRefusals[tostring(pid)]
                 if why then return why end
                 env.kills[#env.kills + 1] = { pid = tostring(pid), force = force and true or false }
@@ -369,17 +405,24 @@ function M.makeHost(opts)
             schedule = function(o) env.calls.timerSchedule = env.calls.timerSchedule + 1; env.timers[o.id] = o end,
             cancel = function(id) env.calls.timerCancel = env.calls.timerCancel + 1; env.timers[id] = nil end,
         },
-        alert = { show = function(m) env.alerts[#env.alerts + 1] = m end },
+        -- Automation tier: refused = a no-op, nothing in env.alerts.
+        alert = { show = function(m) if automation() then env.alerts[#env.alerts + 1] = m end end },
         notify = function(t, b) env.notifications[#env.notifications + 1] = { title = t, body = b } end,
+        -- Automation tier: refused = a no-op with no return value; env.flags stay as they were.
         caffeinate = {
             prevent_idle_sleep = function(kind, on)
+                if not automation() then return end
                 if kind == "display" then env.flags.idleDisplay = on else env.flags.idleSystem = on end
             end,
-            set_disable_lid_sleep = function(on) env.flags.lidDisabled = on end,
-            lock_screen = function() env.flags.locked = true end,
-            set_remote_wake = function(t) env.flags.remoteWake = t and t.enabled or false end,
-            start_screensaver = function() env.flags.screensaver = true end,
-            sleep_now = function() env.flags.sleepNow = (env.flags.sleepNow or 0) + 1 end,
+            set_disable_lid_sleep = function(on) if automation() then env.flags.lidDisabled = on end end,
+            lock_screen = function() if automation() then env.flags.locked = true end end,
+            set_remote_wake = function(t)
+                if automation() then env.flags.remoteWake = t and t.enabled or false end
+            end,
+            start_screensaver = function() if automation() then env.flags.screensaver = true end end,
+            sleep_now = function()
+                if automation() then env.flags.sleepNow = (env.flags.sleepNow or 0) + 1 end
+            end,
         },
         battery = {
             power_source = function() env.calls.battery = env.calls.battery + 1; return env.power end,
@@ -393,18 +436,33 @@ function M.makeHost(opts)
         dch = { sessions = function() return opts.dchSessions or {} end },
         time = function() return env.now end,
         date = function() return opts.date or { hour = 12, min = 0, sec = 0 } end,
-        menubar = { set = function(t) env.calls.menubarSet = env.calls.menubarSet + 1; env.menu = t end,
-                    remove = function() env.menu = nil end },
+        -- menubar / dialog: automation tier. Refused: set and remove are no-ops (env.menu
+        -- untouched), prompt answers ONE nil, confirm ONE false, nothing recorded.
+        menubar = {
+            set = function(t)
+                env.calls.menubarSet = env.calls.menubarSet + 1
+                if automation() then env.menu = t end
+            end,
+            remove = function() if automation() then env.menu = nil end end,
+        },
         settings = { open = function(id) env.settingsOpened = id end },
         dialog = {
-            prompt = function(o) env.dialogPrompt = o; return env.dialogReply end,
+            prompt = function(o)
+                if not automation() then return nil end
+                env.dialogPrompt = o; return env.dialogReply
+            end,
             -- Confirms unless the test sets env.confirmReply = false.
-            confirm = function(o) env.dialogConfirm = o; return env.confirmReply ~= false end,
+            confirm = function(o)
+                if not automation() then return false end
+                env.dialogConfirm = o; return env.confirmReply ~= false
+            end,
         },
-        -- AppleScript bridge. Mirrors the real wrapper's decoded shape.
+        -- AppleScript bridge. Mirrors the real wrapper's decoded shape. Automation tier:
+        -- refused = ONE table { ok = false, error = "not permitted" }, nothing in env.osaCalls.
         osascript = {
             run = function(src)
                 env.calls.osascript = env.calls.osascript + 1
+                if not automation() then return { ok = false, error = "not permitted" } end
                 env.osaCalls[#env.osaCalls + 1] = src
                 return (env.osaRouter and env.osaRouter(src))
                     or { ok = true, output = "", error = "" }
@@ -436,7 +494,9 @@ function M.makeHost(opts)
             -- (already selectable-filtered) layouts list. An id not present —
             -- e.g. a source disabled in System Settings after being picked —
             -- fails, exactly like TISSelectInputSource returning paramErr.
+            -- Automation tier: refused = ONE false, nothing in env.keyboardSets.
             set_source = function(id)
+                if not automation() then return false end
                 env.keyboardSets[#env.keyboardSets + 1] = id
                 local settable = env.keyboardSetFails ~= true
                 if settable then
@@ -461,7 +521,8 @@ function M.makeHost(opts)
         apps = { search = function(q) env.appQuery = q; return env.apps end },
         files = {
             search = function(o) env.fileQuery = o; return env.files end,
-            act = function(id, path) env.fileAct = { id = id, path = path } end,
+            -- System tier only: refused = a no-op with no return value, env.fileAct untouched.
+            act = function(id, path) if env.privileged then env.fileAct = { id = id, path = path } end end,
         },
         fs = {
             list_dirs = function(path) return env.fsDirs[path] or {} end,
@@ -516,7 +577,9 @@ function M.makeHost(opts)
                 env.urlOpens[#env.urlOpens + 1] = env.urlOpened
             end,
             default_browser = function() return env.defaultBrowser end,
+            -- Automation tier: refused = ONE false, defaultBrowserSet untouched.
             set_default_browser = function(id)
+                if not automation() then return false end
                 env.defaultBrowserSet = id
                 if env.setDefaultOK then env.defaultBrowser = id end
                 return env.setDefaultOK
@@ -527,12 +590,15 @@ function M.makeHost(opts)
         -- `opts.menus` seeds the walked rows ({ id, path, title, shortcut });
         -- presses land in env.menusPressed and answer with env.menusPressOK
         -- (default true; set false to model a stale generation).
+        -- Automation tier: refused list = ONE empty table, press = ONE false (not in menusPressed).
         menus = {
             list = function()
                 env.calls.menusList = env.calls.menusList + 1
+                if not automation() then return {} end
                 return env.menus
             end,
             press = function(id)
+                if not automation() then return false end
                 env.menusPressed[#env.menusPressed + 1] = id
                 return env.menusPressOK
             end,
@@ -546,14 +612,17 @@ function M.makeHost(opts)
                 env.actions[#env.actions + 1] = "clip.write"
             end,
         },
+        -- Automation tier: refused stroke / set_rules are no-ops (nothing in strokes, actions, keyRules).
         keys = {
             stroke = function(spec)
+                if not automation() then return end
                 env.strokes[#env.strokes + 1] = spec
                 env.actions[#env.actions + 1] = "keys.stroke:" .. tostring(spec)
             end,
             -- Declarative key rules. The real host replaces the extension's whole
             -- rule set on every call, so the stub keeps only the latest list.
             set_rules = function(rules)
+                if not automation() then return end
                 env.keyRules = rules or {}
                 env.actions[#env.actions + 1] = "keys.set_rules:" .. tostring(#env.keyRules)
             end,

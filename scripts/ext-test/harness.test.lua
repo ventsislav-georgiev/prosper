@@ -212,6 +212,132 @@ do  -- a cmd that is not a string, privileged: lua_tostring semantics (Extension
     h.eq(ok, false, "opts still checked for a non-string cmd")
     h.eq(err:match("host%.shell%.run: .*$"), "host.shell.run: keep_running must be a boolean, got number", "opts error text")
 end
+do  -- the trim is Swift's .whitespacesAndNewlines (ShellRunner.run), not ASCII only
+    local seen, router = routed()
+    local host, env = h.makeHost{ shellRouter = router }
+    h.eq(host.shell.run("\u{A0}"), "", "a no-break space alone is blank")
+    h.eq(host.shell.run(" \u{2028}\u{3000}\u{85}\t"), "", "line separator, ideographic space, NEL: blank")
+    h.eq(seen.n .. ":" .. #env.shellCalls, "0:0", "blank Unicode cmds reach nothing")
+    h.eq(host.shell.run("\u{A0} echo hi\u{202F}\n"), "ran:echo hi", "the cmd that runs is trimmed")
+    h.eq(env.shellCalls[1].cmd, "echo hi", "recorded trimmed")
+    h.eq(host.shell.run("\u{200B}"), "ran:\u{200B}", "a zero-width space is not in the set: it runs")
+end
+
+-- ── the level for every other gated function (ExtensionHostAPI.swift install()) ─
+local function n(...) return select("#", ...) end
+local PROC_REFUSED = "host.process is restricted to system extensions"
+local LAYOUTS = { { id = "com.apple.keylayout.US", name = "U.S." } }
+local MENUS = { { id = "m1", path = { "File" }, title = "New" } }
+do  -- system-only functions below the system tier (privileged = false, trusted by default)
+    local host, env = h.makeHost{ privileged = false }
+    h.eq(env.trusted, true, "privileged = false alone is the trusted tier")
+    h.eq(n(host.process.refusal(501)), 1, "process.refusal refused: one value")
+    h.eq(host.process.refusal(501), PROC_REFUSED, "process.refusal: the host's string")
+    h.eq(n(host.process.kill(501, true)), 1, "process.kill refused: one value")
+    h.eq(host.process.kill(501, false), PROC_REFUSED, "process.kill: the host's string")
+    h.eq(#env.kills, 0, "process.kill refused: nothing killed")
+    h.eq(n(host.files.act("trash", "/Users/example/a.txt")), 0, "files.act refused: no value")
+    h.eq(env.fileAct, nil, "files.act refused: nothing recorded")
+end
+do  -- the trusted tier keeps the automation functions (the third answer)
+    local host, env = h.makeHost{ privileged = false, layouts = LAYOUTS, menus = MENUS }
+    host.caffeinate.set_disable_lid_sleep(true)
+    h.eq(env.flags.lidDisabled, true, "trusted: caffeinate runs")
+    host.alert.show("hi")
+    h.eq(env.alerts[1], "hi", "trusted: alert runs")
+    host.osascript.run("return 1")
+    h.eq(env.osaCalls[1], "return 1", "trusted: osascript runs")
+    h.eq(host.keyboard.set_source("com.apple.keylayout.US"), true, "trusted: set_source runs")
+    host.keys.stroke("cmd+v")
+    h.eq(env.strokes[1], "cmd+v", "trusted: keys run")
+    h.eq(host.url.set_default_browser("com.example.browser"), true, "trusted: set_default_browser runs")
+    h.eq(host.menus.list(), MENUS, "trusted: menus run")
+end
+do  -- neither level (privileged = trusted = false): every automation function refuses
+    local host, env = h.makeHost{ privileged = false, trusted = false, layouts = LAYOUTS,
+        menus = MENUS, keyboardSource = "com.example.old", defaultBrowser = "com.example.old" }
+    env.dialogReply = "typed"
+    -- caffeinate: six no-ops, no value, no flag moved
+    h.eq(n(host.caffeinate.prevent_idle_sleep("display", true)), 0, "idle refused: no value")
+    h.eq(n(host.caffeinate.prevent_idle_sleep("system", true)), 0, "idle system refused: no value")
+    h.eq(n(host.caffeinate.set_disable_lid_sleep(true)), 0, "lid refused: no value")
+    h.eq(n(host.caffeinate.set_remote_wake{ enabled = true }), 0, "remote wake refused: no value")
+    h.eq(n(host.caffeinate.lock_screen()), 0, "lock refused: no value")
+    h.eq(n(host.caffeinate.start_screensaver()), 0, "screensaver refused: no value")
+    h.eq(n(host.caffeinate.sleep_now()), 0, "sleep_now refused: no value")
+    local f = env.flags
+    h.eq(tostring(f.idleDisplay) .. tostring(f.idleSystem) .. tostring(f.lidDisabled) .. tostring(f.locked),
+        "falsefalsefalsefalse", "refused: no power flag set")
+    h.eq(tostring(f.remoteWake) .. tostring(f.screensaver) .. tostring(f.sleepNow), "nilnilnil",
+        "refused: no remote wake, screensaver or sleep")
+    -- menubar / dialog / alert
+    h.eq(n(host.menubar.set{ id = "x", title = "X" }), 0, "menubar.set refused: no value")
+    h.eq(env.menu, nil, "menubar.set refused: nothing set")
+    h.eq(env.calls.menubarSet, 1, "menubar.set refused: the hop is counted")
+    env.menu = "kept"
+    h.eq(n(host.menubar.remove("x")), 0, "menubar.remove refused: no value")
+    h.eq(env.menu, "kept", "menubar.remove refused: nothing removed")
+    h.eq(n(host.dialog.prompt{ title = "T" }), 1, "dialog.prompt refused: one value")
+    h.eq(host.dialog.prompt{ title = "T" }, nil, "dialog.prompt refused: nil")
+    h.eq(env.dialogPrompt, nil, "dialog.prompt refused: not shown")
+    h.eq(n(host.dialog.confirm{ title = "T" }), 1, "dialog.confirm refused: one value")
+    h.eq(host.dialog.confirm{ title = "T" }, false, "dialog.confirm refused: false")
+    h.eq(env.dialogConfirm, nil, "dialog.confirm refused: not shown")
+    h.eq(n(host.alert.show("hi")), 0, "alert.show refused: no value")
+    h.eq(#env.alerts, 0, "alert.show refused: nothing shown")
+    -- osascript
+    h.eq(n(host.osascript.run("return 1")), 1, "osascript refused: one value")
+    local r = host.osascript.run("return 1")
+    local keys = 0
+    for _ in pairs(r) do keys = keys + 1 end
+    h.eq(tostring(r.ok) .. ":" .. tostring(r.error) .. ":" .. keys, "false:not permitted:2", "osascript refused: the host's table")
+    h.eq(#env.osaCalls, 0, "osascript refused: nothing ran")
+    h.eq(env.calls.osascript, 2, "osascript refused: the hops are counted")
+    -- keyboard / keys
+    h.eq(n(host.keyboard.set_source("com.apple.keylayout.US")), 1, "set_source refused: one value")
+    h.eq(host.keyboard.set_source("com.apple.keylayout.US"), false, "set_source refused: false")
+    h.eq(#env.keyboardSets .. ":" .. env.keyboardSource, "0:com.example.old", "set_source refused: nothing set")
+    h.eq(n(host.keys.stroke("cmd+v")), 0, "keys.stroke refused: no value")
+    h.eq(n(host.keys.set_rules{ { from = "f5", swallow = true } }), 0, "keys.set_rules refused: no value")
+    h.eq(#env.strokes .. ":" .. #env.actions .. ":" .. tostring(env.keyRules), "0:0:nil", "keys refused: nothing sent or set")
+    -- url
+    h.eq(n(host.url.set_default_browser("com.example.browser")), 1, "set_default_browser refused: one value")
+    h.eq(host.url.set_default_browser("com.example.browser"), false, "set_default_browser refused: false")
+    h.eq(tostring(env.defaultBrowserSet) .. ":" .. env.defaultBrowser, "nil:com.example.old", "set_default_browser refused: nothing set")
+    -- menus
+    h.eq(n(host.menus.list()), 1, "menus.list refused: one value")
+    local l = host.menus.list()
+    h.eq(type(l) .. ":" .. tostring(next(l)), "table:nil", "menus.list refused: an empty table")
+    h.eq(env.calls.menusList, 2, "menus.list refused: the hops are counted")
+    h.eq(n(host.menus.press("m1")), 1, "menus.press refused: one value")
+    h.eq(host.menus.press("m1"), false, "menus.press refused: false")
+    h.eq(#env.menusPressed, 0, "menus.press refused: nothing pressed")
+end
+do  -- the default (no option) is the system level: every group answers as before
+    local host, env = h.makeHost{ layouts = LAYOUTS, menus = MENUS }
+    h.eq(tostring(env.privileged) .. tostring(env.trusted), "truetrue", "default: both levels")
+    h.eq(host.process.kill(501, true), nil, "default: process.kill sends")
+    h.eq(env.kills[1].pid .. ":" .. tostring(env.kills[1].force), "501:true", "default: the kill recorded")
+    h.eq(host.process.refusal(501), nil, "default: nothing to refuse")
+    host.files.act("reveal", "/Users/example/a.txt")
+    h.eq(env.fileAct.id .. ":" .. env.fileAct.path, "reveal:/Users/example/a.txt", "default: files.act recorded")
+    host.caffeinate.prevent_idle_sleep("system", true)
+    h.eq(env.flags.idleSystem, true, "default: caffeinate runs")
+    host.menubar.set{ id = "x" }
+    h.eq(env.menu.id, "x", "default: menubar set")
+    env.dialogReply = "typed"
+    h.eq(host.dialog.prompt{}, "typed", "default: dialog answers")
+    host.alert.show("hi")
+    h.eq(env.alerts[1], "hi", "default: alert shown")
+    local r = host.osascript.run("return 1")
+    h.eq(tostring(r.ok) .. ":" .. env.osaCalls[1], "true:return 1", "default: osascript runs")
+    h.eq(host.keyboard.set_source("com.apple.keylayout.US"), true, "default: set_source runs")
+    host.keys.stroke("cmd+v")
+    h.eq(env.actions[1], "keys.stroke:cmd+v", "default: keys run")
+    h.eq(host.url.set_default_browser("com.example.browser"), true, "default: set_default_browser runs")
+    h.eq(host.menus.press("m1"), true, "default: menus.press runs")
+    h.eq(env.menusPressed[1], "m1", "default: press recorded")
+end
 
 -- ── bench/le helpers behave ──────────────────────────────────────────────────
 local per = h.bench(1000, function() return 1 + 1 end)
