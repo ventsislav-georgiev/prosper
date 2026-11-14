@@ -406,9 +406,16 @@ enum AgentIsland {
         return String(out)
     }
 
-    /// The "Match this text exactly" button: the escaped pattern when it is read as a regex, else unchanged.
+    /// #938 F938-1: the button works only on a pattern read as a regex whose ESCAPED form (what dch would get) still fits the
+    /// config line's bound in UTF-8 bytes; past it dch writes the line empty. Pure: counts bytes, no index into the pattern.
+    static func sidekickCanMatchExactly(_ pattern: String) -> Bool {
+        guard case .regex = sidekickHint(pattern) else { return false }
+        return sidekickEscaped(pattern.trimmingCharacters(in: .whitespacesAndNewlines)).utf8.count <= DchConfigWriter.maxPatternBytes
+    }
+
+    /// The "Match this text exactly" button: the escaped pattern when it is read as a regex and the escape fits, else unchanged.
     static func sidekickMatchExactly(_ pattern: String) -> String {
-        guard case .regex = sidekickHint(pattern) else { return pattern }
+        guard sidekickCanMatchExactly(pattern) else { return pattern }
         return sidekickEscaped(pattern.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 

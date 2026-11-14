@@ -92,6 +92,7 @@ final class SidekickPatternHintTests: XCTestCase {
             XCTAssertEqual(AgentIsland.sidekickMatch(escaped), .regex, "\(text): matched as a regex, not through the text fallback")
             XCTAssertEqual(AgentIsland.split(list, pattern: escaped).sidekicks.map(\.key.name), [text], "\(text) via \(escaped): only the text")
             if c != "-" { XCTAssertEqual(AgentIsland.sidekickHint(escaped), .exact, "\(escaped) is read as exact") }
+            XCTAssertEqual(DchConfigWriter.sidekickValue(escaped), escaped, "\(escaped) goes to the dch line unchanged (R938-1)")
         }
         // The case folding is the matcher's, as for a plain pattern.
         XCTAssertEqual(AgentIsland.split(["A.B", "axb"].map(session), pattern: AgentIsland.sidekickEscaped("a.b")).sidekicks.map(\.key.name), ["A.B"])
@@ -107,6 +108,35 @@ final class SidekickPatternHintTests: XCTestCase {
         XCTAssertEqual(AgentIsland.sidekickMatchExactly("a\\.b"), "a\\.b", "already exact")
         XCTAssertEqual(AgentIsland.sidekickMatchExactly(""), "")
         XCTAssertEqual(AgentIsland.sidekickHint(AgentIsland.sidekickMatchExactly("a.b")), .exact, "the button leaves no hint behind")
+    }
+
+    /// F938-1: the escape doubles each syntax character, so the button is offered only when the ESCAPED form fits 255 bytes.
+    /// Shapes: `n` portable "a" bytes plus `k` dots; escaped = n + 2k bytes.
+    private func dots(_ n: Int, _ k: Int) -> String { String(repeating: "a", count: n) + String(repeating: ".", count: k) }
+
+    func testButtonOnlyWhenTheEscapedFormFitsTheBound() {
+        let long = dots(240, 10)   // 250 bytes; escaped 260 bytes
+        XCTAssertEqual(long.utf8.count, 250)
+        XCTAssertEqual(AgentIsland.sidekickEscaped(long).utf8.count, 260)
+        XCTAssertEqual(AgentIsland.sidekickHint(long), .regex(first: "."), "still read as a regex: the hint stays")
+        XCTAssertFalse(AgentIsland.sidekickCanMatchExactly(long))
+        XCTAssertEqual(AgentIsland.sidekickMatchExactly(long), long, "unchanged")
+        // The edge: escaped 255 bytes (pattern 250: 245 + 5, escaped 245 + 10) gets the button; escaped 256 (pattern 251) does not.
+        let at = dots(245, 5), over = dots(246, 5)
+        XCTAssertEqual(AgentIsland.sidekickEscaped(at).utf8.count, 255)
+        XCTAssertEqual(AgentIsland.sidekickEscaped(over).utf8.count, 256)
+        XCTAssertTrue(AgentIsland.sidekickCanMatchExactly(at))
+        XCTAssertEqual(AgentIsland.sidekickMatchExactly(at).utf8.count, 255)
+        XCTAssertEqual(AgentIsland.sidekickMatchExactly(at), AgentIsland.sidekickEscaped(at))
+        XCTAssertEqual(DchConfigWriter.sidekickValue(AgentIsland.sidekickMatchExactly(at)).utf8.count, 255, "the dch line is not emptied")
+        XCTAssertFalse(AgentIsland.sidekickCanMatchExactly(over))
+        XCTAssertEqual(AgentIsland.sidekickMatchExactly(over), over)
+        // Short regex patterns, plain and exact ones, and a pattern past the bound itself.
+        XCTAssertTrue(AgentIsland.sidekickCanMatchExactly("a.b"))
+        for p in ["abc", "x(", "a\\.b", "", dots(300, 1)] { XCTAssertFalse(AgentIsland.sidekickCanMatchExactly(p), p) }
+        // Bytes, not characters: a two-byte scalar counts twice (pattern 249, escaped 254 fits; pattern 251, escaped 256 does not).
+        XCTAssertTrue(AgentIsland.sidekickCanMatchExactly(String(repeating: "\u{00E9}", count: 122) + dots(0, 5)))
+        XCTAssertFalse(AgentIsland.sidekickCanMatchExactly(String(repeating: "\u{00E9}", count: 123) + dots(0, 5)))
     }
 
     @MainActor
@@ -200,6 +230,24 @@ final class SidekickPatternHintTests: XCTestCase {
                     }
                 }
             }
+        }
+    }
+
+    @MainActor
+    func testRowHidesTheButtonForAnEscapeThatDoesNotFit() {
+        withSavedKeys {
+            Preferences.agentIslandSidekickTabs = true
+            let size = CGSize(width: sz(560), height: sz(600)), button = "Match this text exactly"
+            @MainActor func state(_ pattern: String) -> (button: Bool, hint: Bool, height: CGFloat) {
+                Preferences.agentIslandSidekickPattern = pattern
+                let tree = axTree(size) { $0.contains { $0.role == "AXTextField" && $0.label == "Sidekick pattern" && $0.value == pattern } }
+                return (tree.contains { $0.reads(button) }, tree.contains { $0.named(prefix: "Read as a regex") }, fittingHeight(size.width))
+            }
+            let shown = state(dots(240, 2)), hidden = state(dots(240, 10))   // escaped 244 and 260 bytes
+            XCTAssertTrue(shown.button && shown.hint, "a short escape: the button")
+            XCTAssertTrue(!hidden.button, "no button when the escape does not fit")
+            XCTAssertTrue(hidden.hint, "the hint line still says it is read as a regex")
+            XCTAssertEqual(hidden.height, shown.height, accuracy: 0.5, "the row keeps its height")
         }
     }
 

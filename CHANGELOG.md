@@ -1069,6 +1069,9 @@ tag from the now-released section and put it on the new top draft.
 - Manual fan control now gives the fans back to macOS for good when the helper's replies keep
   arriving too late three times in a row, instead of re-applying the speed and handing it back over
   and over (#1234)
+- The "Match this text exactly" button in Settings now appears only when the escaped pattern still
+  fits dch's 255-byte limit, so pressing it can no longer make dch silently lose the Sidekick split
+  (#938)
 
 ## v2.174.0
 

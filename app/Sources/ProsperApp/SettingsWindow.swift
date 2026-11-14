@@ -1075,7 +1075,7 @@ struct AgentIslandListSection: View {
                         exactButton("Match this text exactly")
                         exactButton("Match exactly")
                     }
-                    .hidden(AgentIsland.sidekickHint(pattern).text == nil)
+                    .hidden(!AgentIsland.sidekickCanMatchExactly(pattern))
                     if let caption = AgentIsland.sidekickCaption(pattern, tabs: tabs, sessions: AgentIslandController.shared.store?.sessions ?? []) {
                         Text(caption)
                             .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
