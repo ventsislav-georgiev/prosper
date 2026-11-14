@@ -1078,15 +1078,22 @@ final class AgentTerminalTests: XCTestCase {
         try? FileManager.default.removeItem(at: switched)
     }
 
-    /// QA #681 INFO-7: the find bar's buttons say what they do to VoiceOver, not the symbols' names.
-    /// (SwiftUI builds no accessibility tree for a never-shown window, so the view's modifiers are read from
-    /// its dump, as AgentWindowRenameTests does.)
+    /// QA #681 INFO-7: the find bar's buttons say what they do to VoiceOver, not the symbols' names. Read from the real
+    /// accessibility tree of the bar hosted in a window that is never shown (AXTreeSupport turns this process's two AX
+    /// flags on and puts them back); the expected words are typed here, not taken from the product. Runs on the main actor.
     @MainActor
     func testTheFindBarButtonsHaveLabels() {
-        var out = ""
-        dump(AgentTerminalFindBar(controller: AgentTerminalController()).body, to: &out)
-        for want in ["Previous match", "Next match", "Close find", "Previous (⇧⌘G)", "Next (⌘G)", "Close (Esc)"] {
-            XCTAssertTrue(out.contains("\"\(want)\""), want)
+        let tree = AXTreeSupport.tree(AgentTerminalFindBar(controller: AgentTerminalController()), CGSize(width: 420, height: 40)) { t in
+            ["Previous match", "Next match", "Close find"].allSatisfy { n in t.contains { $0.reads(n) } }
+        }
+        for want in ["Previous match", "Next match", "Close find"] {
+            XCTAssertTrue(tree.contains { $0.reads(want) }, "\(want) is read")
+        }
+        for tip in ["Previous (⇧⌘G)", "Next (⌘G)", "Close (Esc)"] {
+            XCTAssertTrue(tree.contains { !$0.ignored && $0.help == tip }, "\(tip) is the tooltip (AXHelp)")
+        }
+        for symbol in ["Go Up", "Go Down"] {
+            XCTAssertFalse(tree.contains { $0.reads(symbol) }, "\(symbol): the symbol's name is not what is read")
         }
     }
 

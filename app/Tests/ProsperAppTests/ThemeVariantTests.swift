@@ -290,9 +290,10 @@ final class ThemeVariantTests: XCTestCase {
     }
 
     // MARK: UI — the tint dots on a theme's row
-    // SwiftUI builds no accessibility tree for a window that was never shown (the first run of
-    // these tests found every element list empty), so the dots are checked through the store the
-    // row reads, the row's own press handler, and the hosted list's laid-out size.
+    // The dots' names, remembered value and tooltips are read from the real accessibility tree
+    // (testTheDotsAreReadByNameValueAndTooltipInTheRealTree: a never-shown window has a tree once
+    // AXTreeSupport turns this process's AX flags on; without them it is empty). The rest is checked
+    // through the store the row reads, the row's own press handler, and the hosted list's laid-out size.
 
     private func flush(_ v: NSView) {
         v.layoutSubtreeIfNeeded()
@@ -596,8 +597,8 @@ final class ThemeVariantTests: XCTestCase {
     }
 
     /// The dump of `v`'s outermost modifier: the lines from its top-level "modifier" child on.
-    /// SwiftUI builds no accessibility tree for a never-shown window, so the accessibility
-    /// attachment is read off the view value, as AgentWindowRenameTests does.
+    /// Only the selected trait is read this way: the tree is real for a never-shown window (AXTreeSupport), but its
+    /// AXTreeNode carries no selected flag, so the trait is compared on the view value, built with and without it.
     private static func outerModifier<V: View>(_ v: V) -> String {
         var out = ""
         dump(v, to: &out)
@@ -613,6 +614,37 @@ final class ThemeVariantTests: XCTestCase {
         var out = ""
         dump(v, to: &out)
         return out
+    }
+
+    /// Real accessibility tree (AXTreeSupport; expected words typed here): each dot is read as "<theme>, <tint>" with
+    /// the tint as its tooltip, and "remembered" is the value of the ringed dot of an inactive theme only. Runs on the main actor.
+    @MainActor
+    func testTheDotsAreReadByNameValueAndTooltipInTheRealTree() throws {
+        ThemeRuntime.scale = 1
+        let s = try listStore()
+        s.select(id: Self.hcLightID, tint: "amber")
+        s.select(id: Self.hcDarkID, tint: "cyan")
+        XCTAssertEqual(s.activeID, Self.hcDarkID)
+        let list = ThemeList(theme: s, paneID: "appearance")
+        let cases: [(id: String, title: String, tints: [String], remembered: String?)] = [
+            (Self.hcDarkID, "High Contrast Dark", ["Lime", "Cyan", "Amber", "Violet", "White"], nil),   // active: no "remembered"
+            (Self.hcLightID, "High Contrast Light", ["Blue", "Lime", "Cyan", "Amber", "Violet", "Black"], "Amber"),
+        ]
+        for c in cases {
+            let d = try XCTUnwrap(s.available.first { $0.id == c.id })
+            let options = try XCTUnwrap(s.tints[c.id])
+            let dots = list.dots(d, options: options, selected: s.activeID == c.id)
+            let tree = AXTreeSupport.tree(dots.frame(width: 300, height: 40), CGSize(width: 300, height: 40)) { t in
+                c.tints.allSatisfy { n in t.contains { $0.reads("\(c.title), \(n)") } }
+            }
+            for tint in c.tints {
+                let name = "\(c.title), \(tint)"
+                let nodes = tree.filter { $0.reads(name) }
+                XCTAssertFalse(nodes.isEmpty, "\(name) is read")
+                XCTAssertEqual(nodes.contains { $0.reads("remembered") }, tint == c.remembered, "\(name): remembered only on the ringed dot of an inactive theme")
+                XCTAssertTrue(nodes.contains { $0.help == tint }, "\(name): the tint is its tooltip")
+            }
+        }
     }
 
     /// INFO-3: on the dots, only the active theme's ringed dot carries the selected trait; an
