@@ -706,14 +706,15 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer now shows Markdown formatted: headings, bold, italic, strikethrough, code, nested
   lists, task lists, quotes, tables and horizontal rules. (#1118)
 - Text Viewer: links in a Markdown file show their full target on hover. Web and mail links open on
-  a click; links to other text files open in another viewer window; any other local file is shown in
-  Finder, never opened or run. (#1118)
-- Text Viewer: images inside the Markdown file's folder are drawn. Images from the web are never
-  downloaded; their alt text shows instead. (#1118)
+  a click; a link to a heading in the same file scrolls to it; links to other text files open in
+  another viewer window; any other local file is shown in Finder, never opened or run. (#1118)
+- Text Viewer: images inside the Markdown file's folder are drawn, the first 64 of a file; later
+  ones show their alt text. Images from the web are never downloaded; their alt text shows instead.
+  (#1118)
 - Text Viewer: very large or very deeply nested Markdown files are shown as plain source, with a
   note saying why; when a file has more links, table cells or styled text than the viewer draws, a
   note says the rest is shown as plain text, and a table beyond 50,000 cells is shown as plain rows
-  so it cannot freeze Prosper. (#1118)
+  so it cannot freeze Prosper. A table wider than 64 columns is shown as plain rows too. (#1118)
 - Text Viewer: files open without blocking Prosper; the text is read and formatted in the
   background. (#1118)
 - Text Viewer: Copy now copies every part of a multi-part (Option-drag) selection, and Copy Path
@@ -723,8 +724,8 @@ tag from the now-released section and put it on the new top draft.
   per file. (#1118)
 - Text Viewer: a window opened through a symlink keeps showing the file it opened, even if the link
   is changed later. (#1118)
-- Text Viewer: UTF-16 files with a broken last byte or an unpaired surrogate are shown read-only
-  instead of as clean text. (#1118)
+- Text Viewer: a UTF-16 file with an unpaired surrogate is shown read-only instead of as clean text.
+  (#1118)
 - Text Viewer: right-clicking a link in a Markdown file offers Copy and Copy Link Address only;
   nothing in that menu opens the link. The viewer no longer starts the system's force-click action,
   the one that could preview a link's web page without a click, and a three-finger tap on a link
