@@ -29,6 +29,7 @@ extension AgentWindowD1Tests {
     func testAgentWindowPaneSelectionIsTheFocusedPanesResolvedTarget() throws {
         let old = record("old", ago: 7200)
         let st = store([session("api", .idle), session("web", .idle)], history: [old])
+        let shared = Preferences.defaults.data(forKey: "agentWindowLayouts")
         let m = windowModel(st)
         m.setVisible(true)
         defer { m.close() }
@@ -59,7 +60,10 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(m.selection == nil)
         XCTAssertEqual(m.layout.id, layoutID, "one layout for the window's life")
         XCTAssertFalse(AgentPaneLayout.splitsEnabled, "15.0: the gate stays off")
-        XCTAssertTrue(Preferences.defaults.object(forKey: "agentWindowLayouts") == nil, "B1 loads and saves; A2 neither")
+        // #1217: AgentsWindow.show() loads and saves the shared key now (its rows remove it in setUp); a model built
+        // with no suite, as here, neither reads nor writes it, whatever an earlier row left there.
+        XCTAssertEqual(Preferences.defaults.data(forKey: "agentWindowLayouts"), shared, "no suite: the shared key as it was")
+        XCTAssertEqual(m.layoutWrites, 0, "no suite: nothing saved")
     }
 
     /// G2 (follow-to-History) and G8 (a removal hands on) pick through the same pane. #831 B1 step 1 (rewritten:

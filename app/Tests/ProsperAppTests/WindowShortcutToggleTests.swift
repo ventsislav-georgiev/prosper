@@ -10,6 +10,13 @@ import XCTest
 @MainActor
 final class WindowShortcutToggleTests: XCTestCase {
 
+    /// #1217 (8.2): AgentsWindow.show() loads the layout store from Preferences.defaults, one shared XCTestDefaults per
+    /// test process; a blob left by an earlier row would make this row's window start on that row's layout.
+    nonisolated override func setUp() {
+        super.setUp()
+        Preferences.defaults.removeObject(forKey: "agentWindowLayouts")
+    }
+
     /// Windows the stubbed state read calls shown / focused.
     private var shown = Set<ObjectIdentifier>()
     private var focused = Set<ObjectIdentifier>()

@@ -928,6 +928,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island's Sidekicks tab now also matches a session's Claude Code or Codex title when the
   session has an alias, as dch's own picker does; the Settings caption says "name, alias or session
   title". (#1210)
+- Agent Sessions reopens on the session you were last reading (also after a relaunch, and after
+  Agent Island is turned off and on) instead of jumping to the first session in the list. (#1217)
 
 ## v2.174.0
 

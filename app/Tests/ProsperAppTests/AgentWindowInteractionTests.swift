@@ -9,6 +9,13 @@ import XCTest
 /// built and never shown; key events are built by hand and handed to them.
 final class AgentWindowInteractionTests: XCTestCase {
 
+    /// #1217 (8.2): AgentsWindow.show() loads the layout store from Preferences.defaults, one shared XCTestDefaults per
+    /// test process; a blob left by an earlier row would make this row's window start on that row's layout.
+    override func setUp() {
+        super.setUp()
+        Preferences.defaults.removeObject(forKey: "agentWindowLayouts")
+    }
+
     static let key = AgentSessionKey(dir: "/tmp/dch-test", name: "s")
     static let rule = String(repeating: "─", count: 100)
 

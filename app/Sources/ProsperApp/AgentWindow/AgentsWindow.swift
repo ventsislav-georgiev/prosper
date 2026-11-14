@@ -33,7 +33,7 @@ final class AgentsWindow {
     func show() {
         if let window { return present(window) }
         let island = island()
-        let model = AgentWindowModel(lastLive: lastLive)
+        let model = AgentWindowModel(lastLive: lastLive, layouts: Preferences.defaults)
         model.interaction.controller = island
         model.bind(island.store)
         island.onStoreChanged = { [weak model, weak island] in model?.bind(island?.store) }

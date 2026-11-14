@@ -476,6 +476,9 @@ final class AgentWindowModel: ObservableObject {
             select(nil, manual: false)
             return
         }
+        // R1194-2: the island back: the saved layout again (bind(nil) emptied its pane in memory only), before the first
+        // refresh, so no first-row pick lands over the saved target and the autosave finds the store equal (no write).
+        if let saved = layouts?.activeLayout, saved != layout { adopt(saved) }
         // @Published sends on willSet with the new value, so the values are used as given.
         subscription = store.$sessions.combineLatest(store.$history, store.$sort, store.$sidekickPattern)
             .combineLatest(store.$details, store.$actions)
