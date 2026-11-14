@@ -256,6 +256,191 @@ final class DchConfigWriterTests: XCTestCase {
         XCTAssertFalse(Self.islandMatches("(\u{E9}", "x(e"))
     }
 
+    // MARK: - #1220 rider R1210-a: a long title never flips the pattern
+
+    /// A fake thread-CPU clock (as AgentIslandTests' countingCPU, #1063): each read advances it `tick` ns, so a
+    /// search's cost is its count of clock reads (one per ICU progress callback, about one per start position).
+    private static func countingCPU(tick: UInt64) -> (clock: @Sendable () -> UInt64, reads: @Sendable () -> UInt64) {
+        let now = OSAllocatedUnfairLock(initialState: UInt64(0))
+        return ({ now.withLock { $0 += tick; return $0 } }, { now.withLock { $0 / tick } })
+    }
+
+    /// Runs `body` with the matcher's seams set, restored after. Patterns are unique per row: the cache is per process.
+    private static func withSeams(deadline: UInt64, slowCall: UInt64, slowTotal: UInt64,
+                                  _ body: (_ reads: @Sendable () -> UInt64) -> Void) {
+        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU)
+        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU) = saved }
+        let c = countingCPU(tick: 1_000)
+        (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU)
+            = (deadline, slowCall, slowTotal, c.clock)
+        body(c.reads)
+    }
+
+    private static func session(_ name: String, alias: String = "", title: String = "") -> AgentSession {
+        AgentSession(key: AgentSessionKey(dir: "/d", name: name), alias: alias, activity: 0, state: .idle, agents: 0, harness: title)
+    }
+
+    /// No match, and a leading ".*" scans the rest from each of its 510 start positions: 510 progress callbacks.
+    private static func longTitle(_ tag: String) -> String { String(repeating: "a", count: 500) + "-qa\(tag)-x" }
+
+    /// A title that runs past the call's deadline (100 reads) is no hit and leaves the pattern a regex; the same
+    /// session's alias still hits, a short title still hits, and the call stops at the deadline: 102 reads.
+    func testASlowTitleIsNoHitAndNeverFlipsThePattern() {
+        let p = ".*-qa1220a$"
+        // A total out of reach: the titles' own tally (testATitleTallyEndsItsRegexSearchOnly) never trips here.
+        Self.withSeams(deadline: 100_000, slowCall: .max, slowTotal: .max) { reads in
+            let list = [Self.session("api", alias: "api-qa1220a", title: Self.longTitle("1220a")),
+                        Self.session("web", alias: "Agent B", title: Self.longTitle("1220a")),
+                        Self.session("doc", alias: "Agent C", title: "doc-qa1220a")]
+            XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex, "the probe on \"\" runs here, outside the counted calls")
+            for _ in 0..<3 {
+                let before = reads()
+                let r = AgentIsland.split(list, pattern: p)
+                XCTAssertEqual(r.sidekicks.map(\.name), ["api", "doc"], "the alias and the short title, as a regex")
+                XCTAssertEqual(r.primary.map(\.name), ["web"], "its title timed out: no hit")
+                XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex, "never flipped by a title")
+                // One call shares one deadline: about 105 reads (start, 101 to pass it, ICU's callbacks after the stop,
+                // measured 104 before the titles' tally added one read; the tail is ICU's and may differ on another macOS).
+                // Were each title given a fresh deadline, both long titles would pay one: about 40 for names and aliases
+                // + 2 x 105, about 250. 170 is between the two.
+                XCTAssertLessThan(reads() - before, 170, "a split call still costs one deadline, not one per title")
+            }
+        }
+    }
+
+    /// The same timeout on a NAME still flips the pattern to text for the process, as before #1220, and Settings says so
+    /// in the same words.
+    func testASlowNameStillFlipsThePattern() {
+        let p = ".*-qa1220b$"
+        Self.withSeams(deadline: 100_000, slowCall: .max, slowTotal: 0) { _ in
+            let r = AgentIsland.split([Self.session(Self.longTitle("1220b")), Self.session("api-qa1220b")], pattern: p)
+            XCTAssertEqual(r.sidekicks.map(\.name), [], "flipped: matched as text, and no name holds the pattern's text")
+            XCTAssertEqual(AgentIsland.sidekickMatch(p), .slow)
+            XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: [])?.components(separatedBy: "\n").first,
+                           "Too slow on a session name: matched as text")
+        }
+        XCTAssertEqual(AgentIsland.SidekickMatch.slow.caption, "Too slow on a session name: matched as text")
+    }
+
+    /// The same timeout on an ALIAS flips it too: names and aliases are accounted as before.
+    func testASlowAliasStillFlipsThePattern() {
+        let p = ".*-qa1220d$"
+        Self.withSeams(deadline: 100_000, slowCall: .max, slowTotal: 0) { _ in
+            _ = AgentIsland.split([Self.session("api", alias: Self.longTitle("1220d"))], pattern: p)
+            XCTAssertEqual(AgentIsland.sidekickMatch(p), .slow)
+        }
+    }
+
+    /// A title searched in time but over the slow-call bar (510 reads against 50) adds nothing to the tally; the same
+    /// cost on a name flips the pattern (a total of 0: any call that counts flips it).
+    func testATitlesTimeIsNotTallied() {
+        let p = ".*-qa1220c$", q = ".*-qa1220e$"
+        Self.withSeams(deadline: 5_000_000, slowCall: 50_000, slowTotal: 0) { _ in
+            let list = [Self.session("api", alias: "Agent A", title: Self.longTitle("1220c")), Self.session("web", alias: "web-qa1220c")]
+            for _ in 0..<3 { XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["web"]) }
+            XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex)
+            _ = AgentIsland.split([Self.session(Self.longTitle("1220e"))], pattern: q)
+            XCTAssertEqual(AgentIsland.sidekickMatch(q), .slow, "the same search on a name counts")
+        }
+    }
+
+    /// #1220 round 2: the titles' own tally. Each call where the long title runs out the deadline adds the titles' part
+    /// (about 105 - 40 = 65 reads, 65 µs) to it; past the 100 µs total (the second call) the titles are matched as
+    /// text: no regex search of a title (the call's reads are the names' only, about 40; 105+ while titles were a
+    /// regex), a title holding the pattern's text is a hit, the title-only regex match is not, and the pattern and its
+    /// names and aliases stay a regex. Names never count here (slowCall out of reach), so only the titles' tally moves.
+    func testATitleTallyEndsItsRegexSearchOnly() {
+        let p = ".*-qa1220h$"
+        Self.withSeams(deadline: 100_000, slowCall: .max, slowTotal: 100_000) { reads in
+            let list = [Self.session("api", alias: "api-qa1220h", title: Self.longTitle("1220h")),
+                        Self.session("doc", alias: "Agent C", title: "doc-qa1220h"),
+                        Self.session("lit", alias: "Agent D", title: "x.*-QA1220H$y")]
+            XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex, "the probe on \"\" runs here, outside the counted calls")
+            for call in 1...2 {
+                let before = reads()
+                XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["api", "doc"], "call \(call): titles a regex")
+                XCTAssertGreaterThan(reads() - before, 100, "call \(call): slow once, under the total: still searched")
+            }
+            let before = reads()
+            XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["api", "lit"],
+                           "titles as text; the alias still a regex")
+            XCTAssertLessThan(reads() - before, 75, "no regex search of a title")
+            XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex)
+        }
+    }
+
+    /// #1220: Settings' caption searches the live sessions as split does (sidekickTexts). A slow title is no hit and
+    /// leaves the pattern a regex, so the caption and the island agree (the island still takes the title-only match);
+    /// a slow name still flips it and the caption says so in the same words.
+    func testTheCaptionSearchesATitleAsATitle() {
+        let p = ".*-qa1220f$", q = ".*-qa1220g$"
+        Self.withSeams(deadline: 100_000, slowCall: .max, slowTotal: .max) { _ in
+            let list = [Self.session("api", alias: "Agent A", title: Self.longTitle("1220f")),
+                        Self.session("doc", alias: "Agent C", title: "doc-qa1220f")]
+            let caption = AgentIsland.sidekickCaption(p, tabs: true, sessions: list)
+            XCTAssertFalse(caption?.contains("Too slow") == true, caption ?? "nil")
+            XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex)
+            XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["doc"], "the title-only match")
+            let named = AgentIsland.sidekickCaption(q, tabs: true, sessions: [Self.session(Self.longTitle("1220g"))])
+            XCTAssertEqual(named?.components(separatedBy: "\n").first, "Too slow on a session name: matched as text")
+            XCTAssertEqual(AgentIsland.sidekickMatch(q), .slow)
+        }
+    }
+
+    /// #1220: a blocked session the island answers is published as working with its title, so the phone's list frame
+    /// does not drop the key for the length of an auto-answer.
+    func testAnAnsweredSessionKeepsItsTitle() {
+        let s = AgentSession(key: AgentSessionKey(dir: "/d", name: "api"), alias: "A", activity: 5, state: .blocked, agents: 1,
+                             cwd: "/w/a", harness: "web-qa")
+        let w = AgentIslandController.answering(s)
+        XCTAssertEqual(w.state, .working)
+        XCTAssertEqual([w.alias, w.cwd, w.harness], ["A", "/w/a", "web-qa"])
+    }
+
+    // MARK: - #1220: the title on the phone's list frame
+
+    /// listPayload's "harness": only when non-empty, not what the alias already sends, and within maxHarnessBytes.
+    /// Literal table: alias, title, the payload's bytes.
+    func testTheTitleIsOnTheListFrameOnlyWhenTheAliasDoesNotCarryIt() {
+        let cap = DchListRow.maxHarnessBytes
+        let atCap = String(repeating: "x", count: cap), overCap = atCap + "x"
+        func wire(_ alias: String, _ title: String) -> String {
+            String(decoding: DchFrame.listPayload([DchListRow(name: "a", alias: alias, activityEpoch: 1, state: "idle", agents: 0,
+                                                              harness: title)]), as: UTF8.self)
+        }
+        let table: [(alias: String, title: String, wire: String)] = [
+            ("", "web-qa", #"[{"harness":"web-qa","name":"a","state":"idle"}]"#),                  // title only
+            ("A", "web-qa", #"[{"alias":"A","harness":"web-qa","name":"a","state":"idle"}]"#),     // with an alias
+            ("web-qa", "web-qa", #"[{"alias":"web-qa","name":"a","state":"idle"}]"#),              // equal: not twice
+            ("A", "", #"[{"alias":"A","name":"a","state":"idle"}]"#),                              // empty
+            ("A", "\u{41F}\u{440}\u{43E}-\u{1F600}", "[{\"alias\":\"A\",\"harness\":\"\u{41F}\u{440}\u{43E}-\u{1F600}\",\"name\":\"a\",\"state\":\"idle\"}]"),
+            ("A", atCap, #"[{"alias":"A","harness":""# + atCap + #"","name":"a","state":"idle"}]"#), // at the cap
+            ("A", overCap, #"[{"alias":"A","name":"a","state":"idle"}]"#),                          // over it: no key
+        ]
+        for (alias, title, w) in table { XCTAssertEqual(wire(alias, title), w, "\(alias)|\(title.prefix(12))") }
+        // Through parseListJSON: a title folded into an empty alias goes once, as the alias.
+        let json = Data(#"[{"name":"a","alias":"","harness":"web-qa"},{"name":"b","alias":"B","harness":"web-qa"}]"#.utf8)
+        XCTAssertEqual(String(decoding: DchFrame.listPayload(DchCommand.parseListJSON(json)), as: UTF8.self),
+                       #"[{"alias":"web-qa","name":"a"},{"alias":"B","harness":"web-qa","name":"b"}]"#)
+    }
+
+    /// Version skew. An older phone reads name, alias, state, agents and meta by key (prosper-ios decodeList): with the
+    /// key, every other key of the row is the same. An older Mac sends no key: a row without a title is today's bytes.
+    func testTheTitleKeyIsOnlyAddedOnBothSidesOfSkew() {
+        let rows = [DchListRow(name: "a", alias: "A", activityEpoch: 1, state: "working", agents: 2, cwd: "/w/a", harness: "web-qa"),
+                    DchListRow(name: "b", alias: "", activityEpoch: 1, state: "", agents: 0, harness: "notes")]
+        let untitled = rows.map { var r = $0; r.harness = ""; return r }
+        func parsed(_ d: Data) -> [NSDictionary] { ((try? JSONSerialization.jsonObject(with: d)) as? [NSDictionary]) ?? [] }
+        let withKey = parsed(DchFrame.listPayload(rows)).map { d -> NSDictionary in
+            let m = NSMutableDictionary(dictionary: d); m.removeObject(forKey: "harness"); return m
+        }
+        XCTAssertEqual(parsed(DchFrame.listPayload(rows)).compactMap { $0["harness"] as? String }, ["web-qa", "notes"])
+        XCTAssertEqual(withKey, parsed(DchFrame.listPayload(untitled)), "an older phone: the key is extra, nothing else changes")
+        XCTAssertEqual(String(decoding: DchFrame.listPayload(untitled), as: UTF8.self),
+                       #"[{"agents":2,"alias":"A","cwd":"\/w\/a","name":"a","state":"working"},{"name":"b"}]"#,
+                       "no title: the bytes from before #1220")
+    }
+
     /// dch's picker: a pattern regcomp refuses, or one regexec finds in "", is matched as plain text ignoring case.
     /// The island does the same; literal table (pattern, text, expected).
     func testInvalidAndEmptyMatchingPatternsAreMatchedAsText() {

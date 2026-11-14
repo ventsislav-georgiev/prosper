@@ -154,6 +154,11 @@ enum DchFrame {
         let o = rows.map { row -> [String: Any] in
             var o: [String: Any] = ["name": row.name]
             if !row.alias.isEmpty { o["alias"] = row.alias }
+            // #1220: the title on its own, for the phone's Sidekicks split, only when the alias does not already carry
+            // it (an empty alias takes it in parseListJSON) and within parseListJSON's cap. An older phone ignores it.
+            if !row.harness.isEmpty, row.harness != row.alias, row.harness.utf8.count <= DchListRow.maxHarnessBytes {
+                o["harness"] = row.harness
+            }
             if !row.state.isEmpty { o["state"] = row.state }   // working|idle|blocked|done
             if row.agents > 0 { o["agents"] = row.agents }     // live subagents; absent from older dch
             if let cwd = row.wireCwd { o["cwd"] = cwd }        // #877: dch 1.52+, absent when unknown
@@ -1171,7 +1176,7 @@ final class DchWatchHub: @unchecked Sendable {
         guard let sessions, dirs.contains(remote) else { return nil }
         let rows = sessions.filter { $0.key.dir == remote }.sorted { $0.name < $1.name }.map { s in
             DchListRow(name: s.name, alias: s.alias, activityEpoch: Int(s.activity), state: wireState(s.state),
-                       agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version, cwd: s.cwd)
+                       agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version, cwd: s.cwd, harness: s.harness)
         }
         return Cache(dir: remote, rows: rows)
     }

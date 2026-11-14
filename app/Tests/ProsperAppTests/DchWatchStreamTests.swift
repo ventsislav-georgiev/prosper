@@ -138,6 +138,29 @@ final class DchWatchStreamTests: XCTestCase {
         XCTAssertEqual(sink.frames.count, 4)
     }
 
+    /// #1220: a title change is a list change (the phone re-splits on it), one frame, under the same one-a-second
+    /// coalescing; a title equal to the alias is not sent, so setting one is no change.
+    func testATitleChangeIsOneListFrame() {
+        let timers = Timers(), h = hub(timers), sink = Sink()
+        func titled(_ alias: String, _ title: String) -> [AgentSession] {
+            [AgentSession(key: AgentSessionKey(dir: Self.dir, name: "a"), alias: alias, activity: 100, state: .working, agents: 0,
+                          harness: title)]
+        }
+        h.island(Self.cache(titled("A", "")))
+        _ = open(h, sink)
+        timers.advance(to: 5)
+        h.island(Self.cache(titled("A", "web-qa")))
+        XCTAssertEqual(sink.frames.count, 3)
+        XCTAssertEqual((Self.json(sink[2]) as? [[String: Any]])?.first?["harness"] as? String, "web-qa")
+        timers.advance(to: 10)
+        h.island(Self.cache(titled("web-qa", "web-qa")))   // now also the alias: the key goes, the alias changed
+        XCTAssertEqual(sink.frames.count, 4)
+        XCTAssertTrue((Self.json(sink[3]) as? [[String: Any]])?.first?["harness"] == nil)
+        timers.advance(to: 15)
+        h.island(Self.cache(titled("web-qa", "")))          // the title gone while the alias stays: same bytes
+        XCTAssertEqual(sink.frames.count, 4)
+    }
+
     func testSidekickFrameOnPatternChange() {
         let timers = Timers(), value = Value(), h = hub(timers, value), sink = Sink()
         h.island(Self.cache([]))
@@ -279,7 +302,7 @@ final class DchWatchStreamTests: XCTestCase {
         [{"name":"a","alias":"","harness":"claude-a","activity_epoch":5,"state":"working","agents":2,"version":"1.28.0","cwd":"/w/a",
           "meta_epoch":1784995200,"meta":{"tasks":{"done":3,"total":7,"in_progress":1,"queued":2},
           "prs":{"open":[{"url":"https://github.com/o/prosper/pull/12","repo":"o/prosper","num":12,"title":"Fix"}],"merged":4}}},
-         {"name":"b","alias":"Build","activity_epoch":6,"state":"blocked","cwd":null},
+         {"name":"b","alias":"Build","harness":"claude-b","activity_epoch":6,"state":"blocked","cwd":null},
          {"name":"c","activity_epoch":7,"state":"done"},{"name":"d","activity_epoch":8,"state":"idle"}]
         """#
         let island = AgentIsland.list(dirs: [Self.dir]) { args, _ in args == ["--ls-json"] ? Data(out.utf8) : nil }
@@ -290,6 +313,8 @@ final class DchWatchStreamTests: XCTestCase {
         XCTAssertEqual(rows.first?["meta_epoch"] as? Int, 1_784_995_200)
         XCTAssertEqual((rows.first?["meta"] as? [String: Any])?.keys.sorted(), ["prs"], "#772: no tasks key")
         XCTAssertEqual(rows.map { $0["cwd"] as? String }, ["/w/a", nil, nil, nil], "#877: the island carries cwd too")
+        XCTAssertEqual(rows.map { $0["harness"] as? String }, [nil, "claude-b", nil, nil],
+                       "#1220: the island carries the title too; a's is its alias already")
     }
 
     func testCacheOnlyForRemoteTerminalsDir() {

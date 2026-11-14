@@ -1770,11 +1770,16 @@ final class AgentIslandController {
         sessions.map { s in
             guard s.state == .blocked, let a = autoAllow[s.key] else { return s }
             if case .human = a { return s }
-            return AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .working,
-                                agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch,
-                                autoAllowed: s.autoAllowed, claudeSessionID: s.claudeSessionID, transcriptPath: s.transcriptPath,
-                                cwd: s.cwd)
+            return Self.answering(s)
         }
+    }
+
+    /// A blocked session the island is answering, as published: working. Pure, so a row pins the fields it keeps.
+    nonisolated static func answering(_ s: AgentSession) -> AgentSession {
+        AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .working,
+                     agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch,
+                     autoAllowed: s.autoAllowed, claudeSessionID: s.claudeSessionID, transcriptPath: s.transcriptPath,
+                     cwd: s.cwd, harness: s.harness)   // #1220: the phone's list frame carries it
     }
 
     private func publish() {

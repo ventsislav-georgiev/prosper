@@ -946,6 +946,9 @@ tag from the now-released section and put it on the new top draft.
 - A Markdown link whose text starts with "![" but holds no image (for example [![x]](#top)) shows
   its text as a link again instead of "[image: ![x]]", and a picture inside a link now also draws in
   a file that starts with a byte-order mark or holds a NUL byte. (#1222)
+- Agent Island: a session with a very long title no longer switches the Sidekicks pattern to plain-
+  text matching for every session; the title is also sent to Prosper on iPhone, so a later iPhone
+  build can sort sidekicks by it. (#1220)
 
 ## v2.174.0
 
