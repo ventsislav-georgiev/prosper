@@ -187,7 +187,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await fulfillment(of: [kept], timeout: 0.3)
         Preferences.fanManualEnabled = true
         let manualOn = expectation(description: "late engage released with manual on (R1225-1)")
-        FanControlHelper.lateEngageLanded(true, sleeping: false, inFlight: 0, release: { manualOn.fulfill() })
+        FanControlHelper.lateEngageLanded(true, inFlight: 0, release: { manualOn.fulfill() })
         await fulfillment(of: [manualOn], timeout: 1)
     }
 
@@ -200,7 +200,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
         Preferences.fanManualEnabled = false
         let kept = expectation(description: "no release")
         kept.isInverted = true
-        FanControlHelper.lateEngageLanded(true, sleeping: false, inFlight: 1, release: { kept.fulfill() })
+        FanControlHelper.lateEngageLanded(true, inFlight: 1, release: { kept.fulfill() })
         await fulfillment(of: [kept], timeout: 0.3)
     }
 
@@ -243,10 +243,10 @@ final class FanReclaimRecoveryTests: XCTestCase {
         defer { Preferences.fanManualEnabled = previousManualIntent }
         Preferences.fanManualEnabled = true
         let released = expectation(description: "released during sleep")
-        FanControlHelper.lateEngageLanded(true, sleeping: true, inFlight: 0, release: { released.fulfill() })
+        FanControlHelper.lateEngageLanded(true, inFlight: 0, release: { released.fulfill() })
         await fulfillment(of: [released], timeout: 1)
         let awake = expectation(description: "released awake")
-        FanControlHelper.lateEngageLanded(true, sleeping: false, inFlight: 0, release: { awake.fulfill() })
+        FanControlHelper.lateEngageLanded(true, inFlight: 0, release: { awake.fulfill() })
         await fulfillment(of: [awake], timeout: 1)
     }
 

@@ -1066,6 +1066,9 @@ tag from the now-released section and put it on the new top draft.
 - Extensions can now repair a managed config block that was edited by hand after Prosper lost its
   record of it (you see the change and approve it first), and uninstalling an extension no longer
   leaves such a block in your file without a word: it tells you which block and what to do (#1232)
+- Manual fan control now gives the fans back to macOS for good when the helper's replies keep
+  arriving too late three times in a row, instead of re-applying the speed and handing it back over
+  and over (#1234)
 
 ## v2.174.0
 

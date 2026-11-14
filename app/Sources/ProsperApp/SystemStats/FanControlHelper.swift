@@ -389,12 +389,12 @@ enum FanControlHelper {
         // Entry 1234: the method is chosen once, here on main, before the call: the reason method only while the
         // helper said it answers it. A verdict that changes while this engage is in flight does not re-send it.
         let reason: OSAllocatedUnfairLock<Int?>? = helperIdentity == .current ? OSAllocatedUnfairLock(initialState: nil) : nil
-        let late: @Sendable (Bool) -> Void = { ok in Task { @MainActor in lateEngageLanded(ok) } }
+        let late: @Sendable (Bool) -> Void = { ok in Task { @MainActor in lateReplyLanded(ok) } }
         switch await callReply(c, timeout: timeout, late: late, { proxy, done in
             if let reason { proxy.setFanManualRPMWithReason(index, rpm: rpm) { code in reason.withLock { $0 = code }; done(code == 0) } }
             else { proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }
         }) {
-        case true?: return .engaged
+        case true?: lateLandings = 0; return .engaged   // R1230-2: landed in time
         case false?:
             lastRefusedFan = index
             // Entry 1234: the helper's own reason, with no speed read (no code kept reads -1)...
@@ -461,7 +461,10 @@ enum FanControlHelper {
             let reply = await engage(i, rpm)
             guard landed(generation) else { return nil }
             // Entry 1234: the helper's own settling too: as a pending preset the recovery would re-apply it, where
-            // today's write failure saves nothing (only more hand-back wins over the reason).
+            // today's write failure saves nothing (only more hand-back wins over the reason). N1234-a: the slider
+            // commit (FanCommit.decide) keeps keepNew(.settlingReported) because there it replaces keepPrevious, which
+            // saves and re-applies the previous targets just the same (equal hand-back); a click has no previous intent
+            // to keep, so here the choice is a preset or nothing, and nothing hands back more.
             guard reply == .engaged else { return reply == .settlingReported ? .writeFailed : reply.afterAnAccept }
         }
         return .engaged
@@ -559,12 +562,27 @@ enum FanControlHelper {
     /// R1225-1: with manual on and awake too: the pin may have come after both timeouts and after the reset
     /// that followed them; the release is a reset without teardown and the recovery re-applies the saved targets.
     /// Held while another engage is in flight, like the popup late path: it owns the fans (#282).
-    /// `sleeping` is kept for the callers' and rows' signature; no case depends on it now.
     static func lateEngageLanded(_ engaged: Bool,
-                                 sleeping: Bool = Self.sleeping,
                                  inFlight: Int = Self.engagesInFlight,
                                  release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) {
         if engaged, inFlight == 0 { Task { await release() } }
+    }
+
+    /// R1230-2: late pins of `setManualReply` released in a row, with no engage landing in time between.
+    static var lateLandings = 0
+    static let lateLandingLimit = 3
+
+    /// R1230-2: `setManualReply`'s late hook. With manual on, a helper whose replies always come after the ceiling
+    /// would pin, be handed back and be re-applied by the recovery every cooldown, for good: the third released
+    /// late pin in a row also turns manual intent off (as the recovery's abandon), so the release tears down and
+    /// nothing re-applies. A held pin (an engage in flight) does not count; an engage that lands in time clears it.
+    static func lateReplyLanded(_ engaged: Bool, inFlight: Int = Self.engagesInFlight,
+                                release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) {
+        if engaged, inFlight == 0 {
+            lateLandings += 1
+            if lateLandings >= lateLandingLimit { lateLandings = 0; Preferences.fanManualEnabled = false }
+        }
+        lateEngageLanded(engaged, inFlight: inFlight, release: release)
     }
 
     /// Reset every fan; tear down only with manual off. With manual on (a release while
