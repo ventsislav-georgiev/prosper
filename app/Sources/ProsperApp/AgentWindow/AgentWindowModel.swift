@@ -167,8 +167,8 @@ enum AgentSidebar {
 @MainActor
 final class AgentWindowModel: ObservableObject {
     @Published private(set) var sections: [AgentSidebar.Section] = []
-    /// #831 A2 (spec 3.5): a view of the focused pane's target by the RAW mapping (never through resolve in phase A),
-    /// written only by `layout`'s didSet. Stored so `$selection` publishes one change per change, as before.
+    /// #831 B1 (spec 3.5): the focused pane's RESOLVED content as a row (`.live` -> .live(k), `.history` -> .history(id),
+    /// anything else nil), written only by `settle()`. Stored so `$selection` publishes one change per change.
     @Published private(set) var selection: AgentSidebar.RowID?
     /// #831 A2: the window's one layout, in memory: the store is neither loaded nor saved before phase B1, so nothing
     /// is restored on open and the first-row pick holds. Every selection change goes into its focused pane through
@@ -176,8 +176,7 @@ final class AgentWindowModel: ObservableObject {
     private(set) var layout = PaneLayout.single() {
         didSet {
             lastLive = AgentPaneLayout.retargeted(lastLive, from: oldValue, to: layout)
-            let s = Self.rowID(layout.panes.first { $0.id == layout.focused }?.target)
-            if s != selection { selection = s }
+            settle()
         }
     }
     /// #831 A2 (4.1a): the panes' last live sights, stamped by `stampLastLive` in the store's publish sink only.
@@ -255,17 +254,16 @@ final class AgentWindowModel: ObservableObject {
     @Published private(set) var confirming: AgentWindowConfirm?
     /// QA #665 INFO-6: an answer a gate refused since the question; dropped by a selection change or the next ask.
     @Published private(set) var refusal: AgentWindowRefusal?
-    /// #829 G2: a Stop or Kill the window started: once its live row is gone and a History
-    /// record of that key ended since, that row is selected. One-shot; any manual selection drops it.
-    private(set) var following: (key: AgentSessionKey, at: TimeInterval)? {
-        didSet { if following == nil { held = nil; heldSince = nil } }
-    }
-    /// QA #665 INFO-8: the followed session's last live row. Its row gone before its record lands,
-    /// the selection stays on it (the pane keeps showing it) until the record lands or the bound passes.
-    /// QA #668 F1: display only (nothing opens, sends or asks on it), and for `recordSlack` at most.
-    private var held: AgentSidebar.Row?
-    /// When the followed session's live row was first seen gone (the hold's start).
-    private var heldSince: TimeInterval?
+    /// #831 B1 (4.4 M1, replaces #829 G2's hold): the focused pane's session ended while its transcript ran: the pane
+    /// keeps that session's last live row and its blocks (the transcript suspended), display only, until resolve
+    /// first gives its own record (one swap), a new session takes the name, or the pane is retargeted or closed.
+    private(set) var ended: (target: PaneTarget, row: AgentSidebar.Row)?
+    /// The focused pane's live row as of the last resolve: what `ended` keeps when the session goes.
+    private var liveRow: AgentSidebar.Row?
+    /// The focused pane's content as of the last resolve.
+    private(set) var content: PaneContent?
+    /// The values of the publish being handled: the store's @Published still hold the old ones inside the sink.
+    private var publishing: (sessions: [AgentSession], history: [DchHistoryRecord])?
     /// dch writes a record each minute: a Stop or Kill's record has ended by then, with slack.
     static let recordSlack: TimeInterval = AgentPaneLayout.recordSlack
     /// #829 G8: a record the window removed (its id): once its row is gone, the next History row
@@ -279,11 +277,10 @@ final class AgentWindowModel: ObservableObject {
 
     init() {
         terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
-        // OQ-66: an OSC 52 write needs the session to be this window's live selection (not a held, ended row).
-        terminal.isSelected = { [weak self] key in
-            guard let self else { return false }
-            return self.selection == .live(key) && !self.selectionIsHeld
-        }
+        // OQ-66: an OSC 52 write needs the session to be the focused pane's, live now (4.3: resolved at the write).
+        terminal.isSelected = { [weak self] key in self?.focusedLive?.key == key }
+        // #831 B1 (4.3): every interaction action re-resolves the focused pane (main actor: called from its actions).
+        interaction.resolveFocused = { [weak self] in self?.focusedLive }
         // #798: the transcript's pending AskUserQuestion is what a question form is checked against.
         askSubscription = transcript.$pendingAsk.sink { [weak self] ask in
             MainActor.assumeIsolated { self?.interaction.ask = ask }
@@ -367,20 +364,19 @@ final class AgentWindowModel: ObservableObject {
         let new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
                                         details: details, now: now(), actions: actions)
         let old = sections
-        if let f = following, let r = new.lazy.flatMap(\.rows).first(where: { $0.id == .live(f.key) }) { held = r }
+        publishing = (sessions, history)
+        defer { publishing = nil }
         if new != sections { sections = new }
-        // The selected row gone (the session ended): nothing selected, nothing tailing; #829 G2:
-        // unless it is followed to its History row (straight there, never through nothing; held
-        // on the ended session until then). G8: a removed record's row hands on to its neighbour.
-        if !followToHistory() {
-            if case .history(let id)? = selection, id == removing, row(.history(id)) == nil {
-                removing = nil
-                select(Self.neighbour(of: id, old: old, new: new), manual: false)
-            } else if selection != nil, selectedRow == nil {
-                select(nil, manual: false)
-            } else {
-                follow()
-            }
+        // #831 B1 (4.3): the focused pane re-resolved on every publish. A session that ended stays Ended (4.4) and
+        // swaps once to its own record (4.5: G2 subsumed). G8: a removed record's pane hands on to its neighbour
+        // before the selection is written (never through nothing). `selection` is still the last resolve's here, so a
+        // `.session` pane showing its own record (4.5) hands on too.
+        if case .history(let id)? = selection, id == removing, row(.history(id)) == nil {
+            removing = nil
+            select(Self.neighbour(of: id, old: old, new: new), manual: false)
+        } else {
+            settle()
+            follow()
         }
         if confirming != nil, confirmingSession == nil, confirmingRecord == nil { confirming = nil }
         if let k = renaming, !sessions.contains(where: { $0.key == k }) { renameEdit = nil }   // it ended: no field
@@ -398,10 +394,66 @@ final class AgentWindowModel: ObservableObject {
 
     var rows: [AgentSidebar.Row] { sections.flatMap(\.rows) }
     func row(_ id: AgentSidebar.RowID) -> AgentSidebar.Row? { rows.first { $0.id == id } }
-    /// QA #665 INFO-8: a followed session whose row left reads as its last row until its record lands.
-    var selectedRow: AgentSidebar.Row? { selection.flatMap { row($0) ?? (held?.id == $0 ? held : nil) } }
-    /// QA #668 F1: the selection resolves only through the hold: the session ended, so its pane is display-only.
-    var selectionIsHeld: Bool { selection.map { row($0) == nil && held?.id == $0 } ?? false }
+    /// The focused pane's row: its Ended session's last live row (4.4), else the selection's row.
+    var selectedRow: AgentSidebar.Row? { ended?.row ?? selection.flatMap { row($0) } }
+    /// #831 B1 (4.4): the focused pane is Ended (kept blocks, display only: nothing opens, sends or asks on it).
+    var focusedEnded: Bool { ended != nil }
+
+    var focusedTarget: PaneTarget? { layout.panes.first { $0.id == layout.focused }?.target }
+
+    /// 4.1 on the focused pane, against the publish being handled, else the store as it is now. No store: nil.
+    private func focusedContent() -> PaneContent? {
+        guard let t = focusedTarget,
+              let v = publishing ?? store.map({ (sessions: $0.sessions, history: $0.history) }) else { return nil }
+        return AgentPaneLayout.resolve(t, sessions: v.sessions, history: v.history,
+                                       lastLive: lastLive[AgentPaneLayout.PaneSlot(layout: layout.id, pane: layout.focused)])
+    }
+
+    /// 4.3: the focused pane resolved now; its session only when `.live` (an ended, removed or empty pane: nil).
+    var focusedLive: AgentSession? {
+        guard !closed, case .live(let s)? = focusedContent() else { return nil }
+        return s
+    }
+
+    /// 3.5 (B1): a content's sidebar row.
+    nonisolated static func resolvedRow(_ c: PaneContent?) -> AgentSidebar.RowID? {
+        switch c {
+        case let .live(s)?: .live(s.key)
+        case let .history(r)?: .history(r.id)
+        case .notRunning?, .removed?, nil: nil
+        }
+    }
+
+    /// #831 B1: re-resolves the focused pane and writes `content`, `ended` and `selection`. Ended (M1) is entered only
+    /// on a `.live` -> `.notRunning` edge of the same target while the transcript runs (visible): a session that
+    /// ended while hidden had its blocks freed, so it shows nothing kept. Any other content or target drops the kept
+    /// blocks (`drop()`), so a name reuse never runs `start()` on them (4.4 (b)). No store: the raw mapping (3.5 A).
+    private func settle() {
+        let t = focusedTarget, was = content
+        let c = store == nil ? nil : focusedContent()
+        if case .live(let s)? = c { liveRow = row(.live(s.key)) }
+        if case .notRunning? = c, case .live? = was, ended == nil, visible, transcript.running,
+           let t, let r = liveRow, r.id == Self.rowID(t) {
+            ended = (t, r)
+        } else if let e = ended {
+            var stays = false
+            if case .notRunning? = c { stays = e.target == t }
+            if !stays {
+                ended = nil
+                transcript.drop()   // the one swap, a name reuse, a retarget: the kept model goes (4.4 (b), (e))
+            }
+        }
+        content = c
+        let s = store == nil ? Self.rowID(t) : Self.resolvedRow(c)
+        // Any change of row drops the confirm strip's question, a refusal and the rename field (R5), as a
+        // `select()` did before B1 for the publish-driven changes too (an end, the swap to History).
+        if s != selection {
+            selection = s
+            confirming = nil
+            refusal = nil
+            renameEdit = nil
+        }
+    }
 
     /// G8: the History row after `id` in `old` that is still there, else the one before, else the
     /// first History row left; nil when History is empty.
@@ -449,19 +501,14 @@ final class AgentWindowModel: ObservableObject {
     /// Any change of row drops the confirm strip's question (R5).
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true) {
-        if manual { following = nil; removing = nil; pendingSpawn = nil; newSession = nil }
-        let was = selection
+        if manual { removing = nil; pendingSpawn = nil; newSession = nil }
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
-        // pick replaces its target (or swaps it for the name's own record, #580), so `selection` becomes `id`.
+        // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
+        // `settle()` drops the strip's question on a change of row.
         let next = id.map { layout.show(target($0), placement: .focused, minimum: PaneLayout.minimumPane, in: .zero,
                                         splitsEnabled: AgentPaneLayout.splitsEnabled) }
             ?? layout.replace(layout.focused, target: nil)
         if case let .success(l) = next { layout = l }
-        if selection != was {
-            confirming = nil
-            refusal = nil
-            renameEdit = nil
-        }
         follow()
     }
 
@@ -477,7 +524,7 @@ final class AgentWindowModel: ObservableObject {
     @discardableResult
     func focusSelection() -> Bool {
         // #887 (QA #747 INFO-4): the New session form covers the pane, so its session takes no input meanwhile.
-        guard renaming == nil, newSession == nil, !selectionIsHeld, selectedRow?.session != nil else { return false }
+        guard renaming == nil, newSession == nil, !focusedEnded, selectedRow?.session != nil else { return false }
         if paneMode == .terminal { terminal.focus() } else { interaction.focusComposer() }
         return true
     }
@@ -527,7 +574,7 @@ final class AgentWindowModel: ObservableObject {
     /// session's held row (`dch -n <name>` would start a new session of that name).
     @discardableResult
     func openSelected() -> Bool {
-        guard !selectionIsHeld, let s = selectedRow?.session else { return false }
+        guard let s = focusedLive else { return false }   // 4.3: resolved now; only `.live` opens (never `dch -n`)
         openSession(s)
         return true
     }
@@ -543,12 +590,12 @@ final class AgentWindowModel: ObservableObject {
     /// The detail pane's mode: a row with nothing to attach (History, an ended session's held row,
     /// none) is Transcript and remembers nothing, so no terminal card shows where no terminal can be.
     var paneMode: AgentPaneMode {
-        guard !selectionIsHeld, let s = selectedRow?.session else { return .transcript }
+        guard !focusedEnded, let s = selectedRow?.session else { return .transcript }
         return mode(s)
     }
 
     func setMode(_ m: AgentPaneMode, for s: AgentSession) {
-        guard !(selectionIsHeld && selection == .live(s.key)) else { return }   // ended: nothing to remember
+        guard ended?.row.id != .live(s.key) else { return }   // ended: nothing to remember
         let k = Self.terminalKey(s.key)
         var keys = transcriptKeys.filter { $0 != k }
         if m == .transcript { keys.insert(k, at: 0) }
@@ -565,7 +612,7 @@ final class AgentWindowModel: ObservableObject {
     /// ⌘T and the header toggle: the selected live session's other mode. False: nothing to toggle.
     @discardableResult
     func toggleMode() -> Bool {
-        guard !selectionIsHeld, let s = selectedRow?.session else { return false }
+        guard !focusedEnded, let s = selectedRow?.session else { return false }
         setMode(mode(s) == .terminal ? .transcript : .terminal, for: s)
         return true
     }
@@ -650,7 +697,7 @@ final class AgentWindowModel: ObservableObject {
 
     var newSessionDefaultFolder: String {
         if let last = Preferences.agentWindowNewSessionFolder, folderExists(last) { return last }
-        if !selectionIsHeld, selectedRow?.session != nil, let cwd = transcript.cwd, folderExists(cwd) { return cwd }
+        if !focusedEnded, selectedRow?.session != nil, let cwd = transcript.cwd, folderExists(cwd) { return cwd }
         return home
     }
 
@@ -831,7 +878,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// A header "⋯" or row context-menu item: selects the row first (R6), then asks.
     func ask(_ verb: AgentWindowVerb, _ s: AgentSession) {
-        if selectionIsHeld, selection == .live(s.key) { return }   // QA #668 F1: it ended, nothing to ask
+        if ended?.row.id == .live(s.key) { return }   // QA #668 F1, 4.4 (d): it ended, nothing to ask
         select(.live(s.key))
         refusal = nil
         renameEdit = nil
@@ -917,39 +964,14 @@ final class AgentWindowModel: ObservableObject {
         }
         switch c.verb {
         case .restart: _ = restartSession(s)
-        case .stop: if stopSession(s) { startFollowing(s) }
-        case .kill: if killSession(s) { startFollowing(s) }
+        case .stop: _ = stopSession(s)   // #831 B1: the pane goes Ended, then its record by resolve (4.5)
+        case .kill: _ = killSession(s)
         case .resume, .resumeNoMessage, .pin, .remove, .rename: break
         }
     }
 
-    private func startFollowing(_ s: AgentSession) {
-        following = (s.key, now())
-        held = row(.live(s.key))
-    }
-
     /// The refusal for the row `id`, if any.
     func refusalText(_ id: AgentSidebar.RowID) -> String? { refusal?.id == id ? refusal?.text : nil }
-
-    /// G2: the followed session's live row is gone and a History record of its key ended
-    /// since the Stop or Kill (dch writes a record each minute: 65 s of slack): select it.
-    /// Dropped after the Stop's bound. QA #668 F1: no record `recordSlack` after the row left (history
-    /// off, a failed record write): the hold lets go and nothing is selected.
-    private func followToHistory() -> Bool {
-        guard let f = following else { return false }
-        if now() - f.at > DchActionRunner.restartBound { following = nil; return false }
-        guard row(.live(f.key)) == nil else { return false }
-        guard let h = rows.first(where: { $0.record?.key == f.key && ($0.record?.lastSeen ?? 0) >= f.at - Self.recordSlack })
-        else {
-            let since = heldSince ?? now()
-            heldSince = since
-            if now() - since > Self.recordSlack { following = nil }
-            return false
-        }
-        following = nil
-        select(h.id, manual: false)
-        return true
-    }
 
     func setVisible(_ v: Bool) {
         guard !closed, v != visible else { return }
@@ -982,14 +1004,19 @@ final class AgentWindowModel: ObservableObject {
         terminal.attach(nil)
     }
 
-    /// The transcript model follows the selection: a visible live session runs, any
-    /// other state is stopped (one model, so at most one transcript is ever tailed).
-    /// #822: the terminal attaches to a visible, selected, live (not held) session in Terminal
-    /// mode and detaches on anything else. The transcript runs in both modes: the header's cwd and
-    /// todos come from it, so a toggle never changes the header.
+    /// The transcript model follows the focused pane: a visible `.live` session runs, an Ended pane keeps its blocks
+    /// suspended (4.4 (c): no IO, hidden or shown), any other state is stopped (one model: at most one tail).
+    /// #822: the terminal attaches to a visible, focused, live session in Terminal mode and detaches on anything else.
+    /// The transcript runs in both modes: the header's cwd and todos come from it, so a toggle never changes the header.
     private func follow() {
-        guard visible, !closed, let s = selectedRow?.session else {
-            if transcript.running { transcript.stop() }
+        if ended != nil, !closed {
+            transcript.suspend()
+            interaction.follow(nil)   // 4.4 (d): nothing on an ended pane takes input
+            terminal.attach(nil)
+            return
+        }
+        guard visible, !closed, case .live(let s)? = content else {
+            if transcript.running || transcript.suspended { transcript.stop() }
             interaction.follow(nil)
             terminal.attach(nil)
             return
@@ -999,9 +1026,9 @@ final class AgentWindowModel: ObservableObject {
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
         interaction.plan = transcript.pendingPlan
         let terminalMode = paneMode == .terminal
-        // QA #668 F1: an ended session takes no input; #822: Terminal mode has no input box (the terminal is the input).
-        interaction.follow(selectionIsHeld || terminalMode ? nil : s)
-        // paneMode is Transcript for a held row; #847: the New session form covers the pane, so no terminal under it.
+        // #822: Terminal mode has no input box (the terminal is the input).
+        interaction.follow(terminalMode ? nil : s)
+        // #847: the New session form covers the pane, so no terminal under it.
         terminal.attach(terminalMode && newSession == nil ? s.key : nil)
     }
 }

@@ -140,14 +140,15 @@ extension AgentWindowD1Tests {
             m.select(.live(a.key))
             XCTAssertEqual(m.paneMode, .terminal)
             XCTAssertEqual(t.spawned().count, 2)
-            // Stopped from the window: the row goes before its record, the selection is held (QA #668 F1).
+            // Stopped from the window: the row goes before its record, the pane is Ended (#831 B1, rewrite 10).
             m.ask(.stop, a)
             m.confirm(true)
             st.sessions = [b]
-            XCTAssertTrue(m.selectionIsHeld)
+            XCTAssertTrue(m.focusedEnded)
+            XCTAssertNil(m.selection)
             XCTAssertEqual(m.paneMode, .transcript, "ended: Transcript, no terminal card")
             XCTAssertEqual(m.mode(a), .terminal, "the session's own choice is untouched")
-            XCTAssertEqual(t.children().last?.terminated, 1, "held: the client goes")
+            XCTAssertEqual(t.children().last?.terminated, 1, "Ended: the client goes")
             XCTAssertFalse(m.toggleMode(), "ended: nothing to toggle")
             m.setMode(.transcript, for: a)
             XCTAssertNil(Preferences.defaults.stringArray(forKey: Self.modePref), "ended: nothing remembered")
@@ -173,11 +174,13 @@ extension AgentWindowD1Tests {
                 }
             }
             XCTAssertFalse(m.terminal.isSelected(a.key), "OQ-66: a held (ended) row is no selection a write can use")
-            // The session gone with no hold: the selection clears, Transcript (the empty state).
+            // Any session that ends in the pane: Ended (no highlight), Transcript, nothing attached.
             m.select(.live(b.key))
             st.sessions = []
             XCTAssertNil(m.selection)
+            XCTAssertTrue(m.focusedEnded)
             XCTAssertEqual(m.paneMode, .transcript)
+            XCTAssertFalse(m.toggleMode())
         }
     }
 
@@ -220,6 +223,8 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(t.spawned().count, 4, "a refresh or the same selection does not reattach")
             st.sessions = [two]
             XCTAssertNil(m.selection)
+            XCTAssertTrue(m.focusedEnded, "#831 B1, rewrite 15: Ended, transcript suspended, nothing attached")
+            XCTAssertFalse(m.transcript.running)
             XCTAssertEqual(terminated(), [1, 1, 1, 1], "the session ended: detached")
             m.select(.live(two.key))
             XCTAssertEqual(m.toggleMode(), true, "two: Transcript to Terminal")

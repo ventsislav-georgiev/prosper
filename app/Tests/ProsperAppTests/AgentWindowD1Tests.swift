@@ -223,7 +223,7 @@ final class AgentWindowD1Tests: XCTestCase {
         XCTAssertEqual(t.blocks.count, 1)
 
         m.move(1)
-        XCTAssertTrue(m.transcript === t, "one model, rebound")
+        XCTAssertTrue(m.transcript === t, "one model, rebound (step 1 keeps the one model; step 2 restates it per pane)")
         XCTAssertEqual(t.source?.key.name, "b")
         XCTAssertEqual(t.tail?.path, b.path)
         guard case .assistant(let c) = t.blocks.first?.body else { return XCTFail("\(t.blocks)") }
@@ -239,11 +239,14 @@ final class AgentWindowD1Tests: XCTestCase {
         m.move(-2)
         XCTAssertEqual(t.tail?.path, a.path)
         XCTAssertTrue(t.running)
-        // The selected session ends: its row goes, nothing stays tailed. QA #626 INFO-4:
-        // nothing is selected (the hint), never another conversation.
+        // The selected session ends: its row goes, nothing stays tailed. QA #626 INFO-4: never another
+        // conversation. #831 B1, rewrite 11: the pane is Ended (4.4), its blocks kept, the transcript suspended.
         st.sessions = [session("b", .idle, ago: 50, path: b.path)]
-        XCTAssertNil(m.selection, "the ended row leaves nothing selected")
+        XCTAssertNil(m.selection, "the ended row leaves nothing highlighted")
+        XCTAssertTrue(m.focusedEnded)
         XCTAssertFalse(t.running)
+        XCTAssertTrue(t.suspended, "M1: suspended, not stopped")
+        XCTAssertEqual(t.blocks.count, 1, "M1: the blocks it was showing stay")
         st.sessions = [session("b", .idle, ago: 40, path: b.path), session("c", .idle, ago: 30)]
         XCTAssertNil(m.selection, "only the window's first fill picks the first row")
         m.select(.live(AgentSessionKey(dir: "/tmp/dch-test", name: "b")))

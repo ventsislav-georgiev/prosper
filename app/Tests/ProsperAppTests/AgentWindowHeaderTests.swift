@@ -654,7 +654,7 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// QA 845 INFO-1, guard 3 (AgentDetailView.overTop passes `ended: model.selectionIsHeld` to the notice line): a
+    /// QA 845 INFO-1, guard 3 (AgentDetailView.overTop passes `ended: model.focusedEnded` to the notice line): a
     /// held (ended) session's notice that names Open in terminal draws its button off; a live session's on. The pane's
     /// own overTop, hosted alone; the Stop is a recorder (nothing reaches dch).
     @MainActor
@@ -670,7 +670,7 @@ extension AgentWindowD1Tests {
             held.ask(.stop, a)
             held.confirm(true)
             st.sessions = [session("b", .idle)]
-            XCTAssertTrue(held.selectionIsHeld)
+            XCTAssertTrue(held.focusedEnded)   // #831 B1, rewrite 6: the Ended state, by resolve (rewrites-B1)
             let liveStore = store([session("a", .idle), session("b", .idle)])
             liveStore.controlDch = bin([1, 38, 0])
             let live = windowModel(liveStore)
@@ -678,7 +678,7 @@ extension AgentWindowD1Tests {
             live.setVisible(true)
             defer { live.close() }
             live.select(.live(a.key))
-            XCTAssertFalse(live.selectionIsHeld)
+            XCTAssertFalse(live.focusedEnded)
             let restoreAX = headerAXOn()
             defer { restoreAX() }
             for (m, s, ended) in [(live, liveStore, false), (held, st, true)] {

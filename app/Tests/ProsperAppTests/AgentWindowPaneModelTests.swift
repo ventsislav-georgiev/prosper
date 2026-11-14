@@ -9,16 +9,24 @@ import XCTest
 extension AgentWindowD1Tests {
     func paneKey(_ name: String) -> AgentSessionKey { AgentSessionKey(dir: "/tmp/dch-test", name: name) }
 
-    /// 3.5 phase A: one pane, focused, and `selection` is its target's row by the raw mapping.
+    /// 3.5 from phase B1 (#831 B1 step 1; was the phase A raw mapping): one pane, focused, and `selection` is the row
+    /// of its target resolved against the store now (`.live` and `.history` give their rows, anything else nil),
+    /// computed here independently of the model's own last resolve. No store: the raw mapping.
     @MainActor
     func assertSelectionIsTheFocusedPane(_ m: AgentWindowModel, _ why: String, line: UInt = #line) {
-        XCTAssertEqual(m.layout.panes.count, 1, "phase A: one pane (\(why))", line: line)
+        XCTAssertEqual(m.layout.panes.count, 1, "one pane (\(why))", line: line)
         XCTAssertEqual(m.layout.panes.first?.id, m.layout.focused, why, line: line)
-        XCTAssertEqual(m.selection, AgentWindowModel.rowID(m.layout.panes.first?.target), why, line: line)
+        let target = m.layout.panes.first?.target
+        guard let st = m.store, let t = target else {
+            return XCTAssertEqual(m.selection, AgentWindowModel.rowID(target), why, line: line)
+        }
+        let c = AgentPaneLayout.resolve(t, sessions: st.sessions, history: st.history,
+                                        lastLive: m.lastLive[AgentPaneLayout.PaneSlot(layout: m.layout.id, pane: m.layout.focused)])
+        XCTAssertEqual(m.selection, AgentWindowModel.resolvedRow(c), why, line: line)
     }
 
     @MainActor
-    func testAgentWindowPaneSelectionIsTheFocusedPanesTargetByTheRawMapping() throws {
+    func testAgentWindowPaneSelectionIsTheFocusedPanesResolvedTarget() throws {
         let old = record("old", ago: 7200)
         let st = store([session("api", .idle), session("web", .idle)], history: [old])
         let m = windowModel(st)
@@ -41,7 +49,10 @@ extension AgentWindowD1Tests {
         m.select(.live(paneKey("api")))
         st.sessions = [session("web", .idle)]
         assertSelectionIsTheFocusedPane(m, "the selected session ended")
-        XCTAssertTrue(m.selection == nil, "today's rule: nothing")
+        XCTAssertTrue(m.selection == nil, "nothing live to highlight")
+        XCTAssertEqual(m.layout.panes.first?.target, .session(dir: "/tmp/dch-test", name: "api"),
+                       "B1 (4.4): the pane keeps its target, Ended; resolve never retargets")
+        XCTAssertTrue(m.focusedEnded)
         m.select(.live(paneKey("web")))
         m.bind(nil)
         assertSelectionIsTheFocusedPane(m, "the island off")
@@ -51,8 +62,10 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(Preferences.defaults.object(forKey: "agentWindowLayouts") == nil, "B1 loads and saves; A2 neither")
     }
 
-    /// G2 (follow-to-History) and G8 (a removal hands on) pick through the same pane: the followed session's pane
-    /// swaps in place to the name's own record (#580), never through nothing.
+    /// G2 (follow-to-History) and G8 (a removal hands on) pick through the same pane. #831 B1 step 1 (rewritten:
+    /// spec 3.5 retires the raw mapping in B1, so this A2 row was not on rewrites-B1.txt): the ended session's pane
+    /// keeps its `.session` target and resolves to the name's own record (4.5), never through the empty pane;
+    /// removing that record from its card hands on (G8, 4.5).
     @MainActor
     func testAgentWindowPaneFollowAndRemovalGoThroughTheFocusedPane() throws {
         let st = store([session("a", .idle), session("b", .idle)],
@@ -65,24 +78,35 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         let a = try XCTUnwrap(st.sessions.first { $0.name == "a" }), b = try XCTUnwrap(st.sessions.first { $0.name == "b" })
         m.select(.live(a.key))
+        st.sessions = [a, b]   // a poll while a shows: its last live sight (4.1a)
         let pane = try XCTUnwrap(m.layout.panes.first?.id)
         m.ask(.stop, a)
         m.confirm(true)
         st.sessions = [b]
-        XCTAssertEqual(m.layout.panes.first?.target, .session(dir: "/tmp/dch-test", name: "a"), "held: the pane keeps it")
-        assertSelectionIsTheFocusedPane(m, "held")
+        XCTAssertEqual(m.layout.panes.first?.target, .session(dir: "/tmp/dch-test", name: "a"), "Ended: the pane keeps it")
+        assertSelectionIsTheFocusedPane(m, "Ended")
+        XCTAssertTrue(m.focusedEnded)
         st.history = [record("a", ago: 0), record("h1", ago: 100), record("h2", ago: 200)]
-        XCTAssertEqual(m.selection, .history(a.key), "G2: followed")
-        assertSelectionIsTheFocusedPane(m, "G2")
+        XCTAssertEqual(m.selection, .history(a.key), "4.5: its own record")
+        assertSelectionIsTheFocusedPane(m, "the swap")
+        XCTAssertEqual(m.layout.panes.first?.id, pane, "the same pane")
+        XCTAssertEqual(m.layout.panes.first?.target, .session(dir: "/tmp/dch-test", name: "a"), "resolve never retargets")
+
+        // G8 from that pane's History card (act() picks the record's row first: the pane swaps to it in place, #580):
+        // the next History row, never the empty pane.
+        m.act(.remove, record("a", ago: 0))
         XCTAssertEqual(m.layout.panes.first?.id, pane, "in place (#580)")
-        guard case .history(_, "a", let seen?)? = m.layout.panes.first?.target else { return XCTFail("the record, with seen") }
-        XCTAssertEqual(seen, m.row(.history(a.key))?.record?.lastSeen)
+        m.confirm(true)
+        st.history = [record("h1", ago: 100), record("h2", ago: 200)]
+        XCTAssertEqual(m.selection, .history(paneKey("h1")), "G8: the next History row")
+        assertSelectionIsTheFocusedPane(m, "G8 from the swapped pane")
+        XCTAssertEqual(m.layout.panes.first?.id, pane)
 
         let h1 = record("h1", ago: 100)
         m.select(.history(h1.id))
         m.act(.remove, h1)
         m.confirm(true)
-        st.history = [record("a", ago: 0), record("h2", ago: 200)]
+        st.history = [record("h2", ago: 200)]
         XCTAssertEqual(m.selection, .history(paneKey("h2")), "G8: the next History row")
         assertSelectionIsTheFocusedPane(m, "G8")
         XCTAssertEqual(m.layout.panes.first?.id, pane)

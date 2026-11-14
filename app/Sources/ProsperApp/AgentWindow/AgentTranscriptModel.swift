@@ -419,6 +419,8 @@ final class AgentTranscriptModel: ObservableObject {
 
     private(set) var source: AgentTranscriptSource?
     private(set) var running = false
+    /// #831 B1 (11.2): stopped by `suspend()` with the blocks and the tail offset kept; the next `start()` catches up.
+    private(set) var suspended = false
     private(set) var tail: TranscriptTail?
     private(set) var assembler = TranscriptAssembler()
     private var watch: AnyObject?
@@ -493,7 +495,8 @@ final class AgentTranscriptModel: ObservableObject {
     func start() {
         guard !running else { return }
         running = true
-        if let path = tail?.path { open(path) }
+        // #831 B1 (11.2): after `suspend()`, one catch-up poll from the kept offset, never the last-page re-read.
+        if suspended { suspended = false; poll() } else if let path = tail?.path { open(path) }
         timer = Timer.scheduledTimer(withTimeInterval: tickInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -504,6 +507,7 @@ final class AgentTranscriptModel: ObservableObject {
     /// still in flight is dropped when it lands.
     func stop() {
         running = false
+        suspended = false
         timer?.invalidate()
         timer = nil
         watch = nil
@@ -511,6 +515,30 @@ final class AgentTranscriptModel: ObservableObject {
         assembler = fresh()
         bump()
         publish()
+    }
+
+    /// #831 B1 (11.2, 4.4 M1): the watch and the timer stop and the blocks and the tail offset stay (an Ended pane's
+    /// kept blocks, a zoomed-away pane). No IO until `start()`; `stop()` frees them as before. A read in flight lands.
+    func suspend() {
+        guard running else { return }
+        running = false
+        suspended = true
+        timer?.invalidate()
+        timer = nil
+        watch = nil
+        syncAsk()   // not running: no pending ask or plan (nothing answers an ended pane)
+    }
+
+    /// #831 B1 (4.4 (b)): an Ended pane's kept model goes: stopped and forgotten (no tail, no source), so the next
+    /// session under the name starts fresh even before dch maps its transcript (no `start()` on the kept tail).
+    func drop() {
+        stop()
+        close()
+        source = nil
+        nullSince = nil   // as a change of session in `update(_:)`
+        showAnyway = false
+        todosOpen = false
+        evaluate()
     }
 
     /// Timer / test hook: catch up on the file and re-check null grace and staleness.
@@ -675,6 +703,7 @@ final class AgentTranscriptModel: ObservableObject {
 
     private func open(_ path: String) {
         bump()
+        suspended = false
         assembler = fresh()
         tail = TranscriptTail(path: path, pageBytes: pageBytes)
         missing = false
@@ -686,6 +715,7 @@ final class AgentTranscriptModel: ObservableObject {
 
     private func close() {
         bump()
+        suspended = false
         tail = nil
         watch = nil
         missing = false

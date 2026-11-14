@@ -336,6 +336,7 @@ extension AgentWindowD1Tests {
             m.openNewSession()
             st.sessions = [b]
             XCTAssertNil(m.selection, "the selected session ended")
+            XCTAssertTrue(m.focusedEnded, "#831 B1, rewrite 13: Ended under the form")
             XCTAssertNotNil(m.newSession, "a form being typed in stays")
         }
     }
@@ -419,10 +420,10 @@ extension AgentWindowD1Tests {
             m.ask(.stop, a)
             m.confirm(true)
             st.sessions = [session("b", .idle)]
-            XCTAssertTrue(m.selectionIsHeld)
+            XCTAssertTrue(m.focusedEnded)   // #831 B1, rewrite 7: the Ended state, by resolve (rewrites-B1)
             XCTAssertEqual(m.transcript.cwd, "/Users/example/proj", "the ended session's cwd is still known")
             m.openNewSession()
-            XCTAssertEqual(m.newSession?.folder, "~", "held: home")
+            XCTAssertEqual(m.newSession?.folder, "~", "Ended: home")
         }
     }
 

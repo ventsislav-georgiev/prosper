@@ -863,6 +863,10 @@ tag from the now-released section and put it on the new top draft.
   character is shown as plain text, so its tooltip can no longer show a file name in a different
   order than it really has; an image is not drawn if a folder on its path is swapped for a link
   while it loads. (#1162)
+- Agent Sessions window: when the session you are viewing ends, its conversation now stays on screen
+  marked Ended (read only, nothing can be sent to it) until its History record arrives, then the
+  History card takes its place; this now happens for every way a session ends, not only for Stop or
+  Kill from the window. (#899)
 
 ## v2.174.0
 

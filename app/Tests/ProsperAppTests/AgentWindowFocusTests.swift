@@ -304,7 +304,8 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.focusSelection())
             XCTAssertTrue(m.terminal.focusPending)
             st.sessions = [mapped("a", .done, ago: 1), mapped("c", .done, ago: 3)]
-            XCTAssertNil(m.selection, "b ended: nothing selected")
+            XCTAssertNil(m.selection, "b ended: nothing highlighted")
+            XCTAssertTrue(m.focusedEnded, "#831 B1, rewrite 12: Ended")
             XCTAssertFalse(m.terminal.focusPending)
             win.sendEvent(focusKey(125, win, "\u{F701}"))
             win.sendEvent(focusKey(125, win, "\u{F701}"))
@@ -323,6 +324,7 @@ extension AgentWindowD1Tests {
             t.store?.sessions = [mapped("e", .done, ago: 2)]
             XCTAssertNil(t.selection)
             XCTAssertFalse(t.interaction.composerFocusPending, "d ended: dropped")
+            XCTAssertTrue(t.focusedEnded)
             t.select(live("e"))
             let tv = AgentComposerTextView(frame: .init(x: 0, y: 0, width: 100, height: 40))
             tv.owner = t.interaction

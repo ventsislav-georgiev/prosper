@@ -138,6 +138,10 @@ extension AgentWindowD1Tests {
 
     @MainActor
     func testAgentWindowFollowsAStoppedOrKilledSessionToItsHistoryRow() throws {
+        // #831 B1, rewrite 1 of rewrites-B1.txt: resolve replaces the follow (4.5 subsumes G2). "Never through nothing"
+        // is PANE CONTENT now: live -> Ended (the kept row, display only) -> History card, never the empty pane between;
+        // the sidebar highlight, derived from the resolve (3.5), goes .live -> nil -> .history. The legs past the Stop's
+        // bound are gone on purpose: v2 has no bound, a late matching record still swaps once (4.4 (e)).
         let st = store([session("a", .idle), session("b", .idle)], history: [record("a", ago: 7200)])
         st.controlDch = bin([1, 38, 0])
         let m = windowModel(st)
@@ -148,24 +152,25 @@ extension AgentWindowD1Tests {
         let a = try XCTUnwrap(st.sessions.first { $0.name == "a" }), b = try XCTUnwrap(st.sessions.first { $0.name == "b" })
         var seen: [AgentSidebar.RowID?] = []
         m.ask(.stop, a)
+        st.sessions = [a, b]   // a poll while a shows: the pane's last live sight (4.1a)
         m.confirm(true)
-        XCTAssertNotNil(m.following)
         let sub = m.$selection.dropFirst().sink { seen.append($0) }
         defer { sub.cancel() }
         st.sessions = [b]
-        // QA #665 INFO-8: the row went before its record: the selection holds on the ended session.
-        XCTAssertEqual(m.selection, .live(a.key), "the row went and only an older record of its name is there: held")
+        XCTAssertNil(m.selection, "the row went and only an older record of its name is there: no row to highlight")
+        XCTAssertTrue(m.focusedEnded, "the pane is Ended, not empty")
         XCTAssertEqual(m.selectedRow?.session?.key, a.key, "the pane keeps the session's last row")
         st.history = [record("other", ago: 0), record("a", ago: 7200)]
-        XCTAssertEqual(m.selection, .live(a.key), "another session's new record: not followed, still held")
-        XCTAssertNotNil(m.following)
+        XCTAssertTrue(m.focusedEnded, "another session's new record: still Ended")
         st.history = [record("a", ago: 0), record("a", ago: 7200)]
-        XCTAssertEqual(m.selection, .history(a.key), "its new record: selected")
-        XCTAssertNil(m.following, "one-shot")
-        XCTAssertEqual(seen, [.history(a.key)], "never through nothing")
+        XCTAssertEqual(m.selection, .history(a.key), "its own record: the one swap")
+        XCTAssertFalse(m.focusedEnded)
+        XCTAssertNotNil(m.selectedRow?.record, "the History card")
+        XCTAssertEqual(seen, [nil, .history(a.key)], "the highlight: .live -> nil -> .history")
 
-        // The record read landing before the row leaves: straight to it, no empty pane between.
+        // The record landing before the row leaves: straight to it, never Ended between.
         st.sessions = [a, b]
+        XCTAssertEqual(m.selection, .live(a.key), "the name live again: the pane is live (4.5 name reuse)")
         st.history = [record("a", ago: 7200)]
         m.ask(.kill, a)
         m.confirm(true)
@@ -174,64 +179,26 @@ extension AgentWindowD1Tests {
         seen = []
         st.sessions = [b]
         XCTAssertEqual(seen, [.history(a.key)], "one change, never through nothing")
+        XCTAssertFalse(m.focusedEnded)
 
-        // Any manual pick drops it.
+        // A manual pick retargets the pane: the earlier session's record never moves it.
         st.sessions = [a, b]
         st.history = []
         m.ask(.stop, a)
         m.confirm(true)
         m.select(.live(b.key))
-        XCTAssertNil(m.following)
         st.sessions = [b]
         st.history = [record("a", ago: 0)]
         XCTAssertEqual(m.selection, .live(b.key))
 
-        // A refused Stop (busy row) follows nothing; neither does a Restart.
-        st.sessions = [a, b]
-        st.history = []
-        calls.started = false
-        m.ask(.stop, a)
-        m.confirm(true)
-        XCTAssertNil(m.following)
-        calls.started = true
-        m.ask(.restart, a)
-        m.confirm(true)
-        XCTAssertNil(m.following)
-
-        // Past the Stop's bound: dropped.
-        m.ask(.stop, a)
-        m.confirm(true)
-        m.now = { Self.now + DchActionRunner.restartBound + 1 }
-        st.sessions = [b]
-        st.history = [record("a", ago: -DchActionRunner.restartBound)]
-        XCTAssertNil(m.following)
-        XCTAssertNil(m.selection, "too late to follow")
-
-        // QA #665 INFO-8: held, the bound passing with no record lets go (nothing selected), and a
-        // manual pick while held drops the hold at once.
-        m.now = { Self.now }
-        st.sessions = [a, b]
-        st.history = []
-        m.ask(.kill, a)
-        m.confirm(true)
-        st.sessions = [b]
-        XCTAssertEqual(m.selection, .live(a.key), "held")
-        m.now = { Self.now + DchActionRunner.restartBound + 1 }
-        m.refresh()
-        XCTAssertNil(m.following)
-        XCTAssertNil(m.selection, "the bound passed with no record: let go")
-        XCTAssertNil(m.selectedRow)
-        m.now = { Self.now }
-        st.sessions = [a, b]
-        m.ask(.kill, a)
-        m.confirm(true)
-        st.sessions = [b]
-        m.select(.live(b.key))
-        st.sessions = [a, b]
-        st.sessions = [b]
-        XCTAssertEqual(m.selection, .live(b.key))
-        m.select(.live(a.key))
-        XCTAssertNil(m.selectedRow, "no follow, no hold: a gone row reads as nothing")
+        // 4.5: any end goes the same way, with no Stop or Kill from the window.
+        st.sessions = [b]   // a poll while b shows
+        st.sessions = []
+        XCTAssertTrue(m.focusedEnded)
+        XCTAssertNil(m.selection)
+        st.history = [record("a", ago: 0), record("b", ago: 0)]
+        XCTAssertEqual(m.selection, .history(b.key), "b's own record, never a's")
+        XCTAssertEqual(calls.all.map(\.verb), [.stop, .kill, .stop])
     }
 
     // MARK: G0: the island's row and dir texts
@@ -936,13 +903,20 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.ask(.stop, a)
         m.confirm(true)
-        XCTAssertNotNil(m.following)
-        st.actions[a.key] = AgentIsland.stoppingText
+        st.actions[a.key] = AgentIsland.stoppingText   // a publish while a shows: its last live sight (4.1a)
         st.sessions = [b]
-        XCTAssertEqual(m.selection, .live(a.key), "held")
+        // #831 B1, rewrite 2 (R3.1 on the one pane): the pane is Ended with the row as last seen; every entry point is
+        // inert (0 openSession, so no `dch -n`; nothing followed, so 0 pty writes).
+        XCTAssertNil(m.selection, "nothing live to highlight")
+        XCTAssertTrue(m.focusedEnded)
         XCTAssertEqual(m.selectedRow?.detail, AgentIsland.stoppingText, "the row as last seen, not as at the Stop")
+        XCTAssertFalse(m.openSelected())
+        XCTAssertFalse(m.focusSelection())
+        XCTAssertFalse(m.toggleMode())
+        XCTAssertTrue(m.interaction.session == nil)
         st.history = [record("a", ago: 0)]
         XCTAssertEqual(m.selection, .history(a.key))
+        XCTAssertFalse(m.focusedEnded)
     }
 }
 
@@ -1125,6 +1099,7 @@ extension AgentWindowD1Tests {
         m.setVisible(true)
         let a = try XCTUnwrap(st.sessions.first { $0.name == "a" })
         m.ask(.stop, a)
+        st.sessions = st.sessions   // #831 B1: a poll while a shows, its last live sight (4.1a)
         m.confirm(true)
         st.sessions = st.sessions.filter { $0.name != "a" }
         return (m, a)
@@ -1155,7 +1130,8 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         let a = try XCTUnwrap(st.sessions.first { $0.name == "a" })
         m.select(.live(a.key))
-        XCTAssertFalse(m.selectionIsHeld)
+        st.sessions = st.sessions   // #831 B1: a poll while a shows, its last live sight (4.1a)
+        XCTAssertFalse(m.focusedEnded)
         XCTAssertTrue(m.openSelected(), "live: Open in terminal opens it")
         XCTAssertEqual(opened, [a.key])
         XCTAssertEqual(m.interaction.session?.key, a.key, "live: the input box is its")
@@ -1164,9 +1140,10 @@ extension AgentWindowD1Tests {
         m.ask(.stop, a)
         m.confirm(true)
         st.sessions = [session("b", .idle)]   // its row left, no record (history off, a failed record write)
-        XCTAssertEqual(m.selection, .live(a.key), "held: the pane keeps showing it")
+        // #831 B1, rewrite 3 (R3.1 / R3.2 on the one pane): Ended, not held; no row to highlight.
+        XCTAssertNil(m.selection, "the pane keeps showing it as Ended; nothing live to highlight")
         XCTAssertEqual(m.selectedRow?.session?.key, a.key)
-        XCTAssertTrue(m.selectionIsHeld)
+        XCTAssertTrue(m.focusedEnded)
         // Open in terminal: nothing runs (`dch -n a` would start a new session named a).
         XCTAssertFalse(m.openSelected(), "nothing to open")
         XCTAssertFalse(m.focusSelection(), "#845: nothing there takes input, the focus stays")
@@ -1194,7 +1171,7 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(AgentInteractionPane(model: typed, session: a, open: {}, ended: true).canSend)
         XCTAssertTrue(AgentInteractionPane(model: typed, session: a, open: {}, ended: false).canSend, "control")
         // The detail pane builds the plain, ended input (no lock store), never the live locked one.
-        XCTAssertNil(detail.inputStore, "held: the plain pane with ended")
+        XCTAssertNil(detail.inputStore, "Ended: the plain pane with ended")
         // The "⋯" (and any ask for it): no question, nothing to confirm, the follow stays.
         for verb: AgentWindowVerb in [.restart, .stop, .kill] {
             m.ask(verb, a)
@@ -1202,8 +1179,8 @@ extension AgentWindowD1Tests {
             m.confirm(true)
         }
         XCTAssertEqual(calls.all.map(\.verb), [.stop], "only the first Stop ran")
-        XCTAssertNotNil(m.following, "an ask refused is no manual pick")
-        XCTAssertEqual(m.selection, .live(a.key))
+        XCTAssertTrue(m.focusedEnded, "an ask refused changes nothing")
+        XCTAssertNil(m.selection)
         // The header's controls keep their slots (off, never removed).
         let row = try XCTUnwrap(m.selectedRow)
         func height(_ ended: Bool) -> CGFloat {
@@ -1215,13 +1192,13 @@ extension AgentWindowD1Tests {
         func header(_ ended: Bool) -> AgentSessionHeader {
             AgentSessionHeader(row: row, session: a, cwd: "/tmp/p", open: {}, store: st, ended: ended)
         }
-        XCTAssertNil(header(true).menuStore, "held: the menu offers nothing")
+        XCTAssertNil(header(true).menuStore, "Ended: the menu offers nothing")
         XCTAssertTrue(header(false).menuStore === st)
         XCTAssertFalse(AgentWindowControls.menu(a, store: st).isEmpty, "live: Restart/Stop/Kill")
         // Its record lands: the History row, as before.
         st.history = [record("a", ago: 0)]
         XCTAssertEqual(m.selection, .history(a.key))
-        XCTAssertFalse(m.selectionIsHeld)
+        XCTAssertFalse(m.focusedEnded)
         XCTAssertFalse(m.openSelected())
         XCTAssertEqual(opened, [a.key])
         // A held session whose live row is back (an island restart of that name): live again, opens.
@@ -1232,6 +1209,9 @@ extension AgentWindowD1Tests {
 
     @MainActor
     func testAgentWindowHoldLetsGoWhenNoRecordLandsWithinTheSlack() throws {
+        // #831 B1, rewrite 4 (R3.2, 4.4 (e)): there is no hold to let go. With no record the pane stays Ended with no
+        // timeout; a record last seen more than the slack before the last live sight is not its own; its own record,
+        // landing late, still swaps once.
         XCTAssertEqual(AgentWindowModel.recordSlack, 65)
         var t = Self.now
         let st = store([session("a", .idle), session("b", .idle)])
@@ -1239,45 +1219,18 @@ extension AgentWindowD1Tests {
         let (m, a) = try heldModel(st, opened: { _ in })
         defer { m.close() }
         m.now = { t }
-        XCTAssertTrue(m.selectionIsHeld)
-        t = Self.now + 60
+        XCTAssertTrue(m.focusedEnded)
+        t = Self.now + 600
         m.refresh()
-        XCTAssertEqual(m.selection, .live(a.key), "inside the slack: held")
-        t = Self.now + 66
-        m.refresh()
-        XCTAssertNil(m.selection, "no record 65 s on: nothing selected, as before Phase 2")
-        XCTAssertNil(m.following)
-        XCTAssertNil(m.selectedRow)
-        XCTAssertFalse(m.selectionIsHeld)
-        st.history = [record("a", ago: -66)]
-        XCTAssertNil(m.selection, "a record after the hold let go is not followed")
-
-        // A record at 30 s: followed (unchanged).
-        t = Self.now
-        st.history = []
-        st.sessions = [a, session("b", .idle)]
-        m.ask(.kill, a)
-        m.confirm(true)
-        st.sessions = [session("b", .idle)]
-        t = Self.now + 30
-        st.history = [record("a", ago: -30)]
-        XCTAssertEqual(m.selection, .history(a.key))
-
-        // A slow Stop: the slack runs from the row leaving, not from the click.
-        t = Self.now
-        st.history = []
-        st.sessions = [a, session("b", .idle)]
-        m.ask(.stop, a)
-        m.confirm(true)
-        t = Self.now + 100
-        st.sessions = [session("b", .idle)]
-        XCTAssertEqual(m.selection, .live(a.key), "the row just left: held")
-        t = Self.now + 160
-        m.refresh()
-        XCTAssertEqual(m.selection, .live(a.key), "60 s since it left: held")
-        t = Self.now + 166
-        m.refresh()
-        XCTAssertNil(m.selection, "66 s since it left: let go")
+        XCTAssertTrue(m.focusedEnded, "10 minutes on with no record: still Ended")
+        XCTAssertNil(m.selection)
+        XCTAssertEqual(m.selectedRow?.session?.key, a.key)
+        XCTAssertFalse(m.transcript.running, "suspended: no IO while Ended")
+        st.history = [record("a", ago: 66)]
+        XCTAssertTrue(m.focusedEnded, "last seen 66 s before the last live sight: an earlier instance's record")
+        st.history = [record("a", ago: 66), record("a", ago: -600)]
+        XCTAssertEqual(m.selection, .history(a.key), "its own record, 10 minutes late: one swap")
+        XCTAssertFalse(m.focusedEnded)
     }
 
     @MainActor
@@ -1322,7 +1275,7 @@ extension AgentWindowD1Tests {
         st.controlDch = bin([1, 38, 0])
         let (m, a) = try heldModel(st, opened: { _ in })
         defer { m.close() }
-        XCTAssertTrue(m.selectionIsHeld)
+        XCTAssertTrue(m.focusedEnded)   // #831 B1, rewrite 5: the pane's Ended state, by resolve
         let row = try XCTUnwrap(m.selectedRow)
         // INFO-4: the header's chip says Ended, not the last live state; its width never moves.
         func header(_ ended: Bool) -> AgentSessionHeader {

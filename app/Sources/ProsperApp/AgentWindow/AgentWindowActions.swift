@@ -849,6 +849,20 @@ final class AgentWindowInteraction: ObservableObject {
     /// #829 (spec 3.5): a session's row text, read at each action. nil: the controller's store.
     var rowText: ((AgentSessionKey) -> String?)?
 
+    /// #831 B1 (4.3): the focused pane's session resolved from the store at action time, nil when it is not `.live`.
+    /// Set by the window model and called on the main actor only (from the actions below). nil seam: `session` as is.
+    var resolveFocused: (@MainActor () -> AgentSession?)?
+    /// What an action runs on: the followed session re-resolved now. Its key gone or changed (a focus or row change
+    /// since the follow): nil, and nothing is sent, answered or interrupted.
+    private var actionSession: AgentSession? {
+        guard let s = session else { return nil }
+        guard let resolveFocused else { return s }
+        return resolveFocused().flatMap { $0.key == s.key ? $0 : nil }
+    }
+
+    /// #831 B1 (3.5): a session's draft, read-only, for a pane that does not hold the input.
+    func draft(for key: AgentSessionKey) -> String { drafts[key] ?? "" }
+
     var draft: String {
         get { session.flatMap { drafts[$0.key] } ?? "" }
         set { if let k = session?.key { drafts[k] = newValue.isEmpty ? nil : newValue } }
@@ -946,7 +960,7 @@ final class AgentWindowInteraction: ObservableObject {
 
     /// A single choice: the island click's own guard (re-read, sameDialog, blocked, one digit).
     func answer(_ o: AgentPromptOption) {
-        guard case .prompt(let w) = panel, w.kind == .choose, w.enabled.contains(o.digit), let s = session else { return }
+        guard case .prompt(let w) = panel, w.kind == .choose, w.enabled.contains(o.digit), let s = actionSession else { return }
         // #802: a plan's approve row: the driver's checked digit, not the island rule (which keeps mode changes off).
         if w.approve.contains(o.digit) {
             // QA #653 INFO-5: the transcript's plan went while the panel still shows its rows.
@@ -962,7 +976,7 @@ final class AgentWindowInteraction: ObservableObject {
 
     /// A preview form's option: its digit, then Enter.
     func choosePreview(_ o: AgentPromptOption) {
-        guard case .prompt(let w) = panel, w.kind == .preview, w.enabled.contains(o.digit), let s = session else { return }
+        guard case .prompt(let w) = panel, w.kind == .preview, w.enabled.contains(o.digit), let s = actionSession else { return }
         let d = driver(s), e = w.screen
         act(s, prompt: e.prompt) { io in d(io).preview(e, digit: o.digit) }
     }
@@ -971,7 +985,7 @@ final class AgentWindowInteraction: ObservableObject {
     func submitPicks() {
         // A form the island rule must not answer (hidden characters, no top rule) has
         // every box off; Submit there would untick the screen's boxes and send an empty answer.
-        guard case .prompt(let w) = panel, w.kind == .multi, !w.enabled.isEmpty, let s = session else { return }
+        guard case .prompt(let w) = panel, w.kind == .multi, !w.enabled.isEmpty, let s = actionSession else { return }
         // #802: the Other row's text, when typed: the same one-line rules as a single choice's.
         var other: (digit: Int, text: String)?
         if let o = w.other, !otherText.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -987,14 +1001,14 @@ final class AgentWindowInteraction: ObservableObject {
 
     /// #802: "Chat about this".
     func chat() {
-        guard case .prompt(let w) = panel, let c = w.chat, let s = session else { return }
+        guard case .prompt(let w) = panel, let c = w.chat, let s = actionSession else { return }
         let d = driver(s), e = w.screen
         act(s, prompt: e.prompt) { io in d(io).chat(e, digit: c.digit) }
     }
 
     /// The Other row of a single choice: the typed answer.
     func sendOther() {
-        guard case .prompt(let w) = panel, w.kind == .choose, let o = w.other, let s = session else { return }
+        guard case .prompt(let w) = panel, w.kind == .choose, let o = w.other, let s = actionSession else { return }
         guard let text = AgentWindowDriver.otherText(otherText) else {
             notice = AgentWindowDriver.isPlaceholder(otherText) ? AgentWindowText.placeholder : AgentWindowText.oneLine
             return
@@ -1005,7 +1019,7 @@ final class AgentWindowInteraction: ObservableObject {
 
     /// The input box: one message while the session is idle or done. Kept unless confirmed.
     func send() {
-        guard let s = session, let text = AgentWindowDriver.message(draft) else { return }
+        guard let s = actionSession, let text = AgentWindowDriver.message(draft) else { return }
         // The list's state first: a blocked session's prompt must never be marked the human's by a message.
         guard s.state == .idle || s.state == .done else {
             notice = s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working
@@ -1019,7 +1033,7 @@ final class AgentWindowInteraction: ObservableObject {
 
     /// Esc while working.
     func interrupt() {
-        guard let s = session, s.state == .working else { return }
+        guard let s = actionSession, s.state == .working else { return }
         let d = driver(s)
         act(s, prompt: nil) { io in d(io).interrupt() }
     }

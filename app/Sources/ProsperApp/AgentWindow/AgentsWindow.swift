@@ -685,7 +685,7 @@ struct AgentDetailView: View {
     var scrolls = true
 
     /// QA #668 F1: the input box's lock store; nil for an ended session's held row (the plain, ended pane).
-    var inputStore: AgentIslandStore? { model.selectionIsHeld ? nil : model.store }
+    var inputStore: AgentIslandStore? { model.focusedEnded ? nil : model.store }
 
     var body: some View {
         if let form = model.newSession {
@@ -693,7 +693,7 @@ struct AgentDetailView: View {
             AgentNewSessionView(model: model, form: form)
         } else if let row = model.selectedRow, let s = row.session {
             // QA #668 F1: an ended session's held row is display-only.
-            let ended = model.selectionIsHeld
+            let ended = model.focusedEnded
             let mode = model.paneMode
             VStack(spacing: 0) {
                 AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
@@ -764,7 +764,7 @@ struct AgentDetailView: View {
         VStack(spacing: 0) {
             if let store = model.store {
                 AgentNoticeLine(store: store, key: s.key, refusal: model.refusalText(row.id),
-                                open: { model.openSelected() }, ended: model.selectionIsHeld)
+                                open: { model.openSelected() }, ended: model.focusedEnded)
             }
             confirmStrip
         }

@@ -163,9 +163,9 @@ extension AgentWindowD1Tests {
         m.ask(.stop, a)
         m.confirm(true)
         st.sessions = [session("b", .idle)]
-        XCTAssertTrue(m.selectionIsHeld)
+        XCTAssertTrue(m.focusedEnded)   // #831 B1, rewrite 9: the Ended state, by resolve (rewrites-B1)
         m.ask(.rename, a)
-        XCTAssertNil(m.renaming, "held (ended): no field")
+        XCTAssertNil(m.renaming, "Ended: no field")
         XCTAssertEqual(renamed, 0)
         let header = AgentSessionHeader(row: try XCTUnwrap(m.selectedRow), session: a, cwd: nil, open: {}, store: st, ended: true)
         XCTAssertNil(header.menuStore, "the ended header's \"⋯\" offers nothing, Rename included")
@@ -647,8 +647,9 @@ extension AgentWindowD1Tests {
             if leaves { st.sessions = [b] }
             XCTAssertNil(m.refusalText(.live(a.key)))
             if leaves {
-                // QA #699 F1's held case: the Rename dropped the follow, so the ended row is not held.
-                XCTAssertNil(m.selection, "the session left: nothing selected, no field")
+                // #831 B1, rewrite 14: the session left: the pane is Ended (no highlight), no field.
+                XCTAssertNil(m.selection, "the session left: nothing highlighted, no field")
+                XCTAssertTrue(m.focusedEnded)
                 XCTAssertNil(m.renaming)
             } else {
                 XCTAssertEqual(m.selection, .live(a.key))
@@ -937,7 +938,7 @@ extension AgentWindowD1Tests {
         let liveStore = store([session("a", .idle), session("b", .idle)])
         liveStore.controlDch = bin([1, 38, 0])
         st.sessions = [session("b", .idle)]
-        XCTAssertTrue(held.selectionIsHeld)
+        XCTAssertTrue(held.focusedEnded)   // #831 B1, rewrite 8: the Ended state, by resolve (rewrites-B1)
         try withModePref {
             let live = windowModel(liveStore)
             Calls().wire(live)
