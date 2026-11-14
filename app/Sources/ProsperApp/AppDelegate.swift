@@ -220,9 +220,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Let extensions open their own host-rendered windows (host.window.open).
         // The runner is dismissed first (the new window takes over), and the
-        // window's controls dispatch back into the owning extension's VM:
-        // converter panes transform synchronously; button actions run on the
-        // async lane and may return a new component tree.
+        // window's controls dispatch back into the owning extension: converter
+        // panes transform and button actions run on its background lane (actions
+        // may return a new component tree).
         LiveExtensionHostServices.shared.windowPresenter = { [weak self] extID, node in
             guard let self else { return }
             self.runnerPanel?.dismiss()
@@ -1057,8 +1057,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.present(
             owner: extID,
             node: node,
-            transform: { fn, input in
-                registry.callExtensionString(extensionID: extID, function: fn, arg: input) ?? ""
+            transform: { fn, input in   // main actor; #1146: the Lua runs on the extension's background lane
+                await registry.callExtensionStringAsync(extensionID: extID, function: fn, args: [input]) ?? ""
             },
             onAction: { id, value, form in
                 let formJSON = (try? JSONEncoder().encode(form))

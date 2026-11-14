@@ -197,6 +197,20 @@ final class ExtensionRegistry: ObservableObject {
     private let asyncRuntimes: AsyncExtensionRuntimes
     private let log = Logger(subsystem: "com.prosper.app", category: "extensions")
 
+    /// #1146: instruction budgets for the Lua this registry runs on the MAIN thread (the MainActor VM). A spent
+    /// call holds the UI for its whole budget: about 7 ms per million instructions of plain Lua, up to ~55 ms for
+    /// allocation-heavy code (measured 2026-11; the 10,000,000 default was 74-550 ms). A call made from inside a
+    /// host function runs on what is left of its outer call's budget (#1154). The event-tap dispatch has its own.
+    enum MainThreadBudget {
+        /// The VM's ceiling: the host bootstraps and the entry chunk when the VM is made (`run` takes no budget).
+        static let load: Int32 = 500_000
+        /// A command handler (invokeSync: the launcher's calc and units on each keystroke) or a view action.
+        static let command: Int32 = 500_000
+        /// A bare function call (callExtensionString's default): snippet placeholders and the event-tap probe.
+        /// Higher than a command because the probe runs a whole Hammerspoon config (~98 per binding line).
+        static let call: Int32 = 1_000_000
+    }
+
     private static let disabledKey = "disabledExtensionIDs"
     /// Turn-ONS for opt-in (`default_disabled`) extensions. The disabled set is the
     /// inverse default (everything on unless listed); opt-in flips it (everything off
@@ -627,7 +641,7 @@ final class ExtensionRegistry: ObservableObject {
         guard let (record, command) = command(id: commandID), record.isLive else { return nil }
         do {
             let rt = try activate(record)
-            let result = try rt.callGlobal(Self.handlerName(for: command.id), [query])
+            let result = try rt.callGlobal(Self.handlerName(for: command.id), [query], budget: MainThreadBudget.command)
             if result != nil, record.isSystem { AnalyticsStore.bumpUsage(extensionID: record.id) }
             return result
         } catch {
@@ -779,7 +793,8 @@ final class ExtensionRegistry: ObservableObject {
             let handler = Self.handlerName(for: command.id) + "_action"
             let formJSON = (try? JSONEncoder().encode(formValues))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-            guard let json = try rt.callGlobal(handler, [actionID, value ?? "", formJSON]) else { return nil }
+            guard let json = try rt.callGlobal(handler, [actionID, value ?? "", formJSON],
+                                               budget: MainThreadBudget.command) else { return nil }
             return try? ExtensionViewNode.decode(json: json)
         } catch {
             log.error("action \(actionID, privacy: .public) on \(commandID, privacy: .public) failed: \(String(describing: error), privacy: .public)")
@@ -795,7 +810,8 @@ final class ExtensionRegistry: ObservableObject {
     /// transform synchronously (cheap, on-device string work — base64, hex, …).
     /// Returns nil to decline (missing extension / error), which the UI treats as
     /// an empty pane.
-    func callExtensionString(extensionID: String, function: String, arg: String, budget: Int32? = nil) -> String? {
+    func callExtensionString(extensionID: String, function: String, arg: String,
+                             budget: Int32 = MainThreadBudget.call) -> String? {
         guard let record = record(id: extensionID), record.isLive else { return nil }
         do {
             let rt = try activate(record)
@@ -896,7 +912,7 @@ final class ExtensionRegistry: ObservableObject {
         // caller reached here without going through the routing table.
         guard record.trusted else { throw ExtensionError.untrusted(record.id) }
         if let rt = record.runtime { return rt }
-        let rt = try LuaRuntime(allowLoad: record.isSystem || record.trusted)
+        let rt = try LuaRuntime(maxInstructions: MainThreadBudget.load, allowLoad: record.isSystem || record.trusted)
         try ExtensionHost(extensionID: record.id, services: services, callTimeout: callTimeout,
                           privileged: record.privileged, trusted: record.trusted,
                           configOwner: record.loaded.managedConfigOwner)

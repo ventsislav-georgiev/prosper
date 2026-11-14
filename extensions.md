@@ -174,7 +174,7 @@ A list item's `actions` are the per-row verbs the runner surfaces (Enter runs th
 
 `host.ui.loading{ title=, subtitle=, progress= }` renders an Apple-style loading state — an **infinite** spinner when `progress` is absent, a **progressive** bar (0…1 with a percentage) when set. The host also shows this spinner automatically while an async view action is in flight, so every async operation gets a polished loading state for free.
 
-`host.ui.converter{ title=, left={label,placeholder,value}, right={…}, forward=, backward=, mono= }` is a live bidirectional two-pane transform window (open it via `host.window.open`): `forward`/`backward` name global Lua functions (text → text) — editing the left pane runs `forward` into the right, editing the right runs `backward` into the left. [`base64`](app/Sources/ProsperApp/Resources/extensions/base64/) is the worked example.
+`host.ui.converter{ title=, left={label,placeholder,value}, right={…}, forward=, backward=, mono= }` is a live bidirectional two-pane transform window (open it via `host.window.open`): `forward`/`backward` name global Lua functions (text → text) — editing the left pane runs `forward` into the right, editing the right runs `backward` into the left. [`base64`](app/Sources/ProsperApp/Resources/extensions/base64/) is the worked example. The transforms run on the extension's background lane, like window button actions, so typing stays responsive while a large paste converts and the latest edit wins; they do not see globals that a main-thread command set, so keep a transform a pure function of its input.
 
 ### Async & timeouts
 

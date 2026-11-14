@@ -778,6 +778,11 @@ tag from the now-released section and put it on the new top draft.
   changes to "Publish v<version>". (#1160)
 - A file whose name is not valid UTF-8 is now named when it stops a publish, instead of the whole
   folder being reported as unreadable. (#1160)
+- Extensions: a runaway extension call on the main thread (launcher calculator and units, snippet
+  placeholders, Hammerspoon event-tap setup) now stops after a few milliseconds instead of freezing
+  Prosper for up to half a second. Converter windows such as Base64 now convert in the background:
+  typing stays responsive while a large paste converts, and the other pane fills in when the
+  conversion finishes. (#1146)
 
 ## v2.174.0
 

@@ -9,10 +9,10 @@ struct ExtensionRenderedView: View {
     let node: ExtensionViewNode
     /// (actionID, value, formValues) → host dispatches to the extension.
     let onAction: (_ id: String, _ value: String?, _ formValues: [String: String]) -> Void
-    /// Synchronous (fnName, input) → output transform, used by `converter` panes
-    /// for live bidirectional conversion. Supplied for `host.window.open` windows;
-    /// nil elsewhere (the inline runner never hosts a converter).
-    var transform: ((_ fnName: String, _ input: String) -> String)? = nil
+    /// (fnName, input) → output transform, used by `converter` panes for live
+    /// bidirectional conversion. Supplied for `host.window.open` windows; nil
+    /// elsewhere (the inline runner never hosts a converter).
+    var transform: ConverterPanes.Transform? = nil
 
     var body: some View {
         content
@@ -392,61 +392,86 @@ private extension View {
 
 // MARK: - Converter (live bidirectional two-pane transform)
 
+/// #1146: the converter's two panes and its ordering rule, apart from SwiftUI so rows drive it. Main actor: the
+/// view reads and edits it on main, and each answer is applied on main after its transform returns.
+@MainActor
+final class ConverterPanes: ObservableObject {
+    /// (fnName, input) → output, called on the main actor; the live one awaits the extension's background lane.
+    typealias Transform = @MainActor (_ fnName: String, _ input: String) async -> String
+
+    @Published private(set) var left: String
+    @Published private(set) var right: String
+    private let forward: String, backward: String
+    private let transform: Transform
+    /// Number of the newest edit (either side); an answer to an older one is dropped.
+    private var latest = 0
+    private var seeded = false
+
+    init(node: ConverterNode, transform: @escaping Transform) {
+        left = node.left.value ?? ""
+        right = node.right.value ?? ""
+        forward = node.forward
+        backward = node.backward
+        self.transform = transform
+    }
+
+    /// Once, on appear: derive the right pane when only the left is given, so the window opens converted.
+    @discardableResult
+    func seed() -> Task<Void, Never>? {
+        guard !seeded else { return nil }
+        seeded = true
+        return right.isEmpty && !left.isEmpty ? convert(fromLeft: true) : nil
+    }
+
+    /// A user edit (the pane's binding). An answer is written past this, and a set to the text a pane already
+    /// holds is no edit, so writing the answer into the other pane does not echo back.
+    @discardableResult
+    func edit(left isLeft: Bool, _ text: String) -> Task<Void, Never>? {
+        guard text != (isLeft ? left : right) else { return nil }
+        if isLeft { left = text } else { right = text }
+        return convert(fromLeft: isLeft)
+    }
+
+    /// Latest edit wins: the answer lands only if no edit on either side came after the one it answers. A cut
+    /// or failed transform answers "" (the other pane empties).
+    private func convert(fromLeft: Bool) -> Task<Void, Never> {
+        latest += 1
+        let mine = latest, input = fromLeft ? left : right, fn = fromLeft ? forward : backward
+        return Task { @MainActor in   // main actor: reads and writes the panes
+            let out = await transform(fn, input)
+            guard mine == latest else { return }
+            if fromLeft { right = out } else { left = out }
+        }
+    }
+}
+
 private struct ConverterRender: View {
     let node: ConverterNode
-    /// (fnName, input) → output, evaluated synchronously in the extension VM.
-    let transform: (String, String) -> String
+    @StateObject private var panes: ConverterPanes
 
-    @State private var leftText: String = ""
-    @State private var rightText: String = ""
-    /// Guards against the change → set-sibling → change feedback loop: while one
-    /// side is writing the other, the other side's onChange is a no-op.
-    @State private var updating = false
-    @State private var seeded = false
+    init(node: ConverterNode, transform: @escaping ConverterPanes.Transform) {
+        self.node = node
+        _panes = StateObject(wrappedValue: ConverterPanes(node: node, transform: transform))
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             pane(label: node.left.label ?? "Input",
                  placeholder: node.left.placeholder,
-                 text: $leftText)
+                 text: Binding(get: { panes.left }, set: { panes.edit(left: true, $0) }))
             Rectangle()
                 .fill(Neon.stroke)
                 .frame(width: 1)
                 .frame(maxHeight: .infinity)
             pane(label: node.right.label ?? "Output",
                  placeholder: node.right.placeholder,
-                 text: $rightText)
+                 text: Binding(get: { panes.right }, set: { panes.edit(left: false, $0) }))
         }
         .frame(minWidth: sz(480), maxWidth: .infinity, minHeight: sz(280), maxHeight: .infinity)
         .background(
             LinearGradient(colors: [Neon.bgTop, Neon.bgBottom],
                            startPoint: .top, endPoint: .bottom))
-        .onChange(of: leftText) { _, new in
-            guard !updating else { return }
-            updating = true
-            rightText = transform(node.forward, new)
-            updating = false
-        }
-        .onChange(of: rightText) { _, new in
-            guard !updating else { return }
-            updating = true
-            leftText = transform(node.backward, new)
-            updating = false
-        }
-        .onAppear {
-            guard !seeded else { return }
-            seeded = true
-            // Seed from declared values; derive the opposite pane when only the
-            // left is provided so the window opens already converted.
-            updating = true
-            leftText = node.left.value ?? ""
-            if let rv = node.right.value, !rv.isEmpty {
-                rightText = rv
-            } else if !leftText.isEmpty {
-                rightText = transform(node.forward, leftText)
-            }
-            updating = false
-        }
+        .onAppear { panes.seed() }
     }
 
     @ViewBuilder
@@ -575,7 +600,7 @@ final class ExtensionViewPanel {
     func present(
         owner: String? = nil,
         node: ExtensionViewNode,
-        transform: ((_ fnName: String, _ input: String) -> String)? = nil,
+        transform: ConverterPanes.Transform? = nil,
         onAction: @escaping (_ id: String, _ value: String?, _ formValues: [String: String]) async -> ExtensionViewNode?
     ) {
         let controller = ExtensionViewHostController(node: node, transform: transform, onAction: onAction)
@@ -650,12 +675,13 @@ final class ExtensionViewPanel {
 final class ExtensionViewHostController: NSHostingController<AnyView> {
     private var current: ExtensionViewNode
     private let onAction: (String, String?, [String: String]) async -> ExtensionViewNode?
-    private let transform: ((String, String) -> String)?
+    /// Internal (not private) so a row calls the transform the presenter handed in.
+    let transform: ConverterPanes.Transform?
     private var pending: Task<Void, Never>?
 
     init(
         node: ExtensionViewNode,
-        transform: ((String, String) -> String)? = nil,
+        transform: ConverterPanes.Transform? = nil,
         onAction: @escaping (String, String?, [String: String]) async -> ExtensionViewNode?
     ) {
         self.current = node
