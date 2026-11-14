@@ -129,7 +129,11 @@ final class ExtensionSecretPathsTests: XCTestCase {
         XCTAssertEqual(try call(try host(system: true), "rd", file), "fake:pool-vault")
     }
 
-    func testCCPoolHomeRelativeOrEmptyIsIgnored() throws {
+    /// With no working directory a relative CCPOOL_HOME adds no root; an empty one adds none either.
+    func testCCPoolHomeRelativeWithNoWorkingDirectoryOrEmptyAddsNothing() throws {
+        let savedCwd = SecretPaths.workingDirectory
+        addTeardownBlock { SecretPaths.workingDirectory = savedCwd }
+        SecretPaths.workingDirectory = nil
         for value in ["pool", "", "./pool"] {
             SecretPaths.environment = ["CCPOOL_HOME": value]
             XCTAssertEqual(SecretPaths.matcher().roots.count, SecretPaths.listed.count, value)
@@ -137,6 +141,18 @@ final class ExtensionSecretPathsTests: XCTestCase {
         try write("pool/vault.json", "plain:pool")
         SecretPaths.environment = ["CCPOOL_HOME": "pool"]
         XCTAssertEqual(try call(try host(system: false), "rd", path("pool/vault.json")), "plain:pool")
+    }
+
+    /// An empty CCPOOL_HOME is the same as unset: it adds no root, even with a working directory, and a
+    /// plain file under that folder stays readable for the automation host.
+    func testCCPoolHomeEmptyAddsNoRootWithWorkingDirectory() throws {
+        let savedCwd = SecretPaths.workingDirectory
+        addTeardownBlock { SecretPaths.workingDirectory = savedCwd }
+        SecretPaths.workingDirectory = path("work")
+        try write("work/plain.txt", "plain:work")
+        SecretPaths.environment = ["CCPOOL_HOME": ""]
+        XCTAssertEqual(SecretPaths.matcher().roots.count, SecretPaths.listed.count)
+        XCTAssertEqual(try call(try host(system: false), "rd", path("work/plain.txt")), "plain:work")
     }
 
     func testCCPoolHomeUnsetIsIgnored() throws {
