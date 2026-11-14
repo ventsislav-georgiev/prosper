@@ -115,4 +115,63 @@ final class StatsEnergyTests: XCTestCase {
         XCTAssertTrue(gate.admit(StatsDeliverGate.key([.battery], snap(charge: 0.5), style: .default), popupShown: false),
                       "a scale change must reach resizeItems")
     }
+
+    // #1050: the default setup (CPU + RAM, graph + text) over 240 ticks = 20 min at 5 s,
+    // counted, not timed. These are the numbers the "no change" verdict rests on.
+    func testDefaultCPUAndRAMAdmitCountsOverTwentyMinutes() {
+        func count(_ cpu: [Double], history: [Double]? = nil, popup: Bool = false) -> Int {
+            var t = StatsFakeTicker()
+            return t.admits(cpu, history: history, popupShown: popup)
+        }
+        let flat = Array(repeating: 0.07, count: 240)
+        var spike = flat
+        spike[181] = 0.95
+        let noisy = (0..<240).map { $0 % 2 == 0 ? 0.05 : 0.08 }
+        XCTAssertEqual(count(flat), 120, "the ring grows for 120 ticks, then a flat full ring skips")
+        XCTAssertEqual(count(spike), 179, "the spike's own tick and every tick it sits in the window")
+        XCTAssertEqual(count(noisy), 240, "the CPU text moves every tick")
+        XCTAssertEqual(count(flat, popup: true), 240, "an open popup gets every tick")
+        // Outside values in the drawn series: no trap, published while in the ring,
+        // and skipping resumes once they leave it (t = 10 leaves at t = 130).
+        for bad in [Double.nan, .infinity, -0.5] {
+            var h = flat
+            h[10] = bad
+            XCTAssertEqual(count(flat, history: h), 131, "history value \(bad)")
+        }
+    }
+}
+
+/// #1050: a fake poller. Two 120-sample rings fed and copied onto the snapshot every
+/// tick as StatsPoller does (cpu :290, memory :293, push :412, deliver :388). RAM is
+/// fixed at 550/1000. `history` overrides what the cpu ring gets (the text keeps `cpu`).
+@MainActor
+struct StatsFakeTicker {
+    private var cpuRing = RingBuffer<Double>(capacity: 120)
+    private var memRing = RingBuffer<Double>(capacity: 120)
+
+    mutating func tick(cpu c: Double, history h: Double? = nil) -> StatsSnapshot {
+        var s = StatsSnapshot()
+        s.cpu = CPUSample(total: c, performance: 0, efficiency: 0, system: 0, user: c, idle: 1 - c, perCore: [])
+        s.memory = MemorySample(total: 1000, used: 550, app: 550, wired: 0, compressed: 0, free: 450,
+                                pressure: 0.55, swapUsed: 0)
+        cpuRing.append(h ?? c)
+        memRing.append(s.memory?.usedFraction ?? 0)
+        s.histories = ["cpu": cpuRing.snapshot(), "memory": memRing.snapshot()]
+        return s
+    }
+
+    /// Admits of one gate over the series, one tick per value, with the real key
+    /// unless `key` (given the tick index) replaces it. Runs on the main actor.
+    mutating func admits(_ cpu: [Double], history: [Double]? = nil, popupShown: Bool = false,
+                         key: ((StatsSnapshot, Int) -> [AnyHashable])? = nil) -> Int {
+        var gate = StatsDeliverGate()
+        var n = 0
+        for (t, c) in cpu.enumerated() {
+            let h = history.flatMap { t < $0.count ? $0[t] : nil }
+            let s = tick(cpu: c, history: h)
+            let k = key?(s, t) ?? StatsDeliverGate.key([.cpu, .memory], s, style: .default)
+            if gate.admit(k, popupShown: popupShown) { n += 1 }
+        }
+        return n
+    }
 }
