@@ -244,7 +244,9 @@ final class ManagedConfig: Sendable {
             }
         }
         return ManagedConfigPlan(owner: owner, operation: operation,
-                                 changes: .init(action: action, owner: owner.id, files: files, pieces: planner.actions),
+                                 changes: .init(action: action, owner: owner.id, files: files, pieces: planner.actions,
+                                                identity: changes.map { ManagedConfigChangeSet.target(path: $0.url.path, base: $0.base,
+                                                                                newBytes: $0.newBytes, deletes: $0.delete, mode: $0.mode) }),
                                  refusals: planner.refusals, files: changes, stateHash: hash(stateBytes))
     }
 
@@ -306,13 +308,18 @@ final class ManagedConfig: Sendable {
                         }
                         // #1226 (R1025-4): a chmod since the stat above, up to the rename itself, is kept. `old` holds
                         // the file being replaced (a chmod by path lands on it until the rename), `new` the temp.
-                        // #1231: O_NOFOLLOW only on the temp (Prosper's own file); f.url is already the resolved path.
-                        let old = open(f.url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+                        // #1231: O_NOFOLLOW on the temp (Prosper's own file). #947 (R1231-1): and on the old file: f.url
+                        // is already the resolved path, so a link there was swapped in after the plan.
+                        let old = open(f.url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW), oldErrno = errno
                         let new = open(temp.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC), newErrno = errno
                         defer { if old >= 0 { _ = close(old) }; if new >= 0 { _ = close(new) } }
                         func held(_ fd: Int32) -> mode_t? { var s = stat(); return fd >= 0 && fstat(fd, &s) == 0 ? s.st_mode & 0o7777 : nil }
                         let before = held(old) ?? mode
                         do {
+                            // a link at the resolved path: left as it is, nothing replaced (fails closed, no fallback)
+                            if old < 0, oldErrno == ELOOP {
+                                throw ManagedConfigPOSIXWriter.WriteError(step: "open target", code: oldErrno)
+                            }
                             // a link where our temp was: never renamed over the user's file (fails closed, no fallback)
                             if new < 0, newErrno == ELOOP {
                                 throw ManagedConfigPOSIXWriter.WriteError(step: "open temp", code: newErrno)

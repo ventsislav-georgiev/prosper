@@ -9,19 +9,41 @@ import SwiftUI
 /// Isolation: a `Sendable` final class holding one `@MainActor @Sendable` presenter. `confirm` is
 /// nonisolated and hops to the main actor itself, so the core calls it from any thread.
 final class ManagedConfigSheetConsent: ManagedConfigConsent {
-    typealias Present = @MainActor @Sendable (ManagedConfigChangeSet, @escaping @MainActor @Sendable (Bool) -> Void) -> Void
+    /// Returns the request's withdraw: called on main when the caller gives up (#947 B-INFO-2).
+    typealias Present = @MainActor @Sendable (ManagedConfigChangeSet, @escaping @MainActor @Sendable (Bool) -> Void) -> @MainActor () -> Void
 
     let present: Present
 
     init(present: @escaping Present) { self.present = present }
 
-    /// The app's sheet: one panel at a time, a second request waits for the first answer.
+    /// The app's sheet: one panel at a time, a second request waits for the first answer (an identical one
+    /// joins it, #947 B-INFO-9).
     static let live = ManagedConfigSheetConsent { changes, done in ManagedConfigConsentPanel.shared.enqueue(changes, done: done) }
+
+    /// Main-only state of one request: set and read only inside `@MainActor` tasks.
+    private final class Pending: @unchecked Sendable {
+        var gaveUp = false
+        var withdraw: (@MainActor () -> Void)?
+    }
 
     nonisolated func confirm(_ changes: ManagedConfigChangeSet) async -> Bool {
         let present = self.present
-        let answer = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            Task { @MainActor in present(changes) { cont.resume(returning: $0) } }
+        let pending = Pending()
+        // #947 (B-INFO-2): the caller's give-up (awaitSync cancels this task) takes the request out of the
+        // panel's queue. onCancel runs on the cancelling thread and only hops to main; the withdraw resumes
+        // `cont` with false through the panel, or the present task does if the give-up came first.
+        let answer = await withTaskCancellationHandler {
+            await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                Task { @MainActor in
+                    guard !pending.gaveUp else { return cont.resume(returning: false) }
+                    pending.withdraw = present(changes) { cont.resume(returning: $0) }
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in
+                pending.gaveUp = true
+                pending.withdraw?()
+            }
         }
         // The Lua bridge gives up after 5 minutes and cancels: a late Apply is a Cancel.
         return answer && !Task.isCancelled
@@ -188,27 +210,55 @@ final class ManagedConfigConsentPanel {
     static let width: CGFloat = 560
 
     private let show: Show
-    private var queue: [(ManagedConfigChangeSet, @MainActor @Sendable (Bool) -> Void)] = []
+    /// One sheet per entry; `queue.first` is the one on screen while `model` is set. Each waiter is one confirm.
+    private var queue: [(changes: ManagedConfigChangeSet, waiters: [(id: Int, done: @MainActor @Sendable (Bool) -> Void)])] = []
+    private var lastWaiter = 0
     private var closeShown: (@MainActor () -> Void)?
     private var model: ManagedConfigConsentModel?
 
     init(show: @escaping Show) { self.show = show }
 
-    func enqueue(_ changes: ManagedConfigChangeSet, done: @escaping @MainActor @Sendable (Bool) -> Void) {
-        queue.append((changes, done))
+    /// Returns the withdraw for this request: it leaves the queue (never shown) or, if its sheet is up and no
+    /// one else waits on it, the sheet closes as a Cancel and the next request is shown. After an answer it does nothing.
+    @discardableResult
+    func enqueue(_ changes: ManagedConfigChangeSet, done: @escaping @MainActor @Sendable (Bool) -> Void) -> @MainActor () -> Void {
+        lastWaiter += 1
+        let id = lastWaiter
+        // #947 (B-INFO-9, F947-1): the same sheet of the same kit and operation over the same writes (path, base
+        // hash, new bytes' digest, mode per file), still pending: no second sheet, the same answer. Anything else,
+        // or a set with no identity, queues as its own sheet: equal lines can hide other bytes.
+        if changes.identity != nil, let i = queue.firstIndex(where: { $0.changes == changes && $0.changes.identity == changes.identity }) {
+            queue[i].waiters.append((id, done))
+        } else {
+            queue.append((changes, [(id, done)]))
+        }
         if model == nil { next() }
+        return { [weak self] in self?.withdraw(id) }
     }
 
     private func next() {
-        guard !queue.isEmpty else { return }
-        let (changes, done) = queue.removeFirst()
-        let model = ManagedConfigConsentModel(changes: changes) { [weak self] ok in
-            self?.close()
-            done(ok)
-            self?.next()
-        }
+        guard let first = queue.first else { return }
+        let model = ManagedConfigConsentModel(changes: first.changes) { [weak self] ok in self?.answered(ok) }
         self.model = model
         closeShown = show(model)
+    }
+
+    private func answered(_ ok: Bool) {
+        close()
+        guard !queue.isEmpty else { return }
+        let request = queue.removeFirst()
+        for w in request.waiters { w.done(ok) }
+        next()
+    }
+
+    private func withdraw(_ id: Int) {
+        guard let i = queue.firstIndex(where: { $0.waiters.contains { $0.id == id } }),
+              let done = queue[i].waiters.first(where: { $0.id == id })?.done else { return } // answered already
+        queue[i].waiters.removeAll { $0.id == id }
+        if queue[i].waiters.isEmpty {
+            if i == 0, let model { model.answer(false) } else { queue.remove(at: i) }
+        }
+        done(false)
     }
 
     /// Built apart from `next` so tests get the panel without ordering it front.

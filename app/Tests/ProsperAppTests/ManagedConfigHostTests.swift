@@ -469,6 +469,7 @@ final class ManagedConfigHostTests: XCTestCase {
             box.models.append(model)
             _ = ManagedConfigConsentPanel.makePanel(model) // built, never ordered front
             model.answer(true)
+            return {}
         }
         let mc = ManagedConfig(roots: env.mc.roots, consent: sheet, writer: env.writer)
         env.writer.interleave { target, n in
@@ -534,6 +535,7 @@ final class ManagedConfigHostTests: XCTestCase {
         let consent = ManagedConfigSheetConsent { _, done in
             XCTAssertTrue(Thread.isMainThread)
             done(true)
+            return {}
         }
         let set = ManagedConfigChangeSet(action: .apply, owner: "kit-a", files: [], pieces: [])
         let yes = await Task.detached { await consent.confirm(set) }.value

@@ -214,13 +214,13 @@ final class ManagedConfigCommitTests: XCTestCase {
         XCTAssertEqual(env.files(under: env.backups).filter { $0.hasSuffix(".orig") }, [])
     }
 
-    /// TODAY'S behaviour, pinned (O_NOFOLLOW on the old file's open is NOT built: supervisor decision, report
-    /// section 3). A link swapped in at the resolved path after the commit's shape check, to a file with the
-    /// same bytes: the old file's open follows it, the new file takes the link target's mode, and the rename
-    /// replaces the link with a regular file. The link target (inside the row's tempDir) is untouched.
-    func testALinkSwappedInAtTheResolvedPathIsReplacedToday() async throws {
+    /// #947 (R1231-1): a link swapped in at the resolved path after the commit's shape check, to a file with the
+    /// same bytes and a narrower mode: the old file's open (O_NOFOLLOW) refuses it and the commit fails closed.
+    /// The link stays a link, its target (inside the row's tempDir) keeps its bytes and mode, no temp or backup
+    /// is left. Parent: the link was replaced by a regular file with the link target's mode (.done).
+    func testALinkSwappedInAtTheResolvedPathFailsClosed() async throws {
         let env = makeMCEnv()
-        let url = env.claudeMD
+        let url = env.claudeMD, dir = env.claude
         let original = Array("# mine\n".utf8)
         try Data(original).write(to: url)
         XCTAssertEqual(chmod(url.path, 0o644), 0)
@@ -234,11 +234,15 @@ final class ManagedConfigCommitTests: XCTestCase {
             _ = symlink(decoy.path, url.path)
         }
         let r = await env.mc.apply([MCPieces.block()], owner: env.owner)
-        XCTAssertEqual(r.status, .done, r.message)
-        XCTAssertTrue((try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) == nil, "the link was replaced")
-        XCTAssertTrue(env.read(url)?.contains("Follow the kit rules.") ?? false)
-        XCTAssertEqual(env.mode(url), 0o600, "the link target's mode")
+        XCTAssertEqual(r.status, .failed, r.message)
+        XCTAssertTrue(r.message.contains("open target failed"), r.message)
+        XCTAssertEqual(try? FileManager.default.destinationOfSymbolicLink(atPath: url.path), decoy.path, "still the link")
         XCTAssertEqual(env.bytes(decoy), original)
+        XCTAssertEqual(env.mode(decoy), 0o600)
         XCTAssertEqual(env.bytes(moved), original)
+        XCTAssertEqual(env.mode(moved), 0o644)
+        let prefix = "." + url.lastPathComponent + ".prosper-"
+        XCTAssertEqual((ManagedConfig.entries(of: dir) ?? []).filter { $0.hasPrefix(prefix) }, [], "no temp left")
+        XCTAssertEqual(env.files(under: env.backups).filter { $0.hasSuffix(".orig") }, [], "no backup left")
     }
 }

@@ -188,6 +188,24 @@ struct ManagedConfigChangeSet: Equatable, Sendable {
     var owner: String
     var files: [File]
     var pieces: [ManagedConfigPieceAction]
+    /// #947 (F947-1): what a consent covers beyond the shown lines, one `target(...)` per file of the plan, in
+    /// plan order. nil when it was not formed (a hand-built set): such a request never joins another sheet.
+    var identity: [[String]]? = nil
+
+    /// The sheet as shown, without `identity`: the apply loop's re-ask compares the sheet and keeps its own
+    /// digests (ManagedConfig.apply). A field added above must be added here.
+    static func == (l: Self, r: Self) -> Bool {
+        l.action == r.action && l.owner == r.owner && l.files == r.files && l.pieces == r.pieces
+    }
+
+    /// One target: the resolved path, the hash of the bytes the plan was made against, a SHA-256 digest of
+    /// the new bytes, and the mode the file keeps.
+    static func target(path: String, base: [UInt8]?, newBytes: [UInt8]?, deletes: Bool, mode: mode_t) -> [String] {
+        [path,
+         base.map { "base " + OrderedJSON.sha256($0) } ?? "no file",
+         deletes ? "deletes the file" : newBytes.map { "new " + OrderedJSON.sha256($0) } ?? "no write",
+         "mode " + String(mode, radix: 8)]
+    }
 
     static let maskedLine = "•••• (hidden: outside the keys Prosper manages)"
     static let elidedLine = "…"

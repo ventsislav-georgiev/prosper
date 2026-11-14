@@ -1014,6 +1014,10 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer: a file with a line longer than 1,048,576 characters now opens without freezing the
   window: it is shown up to that point of the long line, and a note under the header says the rest
   of the file is not shown. (#1236)
+- A config-change sheet that an extension stopped waiting for (after 5 minutes) now closes and lets
+  the next one through, and asking twice for the same change (a double Uninstall) shows one sheet
+  instead of two; a second request shares the first one's answer only when it would write exactly
+  the same bytes, with the same file mode, to the same files. (#947)
 
 ## v2.174.0
 
