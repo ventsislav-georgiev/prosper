@@ -1056,6 +1056,9 @@ tag from the now-released section and put it on the new top draft.
 - Fan control: after the overheat cut-off hands the fans back to macOS, the background helper now
   stays running (up to 30 minutes) until the Mac has cooled below 80 °C, so reopening Prosper can no
   longer bring back a quieter-than-macOS manual fan speed while the Mac is still hot (#981)
+- A command typed with a short resume or continue spelling inside a group (-rabc, -r=abc, -cn x,
+  -cw, -cv, -cp) no longer gets the Default model added, so the conversation keeps its own model
+  (#1237)
 
 ## v2.174.0
 

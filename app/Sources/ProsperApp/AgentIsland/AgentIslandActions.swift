@@ -1071,6 +1071,15 @@ extension AgentIsland {
     private static let conversationFlags: Set<String> = ["--resume", "-r", "--continue", "-c", "--from-pr", "--teleport"]
     private static let conversationFlagsEq = ["--resume=", "--from-pr=", "--teleport="]
 
+    /// #1237 (R1237-a): a single-dash cluster that continues a conversation: a c or r among the letters up to and
+    /// including its stop letter (`-rabc`, `-r=abc`, `-cn x`, `-cw`, `-cv`); letters after the stop letter are its value
+    /// (`-nrc` is the name "rc"). "", "-", "--" and any `--` word are not clusters; the prefix is bounded by the count.
+    private static func clusterContinues(_ a: String) -> Bool {
+        guard a.hasPrefix("-"), !a.hasPrefix("--") else { return false }
+        let letters = Array(a.dropFirst())
+        return letters.prefix(clusterStop(letters).at + 1).contains { $0 == "c" || $0 == "r" }
+    }
+
     /// #1228: a NEW session's argv with the Default model: `--model <model>` right after the claude token (naming's
     /// walk), only when (a) it is an interactive Claude that is the program run (argv[0] or after `env`: claudeRuns)
     /// or behind plain wrapper words (`headroom wrap claude`; a dashed word before it makes that claude an option's
@@ -1089,7 +1098,7 @@ extension AgentIsland {
               !claudeArgs(argv[(tok + 1)...]).contains(where: { arg in
                   guard case .option(let o, _) = arg, let a = o.first else { return false }
                   return a == "--model" || a.hasPrefix("--model=") || conversationFlags.contains(a)
-                      || conversationFlagsEq.contains { a.hasPrefix($0) }
+                      || conversationFlagsEq.contains { a.hasPrefix($0) } || clusterContinues(a)
               })
         else { return argv }
         var out = argv

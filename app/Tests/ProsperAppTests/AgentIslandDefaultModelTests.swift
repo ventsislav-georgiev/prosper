@@ -70,10 +70,23 @@ final class AgentIslandDefaultModelTests: XCTestCase {
             (["claude", "--", "-c"], ["claude", "--model", "opus", "--", "-c"], "after -- it is the prompt"),
         ]
         for r in adds { XCTAssertEqual(AgentIsland.withModel(r.argv, model: "opus"), r.out, r.why) }
-        XCTAssertEqual(AgentIsland.withModel(["claude", "-cp"], model: "opus"), ["claude", "--model", "opus", "-cp"],
-                       "-cp is one cluster word, never matching -c (pinned as it is; not read as -p either)")
-        XCTAssertEqual(AgentIsland.withModel(["claude", "-cn", "x"], model: "opus"), ["claude", "--model", "opus", "-cn", "x"],
-                       "a combined short group never matches -c: the model is added (pinned as it is)")
+        // R1237-a: a cluster with c or r up to and including its stop letter continues a conversation (changed row: -cp and
+        // -cn x used to get the model, pinned "as is"; real claude continues, so they skip now).
+        let clusterSkips: [[String]] = [
+            ["claude", "-rabc"], ["claude", "-r=abc"], ["claude", "-cn", "x"], ["claude", "-cw"], ["claude", "-cv"],
+            ["claude", "-cp"], ["claude", "--resume", "abc"], ["claude", "--continue"], ["claude", "-r", "abc"], ["claude", "-c"],
+        ]
+        for a in clusterSkips { XCTAssertEqual(AgentIsland.withModel(a, model: "opus"), a, a.joined(separator: " ")) }
+        let clusterAdds: [(argv: [String], out: [String], why: String)] = [
+            (["claude", "-nrc"], ["claude", "--model", "opus", "-nrc"], "rc is the name, a value after the stop letter"),
+            (["claude", "-n", "rc"], ["claude", "--model", "opus", "-n", "rc"], "two words: rc is n's value"),
+            (["claude"], ["claude", "--model", "opus"], "a plain new session"),
+            (["claude", ""], ["claude", "--model", "opus", ""], "an empty element is an operand"),
+            (["claude", "-"], ["claude", "--model", "opus", "-"], "a lone dash is an operand"),
+            (["claude", "--"], ["claude", "--model", "opus", "--"], "a bare -- ends the options"),
+            (["claude", "---"], ["claude", "--model", "opus", "---"], "only dashes: an unknown long option"),
+        ]
+        for r in clusterAdds { XCTAssertEqual(AgentIsland.withModel(r.argv, model: "opus"), r.out, r.why) }
     }
 
     /// KNOWN LIMIT (#1237 item 2, decided: leave as is): a plain two-word line whose second word is claude, no dashed word
@@ -162,7 +175,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                 ("-opus", "Not used: Cannot start with -"),
             ]
             XCTAssertEqual(AgentIslandPane.modelHint, cases.first?.line)
-            for scale in [0.7, 0.85, 1.0] as [CGFloat] {
+            for scale in [0.7, 0.85, 1.0, 1.15, 1.3, 1.45] as [CGFloat] {
                 ThemeRuntime.scale = scale
                 let size = CGSize(width: sz(560), height: sz(900))
                 var hint: (field: CGRect, title: CGRect, sub: CGRect, menu: CGRect)?
@@ -237,7 +250,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                 (String(repeating: "a", count: 129), "Not used: Too long: 128 max"),
                 ("-opus", "Not used: Cannot start with -"),
             ]
-            for scale in [0.7, 0.85, 1.0] as [CGFloat] {
+            for scale in [0.7, 0.85, 1.0, 1.15, 1.3, 1.45] as [CGFloat] {
                 ThemeRuntime.scale = scale
                 let size = CGSize(width: sz(560), height: sz(900))
                 var rowHeights: [CGFloat] = [], subHeights: [CGFloat] = []
