@@ -157,7 +157,9 @@ enum DchConfigWriter {
     /// #1172: what dch reads for auto_allow in `file` (dch.c config_line and dch_config_bool): the last line setting it
     /// wins, its value after spaces or tabs, cut of trailing spaces, tabs and CR, true for true/1/yes/on in any ASCII
     /// case; false with no such line. nil when a line is over `dchLineBytes` (dch reads it in pieces: unknown).
+    /// #1179: nil when the file holds a NUL byte anywhere (dch reads C strings: a line ends for it at the NUL).
     static func dchAllows(_ file: Data) -> Bool? {
+        guard !file.contains(0) else { return nil }
         var on = false
         for line in file.split(separator: 0x0A, omittingEmptySubsequences: false) {
             guard line.count <= dchLineBytes else { return nil }
@@ -172,7 +174,7 @@ enum DchConfigWriter {
     /// #1172: when `dch --config` timed out at the stand-down check, whether dch may answer by its own file. No path
     /// (no DCH_CONFIG, XDG_CONFIG_HOME or HOME) or no file: dch reads false. A file read the way dch reads it: its
     /// value. Anything Prosper cannot read as dch does (not a regular file, unreadable, over maxFileBytes, a line over
-    /// dchLineBytes, a stat error): true, so the island stands down and, if dch does not answer, the prompt goes to
+    /// dchLineBytes, a NUL byte, a stat error): true, so the island stands down and, if dch does not answer, the prompt goes to
     /// the human after the wait; never to both engines. Called on the controller's queue.
     static func mayAllow(path: String?) -> Bool {
         guard let path else { return false }
@@ -188,6 +190,8 @@ enum DchConfigWriter {
     /// kept byte for byte (CRLF, non-UTF-8 and comments too), a last line without a newline given one, a
     /// missing key appended. A pattern dch could not read back as one line (a control character, over
     /// `maxPatternBytes`) is written empty: no character of it ever starts another line.
+    /// #1179: a line holding a NUL byte is safe to keep: dch sees its bytes up to the NUL, and a key in that prefix is
+    /// a key setsKey sees on the whole line (the bytes through "=" hold no NUL), so both find the same key lines.
     static func render(_ old: Data, autoAllow: Bool, pattern: String) -> Data {
         let oneLine = pattern.utf8.count <= maxPatternBytes && pattern.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
         let owned = [("auto_allow", "auto_allow = \(autoAllow)"),

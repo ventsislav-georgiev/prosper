@@ -853,6 +853,8 @@ tag from the now-released section and put it on the new top draft.
   Settings; it still closes when publishing is no longer offered. (#1174)
 - Installing an extension now refuses a download that holds a named pipe, socket or device, naming
   it, instead of installing something that could hang Prosper. (#1174)
+- Always allow: when dch's config file holds a NUL byte and dch is slow to answer, Prosper now
+  leaves the prompt to dch instead of possibly answering it as well. (#1179)
 
 ## v2.174.0
 

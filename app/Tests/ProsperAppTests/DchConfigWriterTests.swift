@@ -11,9 +11,12 @@ final class DchConfigWriterTests: XCTestCase {
     // MARK: - dch's reading of the file (dch.c dch_config_get, dch_config_bool), for the rows
 
     /// The value of the LAST line setting `key`, as dch reads it; nil when no line sets it.
+    /// #1179: a line is a C string to dch: it ends at its first NUL byte.
     private static func dchValue(_ file: Data, _ key: String) -> String? {
         var v: String?
-        for line in file.split(separator: 0x0A, omittingEmptySubsequences: false) where DchConfigWriter.setsKey(line, key) {
+        for whole in file.split(separator: 0x0A, omittingEmptySubsequences: false) {
+            let line = whole.prefix { $0 != 0 }
+            guard DchConfigWriter.setsKey(line, key) else { continue }
             v = String(decoding: line.drop { $0 != 0x3D }.dropFirst(), as: UTF8.self)
                 .trimmingCharacters(in: CharacterSet(charactersIn: " \t\r"))
         }
@@ -625,6 +628,33 @@ final class DchConfigWriterTests: XCTestCase {
         }
     }
 
+    /// #1179 item 2: ICU's "$" also matches before a final line end, dch's POSIX "$" only at the very end. Over every
+    /// scalar c of the BMP (and two above it), "-end$" on "x-end" + c reads differently in the two engines exactly on
+    /// this literal list (NUL: dch's C string ends before it), and dch's session name rule (name_ok, copied from the
+    /// supervisor's read) refuses every one of them. Aliases and masters older than that rule: report of #1179.
+    func testTheEndAnchorDiffersOnlyOnNamesDchsRuleRefuses() {
+        let restore = Self.cLocale()
+        defer { restore() }
+        func nameRuleRefuses(_ v: UInt32) -> Bool {
+            switch v {
+            case 0..<0x20, 0x7F...0x9F, 0x2028, 0x2029, 0x202A...0x202E, 0x2066...0x2069, 0x200E, 0x200F, 0x061C: true
+            default: false
+            }
+        }
+        let p = "-end$"
+        XCTAssertEqual(DchConfigWriter.sidekickValue(p), p, "written to dch as the island uses it")
+        var differ: [UInt32] = []
+        for v in Array(UInt32(0)...0xFFFF) + [0x1F600, 0x10FFFF] {
+            guard let u = Unicode.Scalar(v) else { continue }   // the surrogates
+            let n = "x-end" + String(Character(u))
+            if Self.islandMatches(p, n) != Self.dchMatches(p, n) { differ.append(v) }
+        }
+        XCTAssertEqual(differ, [0x00, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029])
+        XCTAssertEqual(differ.filter { !nameRuleRefuses($0) }, [], "a name dch can carry")
+        XCTAssertTrue(Self.islandMatches(p, "x-end\r\n") && Self.dchMatches(p, "x-end\r\n") == false, "CRLF: CR and LF are refused too")
+        XCTAssertTrue(Self.islandMatches(p, "x-end") && Self.dchMatches(p, "x-end") == true)
+    }
+
     /// The set members are this literal list: every printable ASCII character inside a set is taken exactly when it
     /// is in it (the loop runs over the characters, not over the list under test); ranges only of one kind, low to high.
     func testTheSetMembersAreALiteralList() {
@@ -723,6 +753,26 @@ final class DchConfigWriterTests: XCTestCase {
         XCTAssertEqual(written(), off, "the toggle off: false, whatever the list")
     }
 
+    /// #1179 item 3, the number behind "no sync per poll tick": a sync with the toggle on forks `--ls-json` once per
+    /// socket dir and nothing else once the build is cached, so a sync on every 1 s tick would cost 120 process
+    /// starts a minute with both of Prosper's dirs. Counted through the runDch seam.
+    @MainActor func testASyncForksOneListPerSocketDir() {
+        usePattern(tabs: true, "-qa")
+        let file = tempDir().appendingPathComponent("config").path, other = "/Users/example/.local/state/dch-remote"
+        let (c, d) = controller(FakeIO(), on: true, version: [1, 30, 0], build: "full", config: file)
+        c.seedDirs = { [DchConfigWriterTests.dir, other] }
+        d.lock.withLock { d.ls = [Self.dir: "[]", other: "[]"] }
+        c.syncDchConfig()
+        c.queue.sync {}
+        XCTAssertEqual(d.called(), [["--build"], ["--ls-json"], ["--ls-json"]])
+        for _ in 0..<3 {
+            c.syncDchConfig()
+            c.queue.sync {}
+        }
+        XCTAssertEqual(d.called().count, 3 + 3 * 2, "a later sync: one list per dir, nothing else forks")
+        XCTAssertEqual(read(file), "auto_allow = true\nsidekick_pattern = -qa\n")
+    }
+
     /// dch's own reading of auto_allow (dch.c config_line, dch_config_bool), and of the file when the stand-down's
     /// `--config` times out (mayAllow): nothing Prosper cannot read the way dch does counts as false.
     func testDchsReadingOfAutoAllow() throws {
@@ -756,6 +806,45 @@ final class DchConfigWriterTests: XCTestCase {
         let longPath = dir.appendingPathComponent("long").path
         XCTAssertTrue(fm.createFile(atPath: longPath, contents: long))
         XCTAssertTrue(DchConfigWriter.mayAllow(path: longPath), "a line read in pieces: unknown")
+
+        // #1179: a NUL byte anywhere: dch reads each line up to it; Prosper says unknown, so the island stands down.
+        let nul: [(String, Bool)] = [   // the file, what dch reads
+            ("auto_allow = true\u{0} # off\n", true),                    // after the value
+            ("\u{0}auto_allow = true\n", false),                         // before the key
+            ("auto_allow = true\n# a\u{0}b\n", true),                    // in another line
+            ("auto_allow = false\nauto_allow = yes\u{0}\n", true),
+            ("auto_allow = false\n\u{0}\n", false),
+        ]
+        for (text, dch) in nul {
+            XCTAssertEqual(Self.dchAllows(Data(text.utf8)), dch, "dch: \(text.debugDescription)")
+            XCTAssertTrue(DchConfigWriter.dchAllows(Data(text.utf8)) == nil, "unknown: \(text.debugDescription)")
+        }
+        XCTAssertTrue(DchConfigWriter.mayAllow(path: file("nul", "auto_allow = true\u{0} # off\n")), "a NUL byte: unknown")
+        XCTAssertTrue(DchConfigWriter.mayAllow(path: file("nulOff", "\u{0}auto_allow = true\n")), "even where dch reads false")
+    }
+
+    /// #1179: render keeps a line holding a NUL byte, and finds exactly the key lines dch finds in it (dch sees the
+    /// bytes up to the NUL). So turning the toggle off writes a false dch reads, wherever the NUL stands.
+    func testANulByteLineIsKeptAndItsKeyFound() {
+        for set in ["auto_allow = true", " \tauto_allow\t=\tyes"] {
+            let b = Array(set.utf8)
+            for i in 0...b.count {
+                let line = Data(b[..<i]) + Data([0]) + Data(b[i...]), old = line + Data("\n".utf8)
+                XCTAssertEqual(DchConfigWriter.setsKey(line, "auto_allow"), DchConfigWriter.setsKey(line.prefix { $0 != 0 }, "auto_allow"),
+                               "NUL at \(i) of \(set.debugDescription)")
+                let new = DchConfigWriter.render(old, autoAllow: false, pattern: "-qa")
+                XCTAssertFalse(Self.dchAllows(new), "dch reads false: NUL at \(i) of \(set.debugDescription)")
+            }
+        }
+        let path = tempDir().appendingPathComponent("config").path
+        let old = "auto_allow = true\u{0} # off\n\u{0}auto_allow = true\nsidekick_pattern = a\u{0}b\n# note\u{0}x\n"
+        XCTAssertTrue(FileManager.default.createFile(atPath: path, contents: Data(old.utf8)))
+        XCTAssertEqual(DchConfigWriter.write(path: path, autoAllow: false, pattern: "-qa"), .written, "no new refusal")
+        XCTAssertEqual(read(path), "auto_allow = false\n\u{0}auto_allow = true\nsidekick_pattern = -qa\n# note\u{0}x\n")
+        let d = FileManager.default.contents(atPath: path) ?? Data()
+        XCTAssertFalse(Self.dchAllows(d))
+        XCTAssertEqual(Self.dchValue(d, "sidekick_pattern"), "-qa")
+        XCTAssertTrue(DchConfigWriter.dchAllows(d) == nil, "the kept NUL line still reads unknown at a timeout")
     }
 
     /// Item 2 (#792's leftover): the stand-down check's `dch --config` timing out reads the file instead. One that
@@ -768,6 +857,7 @@ final class DchConfigWriterTests: XCTestCase {
             ("no file", nil, true),
             ("not a bool", "auto_allow = true # on\n", true),
             ("a line dch reads in pieces", String(repeating: "#", count: DchConfigWriter.dchLineBytes + 1) + "\n", false),
+            ("a NUL after the value", "auto_allow = true\u{0} # off\n", false),   // #1179: dch reads true
         ]
         for (name, text, types) in cases {
             let f = FakeIO(), file = tempDir("timedOut").appendingPathComponent("config").path
@@ -846,7 +936,31 @@ final class DchConfigWriterTests: XCTestCase {
         let perKey = type("-reviewer", settled: true)
         AgentIslandListSection.patternEdited("", now: Date(timeIntervalSince1970: t + 1))
         fire()
-        let burst = type("-reviewer", settled: false)
+        // #1179 r2: a stale timer fired while the burst still goes on runs no sync and writes nothing (its gen is old),
+        // and the newer timers stay pending. Syncs are counted through the dchConfigPath seam (one call per sync).
+        let paths = OSAllocatedUnfairLock(initialState: 0), path = shared.dchConfigPath
+        shared.dchConfigPath = { paths.withLock { $0 += 1 }; return path() }
+        let word = "-reviewer", before = read(file)
+        for n in 1...3 {
+            t += 1
+            AgentIslandListSection.patternEdited(String(word.prefix(n)), now: Date(timeIntervalSince1970: t))
+        }
+        XCTAssertEqual(timers.pending.count, 3, "a timer per keystroke")
+        guard let stale = timers.pending.first else { return XCTFail("no timer scheduled") }
+        timers.pending.removeFirst()
+        let syncs = paths.withLock { $0 }
+        stale()
+        shared.queue.sync {}
+        XCTAssertEqual(paths.withLock { $0 }, syncs, "a stale timer runs no sync")
+        XCTAssertEqual(read(file), before, "a stale timer writes nothing (not \"-re\")")
+        XCTAssertEqual(timers.pending.count, 2, "the newer timers are still pending")
+        writes = 0
+        for n in 4...word.count {
+            t += 1
+            AgentIslandListSection.patternEdited(String(word.prefix(n)), now: Date(timeIntervalSince1970: t))
+        }
+        fire()
+        let burst = writes
         print("#1172 config writes for \"-reviewer\" typed in Settings: \(perKey) with each keystroke settled, \(burst) as one burst")
         XCTAssertEqual(perKey, 9, "a write per keystroke when nothing coalesces")
         XCTAssertEqual(burst, 1, "one write after the burst")
