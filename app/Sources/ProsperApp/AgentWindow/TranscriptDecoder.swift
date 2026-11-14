@@ -128,6 +128,8 @@ enum TranscriptKeys {
         "startLine": ["startLine", "start_line"],
         "totalLines": ["totalLines", "total_lines"],
         "cwd": ["cwd", "workingDirectory", "working_directory"],
+        "model": ["model", "modelId", "model_id"],
+        "effort": ["effort", "effortLevel", "effort_level"],
     ]
 
     static func get(_ o: [String: Any]?, _ key: String) -> Any? {

@@ -88,6 +88,12 @@ struct AgentSession: Equatable, Identifiable {
     /// #1133 (QA #849 INFO-3): false on a row kept from an earlier list because both list forms failed
     /// (#486); Always allow answers fresh rows only. Never sent to the phone.
     var fresh = true
+    /// #1198: model id and effort word of the session's last answer, read from its transcript
+    /// (AgentModelEffort); nil for Codex, shell and History rows and when the transcript holds none.
+    var model: String? = nil
+    var effort: String? = nil
+    /// The transcript size `model`/`effort` were read at (the cache key with the path); nil = never read.
+    var modelReadSize: UInt64? = nil
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -559,8 +565,11 @@ enum AgentIsland {
     /// #486: a dir whose `-lj` timed out keeps its rows from `previous`, so a wedged
     /// dch does not read as "no sessions" and collapse the island.
     static func list(dirs: [String], keeping previous: [AgentSession] = [],
-                     run: Runner = { DchCommand.runIsland(args: $0, env: $1) }) -> [AgentSession] {
-        dirs.flatMap { dir -> [AgentSession] in
+                     run: Runner = { DchCommand.runIsland(args: $0, env: $1) },
+                     modelIO: AgentModelEffort.IO = .live) -> [AgentSession] {
+        // #1198: runs on the caller's queue (the poller's), like the dch fork; `previous` is the cache.
+        let before = Dictionary(previous.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        return dirs.flatMap { dir -> [AgentSession] in
             let env = listEnv(dir: dir)
             let json = run(["--ls-json"], env) ?? Data()
             var rows = DchCommand.parseListJSON(json)
@@ -571,13 +580,14 @@ enum AgentIsland {
                 }
                 rows = DchCommand.parseListTSV(String(decoding: tsv, as: UTF8.self))
             }
-            return rows.map {
-                AgentSession(key: AgentSessionKey(dir: dir, name: $0.name), alias: $0.alias,
-                             activity: TimeInterval($0.activityEpoch), state: AgentState(dch: $0.state),
-                             agents: $0.agents, meta: $0.meta, version: $0.version, metaEpoch: $0.metaEpoch,
-                             autoAllowed: $0.autoAllowed,
-                             claudeSessionID: mapping[$0.name]?.sessionID, transcriptPath: mapping[$0.name]?.path,
-                             cwd: $0.cwd)
+            return rows.map { row -> AgentSession in
+                let s = AgentSession(key: AgentSessionKey(dir: dir, name: row.name), alias: row.alias,
+                             activity: TimeInterval(row.activityEpoch), state: AgentState(dch: row.state),
+                             agents: row.agents, meta: row.meta, version: row.version, metaEpoch: row.metaEpoch,
+                             autoAllowed: row.autoAllowed,
+                             claudeSessionID: mapping[row.name]?.sessionID, transcriptPath: mapping[row.name]?.path,
+                             cwd: row.cwd)
+                return AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO)
             }
         }
     }

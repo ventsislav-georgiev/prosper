@@ -1,0 +1,299 @@
+import XCTest
+@testable import ProsperApp
+
+/// #1198 (P1a of #1192): the model and effort of the last answer, read from a transcript tail. Fixtures
+/// under Tests/Fixtures/claude-code and files written in tempDir(); every read goes through the counting
+/// seam, nothing asserts time, no real dch runs, no real transcript is read.
+final class AgentModelEffortTests: XCTestCase {
+
+    static let corpus = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/claude-code", isDirectory: true)
+
+    /// Counts what the reader asks for. Memory-backed when `files` holds the path, else the real file.
+    final class Counting: @unchecked Sendable {
+        private let lock = NSLock()
+        private var files: [String: Data]
+        private(set) var stats = 0, reads = 0, bytes = 0, longest = 0
+        init(files: [String: Data] = [:]) { self.files = files }
+        func set(_ path: String, _ data: Data) { lock.lock(); files[path] = data; lock.unlock() }
+        func reset() { lock.lock(); stats = 0; reads = 0; bytes = 0; longest = 0; lock.unlock() }
+        var io: AgentModelEffort.IO {
+            AgentModelEffort.IO(
+                size: { [self] path in
+                    lock.lock(); defer { lock.unlock() }
+                    stats += 1
+                    if let d = files[path] { return UInt64(d.count) }
+                    return AgentModelEffort.IO.live.size(path)
+                },
+                read: { [self] path, off, len in
+                    lock.lock()
+                    let mem = files[path]
+                    reads += 1; bytes += len; longest = max(longest, len)
+                    lock.unlock()
+                    guard let d = mem else { return AgentModelEffort.IO.live.read(path, off, len) }
+                    guard off <= UInt64(d.count), len <= d.count - Int(off) else { return nil }
+                    return d.subdata(in: Int(off)..<(Int(off) + len))
+                })
+        }
+    }
+
+    private func readPath(_ path: String, _ c: Counting = Counting()) -> AgentModelEffort? {
+        guard let size = c.io.size(path) else { return nil }
+        return AgentModelEffort.read(size: size) { c.io.read(path, $0, $1) }
+    }
+
+    private func line(_ o: [String: Any]) -> Data {
+        try! JSONSerialization.data(withJSONObject: o) + Data("\n".utf8)
+    }
+
+    private func assistant(_ model: Any, side: Any? = nil, effort: Any? = nil) -> Data {
+        var o: [String: Any] = ["type": "assistant", "message": ["model": model, "role": "assistant"]]
+        if let side { o["isSidechain"] = side }
+        if let effort { o["effort"] = effort }
+        return line(o)
+    }
+
+    private func write(_ data: Data, _ name: String = "t.jsonl") -> String {
+        let url = tempDir().appendingPathComponent(name)
+        try! data.write(to: url)
+        return url.path
+    }
+
+    // MARK: - Reader on the fixtures
+
+    func testFixturesNewestMainThreadModelAndEffort() {
+        // (fixture, model, effort): the 2.1.318 a and b files hold effort "high"; the rest hold none.
+        let table: [(String, String?, String?)] = [
+            ("2.1.223/a-tools-and-noise.jsonl", "claude-fixture-model", nil),
+            ("2.1.223/b-compaction-agents-bad-lines.jsonl", "claude-fixture-model", nil),
+            ("2.1.280/a-tools-and-noise.jsonl", "claude-fixture-model", nil),
+            ("2.1.280/b-compaction-agents.jsonl", "claude-fixture-model", nil),
+            ("2.1.318/a-tools-and-noise.jsonl", "claude-fixture-model", "high"),
+            ("2.1.318/b-compaction-agents-more-tools.jsonl", "claude-fixture-model", "high"),
+            ("2.1.318/c-tasks.jsonl", "claude-fixture-model", nil),
+            ("2.1.318/d-todowrite.jsonl", "claude-fixture-model", nil),
+            ("2.4.0/future-renamed-and-unknown.jsonl", nil, nil),
+        ]
+        for (file, model, effort) in table {
+            let got = readPath(Self.corpus.appendingPathComponent(file).path)
+            XCTAssertTrue(got?.model == model, file)
+            XCTAssertTrue(got?.effort == effort, file)
+        }
+    }
+
+    // MARK: - Reader rules
+
+    func testSidechainNewestShowsTheMainThreadModel() {
+        let data = assistant("claude-main-4-2") + assistant("claude-side-9-9", side: true)
+            + assistant("claude-side-8-8", side: true)
+        XCTAssertTrue(readPath(write(data))?.model == "claude-main-4-2")
+        // A sidechain flag that is not a Bool is not a main-thread line either.
+        let odd = assistant("claude-main-4-2") + assistant("claude-odd-1-1", side: "false")
+        XCTAssertTrue(readPath(write(odd))?.model == "claude-main-4-2")
+        // Absent and false both read as main.
+        XCTAssertTrue(readPath(write(assistant("claude-a-1-1", side: false)))?.model == "claude-a-1-1")
+    }
+
+    func testEffortWordMustBeKnown() {
+        let table: [(Any?, String?)] = [
+            ("low", "low"), ("medium", "medium"), ("high", "high"), ("xhigh", "xhigh"), ("max", "max"),
+            ("turbo", nil), ("HIGH", nil), ("", nil), (5, nil), (nil, nil),
+        ]
+        for (word, want) in table {
+            let got = readPath(write(assistant("claude-a-1-1", effort: word)))
+            XCTAssertTrue(got?.model == "claude-a-1-1")
+            XCTAssertTrue(got?.effort == want, "\(String(describing: word))")
+        }
+    }
+
+    func testNonStringModelAndOtherTypesReadAsNothing() {
+        XCTAssertTrue(readPath(write(assistant(5))) == nil)
+        XCTAssertTrue(readPath(write(assistant(""))) == nil)
+        XCTAssertTrue(readPath(write(assistant(String(repeating: "m", count: 129)))) == nil)
+        XCTAssertTrue(readPath(write(line(["type": "user", "message": ["model": "claude-a-1-1"]]))) == nil)
+        XCTAssertTrue(readPath(write(Data())) == nil)
+        XCTAssertTrue(readPath("/Users/example/none.jsonl") == nil)
+    }
+
+    func testBadLinesReadAsNothingAndOlderLineStands() {
+        var bad = Data("{\"type\":\"assistant\",\"message\":{\"model\":\"claude-nul-1-1\"}}".utf8)
+        bad.insert(0, at: 5)
+        let notUTF8 = Data([0x7B, 0xFF, 0xFE, 0x7D])
+        let data = assistant("claude-old-2-0") + Data("{not json\n".utf8) + bad + Data("\n".utf8)
+            + notUTF8 + Data("\n".utf8) + Data("[1,2]\n\n".utf8) + Data("{\"type\":\"assistant\"".utf8)
+        XCTAssertTrue(readPath(write(data))?.model == "claude-old-2-0")
+    }
+
+    func testRenamedKeysReadAsUnknownNotWrong() {
+        let renamed = line(["entry_type": "assistant", "message": ["model_id": "claude-alias-3-1"], "effort_level": "max"])
+        let got = readPath(write(renamed))
+        XCTAssertTrue(got?.model == "claude-alias-3-1")
+        XCTAssertTrue(got?.effort == "max")
+        XCTAssertTrue(readPath(write(line(["type": "assistant", "message": ["mdl": "claude-a-1-1"]]))) == nil)
+    }
+
+    // MARK: - Bounds
+
+    func testTwoMiBFileWithNoAssistantInTheLastMiBReadsAtMostOneMiB() {
+        // An assistant line at the very start is outside the last 1 MiB and must not be found.
+        let filler = line(["type": "user", "message": ["content": String(repeating: "x", count: 1000)]])
+        var data = assistant("claude-early-1-1")
+        while data.count < 2 << 20 { data += filler }
+        data = data.prefix(2 << 20) + Data()
+        XCTAssertEqual(data.count, 2 << 20)
+        let c = Counting(files: ["/Users/example/big.jsonl": data])
+        XCTAssertTrue(readPath("/Users/example/big.jsonl", c) == nil)
+        XCTAssertLessThanOrEqual(c.bytes, 1 << 20)
+        XCTAssertLessThanOrEqual(c.longest, 1 << 16)
+        XCTAssertGreaterThan(c.reads, 0)
+    }
+
+    func testOneLineLongerThanTheWindowReadsAsNothing() {
+        let huge = Data("{\"type\":\"assistant\",\"pad\":\"".utf8) + Data(repeating: 0x78, count: 1_300_000)
+            + Data("\",\"message\":{\"model\":\"claude-huge-1-1\"}}\n".utf8)
+        let c = Counting(files: ["/Users/example/huge.jsonl": huge])
+        XCTAssertTrue(readPath("/Users/example/huge.jsonl", c) == nil)
+        XCTAssertLessThanOrEqual(c.bytes, 1 << 20)
+    }
+
+    func testLineSpanningSeveralStepsIsFoundWhole() {
+        let pad = String(repeating: "y", count: 200_000)
+        let data = line(["type": "assistant", "pad": pad, "message": ["model": "claude-wide-5-0"]])
+            + line(["type": "user"])
+        let c = Counting(files: ["/Users/example/wide.jsonl": data])
+        XCTAssertTrue(readPath("/Users/example/wide.jsonl", c)?.model == "claude-wide-5-0")
+        XCTAssertLessThanOrEqual(c.longest, 1 << 16)
+    }
+
+    func testShortFileAndShortReadAreSafe() {
+        let data = assistant("claude-a-1-1")
+        XCTAssertTrue(AgentModelEffort.read(size: UInt64(data.count)) { _, _ in nil } == nil)
+        XCTAssertTrue(AgentModelEffort.read(size: UInt64(data.count)) { _, len in Data(repeating: 0x20, count: len - 1) } == nil)
+        XCTAssertTrue(AgentModelEffort.read(size: 0) { _, _ in data } == nil)
+    }
+
+    // MARK: - Short name
+
+    func testShortNames() {
+        let table: [(String, String)] = [
+            ("claude-opus-4-7", "Opus 4.7"),
+            ("claude-sonnet-4-5-20250929", "Sonnet 4.5"),
+            ("claude-sonnet-4", "Sonnet 4"),
+            ("claude-sonnet-4-20250514", "Sonnet 4"),
+            ("claude-haiku-5", "Haiku 5"),
+            ("claude-haiku-5-20260101", "Haiku 5"),
+            ("claude-fixture-model", "claude-fixture-model"),
+            ("claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20241022"),
+            ("claude-opus-4-7-1-2", "claude-opus-4-7-1-2"),
+            ("claude-opus-4-x", "claude-opus-4-x"),
+            ("claude-Opus-4-7", "claude-Opus-4-7"),
+            ("claude-opus", "claude-opus"),
+            ("claude--4-7", "claude--4-7"),
+            ("other-opus-4-7", "other-opus-4-7"),
+            ("", ""),
+            ("claude-opus-12345678-7", "claude-opus-12345678-7"),
+        ]
+        for (id, want) in table { XCTAssertEqual(AgentModelEffort.shortName(id), want, id) }
+    }
+
+    // MARK: - List path (cache by path and size)
+
+    private let path = "/Users/example/.claude/projects/p/0b7c2f3e-aaaa-bbbb-cccc-0123456789ab.jsonl"
+
+    private func session(_ state: AgentState, path: String?) -> AgentSession {
+        AgentSession(key: AgentSessionKey(dir: "/Users/example/dch", name: "api"), alias: "", activity: 1,
+                     state: state, agents: 0, transcriptPath: path)
+    }
+
+    func testResolveReadsOnlyWhenSizeChangedAndNewOrLeftWorking() {
+        let a = assistant("claude-first-1-0", effort: "low")
+        let b = a + assistant("claude-second-2-0", effort: "max")
+        let c = Counting(files: [path: a])
+        // New row: one read pass, values filled.
+        var s = AgentModelEffort.resolve(session(.working, path: path), previous: nil, io: c.io)
+        XCTAssertTrue(s.model == "claude-first-1-0" && s.effort == "low" && s.modelReadSize == UInt64(a.count))
+        XCTAssertEqual(c.stats, 1)
+        // Same size: no bytes read, one stat.
+        c.reset()
+        var next = AgentModelEffort.resolve(session(.working, path: path), previous: s, io: c.io)
+        XCTAssertEqual(c.reads, 0); XCTAssertEqual(c.bytes, 0); XCTAssertEqual(c.stats, 1)
+        XCTAssertTrue(next.model == "claude-first-1-0")
+        s = next
+        // Grew while still working: not read, old values and old size kept.
+        c.set(path, b); c.reset()
+        next = AgentModelEffort.resolve(session(.working, path: path), previous: s, io: c.io)
+        XCTAssertEqual(c.reads, 0)
+        XCTAssertTrue(next.model == "claude-first-1-0" && next.modelReadSize == UInt64(a.count))
+        s = next
+        // Grew, still not working before and after (idle -> idle): not read either.
+        let idle = AgentSession(key: s.key, alias: "", activity: 1, state: .idle, agents: 0, transcriptPath: path,
+                                           model: s.model, effort: s.effort, modelReadSize: s.modelReadSize)
+        next = AgentModelEffort.resolve(session(.idle, path: path), previous: idle, io: c.io)
+        XCTAssertEqual(c.reads, 0)
+        // Left working: read, new values.
+        next = AgentModelEffort.resolve(session(.done, path: path), previous: s, io: c.io)
+        XCTAssertGreaterThan(c.reads, 0)
+        XCTAssertTrue(next.model == "claude-second-2-0" && next.effort == "max" && next.modelReadSize == UInt64(b.count))
+        // It is cached by the new size again.
+        c.reset()
+        _ = AgentModelEffort.resolve(session(.done, path: path), previous: next, io: c.io)
+        XCTAssertEqual(c.reads, 0)
+    }
+
+    func testShrunkOrReplacedFileIsReadAgain() {
+        let big = assistant("claude-big-1-0") + assistant("claude-big-2-0")
+        let small = assistant("claude-small-3-0")
+        let c = Counting(files: [path: big])
+        let s = AgentModelEffort.resolve(session(.idle, path: path), previous: nil, io: c.io)
+        XCTAssertTrue(s.model == "claude-big-2-0")
+        c.set(path, small); c.reset()
+        let shrunk = AgentModelEffort.resolve(session(.idle, path: path), previous: s, io: c.io)
+        XCTAssertGreaterThan(c.reads, 0)
+        XCTAssertTrue(shrunk.model == "claude-small-3-0")
+        // A different path under the same key (a new transcript) is read although the size grew.
+        let other = "/Users/example/.claude/projects/p/1b7c2f3e-aaaa-bbbb-cccc-0123456789ab.jsonl"
+        c.set(other, big + big); c.reset()
+        let moved = AgentModelEffort.resolve(session(.idle, path: other), previous: shrunk, io: c.io)
+        XCTAssertGreaterThan(c.reads, 0)
+        XCTAssertTrue(moved.model == "claude-big-2-0")
+    }
+
+    func testNothingFoundIsCachedAndRowsWithoutAPathReadNothing() {
+        let c = Counting(files: [path: line(["type": "user"])])
+        let s = AgentModelEffort.resolve(session(.idle, path: path), previous: nil, io: c.io)
+        XCTAssertTrue(s.model == nil && s.effort == nil && s.modelReadSize != nil)
+        c.reset()
+        _ = AgentModelEffort.resolve(session(.idle, path: path), previous: s, io: c.io)
+        XCTAssertEqual(c.reads, 0)
+        // Codex, shell and History rows have no transcript path: no stat, no read.
+        c.reset()
+        for p in [nil, ""] as [String?] {
+            let r = AgentModelEffort.resolve(session(.idle, path: p), previous: nil, io: c.io)
+            XCTAssertTrue(r.model == nil && r.modelReadSize == nil)
+        }
+        XCTAssertEqual(c.stats, 0); XCTAssertEqual(c.reads, 0)
+        // A path that cannot be stat'd reads nothing.
+        let gone = AgentModelEffort.resolve(session(.idle, path: "/Users/example/gone.jsonl"), previous: nil, io: c.io)
+        XCTAssertTrue(gone.model == nil)
+        XCTAssertEqual(c.reads, 0)
+    }
+
+    func testListFillsFieldsAndKeepsThemThroughTheNextList() {
+        let sid = "0b7c2f3e-aaaa-bbbb-cccc-0123456789ab"
+        let json = Data((#"[{"name":"api","alias":"","activity_epoch":1,"state":"working","version":"1.60.0","agents":0,"#
+            + #""claude_session_id":"\#(sid)","transcript_path":"\#(path)"},"#
+            + #"{"name":"sh","alias":"","activity_epoch":1,"state":"idle","version":"1.60.0","agents":0}]"#).utf8)
+        let c = Counting(files: [path: assistant("claude-list-4-6", effort: "xhigh")])
+        let run: AgentIsland.Runner = { _, _ in json }
+        let first = AgentIsland.list(dirs: ["/Users/example/dch"], run: run, modelIO: c.io)
+        XCTAssertEqual(first.count, 2)
+        let api = first.first { $0.name == "api" }, sh = first.first { $0.name == "sh" }
+        XCTAssertTrue(api?.model == "claude-list-4-6" && api?.effort == "xhigh")
+        XCTAssertTrue(sh?.model == nil && sh?.effort == nil)
+        XCTAssertEqual(c.stats, 1)
+        c.reset()
+        let second = AgentIsland.list(dirs: ["/Users/example/dch"], keeping: first, run: run, modelIO: c.io)
+        XCTAssertEqual(c.reads, 0)
+        XCTAssertTrue(second.first { $0.name == "api" }?.model == "claude-list-4-6")
+    }
+}
