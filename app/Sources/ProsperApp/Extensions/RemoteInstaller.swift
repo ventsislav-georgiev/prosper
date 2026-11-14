@@ -390,12 +390,29 @@ enum RemoteInstaller {
     /// symlink in the extracted tree. A symlink pointing outside the extension
     /// dir could later be written-through to escape it; `assertSafeArchive`
     /// blocks `..` entries pre-extraction, this blocks the symlink vector.
-    private static func assertNoSymlinks(_ root: URL) throws {
+    /// #1174: also refuses anything that is not a file or a folder (a named pipe blocks the manifest read and the
+    /// copy that come next); lstat only, nothing here opens an entry.
+    static func assertNoSymlinks(_ root: URL) throws {
         // Every name, "._*" included (a FileManager walk missed those).
         for (name, type) in try entries(root) {
             if type == S_IFLNK { throw InstallError.unsafeArchive("symlink: \(name)") }
             if type == S_IFDIR { try assertNoSymlinks(root.appendingPathComponent(name)) }
+            else if let why = notFileReason(name, type: type) { throw InstallError.unsafeArchive(why) }
         }
+    }
+
+    /// Why an extracted entry of lstat type `type` is refused, naming it as the link refusal does; nil for a
+    /// regular file or a folder. The refusal does not rely on what tar can make: every other type is refused.
+    static func notFileReason(_ name: String, type: mode_t) -> String? {
+        let what: String
+        switch type {
+        case S_IFREG, S_IFDIR: return nil
+        case S_IFIFO: what = "a named pipe"
+        case S_IFSOCK: what = "a socket"
+        case S_IFCHR, S_IFBLK: what = "a device"
+        default: what = "a special item"
+        }
+        return "\(what), not a file or folder: \(name)"
     }
 
     /// Package an extension directory's CONTENTS (extension.toml at the archive

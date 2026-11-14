@@ -132,6 +132,11 @@ private struct ExtensionRow: View {
     @StateObject private var confirmation = PublishConfirmation()
 
     private var meta: ExtensionMeta { record.manifest.extension }
+    /// #1174: the row shows the Publish button; the open list closes when this turns false.
+    private var offered: Bool {
+        PublishActions.offers(system: record.isSystem, trusted: record.trusted, publishing: publishing,
+                              published: publishedVersion, version: meta.version)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(6)) {
@@ -227,6 +232,7 @@ private struct ExtensionRow: View {
             }
         }
         .padding(.vertical, sz(4))
+        .closesPublishList(confirmation, offered: offered)
         .task(id: record.id) { await refreshPublishedVersion() }
     }
 
@@ -391,9 +397,8 @@ struct PublishButton: View {
     }
 
     var body: some View {
+        // No onDisappear close (#1174): a lazy list sends it for a row scrolled far out; the row closes the list.
         Button(title, action: tap).rowAction(prominent: prominent).help(help)
-            // The list closes whenever the row stops offering Publish (untrusted, publishing, already live).
-            .onDisappear { model.cancel() }
     }
 }
 
@@ -417,8 +422,19 @@ struct PublishActions: View {
         try await Task.detached { try packer(dir, plan) }.value
     }
 
+    /// nil: nothing live (never published, yanked or not fetched yet); else whether the local version is newer.
+    static func ahead(_ published: String?, _ version: String) -> Bool? {
+        published.map { SemanticVersion(version) > SemanticVersion($0) }
+    }
+
+    /// Whether a row shows the Publish button (#1174): a trusted user extension, not publishing, its local version
+    /// not live yet or ahead of the live one. The body below draws the button under exactly this condition.
+    static func offers(system: Bool, trusted: Bool, publishing: Bool, published: String?, version: String) -> Bool {
+        !system && trusted && !publishing && ahead(published, version) != false
+    }
+
     var body: some View {
-        let ahead = published.map { SemanticVersion(version) > SemanticVersion($0) }
+        let ahead = Self.ahead(published, version)
         if publishing {
             ProgressView().controlSize(.small)
         } else {
@@ -434,6 +450,14 @@ struct PublishActions: View {
                               dir: dir, model: model, publish: publish)
             }
         }
+    }
+}
+
+extension View {
+    /// #1174: closes `model`'s list when the row stops offering Publish (untrusted, publishing, already live).
+    /// Not on disappear: a lazy list sends that for a row scrolled far out. The action runs on the main actor.
+    @MainActor func closesPublishList(_ model: PublishConfirmation, offered: Bool) -> some View {
+        onChange(of: offered) { _, now in if !now { model.cancel() } }
     }
 }
 

@@ -849,6 +849,10 @@ tag from the now-released section and put it on the new top draft.
   the other model's name. (#893)
 - Open Agent Sessions now has a default shortcut, Shift-Option-S (while the Agent Island extension
   is on). A shortcut you set or cleared yourself is kept; change it in Settings > Shortcuts. (#1177)
+- The Marketplace publish list no longer closes when you scroll its extension far out of view in
+  Settings; it still closes when publishing is no longer offered. (#1174)
+- Installing an extension now refuses a download that holds a named pipe, socket or device, naming
+  it, instead of installing something that could hang Prosper. (#1174)
 
 ## v2.174.0
 

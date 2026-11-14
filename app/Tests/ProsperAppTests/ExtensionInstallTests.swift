@@ -301,6 +301,36 @@ final class ExtensionInstallTests: XCTestCase {
         }
     }
 
+    // MARK: - #1174: an extracted entry that is not a file or folder (the unpack's lstat walk)
+
+    /// A named pipe where the manifest goes (the loader's read would wait on it for ever) refuses the extracted
+    /// folder by name. Only the check runs: it lists the folder (readdir) and lstats the pipe; the row makes the
+    /// pipe with mkfifo in its own tempDir() and unlinks it; nothing opens it (no copy, no loader, no tar).
+    func testExtractedPipeIsRefusedByTheCheck() throws {
+        let dir = tempDir().appendingPathComponent("src", isDirectory: true)
+        try writeSource(into: dir.appendingPathComponent("lib"), id: "eu.example.pipe")   // regular files a level down
+        XCTAssertNoThrow(try RemoteInstaller.assertNoSymlinks(dir), "a folder of files and folders was refused")
+        let pipe = dir.appendingPathComponent("extension.toml").path
+        XCTAssertEqual(mkfifo(pipe, 0o600), 0)
+        defer { unlink(pipe) }
+        XCTAssertThrowsError(try RemoteInstaller.assertNoSymlinks(dir)) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError,
+                           .unsafeArchive("a named pipe, not a file or folder: extension.toml"))
+        }
+    }
+
+    /// Every lstat type but a regular file or a folder is refused with words for what it is, whether or not this
+    /// Mac's tar can make it (a socket has no tar entry; a device needs root). Pure: no file is made.
+    func testNotFileReasonNamesEveryOtherType() {
+        XCTAssertTrue(RemoteInstaller.notFileReason("init.lua", type: S_IFREG) == nil)
+        XCTAssertTrue(RemoteInstaller.notFileReason("lib", type: S_IFDIR) == nil)
+        let refused: [(mode_t, String)] = [(S_IFIFO, "a named pipe"), (S_IFSOCK, "a socket"), (S_IFCHR, "a device"),
+                                           (S_IFBLK, "a device"), (mode_t(0o160000), "a special item")]
+        for (type, what) in refused {   // 0o160000: S_IFWHT, a whiteout
+            XCTAssertEqual(RemoteInstaller.notFileReason("x\u{FFFD}.lua", type: type), "\(what), not a file or folder: x\u{FFFD}.lua")
+        }
+    }
+
     // MARK: - Market id binding (authenticity)
 
     func testMarketIdentityBinding() throws {

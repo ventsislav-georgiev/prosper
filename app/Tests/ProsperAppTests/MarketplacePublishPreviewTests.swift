@@ -206,7 +206,8 @@ final class MarketplacePublishPreviewTests: XCTestCase {
     }
 
     /// The list closes when the row stops offering Publish (Untrust, a publish running, already live):
-    /// the button leaves the tree, the list and its action go with it, and nothing is published.
+    /// the row's closesPublishList (#1174: no longer the button's disappear) closes it, the list and its action
+    /// go with it, and nothing is published.
     @MainActor
     func testListClosesWhenPublishIsNoLongerOffered() throws {
         let ext = try fixture(["extension.toml", "init.lua"])
@@ -226,6 +227,103 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         XCTAssertNotNil(closed, "the list outlived the Publish button")
         model.confirm()
         XCTAssertEqual(published.count, 0, "the list published after the Publish button went away")
+    }
+
+    // MARK: - #1174: the list closes on the row's offer, not on a lazy list's disappear
+
+    /// The row's offer is the condition PublishActions draws the button under: a trusted user extension, not
+    /// publishing, its local version not live yet or ahead. Each way out turns it false, which closes the list.
+    @MainActor
+    func testRowOffersPublishOnlyWhileItsButtonShows() {
+        func offers(system: Bool = false, trusted: Bool = true, publishing: Bool = false, published: String? = nil) -> Bool {
+            PublishActions.offers(system: system, trusted: trusted, publishing: publishing, published: published,
+                                  version: "1.1")
+        }
+        XCTAssertTrue(offers(), "never published")
+        XCTAssertTrue(offers(published: "1.0"), "the local version is ahead")
+        XCTAssertFalse(offers(trusted: false), "untrusted")
+        XCTAssertFalse(offers(publishing: true), "a publish is running")
+        XCTAssertFalse(offers(published: "1.1"), "this version is live")
+        XCTAssertFalse(offers(published: "1.2"), "a newer version is live")
+        XCTAssertFalse(offers(system: true), "a system extension")
+    }
+
+    /// A row scrolled far out of the Settings pane's lazy list (the real NeonScroll, 60 sections below it, in a
+    /// never-shown window; the scroll is set on the clip view, no event) keeps its list open, and comes back with
+    /// the same list model, still open.
+    @MainActor
+    func testListStaysOpenWhenItsRowScrollsFarOut() throws {
+        let ext = try fixture(["extension.toml", "init.lua"])
+        let seen = Seen()
+        let hosted = Hosted(NeonScroll {
+            NeonSection("User Extensions") { OwnRow(dir: ext, seen: seen) }
+            ForEach(0..<60, id: \.self) { i in NeonSection("Filler \(i)") { Color.clear.frame(height: 400) } }
+        }, width: 600, height: 400)
+        defer { hosted.close() }
+        let opened = try XCTUnwrap(hosted.wait { _ in seen.model }, "the row did not appear")
+        opened.ask(ext, publish: { _ in })
+        XCTAssertNotNil(hosted.wait { $0.first { $0.isButton("Publish 2 files") } }, "the list did not open")
+        let scroll = try XCTUnwrap(hosted.scrollView(), "no scroll view in the pane")
+        let far = (scroll.documentView?.frame.height ?? 0) - 400
+        XCTAssertGreaterThan(far, 4000, "the list below the row is not long")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: far))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        XCTAssertNotNil(hosted.wait { _ in seen.gone > 0 ? true : nil }, "the row never left the lazy list")
+        XCTAssertTrue(opened.plan != nil, "scrolling the row out closed its list")
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        XCTAssertNotNil(hosted.wait { _ in seen.appeared > 1 ? true : nil }, "the row did not come back")
+        XCTAssertTrue(seen.model === opened, "the row came back with a new list model")
+        XCTAssertTrue(opened.plan != nil, "the list closed while its row was out of view")
+        XCTAssertNotNil(hosted.wait { $0.first { $0.isButton("Publish 2 files") } }, "the list is not drawn on return")
+        XCTAssertFalse(hosted.window.isVisible, "never shown")
+    }
+
+    /// The extension removed: its row leaves the list with its own list model, and the same id back is a new row
+    /// whose list is closed.
+    @MainActor
+    func testListEndsWhenTheExtensionIsRemoved() throws {
+        let ext = try fixture(["extension.toml", "init.lua"])
+        let ids = Ids()
+        let seen = Seen()
+        try listEndsWithItsRow(RowList(ids: ids, dir: ext, seen: seen), ext, seen,
+                               hide: { ids.list = [] }, show: { ids.list = ["eu.example.one"] })
+    }
+
+    /// Another Settings pane shown (signing out happens in the Account pane): the Extensions pane's rows end
+    /// with their lists, and the pane shown again draws its row with the list closed.
+    @MainActor
+    func testListEndsWhenThePaneSwitches() throws {
+        let ext = try fixture(["extension.toml", "init.lua"])
+        let pane = Offer()
+        let seen = Seen()
+        try listEndsWithItsRow(PaneSwitch(pane: pane, dir: ext, seen: seen), ext, seen,
+                               hide: { pane.on = false }, show: { pane.on = true })
+    }
+
+    /// The Settings window closed (SettingsWindow's willClose detaches the hosting controller and drops the
+    /// window): the row's list model is freed with the tree, so no list outlives the window. Never shown.
+    @MainActor
+    func testListEndsWhenTheSettingsWindowCloses() throws {
+        let ext = try fixture(["extension.toml", "init.lua"])
+        let seen = Seen()
+        var window: NSWindow? = autoreleasepool {
+            let w = NSWindow(contentRect: CGRect(x: 0, y: 0, width: paneRowWidth(), height: 240), styleMask: [.borderless],
+                             backing: .buffered, defer: false)
+            w.isReleasedWhenClosed = false
+            w.contentViewController = NSHostingController(rootView: OwnRow(dir: ext, seen: seen))
+            return w
+        }
+        XCTAssertTrue(spin(window) { seen.model != nil }, "the row did not appear")
+        seen.model?.ask(ext, publish: { _ in })
+        XCTAssertTrue(seen.model?.plan != nil, "the list did not open")
+        XCTAssertFalse(window?.isVisible ?? true, "never shown")
+        autoreleasepool {
+            window?.close()
+            window?.contentViewController = nil
+            window = nil
+        }
+        XCTAssertTrue(spin(nil) { seen.model == nil }, "the list's model outlived the closed window")
     }
 
     /// At UI scale 1.0, 0.85 and 0.7, in the narrowest row of the Settings pane, every line and both
@@ -640,6 +738,41 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         return true
     }
 
+    /// Opens the list of the row `view` draws, ends the row with `hide`, brings it back with `show`: the row is
+    /// new (appeared twice) and its list is closed. Never-shown window.
+    @MainActor
+    private func listEndsWithItsRow<V: View>(_ view: V, _ ext: URL, _ seen: Seen,
+                                             hide: () -> Void, show: () -> Void) throws {
+        let hosted = Hosted(view, width: paneRowWidth())
+        defer { hosted.close() }
+        let model = try XCTUnwrap(hosted.wait { _ in seen.model }, "the row did not appear")
+        model.ask(ext, publish: { _ in })
+        XCTAssertNotNil(hosted.wait { $0.first { $0.isButton("Publish 2 files") } }, "the list did not open")
+        hide()
+        XCTAssertNotNil(hosted.wait { items in seen.gone > 0 && !items.contains { $0.isButton("Publish") } ? true : nil },
+                        "the row did not leave")
+        show()
+        let back = hosted.wait { items in seen.appeared > 1 && items.contains { $0.isButton("Publish") } ? seen.model : nil }
+        XCTAssertTrue(back?.plan == nil && back != nil, "the row came back with its list open")
+        XCTAssertFalse(hosted.items().contains { $0.isButton("Publish 2 files") }, "a list is drawn for the new row")
+        XCTAssertFalse(hosted.window.isVisible, "never shown")
+    }
+
+    /// Lays out `window`'s content and runs the main run loop until `done`, or false after 5 s. Each pass drains
+    /// its own autorelease pool, so an object the tree let go of is freed inside the wait.
+    @MainActor
+    private func spin(_ window: NSWindow?, until done: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            autoreleasepool {
+                window?.contentView?.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            if done() { return true }
+        } while Date() < deadline
+        return false
+    }
+
     /// A plain ustar archive of one-byte files (tar -xzf reads it uncompressed). From
     /// ExtensionWorkFolderCleanupTests, folders and links left out.
     private func ustar(_ names: [String]) -> Data {
@@ -683,6 +816,57 @@ private struct OfferedRow: View {
             }
             PublishConfirmView(model: model)
         }
+        .closesPublishList(model, offered: offer.on)   // #1174: as ExtensionRow closes it
+    }
+}
+
+/// What a row that owns its list showed (main actor): its model once it appeared, and how often it came and went.
+@MainActor
+private final class Seen {
+    weak var model: PublishConfirmation?
+    var appeared = 0
+    var gone = 0
+}
+
+/// A row owning its list model as ExtensionRow does (@StateObject), Publish offered, the list under the actions.
+private struct OwnRow: View {
+    let dir: URL
+    let seen: Seen
+    @StateObject private var model = PublishConfirmation()
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(6)) {
+            HStack(spacing: sz(12)) {
+                PublishButton(title: "Publish", help: "", dir: dir, model: model, publish: { _ in })
+            }
+            PublishConfirmView(model: model)
+        }
+        .closesPublishList(model, offered: true)
+        .onAppear { seen.model = model; seen.appeared += 1 }
+        .onDisappear { seen.gone += 1 }
+    }
+}
+
+/// The installed ids, as the pane's ForEach lists them (main actor).
+@MainActor
+private final class Ids: ObservableObject { @Published var list = ["eu.example.one"] }
+
+/// The installed list: one OwnRow per id, as installedList draws ExtensionRow.
+private struct RowList: View {
+    @ObservedObject var ids: Ids
+    let dir: URL
+    let seen: Seen
+    var body: some View {
+        VStack(alignment: .leading) { ForEach(ids.list, id: \.self) { _ in OwnRow(dir: dir, seen: seen) } }
+    }
+}
+
+/// The Settings detail switching panes: the Extensions pane's row while `pane.on`, the Account pane otherwise.
+private struct PaneSwitch: View {
+    @ObservedObject var pane: Offer
+    let dir: URL
+    let seen: Seen
+    var body: some View {
+        if pane.on { OwnRow(dir: dir, seen: seen) } else { Text("Account") }
     }
 }
 
@@ -726,9 +910,9 @@ private final class Hosted {
     private let set = Selector(("accessibilitySetValue:forAttribute:"))
     private let attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
 
-    init<V: View>(_ view: V, width: CGFloat) {
+    init<V: View>(_ view: V, width: CGFloat, height: CGFloat? = nil) {
         let host = NSHostingView(rootView: view.frame(width: width, alignment: .leading))
-        let size = CGSize(width: width, height: max(host.fittingSize.height, 240))
+        let size = CGSize(width: width, height: height ?? max(host.fittingSize.height, 240))
         host.frame = CGRect(origin: .zero, size: size)
         window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -740,6 +924,12 @@ private final class Hosted {
     func close() {
         for a in attrs { NSApplication.shared.perform(set, with: NSNumber(value: false), with: a) }
         window.close()
+    }
+
+    /// The first NSScrollView in the hosted view (a NeonScroll's).
+    func scrollView() -> NSScrollView? {
+        func find(_ v: NSView) -> NSScrollView? { (v as? NSScrollView) ?? v.subviews.lazy.compactMap(find).first }
+        return find(host)
     }
 
     func items() -> [PublishAXItem] {
