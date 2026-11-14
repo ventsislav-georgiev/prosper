@@ -12,7 +12,10 @@ final class FanHelperIdentityTests: XCTestCase {
     /// A connection to nothing, as the helper side sees it: `resume` opens it on a LidHelperCore (the helper's
     /// open-connection count) and a close (the app's invalidate, or the helper closing it) closes it there and
     /// on a FanControlCore, once each (both cores dedupe). The proxy answers `helperInfo` per `mode` and every
-    /// Bool method with true at once. Replies and errors come on a background queue, as XPC delivers them.
+    /// Bool method with true at once (the engage with `boolReply`). `helperInfo`'s replies and every error come on
+    /// a background queue, as XPC delivers them. Entry 1234: as a fan connection, the engages are recorded in
+    /// `sent`; the reason engage replies `reasonCode` at once, or (nil) the interruption an older helper put in
+    /// place since the ask gives.
     final class FakeConn: NSXPCConnection, @unchecked Sendable {
         enum Mode { case old, silent, answers(Int, Int), fails(String, Int) }
         var mode = Mode.silent
@@ -20,6 +23,9 @@ final class FanHelperIdentityTests: XCTestCase {
         var fans: FanControlCore?
         var invalidations = 0
         var onInvalidate: (() -> Void)?
+        var sent: [String] = []
+        var boolReply = true
+        var reasonCode: Int? = 0
         /// silent: the reply block, kept so a row can answer late.
         var late: (@Sendable (Int, Int) -> Void)?
         override func resume() { lid?.connectionOpened(ObjectIdentifier(self)) }
@@ -40,11 +46,18 @@ final class FanHelperIdentityTests: XCTestCase {
             func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func clearRemoteSession(withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func sleepNow(withReply reply: @escaping (Bool) -> Void) { reply(true) }
-            func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) { reply(true) }
+            func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) {
+                conn?.sent.append("bool")
+                reply(conn?.boolReply ?? true)
+            }
             func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func resetAllFans(withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func setFanManualRPMWithReason(_ index: Int, rpm: Double, withReply reply: @escaping (Int) -> Void) {
-                XCTFail("entry 1208 never sends the reason engage")
+                guard let conn else { return }
+                conn.sent.append("reason")
+                if let code = conn.reasonCode { reply(code); return }
+                nonisolated(unsafe) let error = error
+                DispatchQueue.global().async { error?(CocoaError(.xpcConnectionInterrupted)) }
             }
             func helperInfo(withReply reply: @escaping (Int, Int) -> Void) {
                 nonisolated(unsafe) let reply = reply
@@ -523,7 +536,8 @@ final class FanHelperIdentityTests: XCTestCase {
     }
 
     // (xii) D1208-f: the second ask is made only while idle; with manual on or an engage in flight the kept
-    // retry asks nothing, the count waits, and the next idle moment's interruption reads old.
+    // retry asks nothing and (N1208-h) clears the count, so the next idle moment's interruption is a first one
+    // again: unknown, and a retry is scheduled (count 1, not old).
     func testTheRetryAsksOnlyWhileIdle() async {
         let t = FakeConn()
         t.mode = .old
@@ -544,10 +558,13 @@ final class FanHelperIdentityTests: XCTestCase {
         XCTAssertEqual(made, 1, "an engage in flight")
         FanControlHelper.inject(connection: nil, engagesInFlight: 0)
         XCTAssertTrue(FanControlHelper.helperIdentity == nil)
-        XCTAssertEqual(FanControlHelper.identityInterruptions, 1, "the count waits for the next idle moment")
+        // N1208-h (was: the count waited at 1 and the next interruption, any time later, read old).
+        XCTAssertEqual(FanControlHelper.identityInterruptions, 0, "a retry that made no ask clears the count")
         await askAndAwaitClose(second)
         XCTAssertEqual(made, 2)
-        XCTAssertTrue(FanControlHelper.helperIdentity == .old)
+        XCTAssertTrue(FanControlHelper.helperIdentity == nil, "an unrelated later interruption is the first again")
+        XCTAssertEqual(FanControlHelper.identityInterruptions, 1)
+        XCTAssertEqual(retries.count, 1, "a retry is scheduled again")
         XCTAssertEqual(second.invalidations, 1)
     }
 }

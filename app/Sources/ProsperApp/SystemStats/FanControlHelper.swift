@@ -106,17 +106,35 @@ enum FanManualReply: Equatable {
     case unavailable   // no reply from the helper
     case needsApproval // the helper's Login Items switch is off (#728); the popup words it as unavailable
     case writeFailed   // live helper replied false where its heat gate was open (#1033, see `afterAnAccept`)
+    /// Entry 1234: the helper's OWN reason said settling (FanEngageCode 1). `.settling` is the app's guess from a
+    /// Bool false (an older helper, or the identity answer not in yet), which `afterAnAccept` still renames.
+    case settlingReported
 
     /// #737: a live helper's refusal (its latch) makes the user's speed a pending preset;
     /// no reply (.unavailable / .needsApproval) stays a failure.
-    var isLatchRefusal: Bool { self == .refused || self == .settling }
+    var isLatchRefusal: Bool { self == .refused || self == .settling || self == .settlingReported }
+
+    /// Entry 1234: a `setFanManualRPMWithReason` code. Outside data from the helper: compared only, never an
+    /// index or a conversion. Unreadable, inert and every value outside 0...5 read as a write failure: the
+    /// reply that hands back the most (a Manual click saves nothing; a commit keeps the previous targets).
+    static func reason(_ code: Int) -> FanManualReply {
+        switch code {
+        case FanEngageCode.engaged.rawValue: return .engaged
+        case FanEngageCode.settling.rawValue: return .settlingReported
+        case FanEngageCode.belowMacOS.rawValue: return .refused
+        case FanEngageCode.unreadable.rawValue: return .writeFailed
+        case FanEngageCode.writeFailed.rawValue: return .writeFailed
+        case FanEngageCode.inert.rawValue: return .writeFailed
+        default: return .writeFailed
+        }
+    }
 
     /// #1033: this reply from a later fan of a request whose earlier fan the helper just accepted.
     /// That accept proved the heat gate open, and only a trip or a handback restarts its settle
     /// window (FanControlCore.latch / pinHandedBack), so a false at or above macOS's speed is not
     /// the window: the SMC write threw, or the helper could not read its sensors. The Bool reply
-    /// cannot say which, nor split a false below macOS's speed; that needs a reason in the
-    /// protocol (entry 1208).
+    /// cannot say which, nor split a false below macOS's speed. Entry 1234: a helper that gives its
+    /// reason replies `.settlingReported`, never renamed here.
     var afterAnAccept: FanManualReply { self == .settling ? .writeFailed : self }
 
     /// Name a live helper's `false` by the helper's rule (#586): after a trip it lets a
@@ -129,8 +147,8 @@ enum FanManualReply: Equatable {
     }
 
     /// The single status line the fan popup shows for a failed engage/commit.
-    // shortcut: a first fan's false, or a later one below macOS's speed, is still read as the latch
-    // though the helper also replies false when the SMC write throws; entry 1208's reason reply splits it.
+    // shortcut: from an older helper (the Bool reply) a first fan's false, or a later one below macOS's speed,
+    // is still read as the latch though it also replies false when the SMC write throws; a reason splits it (1234).
     var errorText: String? {
         // Entry 1208: a helper from an older version gives no reason, so these two names are the app's guess.
         let old = FanControlHelper.oldHelperAnswers.withLock { $0 } ? " " + Self.oldHelperSentence : ""
@@ -140,7 +158,7 @@ enum FanManualReply: Equatable {
             return "Fans are held automatic until the Mac cools down — the overheat "
                 + "cut-off tripped, and macOS runs them faster than this. Try again in a few "
                 + "minutes, or pick a faster speed." + old
-        case .settling:
+        case .settling, .settlingReported:
             return "The overheat cut-off just handed the fans to macOS. "
                 + "Try again in a few seconds." + old
         case .unavailable, .needsApproval:
@@ -317,11 +335,18 @@ enum FanControlHelper {
         // c is only compared by identity, on main.
         nonisolated(unsafe) let conn = c
         // Entry 1208: a drop from the helper's side may be an update's old helper going: ask again.
-        let clear: @Sendable () -> Void = { Task { @MainActor in if connection === conn { connection = nil; helperMayHaveChanged() } } }
+        let clear: @Sendable () -> Void = { Task { @MainActor in fanConnectionDropped(conn) } }
         c.invalidationHandler = clear
         c.interruptionHandler = clear
         c.resume()
         return c
+    }
+
+    /// The fan connection dropped from the helper's side (its interruption or invalidation handler, on main):
+    /// forget it and ask again at the next idle moment (entry 1208: it may be an update's old helper going).
+    /// Entry 1234: an interruption on the reason call ends here too, so the next engage sends the Bool method.
+    static func fanConnectionDropped(_ c: NSXPCConnection) {
+        if connection === c { connection = nil; helperMayHaveChanged() }
     }
 
     /// Open (or reuse) the daemon connection, lazily registering the shared helper.
@@ -361,11 +386,24 @@ enum FanControlHelper {
         // A manual write is manual intent, even before the popup saves the pref (it
         // saves it only after the first engage lands), so this arms unconditionally.
         armRecoveryLifecycle()
+        // Entry 1234: the method is chosen once, here on main, before the call: the reason method only while the
+        // helper said it answers it. A verdict that changes while this engage is in flight does not re-send it.
+        let reason: OSAllocatedUnfairLock<Int?>? = helperIdentity == .current ? OSAllocatedUnfairLock(initialState: nil) : nil
         let late: @Sendable (Bool) -> Void = { ok in Task { @MainActor in lateEngageLanded(ok) } }
-        switch await callReply(c, timeout: timeout, late: late, { proxy, done in proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }) {
+        switch await callReply(c, timeout: timeout, late: late, { proxy, done in
+            if let reason { proxy.setFanManualRPMWithReason(index, rpm: rpm) { code in reason.withLock { $0 = code }; done(code == 0) } }
+            else { proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }
+        }) {
         case true?: return .engaged
         case false?:
             lastRefusedFan = index
+            // Entry 1234: the helper's own reason, with no speed read (no code kept reads -1)...
+            if let reason {
+                let said = FanManualReply.reason(reason.withLock { $0 } ?? -1)
+                // ...except below macOS's speed, still named by the app's read as before: where the two reads differ
+                // that names it settling, and a Manual click's later fan then saves nothing (a preset would re-apply).
+                guard said == .refused else { return said }
+            }
             return .refusal(rpm: rpm, macOSRPM: await Task.detached(priority: .utility) { macOSRPM(index) }.value)
         case nil: return .unavailable
         }
@@ -422,7 +460,9 @@ enum FanControlHelper {
         for (i, rpm) in engageOrder(targets) where i != first {
             let reply = await engage(i, rpm)
             guard landed(generation) else { return nil }
-            guard reply == .engaged else { return reply.afterAnAccept }
+            // Entry 1234: the helper's own settling too: as a pending preset the recovery would re-apply it, where
+            // today's write failure saves nothing (only more hand-back wins over the reason).
+            guard reply == .engaged else { return reply == .settlingReported ? .writeFailed : reply.afterAnAccept }
         }
         return .engaged
     }
@@ -620,10 +660,11 @@ enum FanControlHelper {
 
     /// Ask which helper answers, on the throwaway, only while no fan can be held: manual off and no engage
     /// in flight (an engage made before the answer uses the Bool method as before). Not again once
-    /// answered, nor while an ask is open.
-    static func askHelperIdentityIfIdle() {
+    /// answered, nor while an ask is open. True = an ask was made (N1208-h: the retry reads it).
+    @discardableResult
+    static func askHelperIdentityIfIdle() -> Bool {
         guard helperIdentity == nil, identityConnection == nil, !Preferences.fanManualEnabled, engagesInFlight == 0,
-              let c = makeIdentityConnection() else { return }
+              let c = makeIdentityConnection() else { return false }
         identityAsk &+= 1
         let ask = identityAsk
         identityConnection = c
@@ -631,10 +672,11 @@ enum FanControlHelper {
         c.resume()
         guard let proxy = c.remoteObjectProxyWithErrorHandler(failed) as? ProsperHelperProtocol else {
             identityEnded(ask, .unknown)
-            return
+            return true
         }
         identityCeiling { identityEnded(ask, .unknown) }
         proxy.helperInfo(withReply: answered)
+        return true
     }
 
     /// The ask's reply and error handlers. XPC runs both on its own queue, so they are formed here,
@@ -664,7 +706,7 @@ enum FanControlHelper {
     /// Every exit of an ask (reply, error handler, ceiling) ends here, on main. A reply decides at once and a
     /// current one wins even after the ceiling (it only changes a text). An interruption while the ask is open
     /// counts: the second in a row reads old; the first asks again through `identityRetry` (still only if
-    /// idle then; otherwise the next idle moment asks). Silence or another error while open clears the count
+    /// idle then; otherwise the count is cleared, N1208-h, and the next idle moment asks). Silence or another error while open clears the count
     /// and records nothing; the next idle moment asks again. The throwaway is invalidated every time: left
     /// open on a new helper it would hold the helper's last-client lid release and its idle exit.
     private static func identityEnded(_ ask: Int, _ end: IdentityEnd) {
@@ -678,7 +720,8 @@ enum FanControlHelper {
         case .interrupted where open:
             identityInterruptions += 1
             if identityInterruptions >= 2 { helperIdentity = .old; identityInterruptions = 0 }
-            else { identityRetry { askHelperIdentityIfIdle() } }
+            // N1208-h: a retry that makes no ask (not idle) clears the count: "in a row" stays about 1 s apart.
+            else { identityRetry { if !askHelperIdentityIfIdle() { identityInterruptions = 0 } } }
         case .interrupted: break
         case .unknown: if open { identityInterruptions = 0 }
         }

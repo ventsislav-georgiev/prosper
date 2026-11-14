@@ -1032,6 +1032,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island Default model: a command that resumes or continues an existing Claude conversation
   keeps the model it ran on instead of getting the Default model, and the Aliases menu in the
   setting follows the interface size. (#1237)
+- Fans: when the Prosper helper refuses a Manual speed, Prosper now shows the helper's own reason
+  instead of guessing it. When a fan did not take the speed or the temperature could not be read,
+  the fans go back to macOS and the speed is not saved for later. (#1234)
 
 ## v2.174.0
 
