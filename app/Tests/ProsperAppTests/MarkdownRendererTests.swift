@@ -256,7 +256,7 @@ final class MarkdownRendererTests: XCTestCase {
         let big = String(repeating: "a", count: R.maxSourceBytes + 1)
         let out = render(big)
         // #1236: one line one unit over the paragraph cap too: shown as source and cut at the cap.
-        XCTAssertEqual(out.note, R.tooLargeNote + " \u{00B7} " + R.cutNote(R.maxParagraphUnits))
+        XCTAssertEqual(out.note, R.cutNote(R.maxParagraphUnits) + " \u{00B7} " + R.tooLargeNote)
         XCTAssertEqual(out.text.length, R.maxParagraphUnits)
         XCTAssertNil(render(String(repeating: "a", count: 1000)).note)
     }
@@ -699,7 +699,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(at.text.length, R.maxSourceBytes)
         XCTAssertTrue(font(at, "aaaa")?.fontDescriptor.symbolicTraits.contains(.monoSpace) == false, "body text, not source")
         let over = render(atCap + "a")
-        XCTAssertEqual(over.note, R.tooLargeNote + " \u{00B7} " + R.cutNote(R.maxParagraphUnits), "#1236: and one unit over the paragraph cap")
+        XCTAssertEqual(over.note, R.cutNote(R.maxParagraphUnits) + " \u{00B7} " + R.tooLargeNote, "#1236: and one unit over the paragraph cap")
         XCTAssertEqual(over.text.length, R.maxParagraphUnits)
         let bytesOver = render(String(atCap.dropLast()) + "é")
         XCTAssertEqual(bytesOver.note, R.tooLargeNote, "the cap counts UTF-8 bytes, not characters")
@@ -1552,10 +1552,10 @@ extension MarkdownRendererTests {
 
     func testCutNoteLiteralAndWithAnotherNote() {
         XCTAssertEqual(R.cutNote(R.maxParagraphUnits),
-                       "Shown up to 1,048,576 characters of a long line: the rest of the file is not shown")
+                       "The rest of the file is not shown: a line is longer than 1,048,576 characters")
         XCTAssertEqual(R.maxParagraphUnits, 1_048_576)
         XCTAssertEqual(shown(String(repeating: "a", count: 9), cap: 8, note: R.tooLargeNote).1,
-                       "Over 1 MiB: shown as source \u{00B7} Shown up to 8 characters of a long line: the rest of the file is not shown")
+                       "The rest of the file is not shown: a line is longer than 8 characters \u{00B7} Over 1 MiB: shown as source")
     }
 
     /// A Markdown file over the source cap is shown as source through the plain render: at the product cap, one line of
@@ -1565,7 +1565,7 @@ extension MarkdownRendererTests {
         XCTAssertGreaterThan(source.utf8.count, R.maxSourceBytes)
         let out = R.render(source, document: Self.document, style: Self.style, loader: { _, _, _ in nil })
         XCTAssertEqual(out.text.length, R.maxParagraphUnits)
-        XCTAssertEqual(out.note, R.tooLargeNote + " \u{00B7} " + R.cutNote(R.maxParagraphUnits))
+        XCTAssertEqual(out.note, R.cutNote(R.maxParagraphUnits) + " \u{00B7} " + R.tooLargeNote)
     }
 
     /// Rendered Markdown needs no cut: a code block of one line filling the 1 MiB source cap renders a paragraph under

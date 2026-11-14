@@ -81,7 +81,7 @@ enum MarkdownRenderer {
     /// #1236: the note when the plain render cut the text; `cap` with a comma every three digits in every locale.
     nonisolated static func cutNote(_ cap: Int) -> String {
         let n = cap.formatted(.number.grouping(.automatic).locale(Locale(identifier: "en_US")))
-        return "Shown up to \(n) characters of a long line: the rest of the file is not shown"
+        return "The rest of the file is not shown: a line is longer than \(n) characters"
     }
 
     /// Plain text (D5) and the source fallback: one monospaced run, no parsing. #1236: a text with a paragraph longer
@@ -95,7 +95,7 @@ enum MarkdownRenderer {
             return Output(text: NSAttributedString(string: text, attributes: attrs), anchors: [:], note: note, style: style)
         }
         let shown = NSAttributedString(string: String(text[..<cut]), attributes: attrs)
-        return Output(text: shown, anchors: [:], note: [note, cutNote(cap)].compactMap { $0 }.joined(separator: " \u{00B7} "), style: style)
+        return Output(text: shown, anchors: [:], note: [cutNote(cap), note].compactMap { $0 }.joined(separator: " \u{00B7} "), style: style)
     }
 
     /// #1236: where the shown text ends when a paragraph holds more than `cap` UTF-16 units: in the first such paragraph,

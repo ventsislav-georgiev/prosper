@@ -16,7 +16,7 @@ final class TextViewerNoteWidthTests: XCTestCase {
     /// MarkdownRendererTests.testCutNoteLiteralAndWithAnotherNote). It reaches the real window only through a Markdown file
     /// over 1 MiB with a line over the paragraph cap, whose layout this row must not do: the Markdown path takes no cap
     /// seam (TextViewerModel.refresh, TextViewerWindow.swift), so the root's own banner is drawn under the real header.
-    static let joined = [R.tooLargeNote, R.cutNote(R.maxParagraphUnits)].joined(separator: " \u{00B7} ")
+    static let joined = [R.cutNote(R.maxParagraphUnits), R.tooLargeNote].joined(separator: " \u{00B7} ")
 
     /// The root's rows above the text, in its order: the header, its rule, a banner. The filler stands for the text view.
     private struct Rows: View {
@@ -79,7 +79,7 @@ final class TextViewerNoteWidthTests: XCTestCase {
         return tree
     }
 
-    /// A plain file whose second line is cut at a cap of 8: its note is cutNote(8) (76 characters).
+    /// A plain file whose second line is cut at a cap of 8: its note is cutNote(8) (69 characters).
     private func cutModel() throws -> TextViewerModel {
         let url = tempDir("tv-note-width").appendingPathComponent("notes.txt")
         try Data(("ab\n" + String(repeating: "x", count: 20) + "\n").utf8).write(to: url)
@@ -125,6 +125,29 @@ final class TextViewerNoteWidthTests: XCTestCase {
                               "\(tag): \(item.text) at \(item.frame) moved when the banner appeared")
             }
             fputs("tv1180c fact \(tag): one line \(line.height) pt, joined \(banner), cut note \(cutBanner), \(header.count) header elements unmoved\n", stderr)
+        }
+    }
+
+    /// #1180 round 4 (N1180-c): the note LEADS with the consequence, so what the width cuts is the tail. Literal: the
+    /// product cap's sentence, and the joined note starts with it. Fit: at the minimum content width and UI scale 0.7,
+    /// 0.85 and 1.0 the text up to and including "not shown" of the PRODUCT cap's note (cutNote(maxParagraphUnits), a short
+    /// string, nothing is laid out at the cap) is narrower than the banner's text width. This is a MEASURED-WIDTH row: a
+    /// real tree cannot say where a Text was truncated. Measure: NSAttributedString size on the font the banner uses,
+    /// Neon.font(11, .medium) = the system font at 11 * scale, medium; the banner has no horizontal padding, so its text
+    /// width is the content width, 420 * scale (TextViewerWindows.contentMinSize).
+    func testLeadClauseFitsAtTheMinimumWidth() {
+        XCTAssertEqual(R.cutNote(1 << 20), "The rest of the file is not shown: a line is longer than 1,048,576 characters")
+        XCTAssertTrue(Self.joined.hasPrefix(R.cutNote(R.maxParagraphUnits)), "the cut note comes first")
+        let note = R.cutNote(R.maxParagraphUnits)
+        let range = (note as NSString).range(of: "not shown")
+        XCTAssertNotEqual(range.location, NSNotFound)
+        let lead = (note as NSString).substring(to: range.location + range.length)
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            let font = NSFont.systemFont(ofSize: 11 * scale, weight: .medium)
+            func width(_ s: String) -> CGFloat { NSAttributedString(string: s, attributes: [.font: font]).size().width }
+            let room = TextViewerWindows.contentMinSize(scale: scale).width
+            fputs("tv1180d fact scale \(scale): lead \(width(lead)) of \(room) pt, note \(width(note)), joined \(width(Self.joined)), too-large \(width(R.tooLargeNote))\n", stderr)
+            XCTAssertLessThan(width(lead), room, "scale \(scale): the lead clause fits")
         }
     }
 }
