@@ -918,6 +918,10 @@ tag from the now-released section and put it on the new top draft.
 - Themes: in Blossom, Daylight, Fern, Lavender, Mint and Solar the green text of the "Open in
   terminal" and "New shell" buttons is a little darker, so it reads clearly on its tinted button
   fill (#1206)
+- Agent Sessions: a Claude session row shows the model and effort of its last answer (for example
+  "Opus 4.7 · high") in a small muted slot on its second line, where there is room beside what the
+  row already shows; the slot keeps its size, so nothing shifts when the value arrives, and
+  VoiceOver reads it with the row (#1203)
 
 ## v2.174.0
 

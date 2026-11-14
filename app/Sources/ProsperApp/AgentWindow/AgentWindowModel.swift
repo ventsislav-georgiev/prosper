@@ -62,6 +62,17 @@ enum AgentSidebar {
         var merged = 0
         var session: AgentSession?
         var record: DchHistoryRecord?
+        /// #1203: a live Claude session's row (it has a transcript) keeps the model slot, with or without a value;
+        /// Codex, shell and History rows have none.
+        var modelSlot = false
+        /// #1203: the short name of the last answer's model ("Opus 4.7") and its effort word; effort only with a model.
+        var model: String?
+        var effort: String?
+
+        /// #1203: "Opus 4.7 · high", "Opus 4.7", or "" when the model is unknown.
+        var modelText: String { model.map { m in effort.map { "\(m) · \($0)" } ?? m } ?? "" }
+        /// #1203: "model Opus 4.7, effort high", "model Opus 4.7", or nil when unknown.
+        var modelWords: String? { model.map { m in "model \(m)" + (effort.map { ", effort \($0)" } ?? "") } }
 
         /// #1115: the groups beside the state text, agents then merged; a count of 0 is left out.
         var counts: [(Count, Int)] { [(Count.agents, agents), (Count.merged, merged)].filter { $0.1 > 0 } }
@@ -136,10 +147,12 @@ enum AgentSidebar {
         let (chips, more) = AgentIsland.prChips(s.meta, show: details, budget: .infinity)
         let prs = chips.prefix(2).map(\.label) + (chips.count + more > 2 ? ["+\(chips.count + more - 2)"] : [])
         // dch's agents is an unclamped Int (DchCommand.parseListJSON); merged is clamped by DchSessionMeta.count.
+        // #1203: only a Claude session has a transcript (dch sets the path with a Claude only); the effort only with a model.
+        let claude = s.transcriptPath != nil, model = claude ? s.model.map(AgentModelEffort.shortName) : nil
         return Row(id: .live(s.key), title: s.title, state: s.state, detail: AgentWindowControls.lock(action) ?? s.state.label,
                    age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more,
                    agents: details.agents ? max(0, s.agents) : 0, merged: details.merged ? max(0, s.meta?.merged ?? 0) : 0,
-                   session: s)
+                   session: s, modelSlot: claude, model: model, effort: model == nil ? nil : s.effort)
     }
 
     static func row(_ r: DchHistoryRecord, now: TimeInterval) -> Row {

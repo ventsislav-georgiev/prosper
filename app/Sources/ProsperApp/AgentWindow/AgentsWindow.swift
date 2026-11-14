@@ -522,14 +522,7 @@ struct AgentSidebarRowView: View {
                         .fixedSize()
                     }
                 }
-                // The PR chips whole, else their count, else none: never a cut-off chip. #1110: the ⌘<n> chip's room
-                // is kept on every variant but the last, so it goes after the PR chips, whole.
-                ViewThatFits(in: .horizontal) {
-                    detailLine(row.prs, chipSlot: true)
-                    if !row.prs.isEmpty { detailLine([], open: row.prCount, chipSlot: true) }
-                    detailLine([], chipSlot: true)
-                    detailLine([])
-                }
+                detailVariants
             }
         }
         .padding(.horizontal, sz(10)).padding(.vertical, sz(7))
@@ -540,7 +533,7 @@ struct AgentSidebarRowView: View {
         .overlay(alignment: .leading) { NeonSelectionBar().opacity(selected ? 1 : 0) }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail] + row.countWords
+        .accessibilityLabel(([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail, row.modelWords] + row.countWords
                              + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? .isSelected : [])
         // #1110: drawn over the slot the detail line kept (outside the row's element, so it is read with its own name
@@ -594,11 +587,46 @@ struct AgentDigitChip: View {
 }
 
 extension AgentSidebarRowView {
+    /// The second line. The PR chips whole, else their count, else none: never a cut-off chip. #1110: the ⌘<n> chip's
+    /// room is kept on every variant but the last, so it goes after the PR chips, whole. #1203: the model slot shows only
+    /// where the variant taken without it still fits with it (each variant is tried with the slot first, then as before).
+    var detailVariants: some View {
+        ViewThatFits(in: .horizontal) {
+            if row.modelSlot { detailLine(row.prs, chipSlot: true, modelSlot: true) }
+            detailLine(row.prs, chipSlot: true)
+            if !row.prs.isEmpty {
+                if row.modelSlot { detailLine([], open: row.prCount, chipSlot: true, modelSlot: true) }
+                detailLine([], open: row.prCount, chipSlot: true)
+            }
+            if row.modelSlot { detailLine([], chipSlot: true, modelSlot: true) }
+            detailLine([], chipSlot: true)
+            detailLine([])
+        }
+    }
+
+    /// #1203: the model slot's width, a display text no shorter than any known short name with the longest effort
+    /// word (not a model id). A longer name is cut in the middle to it.
+    static let modelWidest = "Sonnet 4.5 · medium"
+
+    /// #1203: the model and effort of the last answer, in a slot as wide as `modelWidest` whether or not a value is
+    /// known (no size change when it arrives): the hidden widest text sizes it, the value is drawn over it.
+    var modelSlotView: some View {
+        Text(Self.modelWidest).hidden()
+            .overlay(alignment: .trailing) {
+                Text(row.modelText).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+            }
+            .font(Neon.font(10))
+            .fixedSize()
+            .help("Model and effort of the last answer")
+    }
+
     /// #1115: the state text, the count groups (no " · ": the gap and the symbol separate them), then the PR chips,
     /// or with `open` the open PRs' count as a blue group in their place.
     /// #1110: `chipSlot` keeps the ⌘<n> chip's width at the end (a numbered row only) at no height: the chip is drawn over
     /// it by the row and overhangs into the row's padding, so the row's height never changes.
-    func detailLine(_ chips: [String], open: Int = 0, chipSlot: Bool = false) -> some View {
+    /// #1203: `modelSlot` puts the model slot after the Spacer, before the chip slot (a Claude row only): trailing, so
+    /// it never moves the state text, and it is never a zero-width child (it always has the widest text's width).
+    func detailLine(_ chips: [String], open: Int = 0, chipSlot: Bool = false, modelSlot: Bool = false) -> some View {
         HStack(spacing: sz(5)) {
             Text(row.detail).font(Neon.font(10.5))
                 .foregroundStyle(row.state == .blocked ? agentStateColor(.blocked) : Neon.textSecondary)
@@ -611,6 +639,7 @@ extension AgentSidebarRowView {
                     .fixedSize()
             }
             Spacer(minLength: 0)
+            if modelSlot, row.modelSlot { modelSlotView }
             if chipSlot, let number {
                 AgentDigitChip(number: number).hidden().frame(height: 0)
                     .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { $0 }
