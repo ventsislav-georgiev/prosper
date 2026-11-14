@@ -12,8 +12,8 @@ struct CCPoolPane: View {
     static let refreshHint = "Costs one tiny request per account, straight to Anthropic."
     static let routeTitle = "Start new Claude sessions through the pool"
     /// P2b-2: what the toggle reaches, as built (spec 3.6; no global routing in v1).
-    static let routeScope = "New sessions started from Prosper that run claude or headroom. "
-        + "Shells, other programs and sessions started in a terminal are not routed."
+    static let routeScope = "New sessions started from Prosper that run claude. "
+        + "Shells, headroom, other programs and sessions started in a terminal are not routed."
     /// QA #739 INFO-1: CCPoolCore.pick keeps the current account while it has room, then takes the
     /// soonest five-hour reset; the list order only breaks ties.
     static let accountsFooter = "The current account is used while it has room, then the one whose five-hour window resets soonest; "

@@ -281,12 +281,12 @@ final class CCPoolPaneTests: XCTestCase {
         XCTAssertTrue(CCPoolPane.accountsFooter.contains("five-hour window resets soonest"))
         var s = viewStrings(r.model)
         // P2b-2: the spawn path applies the routing, so the row is shown, with what it reaches as built:
-        // Prosper's own new sessions of claude or headroom, never a terminal's (no global routing in v1).
+        // Prosper's own new sessions of claude, never a terminal's (no global routing in v1).
         XCTAssertTrue(CCPool.routingWired)
         XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeTitle) }, "the Agent Sessions row is shown")
         XCTAssertTrue(s.contains { $0.contains("Add an account first.") }, "no account: the row says why it is disabled")
-        XCTAssertEqual(CCPoolPane.routeScope, "New sessions started from Prosper that run claude or headroom. "
-                       + "Shells, other programs and sessions started in a terminal are not routed.")
+        XCTAssertEqual(CCPoolPane.routeScope, "New sessions started from Prosper that run claude. "
+                       + "Shells, headroom, other programs and sessions started in a terminal are not routed.")
         XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeScope) }, "the scope line is shown")
         XCTAssertTrue(s.contains { $0.contains("Starts when the first account is added.") }, "the proxy row says why it is stopped")
         XCTAssertTrue(s.contains { $0.contains("ANTHROPIC_BASE_URL=") }, "terminal use, read-only text")

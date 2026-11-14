@@ -13,13 +13,14 @@ final class CCPoolSessionEnvTests: XCTestCase {
     func testCCPoolSessionEnvTable() {
         XCTAssertEqual(base, "http://127.0.0.1:41234")
         let claude = CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": base], remove: creds)
-        let headroom = CCPool.EnvDelta(set: ["ANTHROPIC_TARGET_API_URL": base], remove: creds)
         let rows: [(String, [String], Bool, Bool, CCPool.EnvDelta)] = [
             ("claude", ["claude"], true, true, claude),
             ("claude with args", ["claude", "--resume", "x"], true, true, claude),
             ("absolute claude", ["/opt/bin/claude"], true, true, claude),
-            ("headroom", ["headroom", "proxy"], true, true, headroom),
-            ("absolute headroom", ["/usr/local/bin/headroom"], true, true, headroom),
+            // #1200: headroom's upstream is read in its own shared proxy, so it is never routed.
+            ("headroom", ["headroom"], true, true, .init()),
+            ("absolute headroom", ["/usr/local/bin/headroom"], true, true, .init()),
+            ("headroom wrap claude", ["headroom", "wrap", "claude"], true, true, .init()),
             ("a shell", ["/bin/zsh", "-l"], true, true, .init()),
             ("login-shell wrapped claude", ["/bin/zsh", "-lc", "claude --resume x"], true, true, .init()),
             // argv[0] is direnv: no change (the report says so; P2b documents it in the pane).
@@ -48,12 +49,9 @@ final class CCPoolSessionEnvTests: XCTestCase {
                       "ANTHROPIC_BASE_URL": "http://elsewhere.invalid", "CLAUDE_CODE_OAUTH_TOKEN": "dummy-oauth"]
         let routed = env(["claude"]).applied(to: parent)
         XCTAssertEqual(routed, ["PATH": "/usr/bin", "ANTHROPIC_BASE_URL": base])
-        let head = env(["headroom"]).applied(to: parent)
-        XCTAssertEqual(head["ANTHROPIC_TARGET_API_URL"], base)
-        XCTAssertEqual(head["ANTHROPIC_BASE_URL"], "http://elsewhere.invalid", "headroom keeps its own base URL")
-        XCTAssertNil(head["ANTHROPIC_API_KEY"])
-        XCTAssertNil(head["ANTHROPIC_AUTH_TOKEN"])
-        XCTAssertNil(head["CLAUDE_CODE_OAUTH_TOKEN"], "QA #739 INFO-4: the proxy supplies the credential")
+        for argv in [["headroom"], ["/usr/local/bin/headroom"], ["headroom", "wrap", "claude"]] {
+            XCTAssertEqual(env(argv).applied(to: parent), parent, "headroom is never routed: credentials kept, \(argv)")
+        }
         XCTAssertEqual(env(["claude"], hasAccounts: false).applied(to: parent), parent, "empty pool: nothing changes")
         XCTAssertEqual(env(["claude"], healthy: false).applied(to: parent), parent, "proxy down: nothing changes")
         XCTAssertEqual(env(["bash"]).applied(to: parent), parent, "not claude: nothing changes")

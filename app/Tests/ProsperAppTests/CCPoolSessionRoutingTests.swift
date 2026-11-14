@@ -21,9 +21,6 @@ final class CCPoolSessionRoutingTests: XCTestCase {
     /// claude routed: the credentials stripped, the base URL the pool's.
     private let routedClaude = ["PATH": "/Users/example/bin:/usr/bin", "DCH_SOCKET_DIR": "/d",
                                 "ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"]
-    /// headroom routed: the credentials stripped, its own base URL kept, the target the pool's.
-    private let routedHeadroom = ["PATH": "/Users/example/bin:/usr/bin", "DCH_SOCKET_DIR": "/d",
-                                  "ANTHROPIC_BASE_URL": "http://example.invalid", "ANTHROPIC_TARGET_API_URL": "http://127.0.0.1:41234"]
 
     private var geometry: AgentIslandGeometry {
         AgentIslandGeometry.make(
@@ -136,13 +133,14 @@ final class CCPoolSessionRoutingTests: XCTestCase {
 
     // MARK: - Applies
 
-    /// The window form's spawn: claude gets the pool's base URL, headroom its target; both lose the credentials.
-    func testCCPoolSpawnRoutesClaudeAndHeadroomAtTheRecorder() {
+    /// The window form's spawn: claude gets the pool's base URL and loses the credentials; headroom is never routed (#1200).
+    func testCCPoolSpawnRoutesClaudeAndNeverHeadroomAtTheRecorder() {
         let rec = Recorder(), pool = Pool()
         let c = controller(rec, routing: pool.routing)
         XCTAssertEqual(spawnedEnv(c, rec, ["claude"], name: "api"), routedClaude)
         XCTAssertEqual(spawnedEnv(c, rec, ["/opt/homebrew/bin/claude", "--chrome"], name: "api-2"), routedClaude)
-        XCTAssertEqual(spawnedEnv(c, rec, ["/opt/homebrew/bin/headroom", "wrap", "claude"], name: "api-qa"), routedHeadroom)
+        XCTAssertEqual(spawnedEnv(c, rec, ["/opt/homebrew/bin/headroom", "wrap", "claude"], name: "api-qa"), today,
+                       "headroom is never routed: environment equal to the input")
         XCTAssertEqual(rec.args.last, ["--spawn", "api-qa", "--", "/opt/homebrew/bin/headroom", "wrap", "claude", "--name", "api-qa"],
                        "the argv is untouched: only the env changes")
         XCTAssertEqual(pool.mainReads, 0, "the spawn reads the pool on the runner's queue, never main")
@@ -259,8 +257,8 @@ final class CCPoolSessionRoutingTests: XCTestCase {
 
         XCTAssertEqual(AgentNewSession.poolHint(claude, routing: pool.routing), "via ccpool")
         XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api"), routedClaude)
-        XCTAssertEqual(AgentNewSession.poolHint(headroom, routing: pool.routing), "via ccpool")
-        XCTAssertEqual(spawnedEnv(c, rec, headroom, name: "api-2"), routedHeadroom)
+        XCTAssertTrue(AgentNewSession.poolHint(headroom, routing: pool.routing) == nil, "headroom is never routed: no hint")
+        XCTAssertEqual(spawnedEnv(c, rec, headroom, name: "api-2"), today)
         XCTAssertNil(AgentNewSession.poolHint(shell, routing: pool.routing), "an empty command is the login shell")
         XCTAssertEqual(spawnedEnv(c, rec, shell, name: "api-3"), today)
 

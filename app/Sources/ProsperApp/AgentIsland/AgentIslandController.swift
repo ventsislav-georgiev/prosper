@@ -502,7 +502,7 @@ final class AgentIslandController {
                      prepare: (@Sendable () -> (args: [String]?, out: Data))? = nil,
                      done: @escaping @MainActor @Sendable (DchActionResult) -> Void) -> Bool {
         guard let args else { return false }
-        // Read on main now, so a toggle turned off before this spawn holds for it.
+        // The contributor list is read on main now; each contributor reads the toggle itself when it runs, so a toggle turned off before then holds.
         let env = controlEnv, contributors = spawn == nil ? [] : sessionEnvContributors()
         var hook: (@Sendable (String) -> Void)?
         if let onLine { hook = { line in DispatchQueue.main.async { MainActor.assumeIsolated { onLine(line) } } } }
