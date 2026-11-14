@@ -23,6 +23,7 @@
 #include "ltable.h"
 #include "ltm.h"
 #include "lvm.h"
+#include "clua_shim.h"  /* #1173: clua_work */
 
 
 static const char udatatypename[] = "userdata";
@@ -261,6 +262,7 @@ void luaT_getvarargs (lua_State *L, CallInfo *ci, StkId where, int wanted) {
   if (wanted < 0) {
     wanted = nextra;  /* get all extra arguments available */
     checkstackGCp(L, nextra, where);  /* ensure stack space */
+    clua_work(L, (size_t)nextra, CLUA_WORK_VARARG);  /* #1173: may raise here, as the stack check above */
     L->top.p = where + nextra;  /* next instruction will need top */
   }
   for (i = 0; i < wanted && i < nextra; i++)

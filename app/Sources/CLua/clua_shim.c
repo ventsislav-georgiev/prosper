@@ -110,7 +110,8 @@ void clua_work(lua_State *L, size_t count, size_t weight) {
 }
 
 /* #1166: the counter whose cap was last turned on on this OS thread (the state whose Lua runs here), for charges
-** made where no lua_State is at hand. Set by clua_mem_enforce and host_call's restore, cleared by clua_close. */
+** made where no lua_State is at hand. Set by clua_mem_enforce and host_call's restore; cleared when that cap goes off
+** again (clua_mem_enforce(L, 0)) and by clua_close. */
 static _Thread_local clua_mem *thread_counter;
 
 void clua_work_nostate(size_t count, size_t weight) {

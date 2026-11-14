@@ -321,6 +321,8 @@ void luaV_finishget (lua_State *L, const TValue *t, TValue *key, StkId val,
       return;
     }
     t = tm;  /* else try to access 'tm[key]' */
+    if (ttislngstring(key))  /* #1173: the compare at the last hop was charged (ltable.c) but cannot raise; */
+      clua_work(L, 0, 1);  /* #1173: once that spent the budget, raise here, as the chain limit below does */
     if (luaV_fastget(L, t, key, slot, luaH_get)) {  /* fast track? */
       setobj2s(L, val, slot);  /* done */
       return;

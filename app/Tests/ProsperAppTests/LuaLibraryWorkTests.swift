@@ -9,7 +9,8 @@ import XCTest
 /// small input and is ended by a larger one, so only the charge tells the two apart. Inputs are small (a few times
 /// the row's budget); every loop is bounded. #1166 adds the utf8 library, string.pack/packsize/unpack, plain
 /// string.format text, upper/lower/reverse/byte/char, strings read as numbers, raw equality of long strings, and
-/// long-string table keys (hashed once, compared on a collision).
+/// long-string table keys (hashed once, compared on a collision). #1173 adds table.unpack, vararg expansions and
+/// long-string keys looked up along an __index chain (the lookup is ended at the hop after the limit is passed).
 final class LuaLibraryWorkTests: XCTestCase {
 
     private static let spent = LuaRuntime.LuaError.runtime("execution budget exceeded")
@@ -155,7 +156,7 @@ final class LuaLibraryWorkTests: XCTestCase {
         "char": Site(setup: #"""
             T = {}; for i = 1, 131072 do T[i] = 97 end
             function f(n) return tostring(#string.char(table.unpack(T, 1, tonumber(n)))) end
-            """#, budget: 10_000, under: 1_000, over: 1 << 17),
+            """#, budget: 10_000, under: 1_000, over: 1 << 16),  // #1173: table.unpack alone stays under the limit
         "tonumber_base": Site(setup: #"""
             S = ("1"):rep(1 << 18)
             function f(n) return tostring(tonumber(S:sub(1, tonumber(n)), 10)) end
@@ -189,6 +190,24 @@ final class LuaLibraryWorkTests: XCTestCase {
             A = ("x"):rep(65536); T = {}
             function f(n) local k = 0; for i = 1, tonumber(n) do if T[A .. i] == nil then k = k + 1 end end; return tostring(k) end
             """#, budget: 10_000, under: 2, over: 50),
+        // #1173 sites (ltablib.c, ltm.c, lvm.c).
+        "unpack": Site(setup: #"""
+            T = {}; for i = 1, 131072 do T[i] = 97 end
+            function f(n) return tostring(select("#", table.unpack(T, 1, tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 17),
+        "vararg": Site(setup: #"""
+            T = {}; for i = 1, 32768 do T[i] = 0 end
+            local function g(...) local k = 0; for i = 1, 20 do k = k + select("#", ...) end; return k end
+            function f(n) return tostring(g(table.unpack(T, 1, tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 15),
+        // H[n] reaches LAST through n - 1 tables, each holding a key of Q's length; LAST's __index appends Q to it.
+        "index_chain": Site(setup: #"""
+            S = ("x"):rep(65535) .. "z"; Q = S:sub(1, 65535) .. "y"; LAST = setmetatable({}, {__index = table.insert})
+            H = {LAST}; for i = 2, 1000 do H[i] = setmetatable({[S] = true}, {__index = H[i - 1]}) end
+            local _ = {[Q] = true}
+            function f(n) local v = H[tonumber(n)][Q]; return tostring(rawlen(LAST)) end
+            function reached() return tostring(rawlen(LAST)) end
+            """#, budget: 1_000, under: 5, over: 1_000),
     ]
 
     /// f(under) returns, f(over) is ended with the budget error and leaves the stack at rest, and the runtime then
@@ -214,7 +233,7 @@ final class LuaLibraryWorkTests: XCTestCase {
             "quoted", "insert", "remove", "move", "concat", "sort", "lt", "le", "eq", "alloc", "co_alloc",
             "utf8_len", "utf8_codepoint", "utf8_offset", "utf8_codes", "utf8_char", "pack_option", "pack_pad", "format",
             "upper", "lower", "reverse", "byte", "char", "tonumber_base", "stringtonumber", "tointegerx", "tonumberx",
-            "forprep", "rawequal", "eqk", "key_compare", "key_hash",
+            "forprep", "rawequal", "eqk", "key_compare", "key_hash", "unpack", "vararg", "index_chain",
         ])
     }
 
@@ -273,6 +292,72 @@ final class LuaLibraryWorkTests: XCTestCase {
     func testLongStringEqualToAConstant() throws { try assertCharged("eqk") }
     func testLongStringKeyCompare() throws { try assertCharged("key_compare") }
     func testLongStringKeyHash() throws { try assertCharged("key_hash") }
+    func testTableUnpack() throws { try assertCharged("unpack") }
+    func testVarargExpansion() throws { try assertCharged("vararg") }
+    func testLongStringKeyAlongAnIndexChain() throws {
+        try assertCharged("index_chain")
+        // Ended inside the one lookup, at the hop after the limit was passed: the chain's end is never reached.
+        let lua = try LuaRuntime()
+        let site = try XCTUnwrap(Self.sites["index_chain"])
+        try lua.run(site.setup)
+        XCTAssertThrowsError(try lua.callGlobal("f", [String(site.over)], budget: site.budget)) {
+            XCTAssertEqual($0 as? LuaRuntime.LuaError, Self.spent)
+        }
+        XCTAssertEqual(try lua.callGlobal("reached", [], budget: site.budget), "0")
+    }
+
+    // MARK: - The ordinary case of a guarded charge fits its budget (#1173, R902-1)
+
+    /// One long key, looked up 300 times as the same string object the table holds.
+    private static let sameKey = #"""
+        A = ("x"):rep(65536); T = {[A] = 1}
+        function f() local k = 0; for i = 1, 300 do k = k + T[A] end; return tostring(k) end
+        """#
+
+    /// K1: the key is hashed once (in the setup), not on every lookup. The budget leaves room for the compares.
+    func testALongKeyIsHashedOnce() throws {
+        let lua = try LuaRuntime()
+        try lua.run(Self.sameKey)
+        XCTAssertEqual(try lua.callGlobal("f", budget: 100_000), "300")
+    }
+
+    /// K4: a key found as the very string object the node holds is not compared byte by byte.
+    func testALongKeyFoundAsItselfIsNotCompared() throws {
+        let lua = try LuaRuntime()
+        try lua.run(Self.sameKey)
+        XCTAssertEqual(try lua.callGlobal("f", budget: 10_000), "300")
+    }
+
+    /// K3: rawequal of a long string with itself is not charged as a compare.
+    func testRawEqualOfAStringWithItselfIsNotCharged() throws {
+        let lua = try LuaRuntime()
+        try lua.run(#"""
+            A = ("x"):rep(65536)
+            function f() local k = 0; for i = 1, 300 do if rawequal(A, A) then k = k + 1 end end; return tostring(k) end
+            """#)
+        XCTAssertEqual(try lua.callGlobal("f", budget: 10_000), "300")
+    }
+
+    /// K2: a host function that calls back into the runtime leaves the table charges on for the rest of the call.
+    func testTableWorkAfterAHostCallbackIsCharged() throws {
+        let lua = try LuaRuntime()
+        let seen = Seen()
+        lua.register("inner") { rt in
+            do { seen.lines.append(try rt.callGlobal("g") ?? "nil") } catch { seen.lines.append("threw \(error)") }
+            return 0
+        }
+        try lua.run(#"""
+            A = ("x"):rep(65536); B = ("x"):rep(65536); T = {[A] = 1}; local _ = T[B]
+            function g() return "g" end
+            function f(n) inner(); local k = 0; for i = 1, tonumber(n) do k = k + T[B] end; return tostring(k) end
+            """#)
+        XCTAssertEqual(try lua.callGlobal("f", ["2"], budget: 1_000), "2")
+        XCTAssertThrowsError(try lua.callGlobal("f", ["50"], budget: 1_000)) {
+            XCTAssertEqual($0 as? LuaRuntime.LuaError, Self.spent)
+        }
+        XCTAssertEqual(seen.lines, ["g", "g"])
+        XCTAssertEqual(lua.mainStackHeight, 0)
+    }
 
     // MARK: - Ordinary heavy use passes under the default budget
 

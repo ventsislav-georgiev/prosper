@@ -208,6 +208,7 @@ static int tunpack (lua_State *L) {
   if (l_unlikely(n >= (unsigned int)INT_MAX  ||
                  !lua_checkstack(L, (int)(++n))))
     return luaL_error(L, "too many results to unpack");
+  clua_work(L, (size_t)n, CLUA_WORK_VALUE);  /* #1173: one per value pushed */
   for (; i < e; i++) {  /* push arg[i..e - 1] (to avoid overflows) */
     lua_geti(L, 1, i);
   }

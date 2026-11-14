@@ -818,6 +818,9 @@ tag from the now-released section and put it on the new top draft.
 - Typing fast in a two-pane converter window (Base64 and extension converters) no longer queues one
   conversion per keystroke: while one conversion runs, only your newest text is converted next, so
   the answer for what you typed last arrives sooner. (#1170)
+- Lua extensions: a script that unpacks a very large table, expands a very long argument list, or
+  looks up a very long text key through a chain of fallback tables is now stopped by its execution
+  budget as promptly as other heavy work. (#1173)
 
 ## v2.174.0
 

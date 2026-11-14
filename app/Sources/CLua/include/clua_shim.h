@@ -91,8 +91,11 @@ void         clua_pushhostfunction(lua_State *L, lua_CFunction f);
 #define CLUA_WORK_OPTION          5     /* one string.pack/packsize/unpack option (2.3-4.3) */
 #define CLUA_WORK_VALUE           5     /* one value of string.byte/char or one byte of utf8.codepoint (2.1-5.0) */
 #define CLUA_WORK_UTF8_CHAR       32    /* one argument of utf8.char (29-31) */
+/* #1173 (table.unpack charges CLUA_WORK_VALUE per value: 2.7) */
+#define CLUA_WORK_VARARG          1     /* one value copied by a vararg expansion (0.9-1.2) */
 /* Charge count * weight units (saturating). Raises "execution budget exceeded" when the armed limit is passed and
-** leaves the budget spent; does nothing when no budget is armed or the cap is off (state setup, host functions). */
+** leaves the budget spent; does nothing when no budget is armed or the cap is off (state setup, host functions).
+** A count of 0 charges nothing and raises only if the limit is passed already (lvm.c, an __index hop). */
 void         clua_work(lua_State *L, size_t count, size_t weight);
 /* #1166: the same charge where no lua_State is at hand (ltable.c), against the state whose Lua runs on this OS thread.
 ** It never raises: over the limit the budget is spent, so the next instruction of any thread raises. */
