@@ -236,17 +236,37 @@ enum DchCtl {
         }
     }
 
+    /// dch serve 1.66.0's ctl_xray flag list (rframe.c:632-638), and which take a value (k 4...8).
+    static let xrayFlags: Set<String> = ["--json", "--follow", "--clear", "--full", "--ref", "--chapter", "--scope", "--budget-ms",
+                                         "--search", "--tasks", "--memory"]
+    static let xrayValued: Set<String> = ["--ref", "--chapter", "--scope", "--budget-ms", "--search"]
+    /// The flags added to the Mac after the first scanner; they carry serve's own refusal texts.
+    static let xrayNewFlags: Set<String> = ["--search", "--clear", "--tasks", "--memory"]
+    static let xrayNeedsJSON = "--xray needs --json (the view is client-side only)"   // rframe.c:675-676
+    static let xrayExclusion = "--ref, --search, --tasks, --memory, --follow, --chapter and --clear exclude each other"   // :677-679
+    static let xrayWithRef = "--scope, --full and --budget-ms come with --ref"   // :681-682
+    static let searchShape = "bad search: 2 to 200 bytes, no control character"   // :689-691
+
+    /// dch's xray_search_ok (rframe.c:590-602): 2 to 200 bytes of UTF-8, no cp_ctl code point (cp_ctl, rframe.c:75-81:
+    /// C0, DEL, C1, U+202A-E, U+2066-9, U+200E/F, U+061C, U+2028/9). A Swift String is valid UTF-8 already.
+    static func searchOK(_ t: String) -> Bool {
+        (2...200).contains(t.utf8.count) && !t.unicodeScalars.contains { c in
+            let v = c.value
+            return v < 0x20 || (0x7f..<0xa0).contains(v) || (0x202a...0x202e).contains(v) || (0x2066...0x2069).contains(v)
+                || v == 0x200e || v == 0x200f || v == 0x061c || v == 0x2028 || v == 0x2029
+        }
+    }
+
     /// --xray after its name: each flag once, in any order, its value checked. `seen`: flag to value.
     private static func xrayScan(_ after: [String]) -> (seen: [String: String], why: String?) {
         var seen: [String: String] = [:], i = 0
         while i < after.count {
             let w = after[i]
-            guard ["--json", "--full", "--follow", "--ref", "--scope", "--chapter", "--budget-ms"].contains(w) else {
-                return (seen, unlisted(w, "--xray"))
-            }
-            guard seen[w] == nil else { return (seen, "--xray takes \(w) once") }
+            guard xrayFlags.contains(w) else { return (seen, unlisted(w, "--xray")) }
+            // The four 1.66.0 flags: serve's "%s twice" (rframe.c:661); the older ones keep the Mac's words.
+            guard seen[w] == nil else { return (seen, xrayNewFlags.contains(w) ? "\(w) twice" : "--xray takes \(w) once") }
             var value = ""
-            if ["--ref", "--scope", "--chapter", "--budget-ms"].contains(w) {
+            if xrayValued.contains(w) {
                 guard i + 1 < after.count else { return (seen, "\(w) needs a value") }
                 value = after[i + 1]
                 i += 1
@@ -272,12 +292,14 @@ enum DchCtl {
     private static func xrayRefusal(_ after: [String]) -> String? {
         let (seen, why) = xrayScan(after)
         if let why { return why }
-        guard seen["--json"] != nil else { return "--xray needs --json" }
-        let modes = ["--ref", "--follow", "--chapter"].filter { seen[$0] != nil }
-        guard modes.count <= 1 else { return "--xray takes one of --ref, --follow, --chapter" }
+        let modes = ["--ref", "--follow", "--chapter", "--search", "--clear", "--tasks", "--memory"].filter { seen[$0] != nil }
+        let new = modes.contains { xrayNewFlags.contains($0) }   // a 1.66.0 flag is in play: serve's own words
+        guard seen["--json"] != nil else { return new ? xrayNeedsJSON : "--xray needs --json" }
+        guard modes.count <= 1 else { return new ? xrayExclusion : "--xray takes one of --ref, --follow, --chapter" }
         if seen["--ref"] == nil, let extra = ["--scope", "--full", "--budget-ms"].first(where: { seen[$0] != nil }) {
-            return "\(extra) goes with --ref"
+            return new ? xrayWithRef : "\(extra) goes with --ref"
         }
+        if let text = seen["--search"], !searchOK(text) { return searchShape }
         return nil
     }
 
