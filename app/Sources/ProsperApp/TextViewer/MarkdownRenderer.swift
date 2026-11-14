@@ -59,8 +59,14 @@ enum MarkdownRenderer {
     static let maxStyledRuns = 50_000
     /// Local images decoded per document; later ones show their alt text.
     static let maxImages = 64
+    /// #1187: the parser and the pass below cost 12 to 17 µs per attributed run, linear in the runs, and
+    /// 1 MiB holds over 500,000 runs (7.4 s on the Mac measured, 17.6 s on CI). Above this markupCount the
+    /// file is shown as source; just under it a render takes about 2.5 s on that Mac. Not lower: 50,000
+    /// styled runs (maxStyledRuns) take 100,000 delimiters.
+    static let maxMarkup = 150_000
     static let tooLargeNote = "Over 1 MiB: shown as source"
     static let tooDeepNote = "Nested too deeply: shown as source"
+    static let tooMuchMarkupNote = "Too much markup: shown as source"
     static let unparsedNote = "Not readable as Markdown: shown as source"
     /// Round 3: the note when a cap drew part of the file as plain text; `kinds` in order, e.g. ["links"].
     nonisolated static func trimmedNote(_ kinds: [String]) -> String { "Too many \(kinds.joined(separator: ", ")): the rest shown as plain text" }
@@ -77,6 +83,7 @@ enum MarkdownRenderer {
     nonisolated static func render(_ source: String, document: URL, style: Style, loader: @escaping TextViewerImageLoader) -> Output {
         guard source.utf8.count <= maxSourceBytes else { return plain(source, style: style, note: tooLargeNote) }
         guard nestingBound(source) <= maxNesting else { return plain(source, style: style, note: tooDeepNote) }
+        guard markupCount(source) <= maxMarkup else { return plain(source, style: style, note: tooMuchMarkupNote) }
         let options = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: false, interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible, languageCode: nil)
@@ -135,6 +142,35 @@ enum MarkdownRenderer {
         }
         if state == .bullet || state == .delimiter { markers += 1 }
         return max(bound, markers + min(columns / 2, bound))
+    }
+
+    /// #1187: the attributed runs a parse can make, estimated without parsing: two for each line with
+    /// text (its text and the break after it), one for each emphasis, strikethrough, code or link
+    /// delimiter, two for a "<" (a tag or autolink, and the text after it), and one for each table pipe
+    /// between two cells (a line's first and last pipe open no cell). Quote and list markers open a block,
+    /// counted with its line. At least the parser's run count on every shape measured. One pass over the bytes.
+    nonisolated static func markupCount(_ s: String) -> Int {
+        var n = 0, text = false, pipe = false
+        for b in s.utf8 {
+            switch b {
+            case 0x0A, 0x0D: (text, pipe) = (false, false)   // a pipe that ends its line opens no cell
+            case 0x20, 0x09: continue
+            default:
+                if !text {
+                    (n, text) = (n + 2, true)
+                    if b == UInt8(ascii: "|") { continue }   // nor does one that starts it
+                }
+                if pipe { (n, pipe) = (n + 1, false) }
+                switch b {
+                case UInt8(ascii: "|"): pipe = true
+                case UInt8(ascii: "<"): n += 2
+                case UInt8(ascii: "*"), UInt8(ascii: "_"), UInt8(ascii: "~"), UInt8(ascii: "`"),
+                     UInt8(ascii: "["), UInt8(ascii: "]"): n += 1
+                default: break
+                }
+            }
+        }
+        return n
     }
 
     /// GitHub's heading anchor: lowercased, spaces to hyphens, other punctuation dropped.

@@ -435,6 +435,53 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(para(out, "b")?.headIndent, 22)
     }
 
+    /// #1187: the pre-scan's count, exactly: two per line with text, one per delimiter, one per pipe between cells.
+    func testMarkupCount() {
+        let cases: [(String, Int)] = [
+            ("", 0), ("plain text", 2), ("a\nb", 4), ("a\n\n\nb", 4), ("  \n\t\n", 0), ("a\r\nb\rc", 6),
+            ("*a*", 4), ("_a_ ~~b~~", 8), ("`c`", 4), ("[a](b)", 4), ("<b>x</b>", 6),
+            ("|a|b|", 3), ("| a | b |  ", 3), ("|a|\n|b|", 4), ("||", 2), ("|||", 3), (" | a", 2), ("a |", 2),
+            ("# h\n- i\n1. j", 6), ("> > q", 2), ("a < b", 4), ("<http://a>", 4),
+        ]
+        for (md, n) in cases { XCTAssertEqual(R.markupCount(md), n, md.debugDescription) }
+    }
+
+    /// #1187: at maxMarkup the file is rendered as before; one more delimiter and it is its source, with the note.
+    /// Openers with no closer: the count is at the cap, the parse is one run.
+    func testMarkupCap() {
+        let at = String(repeating: "*a _a ", count: (R.maxMarkup - 2) / 2)   // the line's 2, then 2 per "*a _a "
+        XCTAssertEqual(R.markupCount(at), R.maxMarkup)
+        let out = render(at)
+        XCTAssertTrue(out.note == nil, out.note ?? "")
+        XCTAssertEqual(out.text.string, String(at.dropLast()), "the paragraph, its trailing space dropped")
+        XCTAssertEqual(font(out, "*a _a")?.pointSize, 15, "body text, not source")
+        let over = at + "_"
+        XCTAssertEqual(R.markupCount(over), R.maxMarkup + 1)
+        let src = render(over)
+        XCTAssertEqual(src.note, R.tooMuchMarkupNote)
+        XCTAssertEqual(src.note, "Too much markup: shown as source")
+        XCTAssertEqual(src.text.string, over, "the source, every character")
+        XCTAssertEqual(font(src, "*a _a")?.pointSize, 13, "monospaced source")
+        XCTAssertEqual(render(Self.mixed(129) + "\n" + String(repeating: "*", count: R.maxMarkup)).note, R.tooDeepNote,
+                       "the depth cap is checked first, as before")
+    }
+
+    /// #1187: the entry's shape at a mid size renders as it did before the cap: "*a" pairs as emphasis,
+    /// every other letter italic.
+    func testPairedOpenersRenderAsBefore() {
+        let md = String(repeating: "*a", count: 1000)
+        XCTAssertEqual(R.markupCount(md), 1002)
+        let out = render(md)
+        XCTAssertTrue(out.note == nil, out.note ?? "")
+        XCTAssertEqual(out.text.string, String(repeating: "a", count: 1000))
+        var italic: [Bool] = []
+        out.text.enumerateAttribute(.font, in: NSRange(location: 0, length: out.text.length)) { v, range, _ in
+            let i = (v as? NSFont)?.fontDescriptor.symbolicTraits.contains(.italic) == true
+            italic.append(contentsOf: Array(repeating: i, count: range.length))
+        }
+        XCTAssertEqual(italic, (0..<1000).map { $0 % 2 == 0 })
+    }
+
     // MARK: Heavy (PROSPER_HEAVY_TESTS=1): budgets wide enough for a loaded machine.
 
     /// Runs `work` off the main thread to `ceiling` seconds; on a timeout the task is cancelled
@@ -733,46 +780,56 @@ final class MarkdownRendererTests: XCTestCase {
         for k in [1000, 50000, nil] {
             for (name, md) in Self.inlineShapes(k) {
                 XCTAssertLessThanOrEqual(md.utf8.count, R.maxSourceBytes, name)
-                // 60 s: a hang guard, not a budget (1 MiB of unclosed openers took 17.6 s on the macOS 27.0 CI runner)
-                let out = onAppThread("\(name) x \(k.map { "\($0)" } ?? "1 MiB")", md, ceiling: 60)
-                // parsed, never the source fallback (a cap's "Too many ..." note may show: Round 3 F2)
-                XCTAssertFalse([R.tooLargeNote, R.tooDeepNote, R.unparsedNote].contains(out?.note ?? ""), name)
+                // #1187: over ten times the slowest shape under the markup cap (0.80 s here, 1.41 s on CI)
+                let out = onAppThread("\(name) x \(k.map { "\($0)" } ?? "1 MiB")", md, ceiling: 15)
+                // parsed, never the source fallback (a cap's "Too many ..." note may show: Round 3 F2), unless over the markup cap
+                if R.markupCount(md) > R.maxMarkup {
+                    XCTAssertEqual(out?.note, R.tooMuchMarkupNote, name)
+                } else {
+                    XCTAssertFalse([R.tooLargeNote, R.tooDeepNote, R.unparsedNote, R.tooMuchMarkupNote].contains(out?.note ?? ""), name)
+                }
             }
         }
     }
 
     /// Round 2 item 2: the worst tables the caps allow, against flat shapes of the same size. Layout
-    /// is measured on the main thread, where TextViewerTextView.show runs it.
+    /// is measured on the main thread, where TextViewerTextView.show runs it. #1187: every shape renders as
+    /// Markdown under maxMarkup (its count asserted). A table just under maxMarkup holds over 75,000 cells,
+    /// about 90 MiB at the measured 1.2 KiB a run, so the new table shapes hold 32,000 cells (about 48 MiB).
     func testWorstTables() throws {
         try requireHeavyTests()
-        func table(_ cols: Int, _ rows: Int?) -> String {
+        func table(_ cols: Int, _ rows: Int) -> String {
             let head = "|" + String(repeating: "h|", count: cols) + "\n|" + String(repeating: "-|", count: cols) + "\n"
-            let row = "|" + String(repeating: "a|", count: cols) + "\n"
-            return head + String(repeating: row, count: rows ?? (R.maxSourceBytes - head.utf8.count) / row.utf8.count)
+            return head + String(repeating: "|" + String(repeating: "a|", count: cols) + "\n", count: rows)
         }
-        let shapes: [(String, String)] = [
-            ("table 1 column x 1 MiB of rows", table(1, nil)),
-            ("table 64 columns x 1 MiB of rows", table(64, nil)),
-            ("table 8 x 20000", table(8, 20000)),
-            ("table 1 x 50000 cells, at the cap", table(1, R.maxTableCells - 1)),
-            ("table 8 x 6250, at the cap", table(8, R.maxTableCells / 8 - 1)),
-            ("table 64 x 781, at the cap", table(64, R.maxTableCells / 64 - 1)),
-            ("1 MiB of 4-byte list items", String(repeating: "- a\n", count: R.maxSourceBytes / 4)),
-            ("1 MiB of one-letter paragraphs", String(repeating: "a\n\n", count: R.maxSourceBytes / 3)),
-            ("1 MiB of short links", String(repeating: "[a](b) ", count: R.maxSourceBytes / 7)),
+        let shapes: [(name: String, md: String, marks: Int, table: Bool)] = [
+            ("table 1 x 32000 cells", table(1, 31_999), 64_002, true),
+            ("table 8 x 4000 cells", table(8, 3_999), 36_009, true),
+            ("table 64 x 500 cells", table(64, 499), 32_565, true),
+            ("table 1 x 50000 cells, at the cap", table(1, R.maxTableCells - 1), 100_002, true),
+            ("table 8 x 6250, at the cap", table(8, R.maxTableCells / 8 - 1), 56_259, true),
+            ("table 64 x 781, at the cap", table(64, R.maxTableCells / 64 - 1), 50_830, true),
+            ("32000 4-byte list items", String(repeating: "- a\n", count: 32_000), 64_000, false),
+            ("32000 one-letter paragraphs", String(repeating: "a\n\n", count: 32_000), 64_000, false),
+            ("16000 short links", String(repeating: "[a](b) ", count: 16_000), 32_002, false),
         ]
         let style = Self.style, doc = Self.document
-        for (name, md) in shapes {
+        for (name, md, marks, isTable) in shapes {
+            XCTAssertEqual(R.markupCount(md), marks, name)
             let box = OutputBox()
-            timed("render \(name)", ceiling: 120) { box.set(R.render(md, document: doc, style: style, loader: { _, _, _ in nil })) }
+            let before = Self.footprintMiB()
+            timed("render \(name)", ceiling: 30) { box.set(R.render(md, document: doc, style: style, loader: { _, _, _ in nil })) }
             guard let out = box.get() else { continue }
+            let held = Self.footprintMiB() - before
+            XCTAssertTrue(out.note != R.tooMuchMarkupNote, name)
+            if isTable { XCTAssertTrue(inTable(out, at: 0) && inTable(out, at: out.text.length - 1), "\(name): drawn as table cells") }
             let t0 = Date()
-            timed("layout \(name)", ceiling: 120) { Self.layout(out.text) }
+            timed("layout \(name)", ceiling: 30) { Self.layout(out.text) }
             let offMain = Date().timeIntervalSince(t0)
             guard offMain < 30 else { continue }   // a main-thread layout cannot be cancelled: only a bounded one
             let start = Date()
             Self.layout(out.text)   // on main, as show() does
-            Self.fact("\(name): \(md.utf8.count) bytes, \(out.text.length) characters, layout \(String(format: "%.3f", offMain)) s off main, \(String(format: "%.3f", Date().timeIntervalSince(start))) s on main")
+            Self.fact("\(name): \(md.utf8.count) bytes, \(marks) marks, \(out.text.length) characters, output footprint \(String(format: "%.1f", held)) MiB, layout \(String(format: "%.3f", offMain)) s off main, \(String(format: "%.3f", Date().timeIntervalSince(start))) s on main")
         }
         // The plain-text path (a .txt file, or Markdown shown as source) for comparison.
         let plain = R.plain(String(repeating: "abc\n", count: R.maxSourceBytes / 4), style: style)
@@ -794,6 +851,16 @@ final class MarkdownRendererTests: XCTestCase {
             Self.fact("\(n) links, no cap: \(String(format: "%.3f", secs)) s on main")
             if secs > 10 { break }
         }
+    }
+
+    /// phys_footprint in MiB (the LlamaInlineEngineTests pattern); -1 on failure.
+    nonisolated static func footprintMiB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) { p in
+            p.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return kr == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : -1
     }
 
     final class OutputBox: @unchecked Sendable {

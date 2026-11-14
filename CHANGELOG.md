@@ -904,6 +904,9 @@ tag from the now-released section and put it on the new top draft.
 - Account pool: quitting Prosper while the proxy is still starting no longer leaves its port held,
   and a limit reported for an account that was renamed or replaced mid-request now holds back that
   account, not the one that took its name. (#1190)
+- Markdown files with a very large amount of markup (well over 100,000 emphasis marks, links, code
+  spans, table cells or lines) now open at once as their source with the note "Too much markup:
+  shown as source", instead of taking several seconds to draw. (#1187)
 
 ## v2.174.0
 
