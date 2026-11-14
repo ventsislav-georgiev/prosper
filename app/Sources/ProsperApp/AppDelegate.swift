@@ -314,9 +314,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // #1189: an extension's key rules moved a chord, so Open Agent Sessions' default may stand down or come back.
         // On the next main turn, outside the engine's own setRules call; registerHotKeys never fires this (no loop).
-        ExtensionKeyRules.shared.onExtensionChordsChanged = { [weak self] in
-            Task { @MainActor in self?.registerHotKeys() }
-        }
+        // #1204: a burst of changes queues ONE re-run (CoalescedRerun). Formed here on the main actor; request()
+        // and the run closure both run on the main actor (the engine is @MainActor, the default schedule hops to it).
+        let chordRerun = CoalescedRerun { [weak self] in self?.registerHotKeys() }
+        ExtensionKeyRules.shared.onExtensionChordsChanged = { chordRerun.request() }
         // A resident eventtap (hammerspoon-compat) activates AFTER its rules are set
         // (the probe runs once rules install). Re-reconcile when that flips so the tap
         // comes up for a pure-eventtap config even with inline autocomplete off.

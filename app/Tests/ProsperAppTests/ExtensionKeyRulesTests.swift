@@ -351,4 +351,84 @@ final class ExtensionKeyRulesTests: XCTestCase {
         rules.removeRules(extensionID: compat)
         XCTAssertEqual(reruns, 4, "removing nothing re-runs nothing")
     }
+
+    /// #1204: a burst of chord changes queues ONE re-run. The scheduler is held by hand (no main-actor hop, no
+    /// registerHotKeys): `held` collects what the coalescer queued, the re-run is a counter. Rows count, never time.
+    @MainActor
+    private func makeCoalesced(_ rules: ExtensionKeyRules, held: Held, onRun: @escaping @MainActor () -> Void = {}) -> CoalescedRerun {
+        let c = CoalescedRerun(schedule: { held.queue.append($0) }, run: { held.runs += 1; onRun() })
+        rules.onExtensionChordsChanged = { c.request() }
+        return c
+    }
+
+    @MainActor
+    final class Held {
+        var queue: [@MainActor () -> Void] = []
+        var runs = 0
+        func release() { let q = queue; queue = []; for w in q { w() } }
+    }
+
+    @MainActor
+    private func alternate(_ rules: ExtensionKeyRules, count: Int) {
+        let a = #"[ { "from": "shift+alt+s", "swallow": true } ]"#
+        let b = #"[ { "from": "shift+alt+d", "swallow": true } ]"#
+        for i in 0..<count { rules.setRules(extensionID: "com.example.compat", json: i % 2 == 0 ? a : b) }
+    }
+
+    @MainActor
+    func testChordBurstQueuesOneRerunAndAnotherBurstQueuesOneMore() {
+        let rules = ExtensionKeyRules()
+        let held = Held()
+        let c = makeCoalesced(rules, held: held)
+        defer { rules.onExtensionChordsChanged = nil; _ = c }
+
+        alternate(rules, count: 50)
+        XCTAssertEqual(held.queue.count, 1, "50 alternating changes queue exactly one re-run")
+        XCTAssertEqual(held.runs, 0, "nothing ran while the scheduler is held")
+        held.release()
+        XCTAssertEqual(held.runs, 1, "the queued re-run ran once")
+        XCTAssertEqual(held.queue.count, 0)
+
+        alternate(rules, count: 50)
+        XCTAssertEqual(held.queue.count, 1, "a second burst queues exactly one more (the flag was cleared)")
+        held.release()
+        XCTAssertEqual(held.runs, 2)
+    }
+
+    @MainActor
+    func testEqualChordSetQueuesNoRerun() {
+        let rules = ExtensionKeyRules()
+        let held = Held()
+        let c = makeCoalesced(rules, held: held)
+        defer { rules.onExtensionChordsChanged = nil; _ = c }
+        let json = #"[ { "from": "shift+alt+s", "swallow": true } ]"#
+        rules.setRules(extensionID: "com.example.compat", json: json)
+        held.release()
+        XCTAssertEqual(held.runs, 1)
+        rules.setRules(extensionID: "com.example.compat", json: json)
+        rules.setRules(extensionID: "com.example.compat", json: #"[ { "from": "shift+alt+s", "launch": "com.example.fake" } ]"#)
+        XCTAssertEqual(held.queue.count, 0, "an equal chord set queues nothing")
+    }
+
+    @MainActor
+    func testChangeDuringRerunQueuesExactlyOneMore() {
+        let rules = ExtensionKeyRules()
+        let held = Held()
+        var changed = false
+        let c = makeCoalesced(rules, held: held, onRun: {
+            // A change made from inside the re-run (the flag must already be clear).
+            guard !changed else { return }
+            changed = true
+            self.alternate(rules, count: 3)
+        })
+        defer { rules.onExtensionChordsChanged = nil; _ = c }
+        alternate(rules, count: 2)
+        XCTAssertEqual(held.queue.count, 1)
+        held.release()
+        XCTAssertEqual(held.runs, 1)
+        XCTAssertEqual(held.queue.count, 1, "a change during the re-run queues exactly one more")
+        held.release()
+        XCTAssertEqual(held.runs, 2)
+        XCTAssertEqual(held.queue.count, 0)
+    }
 }

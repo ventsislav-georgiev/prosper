@@ -177,6 +177,31 @@ enum KeyRuleEngine {
     }
 }
 
+/// #1204: collapses a burst of `request()` calls into one queued `run`. The flag is cleared BEFORE `run` starts, so a
+/// request made during or after the run queues exactly one more. Main actor only: the flag, `schedule` and `run`
+/// are all main-actor state; `schedule` is injectable so a row can hold the queued work and release it by hand.
+@MainActor
+final class CoalescedRerun {
+    private var pending = false
+    private let schedule: (@escaping @MainActor () -> Void) -> Void
+    private let run: @MainActor () -> Void
+
+    init(schedule: @escaping (@escaping @MainActor () -> Void) -> Void = { work in Task { @MainActor in work() } },
+         run: @escaping @MainActor () -> Void) {
+        self.schedule = schedule
+        self.run = run
+    }
+
+    func request() {
+        guard !pending else { return }
+        pending = true
+        schedule { [self] in
+            pending = false
+            run()
+        }
+    }
+}
+
 /// Live registry of extension key rules, consulted by the shared tap on every
 /// keyDown. Rules are kept per-extension (so disabling one extension drops only its
 /// rules) and flattened into a single ordered array for matching. MainActor-bound:
