@@ -12,6 +12,8 @@ final class AgentsWindow {
 
     private(set) var window: NSWindow?
     private(set) var model: AgentWindowModel?
+    /// #831 B1 step 2 (4.1a, R899-3): the panes' last live sights, kept for the process: they outlive a window close.
+    let lastLive = AgentLastLiveHome()
     private var observers: [NSObjectProtocol] = []
     var isOpen: Bool { window != nil }
     static let title = "Agent Sessions"
@@ -31,7 +33,7 @@ final class AgentsWindow {
     func show() {
         if let window { return present(window) }
         let island = island()
-        let model = AgentWindowModel()
+        let model = AgentWindowModel(lastLive: lastLive)
         model.interaction.controller = island
         model.bind(island.store)
         island.onStoreChanged = { [weak model, weak island] in model?.bind(island?.store) }

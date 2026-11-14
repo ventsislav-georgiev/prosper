@@ -160,7 +160,33 @@ enum AgentSidebar {
     }
 }
 
-/// The window's state: the sidebar, the selection and the one transcript model.
+/// #831 B1 step 2 (4.1a, rider R899-3): the lastLive map's home. The window's owner (`AgentsWindow`) keeps one for the
+/// process and hands it to every model it builds, so a pane's last live sight outlives a window close; a model built
+/// without one (tests) gets its own. shortcut: nothing prunes it before step 3 (prune on load and on a layout delete);
+/// each window open adds at most one entry per shown pane.
+@MainActor
+final class AgentLastLiveHome {
+    var map: AgentPaneLayout.LastLiveMap = [:]
+}
+
+/// #831 B1 step 2 (4.4, 11.2): one pane's runtime in the active layout: its own transcript model and its kept display
+/// row. `ended` and `content` publish themselves (written only on a change), so a view of an UNFOCUSED pane is told of
+/// an entry into or an exit from Ended, which changes no `selection` (step 1 review (a)).
+@MainActor
+final class AgentPaneRuntime: ObservableObject {
+    let pane: UUID
+    let transcript = AgentTranscriptModel()
+    /// 4.4 M1: the session ended while this pane's transcript ran: its last live row, the blocks kept (suspended).
+    @Published fileprivate(set) var ended: (target: PaneTarget, row: AgentSidebar.Row)?
+    /// The pane's content as of the last resolve.
+    @Published fileprivate(set) var content: PaneContent?
+    /// The pane's live row as of the last resolve: what `ended` keeps when the session goes.
+    fileprivate var liveRow: AgentSidebar.Row?
+
+    init(pane: UUID) { self.pane = pane }
+}
+
+/// The window's state: the sidebar, the selection and one transcript model per pane of the active layout.
 /// Energy (design "Energy"): nothing runs unless the window is open and visible.
 /// While hidden the transcript is stopped and the age clock is off; `close` drops
 /// the store subscription too.
@@ -175,18 +201,40 @@ final class AgentWindowModel: ObservableObject {
     /// the browse rule (`show`, 7.1).
     private(set) var layout = PaneLayout.single() {
         didSet {
-            lastLive = AgentPaneLayout.retargeted(lastLive, from: oldValue, to: layout)
+            // 4.1a: a retarget or a closed pane loses its sight; a layout switch (another id) keeps every layout's.
+            if oldValue.id == layout.id { lastLive = AgentPaneLayout.retargeted(lastLive, from: oldValue, to: layout) }
+            syncRuntimes(switched: oldValue.id != layout.id)
             settle()
         }
     }
     /// #831 A2 (4.1a): the panes' last live sights, stamped by `stampLastLive` in the store's publish sink only.
-    /// shortcut: it lives as long as this model (a window close drops it); B1 moves it to the window's owner (4.1a).
-    private(set) var lastLive: AgentPaneLayout.LastLiveMap = [:]
+    /// B1 step 2 (R899-3): kept by the window's owner (`lastLiveHome`), so it outlives this model.
+    private(set) var lastLive: AgentPaneLayout.LastLiveMap {
+        get { lastLiveHome.map }
+        set { lastLiveHome.map = newValue }
+    }
+    let lastLiveHome: AgentLastLiveHome
     /// False while the island is off (no store): the window says so.
     @Published private(set) var hasStore = false
-    /// The only conversation model: rebound on each selection, stopped on deselect,
-    /// hide and close.
-    let transcript = AgentTranscriptModel()
+    /// #831 B1 step 2 (11.2): one runtime per pane of the active layout, keyed by pane id; freed by a close.
+    private(set) var runtimes: [UUID: AgentPaneRuntime] = [:]
+    var focusedRuntime: AgentPaneRuntime? { runtimes[layout.focused] }
+    /// After `close()` (no runtime left): a model that never starts, for a late reader.
+    private lazy var detachedTranscript = AgentTranscriptModel()
+    /// The focused pane's conversation model (every existing reader, the view included, means that pane's). The same
+    /// object across a row change in that pane (rewrite 11, restated per pane runtime); another pane's is another.
+    var transcript: AgentTranscriptModel { focusedRuntime?.transcript ?? detachedTranscript }
+    /// The shown panes (11.1) from frames in `paneArea`: with the split gate off, the focused pane alone (15.0).
+    var shownPanes: Set<UUID> {
+        switch layout.frames(in: paneArea, minimum: PaneLayout.minimumPane, splitsEnabled: AgentPaneLayout.splitsEnabled) {
+        case let .tiled(f): Set(f.keys)
+        case let .tooSmall(id): [id]
+        }
+    }
+    /// The pane area's size (the view sets it from plan step 4; tests set it). `.zero`: the focused pane alone.
+    var paneArea: CGRect = .zero {
+        didSet { if paneArea != oldValue { follow() } }
+    }
 
     private(set) var store: AgentIslandStore?
     private(set) var visible = false
@@ -220,6 +268,9 @@ final class AgentWindowModel: ObservableObject {
 
     // Seams.
     var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
+    /// A pane runtime made after init (a new pane, a layout switch); tests give its transcript their seams. Called on the
+    /// main actor, from the layout's didSet.
+    var onNewRuntime: (AgentPaneRuntime) -> Void = { _ in }
     /// Open in terminal: the island's row click (focus the attached terminal, else
     /// open one, else copy the attach command).
     var openSession: (AgentSession) -> Void = { AgentIslandController.shared.jump($0) }
@@ -257,11 +308,10 @@ final class AgentWindowModel: ObservableObject {
     /// #831 B1 (4.4 M1, replaces #829 G2's hold): the focused pane's session ended while its transcript ran: the pane
     /// keeps that session's last live row and its blocks (the transcript suspended), display only, until resolve
     /// first gives its own record (one swap), a new session takes the name, or the pane is retargeted or closed.
-    private(set) var ended: (target: PaneTarget, row: AgentSidebar.Row)?
-    /// The focused pane's live row as of the last resolve: what `ended` keeps when the session goes.
-    private var liveRow: AgentSidebar.Row?
+    /// B1 step 2: the focused pane's runtime's (each pane keeps its own).
+    var ended: (target: PaneTarget, row: AgentSidebar.Row)? { focusedRuntime?.ended }
     /// The focused pane's content as of the last resolve.
-    private(set) var content: PaneContent?
+    var content: PaneContent? { focusedRuntime?.content }
     /// The values of the publish being handled: the store's @Published still hold the old ones inside the sink.
     private var publishing: (sessions: [AgentSession], history: [DchHistoryRecord])?
     /// dch writes a record each minute: a Stop or Kill's record has ended by then, with slack.
@@ -274,21 +324,69 @@ final class AgentWindowModel: ObservableObject {
 
     private var askSubscription: AnyCancellable?
     private var planSubscription: AnyCancellable?
+    /// 5.2: what the ask and plan sinks are bound to: the focused pane, its model, its resolved row.
+    private struct Bound: Equatable {
+        let pane: UUID
+        let model: ObjectIdentifier
+        let row: AgentSidebar.RowID?
+        let ended: Bool
+    }
+    private var bound: Bound?
 
-    init() {
+    init(lastLive home: AgentLastLiveHome = AgentLastLiveHome()) {
+        lastLiveHome = home
+        for p in layout.panes { runtimes[p.id] = AgentPaneRuntime(pane: p.id) }
         terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
         // OQ-66: an OSC 52 write needs the session to be the focused pane's, live now (4.3: resolved at the write).
         terminal.isSelected = { [weak self] key in self?.focusedLive?.key == key }
         // #831 B1 (4.3): every interaction action re-resolves the focused pane (main actor: called from its actions).
         interaction.resolveFocused = { [weak self] in self?.focusedLive }
+        rebind()
+    }
+
+    /// 5.2 (R6.2): the ask and plan sinks follow the focused pane's transcript model: re-subscribed on a change of
+    /// focus, of that pane's model, or of its resolved content, so another pane's question never reaches the input.
+    /// Subscribing delivers the model's current values at once (step 2 of 5.2). Both sinks run on the main actor:
+    /// `pendingAsk` / `pendingPlan` are set by the @MainActor transcript model, and Published sends on the setter's thread.
+    private func rebind() {
+        let f = closed ? nil : focusedRuntime
+        let now = f.map { Bound(pane: $0.pane, model: ObjectIdentifier($0.transcript), row: Self.resolvedRow($0.content),
+                                ended: $0.ended != nil) }
+        guard now != bound else { return }
+        bound = now
         // #798: the transcript's pending AskUserQuestion is what a question form is checked against.
-        askSubscription = transcript.$pendingAsk.sink { [weak self] ask in
+        askSubscription = f?.transcript.$pendingAsk.sink { [weak self] ask in
             MainActor.assumeIsolated { self?.interaction.ask = ask }
         }
         // #802: and the pending ExitPlanMode is what a plan approval is checked against.
-        planSubscription = transcript.$pendingPlan.sink { [weak self] plan in
+        planSubscription = f?.transcript.$pendingPlan.sink { [weak self] plan in
             MainActor.assumeIsolated { self?.interaction.plan = plan }
         }
+    }
+
+    /// 11.2: a runtime per pane of the active layout. A layout switch frees every runtime of the old layout (stopped
+    /// before any new one starts; pane ids are unique per layout only, so none is reused across layouts); within a
+    /// layout a closed pane's runtime is stopped and freed, a new pane gets a fresh one.
+    private func syncRuntimes(switched: Bool) {
+        guard !closed else { return }
+        let ids = Set(layout.order)
+        for (id, r) in runtimes where switched || !ids.contains(id) {
+            r.transcript.stop()
+            runtimes[id] = nil
+        }
+        for id in layout.order where runtimes[id] == nil {
+            let r = AgentPaneRuntime(pane: id)
+            runtimes[id] = r
+            onNewRuntime(r)
+        }
+    }
+
+    /// The window's active layout replaced: a layout switch, or a focus or tree change. Plan step 3 loads the saved one
+    /// through here; until then only tests call it, with multi-pane layouts built under the split gate (15.0).
+    func adopt(_ l: PaneLayout) {
+        guard !closed else { return }
+        layout = l
+        follow()
     }
 
     /// Follows `store` (nil: the island is off). Called on open and whenever the
@@ -327,8 +425,8 @@ final class AgentWindowModel: ObservableObject {
     /// (its values are the last publish's, so its clock would date a sight it never made); nor does a hidden window.
     private func stampLastLive(_ sessions: [AgentSession]) {
         guard visible, !closed else { return }
-        // shortcut: with the split gate off only the focused pane draws (15.0); B1 takes the shown panes from frames.
-        lastLive = AgentPaneLayout.stamp(lastLive, layout: layout.id, panes: layout.panes, visible: [layout.focused],
+        // B1 step 2 (R899-3): every shown pane, from frames (the split gate off: the focused pane alone, 15.0).
+        lastLive = AgentPaneLayout.stamp(lastLive, layout: layout.id, panes: layout.panes, visible: shownPanes,
                                          sessions: sessions, at: now())
     }
 
@@ -388,7 +486,9 @@ final class AgentWindowModel: ObservableObject {
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
             filled = true
-            if selection == nil, let first = navigableIDs.first { select(first, manual: false) }
+            // B1 step 2: only into an empty focused pane; a pane with a target (an adopted layout's, its session gone)
+            // keeps it and shows its placeholder (R3.4), never another conversation.
+            if focusedTarget == nil, let first = navigableIDs.first { select(first, manual: false) }
         }
     }
 
@@ -402,11 +502,14 @@ final class AgentWindowModel: ObservableObject {
     var focusedTarget: PaneTarget? { layout.panes.first { $0.id == layout.focused }?.target }
 
     /// 4.1 on the focused pane, against the publish being handled, else the store as it is now. No store: nil.
-    private func focusedContent() -> PaneContent? {
-        guard let t = focusedTarget,
+    private func focusedContent() -> PaneContent? { resolvedContent(of: layout.focused, focusedTarget) }
+
+    /// 4.1 on one pane of the active layout (its own slot of the lastLive map). No store or no target: nil.
+    private func resolvedContent(of pane: UUID, _ target: PaneTarget?) -> PaneContent? {
+        guard let t = target,
               let v = publishing ?? store.map({ (sessions: $0.sessions, history: $0.history) }) else { return nil }
         return AgentPaneLayout.resolve(t, sessions: v.sessions, history: v.history,
-                                       lastLive: lastLive[AgentPaneLayout.PaneSlot(layout: layout.id, pane: layout.focused)])
+                                       lastLive: lastLive[AgentPaneLayout.PaneSlot(layout: layout.id, pane: pane)])
     }
 
     /// 4.3: the focused pane resolved now; its session only when `.live` (an ended, removed or empty pane: nil).
@@ -428,23 +531,12 @@ final class AgentWindowModel: ObservableObject {
     /// on a `.live` -> `.notRunning` edge of the same target while the transcript runs (visible): a session that
     /// ended while hidden had its blocks freed, so it shows nothing kept. Any other content or target drops the kept
     /// blocks (`drop()`), so a name reuse never runs `start()` on them (4.4 (b)). No store: the raw mapping (3.5 A).
+    /// B1 step 2: every pane of the active layout is settled (its own content and Ended state); `selection` stays the
+    /// focused pane's.
     private func settle() {
-        let t = focusedTarget, was = content
-        let c = store == nil ? nil : focusedContent()
-        if case .live(let s)? = c { liveRow = row(.live(s.key)) }
-        if case .notRunning? = c, case .live? = was, ended == nil, visible, transcript.running,
-           let t, let r = liveRow, r.id == Self.rowID(t) {
-            ended = (t, r)
-        } else if let e = ended {
-            var stays = false
-            if case .notRunning? = c { stays = e.target == t }
-            if !stays {
-                ended = nil
-                transcript.drop()   // the one swap, a name reuse, a retarget: the kept model goes (4.4 (b), (e))
-            }
-        }
-        content = c
-        let s = store == nil ? Self.rowID(t) : Self.resolvedRow(c)
+        let wasEnded = focusedEnded
+        for p in layout.panes { if let r = runtimes[p.id] { settle(r, target: p.target) } }
+        let s = store == nil ? Self.rowID(focusedTarget) : Self.resolvedRow(content)
         // Any change of row drops the confirm strip's question, a refusal and the rename field (R5), as a
         // `select()` did before B1 for the publish-driven changes too (an end, the swap to History).
         if s != selection {
@@ -452,7 +544,29 @@ final class AgentWindowModel: ObservableObject {
             confirming = nil
             refusal = nil
             renameEdit = nil
+        } else if focusedEnded != wasEnded {
+            objectWillChange.send()   // the view reads focusedEnded: told even when the row stays (an emptied pane)
         }
+    }
+
+    /// One pane's runtime. Ended entry: a `.live` -> `.notRunning` edge of the same target while this pane's
+    /// transcript runs (shown, visible window); exit: any other content or target (`drop()`).
+    private func settle(_ r: AgentPaneRuntime, target t: PaneTarget?) {
+        let was = r.content
+        let c = store == nil ? nil : resolvedContent(of: r.pane, t)
+        if case .live(let s)? = c { r.liveRow = row(.live(s.key)) }
+        if case .notRunning? = c, case .live? = was, r.ended == nil, visible, r.transcript.running,
+           let t, let kept = r.liveRow, kept.id == Self.rowID(t) {
+            r.ended = (t, kept)
+        } else if let e = r.ended {
+            var stays = false
+            if case .notRunning? = c { stays = e.target == t }
+            if !stays {
+                r.ended = nil
+                r.transcript.drop()   // the one swap, a name reuse, a retarget: the kept model goes (4.4 (b), (e))
+            }
+        }
+        if r.content != c { r.content = c }   // published only on a change (one view update per change)
     }
 
     /// G8: the History row after `id` in `old` that is still there, else the one before, else the
@@ -998,31 +1112,41 @@ final class AgentWindowModel: ObservableObject {
         closed = true
         pendingSpawn = nil   // its deadline timer goes with it
         subscription = nil
-        askSubscription = nil
-        transcript.stop()
+        // 11.2 "window closed: runtime freed": every pane's model stopped, then released (no pane model outlives this).
+        for r in runtimes.values { r.transcript.stop() }
+        runtimes = [:]
+        rebind()   // closed: the sinks go
         interaction.follow(nil)
         terminal.attach(nil)
     }
 
-    /// The transcript model follows the focused pane: a visible `.live` session runs, an Ended pane keeps its blocks
-    /// suspended (4.4 (c): no IO, hidden or shown), any other state is stopped (one model: at most one tail).
+    /// 11.2 per pane runtime: a shown `.live` pane of a visible window runs; an Ended pane keeps its blocks suspended
+    /// (4.4 (c): no IO, shown or not, hidden or not); anything else is stopped (a pane not shown holds no blocks
+    /// unless Ended). Every stop and suspend comes before any start; the focused pane starts first.
     /// #822: the terminal attaches to a visible, focused, live session in Terminal mode and detaches on anything else.
     /// The transcript runs in both modes: the header's cwd and todos come from it, so a toggle never changes the header.
     private func follow() {
-        if ended != nil, !closed {
-            transcript.suspend()
-            interaction.follow(nil)   // 4.4 (d): nothing on an ended pane takes input
+        guard !closed else { return }
+        let shown = visible ? shownPanes : []
+        for r in runtimes.values {
+            if r.ended != nil {
+                r.transcript.suspend()
+            } else if !shown.contains(r.pane) || !Self.isLive(r.content) {
+                if r.transcript.running || r.transcript.suspended { r.transcript.stop() }
+            }
+        }
+        for id in Self.focusedFirst(layout) where shown.contains(id) {
+            guard let r = runtimes[id], r.ended == nil, case .live(let s)? = r.content else { continue }
+            r.transcript.update(AgentSidebar.source(s))
+            r.transcript.start()
+        }
+        rebind()
+        guard visible, let f = focusedRuntime, f.ended == nil, case .live(let s)? = f.content else {
+            interaction.follow(nil)   // 4.4 (d): nothing on an ended pane takes input; hidden or not live: nothing
             terminal.attach(nil)
             return
         }
-        guard visible, !closed, case .live(let s)? = content else {
-            if transcript.running || transcript.suspended { transcript.stop() }
-            interaction.follow(nil)
-            terminal.attach(nil)
-            return
-        }
-        transcript.update(AgentSidebar.source(s))
-        transcript.start()
+        let transcript = f.transcript
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
         interaction.plan = transcript.pendingPlan
         let terminalMode = paneMode == .terminal
@@ -1030,6 +1154,14 @@ final class AgentWindowModel: ObservableObject {
         interaction.follow(terminalMode ? nil : s)
         // #847: the New session form covers the pane, so no terminal under it.
         terminal.attach(terminalMode && newSession == nil ? s.key : nil)
+    }
+
+    /// 11.2: the start order, the focused pane first, then the others in tree order.
+    nonisolated static func focusedFirst(_ l: PaneLayout) -> [UUID] { [l.focused] + l.order.filter { $0 != l.focused } }
+
+    nonisolated static func isLive(_ c: PaneContent?) -> Bool {
+        if case .live? = c { return true }
+        return false
     }
 }
 

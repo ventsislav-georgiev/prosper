@@ -94,8 +94,9 @@ final class AgentWindowD1Tests: XCTestCase {
     /// controller, a terminal or the file watcher.
     @MainActor
     func windowModel(_ store: AgentIslandStore?, opened: @escaping (AgentSession) -> Void = { _ in },
-                     visible: @escaping (Bool) -> Void = { _ in }) -> AgentWindowModel {
-        let m = AgentWindowModel()
+                     visible: @escaping (Bool) -> Void = { _ in },
+                     lastLive: AgentLastLiveHome = AgentLastLiveHome()) -> AgentWindowModel {
+        let m = AgentWindowModel(lastLive: lastLive)
         m.now = { Self.now }
         m.openSession = opened
         m.resume = { _ in }
@@ -104,6 +105,12 @@ final class AgentWindowD1Tests: XCTestCase {
         m.transcript.offMain = { $0() }
         m.transcript.makeWatch = { _, _ in NSObject() }
         m.transcript.tickInterval = 3600
+        // #831 B1 step 2: a pane runtime made later (a fixture's panes, a layout switch) gets the same seams.
+        m.onNewRuntime = { r in
+            r.transcript.offMain = { $0() }
+            r.transcript.makeWatch = { _, _ in NSObject() }
+            r.transcript.tickInterval = 3600
+        }
         m.bind(store)
         return m
     }
@@ -223,7 +230,10 @@ final class AgentWindowD1Tests: XCTestCase {
         XCTAssertEqual(t.blocks.count, 1)
 
         m.move(1)
-        XCTAssertTrue(m.transcript === t, "one model, rebound (step 1 keeps the one model; step 2 restates it per pane)")
+        // Rewrite 11, restated per pane runtime (B1 step 2): the focused pane's model is the same object across a row
+        // change in that pane (testAgentWindowAskAndPlanRebindToTheFocusedPane pins another pane's as another object).
+        XCTAssertTrue(m.transcript === t, "the focused pane's runtime, rebound across rows")
+        XCTAssertTrue(m.focusedRuntime?.transcript === t)
         XCTAssertEqual(t.source?.key.name, "b")
         XCTAssertEqual(t.tail?.path, b.path)
         guard case .assistant(let c) = t.blocks.first?.body else { return XCTFail("\(t.blocks)") }
