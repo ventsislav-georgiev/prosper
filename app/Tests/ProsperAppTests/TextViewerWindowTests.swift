@@ -538,8 +538,9 @@ final class TextViewerWindowTests: XCTestCase {
         let stock = names(NSTextView(usingTextLayoutManager: false))
         fact("stock TextKit 1 recognizers: \(stock)")
         XCTAssertEqual(stock.filter { $0 == immediate }.count, 1, "the recognizer this guards against: \(stock)")
-        XCTAssertEqual(Set(stock), TextViewerTextView.keptRecognizers.union([immediate]),
-                       "a stock recognizer was added or renamed: read what it does before keeping it")
+        // A subset, not equality: macOS 27.0 lacks NSDragGestureRecognizer and _NSTextSelectionMouseEmulationBlocker.
+        let unknown = Set(stock).subtracting(TextViewerTextView.keptRecognizers.union([immediate]))
+        XCTAssertTrue(unknown.isEmpty, "a stock recognizer was added or renamed: read what it does before keeping it: \(unknown.sorted())")
         let kept = stock.filter { $0 != immediate }
         let (scroll, view) = TextViewerTextView.makeScrollable()
         XCTAssertEqual(names(view), kept, "everything else the stock view adds is kept")

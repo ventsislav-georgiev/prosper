@@ -575,7 +575,8 @@ final class MarkdownRendererTests: XCTestCase {
         for k in [1000, 50000, nil] {
             for (name, md) in Self.inlineShapes(k) {
                 XCTAssertLessThanOrEqual(md.utf8.count, R.maxSourceBytes, name)
-                let out = onAppThread("\(name) x \(k.map { "\($0)" } ?? "1 MiB")", md)
+                // 60 s: a hang guard, not a budget (1 MiB of unclosed openers took 17.6 s on the macOS 27.0 CI runner)
+                let out = onAppThread("\(name) x \(k.map { "\($0)" } ?? "1 MiB")", md, ceiling: 60)
                 // parsed, never the source fallback (a cap's "Too many ..." note may show: Round 3 F2)
                 XCTAssertFalse([R.tooLargeNote, R.tooDeepNote, R.unparsedNote].contains(out?.note ?? ""), name)
             }
