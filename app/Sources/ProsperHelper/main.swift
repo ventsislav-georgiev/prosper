@@ -434,7 +434,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             // #981: a tripped latch keeps the daemon (one read per fire) until cool or the bound, so a relaunched app meets it.
             let since = stayingSince ?? ContinuousClock.now
             if !self.fanQ.sync(execute: { self.fanCore.idleMayExit(self.fan, stayed: ContinuousClock.now - since) }) {
-                if self.core.remoteHoldOn { _ = self.core.clearRemoteHold() }   // idleFired's orphan clear, without its exit
+                self.core.idleStayed()   // idleFired's orphan clear, without its exit
                 self.armIdleExit_locked(stayingSince: since)
                 return
             }

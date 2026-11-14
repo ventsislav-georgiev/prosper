@@ -176,4 +176,12 @@ public final class LidHelperCore {
         }
         onIdle()
     }
+
+    /// Idle-exit timer fired but the daemon stays (#981: fan trip latch set). Only
+    /// the orphan clear of `idleFired`, under the same no-client check so a client
+    /// that connected in the window keeps its hold; never calls `onIdle`.
+    public func idleStayed() {
+        guard connections == 0 else { return }
+        if remoteHoldOn { _ = clearRemoteHold() }
+    }
 }
