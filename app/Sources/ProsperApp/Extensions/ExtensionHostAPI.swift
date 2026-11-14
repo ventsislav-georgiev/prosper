@@ -418,19 +418,24 @@ struct ExtensionHost {
     /// #870: the owner of this extension's managed-config pieces (version, kit slug, dir). Its id is
     /// always forced to `extensionID`.
     let configOwner: ManagedConfigOwner?
+    /// #1238: false once the call this VM is serving was retired by a teardown (the off-main lane sets it;
+    /// the main-actor VM cannot straddle a teardown and keeps the default). Gates the acquiring functions.
+    let isCurrent: @Sendable () -> Bool
 
     init(extensionID: String,
          services: ExtensionHostServices,
          callTimeout: TimeInterval = ExtensionHost.defaultCallTimeout,
          privileged: Bool = true,
          trusted: Bool = true,
-         configOwner: ManagedConfigOwner? = nil) {
+         configOwner: ManagedConfigOwner? = nil,
+         isCurrent: @escaping @Sendable () -> Bool = { true }) {
         self.extensionID = extensionID
         self.services = services
         self.callTimeout = callTimeout
         self.privileged = privileged
         self.trusted = trusted
         self.configOwner = configOwner
+        self.isCurrent = isCurrent
     }
 
     /// Register every host function and assemble the `host` table. Call before
@@ -442,6 +447,15 @@ struct ExtensionHost {
         // Automation tier = system OR trusted. The narrower `privileged` (system-only)
         // tier still gates the RCE/destructive surface (host.shell/agent/files.act).
         let automation = privileged || trusted
+        let isCurrent = self.isCurrent
+        // #1238: a take by a retired generation is refused (a no-op: Lua sees the usual empty return). A take a
+        // teardown overtook mid-call may land after the teardown's release: undo it at once, since no late
+        // release comes if the extension is back on by the time the call returns.
+        func take(_ act: () -> Void, undo: () -> Void) {
+            guard isCurrent() else { return }
+            act()
+            if !isCurrent() { undo() }
+        }
         // Lua numbers are Doubles: NaN/±inf trap Int()/Int32() and make JSONSerialization
         // raise an uncatchable NSException. Every number crossing into Swift as an Int or
         // a serialized value goes through these: non-finite → nil, finite → clamped to `r`.
@@ -822,6 +836,8 @@ struct ExtensionHost {
         // --- window.open (host-rendered standalone window; main-bridged) ---
         // Arg: a JSON ExtensionViewNode string. Side effect only.
         lua.register("__h_window_open") { rt in
+            // No undo: no teardown closes a window either.
+            guard isCurrent() else { return 0 }
             services.openWindow(extensionID: extID, nodeJSON: rt.stringArgument(1) ?? "")
             return 0
         }
@@ -850,8 +866,8 @@ struct ExtensionHost {
             let seconds = finiteNumber(rt, 3) ?? 0  // NaN traps TimerScheduler's Int(leeway)
             let handler = rt.stringArgument(4) ?? ""
             guard !id.isEmpty, !handler.isEmpty else { return 0 }
-            services.timerSchedule(extensionID: extID, id: id, every: every,
-                                   seconds: seconds, handler: handler)
+            take({ services.timerSchedule(extensionID: extID, id: id, every: every, seconds: seconds, handler: handler) },
+                 undo: { services.timerCancel(extensionID: extID, id: id) })
             return 0
         }
         lua.register("__h_timer_cancel") { rt in
@@ -892,9 +908,13 @@ struct ExtensionHost {
         // --- caffeinate / power (automation: holds system resources + pmset) ---
         if automation {
             lua.register("__h_caf_idle") { rt in
-                services.caffeinatePreventIdleSleep(
-                    extensionID: extID, kind: rt.stringArgument(1) ?? "display",
-                    on: rt.boolArgument(2) ?? false)
+                let kind = rt.stringArgument(1) ?? "display"
+                let release = { services.caffeinatePreventIdleSleep(extensionID: extID, kind: kind, on: false) }
+                if rt.boolArgument(2) ?? false {
+                    take({ services.caffeinatePreventIdleSleep(extensionID: extID, kind: kind, on: true) }, undo: release)
+                } else {
+                    release()
+                }
                 return 0
             }
             lua.register("__h_caf_lidsleep") { rt in
@@ -906,9 +926,10 @@ struct ExtensionHost {
                 // appended in VM call order so set(true)/set(false) apply strictly in
                 // order and none are dropped (a drop-based coalescer regressed this:
                 // a trailing set(false) killed the override → Mac slept on lid close).
-                LidSleepHelper.enqueueApply {
-                    await services.caffeinateSetDisableLidSleep(extensionID: extID, on: on)
+                let apply = { (on: Bool) in
+                    LidSleepHelper.enqueueApply { await services.caffeinateSetDisableLidSleep(extensionID: extID, on: on) }
                 }
+                if on { take({ apply(true) }, undo: { apply(false) }) } else { apply(false) }
                 return 0
             }
             lua.register("__h_caf_remotewake") { rt in
@@ -917,6 +938,8 @@ struct ExtensionHost {
                 let batt = finiteNumber(rt, 3) ?? 300
                 let floor = intArgument(rt, 4, in: 0...100) ?? 20
                 let devID = rt.stringArgument(5) ?? ""
+                // No undo: no teardown disarms remote wake either.
+                if enabled && !isCurrent() { return 0 }
                 // Same fire-and-forget serial chain as lidsleep — privileged XPC must
                 // never block the VM, and order must hold (enable/disable in sequence).
                 LidSleepHelper.enqueueApply {
@@ -938,8 +961,9 @@ struct ExtensionHost {
         // --- menubar / dialog / alert (automation: host-rendered UI) ---
         if automation {
             lua.register("__h_menubar_set") { rt in
-                services.menubarSet(extensionID: extID, id: rt.stringArgument(1) ?? "",
-                                    json: rt.stringArgument(2) ?? "{}")
+                let id = rt.stringArgument(1) ?? ""
+                take({ services.menubarSet(extensionID: extID, id: id, json: rt.stringArgument(2) ?? "{}") },
+                     undo: { services.menubarRemove(extensionID: extID, id: id) })
                 return 0
             }
             lua.register("__h_menubar_remove") { rt in
@@ -1046,7 +1070,10 @@ struct ExtensionHost {
                 rt.push(services.keyboardSetSource(rt.stringArgument(1) ?? "")); return 1
             }
             lua.register("__h_keys_rules") { rt in
-                services.keysSetRules(extensionID: extID, json: rt.stringArgument(1) ?? "[]"); return 0
+                // A set replaces the id's whole rule set (the live generation's too): gated even when empty.
+                take({ services.keysSetRules(extensionID: extID, json: rt.stringArgument(1) ?? "[]") },
+                     undo: { services.keysSetRules(extensionID: extID, json: "[]") })
+                return 0
             }
             lua.register("__h_keys_stroke") { rt in
                 services.keysStroke(rt.stringArgument(1) ?? ""); return 0
@@ -1060,8 +1087,9 @@ struct ExtensionHost {
             lua.register("__h_fs_watch") { rt in
                 let p = rt.stringArgument(1) ?? ""
                 if !secret(rt, p, "fs.watch") {
-                    services.fsWatch(extensionID: extID, path: p, handler: rt.stringArgument(2) ?? "",
-                                     hideSecrets: !systemTier)
+                    take({ services.fsWatch(extensionID: extID, path: p, handler: rt.stringArgument(2) ?? "",
+                                            hideSecrets: !systemTier) },
+                         undo: { services.fsUnwatch(extensionID: extID, path: p) })
                 }
                 return 0
             }

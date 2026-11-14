@@ -1021,6 +1021,9 @@ tag from the now-released section and put it on the new top draft.
 - Fans: when the Prosper helper still running is from an older version, a refused Manual fan speed
   now says that the helper cannot tell Prosper why it refused. Prosper says so only after the helper
   has shown it is older. (#1208)
+- Extensions: switching an extension off and on again, or resetting it, while one of its actions is
+  still running no longer drops the keep-awake, key rules or menu bar item it set up again, and the
+  old action can no longer leave a keep-awake held behind. (#1238)
 
 ## v2.174.0
 

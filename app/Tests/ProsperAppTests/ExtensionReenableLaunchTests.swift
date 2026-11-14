@@ -11,7 +11,21 @@ private final class LaunchRecordingServices: ExtensionHostServices, @unchecked S
     private var expectations: [String: XCTestExpectation] = [:]
     /// Set before the call to block: fulfilled on entry, then waits for `release`.
     var blockEntered: XCTestExpectation?
+    /// #1238: where the call parks: "idle" (inside prevent_idle_sleep, before its take lands) or "notify"
+    /// (inside host.notify, before any take).
+    var blockIn = "idle"
     let release = DispatchSemaphore(value: 0)
+    private var _calls: [String: [String]] = [:]
+    /// #1238: every prevent_idle_sleep that reached the host for `id`, in order: "+kind" take, "-kind" release.
+    func calls(_ id: String) -> [String] { lock.lock(); defer { lock.unlock() }; return _calls[id] ?? [] }
+
+    private func parkIfAsked(_ site: String) {
+        lock.lock(); let block = blockIn == site ? blockEntered : nil; if block != nil { blockEntered = nil }; lock.unlock()
+        if let block {
+            block.fulfill()
+            _ = release.wait(timeout: .now() + 30)   // a ceiling, not a wait: the test signals
+        }
+    }
 
     var titles: [String] { lock.lock(); defer { lock.unlock() }; return _titles }
     func held(_ id: String) -> Set<String> { lock.lock(); defer { lock.unlock() }; return _held[id] ?? [] }
@@ -32,18 +46,16 @@ private final class LaunchRecordingServices: ExtensionHostServices, @unchecked S
     func prefGet(extensionID: String, key: String) -> String? { nil }
     func prefSet(extensionID: String, key: String, value: String) {}
     func notify(title: String, body: String) {
+        parkIfAsked("notify")
         // Each expectation fulfils once (the list assertions catch extras).
         lock.lock(); _titles.append(title); _events.append(title); let e = expectations.removeValue(forKey: title); lock.unlock()
         e?.fulfill()
     }
     func listDirectories(_ path: String) -> [String] { [] }
     func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool) {
-        lock.lock(); let block = blockEntered; blockEntered = nil; lock.unlock()
-        if let block {
-            block.fulfill()
-            _ = release.wait(timeout: .now() + 30)   // a ceiling, not a wait: the test signals
-        }
+        parkIfAsked("idle")
         lock.lock()
+        _calls[extensionID, default: []].append((on ? "+" : "-") + kind)
         if on { _held[extensionID, default: []].insert(kind) } else { _held[extensionID]?.remove(kind) }
         lock.unlock()
     }
@@ -300,8 +312,11 @@ final class ExtensionReenableLaunchTests: XCTestCase {
         await first.value
         await fulfillment(of: [launched], timeout: 30)
 
-        XCTAssertEqual(services.events, ["release \(s)", "release \(s)", "launch-parked"],
-                       "teardown, the old call's late release, then the replayed launch")
+        // #1238: reset leaves the extension on, so the old call does not release late; its take, which landed
+        // after the teardown, is undone by the host function itself. Was: release, release, launch.
+        XCTAssertEqual(services.events, ["release \(s)", "launch-parked"],
+                       "teardown, then the replayed launch: no late release once the extension is back")
+        XCTAssertEqual(services.calls(s), ["+system", "-system", "+display"], "the old take undone, the launch's kept")
         XCTAssertEqual(services.held(s), ["display"], "the old call's late take must go and the launch's take stay")
     }
 
@@ -319,5 +334,152 @@ final class ExtensionReenableLaunchTests: XCTestCase {
         XCTAssertEqual(services.resets(s), 1, "reset of an idle extension")
         XCTAssertEqual(services.held(u), [])
         XCTAssertEqual(services.held(s), [])
+    }
+
+    // MARK: - #1238: the late release is tied to the generation; a retired generation's take is refused
+
+    /// on_take says "wait", then takes "system" (it parks inside the notify or inside the take, as the row asks);
+    /// on_live takes "display" (run on the main-actor VM: the live generation); on_launch says "launch-gen".
+    private static let genLua = """
+        function on_take() host.notify("wait", ""); host.caffeinate.prevent_idle_sleep("system", true) end
+        function on_live() host.caffeinate.prevent_idle_sleep("display", true) end
+        function on_launch() host.notify("launch-gen", "") end
+        """
+
+    /// Starts on_take on the extension's lane; returns once it is parked at `site` ("notify" or "idle").
+    private func parkedCall(_ reg: ExtensionRegistry, _ services: LaunchRecordingServices, _ id: String,
+                            at site: String) async -> Task<Void, Never> {
+        let entered = expectation(description: "on_take parked in \(site)")
+        services.blockIn = site
+        services.blockEntered = entered
+        let call = Task { @MainActor in await reg.deliverEvent(extensionID: id, handler: "on_take", payloadJSON: "{}") }
+        await fulfillment(of: [entered], timeout: 30)
+        return call
+    }
+
+    /// The live generation takes "display" on the main-actor VM (a command's path) while the old call is parked.
+    private func liveTake(_ reg: ExtensionRegistry, _ id: String) throws {
+        guard let record = reg.record(id: id) else { return XCTFail("no record \(id)") }
+        _ = try reg.activate(record).callGlobal("on_live")
+    }
+
+    private func genRegistry(_ services: LaunchRecordingServices, _ id: String, launch: Bool = false) throws -> ExtensionRegistry {
+        try registry(services, [Fixture(id: id, system: true, launch: launch, lua: Self.genLua)])
+    }
+
+    /// I1, plan row (ii): disabled while the call is inside its take; it returns while still off. The take that
+    /// landed after the teardown is undone by the host function, and the late release still runs.
+    func testI1OldCallReturningWhileOffReleasesLate() async throws {
+        let services = LaunchRecordingServices()
+        let id = "com.test.gen-i1"
+        let reg = try genRegistry(services, id)
+        let old = await parkedCall(reg, services, id, at: "idle")
+        try reg.setEnabled(false, id: id)
+        services.release.signal()
+        await old.value
+        XCTAssertEqual(services.resets(id), 2, "the teardown's release, then the old call's late release")
+        XCTAssertEqual(services.calls(id), ["+system", "-system"], "the take that overtook the teardown is undone")
+        XCTAssertEqual(services.held(id), [])
+    }
+
+    /// A retired generation's take after the teardown is refused: parked before its take, disabled, let go while
+    /// still off. The take never reaches the host: nothing held, nothing for a release to catch.
+    func testRetiredGenerationsTakeIsRefused() async throws {
+        let services = LaunchRecordingServices()
+        let id = "com.test.gen-refused"
+        let reg = try genRegistry(services, id)
+        let old = await parkedCall(reg, services, id, at: "notify")
+        try reg.setEnabled(false, id: id)
+        services.release.signal()
+        await old.value
+        XCTAssertEqual(services.calls(id), [], "a retired generation's take reached the host")
+        XCTAssertEqual(services.held(id), [])
+        XCTAssertEqual(services.resets(id), 2, "the teardown's release, then the late release (still off)")
+    }
+
+    /// I2: disable, enable, then the old call (parked before its take) returns: its take is refused, and nothing
+    /// is released late because the extension is back.
+    func testI2OldCallReturningAfterReenableDoesNotReleaseLate() async throws {
+        let services = LaunchRecordingServices()
+        let id = "com.test.gen-i2"
+        let reg = try genRegistry(services, id)
+        let old = await parkedCall(reg, services, id, at: "notify")
+        try reg.setEnabled(false, id: id)
+        try reg.setEnabled(true, id: id)
+        services.release.signal()
+        await old.value
+        XCTAssertEqual(services.resets(id), 1, "only the disable's own release: the extension was back on")
+        XCTAssertEqual(services.calls(id), [], "a retired generation's take reached the host")
+        XCTAssertEqual(services.held(id), [])
+    }
+
+    /// I3: disable, enable, disable again, then the old call returns: off again, so it releases late.
+    func testI3OldCallReturningWhenOffAgainReleasesLate() async throws {
+        let services = LaunchRecordingServices()
+        let id = "com.test.gen-i3"
+        let reg = try genRegistry(services, id)
+        let old = await parkedCall(reg, services, id, at: "notify")
+        try reg.setEnabled(false, id: id)
+        try reg.setEnabled(true, id: id)
+        try reg.setEnabled(false, id: id)
+        services.release.signal()
+        await old.value
+        XCTAssertEqual(services.resets(id), 3, "two teardowns, then the late release")
+        XCTAssertEqual(services.calls(id), [])
+        XCTAssertEqual(services.held(id), [])
+    }
+
+    /// I4, plan row (i): disable, enable, the live generation takes "display" on the main-actor VM, then the old
+    /// call returns: the live take is kept and the old take refused. Parent: the late release dropped "display".
+    func testI4LiveGenerationsTakeSurvivesTheOldCallsReturn() async throws {
+        let services = LaunchRecordingServices()
+        let id = "com.test.gen-i4"
+        let reg = try genRegistry(services, id)
+        let old = await parkedCall(reg, services, id, at: "notify")
+        try reg.setEnabled(false, id: id)
+        try reg.setEnabled(true, id: id)
+        try liveTake(reg, id)
+        services.release.signal()
+        await old.value
+        XCTAssertEqual(services.resets(id), 1)
+        XCTAssertEqual(services.calls(id), ["+display"], "the old generation's take reached the host")
+        XCTAssertEqual(services.held(id), ["display"], "the live generation lost its take")
+    }
+
+    /// I5, the residual case: the old call is already inside its take when the disable runs; enable, the live take,
+    /// then the take lands and the call returns. The landed take is undone at once; the live one stays.
+    func testI5TakeOvertakenByTheTeardownIsUndone() async throws {
+        let services = LaunchRecordingServices()
+        let id = "com.test.gen-i5"
+        let reg = try genRegistry(services, id)
+        let old = await parkedCall(reg, services, id, at: "idle")
+        try reg.setEnabled(false, id: id)
+        try reg.setEnabled(true, id: id)
+        try liveTake(reg, id)
+        services.release.signal()
+        await old.value
+        XCTAssertEqual(services.resets(id), 1)
+        XCTAssertEqual(services.calls(id), ["+display", "+system", "-system"], "the overtaken take must be undone")
+        XCTAssertEqual(services.held(id), ["display"], "a dead generation's take stayed held, or the live one went")
+    }
+
+    /// I6: reset during a parked call, then a take of the live generation: reset leaves the extension on, so the
+    /// old call neither takes nor releases late; the live take and the replayed launch both stand.
+    func testI6ResetDuringAParkedCallKeepsTheLiveGenerationsTake() async throws {
+        let services = LaunchRecordingServices()
+        let s = "com.test.gen-i6"
+        let reg = try genRegistry(services, s, launch: true)
+        let old = await parkedCall(reg, services, s, at: "notify")
+        let launched = expectation(description: "launch replayed after reset")
+        services.expect("launch-gen", launched)
+        try reg.reset(id: s)                  // registry inside this row's tempDir: <tempDir>/user/<id> only
+        try liveTake(reg, s)
+        services.release.signal()
+        await old.value
+        await fulfillment(of: [launched], timeout: 30)
+        XCTAssertEqual(services.events, ["release \(s)", "wait", "launch-gen"], "no late release after a reset")
+        XCTAssertEqual(services.calls(s), ["+display"], "the old generation's take reached the host")
+        XCTAssertEqual(services.held(s), ["display"], "the live generation lost its take")
+        XCTAssertTrue(reg.record(id: s)?.isLive == true)
     }
 }

@@ -88,6 +88,11 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
     /// #930: bumped by `retire` (teardown). An invocation carries the epoch it was
     /// queued under; a changed epoch means its extension was torn down meanwhile.
     private var epochs: [String: Int] = [:]          // guarded by `lock`
+    /// #1238: torn down and not brought back since (retire inserts, revive removes). Resources are keyed by id
+    /// only, so a call that outlives its retire may release late only while its id is still here.
+    private var down: Set<String> = []               // guarded by `lock`
+    /// #1238: the epoch of the call now running on each id's lane; written only on that lane (see callOnLane).
+    private var running: [String: Int] = [:]         // guarded by `lock`
     private let services: ExtensionHostServices
     private static let log = Logger(subsystem: "com.prosper.extensions", category: "async-runtime")
 
@@ -107,9 +112,20 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
     private func epoch(_ id: String) -> Int { lock.lock(); defer { lock.unlock() }; return epochs[id] ?? 0 }
 
     /// #930: called by the registry's teardown, on the main actor. Every invocation
-    /// queued before it is refused if it has not started, and one already running
-    /// has its resources released again when it returns (see callOnLane).
-    func retire(id: String) { lock.lock(); epochs[id, default: 0] += 1; cache[id] = nil; lock.unlock() }
+    /// queued before it is refused if it has not started; one already running has its
+    /// takes refused from now on, and releases again when it returns unless revived (see callOnLane).
+    func retire(id: String) { lock.lock(); epochs[id, default: 0] += 1; down.insert(id); cache[id] = nil; lock.unlock() }
+
+    /// #1238: the extension is live again (re-enable, reset, re-trust, reinstall): what is held under its id
+    /// now belongs to the live generation, so an older call's late release must leave it alone.
+    func revive(id: String) { lock.lock(); down.remove(id); lock.unlock() }
+
+    /// #1238: true while the call running on `id`'s lane has not been retired. Read by the lane VM's
+    /// acquiring host functions (ExtensionHost.isCurrent), on that lane.
+    private func callIsCurrent(_ id: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running[id] == (epochs[id] ?? 0)
+    }
 
     /// Run `spec.handler(args…)` on the extension's lane, building + caching the VM
     /// on first use. Returns the handler's string result, or nil to decline / error.
@@ -140,9 +156,16 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         // #930: torn down after this was queued: never run (it would take resources
         // nobody releases). Torn down while it ran: release again what it took late.
         guard self.epoch(spec.extensionID) == epoch else { return nil }
+        lock.lock(); running[spec.extensionID] = epoch; lock.unlock()
         defer {
-            if self.epoch(spec.extensionID) != epoch {
-                lock.lock(); cache[spec.extensionID] = nil; lock.unlock()
+            // #1238: only while the extension is still off (or off again); once back, the id's resources are the
+            // live generation's. The VM is dropped either way: it belongs to the retired generation.
+            lock.lock()
+            let retired = (epochs[spec.extensionID] ?? 0) != epoch
+            let stillDown = retired && down.contains(spec.extensionID)
+            if retired { cache[spec.extensionID] = nil }
+            lock.unlock()
+            if stillDown {
                 TimerScheduler.shared.cancelAll(extID: spec.extensionID)
                 services.resetResources(extensionID: spec.extensionID)
             }
@@ -154,10 +177,15 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
                 rt = cached
             } else {
                 rt = try LuaRuntime(allowLoad: spec.privileged || spec.trusted)
+                // #1238: formed here on the lane (nonisolated) and called on the lane by this VM's acquiring
+                // host functions; captures a weak Sendable self and a String. The VM outlives this call, so the
+                // check reads the epoch of the call running at that moment (running), not the one it was built in.
+                let id = spec.extensionID
                 try ExtensionHost(extensionID: spec.extensionID, services: services,
                                   callTimeout: spec.callTimeout,
                                   privileged: spec.privileged, trusted: spec.trusted,
-                                  configOwner: spec.configOwner).install(into: rt)
+                                  configOwner: spec.configOwner,
+                                  isCurrent: { [weak self] in self?.callIsCurrent(id) ?? false }).install(into: rt)
                 let source = try String(contentsOf: spec.entryURL, encoding: .utf8)
                 try rt.run(source, name: "@\(spec.extensionID)")
                 lock.lock(); cache[spec.extensionID] = rt; lock.unlock()
@@ -421,6 +449,8 @@ final class ExtensionRegistry: ObservableObject {
         commandByID.removeAll(keepingCapacity: true)
         matchRoutes.removeAll(keepingCapacity: true)
         for record in records where record.isLive {
+            // #1238: every path that makes an extension live again ends here; untrust and disable never do.
+            asyncRuntimes.revive(id: record.id)
             for command in record.manifest.contributes?.allCommands ?? [] {
                 commandByID[command.id] = (record, command)
                 if let pattern = command.match,
