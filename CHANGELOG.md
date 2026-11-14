@@ -682,6 +682,11 @@ tag from the now-released section and put it on the new top draft.
 - Extensions installed from GitHub: installing or checking for updates now removes only the download
   folder it created, and a download that is refused no longer leaves files behind in your temporary
   folder (#1152).
+- Hammerspoon Compat: `app:hide()` at the top level of your init.lua now runs once when the config
+  is applied (at launch, when you turn the extension on, or on Re-read config), like every other
+  action written there, and no longer again whenever Prosper re-reads the config in the background
+  (opening its settings, after you edit the file, or after a callback was stopped for running too
+  long). (#1149)
 
 ## v2.174.0
 

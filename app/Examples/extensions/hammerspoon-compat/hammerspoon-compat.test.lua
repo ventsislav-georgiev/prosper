@@ -477,6 +477,39 @@ check(alerts[1] == "1|log: " .. SHELL_REFUSED, "output containing the sentence p
 check(exec_notices() == 1, "granted calls add no notice")
 shell_answer, shell_trunc = SHELL_REFUSED, nil
 
+-- 9l. app:hide() gates on the ctx its app object was made under, never on the ctx a
+--     previous run left published while a rebuild runs the config's top level (#1149):
+--     a register ctx, or one whose dispatch was aborted with firing still on. This file
+--     has no instruction budget, so the aborted state is set directly; the Swift rows
+--     (HammerspoonCompatFiringTests) abort real dispatches.
+FAKE_INIT = [[
+local front = hs.application.frontmostApplication()
+if front then front:hide() end
+hs.hotkey.bind({"cmd", "alt"}, "h", function() hs.application.frontmostApplication():hide() end)
+appWatcher = hs.application.watcher.new(function(_, _, app) app:hide() end)
+appWatcher:start()
+]]
+env._HS = nil; hidden = {}
+on_launch(nil)
+check(#hidden == 1 and hidden[1] == "com.apple.finder", "register: top-level hide runs once")
+local h_idx
+for i, b in ipairs(env._HS.ctx.binds) do if b.combo == "cmd+alt+h" then h_idx = i end end
+check(h_idx ~= nil, "cmd+alt+h bind recorded")
+hidden = {}
+settings_render("hammerspoon-compat", "{}") -- rebuild while the register ctx is published
+check(#hidden == 0, "rebuild after register: top-level hide refused")
+env._HS.ctx.firing = true -- what a dispatch aborted on its budget leaves behind
+hidden = {}
+settings_render("hammerspoon-compat", "{}")
+check(#hidden == 0, "rebuild after an aborted dispatch: top-level hide refused")
+hidden = {}
+hs_dispatch(tostring(h_idx))
+check(#hidden == 1 and hidden[1] == "com.apple.finder", "hide from a fired hotkey still hides")
+hidden = {}
+hs_app_activated('{"name":"Slack"}')
+check(#hidden == 1, "hide on the app object an app watcher receives still hides")
+check(env._HS.ctx.firing == false, "firing is off again after the dispatch")
+
 -- restore the URL-routing config for the perf tests below
 FAKE_INIT = [[
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)

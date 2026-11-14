@@ -150,7 +150,7 @@ local function build_hs(ctx)
         frontmostApplication = function()
             local f = host.apps.frontmost(); if not f then return nil end
             -- Real allWindows()/hide() via make_app; other methods inert no-ops.
-            return make_app(f.name, f.bundleID, f.pid)
+            return make_app(f.name, f.bundleID, f.pid, ctx)
         end,
         -- App-activation watcher. new(fn):start() records fn; the host's app.activated
         -- event re-fires it via hs_app_activated with (appName, "activated", appObject),
@@ -570,12 +570,15 @@ end
 -- allWindows() returns a list whose LENGTH equals the AX window count (configs use
 -- `#app:allWindows()`); each element is an inert window stub. hide() is a side
 -- effect, so it is gated like every other shim effect: only in register mode or
--- while a callback fires. Unknown app methods stay inert no-ops.
+-- while a callback fires — of the ctx the object was made under, never the global
+-- _HS.ctx, which during a rebuild is still the previous run's (a register ctx, or
+-- one whose dispatch was aborted with firing left on). Unknown app methods stay
+-- inert no-ops.
 -- NOTE: AX window count needs Accessibility; without the grant host.apps.windows
 -- returns 0, so allWindows() reads empty (Prosper holds a11y in normal use).
 -- Global (not local) so build_hs's frontmostApplication closure — defined earlier
 -- in the file — resolves it at call time alongside hs_app_activated.
-function make_app(name, bid, pid)
+function make_app(name, bid, pid, ctx)
     return setmetatable(
         { name = function() return name end,
           bundleID = function() return bid end,
@@ -594,8 +597,7 @@ function make_app(name, bid, pid)
               return t
           end,
           hide = function()
-              local c = _HS and _HS.ctx
-              if c and (c.mode == "register" or c.firing) then host.apps.hide(bid or "") end
+              if ctx.mode == "register" or ctx.firing then host.apps.hide(bid or "") end
           end },
         { __index = function() return inert(nil) end })
 end
@@ -913,7 +915,7 @@ function hs_app_activated(payload)
     local ctx = ensure_ctx()
     local list = ctx and ctx.appwatchers
     if not (list and #list > 0) then return end -- no watcher in this config
-    local appObj = make_app(data.name, data.bundleID, data.pid)
+    local appObj = make_app(data.name, data.bundleID, data.pid, ctx)
     ctx.activatingApp = name -- tag input-source switches with the app that triggered them (diagnostics)
     ctx.firing = true -- side-effecting hs.* (currentSourceID set) allowed in callback
     for _, w in ipairs(list) do
