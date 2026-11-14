@@ -500,6 +500,11 @@ final class DchConnection: @unchecked Sendable {
             guard (0x01...0x09).contains(type) || type == DchFrame.watch else { return }
             return close(after: DchControlOps.error(DchCtl.ctlOnly))
         }
+        // #1178: a watch stream reads the list, nothing else: kill and rename get serve's 0x13 and the stream stays
+        // open, before anything runs or marks the list changed (on_kill_rename, v1.66.0 serve.c:1175-1179). On `queue`.
+        if watching, type == DchFrame.kill || type == DchFrame.rename {
+            return send(DchControlOps.error(Self.watchKillRename))
+        }
         // QA #606 F1: once a list-changing request ran (for #591's verbs: was sent off, then
         // again on the reply), the list frame forks until the island has the change.
         defer { if DchFrame.listChanging.contains(type) { watch?.changed() } }
@@ -808,6 +813,9 @@ final class DchConnection: @unchecked Sendable {
 
     /// #877: dch serve's answer to a 0x01 with no name, and to a 0x01/0x02 name it cannot read (serve.c:994@v1.54.0).
     static let needsName = "attach needs a session name"
+
+    /// #1178: dch serve's answer to a kill or rename on a watch stream (v1.66.0 serve.c:1177).
+    static let watchKillRename = "watch connections cannot kill or rename"
 
     /// #885: dch serve's answer to a create whose command it cannot read (v1.58.0 serve.c:1052-1053), and MAX_CMD (:101).
     static let badCommand = "malformed create request: command must be an array of strings"

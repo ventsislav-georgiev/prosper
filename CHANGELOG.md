@@ -1050,6 +1050,9 @@ tag from the now-released section and put it on the new top draft.
 - Settings: when the Sidekick pattern holds regular-expression characters (a dot, brackets, a plus
   and so on), a line under the field now says how it is read, and a "Match this text exactly" button
   rewrites it to match just that text. Nothing changes until you press it. (#938)
+- Remote Terminal: a phone's session list stream to this Mac now refuses kill and rename with "watch
+  connections cannot kill or rename", as dch serve 1.66.0 does; kill and rename on their own
+  connection work as before (#1178)
 
 ## v2.174.0
 

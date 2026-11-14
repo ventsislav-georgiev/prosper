@@ -478,6 +478,9 @@ The connection then carries one session:
 
 ### 0x04 kill, 0x06 rename
 
+- On a watch connection (after 0x2e) both get 0x13 `watch connections cannot kill or rename`,
+  before the name is read: nothing runs and the stream stays open (both servers: `dch serve`
+  since 1.66.0, serve.c:1175-1179; Prosper since #1178).
 - 0x04 kill `{"name": string}` → 0x14 (empty). Ends the session (`dch -k`). A name starting
   with `-` → 0x13 `a session name starting with - can't be passed to dch` (both servers; a first
   byte, so `-` followed by a combining mark counts: Prosper since #879). A malformed
