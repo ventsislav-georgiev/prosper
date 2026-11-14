@@ -306,11 +306,17 @@ final class ManagedConfig: Sendable {
                         }
                         // #1226 (R1025-4): a chmod since the stat above, up to the rename itself, is kept. `old` holds
                         // the file being replaced (a chmod by path lands on it until the rename), `new` the temp.
-                        let old = open(f.url.path, O_RDONLY | O_NONBLOCK), new = open(temp.path, O_RDONLY)
+                        // #1231: O_NOFOLLOW only on the temp (Prosper's own file); f.url is already the resolved path.
+                        let old = open(f.url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+                        let new = open(temp.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC), newErrno = errno
                         defer { if old >= 0 { _ = close(old) }; if new >= 0 { _ = close(new) } }
-                        func held() -> mode_t? { var s = stat(); return old >= 0 && fstat(old, &s) == 0 ? s.st_mode & 0o7777 : nil }
-                        let before = held() ?? mode
+                        func held(_ fd: Int32) -> mode_t? { var s = stat(); return fd >= 0 && fstat(fd, &s) == 0 ? s.st_mode & 0o7777 : nil }
+                        let before = held(old) ?? mode
                         do {
+                            // a link where our temp was: never renamed over the user's file (fails closed, no fallback)
+                            if new < 0, newErrno == ELOOP {
+                                throw ManagedConfigPOSIXWriter.WriteError(step: "open temp", code: newErrno)
+                            }
                             if before != mode, fchmod(new, before) != 0 {
                                 throw ManagedConfigPOSIXWriter.WriteError(step: "chmod", code: errno)
                             }
@@ -322,7 +328,8 @@ final class ManagedConfig: Sendable {
                         }
                         // a chmod in the last instant before the rename: the replaced file shows it, the new one takes it.
                         // shortcut: fchmod failing here is ignored (the bytes have landed; undoing them would lose more).
-                        if let after = held(), after != before { _ = fchmod(new, after) }
+                        // #1231 (R1226-1 a): only while the new file still has its mode from the rename; a chmod on it since stays.
+                        if let after = held(old), after != before, held(new) == before { _ = fchmod(new, after) }
                     }
                 } catch {
                     return .failed("writing \(f.target) failed: \(error)", committed: committed)

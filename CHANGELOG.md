@@ -995,6 +995,10 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer: a Markdown file that starts with two or more byte order marks is drawn like one that
   starts with one (its first line is a heading again, and a picture inside a link shows as a
   picture) (#1229)
+- Managed config: a permission change you make to a config file right after Prosper writes it is no
+  longer undone, and Prosper refuses to write when its own temporary file has been replaced by a
+  link; the MCP and hooks files read a leading byte order mark the same way on every macOS version.
+  (#1231)
 
 ## v2.174.0
 

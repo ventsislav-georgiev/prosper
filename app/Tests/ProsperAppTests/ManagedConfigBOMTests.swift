@@ -270,4 +270,16 @@ final class ManagedConfigBOMTests: XCTestCase {
             XCTAssertEqual(Self.count(Self.bom, in: written), c.during.starts(with: Self.bom) ? 1 : 0, c.label)
         }
     }
+
+    /// #1231 (N1227-c): the refusal a mark-only settings.json gets, word for word (nothing written, no sheet).
+    func testAMarkOnlySettingsFileIsRefusedWithThisReason() async throws {
+        let env = makeMCEnv()
+        try Data(Self.bom).write(to: env.settings)
+        let r = await env.mc.apply([MCPieces.statusLine()], owner: env.owner)
+        XCTAssertEqual(r.status, .refused)
+        XCTAssertEqual(r.refusals.map(\.reason.description),
+                       ["corrupt: claude:settings.json does not parse: unexpected end of file (line 1)"])
+        XCTAssertEqual(env.consent.seen.count, 0)
+        XCTAssertEqual(env.bytes(env.settings), Self.bom)
+    }
 }

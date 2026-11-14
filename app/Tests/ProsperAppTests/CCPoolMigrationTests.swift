@@ -176,6 +176,25 @@ final class CCPoolMigrationTests: XCTestCase {
         XCTAssertNil(st.snapshot.current)
     }
 
+    /// #1231 (N1227-a): a vault that starts with a UTF-8 mark is read as the same vault without it (since #1227;
+    /// before, "not JSON"). Made-up vault in the row's tempDir, the in-memory secrets store, dummy tokens.
+    func testCCPoolVaultThatStartsWithAMarkIsReadAsWithout() throws {
+        let plain = try fixture()
+        let marked = tempDir().appendingPathComponent(CCPoolMigration.vaultFileName)
+        let bytes: [UInt8] = try [0xEF, 0xBB, 0xBF] + Array(Data(contentsOf: plain))
+        try Data(bytes).write(to: marked)
+        _ = try write(marked.deletingLastPathComponent(), CCPoolMigration.stateFileName, #"{"current": "beta"}"#)
+        XCTAssertEqual(try CCPoolMigration.inspect(vault: marked, store: store()), try CCPoolMigration.inspect(vault: plain, store: store()))
+        let st = store()
+        let secrets = CCPoolMemorySecrets()
+        let out = try CCPoolMigration.run(vault: marked, store: st, secrets: secrets, choices: [:], now: t0)
+        XCTAssertEqual(out.imported, ["alpha", "beta"])
+        XCTAssertEqual(out.failures, [.init(label: "gamma", reason: CCPoolMigration.reasonNoToken)])
+        XCTAssertEqual(try secrets.token(id: try XCTUnwrap(st.snapshot.accounts["beta"]?.id)), "tok-beta")
+        XCTAssertEqual(try secrets.token(id: try XCTUnwrap(st.snapshot.accounts["alpha"]?.id)), "tok-alpha")
+        XCTAssertEqual(Array(try Data(contentsOf: marked)), bytes, "the vault is never written")
+    }
+
     // QA #739 INFO-14 (A7): a Replace that fails keeps the old Keychain item and the old listing.
     func testCCPoolFailedReplaceKeepsTheOldItem() throws {
         let vault = try fixture()

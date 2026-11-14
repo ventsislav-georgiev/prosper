@@ -343,6 +343,31 @@ final class MCPPassthroughTests: XCTestCase {
         }
     }
 
+    /// #1231 (R1227-a): readableTree reads bytes, not a String. A file that starts with a mark is read, the
+    /// rewrite keeps every key, drops the mark and equals the rewrite of the file without it; the decoder gets
+    /// the text without the mark. Two marks: not readable, the file left byte for byte (#1045).
+    func testAMarkedFileIsReadAsBytesAndRewrittenWithEveryKey() throws {
+        let plain = Array(#"{"x-top": 1, "mcpServers": {"api": {"command": "npx", "x-in": true}}}"#.utf8)
+        let mark: [UInt8] = [0xEF, 0xBB, 0xBF]
+        var outs: [Data] = []
+        for disk in [mark + plain, plain] {
+            try withFile(Data(disk)) { url in
+                var seen: [UInt8] = []
+                let tree = MCPConfigStore.readableTree(url, key: "mcpServers") { seen = Array($0.utf8); return MCPConfigStore.decode($0) != nil }
+                XCTAssertTrue(tree != nil, "readable")
+                XCTAssertEqual(seen, plain, "the decoder gets the text without the mark")
+                MCPConfigStore.writeFile([MCPServer(id: "api", command: "npx")])
+                outs.append(try Data(contentsOf: url))
+            }
+        }
+        XCTAssertEqual(outs.count, 2)
+        XCTAssertEqual(outs.first, outs.last, "the same as the file without the mark")
+        XCTAssertEqual(outs.first?.first, UInt8(ascii: "{"), "no mark written")
+        let text = String(decoding: outs.first ?? Data(), as: UTF8.self)
+        XCTAssertTrue(text.contains("\"x-top\": 1") && text.contains("\"x-in\": true"), text)
+        try assertNotOverwritten(Data(mark + mark + plain))
+    }
+
     func testAbsentFileIsWritten() throws {
         try withFile(nil) { url in
             MCPConfigStore.writeFile([MCPServer(id: "api", command: "npx")])
@@ -810,6 +835,30 @@ final class HookPassthroughTests: XCTestCase {
         try withFile(duplicateKeyFile) { url in
             XCTAssertEqual(HooksConfigStore.decode(try String(contentsOf: url, encoding: .utf8))?.map(\.command), ["echo a"])
         }
+    }
+
+    /// #1231 (R1227-a): as for the MCP file: a hooks file that starts with a mark is read as bytes, rewritten
+    /// with every key and without the mark, the same as without it; two marks leave it untouched.
+    func testAMarkedFileIsReadAsBytesAndRewrittenWithEveryKey() throws {
+        let plain = Array(#"{"x-top": 1, "hooks": {"Stop": [{"x-group": 2, "hooks": [{"type": "command", "command": "echo a", "x-a": 3}]}]}}"#.utf8)
+        let mark: [UInt8] = [0xEF, 0xBB, 0xBF]
+        var outs: [Data] = []
+        for disk in [mark + plain, plain] {
+            try withFile(Data(disk)) { url in
+                var seen: [UInt8] = []
+                let tree = MCPConfigStore.readableTree(url, key: "hooks") { seen = Array($0.utf8); return HooksConfigStore.decode($0) != nil }
+                XCTAssertTrue(tree != nil, "readable")
+                XCTAssertEqual(seen, plain, "the decoder gets the text without the mark")
+                HooksConfigStore.writeFile([HookRule(event: .stop, command: "echo a")])
+                outs.append(try Data(contentsOf: url))
+            }
+        }
+        XCTAssertEqual(outs.count, 2)
+        XCTAssertEqual(outs.first, outs.last, "the same as the file without the mark")
+        XCTAssertEqual(outs.first?.first, UInt8(ascii: "{"), "no mark written")
+        let text = String(decoding: outs.first ?? Data(), as: UTF8.self)
+        XCTAssertTrue(text.contains("\"x-top\": 1") && text.contains("\"x-group\": 2") && text.contains("\"x-a\": 3"), text)
+        try assertNotOverwritten(Data(mark + mark + plain))
     }
 
     func testUnchangedRewriteLeavesFileAlone() throws {

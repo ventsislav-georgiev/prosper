@@ -167,4 +167,78 @@ final class ManagedConfigCommitTests: XCTestCase {
         XCTAssertEqual((ManagedConfig.entries(of: dir) ?? []).filter { $0.hasPrefix(prefix) }, [])
         XCTAssertEqual(env.files(under: env.backups).filter { $0.hasSuffix(".orig") }, [], "the backup of a write that never landed goes")
     }
+
+    // MARK: #1231 (R1226-1, N1226-a). The hooks are @Sendable and run inside ManagedConfig.apply's task.
+
+    /// A chmod of the old file in the last instant before the rename AND one of the new file after it:
+    /// the later one, on the file the user now has, stays (the late copy no longer overwrites it).
+    func testAChmodAfterTheRenameIsKept() async throws {
+        let env = makeMCEnv()
+        let url = env.claudeMD, name = url.lastPathComponent
+        try env.write("# mine\n", url)
+        XCTAssertEqual(chmod(url.path, 0o644), 0)
+        defer { _ = chmod(url.path, 0o644) }
+        env.writer.beforeReplace { t in if t.lastPathComponent == name { _ = chmod(url.path, 0o600) } }
+        env.writer.afterReplace { t in if t.lastPathComponent == name { _ = chmod(url.path, 0o640) } }
+        let r = await env.mc.apply([MCPieces.block()], owner: env.owner)
+        XCTAssertEqual(r.status, .done, r.message)
+        XCTAssertEqual(env.mode(url), 0o640, "the chmod made after the rename stays")
+        XCTAssertTrue(env.read(url)?.contains("Follow the kit rules.") ?? false)
+    }
+
+    /// Prosper's temp replaced by a link (inside the row's tempDir) before the commit opens it: the open
+    /// refuses the link, nothing is renamed over the user's file, temp and backup go, the decoy is untouched.
+    func testATempSwappedForALinkFailsClosed() async throws {
+        let env = makeMCEnv()
+        let url = env.claudeMD, dir = env.claude
+        let original = Array("# mine\n".utf8)
+        try Data(original).write(to: url)
+        let decoy = env.root.appendingPathComponent("decoy.md")
+        try env.write("# decoy\n", decoy)
+        let prefix = "." + url.lastPathComponent + ".prosper-"
+        env.writer.interleave { t, _ in
+            guard t.lastPathComponent == url.lastPathComponent else { return }
+            for name in ManagedConfig.entries(of: dir) ?? [] where name.hasPrefix(prefix) {
+                let temp = dir.appendingPathComponent(name).path
+                _ = unlink(temp)
+                _ = symlink(decoy.path, temp)
+            }
+        }
+        let r = await env.mc.apply([MCPieces.block()], owner: env.owner)
+        XCTAssertEqual(r.status, .failed)
+        XCTAssertTrue(r.message.contains("open temp failed"), r.message)
+        XCTAssertEqual(env.bytes(url), original)
+        XCTAssertTrue((try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) == nil, "still a regular file")
+        XCTAssertEqual(env.read(decoy), "# decoy\n")
+        XCTAssertEqual((ManagedConfig.entries(of: dir) ?? []).filter { $0.hasPrefix(prefix) }, [], "the link is gone")
+        XCTAssertEqual(env.files(under: env.backups).filter { $0.hasSuffix(".orig") }, [])
+    }
+
+    /// TODAY'S behaviour, pinned (O_NOFOLLOW on the old file's open is NOT built: supervisor decision, report
+    /// section 3). A link swapped in at the resolved path after the commit's shape check, to a file with the
+    /// same bytes: the old file's open follows it, the new file takes the link target's mode, and the rename
+    /// replaces the link with a regular file. The link target (inside the row's tempDir) is untouched.
+    func testALinkSwappedInAtTheResolvedPathIsReplacedToday() async throws {
+        let env = makeMCEnv()
+        let url = env.claudeMD
+        let original = Array("# mine\n".utf8)
+        try Data(original).write(to: url)
+        XCTAssertEqual(chmod(url.path, 0o644), 0)
+        let moved = env.root.appendingPathComponent("moved.md"), decoy = env.root.appendingPathComponent("decoy.md")
+        try Data(original).write(to: decoy)
+        XCTAssertEqual(chmod(decoy.path, 0o600), 0)
+        defer { _ = chmod(decoy.path, 0o644); _ = chmod(url.path, 0o644) }
+        env.writer.interleave { t, _ in
+            guard t.lastPathComponent == url.lastPathComponent else { return }
+            _ = rename(url.path, moved.path)
+            _ = symlink(decoy.path, url.path)
+        }
+        let r = await env.mc.apply([MCPieces.block()], owner: env.owner)
+        XCTAssertEqual(r.status, .done, r.message)
+        XCTAssertTrue((try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) == nil, "the link was replaced")
+        XCTAssertTrue(env.read(url)?.contains("Follow the kit rules.") ?? false)
+        XCTAssertEqual(env.mode(url), 0o600, "the link target's mode")
+        XCTAssertEqual(env.bytes(decoy), original)
+        XCTAssertEqual(env.bytes(moved), original)
+    }
 }

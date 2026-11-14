@@ -182,10 +182,14 @@ enum MCPConfigStore {
     /// The file at `url` as a JSON tree when the app can read it: UTF-8 strict JSON (OrderedJSON
     /// keeps each number as written) with an object at the top, which the store's decoder accepts
     /// or which has no `key` at all (`{}`, a settings.json with no hooks). nil otherwise.
+    /// #1231: read as bytes, so a leading UTF-8 mark is skipped by OrderedJSON on every system (whether
+    /// String(contentsOf:) drops it is Foundation's call); `decodes` gets the text after the mark, as
+    /// String(contentsOf:) gives it on macOS 27. OrderedJSON(bytes:) has already refused non-UTF-8.
     static func readableTree(_ url: URL, key: String, decodes: (String) -> Bool) -> OrderedJSON.Value? {
-        guard let text = try? String(contentsOf: url, encoding: .utf8),
-              let doc = try? OrderedJSON(text), let top = members(doc.root.value),
-              top[key] == nil || decodes(text) else { return nil }
+        guard let data = try? Data(contentsOf: url),
+              let doc = try? OrderedJSON(bytes: Array(data)), let top = members(doc.root.value),
+              top[key] == nil || decodes(String(decoding: doc.bytes.dropFirst(OrderedJSON.markLength(doc.bytes)), as: UTF8.self))
+        else { return nil }
         return doc.root.value
     }
 
