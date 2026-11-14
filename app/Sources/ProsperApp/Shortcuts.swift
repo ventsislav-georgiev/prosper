@@ -553,8 +553,8 @@ enum ShortcutAction: String, CaseIterable, Sendable {
             // Opt-in: the runner (`:ocr` / `:color`) is the always-available trigger.
             return unsetKeyCombo
         case .agentSessions:
-            // Opt-in: the island button and the status menu item are the always-available triggers.
-            return unsetKeyCombo
+            // #1177: ⇧⌥S, the same shape as Clipboard History's ⇧⌥A. A saved choice, cleared included, still wins.
+            return KeyCombo(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: UInt32(optionKey | shiftKey), display: "⇧⌥S")
         }
     }
 }

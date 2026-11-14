@@ -78,15 +78,17 @@ final class ShortcutCatalogTests: XCTestCase {
         }
     }
 
-    /// #858: the Agent Sessions window has its own row, found by "agent", unset by default
-    /// and owned by the Agent Island extension, so it is hidden and unregistered with it off.
-    func testAgentSessionsRowIsListedUnsetAndGatedOnTheIsland() throws {
+    /// #858: the Agent Sessions window has its own row, found by "agent", on ⇧⌥S by default
+    /// (#1177) and owned by the Agent Island extension, so it is hidden and unregistered with it off.
+    func testAgentSessionsRowIsListedOnShiftOptionSAndGatedOnTheIsland() throws {
         let a = ShortcutAction.agentSessions
         let hits = ShortcutCatalog.filter(catalog(), query: "agent")
         let row = try XCTUnwrap(hits.first { $0.key == a.rawValue }, "filter \"agent\" must find it")
         XCTAssertEqual(row.title, "Open Agent Sessions")
-        XCTAssertEqual(row.combo, unsetKeyCombo)
-        XCTAssertEqual(a.defaultCombo, unsetKeyCombo)
+        XCTAssertEqual(row.combo.chord, KeyCombo(keyCode: UInt32(kVK_ANSI_S),
+                                                 carbonModifiers: UInt32(optionKey | shiftKey), display: ""))
+        XCTAssertTrue(row.isBound)
+        XCTAssertEqual(row.defaultCombo, a.defaultCombo, "the row offers a reset to ⇧⌥S")
         XCTAssertFalse(a.isWindowManagement)
         XCTAssertEqual(a.hotKeyId, 21, "stable: a changed id re-registers under another slot")
         XCTAssertEqual(ShortcutAction.allCases.filter { $0.hotKeyId == a.hotKeyId }, [a])

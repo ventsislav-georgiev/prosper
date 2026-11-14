@@ -847,6 +847,8 @@ tag from the now-released section and put it on the new top draft.
   while thinking is no longer run. (#893)
 - Coding agent: changing the agent model while a model is loading no longer opens the session under
   the other model's name. (#893)
+- Open Agent Sessions now has a default shortcut, Shift-Option-S (while the Agent Island extension
+  is on). A shortcut you set or cleared yourself is kept; change it in Settings > Shortcuts. (#1177)
 
 ## v2.174.0
 
