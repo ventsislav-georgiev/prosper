@@ -747,6 +747,12 @@ tag from the now-released section and put it on the new top draft.
   config is applied and from hotkeys, timers and other callbacks. (#1158)
 - Hammerspoon Compat: an app object kept by a hotkey, timer, URL or app-watcher callback that was
   stopped for running too long can no longer hide an app from a later run of the config (#1158)
+- Ships dch 1.63.0 (was 1.62.0). In the X-ray view the reader reads on into the next and the
+  previous prompt, and `]` and `[` step between prompts. The tabs are Prompts (Commands for a shell
+  session) and Refs, and the refs on the screen right now come first in Refs. `dch --xray <session>
+  --search <text> --json` finds where a word or phrase was said. On macOS a stopped session is no
+  longer taken for a dead one and started over, and a stop while `dch -a` starts no longer leaves
+  the shell on a raw terminal.
 
 ## v2.174.0
 
