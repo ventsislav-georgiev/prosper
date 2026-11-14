@@ -109,7 +109,7 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(calls.map(\.args), [["--ls-json"], ["--ls-json"], ["-lj"]], "old dch falls back to -lj")
         XCTAssertEqual(rows, [
             AgentSession(key: AgentSessionKey(dir: "/tmp/dch-501", name: "x"), alias: "task", activity: 42,
-                         state: .working, agents: 2),
+                         state: .working, agents: 2, harness: "task"),
             AgentSession(key: AgentSessionKey(dir: "/iso", name: "y"), alias: "Y", activity: 7,
                          state: .idle, agents: 0),
         ])

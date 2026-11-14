@@ -925,6 +925,9 @@ tag from the now-released section and put it on the new top draft.
 - Account pool: the "via ccpool" note in the New session form now updates as soon as you turn
   routing on or off or the proxy starts or stops, and a usage Refresh no longer puts its result on
   the wrong account when one is renamed or removed while it runs. (#1205)
+- Agent Island's Sidekicks tab now also matches a session's Claude Code or Codex title when the
+  session has an alias, as dch's own picker does; the Settings caption says "name, alias or session
+  title". (#1210)
 
 ## v2.174.0
 

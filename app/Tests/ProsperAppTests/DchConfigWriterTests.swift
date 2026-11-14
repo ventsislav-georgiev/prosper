@@ -192,17 +192,68 @@ final class DchConfigWriterTests: XCTestCase {
         XCTAssertTrue(AgentIsland.split(Self.sessions([(name: "api", alias: "\u{2028}qa")]), pattern: "^qa").sidekicks.isEmpty)
     }
 
-    /// Gap 1 as it stands: --ls-json's "harness" folds into the alias only when the alias is empty
-    /// (DchCommand.parseListJSON), so a title-only match splits like dch's picker when no alias is set, and
-    /// does not when one is. The second row pins the known difference (left.txt: needs a new AgentSession field).
-    func testHarnessTitleMatchesOnlyWhenNoAliasHidesIt() {
-        let json = #"[{"name":"api","alias":"","harness":"web-qa","state":"idle"},{"name":"app","alias":"Agent A","harness":"web-qa","state":"idle"}]"#
-        let list = DchCommand.parseListJSON(Data(json.utf8)).map {
-            AgentSession(key: AgentSessionKey(dir: "/d", name: $0.name), alias: $0.alias, activity: 0, state: .idle, agents: 0)
+    /// #1210: dch's picker (pk_load) matches name, alias and harness title one by one, the title also when an
+    /// alias is set. Literal table through parseListJSON and AgentIsland.list: name, alias, title (nil: no key, an
+    /// older dch), pattern, dch's answer (regexec on each text, C locale), the island's. The label stays the alias.
+    func testHarnessTitleSplitsAsDchsPickerAlsoWithAnAlias() {
+        let restore = Self.cLocale()
+        defer { restore() }
+        let cap = DchListRow.maxHarnessBytes
+        let atCap = String(repeating: "x", count: cap - 3) + "-qa", overCap = "x" + atCap
+        let table: [(name: String, alias: String, title: String?, pattern: String, dch: Bool, island: Bool)] = [
+            ("api", "Agent A", "web-qa", "-qa$", true, true),      // title only, alias set
+            ("api", "web-qa", "notes", "-qa$", true, true),        // alias
+            ("api-qa", "Agent A", "notes", "-qa$", true, true),    // name
+            ("api", "Agent A", "notes", "-qa$", false, false),     // none
+            ("api", "Agent A", "", "-qa$", false, false),          // empty title
+            ("api", "", "web-qa", "-qa$", true, true),             // no alias: the title is the label too
+            ("api", "Agent A", nil, "-qa$", false, false),         // no key (dch before 1.9): as before
+            ("api-qa", "", nil, "-qa$", true, true),
+            ("api", "Agent A", "Web-1", "^web", true, true),       // anchored on the title alone
+            ("api", "web-a", "qa", "aqa", false, false),           // never joined: "web-a"+"qa"
+            ("api", "Agent A", atCap, "-qa$", true, true),         // at the cap
+            ("api", "Agent A", overCap, "-qa$", true, false),      // over it: dch prints none so long; dropped
+        ]
+        for (name, alias, title, p, dch, island) in table {
+            let what = "\(name)|\(alias)|\(title?.prefix(12) ?? "nil")|\(p)"
+            XCTAssertEqual([name, alias, title ?? ""].contains { Self.dchMatches(p, $0) == true }, dch, "dch: \(what)")
+            var o: [String: Any] = ["name": name, "alias": alias, "state": "idle"]
+            if let title { o["harness"] = title }
+            let json = (try? JSONSerialization.data(withJSONObject: [o])) ?? Data()
+            let list = AgentIsland.list(dirs: ["/d"], run: { args, _ in args == ["--ls-json"] ? json : nil })
+            XCTAssertEqual(list.count, 1, what)
+            guard let s = list.first else { continue }
+            XCTAssertEqual(!AgentIsland.split(list, pattern: p).sidekicks.isEmpty, island, "island: \(what)")
+            let kept = title.map { $0.utf8.count <= cap ? $0 : "" } ?? ""
+            XCTAssertEqual(s.harness, kept, what)
+            XCTAssertEqual(s.title, !alias.isEmpty ? alias : !kept.isEmpty ? kept : name, "label: \(what)")
         }
-        let split = AgentIsland.split(list, pattern: "-qa$")
-        XCTAssertEqual(split.sidekicks.map(\.name), ["api"], "no alias: the title is the alias")
-        XCTAssertEqual(split.primary.map(\.name), ["app"], "alias set: the title is not at hand (dch would split it off)")
+    }
+
+    /// #1210: the Settings caption names the three texts dch's picker matches.
+    @MainActor func testTheCaptionNamesTheSessionTitle() {
+        XCTAssertTrue(AgentIslandListSection.footer.hasPrefix("Sessions whose name, alias or session title matches the pattern"))
+    }
+
+    /// #1210 rider R1184-1: dch never calls setlocale, so its regcomp folds ASCII only and "." is one byte; the
+    /// island folds and counts by Unicode. A person typing "é" means "É" too, so the island's answer is the right one
+    /// and stays (sidekickRegex's comment). Literal rows: pattern, text, dch (C locale), island.
+    func testANonASCIIPatternFoldsByUnicodeInTheIslandOnly() {
+        let restore = Self.cLocale()
+        defer { restore() }
+        let rows: [(pattern: String, text: String, dch: Bool, island: Bool)] = [
+            ("\u{E9}-qa", "\u{C9}-QA", false, true),   // accented letter against the other case
+            ("^.$", "\u{E9}", false, true),             // one accented letter: two bytes to dch
+            ("\u{E9}-qa", "\u{E9}-qa", true, true),
+        ]
+        for (p, t, dch, island) in rows {
+            XCTAssertEqual(Self.dchMatches(p, t), dch, "dch: \(p) on \(t)")
+            XCTAssertEqual(Self.islandMatches(p, t), island, "island: \(p) on \(t)")
+        }
+        // the text fallback (an invalid pattern): dch's tolower loop (pk_sidekick) folds ASCII only
+        XCTAssertNil(Self.dchMatches("(\u{E9}", "x"))
+        XCTAssertTrue(Self.islandMatches("(\u{E9}", "x(\u{C9}"))
+        XCTAssertFalse(Self.islandMatches("(\u{E9}", "x(e"))
     }
 
     /// dch's picker: a pattern regcomp refuses, or one regexec finds in "", is matched as plain text ignoring case.
@@ -653,11 +704,13 @@ final class DchConfigWriterTests: XCTestCase {
     }
 
     /// dch never calls setlocale, so it compiles in the C locale; the test process may hold another (LuaLocaleTests
-    /// sets some), so the comparison rows set C for LC_CTYPE and LC_COLLATE and put the old ones back.
+    /// sets some), so the comparison rows use C on this thread and put the old one back.
+    /// #1210: per thread (newlocale/uselocale), so the process locale is never changed.
     private static func cLocale() -> () -> Void {
-        let saved = [LC_CTYPE, LC_COLLATE].map { ($0, String(cString: setlocale($0, nil))) }
-        for c in [LC_CTYPE, LC_COLLATE] { setlocale(c, "C") }
-        return { for (c, n) in saved { setlocale(c, n) } }
+        // LC_COLLATE_MASK | LC_CTYPE_MASK (_locale_posix2008.h: 1 << 0, 1 << 1); the macros do not import into Swift.
+        let c = newlocale(Int32(1 << 0 | 1 << 1), "C", nil)
+        let old = uselocale(c)
+        return { uselocale(old); if let c { freelocale(c) } }
     }
 
     /// Why each construct left out stays out: ICU and dch disagree on a name. And the one limit sets share with

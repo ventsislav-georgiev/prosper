@@ -1045,10 +1045,12 @@ struct AgentIslandListSection: View {
     @State private var sort = Preferences.agentIslandSort
     @State private var tabs = Preferences.agentIslandSidekickTabs
     @State private var pattern = Preferences.agentIslandSidekickPattern
+    /// #1210: dch's picker matches all three (pk_load), so the caption names them.
+    static let footer = "Sessions whose name, alias or session title matches the pattern, a regex ignoring case (e.g. -(qa|reviewer)$), go under a Sidekicks tab. Empty shows every session together. Syncs with Prosper on iPhone."
 
     var body: some View {
         NeonSection("Session list",
-                    footer: "Sessions whose name or alias matches the pattern, a regex ignoring case (e.g. -(qa|reviewer)$), go under a Sidekicks tab. Empty shows every session together. Syncs with Prosper on iPhone.") {
+                    footer: Self.footer) {
             NeonRow("Sort sessions") {
                 // Menu, not segmented: segmented controls ignore the UI scale.
                 Picker("", selection: $sort) {
@@ -1064,7 +1066,7 @@ struct AgentIslandListSection: View {
                 VStack(alignment: .trailing, spacing: sz(2)) {
                     TextField("None", text: $pattern).frame(width: sz(180))
                         .disabled(!tabs)
-                    let names = AgentIslandController.shared.store?.sessions.flatMap { [$0.name, $0.alias] } ?? []
+                    let names = AgentIslandController.shared.store?.sessions.flatMap { [$0.name, $0.alias, $0.harness] } ?? []
                     if let caption = AgentIsland.sidekickCaption(pattern, tabs: tabs, names: names) {
                         Text(caption)
                             .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)

@@ -94,6 +94,9 @@ struct AgentSession: Equatable, Identifiable {
     var effort: String? = nil
     /// The transcript size `model`/`effort` were read at (the cache key with the path); nil = never read.
     var modelReadSize: UInt64? = nil
+    /// #1210: dch's harness title (DchListRow.harness), "" when none. Only the Sidekicks split matches it;
+    /// `title` never reads it (an empty alias already holds it, as dch's label does).
+    var harness: String = ""
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -181,15 +184,16 @@ enum AgentIsland {
 
     typealias Split = (primary: [AgentSession], sidekicks: [AgentSession])
 
-    /// A sidekick's name or alias matches `pattern` (trimmed), an ICU regex searched
+    /// A sidekick's name, alias or harness title matches `pattern` (trimmed), each one on its own as dch's
+    /// picker does (pk_load, #1210), an ICU regex searched
     /// case-insensitively (#759). A pattern that is not a usable regex (see
     /// `SidekickMatch`) is matched as literal text, still ignoring case. An empty
     /// pattern means no split. Order is kept in both halves.
     static func split(_ list: [AgentSession], pattern: String) -> Split {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !p.isEmpty else { return (list, []) }
-        let hits = sidekickFind(p, in: list.flatMap { [$0.name, $0.alias] }).hits
-        let tagged = zip(list, list.indices.map { hits[2 * $0] || hits[2 * $0 + 1] })
+        let hits = sidekickFind(p, in: list.flatMap { [$0.name, $0.alias, $0.harness] }).hits
+        let tagged = zip(list, list.indices.map { hits[3 * $0] || hits[3 * $0 + 1] || hits[3 * $0 + 2] })
         return (tagged.filter { !$0.1 }.map(\.0), tagged.filter(\.1).map(\.0))
     }
 
@@ -212,7 +216,7 @@ enum AgentIsland {
 
     /// Settings' caption under the pattern field: none while the tabs are off (the
     /// field is disabled) or the pattern is empty. `names` are the live sessions'
-    /// names and aliases, so a pattern too slow on them says so before the island does.
+    /// names, aliases and harness titles, so a pattern too slow on them says so before the island does.
     /// #1172: and a line under it when the pattern does not reach dch's own picker.
     static func sidekickCaption(_ pattern: String, tabs: Bool, names: [String]) -> String? {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -309,6 +313,7 @@ enum AgentIsland {
     /// valid regex (Settings then says it is matched as text).
     static func sidekickRegex(_ pattern: String) -> NSRegularExpression? {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        // #1210: dch never calls setlocale (C locale): parity with dch's regcomp holds for ASCII; ICU folds and "." go by Unicode.
         // #1184: LF only ends a line, as POSIX: an alias or harness title can end in U+2028 etc. (dch cuts only LF/CR/blanks), and ICU's "$" would match before it.
         return p.isEmpty ? nil : try? NSRegularExpression(pattern: p, options: [.caseInsensitive, .useUnixLineSeparators])
     }
@@ -587,7 +592,7 @@ enum AgentIsland {
                              agents: row.agents, meta: row.meta, version: row.version, metaEpoch: row.metaEpoch,
                              autoAllowed: row.autoAllowed,
                              claudeSessionID: mapping[row.name]?.sessionID, transcriptPath: mapping[row.name]?.path,
-                             cwd: row.cwd)
+                             cwd: row.cwd, harness: row.harness)
                 return AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO)
             }
         }

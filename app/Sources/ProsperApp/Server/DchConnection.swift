@@ -1875,6 +1875,12 @@ struct DchListRow: Equatable, Sendable {
     /// #877: dch 1.52's `cwd` (dch #115), the session's start dir from its live history record; "" when
     /// dch has none (no record, an ended one, an older dch: `null` or no key).
     var cwd: String = ""
+    /// #1210: `harness`, the Claude Code or Codex session title dch prints (1.9+), "" when none. Matched
+    /// by the Sidekicks split as dch's picker does (1.32+), never shown in place of a set alias.
+    var harness: String = ""
+    /// dch reads a title from a record under 8192 bytes, and json_quote may turn each byte into U+FFFD
+    /// (3 bytes): a longer one is not dch's, so it is dropped, never matched.
+    static let maxHarnessBytes = 3 * 8191
 
     /// #877: listResp's "cwd" as dch serve writes it (serve.c:340, :358-359, :374-378@v1.54.0): the
     /// string as dch gave it, unchecked (no absolute or trailing-slash rule), nil when empty or when its
@@ -2213,12 +2219,14 @@ enum DchCommand {
     /// 1.9+). `dch -l` shows it whenever no explicit alias exists, so the phone
     /// does the same: an empty alias falls back to it, and the raw socket name is
     /// the last resort. Folding it into `alias` keeps the wire format unchanged.
+    /// #1210: it is also kept on its own (`harness`), for the Sidekicks split when an alias is set.
     static func parseListJSON(_ data: Data) -> [DchListRow] {
         guard let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
         return rows.compactMap { o in
             guard let name = o["name"] as? String, !name.isEmpty else { return nil }
             var alias = o["alias"] as? String ?? ""
-            if alias.isEmpty { alias = o["harness"] as? String ?? "" }
+            let harness = (o["harness"] as? String).flatMap { $0.utf8.count <= DchListRow.maxHarnessBytes ? $0 : nil } ?? ""
+            if alias.isEmpty { alias = harness }
             return DchListRow(name: name, alias: alias,
                               activityEpoch: o["activity_epoch"] as? Int ?? 0, state: o["state"] as? String ?? "",
                               agents: o["agents"] as? Int ?? 0,
@@ -2226,7 +2234,7 @@ enum DchCommand {
                               metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0,
                               version: o["version"] as? String ?? "",
                               autoAllowed: DchAutoAllowed(json: o["auto_allowed"]),
-                              cwd: o["cwd"] as? String ?? "")
+                              cwd: o["cwd"] as? String ?? "", harness: harness)
         }
     }
 

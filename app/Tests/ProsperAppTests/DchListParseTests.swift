@@ -34,6 +34,7 @@ final class DchListParseTests: XCTestCase {
         XCTAssertEqual(rows[0].alias, "prosper")
         XCTAssertEqual(rows[1].alias, "Agent A")   // explicit alias still wins
         XCTAssertEqual(rows[2].alias, "")          // neither: the client shows the name
+        XCTAssertEqual(rows.map(\.harness), ["prosper", "ignored", ""], "#1210: kept on its own for the Sidekicks split")
     }
 
     /// Newer dch counts the live subagents on Claude Code's agent panel; older dch
