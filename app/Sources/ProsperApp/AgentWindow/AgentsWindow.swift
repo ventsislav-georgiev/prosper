@@ -819,9 +819,12 @@ struct AgentSessionHeader: View {
     var mode = AgentPaneMode.transcript
     var setMode: ((AgentPaneMode) -> Void)?
 
-    var project: String {
-        if let cwd { return (cwd as NSString).abbreviatingWithTildeInPath }
-        return session.key.dir == DchCommand.defaultSocketDir ? "dch \(session.name)" : "dch \(session.name) in \(session.key.dir)"
+    /// #1191: the session's folder, no longer drawn in the header: the title's tooltip and accessibility value carry it
+    /// (two sessions of one name stay apart for VoiceOver). Nil when there is no text at all.
+    var project: String? {
+        let text = cwd.map { ($0 as NSString).abbreviatingWithTildeInPath }
+            ?? (session.key.dir == DchCommand.defaultSocketDir ? "dch \(session.name)" : "dch \(session.name) in \(session.key.dir)")
+        return text.isEmpty ? nil : text
     }
 
     /// #1103: the header's padding above and below its one line. The content view starts under the titlebar
@@ -833,19 +836,25 @@ struct AgentSessionHeader: View {
     /// content alone gave Transcript mode a taller line below 1.0. Fits the tallest control at 1.0 (a capsule, about
     /// 23 pt) and the Rename field.
     static var lineHeight: CGFloat { sz(26) }
-    /// Terminal mode's header (one line) without an open todo list; Transcript mode adds the folder line.
+    /// Terminal mode's header (one line) without an open todo list; Transcript mode adds the counts-and-age line.
     static var height: CGFloat { padTop + lineHeight + padBottom }
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(4)) {
             // The whole title and the labelled controls when they fit, else smaller ones.
             titleLines.frame(height: Self.lineHeight)
-            // #1103: Transcript mode keeps its second line: the picker takes the first line's room the folder needs.
+            // #1103: Transcript mode keeps its second line (the picker takes the first line's room the extras need).
+            // #1191: a fixed slot: the hidden 11 pt text line gives it its height with no counts, no age and no todo chip,
+            // as the age's own text would (a placeholder, not a minHeight: it reads the font's metrics at every scale).
             if mode == .transcript {
-                HStack(spacing: sz(6)) {
-                    folder
-                    Spacer(minLength: 0)
-                    if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+                // A ZStack, not a stack child: a zero-width first child still takes one spacing (the line would start 6 pt in).
+                ZStack(alignment: .leading) {
+                    Text(" ").font(Neon.font(11)).hidden().accessibilityHidden(true)
+                    HStack(spacing: sz(6)) {
+                        folder
+                        Spacer(minLength: 0)
+                        if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+                    }
                 }
             }
             if todosOpen.wrappedValue, let todos = shownTodos { AgentTodosList(todos: todos) }
@@ -855,16 +864,10 @@ struct AgentSessionHeader: View {
         // #860: on the window's backdrop, as Settings' pane title (no opaque band under the titlebar).
     }
 
-    /// The folder, the path (cut in the middle) and the row's detail (whole or not at all): Transcript mode's second
-    /// line, the title line's tail in Terminal mode (#1103).
+    /// The row's detail (whole or not at all): Transcript mode's second line, the title line's tail in Terminal mode
+    /// (#1103). #1191: no folder glyph and no path (the title's tooltip and accessibility value carry it).
     var folder: some View {
         HStack(spacing: sz(6)) {
-            Image(systemName: "folder").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
-                .accessibilityHidden(true)   // #1103 F4: decoration (AppKit read the symbol as "Move")
-            AgentWidthFloor(floor: Self.pathFloor) {
-                Text(project).font(Neon.font(11, design: .monospaced)).foregroundStyle(Neon.textSecondary)
-                    .lineLimit(1).truncationMode(.middle)
-            }
             // #1115: the row's count groups from its fields (no split of the detail text), then the age in words.
             let ago = AgentIsland.ago(row.age)
             if !row.counts.isEmpty || ago != nil {
@@ -873,7 +876,7 @@ struct AgentSessionHeader: View {
                 AgentWidthFloor(floor: 0) {   // #1103 F1: an extra, never part of what the line must hold
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: sz(6)) {
-                            Text("·").accessibilityHidden(true)
+                            if mode == .terminal { Text("·").accessibilityHidden(true) }   // after the chip; nothing leads Transcript's line
                             AgentCountGroups(counts: row.counts, size: 11)
                             if let ago {
                                 if !row.counts.isEmpty { Text("·").accessibilityHidden(true) }   // a count never runs into "4m ago"
@@ -889,12 +892,12 @@ struct AgentSessionHeader: View {
         }
     }
 
-    /// The title, the state chip, in Terminal mode the folder, and the room after them: one slot. G4: while renaming,
-    /// the field lies over the whole slot and its parts only go transparent, so nothing moves. The path gives way first,
-    /// down to its floor (it cuts in the middle); the title, which names the session, takes the rest and cuts at its tail.
+    /// The title, the state chip, in Terminal mode the counts and age, and the room after them: one slot. G4: while
+    /// renaming, the field lies over the whole slot and its parts only go transparent, so nothing moves. The title, which
+    /// names the session, takes the room and cuts at its tail.
     var titleSlot: some View {
         // #1120: no accessibilityHidden here or on its parts: hidden(false) on the slot overrode the folder icon's own
-        // hidden in Terminal mode (read "Move"). While renaming, the opacity 0 leaves the parts out of the tree (SwiftUI
+        // hidden when the header still drew a folder glyph (read "Move"). While renaming, the opacity 0 leaves the parts out of the tree (SwiftUI
         // drops a fully transparent view; testRenameHidesTheTitleChipAndPathUnderTheFieldInTheTree reads it).
         Group { slotParts }
         .opacity(renaming ? 0 : 1)
@@ -907,7 +910,7 @@ struct AgentSessionHeader: View {
         }
     }
 
-    /// #1103 F1: the folder only with a readable title, the chip and the path's floor; never its icon alone.
+    /// #1103 F1: the counts and age only with a readable title and the chip.
     @ViewBuilder var slotParts: some View {
         if mode == .terminal {
             ViewThatFits(in: .horizontal) {
@@ -919,18 +922,17 @@ struct AgentSessionHeader: View {
         }
     }
 
-    /// #1103 F1: a path keeps 16 or so monospaced characters (its head and its last folder), or all of it when
-    /// shorter; a title keeps about 9 characters before the folder is dropped.
-    static var pathFloor: CGFloat { sz(110) }
+    /// #1103 F1: a title keeps about 9 characters before the extras are dropped.
     static var titleFloor: CGFloat { sz(80) }
 
-    /// With the folder the path gives way first, down to its floor: the title's priority 1 leaves the folder only its
-    /// floor before the title shrinks below its ideal (#1120). Each floor counts as the part's ideal width, so
-    /// ViewThatFits takes this line exactly when the floors fit.
+    /// The title, the chip and, with `folder`, the counts and age: the title keeps its floor there, so ViewThatFits
+    /// takes this line exactly when the floor, the chip and the extras fit (the extras are dropped first).
     func slotLine(folder withFolder: Bool) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
             let title = Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                 .lineLimit(1).truncationMode(.tail)
+                // #1191: the folder moved here: the tooltip, and the accessibility value (the words stay the label).
+                .help(project ?? "").accessibilityLabel(row.title).accessibilityValue(project ?? "")
             if withFolder {
                 AgentWidthFloor(floor: Self.titleFloor) { title }.layoutPriority(1)
             } else {

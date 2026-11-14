@@ -115,8 +115,7 @@ extension AgentWindowD1Tests {
         let row = try XCTUnwrap(m.selectedRow)
         let restoreAX = headerAXOn()
         defer { restoreAX() }
-        var tiers: Set<String> = [], gapChecked = 0
-        let pathIdeal = NSHostingView(rootView: Text(Self.headerPath).font(Neon.font(11, design: .monospaced))).fittingSize.width
+        var tiers: Set<String> = []
         for width: CGFloat in [300, 360, 420, 480, 560, 700, 900] {
             var toggleAt: [CGRect] = [], menuAt: [CGRect] = []
             for mode in [AgentPaneMode.terminal, .transcript] {
@@ -154,26 +153,16 @@ extension AgentWindowD1Tests {
                 toggleAt.append(t)
                 menuAt.append(menu.first?.frame ?? .null)
                 // #1103 F4, #1120: the folder icon is decoration in both modes (AppKit names the symbol "Move").
-                XCTAssertFalse(tree.contains { $0.reads("Move") }, "the folder icon is decoration (\(tag)): \(tree.filter { $0.named("Move") })")
+                XCTAssertFalse(tree.contains { $0.reads("Move") }, "no folder icon at all (\(tag)): \(tree.filter { $0.named("Move") })")
                 if mode == .terminal {
                     XCTAssertEqual(imagesLeft(of: t, tree).count, 0, "no image read left of the switch (\(tag)): \(imagesLeft(of: t, tree))")
                 }
-                // F1: Terminal mode drops the folder where the line cannot hold its floors (the narrow widths here).
-                let found = tree.first { $0.named(Self.headerPath) }
-                if mode == .transcript {
-                    let path = try XCTUnwrap(found, "the path is read (\(tag))").frame
-                    XCTAssertGreaterThan(abs(path.midY - t.midY), sz(10), "Transcript mode: the folder on its own line (\(tag))")
-                } else if let path = found?.frame {
-                    XCTAssertEqual(path.midY, t.midY, accuracy: 2, "Terminal mode: one line, the folder on it (\(tag))")
-                    // No gap kept for the picker: what sits left of the toggle on its line ends one spacer from it.
-                    if path.width > 1, path.width < pathIdeal - 1 {
-                        let left = tree.filter { $0.frame.width > 0 && $0.frame.maxX <= t.minX + 0.5 && abs($0.frame.midY - t.midY) < sz(8) }
-                        let gap = t.minX - (left.map(\.frame.maxX).max() ?? -1000)
-                        // path→extra slot 6, slot spacing 8, Spacer 8, line spacing 8, plus under one 11 pt glyph the
-                        // middle cut leaves (ticket 3 read 32.5-37.5); a kept picker gap read 60-224 (mutant M5a).
-                        XCTAssertLessThanOrEqual(gap, sz(6 + 8 + 8 + 8 + 11) + 1, "Terminal mode: the cut path runs up to the toggle (\(tag))")
-                        gapChecked += 1
-                    }
+                // #1191: no path line in either mode: the one element that reads it is the title, on the switch's line.
+                let readers = tree.filter { $0.reads(Self.headerPath) }
+                XCTAssertEqual(readers.count, 1, "only the title carries the path (\(tag)): \(readers)")
+                if let r = readers.first {
+                    XCTAssertTrue(r.named(Self.headerTitle) || r.named("api"), "the reader is the title (\(tag))")
+                    XCTAssertEqual(r.frame.midY, t.midY, accuracy: 2, "the title is on the title line in both modes (\(tag))")
                 }
                 XCTAssertFalse(win.isVisible, "never on screen")
             }
@@ -185,7 +174,6 @@ extension AgentWindowD1Tests {
             print("#1103 \(width): toggle \(toggleAt.map(\.minX)) menu \(menuAt.map(\.minX))")
         }
         XCTAssertEqual(tiers, ["segments", "menu"], "the sweep crosses the tiers")
-        XCTAssertGreaterThan(gapChecked, 0, "the no-gap check ran at a width where Terminal mode cuts the path")
     }
 
     /// A hosted, never-shown window's accessibility tree once `ready` holds (the app's AX attributes set by the caller).
@@ -203,16 +191,15 @@ extension AgentWindowD1Tests {
         return (win, tree)
     }
 
-    /// #1103 F1: Terminal mode, a long title. The folder comes with its path at least at its floor (sz(110), or the
-    /// whole path when shorter), the title keeping its own floor (sz(80)); where the line cannot hold both floors and
-    /// the chip, no folder at all: never its icon alone (pixels: nothing drawn between the chip and the switch).
-    /// Whether the folder shows at each width is written out, not derived from the code under test.
+    /// #1191: the header draws no folder glyph and no path in either mode; the path is the title's tooltip (AXHelp) and
+    /// its accessibility value (the words stay its label), the fallback text for a session with no cwd the same way,
+    /// nothing when there is none. Real accessibility tree of a never-shown window. Fixed slots: the header's height and
+    /// the count and age slots' frames are equal with and without a path, at 0.7, 0.85 and 1.0, in both modes.
     @MainActor
-    func testTerminalHeaderKeepsAReadablePathOrDropsTheFolder() throws {
+    func testHeaderShowsNoPathAndCarriesItInTheTitleTooltipAndValue() throws {
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
-        ThemeRuntime.scale = 1.0
-        let a = session("prosper-ios", .working, ago: 40, alias: Self.headerTitle)
+        let a = session("api", .working, ago: 40, agents: 3)
         let st = store([a])
         st.controlDch = bin([1, 38, 0])
         let m = windowModel(st)
@@ -220,66 +207,114 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        XCTAssertEqual(row.title, Self.headerTitle)
         let restoreAX = headerAXOn()
         defer { restoreAX() }
-        let short = "/srv/api"
-        func ideal(_ p: String) -> CGFloat {
-            NSHostingView(rootView: Text(p).font(Neon.font(11, design: .monospaced))).fittingSize.width
-        }
-        let longIdeal = ideal(Self.headerPath), shortIdeal = ideal(short)
-        XCTAssertGreaterThan(longIdeal, sz(300))
-        XCTAssertLessThan(shortIdeal, sz(80))
-        // window width: the folder drawn with the long path, with the short path
-        let expected: [(CGFloat, Bool, Bool)] = [(300, false, false), (340, false, false), (400, false, true),
-                                                 (480, true, true), (560, true, true), (700, true, true), (900, true, true)]
-        var log: [String] = []
-        for (width, longShown, shortShown) in expected {
-            for (path, shown, full) in [(Self.headerPath, longShown, longIdeal), (short, shortShown, shortIdeal)] {
-                let header = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, store: st, mode: .terminal,
-                                                setMode: { _ in })
-                let size = CGSize(width: width, height: 80)
-                let (win, tree) = headerAXTree(header, size) { $0.named("Session actions") }
-                defer { win.close() }
-                let tag = "\(width) \(path == short ? "short" : "long") path"
-                let toggle = tree.filter { $0.named("Terminal") || $0.named("Transcript") || $0.named(prefix: "Showing: ") }
-                let t = toggle.reduce(CGRect.null) { $0.union($1.frame) }
-                XCTAssertFalse(toggle.isEmpty, "the switch (\(tag))")
-                let title = try XCTUnwrap(tree.first { $0.named(Self.headerTitle) }, "the title (\(tag))").frame
-                let chip = try XCTUnwrap(tree.first { $0.named("Working") }, "the chip (\(tag))").frame
-                let p = tree.first { $0.named(path) }?.frame
-                log.append("\(tag): title \(title.width) path \(p.map { "\($0.width)" } ?? "none") switch \(t.minX)")
-                XCTAssertEqual(p != nil, shown, "the folder drawn (\(tag))")
-                // #1120: the icon is out of the tree (it read "Move" while the slot carried hidden(false)).
-                XCTAssertEqual(imagesLeft(of: t, tree).count, 0, "no unignored AXImage left of the switch (\(tag)): \(imagesLeft(of: t, tree))")
-                if let p {
-                    XCTAssertEqual(p.midY, t.midY, accuracy: 2, "on the switch's line (\(tag))")
-                    if full < sz(110) {
-                        XCTAssertEqual(p.width, full, accuracy: 1, "a short path whole (\(tag))")
-                    } else {
-                        // The middle cut lands on a glyph: up to one 11 pt monospaced glyph under the floor.
-                        XCTAssertGreaterThanOrEqual(p.width, sz(110) - sz(7), "a long path at its floor (\(tag))")
-                    }
-                    XCTAssertGreaterThanOrEqual(title.width, sz(80) - sz(10), "the title readable beside it (\(tag))")
+        let home = NSHomeDirectory()
+        // cwd, then the text the title must carry (nil: none at all); an empty cwd is no text; the test store's socket dir is not the default, so the fallback names it.
+        let cases: [(String?, String?)] = [(Self.headerPath, Self.headerPath), (home + "/project", "~/project"),
+                                           (nil, "dch api in /tmp/dch-test"), ("", nil)]
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            var heights: [CGFloat] = []
+            for mode in [AgentPaneMode.terminal, .transcript] {
+                var slots: [[CGRect]] = []
+                for (cwd, text) in cases {
+                    let header = AgentSessionHeader(row: row, session: a, cwd: cwd, open: {}, store: st, mode: mode, setMode: { _ in })
+                    XCTAssertEqual(header.project, text, "the text (\(cwd ?? "nil"))")
+                    let width = 900 * scale
+                    heights.append(NSHostingView(rootView: header.frame(width: width)).fittingSize.height)
+                    let (win, tree) = headerAXTree(header, CGSize(width: width, height: 80 * scale)) { $0.named("Session actions") }
+                    defer { win.close() }
+                    let tag = "\(mode) \(scale) cwd \(cwd ?? "nil")"
+                    let title = try XCTUnwrap(tree.first { !$0.ignored && $0.label == "api" }, "the title (\(tag))")
+                    XCTAssertEqual(title.help, text ?? "", "the tooltip carries the path (\(tag))")
+                    XCTAssertEqual(title.value, text ?? "", "the accessibility value carries the path (\(tag))")
+                    // Drawn nowhere else: no other element reads it, and no folder glyph.
+                    if let text { XCTAssertEqual(tree.filter { $0.reads(text) }.count, 1, "only the title reads it (\(tag))") }
+                    XCTAssertFalse(tree.contains { $0.reads("Move") }, "no folder glyph (\(tag))")
+                    XCTAssertFalse(tree.contains { !$0.ignored && $0.role == "AXImage" && $0.frame.width > 0 && $0.frame.maxX < title.frame.minX },
+                                   "nothing drawn left of the title (\(tag))")
+                    // Every slot (title, chip, counts, age, controls): the frames of what an AX client is shown.
+                    slots.append(tree.filter { !$0.ignored && $0.frame.width > 0 }.map(\.frame))
+                    XCTAssertFalse(win.isVisible, "never on screen")
                 }
-                // Never the icon alone: ink between the chip's capsule and the switch on the title line exactly when
-                // the folder is drawn.
-                let rep = try render(header, size: size, dark: true, margin: 0)
-                let k = CGFloat(rep.pixelsWide) / size.width
-                let bg = try XCTUnwrap(rep.colorAt(x: 1, y: 1)?.usingColorSpace(.sRGB))
-                var ink = 0
-                let xs = Int((chip.maxX + sz(7) + 1) * k)..<Int((t.minX - 1) * k)
-                let ys = Int(AgentSessionHeader.padTop * k)..<Int((AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * k)
-                for y in ys { for x in xs {
-                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                    if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
-                        + abs(c.blueComponent - bg.blueComponent) > 0.15 { ink += 1 }
-                } }
-                XCTAssertEqual(ink > 0, shown, "drawn between the chip and the switch: \(ink) px (\(tag))")
-                XCTAssertFalse(win.isVisible, "never on screen")
+                for s in slots.dropFirst() {
+                    XCTAssertEqual(s, slots.first ?? [], "every slot (the count and age too) stays put with and without a path (\(mode) \(scale))")
+                }
+                XCTAssertTrue(slots.first?.count ?? 0 >= 5, "the slots were found (\(mode) \(scale)): \(slots.first ?? [])")
+            }
+            // One height per mode, whatever the path: terminal rows first, transcript after (four cases each).
+            for half in [heights.prefix(cases.count), heights.suffix(cases.count)] {
+                XCTAssertEqual(half.min() ?? -1, half.max() ?? -2, accuracy: 0.5, "the header's height with and without a path (\(scale))")
             }
         }
-        print("#1103 F1 floors\n" + log.joined(separator: "\n"))
+    }
+
+    /// #1191: a fixed slot: Transcript mode's header is as high with no counts and no age as with them, at 0.7, 0.85
+    /// and 1.0, and as high as the row with counts measured before the slot existed (the slot did not grow).
+    @MainActor
+    func testTranscriptHeaderHeightIsTheSameWithAndWithoutCountsAndAge() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let a = session("api", .working, ago: 40, agents: 3)
+        let st = store([a])
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(a.key))
+        let base = try XCTUnwrap(m.selectedRow)
+        func variant(_ age: String, agents: Int, merged: Int) -> AgentSidebar.Row {
+            AgentSidebar.Row(id: base.id, title: base.title, state: base.state, detail: base.detail, age: age, prs: [],
+                             agents: agents, merged: merged, session: base.session)
+        }
+        let rows = [("counts and age", variant("4m", agents: 3, merged: 1)), ("age only", variant("4m", agents: 0, merged: 0)),
+                    ("neither", variant("", agents: 0, merged: 0))]
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            var h: [String: CGFloat] = [:]
+            for (name, r) in rows {
+                let header = AgentSessionHeader(row: r, session: a, cwd: "/Users/example/project", open: {}, store: st,
+                                                mode: .transcript, setMode: { _ in })
+                h[name] = NSHostingView(rootView: header.frame(width: 900 * scale)).fittingSize.height
+            }
+            let full = h["counts and age"] ?? -1
+            XCTAssertGreaterThan(full, AgentSessionHeader.height + sz(10), "two lines (\(scale))")
+            for (name, v) in h { XCTAssertEqual(v, full, accuracy: 0.5, "\(name) is as high as counts and age (\(scale))") }
+            print("#1191 transcript heights \(scale): \(h)")
+        }
+    }
+
+    /// #1191 round 3: Transcript mode's counts start under the title's leading edge (the slot's placeholder takes no
+    /// part in the line's spacing), at 0.7, 0.85 and 1.0. Real accessibility frames of a never-shown window.
+    @MainActor
+    func testTranscriptCountsAlignWithTheTitleLeadingEdge() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let a = session("api", .working, ago: 40, agents: 3)
+        let st = store([a])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(a.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            let header = AgentSessionHeader(row: row, session: a, cwd: "/Users/example/project", open: {}, store: st,
+                                            mode: .transcript, setMode: { _ in })
+            let (win, tree) = headerAXTree(header, CGSize(width: 900 * scale, height: 90 * scale)) { $0.named("Session actions") }
+            defer { win.close() }
+            let title = try XCTUnwrap(tree.first { !$0.ignored && $0.label == "api" }, "the title (\(scale))").frame
+            let count = try XCTUnwrap(tree.first { $0.reads("3 agents") }, "the first count group (\(scale))").frame
+            print("#1191 r3 \(scale): title minX \(title.minX) count minX \(count.minX)")
+            XCTAssertGreaterThan(abs(count.midY - title.midY), sz(10), "the counts are on the second line (\(scale))")
+            // Ticket 4 read the group's frame 1 pt (at 1.0) right of the title's: the group's own inset, not spacing. The
+            // indent this guards against is the line's spacing, sz(6): over sz(4).
+            XCTAssertEqual(count.minX, title.minX, accuracy: sz(2), "the counts start under the title (\(scale))")
+            XCTAssertFalse(win.isVisible, "never on screen")
+        }
     }
 
     /// #1103 F2: the sidebar's "Agent Sessions" and the session header's title share one centre line in the whole
@@ -496,48 +531,6 @@ extension AgentWindowD1Tests {
 
     // MARK: #1120
 
-    /// QA 845 INFO-2: Terminal mode, a long title and a long path at three widths: the path gives way first, down to its
-    /// floor, and the title (what names the session) takes the rest. Fails if the order flips (the path above its floor
-    /// while the title is cut). Real accessibility frames of a never-shown window.
-    @MainActor
-    func testTerminalHeaderPathGivesWayBeforeTheTitle() throws {
-        let saved = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = saved }
-        ThemeRuntime.scale = 1.0
-        let a = session("prosper-ios", .working, ago: 40, alias: Self.headerTitle)
-        let st = store([a])
-        st.controlDch = bin([1, 38, 0])
-        let m = windowModel(st)
-        m.setVisible(true)
-        defer { m.close() }
-        m.select(.live(a.key))
-        let row = try XCTUnwrap(m.selectedRow)
-        let restoreAX = headerAXOn()
-        defer { restoreAX() }
-        let titleIdeal = NSHostingView(rootView: Text(Self.headerTitle).font(Neon.font(15, weight: .semibold))).fittingSize.width
-        var log: [String] = []
-        for width: CGFloat in [480, 700, 900] {
-            let header = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st, mode: .terminal,
-                                            setMode: { _ in })
-            let (win, tree) = headerAXTree(header, CGSize(width: width, height: 80)) { $0.named("Session actions") }
-            defer { win.close() }
-            let title = try XCTUnwrap(tree.first { $0.named(Self.headerTitle) }, "the title (\(width))").frame
-            let path = try XCTUnwrap(tree.first { $0.named(Self.headerPath) }, "the path (\(width))").frame
-            log.append("\(width): title \(title.width) of \(titleIdeal), path \(path.width)")
-            XCTAssertLessThan(title.width, titleIdeal - 1, "the line cannot hold both whole (\(width))")
-            // The path at its floor: a middle cut lands on a glyph (up to one 11 pt monospaced glyph under it), and the
-            // title's tail cut leaves under one 15 pt glyph that the path takes (ticket 1: 116 at 700). Flipped, the path
-            // takes the line (its ideal is over sz(300)).
-            XCTAssertLessThanOrEqual(path.width, AgentSessionHeader.pathFloor + sz(10), "the path gives way first (\(width))")
-            XCTAssertGreaterThanOrEqual(path.width, AgentSessionHeader.pathFloor - sz(7), "down to its floor (\(width))")
-            if width > 480 {
-                XCTAssertGreaterThan(title.width, AgentSessionHeader.titleFloor + sz(40), "the title takes the rest (\(width))")
-            }
-            XCTAssertFalse(win.isVisible, "never on screen")
-        }
-        print("#1120 give-way\n" + log.joined(separator: "\n"))
-    }
-
     /// #1120 (QA #693 INFO-5): while the Rename field lies over the slot, the title, the state chip and (Terminal mode)
     /// the folder's path and extras are out of the tree under it (the slot's opacity 0 drops them); the field is read.
     /// Transcript mode's second line is not under the field and stays read. Not renaming, all of them are read. Real
@@ -585,15 +578,8 @@ extension AgentWindowD1Tests {
                 if renaming {
                     XCTAssertEqual(line.filter { $0.role != "AXTextField" }.map(\.names), [], "nothing but the field under it (\(tag))")
                 }
-                let pathRead = tree.contains { $0.reads(path) }
-                if mode == .terminal {
-                    XCTAssertEqual(pathRead, !renaming, "Terminal: the path is on the title line (\(tag))")
-                    if !renaming {
-                        XCTAssertTrue(line.contains { $0.reads(path) }, "and on the switch's line (\(tag))")
-                    }
-                } else {
-                    XCTAssertTrue(pathRead, "Transcript: the folder line is not under the field (\(tag))")
-                }
+                // #1191: the path rides on the title (value and tooltip): read exactly when the title is, in both modes.
+                XCTAssertEqual(tree.contains { $0.reads(path) }, !renaming, "the path follows the title (\(tag))")
                 XCTAssertFalse(win.isVisible, "never on screen")
             }
         }

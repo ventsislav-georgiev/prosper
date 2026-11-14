@@ -907,6 +907,8 @@ tag from the now-released section and put it on the new top draft.
 - Markdown files with a very large amount of markup (well over 100,000 emphasis marks, links, code
   spans, table cells or lines) now open at once as their source with the note "Too much markup:
   shown as source", instead of taking several seconds to draw. (#1187)
+- Agent Sessions: the header of an open session no longer shows the folder path; hover the session
+  name to see it (VoiceOver reads it too). (#1191)
 
 ## v2.174.0
 
