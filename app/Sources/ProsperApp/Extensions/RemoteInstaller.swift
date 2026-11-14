@@ -312,17 +312,12 @@ enum RemoteInstaller {
     /// followed. readdir, not FileManager: FileManager listings omit "._*" names.
     /// A name that is not valid UTF-8 goes to `notUTF8` (shown with U+FFFD, called synchronously on the
     /// caller's thread) and is left out; without it, such a name throws "cannot stat" as before.
-    private static func entries(_ dir: URL, notUTF8: ((String) -> Void)? = nil) throws -> [(name: String, type: mode_t)] {
-        guard let d = opendir(dir.path) else {
-            throw InstallError.extractFailed("cannot read \(dir.lastPathComponent)")
-        }
-        defer { closedir(d) }
+    /// `names` lists the raw names (readNames; a row adds names APFS cannot hold, #1168).
+    private static func entries(_ dir: URL, notUTF8: ((String) -> Void)? = nil,
+                                names: (URL) throws -> [[UInt8]] = RemoteInstaller.readNames) throws -> [(name: String, type: mode_t)] {
         var out: [(name: String, type: mode_t)] = []
-        // Read through the pointer: a record is only as long as its name, so a dirent copy reads past it.
-        let nameOffset = MemoryLayout<dirent>.offset(of: \dirent.d_name)!
-        while let e = readdir(d) {
-            let len = min(Int(e.pointee.d_namlen), MemoryLayout<dirent>.size - nameOffset)
-            let (name, exact) = listedName(UnsafeRawBufferPointer(start: UnsafeRawPointer(e) + nameOffset, count: len))
+        for bytes in try names(dir) {
+            let (name, exact) = listedName(bytes)
             if name == "." || name == ".." { continue }
             if !exact, let notUTF8 { notUTF8(name); continue }
             var st = stat()
@@ -330,6 +325,22 @@ enum RemoteInstaller {
                 throw InstallError.extractFailed("cannot stat \(name)")
             }
             out.append((name, st.st_mode & S_IFMT))
+        }
+        return out
+    }
+
+    /// The names in `dir` as readdir lists them, as bytes ("." and ".." included). Nothing is opened but the folder.
+    static func readNames(_ dir: URL) throws -> [[UInt8]] {
+        guard let d = opendir(dir.path) else {
+            throw InstallError.extractFailed("cannot read \(dir.lastPathComponent)")
+        }
+        defer { closedir(d) }
+        var out: [[UInt8]] = []
+        // Read through the pointer: a record is only as long as its name, so a dirent copy reads past it.
+        let nameOffset = MemoryLayout<dirent>.offset(of: \dirent.d_name)!
+        while let e = readdir(d) {
+            let len = min(Int(e.pointee.d_namlen), MemoryLayout<dirent>.size - nameOffset)
+            out.append(Array(UnsafeRawBufferPointer(start: UnsafeRawPointer(e) + nameOffset, count: len)))
         }
         return out
     }
@@ -440,6 +451,7 @@ enum RemoteInstaller {
         var links: [String] = []       // symbolic links: every install refuses an archive holding one
         var unreadable: [String] = []  // folders the walk could not list: their files would go missing
         var notUTF8: [String] = []     // names that are not valid UTF-8 (U+FFFD per bad byte): no path made from them reaches the file
+        var notFiles: [String] = []    // #1168: neither a file, a folder nor a link (a pipe, socket or device): never opened
 
         /// Why this folder cannot be published, naming the files; nil when it can.
         var refusal: String? {
@@ -449,6 +461,10 @@ enum RemoteInstaller {
             if !notUTF8.isEmpty {
                 return "Can't publish file names that are not valid UTF-8 (\u{FFFD} marks the bytes that can't be shown): "
                     + notUTF8.joined(separator: ", ")
+            }
+            if !notFiles.isEmpty {
+                return "Can't publish items that are not files or folders (a pipe, socket or device): "
+                    + notFiles.joined(separator: ", ")
             }
             if !unreadable.isEmpty {
                 let one = unreadable.count == 1
@@ -461,18 +477,22 @@ enum RemoteInstaller {
 
     /// Walks `dir` by readdir + lstat (a link is never followed, "._*" names are seen, a folder it
     /// cannot list is reported instead of skipped). Left-out entries are counted and never entered.
-    static func publishPlan(_ dir: URL) -> PublishPlan {
+    /// `names` is entries' raw listing (#1168: a row feeds names APFS refuses to create).
+    static func publishPlan(_ dir: URL, names: (URL) throws -> [[UInt8]] = RemoteInstaller.readNames) -> PublishPlan {
         var plan = PublishPlan()
         func walk(_ url: URL, _ rel: String) {
             // Runs synchronously inside entries, on this walk's thread. A hidden one is left out like any other.
+            var bad: [String] = []
             let named = { (name: String) in
                 let path = rel.isEmpty ? name : rel + "/" + name
-                if isLeftOutOfPublish(path) { plan.leftOut += 1 } else { plan.notUTF8.append(path) }
+                if isLeftOutOfPublish(path) { plan.leftOut += 1 } else { bad.append(path) }
             }
-            guard let list = try? entries(url, notUTF8: named) else {
+            // #1168: a folder that fails part way names only the folder: its bad names are a partial list.
+            guard let list = try? entries(url, notUTF8: named, names: names) else {
                 plan.unreadable.append(rel.isEmpty ? url.lastPathComponent : rel)
                 return
             }
+            plan.notUTF8 += bad
             for (name, type) in list {
                 let path = rel.isEmpty ? name : rel + "/" + name
                 if isLeftOutOfPublish(path) {
@@ -481,8 +501,10 @@ enum RemoteInstaller {
                     plan.links.append(path)
                 } else if type == S_IFDIR {
                     walk(url.appendingPathComponent(name, isDirectory: true), path)
-                } else {
+                } else if type == S_IFREG {
                     plan.members.append("./" + path)
+                } else {
+                    plan.notFiles.append(path)
                 }
             }
         }
@@ -491,6 +513,7 @@ enum RemoteInstaller {
         plan.links.sort()
         plan.unreadable.sort()
         plan.notUTF8.sort()
+        plan.notFiles.sort()
         return plan
     }
 

@@ -311,11 +311,7 @@ private struct ExtensionRow: View {
         let themes = record.manifest.contributes?.allThemes ?? []
         Task {
             do {
-                // packageForPublish spawns tar + gzip + base64 (sync). This Task
-                // inherits the View's MainActor, so run the blocking work off-main
-                // to keep the UI responsive while a (≤256KB) artifact is packed.
-                // The detached closure runs on the global executor and takes only Sendable values (URL, PublishPlan).
-                let blob = try await Task.detached { try RemoteInstaller.packageForPublish(dir, plan: plan) }.value
+                let blob = try await PublishActions.pack(dir, plan)
                 let manifest = MarketClient.PublishManifest(
                     id: m.id, name: m.name, title: m.title, description: m.description,
                     version: m.version, author: m.author, icon: m.icon, license: m.license)
@@ -411,6 +407,15 @@ struct PublishActions: View {
     let dir: URL?
     let model: PublishConfirmation
     let publish: @MainActor (RemoteInstaller.PublishPlan) -> Void
+
+    /// A row's packing step with the confirmed plan (#1160, #1168: a row passes a recording `packer`).
+    /// packageForPublish spawns tar + gzip + base64 (sync), so `packer` runs in a detached task on the global
+    /// executor, off the main actor; it takes only Sendable values (URL, PublishPlan).
+    nonisolated static func pack(_ dir: URL, _ plan: RemoteInstaller.PublishPlan,
+                                 packer: @escaping @Sendable (URL, RemoteInstaller.PublishPlan?) throws -> String
+                                     = { try RemoteInstaller.packageForPublish($0, plan: $1) }) async throws -> String {
+        try await Task.detached { try packer(dir, plan) }.value
+    }
 
     var body: some View {
         let ahead = published.map { SemanticVersion(version) > SemanticVersion($0) }

@@ -427,6 +427,102 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         }
     }
 
+    // MARK: - #1168: the row's packing step, the read error, the listing, non-files, a partial listing
+
+    /// The row's packing step hands the confirmed plan to the packer (a recorder here, run in the step's detached
+    /// task), and with the real packer packs that plan only: a file added after the confirm stays out.
+    @MainActor
+    func testRowPackingStepPacksTheConfirmedPlan() async throws {
+        let ext = try fixture(["extension.toml", "init.lua"])
+        let model = PublishConfirmation()
+        let published = Recorder()
+        model.ask(ext, publish: { published.plans.append($0) })
+        model.confirm()
+        let plan = try XCTUnwrap(published.plans.last, "the confirmation did not hand over its plan")
+        let handed = try await PublishActions.pack(ext, plan, packer: { _, p in p?.members.joined(separator: " ") ?? "no plan" })
+        XCTAssertEqual(handed, "./extension.toml ./init.lua", "the packing step did not pass the confirmed plan")
+        try Data("x".utf8).write(to: ext.appendingPathComponent("late.lua"))
+        let blob = try await PublishActions.pack(ext, plan)
+        XCTAssertEqual(try tarList(blob, ext), ["./extension.toml", "./init.lua"],
+                       "a file added after the confirm was packed")
+    }
+
+    /// A member the publisher can no longer reach (its folder's mode changed in this row's tempDir()) stops the
+    /// publish as "(can't be read)", not "(removed)".
+    @MainActor
+    func testUnreadableMemberAfterTheConfirmSaysCantBeRead() throws {
+        let ext = try fixture(["extension.toml", "init.lua", "lib/util.lua"])
+        let plan = RemoteInstaller.publishPlan(ext)
+        let lib = ext.appendingPathComponent("lib")
+        defer { chmod(lib.path, 0o755) }
+        XCTAssertEqual(chmod(lib.path, 0o000), 0)
+        let why = "The folder changed after you confirmed the list, so nothing was published: lib/util.lua (can't be read)."
+            + " Publish again to see the new list."
+        XCTAssertThrowsError(try RemoteInstaller.packageForPublish(ext, plan: plan)) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError, .cannotPublish(why))
+        }
+    }
+
+    /// The walk itself meets names that are not valid UTF-8 (APFS cannot hold one, so the listing adds them to the
+    /// real one): each is named with its folder, a hidden one is left out, and the packer refuses the plan.
+    func testNonUTF8NameFromTheListingIsRefusedByName() throws {
+        let ext = try fixture(["extension.toml", "init.lua", "lib/util.lua"])
+        let bad: [UInt8] = Array("bad".utf8) + [0xFF] + Array(".lua".utf8)
+        let added: [String: [[UInt8]]] = ["ext": [bad, Array(".".utf8) + bad], "lib": [bad]]
+        let plan = RemoteInstaller.publishPlan(ext, names: {
+            try RemoteInstaller.readNames($0) + (added[$0.lastPathComponent] ?? [])
+        })
+        XCTAssertEqual(plan.notUTF8, ["bad\u{FFFD}.lua", "lib/bad\u{FFFD}.lua"])
+        XCTAssertEqual(plan.unreadable, [])
+        XCTAssertEqual(plan.leftOut, 1)
+        XCTAssertEqual(plan.members, ["./extension.toml", "./init.lua", "./lib/util.lua"])
+        let why = "Can't publish file names that are not valid UTF-8 (\u{FFFD} marks the bytes that can't be shown): "
+            + "bad\u{FFFD}.lua, lib/bad\u{FFFD}.lua"
+        XCTAssertEqual(plan.refusal, why)
+        XCTAssertThrowsError(try RemoteInstaller.packageForPublish(ext, plan: plan)) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError, .cannotPublish(why))
+        }
+    }
+
+    /// Item 7: a folder whose listing fails part way names only the folder; the bad names it had already listed are
+    /// a partial list and are not shown.
+    func testFolderFailingPartWayNamesOnlyTheFolder() throws {
+        let ext = try fixture(["extension.toml", "init.lua", "lib/util.lua"])
+        let bad: [UInt8] = Array("bad".utf8) + [0xFF] + Array(".lua".utf8)
+        // A bad name, then a name lstat cannot find: entries throws after the bad name was reported.
+        let plan = RemoteInstaller.publishPlan(ext, names: {
+            try RemoteInstaller.readNames($0) + ($0.lastPathComponent == "lib" ? [bad, Array("ghost.lua".utf8)] : [])
+        })
+        XCTAssertEqual(plan.unreadable, ["lib"])
+        XCTAssertEqual(plan.notUTF8, [], "a partial list of bad names was kept")
+        XCTAssertEqual(plan.refusal, "Can't read the folder lib, so its files would be left out.")
+    }
+
+    /// A named pipe made in this row's tempDir() is refused by the plan itself, by name, with words for something that
+    /// never was a file; the packer refuses before tar, and the confirmation publishes nothing. Nothing here opens
+    /// it: the walk lstats it (entries), the refusal stops packageForPublish before changedMembers and tar.
+    @MainActor
+    func testPipeInTheFolderIsRefusedByTheList() throws {
+        let ext = try fixture(["extension.toml", "init.lua", "lib/util.lua"])
+        let pipe = ext.appendingPathComponent("lib/feed").path
+        XCTAssertEqual(mkfifo(pipe, 0o600), 0)
+        defer { unlink(pipe) }
+        let plan = RemoteInstaller.publishPlan(ext)
+        XCTAssertEqual(plan.notFiles, ["lib/feed"])
+        XCTAssertEqual(plan.members, ["./extension.toml", "./init.lua", "./lib/util.lua"])
+        let why = "Can't publish items that are not files or folders (a pipe, socket or device): lib/feed"
+        XCTAssertEqual(plan.refusal, why)
+        XCTAssertEqual(PublishConfirmation.lines(plan), [why])
+        XCTAssertThrowsError(try RemoteInstaller.packageForPublish(ext)) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError, .cannotPublish(why))
+        }
+        let model = PublishConfirmation()
+        let published = Recorder()
+        model.ask(ext, publish: { _ in published.count += 1 })
+        model.confirm()
+        XCTAssertEqual(published.count, 0, "a refused plan never publishes")
+    }
+
     // MARK: - R1141-3: a work-folder name stable across launches (recorder only, nothing deleted)
 
     /// The literal pins the name across launches (String.hashValue is seeded per launch); the name passes
@@ -501,8 +597,13 @@ final class MarketplacePublishPreviewTests: XCTestCase {
     /// The member names of the packer's archive (given `plan`, or walking the folder), read back with tar -t
     /// from the row's own folder.
     private func packedMembers(_ ext: URL, plan: RemoteInstaller.PublishPlan? = nil) throws -> [String] {
+        try tarList(try RemoteInstaller.packageForPublish(ext, plan: plan), ext)
+    }
+
+    /// The member names of a base64 archive, read back with tar -t from the row's own folder.
+    private func tarList(_ blob: String, _ ext: URL) throws -> [String] {
         let tgz = ext.deletingLastPathComponent().appendingPathComponent("out.tgz")
-        try XCTUnwrap(Data(base64Encoded: try RemoteInstaller.packageForPublish(ext, plan: plan))).write(to: tgz)
+        try XCTUnwrap(Data(base64Encoded: blob)).write(to: tgz)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
         p.arguments = ["-tzf", tgz.path]

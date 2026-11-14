@@ -798,6 +798,8 @@ tag from the now-released section and put it on the new top draft.
   as before. (#1165)
 - Extensions: new `host.timer.scheduled(id)` tells an extension whether one of its own timers is
   scheduled. (#1165)
+- Publishing an extension now refuses a folder that holds a named pipe, socket or device file,
+  naming it, instead of failing later with "no longer a regular file". (#1168)
 
 ## v2.174.0
 
