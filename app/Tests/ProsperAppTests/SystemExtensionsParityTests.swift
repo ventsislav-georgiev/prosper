@@ -28,7 +28,8 @@ final class SystemExtensionsParityTests: XCTestCase {
         )
         let registry = ExtensionRegistry(
             systemDir: dir,
-            userDir: tempDir("prosper-ext-test")
+            userDir: tempDir("prosper-ext-test"),
+            defaults: scratchDefaults("parity")
         )
         registry.discover()
         return registry
@@ -36,29 +37,45 @@ final class SystemExtensionsParityTests: XCTestCase {
 
     // MARK: - base64
 
-    func testLuaBase64MatchesNative() throws {
+    /// Native reference for the Base64 window's two panes (Base64Tool, the engine the launcher used): the encoding,
+    /// and the decoding with "" where native says "(invalid base64)" (the Lua pane stays empty there).
+    private func nativeBase64(forward: Bool, _ text: String) -> String? {
+        let value = Base64Tool.run((forward ? "base64 " : "unbase64 ") + text)?.value
+        return value == "(invalid base64)" ? "" : value
+    }
+
+    /// #1170: the Base64 window's forward and backward functions (the converter's `forward` / `backward` globals),
+    /// run as the window runs them (AppDelegate.presentExtensionView's transform: callExtensionStringAsync on the
+    /// extension's background lane), against the native engine.
+    func testLuaBase64MatchesNative() async throws {
         let registry = try makeRegistry()
-        try XCTSkipIf(registry.command(id: "base64.run") == nil, "base64.run not discovered")
+        let ext = "com.prosper.base64"
+        guard registry.record(id: ext)?.isLive == true else { return XCTFail("\(ext) not discovered or not live") }
+        let source = try String(contentsOf: extensionsDir().appendingPathComponent("base64/init.lua"), encoding: .utf8)
+        XCTAssertTrue(source.contains(#"forward = "b64_encode""#) && source.contains(#"backward = "b64_decode""#),
+                      "the window's pane functions are no longer b64_encode / b64_decode")
 
-        let inputs = [
-            // encode
-            "base64 hi", "b64 hello world", "base64 ", "base64 a", "base64 ab", "base64 abc",
-            "base64 héllo", "base64 🔥 fire", "BASE64 Mixed Case",
-            // decode
-            "unbase64 aGk=", "base64d aGVsbG8gd29ybGQ=", "b64d aGk=", "unbase64 ",
-            "unbase64 not-base64!!", "unbase64 aGk", // bad padding/length
-            // NOTE: degenerate all-padding input ("====") is intentionally excluded:
-            // Foundation decodes it to a stray NUL byte, whereas the Lua port (and
-            // arguably the more sensible behavior) rejects it as invalid.
-            // decline (no recognized prefix)
-            "hello", "", "o Safari", "128*24",
-        ]
-
-        for q in inputs {
-            let lua = registry.invokeSync(commandID: "base64.run", query: q)
-            let native = Base64Tool.run(q)?.value
-            XCTAssertEqual(lua, native, "base64 parity mismatch for \(q.debugDescription): lua=\(lua ?? "nil") native=\(native ?? "nil")")
+        let plain = ["hi", "hello world", "", "a", "ab", "abc", "héllo", "🔥 fire", "Mixed Case", "two\nlines"]
+        let encoded = ["aGk=", "aGVsbG8gd29ybGQ=", "", " aGk= ", "8J+UpSBmaXJl",
+                       // bad: illegal characters, length, a decoding that is not UTF-8
+                       "not-base64!!", "aGk", "/w=="]
+        // NOTE: degenerate all-padding input ("====") is intentionally excluded: Foundation decodes it to a stray
+        // NUL byte, whereas the Lua port (and arguably the more sensible behavior) rejects it as invalid.
+        var compared = 0
+        for text in plain {
+            let lua = await registry.callExtensionStringAsync(extensionID: ext, function: "b64_encode", args: [text])
+            XCTAssertEqual(lua, nativeBase64(forward: true, text), "b64_encode parity for \(text.debugDescription)")
+            let back = await registry.callExtensionStringAsync(extensionID: ext, function: "b64_decode",
+                                                               args: [lua ?? ""])
+            XCTAssertEqual(back, text, "b64_decode(b64_encode(\(text.debugDescription)))")
+            compared += 1
         }
+        for text in encoded {
+            let lua = await registry.callExtensionStringAsync(extensionID: ext, function: "b64_decode", args: [text])
+            XCTAssertEqual(lua, nativeBase64(forward: false, text), "b64_decode parity for \(text.debugDescription)")
+            compared += 1
+        }
+        XCTAssertEqual(compared, plain.count + encoded.count)
     }
 
     // MARK: - units

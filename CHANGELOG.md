@@ -815,6 +815,9 @@ tag from the now-released section and put it on the new top draft.
   read or written, or is larger than 1 MiB, Prosper leaves it unchanged. (#781)
 - Always allow now checks the session list again just before it types Yes. If Claude Code has left
   that session in the meantime, the prompt is shown instead of answered. (#781)
+- Typing fast in a two-pane converter window (Base64 and extension converters) no longer queues one
+  conversion per keystroke: while one conversion runs, only your newest text is converted next, so
+  the answer for what you typed last arrives sooner. (#1170)
 
 ## v2.174.0
 

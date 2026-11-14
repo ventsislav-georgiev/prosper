@@ -405,6 +405,9 @@ final class ConverterPanes: ObservableObject {
     private let transform: Transform
     /// Number of the newest edit (either side); an answer to an older one is dropped.
     private var latest = 0
+    /// Side of the newest edit, and the one transform call in flight (#1170: edits made meanwhile are not queued).
+    private var latestFromLeft = true
+    private var inFlight: Task<Void, Never>?
     private var seeded = false
 
     init(node: ConverterNode, transform: @escaping Transform) {
@@ -433,15 +436,26 @@ final class ConverterPanes: ObservableObject {
     }
 
     /// Latest edit wins: the answer lands only if no edit on either side came after the one it answers. A cut
-    /// or failed transform answers "" (the other pane empties).
+    /// or failed transform answers "" (the other pane empties). #1170: one call at a time per pane pair; edits made
+    /// while it runs only move `latest`, and when it returns the newest text is sent once, so a burst of edits
+    /// costs two transform calls, not one per edit. The returned task ends when the newest answer has landed.
     private func convert(fromLeft: Bool) -> Task<Void, Never> {
         latest += 1
-        let mine = latest, input = fromLeft ? left : right, fn = fromLeft ? forward : backward
-        return Task { @MainActor in   // main actor: reads and writes the panes
-            let out = await transform(fn, input)
-            guard mine == latest else { return }
-            if fromLeft { right = out } else { left = out }
+        latestFromLeft = fromLeft
+        if let inFlight { return inFlight }
+        let task = Task { @MainActor in   // main actor: reads and writes the panes
+            // Each turn answers the newest edit; another turn only when an edit came during the call (finite).
+            while true {
+                let mine = latest, fromLeft = latestFromLeft
+                let out = await transform(fromLeft ? forward : backward, fromLeft ? left : right)
+                guard mine == latest else { continue }
+                if fromLeft { right = out } else { left = out }
+                break
+            }
+            inFlight = nil
         }
+        inFlight = task
+        return task
     }
 }
 

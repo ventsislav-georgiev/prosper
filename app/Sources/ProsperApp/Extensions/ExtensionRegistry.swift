@@ -204,7 +204,7 @@ final class ExtensionRegistry: ObservableObject {
     enum MainThreadBudget {
         /// The VM's ceiling: the host bootstraps and the entry chunk when the VM is made (`run` takes no budget).
         static let load: Int32 = 500_000
-        /// A command handler (invokeSync: the launcher's calc and units on each keystroke) or a view action.
+        /// A command handler (invokeSync: the launcher's calc and units on each keystroke).
         static let command: Int32 = 500_000
         /// A bare function call (callExtensionString's default): snippet placeholders and the event-tap probe.
         /// Higher than a command because the probe runs a whole Hammerspoon config (~98 per binding line).
@@ -678,7 +678,7 @@ final class ExtensionRegistry: ObservableObject {
     }
 
     /// Render a `mode = "view"` command on the OFF-MAIN async lane (for views
-    /// that call async host APIs). Mirrors `renderView` but does not block.
+    /// that call async host APIs). #1170: the only view render; the synchronous twin had no caller.
     func renderViewAsync(commandID: String, query: String = "") async -> ExtensionViewNode? {
         guard let (_, command) = command(id: commandID), command.mode == .view else { return nil }
         guard let json = await invokeAsync(commandID: commandID, query: query) else { return nil }
@@ -761,45 +761,6 @@ final class ExtensionRegistry: ObservableObject {
         guard let json = await asyncRuntimes.invoke(
             spec, args: [sectionID, actionID, value ?? "", formJSON]) else { return nil }
         return try? SettingsUI.decode(json: json)
-    }
-
-    // MARK: - View commands (declarative UI, ADR-002 §D7)
-
-    /// Render a `mode = "view"` command: invoke its handler (which returns a JSON
-    /// component tree via `host.ui.render`) and decode it into a native view
-    /// model. Returns nil if the command isn't a view, declines, or the handler
-    /// produced invalid JSON.
-    func renderView(commandID: String, query: String = "") -> ExtensionViewNode? {
-        guard let (_, command) = command(id: commandID), command.mode == .view else { return nil }
-        guard let json = invokeSync(commandID: commandID, query: query) else { return nil }
-        do {
-            return try ExtensionViewNode.decode(json: json)
-        } catch {
-            log.error("view \(commandID, privacy: .public) returned invalid JSON: \(String(describing: error), privacy: .public)")
-            return nil
-        }
-    }
-
-    /// Dispatch a UI action back into the extension. The handler is the command
-    /// handler name suffixed with `_action`; it receives
-    /// `(actionID, value, formJSON)` and may return a new component tree (for
-    /// intra-extension navigation) or nil.
-    func dispatchAction(
-        commandID: String, actionID: String, value: String?, formValues: [String: String]
-    ) -> ExtensionViewNode? {
-        guard let (record, command) = command(id: commandID), record.isLive else { return nil }
-        do {
-            let rt = try activate(record)
-            let handler = Self.handlerName(for: command.id) + "_action"
-            let formJSON = (try? JSONEncoder().encode(formValues))
-                .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-            guard let json = try rt.callGlobal(handler, [actionID, value ?? "", formJSON],
-                                               budget: MainThreadBudget.command) else { return nil }
-            return try? ExtensionViewNode.decode(json: json)
-        } catch {
-            log.error("action \(actionID, privacy: .public) on \(commandID, privacy: .public) failed: \(String(describing: error), privacy: .public)")
-            return nil
-        }
     }
 
     // MARK: - Host-window callbacks (host.window.open)
