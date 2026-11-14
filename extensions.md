@@ -192,6 +192,8 @@ Each extension's off-main work runs on its **own serial lane**, so a slow handle
 
 **Budget:** every call the host makes into an extension (a command, an event handler, a callback) gets one instruction budget, shared by all of the extension's coroutines. Once it is spent the call ends with "execution budget exceeded"; `pcall`, `xpcall` and `coroutine.resume` cannot catch that, a message handler or a `__close` handler cannot run past it, and the next call starts with a full budget. `setmetatable` refuses a metatable with a `__gc` field (finalizers are refused), and `collectgarbage` only reports: `collectgarbage("count")` and `collectgarbage("isrunning")` answer, every other option does nothing and returns 0.
 
+**Memory:** each extension runtime has a memory limit of 256 MiB. A call that would go past it fails with "not enough memory" (a script can catch that with `pcall`), and the runtime stays usable for the next call. The host finds an extension's entry points (commands, event handlers, callbacks) only as plain globals: a name that only an `__index` metamethod on `_G` would serve is not found, and registering a host function does not run a `__newindex` on `_G`.
+
 **Keystroke path:** fully native and **keyCode-indexed** ([`ExtensionKeyRules.swift`](app/Sources/ProsperApp/Extensions/ExtensionKeyRules.swift)) — a keypress only scans rules bound to that key (≈0–2), budgeted under 5 µs and typically a few hundred ns. **No Lua runs in the keystroke path** (the one opt-in exception is raw event taps, §5).
 
 ---

@@ -676,6 +676,9 @@ tag from the now-released section and put it on the new top draft.
   into another app and the text stays on the clipboard (#1121).
 - File search: an action on a file that no longer exists does nothing and no longer counts as a use
   when results are ranked. (#1143)
+- Hardening: each extension's Lua runtime now has its own memory limit (256 MiB). A script call that
+  goes past it fails with "not enough memory" and the runtime stays usable; Prosper's own reads and
+  writes of an extension's globals no longer run the extension's metatable code (#1127).
 
 ## v2.174.0
 

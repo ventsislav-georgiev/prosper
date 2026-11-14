@@ -22,6 +22,14 @@ import Foundation
 ///   state; once spent it stays spent until the call returns, so a script's
 ///   `pcall` cannot keep going; `__gc` metamethods are refused and
 ///   `collectgarbage` only reports (`count`, `isrunning`), so no finalizer runs.
+/// - **Memory** (#1127): a counting allocator in the shim caps what one runtime's
+///   Lua holds (`memoryLimit`). The cap is enforced only inside protected calls
+///   (compiling a chunk, `run`, `callGlobal`): a growth past it fails that call
+///   with "not enough memory" and the runtime stays usable. State setup, the
+///   host's own pushes and host functions are counted but never refused (no
+///   protected call would catch a refusal there); a host function that leaves the
+///   runtime over its cap fails once it has returned. The host reads and writes
+///   globals raw, so no script metamethod runs outside a call.
 public final class LuaRuntime {
 
     /// Errors thrown by load/run/call.
@@ -35,9 +43,14 @@ public final class LuaRuntime {
     /// The default per-call instruction budget (~tens of ms of pure Lua).
     public static let defaultInstructionBudget: Int32 = 10_000_000
 
+    /// The default per-runtime memory cap. 256 MiB: room for the largest value one host call hands a script
+    /// (host.shell.run's 64 MiB) plus a full-size transform of it; ~12x the highest built-in suite peak (20 MiB).
+    public static let defaultMemoryLimit = 256 << 20
+
     /// `lua_State *`. Recreated on `reset()`.
     private var L: OpaquePointer!
     private let maxInstructions: Int32
+    private let memoryLimit: Int
     /// When true, `load` survives the sandbox, text chunks only (a binary chunk is
     /// refused: Lua byte code is not verified), so a privileged
     /// runtime can compile source it fetched itself — the hammerspoon-compat shim
@@ -56,20 +69,27 @@ public final class LuaRuntime {
     private var registrations: [(name: String, fn: (LuaRuntime) -> Int32)] = []
 
     public init(maxInstructions: Int32 = LuaRuntime.defaultInstructionBudget,
-                allowLoad: Bool = false) throws {
+                allowLoad: Bool = false,
+                memoryLimit: Int = LuaRuntime.defaultMemoryLimit) throws {
         self.maxInstructions = maxInstructions
         self.allowLoad = allowLoad
+        self.memoryLimit = memoryLimit
         try open()
     }
 
     deinit {
-        if let L { lua_close(L) }
+        if let L { clua_close(L) }
     }
+
+    /// Bytes this runtime's Lua holds now, as the allocator counts them. Read it on the runtime's own thread.
+    var memoryInUse: Int { clua_mem_of(L).pointee.used }
+    /// The highest `memoryInUse` so far. Same thread rule.
+    var memoryPeak: Int { clua_mem_of(L).pointee.peak }
 
     // MARK: - State lifecycle
 
     private func open() throws {
-        guard let state = luaL_newstate() else { throw LuaError.stateCreationFailed }
+        guard let state = clua_newstate(max(0, memoryLimit)) else { throw LuaError.stateCreationFailed }
         L = state
         applySandbox()
         replayRegistrations()
@@ -78,7 +98,7 @@ public final class LuaRuntime {
     /// Tear down and rebuild the state (hot reload). Host registrations are
     /// reapplied; the caller is responsible for re-loading script source.
     public func reset() throws {
-        if let L { lua_close(L) }
+        if let L { clua_close(L) }
         L = nil
         boxes.removeAll(keepingCapacity: true)
         try open()
@@ -105,19 +125,19 @@ public final class LuaRuntime {
         lua_getfield(L, -1, "traceback")
         lua_setfield(L, -3, "traceback")
         clua_pop(L, 1)
-        lua_setglobal(L, "debug")
+        clua_rawsetglobal(L, "debug")
 
         // #1126: no finalizers (they would run outside the budget); the collector stays the host's.
         clua_pushcfunction(L, clua_sandbox_setmetatable)
-        lua_setglobal(L, "setmetatable")
+        clua_rawsetglobal(L, "setmetatable")
         clua_pushcfunction(L, clua_sandbox_collectgarbage)
-        lua_setglobal(L, "collectgarbage")
+        clua_rawsetglobal(L, "collectgarbage")
 
         for global in ["dofile", "loadfile"] + (allowLoad ? [] : ["load"]) {
             lua_pushnil(L)
-            lua_setglobal(L, global)
+            clua_rawsetglobal(L, global)
         }
-        lua_getglobal(L, "string")
+        clua_rawgetglobal(L, "string")
         lua_pushnil(L)
         lua_setfield(L, -2, "dump")
         clua_pop(L, 1)
@@ -128,11 +148,15 @@ public final class LuaRuntime {
                 local load0 = load
                 load = function(chunk, name, mode, ...) return load0(chunk, name, "t", ...) end
                 """
-            if luaL_loadstring(L, wrapper) != 0 || clua_pcall(L, 0, 0, 0) != 0 {
+            // Both calls are protected, so the cap applies to them as to any call.
+            let enforced = clua_mem_enforce(L, 1)
+            let failed = luaL_loadstring(L, wrapper) != 0 || clua_pcall(L, 0, 0, 0) != 0
+            clua_mem_enforce(L, enforced)
+            if failed {
                 // Fail closed: only an allocation failure reaches here; no load beats the raw one.
                 clua_pop(L, 1)
                 lua_pushnil(L)
-                lua_setglobal(L, "load")
+                clua_rawsetglobal(L, "load")
             }
         }
     }
@@ -147,7 +171,10 @@ public final class LuaRuntime {
 
     /// Compile a chunk and leave the resulting function on the stack.
     private func load(_ source: String, name: String) throws {
-        let status = luaL_loadstring(L, source)
+        let enforced = clua_mem_enforce(L, 1)
+        let status = luaL_loadstring(L, source)   // protected (lua_load), so it runs under the cap
+        clua_mem_enforce(L, enforced)
+        clua_mem_settle(L)
         if status != 0 {
             throw LuaError.compile(takeError())
         }
@@ -160,7 +187,7 @@ public final class LuaRuntime {
     /// callback can't burn the full default budget on a latency-critical thread.
     @discardableResult
     public func callGlobal(_ name: String, _ args: [String] = [], budget: Int32? = nil) throws -> String? {
-        lua_getglobal(L, name)
+        clua_rawgetglobal(L, name)
         if clua_isfunction(L, -1) == 0 {
             clua_pop(L, 1)
             throw LuaError.notAFunction(name)
@@ -176,8 +203,11 @@ public final class LuaRuntime {
     /// thread of the state and sticky once spent (#1126, clua_shim.c).
     private func pcall(args: Int32, results: Int32, budget: Int32? = nil) throws {
         clua_budget_arm(L, budget ?? maxInstructions)
+        let enforced = clua_mem_enforce(L, 1)
         let status = clua_pcall(L, args, results, 0)
+        clua_mem_enforce(L, enforced)
         let spent = clua_budget_disarm(L) != 0
+        clua_mem_settle(L)
         if status != 0 {
             let message = takeError()
             // A spent budget is reported as such whatever unwound last (coroutine.wrap adds a position).
@@ -212,8 +242,8 @@ public final class LuaRuntime {
         // upvalue 1: the boxed closure; upvalue 2: the owning runtime.
         lua_pushlightuserdata(L, Unmanaged.passUnretained(box).toOpaque())
         lua_pushlightuserdata(L, Unmanaged.passUnretained(self).toOpaque())
-        lua_pushcclosure(L, LuaRuntime.trampoline, 2)
-        lua_setglobal(L, name)
+        clua_pushhostfunction(L, LuaRuntime.trampoline)
+        clua_rawsetglobal(L, name)
     }
 
     /// C entry point shared by every registered host function. Recovers the box

@@ -133,6 +133,16 @@ final class LuaSandboxEscapeTests: XCTestCase {
         try assertRows([("tostring(load)", "nil")], allowLoad: false)
     }
 
+    /// #1127 (R1127-1): when the text-only wrapper cannot be installed, `load` is removed, never left raw. A cap of
+    /// 0 refuses the wrapper's compile, the one capped stretch of the state's setup (a protected call).
+    func testLoadIsRemovedWhenItsWrapperCannotBeInstalled() throws {
+        let lua = try LuaRuntime(allowLoad: true, memoryLimit: 0)
+        XCTAssertThrowsError(try lua.callGlobal("load")) { error in
+            XCTAssertEqual(error as? LuaRuntime.LuaError, .notAFunction("load"))
+        }
+        XCTAssertEqual(try LuaRuntime(allowLoad: true).callGlobal("load", ["return 1"]), nil, "with room, load is installed")
+    }
+
     func testAllowLoadTakesTextChunksOnly() throws {
         func both(_ call: String) -> String {
             "(function() local d = false local f, e = \(call) return tostring(f) .. ' ' .. tostring(e) end)()"
