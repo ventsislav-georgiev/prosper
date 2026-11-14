@@ -103,11 +103,11 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func fallbackImport() -> Int
     // Filesystem reads (open) + path watching (privileged, §Q). A watch fires a named
     // handler with payload { paths }. The host owns the FSEventStream; it is released
-    // on disable/reset.
+    // on disable/reset. `hideSecrets` (#921): drop changes under a `SecretPaths` path.
     func fsExists(_ path: String) -> Bool
     func fsAttributesJSON(_ path: String) -> String
     func fsRead(_ path: String) -> String?
-    func fsWatch(extensionID: String, path: String, handler: String)
+    func fsWatch(extensionID: String, path: String, handler: String, hideSecrets: Bool)
     func fsUnwatch(extensionID: String, path: String)
     // Whether a named macOS privacy grant (manifest `permissions`) is currently
     // held — e.g. "full-disk-access" for the bookmarks extension's Safari source.
@@ -366,7 +366,7 @@ extension ExtensionHostServices {
     func fsExists(_ path: String) -> Bool { false }
     func fsAttributesJSON(_ path: String) -> String { #"{"exists":false}"# }
     func fsRead(_ path: String) -> String? { nil }
-    func fsWatch(extensionID: String, path: String, handler: String) {}
+    func fsWatch(extensionID: String, path: String, handler: String, hideSecrets: Bool) {}
     func fsUnwatch(extensionID: String, path: String) {}
 
     /// Default: no grants (test / minimal hosts). The live host overrides this
@@ -459,6 +459,19 @@ struct ExtensionHost {
             return d >= Double(r.upperBound) ? r.upperBound : d <= Double(r.lowerBound) ? r.lowerBound : Int(d)
         }
         let pidRange = Int(Int32.min)...Int(Int32.max)
+        // #921 (OQ-70): below the system tier a secret path answers exactly like a missing one.
+        // Only the system tier (`privileged`) reads, lists, stats, watches or finds them.
+        let systemTier = privileged
+        // One notice per refused path per VM (as #1048 did for hs.execute): a polling extension
+        // would otherwise log a line on every call. Capped so varied spellings cannot grow it unbounded.
+        var noticed: Set<String> = []
+        func secret(_ path: String, _ call: String) -> Bool {
+            guard !systemTier, SecretPaths.denies(path) else { return false }
+            if noticed.count < SecretPaths.noticeCap, noticed.insert(path).inserted {
+                SecretPaths.logRefusal(extensionID: extID, call: call)
+            }
+            return true
+        }
 
         // --- clipboard ---
         lua.register("__h_clip_read") { rt in
@@ -668,7 +681,7 @@ struct ExtensionHost {
         // owns json_decode). Kept alive past the bootstrap nil-out, like http.
         lua.register("__h_fs_list_dirs") { rt in
             let path = rt.stringArgument(1) ?? ""
-            let dirs = services.listDirectories(path)
+            let dirs = secret(path, "fs.list_dirs") ? [] : services.listDirectories(path)
             let data = (try? JSONSerialization.data(withJSONObject: dirs)) ?? Data("[]".utf8)
             rt.push(String(data: data, encoding: .utf8) ?? "[]")
             return 1
@@ -766,7 +779,7 @@ struct ExtensionHost {
         lua.register("__h_files_search") { rt in
             let opts = rt.stringArgument(1) ?? "{}"
             let out = ExtensionHost.awaitSync(timeout: timeout) { await services.filesSearch(opts) }
-            rt.push(out ?? "[]")
+            rt.push(out.map { systemTier ? $0 : SecretPaths.filterHits($0) } ?? "[]")
             return 1
         }
         // --- files.act (built-in file operation; sync, fire-and-forget) ---
@@ -970,8 +983,14 @@ struct ExtensionHost {
             rt.push(services.urlOpen(rt.stringArgument(1) ?? "", bundleID: rt.stringArgument(2))); return 1
         }
         lua.register("__h_url_default") { rt in rt.push(services.urlDefaultBrowser()); return 1 }
-        lua.register("__h_fs_exists") { rt in rt.push(services.fsExists(rt.stringArgument(1) ?? "")); return 1 }
-        lua.register("__h_fs_attrs") { rt in rt.push(services.fsAttributesJSON(rt.stringArgument(1) ?? "")); return 1 }
+        lua.register("__h_fs_exists") { rt in
+            let p = rt.stringArgument(1) ?? ""
+            rt.push(secret(p, "fs.exists") ? false : services.fsExists(p)); return 1
+        }
+        lua.register("__h_fs_attrs") { rt in
+            let p = rt.stringArgument(1) ?? ""
+            rt.push(secret(p, "fs.attributes") ? #"{"exists":false}"# : services.fsAttributesJSON(p)); return 1
+        }
 
         // --- fallback web-search store (system extensions only; edits the runner) ---
         if privileged {
@@ -1015,16 +1034,22 @@ struct ExtensionHost {
                 rt.push(services.urlSetDefaultBrowser(rt.stringArgument(1) ?? "")); return 1
             }
             lua.register("__h_fs_watch") { rt in
-                services.fsWatch(extensionID: extID, path: rt.stringArgument(1) ?? "",
-                                 handler: rt.stringArgument(2) ?? ""); return 0
+                let p = rt.stringArgument(1) ?? ""
+                if !secret(p, "fs.watch") {
+                    services.fsWatch(extensionID: extID, path: p, handler: rt.stringArgument(2) ?? "",
+                                     hideSecrets: !systemTier)
+                }
+                return 0
             }
             lua.register("__h_fs_unwatch") { rt in
                 services.fsUnwatch(extensionID: extID, path: rt.stringArgument(1) ?? ""); return 0
             }
-            // Read a text file (privileged — arbitrary path). Powers the
-            // hammerspoon-compat shim loading the user's ~/.hammerspoon/init.lua.
+            // Read a text file (automation tier — any path but a `SecretPaths` one, which
+            // only the system tier reads). Powers the hammerspoon-compat shim loading the
+            // user's ~/.hammerspoon/init.lua.
             lua.register("__h_fs_read") { rt in
-                if let s = services.fsRead(rt.stringArgument(1) ?? "") { rt.push(s) } else { rt.pushNil() }
+                let p = rt.stringArgument(1) ?? ""
+                if !secret(p, "fs.read"), let s = services.fsRead(p) { rt.push(s) } else { rt.pushNil() }
                 return 1
             }
             lua.register("__h_menus_list") { rt in rt.push(services.menusList()); return 1 }
@@ -1665,7 +1690,7 @@ struct ExtensionHost {
     -- wired above).
     host.fs.exists     = function(p) return raw_fs_exists(p or "") end
     host.fs.attributes = function(p) return json_decode(raw_fs_attrs(p or "")) or {} end
-    host.fs.read       = function(p) return raw_fs_read(p or "") end   -- string | nil (privileged)
+    host.fs.read       = function(p) return raw_fs_read(p or "") end   -- string | nil (automation; secret paths system-only)
     host.fs.watch      = function(p, handler) raw_fs_watch(p or "", handler or "") end
     host.fs.unwatch    = function(p) raw_fs_unwatch(p or "") end
     __h_fs_exists = nil; __h_fs_attrs = nil; __h_fs_read = nil; __h_fs_watch = nil; __h_fs_unwatch = nil

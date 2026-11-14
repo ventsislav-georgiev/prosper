@@ -142,7 +142,7 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
     var unwatches: [String] = []
     func fsExists(_ path: String) -> Bool { existsPaths.contains(path) }
     func fsAttributesJSON(_ path: String) -> String { #"{"exists":true,"isDir":true,"size":0,"mtime":1700000000}"# }
-    func fsWatch(extensionID: String, path: String, handler: String) { watches.append((path, handler)) }
+    func fsWatch(extensionID: String, path: String, handler: String, hideSecrets: Bool) { watches.append((path, handler)) }
     func fsUnwatch(extensionID: String, path: String) { unwatches.append(path) }
 
     let lock = NSLock()

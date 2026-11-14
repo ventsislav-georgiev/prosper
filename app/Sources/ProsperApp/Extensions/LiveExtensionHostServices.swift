@@ -1067,8 +1067,10 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     func fsExists(_ path: String) -> Bool { FSReads.exists(path) }
     func fsAttributesJSON(_ path: String) -> String { FSReads.attributesJSON(path) }
     func fsRead(_ path: String) -> String? { FSReads.read(path) }
-    func fsWatch(extensionID: String, path: String, handler: String) {
-        Task { @MainActor in ExtensionFSWatch.shared.watch(extensionID: extensionID, path: path, handler: handler) }
+    func fsWatch(extensionID: String, path: String, handler: String, hideSecrets: Bool) {
+        Task { @MainActor in
+            ExtensionFSWatch.shared.watch(extensionID: extensionID, path: path, handler: handler, hideSecrets: hideSecrets)
+        }
     }
     func fsUnwatch(extensionID: String, path: String) {
         Task { @MainActor in ExtensionFSWatch.shared.unwatch(extensionID: extensionID, path: path) }

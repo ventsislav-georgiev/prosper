@@ -68,7 +68,7 @@ private final class FallbackAwareFakeServices: ExtensionHostServices, @unchecked
     func urlSetDefaultBrowser(_ bundleID: String) -> Bool { false }
     func fsExists(_ path: String) -> Bool { false }
     func fsAttributesJSON(_ path: String) -> String { "{}" }
-    func fsWatch(extensionID: String, path: String, handler: String) {}
+    func fsWatch(extensionID: String, path: String, handler: String, hideSecrets: Bool) {}
     func fsUnwatch(extensionID: String, path: String) {}
 }
 

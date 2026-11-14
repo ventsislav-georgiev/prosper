@@ -881,6 +881,13 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer: Markdown files with a long line of spaces or tabs are no longer shown as source with
   "Nested too deeply"; a list line that opens two items ("1. - x") shows both markers; a table wider
   than 64 columns says why it is shown as plain rows. (#1163)
+- Extensions: an extension that is trusted but not given System Access can no longer read, list,
+  check, watch or search your SSH keys (~/.ssh), keychains (~/Library/Keychains), ~/.ccpool,
+  ~/.config/mcpbridge, ~/.claude/settings.json, Prosper's own key files, and other common credential
+  files (AWS, GnuPG, .netrc, Git, npm, GitHub CLI, gcloud, Kubernetes, Docker, Claude); to it they
+  look like files that do not exist. The extensions guide lists every path. Bundled system
+  extensions and extensions you grant System Access are unchanged, and the guide now says correctly
+  that host.fs.read is available to trusted extensions. (#921)
 
 ## v2.174.0
 

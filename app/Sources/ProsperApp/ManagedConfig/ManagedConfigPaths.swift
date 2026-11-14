@@ -108,8 +108,8 @@ enum ManagedConfigPaths {
         guard logical.standardizedFileURL.path.hasPrefix(baseStd + "/") else { return .failure(.outsideRoot) }
 
         // Check 3: real directories stay under the real root; a symlinked file must be ours.
-        let realBase = existingPrefixResolved(base)
-        let parentReal = existingPrefixResolved(logical.deletingLastPathComponent())
+        let realBase = FilePaths.existingPrefixResolved(base)
+        let parentReal = FilePaths.existingPrefixResolved(logical.deletingLastPathComponent())
         guard parentReal.path == realBase.path || parentReal.path.hasPrefix(realBase.path + "/") else { return .failure(.outsideRoot) }
         var file = logical
         var st = stat()
@@ -162,19 +162,6 @@ enum ManagedConfigPaths {
               let data = FileManager.default.contents(atPath: dir.appendingPathComponent(kitMarkerFile).path),
               String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == owner else { return .foreign }
         return .ours
-    }
-
-    /// Resolves symlinks in the longest existing prefix of `url` and re-appends the rest.
-    static func existingPrefixResolved(_ url: URL) -> URL {
-        var head = url.standardizedFileURL
-        var tail: [String] = []
-        while !FileManager.default.fileExists(atPath: head.path), head.path != "/" {
-            tail.insert(head.lastPathComponent, at: 0)
-            head = head.deletingLastPathComponent()
-        }
-        var out = head.resolvingSymlinksInPath()
-        for t in tail { out.appendPathComponent(t) }
-        return out
     }
 }
 
