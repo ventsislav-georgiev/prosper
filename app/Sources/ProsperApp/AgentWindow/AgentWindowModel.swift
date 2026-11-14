@@ -610,7 +610,10 @@ final class AgentWindowModel: ObservableObject {
     private func stampLastLive(_ sessions: [AgentSession]) {
         guard visible, !closed else { return }
         // B1 step 2 (R899-3): every shown pane, from frames (the split gate off: the focused pane alone, 15.0).
-        lastLive = AgentPaneLayout.stamp(lastLive, layout: layout.id, panes: layout.panes, visible: shownPanes,
+        // #900 N900-d: with the gate on, every pane of the active layout (zoomed away and too-small hidden ones keep a
+        // runtime, so a stale sight would bind them to an earlier instance's record).
+        let stamped = AgentPaneLayout.splitsEnabled ? Set(layout.order) : shownPanes
+        lastLive = AgentPaneLayout.stamp(lastLive, layout: layout.id, panes: layout.panes, visible: stamped,
                                          sessions: sessions, at: now())
     }
 
@@ -739,7 +742,9 @@ final class AgentWindowModel: ObservableObject {
         let was = r.content
         let c = store == nil ? nil : resolvedContent(of: r.pane, t)
         if case .live(let s)? = c { r.liveRow = row(.live(s.key)) }
-        if case .notRunning? = c, case .live? = was, r.ended == nil, visible, r.transcript.running,
+        // #900 N900-e (4.4): a suspended pane (zoomed away, too-small hidden: gate on only) keeps its blocks: Ended too.
+        if case .notRunning? = c, case .live? = was, r.ended == nil, visible,
+           r.transcript.running || r.transcript.suspended,
            let t, let kept = r.liveRow, kept.id == Self.rowID(t) {
             r.ended = (t, kept)
         } else if let e = r.ended {
