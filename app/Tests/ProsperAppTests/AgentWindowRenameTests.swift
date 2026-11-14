@@ -674,31 +674,9 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(AgentSessionMenuButton.help(a), "Open in terminal, rename, restart, stop or kill this session")
     }
 
-    /// QA #693 INFO-5 (#2): while the field lies over it, the title and the state chip are hidden from
-    /// VoiceOver (it reads the field, not a stale title under it). A never-shown window builds no
-    /// accessibility tree, so this reads the view value: titleSlot's visibility entry, hidden (4) only while
-    /// renaming. shortcut: reads SwiftUI's reflected AccessibilityVisibility; a SwiftUI that renames it fails
-    /// here first, then an AX read in a shown window is the check.
-    @MainActor
-    func testAgentWindowRenameHidesTheTitleUnderTheFieldFromVoiceOver() throws {
-        let a = session("a", .idle, alias: "Alpha Title")
-        let st = store([a])
-        st.controlDch = bin([1, 38, 0])
-        let m = windowModel(st)
-        m.setVisible(true)
-        defer { m.close() }
-        m.select(.live(a.key))
-        let row = try XCTUnwrap(m.selectedRow)
-        func visibility(_ rename: AgentRenameEdit?) -> String? {
-            var out = ""
-            dump(AgentSessionHeader(row: row, session: a, cwd: nil, open: {}, store: st, rename: rename).titleSlot, to: &out, maxDepth: 12)
-            guard let key = out.range(of: "VisibilityKey"), let raw = out.range(of: "rawValue: ", range: key.upperBound..<out.endIndex)
-            else { return nil }
-            return String(out[raw.upperBound...].prefix { $0.isNumber })
-        }
-        XCTAssertEqual(visibility(AgentRenameEdit(key: a.key, text: "Alpha Title")), "4", "renaming: hidden")
-        XCTAssertEqual(visibility(nil), "0", "not renaming: the title reads")
-    }
+    // QA #693 INFO-5 (#2): the title, the chip and the path out of the tree under the Rename field is read from the real
+    // tree by testRenameHidesTheTitleChipAndPathUnderTheFieldInTheTree (AgentWindowHeaderTests.swift). #1120 removed the
+    // view-value row that stood here: it reflected titleSlot for an accessibilityHidden the slot no longer carries.
 
     /// QA #693 INFO-5 (#3): the header passes `ended` to its Open in terminal, which #1103 moved into the "⋯": an
     /// ended session's "⋯" is off and its one item, Open in terminal, is off too (the other call sites have their own checks).

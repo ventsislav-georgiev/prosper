@@ -372,16 +372,19 @@ extension AgentWindowD1Tests {
             let labels = width(AgentVerbosityPicker(level: .constant(.default), style: .labels))
             let icons = width(AgentVerbosityPicker(level: .constant(.default), style: .icons))
             let menu = width(AgentVerbosityPicker(level: .constant(.default), style: .menu))
-            let open = width(OpenInTerminalButton(action: {})), compact = width(OpenInTerminalButton(action: {}, compact: true))
+            // #1120 (QA 845 INFO-5): the line's controls since #1103: the picker, the mode switch and the "⋯" (sz(18)).
+            let toggle = width(AgentPaneModeToggle(mode: .terminal, style: .icons, set: { _ in }))
+            let toggleMenu = width(AgentPaneModeToggle(mode: .terminal, style: .menu, set: { _ in }))
             let chip = width(AgentStateChip(state: .working)), todo = width(AgentTodosChip(todos: todos, open: .constant(false)))
             for w: CGFloat in [640, 800, 1000] {
                 let room = w * scale - sz(290) - 1
-                // Padding, the state chip, a readable title (60 pt), the picker, the icon button
-                // and room for #822's Terminal view pill (an icon pill like the button): the menu
-                // variant fits at every width, the icon variant from 800 × scale up.
-                let narrow = sz(32) + chip + sz(60) + icons + compact * 2 + sz(8) * 5
-                XCTAssertLessThanOrEqual(narrow - icons + menu, room, "the menu variant fits with room for #822 at \(scale) × \(w)")
-                if w >= 800 { XCTAssertLessThanOrEqual(narrow, room, "the icon variant fits with room for #822 at \(scale) × \(w)") }
+                // Padding, a readable title (60 pt), the state chip, the slot's Spacer, the picker, the mode switch and
+                // the "⋯", each after a sz(8) spacing: the menu variant fits at every width, the icon variant from
+                // 800 × scale up.
+                let narrow = sz(32) + sz(60) + chip + sz(8) + icons + toggle + sz(18) + sz(8) * 5
+                let narrowMenu = narrow - icons - toggle + menu + toggleMenu
+                XCTAssertLessThanOrEqual(narrowMenu, room, "the menu variant fits with the mode switch at \(scale) × \(w)")
+                if w >= 800 { XCTAssertLessThanOrEqual(narrow, room, "the icon variant fits with the mode switch at \(scale) × \(w)") }
                 for level in AgentVerbosity.allCases {
                   for open in [false, true] {
                     let h = AgentSessionHeader(row: row, session: s, cwd: "/Users/user/project/app/Sources", open: {},
@@ -400,9 +403,9 @@ extension AgentWindowD1Tests {
                                    0, "header \(level) open \(open) at \(scale) × \(w)")
                   }
                 }
-                audit.append(String(format: "scale %.2f width %4.0f room %6.1f | labels %5.1f icons %5.1f menu %4.1f | open %5.1f "
-                                    + "compact %4.1f chip %4.1f todos %4.1f | need: icon variant %6.1f, menu variant %6.1f", scale, w * scale, room,
-                                    labels, icons, menu, open, compact, chip, todo, narrow, narrow - icons + menu))
+                audit.append(String(format: "scale %.2f width %4.0f room %6.1f | labels %5.1f icons %5.1f menu %4.1f | switch %5.1f "
+                                    + "switch menu %4.1f chip %4.1f todos %4.1f | need: icon variant %6.1f, menu variant %6.1f", scale, w * scale,
+                                    room, labels, icons, menu, toggle, toggleMenu, chip, todo, narrow, narrowMenu))
             }
             XCTAssertLessThan(icons, labels)
             XCTAssertLessThan(menu, icons)

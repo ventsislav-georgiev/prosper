@@ -790,6 +790,8 @@ tag from the now-released section and put it on the new top draft.
   them stops with an "execution budget exceeded" error instead of keeping Prosper busy. (#1166)
 - Ordinary extension work with these functions (formatting, parsing numbers, walking UTF-8 text,
   packing data) runs as before. (#1166)
+- Agent Sessions window: in Terminal mode, VoiceOver no longer reads the folder icon on the
+  session's title line as an image named "Move". (#1120)
 
 ## v2.174.0
 

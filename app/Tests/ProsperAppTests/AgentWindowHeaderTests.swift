@@ -18,6 +18,10 @@ extension AgentWindowD1Tests {
         let frame: CGRect
         /// Ignored by AppKit (NSAccessibility.unignoredChildren drops it): an AX client never sees it.
         var ignored = false
+        /// AXEnabled as served to an AX client (true where the node reports none). #1120: the drawn state of a control.
+        var enabled = true
+        /// #1120: where `enabled` came from (the node's class, the legacy attribute, isAccessibilityEnabled).
+        var enabledFacts = ""
         /// What an AX client is shown, by any of its names (not an ignored node).
         func reads(_ n: String) -> Bool { !ignored && names.contains { $0.caseInsensitiveCompare(n) == .orderedSame } }
         var names: [String] { [label, title, value].filter { !$0.isEmpty } }
@@ -38,8 +42,14 @@ extension AgentWindowD1Tests {
         // #1103 F4: AppKit's own verdict, the one served to an AX client: an ignored node is replaced by its
         // unignored descendants (the raw children below still list it).
         let ignored = !NSAccessibility.unignoredChildren(from: [o]).contains { ($0 as AnyObject) === o }
+        // #1120: AXEnabled by both routes AppKit serves it: the legacy attribute (an NSView's) and isAccessibilityEnabled
+        // (an accessibility element's; KVC finds it under the key "accessibilityEnabled"). Off when either says off.
+        let legacy = (o.accessibilityAttributeValue(.enabled) as? NSNumber)?.boolValue
+        let modern = o.responds(to: Selector(("isAccessibilityEnabled"))) ? (o.value(forKey: "accessibilityEnabled") as? NSNumber)?.boolValue : nil
         out.append(HeaderAX(role: text("accessibilityRole"), label: text("accessibilityLabel"), title: text("accessibilityTitle"),
-                            value: text("accessibilityValue"), help: text("accessibilityHelp"), frame: frame, ignored: ignored))
+                            value: text("accessibilityValue"), help: text("accessibilityHelp"), frame: frame, ignored: ignored,
+                            enabled: legacy != false && modern != false,
+                            enabledFacts: "\(type(of: o)) legacy \(legacy.map { "\($0)" } ?? "nil") modern \(modern.map { "\($0)" } ?? "nil")"))
         for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { headerAXWalk(k, &out, depth: depth + 1) }
     }
 
@@ -60,6 +70,29 @@ extension AgentWindowD1Tests {
         ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { headerViews($0, t) }
     }
 
+    /// #1120: turns the app's AX attributes on (an AX client's write: a never-shown window then builds its tree) and
+    /// returns what puts them back as found: AXEnhancedUserInterface to the value NSApplication read back before,
+    /// AXManualAccessibility (NSApplication reads back nothing for it) to false, its only knowable value. Main actor.
+    @MainActor
+    private func headerAXOn() -> @MainActor () -> Void {
+        let app = NSApplication.shared, set = Selector(("accessibilitySetValue:forAttribute:"))
+        let get = Selector(("accessibilityAttributeValue:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
+        XCTAssertTrue(app.responds(to: set))
+        let prior = app.responds(to: get)
+            ? (app.perform(get, with: attrs[0])?.takeUnretainedValue() as? NSNumber)?.boolValue ?? false : false
+        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
+        return {
+            app.perform(set, with: NSNumber(value: prior), with: attrs[0])
+            app.perform(set, with: NSNumber(value: false), with: attrs[1])
+        }
+    }
+
+    /// #1120: an image an AX client is shown on the switch's line, left of it (the title line's decoration).
+    @MainActor
+    private func imagesLeft(of t: CGRect, _ tree: [HeaderAX]) -> [HeaderAX] {
+        tree.filter { $0.role == "AXImage" && !$0.ignored && $0.frame.maxX <= t.minX + 0.5 && abs($0.frame.midY - t.midY) < sz(8) }
+    }
+
     static let pickerLabels: Set<String> = ["Focused view", "Default view", "Verbose view"]
 
     /// The real accessibility tree of a never-shown window (#887's technique; both attributes are put back after), at
@@ -69,10 +102,6 @@ extension AgentWindowD1Tests {
     /// the picker's room (no gap kept for it).
     @MainActor
     func testAccessibilityTreeReadsTheHeaderAndHidesThePickerInTerminalMode() throws {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         ThemeRuntime.scale = 1.0
@@ -84,7 +113,8 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
         var tiers: Set<String> = [], gapChecked = 0
         let pathIdeal = NSHostingView(rootView: Text(Self.headerPath).font(Neon.font(11, design: .monospaced))).fittingSize.width
         for width: CGFloat in [300, 360, 420, 480, 560, 700, 900] {
@@ -123,9 +153,10 @@ extension AgentWindowD1Tests {
                 let t = toggle.reduce(CGRect.null) { $0.union($1.frame) }
                 toggleAt.append(t)
                 menuAt.append(menu.first?.frame ?? .null)
-                // #1103 F4: the Transcript line only; Terminal's title line still reads the icon as "Move" (left open, own entry).
-                if mode == .transcript {
-                    XCTAssertFalse(tree.contains { $0.reads("Move") }, "the folder icon is decoration (\(tag)): \(tree.filter { $0.named("Move") })")
+                // #1103 F4, #1120: the folder icon is decoration in both modes (AppKit names the symbol "Move").
+                XCTAssertFalse(tree.contains { $0.reads("Move") }, "the folder icon is decoration (\(tag)): \(tree.filter { $0.named("Move") })")
+                if mode == .terminal {
+                    XCTAssertEqual(imagesLeft(of: t, tree).count, 0, "no image read left of the switch (\(tag)): \(imagesLeft(of: t, tree))")
                 }
                 // F1: Terminal mode drops the folder where the line cannot hold its floors (the narrow widths here).
                 let found = tree.first { $0.named(Self.headerPath) }
@@ -178,10 +209,6 @@ extension AgentWindowD1Tests {
     /// Whether the folder shows at each width is written out, not derived from the code under test.
     @MainActor
     func testTerminalHeaderKeepsAReadablePathOrDropsTheFolder() throws {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         ThemeRuntime.scale = 1.0
@@ -194,7 +221,8 @@ extension AgentWindowD1Tests {
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
         XCTAssertEqual(row.title, Self.headerTitle)
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
         let short = "/srv/api"
         func ideal(_ p: String) -> CGFloat {
             NSHostingView(rootView: Text(p).font(Neon.font(11, design: .monospaced))).fittingSize.width
@@ -222,6 +250,8 @@ extension AgentWindowD1Tests {
                 let p = tree.first { $0.named(path) }?.frame
                 log.append("\(tag): title \(title.width) path \(p.map { "\($0.width)" } ?? "none") switch \(t.minX)")
                 XCTAssertEqual(p != nil, shown, "the folder drawn (\(tag))")
+                // #1120: the icon is out of the tree (it read "Move" while the slot carried hidden(false)).
+                XCTAssertEqual(imagesLeft(of: t, tree).count, 0, "no unignored AXImage left of the switch (\(tag)): \(imagesLeft(of: t, tree))")
                 if let p {
                     XCTAssertEqual(p.midY, t.midY, accuracy: 2, "on the switch's line (\(tag))")
                     if full < sz(110) {
@@ -462,5 +492,208 @@ extension AgentWindowD1Tests {
         let plain = try render(AgentNoticeLine(store: st, key: a.key, open: {}), size: size, dark: true)
         let plainNone = try render(AgentNoticeLine(store: st, key: a.key), size: size, dark: true)
         XCTAssertEqual(differing(plain, plainNone, x: all, y: rows), 0, "no button beside a line that names none")
+    }
+
+    // MARK: #1120
+
+    /// QA 845 INFO-2: Terminal mode, a long title and a long path at three widths: the path gives way first, down to its
+    /// floor, and the title (what names the session) takes the rest. Fails if the order flips (the path above its floor
+    /// while the title is cut). Real accessibility frames of a never-shown window.
+    @MainActor
+    func testTerminalHeaderPathGivesWayBeforeTheTitle() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1.0
+        let a = session("prosper-ios", .working, ago: 40, alias: Self.headerTitle)
+        let st = store([a])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(a.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
+        let titleIdeal = NSHostingView(rootView: Text(Self.headerTitle).font(Neon.font(15, weight: .semibold))).fittingSize.width
+        var log: [String] = []
+        for width: CGFloat in [480, 700, 900] {
+            let header = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st, mode: .terminal,
+                                            setMode: { _ in })
+            let (win, tree) = headerAXTree(header, CGSize(width: width, height: 80)) { $0.named("Session actions") }
+            defer { win.close() }
+            let title = try XCTUnwrap(tree.first { $0.named(Self.headerTitle) }, "the title (\(width))").frame
+            let path = try XCTUnwrap(tree.first { $0.named(Self.headerPath) }, "the path (\(width))").frame
+            log.append("\(width): title \(title.width) of \(titleIdeal), path \(path.width)")
+            XCTAssertLessThan(title.width, titleIdeal - 1, "the line cannot hold both whole (\(width))")
+            // The path at its floor: a middle cut lands on a glyph (up to one 11 pt monospaced glyph under it), and the
+            // title's tail cut leaves under one 15 pt glyph that the path takes (ticket 1: 116 at 700). Flipped, the path
+            // takes the line (its ideal is over sz(300)).
+            XCTAssertLessThanOrEqual(path.width, AgentSessionHeader.pathFloor + sz(10), "the path gives way first (\(width))")
+            XCTAssertGreaterThanOrEqual(path.width, AgentSessionHeader.pathFloor - sz(7), "down to its floor (\(width))")
+            if width > 480 {
+                XCTAssertGreaterThan(title.width, AgentSessionHeader.titleFloor + sz(40), "the title takes the rest (\(width))")
+            }
+            XCTAssertFalse(win.isVisible, "never on screen")
+        }
+        print("#1120 give-way\n" + log.joined(separator: "\n"))
+    }
+
+    /// #1120 (QA #693 INFO-5): while the Rename field lies over the slot, the title, the state chip and (Terminal mode)
+    /// the folder's path and extras are out of the tree under it (the slot's opacity 0 drops them); the field is read.
+    /// Transcript mode's second line is not under the field and stays read. Not renaming, all of them are read. Real
+    /// tree, never-shown window.
+    @MainActor
+    func testRenameHidesTheTitleChipAndPathUnderTheFieldInTheTree() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1.0
+        let a = session("prosper-ios", .working, ago: 40, alias: "api title", agents: 3)
+        let st = store([a])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(a.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
+        let path = "/srv/api"
+        for mode in [AgentPaneMode.terminal, .transcript] {
+            for renaming in [false, true] {
+                let edit = renaming ? AgentRenameEdit(key: a.key, text: "api-qa") : nil
+                let header = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, store: st, rename: edit, mode: mode,
+                                                setMode: { _ in })
+                let (win, tree) = headerAXTree(header, CGSize(width: 900, height: 80)) { e in
+                    renaming ? e.role == "AXTextField" : e.named("Session actions")
+                }
+                defer { win.close() }
+                let tag = "\(mode) renaming \(renaming)"
+                let toggle = tree.filter { $0.named("Terminal") || $0.named("Transcript") }
+                let t = toggle.reduce(CGRect.null) { $0.union($1.frame) }
+                XCTAssertFalse(toggle.isEmpty, "the switch (\(tag))")
+                // The slot: left of the line's first control (Transcript mode: the picker; ticket 1 read its three buttons).
+                let controls = tree.filter { e in e.named("Terminal") || e.named("Transcript") || Self.pickerLabels.contains { e.named($0) } }
+                let edge = controls.map(\.frame.minX).min() ?? t.minX
+                let line = tree.filter { !$0.ignored && !$0.names.isEmpty && $0.frame.width > 0
+                    && $0.frame.maxX <= edge + 0.5 && abs($0.frame.midY - t.midY) < sz(8) }
+                let field = line.filter { $0.role == "AXTextField" }
+                print("#1120 rename tree \(tag): " + line.map { "\($0.role) \($0.names)" }.joined(separator: ", "))
+                XCTAssertEqual(field.count, renaming ? 1 : 0, "the field is read while renaming (\(tag))")
+                for n in ["api title", "Working"] {
+                    XCTAssertEqual(line.contains { $0.role != "AXTextField" && $0.reads(n) }, !renaming, "\(n) (\(tag))")
+                }
+                if renaming {
+                    XCTAssertEqual(line.filter { $0.role != "AXTextField" }.map(\.names), [], "nothing but the field under it (\(tag))")
+                }
+                let pathRead = tree.contains { $0.reads(path) }
+                if mode == .terminal {
+                    XCTAssertEqual(pathRead, !renaming, "Terminal: the path is on the title line (\(tag))")
+                    if !renaming {
+                        XCTAssertTrue(line.contains { $0.reads(path) }, "and on the switch's line (\(tag))")
+                    }
+                } else {
+                    XCTAssertTrue(pathRead, "Transcript: the folder line is not under the field (\(tag))")
+                }
+                XCTAssertFalse(win.isVisible, "never on screen")
+            }
+        }
+    }
+
+    /// QA 845 INFO-1, guard 1 (AgentWindowControls.swift, AgentSessionMenuButton's `.disabled(ended)`): an ended
+    /// session's "⋯" is off as an AX client reads it (AXEnabled), a live one's on.
+    @MainActor
+    func testEndedHeaderMenuIsOffInTheAccessibilityTree() throws {
+        let a = session("api", .idle)
+        let st = store([a])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(a.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
+        for ended in [false, true] {
+            let header = AgentSessionHeader(row: row, session: a, cwd: "/srv/api", open: {}, store: st, ended: ended, mode: .terminal,
+                                            setMode: { _ in })
+            let (win, tree) = headerAXTree(header, CGSize(width: 700, height: 80)) { $0.named("Session actions") }
+            defer { win.close() }
+            let menu = tree.filter { $0.named("Session actions") }
+            print("#1120 AXEnabled \"⋯\" ended \(ended): \(menu.map(\.enabledFacts))")
+            XCTAssertEqual(menu.count, 1, "one \"⋯\" (ended \(ended))")
+            XCTAssertEqual(menu.first?.enabled, !ended, "the \"⋯\" is \(ended ? "off" : "on") (ended \(ended))")
+            XCTAssertFalse(win.isVisible, "never on screen")
+        }
+    }
+
+    /// QA 845 INFO-1, guard 2 (AgentMenuEntries' `.disabled(!enabled)` on Open in terminal): the items the "⋯" builds,
+    /// drawn as buttons outside a menu (no menu is opened): an ended session's Open in terminal is off, a live one's on.
+    @MainActor
+    func testEndedMenuOpenItemIsOffInTheAccessibilityTree() throws {
+        let a = session("api", .idle)
+        let st = store([a])
+        st.controlDch = bin([1, 38, 0])
+        let m = windowModel(st)
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(a.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
+        for ended in [false, true] {
+            let entries = AgentSessionHeader(row: row, session: a, cwd: nil, open: {}, store: st, ended: ended).menuButton.entries
+            XCTAssertEqual(entries.first, .open(enabled: !ended))
+            let items = VStack(alignment: .leading) { AgentMenuEntries(entries: entries, act: { _ in }, open: {}) }
+            let (win, tree) = headerAXTree(items, CGSize(width: 300, height: 260)) { $0.named(AgentWindowControls.openLabel) }
+            defer { win.close() }
+            let open = tree.filter { $0.role == "AXButton" && $0.named(AgentWindowControls.openLabel) }
+            print("#1120 AXEnabled menu item ended \(ended): \(open.map(\.enabledFacts))")
+            XCTAssertEqual(open.count, 1, "Open in terminal (ended \(ended))")
+            XCTAssertEqual(open.first?.enabled, !ended, "Open in terminal is \(ended ? "off" : "on") (ended \(ended))")
+            XCTAssertFalse(win.isVisible, "never on screen")
+        }
+    }
+
+    /// QA 845 INFO-1, guard 3 (AgentDetailView.overTop passes `ended: model.selectionIsHeld` to the notice line): a
+    /// held (ended) session's notice that names Open in terminal draws its button off; a live session's on. The pane's
+    /// own overTop, hosted alone; the Stop is a recorder (nothing reaches dch).
+    @MainActor
+    func testHeldPaneNoticeOpenButtonIsOffInTheAccessibilityTree() throws {
+        try withModePref {
+            let st = store([session("a", .idle), session("b", .idle)])
+            st.controlDch = bin([1, 38, 0])
+            let held = windowModel(st)
+            Calls().wire(held)
+            held.setVisible(true)
+            defer { held.close() }
+            let a = try XCTUnwrap(st.sessions.first { $0.name == "a" })
+            held.ask(.stop, a)
+            held.confirm(true)
+            st.sessions = [session("b", .idle)]
+            XCTAssertTrue(held.selectionIsHeld)
+            let liveStore = store([session("a", .idle), session("b", .idle)])
+            liveStore.controlDch = bin([1, 38, 0])
+            let live = windowModel(liveStore)
+            Calls().wire(live)
+            live.setVisible(true)
+            defer { live.close() }
+            live.select(.live(a.key))
+            XCTAssertFalse(live.selectionIsHeld)
+            let restoreAX = headerAXOn()
+            defer { restoreAX() }
+            for (m, s, ended) in [(live, liveStore, false), (held, st, true)] {
+                s.notices[a.key] = nil
+                s.actions[a.key] = AgentWindowText.promptShown
+                let row = try XCTUnwrap(m.selectedRow), sel = try XCTUnwrap(row.session)
+                let top = AgentDetailView(model: m, transcript: m.transcript, scrolls: false).overTop(row, sel)
+                let (win, tree) = headerAXTree(top, CGSize(width: 700, height: 80)) { $0.named(AgentWindowControls.openLabel) }
+                defer { win.close() }
+                let open = tree.filter { $0.role == "AXButton" && $0.named(AgentWindowControls.openLabel) }
+                print("#1120 AXEnabled notice ended \(ended): \(open.map(\.enabledFacts))")
+                XCTAssertEqual(open.count, 1, "the notice's Open in terminal (ended \(ended))")
+                XCTAssertEqual(open.first?.enabled, !ended, "it is \(ended ? "off" : "on") (ended \(ended))")
+                XCTAssertFalse(win.isVisible, "never on screen")
+            }
+        }
     }
 }

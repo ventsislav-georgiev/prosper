@@ -8,6 +8,8 @@ extension AgentWindowD1Tests {
     /// Offscreen PNGs for the operator, skipped unless PROSPER_HEADER_PNG_DIR is set: the header in both modes with a
     /// long title and a long path at 0.7, 0.85 and 1.0, light and dark, on the window's backdrop, and the whole window
     /// in both modes at 1.0. PROSPER_HEADER_PHASE (before/after) prefixes the names. The heights print as numbers.
+    /// #1120 (QA 845 INFO-6): unset, it skips before it builds anything and writes nothing anywhere. Set, it writes its
+    /// PNGs into that directory and never removes them: the directory is the caller's, and so is cleaning it.
     @MainActor
     func testAgentSessionHeaderReviewPictures() throws {
         guard let dir = ProcessInfo.processInfo.environment["PROSPER_HEADER_PNG_DIR"].map({ URL(fileURLWithPath: $0) }) else {

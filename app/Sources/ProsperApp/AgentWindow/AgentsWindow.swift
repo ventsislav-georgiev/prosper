@@ -297,7 +297,7 @@ final class AgentsNSWindow: NSWindow {
         // #845 right: into the session; a folded selection's section (or none selected) unfolds first.
         case 124 where model.selection != nil && !model.selectionFolded: model.focusSelection()
         case 124: model.collapseSelected(false)
-        // Return, keypad Enter: #822/#845 into the terminal or the input box (Ghostty is the header's button).
+        // Return, keypad Enter: #822/#845 into the terminal or the input box (Ghostty is the "⋯" menu's first item).
         // A History row, an ended session's row: nothing takes input, so it passes on.
         case 36, 76: return model.focusSelection()
         default: return false
@@ -804,7 +804,7 @@ struct AgentSessionHeader: View {
     var ask: (AgentWindowVerb) -> Void = { _ in }
     /// QA #668 F1: the session ended (a held row): the "⋯" (Open in terminal's home since #1103) is off, in its slot.
     var ended = false
-    /// The "⋯" menu's store: none for an ended session, so it offers nothing and is disabled.
+    /// The "⋯" menu's store: none for an ended session, so it offers only Open in terminal, off, and is disabled.
     var menuStore: AgentIslandStore? { ended ? nil : store }
     /// QA #668 INFO-4: the state chip reads "Ended" for an ended session, in the same slot.
     var stateChip: AgentStateChip { AgentStateChip(state: session.state, ended: ended) }
@@ -888,14 +888,14 @@ struct AgentSessionHeader: View {
     }
 
     /// The title, the state chip, in Terminal mode the folder, and the room after them: one slot. G4: while renaming,
-    /// the field lies over the whole slot and its parts only go transparent, so nothing moves. The title cuts at its
-    /// tail and gives way first, down to its floor; the path cuts in the middle and keeps its own floor.
+    /// the field lies over the whole slot and its parts only go transparent, so nothing moves. The path gives way first,
+    /// down to its floor (it cuts in the middle); the title, which names the session, takes the rest and cuts at its tail.
     var titleSlot: some View {
-        // #1103 F4, left open: accessibilityHidden(false) here overrides the folder icon's own hidden in Terminal mode
-        // (its AX tree still reads "Move"); a conditional hidden fixed the tree but rebuilt the parts and broke Rename.
+        // #1120: no accessibilityHidden here or on its parts: hidden(false) on the slot overrode the folder icon's own
+        // hidden in Terminal mode (read "Move"). While renaming, the opacity 0 leaves the parts out of the tree (SwiftUI
+        // drops a fully transparent view; testRenameHidesTheTitleChipAndPathUnderTheFieldInTheTree reads it).
         Group { slotParts }
         .opacity(renaming ? 0 : 1)
-        .accessibilityHidden(renaming)
         .overlay(alignment: .leading) {
             if let rename {
                 AgentRenameField(name: session.name, edit: rename, end: endRename)
@@ -922,8 +922,9 @@ struct AgentSessionHeader: View {
     static var pathFloor: CGFloat { sz(110) }
     static var titleFloor: CGFloat { sz(80) }
 
-    /// With the folder the title gives way first, down to its floor (each floor counts as the part's ideal width, so
-    /// ViewThatFits takes this line exactly when the floors fit).
+    /// With the folder the path gives way first, down to its floor: the title's priority 1 leaves the folder only its
+    /// floor before the title shrinks below its ideal (#1120). Each floor counts as the part's ideal width, so
+    /// ViewThatFits takes this line exactly when the floors fit.
     func slotLine(folder withFolder: Bool) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
             let title = Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
