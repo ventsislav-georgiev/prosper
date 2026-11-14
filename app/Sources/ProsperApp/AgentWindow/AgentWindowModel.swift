@@ -249,11 +249,19 @@ final class AgentWindowModel: ObservableObject {
     /// object across a row change in that pane (rewrite 11, restated per pane runtime); another pane's is another.
     var transcript: AgentTranscriptModel { focusedRuntime?.transcript ?? detachedTranscript }
     /// The shown panes (11.1) from frames in `paneArea`: with the split gate off, the focused pane alone (15.0).
-    var shownPanes: Set<UUID> { Set(paneFrames(in: paneArea).keys) }
+    /// #900 B2 step 2 (7.4): zoomed, the zoomed pane (always the focused one) alone; the frames stay the tiling.
+    var shownPanes: Set<UUID> {
+        let tiled = Set(paneFrames(in: paneArea).keys)
+        guard AgentPaneLayout.splitsEnabled, let z = layout.zoomed, tiled.contains(z) else { return tiled }
+        return [z]
+    }
+    /// 3.3 (#900 B2 step 2): the minimum pane, 300x200·s: the one value paneFrames tiles with and perform's split
+    /// checks, so a split that passes its room check is always drawn tiled.
+    var paneMinimum: CGSize { CGSize(width: sz(PaneLayout.minimumPane.width), height: sz(PaneLayout.minimumPane.height)) }
     /// #831 B1 step 4: the panes to draw in `area` and where (the view passes its own size, so a frame is never a
     /// layout pass behind): the layout's frames; too small (3.4): the focused pane alone at the whole area.
     func paneFrames(in area: CGRect) -> [UUID: CGRect] {
-        switch layout.frames(in: area, minimum: PaneLayout.minimumPane, splitsEnabled: AgentPaneLayout.splitsEnabled) {
+        switch layout.frames(in: area, minimum: paneMinimum, splitsEnabled: AgentPaneLayout.splitsEnabled) {
         case let .tiled(f): f
         case let .tooSmall(id): [id: area]
         }
@@ -290,7 +298,8 @@ final class AgentWindowModel: ObservableObject {
     /// `PaneKeys.treeAction` (the split gate on). True: it acted, so the window swallows the chord: the layout changed,
     /// or a refused split put its refusal in the pane notice line (R899-2's `paneRefusal`). False (an edge with no
     /// neighbour, an action this step does not route, the window closed): the chord goes on as before #831.
-    /// Zoom is model state only here: frames ignore it, so a zoomed layout still draws its tiling (step 2/3 draw it).
+    /// Zoom: frames ignore it (the view still draws the tiling until step 3); shownPanes and follow() honour it (step
+    /// 2), so a focus key while zoomed moves the zoom: one pane suspends, one starts (7.4).
     @discardableResult
     func perform(_ a: PaneAction) -> Bool {
         guard !closed else { return false }
@@ -298,7 +307,7 @@ final class AgentWindowModel: ObservableObject {
         switch a {
         case let .split(axis):
             // The same minimum paneFrames tiles with, so a split that passes here is drawn tiled.
-            next = layout.split(axis: axis, minimum: PaneLayout.minimumPane, in: CGRect(origin: .zero, size: paneArea.size))
+            next = layout.split(axis: axis, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size))
         case .closePane:
             next = layout.close(layout.focused)
         case let .focus(d):
@@ -794,7 +803,7 @@ final class AgentWindowModel: ObservableObject {
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
         // `settle()` drops the strip's question on a change of row.
-        let next = id.map { layout.show(target($0), placement: .focused, minimum: PaneLayout.minimumPane, in: .zero,
+        let next = id.map { layout.show(target($0), placement: .focused, minimum: paneMinimum, in: .zero,
                                         splitsEnabled: AgentPaneLayout.splitsEnabled) }
             ?? layout.replace(layout.focused, target: nil)
         switch next {
@@ -1304,13 +1313,19 @@ final class AgentWindowModel: ObservableObject {
     /// 11.2 per pane runtime: a shown `.live` pane of a visible window runs; an Ended pane keeps its blocks suspended
     /// (4.4 (c): no IO, shown or not, hidden or not); anything else is stopped (a pane not shown holds no blocks
     /// unless Ended). Every stop and suspend comes before any start; the focused pane starts first.
+    /// #900 B2 step 2 (R1193-5, 11.2, 7.4): with the split gate on, a `.live` pane of a visible window that is in the
+    /// layout but not shown (zoomed away, too-small hidden) is suspended, not stopped: blocks and offset kept, one
+    /// catch-up poll when shown again. A pane that left the layout was already stopped by syncRuntimes.
     /// #822: the terminal attaches to a visible, focused, live session in Terminal mode and detaches on anything else.
     /// The transcript runs in both modes: the header's cwd and todos come from it, so a toggle never changes the header.
     private func follow() {
         guard !closed else { return }
         let shown = visible ? shownPanes : []
+        let keep = visible && AgentPaneLayout.splitsEnabled   // hidden or the gate off: stopped as before
         for r in runtimes.values {
             if r.ended != nil {
+                r.transcript.suspend()
+            } else if keep, !shown.contains(r.pane), Self.isLive(r.content) {
                 r.transcript.suspend()
             } else if !shown.contains(r.pane) || !Self.isLive(r.content) {
                 if r.transcript.running || r.transcript.suspended { r.transcript.stop() }
