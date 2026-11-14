@@ -821,6 +821,20 @@ tag from the now-released section and put it on the new top draft.
 - Lua extensions: a script that unpacks a very large table, expands a very long argument list, or
   looks up a very long text key through a chain of fallback tables is now stopped by its execution
   budget as promptly as other heavy work. (#1173)
+- Always allow no longer writes `auto_allow = true` to dch's config while a dch 1.29 session (or one
+  whose version cannot be read) is running in Prosper's session folders. Those sessions would answer
+  hook and ask prompts too. `false` is written until they are gone, then `true` follows. (#1172)
+- When dch takes too long to report its config, the island now reads dch's config file itself to
+  decide whether to stand down. A file that says `true`, or one it cannot read the way dch does,
+  leaves the prompt to dch, so Prosper and dch never both answer it. (#1172)
+- Sidekick patterns with bracket sets of letters, digits and `_` (for example `build-[0-9]+$`) now
+  reach dch's own picker. Sets with ranges of one kind (`a-z`, `A-Z`, `0-9`) are included. (#1172)
+- Settings now says "dch's picker cannot use it: no Sidekicks tab there" under a sidekick pattern
+  that dch's own picker cannot use. (#1172)
+- Typing a sidekick pattern in Settings writes dch's config once, a second after the last keystroke,
+  instead of once per keystroke. (#1172)
+- Prosper no longer rewrites a dch config that has a line over 1023 bytes. dch reads such a line in
+  pieces, so a piece could set a key Prosper cannot see. (#1172)
 
 ## v2.174.0
 

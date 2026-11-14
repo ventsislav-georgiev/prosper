@@ -15,6 +15,11 @@ enum DchConfigWriter {
     static let maxPatternBytes = 255
     /// #781 r2: a config file is a few lines; a bigger one is not read whole on the poll queue.
     static let maxFileBytes = 1 << 20
+    /// #1172: dch reads a line with fgets into 1024 bytes; a longer line comes in pieces, and a piece may set a key
+    /// that Prosper, reading whole lines, does not see.
+    static let dchLineBytes = 1023
+    /// #1172: masters 1.29.0 up to `handOffMinimum` read auto_allow but still answer hook and ask prompts.
+    static let heldMinimum = [1, 29, 0]
     private static let log = Logger(subsystem: "eu.illegible.prosper", category: "agentisland")
 
     /// dch's own path rule (dch_config_path): $DCH_CONFIG, else $XDG_CONFIG_HOME/dch/config, else
@@ -41,30 +46,41 @@ enum DchConfigWriter {
     /// then shows no Sidekicks tab), never a pattern that splits differently.
     static func sidekickValue(_ pattern: String) -> String {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !p.isEmpty, p.utf8.count <= maxPatternBytes, portable(p),
-              AgentIsland.sidekickCaption(p, tabs: true, names: []) == nil else { return "" }
+        guard !p.isEmpty, p.utf8.count <= maxPatternBytes, portable(p), AgentIsland.sidekickMatch(p) == .regex else { return "" }
         return p
     }
 
+    /// #1172: what may stand inside a bracket set, alone or as a range of one kind (digits, a-z, A-Z), low to high.
+    static let setMembers = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_".unicodeScalars)
+
     /// The subset both engines read alike on ASCII names: printable ASCII; literals; `\` before one of
     /// `\^$.|?*+()[]{}`; the anchors `^` `$`; `(` `)` around something; `|` between two non-empty branches;
-    /// one `*` `+` `?` right after a literal. Not in it: `.` (dch runs in the C locale: one byte, ICU one
-    /// character), brackets and `\d`-style classes (ranges and Unicode digits differ), `{}`, `(?`, lazy or
-    /// possessive quantifiers, a quantified group (ICU backtracks, the island may flip it to text).
+    /// one `*` `+` `?` right after a literal or a bracket set; #1172: a bracket set of `setMembers` and ranges (`[0-9]`,
+    /// `[a-z_]`). A set of ASCII members matches one ASCII byte in dch and one ASCII character in ICU, and an ASCII byte
+    /// never sits inside a multi-byte character, so non-ASCII names read alike too. Letters in a set fold case exactly as
+    /// a literal letter does (the known limit: ICU also folds K U+212A to k and ſ U+017F to s, dch only ASCII).
+    /// Not in it: `.` (dch runs in the C locale: one byte, ICU one character and never a line end), a negated set
+    /// (`[^0-9]` takes one byte of a multi-byte character in dch, the whole character in ICU), `-` `^` `]` `[` `\` `:`
+    /// or anything else inside a set (ICU escapes, nested sets, `&&`, POSIX classes), `\d`-style classes (Unicode
+    /// digits), `{}`, `(?`, lazy or possessive quantifiers, a quantified group (ICU backtracks, the island may flip it to text).
     static func portable(_ p: String) -> Bool {
         enum Last { case open, atom, close, alt, quant, anchor }
         let special = Set("\\^$.|?*+()[]{}".unicodeScalars)
-        var last = Last.open, depth = 0, escaped = false
-        for u in p.unicodeScalars {
+        let s = Array(p.unicodeScalars)
+        var last = Last.open, depth = 0, i = 0
+        while i < s.count {
+            let u = s[i]
+            i += 1
             guard u.value >= 0x20, u.value <= 0x7E else { return false }
-            if escaped {
-                guard special.contains(u) else { return false }
-                escaped = false
-                last = .atom
-                continue
-            }
             switch u {
-            case "\\": escaped = true
+            case "\\":
+                guard i < s.count, special.contains(s[i]) else { return false }
+                i += 1
+                last = .atom
+            case "[":
+                guard let end = setEnd(s, from: i) else { return false }
+                i = end
+                last = .atom
             case "(": depth += 1; last = .open
             case ")":
                 guard depth > 0, last != .open, last != .alt else { return false }
@@ -77,11 +93,94 @@ enum DchConfigWriter {
                 guard last == .atom else { return false }
                 last = .quant
             case "^", "$": last = .anchor
-            case ".", "[", "]", "{", "}": return false
+            case ".", "]", "{", "}": return false
             default: last = .atom
             }
         }
-        return !escaped && depth == 0 && last != .alt && last != .open
+        return depth == 0 && last != .alt && last != .open
+    }
+
+    /// The index just past the `]` of a set whose members start at `from` (after its `[`); nil when the set is empty
+    /// or holds anything but `setMembers` and ranges of one kind, low to high.
+    private static func setEnd(_ s: [Unicode.Scalar], from: Int) -> Int? {
+        func kind(_ u: Unicode.Scalar) -> Int? {
+            switch u.value {
+            case 0x30...0x39: 0
+            case 0x61...0x7A: 1
+            case 0x41...0x5A: 2
+            default: nil
+            }
+        }
+        var i = from
+        while i < s.count, setMembers.contains(s[i]) {
+            if i + 2 < s.count, s[i + 1] == "-", setMembers.contains(s[i + 2]) {
+                guard let k = kind(s[i]), k == kind(s[i + 2]), s[i].value <= s[i + 2].value else { return nil }
+                i += 3
+            } else {
+                i += 1
+            }
+        }
+        return i > from && i < s.count && s[i] == "]" ? i + 1 : nil
+    }
+
+    /// #1172: whether true must be held back from dch's config: a listed master in `heldMinimum` ..< `handOffMinimum`,
+    /// or one whose version is not plain "X.Y.Z" ("" from a list without versions or a master too old to say, a
+    /// suffix, garbage), or no list at all (nil: a list timed out or did not parse). Only a list read whole and every
+    /// version outside the range lets true through.
+    static func holdsTrue(_ masters: [String]?) -> Bool {
+        guard let masters else { return true }
+        return masters.contains { m in
+            guard let v = plainVersion(m) else { return true }
+            return DchCommand.isAtLeast(v, heldMinimum) && !DchCommand.isAtLeast(v, handOffMinimum)
+        }
+    }
+
+    /// "X.Y.Z" of ASCII digits, at most 9 per part (so Int never overflows); anything else nil.
+    static func plainVersion(_ s: String) -> [Int]? {
+        let parts = s.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts.allSatisfy({ (1...9).contains($0.utf8.count) && $0.utf8.allSatisfy { (0x30...0x39).contains($0) } })
+        else { return nil }
+        return parts.compactMap { Int($0) }
+    }
+
+    /// #1172: every master's "version" in `--ls-json` outputs, one per socket dir; nil when any of them timed out (nil)
+    /// or is not a JSON array of rows (unknown, never "no masters"). A row without a string version counts as "".
+    static func masters(_ lists: [Data?]) -> [String]? {
+        var out: [String] = []
+        for d in lists {
+            guard let d, let rows = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] else { return nil }
+            out += rows.map { $0["version"] as? String ?? "" }
+        }
+        return out
+    }
+
+    /// #1172: what dch reads for auto_allow in `file` (dch.c config_line and dch_config_bool): the last line setting it
+    /// wins, its value after spaces or tabs, cut of trailing spaces, tabs and CR, true for true/1/yes/on in any ASCII
+    /// case; false with no such line. nil when a line is over `dchLineBytes` (dch reads it in pieces: unknown).
+    static func dchAllows(_ file: Data) -> Bool? {
+        var on = false
+        for line in file.split(separator: 0x0A, omittingEmptySubsequences: false) {
+            guard line.count <= dchLineBytes else { return nil }
+            guard setsKey(line, "auto_allow") else { continue }
+            var v = line.drop { $0 != 0x3D }.dropFirst().drop { $0 == 0x20 || $0 == 0x09 }
+            while let b = v.last, b == 0x20 || b == 0x09 || b == 0x0D { v = v.dropLast() }
+            on = v.allSatisfy { $0 < 0x80 } && ["true", "1", "yes", "on"].contains(String(decoding: v, as: UTF8.self).lowercased())
+        }
+        return on
+    }
+
+    /// #1172: when `dch --config` timed out at the stand-down check, whether dch may answer by its own file. No path
+    /// (no DCH_CONFIG, XDG_CONFIG_HOME or HOME) or no file: dch reads false. A file read the way dch reads it: its
+    /// value. Anything Prosper cannot read as dch does (not a regular file, unreadable, over maxFileBytes, a line over
+    /// dchLineBytes, a stat error): true, so the island stands down and, if dch does not answer, the prompt goes to
+    /// the human after the wait; never to both engines. Called on the controller's queue.
+    static func mayAllow(path: String?) -> Bool {
+        guard let path else { return false }
+        var st = stat()
+        guard stat(path, &st) == 0 else { return errno != ENOENT }
+        guard st.st_mode & S_IFMT == S_IFREG, st.st_size <= maxFileBytes,
+              let d = FileManager.default.contents(atPath: path) else { return true }
+        return dchAllows(d) ?? true
     }
 
     /// The pure core: `old` (the file's bytes, any encoding) with auto_allow and sidekick_pattern set the way
@@ -150,6 +249,10 @@ enum DchConfigWriter {
             // shortcut: a file that grows between this stat and the read is read whole; bound the read if that ever matters.
             guard st.st_size <= maxFileBytes else { return .refused("over \(maxFileBytes) bytes") }
             guard let d = FileManager.default.contents(atPath: target) else { return .refused("unreadable") }
+            // #1172: a piece of a long line may set a key in dch that render does not see; leave such a file alone.
+            guard !d.split(separator: 0x0A).contains(where: { $0.count > dchLineBytes }) else {
+                return .refused("a line over \(dchLineBytes) bytes")
+            }
             old = d
             mode = st.st_mode & 0o7777
         } else if errno == ENOENT {

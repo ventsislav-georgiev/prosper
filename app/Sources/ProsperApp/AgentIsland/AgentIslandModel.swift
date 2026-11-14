@@ -201,13 +201,23 @@ enum AgentIsland {
         }
     }
 
+    /// #1172: the caption's line when dch's config gets no pattern (DchConfigWriter.sidekickValue is "").
+    static let sidekickDchNote = "dch's picker cannot use it: no Sidekicks tab there"
+
     /// Settings' caption under the pattern field: none while the tabs are off (the
     /// field is disabled) or the pattern is empty. `names` are the live sessions'
     /// names and aliases, so a pattern too slow on them says so before the island does.
+    /// #1172: and a line under it when the pattern does not reach dch's own picker.
     static func sidekickCaption(_ pattern: String, tabs: Bool, names: [String]) -> String? {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        return tabs && !p.isEmpty ? sidekickFind(p, in: names).how.caption : nil
+        guard tabs, !p.isEmpty else { return nil }
+        let lines = [sidekickFind(p, in: names).how.caption, DchConfigWriter.sidekickValue(p).isEmpty ? sidekickDchNote : nil]
+            .compactMap { $0 }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
+
+    /// How the trimmed, non-empty `p` is matched now (cached per pattern, as the split uses it).
+    static func sidekickMatch(_ p: String) -> SidekickMatch { sidekickFind(p, in: []).how }
 
     /// QA #592 F1: split runs on main several times a second, and an ICU regex can
     /// backtrack for seconds. Bounds, in this thread's CPU time (a busy machine

@@ -313,7 +313,7 @@ final class AgentIslandController {
     /// row losing its PR line is 48 pt again, a tab change shows other rows);
     /// no animation.
     func rowDetailsChanged() {
-        syncDchConfig()   // #781: the pattern or the tabs may have changed
+        syncDchConfigSoon()   // #781: the pattern or the tabs may have changed
         onRowDetails?()
         guard let store else { return }
         store.details = Preferences.agentIslandRowDetails
@@ -1505,20 +1505,44 @@ final class AgentIslandController {
     /// is written, so the island stays the only engine; toggle off writes false without asking dch. Toggle on with
     /// no dch found or a --build that timed out, or no path: nothing is written. The values are read here on main; the probes and the write run on `queue`, serial,
     /// so the writes land in call order.
+    /// #1172: true also waits while a master in Prosper's socket dirs runs dch 1.29.x, reports a version that is not
+    /// plain X.Y.Z, or a dir's `--ls-json` times out or does not parse (DchConfigWriter.holdsTrue): false is written
+    /// meanwhile, and checkAutoAllow syncs again when the newest list's masters move in or out of that set.
     func syncDchConfig() {
         guard let path = dchConfigPath() else { return }
         let toggle = autoAllowOn(), pattern = DchConfigWriter.sidekickValue(Self.sidekickPattern)
-        let probe = controlDch, run = runDch, builds = dchBuilds, t = now(), retry = Self.dchBuildRetry
+        let probe = controlDch, run = runDch, builds = dchBuilds, t = now(), retry = Self.dchBuildRetry, dirs = seedDirs
         queue.async {
             // #781 r2: false needs neither version nor build, so turning the toggle off always reaches the file.
             guard toggle else { DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern); return }
             guard let bin = probe() else { return }
             let build = Self.buildProbe(builds, run: run, env: AgentIsland.listEnv(dir: DchCommand.defaultSocketDir),
                                         t: t, retry: retry)
-            guard let allow = DchConfigWriter.autoAllow(toggle: toggle, dch: bin, build: build) else { return }
+            guard var allow = DchConfigWriter.autoAllow(toggle: toggle, dch: bin, build: build) else { return }
+            // #1172: a 1.29.x master would act on true and answer hook and ask prompts; each dir listed now, on this queue.
+            if allow, DchConfigWriter.holdsTrue(DchConfigWriter.masters(dirs().map {
+                run(bin.path, ["--ls-json"], AgentIsland.listEnv(dir: $0))
+            })) { allow = false }
             DchConfigWriter.write(path: path, autoAllow: allow, pattern: pattern)
         }
     }
+
+    /// #1172: a Settings or phone change of the pattern, the tabs or the sort writes dch's config once, `dchConfigSettle`
+    /// after the last of a burst (a typed pattern), not once per keystroke. The timer is the `after` seam (main).
+    /// shortcut: a quit inside the window loses that write until the next start's reload() writes it.
+    private var dchConfigGen = 0
+    static let dchConfigSettle: TimeInterval = 1
+    func syncDchConfigSoon() {
+        guard dchConfigPath() != nil else { return }
+        dchConfigGen += 1
+        let gen = dchConfigGen
+        after(Self.dchConfigSettle) { [weak self] in
+            guard let self, self.dchConfigGen == gen else { return }
+            self.syncDchConfig()
+        }
+    }
+    /// #1172: whether the newest list held true back (DchConfigWriter.holdsTrue over its versions); nil before a list.
+    private var listHold: Bool?
     /// #791: the rows left to the human whose screen is being read again.
     private var rereading: Set<AgentSessionKey> = []
     /// #935: the rows dch names one live Claude Code in (`claude_session_id`, the Agents window's
@@ -1535,6 +1559,10 @@ final class AgentIslandController {
         // QA #849 INFO-5: before the setting's guard, so a check an off-toggle orphaned reads a fresh set at its
         // send when the setting is back on before autoAllowChanged runs here.
         claudeKeys.withLock { $0 = claude }
+        // #1172: a 1.29.x (or unreadable) master came or went: dch's config again (the sync reads the dirs itself).
+        let hold = DchConfigWriter.holdsTrue(store.sessions.map(\.version))
+        if let was = listHold, was != hold { syncDchConfig() }
+        listHold = hold
         guard autoAllowOn() else { autoAllow = [:]; dchSeen = [:]; return }   // nothing held: published as is
         showDchAnswers(store.sessions)
         let blocked = Set(store.sessions.filter { $0.state == .blocked }.map(\.key))
@@ -1643,12 +1671,13 @@ final class AgentIslandController {
         let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
         // #792: a fresh blocked stretch only; the re-read after Prosper's own answer stays Prosper's.
         let master = answered ? "" : store?.sessions.first { $0.key == key }?.version ?? ""
-        let probe = controlDch, run = runDch, builds = dchBuilds
+        let probe = controlDch, run = runDch, builds = dchBuilds, path = dchConfigPath()
         queue.async { [weak self] in
             let env = AgentIsland.listEnv(dir: key.dir)
             let dch = DchAutoAllowGate.answers(master: master, dch: probe,
                                                build: Self.buildProbe(builds, run: run, env: env, t: t, retry: retry),
-                                               config: { bin in run(bin.path, ["--config"], env).map { String(decoding: $0, as: UTF8.self) } })
+                                               config: { bin in run(bin.path, ["--config"], env).map { String(decoding: $0, as: UTF8.self) } },
+                                               timedOut: { DchConfigWriter.mayAllow(path: path) })
             let s = dch ? nil : screen?.text ?? io.read(key), read = s.flatMap(AgentPrompt.parse)
             let r = s.map { AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered, isOn: isOn, screen: $0) } ?? .dch
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r, read, act, t) } }
@@ -2069,15 +2098,18 @@ extension AgentPromptIO {
 /// engines), the installed dch at 1.29.2+ (its normalised `--config` listing is the verified
 /// one), the installed build "full" (lite never auto-allows; asked only past the version,
 /// since older dch exits 1 on --build), and that listing has exactly "auto_allow = true".
-/// Anything else (off, unreadable, timed out, an older or lite dch, none): Prosper answers.
+/// Anything else (off, unreadable, an older or lite dch, none): Prosper answers.
+/// #1172: a `--config` that timed out asks `timedOut` (the file read the way dch reads it,
+/// DchConfigWriter.mayAllow), so a file that says true is never answered by both.
 enum DchAutoAllowGate {
     static let masterMinimum = [1, 29, 0]
     static let installedMinimum = [1, 29, 2]
 
     static func answers(master: String, dch: () -> DchCommand.Binary?, build: (DchCommand.Binary) -> String?,
-                        config: (DchCommand.Binary) -> String?) -> Bool {
+                        config: (DchCommand.Binary) -> String?, timedOut: () -> Bool = { false }) -> Bool {
         guard DchCommand.isAtLeast(DchCommand.masterVersion(master), masterMinimum), let bin = dch(),
-              DchCommand.isAtLeast(bin.version, installedMinimum), build(bin) == "full", let text = config(bin) else { return false }
+              DchCommand.isAtLeast(bin.version, installedMinimum), build(bin) == "full" else { return false }
+        guard let text = config(bin) else { return timedOut() }
         // Line 1 is the config's path; bools are normalised to true/false (never the raw "yes").
         return text.split(separator: "\n").dropFirst().contains("auto_allow = true")
     }
