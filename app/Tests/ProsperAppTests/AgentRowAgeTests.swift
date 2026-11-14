@@ -135,51 +135,21 @@ final class AgentRowAgeTests: XCTestCase {
 
     // MARK: VoiceOver, from the real accessibility tree
 
-    /// Every element under `e` in an AX client's walk (accessibilityChildren), depth first: its label.
-    @MainActor
-    func axLabels(_ e: Any, _ out: inout [String], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        let v = o.value(forKey: "accessibilityLabel")
-        out.append((v as? String) ?? (v as? NSAttributedString)?.string ?? "")
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axLabels(k, &out, depth: depth + 1) }
-    }
-
     /// The sidebar row's label as VoiceOver reads it: "<age> ago", "just now" under a minute, nothing on a working
     /// row. SwiftUI builds the tree in a never-shown window once this process (only) is asked to, as an AX client's
     /// attribute write would; both attributes are put back after.
     @MainActor
     func testSidebarRowAccessibilityLabelReadsTheAge() {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
         let rows = [AgentSidebar.row(session("api", .working, ago: 600), details: .all, now: Self.now),
                     AgentSidebar.row(session("api-qa", .done, ago: 12), details: .all, now: Self.now),
                     AgentSidebar.row(session("api-dev", .idle, ago: 240), details: .all, now: Self.now),
                     AgentSidebar.row(record("api-old", ago: 7200), now: Self.now)]
-        let size = CGSize(width: 300, height: 300)
-        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
-        win.isReleasedWhenClosed = false
-        defer { win.close() }
-        let host = NSHostingView(rootView: VStack(spacing: 0) {
-            ForEach(rows) { AgentSidebarRowView(row: $0, selected: false) }
-        })
-        host.frame = CGRect(origin: .zero, size: size)
-        win.contentView = host
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        var labels: [String] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            var all: [String] = []
-            axLabels(host, &all)
-            labels = all.filter { $0.hasPrefix("api") }
-        } while labels.count < rows.count && Date() < deadline
+        let tree = AXTreeSupport.tree(VStack(spacing: 0) { ForEach(rows) { AgentSidebarRowView(row: $0, selected: false) } },
+                                      CGSize(width: 300, height: 300)) { t in t.filter { $0.label.hasPrefix("api") }.count >= rows.count }
+        let labels = tree.map(\.label).filter { $0.hasPrefix("api") }
         XCTAssertEqual(labels, ["api, Working",
                                 "api-qa, Done, just now",
                                 "api-dev, Idle, 4m ago",
                                 "api-old, Ended · exited, 2h ago"])
-        XCTAssertFalse(win.isVisible, "never shown")
     }
 }

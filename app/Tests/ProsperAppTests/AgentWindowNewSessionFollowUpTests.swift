@@ -269,47 +269,26 @@ extension AgentWindowD1Tests {
 
     // MARK: INFO-6, INFO-7
 
-    /// Every element under `e` in an AX client's walk (accessibilityChildren), depth first: role, label (AXDescription)
-    /// and title (AXTitle). Read through KVC because a SwiftUI button's title is an attributed string.
-    @MainActor
-    func axWalk(_ e: Any, _ out: inout [(role: String, label: String, title: String)], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        out.append((text("accessibilityRole"), text("accessibilityLabel"), text("accessibilityTitle")))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axWalk(k, &out, depth: depth + 1) }
-    }
-
     /// QA #747 INFO-6, QA #826: VoiceOver reads the form's fields by name, not by placeholder (their label), and the
     /// recents menu by its title. Read off the real accessibility tree: SwiftUI builds it in a never-shown window once
     /// this process (only) is asked to, as an AX client's attribute write would; both attributes are put back after.
     /// Named to run first in AgentWindowD1Tests.
     @MainActor
     func testAccessibilityTreeReadsTheNewSessionFormByName() {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
         // NSApp is nil until something creates the application; this test may run first in the process.
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
+        let restoreAX = AXTreeSupport.axOn()
+        defer { restoreAX() }
         withNewSessionPrefs {
             let m = wiringModel(store([mapped("a", ago: 1)]), SpawnCalls())
             defer { m.close() }
             let (win, host) = focusWindow(m)
             defer { win.close() }
-            for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
             m.openNewSession()
             XCTAssertFalse(m.newSessionRecents.isEmpty, "the menu is enabled")
             // The tree fills in on the run loop: poll for the form's four controls, with a deadline.
-            var tree: [(role: String, label: String, title: String)] = []
-            let deadline = Date().addingTimeInterval(5)
-            repeat {
-                settle(host)
-                tree = []
-                axWalk(host, &tree)
-            } while (tree.filter { $0.role == "AXTextField" }.count < 3 || !tree.contains { $0.role == "AXMenuButton" })
-                && Date() < deadline
+            let tree = AXTreeSupport.poll(host) { t in
+                t.filter { $0.role == "AXTextField" }.count >= 3 && t.contains { $0.role == "AXMenuButton" }
+            }
             print("#887 a11y tree:\n" + tree.map { "  \($0.role) label=\($0.label) title=\($0.title)" }.joined(separator: "\n"))
             XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.map(\.label), ["Folder", "Name", "Command"])
             XCTAssertEqual(tree.filter { $0.role == "AXMenuButton" }.map(\.title), ["Recent folders"])

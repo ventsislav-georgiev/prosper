@@ -105,52 +105,13 @@ final class AgentIslandDefaultModelTests: XCTestCase {
 
     // MARK: The settings row: offscreen at three scales, on the real accessibility tree of a never-shown window
 
-    private struct AXNode {
-        let role: String, label: String, title: String, value: String, frame: CGRect
-        /// A static text carries its words as its value, a button may as its title: any of them names it.
-        func named(_ s: String) -> Bool { label == s || title == s || value == s }
-    }
+    /// A static text carries its words as its value, a button may as its title: `named` is any of them.
+    private typealias AXNode = AXTreeNode
 
-    @MainActor
-    private func axWalk(_ e: Any, _ out: inout [AXNode], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            guard o.responds(to: Selector(key)) else { return "" }
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        let frame = o.responds(to: Selector(("accessibilityFrame"))) ? (o.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue : nil
-        out.append(AXNode(role: text("accessibilityRole"), label: text("accessibilityLabel"), title: text("accessibilityTitle"),
-                          value: text("accessibilityValue"), frame: frame ?? .zero))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axWalk(k, &out, depth: depth + 1) }
-    }
-
-    /// AgentIslandCountSymbolsTests.axTree's way: a borderless window that is never ordered in, the two AX flags set
-    /// while walking and put back to what NSApplication reported.
+    /// The settings pane in a never-shown window: AXTreeSupport's walk, the two AX flags put back to what they were.
     @MainActor
     private func axTree(_ size: CGSize, until done: ([AXNode]) -> Bool) -> [AXNode] {
-        let attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"], app = NSApplication.shared
-        let get = Selector(("accessibilityAttributeValue:")), set = Selector(("accessibilitySetValue:forAttribute:"))
-        XCTAssertTrue(app.responds(to: set))
-        let prior = attrs.map { app.responds(to: get) ? (app.perform(get, with: $0)?.takeUnretainedValue() as? NSNumber)?.boolValue : nil }
-        defer { for (a, f) in zip(attrs, prior) { app.perform(set, with: NSNumber(value: f ?? false), with: a) } }
-        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
-        win.isReleasedWhenClosed = false
-        defer { win.close() }
-        let host = NSHostingView(rootView: AgentIslandPane().frame(width: size.width).preferredColorScheme(.dark))
-        host.frame = CGRect(origin: .zero, size: size)
-        win.contentView = host
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        var tree: [AXNode] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            tree = []
-            axWalk(host, &tree)
-        } while !done(tree) && Date() < deadline
-        XCTAssertFalse(win.isVisible, "never shown")
-        return tree
+        AXTreeSupport.tree(AgentIslandPane().frame(width: size.width).preferredColorScheme(.dark), size, until: done)
     }
 
     @MainActor

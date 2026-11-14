@@ -468,48 +468,22 @@ final class AgentIslandMessageTests: XCTestCase {
 
     // MARK: - Offscreen: accessibility tree and UI scale
 
-    /// Every element under `e` in an AX client's walk, depth first: role, AXDescription and AXTitle.
-    @MainActor
-    private func axWalk(_ e: Any, _ out: inout [(role: String, label: String, title: String)], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        out.append((text("accessibilityRole"), text("accessibilityLabel"), text("accessibilityTitle")))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axWalk(k, &out, depth: depth + 1) }
-    }
-
     /// The composer's field and both buttons by name, read off the real accessibility tree of a never-shown
     /// window (#887's technique): both attributes are put back after. Named to run first in this class.
     @MainActor
     func testAAccessibilityTreeReadsTheComposerByName() throws {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
+        let restoreAX = AXTreeSupport.axOn()
+        defer { restoreAX() }
         let c = controller(Proc(), [session("api")])
         let store = try XCTUnwrap(c.store)
         c.askMessage(session("api"))
         store.typeMessage("hi")
-        let host = NSHostingView(rootView: AgentIslandView(store: store))
-        host.frame = CGRect(origin: .zero, size: store.size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        win.isReleasedWhenClosed = false
-        win.contentView = host
+        let (win, host) = AXTreeSupport.hosted(AgentIslandView(store: store), store.size)
         defer { win.close() }
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        func named(_ t: [(role: String, label: String, title: String)], _ role: String, _ name: String) -> Bool {
+        func named(_ t: [AXTreeNode], _ role: String, _ name: String) -> Bool {
             t.contains { $0.role == role && ($0.label == name || $0.title == name) }
         }
-        var tree: [(role: String, label: String, title: String)] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            tree = []
-            axWalk(host, &tree)
-        } while !(named(tree, "AXTextField", "Message api") && named(tree, "AXButton", "Send message")) && Date() < deadline
+        let tree = AXTreeSupport.poll(host) { named($0, "AXTextField", "Message api") && named($0, "AXButton", "Send message") }
         print("#584 a11y tree:\n" + tree.map { "  \($0.role) label=\($0.label) title=\($0.title)" }.joined(separator: "\n"))
         XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.map(\.label), ["Message api"])
         XCTAssertTrue(named(tree, "AXButton", "Send message"), "Send")

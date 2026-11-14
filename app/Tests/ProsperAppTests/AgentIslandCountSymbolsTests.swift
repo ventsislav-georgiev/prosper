@@ -199,62 +199,11 @@ final class AgentIslandCountSymbolsTests: XCTestCase {
 
     // MARK: VoiceOver, from the real accessibility tree
 
-    struct AX { let label: String, help: String }
+    typealias AX = AXTreeNode
 
-    @MainActor
-    func axWalk(_ e: Any, _ out: inout [AX], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            guard o.responds(to: Selector(key)) else { return "" }
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        out.append(AX(label: text("accessibilityLabel"), help: text("accessibilityHelp")))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axWalk(k, &out, depth: depth + 1) }
-    }
-
-    static let axAttrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-
-    /// The two flags as NSApplication reports them (nil where it reports nothing).
-    @MainActor
-    func axFlags() -> [Bool?] {
-        let get = Selector(("accessibilityAttributeValue:")), app = NSApplication.shared
-        guard app.responds(to: get) else { return Self.axAttrs.map { _ in nil } }
-        return Self.axAttrs.map { (app.perform(get, with: $0)?.takeUnretainedValue() as? NSNumber)?.boolValue }
-    }
-
-    @MainActor
-    func setAXFlags(_ v: [Bool?]) {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), app = NSApplication.shared
-        for (a, f) in zip(Self.axAttrs, v) { app.perform(set, with: NSNumber(value: f ?? false), with: a) }
-    }
-
-    /// Hosts `view` in a never-shown window and walks its AX tree (built once this process asks, as an AX client's
-    /// attribute write would) until `done` holds, with a ceiling. R1137-1: both attributes are put back to the values
-    /// read before (false only where NSApplication reports none), not to false.
     @MainActor
     func axTree<V: View>(_ view: V, _ size: CGSize, until done: ([AX]) -> Bool) -> [AX] {
-        XCTAssertTrue(NSApplication.shared.responds(to: Selector(("accessibilitySetValue:forAttribute:"))))
-        let prior = axFlags()
-        defer { setAXFlags(prior) }
-        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
-        win.isReleasedWhenClosed = false
-        defer { win.close() }
-        let host = NSHostingView(rootView: view)
-        host.frame = CGRect(origin: .zero, size: size)
-        win.contentView = host
-        setAXFlags([true, true])
-        print("#1137 R1137-1: flags before \(prior), while walking \(axFlags())")
-        var tree: [AX] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            tree = []
-            axWalk(host, &tree)
-        } while !done(tree) && Date() < deadline
-        XCTAssertFalse(win.isVisible, "never shown")
-        return tree
+        AXTreeSupport.tree(view, size, until: done)
     }
 
     /// The rendered island rows read the window's words in their label; each count group, hosted on its own, reads
@@ -295,23 +244,19 @@ final class AgentIslandCountSymbolsTests: XCTestCase {
         XCTAssertEqual(g.map(\.help), ["3 agents", "99999+ merged pull requests"], "and has them as help")
     }
 
-    /// R1137-1: the helper puts the flags back as it found them. NSApplication reads AXEnhancedUserInterface back and
-    /// reports nothing for AXManualAccessibility (run of 2026-11-14: before [false, nil], while walking [true, nil]),
-    /// so the readable one is checked: on before the helper runs (as an AX client would have left it), still on after;
-    /// off before, off after. AXManualAccessibility is restored to false, its only knowable value.
+    /// R888-1: a count group hosted alone is exactly one accessibility element, and it carries the group's words (as
+    /// label and help). Without accessibilityElement(children: .ignore) the tree gains the number's own element (its
+    /// value "3"), and the help lands on a stray element with no label.
     @MainActor
-    func testAXHelperRestoresThePriorFlags() throws {
-        let original = axFlags()
-        defer { setAXFlags(original) }
-        func enhanced() -> Bool? { axFlags().first ?? nil }
-        setAXFlags([true, true])
-        guard enhanced() == true else {
-            throw XCTSkip("NSApplication does not read AXEnhancedUserInterface back (\(axFlags()))")
+    func testCountGroupIsOneAccessibilityElementWithItsWords() {
+        for (kind, n, words) in [(AgentSidebar.Count.agents, 3, "3 agents"), (.merged, 100_000, "99999+ merged pull requests")] {
+            let tree = axTree(AgentIslandCount(kind: kind, n: n), CGSize(width: 200, height: 30)) { t in
+                t.contains { !$0.help.isEmpty }
+            }
+            let named = tree.filter { !$0.label.isEmpty || !$0.title.isEmpty || !$0.value.isEmpty || !$0.help.isEmpty }
+            XCTAssertEqual(named.count, 1, "\(words): one element with any words, not a stray one: \(tree)")
+            XCTAssertEqual(named.first?.label, words, "\(words): it carries the group's words")
+            XCTAssertEqual(named.first?.help, words, "\(words): and has them as help")
         }
-        _ = axTree(Text(verbatim: "x"), CGSize(width: 40, height: 20)) { $0.count > 1 }
-        XCTAssertEqual(enhanced(), true, "put back as found, not false")
-        setAXFlags([false, false])
-        _ = axTree(Text(verbatim: "x"), CGSize(width: 40, height: 20)) { $0.count > 1 }
-        XCTAssertEqual(enhanced(), false, "and off when it was off")
     }
 }

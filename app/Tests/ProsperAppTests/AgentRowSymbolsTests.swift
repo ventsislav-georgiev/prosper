@@ -66,47 +66,13 @@ extension AgentWindowD1Tests {
 
     // MARK: VoiceOver, from the real accessibility tree
 
-    struct SymbolsAX { let label: String, value: String, help: String }
+    typealias SymbolsAX = AXTreeNode
 
-    /// Every element under `e` in an AX client's walk, depth first: label, value and help.
+    /// The real accessibility tree of `view` in a never-shown window, walked until `done` holds, with a ceiling
+    /// (AXTreeSupport: both attributes are put back as found).
     @MainActor
-    func symbolsAX(_ e: Any, _ out: inout [SymbolsAX], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            guard o.responds(to: Selector(key)) else { return "" }
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        out.append(SymbolsAX(label: text("accessibilityLabel"), value: text("accessibilityValue"), help: text("accessibilityHelp")))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { symbolsAX(k, &out, depth: depth + 1) }
-    }
-
-    /// Hosts `view` in a never-shown window and walks its AX tree (built once this process asks, as an AX client's
-    /// attribute write would; both attributes are put back after) until `done` holds, with a ceiling.
-    @MainActor
-    func symbolsTree<V: View>(_ view: V, _ size: CGSize,
-                              until done: ([SymbolsAX]) -> Bool) -> [SymbolsAX] {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
-        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
-        win.isReleasedWhenClosed = false
-        defer { win.close() }
-        let host = NSHostingView(rootView: view)
-        host.frame = CGRect(origin: .zero, size: size)
-        win.contentView = host
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        var tree: [SymbolsAX] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            tree = []
-            symbolsAX(host, &tree)
-        } while !done(tree) && Date() < deadline
-        XCTAssertFalse(win.isVisible, "never shown")
-        return tree
+    func symbolsTree<V: View>(_ view: V, _ size: CGSize, until done: ([SymbolsAX]) -> Bool) -> [SymbolsAX] {
+        AXTreeSupport.tree(view, size, until: done)
     }
 
     /// The sidebar row reads the counts as words ("3 agents", "192 merged pull requests", "8 open pull requests"),

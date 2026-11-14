@@ -10,48 +10,8 @@ extension AgentWindowD1Tests {
     static let headerPath = "/Users/example/projects/prosper/app/Sources/ProsperApp/AgentWindow/Header/Long/Path"
     static let headerTitle = "prosper-ios release with a very long session name that truncates at the tail"
 
-    /// One element of an AX client's walk: role, AXDescription, AXTitle, AXValue, AXHelp and the frame. A Menu's
-    /// accessibilityLabel arrives as its AXTitle (#887's "Recent folders"; the "⋯" reads label "More", title "Session
-    /// actions"), a Text's words as its AXValue: `names` is all three.
-    struct HeaderAX {
-        let role: String, label: String, title: String, value: String, help: String
-        let frame: CGRect
-        /// Ignored by AppKit (NSAccessibility.unignoredChildren drops it): an AX client never sees it.
-        var ignored = false
-        /// AXEnabled as served to an AX client (true where the node reports none). #1120: the drawn state of a control.
-        var enabled = true
-        /// #1120: where `enabled` came from (the node's class, the legacy attribute, isAccessibilityEnabled).
-        var enabledFacts = ""
-        /// What an AX client is shown, by any of its names (not an ignored node).
-        func reads(_ n: String) -> Bool { !ignored && names.contains { $0.caseInsensitiveCompare(n) == .orderedSame } }
-        var names: [String] { [label, title, value].filter { !$0.isEmpty } }
-        func named(_ n: String) -> Bool { names.contains(n) }
-        func named(prefix: String) -> Bool { names.contains { $0.hasPrefix(prefix) } }
-        var name: String { names.first { ["Terminal", "Transcript"].contains($0) || $0.hasPrefix("Showing: ") } ?? names.first ?? "" }
-    }
-
-    @MainActor
-    private func headerAXWalk(_ e: Any, _ out: inout [HeaderAX], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            guard o.responds(to: Selector(key)) else { return "" }
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        let frame = o.responds(to: Selector(("accessibilityFrame"))) ? (o.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue ?? .zero : .zero
-        // #1103 F4: AppKit's own verdict, the one served to an AX client: an ignored node is replaced by its
-        // unignored descendants (the raw children below still list it).
-        let ignored = !NSAccessibility.unignoredChildren(from: [o]).contains { ($0 as AnyObject) === o }
-        // #1120: AXEnabled by both routes AppKit serves it: the legacy attribute (an NSView's) and isAccessibilityEnabled
-        // (an accessibility element's; KVC finds it under the key "accessibilityEnabled"). Off when either says off.
-        let legacy = (o.accessibilityAttributeValue(.enabled) as? NSNumber)?.boolValue
-        let modern = o.responds(to: Selector(("isAccessibilityEnabled"))) ? (o.value(forKey: "accessibilityEnabled") as? NSNumber)?.boolValue : nil
-        out.append(HeaderAX(role: text("accessibilityRole"), label: text("accessibilityLabel"), title: text("accessibilityTitle"),
-                            value: text("accessibilityValue"), help: text("accessibilityHelp"), frame: frame, ignored: ignored,
-                            enabled: legacy != false && modern != false,
-                            enabledFacts: "\(type(of: o)) legacy \(legacy.map { "\($0)" } ?? "nil") modern \(modern.map { "\($0)" } ?? "nil")"))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { headerAXWalk(k, &out, depth: depth + 1) }
-    }
+    /// One element of an AX client's walk (AXTreeSupport's): role, label, title, value, help, frame, ignored, enabled.
+    typealias HeaderAX = AXTreeNode
 
     @MainActor
     private func headerHosted<V: View>(_ view: V, _ size: CGSize) -> (NSWindow, NSHostingView<V>) {
@@ -68,23 +28,6 @@ extension AgentWindowD1Tests {
     @MainActor
     private func headerViews<T: NSView>(_ v: NSView, _ t: T.Type) -> [T] {
         ((v as? T).map { [$0] } ?? []) + v.subviews.flatMap { headerViews($0, t) }
-    }
-
-    /// #1120: turns the app's AX attributes on (an AX client's write: a never-shown window then builds its tree) and
-    /// returns what puts them back as found: AXEnhancedUserInterface to the value NSApplication read back before,
-    /// AXManualAccessibility (NSApplication reads back nothing for it) to false, its only knowable value. Main actor.
-    @MainActor
-    private func headerAXOn() -> @MainActor () -> Void {
-        let app = NSApplication.shared, set = Selector(("accessibilitySetValue:forAttribute:"))
-        let get = Selector(("accessibilityAttributeValue:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        XCTAssertTrue(app.responds(to: set))
-        let prior = app.responds(to: get)
-            ? (app.perform(get, with: attrs[0])?.takeUnretainedValue() as? NSNumber)?.boolValue ?? false : false
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        return {
-            app.perform(set, with: NSNumber(value: prior), with: attrs[0])
-            app.perform(set, with: NSNumber(value: false), with: attrs[1])
-        }
     }
 
     /// #1120: an image an AX client is shown on the switch's line, left of it (the title line's decoration).
@@ -113,7 +56,7 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        let restoreAX = headerAXOn()
+        let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         var tiers: Set<String> = []
         for width: CGFloat in [300, 360, 420, 480, 560, 700, 900] {
@@ -124,14 +67,7 @@ extension AgentWindowD1Tests {
                 let size = CGSize(width: width, height: 80)
                 let (win, host) = headerHosted(header.frame(width: width, height: 80, alignment: .top), size)
                 defer { win.close() }
-                var tree: [HeaderAX] = []
-                let deadline = Date().addingTimeInterval(5)
-                repeat {
-                    host.layoutSubtreeIfNeeded()
-                    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-                    tree = []
-                    headerAXWalk(host, &tree)
-                } while !tree.contains(where: { $0.named("Session actions") }) && Date() < deadline
+                let tree = AXTreeSupport.poll(host) { $0.contains(where: { $0.named("Session actions") }) }
                 let tag = "\(width) \(mode)"
                 if width == 700 {
                     print("#1103 a11y tree \(tag):\n" + tree.map { "  \($0.role) label=\($0.label) title=\($0.title) value=\($0.value) help=\($0.help) frame=\($0.frame)\($0.ignored ? " IGNORED" : "")" }
@@ -180,15 +116,7 @@ extension AgentWindowD1Tests {
     @MainActor
     private func headerAXTree<V: View>(_ view: V, _ size: CGSize, ready: (HeaderAX) -> Bool) -> (NSWindow, [HeaderAX]) {
         let (win, host) = headerHosted(view.frame(width: size.width, height: size.height, alignment: .top), size)
-        var tree: [HeaderAX] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            tree = []
-            headerAXWalk(host, &tree)
-        } while !tree.contains(where: ready) && Date() < deadline
-        return (win, tree)
+        return (win, AXTreeSupport.poll(host) { $0.contains(where: ready) })
     }
 
     /// #1191: the header draws no folder glyph and no path in either mode; the path is the title's tooltip (AXHelp) and
@@ -207,7 +135,7 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        let restoreAX = headerAXOn()
+        let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         let home = NSHomeDirectory()
         // cwd, then the text the title must carry (nil: none at all); an empty cwd is no text; the test store's socket dir is not the default, so the fallback names it.
@@ -300,7 +228,7 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        let restoreAX = headerAXOn()
+        let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
@@ -323,10 +251,6 @@ extension AgentWindowD1Tests {
     /// window, at 0.7, 0.85 and 1.0, in both modes (the real accessibility frames of a never-shown window).
     @MainActor
     func testSidebarTitleSharesTheHeaderTitleLine() throws {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
         // The window's backdrop builds ThemeStore.shared, whose init sets ThemeRuntime.scale from the prefs: built
         // first, or the first pass (0.7) is laid out partly at 1.0 (ticket 6, a filtered run).
         _ = ThemeStore.shared
@@ -337,7 +261,8 @@ extension AgentWindowD1Tests {
             _ = fakeTerminal(wm)
             defer { wm.close() }
             let s = try XCTUnwrap(wst.sessions.first { $0.name == "prosper" })
-            for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
+            let restoreAX = AXTreeSupport.axOn()
+            defer { restoreAX() }
             var checked = 0
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
@@ -550,7 +475,7 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        let restoreAX = headerAXOn()
+        let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         let path = "/srv/api"
         for mode in [AgentPaneMode.terminal, .transcript] {
@@ -599,7 +524,7 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        let restoreAX = headerAXOn()
+        let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         for ended in [false, true] {
             let header = AgentSessionHeader(row: row, session: a, cwd: "/srv/api", open: {}, store: st, ended: ended, mode: .terminal,
@@ -626,7 +551,7 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         m.select(.live(a.key))
         let row = try XCTUnwrap(m.selectedRow)
-        let restoreAX = headerAXOn()
+        let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         for ended in [false, true] {
             let entries = AgentSessionHeader(row: row, session: a, cwd: nil, open: {}, store: st, ended: ended).menuButton.entries
@@ -667,7 +592,7 @@ extension AgentWindowD1Tests {
             defer { live.close() }
             live.select(.live(a.key))
             XCTAssertFalse(live.focusedEnded)
-            let restoreAX = headerAXOn()
+            let restoreAX = AXTreeSupport.axOn()
             defer { restoreAX() }
             for (m, s, ended) in [(live, liveStore, false), (held, st, true)] {
                 s.notices[a.key] = nil
@@ -692,7 +617,7 @@ extension AgentWindowD1Tests {
     func testCompactHeaderFitsThreeHundredPointsInEveryState() throws {
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
-        let restoreAX = headerAXOn()
+        let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
@@ -743,7 +668,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.layout.id, gone.id, "the saved layout")
         XCTAssertEqual(m.content, .notRunning(paneKey("gone")))
         XCTAssertTrue(m.selection == nil)
-        let restoreAX = headerAXOn()
+        let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         let size = CGSize(width: 1000, height: 680)
         let words = "gone isn't running"

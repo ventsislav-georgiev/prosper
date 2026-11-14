@@ -63,19 +63,7 @@ final class TextViewerSettingsPaneTests: XCTestCase {
         return r
     }
 
-    private struct AXItem { let role: String, label: String, title: String, value: String }
-
-    private func axWalk(_ e: Any, _ out: inout [AXItem], depth: Int = 0) {
-        guard depth < 60, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            guard o.responds(to: Selector(key)) else { return "" }
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        out.append(AXItem(role: text("accessibilityRole"), label: text("accessibilityLabel"),
-                          title: text("accessibilityTitle"), value: text("accessibilityValue")))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axWalk(k, &out, depth: depth + 1) }
-    }
+    private typealias AXItem = AXTreeNode
 
     private static func has(_ items: [AXItem], _ s: String) -> Bool {
         items.contains { $0.label == s || $0.title == s || $0.value == s }
@@ -89,27 +77,7 @@ final class TextViewerSettingsPaneTests: XCTestCase {
     /// The pane hosted in a never-shown window, tall enough that the lazy column builds its footer;
     /// the tree once `ready` holds (or after 5 s). SwiftUI builds it once this process (only) is asked to.
     private func tree(_ pane: ExtensionSettingsPane, ready: ([AXItem]) -> Bool) -> [AXItem] {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
-        let host = NSHostingView(rootView: pane.frame(width: 600, height: 1600))
-        host.frame = CGRect(x: 0, y: 0, width: 600, height: 1600)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        win.isReleasedWhenClosed = false
-        win.contentView = host
-        defer { win.close() }
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        var items: [AXItem] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            items = []
-            axWalk(host, &items)
-        } while !ready(items) && Date() < deadline
-        XCTAssertFalse(win.isVisible, "never shown")
-        return items
+        AXTreeSupport.tree(pane.frame(width: 600, height: 1600), CGSize(width: 600, height: 1600), until: ready)
     }
 
     private func textViewerPage(_ r: ExtensionRegistry) throws -> (ExtensionRecord, SettingsSection) {

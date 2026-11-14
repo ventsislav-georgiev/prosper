@@ -196,46 +196,19 @@ final class TextViewerDefaultAppTests: XCTestCase {
 
     // MARK: Accessibility and fit, from the real accessibility tree of a never-shown window
 
-    private struct AXItem { let role: String, label: String, title: String, frame: CGRect }
-
-    private func axWalk(_ e: Any, _ out: inout [AXItem], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            guard o.responds(to: Selector(key)) else { return "" }
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        let frame = o.responds(to: Selector(("accessibilityFrame")))
-            ? (o.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue ?? .zero : .zero
-        out.append(AXItem(role: text("accessibilityRole"), label: text("accessibilityLabel"),
-                          title: text("accessibilityTitle"), frame: frame))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axWalk(k, &out, depth: depth + 1) }
-    }
+    private typealias AXItem = AXTreeNode
 
     /// The section hosted at `width` in a never-shown window; the tree once `ready` holds (or after 5 s).
     /// SwiftUI builds it once this process (only) is asked to, as an AX client's attribute write would.
     private func tree(_ model: TextViewerDefaultApp, width: CGFloat,
                       ready: ([AXItem]) -> Bool) -> (items: [AXItem], window: CGRect) {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
-        let host = NSHostingView(rootView: TextViewerDefaultAppSection(model: model).frame(width: width))
-        let size = CGSize(width: width, height: max(host.fittingSize.height, 200))
-        host.frame = CGRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        win.isReleasedWhenClosed = false
-        win.contentView = host
+        let restoreAX = AXTreeSupport.axOn()
+        defer { restoreAX() }
+        let probe = NSHostingView(rootView: TextViewerDefaultAppSection(model: model).frame(width: width))
+        let size = CGSize(width: width, height: max(probe.fittingSize.height, 200))
+        let (win, host) = AXTreeSupport.hosted(TextViewerDefaultAppSection(model: model).frame(width: width), size)
         defer { win.close() }
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        var items: [AXItem] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            items = []
-            axWalk(host, &items)
-        } while !ready(items) && Date() < deadline
+        let items = AXTreeSupport.poll(host, until: ready)
         XCTAssertFalse(win.isVisible, "never shown")
         return (items, win.frame)
     }

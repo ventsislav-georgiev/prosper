@@ -245,48 +245,13 @@ extension AgentWindowD1Tests {
 
     // MARK: The chip, from the row view
 
-    struct DigitAX { let label: String, help: String, frame: CGRect, ignored: Bool }
+    typealias DigitAX = AXTreeNode
 
-    @MainActor
-    func digitAXWalk(_ e: Any, _ out: inout [DigitAX], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            guard o.responds(to: Selector(key)) else { return "" }
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        let frame = o.responds(to: Selector(("accessibilityFrame")))
-            ? (o.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue ?? .zero : .zero
-        let ignored = !NSAccessibility.unignoredChildren(from: [o]).contains { ($0 as AnyObject) === o }
-        out.append(DigitAX(label: text("accessibilityLabel"), help: text("accessibilityHelp"), frame: frame, ignored: ignored))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { digitAXWalk(k, &out, depth: depth + 1) }
-    }
-
-    /// The real accessibility tree of `view` in a never-shown window (built once this process asks, as an AX client's
-    /// attribute write would; both attributes are put back after), walked until `done` holds, with a ceiling.
+    /// The real accessibility tree of `view` in a never-shown window, walked until `done` holds, with a ceiling
+    /// (AXTreeSupport: both attributes are put back as found).
     @MainActor
     func digitTree<V: View>(_ view: V, _ size: CGSize, until done: ([DigitAX]) -> Bool) -> [DigitAX] {
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        XCTAssertTrue(app.responds(to: set))
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
-        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
-        win.isReleasedWhenClosed = false
-        defer { win.close() }
-        let host = NSHostingView(rootView: view)
-        host.frame = CGRect(origin: .zero, size: size)
-        win.contentView = host
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        var tree: [DigitAX] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            tree = []
-            digitAXWalk(host, &tree)
-        } while !done(tree) && Date() < deadline
-        XCTAssertFalse(win.isVisible, "never shown")
-        return tree
+        AXTreeSupport.tree(view, size, until: done)
     }
 
     /// The model's rows drawn as the sidebar draws them (its row view, the model's numbers), at the sidebar's row width.
