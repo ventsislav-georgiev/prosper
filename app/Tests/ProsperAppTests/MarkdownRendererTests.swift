@@ -61,10 +61,13 @@ final class MarkdownRendererTests: XCTestCase {
     final class Loader: @unchecked Sendable {
         let lock = NSLock()
         private var seen: [String] = []
+        private var pixels: [Int] = []
         var image: CGImage?
         var requests: [String] { lock.lock(); defer { lock.unlock() }; return seen }
+        /// The maxPixelSize each request was handed (R886-3).
+        var sizes: [Int] { lock.lock(); defer { lock.unlock() }; return pixels }
         var load: TextViewerImageLoader {
-            { [self] src, _, _ in lock.lock(); seen.append(src.absoluteString); lock.unlock(); return image }
+            { [self] src, _, size in lock.lock(); seen.append(src.absoluteString); pixels.append(size); lock.unlock(); return image }
         }
     }
 
@@ -79,6 +82,13 @@ final class MarkdownRendererTests: XCTestCase {
     }
 
     private func para(_ out: R.Output, _ word: String) -> NSParagraphStyle? { at(out, word)[.paragraphStyle] as? NSParagraphStyle }
+
+    /// Whether the character at `index` is drawn in an NSTextTable cell (false outside the text).
+    private func inTable(_ out: R.Output, at index: Int) -> Bool {
+        guard index >= 0, index < out.text.length else { return false }
+        let ps = out.text.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle
+        return ps?.textBlocks.contains(where: { $0 is NSTextTableBlock }) == true
+    }
     private func font(_ out: R.Output, _ word: String) -> NSFont? { at(out, word)[.font] as? NSFont }
 
     /// The parser's shapes this renderer relies on (report T3, T4), pinned so an OS update that
@@ -99,6 +109,13 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(html.runs.allSatisfy { $0.presentationIntent == nil }, "a raw HTML block has no block intent")
         let inline = try AttributedString(markdown: "<i>x</i>", options: opts)
         XCTAssertEqual(String(inline.characters), "<i>x</i>", "a tag with text after it on its line is inline HTML")
+        // #1163 R886-5 (left.txt): an image inside a link is dropped: one run, its alt text with the link
+        // and no image. If an OS update starts keeping the image, this fails and the renderer can draw it.
+        let linked = try AttributedString(markdown: "[![alt](p.png)](https://example.com/)", options: opts)
+        XCTAssertEqual(linked.runs.count, 1)
+        XCTAssertEqual(String(linked.characters), "alt")
+        XCTAssertEqual(linked.runs.first?.link, URL(string: "https://example.com/"))
+        XCTAssertTrue(linked.runs.first?.imageURL == nil, "the image inside a link is dropped by the parser")
     }
 
     func testEveryConstruct() throws {
@@ -244,9 +261,12 @@ final class MarkdownRendererTests: XCTestCase {
             }
             return found
         }
-        XCTAssertTrue(hasTable(render(table(64))))
+        let at = render(table(64))
+        XCTAssertTrue(hasTable(at))
+        XCTAssertTrue(at.note == nil, "64 columns is a table: no note")
         let wide = render(table(65))
         XCTAssertFalse(hasTable(wide))
+        XCTAssertEqual(wide.note, "Too many table columns: the rest shown as plain text", "R886-9: the wide table says why")
         XCTAssertTrue(wide.text.string.contains("h0 | h1 | h2"), wide.text.string.prefix(80).description)
         XCTAssertTrue(wide.text.string.contains("\nc0 | c1"))
     }
@@ -270,6 +290,149 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(R.slug("Install Guide!"), "install-guide")
         let out = render("# A\n\n# A\n\n# A")
         XCTAssertEqual(Set(out.anchors.keys), ["a", "a-1", "a-2"])
+    }
+
+    // MARK: #1163 (QA 886): the depth check, the nested markers, an image inside a link, the cap edges.
+
+    /// R886-4: indent only continues what earlier lines opened. A blank line of 258 spaces and a code
+    /// line of 65 tabs open nothing; real nesting past the cap is still refused.
+    func testDepthCountsOnlyRealNesting() {
+        let blank = "a\n" + String(repeating: " ", count: 258) + "\nb"
+        XCTAssertEqual(R.nestingBound(blank), 0)
+        let blankOut = render(blank)
+        XCTAssertTrue(blankOut.note == nil, "a blank line of spaces is no nesting")
+        XCTAssertEqual(blankOut.text.string, "a\nb")
+        let tabs = "# T\n\n" + String(repeating: "\t", count: 65) + "code"
+        XCTAssertEqual(R.nestingBound(tabs), 0)
+        let code = render(tabs)
+        XCTAssertTrue(code.note == nil, "an indented code line is no nesting")
+        XCTAssertTrue(code.text.string.hasPrefix("T\n"), code.text.string.prefix(8).description)
+        XCTAssertTrue(font(code, "code")?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true)
+        // Indent counts up to what the earlier lines opened, and markers in full.
+        XCTAssertEqual(R.nestingBound("- - - x\n" + String(repeating: " ", count: 258) + "y"), 3)
+        XCTAssertEqual(R.nestingBound("- a\n  - b\n    - c"), 3)
+        XCTAssertEqual(R.nestingBound("      > x"), 1, "indent before the first line's marker continues nothing")
+        XCTAssertEqual(R.nestingBound(Self.listByIndent(127) + "\n" + String(repeating: " ", count: 258)), 127)
+        // Real nesting past the cap: still refused, with or without a wide blank line after it.
+        let deep = Self.listByIndent(129) + "\n" + String(repeating: " ", count: 258) + "\nz"
+        XCTAssertEqual(R.nestingBound(deep), 129)
+        XCTAssertEqual(render(deep).note, R.tooDeepNote)
+    }
+
+    /// R886-5: "1. - x" draws both markers, each at its own depth; later blocks draw only the items they open.
+    func testNestedItemsOnOneLineDrawEveryMarker() {
+        let out = render("1. - x")
+        XCTAssertEqual(out.text.string, "1.\t◦\tx")
+        let ps = para(out, "1.")
+        XCTAssertEqual(ps?.firstLineHeadIndent, 0)
+        XCTAssertEqual(ps?.headIndent, 44)
+        XCTAssertEqual(ps?.tabStops.map(\.location), [22, 44])
+        XCTAssertEqual(render("1. - x\n   - y\n2. z").text.string, "1.\t◦\tx\n◦\ty\n2.\tz")
+        XCTAssertEqual(render("- - [ ] t").text.string, "•\t☐\tt", "the task box is the innermost item's")
+        XCTAssertEqual(render("- - - - - - - - - x").text.string, "•\t◦\t▪\t•\t◦\t▪\t•\t◦ ◦\tx", "past depth 8 markers share the last stop")
+        // A raw HTML block inside an item carries no intent: the item's next block draws no marker again.
+        let html = render("- a\n\n  <div>x</div>\n\n  b").text.string
+        XCTAssertTrue(html.hasPrefix("•\ta\n"), html)
+        XCTAssertTrue(html.hasSuffix("\nb"), html)
+        XCTAssertFalse(html.contains("•\tb"), html)
+    }
+
+    /// R886-5, KNOWN FAULT (left.txt): the parser drops an image inside a link (testParserFacts), so
+    /// the renderer sees only its alt text as link text and the picture is never requested.
+    func testImageInsideLinkIsItsAltTextKnownFault() {
+        let loader = Loader()
+        let out = render("[![alt](p.png)](https://example.com/)", loader)
+        XCTAssertEqual(loader.requests, [])
+        XCTAssertEqual(out.text.string, "alt")
+        XCTAssertEqual(out.text.attribute(.link, at: 0, effectiveRange: nil) as? URL, URL(string: "https://example.com/"))
+        let remote = render("[![badge](https://example.com/b.svg)](https://example.com/home)")
+        XCTAssertEqual(remote.text.string, "badge")
+        XCTAssertEqual(remote.text.attribute(.link, at: 0, effectiveRange: nil) as? URL, URL(string: "https://example.com/home"))
+    }
+
+    /// R886-3: exactly 1 MiB is parsed; one byte more, or 1 MiB of characters over 1 MiB of bytes, is source.
+    func testSizeCapBoundary() {
+        let atCap = String(repeating: "a", count: R.maxSourceBytes)
+        let start = Date()
+        let at = render(atCap)
+        Self.fact("size cap boundary: 1 MiB paragraph rendered in \(String(format: "%.3f", Date().timeIntervalSince(start))) s")
+        XCTAssertTrue(at.note == nil, "exactly 1 MiB is parsed")
+        XCTAssertEqual(at.text.length, R.maxSourceBytes)
+        XCTAssertTrue(font(at, "aaaa")?.fontDescriptor.symbolicTraits.contains(.monoSpace) == false, "body text, not source")
+        let over = render(atCap + "a")
+        XCTAssertEqual(over.note, R.tooLargeNote)
+        XCTAssertEqual(over.text.length, R.maxSourceBytes + 1)
+        let bytesOver = render(String(atCap.dropLast()) + "é")
+        XCTAssertEqual(bytesOver.note, R.tooLargeNote, "the cap counts UTF-8 bytes, not characters")
+    }
+
+    /// R886-3: quote bars and list indents are drawn 8 deep at most; deeper blocks draw at depth 8.
+    func testShownDepthEdges() {
+        let q8 = render("> > > > > > > > eight")
+        XCTAssertEqual(para(q8, "eight")?.textBlocks.count, 8)
+        let q9 = render("> > > > > > > > > nine")
+        XCTAssertEqual(q9.text.string, "nine")
+        XCTAssertEqual(para(q9, "nine")?.textBlocks.count, 8)
+        let list = render("- l1\n  - l2\n    - l3\n      - l4\n        - l5\n          - l6\n            - l7\n              - l8\n                - l9")
+        XCTAssertEqual(list.text.string, "•\tl1\n◦\tl2\n▪\tl3\n•\tl4\n◦\tl5\n▪\tl6\n•\tl7\n◦\tl8\n◦\tl9")
+        XCTAssertEqual(para(list, "\tl7")?.headIndent, 154)
+        XCTAssertEqual(para(list, "\tl8")?.headIndent, 176)
+        XCTAssertEqual(para(list, "\tl9")?.headIndent, 176)
+    }
+
+    /// R886-3: table cells are counted per row times its columns: 4 columns x 12,500 rows is the cap.
+    func testTableCellCapCountsColumnsPerRow() {
+        let head = "|h|i|j|k|\n|-|-|-|-|\n"
+        let start = Date()
+        let at = render(head + String(repeating: "|a|b|c|d|\n", count: 12_498) + "|w|x|y|z|")
+        Self.fact("table cell cap, 4 columns: 50,000 cells rendered in \(String(format: "%.3f", Date().timeIntervalSince(start))) s")
+        XCTAssertTrue(at.note == nil, "50,000 cells: nothing trimmed")
+        XCTAssertTrue(at.text.string.hasSuffix("\nw\nx\ny\nz"), String(at.text.string.suffix(12)))
+        XCTAssertTrue(inTable(at, at: at.text.length - 1), "cell 50,000 is a table cell")
+        let over = render(head + String(repeating: "|a|b|c|d|\n", count: 12_499) + "|w|x|y|z|")
+        XCTAssertTrue(over.text.string.hasSuffix("\nd\nw | x | y | z"), String(over.text.string.suffix(16)))
+        XCTAssertFalse(inTable(over, at: over.text.length - 1), "the row past 50,000 cells is joined text")
+        XCTAssertTrue(inTable(over, at: over.text.length - 15), "the row before it is still a table")
+        XCTAssertEqual(over.note, "Too many table cells: the rest shown as plain text")
+    }
+
+    /// R886-3: the thumbnail size handed to the loader is the column (760) at a 2x backing, capped at 16,384.
+    func testImageSizeHandedToTheLoader() {
+        func sizes(scale: CGFloat) -> [Int] {
+            var style = Self.style
+            style.scale = scale
+            let loader = Loader()
+            _ = R.render("![a](a.png)", document: Self.document, style: style, loader: loader.load)
+            return loader.sizes
+        }
+        XCTAssertEqual(sizes(scale: 1), [1520])
+        XCTAssertEqual(sizes(scale: 2), [3040])
+        XCTAssertEqual(sizes(scale: 20), [16384], "760 x 20 x 2 = 30,400 is capped")
+        XCTAssertEqual(sizes(scale: 0), [1520], "a scale that is not positive draws at 1")
+        XCTAssertEqual(sizes(scale: .nan), [1520])
+    }
+
+    /// R886-3: a list or quote marker that ends its line counts toward the bound, at the end of a line
+    /// and at the end of the source.
+    func testMarkerEndingItsLineCounts() {
+        XCTAssertEqual(R.nestingBound("- -\nx"), 2)
+        XCTAssertEqual(R.nestingBound("1.\nx"), 1)
+        XCTAssertEqual(R.nestingBound("1)\r\nx"), 1)
+        XCTAssertEqual(R.nestingBound(">\nx"), 1)
+        XCTAssertEqual(R.nestingBound("- -"), 2)
+        XCTAssertEqual(R.nestingBound("2."), 1)
+        XCTAssertEqual(R.nestingBound("-x\n12\n"), 0, "no space after the marker: text")
+        XCTAssertTrue(render(String(repeating: "- ", count: 127) + "-\nx").note == nil, "128 with the last marker ending its line")
+        XCTAssertEqual(render(String(repeating: "- ", count: 128) + "-\nx").note, R.tooDeepNote)
+    }
+
+    /// R886-3: after a hard break the rest of an item is at the item's text indent, not the marker's.
+    func testIndentAfterHardBreak() {
+        let out = render("- a\\\n  b")
+        XCTAssertEqual(out.text.string, "•\ta\nb")
+        XCTAssertEqual(para(out, "•")?.firstLineHeadIndent, 0)
+        XCTAssertEqual(para(out, "b")?.firstLineHeadIndent, 22)
+        XCTAssertEqual(para(out, "b")?.headIndent, 22)
     }
 
     // MARK: Heavy (PROSPER_HEAVY_TESTS=1): budgets wide enough for a loaded machine.
@@ -445,11 +608,6 @@ final class MarkdownRendererTests: XCTestCase {
     /// cap, and every later one, is joined text.
     func testTableCellCap() {
         func oneColumn(_ cells: Int) -> String { "|h|\n|-|\n" + String(repeating: "|c|\n", count: cells - 1) }
-        func inTable(_ out: R.Output, at index: Int) -> Bool {
-            guard index >= 0, index < out.text.length else { return false }
-            let ps = out.text.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle
-            return ps?.textBlocks.contains(where: { $0 is NSTextTableBlock }) == true
-        }
         let at = render(oneColumn(R.maxTableCells))
         XCTAssertNil(at.note, "nothing trimmed at the cap")
         XCTAssertTrue(inTable(at, at: 0))

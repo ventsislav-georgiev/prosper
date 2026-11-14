@@ -878,6 +878,9 @@ tag from the now-released section and put it on the new top draft.
   claude or headroom now go through the pool, and any Anthropic API key or auth token in their
   environment is left out. The New session form shows "via ccpool" next to the command when that
   applies. Shells, other programs and sessions started in a terminal are unchanged. (#914)
+- Text Viewer: Markdown files with a long line of spaces or tabs are no longer shown as source with
+  "Nested too deeply"; a list line that opens two items ("1. - x") shows both markers; a table wider
+  than 64 columns says why it is shown as plain rows. (#1163)
 
 ## v2.174.0
 

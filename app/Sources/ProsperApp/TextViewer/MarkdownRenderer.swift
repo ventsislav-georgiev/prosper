@@ -45,7 +45,7 @@ enum MarkdownRenderer {
     static let maxNesting = 128
     /// Indents and quote bars drawn at most this deep; deeper blocks draw at this depth.
     static let maxShownDepth = 8
-    /// Wider tables are drawn as rows of " | "-joined cells, not as an NSTextTable.
+    /// Wider tables are drawn as rows of " | "-joined cells, not as an NSTextTable, with the note.
     static let maxTableColumns = 64
     /// Table cells drawn as NSTextTable cells per document; from the row that passes it on, rows are
     /// " | "-joined text. Round 2: TextKit 1 lays tables out on the main thread at about 11 µs a cell.
@@ -95,7 +95,9 @@ enum MarkdownRenderer {
     /// An upper bound on the container nesting any line can reach: every block quote or list level
     /// open on a line costs a marker in its prefix or at least two columns of indent (the one space a
     /// ">" consumes, and the space or tab after a list marker, are part of the marker). Lazy lines
-    /// only continue what an earlier line opened. One pass over the bytes, no parse.
+    /// only continue what an earlier line opened. #1163: indent only continues containers an earlier
+    /// line opened, so it counts at most the bound so far (a blank or code line of spaces opens
+    /// nothing); markers count in full. One pass over the bytes, no parse.
     nonisolated static func nestingBound(_ s: String) -> Int {
         enum State { case prefix, quote, bullet, digits, delimiter, text }
         var bound = 0, markers = 0, columns = 0
@@ -103,7 +105,7 @@ enum MarkdownRenderer {
         for b in s.utf8 {
             if b == 0x0A || b == 0x0D {
                 if state == .bullet || state == .delimiter { markers += 1 }
-                bound = max(bound, markers + columns / 2)
+                bound = max(bound, markers + min(columns / 2, bound))
                 (markers, columns, state) = (0, 0, .prefix)
                 continue
             }
@@ -132,7 +134,7 @@ enum MarkdownRenderer {
             }
         }
         if state == .bullet || state == .delimiter { markers += 1 }
-        return max(bound, markers + columns / 2)
+        return max(bound, markers + min(columns / 2, bound))
     }
 
     /// GitHub's heading anchor: lowercased, spaces to hyphens, other punctuation dropped.
@@ -165,7 +167,7 @@ private final class Converter {
     var cont = NSParagraphStyle()   // the same block after a hard break: no marker indent
     var blockFont: NSFont
     var blockColor: NSColor
-    var lastItem: Int?
+    var openItems: Set<Int> = []   // the list items of the last block that had any
     var lastWideRow: [Int]?
     var quoteBlocks: [Int: NSTextBlock] = [:]
     var codeBlocks: [Int: NSTextBlock] = [:]
@@ -232,7 +234,7 @@ private final class Converter {
         finishHeading()
         var quotes = 0, lists = 0, level = 0
         var ordered = false, code = false, rule = false, headerRow = false
-        var item: (id: Int, ordinal: Int, ordered: Bool)?
+        var items: [(id: Int, ordinal: Int, ordered: Bool, depth: Int)] = []   // outermost first
         var table: (id: Int, columns: [PresentationIntent.TableColumn])?
         var row = -1, rowID = -1, column = -1
         var blocks: [NSTextBlock] = []
@@ -243,7 +245,7 @@ private final class Converter {
                 if quotes <= R.maxShownDepth { blocks.append(quoteBlock(c.identity)) }
             case .orderedList: lists += 1; ordered = true
             case .unorderedList: lists += 1; ordered = false
-            case .listItem(let ordinal): item = (c.identity, ordinal, ordered)
+            case .listItem(let ordinal): items.append((c.identity, ordinal, ordered, min(lists, R.maxShownDepth)))
             case .header(let l): level = l
             case .codeBlock: code = true; blocks.append(codeBlock(c.identity))
             case .thematicBreak: rule = true
@@ -258,7 +260,7 @@ private final class Converter {
         var wideRow: [Int]?
         if let table, column >= 0, rowID != lastRow {   // a row's cells count once, at its first cell
             lastRow = rowID
-            if table.columns.count <= R.maxTableColumns { tableCells += table.columns.count }
+            if table.columns.count <= R.maxTableColumns { tableCells += table.columns.count } else { trim("table columns") }
             if tableCells > R.maxTableCells { trim("table cells") }
         }
         if let table, column >= 0, table.columns.count > R.maxTableColumns || tableCells > R.maxTableCells {
@@ -274,7 +276,7 @@ private final class Converter {
         ps.headIndent = indent
         ps.firstLineHeadIndent = indent
         ps.tabStops = [NSTextTab(textAlignment: .left, location: indent, options: [:])]
-        ps.paragraphSpacing = code || column >= 0 ? 0 : (item != nil ? 3 : 8) * scale
+        ps.paragraphSpacing = code || column >= 0 ? 0 : (items.isEmpty ? 8 : 3) * scale
         ps.paragraphSpacingBefore = level > 0 ? 8 * scale : 0
         var font = body
         let headingSizes: [CGFloat] = [20, 18, 16]   // MarkdownBlocksView's; 15 below level 3
@@ -296,12 +298,19 @@ private final class Converter {
 
         var text = rule ? "\u{00A0}" : text   // a rule is drawn by its block's border, not the "⸻" glyph
         var marker: String?
-        if let item, item.id != lastItem {
-            lastItem = item.id
-            if text.hasPrefix("[ ] ") { marker = "☐"; text.removeFirst(4) }
-            else if text.hasPrefix("[x] ") || text.hasPrefix("[X] ") { marker = "☑"; text.removeFirst(4) }
-            else { marker = item.ordered ? "\(item.ordinal)." : ["•", "◦", "▪"][max(0, depth - 1) % 3] }
-            ps.firstLineHeadIndent = max(0, indent - unit)
+        // #1163: every item this block opens gets its marker ("1. - x" opens two), outermost first, each at
+        // its own depth. The new ones are the innermost: an item open on the last block keeps its parents.
+        let fresh = items.filter { !openItems.contains($0.id) }
+        if !items.isEmpty { openItems = Set(items.map(\.id)) }   // a block with no intent (raw HTML) keeps them
+        if let first = fresh.first {
+            var marks = fresh.map { $0.ordered ? "\($0.ordinal)." : ["•", "◦", "▪"][max(0, $0.depth - 1) % 3] }
+            if text.hasPrefix("[ ] ") { marks[marks.count - 1] = "☐"; text.removeFirst(4) }
+            else if text.hasPrefix("[x] ") || text.hasPrefix("[X] ") { marks[marks.count - 1] = "☑"; text.removeFirst(4) }
+            var m = "", prev = 0
+            for (f, mark) in zip(fresh, marks) { m += (m.isEmpty ? "" : f.depth == prev ? " " : "\t") + mark; prev = f.depth }   // past the shown depth they share a stop
+            marker = m
+            ps.firstLineHeadIndent = CGFloat(max(0, first.depth - 1)) * unit
+            ps.tabStops = stride(from: first.depth, through: depth, by: 1).map { NSTextTab(textAlignment: .left, location: CGFloat($0) * unit, options: [:]) }
         }
         para = ps.copy() as! NSParagraphStyle
         let c = ps.mutableCopy() as! NSMutableParagraphStyle
