@@ -395,7 +395,18 @@ struct AgentWindowRootView: View {
                 .frame(width: sz(290))
                 .background(NeonSidebarSurface())
             Rectangle().fill(Neon.stroke).frame(width: 1)
-            AgentPaneArea(model: model, scrolls: scrolls)
+            // #831 9.1: the band over the pane area, one whatever the number of panes, only while the split gate is on
+            // (AgentWindowBand.shown; AgentWindowModel.paneAreaFrame mirrors this column for the 7.2 click rule).
+            Group {
+                if AgentWindowBand.shown {
+                    VStack(spacing: 0) {
+                        AgentWindowBand(model: model)
+                        AgentPaneArea(model: model, scrolls: scrolls)
+                    }
+                } else {
+                    AgentPaneArea(model: model, scrolls: scrolls)
+                }
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(SettingsBackground())
         }
@@ -912,6 +923,98 @@ struct AgentDetailView: View {
     }
 }
 
+// MARK: - #831 B1 step 5b: the band (9.1)
+
+/// The band's coordinate space (AgentWindowBand.probe frames are in it).
+let agentBandSpace = "agentWindowBand"
+
+/// #831 9.1: the window-level band over the pane area, one row of 30·s whatever the number of panes, shown only while
+/// the split gate is on (`shown`; #1224: off, the window is the parent's and the header draws the picker). Slots, left to
+/// right: the layout slot and the chip slot (empty before the Layouts section, zoom and the too-small chip: B2/B3), the
+/// All slot (its room kept, empty until phase C: no control, no text, no accessibility element), the verbosity picker
+/// (moved in from the session header). Fixed slots: each slot's size comes from the UI scale alone. A narrow band gives
+/// way in `Tier` order: the chip slot first, then the layout slot, then the picker's icons, then its menu; the All slot
+/// and the picker never go.
+struct AgentWindowBand: View {
+    @ObservedObject var model: AgentWindowModel
+    /// Tests only: (slot, frame in the band) as "layout", "chip", "all", "picker" and "band" are laid out. Main actor
+    /// (SwiftUI calls it from layout).
+    static var probe: ((String, CGRect) -> Void)?
+
+    /// The one gate for the band (#1224): the window's content, AgentWindowModel.paneAreaFrame and the session header's
+    /// picker all read it. Off (the product, the split gate's default): no band, the parent's window. Read at layout
+    /// time, not observed: a flip shows at the next build of the view, as the split gate does.
+    @MainActor static var shown: Bool { AgentPaneLayout.splitsEnabled }
+    static var height: CGFloat { sz(30) }
+    /// shortcut: fixed widths for slots that draw nothing before B2/B3/C; the phase that fills one sizes it to its widest.
+    static var layoutWidth: CGFloat { sz(100) }
+    static var allWidth: CGFloat { sz(140) }
+    /// 3.4's chip at the 6-pane cap: the chip slot's widest variant.
+    static let chipWidest = "5 panes hidden, window too small"
+
+    /// Widest first, so ViewThatFits takes the first that fits: the order in which the slots give way.
+    enum Tier: CaseIterable { case full, noChip, noLayout, icons, menu }
+
+    var body: some View {
+        let on = Self.transcriptShown(model)
+        ViewThatFits(in: .horizontal) {
+            line(.full, on: on)
+            line(.noChip, on: on)
+            line(.noLayout, on: on)
+            line(.icons, on: on)
+            line(.menu, on: on)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: Self.height)
+        .modifier(AgentBandProbe(kind: "band"))
+        .coordinateSpace(.named(agentBandSpace))
+    }
+
+    func line(_ t: Tier, on: Bool) -> some View {
+        HStack(spacing: sz(8)) {
+            // Slots that give way are left out of the stack, never zero-width (a zero-width child still takes a spacing).
+            if t == .full || t == .noChip {
+                Color.clear.frame(width: Self.layoutWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "layout"))
+            }
+            if t == .full {
+                Text(Self.chipWidest).font(Neon.font(11)).lineLimit(1).fixedSize().hidden().accessibilityHidden(true)
+                    .modifier(AgentBandProbe(kind: "chip"))
+            }
+            Spacer(minLength: 0)
+            Color.clear.frame(width: Self.allWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "all"))
+            AgentVerbosityPicker(level: $model.verbosity, style: t == .menu ? .menu : t == .icons ? .icons : .labels)
+                .disabled(!on).opacity(on ? 1 : 0.45)
+                .modifier(AgentBandProbe(kind: "picker"))
+        }
+        .padding(.horizontal, sz(16))
+        .frame(maxWidth: .infinity)   // the ideal width still decides the tier; the taken line spans the band
+    }
+
+    /// 9.1 (#822 5.1, window-wide): some shown pane draws a transcript. The focused pane as AgentDetailView draws it (a
+    /// session row, no New session form, Transcript mode); any other shown pane as AgentUnfocusedPane does.
+    /// shortcut: the band observes the window model only, so an unfocused pane's own change (gate on) shows at the
+    /// model's next publish; upgrade when B2 lets a person see two panes.
+    static func transcriptShown(_ m: AgentWindowModel) -> Bool {
+        m.paneFrames(in: m.paneArea).keys.contains { id in
+            if id == m.layout.focused {
+                return m.newSession == nil && m.selectedRow?.session != nil && m.paneMode == .transcript
+            }
+            guard let r = m.runtimes[id] else { return false }
+            return AgentUnfocusedPane(model: m, runtime: r, transcript: r.transcript, interaction: m.interaction).shown != nil
+        }
+    }
+}
+
+/// Tests: a band part's frame in the band, through `AgentWindowBand.probe` (nil in the product). Main actor.
+struct AgentBandProbe: ViewModifier {
+    let kind: String
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentBandSpace)) }) { r in
+            AgentWindowBand.probe?(kind, r)
+        }
+    }
+}
+
 // MARK: - #831 B1 step 4: the pane area (view A)
 
 /// The pane area's coordinate space (pane frames are the model's, in it).
@@ -1423,6 +1526,8 @@ struct AgentSessionHeader: View {
             Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1)
             stateChip
             if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+            // #831 9.1: the picker's room counts here whether the header or the band (AgentWindowBand.shown) draws it,
+            // so the header picks its tier at the same widths and the toggle and the "⋯" stay where they were.
             AgentVerbosityPicker(level: level, style: picker)
             if setMode != nil { AgentPaneModeToggle(mode: mode, style: picker, set: { _ in }) }
             Color.clear.frame(width: sz(18), height: sz(18))   // the "⋯"
@@ -1439,7 +1544,8 @@ struct AgentSessionHeader: View {
             // push the line past the header, so they sit at the right edge, where the mode does not move them.
             titleSlot.frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
             if mode == .terminal, let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
-            if mode == .transcript { AgentVerbosityPicker(level: level, style: picker) }   // #1103: none in Terminal mode
+            // #1103: none in Terminal mode. #831 9.1: with the band shown the picker is the band's, not drawn here.
+            if mode == .transcript && !AgentWindowBand.shown { AgentVerbosityPicker(level: level, style: picker) }
             if let setMode {
                 AgentPaneModeToggle(mode: mode, style: picker, set: setMode,
                                     off: ended ? AgentPaneModeToggle.endedReason : nil)

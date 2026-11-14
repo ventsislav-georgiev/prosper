@@ -298,14 +298,17 @@ final class AgentWindowModel: ObservableObject {
         hasStore ? CGRect(x: 0, y: 0, width: sz(290), height: size.height) : nil
     }
 
-    /// The pane area's frame in the same content: right of the sidebar and its line; nil with no store.
+    /// The pane area's frame in the same content: right of the sidebar and its line, under the band while it is shown
+    /// (AgentWindowBand.shown; 9.1: a click on the band is in no pane), else the whole height; nil with no store.
     func paneAreaFrame(in size: CGSize) -> CGRect? {
-        hasStore ? CGRect(x: sz(290) + 1, y: 0, width: max(0, size.width - sz(290) - 1), height: size.height) : nil
+        let band = AgentWindowBand.shown ? AgentWindowBand.height : 0
+        return hasStore ? CGRect(x: sz(290) + 1, y: band, width: max(0, size.width - sz(290) - 1),
+                                 height: max(0, size.height - band)) : nil
     }
 
     /// 7.2 / 7.6: a left mouse-down at `p` in the content of `size` (top-left origin). Outside data: a point or size that
     /// is not finite changes nothing. In the sidebar: the sidebar takes the keys. In a pane frame: the panes do, and an
-    /// unfocused pane is focused (`AgentsNSWindow.firstClick`). Elsewhere (the 1 pt line): nothing changes.
+    /// unfocused pane is focused (`AgentsNSWindow.firstClick`). Elsewhere (the 1 pt line, the band): nothing changes.
     /// True: the click only focused a pane, so the window swallows it with its drags and its up.
     func mouseDown(at p: CGPoint, in size: CGSize) -> Bool {
         guard p.x.isFinite, p.y.isFinite, size.width.isFinite, size.height.isFinite else { return false }

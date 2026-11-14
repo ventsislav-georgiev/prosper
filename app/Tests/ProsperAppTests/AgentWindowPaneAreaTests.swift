@@ -117,7 +117,8 @@ extension AgentWindowD1Tests {
             // Two panes, columns.
             AgentPaneLayout.splitsEnabled = true
             m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
-            let frames = m.paneFrames(in: area)
+            // #1224: with the gate on the band shows, so the pane area is the column less it.
+            let frames = m.paneFrames(in: CGRect(x: 0, y: 0, width: area.width, height: area.height - AgentWindowBand.height))
             let base = paneSnapshot(m, size)
             for i in 0..<2 {
                 let id = m.layout.order[i]
