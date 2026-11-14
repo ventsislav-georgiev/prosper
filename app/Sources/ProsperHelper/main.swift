@@ -225,33 +225,25 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // Re-assert the recorded target once per incident; if it keeps getting
         // reclaimed, the OS wants the fans — give up honestly with a full reset so the
         // app's poll sees auto everywhere and flips the UI.
-        let fan = self.fan
-        var mx: Double?
-        switch fanCore.supervise(maxCelsius: { mx = fan?.maxTemperature(); return mx }(),
-                                 isManualEngaged: { fan?.isManualEngaged($0) ?? true }) {
-        case .stop:
-            fanKillTimer?.cancel(); fanKillTimer = nil
-        case .fired:
-            fanLog.fault("fan kill-switch FIRED: \(mx ?? .nan, privacy: .public)°C ≥ \(FanControlCore.killSwitchCelsius, privacy: .public)°C — all fans reset to auto")
-            fanKillTimer?.cancel(); fanKillTimer = nil
-        case .keep:
-            break
-        case .reassert(let reclaimed):
-            fanLog.notice("fan reclaim detected on \(reclaimed, privacy: .public) — re-asserting targets")
-            for i in reclaimed {
-                guard let fan, let rpm = fanCore.heldTargets[i] else { continue }
-                do { try fan.setManual(i, rpm: rpm) }
-                catch {
-                    fanLog.error("fan re-assert(\(i, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)")
-                }
+        // The reads, the step and the writes run in FanControlCore.tick (unit-tested, #1207); this
+        // only logs and cancels. `log` is non-escaping: it runs inside the call, on fanQ.
+        let done = fanCore.tick(fan) { event in
+            switch event {
+            case .step(.fired, let mx):
+                fanLog.fault("fan kill-switch FIRED: \(mx ?? .nan, privacy: .public)°C ≥ \(FanControlCore.killSwitchCelsius, privacy: .public)°C — all fans reset to auto")
+            case .step(.reassert(let reclaimed), _):
+                fanLog.notice("fan reclaim detected on \(reclaimed, privacy: .public) — re-asserting targets")
+            case .step(.release(let reclaimed), _):
+                fanLog.fault("fan reclaim persists on \(reclaimed, privacy: .public) — OS wants control, releasing all fans")
+            case .step:
+                break
+            case .reassertFailed(let i, let error):
+                fanLog.error("fan re-assert(\(i, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)")
+            case .releaseFailed:
+                fanLog.error("fan release reset FAILED — retrying next tick")
             }
-        case .release(let reclaimed):
-            fanLog.fault("fan reclaim persists on \(reclaimed, privacy: .public) — OS wants control, releasing all fans")
-            // A failed reset keeps the timer: the core still holds the targets, so the
-            // next tick releases (and retries the reset) again.
-            guard fanCore.releaseAll() else { fanLog.error("fan release reset FAILED — retrying next tick"); break }
-            fanKillTimer?.cancel(); fanKillTimer = nil
         }
+        if done { fanKillTimer?.cancel(); fanKillTimer = nil }
     }
 
     func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) {
@@ -260,13 +252,12 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // harmless while under-resetting is the hazard. With `holdUnlock` (opt-in
         // fast-re-engage pref) the controller unlock is kept once NO fan remains
         // manual — a latent hazard the core then supervises exactly like a pin.
+        // Write, record and arm run in FanControlCore.setFanAuto (unit-tested, #1207); `arm` is
+        // non-escaping and runs inside that call, on fanQ.
         fanQ.async {
-            guard let fan = self.fan else { reply(false); return }
             do {
-                try fan.setAuto(index, holdUnlock: holdUnlock)
-                if self.fanCore.autoApplied(index: index, holdUnlock: holdUnlock, hasFtst: fan.hasFtst()) {
-                    self.armFanKillSwitch_fanQ()
-                }
+                guard try self.fanCore.setFanAuto(self.fan, index: index, holdUnlock: holdUnlock,
+                                                  arm: { self.armFanKillSwitch_fanQ() }) else { reply(false); return }
                 fanLog.notice("setFanAuto(\(index, privacy: .public), hold=\(holdUnlock, privacy: .public)) ok")
                 reply(true)
             } catch {

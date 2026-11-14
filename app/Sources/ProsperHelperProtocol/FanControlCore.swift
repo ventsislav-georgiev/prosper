@@ -98,6 +98,18 @@ public final class FanControlCore {
         return true
     }
 
+    /// `setFanAuto`'s body, run by the daemon inside one fanQ block (#1207 moved it out of main.swift
+    /// unchanged). `fan` nil (no SMC controller): false, nothing written or recorded. Otherwise the
+    /// write comes first and only once it returned is the target dropped (`autoApplied`); `arm` (the
+    /// supervision timer) runs after that when it asks for it. A throwing write rethrows with the
+    /// target, the holder and the crash reset still held.
+    public func setFanAuto(_ fan: FanHardware?, index: Int, holdUnlock: Bool, arm: () -> Void) throws -> Bool {
+        guard let fan else { return false }
+        try fan.setAuto(index, holdUnlock: holdUnlock)
+        if autoApplied(index: index, holdUnlock: holdUnlock, hasFtst: fan.hasFtst()) { arm() }
+        return true
+    }
+
     /// A connection closed. Only the holder's drop resets the fans.
     public func connectionClosed(_ cid: ObjectIdentifier) {
         guard holder == cid else { return }
@@ -133,6 +145,42 @@ public final class FanControlCore {
         if reclaimed.isEmpty { reassertBudget = 1; return .keep }
         if reassertBudget > 0 { reassertBudget -= 1; return .reassert(reclaimed) }
         return .release(reclaimed)
+    }
+
+    /// What the daemon's tick logs: the step with the hottest reading it saw (nil when none was
+    /// read), then each re-assert write that threw, or a release whose reset failed.
+    public enum TickLog {
+        case step(Step, maxCelsius: Double?)
+        case reassertFailed(Int, Error)
+        case releaseFailed
+    }
+
+    /// The daemon's 30 s supervision tick, carried out (#1207 moved it out of main.swift unchanged):
+    /// `supervise`, then what the step asks of the fans. `fan` nil (no SMC controller): the hottest
+    /// sensor reads nil and every fan reads engaged, so nothing is written. Returns true when the
+    /// daemon cancels the timer: after `.stop`, `.fired`, and a `.release` whose reset worked.
+    public func tick(_ fan: FanHardware?, log: (TickLog) -> Void) -> Bool {
+        var mx: Double?
+        let step = supervise(maxCelsius: { mx = fan?.maxTemperature(complete: false); return mx }(),
+                             isManualEngaged: { fan?.isManualEngaged($0) ?? true })
+        log(.step(step, maxCelsius: mx))
+        switch step {
+        case .stop, .fired:
+            return true
+        case .keep:
+            return false
+        case .reassert(let reclaimed):
+            for i in reclaimed {
+                guard let fan, let rpm = heldTargets[i] else { continue }
+                do { try fan.setManual(i, rpm: rpm) } catch { log(.reassertFailed(i, error)) }
+            }
+            return false
+        case .release:
+            // A failed reset keeps the timer: the core still holds the targets, so the
+            // next tick releases (and retries the reset) again.
+            guard releaseAll() else { log(.releaseFailed); return false }
+            return true
+        }
     }
 
     /// A manual write succeeded — arm the crash-safety reset. Manual supersedes a
@@ -305,11 +353,14 @@ public final class FanControlCore {
     }
 }
 
-/// The SMC calls `FanControlCore.engage` makes. The daemon's `SMCFanController` conforms
+/// The SMC calls `engage`, `tick` and `setFanAuto` make. The daemon's `SMCFanController` conforms
 /// (this target cannot import SMCKit); tests pass a fake, so no test touches a real fan.
 public protocol FanHardware {
     func maxTemperature(complete: Bool) -> Double?
     func currentRPM(_ i: Int) -> Double?
     func targetRPM(_ i: Int) -> Double?
     func setManual(_ i: Int, rpm: Double) throws
+    func isManualEngaged(_ i: Int) -> Bool
+    func setAuto(_ i: Int, holdUnlock: Bool) throws
+    func hasFtst() -> Bool
 }

@@ -664,6 +664,10 @@ final class FanControlCoreTests: XCTestCase {
             calls.append("write \(i) \(Int(rpm))")
             if writeFails { throw WriteFailed() }
         }
+        // engage makes none of these; recorded so a stray one shows in `calls`.
+        func isManualEngaged(_ i: Int) -> Bool { calls.append("engaged \(i)"); return true }
+        func setAuto(_ i: Int, holdUnlock: Bool) throws { calls.append("auto \(i)") }
+        func hasFtst() -> Bool { calls.append("ftst"); return true }
     }
 
     /// Unlatched: no SMC read at all, the supervision timer is armed before the write, the pin is recorded.

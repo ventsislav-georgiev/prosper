@@ -24,8 +24,19 @@ public struct FanBounds: Equatable {
     public let max: Double
 }
 
+/// The SMC calls `SMCFanController` makes; `SMC` conforms. Internal like `writeRawUnchecked`, so
+/// the write whitelist stays the only way out of this module; a test (`@testable`) passes a fake
+/// and never opens the SMC (#1207).
+protocol SMCAccess {
+    func read(_ key: String) -> SMCValue?
+    func exists(_ key: String) -> Bool
+    func allKeys() -> [String]
+    func writeRawUnchecked(_ key: String, _ bytes: [UInt8]) throws
+}
+extension SMC: SMCAccess {}
+
 public final class SMCFanController {
-    private let smc: SMC
+    private let smc: SMCAccess
 
     // Absolute safety rails, independent of (untrusted) SMC-reported bounds. The
     // FLOOR is the single load-bearing thermal backstop — distrusting SMC bounds on
@@ -48,6 +59,7 @@ public final class SMCFanController {
     private func trace(_ s: String) { onTrace?(s) }
 
     public init(_ smc: SMC) { self.smc = smc }
+    init(access: SMCAccess) { self.smc = access }
 
     // MARK: Read-side helpers
 
@@ -111,7 +123,7 @@ public final class SMCFanController {
     /// re-encodes in the format the bytes were written in; deriving it from a
     /// hasFtst() guess instead would corrupt the value on any board where the two
     /// disagree (Ftst present but an `fpe2` target, or vice-versa).
-    private func clampTargetBytes(_ key: String, _ bytes: [UInt8]) -> [UInt8] {
+    func clampTargetBytes(_ key: String, _ bytes: [UInt8]) -> [UInt8] {
         let fpe2 = (smc.read(key)?.type ?? (hasFtst() ? "flt " : "fpe2")) == "fpe2"
         let rpm = fpe2 ? Double(SMCDecode.decodeFPE2(bytes))
                        : Double(SMCDecode.decodeFloatLE(bytes))
@@ -131,9 +143,7 @@ public final class SMCFanController {
             try? setAuto(i)                          // fail closed: hand fan back to OS
             throw SMCError.clampUnsafe("F\(i)")
         }
-        let lo = Swift.max(b.min, Self.absoluteFloorRPM)
-        let hi = Swift.min(b.max, Self.absoluteCeilRPM)
-        let safe = Swift.min(Swift.max(rpm, lo), hi)
+        let safe = Self.clampRPM(rpm, b)
 
         // Fail CLOSED across the whole manual sequence: if the unlock half-succeeds
         // (mode flipped to manual / Ftst=1) but the target write then throws, the fan
@@ -151,6 +161,15 @@ public final class SMCFanController {
             try? setAuto(i)
             throw error
         }
+    }
+
+    /// setManual's clamp (#1207 moved it here unchanged): the SMC bounds narrowed to the absolute
+    /// rails. bounds() already rejects a max at or above the ceiling, so through setManual only the
+    /// floor can bite; the ceiling is pinned here directly.
+    static func clampRPM(_ rpm: Double, _ b: FanBounds) -> Double {
+        let lo = Swift.max(b.min, Self.absoluteFloorRPM)
+        let hi = Swift.min(b.max, Self.absoluteCeilRPM)
+        return Swift.min(Swift.max(rpm, lo), hi)
     }
 
     public func setFull(_ i: Int) throws {
