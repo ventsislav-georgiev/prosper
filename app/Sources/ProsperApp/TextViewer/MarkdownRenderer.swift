@@ -152,15 +152,19 @@ enum MarkdownRenderer {
     /// text (its text and the break after it), one for each emphasis, strikethrough, code or link
     /// delimiter, two for a "<" (a tag or autolink, and the text after it), and one for each table pipe
     /// between two cells (a line's first and last pipe open no cell). Quote and list markers open a block,
-    /// counted with its line. #1211 (F1187-1): two for each "." or ":" followed by a non-blank byte, so every bare
-    /// autolink (http://a, www.a, a@b.c: a link run and the text after it) counts at least two, and a sentence's
-    /// ". " or ": " nothing. At least the parser's run count on every shape measured. One pass over the bytes.
+    /// counted with its line. #1211 (F1187-1), #1213: a bare autolink (a link run and the text after it) counts two:
+    /// two for each ":" followed by "/" (a scheme's "://"), two for a "." after a "w" or "W" and two for the first "." after an
+    /// "@" in one word, each "." only when a non-blank byte follows it. Other dots and colons ("a.b", "1.2.3", "x:y")
+    /// count nothing: the parser links none of them. At least the parser's run count on every shape measured
+    /// (#1213 probe). One pass over the bytes.
     nonisolated static func markupCount(_ s: String) -> Int {
-        var n = 0, text = false, pipe = false, dot = false
+        var n = 0, text = false, pipe = false, dot = false, at = false
+        var prev: UInt8 = 0x20
         for b in s.utf8 {
+            defer { prev = b }
             switch b {
-            case 0x0A, 0x0D: (text, pipe, dot) = (false, false, false)   // a pipe that ends its line opens no cell
-            case 0x20, 0x09: dot = false
+            case 0x0A, 0x0D: (text, pipe, dot, at) = (false, false, false, false)   // a pipe that ends its line opens no cell
+            case 0x20, 0x09: (dot, at) = (false, false)
             default:
                 if !text {
                     (n, text) = (n + 2, true)
@@ -170,7 +174,10 @@ enum MarkdownRenderer {
                 if dot { (n, dot) = (n + 2, false) }
                 switch b {
                 case UInt8(ascii: "|"): pipe = true
-                case UInt8(ascii: "."), UInt8(ascii: ":"): dot = true
+                case UInt8(ascii: "@"): at = true
+                case UInt8(ascii: "."):
+                    if prev == UInt8(ascii: "w") || prev == UInt8(ascii: "W") { dot = true } else if at { (dot, at) = (true, false) }
+                case UInt8(ascii: "/"): if prev == UInt8(ascii: ":") { n += 2 }
                 case UInt8(ascii: "<"): n += 2
                 case UInt8(ascii: "*"), UInt8(ascii: "_"), UInt8(ascii: "~"), UInt8(ascii: "`"),
                      UInt8(ascii: "["), UInt8(ascii: "]"): n += 1

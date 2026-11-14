@@ -442,11 +442,49 @@ final class MarkdownRendererTests: XCTestCase {
             ("*a*", 4), ("_a_ ~~b~~", 8), ("`c`", 4), ("[a](b)", 4), ("<b>x</b>", 6),
             ("|a|b|", 3), ("| a | b |  ", 3), ("|a|\n|b|", 4), ("||", 2), ("|||", 3), (" | a", 2), ("a |", 2),
             ("# h\n- i\n1. j", 6), ("> > q", 2), ("a < b", 4), ("<http://a>", 6),
-            // #1211 (F1187-1): a "." or ":" before a non-blank byte counts two, so each bare autolink (two runs) counts two
-            ("a.b", 4), ("a:b", 4), (".a", 4), ("a..b", 6), ("a.", 2), ("a. b", 2), ("a: b", 2), ("a.\nb", 4), ("a@b", 2),
-            ("a@b.co", 4), ("www.a", 4), ("http://a", 4), ("www.a.co", 6), ("http://a.co", 6), ("a@b.co a@b.co", 6),
-        ]
+            // #1211 (F1187-1), #1213: a bare autolink (two runs) counts two; other dots and colons nothing
+            ("a.b", 2), ("a:b", 2), (".a", 2), ("a..b", 2), ("a.", 2), ("a. b", 2), ("a: b", 2), ("a.\nb", 4), ("a@b", 2),
+            ("a@b.co", 4), ("www.a", 4), ("http://a", 4), ("www.a.co", 4), ("http://a.co", 4), ("a@b.co a@b.co", 6),
+            ("a@ b.c", 2), ("a@b. c", 2), ("a@b.c.d", 4), ("w. a", 2), ("a:/", 4),
+        ] + Self.autolinkShapes
         for (md, n) in cases { XCTAssertEqual(R.markupCount(md), n, md.debugDescription) }
+    }
+
+    /// #1213: shapes the parser may or may not turn into a link, one unit each, with markupCount's count (probe table).
+    static let autolinkShapes: [(String, Int)] = [
+        ("a@b.co", 4), ("www.a.co", 4), ("http://a.co", 4), ("a@b.c", 4), ("www.a", 4), ("http://a", 4),
+        ("https://a", 4), ("ftp://a.b", 4), ("mailto:a@b.c", 4), ("a.co", 2), ("x:y", 2), ("a.b", 2), ("a@b", 2),
+        ("WWW.a", 4), ("WWW.A.CO", 4), ("Www.a", 4), ("HTTP://a", 4), ("HTTPS://a", 4), ("ftp://a", 4), ("FTP://a", 4),
+        ("mailto:a", 2), ("MAILTO:a@b.c", 4), ("mailto:a@b", 2), ("xmpp:a@b.c", 4), ("xmpp:a@b.c/r", 4), ("xmpp:a", 2),
+        ("http://[::1]/", 6), ("http://[a]/", 6), ("a@", 2), ("@a.b", 4), ("now.then", 4), ("w.a", 4), ("xwww.a", 4),
+        ("www.a.co/x?y=z", 4), ("http://a.co/x.y", 4), ("a@b.co.uk", 4), ("a@b.co@c.d", 6), ("a.b@c.d", 4),
+        ("a@b.c.", 4), ("www.a.", 4), ("file.md", 2), ("1.2.3", 2), ("x://a", 4), ("a://b", 4), ("a+b@c.d", 4),
+        ("a_b@c.d", 5), ("a-b@c.d", 4), ("(www.a)", 4), ("*www.a*", 6), ("a@b.co,c@d.co", 6), ("www.a.co,www.b.co", 6),
+        ("http://a,http://b", 6), ("http://a.co,www.b.co", 6), ("a@b.co;http://c", 6), ("www.a@b.c", 6),
+        ("https://a@b.c", 6), ("a@www.b", 4), ("a:b@c.d", 4), ("http://a.co.", 4), ("<http://a>", 6), ("<a@b.c>", 6),
+        ("[x](http://a)", 6), ("`www.a`", 6), ("a.b.c.d.e", 2), ("v1.2.3:", 2), ("C:\\x", 2),
+    ]
+
+    /// #1213: on every shape above, and on #1187's inline shapes, 100 units count at least the runs the parser makes of
+    /// them, units joined by a blank and by a line end. Parse only, a few hundred runs a shape.
+    func testMarkupCountCoversTheParsersRuns() throws {
+        let opts = AttributedString.MarkdownParsingOptions(allowsExtendedAttributes: false, interpretedSyntax: .full,
+                                                           failurePolicy: .returnPartiallyParsedIfPossible, languageCode: nil)
+        var docs = Self.inlineShapes(100)
+        for (shape, _) in Self.autolinkShapes {
+            docs.append((shape + " x100", String(repeating: shape + " ", count: 100)))
+            docs.append((shape + " x100 lines", String(repeating: shape + "\n", count: 100)))
+        }
+        var linked = 0
+        for (name, md) in docs {
+            try autoreleasepool {
+                let parsed = try AttributedString(markdown: md, options: opts)
+                let runs = parsed.runs.count
+                linked += parsed.runs.contains { $0.link != nil } ? 1 : 0
+                XCTAssertGreaterThanOrEqual(R.markupCount(md), runs, name)
+            }
+        }
+        XCTAssertGreaterThanOrEqual(linked, 40, "the table holds shapes the parser links (41 a join in the probe)")
     }
 
     /// #1187: at maxMarkup the file is rendered as before; one more delimiter and it is its source, with the note.
@@ -487,7 +525,7 @@ final class MarkdownRendererTests: XCTestCase {
 
     /// #1211 (F1187-1): bare e-mail autolinks count toward the markup cap: at it the file is Markdown, one more is source.
     func testMarkupCapCountsAutolinks() {
-        let mails = String(repeating: "a@b.co ", count: 1000)   // 2 each: the "." before "co"
+        let mails = String(repeating: "a@b.co ", count: 1000)   // 2 each: the first "." after the "@"
         XCTAssertEqual(R.markupCount(mails), 2 + 2000)
         let at = mails + String(repeating: "*a _a ", count: (R.maxMarkup - 2002) / 2)   // openers with no closer: one run
         XCTAssertEqual(R.markupCount(at), R.maxMarkup)
@@ -550,6 +588,42 @@ final class MarkdownRendererTests: XCTestCase {
             let wide = render(md)
             XCTAssertEqual(wide.note, "Too many table columns, styles in one paragraph: the rest shown as plain text")
             XCTAssertEqual(italicRuns(wide), p - (cols - 1), "the \" | \" between two cells takes the last run's style and joins two runs")
+        }
+    }
+
+    /// #1211 (R1211-2, #1213): an image counts toward maxStyledRunsPerParagraph. Past the bound it is its alt text as plain
+    /// text and the loader is not asked; in the next paragraph an image is drawn again. The loader is the test's fake.
+    func testImagesCountInTheParagraphBound() throws {
+        let p = R.maxStyledRunsPerParagraph
+        let note = "Too many styles in one paragraph: the rest shown as plain text"
+        func para(_ n: Int) -> String { (0..<n).map { "*e\($0)*" }.joined(separator: " ") }
+        let png = try pngData(width: 8, height: 8)
+        func attachments(_ out: R.Output) -> Int {
+            var n = 0
+            out.text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: out.text.length)) { v, _, _ in if v != nil { n += 1 } }
+            return n
+        }
+        autoreleasepool {   // the image is run p + 1: its alt text, plain; the next paragraph's image is drawn
+            let loader = Loader()
+            loader.image = ImagePolicy.decode(png, maxPixelSize: 8)
+            let out = render(para(p) + " ![over](p.png)\n\n![next](q.png)", loader)
+            XCTAssertEqual(out.note, note)
+            XCTAssertEqual(loader.requests, ["q.png"], "the image past the bound is not requested")
+            XCTAssertEqual(attachments(out), 1)
+            XCTAssertTrue(out.text.string.contains(" over\n"), "the alt text as plain text, no \"[image: ...]\"")
+            XCTAssertTrue(at(out, "over")[.link] == nil)
+            XCTAssertEqual(italicRuns(out), p)
+            XCTAssertEqual(out.text.attribute(.toolTip, at: out.text.length - 1, effectiveRange: nil) as? String, "next")
+        }
+        autoreleasepool {   // the image is run p: drawn, and the styled run after it is past the bound
+            let loader = Loader()
+            loader.image = ImagePolicy.decode(png, maxPixelSize: 8)
+            let out = render(para(p - 1) + " ![in](p.png) *last*", loader)
+            XCTAssertEqual(out.note, note)
+            XCTAssertEqual(loader.requests, ["p.png"])
+            XCTAssertEqual(attachments(out), 1)
+            XCTAssertEqual(italicRuns(out), p - 1)
+            XCTAssertEqual(font(out, "last")?.fontDescriptor.symbolicTraits.contains(.italic), false, "run \(p + 1) is plain")
         }
     }
 
