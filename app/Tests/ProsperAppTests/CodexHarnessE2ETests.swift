@@ -95,7 +95,11 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// message delta / turn/completed; ["ask", thread, id] / ["patch", thread, id] that thread's command
     /// approval / fileChange item then file-change approval, with JSON-RPC id `id`; ["finish"] ends the
     /// session's turn at once; ["complete", thread, turn] a turn/completed{interrupted} naming that turn. Otherwise the turn ends once every ask is answered (a reply not in the
-    /// method's shape fails it).
+    /// method's shape fails it). #1098: ["fan", prefix, n, parent] n thread_spawn children prefix-1…prefix-n of one
+    /// parent in one write; ["close", id, …] a thread/closed per id in one write (a non-string id is off-schema
+    /// on purpose and goes out unlogged). STALEFIRST: a turn/start after a WEDGE turn sends the wedged turn's late
+    /// turn/completed{interrupted} before its reply and turn/started (the new turn not yet named), not after.
+    /// ENDFIRST (#1098 r2): the turn's turn/completed{completed} and then its reply in one write, no turn/started.
     private static let mockServer = #"""
     import sys, json, os, time, subprocess
 
@@ -273,6 +277,16 @@ final class CodexHarnessE2ETests: XCTestCase {
             elif kind == "chain":
                 prefix, n, root = args
                 send(*(spawned("%s-%d" % (prefix, k), root if k == 1 else "%s-%d" % (prefix, k - 1), k) for k in range(1, n + 1)))
+            elif kind == "fan":
+                prefix, n, parent = args
+                send(*(spawned("%s-%d" % (prefix, k), parent) for k in range(1, n + 1)))
+            elif kind == "close":
+                frames = [{"jsonrpc": "2.0", "method": "thread/closed", "params": {"threadId": t}} for t in args]
+                for f in frames:
+                    if isinstance(f["params"]["threadId"], str):   # the schema log gets only well-formed ones
+                        log("in", f)
+                sys.stdout.write("".join(json.dumps(f) + "\n" for f in frames))
+                sys.stdout.flush()
             elif kind == "fork":
                 send(thread_started(args[0], forkedFromId=args[1]))
             elif kind == "review":
@@ -442,6 +456,15 @@ final class CodexHarnessE2ETests: XCTestCase {
             current_thread = params.get("threadId")
             turn_seq += 1
             current_turn = "turn-%d" % turn_seq
+            if stale and "STALEFIRST" in prompt:   # #1098 rider 3: before the new turn is named
+                send({"jsonrpc": "2.0", "method": "turn/completed",
+                      "params": {"threadId": prev_thread, "turn": {"id": stale, "items": [], "status": "interrupted"}}})
+                stale = None
+            if "ENDFIRST" in prompt:
+                send({"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": current_thread, "turn": turn("completed")}},
+                     {"jsonrpc": "2.0", "id": mid, "result": {"turn": turn("inProgress")}})
+                current_turn = None
+                continue
             if "FAST" in prompt:
                 done = turn("failed" if "FAIL" in prompt else "completed")
                 if "FAIL" in prompt:
@@ -838,11 +861,11 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// Prompts thread-1 with SPAWNPLAN running `plan` (see the mock), answers every card with `answer`
     /// (nil: leaves it), and returns the events up to the end of turn `endTurn` ([] past 10 s). Before the
     /// shutdown it waits (polls) until every ask of the plan has a reply in the mock's log. `before` runs
-    /// on the fresh session first.
-    private func runPlan(_ plan: [[Any]], answer: ApprovalDecision?, endTurn: String = "turn-1",
-                         before: ((CodexHarness, SessionID) async throws -> Void)? = nil) async throws -> (events: [HarnessEvent], exe: URL) {
+    /// on the fresh session first. `prompt` carries the mock's words (SPAWNPLAN in it).
+    private func runPlan(_ plan: [[Any]], answer: ApprovalDecision?, endTurn: String = "turn-1", prompt: String = "SPAWNPLAN",
+                         before: ((CodexHarness, SessionID, URL) async throws -> Void)? = nil) async throws -> (events: [HarnessEvent], exe: URL) {
         let (harness, session, exe) = try await harnessOnThread1()
-        try await before?(harness, session)
+        try await before?(harness, session, exe)
         try JSONSerialization.data(withJSONObject: plan)
             .write(to: exe.deletingLastPathComponent().appendingPathComponent("spawn-plan.json"))
         let collector = Task { () -> [HarnessEvent] in
@@ -854,7 +877,7 @@ final class CodexHarnessE2ETests: XCTestCase {
             }
             return seen
         }
-        try await harness.sendPrompt(session: session, input: [.text("SPAWNPLAN")])
+        try await harness.sendPrompt(session: session, input: [.text(prompt)])
         let events = await withTaskGroup(of: [HarnessEvent]?.self) { group in
             group.addTask { await collector.value }
             group.addTask { try? await Task.sleep(nanoseconds: 10 * 1_000_000_000); return nil }
@@ -940,25 +963,85 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(Self.replies(exe: exe), ["srv-early": [Self.declined], "srv-later": [Self.accepted]])
     }
 
-    /// The peer's ids bound nothing on their own: a parent cycle (cyc-a <-> cyc-b) ends the walk, a chain
-    /// reaches the session within `spawnHops` (16) hops only, and past `spawnCap` (256) announcements a
-    /// new one is ignored, even a direct child's. 2 cycle threads + deep-1…deep-253 hold 255 entries:
-    /// child-256 is the 256th (shown), late-child the 257th (declined).
+    /// The peer's ids bound nothing on their own: a parent cycle (cyc-a <-> cyc-b) reaches no session, a chain
+    /// reaches it within `spawnHops` (16) hops only, and past `spawnCap` (256) announcements a new one is
+    /// ignored, even a direct child's. #1098: only chains that reach the session are recorded, so the cycle
+    /// and deep-17…deep-253 take no slot: deep-1…deep-16 + c-1…c-240 hold 256 entries, c-240 the 256th
+    /// (shown), late-child the 257th (declined).
     func testParentCycleDeepChainAndAnnouncementCapAreBounded() async throws {
         XCTAssertEqual(CodexHarness.spawnHops, 16)
         XCTAssertEqual(CodexHarness.spawnCap, 256)
         let (events, exe) = try await runPlan([["spawn", "cyc-a", "cyc-b"], ["spawn", "cyc-b", "cyc-a"],
                                                ["ask", "cyc-a", "srv-cycle"], ["chain", "deep", 253, "thread-1"],
                                                ["ask", "deep-16", "srv-16"], ["ask", "deep-17", "srv-17"],
-                                               ["ask", "deep-253", "srv-253"], ["spawn", "child-256", "thread-1"],
-                                               ["ask", "child-256", "srv-256"], ["spawn", "late-child", "thread-1"],
+                                               ["ask", "deep-253", "srv-253"], ["fan", "c", 240, "thread-1"],
+                                               ["ask", "c-240", "srv-256"], ["spawn", "late-child", "thread-1"],
                                                ["ask", "late-child", "srv-past-cap"]], answer: .accept)
         XCTAssertEqual(Self.cards(events), ["deep-16: \(Self.label)\nrm -rf build",
-                                            "child-256: \(Self.label)\nrm -rf build"], "\(events)")
+                                            "c-240: \(Self.label)\nrm -rf build"], "\(events)")
         XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
         XCTAssertEqual(Self.replies(exe: exe), ["srv-cycle": [Self.declined], "srv-16": [Self.accepted],
                                                 "srv-17": [Self.declined], "srv-253": [Self.declined],
                                                 "srv-256": [Self.accepted], "srv-past-cap": [Self.declined]])
+    }
+
+    /// #1098 case 2: a session past 256 spawns still shows a later sub-agent's card once earlier ones ended
+    /// (thread/closed frees their slots). over-1 comes while a-1…a-256 fill the map: declined.
+    func testEndedSubAgentsFreeTheCapForLaterOnes() async throws {
+        let closes: [Any] = ["close"] + (1...256).map { "a-\($0)" }
+        let (events, exe) = try await runPlan([["fan", "a", 256, "thread-1"], ["spawn", "over-1", "thread-1"],
+                                               ["ask", "over-1", "srv-full"], closes, ["spawn", "after-1", "thread-1"],
+                                               ["ask", "after-1", "srv-after"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), ["after-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-full": [Self.declined], "srv-after": [Self.accepted]])
+    }
+
+    /// #1098: a sub-agent whose thread closed and asks again is an unknown thread: declined, no card (fail safe,
+    /// as an unannounced one). Its child grand-1 keeps its own entry, but the chain up to the session is gone with
+    /// kid-1, so grand-1 is no longer proven the session's: declined too.
+    func testAnEndedSubAgentAndItsChildAskingAgainAreDeclined() async throws {
+        let (events, exe) = try await runPlan([["spawn", "kid-1", "thread-1"], ["spawn", "grand-1", "kid-1"],
+                                               ["ask", "kid-1", "srv-before"], ["close", "kid-1"],
+                                               ["ask", "kid-1", "srv-again"], ["ask", "grand-1", "srv-grand"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), ["kid-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-before": [Self.accepted], "srv-again": [Self.declined],
+                                                "srv-grand": [Self.declined]])
+    }
+
+    /// #1098 rider 1 (QA 835 INFO-3): 256 sub-agents of another root take no slot; the session's kid-1 still gets
+    /// its card, and o-1 stays declined.
+    func testAnotherRootsSpawnsDoNotUseTheCap() async throws {
+        let (events, exe) = try await runPlan([["fan", "o", 256, "thread-9"], ["spawn", "kid-1", "thread-1"],
+                                               ["ask", "o-1", "srv-other"], ["ask", "kid-1", "srv-kid"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), ["kid-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-other": [Self.declined], "srv-kid": [Self.accepted]])
+    }
+
+    /// #1098: thread/closed for an unknown thread, with a non-string id or an id past `threadIDLimit` changes
+    /// nothing: kid-1 keeps its card. A spawn with an over-long id is not recorded: declined.
+    func testThreadClosedForUnknownMalformedOrOverlongIdsChangesNothing() async throws {
+        XCTAssertEqual(CodexHarness.threadIDLimit, 256)
+        let long = String(repeating: "g", count: 257)
+        let (events, exe) = try await runPlan([["spawn", "kid-1", "thread-1"], ["close", "ghost-1", 7, NSNull(), long],
+                                               ["spawn", long, "thread-1"], ["ask", long, "srv-long"],
+                                               ["ask", "kid-1", "srv-kid"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), ["kid-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-long": [Self.declined], "srv-kid": [Self.accepted]])
+    }
+
+    /// #1098: the spawn walk is a loop of at most `spawnHops` lookups whatever the map holds: a cycle and a
+    /// 10 000-long chain end within the bound (lookups counted, no clock), and the 16-hop edge holds.
+    func testSpawnWalkIsBoundedByHopsWhateverTheMap() {
+        var map = ["cyc-a": "cyc-b", "cyc-b": "cyc-a"]
+        for k in 1..<10_000 { map["k-\(k)"] = "k-\(k - 1)" }
+        map["k-0"] = "root"
+        for (start, want) in [("cyc-a", nil), ("k-9999", nil), ("k-15", 16), ("k-16", nil), ("k-0", 1), ("none", nil)] as [(String, Int?)] {
+            var lookups = 0
+            let got = CodexHarness.hops(from: start, to: "root", parent: { lookups += 1; return map[$0] })
+            XCTAssertTrue(got == want, "\(start): \(String(describing: got))")
+            XCTAssertLessThanOrEqual(lookups, CodexHarness.spawnHops, start)
+        }
     }
 
     /// The session's turn ends with a sub-agent's card unanswered: the controller drops the card then,
@@ -988,13 +1071,39 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testAStoppedTurnsLateCompletionLeavesTheNextTurnsCards() async throws {
         let (events, exe) = try await runPlan([["spawn", "child-1", "thread-1"], ["ask", "child-1", "srv-child"],
                                                ["ask", "thread-1", "srv-own"], ["complete", "thread-1", "turn-1"]],
-                                              answer: .accept, endTurn: "turn-2") { harness, session in
+                                              answer: .accept, endTurn: "turn-2") { harness, session, _ in
             let turn = try await harness.sendPrompt(session: session, input: [.text("WEDGE")])
             do { try await harness.abort(session: session, turn: turn, timeout: 0.3); XCTFail("the wedged turn answered") } catch {}
         }
         XCTAssertEqual(Self.cards(events), ["child-1: \(Self.label)\nrm -rf build", "thread-1: rm -rf build"], "\(events)")
         XCTAssertEqual(Self.ended(events), ["turn-1 aborted", "turn-1 aborted", "turn-2 completed"], "\(events)")
         XCTAssertEqual(Self.replies(exe: exe), ["srv-child": [Self.accepted], "srv-own": [Self.accepted]])
+    }
+
+    /// #1098 rider 3: Stop fails on a wedged turn-1 (the interrupt answered with an error), turn-2 is requested,
+    /// and codex ends turn-1 late BEFORE turn-2's reply and turn/started (STALEFIRST): turn-2 is not named yet,
+    /// and still the late end leaves it running, so its sub-agent card shows.
+    func testAStoppedTurnsLateEndBeforeTheNextTurnIsNamedLeavesItsCards() async throws {
+        let (events, exe) = try await runPlan([["spawn", "child-1", "thread-1"], ["ask", "child-1", "srv-child"]],
+                                              answer: .accept, endTurn: "turn-2", prompt: "SPAWNPLAN STALEFIRST") { harness, session, exe in
+            let turn = try await harness.sendPrompt(session: session, input: [.text("WEDGE")])
+            try Self.put("turn/interrupt", "error-on", exe: exe)
+            do { try await harness.abort(session: session, turn: turn); XCTFail("the interrupt was answered") } catch {}
+        }
+        XCTAssertEqual(Self.cards(events), ["child-1: \(Self.label)\nrm -rf build"], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 aborted", "turn-2 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-child": [Self.accepted]])
+    }
+
+    /// #1098 rider 4: a turn/completed naming a turn that is neither the running one nor a stopped one ends the
+    /// harness's turn, as the controller ends its own on it (AgentController .turnCompleted): the gate closes, so
+    /// child-1's request after it is declined, with no card an idle controller would hold.
+    func testATurnEndNamingAnotherTurnEndsTheTurnAsTheControllerDoes() async throws {
+        let (events, exe) = try await runPlan([["spawn", "child-1", "thread-1"], ["complete", "thread-1", "turn-other"],
+                                               ["ask", "child-1", "srv-after"]], answer: .accept)
+        XCTAssertEqual(Self.cards(events), [], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-other aborted", "turn-1 completed"], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-after": [Self.declined]])
     }
 
     /// #1086 r3 (QA 835 INFO-2): a Stop whose interrupt fails leaves the controller idle, so the harness
@@ -1039,6 +1148,67 @@ final class CodexHarnessE2ETests: XCTestCase {
             let resumed = try await harness.resumeSession(session, options: Self.threadOpts)
             XCTAssertEqual(resumed.raw, "thread-1")
         }
+    }
+
+    /// #1098 rider 5: each half of a reset line alone. Map half: after the reset a new turn of thread-1 runs (gate
+    /// open) and the old child-1 asks: declined only because the map was cleared. Gate half: after the reset, with no
+    /// new turn, kid-2 is announced anew (map holds it) and asks: declined only because the gate was closed.
+    private func assertResetHalves(_ reset: (CodexHarness, SessionID) async throws -> Void) async throws {
+        let open: [[Any]] = [["spawn", "child-1", "thread-1"], ["ask", "child-1", "srv-open"]]
+        do {
+            let (harness, session, exe, _, cards) = try await openTurnWithCard(open)
+            XCTAssertEqual(cards, ["child-1: \(Self.label)\nrm -rf build"])
+            try await reset(harness, session)
+            try Self.put([["ask", "child-1", "srv-after"]], "spawn-plan.json", exe: exe)
+            try await harness.sendPrompt(session: session, input: [.text("SPAWNPLAN")])
+            let replies = try await Self.awaitReplies(["srv-after"], exe: exe)
+            await harness.shutdown()
+            XCTAssertEqual(replies["srv-after"], [Self.declined], "map half: the old child kept its entry")
+        }
+        do {
+            let (harness, session, exe, _, cards) = try await openTurnWithCard(open)
+            XCTAssertEqual(cards, ["child-1: \(Self.label)\nrm -rf build"])
+            try await reset(harness, session)
+            try Self.put(["thread/fork": [["spawn", "kid-2", "thread-1"], ["ask", "kid-2", "srv-after"]]], "after-plan.json", exe: exe)
+            _ = try await harness.forkSession(session)
+            let replies = try await Self.awaitReplies(["srv-after"], exe: exe)
+            await harness.shutdown()
+            XCTAssertEqual(replies["srv-after"], [Self.declined], "gate half: the old turn kept the gate open")
+        }
+    }
+
+    func testNewSessionClearsTheMapAndClosesTheGateEachOnItsOwn() async throws {
+        try await assertResetHalves { harness, _ in _ = try await harness.newSession(Self.threadOpts) }
+    }
+
+    func testResumeSessionClearsTheMapAndClosesTheGateEachOnItsOwn() async throws {
+        try await assertResetHalves { harness, session in _ = try await harness.resumeSession(session, options: Self.threadOpts) }
+    }
+
+    /// #1098 r2: a reset forgets the stopped turn's id. Stop of turn-1 throws (the mock runs no turn-1 yet and
+    /// answers the interrupt with an error, as a refused Stop), the session is reset, and the new session's turn is
+    /// also named turn-1 and ends (ENDFIRST) before its reply or turn/started name it. That end is the turn's own:
+    /// the gate closes, so kid-2 announced afterwards (fork reply) is declined. Kept, the stale id read the end as
+    /// the stopped turn's and the turn ran on with its gate open.
+    private func assertResetForgetsTheStoppedTurn(_ reset: (CodexHarness, SessionID) async throws -> Void) async throws {
+        let (harness, session, exe) = try await harnessOnThread1()
+        do { try await harness.abort(session: session, turn: TurnID(raw: "turn-1")); XCTFail("the interrupt was answered") } catch {}
+        try await reset(harness, session)
+        let turn = try await harness.sendPrompt(session: session, input: [.text("ENDFIRST")])
+        XCTAssertEqual(turn.raw, "turn-1")
+        try Self.put(["thread/fork": [["spawn", "kid-2", "thread-1"], ["ask", "kid-2", "srv-after"]]], "after-plan.json", exe: exe)
+        _ = try await harness.forkSession(session)
+        let replies = try await Self.awaitReplies(["srv-after"], exe: exe)
+        await harness.shutdown()
+        XCTAssertEqual(replies["srv-after"], [Self.declined], "the turn's own end was read as the stopped turn's")
+    }
+
+    func testNewSessionForgetsTheStoppedTurn() async throws {
+        try await assertResetForgetsTheStoppedTurn { harness, _ in _ = try await harness.newSession(Self.threadOpts) }
+    }
+
+    func testResumeSessionForgetsTheStoppedTurn() async throws {
+        try await assertResetForgetsTheStoppedTurn { harness, session in _ = try await harness.resumeSession(session, options: Self.threadOpts) }
     }
 
     /// A turn/start that fails starts no turn: a sub-agent request after it is declined. NOID: the reply

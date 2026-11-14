@@ -949,6 +949,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: a session with a very long title no longer switches the Sidekicks pattern to plain-
   text matching for every session; the title is also sent to Prosper on iPhone, so a later iPhone
   build can sort sidekicks by it. (#1220)
+- Coding agent: in a long session, sub-agents that start after earlier ones have finished (or after
+  another conversation's sub-agents) now still get their approval card instead of being declined,
+  and a stopped turn ending late no longer costs the next turn its sub-agent cards. (#1098)
 
 ## v2.174.0
 

@@ -59,11 +59,19 @@ actor CodexHarness: CodingHarness {
     /// #1086: child -> parent of every thread codex announced as spawned (`thread/started` with
     /// `source.subAgent.thread_spawn`), so a sub-agent's approval can be shown. Ids are the peer's:
     /// capped at `spawnCap` entries (later announcements are ignored and their approvals declined),
-    /// first write wins, cleared with the session.
+    /// first write wins, cleared with the session. #1098: only a child whose chain reaches the active
+    /// thread is recorded (another root's spawns take no slot), and `thread/closed` drops a child.
     private var spawnParents: [String: String] = [:]
     static let spawnCap = 256
     /// Hops from a thread up to the active one that still count as its sub-agent.
     static let spawnHops = 16
+    /// UTF-8 bytes of a peer thread id the spawn map accepts (codex ids are 36-character UUIDs).
+    static let threadIDLimit = 256
+    /// The turn the last Stop interrupted: its late turn/completed must not end the next turn, even before
+    /// that turn is named (#1098 rider 3). shortcut: one id, a later Stop replaces it; a set would cover a
+    /// stopped turn ending after two later Stops, if that is ever seen.
+    /// Cleared with the session's turn state: another thread's turn may carry the same id (#1098 r2).
+    private var stoppedTurn: String?
     /// The rpc id of the in-flight thread/resume: its reply moves the active thread inside `ingest`.
     private var resumeRPC: Int?
     /// A turn of the session's thread is in flight: from its turn/start request to its turn/completed.
@@ -302,7 +310,7 @@ actor CodexHarness: CodingHarness {
         consumer = nil
         approvalReplies.removeAll()   // codex is gone; no reply can land
         fileChanges.removeAll()
-        spawnParents.removeAll(); turnRunning = false; currentTurn = nil
+        spawnParents.removeAll(); turnRunning = false; currentTurn = nil; stoppedTurn = nil
         inboundContinuation.finish()
         eventContinuation.finish()
     }
@@ -323,7 +331,7 @@ actor CodexHarness: CodingHarness {
         }
         sandboxPolicies[id] = Self.sandboxJSON(opts.sandbox, cwd: opts.cwd)
         activeThread = id
-        spawnParents.removeAll(); turnRunning = false; currentTurn = nil
+        spawnParents.removeAll(); turnRunning = false; currentTurn = nil; stoppedTurn = nil
         let session = SessionID(raw: id)
         eventContinuation.yield(.sessionStarted(session))
         return session
@@ -331,7 +339,7 @@ actor CodexHarness: CodingHarness {
 
     func resumeSession(_ id: SessionID, options opts: SessionOptions) async throws -> SessionID {
         activeThread = id.raw   // before the request: codex sends the thread's usage right after its reply
-        spawnParents.removeAll(); turnRunning = false; currentTurn = nil
+        spawnParents.removeAll(); turnRunning = false; currentTurn = nil; stoppedTurn = nil
         let result = try await sendRequest(method: Wire.threadResume, params: [
             "threadId": id.raw,
             "approvalPolicy": opts.approvalPolicy.rawValue,
@@ -395,6 +403,8 @@ actor CodexHarness: CodingHarness {
     /// the interrupt isn't answered within `timeout` seconds.
     func abort(session: SessionID, turn: TurnID?, timeout: TimeInterval) async throws {
         guard let turn else { return }
+        // Before the request: the controller's raced Stop starts the next turn while this interrupt is unanswered.
+        stoppedTurn = turn.raw
         do {
             _ = try await sendRequest(method: Wire.turnInterrupt, params: [
                 "threadId": session.raw, "turnId": turn.raw,
@@ -501,6 +511,7 @@ actor CodexHarness: CodingHarness {
                 handleServerRequest(id: id, method: method, params: params)
             case .notification(let method, let params):
                 if method == Wire.threadStarted { noteSpawn(params) }
+                if method == Wire.threadClosed { noteClosed(params) }
                 let thread = params["threadId"] as? String
                 // #1086: a sub-agent's file-change item is kept so its approval card shows the diff.
                 if method == Wire.itemStarted, let item = params["item"] as? [String: Any],
@@ -521,16 +532,16 @@ actor CodexHarness: CodingHarness {
                 // (accepted: one turn's patches are small, approvals are rare).
                 // A sub-agent's request outlives it but loses its card (the controller drops cards at the
                 // turn end): decline it, or the sub-agent waits forever (#1086).
-                // #1086: a turn/completed naming another turn than the current one is a stopped turn's
-                // late end (the controller settled it on an abort timeout): the current turn goes on. Unknown
-                // ids on either side end the turn as before.
+                // #1098: only the turn a Stop gave up on ends late while a turn runs (the controller settled it
+                // and ignores it too): the running turn goes on, named or not. Any other id ends the turn, as the
+                // controller ends its own on it (rider 4); a missing id ends it as before.
                 if method == Wire.turnStarted, turnRunning, currentTurn == nil {
                     currentTurn = (params["turn"] as? [String: Any])?["id"] as? String
                 }
                 if method == Wire.turnCompleted {
-                    if let ended = (params["turn"] as? [String: Any])?["id"] as? String,
-                       let current = currentTurn, ended != current {
-                        log.info("late turn/completed of \(ended, privacy: .public) during \(current, privacy: .public)")
+                    if turnRunning, let ended = (params["turn"] as? [String: Any])?["id"] as? String,
+                       ended == stoppedTurn, ended != currentTurn {
+                        log.info("late turn/completed of the stopped turn \(ended, privacy: .public)")
                     } else {
                         declineSubAgentRequests()
                         approvalReplies.removeAll(); fileChanges.removeAll(); turnRunning = false; currentTurn = nil
@@ -599,7 +610,13 @@ actor CodexHarness: CodingHarness {
     private func noteSpawn(_ params: [String: Any]) {
         guard let thread = params["thread"] as? [String: Any], let id = thread["id"] as? String,
               let spawn = ((thread["source"] as? [String: Any])?["subAgent"] as? [String: Any])?["thread_spawn"] as? [String: Any],
-              let parent = spawn["parent_thread_id"] as? String, parent != id, spawnParents[id] == nil else { return }
+              let parent = spawn["parent_thread_id"] as? String, parent != id,
+              id.utf8.count <= Self.threadIDLimit, parent.utf8.count <= Self.threadIDLimit,
+              spawnParents[id] == nil, let active = activeThread else { return }
+        // #1098 (QA 835 INFO-3): a child is recorded only within `spawnHops` of the session, so another root's
+        // sub-agents (never shown) take no slot. A parent that is unknown, past the hops or on a cycle: not recorded.
+        let reach: Int? = parent == active ? 0 : Self.hops(from: parent, to: active, parent: { spawnParents[$0] })
+        guard let reach, reach < Self.spawnHops else { return }
         guard spawnParents.count < Self.spawnCap else {
             log.error("ignored the spawn of thread \(id, privacy: .public): \(Self.spawnCap) sub-agents already known")
             return
@@ -607,20 +624,32 @@ actor CodexHarness: CodingHarness {
         spawnParents[id] = parent
     }
 
+    /// #1098: a child whose thread ended (`thread/closed {threadId}`, 0.162.1 schema) leaves the map and frees its
+    /// slot. If it asks again it is an unknown thread and is declined; its own children lose their chain the same way.
+    private func noteClosed(_ params: [String: Any]) {
+        guard let id = params["threadId"] as? String, id.utf8.count <= Self.threadIDLimit else { return }
+        spawnParents[id] = nil
+    }
+
     /// Whether a turn of the session is running and `thread`'s spawn chain reaches the active thread
-    /// within `spawnHops` hops. The hop limit bounds the walk whatever the peer announced; the seen-set
-    /// ends a cycle early.
+    /// within `spawnHops` hops.
     private func isSubAgent(_ thread: String) -> Bool {
         guard turnRunning, let active = activeThread else { return false }
+        return Self.hops(from: thread, to: active, parent: { spawnParents[$0] }) != nil
+    }
+
+    /// Hops from `thread` up its spawn chain to `active` (1: a direct child); nil at a thread with no parent,
+    /// on a cycle, or past `spawnHops` hops. A loop bounded by `spawnHops` lookups whatever the peer announced.
+    static func hops(from thread: String, to active: String, parent: (String) -> String?) -> Int? {
         var seen: Set<String> = [thread]
         var current = thread
-        for _ in 0..<Self.spawnHops {
-            guard let parent = spawnParents[current] else { return false }
-            if parent == active { return true }
-            guard seen.insert(parent).inserted else { return false }
-            current = parent
+        for hop in 1...spawnHops {
+            guard let next = parent(current) else { return nil }
+            if next == active { return hop }
+            guard seen.insert(next).inserted else { return nil }
+            current = next
         }
-        return false
+        return nil
     }
 
     private func logStderr(_ s: String) {
@@ -1061,6 +1090,7 @@ private enum Wire {
     static let turnStarted = "turn/started"
     static let turnCompleted = "turn/completed"
     static let threadStarted = "thread/started"
+    static let threadClosed = "thread/closed"
     static let agentMessageDelta = "item/agentMessage/delta"
     static let reasoningDelta = "item/reasoning/textDelta"
     static let reasoningSummaryDelta = "item/reasoning/summaryTextDelta"
