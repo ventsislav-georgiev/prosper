@@ -85,10 +85,61 @@ final class FileSearchViewTrustTests: XCTestCase {
 /// #1164 round 2: the runner's mark, and the trust given to a marked path with a non-text extension.
 @MainActor
 final class FileSearchViewTrustRunnerTests: XCTestCase {
+    private let filesMode = RunnerMode.ext(id: "files.run", title: "Find Files", icon: "doc.text.magnifyingglass")
+    private let bundled: (String) -> (extensionID: String, isSystem: Bool)? = { $0 == "files.run" ? ("com.prosper.files", true) : nil }
+
     /// RunnerPanel.performFileAction is private with no seam: its call site uses this pure function.
+    /// Round 3: only file.view from the bundled file search's own command is marked.
     func testRunnerMarksOnlyFileView() {
-        XCTAssertTrue(FileActions.runnerMark(FileActions.ID.view))
-        for id in FileActions.ID.all.subtracting([FileActions.ID.view]) { XCTAssertFalse(FileActions.runnerMark(id), id) }
+        XCTAssertTrue(FileActions.runnerMark(id: "file.view", mode: filesMode, owner: bundled))
+        for id in FileActions.ID.all.subtracting([FileActions.ID.view]) {
+            XCTAssertFalse(FileActions.runnerMark(id: id, mode: filesMode, owner: bundled), id)
+        }
+        for id in ["file.open", "file.quicklook", "file.copyPath"] {
+            XCTAssertFalse(FileActions.runnerMark(id: id, mode: filesMode, owner: bundled), id)
+        }
+    }
+
+    /// Another extension's command listing file.view, and a mode that is not an extension mode: not marked.
+    func testRunnerDoesNotMarkAnotherSource() {
+        let other = RunnerMode.ext(id: "acme.find", title: "Acme", icon: "doc")
+        let otherOwner: (String) -> (extensionID: String, isSystem: Bool)? = { _ in ("com.example.acme", false) }
+        XCTAssertFalse(FileActions.runnerMark(id: "file.view", mode: other, owner: otherOwner))
+        XCTAssertFalse(FileActions.runnerMark(id: "file.view", mode: other, owner: bundled))
+        XCTAssertFalse(FileActions.runnerMark(id: "file.view", mode: .universal, owner: bundled))
+    }
+
+    /// A user-installed extension declaring the command id files.run (it wins the registry's id table when
+    /// it loads after the bundled one): not marked, whichever single fact it copies; no registry: not marked.
+    func testRunnerDoesNotMarkAnImitationOfTheBuiltInCommand() {
+        let imitations: [(extensionID: String, isSystem: Bool)] = [
+            ("com.example.files", false), ("com.prosper.files", false), ("files", true), ("com.example.files", true),
+        ]
+        for owner in imitations {
+            XCTAssertFalse(FileActions.runnerMark(id: "file.view", mode: filesMode, owner: { _ in owner }), owner.extensionID)
+        }
+        XCTAssertFalse(FileActions.runnerMark(id: "file.view", mode: filesMode, owner: { _ in nil }))
+    }
+
+    /// Through the dispatcher: an extensionless file with a zero byte, the mark computed for ANOTHER
+    /// extension's mode: not handled, the recorder saw nothing.
+    func testAnotherExtensionsFileViewRowIsNotHandled() throws {
+        let file = tempDir("fs-view-trust-other").appendingPathComponent("credentials")
+        try Data([0x00, 0x01, 0x02]).write(to: file)
+        let intake = TextViewerIntake.shared
+        let saved = (intake.isEnabled, intake.notifyOff, intake.show)
+        defer { (intake.isEnabled, intake.notifyOff, intake.show) = saved }
+        var shown: [String] = []
+        intake.isEnabled = { true }
+        intake.notifyOff = {}
+        intake.show = { shown.append($0.lastPathComponent) }
+        intake.ready()
+        let mark = FileActions.runnerMark(id: "file.view", mode: .ext(id: "acme.find", title: "Acme", icon: "doc"),
+                                          owner: { _ in ("com.example.acme", false) })
+        let frecency = FrecencyStore(defaults: scratchDefaults("view-trust-other"), storageKey: "k")
+        let dispatcher = FileActionDispatcher(performer: LiveFileActionPerformer(), frecency: frecency)
+        XCTAssertFalse(dispatcher.run(id: "file.view", path: file.path, viewable: mark, now: 1_700_000_000))
+        XCTAssertEqual(shown, [])
     }
 
     private func act(viewable: Bool) throws -> (handled: Bool, shown: [String]) {

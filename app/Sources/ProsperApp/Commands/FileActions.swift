@@ -54,9 +54,18 @@ enum FileActions {
     /// dismisses, matching Raycast.
     static func dismissesRunner(_ id: String) -> Bool { id != ID.quickLook }
 
-    /// #1164: the mark the runner's row activation passes. The runner callback holds only (id, path), not the hit,
-    /// and a row's action list holds file.view only for a hit the search marked viewable.
-    static func runnerMark(_ id: String) -> Bool { id == ID.view }
+    /// #1164: the mark the runner's row activation passes. The runner callback holds only (id, path), not the hit;
+    /// the built-in file search lists file.view only for a hit it marked viewable (files/init.lua:60), but any
+    /// extension's row may list file.view, and any extension may declare the command id files.run. So the mark
+    /// holds only when the mode's command is owned (`owner`: the registry's record for that id) by the bundled
+    /// extension: id com.prosper.files AND a system record (installs land in a folder named by their id, so a
+    /// third-party copy of that id is never a system record).
+    static func runnerMark(id: String, mode: RunnerMode,
+                           owner: (_ commandID: String) -> (extensionID: String, isSystem: Bool)?) -> Bool {
+        guard id == ID.view, case .ext("files.run", _, _, _) = mode,
+              let record = owner("files.run") else { return false }
+        return record.extensionID == "com.prosper.files" && record.isSystem
+    }
 
     /// Runs a built-in action against `path`. Returns true if it was a recognized
     /// built-in (so the caller can record frecency / dismiss). Unknown / missing

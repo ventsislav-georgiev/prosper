@@ -353,8 +353,11 @@ final class RunnerPanel {
             return
         }
         if FileActions.dismissesRunner(id) { dismiss() }
-        // #1164: a runner row offers file.view only on a hit the search marked viewable (files/init.lua:60).
-        FileActionDispatcher.live.run(id: id, path: path, viewable: FileActions.runnerMark(id))
+        // #1164: only the bundled file search's file.view is marked (it lists it only on a viewable hit, files/init.lua:60).
+        let mark = FileActions.runnerMark(id: id, mode: model.mode) { cid in
+            CommandRouter.registry?.command(id: cid).map { ($0.record.id, $0.record.isSystem) }
+        }
+        FileActionDispatcher.live.run(id: id, path: path, viewable: mark)
     }
 
     /// Executes a `:` meta command, then hides the panel.
