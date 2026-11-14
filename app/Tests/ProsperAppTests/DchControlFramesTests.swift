@@ -709,7 +709,7 @@ final class DchControlFramesTests: XCTestCase {
         let f = reviveFake()
         f.out["--revive a --json"] = Self.ran("a", as: "a", "withdrawn", running: false)
         let r = call(ops(f), DchFrame.revive, ["name": "a"])
-        XCTAssertEqual(message(r), "a: revived as a in /p, claude resumed s; resume message NOT sent (x)")
+        XCTAssertEqual(message(r), "a: Not resumed: its Claude is not running; the resume message wasn't sent")   // #950
         XCTAssertNil((r.json as? [String: Any])?["names"])
         f.out[AgentIsland.reviveAllArgs.joined(separator: " ")] = Self.ran("a", as: "a", "draft_left", running: false)
         XCTAssertEqual(message(call(ops(f), DchFrame.revive, ["all": true])), "1 failed")
@@ -790,6 +790,31 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(names(r), ["a"])
         XCTAssertEqual((r.json as? [String: Any])?["message"] as? String,
                        "a: Resumed; the resume message wasn't sent; 1 session has a name dch can no longer start")
+    }
+
+    /// #950: an id-shaped name dch refused, beside a resumed one: ok, its own sentence; alone: the error.
+    func testResumeAllWithAnIdShapedRefusalHasItsOwnSentence() {
+        let id = Self.line("m0123456789abcdef", "failed", reason: "not_started", detail: "x: not started")
+        let r = resumeAll(Self.ok("a", as: "a-2"), id)
+        XCTAssertEqual(r.type, DchFrame.ok)
+        XCTAssertEqual(names(r), ["a-2"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String,
+                       "1 resumed, 1 session has a name shaped like a session id, which dch can no longer start")
+        let alone = AgentIsland.actionResult(status: 1, output: Data((id + "\n").utf8))
+        XCTAssertEqual(DchControlOps.answer(all: alone, .resume),
+                       DchControlOps.error("1 session has a name shaped like a session id, which dch can no longer start"))
+    }
+
+    /// #950: the history frame's "takes" is false for a name dch refuses (the phone's count and button follow it).
+    func testHistoryWireTakesIsFalseForARefusedName() {
+        let now: TimeInterval = 2_000_000_000
+        func takes(_ name: String) -> Bool? {
+            let r = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: name), started: now - 3600, updated: now - 60, ended: now - 60, end: "signal 9")
+            return DchControlOps.historyWire(r, now: now)["takes"] as? Bool
+        }
+        XCTAssertTrue(takes("api") == true)
+        XCTAssertTrue(takes("-api") == false)
+        XCTAssertTrue(takes("m0123456789abcdef") == false)
     }
 
     func testRestartAllWithNoResultAndANonZeroExitIsAnError() {

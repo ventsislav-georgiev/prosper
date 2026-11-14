@@ -1805,7 +1805,7 @@ struct DchControlOps: Sendable {
     /// and no result failed; else one error with the island's own summary line.
     /// #861: a revive whose message was not sent (exit 1) is ok too, its line in "message" as answer(named:)'s.
     /// #886: AgentIsland.resumedUnsent decides it, so the phone and the island tally count one way.
-    /// #886 r2: a dash refusal (AgentIsland.dashRefused) is no failure either, but only beside a session that
+    /// #886 r2: a name refusal (AgentIsland.nameRefusal, #950: dash or id-shaped) is no failure either, but only beside a session that
     /// resumed: with no names an ok would leave the phone's button doing nothing. Its "message" is then the tally.
     /// #951: beside an unsent line the per-session lines stay and the dash sentence follows them.
     static func answer(all r: DchActionResult, _ verb: AgentIsland.Verb) -> Data {
@@ -1816,9 +1816,9 @@ struct DchControlOps: Sendable {
             let n = o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name
             if seen.insert(n).inserted { names.append(n) }
         }
-        let dashed = names.isEmpty ? [] : results.filter { AgentIsland.dashRefused($0, verb) }
+        let dashed = names.isEmpty ? [] : results.filter { AgentIsland.nameRefusal($0, verb) != nil }
         guard !r.stopped, r.status == 0 || !unsent.isEmpty || !dashed.isEmpty,
-              !results.contains(where: { $0.failed && !AgentIsland.resumedUnsent($0, verb) && !(!names.isEmpty && AgentIsland.dashRefused($0, verb)) }) else {
+              !results.contains(where: { $0.failed && !AgentIsland.resumedUnsent($0, verb) && !(!names.isEmpty && AgentIsland.nameRefusal($0, verb) != nil) }) else {
             return error(verb == .resume ? AgentIsland.tally(r, .resume, title: "Resume", empty: "nothing to resume")
                                          : AgentIsland.restartAllSummary(r))
         }

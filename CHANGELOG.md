@@ -962,6 +962,10 @@ tag from the now-released section and put it on the new top draft.
   Turning on Manual, from the popup or the phone, now says so and leaves every fan with macOS
   instead of pinning only some of them; if Manual was already on, the fans go back to Automatic. A
   damaged saved fan setting no longer pins some fans and not others. (#1223)
+- Resume interrupted no longer counts sessions whose name dch will not start (a name that begins
+  with "-" or is shaped like a session id); with only such sessions left the button is not shown, on
+  the Mac and on the phone. A name shaped like a session id gets its own explanation, and a resume
+  whose Claude is not running reads as not resumed, matching the "failed" count. (#950)
 
 ## v2.174.0
 

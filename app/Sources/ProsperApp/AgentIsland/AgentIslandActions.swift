@@ -247,6 +247,16 @@ extension AgentIsland {
     /// within 3 days, after running at least 5 minutes (last seen minus started).
     static func reviveAllTakes(_ r: DchHistoryRecord, now: TimeInterval) -> Bool {
         !endedOnPurpose.contains(r.end) && r.lastSeen >= now - 3 * 86400 && r.lastSeen - r.started >= 5 * 60
+            && refusedName(r.name) == nil   // #950: dch fails such a record on every run, so it is no work to offer
+    }
+
+    /// #950: why dch starts no session of this name (refuse_id_name, dch.c:2124-2135 at v1.65.0): its first
+    /// byte is '-', or it is shaped like a session id ("m" + 16 hex digits, any case, trimmed: xr_label_id_shaped,
+    /// xray.c:1126-1142). One linear pass over the bytes, no index.
+    enum NameRefusal { case dash, idShaped }
+    static func refusedName(_ name: String) -> NameRefusal? {
+        if !passable(name) { return .dash }
+        return DchControlOps.idShaped(name) ? .idShaped : nil
     }
 
     static let endedOnPurpose = ["exit 0", "killed", "stopped"]
@@ -495,8 +505,12 @@ extension AgentIsland {
             let a = o.revivedAs.flatMap { $0.isEmpty || $0 == o.name ? nil : $0 }
             return (a.map { "Resumed as \($0)" } ?? "Resumed") + (messageLeft(o)
                 ? "; the resume message may still be in Claude's input, not sent" : "; the resume message wasn't sent")
-        case "not_started" where dashRefused(o, verb):
-            return dashRefusedText
+        case "not_started" where nameRefusal(o, verb) != nil:
+            return nameRefusal(o, verb) == .dash ? dashRefusedText : idShapedRefusedText
+        case _ where o.isFinal && o.result == "failed" && resume && o.running == false && messageReasons.contains(o.reason ?? ""):
+            // #950 (QA 816): dch's detail says "claude resumed" here, but with running false its agent does not
+            // run and the tally counts a failure: the row says the same.
+            return "Not resumed: its Claude is not running; the resume message wasn't sent"
         case "claude_unreadable":
             return "Not stopped: its Claude session record can't be read; left running"
         case "signal" where o.result == "interrupted":
@@ -540,7 +554,7 @@ extension AgentIsland {
         if r.stopped { return "\(verb.rawValue) cancelled: no answer in \(verb.minutes)m" }
         if let f = r.json.last(where: { $0.name == name && ($0.isFinal || $0.isMaster) }) {
             let started = f.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? f.name
-            let exec = f.isFinal && f.reason == "not_started" && !dashRefused(f, verb)
+            let exec = f.isFinal && f.reason == "not_started" && nameRefusal(f, verb) == nil
                 ? r.text.last { $0.hasPrefix("dch: \(started): ") } : nil
             return (f.isMaster && f.failed ? r.dchLine : exec).map { "\(verb.rawValue) failed: \($0)" } ?? finalText(f, verb)
         }
@@ -585,9 +599,11 @@ extension AgentIsland {
         let notes = ((unsent.count > left ? ["\(messages(unsent.count - left)) not sent"] : [])
             + (left > 0 ? ["\(messages(left)) may still be in Claude's input, not sent"] : [])).joined(separator: "; ")
         let dashed = r.json.filter { dashRefused($0, verb) }.count
+        let idShaped = r.json.filter { nameRefusal($0, verb) == .idShaped }.count
         let parts = [(c.ok + unsent.count, verb.done.lowercased() + (notes.isEmpty ? "" : " (\(notes))")), (k, "killed"),
-                     (c.failed - unsent.count - dashed, "failed"), (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+                     (c.failed - unsent.count - dashed - idShaped, "failed"), (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
             + (dashed > 0 ? ["\(dashed) session\(dashed == 1 ? " has a name" : "s have names") dch can no longer start"] : [])
+            + (idShaped > 0 ? ["\(idShaped) session\(idShaped == 1 ? " has a name shaped like a session id" : "s have names shaped like session ids"), which dch can no longer start"] : [])
         if parts.isEmpty { return other.map { "\(title) \($0)" } ?? empty }
         return (parts + [other].compactMap { $0 }).joined(separator: ", ")
     }
@@ -623,12 +639,17 @@ extension AgentIsland {
     /// of such a name on every run: not_started (revive_spawn, :10242-10246). Nothing the user can act
     /// on (the row's Resume is off): a reason, not a failure.
     /// #886 (#878 INFO-1): dch refuses the name it starts, `as` (do_spawn_verb(exe, r->as, …), dch.c:10231).
-    static func dashRefused(_ o: DchJSONLine, _ verb: Verb) -> Bool {
-        (verb == .resume || verb == .resumeNoMessage) && o.isFinal && o.result == "failed"
-            && o.reason == "not_started" && !passable(o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name)
+    static func dashRefused(_ o: DchJSONLine, _ verb: Verb) -> Bool { nameRefusal(o, verb) == .dash }
+
+    /// #950: the same line for either refusal of refuse_id_name; nil when it is none.
+    static func nameRefusal(_ o: DchJSONLine, _ verb: Verb) -> NameRefusal? {
+        guard (verb == .resume || verb == .resumeNoMessage) && o.isFinal && o.result == "failed" && o.reason == "not_started"
+        else { return nil }
+        return refusedName(o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name)
     }
 
     static let dashRefusedText = "Not resumed: dch no longer starts a name that begins with '-'"
+    static let idShapedRefusedText = "Not resumed: dch no longer starts a name shaped like a session id"
 
     /// #620: `tally`'s numbers, the session results by kind (dch's own --json tally line counts the same).
     static func counts(_ r: DchActionResult) -> (ok: Int, failed: Int, skipped: Int) {

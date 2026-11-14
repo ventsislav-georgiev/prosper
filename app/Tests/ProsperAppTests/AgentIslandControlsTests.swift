@@ -206,6 +206,70 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertFalse(AgentIsland.reviveAllTakes(rec("", started: 0, ended: 0, updated: 0), now: now), "never seen")
     }
 
+    /// #950: dch's refuse_id_name, row by row: first byte '-', or "m" + 16 hex digits trimmed of ' ' and \t...\r, any case.
+    func testRefusedNameIsADashOrAnIdShapedName() {
+        typealias R = AgentIsland.NameRefusal
+        let rows: [(String, R?)] = [
+            ("m0123456789abcdef", .idShaped), ("M0123456789ABCDEF", .idShaped), ("m0123456789AbCdEf", .idShaped),
+            ("m0123456789abcde", nil), ("m0123456789abcdef0", nil), ("m0123456789abcdeg", nil),
+            ("  m0123456789abcdef\t\n", .idShaped), ("\u{0b}m0123456789abcdef\u{0c}\r", .idShaped),
+            ("m0123456789abcdef-2", nil), ("x0123456789abcdef", nil), ("m 123456789abcdef", nil),
+            ("-x", .dash), ("--", .dash), ("-", .dash), ("-m0123456789abcdef", .dash), (" -x", nil),
+            ("", nil), ("   ", nil), ("api", nil), ("api-qa", nil),
+        ]
+        for (name, want) in rows {
+            XCTAssertTrue(AgentIsland.refusedName(name) == want, name.debugDescription)
+        }
+    }
+
+    /// #950: a record dch refuses by name is left out of the count (the button too), both kinds and the same
+    /// record under a name dch takes.
+    @MainActor
+    func testReviveAllTakesLeavesRefusedNamesOut() {
+        let now: TimeInterval = 2_000_000_000
+        func rec(_ name: String) -> DchHistoryRecord {
+            DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: name), started: now - 3600, updated: now - 60, ended: now - 60, end: "signal 9")
+        }
+        XCTAssertTrue(AgentIsland.reviveAllTakes(rec("api"), now: now))
+        XCTAssertFalse(AgentIsland.reviveAllTakes(rec("-api"), now: now), "dash")
+        XCTAssertFalse(AgentIsland.reviveAllTakes(rec("m0123456789abcdef"), now: now), "id-shaped")
+        XCTAssertFalse(AgentIsland.reviveAllTakes(rec(" M0123456789ABCDEF "), now: now), "id-shaped, any case, trimmed")
+        let store = AgentIslandStore(geometry: notched)
+        store.now = { now }
+        store.sessions = [session("a", version: "1.24.0")]
+        store.controlDch = Self.v124
+        store.historyTab = true
+        store.history = [rec("-api"), rec("m0123456789abcdef")]
+        XCTAssertEqual(store.resumableCount, 0)
+        XCTAssertTrue(store.resumeAllButton == nil, "only refused names: no button")
+        store.history.append(rec("api"))
+        XCTAssertEqual(store.resumableCount, 1)
+        XCTAssertEqual(store.resumeAllButton, "Resume interrupted (1)")
+        XCTAssertEqual(AgentIsland.reviveAllTaken(store.history, now: now, held: nil, endedHolds: false).count, 1)
+    }
+
+    /// #950: an id-shaped name dch refused (not_started): its own sentence in the row text and the tally, apart
+    /// from the dash one and from a failure; only a resume reads it.
+    func testIdShapedRefusalHasItsOwnSentence() {
+        func line(_ n: String, _ reason: String = "not_started") -> String {
+            #"{"name":"\#(n)","as":"\#(n)","result":"failed","reason":"\#(reason)","detail":"d","session_id":""}"#
+        }
+        func resume(_ out: String, _ verb: AgentIsland.Verb = .resume) -> String {
+            AgentIsland.tally(result(out + "\ndch: name looks like a session_id", status: 1), verb, title: verb.rawValue, empty: "nothing to resume")
+        }
+        let id = "m0123456789abcdef"
+        XCTAssertEqual(AgentIsland.rowText(result(line(id), status: 1), name: id, .resume), AgentIsland.idShapedRefusedText)
+        XCTAssertEqual(AgentIsland.idShapedRefusedText, "Not resumed: dch no longer starts a name shaped like a session id")
+        XCTAssertEqual(resume(line(id)), "1 session has a name shaped like a session id, which dch can no longer start")
+        XCTAssertEqual(resume(line(id) + "\n" + line("M0123456789ABCDEF")), "2 sessions have names shaped like session ids, which dch can no longer start")
+        XCTAssertEqual(resume(line(id), .resumeNoMessage), "1 session has a name shaped like a session id, which dch can no longer start")
+        XCTAssertEqual(resume(line("m0123456789abcde")), "1 failed", "15 digits is a name dch takes")
+        XCTAssertEqual(resume(line(id, "cwd_gone")), "1 failed", "another reason is a failure")
+        XCTAssertEqual(AgentIsland.tally(result(line(id), status: 1), .stop, title: "Stop all", empty: ""), "1 failed")
+        XCTAssertEqual(resume(line(id) + "\n" + line("-x") + "\n" + line("y", "cwd_gone") + "\n" + Fixture.reviveOne),
+                       "1 resumed, 1 failed, 1 session has a name dch can no longer start, 1 session has a name shaped like a session id, which dch can no longer start")
+    }
+
     /// #585: the History header: no line at all with nothing to resume, no
     /// status and the gate open; "Resume interrupted (N)" counting the takers.
     @MainActor
@@ -4705,7 +4769,9 @@ final class AgentIslandControlsTests: XCTestCase {
     func testRunningFalseWithAFailedSendIsAFailureOnTheIsland() {
         for reason in ["withdrawn", "draft_left", "prompt", "not_typed"] {
             let out = Self.revived("a", as: "a", reason, running: "false")
-            XCTAssertEqual(AgentIsland.rowText(result(out, status: 1), name: "a", .resume), Self.unsentDetail, reason)
+            // #950 (QA 816): the row says what the tally says, not dch's "claude resumed".
+            XCTAssertEqual(AgentIsland.rowText(result(out, status: 1), name: "a", .resume),
+                           "Not resumed: its Claude is not running; the resume message wasn't sent", reason)
             XCTAssertEqual(resumeTally(out), "1 failed", reason)
             XCTAssertFalse(AgentIsland.revivedOrLive(result(out, status: 1), name: "a"), reason)
         }
