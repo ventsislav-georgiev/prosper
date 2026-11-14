@@ -27,9 +27,10 @@ int          clua_isnil(lua_State *L, int idx);
 /* lua_upvalueindex(i) — pseudo-index for the i-th C-closure upvalue. */
 int          clua_upvalueindex(int i);
 /* #1126: arm the per-call instruction budget on the main thread before a host call (a count below 1
-** is taken as 1), disarm it after; disarm returns 1 if the budget was spent during the call. */
-void         clua_budget_arm(lua_State *L, int count);
-int          clua_budget_disarm(lua_State *L);
+** is taken as 1), disarm it after; disarm returns 1 if the budget is spent. #1154: arm returns 1 when it armed, 0 when
+** a budget is already armed (a call from inside a host call runs on it); disarm removes the hook only when 'armed'. */
+int          clua_budget_arm(lua_State *L, int count);
+int          clua_budget_disarm(lua_State *L, int armed);
 /* #1126: the sandbox's setmetatable (refuses a metatable with __gc) and collectgarbage (count and
 ** isrunning only; every other option does nothing and returns 0). */
 int          clua_sandbox_setmetatable(lua_State *L);

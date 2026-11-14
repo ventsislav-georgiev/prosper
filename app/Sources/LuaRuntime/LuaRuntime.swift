@@ -20,7 +20,8 @@ import Foundation
 ///   (`run`, `callGlobal`) that runs longer than its budget, so a runaway loop
 ///   cannot wedge the host. One count per call covers every coroutine of the
 ///   state; once spent it stays spent until the call returns, so a script's
-///   `pcall` cannot keep going; `__gc` metamethods are refused and
+///   `pcall` cannot keep going. A call a host function makes back into the
+///   same runtime runs on the budget of the call it is part of (#1154); `__gc` metamethods are refused and
 ///   `collectgarbage` only reports (`count`, `isrunning`), so no finalizer runs.
 /// - **Memory** (#1127): a counting allocator in the shim caps what one runtime's
 ///   Lua holds (`memoryLimit`). The cap is enforced only inside protected calls
@@ -193,8 +194,13 @@ public final class LuaRuntime {
     /// `budget` overrides the per-VM instruction ceiling for THIS call only — pass a
     /// tighter value for hot-path calls (e.g. a keystroke-time dispatch) so a heavy
     /// callback can't burn the full default budget on a latency-critical thread.
+    /// Made from inside a host function, the call runs on the budget of the call it is part of and `budget` is unused.
     @discardableResult
     public func callGlobal(_ name: String, _ args: [String] = [], budget: Int32? = nil) throws -> String? {
+        // R1154-2: room for the lookup's two slots, then the function and every argument (LUAI_MAXSTACK caps the count).
+        guard args.count < 1_000_000, lua_checkstack(L, Int32(args.count) + 2) != 0 else {
+            throw LuaError.runtime("stack overflow")
+        }
         clua_rawgetglobal(L, name)
         if clua_isfunction(L, -1) == 0 {
             clua_pop(L, 1)
@@ -207,22 +213,26 @@ public final class LuaRuntime {
         return result
     }
 
-    /// Protected call with a freshly-armed instruction budget, shared by every
-    /// thread of the state and sticky once spent (#1126, clua_shim.c).
+    /// Protected call under an instruction budget shared by every thread of the state and sticky once spent
+    /// (#1126, clua_shim.c). The outermost call arms it; a call made from inside a host function runs on it (#1154).
     private func pcall(args: Int32, results: Int32, budget: Int32? = nil) throws {
         // A host call that unwound with a Lua error never ran the trampoline's restore.
         let previousCaller = caller
         defer { caller = previousCaller }
-        clua_budget_arm(L, budget ?? maxInstructions)
+        let armed = clua_budget_arm(L, budget ?? maxInstructions)
         let enforced = clua_mem_enforce(L, 1)
         let status = clua_pcall(L, args, results, 0)
         clua_mem_enforce(L, enforced)
-        let spent = clua_budget_disarm(L) != 0
+        let spent = clua_budget_disarm(L, armed) != 0
         clua_mem_settle(L)
+        if spent {
+            // Reported as such whatever unwound last (coroutine.wrap adds a position), and also when a host function
+            // caught it and the call then returned without another instruction.
+            clua_pop(L, status != 0 ? 1 : results)
+            throw LuaError.runtime("execution budget exceeded")
+        }
         if status != 0 {
-            let message = takeError()
-            // A spent budget is reported as such whatever unwound last (coroutine.wrap adds a position).
-            throw LuaError.runtime(spent ? "execution budget exceeded" : message)
+            throw LuaError.runtime(takeError())
         }
     }
 
@@ -321,10 +331,15 @@ public final class LuaRuntime {
     ///   integers; reals stay floats)
     /// - `null` / anything unsupported → nil
     ///
-    /// Net stack effect: +1. Recursion is depth-bounded and grows the C stack so
+    /// Net stack effect: +1 (0 when the calling thread's stack is full). Recursion is depth-bounded and grows the C stack so
     /// pathological nesting can't crash the host.
     public func pushJSON(_ value: Any, depth: Int32 = 0) {
-        guard depth < 256, lua_checkstack(thread, 3) != 0 else { lua_pushnil(thread); return }
+        guard depth < 256, lua_checkstack(thread, 3) != 0 else {
+            // R1154-2: below the top level the parent's check left room for this nil; at the top a full stack skips
+            // it, as the push helpers do.
+            if lua_checkstack(thread, 1) != 0 { lua_pushnil(thread) }
+            return
+        }
         switch value {
         case let s as String:
             lua_pushstring(thread, s)

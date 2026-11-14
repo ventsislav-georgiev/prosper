@@ -700,6 +700,9 @@ tag from the now-released section and put it on the new top draft.
   object kept in a shared table) can no longer act later from a background re-read of the config; it
   acts only while the config is being applied or from its own hotkey, timer, URL, app-watcher or
   event-tap callbacks. (#1156)
+- Extensions: a call an extension's host function makes back into the same extension now runs on the
+  instruction budget of the call it is part of, so a long-running extension script is always stopped
+  on time. (#1154)
 
 ## v2.174.0
 

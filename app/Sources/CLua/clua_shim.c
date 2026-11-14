@@ -4,6 +4,10 @@
 #include "clua_shim.h"
 #include "lstate.h"  /* #1126: L->allowhook */
 
+/* R1154-1: every top-level call passes no message handler (msgh 0). A handler would run on every error with the memory
+** cap and the budget still on. Lua 5.4.9 allocates nothing after the unwind (luaD_seterrorobj copies the error value;
+** luaD_errerr makes "error in error handling" before its throw); a handler must not be added here without re-checking
+** that, or without switching the cap off before the error object is set. */
 int clua_pcall(lua_State *L, int nargs, int nresults, int msgh) {
     return lua_pcall(L, nargs, nresults, msgh);
 }
@@ -55,13 +59,19 @@ static void budget_hook(lua_State *L, lua_Debug *ar) {
     budget_spent(L, ar);
 }
 
-void clua_budget_arm(lua_State *L, int count) {
+/* #1154: one budget per outermost call. A call made from inside a host call finds the hook set and leaves it, so it
+** runs on the outer count, and a spent budget stays spent; only the call that armed the budget removes it. */
+int clua_budget_arm(lua_State *L, int count) {
+    if (lua_gethook(L) != NULL)
+        return 0;
     lua_sethook(L, budget_hook, LUA_MASKCOUNT, count < 1 ? 1 : count); /* 0 or less would never fire */
+    return 1;
 }
 
-int clua_budget_disarm(lua_State *L) {
+int clua_budget_disarm(lua_State *L, int armed) {
     int spent = lua_gethook(L) == budget_spent;
-    lua_sethook(L, NULL, 0, 0);
+    if (armed)
+        lua_sethook(L, NULL, 0, 0);
     return spent;
 }
 
