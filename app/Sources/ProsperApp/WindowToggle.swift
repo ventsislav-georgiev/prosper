@@ -48,26 +48,97 @@ enum WindowToggle {
     /// a panel put it there, or was just closed, or nothing is: the app the last answer named, none if it quit.
     @MainActor static func pasteTarget() -> NSRunningApplication? {
         observeResign()
-        if let app = frontmost(), app.processIdentifier != getpid()
-            || keyWindow().map({ !$0.styleMask.contains(.nonactivatingPanel) }) == true {
+        if let app = frontmost(), app.processIdentifier != getpid() || ownWindowKey() {
             openedOver = app
             return app
         }
         return openedOver?.isTerminated == false ? openedOver : nil
     }
 
+    /// One of Prosper's own windows is key (Settings, Agent Sessions), not a non-activating panel.
+    @MainActor static func ownWindowKey() -> Bool {
+        keyWindow().map { !$0.styleMask.contains(.nonactivatingPanel) } == true
+    }
+
     /// #1121 r2: the remembered app holds only while Prosper has stayed active since the answer that named it;
     /// once Prosper resigns, another app is in front and the next answer names that one.
     @MainActor static func prosperResignedActive() { openedOver = nil }
 
-    @MainActor private static var resignObserver: NSObjectProtocol?
+    /// #1150 R1150-1: macOS can refuse a panel's activation, so Prosper never resigns afterwards. Prosper
+    /// becoming active by anything but a panel (a Settings or Agent Sessions window, the Dock icon) drops the
+    /// remembered app too; a panel's own activation (the runner or Clipboard History key) keeps it.
+    @MainActor static func prosperBecameActive() {
+        if keyWindow()?.styleMask.contains(.nonactivatingPanel) != true { openedOver = nil }
+    }
 
-    /// Installed by the first pasteTarget(), the only writer of openedOver. queue .main runs the block on the
-    /// main thread, so assumeIsolated holds (the block itself is not main-actor isolated).
+    @MainActor private static var resignObserver: NSObjectProtocol?
+    @MainActor private static var activeObserver: NSObjectProtocol?
+
+    /// Installed by the first pasteTarget(), the only writer of openedOver. queue .main runs the blocks on the
+    /// main thread, so assumeIsolated holds (the blocks themselves are not main-actor isolated).
     @MainActor private static func observeResign() {
         guard resignObserver == nil else { return }
         resignObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
         ) { _ in MainActor.assumeIsolated { WindowToggle.prosperResignedActive() } }
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in MainActor.assumeIsolated { WindowToggle.prosperBecameActive() } }
+    }
+
+    // MARK: - #1150 the paste guard
+
+    /// Seams (#1150). Under XCTest the real ones are never installed: with no fake, nothing is activated, no
+    /// key event is posted and nothing beeps, whatever paste(into:) decides. Called on main, from paste(into:).
+    @MainActor static var activate: ((NSRunningApplication) -> Bool)? =
+        NSClassFromString("XCTestCase") == nil ? { $0.activate(options: []) } : nil
+    @MainActor static var sendCommandV: (() -> Void)? = NSClassFromString("XCTestCase") == nil ? { WindowToggle.postCommandV() } : nil
+    /// The fill-in's "not sent" sound (#848). Every paste(into:) ends in exactly one of sendCommandV or beep.
+    @MainActor static var beep: (() -> Void)? = NSClassFromString("XCTestCase") == nil ? { NSSound.beep() } : nil
+
+    /// Polls of the frontmost app after the activation, 0.05 s apart: the paste goes at the first that shows
+    /// the target in front (the parent's fixed 0.05 s), a slow activation gets up to 0.5 s, then the beep.
+    static let frontTries = 10
+
+    /// #1150: the runner's and Clipboard History's paste; the text is already on the clipboard. A missing or quit
+    /// target gets nothing. Otherwise the target is asked to come forward and Command-V goes only if it is the
+    /// frontmost app when the key goes; for Prosper itself (pasteTarget() named it because one of its own
+    /// windows was key) one of its own windows must be key again. Otherwise nothing is sent, the text stays on
+    /// the clipboard and the user hears the beep. Main queue throughout: every asyncAfter is on .main and every
+    /// decision runs there.
+    @MainActor static func paste(into target: NSRunningApplication?) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {   // the panel resigns key first
+            // No activation seam (XCTest with no fake) ends here too: nothing activated, nothing sent.
+            guard let target, !target.isTerminated, let activate = WindowToggle.activate else { beep?(); return }
+            // r2: the answer is not trusted either way (a refused or self activation can answer false with the
+            // target already in front); the frontmost polls decide.
+            _ = activate(target)
+            sendWhenFront(target, tries: frontTries)
+        }
+    }
+
+    @MainActor private static func sendWhenFront(_ target: NSRunningApplication, tries: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            if frontmost()?.processIdentifier == target.processIdentifier,
+               target.processIdentifier != getpid() || ownWindowKey() {
+                sendCommandV?()
+            } else if tries > 1 {
+                sendWhenFront(target, tries: tries - 1)
+            } else {
+                beep?()
+            }
+        }
+    }
+
+    /// Synthesizes a Cmd+V keystroke via CGEvent. Reached only through sendCommandV, never under XCTest.
+    private static func postCommandV() {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let vKey: CGKeyCode = 9 // kVK_ANSI_V
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false) else { return }
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        keyDown.post(tap: .cgSessionEventTap)
+        keyUp.post(tap: .cgSessionEventTap)
     }
 }

@@ -690,6 +690,9 @@ tag from the now-released section and put it on the new top draft.
 - Extensions: a host function called from inside a Lua coroutine now reads its arguments from, and
   returns its results to, that coroutine, so extensions that use coroutines get the right values
   back. (#1151)
+- Runner and Clipboard History no longer press Command-V unless the app you opened them from is back
+  in front: if it has quit or another app came forward meanwhile, nothing is typed, the text stays
+  on the clipboard and you hear a beep, as with snippet fill-ins. (#1150)
 
 ## v2.174.0
 

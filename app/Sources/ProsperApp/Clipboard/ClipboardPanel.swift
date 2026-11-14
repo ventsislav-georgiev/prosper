@@ -199,8 +199,8 @@ final class ClipboardPanel {
         dismiss()
     }
 
-    /// #632: a row still arriving pastes once its item lands; any other row at once.
-    private func commit(_ item: ClipboardItem) {
+    /// #632: a row still arriving pastes once its item lands; any other row at once. Internal for PasteGuardTests.
+    func commit(_ item: ClipboardItem) {
         wait.paste(item) { [weak self] in self?.pasteNow($0) }
     }
 
@@ -212,7 +212,7 @@ final class ClipboardPanel {
         // autocomplete/drag-snap request it), so the paste looks broken. Route to the
         // same Settings → Context permissions UI every other Accessibility-gated
         // feature uses. The clip is already on the pasteboard, so manual ⌘V still works.
-        guard PermissionsManager.isAccessibilityTrusted() else {
+        guard accessibilityTrusted() else {
             // Land on General — it's always present and now hosts the Accessibility
             // grant. (Context has the same row but is hidden when autocomplete is off,
             // which is exactly the clipboard-only case that hits this path.)
@@ -220,25 +220,11 @@ final class ClipboardPanel {
             onOpenSettings()
             return
         }
-        let target = previousApp
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            target?.activate(options: [])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                Self.pasteViaCmdV()
-            }
-        }
+        WindowToggle.paste(into: previousApp)   // #1150: only into a live target that came to front
     }
 
-    private static func pasteViaCmdV() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let vKey: CGKeyCode = 9 // kVK_ANSI_V
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false) else { return }
-        keyDown.flags = .maskCommand
-        keyUp.flags = .maskCommand
-        keyDown.post(tap: .cgSessionEventTap)
-        keyUp.post(tap: .cgSessionEventTap)
-    }
+    /// The Accessibility check before the paste, a seam (#1150): a row passes it without the real trust.
+    var accessibilityTrusted: () -> Bool = { PermissionsManager.isAccessibilityTrusted() }
 }
 
 // MARK: - View model

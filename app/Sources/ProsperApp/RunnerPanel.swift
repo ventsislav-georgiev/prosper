@@ -661,8 +661,8 @@ final class RunnerPanel {
     }
 
     /// Copies the chosen text, hides the panel, reactivates the prior app, and
-    /// pastes via a synthesized Cmd+V.
-    private func commit(_ text: String) {
+    /// pastes via a synthesized Cmd+V only if that app came to front (#1150). Internal for PasteGuardTests.
+    func commit(_ text: String) {
         guard !text.isEmpty else { return }
 
         let pasteboard = Pasteboard.general
@@ -670,15 +670,7 @@ final class RunnerPanel {
         pasteboard.setString(text, forType: .string)
 
         dismiss()
-
-        let target = previousApp
-        // Give the panel a moment to resign key, then reactivate + paste.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            target?.activate(options: [])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                Self.pasteViaCmdV()
-            }
-        }
+        WindowToggle.paste(into: previousApp)
     }
 
     /// Invokes a window-launching extension command (manifest `launches_window`).
@@ -695,20 +687,6 @@ final class RunnerPanel {
         Task { @MainActor in
             _ = await CommandRouter.registry?.invokeAsync(commandID: commandID, query: query)
         }
-    }
-
-    /// Synthesizes a Cmd+V keystroke via CGEvent.
-    private static func pasteViaCmdV() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let vKey: CGKeyCode = 9 // kVK_ANSI_V
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false) else {
-            return
-        }
-        keyDown.flags = .maskCommand
-        keyUp.flags = .maskCommand
-        keyDown.post(tap: .cgSessionEventTap)
-        keyUp.post(tap: .cgSessionEventTap)
     }
 }
 
