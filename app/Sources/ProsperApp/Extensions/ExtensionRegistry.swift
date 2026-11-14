@@ -1048,6 +1048,11 @@ final class ExtensionRegistry: ObservableObject {
         let dest = userDir.appendingPathComponent(loaded.id, isDirectory: true)
         if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
         try fm.copyItem(at: sourceDir, to: dest)
+        // #1142: the copy leaves out hidden files and folders by the publish rule. A source
+        // given as a link is copied as that link: never swept, it is the source folder itself.
+        if try fm.attributesOfItem(atPath: dest.path)[.type] as? FileAttributeType == .typeDirectory {
+            try RemoteInstaller.removeHiddenMembers(dest)
+        }
         discover()
         guard let record = record(id: loaded.id) else { throw ExtensionError.notFound(loaded.id) }
         return record
