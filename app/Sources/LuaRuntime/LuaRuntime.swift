@@ -58,6 +58,10 @@ public final class LuaRuntime {
     private var caller: OpaquePointer?
     /// The thread the stack helpers act on: the caller's, else the main thread.
     private var thread: OpaquePointer? { caller ?? L }
+    /// #1201: host state that lives for ONE entry into the VM (one outermost `run`/`callGlobal`, nested calls
+    /// included) and is nil outside one: cleared when that call returns or throws, and by `reset()`. Per runtime,
+    /// never shared; read and written only on the runtime's own lane, like `L`.
+    public var entryLocal: AnyObject?
     private let maxInstructions: Int32
     private let memoryLimit: Int
     /// When true, `load` survives the sandbox, text chunks only (a binary chunk is
@@ -111,6 +115,7 @@ public final class LuaRuntime {
     public func reset() throws {
         if let L { clua_close(L) }
         L = nil
+        entryLocal = nil
         boxes.removeAll(keepingCapacity: true)
         try open()
     }
@@ -226,6 +231,7 @@ public final class LuaRuntime {
         let status = clua_pcall(L, args, results, 0)
         clua_mem_enforce(L, enforced)
         let spent = clua_budget_disarm(L, armed) != 0
+        if armed != 0 { entryLocal = nil }   // #1201: the outermost call ends here, before either throw below
         clua_mem_settle(L)
         if spent {
             // Reported as such whatever unwound last (coroutine.wrap adds a position), and also when a host function

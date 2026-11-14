@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LuaRuntime
 
@@ -463,11 +464,17 @@ struct ExtensionHost {
         // Only the system tier (`privileged`) reads, lists, stats, watches or finds them.
         let systemTier = privileged
         // One notice per refused path per VM (as #1048 did for hs.execute): a polling extension
-        // would otherwise log a line on every call. Capped so varied spellings cannot grow it unbounded.
-        var noticed: Set<String> = []
-        func secret(_ path: String, _ call: String) -> Bool {
-            guard !systemTier, SecretPaths.denies(path) else { return false }
-            if noticed.count < SecretPaths.noticeCap, noticed.insert(path).inserted {
+        // would otherwise log a line on every call. Capped so varied spellings cannot grow it unbounded,
+        // and keyed on the path's SHA-256 (#1201) so a long path is not kept.
+        var noticed: Set<SHA256Digest> = []
+        // #1201: the roots are resolved once per handler run (one entry into the VM): a root that becomes
+        // a symlink during a run is seen from the next run.
+        func secret(_ rt: LuaRuntime, _ path: String, _ call: String) -> Bool {
+            guard !systemTier else { return false }
+            let roots = rt.entryLocal as? SecretPaths.EntryRoots ?? SecretPaths.EntryRoots()
+            rt.entryLocal = roots
+            guard roots.matcher.denies(path) else { return false }
+            if noticed.count < SecretPaths.noticeCap, noticed.insert(SHA256.hash(data: Data(path.utf8))).inserted {
                 SecretPaths.logRefusal(extensionID: extID, call: call)
             }
             return true
@@ -681,7 +688,7 @@ struct ExtensionHost {
         // owns json_decode). Kept alive past the bootstrap nil-out, like http.
         lua.register("__h_fs_list_dirs") { rt in
             let path = rt.stringArgument(1) ?? ""
-            let dirs = secret(path, "fs.list_dirs") ? [] : services.listDirectories(path)
+            let dirs = secret(rt, path, "fs.list_dirs") ? [] : services.listDirectories(path)
             let data = (try? JSONSerialization.data(withJSONObject: dirs)) ?? Data("[]".utf8)
             rt.push(String(data: data, encoding: .utf8) ?? "[]")
             return 1
@@ -985,11 +992,11 @@ struct ExtensionHost {
         lua.register("__h_url_default") { rt in rt.push(services.urlDefaultBrowser()); return 1 }
         lua.register("__h_fs_exists") { rt in
             let p = rt.stringArgument(1) ?? ""
-            rt.push(secret(p, "fs.exists") ? false : services.fsExists(p)); return 1
+            rt.push(secret(rt, p, "fs.exists") ? false : services.fsExists(p)); return 1
         }
         lua.register("__h_fs_attrs") { rt in
             let p = rt.stringArgument(1) ?? ""
-            rt.push(secret(p, "fs.attributes") ? #"{"exists":false}"# : services.fsAttributesJSON(p)); return 1
+            rt.push(secret(rt, p, "fs.attributes") ? #"{"exists":false}"# : services.fsAttributesJSON(p)); return 1
         }
 
         // --- fallback web-search store (system extensions only; edits the runner) ---
@@ -1035,7 +1042,7 @@ struct ExtensionHost {
             }
             lua.register("__h_fs_watch") { rt in
                 let p = rt.stringArgument(1) ?? ""
-                if !secret(p, "fs.watch") {
+                if !secret(rt, p, "fs.watch") {
                     services.fsWatch(extensionID: extID, path: p, handler: rt.stringArgument(2) ?? "",
                                      hideSecrets: !systemTier)
                 }
@@ -1049,7 +1056,7 @@ struct ExtensionHost {
             // user's ~/.hammerspoon/init.lua.
             lua.register("__h_fs_read") { rt in
                 let p = rt.stringArgument(1) ?? ""
-                if !secret(p, "fs.read"), let s = services.fsRead(p) { rt.push(s) } else { rt.pushNil() }
+                if !secret(rt, p, "fs.read"), let s = services.fsRead(p) { rt.push(s) } else { rt.pushNil() }
                 return 1
             }
             lua.register("__h_menus_list") { rt in rt.push(services.menusList()); return 1 }

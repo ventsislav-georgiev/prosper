@@ -95,7 +95,8 @@ enum SecretPaths {
     static let noticeCap = 64
 
     /// The secret roots and the volume's case rule, resolved once for a batch of paths (the roots
-    /// are case-folded here, once). Never kept across calls: a root can become a symlink later.
+    /// are case-folded here, once). Never kept past one batch or one entry into a VM (`EntryRoots`):
+    /// a root can become a symlink later.
     struct Matcher {
         let roots: [String]
         let caseInsensitive: Bool
@@ -127,6 +128,12 @@ enum SecretPaths {
         let fold = (try? URL(fileURLWithPath: home).resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?
             .volumeSupportsCaseSensitiveNames != true
         return Matcher(roots: paths.map(canonical), caseInsensitive: fold)
+    }
+
+    /// #1201: the matcher of one entry into an extension VM, held in `LuaRuntime.entryLocal`, which the
+    /// runtime drops when that entry returns or throws. Built and read on the VM's own lane.
+    final class EntryRoots {
+        let matcher = SecretPaths.matcher()
     }
 
     /// One path: resolves the roots for this call only. Batches use `matcher()` once.

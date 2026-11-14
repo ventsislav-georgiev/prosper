@@ -173,11 +173,17 @@ final class ExtensionSecretPathsTests: XCTestCase {
             XCTAssertEqual(try call(automation, "ex", path(".ssh/missing\(i)")), "false")
         }
         XCTAssertEqual(lines.count, 3 + SecretPaths.noticeCap - 2, "two paths were already noticed in this VM")
+        // #1201: the key is a hash, so two long paths that share their first 256 characters are two paths.
+        let fresh = try host(system: false), long = path(".ssh/" + String(repeating: "d/", count: 1_000))
+        let before = lines.count
+        for p in [long + "a", long + "b", long + "a"] { XCTAssertEqual(try call(fresh, "ex", p), "false") }
+        XCTAssertEqual(lines.count, before + 2, "one line per long path")
         XCTAssertFalse(lines.contains { $0.contains(home) || $0.contains(".ssh") })
     }
 
     /// The filter's cost on the calling queue, counted in resolved paths (canonical calls), never
-    /// timed: below the system tier one host.fs call resolves every root once plus its own path; one
+    /// timed: below the system tier one host.fs call, alone in its handler run, resolves every root once
+    /// plus its own path (several calls in one run: testRootsResolvedOncePerHandlerRun); one
     /// watch callback batch (visiblePaths) and one files.search answer resolve the roots once plus
     /// one per path; the system tier and an unfiltered watch resolve nothing.
     func testFilterCostIsRootsOncePlusOnePerPath() throws {
@@ -211,6 +217,63 @@ final class ExtensionSecretPathsTests: XCTestCase {
         resolved = 0
         XCTAssertTrue(SecretPaths.filterHits(hits).contains("plain.txt"))
         XCTAssertEqual(resolved, roots + 2, "one files.search answer")
+    }
+
+    /// #1201: below the system tier the roots are resolved once per entry into the VM (one handler run),
+    /// counted in resolved paths: N host.fs calls in one run cost roots + N; the next run, a run after a
+    /// throw and a second VM entered from inside the first each resolve their own roots.
+    func testRootsResolvedOncePerHandlerRun() throws {
+        var resolved = 0
+        let prefix = home
+        SecretPaths.onCanonical = { if $0.hasPrefix(prefix) { resolved += 1 } }
+        let roots = SecretPaths.listed.count
+        try write("plain.txt", "plain")
+        let lua = try host(system: false), other = try host(system: false)
+        let script = """
+        function many(base)
+            local seen = 0
+            for i = 1, 20 do if host.fs.exists(base .. "/f" .. i) then seen = seen + 1 end end
+            if host.fs.read(base .. "/plain.txt") ~= nil then seen = seen + 1 end
+            if host.fs.read(base .. "/.ssh/id_test") ~= nil then seen = seen + 100 end
+            host.fs.list_dirs(base)
+            host.fs.attributes(base .. "/plain.txt")
+            return tostring(seen)
+        end
+        function boom(base) host.fs.exists(base .. "/plain.txt"); error("handler failed") end
+        function cross(base)
+            host.fs.exists(base .. "/a")
+            call_other()
+            host.fs.exists(base .. "/b")
+            return "ok"
+        end
+        """
+        try lua.run(script)
+        try other.run(script)
+        let calls = 24
+        resolved = 0
+        XCTAssertEqual(try lua.callGlobal("many", [home]), "1")
+        XCTAssertEqual(resolved, roots + calls, "one handler run")
+        resolved = 0
+        XCTAssertEqual(try lua.callGlobal("many", [home]), "1")
+        XCTAssertEqual(resolved, roots + calls, "the next run resolves the roots again")
+        resolved = 0
+        XCTAssertThrowsError(try lua.callGlobal("boom", [home]))
+        XCTAssertEqual(resolved, roots + 1, "a run that throws")
+        resolved = 0
+        XCTAssertEqual(try lua.callGlobal("many", [home]), "1")
+        XCTAssertEqual(resolved, roots + calls, "a run after a throw resolves the roots again")
+        let base = home
+        var otherCost = 0
+        lua.register("call_other") { _ in
+            let before = resolved
+            XCTAssertEqual(try? other.callGlobal("many", [base]), "1")
+            otherCost = resolved - before
+            return 0
+        }
+        resolved = 0
+        XCTAssertEqual(try lua.callGlobal("cross", [home]), "ok")
+        XCTAssertEqual(otherCost, roots + calls, "a second VM entered mid-run never sees the first VM's roots")
+        XCTAssertEqual(resolved, 2 * roots + 2 + calls, "and the first VM keeps its own across that call")
     }
 
     /// The data volume's firmlink spelling of the same home: /System/Volumes/Data + its realpath.

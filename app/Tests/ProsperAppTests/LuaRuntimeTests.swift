@@ -110,6 +110,36 @@ final class LuaRuntimeTests: XCTestCase {
 
     // MARK: - Hot reload
 
+    /// #1201: `entryLocal` lives for one outermost run/callGlobal: kept across a nested call, nil once the
+    /// outermost call returns, throws or spends its budget, and empty at the start of the next one.
+    func testEntryLocalLivesForOneOutermostCall() throws {
+        final class Box {}
+        let lua = try LuaRuntime(maxInstructions: 100_000)
+        var seen: [Bool] = []
+        lua.register("mark") { rt in rt.entryLocal = rt.entryLocal ?? Box(); return 0 }
+        lua.register("has") { rt in seen.append(rt.entryLocal != nil); return 0 }
+        lua.register("nested") { rt in _ = try? rt.callGlobal("inner"); return 0 }
+        try lua.run("""
+        function inner() has() mark() end
+        function outer() mark() nested() has() return "ok" end
+        function fails() mark() error("boom") end
+        function spins() mark() while true do end end
+        function probe() has() return "ok" end
+        """)
+        XCTAssertEqual(try lua.callGlobal("outer"), "ok")
+        XCTAssertEqual(seen, [true, true], "kept across a nested callGlobal")
+        XCTAssertTrue(lua.entryLocal == nil, "dropped when the outermost call returns")
+        XCTAssertThrowsError(try lua.callGlobal("fails"))
+        XCTAssertTrue(lua.entryLocal == nil, "dropped after a Lua error")
+        XCTAssertThrowsError(try lua.callGlobal("spins"))
+        XCTAssertTrue(lua.entryLocal == nil, "dropped after a spent budget")
+        try lua.run("mark()")
+        XCTAssertTrue(lua.entryLocal == nil, "run is one entry too")
+        seen = []
+        XCTAssertEqual(try lua.callGlobal("probe"), "ok")
+        XCTAssertEqual(seen, [false], "a new entry starts empty")
+    }
+
     func testResetReappliesHostFunctionsAndClearsState() throws {
         let lua = try LuaRuntime()
         lua.register("host_const") { rt in rt.push("constant"); return 1 }
