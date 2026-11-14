@@ -1024,6 +1024,8 @@ tag from the now-released section and put it on the new top draft.
 - Extensions: switching an extension off and on again, or resetting it, while one of its actions is
   still running no longer drops the keep-awake, key rules or menu bar item it set up again, and the
   old action can no longer leave a keep-awake held behind. (#1238)
+- Text Viewer: a long line cut inside a run of flags no longer ends with half a flag, and a long
+  note under the header stays on one line in a narrow window (hover it for the whole text). (#1180)
 
 ## v2.174.0
 

@@ -343,7 +343,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(render("1. - x\n   - y\n2. z").text.string, "1.\t◦\tx\n◦\ty\n2.\tz")
         XCTAssertEqual(render("- - [ ] t").text.string, "•\t☐\tt", "the task box is the innermost item's")
         XCTAssertEqual(render("- - - - - - - - - x").text.string, "•\t◦\t▪\t•\t◦\t▪\t•\t◦ ◦\tx", "past depth 8 markers share the last stop")
-        // A raw HTML block inside an item carries no intent: the item's next block draws no marker again.
+        // A raw HTML block inside an item (it carries the item: N1163-m): the item's next block draws no marker again.
         let html = render("- a\n\n  <div>x</div>\n\n  b").text.string
         XCTAssertTrue(html.hasPrefix("•\ta\n"), html)
         XCTAssertTrue(html.hasSuffix("\nb"), html)
@@ -1579,5 +1579,140 @@ extension MarkdownRendererTests {
         XCTAssertGreaterThanOrEqual(out.text.length, line.utf16.count, "the code line is shown")
         XCTAssertTrue(R.paragraphCut(out.text.string, cap: R.maxParagraphUnits) == nil, "no rendered paragraph over the cap")
         Self.fact("#1236: a one-line code block at the source cap renders a \(line.utf16.count)-unit paragraph, cap \(R.maxParagraphUnits)")
+    }
+}
+
+/// #1180 round 3: the riders of entry 1236 and of entries 1163 and 1229. Pure rows (no file, no view); the cut rows pass a
+/// small cap, the two rows at the source cap hold about 1 MiB of source and 2 MiB of rendered text each.
+extension MarkdownRendererTests {
+
+    private static func flags(_ n: Int) -> String { String(repeating: "\u{1F1E7}\u{1F1EC}", count: n) }
+
+    /// N1236-b (QA 983): the cut window starts more than 256 units into a run of flags, where its own pairing is off by
+    /// one: the count back from the cut keeps every flag whole. "x" then 140 flags: flag k starts at unit 1 + 4k, so a
+    /// cap of 1 + 4k + 2 lands on its second half.
+    func testCutInsideALongRunOfFlagsKeepsWholeFlags() {
+        let text = "x" + Self.flags(140)
+        for k in [100, 101, 139] {
+            let cap = 1 + 4 * k + 2
+            let (cut, note) = shown(text, cap: cap)
+            XCTAssertEqual(cut, "x" + Self.flags(k), "flag \(k): the shown text ends with a whole flag")
+            XCTAssertEqual(cut.utf16.count, 1 + 4 * k, "flag \(k)")
+            XCTAssertEqual(note, R.cutNote(cap))
+        }
+        XCTAssertEqual(shown(text, cap: 1 + 4 * 100).0, "x" + Self.flags(100), "a cap on a first half: the cut is already there")
+    }
+
+    /// N1236-b, hostile texts: a run longer than the count's bound, an indicator at the paragraph start, a lone surrogate
+    /// half (a Swift literal cannot hold one: built from UTF-16 units, once repaired by String(decoding:), once kept by
+    /// NSString). Nothing traps and the shown text is at most the cap (and a prefix of the repaired text).
+    func testFlagCountOnHostileTexts() {
+        // 2,200 flags; the cut 4,201 indicators in: past maxIndicatorRun (4,096) the window's cut is kept, which here
+        // splits a flag, as before #1180.
+        let long = "x" + Self.flags(2_200), cap = 1 + 4 * 2_100 + 2
+        XCTAssertGreaterThan(2 * 2_100 + 1, R.maxIndicatorRun)
+        let past = shown(long, cap: cap).0
+        XCTAssertEqual(past.utf16.count, cap, "past the bound: the cut at the cap, on a second half")
+        XCTAssertTrue(long.utf16.starts(with: past.utf16))
+        XCTAssertEqual(shown("\u{1F1E7}\u{1F1EC}\u{1F1E7}", cap: 2).0, "", "a flag at the paragraph start")
+        XCTAssertEqual(shown("ab\n" + Self.flags(3), cap: 2).0, "ab\n", "the count stops at the paragraph start")
+        XCTAssertEqual(shown("\u{1F1E7}" + "z", cap: 1).0, "", "a lone indicator alone")
+        let units: [UInt16] = [0x78, 0xD83C] + (0..<200).flatMap { _ in [UInt16(0xD83C), 0xDDE7] } + [0xDDE7]
+        let repaired = String(decoding: units, as: UTF16.self)
+        let kept = units.withUnsafeBufferPointer { NSString(characters: $0.baseAddress!, length: $0.count) } as String
+        for (name, text) in [("repaired", repaired), ("kept", kept)] {
+            for cap in [0, 1, 2, 3, 4, 300, 301, 401, 402, 403] {
+                let cut = shown(text, cap: cap).0
+                XCTAssertLessThanOrEqual(cut.utf16.count, cap, "\(name) \(cap)")
+                // The slice of `kept` is a native String: its lone halves come back as U+FFFD, so only `repaired` is compared.
+                if name == "repaired" { XCTAssertTrue(text.utf16.starts(with: cut.utf16), "\(name) \(cap)") }
+            }
+        }
+    }
+
+    /// QA 983, the missing row: a Markdown source over the source cap made of short lines (80 units, none near the
+    /// paragraph cap) is shown whole as source, with the too-large note alone.
+    func testMarkdownOverTheSourceCapOfShortLinesIsShownWhole() {
+        let line = String(repeating: "a", count: 79) + "\n"
+        let source = String(repeating: line, count: R.maxSourceBytes / 80 + 1)
+        XCTAssertGreaterThan(source.utf8.count, R.maxSourceBytes)
+        let out = R.render(source, document: Self.document, style: Self.style, loader: { _, _, _ in nil })
+        XCTAssertEqual(out.note, R.tooLargeNote, "no cut note")
+        XCTAssertEqual(out.text.length, source.utf16.count, "the full length")
+        XCTAssertTrue(out.text.string == source, "the source as is")
+    }
+
+    /// The longest paragraph of `s` in UTF-16 units, paragraphs ended as paragraphCut ends them.
+    private static func longestParagraph(_ s: String) -> Int {
+        var longest = 0, run = 0
+        for u in s.utf16 {
+            if u == 0x0A || u == 0x0D || u == 0x2029 { run = 0 } else { run += 1; longest = max(longest, run) }
+        }
+        return longest
+    }
+
+    /// N1236-d: a one-item list whose item fills the source cap. Each marker the renderer draws ("•\t", "1.\t", nine
+    /// nested markers sharing stops past depth 8) replaces source bytes at least as long, so the longest rendered
+    /// paragraph is predicted at the source cap exactly (N = 0); the bound is the cap plus 8 units, a margin of 8.
+    func testRenderedListItemAtTheSourceCapStaysNearTheCap() {
+        for prefix in ["- ", "1. ", String(repeating: "- ", count: 9)] {
+            let source = prefix + String(repeating: "a", count: R.maxSourceBytes - prefix.utf8.count)
+            XCTAssertEqual(source.utf8.count, R.maxSourceBytes)
+            let out = R.render(source, document: Self.document, style: Self.style, loader: { _, _, _ in nil })
+            XCTAssertTrue(out.note == nil, "\(prefix.debugDescription): rendered, not shown as source")
+            let longest = Self.longestParagraph(out.text.string)
+            XCTAssertLessThanOrEqual(longest, R.maxSourceBytes + 8, prefix.debugDescription)
+            XCTAssertGreaterThanOrEqual(longest, R.maxSourceBytes - prefix.utf8.count, "the item's text is shown")
+            Self.fact("N1236-d: \(prefix.debugDescription) item at the source cap: longest paragraph \(longest) units, source cap plus \(longest - R.maxSourceBytes)")
+        }
+    }
+
+    /// N1163-m: every block between an item's first and last block carries that item in its intent (raw HTML, a comment,
+    /// code, a quote, a rule, a table, a reference definition). So a block with no items (start(), MarkdownRenderer.swift,
+    /// the line before `let fresh`) has left every list, and the next item is fresh whatever openItems held: the guard
+    /// "if !items.isEmpty" was dead and is gone. Under the guard's absence a shape that broke this rule would draw the
+    /// item's marker again before "b"; each shape is also rendered.
+    func testEveryBlockInsideAnItemCarriesTheItem() {
+        func isItem(_ c: PresentationIntent.IntentType) -> Bool { if case .listItem = c.kind { true } else { false } }
+        let shapes = ["- a\n\n  <div>x</div>\n\n  b", "- a\n  <div>x</div>\n\n  b", "- a\n\n  <!-- c -->\n\n  b",
+                      "1. a\n\n   ```\n   c\n   ```\n\n   b", "- a\n\n  > q\n\n  b", "- a\n\n  ***\n\n  b",
+                      "- a\n\n  | h |\n  |---|\n  | c |\n\n  b", "- a\n\n  [r]: #top\n\n  b", "- a\n\n      code\n\n  b"]
+        for md in shapes {
+            guard let parsed = try? AttributedString(markdown: md, options: R.parsingOptions(for: md)) else {
+                XCTFail("\(md.debugDescription): not parsed"); continue
+            }
+            let items = parsed.runs.map { run in run.presentationIntent?.components.filter(isItem).map(\.identity) ?? [] }
+            let first = items.firstIndex { !$0.isEmpty }, last = items.lastIndex { !$0.isEmpty }
+            XCTAssertTrue(first != nil && last != nil && first! < last!, "\(md.debugDescription): the item spans runs")
+            if let first, let last, first <= last {
+                XCTAssertTrue(items[first...last].allSatisfy { !$0.isEmpty }, "\(md.debugDescription): a run with no item inside it: \(items)")
+            }
+            let s = render(md).text.string
+            XCTAssertTrue(s.hasSuffix("b"), "\(md.debugDescription): \(s.debugDescription)")
+            XCTAssertFalse(s.contains("\tb"), "\(md.debugDescription): one marker: \(s.debugDescription)")
+        }
+    }
+
+    /// N1229-a: other first-line syntax after two leading BOMs draws as with one and as with none (render drops every
+    /// leading BOM before the parse): a list, a quote, a code fence, a reference definition.
+    func testTwoLeadingBOMsBeforeOtherFirstLineSyntax() {
+        let b = "\u{FEFF}"
+        func same(_ md: String) -> R.Output {
+            let two = render(b + b + md)
+            XCTAssertEqual(two.text.string, render(b + md).text.string, "\(md.debugDescription): as with one BOM")
+            XCTAssertEqual(two.text.string, render(md).text.string, "\(md.debugDescription): as with none")
+            return two
+        }
+        XCTAssertEqual(same("- one\n- two").text.string, "\u{2022}\tone\n\u{2022}\ttwo", "a list")
+        let quote = same("> quoted")
+        XCTAssertEqual(quote.text.string, "quoted", "a quote")
+        XCTAssertEqual(para(quote, "quoted")?.textBlocks.count, 1, "its bar")
+        let fence = same("```\ncode\n```")
+        XCTAssertTrue(fence.text.string.hasPrefix("code"), fence.text.string.debugDescription)
+        XCTAssertTrue(font(fence, "code")?.fontDescriptor.symbolicTraits.contains(.monoSpace) == true, "a code fence")
+        XCTAssertEqual(para(fence, "code")?.textBlocks.count, 1, "its block")
+        let ref = same("[r]: #top\n\n[go][r]")
+        XCTAssertEqual(ref.text.string, "go", "a reference definition draws nothing")
+        XCTAssertEqual(linkString(ref, at: 0), "#top", "its link")
     }
 }

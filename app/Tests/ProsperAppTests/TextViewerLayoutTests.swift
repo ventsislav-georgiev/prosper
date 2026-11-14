@@ -591,6 +591,12 @@ final class TextViewerLayoutTests: XCTestCase {
     /// #1180 probe (heavy only, no assertion on time): the ladder. Doubling from 64 KiB; stops at the first
     /// step over 2 s; never starts a step predicted over 10 s (from the last two steps) or over 48 MiB, or past
     /// the file cap. Then one step of 4-byte characters and one with a space every 80, at 1 MiB of units.
+    /// N1180-a (QA 978): a step's memory growth is read at the end of the step, not at its peak, and against a baseline
+    /// that holds pages kept from the step before, so both readings bias low, and the floor of twice the last growth in
+    /// predictedMiB covers linear growth only (headroom at 1 Mi units about 1.5 times).
+    /// N1180-b (QA 978): the 1 Mi step starts on a thin margin (predicted 44 to 47 MiB against 48), so when the 512 Ki step
+    /// grows by more than 24 MiB the 1 Mi step is not started and the side steps run at 512 Ki units instead (not at all
+    /// when it grew by more than 48 MiB): the set of steps is not fixed from run to run.
     func testOneLineLadderProbe() throws {
         try requireHeavyTests()
         var units = 64 << 10

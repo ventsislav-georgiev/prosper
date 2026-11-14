@@ -396,9 +396,13 @@ struct TextViewerRootView: View {
     }
 
     func banner(_ text: String) -> some View {
+        // N1236-a: one line at any width (the joined notes wrapped at the minimum width); the full text in the help and on
+        // the accessibility tree (a truncated Text keeps its whole label).
         Text(text)
             .font(Neon.font(11, weight: .medium))
             .foregroundStyle(Neon.textSecondary)
+            .lineLimit(1).truncationMode(.tail)
+            .help(text)
             .frame(maxWidth: .infinity)
             .padding(.vertical, sz(5))
             .background(Neon.card)

@@ -142,7 +142,28 @@ enum MarkdownRenderer {
             offset += c.utf16.count
         }
         if best == 0, from != floor { return at }   // no boundary in reach: a scalar boundary instead
-        return units.index(from, offsetBy: best)
+        return flagStart(text, units.index(from, offsetBy: best), floor: floor)
+    }
+
+    /// The most indicators counted back from a cut (N1236-b); 2,048 flags.
+    static let maxIndicatorRun = 4_096
+
+    /// N1236-b: regional indicators pair into flags by parity from their run's start, which can lie before the window
+    /// characterStart reads, so a cut found there can fall between a flag's halves. When the scalar at `cut` is an
+    /// indicator, the run before it is counted back (never before `floor`, at most maxIndicatorRun scalars, one checked
+    /// step each) and an odd count moves the cut back one indicator. A longer run keeps the cut: a flag may split there.
+    private nonisolated static func flagStart(_ text: String, _ cut: String.Index, floor: String.Index) -> String.Index {
+        let scalars = text.unicodeScalars
+        func isIndicator(_ i: String.Index) -> Bool { (0x1F1E6...0x1F1FF).contains(scalars[i].value) }
+        guard cut < scalars.endIndex, cut.samePosition(in: scalars) != nil, isIndicator(cut) else { return cut }
+        var back = cut, run = 0
+        while back > floor, run <= maxIndicatorRun {
+            let prev = scalars.index(before: back)
+            guard isIndicator(prev) else { break }
+            (back, run) = (prev, run + 1)
+        }
+        guard run <= maxIndicatorRun, run % 2 == 1 else { return cut }
+        return scalars.index(before: cut)
     }
 
     /// Parses and converts `source`, the Markdown document at `document`. Off the main thread; stops
@@ -391,7 +412,7 @@ private final class Converter {
     var cont = NSParagraphStyle()   // the same block after a hard break: no marker indent
     var blockFont: NSFont
     var blockColor: NSColor
-    var openItems: Set<Int> = []   // the list items of the last block that had any
+    var openItems: Set<Int> = []   // the list items of the last block
     var lastWideRow: [Int]?
     var quoteBlocks: [Int: NSTextBlock] = [:]
     var codeBlocks: [Int: NSTextBlock] = [:]
@@ -542,7 +563,9 @@ private final class Converter {
         // #1163: every item this block opens gets its marker ("1. - x" opens two), outermost first, each at
         // its own depth. The new ones are the innermost: an item open on the last block keeps its parents.
         let fresh = items.filter { !openItems.contains($0.id) }
-        if !items.isEmpty { openItems = Set(items.map(\.id)) }   // a block with no intent (raw HTML) keeps them
+        // N1163-m: every block inside an item carries the item (raw HTML too: testEveryBlockInsideAnItemCarriesTheItem),
+        // so a block with no items has left every list and the next item is fresh either way.
+        openItems = Set(items.map(\.id))
         if let first = fresh.first {
             var marks = fresh.map { $0.ordered ? "\($0.ordinal)." : ["•", "◦", "▪"][max(0, $0.depth - 1) % 3] }
             if text.hasPrefix("[ ] ") { marks[marks.count - 1] = "☐"; text.removeFirst(4) }
