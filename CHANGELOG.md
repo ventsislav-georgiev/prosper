@@ -1047,6 +1047,9 @@ tag from the now-released section and put it on the new top draft.
 - File search: "Open in Prosper" on a file with no extension no longer does nothing when macOS
   disagrees about whether it is text; the viewer opens it and says so itself if it is not text.
   (#1164)
+- Settings: when the Sidekick pattern holds regular-expression characters (a dot, brackets, a plus
+  and so on), a line under the field now says how it is read, and a "Match this text exactly" button
+  rewrites it to match just that text. Nothing changes until you press it. (#938)
 
 ## v2.174.0
 

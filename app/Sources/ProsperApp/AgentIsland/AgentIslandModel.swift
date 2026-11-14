@@ -357,6 +357,61 @@ enum AgentIsland {
         return p.isEmpty ? nil : try? NSRegularExpression(pattern: p, options: [.caseInsensitive, .useUnixLineSeparators])
     }
 
+    // MARK: - What the pattern means as a regex (#938, QA INFO-3 on #759)
+
+    /// What Settings tells about the saved pattern. `regex` carries the first syntax character, found left to right.
+    enum SidekickHint: Equatable {
+        case plain, invalid, exact, tooLong
+        case regex(first: Unicode.Scalar)
+
+        /// The plain words for the row's hint slot; nil where the row says nothing (plain and exact are calm; `invalid` is
+        /// already told by `SidekickMatch.invalid.caption` under the field; `tooLong` is told by sidekickDchNote).
+        var text: String? {
+            guard case .regex(let c) = self, let says = AgentIsland.sidekickSyntax.first(where: { $0.char == c })?.says else { return nil }
+            return "Read as a regex: \(c) \(says)"
+        }
+    }
+
+    /// The characters ICU (NSRegularExpression, no x flag) reads as syntax outside a bracket set, and what each does. A "-"
+    /// is none of them. The escape below prefixes exactly these, so one table pins both.
+    static let sidekickSyntax: [(char: Unicode.Scalar, says: String)] = [
+        ("\\", "starts a special code"), ("^", "means start of the text"), ("$", "means end of the text"),
+        (".", "matches any character"), ("|", "means either side"), ("?", "may skip the one before"),
+        ("*", "repeats the one before"), ("+", "repeats the one before"), ("(", "groups part of it"), (")", "groups part of it"),
+        ("[", "picks one of a set"), ("]", "picks one of a set"), ("{", "sets a repeat count"), ("}", "sets a repeat count"),
+    ]
+
+    /// Same bound as the dch config line (DchConfigWriter.maxPatternBytes): longer is outside data, never scanned or escaped.
+    static func sidekickHint(_ pattern: String) -> SidekickHint {
+        guard pattern.utf8.count <= DchConfigWriter.maxPatternBytes else { return .tooLong }
+        let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = p.unicodeScalars.first(where: { c in sidekickSyntax.contains { $0.char == c } }) else { return .plain }
+        guard sidekickRegex(p) != nil else { return .invalid }
+        // Already the escaped form of some text: dropping each backslash that guards a syntax character and escaping again gives it back.
+        var plain = String.UnicodeScalarView(), chars = p.unicodeScalars.makeIterator(), next = chars.next()
+        while let c = next {
+            next = chars.next()
+            if c == "\\", let n = next, sidekickSyntax.contains(where: { $0.char == n }) { plain.append(n); next = chars.next() } else { plain.append(c) }
+        }
+        return String(plain) != p && sidekickEscaped(String(plain)) == p ? .exact : .regex(first: first)
+    }
+
+    /// `text` as a pattern that matches that text and nothing else: a backslash before each syntax character.
+    static func sidekickEscaped(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        for c in text.unicodeScalars {
+            if sidekickSyntax.contains(where: { $0.char == c }) { out.append("\\") }
+            out.append(c)
+        }
+        return String(out)
+    }
+
+    /// The "Match this text exactly" button: the escaped pattern when it is read as a regex, else unchanged.
+    static func sidekickMatchExactly(_ pattern: String) -> String {
+        guard case .regex = sidekickHint(pattern) else { return pattern }
+        return sidekickEscaped(pattern.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     /// Never without sidekicks; always when they are all there is; else the chosen tab.
     static func showsSidekicks(_ split: Split, tab: Bool) -> Bool {
         !split.sidekicks.isEmpty && (tab || split.primary.isEmpty)

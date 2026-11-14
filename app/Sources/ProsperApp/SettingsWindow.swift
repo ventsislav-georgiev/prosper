@@ -1061,11 +1061,21 @@ struct AgentIslandListSection: View {
             NeonDivider()
             NeonRow("Sidekick tabs") { Toggle("", isOn: $tabs).labelsHidden() }
             NeonDivider()
-            NeonRow("Sidekick pattern") {
+            // #938: the subtitle is one fixed line (a no-break space when there is no hint), so the row never changes height.
+            NeonRow("Sidekick pattern", subtitle: Self.hintLine(pattern)) {
                 // Empty = no split, so the placeholder says so (QA #434 L1).
                 VStack(alignment: .trailing, spacing: sz(2)) {
                     TextField("None", text: $pattern).frame(width: sz(180))
                         .disabled(!tabs)
+                        .accessibilityLabel("Sidekick pattern")
+                        .accessibilityHint(AgentIsland.sidekickHint(pattern).text ?? "")
+                    // The button's slot is always laid out; hidden() keeps its size and drops it from the accessibility tree.
+                    // The press runs on the main actor (a View's button action); the onChange below saves, as a typed edit does.
+                    ViewThatFits(in: .horizontal) {
+                        exactButton("Match this text exactly")
+                        exactButton("Match exactly")
+                    }
+                    .hidden(AgentIsland.sidekickHint(pattern).text == nil)
                     if let caption = AgentIsland.sidekickCaption(pattern, tabs: tabs, sessions: AgentIslandController.shared.store?.sessions ?? []) {
                         Text(caption)
                             .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
@@ -1080,6 +1090,17 @@ struct AgentIslandListSection: View {
         .onReceive(NotificationCenter.default.publisher(for: .sidekickPatternChangedExternally)) { _ in
             pattern = Preferences.agentIslandSidekickPattern
         }
+    }
+
+    /// The hint slot's text: the hint, or a no-break space that keeps the line.
+    static func hintLine(_ pattern: String) -> String { AgentIsland.sidekickHint(pattern).text ?? "\u{00A0}" }
+
+    private func exactButton(_ title: String) -> some View {
+        Button(title) { pattern = AgentIsland.sidekickMatchExactly(pattern) }
+            .controlSize(AgentIslandPane.aliasesControlSize(ThemeRuntime.scale))
+            .fixedSize()
+            .disabled(!tabs)
+            .accessibilityLabel("Match this text exactly")
     }
 
     /// The field's onChange, here so a test can drive it: an edit stamps, the echo of an adopt does not.
@@ -3921,4 +3942,9 @@ enum ProsperVerify {
 
         print("=== END PROSPER_VERIFY ===")
     }
+}
+
+private extension View {
+    /// Keeps the view's size and place; hides it from the eye and from accessibility when `off`.
+    @ViewBuilder func hidden(_ off: Bool) -> some View { if off { hidden() } else { self } }
 }
