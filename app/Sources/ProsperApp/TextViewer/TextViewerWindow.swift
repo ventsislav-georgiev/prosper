@@ -71,11 +71,12 @@ final class TextViewerModel: ObservableObject {
     var name: String { url.lastPathComponent }
     var document: TextViewerDocument? { try? state?.get() }
 
-    /// The first load found a regular file (shown, or refused for its size or bytes): worth
-    /// watching. A missing file, a folder or a FIFO is not watched.
-    var isRegularFile: Bool {
+    /// The first load found a regular file (shown, or refused for its size or bytes) or nothing
+    /// (#1147: the window fills in when the file is created): worth watching. A folder or a FIFO
+    /// (.notRegular) and an unreadable path are not watched.
+    var isWatched: Bool {
         switch state {
-        case .success?, .failure(.tooLarge)?, .failure(.binary)?: true
+        case .success?, .failure(.tooLarge)?, .failure(.binary)?, .failure(.missing)?: true
         default: false
         }
     }
@@ -215,8 +216,9 @@ final class TextViewerWindows {
         // Watched once the first (off-main) load knows what the path is. Set before that load can land:
         // it publishes on the main actor, after this function returns.
         model.onFirstLoad = { [weak entry, weak model] in
-            guard let entry, let model, model.isRegularFile else { return }
-            entry.watcher = FileWatcher(url: resolved) { [weak model] in
+            guard let entry, let model, model.isWatched else { return }
+            // Created between the first load and the first arm: that arm fires (#1147).
+            entry.watcher = FileWatcher(url: resolved, absent: model.state == .failure(.missing)) { [weak model] in
                 MainActor.assumeIsolated { model?.reload() }   // FileWatcher fires on the main queue
             }
         }

@@ -135,4 +135,82 @@ final class FileWatcherTests: XCTestCase {
         watcher = nil
         XCTAssertTrue(poll(10) { watchedInodes(under: dir).isEmpty }, "closed within 10 s")
     }
+
+    // MARK: #1147 one fire when the path appears after an absence
+
+    /// Fires counted on main; `offMain` records a call off the main queue.
+    final class Fires: @unchecked Sendable { var n = 0; var offMain = false }   // touched on main only
+
+    /// @Sendable, made here (nonisolated test code) and called by the watcher on the main queue,
+    /// after its debounce on the watcher's own queue.
+    private func counting(_ fires: Fires) -> @Sendable () -> Void {
+        { if !Thread.isMainThread { fires.offMain = true }; fires.n += 1 }
+    }
+
+    /// Watched before the file exists: the first arm (synced on the watcher's queue) finds nothing,
+    /// the 1 s retry arms the created file and fires once. Waits: the fire, 10 s ceiling (one 1 s
+    /// retry plus the 0.2 s debounce); then no second fire within 2 s (ten debounces); then a write
+    /// to the armed file fires again, 10 s ceiling.
+    func testArmAfterAbsenceFiresOnce() throws {
+        let dir = tempDir("fw-appear")
+        let file = dir.appendingPathComponent("late.txt")
+        let fires = Fires()
+        let watcher = FileWatcher(url: file, onChange: counting(fires))
+        defer { watcher.stop() }
+        watcher.queue.sync {}   // the first arm, queued by init, has looked and found nothing
+        XCTAssertTrue(watchedInodes(under: dir).isEmpty, "nothing armed while the path is absent")
+        try Data("x\n".utf8).write(to: file)
+        XCTAssertTrue(poll(10) { fires.n == 1 }, "the appearance fires within 10 s: \(fires.n)")
+        XCTAssertTrue(poll(10) { watchedInodes(under: dir) == [inode(file)].compactMap { $0 } }, "armed on the new file")
+        XCTAssertFalse(poll(2) { fires.n > 1 }, "one fire for one appearance: \(fires.n)")
+        let h = try FileHandle(forWritingTo: file)
+        try h.seekToEnd(); try h.write(contentsOf: Data("y\n".utf8)); try h.close()
+        XCTAssertTrue(poll(10) { fires.n == 2 }, "a write after the arm fires within 10 s: \(fires.n)")
+        XCTAssertFalse(fires.offMain, "onChange ran on main")
+    }
+
+    /// An existing file's first arm is not a change: armed, then no fire within 2 s (ten debounces).
+    func testFirstArmOfAnExistingFileFiresNothing() throws {
+        let dir = tempDir("fw-present")
+        let file = try XCTUnwrap(try files(1, in: dir).first)
+        let fires = Fires()
+        let watcher = FileWatcher(url: file, onChange: counting(fires))
+        defer { watcher.stop() }
+        XCTAssertTrue(poll(10) { watchedInodes(under: dir).count == 1 }, "armed within 10 s")
+        XCTAssertFalse(poll(2) { fires.n > 0 }, "the first arm of an existing file fired: \(fires.n)")
+    }
+
+    /// `absent: true` (the viewer's first load found nothing): a file there by the first arm was
+    /// created since, so that arm fires once. Waits: the fire, 10 s; no second within 2 s.
+    func testAbsentCallerFiresOnTheFirstArm() throws {
+        let dir = tempDir("fw-absent")
+        let file = try XCTUnwrap(try files(1, in: dir).first)
+        let fires = Fires()
+        let watcher = FileWatcher(url: file, absent: true, onChange: counting(fires))
+        defer { watcher.stop() }
+        XCTAssertTrue(poll(10) { fires.n == 1 }, "the first arm fires within 10 s: \(fires.n)")
+        XCTAssertFalse(poll(2) { fires.n > 1 }, "one fire: \(fires.n)")
+        XCTAssertFalse(fires.offMain, "onChange ran on main")
+    }
+
+    /// Deleted, then created again: the delete fires (as before #1147), the re-arm in that same
+    /// debounced item finds nothing (it runs before onChange is queued to main, so it has looked
+    /// by the time the fire is seen here), and the creation fires once more when the 1 s retry
+    /// arms it. Waits: each fire 10 s; no third fire within 2 s.
+    func testDeletedAndCreatedAgainFiresOnTheCreation() throws {
+        let dir = tempDir("fw-recreate")
+        let file = try XCTUnwrap(try files(1, in: dir).first)
+        let fires = Fires()
+        let watcher = FileWatcher(url: file, onChange: counting(fires))
+        defer { watcher.stop() }
+        XCTAssertTrue(poll(10) { watchedInodes(under: dir).count == 1 }, "armed within 10 s")
+        try FileManager.default.removeItem(at: file)
+        XCTAssertTrue(poll(10) { fires.n == 1 }, "the delete fires within 10 s: \(fires.n)")
+        XCTAssertTrue(watchedInodes(under: dir).isEmpty, "nothing armed while the path is absent")
+        try Data("again\n".utf8).write(to: file)
+        XCTAssertTrue(poll(10) { fires.n == 2 }, "the creation fires within 10 s: \(fires.n)")
+        XCTAssertTrue(poll(10) { watchedInodes(under: dir) == [inode(file)].compactMap { $0 } }, "armed on the new file")
+        XCTAssertFalse(poll(2) { fires.n > 2 }, "one fire for the creation: \(fires.n)")
+        XCTAssertFalse(fires.offMain, "onChange ran on main")
+    }
 }

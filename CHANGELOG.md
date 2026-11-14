@@ -763,6 +763,9 @@ tag from the now-released section and put it on the new top draft.
   or a one-shot that already fired) instead of always answering true. (#1161)
 - Hammerspoon Compat: a config that replaces a standard string function can no longer act with
   permissions left over from an earlier run that was stopped for running too long. (#1161)
+- Text Viewer: a window opened on a file that does not exist yet now shows the file as soon as it is
+  created, and a file that is deleted and created again shows its new contents (before, the window
+  kept saying the file was not there). (#1147)
 
 ## v2.174.0
 
