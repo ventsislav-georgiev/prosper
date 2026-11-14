@@ -1057,7 +1057,7 @@ final class ExtensionRegistry: ObservableObject {
     @discardableResult
     func installRemote(url: String) async throws -> ExtensionRecord {
         let extDir = try await RemoteInstaller.fetch(url)
-        defer { try? FileManager.default.removeItem(at: extDir.deletingLastPathComponent().deletingLastPathComponent()) }
+        defer { RemoteInstaller.removeWorkFolder(holding: extDir) }
         // Stamp the origin so future launches can poll it for updates (no-op if
         // the author already declared an update_url).
         injectUpdateURL(url, intoManifestAt: extDir)
@@ -1073,7 +1073,7 @@ final class ExtensionRegistry: ObservableObject {
     @discardableResult
     func installFromMarket(id: String, version: String) async throws -> ExtensionRecord {
         let extDir = try await RemoteInstaller.fetchFromMarket(id: id, version: version)
-        defer { try? FileManager.default.removeItem(at: extDir.deletingLastPathComponent()) }
+        defer { RemoteInstaller.removeWorkFolder(holding: extDir) }
         try bindMarketIdentity(extDir: extDir, expected: id)
         injectUpdateURL("prosper://market/\(id)", intoManifestAt: extDir, force: true)
         return try installLocal(from: extDir)
@@ -1136,8 +1136,7 @@ final class ExtensionRegistry: ObservableObject {
                     continue
                 }
                 let remoteDir = try await RemoteInstaller.fetch(cand.url)
-                let temp = remoteDir.deletingLastPathComponent().deletingLastPathComponent()
-                defer { try? FileManager.default.removeItem(at: temp) }
+                defer { RemoteInstaller.removeWorkFolder(holding: remoteDir) }
                 guard let remote = Self.manifestVersion(at: remoteDir), cand.version < remote else { continue }
                 // Same clobber guard as the market path: installLocal installs under the
                 // tarball's OWN manifest id, so a (compromised) update feed for A that ships

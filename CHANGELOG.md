@@ -679,6 +679,9 @@ tag from the now-released section and put it on the new top draft.
 - Hardening: each extension's Lua runtime now has its own memory limit (256 MiB). A script call that
   goes past it fails with "not enough memory" and the runtime stays usable; Prosper's own reads and
   writes of an extension's globals no longer run the extension's metatable code (#1127).
+- Extensions installed from GitHub: installing or checking for updates now removes only the download
+  folder it created, and a download that is refused no longer leaves files behind in your temporary
+  folder (#1152).
 
 ## v2.174.0
 

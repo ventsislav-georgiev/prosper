@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 
 /// Installs an extension from a GitHub URL pointing at a repo (or a sub-directory
 /// of a repo) that contains an `extension.toml`. Downloads the repo tarball via
@@ -82,8 +83,8 @@ enum RemoteInstaller {
     }
 
     /// Download + extract the repo, returning the local directory that contains
-    /// `extension.toml`. The caller owns the returned directory's parent temp
-    /// tree and should remove it after copying the extension out.
+    /// `extension.toml`. The caller removes the work folder holding it with
+    /// `removeWorkFolder(holding:)` after copying the extension out.
     static func fetch(_ raw: String) async throws -> URL {
         guard let source = parse(raw) else { throw InstallError.unsupportedURL(raw) }
 
@@ -102,22 +103,13 @@ enum RemoteInstaller {
             throw InstallError.downloadFailed("HTTP \(http.statusCode)")
         }
 
-        let fm = FileManager.default
-        let work = fm.temporaryDirectory.appendingPathComponent("prosper-ext-\(source.repo)-\(abs(raw.hashValue))", isDirectory: true)
-        try? fm.removeItem(at: work)
-        try fm.createDirectory(at: work, withIntermediateDirectories: true)
-
-        let tarball = work.appendingPathComponent("download.tar.gz")
-        try data.write(to: tarball)
-
         // Extract with the system tar (no Foundation gzip/tar reader). Strip the
         // top-level "<repo>-<ref>/" directory codeload always prepends.
-        let extractDir = work.appendingPathComponent("src", isDirectory: true)
-        try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
         // Same zip-slip/symlink guards as the market path — a GitHub repo is just as
         // untrusted. assertSafeArchive checks RAW entries for `..` (conservative: also
         // covers `repo-ref/../../x`, which --strip-components 1 would turn into `../x`).
-        return try unpack(tarball, into: extractDir, stripTopLevel: true, subdir: source.subdir)
+        return try extract(data, workName: "prosper-ext-\(source.repo)-\(raw.hashValue.magnitude)",
+                           stripTopLevel: true, subdir: source.subdir)
     }
 
     // MARK: - Marketplace install
@@ -134,7 +126,7 @@ enum RemoteInstaller {
     /// Download an extension from the marketplace, verify its integrity (sha256)
     /// and authenticity (Ed25519 signature over the claim, bound to id/version),
     /// then extract it to a temp dir and return that dir for `installLocal`. The
-    /// caller owns the returned directory's parent temp tree.
+    /// caller removes its work folder with `removeWorkFolder(holding:)`.
     static func fetchFromMarket(id: String, version: String) async throws -> URL {
         let dl: MarketClient.Download
         do {
@@ -177,20 +169,83 @@ enum RemoteInstaller {
 
         // Write + extract. Market tarballs are packaged from the extension dir's
         // contents (extension.toml at the archive root), so no strip is needed.
-        let fm = FileManager.default
-        // ponytail: stable temp path per (id,version) — the caller's defer cleans it
-        // on success; on a mid-fetch throw the next install of the same id+version
-        // wipes it here. Worst case is one stale dir per failed (id,version), in
-        // NSTemporaryDirectory (OS-reaped). Not worth clean-on-throw plumbing.
-        let work = fm.temporaryDirectory.appendingPathComponent("prosper-market-\(id)-\(version)", isDirectory: true)
-        try? fm.removeItem(at: work)
-        try fm.createDirectory(at: work, withIntermediateDirectories: true)
-        let tarball = work.appendingPathComponent("download.tar.gz")
-        try bytes.write(to: tarball)
+        return try extract(bytes, workName: "prosper-market-\(id)-\(version)", stripTopLevel: false)
+    }
 
-        let extractDir = work.appendingPathComponent("src", isDirectory: true)
-        try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
-        return try unpack(tarball, into: extractDir, stripTopLevel: false)
+    // MARK: - Work folder
+
+    /// Every download gets a work folder directly in the temp folder, named with one of these.
+    static let workPrefixes = ["prosper-ext-", "prosper-market-"]
+    private static let log = Logger(subsystem: "com.prosper.app", category: "extension")
+
+    /// Writes `data` into a fresh `tempRoot/<workName>` and unpacks it there (see `unpack`). On success
+    /// the caller removes the work folder with `removeWorkFolder(holding:)`; on a throw it is removed here.
+    static func extract(_ data: Data, workName: String, tempRoot: URL = FileManager.default.temporaryDirectory,
+                        stripTopLevel: Bool, subdir: String = "") throws -> URL {
+        let work = tempRoot.appendingPathComponent(workName, isDirectory: true)
+        // Clears a leftover of the same name; a name the guard refuses is never written either.
+        guard removeWorkFolder(work, tempRoot: tempRoot) else {
+            throw InstallError.extractFailed("unexpected download folder name")
+        }
+        let fm = FileManager.default
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        do {
+            let tarball = work.appendingPathComponent("download.tar.gz")
+            try data.write(to: tarball)
+            let extractDir = work.appendingPathComponent("src", isDirectory: true)
+            try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
+            return try unpack(tarball, into: extractDir, stripTopLevel: stripTopLevel, subdir: subdir)
+        } catch {
+            removeWorkFolder(work, tempRoot: tempRoot)
+            throw error
+        }
+    }
+
+    /// The temp folder's child that holds `extDir`: the work folder a fetch made, at any sub-folder
+    /// depth. nil when `extDir` is not below `tempRoot`.
+    static func workFolder(of extDir: URL, tempRoot: URL = FileManager.default.temporaryDirectory) -> URL? {
+        let root = tempRoot.pathComponents, parts = extDir.pathComponents
+        guard parts.count > root.count, Array(parts.prefix(root.count)) == root else { return nil }
+        return tempRoot.appendingPathComponent(parts[root.count], isDirectory: true)
+    }
+
+    /// The installers' cleanup: removes the work folder holding a fetched extension folder.
+    static func removeWorkFolder(holding extDir: URL, tempRoot: URL = FileManager.default.temporaryDirectory) {
+        removeWorkFolder(workFolder(of: extDir, tempRoot: tempRoot) ?? extDir, tempRoot: tempRoot)
+    }
+
+    /// Removes `work` only when it is a direct child of `tempRoot` named with a download prefix; any
+    /// other path is refused (logged, nothing removed, returns false). `remove` is a test seam; it is
+    /// called synchronously on the caller's queue.
+    @discardableResult
+    static func removeWorkFolder(_ work: URL, tempRoot: URL = FileManager.default.temporaryDirectory,
+                                 remove: (URL) -> Void = RemoteInstaller.clearWorkFolder) -> Bool {
+        let parts = work.pathComponents, root = tempRoot.pathComponents
+        guard parts.count == root.count + 1, Array(parts.dropLast()) == root,
+              let name = parts.last, workPrefixes.contains(where: { name.hasPrefix($0) }) else {
+            log.error("refused to remove \(work.path, privacy: .public): not a download folder in the temp folder")
+            return false
+        }
+        remove(work)
+        return true
+    }
+
+    /// Opens every folder inside `work` to its owner first (an archive can leave one unlistable or
+    /// read-only), then removes it. A missing folder is not an error.
+    static func clearWorkFolder(_ work: URL) {
+        var st = stat()
+        if lstat(work.path, &st) == 0, st.st_mode & S_IFMT == S_IFDIR { restoreAccess(work) }
+        try? FileManager.default.removeItem(at: work)
+    }
+
+    /// chmod 0700 on every real folder below `dir`, top down; a link is never followed.
+    private static func restoreAccess(_ dir: URL) {
+        guard let list = try? entries(dir) else { return }
+        for (name, type) in list where type == S_IFDIR {
+            let sub = dir.appendingPathComponent(name)
+            chmod(sub.path, 0o700)
+            restoreAccess(sub)
+        }
     }
 
     /// The extraction both install paths share: zip-slip check, extract, refuse a
@@ -238,10 +293,12 @@ enum RemoteInstaller {
         }
         defer { closedir(d) }
         var out: [(name: String, type: mode_t)] = []
+        // Read through the pointer: a record is only as long as its name, so a dirent copy reads past it.
+        let nameOffset = MemoryLayout<dirent>.offset(of: \dirent.d_name)!
         while let e = readdir(d) {
-            let ent = e.pointee
-            let len = Int(ent.d_namlen)
-            let name = withUnsafeBytes(of: ent.d_name) { String(decoding: $0.prefix(len), as: UTF8.self) }
+            let len = min(Int(e.pointee.d_namlen), MemoryLayout<dirent>.size - nameOffset)
+            let name = String(decoding: UnsafeRawBufferPointer(start: UnsafeRawPointer(e) + nameOffset, count: len),
+                              as: UTF8.self)
             if name == "." || name == ".." { continue }
             var st = stat()
             guard lstat(dir.appendingPathComponent(name).path, &st) == 0 else {
