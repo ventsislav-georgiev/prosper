@@ -72,12 +72,40 @@ final class ManagedConfigConsentModel: ObservableObject {
         done(ok)
     }
 
-    var title: String {
+    /// #1235 (B-INFO-6): the manifest's display name as shown: outside data, so every control, format (direction),
+    /// separator and other unseen scalar is dropped by the tree's rule for shown outside strings. nil when none is known.
+    var displayName: String? {
+        let shown = CCPoolStore.shown(changes.displayName ?? "", max: 120).trimmingCharacters(in: .whitespaces)
+        return shown.isEmpty ? nil : shown
+    }
+
+    /// The title: the display name, or the id when no name is known (one line, drawn verbatim).
+    var title: String { displayName ?? changes.owner }
+
+    /// The id under a display name; nil when the title is the id already.
+    var idLine: String? { displayName == nil ? nil : changes.owner }
+
+    /// What the operation does, under the title.
+    var lead: String {
         switch changes.action {
-        case .apply: return "\(changes.owner) wants to change your config"
-        case .remove: return "Remove \(changes.owner)'s config changes"
-        case .repair: return "Repair \(changes.owner)'s config changes"
+        case .apply: return "wants to change your config"
+        case .remove: return "Remove this extension's config changes"
+        case .repair: return "Repair this extension's config changes"
         }
+    }
+
+    /// The consenting button reads the operation's verb. No default: a new action fails the build until it has one.
+    var verb: String {
+        switch changes.action {
+        case .apply: return "Apply"
+        case .remove: return "Remove"
+        case .repair: return "Repair"
+        }
+    }
+
+    /// A new file has nothing to back up: no backup line for it.
+    func backupLine(_ file: ManagedConfigChangeSet.File) -> String? {
+        file.newFile ? nil : "Backup: \(file.backupDirectory)"
     }
 
     /// The planner's sentences, plus the live note for settings.json whatever the planner said.
@@ -105,13 +133,13 @@ final class ManagedConfigConsentModel: ObservableObject {
 
     /// Every string the view renders, in order: what the C11 test greps.
     var renderedStrings: [String] {
-        var out = [title]
+        var out = [title] + (idLine.map { [$0] } ?? []) + [lead]
         for f in changes.files {
             out.append(f.path)
             if let s = status(f) { out.append(s) }
-            out += f.lines.map(Self.text) + notes(f) + ["Backup: \(f.backupDirectory)"]
+            out += f.lines.map(Self.text) + notes(f) + (backupLine(f).map { [$0] } ?? [])
         }
-        return out
+        return out + ["Cancel", verb]
     }
 }
 
@@ -120,11 +148,25 @@ struct ManagedConfigConsentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(12)) {
-            Text(model.title)
+            // #1235: outside text, never interpreted (no Markdown, no link): one line, cut in the middle.
+            Text(verbatim: model.title)
                 .font(Neon.font(15, weight: .semibold))
                 .foregroundStyle(Neon.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(model.title)
+            if let id = model.idLine {
+                Text(verbatim: id)
+                    .font(Neon.font(11, design: .monospaced))
+                    .foregroundStyle(Neon.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text(verbatim: model.lead)
+                .font(Neon.font(12))
+                .foregroundStyle(Neon.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Prosper writes only what is shown here, and keeps a backup of each file first.")
+            Text("Prosper writes only what is shown here, and keeps a backup of each existing file first.")
                 .font(Neon.font(12))
                 .foregroundStyle(Neon.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -138,7 +180,7 @@ struct ManagedConfigConsentView: View {
                     .keyboardShortcut(.cancelAction)
                 // r2 (R2-2): no key equivalent. The sheet can take the keyboard from another app,
                 // and a Return meant for that app must not consent to a config write.
-                Button("Apply") { model.answer(true) }
+                Button(model.verb) { model.answer(true) }
                     .buttonStyle(.neon)
             }
         }
@@ -169,11 +211,13 @@ struct ManagedConfigConsentView: View {
                     .foregroundStyle(Neon.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Backup: \(file.backupDirectory)")
-                .font(Neon.font(11))
-                .foregroundStyle(Neon.textSecondary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            if let backup = model.backupLine(file) {
+                Text(backup)
+                    .font(Neon.font(11))
+                    .foregroundStyle(Neon.textSecondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(sz(10))
         .frame(maxWidth: .infinity, alignment: .leading)

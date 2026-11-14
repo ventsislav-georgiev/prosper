@@ -244,7 +244,7 @@ final class ManagedConfig: Sendable {
             }
         }
         return ManagedConfigPlan(owner: owner, operation: operation,
-                                 changes: .init(action: action, owner: owner.id, files: files, pieces: planner.actions,
+                                 changes: .init(action: action, owner: owner.id, displayName: owner.displayName, files: files, pieces: planner.actions,
                                                 identity: changes.map { ManagedConfigChangeSet.target(path: $0.url.path, base: $0.base,
                                                                                 newBytes: $0.newBytes, deletes: $0.delete, mode: $0.mode) }),
                                  refusals: planner.refusals, files: changes, stateHash: hash(stateBytes))

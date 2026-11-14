@@ -11,6 +11,9 @@ struct ManagedConfigOwner: Sendable, Equatable {
     var kitSlug: String? = nil
     /// The extension's own dir: the `ext:` root, read-only.
     var extensionDir: URL? = nil
+    /// #1235 (B-INFO-6): the manifest's display name for the consent sheet's title (outside data, sanitized
+    /// where shown). nil: the sheet shows the id. Shown only; never part of a path or a record.
+    var displayName: String? = nil
 }
 
 /// One managed change. `value` is JSON text (a Lua table is converted to JSON by the P2 bridge).
@@ -186,6 +189,8 @@ struct ManagedConfigChangeSet: Equatable, Sendable {
 
     var action: Action
     var owner: String
+    /// #1235: the owner's display name as the plan found it (ManagedConfigOwner.displayName); shown, so compared.
+    var displayName: String? = nil
     var files: [File]
     var pieces: [ManagedConfigPieceAction]
     /// #947 (F947-1): what a consent covers beyond the shown lines, one `target(...)` per file of the plan, in
@@ -195,7 +200,7 @@ struct ManagedConfigChangeSet: Equatable, Sendable {
     /// The sheet as shown, without `identity`: the apply loop's re-ask compares the sheet and keeps its own
     /// digests (ManagedConfig.apply). A field added above must be added here.
     static func == (l: Self, r: Self) -> Bool {
-        l.action == r.action && l.owner == r.owner && l.files == r.files && l.pieces == r.pieces
+        l.action == r.action && l.owner == r.owner && l.displayName == r.displayName && l.files == r.files && l.pieces == r.pieces
     }
 
     /// One target: the resolved path, the hash of the bytes the plan was made against, a SHA-256 digest of

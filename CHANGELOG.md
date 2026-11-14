@@ -1026,6 +1026,9 @@ tag from the now-released section and put it on the new top draft.
   old action can no longer leave a keep-awake held behind. (#1238)
 - Text Viewer: a long line cut inside a run of flags no longer ends with half a flag, and a long
   note under the header stays on one line in a narrow window (hover it for the whole text). (#1180)
+- Agent settings: the config consent sheet shows the extension on its own line, its button says what
+  it does (Apply, Remove or Repair), and it no longer lists a backup for a file that does not exist
+  yet. (#1235)
 
 ## v2.174.0
 
