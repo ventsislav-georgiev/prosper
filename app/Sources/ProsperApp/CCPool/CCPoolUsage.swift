@@ -70,28 +70,42 @@ enum CCPoolUsage {
                 continue
             }
             let answer = await probe(token: token, base: base)
+            // R1190-1: the verdict belongs to the account probed, by its Keychain id, not to its label: a rename, a
+            // remove and add or an import Replace during the probe can move the label to another account. An account
+            // gone by now gets no row and no write (the pane keys its flags by a row's label).
+            guard let named = store.read({ $0.label(ofID: id) }) else {
+                logger.note(label, "refresh: account gone during the probe; nothing recorded")
+                continue
+            }
             // P2a: a 401/403 is a rejected token, said as such (spec 3.4), never a usage reading.
             if let status = answer?.status, status == 401 || status == 403 {
-                logger.note(label, "refresh: token rejected (\(status))")
-                rows.append(Row(label: label, limits: nil, status: status))
+                logger.note(named, "refresh: token rejected (\(status))")
+                rows.append(Row(label: named, limits: nil, status: status))
                 continue
             }
             guard let p = answer, !p.limits.isEmpty else {
-                logger.note(label, "refresh: probe could not answer")
-                rows.append(Row(label: label, limits: nil, status: nil))
+                logger.note(named, "refresh: probe could not answer")
+                rows.append(Row(label: named, limits: nil, status: nil))
                 continue
             }
             let now = store.now
             let spent = CCPoolCore.exhaustedClaims(p.limits, now: now, threshold: threshold)
-            let cooldown = store.mutate { st -> [String: Int] in
-                for (claim, until) in spent { st.bench(label, claim: claim, until: until, now: now) }
-                st.recordResets(label, limits: p.limits, now: now)
-                return st.accounts[label]?.cooldown ?? [:]
+            // Resolved again under the store's lock: the writes land on that account or nowhere.
+            let owned = store.mutate { st -> (owner: String, cooldown: [String: Int])? in
+                guard let owner = st.label(ofID: id) else { return nil }
+                for (claim, until) in spent { st.bench(owner, claim: claim, until: until, now: now) }
+                st.recordResets(owner, limits: p.limits, now: now)
+                return (owner, st.accounts[owner]?.cooldown ?? [:])
             }
-            store.recordUsage(label, limits: p.limits)
-            let held = cooldown.filter { Double($0.value) > now && spent[$0.key] == nil }
-            logger.note(label, "refresh: status \(p.status); spent \(spent.keys.sorted()); held \(held.keys.sorted())")
-            rows.append(Row(label: label, limits: p.limits, status: p.status, spent: spent, held: held))
+            guard let owned else {
+                logger.note(named, "refresh: account gone during the probe; nothing recorded")
+                continue
+            }
+            // shortcut: the usage sample (display only) is written just after the mutate, not under its lock.
+            store.recordUsage(owned.owner, limits: p.limits)
+            let held = owned.cooldown.filter { Double($0.value) > now && spent[$0.key] == nil }
+            logger.note(owned.owner, "refresh: status \(p.status); spent \(spent.keys.sorted()); held \(held.keys.sorted())")
+            rows.append(Row(label: owned.owner, limits: p.limits, status: p.status, spent: spent, held: held))
             live.append(.init(util: CCPoolCore.utils(p.limits), reset: CCPoolCore.resets(p.limits),
                               spent: spent.merging(held) { a, _ in a }))
         }

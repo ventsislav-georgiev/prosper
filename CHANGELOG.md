@@ -922,6 +922,9 @@ tag from the now-released section and put it on the new top draft.
   "Opus 4.7 · high") in a small muted slot on its second line, where there is room beside what the
   row already shows; the slot keeps its size, so nothing shifts when the value arrives, and
   VoiceOver reads it with the row (#1203)
+- Account pool: the "via ccpool" note in the New session form now updates as soon as you turn
+  routing on or off or the proxy starts or stops, and a usage Refresh no longer puts its result on
+  the wrong account when one is renamed or removed while it runs. (#1205)
 
 ## v2.174.0
 

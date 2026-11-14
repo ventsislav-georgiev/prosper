@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // #847: New session from the Agent Sessions window: the form in the detail pane (folder, name, command)
@@ -116,11 +117,35 @@ enum AgentNewSession {
     }
 }
 
+/// #1205: the "via ccpool" hint's source while the form is shown. The routing toggle, the proxy's state and the
+/// pool's accounts all change through the ccpool pane model, which publishes each change on main (the toggle's
+/// setter; every start, stop and restart ends in its @Published job count; store changes hop to main first). This
+/// forwards those publishes so the form redraws the hint; the subscription goes with this object.
+/// Isolation: @MainActor.
+@MainActor
+final class AgentNewSessionPoolWatch: ObservableObject {
+    let routing: CCPool.Routing?
+    private var changes: AnyCancellable?
+
+    // shortcut: the runtime is the one built when the form opened; an extension first turned on while the form is
+    // open shows its hint at the next open.
+    init(_ runtime: CCPoolRuntime?) {
+        routing = runtime?.routing
+        // The sink runs on main: the pane model is @MainActor and publishes only there.
+        changes = runtime?.model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    /// What the form shows beside "Runs:" for `argv`, read at each redraw.
+    func hint(_ argv: [String]) -> String? { AgentNewSession.poolHint(argv, routing: routing) }
+}
+
 /// The form, in place of the detail pane's content while `model.newSession` is set.
 struct AgentNewSessionView: View {
     @ObservedObject var model: AgentWindowModel
     let form: AgentNewSessionForm
     @FocusState private var focus: Field?
+    /// #1205: redraws the hint when the toggle or the proxy changes while the form is open.
+    @StateObject private var pool = AgentNewSessionPoolWatch(CCPoolRuntime.shared)
 
     enum Field: Hashable { case folder, name, command }
 
@@ -166,9 +191,8 @@ struct AgentNewSessionView: View {
                     HStack(spacing: sz(6)) {
                         Text(verbatim: "Runs: " + runs).font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textSecondary)
                             .lineLimit(1).truncationMode(.tail).help(runs)
-                        // Re-read on each redraw (a keystroke); the Start argv, the spawn path's routing.
-                        if let hint = AgentNewSession.poolHint(AgentNewSession.argv(form.command, shell: model.shell),
-                                                               routing: CCPoolRuntime.shared?.routing) {
+                        // Re-read on each redraw (a keystroke, the toggle, the proxy); the Start argv, the spawn path's routing.
+                        if let hint = pool.hint(AgentNewSession.argv(form.command, shell: model.shell)) {
                             Text(verbatim: hint).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.blue)
                                 .fixedSize()
                         }

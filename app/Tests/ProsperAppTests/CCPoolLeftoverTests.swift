@@ -121,6 +121,69 @@ final class CCPoolLeftoverTests: XCTestCase {
         XCTAssertEqual(anthropic.get { $0.seen }, ["Bearer tok-second"], "it still serves")
     }
 
+    /// #1205 (R1190-1): a Refresh whose probe is answered by a fake upstream on an ephemeral port that, while
+    /// answering `token`, runs `move` on the store (a rename, a remove and add).
+    nonisolated private func refreshWhileMoving(_ store: CCPoolStore, _ secrets: CCPoolSecrets, _ anthropic: CCPoolFakeAnthropic,
+                                                token: String, _ move: @escaping @Sendable () -> Void) async throws -> CCPoolUsage.Report {
+        let moved = LeftoverCounter()
+        let up = try CCPoolFakeServer { h, b in
+            if moved.count == 0, h.header("authorization")?.contains(token) == true {
+                moved.bump()
+                move()
+            }
+            return anthropic.reply(h, b)
+        }
+        defer { up.stop() }
+        let report = await CCPoolUsage.refresh(store: store, secrets: secrets, base: URL(string: "http://127.0.0.1:\(up.port)")!,
+                                               logger: CCPoolCapturingLogger())
+        XCTAssertEqual(moved.count, 1, "the label moved while the probe was in flight")
+        return report
+    }
+
+    // #1205 (R1190-1), mutant r1: the Refresh probe's verdict (bench, resets, usage sample, report row) follows the
+    // account probed, renamed during the probe, and never lands on the account that took its label.
+    nonisolated func testCCPoolRefreshVerdictFollowsTheAccountNotItsLabel() async throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = CCPoolMemorySecrets()
+        try store.addAccount(label: "Example Org", token: "tok-first", secrets: secrets)
+        let anthropic = CCPoolFakeAnthropic()
+        anthropic.set { $0.usage = ["tok-first": 0.995, "tok-second": 0.10] }
+        let report = try await refreshWhileMoving(store, secrets, anthropic, token: "tok-first") {
+            try? store.renameAccount("Example Org", to: "Example Org (old)")
+            try? store.addAccount(label: "Example Org", token: "tok-second", secrets: secrets)
+        }
+        XCTAssertEqual(report.rows.map(\.label), ["Example Org (old)"], "the row names the account probed, as it is called now")
+        let snap = store.snapshot
+        XCTAssertNotNil(snap.accounts["Example Org (old)"]?.cooldown[CCPoolCore.fiveHour], "the account probed is benched")
+        XCTAssertNotNil(snap.accounts["Example Org (old)"]?.reset[CCPoolCore.fiveHour], "and its rollover recorded")
+        XCTAssertEqual(snap.accounts["Example Org"]?.cooldown, [:], "the account that took the label is not benched")
+        XCTAssertEqual(snap.accounts["Example Org"]?.reset, [:], "nor given its resets")
+        XCTAssertTrue(store.usageSample("Example Org") == nil, "nor its usage sample")
+        XCTAssertTrue(store.usageSample("Example Org (old)") != nil)
+    }
+
+    // #1205 (R1190-1), mutant g1: an account removed during the probe gets nothing (it is gone), and neither does the
+    // new account that took its label: no bench, no resets, no usage, and no row (the pane flags accounts by a row's
+    // label). Once with a spent answer, once with a rejected token.
+    nonisolated func testCCPoolRefreshOfAnAccountRemovedMidProbeWritesNothing() async throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = CCPoolMemorySecrets()
+        let anthropic = CCPoolFakeAnthropic()
+        anthropic.set { $0.usage = ["tok-first": 0.995, "tok-second": 0.10, "tok-third": 0.10]; $0.reject = ["tok-rejected": 401] }
+        for (old, new) in [("tok-first", "tok-second"), ("tok-rejected", "tok-third")] {
+            try store.addAccount(label: "Example Org", token: old, secrets: secrets)
+            let report = try await refreshWhileMoving(store, secrets, anthropic, token: old) {
+                _ = try? store.removeAccount(label: "Example Org", secrets: secrets)
+                try? store.addAccount(label: "Example Org", token: new, secrets: secrets)
+            }
+            XCTAssertEqual(report.rows.count, 0, "\(old): a gone account has no row, the new holder of its label none either")
+            XCTAssertEqual(store.snapshot.accounts["Example Org"]?.cooldown, [:], "\(old): the new holder is not benched")
+            XCTAssertEqual(store.snapshot.accounts["Example Org"]?.reset, [:], "\(old): nor given resets")
+            XCTAssertTrue(store.usageSample("Example Org") == nil, "\(old): nor a usage sample")
+            _ = try store.removeAccount(label: "Example Org", secrets: secrets)
+        }
+    }
+
     // INFO-5 (a), mutant v3: the store's change hook (the pane's republish) runs once per change that
     // took, never for a body that changed nothing, and never for an account change whose write failed
     // and was undone.

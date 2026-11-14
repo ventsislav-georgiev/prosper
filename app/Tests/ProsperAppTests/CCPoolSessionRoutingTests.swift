@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import ProsperApp
 
@@ -270,5 +271,63 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api-5"), today)
 
         XCTAssertNil(AgentNewSession.poolHint(claude, routing: nil), "no ccpool runtime: no hint")
+    }
+
+    /// #1205 (a), mutants t1, s1, w1: while the form is open its pool watch (the form view's @StateObject) publishes
+    /// on every toggle flip and every proxy start or stop, and its hint reads the new value at once. The proxy is
+    /// this row's own runtime on an ephemeral loopback port (port 0). Once the watch is dropped it is gone (no
+    /// subscription keeps it), and later flips call nothing and do not crash. No view is shown.
+    func testCCPoolFormHintFollowsTheToggleAndTheProxyWhileOpen() async throws {
+        final class Count { var n = 0 }
+        let rt = runtime()
+        let service = rt.service
+        addTeardownBlock { service.stop() }
+        try rt.store.addAccount(label: "Example Org", token: "tok-example", secrets: rt.secrets)
+        let claude = AgentNewSession.argv("claude", shell: "/bin/zsh")
+        weak var dropped: AgentNewSessionPoolWatch?
+        var redraws: AnyCancellable?
+        do {
+            let watch = AgentNewSessionPoolWatch(rt)
+            dropped = watch
+            let count = Count()
+            redraws = watch.objectWillChange.sink { count.n += 1 }   // main: every publish here is on main
+            XCTAssertTrue(watch.hint(claude) == nil, "off, proxy stopped")
+
+            var before = count.n
+            rt.model.routeAgentSessions = true
+            XCTAssertGreaterThan(count.n, before, "toggle on: the form redraws")
+            XCTAssertTrue(watch.hint(claude) == nil, "on, but the proxy is stopped")
+
+            let start = rt.setLive(true)
+            before = count.n
+            await start?.value
+            guard case .running = rt.service.status else { return XCTFail("live with an account: \(rt.service.status)") }
+            XCTAssertGreaterThan(count.n, before, "proxy started: the form redraws")
+            XCTAssertEqual(watch.hint(claude), AgentNewSession.viaPoolHint)
+
+            before = count.n
+            rt.model.routeAgentSessions = false
+            XCTAssertGreaterThan(count.n, before, "toggle off: the form redraws")
+            XCTAssertTrue(watch.hint(claude) == nil, "off: no hint")
+
+            before = count.n
+            rt.model.routeAgentSessions = true
+            XCTAssertGreaterThan(count.n, before, "toggle on again: the form redraws")
+            XCTAssertEqual(watch.hint(claude), AgentNewSession.viaPoolHint)
+
+            let stop = rt.setLive(false)
+            before = count.n
+            await stop?.value
+            XCTAssertEqual(rt.service.status, .stopped)
+            XCTAssertGreaterThan(count.n, before, "proxy stopped: the form redraws")
+            XCTAssertTrue(watch.hint(claude) == nil, "stopped: no hint")
+        }
+        redraws?.cancel()
+        redraws = nil
+        XCTAssertTrue(dropped == nil, "the form's watch goes with the form: nothing holds it")
+        rt.model.routeAgentSessions = false
+        await rt.setLive(true)?.value
+        await rt.setLive(false)?.value
+        XCTAssertEqual(rt.service.status, .stopped, "flips after the form closed: no call into it, no crash")
     }
 }
