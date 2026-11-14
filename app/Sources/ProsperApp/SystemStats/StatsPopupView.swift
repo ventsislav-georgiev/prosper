@@ -875,7 +875,7 @@ struct StatsPopupView: View {
             // (e.g. "1200 → 3000 rpm" while the bar sits at 1200).
             Text(Self.fanReadoutText(current: fan.current, target: target))
                 .font(Neon.font(10).monospacedDigit()).foregroundStyle(Neon.textSecondary)
-            Text(StatsFormat.percent(pct))
+            Text(Self.fanPercentText(current: fan.current, fraction: pct))
                 .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
         }
     }
@@ -883,13 +883,19 @@ struct StatsPopupView: View {
     /// #1223 (F1215-a): the readout's rpm text. Int() only on a value checked here (a NaN, an infinity or
     /// 1e300 traps it); anything else reads "no reading" (current) or is left out (target).
     nonisolated static func fanReadoutText(current: Double?, target: Double?) -> String {
-        func rpm(_ v: Double?) -> String? {
-            guard let v, v.isFinite, v >= 0, v < 20_000 else { return nil }
-            return String(Int(v))
-        }
-        let now = rpm(current)
-        guard let to = rpm(target) else { return now.map { "\($0) rpm" } ?? "no reading" }
+        let now = rpmText(current)
+        guard let to = rpmText(target) else { return now.map { "\($0) rpm" } ?? "no reading" }
         return "\(now ?? "no reading") → \(to) rpm"
+    }
+
+    nonisolated private static func rpmText(_ v: Double?) -> String? {
+        guard let v, v.isFinite, v >= 0, v < 20_000 else { return nil }
+        return String(Int(v))
+    }
+
+    /// N1223-b: the percent beside the readout: a dash for a fan with no reading (its bar sits at 0), not "0%".
+    nonisolated static func fanPercentText(current: Double?, fraction: Double) -> String {
+        rpmText(current) == nil ? "—" : StatsFormat.percent(fraction)
     }
 
     /// Shared 0…1 fraction across all adjustable fans (mean of each fan's position in
@@ -1028,6 +1034,7 @@ struct StatsPopupView: View {
     /// passes `presentModal: false` (#728): no approval modal on an unattended Mac.
     @discardableResult
     @MainActor static func selectAuto(fanIDs ids: [Int], presentModal: Bool = true) -> Task<Void, Never> {
+        FanControlHelper.automaticGeneration &+= 1   // R1223-a: an engage in flight on either surface saves nothing
         Preferences.fanManualEnabled = false
         Preferences.fanTargets = [:]
         FanControlHelper.userAdjusting = false

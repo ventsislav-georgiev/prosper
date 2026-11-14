@@ -29,6 +29,8 @@ final class DchFanCommandsTests: XCTestCase {
         final class Proxy: NSObject, ProsperHelperProtocol, @unchecked Sendable {
             var resets = 0
             var autos: [Int] = []
+            /// Called on each reset: the release seam a row waits on with an expectation, never a poll.
+            var onReset: (@Sendable () -> Void)?
             func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
@@ -39,6 +41,7 @@ final class DchFanCommandsTests: XCTestCase {
             /// Replies late, like a real helper, so a reply sent before the reset landed shows.
             func resetAllFans(withReply reply: @escaping (Bool) -> Void) {
                 resets += 1
+                onReset?()
                 nonisolated(unsafe) let reply = reply
                 DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { reply(true) }
             }
@@ -293,9 +296,13 @@ final class DchFanCommandsTests: XCTestCase {
             Preferences.fanTargets = [0: 2000, 1: 2000]
             let log = Log()
             let fake = releaseSink()
+            let reset = expectation(description: "the failed engage handed the fans back")
+            reset.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReset = { reset.fulfill() }
             let f = await run(ops(log: log, first: .unavailable), "fans.manual", "60%")
             XCTAssertEqual(Self.message(f), try XCTUnwrap(FanManualReply.unavailable.errorText))
-            for _ in 0..<300 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+            await fulfillment(of: [reset], timeout: 2)
+            fake.proxy.onReset = nil
             XCTAssertEqual(fake.proxy.resets, 1, "the failed engage did not hand the fans back")
             XCTAssertTrue(FanControlHelper.connection === fake, "a manual-on release tore the connection down")
             XCTAssertTrue(Preferences.fanManualEnabled)
@@ -480,6 +487,158 @@ final class DchFanCommandsTests: XCTestCase {
             XCTAssertEqual(held.proxy.autos, [0, 1])
             XCTAssertEqual(held.proxy.resets, 0)
             XCTAssertTrue(FanControlHelper.connection === held)
+        }
+    }
+
+    // MARK: Automatic is the last word (R1223-a)
+
+    /// A first engage held open until the row opens `gate`; `started` is fulfilled once it is in flight.
+    nonisolated private static func gated(_ gate: AsyncStream<Void>, _ started: XCTestExpectation,
+                                          _ reply: FanManualReply = .engaged) -> @Sendable (Int, Double) async -> FanManualReply {
+        { _, _ in started.fulfill(); for await _ in gate { break }; return reply }
+    }
+
+    /// R1223-a: the phone's "Fans: Auto" while the popup's Manual engage is in flight. When the engage lands
+    /// nothing is saved (Automatic stays: manual off, no targets) and its pins go back (a second reset, after
+    /// the Automatic's own). The fake holds the connection while the engage is in flight, as setManualReply does.
+    func testPhoneAutoDuringAPopupEngageWins() async {
+        await withFanState {
+            let log = Log(), fake = FakeConnection()
+            let (gate, open) = AsyncStream<Void>.makeStream()
+            let started = expectation(description: "the popup's first engage is in flight")
+            FanControlHelper.inject(connection: fake, engagesInFlight: 1)
+            let popup = Task { @MainActor in
+                await StatsPopupView.engageManual([0: 3000, 1: 2500], firstReply: Self.gated(gate, started),
+                                                  engage: { i, _ in log.add("engage \(i)"); return .engaged })
+            }
+            await fulfillment(of: [started], timeout: 2)
+            let auto = await run(ops(log: log), "fans.auto")
+            XCTAssertEqual(Self.result(auto), ["text": "Auto"])
+            XCTAssertEqual(fake.proxy.resets, 1, "the phone's Automatic did not reset")
+            let handBack = expectation(description: "the landed pin went back to macOS")
+            handBack.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReset = { handBack.fulfill() }
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // the first engage's call returned
+            open.yield(); open.finish()
+            let (saved, reply) = await popup.value
+            await fulfillment(of: [handBack], timeout: 2)
+            fake.proxy.onReset = nil
+            XCTAssertFalse(saved, "the older Manual click overwrote Automatic")
+            XCTAssertEqual(reply, .engaged)
+            XCTAssertFalse(Preferences.fanManualEnabled, "the older Manual click overwrote Automatic")
+            XCTAssertEqual(Preferences.fanTargets, [:])
+            XCTAssertEqual(fake.proxy.resets, 2)
+        }
+    }
+
+    /// R1223-a, the reverse: the popup's Automatic (selectAuto, what its button runs) while the phone's
+    /// "Fans: Manual" engage is in flight. The phone replies that the fans stayed automatic; nothing is saved
+    /// and the landed pin goes back.
+    func testPopupAutoDuringAPhoneEngageWins() async {
+        await withFanState {
+            let log = Log(), fake = FakeConnection()
+            let (gate, open) = AsyncStream<Void>.makeStream()
+            let started = expectation(description: "the phone's first engage is in flight")
+            FanControlHelper.inject(connection: fake, engagesInFlight: 1)
+            let phoneOps = DchCommandOps(enabled: { true }, registry: { nil },
+                                         fans: .init(read: { Self.twoFans }, firstReply: Self.gated(gate, started),
+                                                     engage: { i, _ in log.add("engage \(i)"); return .engaged }))
+            let phone = Task { @MainActor in await self.run(phoneOps, "fans.manual", "60%") }
+            await fulfillment(of: [started], timeout: 2)
+            await StatsPopupView.selectAuto(fanIDs: [0, 1]).value
+            XCTAssertEqual(fake.proxy.resets, 1, "the popup's Automatic did not reset")
+            let handBack = expectation(description: "the landed pin went back to macOS")
+            handBack.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReset = { handBack.fulfill() }
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // the first engage's call returned
+            open.yield(); open.finish()
+            let f = await phone.value
+            await fulfillment(of: [handBack], timeout: 2)
+            fake.proxy.onReset = nil
+            XCTAssertEqual(Self.message(f), "fans stayed automatic")
+            XCTAssertFalse(Preferences.fanManualEnabled, "the older Manual request overwrote Automatic")
+            XCTAssertEqual(Preferences.fanTargets, [:])
+            XCTAssertEqual(fake.proxy.resets, 2)
+        }
+    }
+
+    /// R1223-a: the first fan's latch refusal landing after an Automatic saves no pending preset: manual stays
+    /// off, and the failure release hands every fan back (it pinned nothing).
+    func testAutomaticDuringAnEngageTheLatchRefusesSavesNoPreset() async {
+        await withFanState {
+            let fake = FakeConnection()
+            let (gate, open) = AsyncStream<Void>.makeStream()
+            let started = expectation(description: "the first engage is in flight")
+            FanControlHelper.inject(connection: fake, engagesInFlight: 1)
+            let popup = Task { @MainActor in
+                await StatsPopupView.engageManual([0: 3000, 1: 2500], firstReply: Self.gated(gate, started, .refused),
+                                                  engage: { _, _ in .engaged })
+            }
+            await fulfillment(of: [started], timeout: 2)
+            await StatsPopupView.selectAuto(fanIDs: [0, 1]).value
+            let handBack = expectation(description: "the failure release reset the fans")
+            handBack.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReset = { handBack.fulfill() }
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            open.yield(); open.finish()
+            let (saved, _) = await popup.value
+            await fulfillment(of: [handBack], timeout: 2)
+            fake.proxy.onReset = nil
+            XCTAssertFalse(saved, "a pending preset was saved over Automatic")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [:])
+            XCTAssertFalse(FanControlHelper.presetPending)
+            XCTAssertEqual(fake.proxy.resets, 2)
+        }
+    }
+
+    /// R1223-a, unchanged: with no Automatic since the click the engage saves manual on with its targets and
+    /// hands nothing back.
+    func testEngageWithNoAutomaticBetweenStillSaves() async {
+        await withFanState {
+            let fake = FakeConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            let (saved, reply) = await StatsPopupView.engageManual([0: 3000, 1: 2500], firstReply: { _, _ in .engaged },
+                                                                   engage: { _, _ in .engaged })
+            XCTAssertTrue(saved)
+            XCTAssertEqual(reply, .engaged)
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [0: 3000, 1: 2500])
+            XCTAssertEqual(fake.proxy.resets, 0, "a plain engage handed the fans back")
+        }
+    }
+
+    /// R1223-a: Manual (1), Automatic, Manual (2) landing first, then (1) lands: the later click came after the
+    /// Automatic and wins. (2) saves its targets; (1) saves nothing and its stale pin goes back (a reset without
+    /// teardown, manual on), so the recovery re-applies (2)'s speeds.
+    func testTwoEngagesWithAutomaticBetweenTheLaterWins() async {
+        await withFanState {
+            let fake = FakeConnection()
+            let (gate, open) = AsyncStream<Void>.makeStream()
+            let started = expectation(description: "the first click's engage is in flight")
+            FanControlHelper.inject(connection: fake, engagesInFlight: 1)
+            let first = Task { @MainActor in
+                await StatsPopupView.engageManual([0: 3000, 1: 2500], firstReply: Self.gated(gate, started),
+                                                  engage: { _, _ in .engaged })
+            }
+            await fulfillment(of: [started], timeout: 2)
+            await StatsPopupView.selectAuto(fanIDs: [0, 1]).value
+            let (secondSaved, _) = await StatsPopupView.engageManual([0: 4000, 1: 3500], firstReply: { _, _ in .engaged },
+                                                                     engage: { _, _ in .engaged })
+            XCTAssertTrue(secondSaved, "the click after the Automatic did not save")
+            let handBack = expectation(description: "the first click's pin went back to macOS")
+            handBack.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReset = { handBack.fulfill() }
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            open.yield(); open.finish()
+            let (firstSaved, _) = await first.value
+            await fulfillment(of: [handBack], timeout: 2)
+            fake.proxy.onReset = nil
+            XCTAssertFalse(firstSaved, "the click before the Automatic saved over the later one")
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [0: 4000, 1: 3500])
+            XCTAssertEqual(fake.proxy.resets, 2, "the Automatic's reset and the stale pin's")
+            XCTAssertTrue(FanControlHelper.connection === fake, "manual on: no teardown")
         }
     }
 

@@ -208,6 +208,19 @@ final class FanCommitRuleTests: XCTestCase {
         }
     }
 
+    /// N1223-b: the percent beside the readout is a dash for a fan with no reading (the "no reading" cases
+    /// above), never "0%"; a real reading keeps its percent.
+    func testReadoutPercentIsADashWithNoReading() {
+        let rows: [(current: Double?, fraction: Double, want: String)] = [
+            (nil, 0, "—"), (.nan, 0, "—"), (.infinity, 1, "—"), (-1, 0, "—"), (1e300, 1, "—"),
+            (1500, 0.25, "25%"), (0, 0, "0%"), (5000, 1, "100%"),
+        ]
+        for row in rows {
+            XCTAssertEqual(StatsPopupView.fanPercentText(current: row.current, fraction: row.fraction), row.want,
+                           "\(String(describing: row.current))")
+        }
+    }
+
     /// The pending line's percent is clamped before percent() converts it: a saved target far outside a
     /// tiny range reads 100 %, never an Int overflow.
     func testPendingLinePercentIsClamped() throws {

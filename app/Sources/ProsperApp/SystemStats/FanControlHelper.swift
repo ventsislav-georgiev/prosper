@@ -282,6 +282,10 @@ enum FanControlHelper {
     /// any bump as "a sleep happened" and abandons, so a new bump site would turn Manual
     /// clicks into silent no-ops (#345; pinned by a source scan in FanReclaimRecoveryTests).
     private(set) static var reclaimGeneration = 0
+    /// R1223-a: bumped by every Automatic the user chooses, all through `StatsPopupView.selectAuto` (the popup's,
+    /// the phone's "Fans: Auto", a refusal ending in Automatic). An engage started before a bump saves nothing
+    /// and hands its pins back: the last word "Automatic" wins over an older Manual click.
+    static var automaticGeneration = 0
     private static var reclaimRetryNotBefore = Date.distantPast
 
     /// Set by the popup while a slider drag / quick-button commit is in flight, so
@@ -453,9 +457,10 @@ enum FanControlHelper {
                             engage: (Int, Double) async -> FanManualReply = { await setManualReply($0, rpm: $1) },
                             landed: (Int) -> Bool = { laterEngageLanded(since: $0) })
         async -> (saved: Bool, reply: FanManualReply) {
-        let generation = reclaimGeneration, asleepAtClick = sleeping
+        let generation = reclaimGeneration, asleepAtClick = sleeping, automatic = automaticGeneration
         let reply = await engageFirst()
-        if reply.isLatchRefusal, generation == reclaimGeneration, !asleepAtClick, !sleeping {
+        // R1223-a: a refusal after an Automatic since the click goes on to firstLanded's failure release.
+        if reply.isLatchRefusal, generation == reclaimGeneration, !asleepAtClick, !sleeping, automatic == automaticGeneration {
             savePreset(targets)
             return (true, reply)
         }
@@ -468,6 +473,12 @@ enum FanControlHelper {
         // back); no reply (#737) or a write failure (#1215) stays a failure: nothing saved, released
         // like a failed first engage.
         // engageRest's last `landed` check ran after its last await: no await from there to here.
+        // R1223-a: Automatic chosen on either surface since the click: save nothing; this click's pins go back
+        // like a late pin (held only for a newer engage in flight, which owns the fans). A failure keeps its release.
+        if automatic != automaticGeneration, rest == .engaged || rest.isLatchRefusal {
+            lateEngageLanded(true)
+            return (false, reply)
+        }
         guard rest == .engaged else {
             if rest.isLatchRefusal { savePreset(targets) } else { Task { await sleepSafeRelease() } }
             return (rest.isLatchRefusal, rest)
@@ -498,12 +509,15 @@ enum FanControlHelper {
     /// the helper pinned the fan anyway. With manual off nothing else will release it
     /// (the reclaim re-apply has no popup late-engage guard), so `release` here (#269).
     /// Also release while sleeping: willSleep already reset the fans and wake re-applies (#275).
+    /// R1225-1: with manual on and awake too: the pin may have come after both timeouts and after the reset
+    /// that followed them; the release is a reset without teardown and the recovery re-applies the saved targets.
     /// Held while another engage is in flight, like the popup late path: it owns the fans (#282).
+    /// `sleeping` is kept for the callers' and rows' signature; no case depends on it now.
     static func lateEngageLanded(_ engaged: Bool,
                                  sleeping: Bool = Self.sleeping,
                                  inFlight: Int = Self.engagesInFlight,
                                  release: @escaping @MainActor () async -> Void = { await sleepSafeRelease() }) {
-        if engaged, inFlight == 0, !Preferences.fanManualEnabled || sleeping { Task { await release() } }
+        if engaged, inFlight == 0 { Task { await release() } }
     }
 
     /// Reset every fan; tear down only with manual off. With manual on (a release while

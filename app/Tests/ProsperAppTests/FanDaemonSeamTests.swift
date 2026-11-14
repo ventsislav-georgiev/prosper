@@ -367,11 +367,12 @@ final class FanDaemonSeamTests: XCTestCase {
                       "the clamp still lets a NaN through (Swift.max/min keep it); #1218: writeTarget throws on it, see testSetManualNaNThrowsAndHandsBack")
     }
 
-    /// R1218-a: FNum is capped at 64 before Int(): a float of 2^63 or more trapped the root helper.
-    /// Nothing here converts a value the cap has not seen first (the fake SMC only; no real SMC).
+    /// R1218-a: FNum is capped before Int(): a float of 2^63 or more trapped the root helper. N1225-a: the cap is 10,
+    /// the one-digit indexes the write guard accepts. Nothing here converts a value the cap has not seen first
+    /// (the fake SMC only; no real SMC).
     func testFanCountIsCappedBeforeTheConversion() {
         let rows: [(Double, Int)] = [(.nan, 0), (.infinity, 0), (-.infinity, 0), (-1, 0), (0, 0), (2, 2),
-                                     (64, 64), (65, 64), (9.3e18, 64)]
+                                     (9, 9), (10, 10), (11, 10), (64, 10), (65, 10), (9.3e18, 10)]
         for (fnum, want) in rows {
             let smc = FakeSMC()
             smc.set("FNum", "flt ", fnum)
@@ -382,6 +383,18 @@ final class FanDaemonSeamTests: XCTestCase {
         smc.set("FNum", "flt ", 9.3e18)
         fc.resetAll()
         XCTAssertTrue(smc.writes.contains("F0Md [0]") && smc.writes.contains("F1Md [0]"), "\(smc.writes.prefix(4))")
+    }
+
+    /// N1225-a: a garbage count over the cap still resets true (every write the guard can serve, then Ftst):
+    /// no index of 10 or more is tried, so crash safety does not retry forever. Fake SMC only.
+    func testResetAllIsTrueForAGarbageCountOverTheCap() {
+        for (fnum, ftst) in [(11.0, true), (64, true), (9.3e18, true), (11, false), (64, false)] {
+            let (fc, smc) = board(fans: 2, ftst: ftst)
+            smc.set("FNum", "ui8 ", fnum)
+            XCTAssertTrue(fc.resetAll(), "FNum \(fnum) Ftst \(ftst): \(smc.writes.suffix(3))")
+            XCTAssertEqual(smc.writes.filter { $0.hasSuffix("Md [0]") }.count, 10, "FNum \(fnum)")
+            XCTAssertTrue(smc.writes.contains("F9Md [0]") && !smc.writes.contains { $0.hasPrefix("F10") }, "FNum \(fnum)")
+        }
     }
 
     func testTargetWriteClampRows() {

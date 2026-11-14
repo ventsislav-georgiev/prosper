@@ -148,9 +148,13 @@ final class FanReclaimRecoveryTests: XCTestCase {
         }
         // The default release on a fake: one reset, no teardown (manual on keeps the connection).
         let fake = FakeHelperConnection()
+        let reset = expectation(description: "the default release reset the fans")
+        reset.assertForOverFulfill = false   // the count below says it
+        fake.proxy.onReset = { reset.fulfill() }
         FanControlHelper.inject(connection: fake, engagesInFlight: 0)
         XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, since: FanControlHelper.reclaimGeneration))
-        for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+        await fulfillment(of: [reset], timeout: 2)
+        fake.proxy.onReset = nil
         XCTAssertEqual(fake.proxy.resets, 1)
         XCTAssertTrue(FanControlHelper.connection === fake, "a manual-on release tore the connection down")
         Preferences.fanManualEnabled = false
@@ -158,8 +162,8 @@ final class FanReclaimRecoveryTests: XCTestCase {
     }
 
     /// #269: a re-apply engage that timed out (ResumeOnce already resumed nil) and
-    /// whose `true` lands later with manual off pins the fan → released. With manual
-    /// on, or a late refusal, nothing is.
+    /// whose `true` lands later with manual off pins the fan → released. A late refusal is
+    /// not. R1225-1: with manual on it is released too (it was held before).
     @MainActor
     func testLateEngageAfterTimeoutReleasesWithManualOff() async {
         let previousManualIntent = Preferences.fanManualEnabled
@@ -180,9 +184,11 @@ final class FanReclaimRecoveryTests: XCTestCase {
         let kept = expectation(description: "no release")
         kept.isInverted = true
         FanControlHelper.lateEngageLanded(false, release: { kept.fulfill() })
-        Preferences.fanManualEnabled = true
-        FanControlHelper.lateEngageLanded(true, release: { kept.fulfill() })
         await fulfillment(of: [kept], timeout: 0.3)
+        Preferences.fanManualEnabled = true
+        let manualOn = expectation(description: "late engage released with manual on (R1225-1)")
+        FanControlHelper.lateEngageLanded(true, sleeping: false, inFlight: 0, release: { manualOn.fulfill() })
+        await fulfillment(of: [manualOn], timeout: 1)
     }
 
     /// A late engage landing while the popup's first engage is in flight is held:
@@ -228,19 +234,51 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertEqual(lateValue.get(), [false])
     }
 
-    /// Asleep, a late engage is released even with manual on (#275).
+    /// Asleep, a late engage is released even with manual on (#275). R1225-1: awake too (it was held).
     @MainActor
     func testLateEngageDuringSleepReleasesWithManualOn() async {
         let previousManualIntent = Preferences.fanManualEnabled
         defer { Preferences.fanManualEnabled = previousManualIntent }
         Preferences.fanManualEnabled = true
         let released = expectation(description: "released during sleep")
-        FanControlHelper.lateEngageLanded(true, sleeping: true, release: { released.fulfill() })
+        FanControlHelper.lateEngageLanded(true, sleeping: true, inFlight: 0, release: { released.fulfill() })
         await fulfillment(of: [released], timeout: 1)
-        let kept = expectation(description: "no release awake")
-        kept.isInverted = true
-        FanControlHelper.lateEngageLanded(true, sleeping: false, release: { kept.fulfill() })
-        await fulfillment(of: [kept], timeout: 0.3)
+        let awake = expectation(description: "released awake")
+        FanControlHelper.lateEngageLanded(true, sleeping: false, inFlight: 0, release: { awake.fulfill() })
+        await fulfillment(of: [awake], timeout: 1)
+    }
+
+    /// R1225-1: registration slower than the 45 s ceiling, then the 35 s reply wait gave up too, and the helper's
+    /// true arrives after both: with manual on, awake and nothing in flight, the default release hands every fan
+    /// back (one reset on the fake, no teardown), and manual and the saved targets stay for the recovery to
+    /// re-apply. Fake connection only; the fast re-engage pref off; scratch defaults.
+    @MainActor
+    func testLatePinAfterBothTimeoutsWithManualOnHandsBack() async {
+        let manual = Preferences.fanManualEnabled, targets = Preferences.fanTargets, hold = Preferences.fanHoldUnlock
+        defer {
+            Preferences.fanManualEnabled = manual; Preferences.fanTargets = targets; Preferences.fanHoldUnlock = hold
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0); FanControlHelper.inject(sleeping: false)
+        }
+        Preferences.fanHoldUnlock = false
+        FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        await FanControlHelper.resetAll(teardown: true)   // no connection: no call; drops any timer
+        FanControlHelper.inject(sleeping: false)
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = [0: 2000, 1: 3000]
+        let fake = FakeHelperConnection()
+        let reset = expectation(description: "the late pin was handed back")
+        reset.assertForOverFulfill = false   // the count below says it
+        fake.proxy.onReset = { reset.fulfill() }
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        FanControlHelper.lateEngageLanded(true)   // every default: live sleeping, in flight and release
+        await fulfillment(of: [reset], timeout: 2)
+        fake.proxy.onReset = nil
+        XCTAssertEqual(fake.proxy.resets, 1)
+        XCTAssertTrue(FanControlHelper.connection === fake, "a manual-on release tore the connection down")
+        XCTAssertTrue(Preferences.fanManualEnabled)
+        XCTAssertEqual(Preferences.fanTargets, [0: 2000, 1: 3000], "the saved targets changed")
+        Preferences.fanManualEnabled = false
+        await FanControlHelper.resetAll(teardown: true)
     }
 
     /// #263 (2): a teardown must not invalidate the connection an engage picked up
@@ -600,7 +638,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
                        "firstEngageLanded missed the willSleep")
         await waitForTeardown()
         XCTAssertTrue(FanControlHelper.connection == nil, "firstEngageLanded's default release did not release")
-        // lateEngageLanded: `sleeping` default (manual on, so only sleep releases).
+        // lateEngageLanded: `sleeping` default (manual on; asleep).
         Preferences.fanManualEnabled = true
         FanControlHelper.inject(sleeping: true)
         let released = expectation(description: "late engage released while asleep")
@@ -1512,6 +1550,8 @@ private final class FakeHelperConnection: NSXPCConnection, @unchecked Sendable {
         var resets = 0
         var replies = true
         var manualReply = true
+        /// Called on each reset: the release seam a row waits on with an expectation, never a poll.
+        var onReset: (@Sendable () -> Void)?
         func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
@@ -1519,7 +1559,7 @@ private final class FakeHelperConnection: NSXPCConnection, @unchecked Sendable {
         func sleepNow(withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) { reply(manualReply) }
         func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
-        func resetAllFans(withReply reply: @escaping (Bool) -> Void) { resets += 1; if replies { reply(true) } }
+        func resetAllFans(withReply reply: @escaping (Bool) -> Void) { resets += 1; onReset?(); if replies { reply(true) } }
     }
     let proxy = Proxy()
     /// Set: replies are dropped and the error handler fires on a background queue,

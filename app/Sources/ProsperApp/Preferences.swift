@@ -1645,9 +1645,9 @@ enum Preferences {
             let raw = defaults.dictionary(forKey: Keys.fanTargets) as? [String: Double] ?? [:]
             // #1223: one unusable saved speed, or one non-canonical key (#393: "1", "01" and "+1" all parse to
             // 1 and would trap uniqueKeysWithValues), is damage: no targets at all, never a split with that fan
-            // on macOS and the others pinned. Readers see no targets: a re-apply engages nothing, and once macOS
-            // has every fan (reclaimDetected) the recovery turns manual off and hands them back; fans the helper
-            // still holds stay pinned until then. The raw value is not rewritten.
+            // on macOS and the others pinned. Readers see no targets: a re-apply engages nothing, and on its next
+            // tick the recovery turns manual off and hands every fan back, pinned or not (R1223-3), unless an
+            // engage is in flight (it saves new targets or hands back itself). The raw value is not rewritten.
             guard raw.values.allSatisfy(FanRPM.usable),
                   raw.keys.allSatisfy({ Int($0).map(String.init) == $0 }) else { return [:] }
             return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in

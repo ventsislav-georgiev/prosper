@@ -65,11 +65,12 @@ public final class SMCFanController {
 
     /// R1218-a: capped at `maxFans` before Int() (a float FNum of 2^63 or more trapped the root helper).
     /// Capped, not zeroed: resetAll still clears every real fan's mode key on a garbage count.
+    /// N1225-a: 10 = the one-digit indexes keyAllowed writes (F0Md...F9Md); above it resetAll failed every time.
     public func fanCount() -> Int {
         guard let v = smc.read("FNum")?.double, v.isFinite, v >= 0 else { return 0 }
         return Int(Swift.min(v, Self.maxFans))
     }
-    static let maxFans: Double = 64
+    static let maxFans: Double = 10
 
     /// Reads `[F{i}Mn, F{i}Mx]`. Returns nil (→ caller fails closed) if the
     /// bounds are unreadable or degenerate.

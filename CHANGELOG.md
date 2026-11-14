@@ -988,6 +988,10 @@ tag from the now-released section and put it on the new top draft.
 - A session that ended on a signal now shows the whole command of the process that sent it in its
   end label (a path with spaces is no longer cut at the first space), shortened to 48 characters;
   the phone also gets the whole command in a new optional field (#937)
+- Fans: choosing Automatic on the Mac or on the phone now wins over a Manual request that is still
+  starting on the other one; a fan speed that lands after its request gave up is handed back to
+  macOS; a Mac that reports a bogus fan count no longer retries the fan reset forever; a fan with no
+  reading shows a dash instead of 0% (#1230)
 
 ## v2.174.0
 
