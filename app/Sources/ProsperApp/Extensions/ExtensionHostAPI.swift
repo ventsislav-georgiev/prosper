@@ -822,9 +822,11 @@ struct ExtensionHost {
             return 0
         }
         // scheduled(id) -> boolean: read-only; asks about this extension's own timers only
-        // (extID is the owner). A non-string id or "" reads false.
+        // (extID is the owner). A number id reads as its string form (7 and "7" alike, as
+        // schedule stores it); any other non-string id or "" reads false.
         lua.register("__h_timer_scheduled") { rt in
             let id = rt.stringArgument(1) ?? ""
+            // Kept: restore() loads a persisted blob that can hold "" without passing schedule's guard.
             rt.push(!id.isEmpty && services.timerIsScheduled(extensionID: extID, id: id))
             return 1
         }

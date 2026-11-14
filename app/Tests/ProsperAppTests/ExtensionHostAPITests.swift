@@ -88,6 +88,13 @@ private final class FakeServices: ExtensionHostServices, @unchecked Sendable {
         timerSchedules.append((id, every, seconds, handler))
     }
     func timerCancel(extensionID: String, id: String) { timerCancels.append(id) }
+    /// Ids timerIsScheduled answers true for, beyond what was scheduled (a persisted blob's ids).
+    var timerPersisted: Set<String> = []
+    var timerAsks: [String] = []
+    func timerIsScheduled(extensionID: String, id: String) -> Bool {
+        timerAsks.append(id)
+        return timerPersisted.contains(id) || timerSchedules.contains { $0.id == id }
+    }
     func log(level: String, message: String) { logs.append((level, message)) }
     func envGet(_ name: String) -> String? { env[name] }
 
@@ -299,6 +306,25 @@ final class ExtensionHostAPITests: XCTestCase {
         try a.callGlobal("stop")
         out.append(try a.callGlobal("q", ["hst_1"]) ?? "nil")
         return out.joined(separator: "|")
+    }
+
+    /// #1175: a number id is stored and read through clua_tostring, so 7 and "7" name one timer;
+    /// "" reads false even when the store holds a "" entry (a persisted blob), and services is never asked.
+    func testTimerScheduledNumberIDAndEmptyID() throws {
+        let lua = try LuaRuntime()
+        let svc = FakeServices()
+        svc.timerPersisted = [""]
+        try ExtensionHost(extensionID: "com.test", services: svc).install(into: lua)
+        try lua.run("""
+        function t()
+            host.timer.schedule{ id = 7, after = 3600, handler = 'h' }
+            return table.concat({ tostring(host.timer.scheduled(7)), tostring(host.timer.scheduled("7")),
+                                  tostring(host.timer.scheduled(8)), tostring(host.timer.scheduled("")) }, ",")
+        end
+        """)
+        XCTAssertEqual(try lua.callGlobal("t"), "true,true,false,false")
+        XCTAssertEqual(svc.timerSchedules.map(\.id), ["7"])
+        XCTAssertEqual(svc.timerAsks, ["7", "7", "8"])
     }
 
     func testTimerFirePayloadEscapesID() throws {
