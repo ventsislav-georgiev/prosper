@@ -1676,7 +1676,7 @@ struct ExtensionHost {
     --   host.config.plan{ pieces = { … } }   -> { ok=, files={ {target=, path=, backup=, diff=, notes=} }, pieces={ {id=, action=} }, refused= }
     --   host.config.apply{ pieces = { … } }  -> { ok=, status=, applied={ids}, removed={ids}, refused={ {id=, target=, why=} }, message= }
     --   host.config.status{ pieces = { … } } -> { {id=, state=, target=, path=} }, or { error="state_unreadable", message= }
-    --   host.config.remove{ ids = { … } } / { all = true }; host.config.repair{ ids = { … } } / { all = true }
+    --   host.config.remove{ ids = { … } } / { all = true }; host.config.repair{ ids = { … } } / { all = true } / { pieces = { … } }
     local raw_config = __h_config
     local function config_call(op)
         return function(opts) return json_decode(raw_config(op, raw_json_encode(opts or {}))) end

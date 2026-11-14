@@ -35,6 +35,12 @@ enum ManagedConfigLua {
             if !bad.isEmpty { return op == "plan" ? encodePlanRefusal(bad) : encodeResult(.init(status: .refused, refusals: bad, message: "invalid pieces")) }
             if op == "plan" { return encodePlan(config.plan(pieces, owner: owner)) }
             return encodeResult(await config.apply(pieces, owner: owner))
+        case "repair" where opts["pieces"] != nil:
+            // #1232: Repair by the declared pieces (a block whose record was lost too): apply's decoder and refusal,
+            // the caller's owner, and the sheet before any write, as for apply.
+            let (pieces, bad) = parsePieces(opts["pieces"])
+            if !bad.isEmpty { return encodeResult(.init(status: .refused, refusals: bad, message: "invalid pieces")) }
+            return encodeResult(await config.repair(pieces, owner: owner))
         case "remove", "repair":
             let ids: [String]?
             if opts["all"] as? Bool == true {
@@ -54,14 +60,23 @@ enum ManagedConfigLua {
             guard config.stateIsReadable() else {
                 return encode(["error": "state_unreadable", "message": ManagedConfigRefusalReason.stateUnreadable.description])
             }
-            let (declared, _) = parsePieces(opts["pieces"])
+            let (declared, bad) = parsePieces(opts["pieces"])
+            if opts["pieces"] != nil, bad.isEmpty { remember(declared, of: owner) }
+            // #1232: `repair` offers host.config.repair{ pieces = { … } }, which takes a drifted block with a record or without
             let rows: [[String: Any]] = config.status(owner: owner, declared: declared).map {
-                ["id": $0.id, "state": $0.state.rawValue, "target": $0.target, "path": $0.path]
+                ["id": $0.id, "state": $0.state.rawValue, "target": $0.target, "path": $0.path, "repair": $0.state == .drifted]
             }
             return encode(rows)
         default:
             return inert(op, message: "unknown host.config call")
         }
+    }
+
+    /// #1232: the owner's declaration as its last valid status call gave it (spec 2.4: its current pieces; a repair may
+    /// name a few, so it does not count), kept where the status refresh and the uninstall read it (main actor).
+    /// Called off main; the hop carries Sendable values only.
+    static func remember(_ declared: [ManagedConfigPiece], of owner: ManagedConfigOwner) {
+        Task { @MainActor in ManagedConfigRefresh.current?.declared[owner.id] = declared }
     }
 
     // MARK: Lua -> pieces

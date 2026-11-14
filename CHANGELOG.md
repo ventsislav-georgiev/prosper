@@ -1059,6 +1059,9 @@ tag from the now-released section and put it on the new top draft.
 - A command typed with a short resume or continue spelling inside a group (-rabc, -r=abc, -cn x,
   -cw, -cv, -cp) no longer gets the Default model added, so the conversation keeps its own model
   (#1237)
+- Extensions can now repair a managed config block that was edited by hand after Prosper lost its
+  record of it (you see the change and approve it first), and uninstalling an extension no longer
+  leaves such a block in your file without a word: it tells you which block and what to do (#1232)
 
 ## v2.174.0
 

@@ -1002,7 +1002,9 @@ final class ExtensionRegistry: ObservableObject {
         guard let first = record(id: id) else { throw ExtensionError.notFound(id) }
         guard !first.isSystem else { throw ExtensionError.cannotUninstallSystem(id) }
         if let provider = managedConfig {
-            if let kept = await Self.removeManagedPieces(owner: first.loaded.managedConfigOwner, provider: provider) {
+            // #1232: the pieces the extension last declared (host.config.status), read on main while its folder is here
+            let declared = ManagedConfigRefresh.current?.declared[id] ?? []
+            if let kept = await Self.removeManagedPieces(owner: first.loaded.managedConfigOwner, declared: declared, provider: provider) {
                 throw ExtensionError.managedConfigKept(id: id, reason: kept)
             }
             ManagedConfigRefresh.current?.rescan()
@@ -1029,7 +1031,10 @@ final class ExtensionRegistry: ObservableObject {
     /// consent sheet hops to main.
     /// r2 (R2-1): a provider that cannot resolve (slow or fish login shell, relative
     /// CLAUDE_CONFIG_DIR) stops only an owner the state has records for.
-    nonisolated static func removeManagedPieces(owner: ManagedConfigOwner, provider: ManagedConfigProvider) async -> String? {
+    /// #1232: a declared block of the owner with no record (lost, edited or not) is one Remove cannot take: the
+    /// uninstall names it and stops before any sheet, writing nothing (status without pieces and plan only read).
+    nonisolated static func removeManagedPieces(owner: ManagedConfigOwner, declared: [ManagedConfigPiece] = [],
+                                                provider: ManagedConfigProvider) async -> String? {
         let config: ManagedConfig
         switch await provider.resolve() {
         case .failure(let why):
@@ -1039,7 +1044,21 @@ final class ExtensionRegistry: ObservableObject {
         case .success(let c): config = c
         }
         guard config.stateIsReadable() else { return ManagedConfigRefusalReason.stateUnreadable.description }
-        guard !config.status(owner: owner).isEmpty else { return nil }
+        let recorded = config.status(owner: owner)
+        let blocks = declared.filter { p in p.kind == .block && !recorded.contains { $0.id == p.id } }
+        if !blocks.isEmpty {
+            let plan = config.plan(blocks, owner: owner) // adopt: byte-equal, drifted: edited; both on disk with no record
+            let named = blocks.filter { p in
+                plan.actions.contains { $0.id == p.id && $0.action == .adopt } || plan.refusals.contains { $0.pieceID == p.id && $0.reason == .drifted }
+            }
+            if !named.isEmpty {
+                return "Not uninstalled: Prosper has no record of these blocks of the extension, so Remove cannot take them out: "
+                    + named.map { "\($0.id) in \(String(reflecting: $0.target))" }.joined(separator: ", ")
+                    + ". Nothing was changed. Repair them from the extension (they are then recorded and uninstall removes them), "
+                    + "or delete them from the file yourself (only their two prosper marker lines, to keep your text), then uninstall again."
+            }
+        }
+        guard !recorded.isEmpty else { return nil }
         let result = await config.remove(owner: owner)
         if result.ok { return nil }
         return result.status == .denied ? "Remove was cancelled: the extension and its config stay" : result.message

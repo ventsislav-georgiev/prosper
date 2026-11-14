@@ -447,9 +447,9 @@ local pieces = {
 }
 host.config.plan{ pieces = pieces }   -- -> { ok, files = { { target, path, backup, diff, notes, new_file, deletes_file } }, pieces = { { id, action } }, refused = { { id, target, why } } }
 host.config.apply{ pieces = pieces }  -- -> { ok, status, applied = { ids }, removed = { ids }, refused, pieces, message }
-host.config.status{ pieces = pieces } -- -> { { id, state, target, path } }, or { error = "state_unreadable", message }
+host.config.status{ pieces = pieces } -- -> { { id, state, target, path, repair } }, or { error = "state_unreadable", message }
 host.config.remove{ ids = { "pre" } } -- or { all = true }
-host.config.repair{ all = true }      -- or { ids = { … } }
+host.config.repair{ all = true }      -- or { ids = { … } }, or { pieces = pieces }: also takes a block Prosper has no record of
 ```
 
 - **`plan`** never writes and never asks. Its `diff` holds only the added and removed lines; the unchanged lines around them are the user's own text and appear only on the consent sheet. **`apply`**, **`remove`** and **`repair`** show the consent sheet: the masked diff, the backup folder, and a sentence per hook and status line. A change to `claude:settings.json` notes that it applies to open Claude Code sessions at once. **Cancel** writes nothing and answers `ok = false, status = "denied"` with empty `applied`, `removed` and `pieces`. Nothing is remembered: the next change asks again.
