@@ -754,6 +754,9 @@ tag from the now-released section and put it on the new top draft.
   --search <text> --json` finds where a word or phrase was said. On macOS a stopped session is no
   longer taken for a dead one and started over, and a stop while `dch -a` starts no longer leaves
   the shell on a raw terminal.
+- Agent Sessions: Command-1 to Command-9 jump to the session at that place in the sidebar and put
+  the keyboard in it (its terminal or its message box), from anywhere in the window; each of the
+  first nine live sessions shows its ⌘ number as a chip, as in Clipboard History. (#1110)
 
 ## v2.174.0
 

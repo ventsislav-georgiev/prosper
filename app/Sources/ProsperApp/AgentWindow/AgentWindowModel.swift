@@ -454,6 +454,25 @@ final class AgentWindowModel: ObservableObject {
         select(ids[min(max(i + delta, 0), ids.count - 1)])
     }
 
+    /// #1110: the rows ⌘1…⌘9 select, from `sections` (the list the sidebar draws): the live rows it shows, top to bottom
+    /// across its sections, the first nine. A folded section's rows are not shown, so not numbered; History never is.
+    var numberedIDs: [AgentSidebar.RowID] {
+        Array(sections.filter { !isCollapsed($0.title) }.flatMap(\.rows).filter { $0.session != nil }.map(\.id).prefix(9))
+    }
+
+    /// The sidebar row's chip: its 1-based number, nil for an unnumbered row.
+    func number(_ id: AgentSidebar.RowID) -> Int? { numberedIDs.firstIndex(of: id).map { $0 + 1 } }
+
+    /// ⌘<n>: the n-th numbered row, the human's pick, and the keyboard into its pane (as a click). False: no row there,
+    /// nothing changes.
+    @discardableResult
+    func selectNumbered(_ n: Int) -> Bool {
+        let ids = numberedIDs
+        guard n >= 1, n <= ids.count else { return false }
+        click(ids[n - 1])
+        return true
+    }
+
     /// The "Open in terminal" buttons: a live session only. False: nothing to open (a History
     /// row, none). QA #668 F1: nor an ended
     /// session's held row (`dch -n <name>` would start a new session of that name).

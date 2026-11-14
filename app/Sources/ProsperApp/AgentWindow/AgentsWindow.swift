@@ -133,6 +133,8 @@ final class AgentsNSWindow: NSWindow {
         case close, toggleMode, verbosity(AgentVerbosity), session(Int), find, findNext(Bool)
         /// #847: ⌘N (the New session form, or its Name field when open) and ⇧⌘N (the quick shell).
         case newSession, newShell
+        /// #1110: ⌘1…⌘9, the numbered row at that position (1-based).
+        case jump(Int)
         /// Up, down, left, right, Return for the sidebar (sendEvent).
         case sidebar
         /// The window's, doing nothing here (⌥⌘1/2/3 in Terminal mode).
@@ -156,12 +158,14 @@ final class AgentsNSWindow: NSWindow {
     /// verbosity keys, ⌘T, ⌘F, ⌘G, ⌘↑/⌘↓ and any shortcut added later stand down).
     /// #887 (QA #747 INFO-4): while the New session `form` covers the pane, a chord that acts on the session under it
     /// (⌘T, ⌥⌘1/2/3, ⌘F, ⌘G, ⇧⌘G, ⌘↑/⌘↓) is swallowed; ⌘W, ⌘N and ⇧⌘N stay the window's.
+    /// #1110: ⌘1…⌘9 from every responder, the terminal and a text view too; it stands down for the rename field and is
+    /// swallowed under the form, as ⌘↑/⌘↓.
     static func route(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool,
                       renaming: Bool = false, form: Bool = false) -> KeyRoute {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .toggleMode, .verbosity, .session, .find, .findNext: return form ? .swallow : r
+        case .toggleMode, .verbosity, .session, .jump, .find, .findNext: return form ? .swallow : r
         default: return r
         }
     }
@@ -179,6 +183,7 @@ final class AgentsNSWindow: NSWindow {
         }
         if let v = verbosity(for: event) { return terminalMode ? .swallow : .verbosity(v) }
         if mods == [.command] {
+            if let n = digit(event.keyCode) { return .jump(n) }
             switch key {
             case "t": return .toggleMode
             case "f": return terminalMode ? .find : .pass
@@ -213,6 +218,7 @@ final class AgentsNSWindow: NSWindow {
             guard model.toggleMode() else { return super.performKeyEquivalent(with: event) }
             model.focusSelection()   // #845: the shown mode's input, Transcript's too
         case .session(let d): model.move(d)
+        case .jump(let n): model.selectNumbered(n)   // no row there: nothing, and the key stops here (no beep, not the terminal's)
         case .find: model.terminal.openFind()
         case .findNext(let forward): model.terminal.findNext(forward)
         // #847: the model checks the gate; refused, the key does nothing (handled: no beep).
@@ -242,6 +248,13 @@ final class AgentsNSWindow: NSWindow {
     }
 
     static let chordLetters: Set<String> = ["w", "t", "f", "g", "n"]
+
+    /// #1110: the digit 1…9 of a key, by key code (any layout: a Cyrillic one, AZERTY's unshifted digit row): the top row
+    /// (QuickSelect's table, its 0 left out: ⌘0 stays free) or the keypad.
+    static func digit(_ keyCode: UInt16) -> Int? {
+        if let slot = QuickSelect.slot(forKeyCode: keyCode), slot < 9 { return slot + 1 }
+        return [83, 84, 85, 86, 87, 88, 89, 91, 92].firstIndex(of: keyCode).map { $0 + 1 }
+    }
 
     /// #821: ⌥⌘1 / ⌥⌘2 / ⌥⌘3 pick Focused / Default / Verbose (no app menu item uses them).
     static func verbosity(for event: NSEvent) -> AgentVerbosity? {
@@ -361,7 +374,8 @@ struct AgentSidebarView: View {
                                 if !folded {
                                     ForEach(section.rows) { row in
                                         Button { model.click(row.id) } label: {
-                                            AgentSidebarRowView(row: row, selected: model.selection == row.id)
+                                            AgentSidebarRowView(row: row, selected: model.selection == row.id,
+                                                                number: model.number(row.id))
                                         }
                                         .buttonStyle(.plain)
                                         .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
@@ -473,6 +487,8 @@ struct AgentSectionHeader: View {
 struct AgentSidebarRowView: View {
     let row: AgentSidebar.Row
     let selected: Bool
+    /// #1110: the row's ⌘<n> (1…9), nil for no chip.
+    var number: Int?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
@@ -504,10 +520,12 @@ struct AgentSidebarRowView: View {
                         .fixedSize()
                     }
                 }
-                // The PR chips whole, else their count, else none: never a cut-off chip.
+                // The PR chips whole, else their count, else none: never a cut-off chip. #1110: the ⌘<n> chip's room
+                // is kept on every variant but the last, so it goes after the PR chips, whole.
                 ViewThatFits(in: .horizontal) {
-                    detailLine(row.prs)
-                    if !row.prs.isEmpty { detailLine([], open: row.prCount) }
+                    detailLine(row.prs, chipSlot: true)
+                    if !row.prs.isEmpty { detailLine([], open: row.prCount, chipSlot: true) }
+                    detailLine([], chipSlot: true)
                     detailLine([])
                 }
             }
@@ -523,13 +541,62 @@ struct AgentSidebarRowView: View {
         .accessibilityLabel(([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail] + row.countWords
                              + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? .isSelected : [])
+        // #1110: drawn over the slot the detail line kept (outside the row's element, so it is read with its own name
+        // and help); no slot, no chip.
+        .overlayPreferenceValue(AgentDigitChipSlot.self) { slot in
+            if let slot, let number {
+                GeometryReader { proxy in
+                    let r = proxy[slot]
+                    AgentDigitChip(number: number, active: selected)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Command-\(number)")
+                        .help("Select this session (⌘\(number))")
+                        .position(x: r.midX, y: r.midY)
+                }
+            }
+        }
+    }
+}
+
+/// #1110: the bounds of the ⌘<n> chip's slot on the row's detail line.
+private struct AgentDigitChipSlot: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
+}
+
+/// #1110: a numbered row's ⌘<n> chip, Clipboard History's position keycap (ClipboardPanel.swift's PositionKeyCap: private
+/// there, and its glyph follows the clipboard's ⌘/⌃ setting while this chord is always ⌘). Brighter on the selected row.
+/// Neon.blue, not the keycap's blueBright: a theme that sets only its accent leaves blueBright at the default cyan.
+struct AgentDigitChip: View {
+    let number: Int
+    var active = false
+
+    var body: some View {
+        HStack(spacing: sz(1)) {
+            Text("\u{2318}")
+            Text("\(number)")
+        }
+        .font(Neon.font(10, weight: .bold, design: .rounded))
+        .foregroundStyle(active ? Neon.bgTop : Neon.blue)
+        .padding(.horizontal, sz(5))
+        .padding(.vertical, sz(2))
+        .background(
+            RoundedRectangle(cornerRadius: sz(4))
+                .fill(active ? Neon.blue : Neon.bgBottom)
+                .overlay(
+                    RoundedRectangle(cornerRadius: sz(4))
+                        .strokeBorder(Neon.blue.opacity(active ? 0.9 : 0.6), lineWidth: 1))
+        )
+        .fixedSize()
     }
 }
 
 extension AgentSidebarRowView {
     /// #1115: the state text, the count groups (no " · ": the gap and the symbol separate them), then the PR chips,
     /// or with `open` the open PRs' count as a blue group in their place.
-    func detailLine(_ chips: [String], open: Int = 0) -> some View {
+    /// #1110: `chipSlot` keeps the ⌘<n> chip's width at the end (a numbered row only) at no height: the chip is drawn over
+    /// it by the row and overhangs into the row's padding, so the row's height never changes.
+    func detailLine(_ chips: [String], open: Int = 0, chipSlot: Bool = false) -> some View {
         HStack(spacing: sz(5)) {
             Text(row.detail).font(Neon.font(10.5))
                 .foregroundStyle(row.state == .blocked ? agentStateColor(.blocked) : Neon.textSecondary)
@@ -542,6 +609,10 @@ extension AgentSidebarRowView {
                     .fixedSize()
             }
             Spacer(minLength: 0)
+            if chipSlot, let number {
+                AgentDigitChip(number: number).hidden().frame(height: 0)
+                    .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { $0 }
+            }
         }
     }
 }
