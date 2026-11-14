@@ -16,6 +16,7 @@ enum RemoteInstaller {
         case manifestNotFound(subdir: String)
         case integrityFailed(String)
         case unsafeArchive(String)
+        case cannotPublish(String)
 
         var errorDescription: String? {
             switch self {
@@ -31,6 +32,8 @@ enum RemoteInstaller {
                 return "Integrity check failed: \(m)"
             case .unsafeArchive(let m):
                 return "Refused to extract an unsafe archive: \(m)"
+            case .cannotPublish(let m):
+                return m
             }
         }
     }
@@ -108,8 +111,15 @@ enum RemoteInstaller {
         // Same zip-slip/symlink guards as the market path — a GitHub repo is just as
         // untrusted. assertSafeArchive checks RAW entries for `..` (conservative: also
         // covers `repo-ref/../../x`, which --strip-components 1 would turn into `../x`).
-        return try extract(data, workName: "prosper-ext-\(source.repo)-\(raw.hashValue.magnitude)",
+        return try extract(data, workName: githubWorkName(repo: source.repo, address: raw),
                            stripTopLevel: true, subdir: source.subdir)
+    }
+
+    /// The GitHub download's work folder: the same name for the same address in every launch, so a
+    /// folder left by a crash is the one the next install of that address clears (hashValue is seeded
+    /// per launch). 16 hex digits of the address's SHA-256.
+    static func githubWorkName(repo: String, address raw: String) -> String {
+        "prosper-ext-\(repo)-" + SHA256.hash(data: Data(raw.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Marketplace install
@@ -183,13 +193,18 @@ enum RemoteInstaller {
     static func extract(_ data: Data, workName: String, tempRoot: URL = FileManager.default.temporaryDirectory,
                         stripTopLevel: Bool, subdir: String = "") throws -> URL {
         let work = tempRoot.appendingPathComponent(workName, isDirectory: true)
+        // One install per work folder at a time: a second one would clear the folder the first still uses.
+        guard inUse.withLock({ $0.insert(work.path).inserted }) else {
+            throw InstallError.extractFailed("this extension is already being installed")
+        }
         // Clears a leftover of the same name; a name the guard refuses is never written either.
         guard removeWorkFolder(work, tempRoot: tempRoot) else {
+            release(work)
             throw InstallError.extractFailed("unexpected download folder name")
         }
         let fm = FileManager.default
-        try fm.createDirectory(at: work, withIntermediateDirectories: true)
         do {
+            try fm.createDirectory(at: work, withIntermediateDirectories: true)
             let tarball = work.appendingPathComponent("download.tar.gz")
             try data.write(to: tarball)
             let extractDir = work.appendingPathComponent("src", isDirectory: true)
@@ -197,9 +212,14 @@ enum RemoteInstaller {
             return try unpack(tarball, into: extractDir, stripTopLevel: stripTopLevel, subdir: subdir)
         } catch {
             removeWorkFolder(work, tempRoot: tempRoot)
+            release(work)
             throw error
         }
     }
+
+    /// Work folders an install of this launch is using, from `extract` until `removeWorkFolder(holding:)`.
+    private static let inUse = OSAllocatedUnfairLock(initialState: Set<String>())
+    private static func release(_ work: URL) { _ = inUse.withLock { $0.remove(work.path) } }
 
     /// The temp folder's child that holds `extDir`: the work folder a fetch made, at any sub-folder
     /// depth. nil when `extDir` is not below `tempRoot`.
@@ -209,9 +229,12 @@ enum RemoteInstaller {
         return tempRoot.appendingPathComponent(parts[root.count], isDirectory: true)
     }
 
-    /// The installers' cleanup: removes the work folder holding a fetched extension folder.
+    /// The installers' cleanup: removes the work folder holding a fetched extension folder, then frees
+    /// its name for the next install.
     static func removeWorkFolder(holding extDir: URL, tempRoot: URL = FileManager.default.temporaryDirectory) {
-        removeWorkFolder(workFolder(of: extDir, tempRoot: tempRoot) ?? extDir, tempRoot: tempRoot)
+        let work = workFolder(of: extDir, tempRoot: tempRoot) ?? extDir
+        removeWorkFolder(work, tempRoot: tempRoot)
+        release(work)
     }
 
     /// Removes `work` only when it is a direct child of `tempRoot` named with a download prefix; any
@@ -362,26 +385,70 @@ enum RemoteInstaller {
     /// "." and empties the archive. --no-mac-metadata/--no-xattrs keep macOS from
     /// adding "._x" AppleDouble members and xattr records (provenance, quarantine).
     static func packageForPublish(_ dir: URL) throws -> String {
+        let plan = publishPlan(dir)
+        if let why = plan.refusal { throw InstallError.cannotPublish(why) }
         // Fixed owner fields: by default every header names the publisher's account.
         // paxr = bsdtar's default (restricted pax), named so a default change cannot bring
         // GNU @LongLink headers (they carry an owner name).
-        try runTarData(["-czf", "-", "--format", "paxr", "-n", "--no-mac-metadata", "--no-xattrs",
-                        "--uid", "0", "--gid", "0", "--uname", "", "--gname", "", "-C", dir.path]
-                       + publishMembers(dir)).base64EncodedString()
+        return try runTarData(["-czf", "-", "--format", "paxr", "-n", "--no-mac-metadata", "--no-xattrs",
+                               "--uid", "0", "--gid", "0", "--uname", "", "--gname", "", "-C", dir.path]
+                              + plan.members).base64EncodedString()
     }
 
     /// The files a publish packs, as "./<relative path>", sorted. The "./" prefix
     /// keeps a name like "-x" or "@x" from reading as a tar option or archive.
     /// shortcut: members go as arguments (ARG_MAX 1 MB); a publish is capped at
     /// 256 KB, so thousands of files never get here — switch to --null -T - if it must.
-    static func publishMembers(_ dir: URL) -> [String] {
-        guard let en = FileManager.default.enumerator(atPath: dir.path) else { return [] }
-        var members: [String] = []
-        for case let rel as String in en
-        where !isLeftOutOfPublish(rel) && en.fileAttributes?[.type] as? FileAttributeType != .typeDirectory {
-            members.append("./" + rel)
+    static func publishMembers(_ dir: URL) -> [String] { publishPlan(dir).members }
+
+    /// What a publish of a folder sends, and what stops it (#1141). Paths are relative to the folder.
+    struct PublishPlan: Equatable {
+        var members: [String] = []     // "./<path>", sorted: exactly what the packer sends
+        var leftOut = 0                // hidden and test entries not sent; a left-out folder counts once
+        var links: [String] = []       // symbolic links: every install refuses an archive holding one
+        var unreadable: [String] = []  // folders the walk could not list: their files would go missing
+
+        /// Why this folder cannot be published, naming the files; nil when it can.
+        var refusal: String? {
+            if !links.isEmpty {
+                return "Can't publish symbolic links (every install refuses them): " + links.joined(separator: ", ")
+            }
+            if !unreadable.isEmpty {
+                let one = unreadable.count == 1
+                return "Can't read the folder\(one ? "" : "s") " + unreadable.joined(separator: ", ")
+                    + ", so \(one ? "its" : "their") files would be left out."
+            }
+            return members.isEmpty ? "There are no files to publish." : nil
         }
-        return members.sorted()
+    }
+
+    /// Walks `dir` by readdir + lstat (a link is never followed, "._*" names are seen, a folder it
+    /// cannot list is reported instead of skipped). Left-out entries are counted and never entered.
+    static func publishPlan(_ dir: URL) -> PublishPlan {
+        var plan = PublishPlan()
+        func walk(_ url: URL, _ rel: String) {
+            guard let list = try? entries(url) else {
+                plan.unreadable.append(rel.isEmpty ? url.lastPathComponent : rel)
+                return
+            }
+            for (name, type) in list {
+                let path = rel.isEmpty ? name : rel + "/" + name
+                if isLeftOutOfPublish(path) {
+                    plan.leftOut += 1
+                } else if type == S_IFLNK {
+                    plan.links.append(path)
+                } else if type == S_IFDIR {
+                    walk(url.appendingPathComponent(name, isDirectory: true), path)
+                } else {
+                    plan.members.append("./" + path)
+                }
+            }
+        }
+        walk(dir, "")
+        plan.members.sort()
+        plan.links.sort()
+        plan.unreadable.sort()
+        return plan
     }
 
     /// Hidden files and folders at any depth, plus the dev-only test files

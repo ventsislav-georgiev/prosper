@@ -734,6 +734,14 @@ tag from the now-released section and put it on the new top draft.
 - The Agent island now shows a session's agents and merged pull requests as an icon plus a number,
   as the Agent Sessions window does; the narrower merged count leaves room for more pull request
   chips, and VoiceOver and the tooltips read "3 agents" and "192 merged pull requests" (#1137)
+- Publishing an extension to the Marketplace now first lists the files it will send (and how many
+  hidden or test files it leaves out); nothing is uploaded until you click "Publish N files", and a
+  symbolic link or a folder Prosper cannot read stops the publish with its name instead of producing
+  a package no one can install or one that is missing files. (#1141)
+- Two installs or updates of the same extension running at the same time no longer delete each
+  other's download; the second one stops with "this extension is already being installed", and a
+  download folder left behind by a crash is cleaned up the next time that extension is installed
+  from GitHub. (#1141)
 
 ## v2.174.0
 

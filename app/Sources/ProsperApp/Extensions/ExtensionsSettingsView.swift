@@ -128,6 +128,8 @@ private struct ExtensionRow: View {
     /// Errors from this row's own actions (trust/publish/uninstall/…) render
     /// inline here, not in the unrelated GitHub-install section below the list.
     @State private var rowError: String?
+    /// #1141: what a publish would send, shown under the actions until its own action publishes.
+    @StateObject private var confirmation = PublishConfirmation()
 
     private var meta: ExtensionMeta { record.manifest.extension }
 
@@ -217,6 +219,8 @@ private struct ExtensionRow: View {
                 }
             }
 
+            PublishConfirmView(model: confirmation)
+
             if let rowError {
                 Text(rowError).font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
             }
@@ -234,18 +238,17 @@ private struct ExtensionRow: View {
                 // offer the version bump.
                 badge("v\(pv) published")
                     .help("Version \(pv) is live on the marketplace")
-                Button("Publish v\(meta.version)", action: publish)
-                    .rowAction(prominent: true)
-                    .help("Push the newer local version (\(meta.version)) to the marketplace")
+                PublishButton(title: "Publish v\(meta.version)", prominent: true,
+                              help: "Push the newer local version (\(meta.version)) to the marketplace",
+                              dir: registry.directory(id: record.id), model: confirmation, publish: publish)
             } else {
                 // Up to date (local == live, or somehow behind) — nothing to push.
                 badge("Published v\(pv)")
                     .help("This version is live on the marketplace")
             }
         } else {
-            Button("Publish", action: publish)
-                .rowAction()
-                .help("Publish this extension to the marketplace")
+            PublishButton(title: "Publish", help: "Publish this extension to the marketplace",
+                          dir: registry.directory(id: record.id), model: confirmation, publish: publish)
         }
     }
 
@@ -352,6 +355,97 @@ private struct ExtensionRow: View {
                     publishing = false
                     rowError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
                 }
+            }
+        }
+    }
+}
+
+/// #1141: a publish waits here between the Publish button and the upload. Main actor: SwiftUI bodies
+/// and button actions are its only callers.
+@MainActor final class PublishConfirmation: ObservableObject {
+    @Published private(set) var plan: RemoteInstaller.PublishPlan?
+    private var dir: URL?
+    private var publish: (@MainActor () -> Void)?
+
+    /// Opens the confirmation with what a publish of `dir` would send; publishes nothing.
+    func ask(_ dir: URL, publish: @escaping @MainActor () -> Void) {
+        // shortcut: walks the folder on the main actor, slow only for a linked development folder with a large published tree; move it off main if that is reported.
+        plan = RemoteInstaller.publishPlan(dir)
+        self.dir = dir
+        self.publish = publish
+    }
+
+    /// The confirmation's own action. It reads the folder again: unchanged, it closes and publishes; changed,
+    /// it shows the new plan (or its refusal) and publishes nothing, so only what was on screen is confirmed.
+    func confirm() {
+        guard let plan, plan.refusal == nil, let dir, let run = publish else { return }
+        let now = RemoteInstaller.publishPlan(dir)
+        guard now == plan else { self.plan = now; return }
+        cancel()
+        run()
+    }
+
+    func cancel() { plan = nil; dir = nil; publish = nil }
+
+    /// The confirmation's text, top to bottom: the refusal alone, or the count, the first
+    /// `shown` names and the count left out.
+    static func lines(_ plan: RemoteInstaller.PublishPlan, shown: Int = 10) -> [String] {
+        if let why = plan.refusal { return [why] }
+        let n = plan.members.count
+        var out = ["\(n) file\(n == 1 ? "" : "s") will be published:"]
+        out += plan.members.prefix(shown).map { String($0.dropFirst(2)) }
+        if n > shown { out.append("and \(n - shown) more") }
+        if plan.leftOut > 0 {
+            out.append("\(plan.leftOut) hidden or test item\(plan.leftOut == 1 ? "" : "s") left out")
+        }
+        return out
+    }
+
+    static func actionTitle(_ plan: RemoteInstaller.PublishPlan) -> String {
+        "Publish \(plan.members.count) file\(plan.members.count == 1 ? "" : "s")"
+    }
+}
+
+/// A Publish button: opens the confirmation; only the confirmation's action publishes.
+struct PublishButton: View {
+    let title: String
+    var prominent = false
+    let help: String
+    let dir: URL?
+    @ObservedObject var model: PublishConfirmation
+    let publish: @MainActor () -> Void
+
+    /// The button's action (main actor), a property so a row can run it without a window.
+    var tap: @MainActor () -> Void {
+        { [dir, model, publish] in if let dir { model.ask(dir, publish: publish) } }
+    }
+
+    var body: some View {
+        Button(title, action: tap).rowAction(prominent: prominent).help(help)
+            // The list closes whenever the row stops offering Publish (untrusted, publishing, already live).
+            .onDisappear { model.cancel() }
+    }
+}
+
+/// The list under a row's actions while a publish waits for its confirmation.
+struct PublishConfirmView: View {
+    @ObservedObject var model: PublishConfirmation
+
+    var body: some View {
+        if let plan = model.plan {
+            VStack(alignment: .leading, spacing: sz(2)) {
+                ForEach(Array(PublishConfirmation.lines(plan).enumerated()), id: \.offset) { _, line in
+                    Text(line).font(Neon.font(.caption))
+                        .foregroundStyle(plan.refusal == nil ? Neon.textSecondary : Neon.magenta)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: sz(12)) {
+                    if plan.refusal == nil {
+                        Button(PublishConfirmation.actionTitle(plan)) { model.confirm() }.rowAction(prominent: true)
+                    }
+                    Button("Cancel") { model.cancel() }.rowAction()
+                }
+                .padding(.top, sz(2))
             }
         }
     }
