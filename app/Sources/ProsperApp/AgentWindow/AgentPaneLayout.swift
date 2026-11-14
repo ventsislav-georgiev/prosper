@@ -937,7 +937,9 @@ enum PaneKeys {
         case [.control]:
             return event.keyCode == 48 ? .previousLayout : nil
         case [.control, .command]:
-            return key == "s" ? .toggleSidebar : nil
+            // R900-1: ⌃ turns `characters` into a control character, so on a Cyrillic or Greek layout the letter rule
+            // only sees the layout's own letter; the S key's code (kVK_ANSI_S) decides then, never over a Latin letter.
+            return key == "s" || (event.keyCode == 1 && key?.allSatisfy(\.isASCII) != true) ? .toggleSidebar : nil
         case []:
             guard c.keyFocus == .sidebar, c.responder == .other, [126, 125, 123, 124, 36, 76].contains(event.keyCode) else {
                 return nil
@@ -945,6 +947,28 @@ enum PaneKeys {
             return .sidebar
         default:
             return nil
+        }
+    }
+
+    /// #900 B2 step 1: the tree keys the window acts on (split, close, focus by direction and by order, zoom). 15.0: with
+    /// the split gate off nil before the event is read, so every chord stays what it was before #831. The rename field
+    /// (#829 G4) and the New session form (#887) keep today's routes too: ⌘W there closes the window, as before.
+    /// ⌃⌘S joins in step 4; ⌘1…9, ⌃Tab and ⌘J in B3; ⇧⌘T in C.
+    @MainActor
+    static func treeAction(for event: NSEvent, context c: Context, renaming: Bool, form: Bool) -> PaneAction? {
+        guard c.splitsEnabled, !renaming, !form else { return nil }
+        switch action(for: event, context: c) {
+        case let a? where a.isTreeEdit: return a
+        default: return nil
+        }
+    }
+}
+
+extension PaneAction {
+    var isTreeEdit: Bool {
+        switch self {
+        case .split, .closePane, .focus, .cycle, .zoom: true
+        default: false
         }
     }
 }

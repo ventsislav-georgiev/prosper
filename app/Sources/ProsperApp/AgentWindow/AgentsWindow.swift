@@ -257,6 +257,12 @@ final class AgentsNSWindow: NSWindow {
             }
             return super.performKeyEquivalent(with: event)
         }
+        // #900 B2 step 1: the tree keys first (before the terminal and the composer, 12.2), only when they acted;
+        // otherwise (the gate off, an edge, one pane) today's route below, unchanged.
+        let pane = PaneKeys.Context(responder: responderKind, keyFocus: model.keyFocus, panes: model.layout.panes.count,
+                                    splitsEnabled: AgentPaneLayout.splitsEnabled)
+        if let a = PaneKeys.treeAction(for: event, context: pane, renaming: model.renaming != nil,
+                                       form: model.newSession != nil), model.perform(a) { return true }
         switch Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
                           terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil,
                           form: model.newSession != nil) {

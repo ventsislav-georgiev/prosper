@@ -286,6 +286,48 @@ final class AgentWindowModel: ObservableObject {
         if case let .success(l) = layout.close(pane) { adopt(l); keyFocus = .pane }
     }
 
+    /// #900 B2 step 1 (12.1, 7.3, 7.4): a tree key's action on the active layout; the window calls it only for
+    /// `PaneKeys.treeAction` (the split gate on). True: it acted, so the window swallows the chord: the layout changed,
+    /// or a refused split put its refusal in the pane notice line (R899-2's `paneRefusal`). False (an edge with no
+    /// neighbour, an action this step does not route, the window closed): the chord goes on as before #831.
+    /// Zoom is model state only here: frames ignore it, so a zoomed layout still draws its tiling (step 2/3 draw it).
+    @discardableResult
+    func perform(_ a: PaneAction) -> Bool {
+        guard !closed else { return false }
+        let next: Result<PaneLayout, PaneRefusal>
+        switch a {
+        case let .split(axis):
+            // The same minimum paneFrames tiles with, so a split that passes here is drawn tiled.
+            next = layout.split(axis: axis, minimum: PaneLayout.minimumPane, in: CGRect(origin: .zero, size: paneArea.size))
+        case .closePane:
+            next = layout.close(layout.focused)
+        case let .focus(d):
+            // The tree's tiling in a fixed square: adjacency depends on the ratios only, never on the size or the minimum.
+            let square = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+            guard case let .tiled(f) = layout.frames(in: square, minimum: .zero, splitsEnabled: true),
+                  let id = layout.neighbour(of: layout.focused, direction: d, frames: f) else { return false }
+            next = layout.focus(id)
+        case let .cycle(step):
+            next = layout.focus(step < 0 ? layout.previous : layout.next)
+        case .zoom:
+            next = .success(layout.toggleZoom())
+        default:
+            return false
+        }
+        switch next {
+        case let .success(l):
+            guard l != layout else { return false }
+            if paneRefusal != nil { paneRefusal = nil }
+            keyFocus = .pane   // 7.2: every pane focus action, split and close
+            adopt(l)
+            return true
+        case let .failure(r):
+            guard case .split = a else { return false }
+            paneRefusal = r
+            return true
+        }
+    }
+
     /// 7.6: the first click on an unfocused pane focuses it; the panes take the keys (7.2).
     func focusPane(_ pane: UUID) {
         if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
