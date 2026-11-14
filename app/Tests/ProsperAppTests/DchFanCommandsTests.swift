@@ -493,4 +493,49 @@ final class DchFanCommandsTests: XCTestCase {
             XCTAssertTrue(Preferences.fanManualEnabled, "Auto with no fans changed the intent")
         }
     }
+
+    // MARK: #1223: a fan with no usable reading
+
+    /// One adjustable fan with no usable reading refuses the whole "Fans: Manual" with the popup's text.
+    /// Manual off: nothing engaged, called or saved. "Fans: Auto" still hands every fan back.
+    func testManualRefusesWhenAFanHasNoReading() async {
+        let unread = [FanReading(id: 1, min: 1000, max: 5000, current: nil, manual: false),
+                      FanReading(id: 0, min: 1200, max: 6000, current: 1800, manual: false)]
+        await withFanState {
+            let fake = FakeConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            let log = Log()
+            let f = await run(ops(fans: unread, log: log), "fans.manual", "60%")
+            XCTAssertEqual(Self.message(f), "Couldn’t read a fan’s speed, so macOS keeps running the fans. Try again.")
+            XCTAssertEqual(Self.message(f), StatsPopupView.unreadFanText)
+            XCTAssertEqual(log.calls, ["read"], "an engage ran")
+            XCTAssertEqual(fake.proxy.resets, 0, "manual off: a hand-back ran")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [9: 1])
+            let auto = await run(ops(fans: unread, log: log), "fans.auto")
+            XCTAssertEqual(Self.result(auto), ["text": "Auto"])
+        }
+    }
+
+    /// R1223-1: with manual already on (the phone sending a new speed), the refusal ends in Automatic by
+    /// the Automatic path, awaited before the reply: manual off saved, targets cleared, one reset and the
+    /// teardown on the fake connection, nothing engaged.
+    func testManualRefusalWithManualOnEndsInAutomatic() async {
+        let unread = [FanReading(id: 0, min: 1200, max: 6000, current: 1800, manual: true),
+                      FanReading(id: 1, min: 1000, max: 5000, current: nil, manual: true)]
+        await withFanState {
+            Preferences.fanManualEnabled = true
+            Preferences.fanTargets = [0: 2000, 1: 2000]
+            let fake = FakeConnection()
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            let log = Log()
+            let f = await run(ops(fans: unread, log: log), "fans.manual", "60%")
+            XCTAssertEqual(Self.message(f), StatsPopupView.unreadFanText)
+            XCTAssertEqual(log.calls, ["read"], "an engage ran")
+            XCTAssertFalse(Preferences.fanManualEnabled, "the refusal left manual on")
+            XCTAssertEqual(Preferences.fanTargets, [:])
+            XCTAssertEqual(fake.proxy.resets, 1, "the Automatic path ran once, before the reply")
+            XCTAssertTrue(FanControlHelper.connection == nil, "the Automatic path tore down")
+        }
+    }
 }

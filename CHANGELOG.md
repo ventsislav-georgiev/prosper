@@ -958,6 +958,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: when the window opens on a session that is no longer running, the pane now says
   "<name> isn't running" with a Pick Another button, instead of the empty "Select a session" state.
   (#1195)
+- Fans: a fan whose speed can't be read no longer crashes the Stats popup (it shows "no reading").
+  Turning on Manual, from the popup or the phone, now says so and leaves every fan with macOS
+  instead of pinning only some of them; if Manual was already on, the fans go back to Automatic. A
+  damaged saved fan setting no longer pins some fans and not others. (#1223)
 
 ## v2.174.0
 

@@ -184,6 +184,10 @@ struct DchCommandOps: Sendable {
             return Self.shape("Auto")
         }
         guard let pct = Self.percent(argument) else { return Self.error(Self.badSpeed) }
+        // #1223: the popup's refusal: one fan with no usable reading refuses the whole request.
+        guard !adjustable.contains(where: { $0.current == nil }) else {
+            return Self.error(await StatsPopupView.refuseUnreadFans(fanIDs: adjustable.map(\.id), presentModal: false))
+        }
         let rpms = adjustable.map { ($0.id, $0.min + pct / 100 * ($0.max - $0.min)) }
         let (saved, reply) = await Self.engage(Dictionary(uniqueKeysWithValues: rpms), fans)
         guard saved else {

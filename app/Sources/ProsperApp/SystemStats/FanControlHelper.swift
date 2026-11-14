@@ -5,12 +5,13 @@ import SMCKit
 import os
 
 /// One fan's identity + range, read UNPRIVILEGED (SMC reads need no root — only
-/// writes do). Drives the settings sliders. `current` is the live RPM at read time.
+/// writes do). Drives the settings sliders. `current` is the live RPM at read time; nil = no usable
+/// reading (#1223: `FanInfo.current`), never non-finite.
 struct FanReading: Identifiable, Equatable {
     let id: Int          // SMC fan index
     let min: Double
     let max: Double
-    let current: Double
+    let current: Double?
     /// Whether the fan is manually engaged on the HARDWARE right now (mode key +
     /// Ftst, unprivileged reads). Lets the UI detect an OS reclaim: user thinks
     /// manual, hardware says auto → flip the toggle honestly.
@@ -51,8 +52,8 @@ enum FanReclaimRecovery {
     static func pendingText(manualIntent: Bool, readings: [FanReading], targets: [Int: Double]) -> String? {
         guard manualIntent, reclaimDetected(readings),
               let fraction = manualFraction(targets: targets, readings: readings) else { return nil }
-        return "Waiting for macOS to hand back the fans. "
-            + "Prosper sets \(StatsFormat.percent(fraction)) as soon as it can."
+        return "Waiting for macOS to hand back the fans. "   // #1223: clamped, percent() does Int()
+            + "Prosper sets \(StatsFormat.percent(Swift.min(1, Swift.max(0, fraction)))) as soon as it can."
     }
 
     /// `userAdjusting` = a slider drag / quick-button commit is in flight. The saved
@@ -223,9 +224,17 @@ enum FanInfo {
         guard n > 0 else { return [] }
         return (0..<n).compactMap { i in
             guard let b = fc.bounds(i) else { return nil }   // degenerate bounds → skip (write would fail closed anyway)
-            return FanReading(id: i, min: b.min, max: b.max, current: fc.currentRPM(i) ?? 0,
+            return FanReading(id: i, min: b.min, max: b.max, current: current(fc.currentRPM(i)),
                               manual: fc.isManualEngaged(i))
         }
+    }
+
+    /// #1223: the raw F<i>Ac read as the app may use it. A real speed (finite, 0 for a stopped fan, under
+    /// SMCFanController's 20 000 rpm ceiling) stays; unreadable, NaN, an infinity, negative or huge is nil
+    /// ("no reading"), never 0: a stopped fan reads 0 and must stay a normal Manual click.
+    static func current(_ raw: Double?) -> Double? {
+        guard let raw, raw.isFinite, raw >= 0, raw < 20_000 else { return nil }
+        return raw
     }
 }
 

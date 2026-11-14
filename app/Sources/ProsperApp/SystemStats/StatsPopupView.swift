@@ -866,18 +866,30 @@ struct StatsPopupView: View {
     private func fanReadout(_ fan: FanReading) -> some View {
         // Normalize into the fan's operating range (min…max), same basis as the slider
         // fraction (line ~641) and exelban/Stats — else readout % and slider % disagree.
-        let pct = fan.max > fan.min ? Swift.min(1, Swift.max(0, (fan.current - fan.min) / (fan.max - fan.min))) : 0
+        let pct = fan.max > fan.min ? Swift.min(1, Swift.max(0, ((fan.current ?? 0) - fan.min) / (fan.max - fan.min))) : 0
         let target = (fanManual ? fanTargets[fan.id] : nil)
         return HStack(spacing: sz(8)) {
             Text("Fan \(fan.id + 1)").font(Neon.font(.caption, weight: .bold))
             FanBar(fraction: pct)
             // Show the manual target alongside actual so a non-responding fan is obvious
             // (e.g. "1200 → 3000 rpm" while the bar sits at 1200).
-            Text(target != nil ? "\(Int(fan.current)) → \(Int(target!)) rpm" : "\(Int(fan.current)) rpm")
+            Text(Self.fanReadoutText(current: fan.current, target: target))
                 .font(Neon.font(10).monospacedDigit()).foregroundStyle(Neon.textSecondary)
             Text(StatsFormat.percent(pct))
                 .font(Neon.font(.caption, weight: .semibold).monospacedDigit())
         }
+    }
+
+    /// #1223 (F1215-a): the readout's rpm text. Int() only on a value checked here (a NaN, an infinity or
+    /// 1e300 traps it); anything else reads "no reading" (current) or is left out (target).
+    nonisolated static func fanReadoutText(current: Double?, target: Double?) -> String {
+        func rpm(_ v: Double?) -> String? {
+            guard let v, v.isFinite, v >= 0, v < 20_000 else { return nil }
+            return String(Int(v))
+        }
+        let now = rpm(current)
+        guard let to = rpm(target) else { return now.map { "\($0) rpm" } ?? "no reading" }
+        return "\(now ?? "no reading") → \(to) rpm"
     }
 
     /// Shared 0…1 fraction across all adjustable fans (mean of each fan's position in
@@ -888,7 +900,7 @@ struct StatsPopupView: View {
             return (t - f.min) / (f.max - f.min)
         }
         guard !fs.isEmpty else { return 0 }
-        return fs.reduce(0, +) / Double(fs.count)
+        return Swift.min(1, Swift.max(0, fs.reduce(0, +) / Double(fs.count)))   // #1223: percent() does Int()
     }
 
     private func selectManualAll() {
@@ -960,11 +972,14 @@ struct StatsPopupView: View {
     private func confirmManualAll() {
         pendingManual = false
         Preferences.fanManualConsent = true   // remember the acknowledgement; don't re-prompt on re-engage
+        guard let targets = Self.manualSeed(saved: Preferences.fanTargets, fans: fansAdjustable) else {
+            // #1223: nothing pinned; with manual on, Automatic (R1223-1) so the text stays true.
+            fanError = Self.unreadFanText
+            if Preferences.fanManualEnabled { selectAutoAll() }
+            return
+        }
         fanError = nil
         fanBusy = true
-        var t = Preferences.fanTargets
-        for f in fansAdjustable { t[f.id] = Self.clampRPM(f.current, f) }   // nil drops the fan: it stays with macOS
-        let targets = t
         Task {
             guard !targets.isEmpty else { fanBusy = false; return }
             // Engage ONE fan first. This is what registers/approves the helper and runs
@@ -1076,11 +1091,28 @@ struct StatsPopupView: View {
         }
     }
 
-    /// The Manual click's seed: the fan's current speed in its range. R1218-1: nil for a non-finite reading
-    /// (max/min keep a NaN, and an infinity would become a made-up min or max).
-    static func clampRPM(_ v: Double, _ fan: FanReading) -> Double? {
-        guard v.isFinite else { return nil }
-        return Swift.min(Swift.max(v, fan.min), fan.max)
+    /// The Manual click's seed: every adjustable fan at its current speed in its range, over the saved
+    /// targets. #1223: nil when any fan has no usable reading - the whole click is refused, never a split
+    /// with that fan on macOS and the others pinned (#1033's rule).
+    nonisolated static func manualSeed(saved: [Int: Double], fans: [FanReading]) -> [Int: Double]? {
+        var t = saved
+        for f in fans {
+            guard let v = f.current else { return nil }
+            t[f.id] = Swift.min(Swift.max(v, f.min), f.max)
+        }
+        return t
+    }
+
+    /// #1223: the refusal of a Manual request (the popup's click, the phone's "Fans: Manual") when a fan has
+    /// no usable reading. Pins nothing. With manual already on it ends in Automatic by the Automatic path
+    /// (`selectAuto`: manual off saved, every fan handed back, awaited), so "macOS keeps running the fans"
+    /// stays true (R1223-1: a reset alone was re-pinned by the reclaim recovery a tick later). With manual
+    /// off every fan is with macOS already: nothing is called or saved. The popup does the same inline.
+    nonisolated static let unreadFanText = "Couldn’t read a fan’s speed, so macOS keeps running the fans. Try again."
+
+    @MainActor static func refuseUnreadFans(fanIDs: [Int], presentModal: Bool = true) async -> String {
+        if Preferences.fanManualEnabled { await selectAuto(fanIDs: fanIDs, presentModal: presentModal).value }
+        return unreadFanText
     }
 
     /// Debounce BOTH the slow root SMC writes and the UserDefaults persist: a slider

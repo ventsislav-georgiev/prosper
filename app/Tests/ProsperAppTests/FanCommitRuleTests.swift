@@ -118,15 +118,24 @@ final class FanCommitRuleTests: XCTestCase {
         }
     }
 
-    /// The saved-targets getter drops every unusable value it reads (written raw into the scratch
-    /// suite's defaults, as a damaged or hand-edited plist would hold them); usable ones stay.
-    func testSavedTargetsGetterDropsUnusableSpeeds() {
+    /// #1223: the saved-targets getter is all-or-nothing. One unusable value among usable ones (written
+    /// raw into the scratch suite's defaults, as a damaged or hand-edited plist would hold it) reads as no
+    /// targets at all; the read does not rewrite the raw value; all usable reads as before.
+    func testSavedTargetsGetterIsAllOrNothing() {
         let previous = Preferences.defaults.object(forKey: "fanTargets")
         defer { Preferences.defaults.set(previous, forKey: "fanTargets") }
-        var raw: [String: Double] = ["7": 1500]
-        for (i, v) in Self.unusable.enumerated() { raw[String(i)] = v }
-        Preferences.defaults.set(raw, forKey: "fanTargets")
-        XCTAssertEqual(Preferences.fanTargets, [7: 1500])
+        for bad in [Double.nan, .infinity, -.infinity, -1, 0, 20_000, 1e300] {
+            Preferences.defaults.set(["7": 1500.0, "8": bad], forKey: "fanTargets")
+            XCTAssertEqual(Preferences.fanTargets, [:], "\(bad)")
+            let raw = Preferences.defaults.dictionary(forKey: "fanTargets") as? [String: Double]
+            XCTAssertEqual(raw?.count, 2, "\(bad): the read rewrote the saved value")
+            XCTAssertEqual(raw?["7"], 1500, "\(bad)")
+            XCTAssertTrue(raw?["8"].map { $0 == bad || ($0.isNaN && bad.isNaN) } == true, "\(bad)")
+        }
+        Preferences.defaults.set(["7": 1500.0, "8": 19_999, "9": 1], forKey: "fanTargets")
+        XCTAssertEqual(Preferences.fanTargets, [7: 1500, 8: 19_999, 9: 1])
+        Preferences.defaults.set([String: Double](), forKey: "fanTargets")
+        XCTAssertEqual(Preferences.fanTargets, [:])
     }
 
     /// savePreset never saves an unusable target: the raw saved value (not the filtering getter) holds
@@ -170,15 +179,78 @@ final class FanCommitRuleTests: XCTestCase {
         XCTAssertEqual(FanControlHelper.engagesInFlight, 0)
     }
 
-    /// The popup Manual click's seed: a non-finite current speed drops the fan (it stays with macOS);
-    /// a finite one is clamped into the fan's range as before.
-    func testManualSeedDropsANonFiniteCurrentSpeed() {
-        let fan = FanReading(id: 0, min: 1000, max: 5000, current: 0, manual: false)
-        for v in [Double.nan, .infinity, -.infinity] {
-            XCTAssertTrue(StatsPopupView.clampRPM(v, fan) == nil, "\(v)")
+    // MARK: - #1223: a fan with no usable reading
+
+    /// FanInfo.read's mapping of the raw F<i>Ac read (FanInfo.read itself reads the SMC: never called here).
+    /// A real speed stays, 0 included (a stopped fan); anything else is nil, never non-finite.
+    func testCurrentReadingTable() {
+        let rows: [(raw: Double?, want: Double?)] = [
+            (nil, nil), (.nan, nil), (.infinity, nil), (-.infinity, nil), (-1, nil), (1e300, nil), (20_000, nil),
+            (0, 0), (1, 1), (1500, 1500), (19_999, 19_999),
+        ]
+        for row in rows {
+            XCTAssertTrue(FanInfo.current(row.raw) == row.want, "\(String(describing: row.raw))")
         }
-        for (v, want) in [(-1.0, 1000.0), (0, 1000), (1500, 1500), (1e300, 5000)] {
-            XCTAssertEqual(StatsPopupView.clampRPM(v, fan), want, "\(v)")
+    }
+
+    /// F1215-a: the popup readout's text. Int() runs only on a value the function checked first.
+    func testReadoutTextNeverConvertsABadReading() {
+        let rows: [(current: Double?, target: Double?, want: String)] = [
+            (1500, nil, "1500 rpm"), (1500, 3000, "1500 → 3000 rpm"), (0, nil, "0 rpm"),
+            (nil, nil, "no reading"), (nil, 3000, "no reading → 3000 rpm"),
+            (.nan, nil, "no reading"), (.infinity, nil, "no reading"), (-.infinity, 3000, "no reading → 3000 rpm"),
+            (-1, nil, "no reading"), (1e300, nil, "no reading"),
+            (1500, .nan, "1500 rpm"), (1500, .infinity, "1500 rpm"), (1500, 1e300, "1500 rpm"),
+        ]
+        for row in rows {
+            XCTAssertEqual(StatsPopupView.fanReadoutText(current: row.current, target: row.target), row.want,
+                           "\(String(describing: row.current)) \(String(describing: row.target))")
         }
+    }
+
+    /// The pending line's percent is clamped before percent() converts it: a saved target far outside a
+    /// tiny range reads 100 %, never an Int overflow.
+    func testPendingLinePercentIsClamped() throws {
+        let tiny = [FanReading(id: 0, min: 1, max: 1.0000000000000002, current: 1, manual: false)]
+        let line = try XCTUnwrap(FanReclaimRecovery.pendingText(manualIntent: true, readings: tiny, targets: [0: 19_999]))
+        XCTAssertEqual(line, "Waiting for macOS to hand back the fans. Prosper sets 100% as soon as it can.")
+    }
+
+    /// The Manual click's seed: one adjustable fan with no usable reading refuses the whole click (nil:
+    /// nothing pinned), never the others pinned with that fan on macOS. A stopped fan (0) seeds at its min.
+    func testManualSeedRefusesAFanWithNoReading() {
+        let saved: [Int: Double] = [0: 3000, 5: 2500]
+        let a = FanReading(id: 0, min: 1000, max: 5000, current: 1500, manual: false)
+        let stopped = FanReading(id: 1, min: 1200, max: 6000, current: 0, manual: false)
+        let unread = FanReading(id: 1, min: 1200, max: 6000, current: nil, manual: false)
+        let fast = FanReading(id: 2, min: 1000, max: 5000, current: 9000, manual: false)
+        XCTAssertTrue(StatsPopupView.manualSeed(saved: saved, fans: [a, unread]) == nil)
+        XCTAssertTrue(StatsPopupView.manualSeed(saved: saved, fans: [unread, a]) == nil)
+        XCTAssertTrue(StatsPopupView.manualSeed(saved: [:], fans: [unread]) == nil)
+        XCTAssertEqual(StatsPopupView.manualSeed(saved: saved, fans: [a, stopped, fast]),
+                       [0: 1500, 1: 1200, 2: 5000, 5: 2500])
+        XCTAssertEqual(StatsPopupView.manualSeed(saved: [:], fans: []), [:])
+    }
+
+    /// The refusal's text. With manual off nothing is called or saved; with manual on it ends in Automatic
+    /// (manual off saved, targets cleared) and is awaited. No connection is injected: the hand-back's reset
+    /// has nothing to call (fans already on auto), so no helper is reached.
+    func testRefusalTextAndAutomatic() async {
+        let manual = Preferences.fanManualEnabled, saved = Preferences.fanTargets, hold = Preferences.fanHoldUnlock
+        defer { Preferences.fanManualEnabled = manual; Preferences.fanTargets = saved; Preferences.fanHoldUnlock = hold }
+        FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        Preferences.fanHoldUnlock = false
+        XCTAssertEqual(StatsPopupView.unreadFanText,
+                       "Couldn’t read a fan’s speed, so macOS keeps running the fans. Try again.")
+        Preferences.fanManualEnabled = false
+        Preferences.fanTargets = [0: 2000]
+        let off = await StatsPopupView.refuseUnreadFans(fanIDs: [0, 1], presentModal: false)
+        XCTAssertEqual(off, StatsPopupView.unreadFanText)
+        XCTAssertEqual(Preferences.fanTargets, [0: 2000], "manual off: something was saved")
+        Preferences.fanManualEnabled = true
+        let on = await StatsPopupView.refuseUnreadFans(fanIDs: [0, 1], presentModal: false)
+        XCTAssertEqual(on, StatsPopupView.unreadFanText)
+        XCTAssertFalse(Preferences.fanManualEnabled, "manual on: the refusal left manual on")
+        XCTAssertEqual(Preferences.fanTargets, [:])
     }
 }

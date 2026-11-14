@@ -221,12 +221,19 @@ final class FanReclaimRecoveryTests: XCTestCase {
         XCTAssertNil(FanControlHelper.connection)
     }
 
-    /// #393: a hand-edited plist with "1", "01" and "+1" keys must not trap the getter.
-    func testFanTargetsDropsNonCanonicalKeysInsteadOfTrapping() {
+    /// #393: a hand-edited plist with "1", "01" and "+1" keys must not trap the getter. #1223 (R1223-2): a
+    /// non-canonical key is damage like an unusable speed: no targets at all, never the canonical fan alone.
+    func testFanTargetsWithANonCanonicalKeyReadAsNoTargets() {
         let previousTargets = Preferences.fanTargets
         defer { Preferences.fanTargets = previousTargets }
         Preferences.defaults.set(["1": 2000.0, "01": 2500.0, "+1": 3000.0, "x": 1.0], forKey: "fanTargets")
-        XCTAssertEqual(Preferences.fanTargets, [1: 2000])
+        XCTAssertEqual(Preferences.fanTargets, [:])
+        Preferences.defaults.set(["1": 2000.0, "01": 2500.0], forKey: "fanTargets")
+        XCTAssertEqual(Preferences.fanTargets, [:])
+        Preferences.defaults.set(["0": 2000.0, "1": 2500.0, "x": 1.0], forKey: "fanTargets")
+        XCTAssertEqual(Preferences.fanTargets, [:])
+        Preferences.defaults.set(["0": 2000.0, "1": 2500.0], forKey: "fanTargets")
+        XCTAssertEqual(Preferences.fanTargets, [0: 2000, 1: 2500])
     }
 
     /// #267: Automatic landing while a re-apply is between fans stops the loop; the
