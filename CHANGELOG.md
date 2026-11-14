@@ -867,6 +867,8 @@ tag from the now-released section and put it on the new top draft.
   marked Ended (read only, nothing can be sent to it) until its History record arrives, then the
   History card takes its place; this now happens for every way a session ends, not only for Stop or
   Kill from the window. (#899)
+- Muted (secondary) text on the tinted top of the sidebar in the Fern and Mint themes is a touch
+  darker, so it now meets the 4.5:1 contrast minimum there. (#1129)
 
 ## v2.174.0
 

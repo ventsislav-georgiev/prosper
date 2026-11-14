@@ -136,21 +136,44 @@ final class ThemeContrastTests: XCTestCase {
     }
 
     /// Text tokens on the surfaces they are painted on (window backdrop, sidebar,
-    /// cards, selected rows). Token colours do not depend on the system appearance,
-    /// so this holds in light and dark alike.
+    /// cards, selected rows, and #1129: the washed top of the rail). Token colours do not
+    /// depend on the system appearance, so this holds in light and dark alike.
     func testThemeTextClearsEverySurfaceToken() throws {
-        let surfaces = Self.surfaces
         let texts: [(String, KeyPath<ThemePalette, Color>)] = [
             ("textPrimary", \.textPrimary), ("textSecondary", \.textSecondary),
         ]
-        for d in try themes() {
+        let themes = try themes()
+        var pairs = 0
+        for d in themes {
             let p = ThemePalette.load(for: d)
+            let surfaces = Self.ruleSurfaces(p)
+            // #1129: the six surfaces, written out, so the walk cannot quietly shrink to five.
+            XCTAssertEqual(surfaces.map(\.0), ["bgTop", "bgBottom", "sidebar", "card", "cardHi", "sidebarWashTop"], d.title)
             for (tn, t) in texts {
                 for (sn, s) in surfaces {
-                    let r = Self.contrast(NSColor(p[keyPath: t]), on: NSColor(p[keyPath: s]))
+                    let r = Self.contrast(NSColor(p[keyPath: t]), on: s)
                     XCTAssertGreaterThanOrEqual(r, Self.minimum, "\(d.title): \(tn) on \(sn) is \(r):1")
+                    pairs += 1
                 }
             }
+        }
+        XCTAssertEqual(pairs, themes.count * 2 * 6, "two text tokens on six surfaces per theme")
+    }
+
+    /// #1129: textSecondary of the two themes that read under 4.5 on the washed rail top, written
+    /// out (Fern #547252 was 4.3942 there, Mint #527267 4.3371): the smallest lightness change
+    /// that clears 4.55 on all six surfaces, hue within 0.5 degrees. A revert fails here by name.
+    func testNudgedTextSecondaryIsPinned() throws {
+        let pinned: [(theme: String, hex: String)] = [("theme-fern", "#536F51"), ("theme-mint", "#506D63")]
+        let dir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
+        for (theme, hex) in pinned {
+            let spec = try ThemeSpec.decode(Data(contentsOf: dir.appendingPathComponent("\(theme)/theme.json")))
+            let got = Self.srgb(NSColor(try XCTUnwrap(spec.colors["textSecondary"], theme)))
+            let want = Self.srgb(NSColor(try XCTUnwrap(Color(hex: hex))))
+            XCTAssertTrue(abs(got.r - want.r) < 0.001 && abs(got.g - want.g) < 0.001 && abs(got.b - want.b) < 0.001,
+                          "\(theme) textSecondary is not \(hex)")
         }
     }
 
