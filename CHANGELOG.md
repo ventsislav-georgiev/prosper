@@ -800,6 +800,21 @@ tag from the now-released section and put it on the new top draft.
   scheduled. (#1165)
 - Publishing an extension now refuses a folder that holds a named pipe, socket or device file,
   naming it, instead of failing later with "no longer a regular file". (#1168)
+- Always allow now writes `auto_allow` into dch's own config file whenever the toggle changes and
+  when Prosper starts. With dch 1.30.0 or newer (full build), dch answers permission prompts itself,
+  and Prosper's island stops typing them. A value set by hand for `auto_allow` or `sidekick_pattern`
+  in that file is replaced by Prosper's toggle and pattern. (#781)
+- With an older dch or the lite build, Prosper writes `auto_allow = false` and keeps answering
+  prompts itself, so the two never both answer the same prompt. Turning Always allow off writes
+  `auto_allow = false` even when no dch is found. (#781)
+- The Sidekicks pattern is copied into dch's config as `sidekick_pattern`, so dch's own session
+  picker splits sessions the same way the island does. If dch would read the pattern differently
+  (for example `\d`, `.` or brackets), or Sidekick tabs are off, the value is left empty. (#781)
+- The rest of dch's config file is left as it was. Prosper keeps every other line, keeps the file's
+  permissions, follows a symbolic link, and writes the new file atomically. If the file cannot be
+  read or written, or is larger than 1 MiB, Prosper leaves it unchanged. (#781)
+- Always allow now checks the session list again just before it types Yes. If Claude Code has left
+  that session in the meantime, the prompt is shown instead of answered. (#781)
 
 ## v2.174.0
 

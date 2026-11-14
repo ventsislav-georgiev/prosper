@@ -235,6 +235,7 @@ final class AgentIslandController {
         // #581: once per build, so the island can show with history and no live
         // session (after a reboot). A read only, never --revive.
         refreshHistory()
+        syncDchConfig()   // #781: once per build of the island
     }
 
     /// #478: nonisolated so the handler is too. Built in reload() it was inferred
@@ -312,6 +313,7 @@ final class AgentIslandController {
     /// row losing its PR line is 48 pt again, a tab change shows other rows);
     /// no animation.
     func rowDetailsChanged() {
+        syncDchConfig()   // #781: the pattern or the tabs may have changed
         onRowDetails?()
         guard let store else { return }
         store.details = Preferences.agentIslandRowDetails
@@ -1462,6 +1464,61 @@ final class AgentIslandController {
     }
     /// #792: `--build` per installed binary and version ("<path>@1.29.2": "full"), nil = timed out at `at`.
     private let dchBuilds = OSAllocatedUnfairLock<[String: (build: String?, at: Date)]>(initialState: [:])
+
+    /// `--build` of a binary through the `dchBuilds` cache; the returned closure runs on `queue` (it forks).
+    nonisolated private static func buildProbe(_ builds: OSAllocatedUnfairLock<[String: (build: String?, at: Date)]>,
+                                               run: @escaping @Sendable (String, [String], [String: String]) -> Data?,
+                                               env: [String: String], t: Date,
+                                               retry: TimeInterval) -> @Sendable (DchCommand.Binary) -> String? {
+        { bin in
+            let k = "\(bin.path)@\(DchCommand.versionString(bin.version))"
+            // QA #614 INFO-3: a timeout is kept `retry` s, so a hung dch stalls the poll once per window.
+            if let hit = builds.withLock({ $0[k] }), hit.build != nil || t.timeIntervalSince(hit.at) < retry {
+                return hit.build
+            }
+            let b = run(bin.path, ["--build"], env).map {
+                String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            builds.withLock { $0[k] = (b, t) }
+            return b
+        }
+    }
+
+    /// #781 rider seam: whether a list of the session's dir read now still names one Claude Code in its row.
+    /// Called on `queue` right before an automatic send (a fork, bounded by DchCommand.islandTimeout; a timeout
+    /// lists nothing, so nothing is typed). Under XCTest true, so no row runs a real dch; rows swap it.
+    var claudeNow: @Sendable (AgentSessionKey) -> Bool = { key in
+        NSClassFromString("XCTestCase") != nil || AgentIsland.list(dirs: [key.dir]).contains {
+            $0.key == key && $0.fresh && $0.claudeSessionID?.isEmpty == false
+        }
+    }
+
+    /// #781 seam: the dch config file Prosper writes, by dch's own path rule over Prosper's environment (the one
+    /// `dch --config` gets in DchAutoAllowGate). Called on main. nil under XCTest: no row reaches a real config.
+    var dchConfigPath: @Sendable () -> String? = {
+        NSClassFromString("XCTestCase") == nil ? DchConfigWriter.defaultPath(env: ProcessInfo.processInfo.environment) : nil
+    }
+
+    /// #781: Always allow and the sidekick pattern into dch's config, at start and on every toggle, pattern or
+    /// tabs change. auto_allow is true only with the toggle on and the installed dch at 1.30.0+ with the full
+    /// build; then DchAutoAllowGate reads it back and the island stands down. Below the gate, or lite, false
+    /// is written, so the island stays the only engine; toggle off writes false without asking dch. Toggle on with
+    /// no dch found or a --build that timed out, or no path: nothing is written. The values are read here on main; the probes and the write run on `queue`, serial,
+    /// so the writes land in call order.
+    func syncDchConfig() {
+        guard let path = dchConfigPath() else { return }
+        let toggle = autoAllowOn(), pattern = DchConfigWriter.sidekickValue(Self.sidekickPattern)
+        let probe = controlDch, run = runDch, builds = dchBuilds, t = now(), retry = Self.dchBuildRetry
+        queue.async {
+            // #781 r2: false needs neither version nor build, so turning the toggle off always reaches the file.
+            guard toggle else { DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern); return }
+            guard let bin = probe() else { return }
+            let build = Self.buildProbe(builds, run: run, env: AgentIsland.listEnv(dir: DchCommand.defaultSocketDir),
+                                        t: t, retry: retry)
+            guard let allow = DchConfigWriter.autoAllow(toggle: toggle, dch: bin, build: build) else { return }
+            DchConfigWriter.write(path: path, autoAllow: allow, pattern: pattern)
+        }
+    }
     /// #791: the rows left to the human whose screen is being read again.
     private var rereading: Set<AgentSessionKey> = []
     /// #935: the rows dch names one live Claude Code in (`claude_session_id`, the Agents window's
@@ -1537,6 +1594,7 @@ final class AgentIslandController {
     /// publishes at once; on checks the sessions blocked now.
     /// #755 INFO-2: a dropped hold shows its card at once.
     func autoAllowChanged() {
+        syncDchConfig()   // #781
         checkAutoAllow()
         publish()
         refreshCards()
@@ -1579,25 +1637,18 @@ final class AgentIslandController {
         let io = io, t = now(), on = autoAllowOn, claude = claudeKeys, act = screen?.act ?? activity(key), retry = Self.dchBuildRetry
         // #935: every automatic send (a fresh check, a re-read, the verify) asks this last, right before the key:
         // a session whose newest list no longer names a Claude Code is left to the human.
-        let isOn: @Sendable () -> Bool = { on() && claude.withLock { $0.contains(key) } }
+        // #781 rider: and a list of its dir read now, on this queue, must still name one (the newest poll is up to 2 s old).
+        let relist = claudeNow
+        let isOn: @Sendable () -> Bool = { on() && claude.withLock { $0.contains(key) } && relist(key) }
         let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
         // #792: a fresh blocked stretch only; the re-read after Prosper's own answer stays Prosper's.
         let master = answered ? "" : store?.sessions.first { $0.key == key }?.version ?? ""
         let probe = controlDch, run = runDch, builds = dchBuilds
         queue.async { [weak self] in
             let env = AgentIsland.listEnv(dir: key.dir)
-            let dch = DchAutoAllowGate.answers(master: master, dch: probe, build: { bin in
-                let k = "\(bin.path)@\(DchCommand.versionString(bin.version))"
-                // QA #614 INFO-3: a timeout is kept `retry` s, so a hung dch stalls the poll once per window.
-                if let hit = builds.withLock({ $0[k] }), hit.build != nil || t.timeIntervalSince(hit.at) < retry {
-                    return hit.build
-                }
-                let b = run(bin.path, ["--build"], env).map {
-                    String(decoding: $0, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                builds.withLock { $0[k] = (b, t) }
-                return b
-            }, config: { bin in run(bin.path, ["--config"], env).map { String(decoding: $0, as: UTF8.self) } })
+            let dch = DchAutoAllowGate.answers(master: master, dch: probe,
+                                               build: Self.buildProbe(builds, run: run, env: env, t: t, retry: retry),
+                                               config: { bin in run(bin.path, ["--config"], env).map { String(decoding: $0, as: UTF8.self) } })
             let s = dch ? nil : screen?.text ?? io.read(key), read = s.flatMap(AgentPrompt.parse)
             let r = s.map { AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered, isOn: isOn, screen: $0) } ?? .dch
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r, read, act, t) } }
