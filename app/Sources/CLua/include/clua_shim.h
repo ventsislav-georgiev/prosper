@@ -45,6 +45,9 @@ typedef struct clua_mem {
     size_t cap;     /* growth past this is refused while 'enforce' is set */
     int    enforce; /* set by the host around protected calls only */
     int    refused; /* a growth was refused since the last clua_mem_settle */
+    size_t work;      /* #1145: library work charged in the armed call, in units (clua_work) */
+    size_t worklimit; /* #1145: units the armed call may charge; 0 when no budget is armed */
+    lua_State *main;  /* the state's main thread, for the allocator's charge */
 } clua_mem;
 void        *clua_mem_alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 /* lua_newstate with clua_mem_alloc and a fresh counter (cap not enforced); NULL if out of memory. */
@@ -59,6 +62,33 @@ void         clua_mem_settle(lua_State *L);
 /* Pops two upvalues for f (pushed by the caller) and pushes a closure that runs f with the cap off and fails
 ** with "not enough memory" after f returns if the runtime is then over its cap. f reads upvalues 1 and 2. */
 void         clua_pushhostfunction(lua_State *L, lua_CFunction f);
+/* #1145: work a library C function does inside one instruction, charged in units against a limit of
+** budget * CLUA_WORK_PER_INSTRUCTION, armed and cleared with the budget (one per outermost call, every thread).
+** One unit is about 1 ns of that work at -O2 on an Apple M4 Pro (measured per site, 0.3-1.5 ns), so a full default
+** budget (10M) of library work ends in about 0.5 s and the event-tap budget (500k) in about 25 ms. Weights cover the
+** slow case of a site (an element reached through a C metamethod, a quoted control byte), not the common one.
+** Weights are units per step; *_BYTES are bytes per unit; *_MIN is the size below which nothing is charged (the
+** instruction that does it is counted already). */
+#define CLUA_WORK_PER_INSTRUCTION 50
+#define CLUA_WORK_MATCH           8     /* one entry into the pattern matcher */
+#define CLUA_WORK_SCAN            2     /* one subject character tried by a repetition */
+#define CLUA_WORK_CLASS_BYTES     2     /* bytes of a [set] class per unit, per character tested */
+#define CLUA_WORK_FIND_BYTES      16    /* bytes of a plain find's needle per unit, per candidate position */
+#define CLUA_WORK_REP             2     /* one copy made by string.rep */
+#define CLUA_WORK_QUOTE           40    /* one byte quoted by string.format %q */
+#define CLUA_WORK_ELEMENT         48    /* one element moved by table.insert/remove/move or joined by concat */
+#define CLUA_WORK_COMPARE         24    /* one table.sort comparison */
+#define CLUA_WORK_STRING_BYTES    16    /* bytes of a long-string comparison per unit (lvm.c) */
+#define CLUA_WORK_STRING_MIN      4096
+#define CLUA_WORK_ALLOC_BYTES     64    /* bytes of an allocation per unit (clua_mem_alloc) */
+#define CLUA_WORK_ALLOC_MIN       4096
+/* Charge count * weight units (saturating). Raises "execution budget exceeded" when the armed limit is passed and
+** leaves the budget spent; does nothing when no budget is armed or the cap is off (state setup, host functions). */
+void         clua_work(lua_State *L, size_t count, size_t weight);
+/* Two strings of la and lb bytes compared by one instruction (lvm.c). */
+#define CLUA_WORK_STRINGS(L, la, lb) do { size_t clua_l_ = (la) < (lb) ? (la) : (lb); \
+    if (clua_l_ >= CLUA_WORK_STRING_MIN) clua_work((L), clua_l_ / CLUA_WORK_STRING_BYTES, 1); } while (0)
+
 /* R1127-3: lua_getglobal / lua_setglobal, raw (no metamethod of the globals table runs). */
 int          clua_rawgetglobal(lua_State *L, const char *name);
 void         clua_rawsetglobal(lua_State *L, const char *name);

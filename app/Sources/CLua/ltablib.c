@@ -18,6 +18,7 @@
 
 #include "lauxlib.h"
 #include "lualib.h"
+#include "clua_shim.h"  /* #1145: clua_work */
 
 
 /*
@@ -73,6 +74,8 @@ static int tinsert (lua_State *L) {
       /* check whether 'pos' is in [1, e] */
       luaL_argcheck(L, (lua_Unsigned)pos - 1u < (lua_Unsigned)e, 2,
                        "position out of bounds");
+      if (e > pos)  /* #1145 */
+        clua_work(L, (size_t)((lua_Unsigned)e - (lua_Unsigned)pos), CLUA_WORK_ELEMENT);
       for (i = e; i > pos; i--) {  /* move up elements */
         lua_geti(L, 1, i - 1);
         lua_seti(L, 1, i);  /* t[i] = t[i - 1] */
@@ -96,6 +99,8 @@ static int tremove (lua_State *L) {
     luaL_argcheck(L, (lua_Unsigned)pos - 1u <= (lua_Unsigned)size, 2,
                      "position out of bounds");
   lua_geti(L, 1, pos);  /* result = t[pos] */
+  if (pos < size)  /* #1145 */
+    clua_work(L, (size_t)((lua_Unsigned)size - (lua_Unsigned)pos), CLUA_WORK_ELEMENT);
   for ( ; pos < size; pos++) {
     lua_geti(L, 1, pos + 1);
     lua_seti(L, 1, pos);  /* t[pos] = t[pos + 1] */
@@ -126,6 +131,7 @@ static int tmove (lua_State *L) {
     n = e - f + 1;  /* number of elements to move */
     luaL_argcheck(L, t <= LUA_MAXINTEGER - n + 1, 4,
                   "destination wrap around");
+    clua_work(L, (size_t)n, CLUA_WORK_ELEMENT);  /* #1145 */
     if (t > e || t <= f || (tt != 1 && !lua_compare(L, 1, tt, LUA_OPEQ))) {
       for (i = 0; i < n; i++) {
         lua_geti(L, 1, f + i);
@@ -160,6 +166,8 @@ static int tconcat (lua_State *L) {
   const char *sep = luaL_optlstring(L, 2, "", &lsep);
   lua_Integer i = luaL_optinteger(L, 3, 1);
   last = luaL_optinteger(L, 4, last);
+  if (i <= last)  /* #1145 */
+    clua_work(L, (size_t)((lua_Unsigned)last - (lua_Unsigned)i), CLUA_WORK_ELEMENT);
   luaL_buffinit(L, &b);
   for (; i < last; i++) {
     addfield(L, &b, i);
@@ -273,6 +281,7 @@ static void set2 (lua_State *L, IdxT i, IdxT j) {
 ** index 'b' (according to the order of the sort).
 */
 static int sort_comp (lua_State *L, int a, int b) {
+  clua_work(L, 1, CLUA_WORK_COMPARE);  /* #1145 (long strings: lvm.c) */
   if (lua_isnil(L, 2))  /* no function? */
     return lua_compare(L, a, b, LUA_OPLT);  /* a < b */
   else {  /* function */

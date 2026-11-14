@@ -24,6 +24,7 @@
 
 #include "lauxlib.h"
 #include "lualib.h"
+#include "clua_shim.h"  /* #1145: clua_work */
 
 
 /* #1099: C-locale ctype whatever the process locale (Ghostty's init sets LC_ALL);
@@ -174,7 +175,9 @@ static int str_rep (lua_State *L) {
   else {
     size_t totallen = (size_t)n * l + (size_t)(n - 1) * lsep;
     luaL_Buffer b;
-    char *p = luaL_buffinitsize(L, &b, totallen);
+    char *p;
+    clua_work(L, (size_t)n, CLUA_WORK_REP);  /* #1145 */
+    p = luaL_buffinitsize(L, &b, totallen);
     while (n-- > 1) {  /* first n-1 copies (followed by separator) */
       memcpy(p, s, l * sizeof(char)); p += l;
       if (lsep > 0) {  /* empty 'memcpy' is not that cheap */
@@ -484,6 +487,8 @@ static int matchbracketclass (int c, const char *p, const char *ec) {
 
 static int singlematch (MatchState *ms, const char *s, const char *p,
                         const char *ep) {
+  if (*p == '[')  /* #1145: a set is scanned per test (and by classend before) */
+    clua_work(ms->L, (size_t)(ep - p) / CLUA_WORK_CLASS_BYTES + 1, 1);
   if (s >= ms->src_end)
     return 0;
   else {
@@ -523,6 +528,7 @@ static const char *max_expand (MatchState *ms, const char *s,
   ptrdiff_t i = 0;  /* counts maximum expand for item */
   while (singlematch(ms, s + i, p, ep))
     i++;
+  clua_work(ms->L, (size_t)i, CLUA_WORK_SCAN);  /* #1145 */
   /* keeps trying to match with the maximum repetitions */
   while (i>=0) {
     const char *res = match(ms, (s+i), ep+1);
@@ -575,6 +581,7 @@ static const char *match_capture (MatchState *ms, const char *s, int l) {
   size_t len;
   l = check_capture(ms, l);
   len = ms->capture[l].len;
+  clua_work(ms->L, len / CLUA_WORK_FIND_BYTES, 1);  /* #1145 */
   if ((size_t)(ms->src_end-s) >= len &&
       memcmp(ms->capture[l].init, s, len) == 0)
     return s+len;
@@ -586,6 +593,7 @@ static const char *match (MatchState *ms, const char *s, const char *p) {
   if (l_unlikely(ms->matchdepth-- == 0))
     luaL_error(ms->L, "pattern too complex");
   init: /* using goto to optimize tail recursion */
+  clua_work(ms->L, 1, CLUA_WORK_MATCH);  /* #1145: per pattern item, entry or tail loop */
   if (p != ms->p_end) {  /* end of pattern? */
     switch (*p) {
       case '(': {  /* start capture */
@@ -608,7 +616,10 @@ static const char *match (MatchState *ms, const char *s, const char *p) {
       case L_ESC: {  /* escaped sequences not in the format class[*+?-]? */
         switch (*(p + 1)) {
           case 'b': {  /* balanced string? */
+            const char *b0 = s;  /* #1145: it scans from b0 to s, or to the end */
             s = matchbalance(ms, s, p + 2);
+            if (*b0 == *(p + 2))  /* #1145 */
+              clua_work(ms->L, (size_t)((s != NULL ? s : ms->src_end) - b0), CLUA_WORK_SCAN);
             if (s != NULL) {
               p += 4; goto init;  /* return match(ms, s, p + 4); */
             }  /* else fail (s == NULL) */
@@ -620,6 +631,7 @@ static const char *match (MatchState *ms, const char *s, const char *p) {
             if (l_unlikely(*p != '['))
               luaL_error(ms->L, "missing '[' after '%%f' in pattern");
             ep = classend(ms, p);  /* points to what is next */
+            clua_work(ms->L, (size_t)(ep - p) / CLUA_WORK_CLASS_BYTES + 1, 2);  /* #1145 */
             previous = (s == ms->src_init) ? '\0' : *(s - 1);
             if (!matchbracketclass(uchar(previous), p, ep - 1) &&
                matchbracketclass(uchar(*s), p, ep - 1)) {
@@ -685,8 +697,9 @@ static const char *match (MatchState *ms, const char *s, const char *p) {
 
 
 
-static const char *lmemfind (const char *s1, size_t l1,
+static const char *lmemfind (lua_State *L, const char *s1, size_t l1,  /* #1145: L */
                                const char *s2, size_t l2) {
+  clua_work(L, l1 / CLUA_WORK_FIND_BYTES, 1);  /* #1145 */
   if (l2 == 0) return s1;  /* empty strings are everywhere */
   else if (l2 > l1) return NULL;  /* avoids a negative 'l1' */
   else {
@@ -695,6 +708,7 @@ static const char *lmemfind (const char *s1, size_t l1,
     l1 = l1-l2;  /* 's2' cannot be found after that */
     while (l1 > 0 && (init = (const char *)memchr(s1, *s2, l1)) != NULL) {
       init++;   /* 1st char is already checked */
+      clua_work(L, l2 / CLUA_WORK_FIND_BYTES + 1, 1);  /* #1145 */
       if (memcmp(init, s2+1, l2) == 0)
         return init-1;
       else {  /* correct 'l1' and 's1' to try again */
@@ -796,7 +810,7 @@ static int str_find_aux (lua_State *L, int find) {
   /* explicit request or no special characters? */
   if (find && (lua_toboolean(L, 4) || nospecials(p, lp))) {
     /* do a plain search */
-    const char *s2 = lmemfind(s + init, ls - init, p, lp);
+    const char *s2 = lmemfind(L, s + init, ls - init, p, lp);
     if (s2) {
       lua_pushinteger(L, (s2 - s) + 1);
       lua_pushinteger(L, (s2 - s) + lp);
@@ -1134,6 +1148,7 @@ static int lua_number2strx (lua_State *L, char *buff, int sz,
 
 
 static void addquoted (luaL_Buffer *b, const char *s, size_t len) {
+  clua_work(b->L, len, CLUA_WORK_QUOTE);  /* #1145 */
   luaL_addchar(b, '"');
   while (len--) {
     if (*s == '"' || *s == '\\' || *s == '\n') {

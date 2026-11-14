@@ -174,7 +174,7 @@ final class LuaMemoryCapTests: XCTestCase {
 
     /// The allocator alone, on a counter of the test's own (no Lua state).
     func testTheCountFollowsGrowShrinkAndFree() throws {
-        var m = clua_mem(used: 0, peak: 0, cap: 1 << 20, enforce: 1, refused: 0)
+        var m = clua_mem(used: 0, peak: 0, cap: 1 << 20, enforce: 1, refused: 0, work: 0, worklimit: 0, main: nil)
         // With no block, the old size is a type tag (lua_Alloc): it must not be taken off.
         var p = clua_mem_alloc(&m, nil, Int(LUA_TTABLE), 1000)
         XCTAssertTrue(p != nil)
@@ -192,7 +192,7 @@ final class LuaMemoryCapTests: XCTestCase {
     }
 
     func testTheCapRefusesGrowthOnlyWhileEnforced() throws {
-        var m = clua_mem(used: 0, peak: 0, cap: 1000, enforce: 1, refused: 0)
+        var m = clua_mem(used: 0, peak: 0, cap: 1000, enforce: 1, refused: 0, work: 0, worklimit: 0, main: nil)
         var a = clua_mem_alloc(&m, nil, 0, 600)
         XCTAssertTrue(a != nil)
         XCTAssertTrue(clua_mem_alloc(&m, nil, 0, 600) == nil, "past the cap")
@@ -220,14 +220,14 @@ final class LuaMemoryCapTests: XCTestCase {
     /// larger than the count never takes it below zero. Only small real blocks are allocated.
     func testSizesThatWouldWrapTheCountAreRefused() throws {
         let nearTop = Int(bitPattern: UInt.max - 8)
-        var m = clua_mem(used: nearTop, peak: 0, cap: 1 << 20, enforce: 0, refused: 0)
+        var m = clua_mem(used: nearTop, peak: 0, cap: 1 << 20, enforce: 0, refused: 0, work: 0, worklimit: 0, main: nil)
         let p = clua_mem_alloc(&m, nil, 0, 64)
         XCTAssertTrue(p == nil, "the count would wrap")
         if p != nil { free(p) }
         XCTAssertEqual(m.used, nearTop)
         XCTAssertEqual(m.refused, 1)
 
-        var n = clua_mem(used: 0, peak: 0, cap: 1 << 20, enforce: 1, refused: 0)
+        var n = clua_mem(used: 0, peak: 0, cap: 1 << 20, enforce: 1, refused: 0, work: 0, worklimit: 0, main: nil)
         var q = clua_mem_alloc(&n, nil, 0, 64)
         XCTAssertTrue(q != nil)
         n.used = 8

@@ -23,6 +23,8 @@ import Foundation
 ///   `pcall` cannot keep going. A call a host function makes back into the
 ///   same runtime runs on the budget of the call it is part of (#1154); `__gc` metamethods are refused and
 ///   `collectgarbage` only reports (`count`, `isrunning`), so no finalizer runs.
+///   Work a library function does inside one instruction (patterns, `string.rep`, `%q`, the table functions,
+///   long-string comparisons, large allocations) is charged against the same call's budget (#1145, clua_shim.h).
 /// - **Memory** (#1127): a counting allocator in the shim caps what one runtime's
 ///   Lua holds (`memoryLimit`). The cap is enforced only inside protected calls
 ///   (compiling a chunk, `run`, `callGlobal`): a growth past it fails that call

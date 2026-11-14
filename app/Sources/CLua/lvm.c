@@ -30,6 +30,7 @@
 #include "ltable.h"
 #include "ltm.h"
 #include "lvm.h"
+#include "clua_shim.h"  /* #1145: clua_work */
 
 
 /*
@@ -532,8 +533,10 @@ l_sinline int LEnum (const TValue *l, const TValue *r) {
 */
 static int lessthanothers (lua_State *L, const TValue *l, const TValue *r) {
   lua_assert(!ttisnumber(l) || !ttisnumber(r));
-  if (ttisstring(l) && ttisstring(r))  /* both are strings? */
+  if (ttisstring(l) && ttisstring(r)) {  /* both are strings? */
+    CLUA_WORK_STRINGS(L, tsslen(tsvalue(l)), tsslen(tsvalue(r)));  /* #1145 */
     return l_strcmp(tsvalue(l), tsvalue(r)) < 0;
+  }
   else
     return luaT_callorderTM(L, l, r, TM_LT);
 }
@@ -554,8 +557,10 @@ int luaV_lessthan (lua_State *L, const TValue *l, const TValue *r) {
 */
 static int lessequalothers (lua_State *L, const TValue *l, const TValue *r) {
   lua_assert(!ttisnumber(l) || !ttisnumber(r));
-  if (ttisstring(l) && ttisstring(r))  /* both are strings? */
+  if (ttisstring(l) && ttisstring(r)) {  /* both are strings? */
+    CLUA_WORK_STRINGS(L, tsslen(tsvalue(l)), tsslen(tsvalue(r)));  /* #1145 */
     return l_strcmp(tsvalue(l), tsvalue(r)) <= 0;
+  }
   else
     return luaT_callorderTM(L, l, r, TM_LE);
 }
@@ -598,7 +603,11 @@ int luaV_equalobj (lua_State *L, const TValue *t1, const TValue *t2) {
     case LUA_VLIGHTUSERDATA: return pvalue(t1) == pvalue(t2);
     case LUA_VLCF: return fvalue(t1) == fvalue(t2);
     case LUA_VSHRSTR: return eqshrstr(tsvalue(t1), tsvalue(t2));
-    case LUA_VLNGSTR: return luaS_eqlngstr(tsvalue(t1), tsvalue(t2));
+    case LUA_VLNGSTR:
+      if (L != NULL && tsvalue(t1) != tsvalue(t2) &&  /* #1145: a memcmp runs (not raw, not one string) */
+          tsslen(tsvalue(t1)) == tsslen(tsvalue(t2)))
+        CLUA_WORK_STRINGS(L, tsslen(tsvalue(t1)), tsslen(tsvalue(t2)));
+      return luaS_eqlngstr(tsvalue(t1), tsvalue(t2));
     case LUA_VUSERDATA: {
       if (uvalue(t1) == uvalue(t2)) return 1;
       else if (L == NULL) return 0;

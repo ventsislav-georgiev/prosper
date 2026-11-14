@@ -3,6 +3,7 @@
 #include <string.h>
 #include "clua_shim.h"
 #include "lstate.h"  /* #1126: L->allowhook */
+#include "ldebug.h"  /* #1145: luaG_runerror */
 
 /* R1154-1: every top-level call passes no message handler (msgh 0). A handler would run on every error with the memory
 ** cap and the budget still on. Lua 5.4.9 allocates nothing after the unwind (luaD_seterrorobj copies the error value;
@@ -62,17 +63,44 @@ static void budget_hook(lua_State *L, lua_Debug *ar) {
 /* #1154: one budget per outermost call. A call made from inside a host call finds the hook set and leaves it, so it
 ** runs on the outer count, and a spent budget stays spent; only the call that armed the budget removes it. */
 int clua_budget_arm(lua_State *L, int count) {
+    clua_mem *m = (clua_mem *)G(L)->ud;
     if (lua_gethook(L) != NULL)
         return 0;
-    lua_sethook(L, budget_hook, LUA_MASKCOUNT, count < 1 ? 1 : count); /* 0 or less would never fire */
+    if (count < 1)
+        count = 1; /* 0 or less would never fire */
+    lua_sethook(L, budget_hook, LUA_MASKCOUNT, count);
+    m->work = 0; /* #1145: the library-work limit goes with the budget */
+    m->worklimit = (size_t)count * CLUA_WORK_PER_INSTRUCTION;
     return 1;
 }
 
 int clua_budget_disarm(lua_State *L, int armed) {
+    clua_mem *m = (clua_mem *)G(L)->ud;
     int spent = lua_gethook(L) == budget_spent;
-    if (armed)
+    if (armed) {
         lua_sethook(L, NULL, 0, 0);
+        m->work = 0;
+        m->worklimit = 0;
+    }
     return spent;
+}
+
+/* #1145: library work. The raise happens inside a library function or a comparison instruction (both may raise
+** there already) and leaves the budget spent exactly as budget_hook does. */
+void clua_work(lua_State *L, size_t count, size_t weight) {
+    clua_mem *m;
+    size_t units;
+    if (G(L)->frealloc != clua_mem_alloc)
+        return; /* a state not made by clua_newstate (luaL_newstate in ExtensionLuaSuiteTests): no counter */
+    m = (clua_mem *)G(L)->ud;
+    if (m->worklimit == 0 || !m->enforce)
+        return; /* no armed call, or a host function is running (it must never raise) */
+    units = weight != 0 && count > SIZE_MAX / weight ? SIZE_MAX : count * weight;
+    m->work = units > SIZE_MAX - m->work ? SIZE_MAX : m->work + units;
+    if (m->work > m->worklimit) {
+        lua_sethook(G(L)->mainthread, budget_spent, LUA_MASKCOUNT, 1);
+        luaG_runerror(L, "execution budget exceeded");
+    }
 }
 
 /* #1126: setmetatable without finalizers, which would run outside the per-call budget. */
@@ -142,6 +170,15 @@ void *clua_mem_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
         m->used += nsize - old; /* checked above: cannot wrap */
         if (m->used > m->peak)
             m->peak = m->used;
+        /* #1145: a large growth is library work (a copy). An allocator cannot raise: the allocation stands, and once
+           over the limit the budget is spent, so the next instruction of any thread raises (lua_sethook is safe
+           from anywhere). */
+        if (m->enforce && m->worklimit != 0 && nsize >= CLUA_WORK_ALLOC_MIN) {
+            size_t units = nsize / CLUA_WORK_ALLOC_BYTES;
+            m->work = units > SIZE_MAX - m->work ? SIZE_MAX : m->work + units;
+            if (m->work > m->worklimit)
+                lua_sethook(m->main, budget_spent, LUA_MASKCOUNT, 1);
+        }
     } else {
         mem_lower(m, old - nsize);
     }
@@ -166,6 +203,7 @@ lua_State *clua_newstate(size_t cap) {
         free(m);
         return NULL;
     }
+    m->main = L;
     lua_atpanic(L, clua_panic); /* warnings stay off: no warnf, so warn() does nothing */
     return L;
 }

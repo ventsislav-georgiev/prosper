@@ -766,6 +766,11 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer: a window opened on a file that does not exist yet now shows the file as soon as it is
   created, and a file that is deleted and created again shows its new contents (before, the window
   kept saying the file was not there). (#1147)
+- An extension can no longer hang Prosper with a single slow string or table call (a heavy pattern
+  match, sort or repeat): that work now counts toward the extension's time budget, and the call
+  stops with an "execution budget exceeded" error instead. (#1145)
+- Ordinary extension work (searching and replacing in large text, sorting or joining long lists)
+  runs as before. (#1145)
 
 ## v2.174.0
 
