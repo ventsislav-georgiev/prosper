@@ -17,7 +17,6 @@ struct CalendarPopupView: View {
 
     @State private var hoveredDay: Date?
     @State private var dragStartRows: Int?
-    @State private var detailEvent: CalendarEventInfo?
 
     /// User text-scale on top of the global UI scale.
     private var f: CGFloat { store.style.textScale.factor }
@@ -298,7 +297,7 @@ struct CalendarPopupView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if !store.accessGranted {
                     accessHint
-                } else if let event = detailEvent {
+                } else if let event = store.detailEvent {
                     eventDetail(event)
                 } else {
                     ForEach(agendaDays, id: \.self) { day in
@@ -320,9 +319,7 @@ struct CalendarPopupView: View {
             .padding(.vertical, sz(6))
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: (detailEvent == nil ? sz(240) : sz(380)) * f)
-        // Back to the list when the user picks another day.
-        .onChange(of: store.selectedDay) { detailEvent = nil }
+        .frame(maxHeight: (store.detailEvent == nil ? sz(240) : sz(380)) * f)
     }
 
     private var accessHint: some View {
@@ -421,7 +418,7 @@ struct CalendarPopupView: View {
         }
         .padding(.horizontal, sz(14)).padding(.vertical, sz(3))
         .contentShape(Rectangle())
-        .onTapGesture { detailEvent = event }
+        .onTapGesture { store.detailEventID = event.id }
     }
 
     // MARK: - Event detail (Itsycal parity: click an agenda row for the
@@ -436,7 +433,7 @@ struct CalendarPopupView: View {
                     .foregroundStyle(Neon.textPrimary)
                     .textSelection(.enabled)
                 Spacer(minLength: sz(8))
-                Button { detailEvent = nil } label: {
+                Button { store.detailEventID = nil } label: {
                     Image(systemName: "delete.backward")
                         .font(.system(size: sz(13) * f))
                         .foregroundStyle(Neon.textSecondary)

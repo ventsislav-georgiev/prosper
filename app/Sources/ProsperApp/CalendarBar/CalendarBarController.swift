@@ -25,12 +25,27 @@ final class CalendarBarStore: ObservableObject {
     @Published var today: Date
     @Published var now: Date          // minute-tick for time-bearing patterns
     @Published var monthAnchor: Date  // any date inside the displayed month
-    @Published var selectedDay: Date
-    @Published var eventsByDay: [Date: [CalendarEventInfo]] = [:]
+    @Published var selectedDay: Date {
+        // Back to the list when the user picks another day.
+        didSet { if selectedDay != oldValue { detailEventID = nil } }
+    }
+    @Published var eventsByDay: [Date: [CalendarEventInfo]] = [:] {
+        // #928: a refetch that no longer has the open event closes its detail.
+        didSet { if detailEventID != nil, detailEvent == nil { detailEventID = nil } }
+    }
     @Published var pinned = false     // popover survives focus loss while set
     @Published var accessGranted = CalendarEventCenter.authorized
+    /// #928: the open event detail's id. Held here, not in the popup's @State, because Themed
+    /// rebuilds the popup's subtree on a theme switch and a pinned popup stays open through one.
+    @Published var detailEventID: String?
 
     var calendar = Calendar.autoupdatingCurrent
+
+    /// The open detail's event, looked up in the fetched events: nil when none is open or it is gone.
+    var detailEvent: CalendarEventInfo? {
+        guard let id = detailEventID else { return nil }
+        return eventsByDay.values.lazy.flatMap { $0 }.first { $0.id == id }
+    }
 
     init(style: CalendarBarStyle) {
         self.style = style
@@ -254,7 +269,9 @@ final class CalendarBarController {
         // #195: click → popover transaction committed.
         let signpost = Perf.signposter.beginInterval("popover.show", id: Perf.signposter.makeSignpostID(), "calendar")
         CATransaction.setCompletionBlock { Perf.signposter.endInterval("popover.show", signpost) }
-        // Reset navigation to today on open (Itsycal behaviour).
+        // Reset navigation to today on open (Itsycal behaviour), on the list (#928: the detail's
+        // id outlives the popup now, so a fresh show closes it as the fresh @State used to).
+        store.detailEventID = nil
         store.today = store.calendar.startOfDay(for: Date())
         store.monthAnchor = store.today
         store.selectedDay = store.today

@@ -1072,6 +1072,8 @@ tag from the now-released section and put it on the new top draft.
 - The "Match this text exactly" button in Settings now appears only when the escaped pattern still
   fits dch's 255-byte limit, so pressing it can no longer make dch silently lose the Sidekick split
   (#938)
+- Switching themes no longer closes an open event in a pinned Calendar popup, and the model setup
+  window's text now changes colour with the theme (#928)
 
 ## v2.174.0
 

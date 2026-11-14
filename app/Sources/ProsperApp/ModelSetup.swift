@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Shows a small progress window that drives `CoreBridge.ensureModel` (MLXEngine
@@ -17,6 +18,7 @@ final class ModelSetup: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var progressBar: NSProgressIndicator?
     private var statusLabel: NSTextField?
+    private var labelTheme: AnyCancellable?
     private weak var retryButton: NSButton?
     private var operation: Operation?
     private var isRunning = false
@@ -134,7 +136,7 @@ final class ModelSetup: NSObject, NSWindowDelegate {
         content.autoresizingMask = [.width, .height]
 
         let label = NSTextField(labelWithString: "Preparing the language model\u{2026}")
-        label.textColor = NSColor(Neon.textPrimary)
+        labelTheme = Self.followTheme(label)
         label.frame = NSRect(x: 20, y: 100, width: 340, height: 20)
         label.autoresizingMask = [.width, .minYMargin]
         content.addSubview(label)
@@ -173,6 +175,15 @@ final class ModelSetup: NSObject, NSWindowDelegate {
         DockPolicy.windowDidShow(window)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// #928: colours `label` with the theme's primary text now and again on every generation bump
+    /// (theme, tint or size), as Themed re-reads Neon for SwiftUI windows: this label is AppKit and
+    /// the window stays open through a theme switch during a download. The sink runs synchronously
+    /// on the main actor: `generation` is published from @MainActor ThemeStore only, after the new
+    /// palette is in ThemeRuntime (ThemeStore.apply), so the willSet value is not needed.
+    static func followTheme(_ label: NSTextField, store: ThemeStore = .shared) -> AnyCancellable {
+        store.$generation.sink { [weak label] _ in label?.textColor = NSColor(Neon.textPrimary) }
     }
 
     private func update(with progress: SetupProgress) {
