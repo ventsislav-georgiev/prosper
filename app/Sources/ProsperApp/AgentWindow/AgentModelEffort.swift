@@ -13,6 +13,8 @@ struct AgentModelEffort: Equatable, Sendable {
     static let step: UInt64 = 1 << 16
     static let levels: Set<String> = ["low", "medium", "high", "xhigh", "max"]
     static let maxModelLength = 128
+    private static let allowedModelScalars: Set<UInt32> = Set(
+        Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:@/-".unicodeScalars).map { $0.value })
 
     /// The two outside reads, as a seam so rows count them. Runs on whatever queue the list runs on.
     struct IO: Sendable {
@@ -29,8 +31,16 @@ struct AgentModelEffort: Equatable, Sendable {
                 return UInt64(st.st_size)
             },
             read: { path, offset, length in
-                guard length > 0, let h = FileHandle(forReadingAtPath: path) else { return nil }
-                defer { try? h.close() }
+                // Non-blocking open, then the type is checked on the opened descriptor: whatever sits at
+                // the path now, only a regular file is read, and the open never waits on a writer (#1216).
+                guard length > 0 else { return nil }
+                let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+                guard fd >= 0 else { return nil }
+                var st = stat()
+                guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size >= 0,
+                      offset <= UInt64(st.st_size) else { close(fd); return nil }
+                let h = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+                defer { close(fd) }
                 do {
                     try h.seek(toOffset: offset)
                     return try h.read(upToCount: length)
@@ -74,9 +84,11 @@ struct AgentModelEffort: Equatable, Sendable {
         if let side = TranscriptKeys.get(o, "isSidechain") {
             guard let n = side as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID(), !n.boolValue else { return nil }
         }
+        // The id reaches row text, so only ASCII letters, digits and . _ : @ / - are kept (checked per
+        // scalar); any other id reads as no model, never as a cleaned or cut one (#1216).
         guard let model = TranscriptKeys.str(TranscriptKeys.obj(o, "message"), "model"),
               !model.isEmpty, model.utf8.count <= maxModelLength,
-              !model.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) else { return nil }
+              model.unicodeScalars.allSatisfy({ allowedModelScalars.contains($0.value) }) else { return nil }
         let effort = TranscriptKeys.str(o, "effort").flatMap { levels.contains($0) ? $0 : nil }
         return AgentModelEffort(model: model, effort: effort)
     }

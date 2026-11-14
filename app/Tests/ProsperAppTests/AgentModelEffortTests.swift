@@ -115,6 +115,35 @@ final class AgentModelEffortTests: XCTestCase {
         XCTAssertTrue(readPath("/Users/example/none.jsonl") == nil)
     }
 
+    func testModelIdAllowlistIsPerScalar() {
+        let table: [(String, String?)] = [
+            ("claude-a-1-1-20250101", "claude-a-1-1-20250101"),
+            ("provider.model-v1:2", "provider.model-v1:2"),
+            ("model@2025", "model@2025"),
+            ("vendor/model_x", "vendor/model_x"),
+            ("claude-a\u{202E}-1", nil),
+            ("claude-a\u{0085}-1", nil),
+            ("claude a-1", nil),
+            ("claude-\u{00E9}-1", nil),
+            ("claude-a\u{0301}-1", nil),
+            ("", nil),
+            (String(repeating: "m", count: 128), String(repeating: "m", count: 128)),
+            (String(repeating: "m", count: 129), nil),
+        ]
+        for (id, want) in table {
+            let got = AgentModelEffort.parse(assistant(id, effort: "high"))
+            XCTAssertTrue(got?.model == want, id)
+            // The effort is read from the same line only when the id is kept.
+            XCTAssertTrue(got?.effort == (want == nil ? nil : "high"), id)
+        }
+    }
+
+    func testRefusedIdLineLeavesTheOlderLineStanding() {
+        let data = assistant("claude-old-2-0", effort: "low") + assistant("claude-a\u{202E}-1", effort: "max")
+        let got = readPath(write(data))
+        XCTAssertTrue(got?.model == "claude-old-2-0" && got?.effort == "low")
+    }
+
     func testBadLinesReadAsNothingAndOlderLineStands() {
         var bad = Data("{\"type\":\"assistant\",\"message\":{\"model\":\"claude-nul-1-1\"}}".utf8)
         bad.insert(0, at: 5)
@@ -278,6 +307,61 @@ final class AgentModelEffortTests: XCTestCase {
         let r = AgentModelEffort.resolve(session(.idle, path: dir.path), previous: nil, io: c.io)
         XCTAssertTrue(r.model == nil && r.modelReadSize == nil)
         XCTAssertEqual(c.reads, 0)
+    }
+
+    /// Descriptors open in this process (probing the low range), for the close-on-every-path row.
+    private func openDescriptors() -> Int {
+        (3..<1024).filter { fcntl(Int32($0), F_GETFD) != -1 }.count
+    }
+
+    func testLiveReadOfANonRegularFileIsNothingAndNeverBlocks() {
+        let dir = tempDir()
+        let live = AgentModelEffort.IO.live
+        XCTAssertTrue(live.read(dir.path, 0, 16) == nil)
+        // One FIFO, made after the non-blocking open is in the code under test; the read runs on its own
+        // queue and the wait fails instead of hanging the suite.
+        let fifo = dir.appendingPathComponent("pipe").path
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        let done = expectation(description: "read of a FIFO returns")
+        let box = Box()
+        DispatchQueue.global().async {   // runs off main, captures only Sendable values
+            box.value = live.read(fifo, 0, 16)
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+        XCTAssertTrue(box.value == nil)
+        XCTAssertTrue(live.size(fifo) == nil)
+    }
+
+    final class Box: @unchecked Sendable { var value: Data? = Data() }
+
+    func testLiveReadOfARegularFileIsUnchangedAndASymlinkInsideTheFolderIsFollowed() {
+        let body = assistant("claude-a-1-1")
+        let f = write(body, "live.jsonl")
+        let live = AgentModelEffort.IO.live
+        XCTAssertTrue(live.read(f, 0, body.count) == body)
+        XCTAssertTrue(live.read(f, 1, 3) == body.subdata(in: 1..<4))
+        XCTAssertTrue(live.read(f, UInt64(body.count) + 1, 1) == nil)   // offset past the end
+        XCTAssertTrue(live.read(f, UInt64.max, 1) == nil)
+        XCTAssertTrue(live.read(f, 0, 0) == nil)
+        let link = URL(fileURLWithPath: f).deletingLastPathComponent().appendingPathComponent("link.jsonl").path
+        XCTAssertNoThrow(try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: f))
+        XCTAssertTrue(live.read(link, 0, body.count) == body)
+    }
+
+    func testLiveReadsLeaveTheDescriptorCountUnchanged() {
+        let dir = tempDir()
+        let f = write(assistant("claude-a-1-1"), "live.jsonl")
+        let missing = dir.appendingPathComponent("none").path
+        let live = AgentModelEffort.IO.live
+        _ = live.read(f, 0, 1)   // warm any lazy descriptor first
+        let before = openDescriptors()
+        for _ in 0..<200 {
+            _ = live.read(f, 0, 8); _ = live.read(dir.path, 0, 8); _ = live.read(missing, 0, 8)
+            _ = live.read(f, UInt64.max, 8)
+        }
+        // A leak on any one refused path adds at least 200; other threads may move the count by a few.
+        XCTAssertLessThan(openDescriptors() - before, 100, "descriptors leaked by the live read")
     }
 
     func testShrunkOrReplacedFileIsReadAgain() {
