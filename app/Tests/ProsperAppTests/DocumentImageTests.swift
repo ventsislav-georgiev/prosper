@@ -108,6 +108,8 @@ final class DocumentImageTests: XCTestCase {
         XCTAssertGreaterThan(ink(strips, rows: 0, 200), 50, "first strip")
         XCTAssertGreaterThan(ink(strips, rows: 1_600, 1_664), 50, "last strip")
         XCTAssertEqual(strips.bytesPerRow, whole.bytesPerRow)
+        // R1107-4: the same guard: never read past the shorter buffer.
+        guard strips.bytesPerRow == whole.bytesPerRow, strips.pixelsHigh == whole.pixelsHigh else { return }
         let a = try XCTUnwrap(strips.bitmapData), b = try XCTUnwrap(whole.bitmapData)
         let count = strips.bytesPerRow * strips.pixelsHigh
         var differ = 0
@@ -145,6 +147,8 @@ final class DocumentImageTests: XCTestCase {
         XCTAssertEqual([a.pixelsWide, a.pixelsHigh], [232, 92])
         XCTAssertEqual([b.pixelsWide, b.pixelsHigh], [a.pixelsWide, a.pixelsHigh])
         XCTAssertEqual(a.bytesPerRow, b.bytesPerRow)
+        // R1107-4: the asserts above do not stop the row; the loop below must never read past b's buffer.
+        guard a.bytesPerRow == b.bytesPerRow, a.pixelsHigh == b.pixelsHigh else { return }
         let pa = try XCTUnwrap(a.bitmapData), pb = try XCTUnwrap(b.bitmapData)
         let count = a.bytesPerRow * a.pixelsHigh
         var differ = 0

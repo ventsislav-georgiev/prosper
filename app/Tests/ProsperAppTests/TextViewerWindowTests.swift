@@ -912,4 +912,49 @@ final class TextViewerWindowTests: XCTestCase {
             for word in banned { XCTAssertFalse(text.contains(word), "\(name) uses \(word)") }
         }
     }
+
+    /// R1107-4 (b), R1107-2: a screenshot's notice timer clears only its own notice. Two screenshots; the first
+    /// timer ends after the second notice is up and leaves it; the second timer clears it. The wait is the seam
+    /// (returns at once): no 5 s and no fixed wait; the timers are awaited. The image goes to the private test
+    /// pasteboard (Pasteboard.general under XCTest); the view is never in a window.
+    func testScreenshotNoticeTimerClearsOnlyItsOwn() async throws {
+        let url = tempDir("tv-notice").appendingPathComponent("a.txt")
+        try write("one line\n", url)
+        let model = TextViewerModel(url: url, resolved: url, actions: fakeActions())
+        await model.job?.value
+        let (_, view) = TextViewerTextView.makeScrollable()
+        view.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+        view.show(try XCTUnwrap(model.output?.text))
+        model.textView = view
+        model.noticeWait = {}
+        model.screenshot()
+        let first = try XCTUnwrap(model.noticeTimer)
+        // The second timer is held until the first has ended (awaiting one lets every ready main-actor job run).
+        let gate = NoticeGate()
+        model.noticeWait = { await gate.wait() }
+        model.screenshot()
+        let second = try XCTUnwrap(model.noticeTimer)
+        XCTAssertTrue(model.notice != nil, "the second screenshot's notice is up")
+        await first.value
+        XCTAssertTrue(model.notice != nil, "the first timer left the newer notice")
+        gate.open()
+        await second.value
+        XCTAssertTrue(model.notice == nil, "the second timer cleared its own notice")
+        withExtendedLifetime(view) {}
+    }
+
+    /// A wait the row ends itself (main actor): open() before or after wait() both let it return.
+    @MainActor private final class NoticeGate {
+        private var waiter: CheckedContinuation<Void, Never>?
+        private var opened = false
+        func wait() async {
+            if opened { return }
+            await withCheckedContinuation { waiter = $0 }
+        }
+        func open() {
+            opened = true
+            waiter?.resume()
+            waiter = nil
+        }
+    }
 }

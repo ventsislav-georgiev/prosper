@@ -185,6 +185,9 @@ final class TextViewerModel: ObservableObject {
     @Published private(set) var notice: String?
     /// R1107-2: which screenshot said the notice; a timer clears only its own.
     private var noticeGeneration = 0
+    /// R1107-4: the notice's wait (5 s), a seam; a row replaces it and awaits the timer it kept.
+    var noticeWait: @MainActor () async -> Void = { try? await Task.sleep(for: .seconds(5)) }
+    private(set) var noticeTimer: Task<Void, Never>?
 
     /// D15: the header's Screenshot. One PNG of the whole shown text (all of the scroll) on the clipboard
     /// through the Pasteboard.general seam, at the window's column width, appearance and backing scale.
@@ -197,8 +200,8 @@ final class TextViewerModel: ObservableObject {
         noticeGeneration += 1
         let generation = noticeGeneration
         // Runs on the main actor; a newer screenshot's notice is left in place, even when it says the same.
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+        noticeTimer = Task { @MainActor [weak self, wait = noticeWait] in
+            await wait()
             if let self, self.noticeGeneration == generation { self.notice = nil }
         }
     }

@@ -535,4 +535,88 @@ final class TextViewerLayoutTests: XCTestCase {
         Self.fact(String(format: "time: a paragraph of %ld links shown and drawn %.4f s", R.maxLinks, t))
         XCTAssertLessThan(t, 2, "a paragraph of \(R.maxLinks) links laid out in \(t) s (\(h.count.lines) lines)")
     }
+
+    // MARK: #1180: one line with no line break is one paragraph, laid out whole on main.
+
+    /// phys_footprint in bytes (as LlamaInlineEngineTests reads it); 0 on failure.
+    private static func footprint() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) { p in
+            p.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return kr == KERN_SUCCESS ? Int(info.phys_footprint) : 0
+    }
+
+    /// No break opportunity inside (letters and digits): the worst wrap, broken by characters.
+    private static let asciiPiece = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZxy"
+    /// A space every 80 characters: an ordinary wrap at words.
+    private static let spacedPiece = String(repeating: "abcdefghij", count: 7) + "abcdefghi "
+    /// U+1D400, a 4-byte character (two UTF-16 units), letter class: no break opportunity either.
+    private static let widePiece = String(repeating: "\u{1D400}", count: 32)
+
+    /// One step: the text built in memory through the product's plain render, then (on main, as the app)
+    /// show plus the first draw, and a reload (a new object with the same text). Timed for the probe only.
+    private func oneLineStep(_ piece: String, units: Int, _ what: String) throws -> (time: Double, mib: Double) {
+        let before = Self.footprint()
+        let t0 = Date()
+        let text = R.plain(String(repeating: piece, count: max(1, units / piece.utf16.count)), style: Self.style).text
+        let render = Date().timeIntervalSince(t0)
+        let h = try host()
+        defer { h.window.close() }
+        h.count.reset()
+        let t1 = Date()
+        h.view.show(text)
+        try draw(h)
+        let show = Date().timeIntervalSince(t1)
+        let glyphs = h.count.glyphs, lines = h.count.lines
+        let again = NSAttributedString(attributedString: text)
+        let t2 = Date()
+        h.view.show(again)
+        try draw(h)
+        let reload = Date().timeIntervalSince(t2)
+        let mib = Double(max(0, Self.footprint() - before)) / 1_048_576
+        Self.fact(String(format: "ladder %@ %ld units: plain %.3f s, show+draw %.3f s (%ld glyphs, %ld lines laid out of %ld glyphs), reload %.3f s, footprint +%.1f MiB",
+                         what, text.length, render, show, glyphs, lines, h.view.layoutManager?.numberOfGlyphs ?? -1, reload, mib))
+        return (max(show, reload), mib)
+    }
+
+    /// Bytes a step of `units` is predicted to hold: the UTF-16 text three times (the render's, the storage's,
+    /// the reload copy) plus the Swift string, plus `perGlyph` bytes of layout per glyph; at least twice the
+    /// last step's measured growth.
+    private static func predictedMiB(_ units: Int, perGlyph: Double, lastMiB: Double) -> Double {
+        max(Double(units) * (7 + perGlyph) / 1_048_576, 2 * lastMiB)
+    }
+
+    /// #1180 probe (heavy only, no assertion on time): the ladder. Doubling from 64 KiB; stops at the first
+    /// step over 2 s; never starts a step predicted over 10 s (from the last two steps) or over 48 MiB, or past
+    /// the file cap. Then one step of 4-byte characters and one with a space every 80, at 1 MiB of units.
+    func testOneLineLadderProbe() throws {
+        try requireHeavyTests()
+        var units = 64 << 10
+        var last: (units: Int, time: Double, mib: Double)?
+        var prevTime: Double?, fitted: Int?
+        var perGlyph = 16.0
+        while units <= TextViewerDocument.maxBytes {
+            var predicted = 0.0
+            if let last { predicted = prevTime.map { last.time * max(2, last.time / max($0, 0.001)) } ?? 2 * last.time }
+            let mib = Self.predictedMiB(units, perGlyph: perGlyph, lastMiB: last?.mib ?? 0)
+            Self.fact(String(format: "ladder next %ld units: predicted %.2f s, %.1f MiB", units, predicted, mib))
+            if predicted > 10 || mib > 48 { Self.fact("ladder stop: not started (prediction over 10 s or 48 MiB)"); break }
+            let step = try autoreleasepool { try oneLineStep(Self.asciiPiece, units: units, "ascii") }
+            perGlyph = max(4, step.mib * 1_048_576 / Double(units) - 7)
+            prevTime = last?.time
+            last = (units, step.time, step.mib)
+            if step.time > 2 { Self.fact("ladder stop: over 2 s"); break }
+            fitted = units
+            units *= 2
+        }
+        // The side steps at the largest ASCII step that took at most 2 s, and at most 1 MiB of units.
+        guard let fit = fitted, Self.predictedMiB(min(fit, 1 << 20), perGlyph: perGlyph, lastMiB: 0) <= 48 else {
+            Self.fact("side steps not started"); return
+        }
+        let side = min(fit, 1 << 20)
+        _ = try autoreleasepool { try oneLineStep(Self.widePiece, units: side, "4-byte") }
+        _ = try autoreleasepool { try oneLineStep(Self.spacedPiece, units: side, "space every 80") }
+    }
 }
