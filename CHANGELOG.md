@@ -1003,6 +1003,10 @@ tag from the now-released section and put it on the new top draft.
   slider is still being applied now hands every fan back to macOS; before, a fan could stay at the
   slider's speed while the popup said Automatic. A Manual request refused because a fan had no
   reading now also stops a Manual change still in flight from the other surface. (#1233)
+- Agent Island settings have a Default model (type a model name or pick opus, sonnet or haiku): new
+  Claude sessions that Prosper starts from the island, the New session window or the phone use it
+  from their first turn, unless the command already names a model. Empty keeps Claude Code's own
+  default; Restart and Resume keep each session's model. (#1228)
 
 ## v2.174.0
 

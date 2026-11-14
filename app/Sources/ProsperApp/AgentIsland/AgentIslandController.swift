@@ -1083,7 +1083,10 @@ final class AgentIslandController {
     /// #606: the command is the setting's, else inferred first (off main).
     func newSession(in folder: String) {
         guard store?.resumeGate.isOK == true else { return }
-        newSessionCommand { [weak self] command in self?.spawn(in: folder, command: command) }
+        // #1228: the Default model, read when it starts (on main: newSessionCommand's `done`); Restart/Resume never pass here.
+        newSessionCommand { [weak self] command in
+            self?.spawn(in: folder, command: AgentIsland.withModel(command, model: Preferences.agentIslandDefaultModel))
+        }
     }
 
     /// spec 6.1: a --spawn's env: spawnEnv's strip, then each contributor in order. Pure; runs on the runner's queue.

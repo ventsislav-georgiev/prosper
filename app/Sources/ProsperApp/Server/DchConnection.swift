@@ -860,7 +860,10 @@ final class DchConnection: @unchecked Sendable {
         sessionName = name
         // #877 (QA #725 INFO-1): an interactive Claude gets `--name <session name>`, as a Mac New session
         // (#847, AgentIsland.naming); no name (dch picks one): left unnamed. dch serve passes it as sent.
-        let raw = (o["command"] as? [String]) ?? []
+        // #1228: an interactive Claude gets the Mac's Default model (withModel re-checks it; a typed --model wins),
+        // create and attach alike: dch uses an attach's command only when it starts the session (dch.c do_attach:
+        // a live socket goes to attach_main without argv), so an existing session is unchanged.
+        let raw = AgentIsland.withModel((o["command"] as? [String]) ?? [], model: Preferences.agentIslandDefaultModel)
         let command = name.map { $0.isEmpty ? raw : AgentIsland.naming(raw, name: $0) } ?? raw
         let (cols, rows) = DchFrame.size(o)
 

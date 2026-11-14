@@ -442,6 +442,7 @@ enum Preferences {
         static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
         static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
+        static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
         static let agentIslandSidekickSuffix = "agentIslandSidekickSuffix"   // #847, per Mac
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         // #821: the Agent Sessions window's verbosity (AgentVerbosity); per Mac, so not in SyncedKeys.
@@ -1312,6 +1313,16 @@ enum Preferences {
             let v = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandNewSessionCommand) }
             else { defaults.set(v, forKey: Keys.agentIslandNewSessionCommand) }
+        }
+    }
+
+    /// #1228: the model a new Claude session starts with; "" = Claude Code's own default (the key removed).
+    /// Saved through AgentIslandPane.commitModel (refused values never reach it); AgentIsland.withModel re-checks it.
+    static var agentIslandDefaultModel: String {
+        get { defaults.string(forKey: Keys.agentIslandDefaultModel) ?? "" }
+        set {
+            if newValue.isEmpty { defaults.removeObject(forKey: Keys.agentIslandDefaultModel) }
+            else { defaults.set(newValue, forKey: Keys.agentIslandDefaultModel) }
         }
     }
 

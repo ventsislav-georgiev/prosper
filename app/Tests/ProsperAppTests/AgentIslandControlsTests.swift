@@ -1650,6 +1650,27 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [resumed]), ["headroom", "wrap", "claude"])
     }
 
+    /// #1228 F1228-1: an inferred command never carries a recorded model (it would be stored and win over every
+    /// later Default model); another option's value and a non-claude record are left alone.
+    func testInferredCommandDropsARecordedModel() {
+        func inferred(_ argv: [String]) -> [String]? {
+            AgentIsland.inferredCommand(live: [], history: [agentRecord("api", ended: 5, cwd: "/a", launch: ["claude"], argv: argv)])
+        }
+        XCTAssertEqual(inferred(["claude", "--model", "sonnet", "--chrome"]), ["claude", "--chrome"])
+        XCTAssertEqual(inferred(["claude", "--model=sonnet", "--chrome"]), ["claude", "--chrome"])
+        XCTAssertEqual(inferred(["headroom", "wrap", "claude", "--model", "x"]), ["headroom", "wrap", "claude"])
+        XCTAssertEqual(inferred(["claude", "--name", "--model", "--chrome"]), ["claude", "--chrome"],
+                       "--model as --name's value goes with the name, not as a model")
+        XCTAssertEqual(AgentIsland.strippingModel(["claude", "--append-system-prompt", "--model", "--chrome"]),
+                       ["claude", "--append-system-prompt", "--model", "--chrome"], "another option's value: left alone")
+        XCTAssertEqual(AgentIsland.strippingModel(["claude", "--chrome", "--", "--model", "x"]),
+                       ["claude", "--chrome", "--", "--model", "x"], "after a bare --: left alone")
+        let other = agentRecord("cx", ended: 5, cwd: "/a", launch: ["codex", "--model", "x"])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [other]), ["codex", "--model", "x"], "not claude: unchanged")
+        XCTAssertEqual(AgentIsland.strippingName(["claude", "--model", "x"]), ["claude", "--model", "x"],
+                       "strippingName (naming, the form's typed command) keeps a typed model")
+    }
+
     /// #867: dch_claude_strip's rules (dch v1.50.1 cargv.c:174-249): operands and a bare -- with the rest go,
     /// options and their values stay; no claude token, a claude that does not run (unless the agent was seen), a
     /// command first, or an unknown option that may own the next token: the whole argv.
@@ -2275,6 +2296,38 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "My-Repo")) }
     }
 
+    /// #1228: with a Default model saved, Restart and Resume run exactly today's dch verbs (dch re-runs the record),
+    /// and the island's New session carries --model once, right after the claude word behind the wrapper.
+    @MainActor
+    func testDefaultModelReachesNewSessionOnlyNeverRestartOrResume() {
+        XCTAssertTrue(Preferences.defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
+        let k = "agentIslandDefaultModel", saved = Preferences.defaults.object(forKey: k)
+        defer { Preferences.defaults.set(saved, forKey: k); Preferences.agentIslandNewSessionCommand = "" }
+        Preferences.agentIslandDefaultModel = "claude-example-1"
+        Preferences.agentIslandNewSessionCommand = "/opt/homebrew/bin/headroom wrap claude --chrome"
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        c.restart(session("a"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "a")) }
+        let x = record("x")
+        c.resume(x)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(x.id) }
+        c.newSession(in: "/src/app")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--restart", "a", "--include-agents", "-f", "--json"], ["--revive", "x", "--json"],
+                                ["--spawn", "app", "--", "/opt/homebrew/bin/headroom", "wrap", "claude", "--name", "app",
+                                 "--model", "claude-example-1", "--chrome"]])
+        XCTAssertEqual(f.args.last?.filter { $0 == "--model" }.count, 1, "the flag once")
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "/opt/homebrew/bin/headroom wrap claude --chrome",
+                       "the saved command never takes the flag")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "app")) }
+    }
+
     /// #847: what the window's spawn hands back (on main).
     private final class Spawned: @unchecked Sendable {
         var keys: [AgentSessionKey?] = []
@@ -2406,6 +2459,37 @@ final class AgentIslandControlsTests: XCTestCase {
         var got: [String]?
         c.newSessionCommand { got = $0 }
         XCTAssertEqual(got, ["headroom", "wrap", "claude", "--chrome"])
+    }
+
+    /// #1228 F1228-1: the broken sequence. Unset command, Default model "sonnet", a live record started with it:
+    /// the STORED command holds no model, the spawn holds it once; a later Default model "opus" then wins.
+    @MainActor
+    func testInferredCommandStoredWithoutModelSoALaterDefaultModelWins() throws {
+        XCTAssertTrue(Preferences.defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
+        let k = "agentIslandDefaultModel", saved = Preferences.defaults.object(forKey: k)
+        defer { Preferences.defaults.set(saved, forKey: k); Preferences.agentIslandNewSessionCommand = "" }
+        Preferences.agentIslandNewSessionCommand = ""
+        Preferences.agentIslandDefaultModel = "sonnet"
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        var live = agentRecord("a", ended: 0, cwd: "/a", launch: ["claude"], argv: ["claude", "--model", "sonnet", "--chrome"])
+        live.end = ""
+        let rec = live
+        c.readLiveRecords = { _ in [rec] }   // runs on the controller's queue, off main
+        c.newSession(in: "/x/proj")
+        settle(c) { !f.args.isEmpty }
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome", "the stored command holds no --model")
+        XCTAssertEqual(f.args.last, ["--spawn", "proj", "--", "claude", "--name", "proj", "--model", "sonnet", "--chrome"])
+        XCTAssertEqual(f.args.last?.filter { $0 == "--model" }.count, 1, "the flag once")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "proj")) }
+        Preferences.agentIslandDefaultModel = "opus"
+        c.newSession(in: "/x/two")
+        settle(c) { f.args.count == 2 }
+        XCTAssertEqual(f.args.last, ["--spawn", "two", "--", "claude", "--name", "two", "--model", "opus", "--chrome"])
+        XCTAssertEqual(f.args.last?.contains("sonnet"), false, "the old model is gone")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "two")) }
     }
 
     /// #608: a value the user commits while inference is still reading is

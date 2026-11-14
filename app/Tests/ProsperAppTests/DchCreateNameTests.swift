@@ -168,6 +168,33 @@ final class DchCreateNameTests: XCTestCase {
         XCTAssertEqual(spawned("work", ["claude", "-n", "old"]), ["-E", "-n", "work", "--", "claude", "--name", "work"])
     }
 
+    // MARK: - The Default model (#1228)
+
+    /// The Mac's Default model on a phone's create: once, after the name; a typed model kept; a shell as sent;
+    /// unset: today's argv byte for byte; an attach the same (dch runs its command only if it starts the session).
+    /// Scratch XCTestDefaults only.
+    func testAPhoneCreateGetsTheDefaultModel() {
+        XCTAssertTrue(Preferences.defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
+        let k = "agentIslandDefaultModel", saved = Preferences.defaults.object(forKey: k)
+        defer { Preferences.defaults.set(saved, forKey: k) }
+        Preferences.agentIslandDefaultModel = ""
+        XCTAssertEqual(spawned("work", ["claude"]), ["-E", "-n", "work", "--", "claude", "--name", "work"], "unset: today's")
+        XCTAssertEqual(spawned(nil, ["claude"]), ["-E", "--", "claude"], "unset, no name: today's")
+        XCTAssertEqual(send(DchFrame.attach, ["name": "work", "command": ["claude"], "cols": 80, "rows": 24]).spawned.first,
+                       ["-E", "-f", "-n", "work", "--", "claude", "--name", "work"], "unset, an attach: today's")
+        Preferences.agentIslandDefaultModel = "sonnet"
+        let got = spawned("work", ["claude"])
+        XCTAssertEqual(got, ["-E", "-n", "work", "--", "claude", "--name", "work", "--model", "sonnet"])
+        XCTAssertEqual(got?.filter { $0 == "--model" }.count, 1, "once")
+        XCTAssertEqual(spawned("work", ["claude", "--model", "opus"]), ["-E", "-n", "work", "--", "claude", "--name", "work", "--model", "opus"],
+                       "a typed model wins")
+        XCTAssertEqual(spawned("work", ["/bin/zsh"]), ["-E", "-n", "work", "--", "/bin/zsh"], "a shell: as sent")
+        XCTAssertEqual(spawned("work", []), ["-E", "-n", "work"], "no command: the default shell")
+        XCTAssertEqual(send(DchFrame.attach, ["name": "work", "command": ["claude"], "cols": 80, "rows": 24]).spawned.first,
+                       ["-E", "-f", "-n", "work", "--", "claude", "--name", "work", "--model", "sonnet"],
+                       "an attach: once, after the name (used only if it starts the session)")
+    }
+
     /// No name: dch picks one Prosper does not know beforehand, so Claude stays unnamed.
     func testNoNameLeavesClaudeUnnamed() {
         XCTAssertEqual(spawned(nil, ["claude"]), ["-E", "--", "claude"])

@@ -88,9 +88,11 @@ enum AgentNewSession {
     }
 
     /// The command's argv as it runs; empty: the login shell (OQ-2: like Terminal.app).
-    static func argv(_ command: String, shell: String?) -> [String] {
+    /// #1228: with the Default model (AgentIsland.withModel); Start, the "Runs:" line and the ccpool hint all read
+    /// this one argv, so what is shown is what starts. The typed text (saved on success) never gets the flag.
+    static func argv(_ command: String, shell: String?, model: String = Preferences.agentIslandDefaultModel) -> [String] {
         let words = AgentIsland.shellWords(command)
-        return words.isEmpty ? [loginShell(shell), "-l"] : words
+        return words.isEmpty ? [loginShell(shell), "-l"] : AgentIsland.withModel(words, model: model)
     }
 
     static let viaPoolHint = "via ccpool"

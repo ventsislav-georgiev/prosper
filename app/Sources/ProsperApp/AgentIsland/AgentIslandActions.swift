@@ -902,9 +902,10 @@ extension AgentIsland {
     /// `claude` and nothing is stored).
     /// #847 D7.3: and without a recorded `--name` (a record of a named spawn carries one).
     /// #867: and without Claude's one-shot prompt, dch's way for that record (strippingPrompt's `agent`).
+    /// #1228: and without a recorded model (the Default model has its own setting; a stored one would win over it).
     static func inferredCommand(live: [DchHistoryRecord], history: [DchHistoryRecord]) -> [String]? {
         (live + history).lazy.compactMap { r in recordCommand(r).map { strippingResume($0, agent: r.agent?.kind == "claude") } }
-            .first.map(strippingName)
+            .first.map { strippingModel(strippingName($0)) }
     }
 
     /// #847: Claude Code 2.1.318's commands and aliases (dch v1.50.1 cargv.c:92-97 csubs): as the
@@ -1022,6 +1023,21 @@ extension AgentIsland {
         }
     }
 
+    /// #1228: an interactive Claude's argv without a recorded model: --model with its value, --model=… (the table
+    /// knows no short form). Read by claudeArgs, so another option's value is never taken for a model; a bare `--`
+    /// and what follows stay. Used by inferredCommand only: a command the user typed keeps its model.
+    static func strippingModel(_ argv: [String]) -> [String] {
+        guard isInteractiveClaude(argv), let tok = argv.firstIndex(where: { dchBase($0, is: "claude") })
+        else { return argv }
+        return Array(argv.prefix(tok + 1)) + claudeArgs(argv[(tok + 1)...]).flatMap { arg -> [String] in
+            switch arg {
+            case .operand(let a): return [a]
+            case .rest(let r): return r
+            case .option(let o, _): return o[0] == "--model" || o[0].hasPrefix("--model=") ? [] : o
+            }
+        }
+    }
+
     /// #847 D1.2 (OQ-68): an interactive Claude named `name`, the user's own name replaced. Right after
     /// the claude token, as dch's resume_argv inserts --resume (v1.50.1 dch.c:5870-5874): a trailing
     /// `-- <prompt>` can never swallow it. Anything else (a shell, another agent, a batch run) as is.
@@ -1030,6 +1046,39 @@ extension AgentIsland {
         else { return argv }
         var out = strippingName(argv)
         out.insert(contentsOf: ["--name", name], at: tok + 1)
+        return out
+    }
+
+    /// #1228: the Default model is one argv element, never passed through a shell: 1 to `modelMax` ASCII letters,
+    /// digits, . _ : - [ ], not starting with "-". nil: it passes; else why not (the settings field shows it).
+    /// The reasons stay short: with "Not used: " before them each fits the row's one subtitle line at UI scale 0.7.
+    static let modelMax = 128
+    private static let modelBytes = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-[]".utf8)
+    static func modelRefusal(_ m: String) -> String? {
+        if m.isEmpty { return "Type a model name" }
+        if m.utf8.count > modelMax { return "Too long: \(modelMax) max" }
+        if !m.utf8.allSatisfy(modelBytes.contains) { return "Only A-Z a-z 0-9 ._:-[]" }
+        if m.hasPrefix("-") { return "Cannot start with -" }
+        return nil
+    }
+
+    /// #1228: a NEW session's argv with the Default model: `--model <model>` right after the claude token (naming's
+    /// walk), only when (a) it is an interactive Claude that is the program run (argv[0] or after `env`: claudeRuns)
+    /// or behind plain wrapper words (`headroom wrap claude`; a dashed word before it makes that claude an option's
+    /// value or another program's argument), (b) it carries no --model / --model= of its own (claudeArgs: a typed
+    /// model wins; the table has no short form) and (c) `model` passes modelRefusal (the key can be written from
+    /// outside). Anything else (a shell, codex, an empty argv, an unset model) comes back as is.
+    static func withModel(_ argv: [String], model: String) -> [String] {
+        guard modelRefusal(model) == nil, isInteractiveClaude(argv),
+              let tok = argv.firstIndex(where: { dchBase($0, is: "claude") }),
+              claudeRuns(argv, tok: tok) || !argv[..<tok].contains(where: { $0.hasPrefix("-") }),
+              !claudeArgs(argv[(tok + 1)...]).contains(where: { arg in
+                  guard case .option(let o, _) = arg, let a = o.first else { return false }
+                  return a == "--model" || a.hasPrefix("--model=")
+              })
+        else { return argv }
+        var out = argv
+        out.insert(contentsOf: ["--model", model], at: tok + 1)
         return out
     }
 

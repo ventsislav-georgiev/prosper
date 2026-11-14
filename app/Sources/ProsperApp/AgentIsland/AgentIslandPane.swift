@@ -23,6 +23,33 @@ struct AgentIslandPane: View {
     @State private var command = Preferences.agentIslandNewSessionCommand
     /// #751: Always allow permission prompts.
     @State private var autoAllow = Preferences.agentIslandAutoAllow
+    /// #1228: the Default model field, and why its last commit was refused (nil: saved).
+    @State private var model = Preferences.agentIslandDefaultModel
+    /// What the field last read or saved: leaving the pane commits only an edit (a pane torn down later never
+    /// writes back a value the store has moved on from).
+    @State private var modelSaved = Preferences.agentIslandDefaultModel
+    /// Opened with a saved value written from outside that fails the rule: why (withModel does not use it).
+    @State private var modelRefusal = Self.savedModelRefusal()
+    nonisolated static func savedModelRefusal() -> String? {
+        let m = Preferences.agentIslandDefaultModel
+        return m.isEmpty ? nil : AgentIsland.modelRefusal(m).map { "Not used: " + $0 }
+    }
+    static let modelAliases = ["opus", "sonnet", "haiku"]
+    static let modelHint = "Empty: Claude Code's own default"
+
+    /// #1228: the Default model field's commit: trimmed; empty clears it; anything AgentIsland.modelRefusal refuses
+    /// is not saved (the previous value stays) and its reason comes back. nil: saved.
+    static func commitModel(_ text: String) -> String? {
+        let v = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !v.isEmpty, let why = AgentIsland.modelRefusal(v) { return why }
+        Preferences.agentIslandDefaultModel = v
+        return nil
+    }
+
+    private func saveModel() {
+        modelRefusal = Self.commitModel(model)
+        if modelRefusal == nil { model = Preferences.agentIslandDefaultModel; modelSaved = model }
+    }
 
     /// #751: the Always allow toggle's hook (#754 INFO-R3: a function so a test drives it).
     static func autoAllowToggled(_ on: Bool, _ c: AgentIslandController = .shared) {
@@ -87,6 +114,21 @@ struct AgentIslandPane: View {
                     .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(260))
                     .onSubmit { command = Self.commit(command) }
             }
+            NeonDivider()
+            // The subtitle is one slot: the hint, or the refusal in its place (nothing moves).
+            NeonRow("Default model", subtitle: modelRefusal ?? Self.modelHint) {
+                HStack(spacing: sz(6)) {
+                    TextField("Claude Code's default", text: $model)
+                        .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(200))
+                        .accessibilityLabel("Default model")
+                        .onSubmit { saveModel() }
+                    Menu("Aliases") {
+                        ForEach(Self.modelAliases, id: \.self) { a in Button(a) { model = a; saveModel() } }
+                    }
+                    .fixedSize()
+                    .accessibilityLabel("Model aliases")
+                }
+            }
         }
         .onAppear {
             guard command.isEmpty else { return }
@@ -95,6 +137,9 @@ struct AgentIslandPane: View {
                 if command.isEmpty { command = Preferences.agentIslandNewSessionCommand }
             }
         }
-        .onDisappear { _ = Self.commit(command) }
+        .onDisappear {
+            _ = Self.commit(command)
+            if model != modelSaved { _ = Self.commitModel(model) }
+        }
     }
 }

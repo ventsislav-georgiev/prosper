@@ -461,6 +461,9 @@ The connection then carries one session:
   gets `--name <name>` right after the `claude` word, any `-n`/`--name` of its own replaced. A
   shell, another program and `claude -p` run as sent; so does any command of a create with no
   name (dch picks the name, unknown to Prosper beforehand). `dch serve` runs the command as sent.
+  A command that runs Claude interactively (0x02, or a 0x01 that starts the session) also gets
+  `--model <m>` after its `--name` when the Mac's Agent Island Default model is set and the command
+  names no `--model` of its own (#1228).
 - A failed spawn (Prosper: `forkpty` fails, the Mac is out of ptys or processes): 0x13
   `{"message": "Could not start the session: ..."}`, then close; the 0x13 is sent as the last
   frame before the FIN. Frames the client sent after the attach on that connection are
