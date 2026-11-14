@@ -82,6 +82,12 @@ end
 -- side effects: a side-effecting host call runs only while a register run's top level
 -- runs (config intent, once) OR while a fired callback is executing (the action itself).
 
+-- The ctx whose fired callback is running right now, else nil (#1158). Same shape as
+-- `registering`: a callback that spends its budget never reaches the line that clears it,
+-- so run_user_config clears it before any new run, and an object of the aborted ctx kept
+-- where a later run can reach it cannot act from that run.
+local firing = nil
+
 -- The register ctx whose config top level is running right now, else nil (#1156). An object
 -- made in a register run acts at register time only while this names its ctx, so one the
 -- config stores where a later run can reach it (the shared string/table/math tables) cannot
@@ -102,7 +108,7 @@ local function build_hs(ctx)
     -- A side effect is allowed while this ctx's register top level runs or while one of
     -- its callbacks fires (dispatch + firing). Top-level calls during a dispatch re-run
     -- are suppressed so they don't fire again on every keypress.
-    local function allowed() return registering == ctx or ctx.firing end
+    local function allowed() return registering == ctx or firing == ctx end
 
     -- Chainable no-op: both indexing AND calling return the object itself, so an
     -- unmodified config can index arbitrarily deep AND call at any point —
@@ -452,8 +458,9 @@ local function build_hs(ctx)
         end
         if allowed() then arm() end -- created started (hs semantics); rebuild won't re-arm
         return setmetatable({}, { __index = function(_, k)
-            if k == "stop" then return function(s) host.timer.cancel(id); return s end end
-            if k == "start" then return function(s) arm(); return s end end
+            -- Gated like doAfter/doEvery: a re-run's top level must not re-arm or cancel it (#1158).
+            if k == "stop" then return function(s) if allowed() then host.timer.cancel(id) end; return s end end
+            if k == "start" then return function(s) if allowed() then arm() end; return s end end
             if k == "running" then return function() return true end end
             return function(s) return s end -- fire()/setNextTrigger()/… chainable no-op
         end })
@@ -580,8 +587,7 @@ end
 -- `#app:allWindows()`); each element is an inert window stub. hide() is a side
 -- effect, so it is gated like every other shim effect: only while the register top level
 -- runs or while a callback fires — of the ctx the object was made under, never the global
--- _HS.ctx, which during a rebuild is still the previous run's (a register ctx, or
--- one whose dispatch was aborted with firing left on). Unknown app methods stay
+-- _HS.ctx, which during a rebuild is still the previous run's (#1149). Unknown app methods stay
 -- inert no-ops.
 -- NOTE: AX window count needs Accessibility; without the grant host.apps.windows
 -- returns 0, so allWindows() reads empty (Prosper holds a11y in normal use).
@@ -606,7 +612,7 @@ function make_app(name, bid, pid, ctx)
               return t
           end,
           hide = function()
-              if registering == ctx or ctx.firing then host.apps.hide(bid or "") end
+              if registering == ctx or firing == ctx then host.apps.hide(bid or "") end
           end },
         { __index = function() return inert(nil) end })
 end
@@ -680,7 +686,7 @@ local function build_spoon(hs, ctx)
     end
 
     URLDispatcher.start = function(self)
-        -- Set the live callback hs_url_open fires (effects gated there via ctx.firing).
+        -- Set the live callback hs_url_open fires (effects gated there via firing).
         hs.urlevent.httpCallback = function(scheme, host_, params, fullURL, pid)
             self:dispatchURL(scheme, host_, params, fullURL, pid)
         end
@@ -726,6 +732,7 @@ local function config_mtime()
 end
 
 local function run_user_config(mode)
+    firing = nil -- left set by a callback that spent its budget; a new run starts here
     local source = host.fs.read(HS_INIT)
     if not source then
         if mode == "register" then host.log.warn("hammerspoon-compat: " .. HS_INIT .. " not found / unreadable") end
@@ -733,7 +740,7 @@ local function run_user_config(mode)
         return nil
     end
 
-    local ctx = { mode = mode, firing = false, binds = {}, timers = {}, native = {}, eventtaps = {}, appwatchers = {} }
+    local ctx = { mode = mode, binds = {}, timers = {}, native = {}, eventtaps = {}, appwatchers = {} }
     -- Sandbox the user's chunk in a fresh env: inject `hs`, expose stdlib + print.
     -- No `_G` passthrough -> the config can't reach Prosper's host.* directly.
     local osShim = {
@@ -796,9 +803,9 @@ local function fire(idx)
     local ctx = _HS and _HS.ctx
     local b = ctx and ctx.binds[idx]
     if not (b and b.fn) then return false end
-    ctx.firing = true                       -- side-effecting hs.* allowed inside the callback
+    firing = ctx                            -- side-effecting hs.* allowed inside the callback
     local ok, err = pcall(b.fn)
-    ctx.firing = false
+    firing = nil
     if not ok then host.log.error("hammerspoon-compat: hotkey error: " .. tostring(err)) end
     return true
 end
@@ -808,9 +815,9 @@ local function fire_timer(idx)
     local ctx = _HS and _HS.ctx
     local t = ctx and ctx.timers and ctx.timers[idx]
     if not (t and t.fn) then return false end
-    ctx.firing = true
+    firing = ctx
     local ok, err = pcall(t.fn)
-    ctx.firing = false
+    firing = nil
     if not ok then host.log.error("hammerspoon-compat: timer error: " .. tostring(err)) end
     return true
 end
@@ -909,9 +916,9 @@ function hs_url_open(payload)
     local cb = ctx and ctx.urlevent and ctx.urlevent.httpCallback
     if type(cb) ~= "function" then return end -- this config does no URL routing
     local scheme, host_, params = parse_url(full)
-    ctx.firing = true                         -- side-effecting hs.* allowed in the callback
+    firing = ctx                              -- side-effecting hs.* allowed in the callback
     local ok, err = pcall(cb, scheme, host_, params, full)
-    ctx.firing = false
+    firing = nil
     if not ok then host.log.error("hammerspoon-compat: httpCallback error: " .. tostring(err)) end
 end
 
@@ -929,14 +936,14 @@ function hs_app_activated(payload)
     if not (list and #list > 0) then return end -- no watcher in this config
     local appObj = make_app(data.name, data.bundleID, data.pid, ctx)
     ctx.activatingApp = name -- tag input-source switches with the app that triggered them (diagnostics)
-    ctx.firing = true -- side-effecting hs.* (currentSourceID set) allowed in callback
+    firing = ctx -- side-effecting hs.* (currentSourceID set) allowed in callback
     for _, w in ipairs(list) do
         if w.started and w.fn then
             local ok, err = pcall(w.fn, data.name, "activated", appObj)
             if not ok then host.log.error("hammerspoon-compat: appwatcher error: " .. tostring(err)) end
         end
     end
-    ctx.firing = false
+    firing = nil
 end
 
 -- ============ raw eventtaps (resident VM, opt-in) ============
@@ -973,7 +980,7 @@ end
 
 -- payload: {type, keyCode?, flags={cmd,alt,ctrl,shift,fn}, sys={key,down}?}.
 -- HOT PATH: fires the cached closures directly (no reparse). Cold/evicted VM
--- rebuilds once. firing=true lets the callback's side-effecting hs.* run.
+-- rebuilds once. firing = ctx lets the callback's side-effecting hs.* run.
 function hs_eventtap_dispatch(payload)
     if not is_enabled() then return "false" end
     registering = nil -- as in ensure_ctx: this hot path fires without a new run_user_config
@@ -989,7 +996,7 @@ function hs_eventtap_dispatch(payload)
         getFlags = function() return flags end,
         systemKey = function() return { key = sys and sys.key, down = sys and sys.down } end,
     }
-    ctx.firing = true
+    firing = ctx
     local swallow = false
     for _, t in ipairs(ctx.eventtaps) do
         if t.running and t.types[e.type] then
@@ -1001,7 +1008,7 @@ function hs_eventtap_dispatch(payload)
             end
         end
     end
-    ctx.firing = false
+    firing = nil
     return swallow and "true" or "false"
 end
 

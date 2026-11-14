@@ -58,6 +58,8 @@ final class HammerspoonCompatFiringTests: XCTestCase {
         }
         try lua.run(#"""
         local noop = function() end
+        __t_timer_log = {}
+        function __t_timers() return table.concat(__t_timer_log, ",") end
         host = {
             prefs = { get = function(k) if k == "enabled" then return "true" end end, set = noop },
             fs = { read = function() return __t_read() end },
@@ -66,7 +68,10 @@ final class HammerspoonCompatFiringTests: XCTestCase {
             time = function() return 0 end,
             env = { get = function() return nil end },
             keys = { set_rules = noop, stroke = noop, system = noop },
-            timer = { schedule = noop, cancel = noop },
+            timer = {
+                schedule = function(o) __t_timer_log[#__t_timer_log + 1] = "schedule " .. tostring(o.id) end,
+                cancel = function(id) __t_timer_log[#__t_timer_log + 1] = "cancel " .. tostring(id) end,
+            },
             apps = {
                 frontmost = function() return { name = "Example", bundleID = "com.example.front", pid = 42 } end,
                 hide = function(bid) __t_hide(bid) end,
@@ -77,7 +82,17 @@ final class HammerspoonCompatFiringTests: XCTestCase {
         setmetatable(host, { __index = function()
             return setmetatable({}, { __index = function(t) return t end, __call = function(t) return t end })
         end })
-        function __t_firing() return tostring(_HS and _HS.ctx and _HS.ctx.firing) end
+        -- Whether an effect of the published ctx would pass right now: a hide through an app object of
+        -- that ctx, with host.apps.hide swapped for a local flag so the hide recorder stays untouched.
+        function __t_firing()
+            local c = _HS and _HS.ctx
+            if not c then return "nil" end
+            local real, hit = host.apps.hide, false
+            host.apps.hide = function() hit = true end
+            make_app("Probe", "com.example.probe", 1, c).hide()
+            host.apps.hide = real
+            return tostring(hit)
+        end
         """#, name: "=hoststub")
         try lua.run(Self.facadeSource(), name: "@hammerspoon-compat")
         return (lua, { hidden })
@@ -239,5 +254,62 @@ final class HammerspoonCompatFiringTests: XCTestCase {
             XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "keyDown", name)   // run 3: a rebuild
             XCTAssertEqual(hidden(), [], "\(name): the next rebuild's top level must not hide through it")
         }
+    }
+
+    // MARK: - #1158: a callback stopped on its budget, the timer object's start and stop
+
+    /// Every dispatcher's callback parks an app object of its run in the standard `table` library, then
+    /// spends its budget (a bounded loop, as in spinConfig). Bind 2 hides through whatever is parked.
+    private static let abortParkConfig = """
+    if table.parked then table.parked:hide() end
+    local function park() table.parked = hs.application.frontmostApplication(); for i = 1, 5000000 do end end
+    hs.hotkey.bind({"cmd", "alt"}, "j", park)
+    hs.hotkey.bind({"cmd", "alt"}, "u", function() table.parked:hide() end)
+    hs.timer.doAfter(60, park)
+    hs.urlevent.httpCallback = park
+    hs.application.watcher.new(park):start()
+    hs.eventtap.new({ hs.eventtap.event.types.keyDown }, park):start()
+    """
+
+    /// #1158: a callback stopped on its budget never reaches the line that ends its firing window. The
+    /// object it parked must not hide from a later run: the next rebuild's top level, then that run's callback.
+    func testAnObjectParkedByACallbackAbortedOnItsBudgetDoesNotHideFromALaterRun() throws {
+        XCTAssertEqual(Self.dispatches.map { $0.0 }, ["hs_dispatch", "hs_timer_fired", "hs_url_open",
+                                                  "hs_app_activated", "hs_eventtap_dispatch"])
+        for (name, arg) in Self.dispatches {
+            let (lua, hidden) = try makeRuntime(config: Self.abortParkConfig)
+            try lua.run("function __t_parked() return tostring(table.parked ~= nil) end", name: "=probe")
+            XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "keyDown", name)   // run 1: published
+            assertSpent(lua, name, arg)                                                 // its callback parks, aborts
+            XCTAssertEqual(try lua.callGlobal("__t_parked"), "true", "\(name): the callback got past the park line")
+            XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "keyDown", name)   // run 2: a rebuild
+            XCTAssertEqual(hidden(), [], "\(name): the next rebuild's top level must not hide through it")
+            try lua.callGlobal("hs_dispatch", ["2"])
+            XCTAssertEqual(hidden(), [], "\(name): another run's callback must not hide through it")
+        }
+    }
+
+    /// #1158: the timer object's start and stop are effects like doAfter/doEvery: a register's top level
+    /// and a fired callback reach the host timer, a rebuild's top level does not (no re-arm, no cancel).
+    /// The host timer is a recorder (schedule/cancel append to a list); nothing is armed.
+    func testATimersStartAndStopReachTheHostOnlyAtRegisterAndFromACallback() throws {
+        let config = """
+        local t = hs.timer.doEvery(60, function() end)
+        t:start()
+        t:stop()
+        t:start()
+        hs.hotkey.bind({"cmd", "alt"}, "t", function() t:stop(); t:start() end)
+        """
+        let (lua, _) = try makeRuntime(config: config)
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try lua.callGlobal("__t_timers"), "", "a rebuild's top level must not start or stop it")
+        try lua.callGlobal("on_launch", [""])
+        let registered = "schedule hst_1,schedule hst_1,cancel hst_1,schedule hst_1"
+        XCTAssertEqual(try lua.callGlobal("__t_timers"), registered, "register: doEvery, start, stop, start")
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try lua.callGlobal("__t_timers"), registered, "a rebuild after register must not either")
+        try lua.callGlobal("hs_dispatch", ["1"])
+        XCTAssertEqual(try lua.callGlobal("__t_timers"), registered + ",cancel hst_1,schedule hst_1",
+                       "a fired callback stops and starts it")
     }
 }

@@ -742,6 +742,11 @@ tag from the now-released section and put it on the new top draft.
   other's download; the second one stops with "this extension is already being installed", and a
   download folder left behind by a crash is cleaned up the next time that extension is installed
   from GitHub. (#1141)
+- Hammerspoon Compat: a timer's start() and stop() at the top level of init.lua no longer re-arm or
+  cancel the timer every time the config is re-read in the background; they take effect when the
+  config is applied and from hotkeys, timers and other callbacks. (#1158)
+- Hammerspoon Compat: an app object kept by a hotkey, timer, URL or app-watcher callback that was
+  stopped for running too long can no longer hide an app from a later run of the config (#1158)
 
 ## v2.174.0
 

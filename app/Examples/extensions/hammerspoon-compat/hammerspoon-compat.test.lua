@@ -16,6 +16,7 @@ local set_default_calls = {}
 local kbd_set = {} -- host.keyboard.set_source calls (per-app input switching)
 local fake_mtime = 1 -- ~/.hammerspoon/init.lua mtime the fs.attributes mock reports
 local scheduled, alerts, confirms, osascripts = {}, {}, {}, {}
+local cancelled = {}         -- host.timer.cancel calls (id)
 local confirm_result = true -- what host.dialog.confirm returns (OK vs Cancel)
 local hidden = {}           -- host.apps.hide calls (bundleID) — window API
 local window_count = 0      -- what host.apps.windows returns (AX window count)
@@ -73,7 +74,7 @@ host = {
             error = function(m) print("ERR " .. tostring(m)) end },
     shell = { run = function() shell_calls = shell_calls + 1; return shell_answer, shell_trunc end },
     keys = { set_rules = function() end, stroke = function() end },
-    timer = { cancel = function() end,
+    timer = { cancel = function(id) cancelled[#cancelled + 1] = id end,
               schedule = function(spec) scheduled[#scheduled + 1] = spec end }, -- doAfter/doEvery
     alert = { show = function(t) alerts[#alerts + 1] = t end },
     dialog = { confirm = function(o) confirms[#confirms + 1] = o; return confirm_result end },
@@ -116,7 +117,7 @@ check(last() and last().browser == "com.google.Chrome", "cold VM routes github -
 check(last() and last().url == "https://github.com/a/b", "full URL passed to callback")
 
 -- 2. CRITICAL: open fired even though rebuild mode suppresses side effects
---    (proves ctx.firing=true wraps the callback so openURLWithBundle's gate opens)
+--    (proves the firing window wraps the callback so openURLWithBundle's gate opens)
 check(#opened == 1, "callback side effect (open) actually ran under rebuild VM")
 
 -- 3. setDefaultHandler must NOT run on the per-link rebuild (would re-steal default)
@@ -479,13 +480,29 @@ shell_answer, shell_trunc = SHELL_REFUSED, nil
 
 -- 9l. app:hide() gates on the ctx its app object was made under, never on the ctx a
 --     previous run left published while a rebuild runs the config's top level (#1149):
---     a register ctx, or one whose dispatch was aborted with firing still on. This file
---     has no instruction budget, so the aborted state is set directly; the Swift rows
---     (HammerspoonCompatFiringTests) abort real dispatches.
+--     a register ctx, or one whose dispatch stopped with firing still on. This file has
+--     no instruction budget: a callback that yields out of a coroutine the test never
+--     resumes stops the same way (the shim never reaches the line after its pcall); the
+--     Swift rows (HammerspoonCompatFiringTests) spend real budgets.
+-- live(ctx): would an effect of ctx pass right now (a hide, counted aside from `hidden`).
+local function live(ctx)
+    local real, hit = host.apps.hide, false
+    host.apps.hide = function() hit = true end
+    env.make_app("Probe", "com.example.probe", 1, ctx).hide()
+    host.apps.hide = real
+    return hit
+end
+local function stop_inside(fn, ...) -- run fn in a coroutine; a callback calling table.__t_stop() leaves it suspended
+    local co = coroutine.create(fn)
+    coroutine.resume(co, ...)
+    return coroutine.status(co)
+end
+table.__t_stop = coroutine.yield
 FAKE_INIT = [[
 local front = hs.application.frontmostApplication()
 if front then front:hide() end
 hs.hotkey.bind({"cmd", "alt"}, "h", function() hs.application.frontmostApplication():hide() end)
+hs.hotkey.bind({"cmd", "alt"}, "y", function() table.__t_stop() end)
 appWatcher = hs.application.watcher.new(function(_, _, app) app:hide() end)
 appWatcher:start()
 ]]
@@ -498,7 +515,10 @@ check(h_idx ~= nil, "cmd+alt+h bind recorded")
 hidden = {}
 settings_render("hammerspoon-compat", "{}") -- rebuild while the register ctx is published
 check(#hidden == 0, "rebuild after register: top-level hide refused")
-env._HS.ctx.firing = true -- what a dispatch aborted on its budget leaves behind
+local y_idx
+for i, b in ipairs(env._HS.ctx.binds) do if b.combo == "cmd+alt+y" then y_idx = i end end
+check(stop_inside(hs_dispatch, tostring(y_idx)) == "suspended" and live(env._HS.ctx),
+      "a dispatch stopped inside its callback leaves firing on")
 hidden = {}
 settings_render("hammerspoon-compat", "{}")
 check(#hidden == 0, "rebuild after an aborted dispatch: top-level hide refused")
@@ -508,7 +528,51 @@ check(#hidden == 1 and hidden[1] == "com.apple.finder", "hide from a fired hotke
 hidden = {}
 hs_app_activated('{"name":"Slack"}')
 check(#hidden == 1, "hide on the app object an app watcher receives still hides")
-check(env._HS.ctx.firing == false, "firing is off again after the dispatch")
+check(not live(env._HS.ctx), "firing is off again after the dispatch")
+
+-- 9n. A callback that stops inside (a spent budget, here a yield never resumed) leaves
+--     its firing window open (#1158). An app object it parked in a table every run shares
+--     must not hide from a later run: the next rebuild's top level, then that run's callback.
+FAKE_INIT = [[
+if table.__t_parked then table.__t_parked:hide() end
+hs.hotkey.bind({"cmd", "alt"}, "j", function()
+    table.__t_parked = hs.application.frontmostApplication()
+    table.__t_stop()
+end)
+hs.hotkey.bind({"cmd", "alt"}, "u", function() table.__t_parked:hide() end)
+]]
+table.__t_parked = nil
+env._HS = nil; hidden = {}
+settings_render("hammerspoon-compat", "{}") -- run 1 (a rebuild), published
+check(stop_inside(hs_dispatch, "1") == "suspended" and table.__t_parked ~= nil,
+      "a callback stopped inside parks its app object")
+settings_render("hammerspoon-compat", "{}") -- run 2 (a rebuild)
+check(#hidden == 0, "object parked by a stopped callback: hide refused from the next rebuild's top level")
+hs_dispatch("2")
+check(#hidden == 0, "object parked by a stopped callback: hide refused from another run's callback")
+table.__t_parked = nil
+
+-- 9o. The timer object's start and stop are effects like doAfter/doEvery (#1158): a
+--     register's top level and a fired callback reach host.timer, a rebuild's top level
+--     neither re-arms nor cancels it.
+FAKE_INIT = [[
+local t = hs.timer.doEvery(60, function() end)
+t:start()
+t:stop()
+t:start()
+hs.hotkey.bind({"cmd", "alt"}, "t", function() t:stop(); t:start() end)
+]]
+env._HS = nil; scheduled = {}; cancelled = {}
+settings_render("hammerspoon-compat", "{}")
+check(#scheduled == 0 and #cancelled == 0, "timer start/stop at a rebuild's top level reach no host timer")
+on_launch(nil)
+check(#scheduled == 3 and #cancelled == 1, "register: doEvery, start, start arm and stop cancels")
+settings_render("hammerspoon-compat", "{}")
+check(#scheduled == 3 and #cancelled == 1, "timer start/stop at the rebuild after register reach no host timer")
+hs_dispatch("1")
+check(#scheduled == 4 and #cancelled == 2 and cancelled[2] == "hst_1",
+      "a fired callback stops and starts it")
+table.__t_stop = nil
 
 -- 9m. A register ctx allows effects only while its top level runs or one of its callbacks
 --     fires (#1156). An app object a register run stores in a table every run shares (the
