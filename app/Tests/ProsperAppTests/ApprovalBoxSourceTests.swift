@@ -1,4 +1,7 @@
+import AppKit
+import SwiftUI
 import XCTest
+@testable import ProsperApp
 
 /// #359 (QA #137): the approval card's layout is view code no test renders, so its load-bearing
 /// lines are pinned by a source scan: the command summary is never line-limited (#323), both
@@ -12,8 +15,8 @@ final class ApprovalBoxSourceTests: XCTestCase {
 
     func testApprovalBarKeepsTheCommandWholeInHeightCappedBoxes() throws {
         let chat = try source("Sources/ProsperApp/ChatWindow.swift")
-        let start = try XCTUnwrap(chat.range(of: "private func approvalBar("))
-        let end = try XCTUnwrap(chat.range(of: "private func", range: start.upperBound..<chat.endIndex))
+        let start = try XCTUnwrap(chat.range(of: "struct ApprovalCardView: View {"))
+        let end = try XCTUnwrap(chat.range(of: "private func approvalNoun", range: start.upperBound..<chat.endIndex))
         let bar = chat[start.upperBound..<end.lowerBound]
 
         XCTAssertGreaterThanOrEqual(bar.components(separatedBy: ".frame(maxHeight: sz(160))").count - 1, 2,
@@ -42,7 +45,7 @@ final class ApprovalBoxSourceTests: XCTestCase {
                 .map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
         }
         let det = try XCTUnwrap(bar.range(of: "if req.kind != .command, let diff = req.detail {"))
-        let branches = [("summary", flat(bar[cmd.upperBound..<other.lowerBound]), "Summary", summaryCue, "ScrollView {\nText(req.summary)"),
+        let branches = [("summary", flat(bar[cmd.upperBound..<other.lowerBound]), "Summary", summaryCue, "ScrollView {\nText(command)"),
                         ("detail", flat(bar[det.upperBound...]), "Detail", detailCue, "ScrollView {\nText(diff)")]
         for (name, body, v, cue, open) in branches {
             let text = ".frame(maxWidth: .infinity, alignment: .leading)\n.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approval\(v)Height = $0 }\n}"
@@ -72,5 +75,114 @@ final class ApprovalBoxSourceTests: XCTestCase {
     func testOverflowCharCountGuessIsGone() throws {
         XCTAssertFalse(try source("Sources/ProsperApp/Harness/CodingHarness.swift").contains("summary.count > 300"))
         XCTAssertFalse(try source("Sources/ProsperApp/ChatWindow.swift").contains("count > 300"))
+    }
+
+    // MARK: #1221 the sub-agent line is its own element
+
+    private static let label = "Asked by a sub-agent of this session"   // literal: the CHANGELOG quotes it
+
+    private func request(_ kind: ApprovalRequest.Kind, _ summary: String, detail: String? = nil) -> ApprovalRequest {
+        ApprovalRequest(id: ApprovalID(raw: "a1"), kind: kind, session: SessionID(raw: "t1"), summary: summary, detail: detail)
+    }
+
+    /// The card hosted offscreen (never shown), its natural size and the labels on its real accessibility tree.
+    @MainActor
+    private func host(_ req: ApprovalRequest, width: CGFloat = 420) -> (size: CGSize, labels: [String]) {
+        let h = NSHostingView(rootView: ApprovalCardView(req: req, respond: { _ in }).frame(width: width))
+        let win = NSWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: 600), styleMask: [.borderless], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.contentView = h
+        defer { win.close() }
+        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
+        let app = NSApplication.shared
+        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
+        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
+        var labels: [String] = []
+        for _ in 0..<20 {
+            h.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            labels = []
+            walk(h, &labels)
+            if labels.contains("Approve") { break }
+        }
+        return (h.fittingSize, labels)
+    }
+
+    @MainActor
+    private func walk(_ e: Any, _ out: inout [String], depth: Int = 0) {
+        guard depth < 40, let o = e as? NSObject else { return }
+        for k in ["accessibilityLabel", "accessibilityTitle"] {
+            let v = o.value(forKey: k)
+            if let t = (v as? String) ?? (v as? NSAttributedString)?.string, !t.isEmpty { out.append(t) }
+        }
+        for c in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { walk(c, &out, depth: depth + 1) }
+    }
+
+    func testSplitTakesTheLabelLineOnly() {
+        let sp = ApprovalCardView.split(Self.label + "\nEdit /Users/example/a.txt")
+        XCTAssertEqual(sp.label, Self.label)
+        XCTAssertEqual(sp.command, "Edit /Users/example/a.txt")
+        // CardText.ltr adds U+200E after neutral characters of a non-ASCII summary, label included.
+        let ltr = CardText.ltr(Self.label + "\n\u{05D0}: /Users/example")
+        XCTAssertNotEqual(ltr.split(separator: "\n").first.map(String.init), Self.label, "the marks are really there")
+        XCTAssertEqual(ApprovalCardView.split(ltr).label, Self.label)
+        XCTAssertTrue(ApprovalCardView.split(ltr).command.hasPrefix("\u{05D0}"))
+        for plain in ["ls /Users/example", "Asked by a sub-agent of this session", "other\n" + Self.label, Self.label + " \nx"] {
+            XCTAssertTrue(ApprovalCardView.split(plain).label == nil, "not a label line: \(plain)")
+            XCTAssertEqual(ApprovalCardView.split(plain).command, plain)
+        }
+    }
+
+    @MainActor
+    func testSubAgentLineIsItsOwnLabelledElementAndTheCommandKeepsThreeLines() {
+        let three = "line one\nline two\nline three"
+        let cases: [(ApprovalRequest.Kind, String)] = [(.fileChange, "Edit /Users/example/a.txt\nsecond\nthird"), (.permission, three)]
+        for (kind, cmd) in cases {
+            let sub = host(request(kind, Self.label + "\n" + cmd))
+            XCTAssertEqual(sub.labels.filter { $0 == Self.label }.count >= 1, true, "\(kind): the line has its own accessibility label")
+            XCTAssertFalse(sub.labels.contains { $0.contains(Self.label) && $0 != Self.label }, "\(kind): no label holds the line plus the command")
+            let plain = host(request(kind, cmd))
+            XCTAssertFalse(plain.labels.contains(Self.label), "\(kind): a plain card has no such element")
+            // The command is whole: three lines tall in both, the sub-agent card is taller only by the line.
+            XCTAssertGreaterThan(sub.size.height, plain.size.height, "\(kind): the line adds a row, it takes none of the command's")
+            let oneLine = host(request(kind, Self.label + "\nx")).size.height, threeLine = sub.size.height
+            XCTAssertGreaterThan(threeLine, oneLine, "\(kind): all three command lines show with the line present")
+        }
+    }
+
+    @MainActor
+    func testCardSizeAtEveryScale() {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            for kind in [ApprovalRequest.Kind.command, .fileChange, .permission] {
+                let plain = host(request(kind, "one\ntwo\nthree")).size
+                let sub = host(request(kind, Self.label + "\none\ntwo\nthree")).size
+                print("#1221 size scale \(scale) \(kind): plain \(plain) sub-agent \(sub) grows by \(sub.height - plain.height)")
+                XCTAssertGreaterThan(sub.height, plain.height, "scale \(scale) \(kind)")
+                XCTAssertLessThan(sub.height - plain.height, 40 * scale, "scale \(scale) \(kind): one line, not two")
+                XCTAssertEqual(sub.width, plain.width, accuracy: 0.5, "scale \(scale) \(kind)")
+            }
+        }
+    }
+
+    @MainActor
+    func testCopyTakesTheCommandOnlyThroughThePasteboardSeam() throws {
+        let req = request(.command, Self.label + "\nls /Users/example")
+        let pb = Pasteboard.general
+        pb.clearContents()
+        pb.setString(ApprovalCardView.copyText(req), forType: .string)
+        XCTAssertEqual(pb.string(forType: .string), "ls /Users/example")
+        XCTAssertFalse(try XCTUnwrap(pb.string(forType: .string)).contains("sub-agent"))
+        pb.clearContents()
+    }
+
+    func testRespondIsUntouched() throws {
+        let chat = try source("Sources/ProsperApp/ChatWindow.swift")
+        for d in [".accept", ".acceptForSession", ".decline"] {
+            XCTAssertEqual(chat.components(separatedBy: "respond(\(d))").count - 1, 1, d)
+        }
+        XCTAssertTrue(chat.contains("ApprovalCardView(req: approval) { controller.respond(to: approval, decision: $0) }"))
     }
 }

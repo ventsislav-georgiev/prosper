@@ -952,6 +952,9 @@ tag from the now-released section and put it on the new top draft.
 - Coding agent: in a long session, sub-agents that start after earlier ones have finished (or after
   another conversation's sub-agents) now still get their approval card instead of being declined,
   and a stopped turn ending late no longer costs the next turn its sub-agent cards. (#1098)
+- The coding agent's approval card now shows "Asked by a sub-agent of this session" as its own
+  labelled line above the command, so the selectable command text holds only the command and keeps
+  all its lines. (#1221)
 
 ## v2.174.0
 

@@ -245,14 +245,6 @@ private struct ComposerFieldAnchorKey: PreferenceKey {
 struct ChatRootView: View {
     private let controller = AgentController.shared
     @State private var atBottom = true
-    /// #359: the approval card's laid-out summary/detail text heights; the scroll cue shows only
-    /// when the text actually runs past its box (any script, any card width).
-    @State private var approvalSummaryHeight: CGFloat = 0
-    @State private var approvalDetailHeight: CGFloat = 0
-    /// #368: the boxes' own laid-out heights. `.frame(maxHeight:)` only caps them, so near the
-    /// window's minimum height a box is shorter than 160 pt; 0 = not measured yet (no cue).
-    @State private var approvalSummaryBoxHeight: CGFloat = 0
-    @State private var approvalDetailBoxHeight: CGFloat = 0
     // Slash-command suggestions live here (not in the composer) so the popup can float
     // as a root-level overlay ABOVE the composer's AppKit field — over the persona row
     // and chat transcript (both AppKit-backed: SwiftUI ScrollView == NSScrollView), which
@@ -269,7 +261,7 @@ struct ChatRootView: View {
             if isWorking { WorkingBar().transition(.opacity) }
             transcript
             if let approval = controller.pendingApprovals.first {
-                approvalBar(approval)
+                ApprovalCardView(req: approval) { controller.respond(to: approval, decision: $0) }
             }
             // Its own view so the AppKit-backed composer isn't rebuilt on every streamed
             // token — it reads only `phase`/`workingDirectory`/`draft` (all stable during
@@ -466,15 +458,47 @@ struct ChatRootView: View {
         .opacity(0.55)
     }
 
-    // MARK: Approval
+}
 
-    private func approvalBar(_ req: ApprovalRequest) -> some View {
+/// The approval card. #1221: a sub-agent's "Asked by a sub-agent of this session" line (the harness
+/// puts it ahead of the summary) is its own element above the command; the command keeps its own lines.
+struct ApprovalCardView: View {
+    let req: ApprovalRequest
+    let respond: (ApprovalDecision) -> Void
+    /// #359: the approval card's laid-out summary/detail text heights; the scroll cue shows only
+    /// when the text actually runs past its box (any script, any card width).
+    @State private var approvalSummaryHeight: CGFloat = 0
+    @State private var approvalDetailHeight: CGFloat = 0
+    /// #368: the boxes' own laid-out heights. `.frame(maxHeight:)` only caps them, so near the
+    /// window's minimum height a box is shorter than 160 pt; 0 = not measured yet (no cue).
+    @State private var approvalSummaryBoxHeight: CGFloat = 0
+    @State private var approvalDetailBoxHeight: CGFloat = 0
+
+    /// The label (the constant, never the peer's text) and the rest of the summary. The harness marks
+    /// the text display-ready over label + summary, which may add U+200E after the label's spaces: dropped to compare.
+    static func split(_ summary: String) -> (label: String?, command: String) {
+        guard let nl = summary.firstIndex(of: "\n"),
+              summary[..<nl].replacingOccurrences(of: "\u{200E}", with: "") == CodexHarness.subAgentLabel
+        else { return (nil, summary) }
+        return (CodexHarness.subAgentLabel, String(summary[summary.index(after: nl)...]))
+    }
+
+    /// What the command's text selection copies: the command only.
+    static func copyText(_ req: ApprovalRequest) -> String { split(req.summary).command }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: sz(8)) {
             Text("Approve \(approvalNoun(req.kind))?").font(Neon.font(.subheadline).bold())
             // summary/detail arrive display-ready (CardText at construction, #359): no text work here.
+            let split = Self.split(req.summary)
+            let command = split.command
+            if let asked = split.label {   // #1221: its own element, not part of the command or what Copy takes
+                Text(asked).font(Neon.font(.caption2)).foregroundStyle(Neon.textSecondary)
+                    .accessibilityElement(children: .ignore).accessibilityLabel(asked)
+            }
             if req.kind == .command {   // the whole command, scrolled in a bounded box: never cut off
                 ScrollView {
-                    Text(req.summary).font(Neon.font(.caption, design: .monospaced))
+                    Text(command).font(Neon.font(.caption, design: .monospaced))
                         .foregroundStyle(Neon.textSecondary).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approvalSummaryHeight = $0 }
@@ -483,7 +507,7 @@ struct ChatRootView: View {
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { approvalSummaryBoxHeight = $0 }
                 if approvalSummaryBoxHeight > 0 && approvalSummaryHeight > approvalSummaryBoxHeight + 0.5 { scrollCue }
             } else {
-                Text(req.summary).font(Neon.font(.caption, design: .monospaced))
+                Text(command).font(Neon.font(.caption, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary).lineLimit(3)
             }
             if req.kind != .command, let diff = req.detail {   // file diffs; requested permission profile
@@ -498,11 +522,11 @@ struct ChatRootView: View {
                 if approvalDetailBoxHeight > 0 && approvalDetailHeight > approvalDetailBoxHeight + 0.5 { scrollCue }
             }
             HStack {
-                Button("Approve") { controller.respond(to: req, decision: .accept) }
+                Button("Approve") { respond(.accept) }
                     .buttonStyle(.neon)
-                Button("Always") { controller.respond(to: req, decision: .acceptForSession) }
+                Button("Always") { respond(.acceptForSession) }
                     .buttonStyle(.neon)
-                Button("Deny") { controller.respond(to: req, decision: .decline) }
+                Button("Deny") { respond(.decline) }
                     .buttonStyle(.neon)
                 Spacer()
             }
@@ -521,7 +545,6 @@ struct ChatRootView: View {
     private func approvalNoun(_ kind: ApprovalRequest.Kind) -> String {
         switch kind { case .command: return "command"; case .fileChange: return "file changes"; case .permission: return "permission" }
     }
-
 }
 
 // MARK: - Backdrop
