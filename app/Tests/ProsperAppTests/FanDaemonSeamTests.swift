@@ -367,6 +367,23 @@ final class FanDaemonSeamTests: XCTestCase {
                       "the clamp still lets a NaN through (Swift.max/min keep it); #1218: writeTarget throws on it, see testSetManualNaNThrowsAndHandsBack")
     }
 
+    /// R1218-a: FNum is capped at 64 before Int(): a float of 2^63 or more trapped the root helper.
+    /// Nothing here converts a value the cap has not seen first (the fake SMC only; no real SMC).
+    func testFanCountIsCappedBeforeTheConversion() {
+        let rows: [(Double, Int)] = [(.nan, 0), (.infinity, 0), (-.infinity, 0), (-1, 0), (0, 0), (2, 2),
+                                     (64, 64), (65, 64), (9.3e18, 64)]
+        for (fnum, want) in rows {
+            let smc = FakeSMC()
+            smc.set("FNum", "flt ", fnum)
+            XCTAssertEqual(SMCFanController(access: smc).fanCount(), want, "FNum \(fnum)")
+        }
+        // A garbage count still clears every real fan's mode key: capped, not zeroed.
+        let (fc, smc) = board(fans: 2)
+        smc.set("FNum", "flt ", 9.3e18)
+        fc.resetAll()
+        XCTAssertTrue(smc.writes.contains("F0Md [0]") && smc.writes.contains("F1Md [0]"), "\(smc.writes.prefix(4))")
+    }
+
     func testTargetWriteClampRows() {
         let flt = FakeSMC()
         flt.set("F0Tg", "flt ", 0)

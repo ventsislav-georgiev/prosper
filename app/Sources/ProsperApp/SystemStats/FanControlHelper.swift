@@ -70,6 +70,13 @@ enum FanReclaimRecovery {
         return !adjustable.isEmpty && adjustable.allSatisfy { !$0.manual }
     }
 
+    /// The recovery acts once macOS has every fan, or (R1223-3) when the saved targets read none
+    /// (damaged from outside) while the helper still holds pins: nothing to re-apply, so manual goes
+    /// off and every fan back. Not with an engage in flight: it is about to save new targets.
+    static func shouldRecover(_ readings: [FanReading], targetsEmpty: Bool, inFlight: Int) -> Bool {
+        reclaimDetected(readings) || (targetsEmpty && inFlight == 0)
+    }
+
     static func manualFraction(targets: [Int: Double], readings: [FanReading]) -> Double? {
         let fractions = readings.compactMap { fan -> Double? in
             guard fan.max > fan.min, let target = targets[fan.id] else { return nil }
@@ -159,7 +166,8 @@ enum FanCommit: Equatable {
     case landed
     /// The helper's heat latch refused: every fan to macOS, `targets` wait as the preset (#737).
     case keepNew(FanManualReply)
-    /// No reply, or a write failure: every fan to macOS, the previous targets wait as the preset.
+    /// No reply, or a write failure: every fan to macOS, the previous targets wait as the preset. "Previous"
+    /// is the last ASKED targets (saved before this burst), not the last landed ones (R1215-2).
     case keepPrevious(FanManualReply)
     /// Manual went off while the commit was in flight (Automatic, here or from the phone): every fan
     /// to macOS, nothing saved.
@@ -352,9 +360,9 @@ enum FanControlHelper {
         }
     }
 
-    /// The popup's first engage replied; true = engaged. On failure with no saved
-    /// manual intent nothing will ever recover, so drop the 2 s reclaim timer that
-    /// engage armed, and `release` everything: an older engage that landed late while
+    /// The popup's first engage replied; true = engaged. On failure `release` everything (with no
+    /// saved manual intent nothing will ever recover, so also drop the 2 s reclaim timer that
+    /// engage armed): an older engage that landed late while
     /// this one was in flight was held for it (#263). Fire-and-forget so the button
     /// resolves now; a retry racing it is covered by the teardown guard in `resetAll`.
     /// An engage that lands after a willSleep since `generation` (captured before the
@@ -370,7 +378,11 @@ enum FanControlHelper {
             guard current == generation, !sleeping else { Task { await release() }; return false }
             return true
         }
-        if !Preferences.fanManualEnabled { removeReclaimMonitor(); Task { await release() } }
+        // R1215-1: with manual on too. A timed-out engage may still pin its fan at the new speed while the
+        // others and the saved targets keep the old one; the release (no teardown with manual on) follows
+        // that pin on the helper's one queue, and the recovery re-applies the saved targets, kept as they are.
+        if !Preferences.fanManualEnabled { removeReclaimMonitor() }
+        Task { await release() }
         return false
     }
 
@@ -651,9 +663,10 @@ enum FanControlHelper {
         guard FanReclaimRecovery.canStartRecovery(manualIntent: Preferences.fanManualEnabled,
                                                    sleeping: sleeping,
                                                    recoveryInFlight: reclaimRecoveryInFlight,
-                                                   userAdjusting: userAdjusting),
-              FanReclaimRecovery.reclaimDetected(readings) else { return }
-        let fraction = FanReclaimRecovery.manualFraction(targets: Preferences.fanTargets, readings: readings)
+                                                   userAdjusting: userAdjusting) else { return }
+        let targets = Preferences.fanTargets
+        guard FanReclaimRecovery.shouldRecover(readings, targetsEmpty: targets.isEmpty, inFlight: engagesInFlight) else { return }
+        let fraction = FanReclaimRecovery.manualFraction(targets: targets, readings: readings)
         guard let fraction else {
             Preferences.fanManualEnabled = false
             Task { await resetAll(teardown: true) }

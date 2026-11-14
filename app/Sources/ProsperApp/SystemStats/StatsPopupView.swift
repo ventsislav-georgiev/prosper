@@ -917,19 +917,19 @@ struct StatsPopupView: View {
     /// wedged SMAppService registration), return `.unavailable` so the UI resolves. The
     /// orphaned op can't be cancelled and may still engage later (the helper pins the fan
     /// and the reclaim timer re-arms) behind a card that says it failed — so a late
-    /// `.engaged` is released through the same reset as "Automatic" (#255), unless a
-    /// newer engage is still in flight (it shares the registration and owns the fans)
-    /// or manual is on. A newer engage that already failed owns nothing (#263); one
-    /// that fails later releases through `firstEngageLanded`. `manualOn`/`release` are test seams.
+    /// `.engaged` is released (#255), unless a newer engage is still in flight (it shares the
+    /// registration and owns the fans). A newer engage that already failed owns nothing (#263); one
+    /// that fails later releases through `firstEngageLanded`. R1215-1: with manual on too, as a reset
+    /// without teardown (`sleepSafeRelease`): the ceiling may have won before the pin was even sent,
+    /// so firstEngageLanded's reset went out ahead of it; the recovery re-applies the saved targets.
+    /// `release` is the test seam.
     @MainActor static func withFanTimeout(_ seconds: Double, _ op: @escaping @Sendable () async -> FanManualReply,
-                                          manualOn: @escaping @MainActor @Sendable () -> Bool = { Preferences.fanManualEnabled },
-                                          release: @escaping @MainActor @Sendable () async -> Void = { await FanControlHelper.resetAll(teardown: true) }) async -> FanManualReply {
+                                          release: @escaping @MainActor @Sendable () async -> Void = { await FanControlHelper.sleepSafeRelease() }) async -> FanManualReply {
         Self.engageGeneration += 1
         let gen = Self.engageGeneration
         let reply = await Self.raceFanTimeout(seconds, op) { @MainActor in
             guard Self.shouldReleaseLateEngage(generation: gen, current: Self.engageGeneration,
-                                               lastFailed: Self.failedEngageGeneration,
-                                               manualOn: manualOn()) else { return }
+                                               lastFailed: Self.failedEngageGeneration) else { return }
             await release()
         }
         if reply != .engaged { Self.failedEngageGeneration = gen }
@@ -939,10 +939,9 @@ struct StatsPopupView: View {
     @MainActor private static var engageGeneration = 0
     @MainActor private static var failedEngageGeneration = 0
 
-    /// Release unless the current engage is still in flight or manual is on.
-    nonisolated static func shouldReleaseLateEngage(generation: Int, current: Int, lastFailed: Int,
-                                                    manualOn: Bool) -> Bool {
-        (generation == current || lastFailed == current) && !manualOn
+    /// Release unless a newer engage is still in flight (R1215-1: manual on no longer holds it).
+    nonisolated static func shouldReleaseLateEngage(generation: Int, current: Int, lastFailed: Int) -> Bool {
+        generation == current || lastFailed == current
     }
 
     /// Not a task group: a group awaits every child before returning, so a non-cancellable
@@ -1122,7 +1121,7 @@ struct StatsPopupView: View {
         fanCommitWork?.cancel()
         FanControlHelper.userAdjusting = true
         let work = DispatchWorkItem {
-            let previous = Preferences.fanTargets
+            let previous = Preferences.fanTargets   // the last ASKED targets, not the last landed (R1215-2)
             Preferences.fanTargets = targets
             // The gesture is settled (0.4 s since the last frame); let reclaim
             // recovery arm again. A still-live drag re-raises it on its next frame.

@@ -976,6 +976,11 @@ tag from the now-released section and put it on the new top draft.
   applies, removes or repairs a piece, even if it lands while the write is in progress; and a
   managed block edited so that one byte is no longer valid text is shown as your edit instead of
   being taken as unchanged. (#1226)
+- Fans: a Manual request that times out while manual fan control is already on now hands every fan
+  back to macOS until your saved speed is applied again, instead of leaving one fan at the new
+  speed; saved fan speeds that can no longer be read while Prosper holds the fans now turn manual
+  off and hand the fans back; a garbage fan count from the SMC can no longer crash the fan helper.
+  (#1225)
 
 ## v2.174.0
 

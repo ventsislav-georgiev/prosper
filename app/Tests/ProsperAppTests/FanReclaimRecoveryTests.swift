@@ -88,9 +88,9 @@ final class FanReclaimRecoveryTests: XCTestCase {
         await FanControlHelper.resetAll(teardown: true)
     }
 
-    /// #263 ordering B, step 2: N landed late and was held for N+1; N+1 fails with
-    /// manual off → everything is released. With manual on (a later commit failing),
-    /// or on success, nothing is.
+    /// #263 ordering B, step 2: N landed late and was held for N+1; N+1 fails → everything is
+    /// released. R1215-1: with manual on too (a timed-out first engage may still pin its fan);
+    /// on success nothing is.
     @MainActor
     func testFailedFirstEngageReleasesTheHeldPin() async {
         let previousManualIntent = Preferences.fanManualEnabled
@@ -104,18 +104,57 @@ final class FanReclaimRecoveryTests: XCTestCase {
         kept.isInverted = true
         XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, since: FanControlHelper.reclaimGeneration, release: { kept.fulfill() }))
         Preferences.fanManualEnabled = true
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, since: FanControlHelper.reclaimGeneration, release: { kept.fulfill() }))
+        XCTAssertTrue(FanControlHelper.firstEngageLanded(.engaged, since: FanControlHelper.reclaimGeneration, release: { kept.fulfill() }))
         await fulfillment(of: [kept], timeout: 0.3)
 
         // #347 (2): a failed reply after a willSleep (generation changed) releases exactly
-        // once with manual off, and not at all with manual on.
-        let once = expectation(description: "failed reply after a sleep releases once")   // over-fulfill fails
+        // once per reply, manual off or on.
+        let twice = expectation(description: "failed reply after a sleep releases once each")   // over-fulfill fails
+        twice.expectedFulfillmentCount = 2
         Preferences.fanManualEnabled = false
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, since: 4, current: 5, sleeping: true, release: { once.fulfill() }))
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, since: 4, current: 5, sleeping: true, release: { twice.fulfill() }))
         Preferences.fanManualEnabled = true
-        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, since: 4, current: 5, sleeping: true, release: { once.fulfill() }))
-        await fulfillment(of: [once], timeout: 1)
-        try? await Task.sleep(nanoseconds: 300_000_000)   // room for a second release to over-fulfill
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.refused, since: 4, current: 5, sleeping: true, release: { twice.fulfill() }))
+        await fulfillment(of: [twice], timeout: 1)
+        try? await Task.sleep(nanoseconds: 300_000_000)   // room for a third release to over-fulfill
+    }
+
+    /// R1215-1, the manual-on half: a failed first engage with manual already on releases every fan
+    /// (no teardown: manual on) and keeps the saved targets and intent for the recovery to re-apply.
+    /// Fake connection only; the fast re-engage pref off; scratch defaults.
+    @MainActor
+    func testFailedFirstEngageWithManualOnHandsBackAndKeepsTheTargets() async {
+        let manual = Preferences.fanManualEnabled, targets = Preferences.fanTargets, hold = Preferences.fanHoldUnlock
+        let pending = FanControlHelper.presetPending
+        defer {
+            Preferences.fanManualEnabled = manual; Preferences.fanTargets = targets; Preferences.fanHoldUnlock = hold
+            FanControlHelper.presetPending = pending
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        }
+        Preferences.fanHoldUnlock = false
+        FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        await FanControlHelper.resetAll(teardown: true)   // no connection: no call; drops any timer
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = [0: 2000, 1: 3000]
+        FanControlHelper.presetPending = false
+        for failure in [FanManualReply.unavailable, .needsApproval, .writeFailed] {
+            let released = expectation(description: "\(failure) released with manual on")
+            XCTAssertFalse(FanControlHelper.firstEngageLanded(failure, since: FanControlHelper.reclaimGeneration,
+                                                              release: { released.fulfill() }))
+            await fulfillment(of: [released], timeout: 1)
+            XCTAssertTrue(Preferences.fanManualEnabled, "\(failure)")
+            XCTAssertEqual(Preferences.fanTargets, [0: 2000, 1: 3000], "\(failure): the saved targets changed")
+            XCTAssertFalse(FanControlHelper.presetPending, "\(failure): the floor exemption was set")
+        }
+        // The default release on a fake: one reset, no teardown (manual on keeps the connection).
+        let fake = FakeHelperConnection()
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        XCTAssertFalse(FanControlHelper.firstEngageLanded(.unavailable, since: FanControlHelper.reclaimGeneration))
+        for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(fake.proxy.resets, 1)
+        XCTAssertTrue(FanControlHelper.connection === fake, "a manual-on release tore the connection down")
+        Preferences.fanManualEnabled = false
+        await FanControlHelper.resetAll(teardown: true)
     }
 
     /// #269: a re-apply engage that timed out (ResumeOnce already resumed nil) and
@@ -1275,6 +1314,68 @@ final class FanReclaimRecoveryTests: XCTestCase {
         for _ in 0..<200 where !FanControlHelper.reclaimTickAllowed(now: t.addingTimeInterval(FanReclaimRecovery.retryCooldown)) {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+    }
+
+    /// R1223-3: the recovery's trigger. macOS holding every fan acts as before; saved targets that read
+    /// none act even while the helper holds pins, unless an engage is in flight (it saves new targets).
+    func testRecoveryActsOnEmptyTargetsWhileThePinsStay() {
+        let pinned = [FanReading(id: 0, min: 1000, max: 5000, current: 3000, manual: true),
+                      FanReading(id: 1, min: 1000, max: 5000, current: 3000, manual: false)]
+        let auto = [FanReading(id: 0, min: 1000, max: 5000, current: 3000, manual: false),
+                    FanReading(id: 1, min: 1000, max: 5000, current: 3000, manual: false)]
+        XCTAssertFalse(FanReclaimRecovery.shouldRecover(pinned, targetsEmpty: false, inFlight: 0), "pins, targets set")
+        XCTAssertFalse(FanReclaimRecovery.shouldRecover(pinned, targetsEmpty: false, inFlight: 1), "pins, targets set, in flight")
+        XCTAssertTrue(FanReclaimRecovery.shouldRecover(pinned, targetsEmpty: true, inFlight: 0), "pins, targets damaged")
+        XCTAssertFalse(FanReclaimRecovery.shouldRecover(pinned, targetsEmpty: true, inFlight: 1), "pins, targets empty, in flight")
+        XCTAssertTrue(FanReclaimRecovery.shouldRecover(auto, targetsEmpty: false, inFlight: 0), "macOS has every fan")
+        XCTAssertTrue(FanReclaimRecovery.shouldRecover(auto, targetsEmpty: false, inFlight: 1), "macOS has every fan, in flight")
+        XCTAssertTrue(FanReclaimRecovery.shouldRecover(auto, targetsEmpty: true, inFlight: 0), "macOS, targets empty")
+        XCTAssertTrue(FanReclaimRecovery.shouldRecover(auto, targetsEmpty: true, inFlight: 1), "macOS, empty, in flight: as before")
+        XCTAssertTrue(FanReclaimRecovery.shouldRecover([], targetsEmpty: true, inFlight: 0), "no reading, targets empty")
+        XCTAssertFalse(FanReclaimRecovery.shouldRecover([], targetsEmpty: false, inFlight: 0), "no reading, targets set")
+    }
+
+    /// R1223-3 end to end through the reclaim tick (fake read, fake connection, scratch defaults, the fast
+    /// re-engage pref off): manual on, targets empty, the helper holding a fan -> manual off and every fan
+    /// handed back. With an engage in flight the same tick does nothing.
+    @MainActor
+    func testReclaimTickHandsBackPinsWhenTheTargetsReadEmpty() async {
+        let manual = Preferences.fanManualEnabled, targets = Preferences.fanTargets, hold = Preferences.fanHoldUnlock
+        defer {
+            Preferences.fanManualEnabled = manual; Preferences.fanTargets = targets; Preferences.fanHoldUnlock = hold
+            FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+            FanControlHelper.deferReclaimRetry(now: .distantPast)
+        }
+        let pinned: @Sendable () -> [FanReading] = {
+            [FanReading(id: 0, min: 1000, max: 5000, current: 3000, manual: true),
+             FanReading(id: 1, min: 1000, max: 5000, current: 3000, manual: true)]
+        }
+        Preferences.fanHoldUnlock = false
+        FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        await FanControlHelper.resetAll(teardown: true)   // no connection: no call; drops any timer
+        FanControlHelper.inject(sleeping: false)
+        FanControlHelper.userAdjusting = false
+        FanControlHelper.deferReclaimRetry(now: .distantPast)
+
+        // An engage in flight: legitimate, nothing happens.
+        let held = FakeHelperConnection()
+        FanControlHelper.inject(connection: held, engagesInFlight: 1)
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = [:]
+        FanControlHelper.reclaimTick(read: pinned)
+        for _ in 0..<200 where !FanControlHelper.reclaimTickAllowed() { try? await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(FanControlHelper.reclaimTickAllowed(), "the tick's read never came back")
+        XCTAssertTrue(Preferences.fanManualEnabled, "handed back during an engage")
+        XCTAssertEqual(held.proxy.resets, 0)
+
+        // Nothing in flight: manual off, one reset with teardown.
+        let fake = FakeHelperConnection()
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+        FanControlHelper.reclaimTick(read: pinned)
+        await waitForTeardown()
+        XCTAssertFalse(Preferences.fanManualEnabled, "the pins stayed with the targets reading empty")
+        XCTAssertEqual(fake.proxy.resets, 1)
+        XCTAssertTrue(FanControlHelper.connection == nil, "no teardown")
     }
 
     /// #259 (QA #74 eW3): a `.retry` outcome starts the cooldown.

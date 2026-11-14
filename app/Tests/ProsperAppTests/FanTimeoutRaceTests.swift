@@ -41,25 +41,43 @@ final class FanTimeoutRaceTests: XCTestCase {
         await fulfillment(of: [released], timeout: 2)
     }
 
-    /// #255: only the newest engage, with manual still off, may release.
+    /// #255: only the newest engage may release (R1215-1: manual on or off).
     func testShouldReleaseLateEngage() {
-        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 1, manualOn: false))
-        XCTAssertTrue(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, lastFailed: 1, manualOn: false))
-        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, lastFailed: 1, manualOn: true))
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 1))
+        XCTAssertTrue(StatsPopupView.shouldReleaseLateEngage(generation: 2, current: 2, lastFailed: 1))
     }
 
     /// #263 ordering A: N timed out, N+1 failed, then N lands late. N+1 owns nothing,
-    /// so N is released (unless manual came on since).
+    /// so N is released.
     func testLateEngageAfterNewerEngageFailedIsReleased() {
-        XCTAssertTrue(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 2, manualOn: false))
-        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 2, manualOn: true))
+        XCTAssertTrue(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 2))
+    }
+
+    /// R1215-1: the ceiling won with manual already on (the pin may not have been sent yet, so the
+    /// failed first engage's reset went out ahead of it); the late pin is still released. The op waits
+    /// on a gate the row opens after the ceiling: no fixed wait. Scratch defaults; release is a fake.
+    @MainActor
+    func testWithFanTimeoutReleasesALateEngageWithManualOn() async {
+        let manual = Preferences.fanManualEnabled
+        defer { Preferences.fanManualEnabled = manual }
+        Preferences.fanManualEnabled = true
+        let (gate, open) = AsyncStream<Void>.makeStream()
+        let released = expectation(description: "late engage released with manual on")
+        let reply = await StatsPopupView.withFanTimeout(0, {
+            for await _ in gate { break }
+            return .engaged
+        }, release: { released.fulfill() })
+        XCTAssertEqual(reply, .unavailable)
+        open.yield(); open.finish()
+        await fulfillment(of: [released], timeout: 2)
+        XCTAssertTrue(Preferences.fanManualEnabled, "the release changed the saved intent")
     }
 
     /// #263 ordering B, step 1: N lands late while N+1 is still in flight — held for N+1.
     /// Step 2 (N+1 fails → release) is FanReclaimRecoveryTests.testFailedFirstEngageReleasesTheHeldPin.
     func testLateEngageWhileNewerEngageInFlightIsHeld() {
-        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 1, manualOn: false))
-        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 3, lastFailed: 2, manualOn: false))
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 2, lastFailed: 1))
+        XCTAssertFalse(StatsPopupView.shouldReleaseLateEngage(generation: 1, current: 3, lastFailed: 2))
     }
 
     /// #263 / QA #83: drives the real generation bookkeeping. N times out, N+1 is refused
@@ -71,9 +89,9 @@ final class FanTimeoutRaceTests: XCTestCase {
         let older = await StatsPopupView.withFanTimeout(0.1, {
             try? await Task.sleep(nanoseconds: 500_000_000)
             return .engaged
-        }, manualOn: { false }, release: { released.fulfill() })
+        }, release: { released.fulfill() })
         XCTAssertEqual(older, .unavailable)
-        let newer = await StatsPopupView.withFanTimeout(5, { .refused }, manualOn: { false }, release: {})
+        let newer = await StatsPopupView.withFanTimeout(5, { .refused }, release: {})
         XCTAssertEqual(newer, .refused)
         await fulfillment(of: [released], timeout: 2)
     }

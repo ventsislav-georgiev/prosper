@@ -284,6 +284,27 @@ final class DchFanCommandsTests: XCTestCase {
         }
     }
 
+    /// R1215-1: "Fans: Manual" with manual already on whose first engage gets no reply (a timeout):
+    /// the error text, every fan handed back (one reset, no teardown: manual stays on), and the earlier
+    /// saved targets kept for the recovery to re-apply. Nothing else engaged.
+    func testUnavailableWithManualOnHandsBackAndKeepsTheTargets() async throws {
+        try await withFanState {
+            Preferences.fanManualEnabled = true
+            Preferences.fanTargets = [0: 2000, 1: 2000]
+            let log = Log()
+            let fake = releaseSink()
+            let f = await run(ops(log: log, first: .unavailable), "fans.manual", "60%")
+            XCTAssertEqual(Self.message(f), try XCTUnwrap(FanManualReply.unavailable.errorText))
+            for _ in 0..<300 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertEqual(fake.proxy.resets, 1, "the failed engage did not hand the fans back")
+            XCTAssertTrue(FanControlHelper.connection === fake, "a manual-on release tore the connection down")
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [0: 2000, 1: 2000])
+            XCTAssertFalse(FanControlHelper.presetPending)
+            XCTAssertFalse(log.calls.contains { $0.hasPrefix("engage") }, "the rest engaged after a failure")
+        }
+    }
+
     // MARK: A later fan's reply (#926)
 
     /// The first fan (0) engaged and the later one (1) refused: the same pending reply and preset as
