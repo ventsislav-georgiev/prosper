@@ -24,7 +24,8 @@ struct AgentModelEffort: Equatable, Sendable {
         static let live = IO(
             size: { path in
                 var st = stat()
-                guard stat(path, &st) == 0, st.st_size >= 0 else { return nil }
+                // Only a regular file: a folder, FIFO, device or socket is never read (#1209).
+                guard stat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size >= 0 else { return nil }
                 return UInt64(st.st_size)
             },
             read: { path, offset, length in
@@ -100,15 +101,15 @@ struct AgentModelEffort: Equatable, Sendable {
     // MARK: - List path
 
     /// `row` with its model and effort: carried from `previous` while the transcript size is the one
-    /// read last, read again for a new row, a new path, a file that shrank, or a row whose state left
-    /// working (a growing file under a working row is not read: the answer is not over). The
+    /// read last, read again for a new row, a new path, a file that shrank, or a file that grew under a
+    /// row that is not working now (a growing file under a working row is not read: the answer is not
+    /// over; an answer seen only as idle before and after is read, #1209). The
     /// read size is kept even when nothing was found, so an empty result is cached too.
     static func resolve(_ row: AgentSession, previous: AgentSession?, io: IO) -> AgentSession {
         guard let path = row.transcriptPath, !path.isEmpty, let size = io.size(path) else { return row }
         var s = row
         if let p = previous, p.transcriptPath == path, let seen = p.modelReadSize {
-            let leftWorking = p.state == .working && row.state != .working
-            if seen == size || (size > seen && !leftWorking) {
+            if seen == size || (size > seen && row.state == .working) {
                 s.model = p.model; s.effort = p.effort; s.modelReadSize = seen
                 return s
             }

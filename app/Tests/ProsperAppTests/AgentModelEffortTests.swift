@@ -225,18 +225,58 @@ final class AgentModelEffortTests: XCTestCase {
         XCTAssertEqual(c.reads, 0)
         XCTAssertTrue(next.model == "claude-first-1-0" && next.modelReadSize == UInt64(a.count))
         s = next
-        // Grew, still not working before and after (idle -> idle): not read either.
+        // Grew, idle before and idle now (an answer between two ticks): exactly one read, new values.
         let idle = AgentSession(key: s.key, alias: "", activity: 1, state: .idle, agents: 0, transcriptPath: path,
                                            model: s.model, effort: s.effort, modelReadSize: s.modelReadSize)
+        c.reset()
         next = AgentModelEffort.resolve(session(.idle, path: path), previous: idle, io: c.io)
-        XCTAssertEqual(c.reads, 0)
+        XCTAssertEqual(c.stats, 1)
+        XCTAssertTrue(c.reads > 0 && c.bytes == b.count)
+        XCTAssertTrue(next.model == "claude-second-2-0" && next.modelReadSize == UInt64(b.count))
         // Left working: read, new values.
+        c.reset()
         next = AgentModelEffort.resolve(session(.done, path: path), previous: s, io: c.io)
         XCTAssertGreaterThan(c.reads, 0)
         XCTAssertTrue(next.model == "claude-second-2-0" && next.effort == "max" && next.modelReadSize == UInt64(b.count))
         // It is cached by the new size again.
         c.reset()
         _ = AgentModelEffort.resolve(session(.done, path: path), previous: next, io: c.io)
+        XCTAssertEqual(c.reads, 0)
+    }
+
+    func testEveryStateOnGrowthAndUnchangedSize() {
+        let a = assistant("claude-first-1-0"), b = a + assistant("claude-second-2-0")
+        let c = Counting(files: [path: a])
+        // (state now, read when the size grew): the literal table over every AgentState.
+        let table: [(AgentState, Bool)] = [(.working, false), (.blocked, true), (.done, true), (.idle, true)]
+        XCTAssertEqual(table.count, AgentState.allCases.count)
+        XCTAssertEqual(Set(table.map { $0.0.rawValue }), Set(AgentState.allCases.map { $0.rawValue }))
+        for (state, reads) in table {
+            for before in AgentState.allCases {
+                c.set(path, a)
+                let seen = AgentModelEffort.resolve(session(before, path: path), previous: nil, io: c.io)
+                // Size unchanged: never read.
+                c.reset()
+                _ = AgentModelEffort.resolve(session(state, path: path), previous: seen, io: c.io)
+                XCTAssertEqual(c.reads, 0, "\(before) -> \(state) unchanged")
+                // Size grew: read exactly when the row is not working now.
+                c.set(path, b); c.reset()
+                let got = AgentModelEffort.resolve(session(state, path: path), previous: seen, io: c.io)
+                XCTAssertTrue((c.reads > 0) == reads, "\(before) -> \(state) grew")
+                XCTAssertTrue(got.model == (reads ? "claude-second-2-0" : "claude-first-1-0"), "\(before) -> \(state)")
+            }
+        }
+    }
+
+    func testLiveStatRefusesAFolderAndAnswersForARegularFile() {
+        let dir = tempDir()
+        XCTAssertTrue(AgentModelEffort.IO.live.size(dir.path) == nil)
+        let f = write(assistant("claude-a-1-1"), "live.jsonl")
+        XCTAssertTrue(AgentModelEffort.IO.live.size(f) == UInt64(assistant("claude-a-1-1").count))
+        // Through the seam: a folder reads as nothing and nothing is read.
+        let c = Counting()
+        let r = AgentModelEffort.resolve(session(.idle, path: dir.path), previous: nil, io: c.io)
+        XCTAssertTrue(r.model == nil && r.modelReadSize == nil)
         XCTAssertEqual(c.reads, 0)
     }
 
