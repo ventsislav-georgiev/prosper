@@ -729,6 +729,8 @@ tag from the now-released section and put it on the new top draft.
   nothing in that menu opens the link. The viewer no longer starts the system's force-click action,
   the one that could preview a link's web page without a click, and a three-finger tap on a link
   does nothing. (#1118)
+- File search no longer gives a file the ranking of a file deleted from the same path more than 30
+  days before. (#1153)
 
 ## v2.174.0
 

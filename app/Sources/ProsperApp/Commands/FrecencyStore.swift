@@ -12,16 +12,33 @@ import Foundation
 /// (thread-safe) guarded by a lock for the read-modify-write bump.
 final class FrecencyStore: @unchecked Sendable {
 
-    static let shared = FrecencyStore()
+    static let shared = FrecencyStore(pathState: FrecencyStore.livePathState)
 
     private let defaults: UserDefaults
     private let storageKey: String
     private let lock = NSLock()
+    /// true = the path exists, false = it is gone, nil = it cannot be checked. nil store-wide = no prune.
+    private let pathState: (@Sendable (String) -> Bool?)?
+    private let pruneQueue = DispatchQueue(label: "prosper.frecency.prune", qos: .utility)
 
-    /// `defaults`/`storageKey` are injectable so tests get an isolated suite.
-    init(defaults: UserDefaults = Preferences.defaults, storageKey: String = "files.frecency.v1") {
+    /// `defaults`/`storageKey` are injectable so tests get an isolated suite; `pathState` so a
+    /// test decides what is gone or uncheckable.
+    init(defaults: UserDefaults = Preferences.defaults, storageKey: String = "files.frecency.v1",
+         pathState: (@Sendable (String) -> Bool?)? = nil) {
         self.defaults = defaults
         self.storageKey = storageKey
+        self.pathState = pathState
+    }
+
+    /// Gone only when the folder is there without the file; a missing folder may be a volume that is not
+    /// mounted, and any error other than ENOENT is unknown, so both are kept.
+    static let livePathState: @Sendable (String) -> Bool? = { path in
+        // An external disk or network share: never stat it (could wake it); cannot be checked.
+        if path.hasPrefix("/Volumes/") { return nil }
+        var st = stat()
+        if lstat(path, &st) == 0 { return true }
+        guard errno == ENOENT else { return nil }
+        return lstat((path as NSString).deletingLastPathComponent, &st) == 0 ? false : nil
     }
 
     /// One file's running engagement: how many times acted on, and when last.
@@ -49,7 +66,25 @@ final class FrecencyStore: @unchecked Sendable {
             map = Dictionary(uniqueKeysWithValues: ranked.prefix(1000).map { ($0.key, $0.value) })
         }
         save(map)
+        if pathState != nil { pruneQueue.async { self.pruneGonePaths(now: now) } }
     }
+
+    /// Drops entries unused for more than `decayDays` whose path is gone (#1153), so a file created again
+    /// there long after starts unranked; a path away for a while (branch switch, rebuild) keeps its rank.
+    /// Runs on `pruneQueue`, never on main and never under the lock; only entries past the window are statted.
+    private func pruneGonePaths(now: TimeInterval) {
+        guard let pathState else { return }
+        lock.lock(); let snapshot = load(); lock.unlock()
+        let gone = snapshot.filter { now - $0.value.lastUsed > Self.decayDays * 86_400 && pathState($0.key) == false }
+        guard !gone.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        var map = load()
+        for (p, e) in gone where map[p] == e { map[p] = nil }  // re-recorded since the snapshot: keep
+        save(map)
+    }
+
+    /// Blocks until every prune queued so far has run (tests).
+    func waitForPrune() { pruneQueue.sync {} }
 
     /// Forgets all recorded engagements (Settings "clear" affordance).
     func clear() {
@@ -78,12 +113,15 @@ final class FrecencyStore: @unchecked Sendable {
 
     // MARK: - Scoring (pure → unit-testable)
 
+    /// Recency decay constant in days; also the age past which a gone path's entry is pruned.
+    static let decayDays: Double = 30
+
     /// Frecency score: usage count decayed by recency, with a ~30-day half-life
     /// so a file opened often-but-long-ago fades behind one opened recently.
     static func score(_ e: Entry, now: TimeInterval) -> Double {
         guard e.count > 0 else { return 0 }
         let ageDays = max(0, (now - e.lastUsed) / 86_400)
-        let recency = exp(-ageDays / 30.0)  // 1.0 today → ~0.37 at 30 days → ~0.14 at 60
+        let recency = exp(-ageDays / decayDays)  // 1.0 today → ~0.37 at 30 days → ~0.14 at 60
         return Double(e.count) * recency
     }
 
