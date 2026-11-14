@@ -441,7 +441,10 @@ final class MarkdownRendererTests: XCTestCase {
             ("", 0), ("plain text", 2), ("a\nb", 4), ("a\n\n\nb", 4), ("  \n\t\n", 0), ("a\r\nb\rc", 6),
             ("*a*", 4), ("_a_ ~~b~~", 8), ("`c`", 4), ("[a](b)", 4), ("<b>x</b>", 6),
             ("|a|b|", 3), ("| a | b |  ", 3), ("|a|\n|b|", 4), ("||", 2), ("|||", 3), (" | a", 2), ("a |", 2),
-            ("# h\n- i\n1. j", 6), ("> > q", 2), ("a < b", 4), ("<http://a>", 4),
+            ("# h\n- i\n1. j", 6), ("> > q", 2), ("a < b", 4), ("<http://a>", 6),
+            // #1211 (F1187-1): a "." or ":" before a non-blank byte counts two, so each bare autolink (two runs) counts two
+            ("a.b", 4), ("a:b", 4), (".a", 4), ("a..b", 6), ("a.", 2), ("a. b", 2), ("a: b", 2), ("a.\nb", 4), ("a@b", 2),
+            ("a@b.co", 4), ("www.a", 4), ("http://a", 4), ("www.a.co", 6), ("http://a.co", 6), ("a@b.co a@b.co", 6),
         ]
         for (md, n) in cases { XCTAssertEqual(R.markupCount(md), n, md.debugDescription) }
     }
@@ -480,6 +483,101 @@ final class MarkdownRendererTests: XCTestCase {
             italic.append(contentsOf: Array(repeating: i, count: range.length))
         }
         XCTAssertEqual(italic, (0..<1000).map { $0 % 2 == 0 })
+    }
+
+    /// #1211 (F1187-1): bare e-mail autolinks count toward the markup cap: at it the file is Markdown, one more is source.
+    func testMarkupCapCountsAutolinks() {
+        let mails = String(repeating: "a@b.co ", count: 1000)   // 2 each: the "." before "co"
+        XCTAssertEqual(R.markupCount(mails), 2 + 2000)
+        let at = mails + String(repeating: "*a _a ", count: (R.maxMarkup - 2002) / 2)   // openers with no closer: one run
+        XCTAssertEqual(R.markupCount(at), R.maxMarkup)
+        autoreleasepool {
+            let out = render(at)
+            XCTAssertTrue(out.note == nil, out.note ?? "")
+            var links = 0
+            out.text.enumerateAttribute(.link, in: NSRange(location: 0, length: out.text.length)) { v, _, _ in if v != nil { links += 1 } }
+            XCTAssertEqual(links, 1000, "every bare e-mail is a link run")
+        }
+        XCTAssertEqual(R.markupCount(at + "a@b.co"), R.maxMarkup + 2)
+        let src = render(at + "a@b.co")
+        XCTAssertEqual(src.note, R.tooMuchMarkupNote)
+        XCTAssertEqual(src.text.string, at + "a@b.co")
+    }
+
+    /// Styled runs of `out` (font italic), counted run by run.
+    private func italicRuns(_ out: R.Output) -> Int {
+        var n = 0
+        out.text.enumerateAttribute(.font, in: NSRange(location: 0, length: out.text.length)) { v, _, _ in
+            if (v as? NSFont)?.fontDescriptor.symbolicTraits.contains(.italic) == true { n += 1 }
+        }
+        return n
+    }
+
+    /// #1211: at most maxStyledRunsPerParagraph styled runs in one paragraph (to its line end); the rest of it is plain,
+    /// the next paragraph is styled again. A hard break ends a paragraph; a soft break and a wide row's " | " do not.
+    func testStyledRunsPerParagraphCap() {
+        let p = R.maxStyledRunsPerParagraph
+        XCTAssertEqual(p, 10_000)
+        func para(_ n: Int) -> String { (0..<n).map { "*e\($0)*" }.joined(separator: " ") }
+        let note = "Too many styles in one paragraph: the rest shown as plain text"
+        autoreleasepool {
+            let at = render(para(p))
+            XCTAssertTrue(at.note == nil, at.note ?? "")
+            XCTAssertEqual(italicRuns(at), p, "run \(p) of the paragraph is styled")
+        }
+        autoreleasepool {
+            let over = render(para(p + 1) + "\n\n*next*")
+            XCTAssertEqual(over.note, note)
+            XCTAssertEqual(italicRuns(over), p + 1, "the paragraph's first \(p), then the next paragraph's one")
+            XCTAssertEqual(font(over, "e\(p)")?.fontDescriptor.symbolicTraits.contains(.italic), false, "run \(p + 1) is plain")
+            XCTAssertEqual(font(over, "next")?.fontDescriptor.symbolicTraits.contains(.italic), true)
+        }
+        autoreleasepool {
+            let hard = render(para(p) + "\\\n*x*")
+            XCTAssertTrue(hard.note == nil, hard.note ?? "")
+            XCTAssertEqual(italicRuns(hard), p + 1, "a hard break starts a new paragraph")
+        }
+        autoreleasepool {
+            let soft = render(para(p) + "\n*x*")
+            XCTAssertEqual(soft.note, note, "a soft break keeps the paragraph")
+            XCTAssertEqual(italicRuns(soft), p)
+        }
+        autoreleasepool {   // a wide table's cells of one row share a line
+            let cols = R.maxTableColumns + 1, perCell = p / cols + 1
+            let cell = String(repeating: "*a* ", count: perCell)
+            let md = "|" + String(repeating: " h |", count: cols) + "\n|" + String(repeating: "-|", count: cols) + "\n|"
+                + String(repeating: " \(cell)|", count: cols)
+            let wide = render(md)
+            XCTAssertEqual(wide.note, "Too many table columns, styles in one paragraph: the rest shown as plain text")
+            XCTAssertEqual(italicRuns(wide), p - (cols - 1), "the \" | \" between two cells takes the last run's style and joins two runs")
+        }
+    }
+
+    /// #1211: the font of each kind of run, by value (the cache of derived fonts keeps every one): headings, emphasis,
+    /// strong, both, code, a fragment link, strikethrough, a table's header and body, a list item.
+    func testRunFontsByValue() {
+        let md = "# H1 *hi* `hc`\n\nP *pi* **pb** ***pbi*** `pc` [pl](#top) ~~ps~~ *pi2* **pb2**\n\n"
+            + "| *ti* | **tb** |\n|---|---|\n| `tc` | *tj* |\n\n- *li* `lc` **lb**\n\n> *qi*"
+        let out = render(md)
+        XCTAssertTrue(out.note == nil, out.note ?? "")
+        // (word, point size, bold, italic, monospaced)
+        let want: [(String, CGFloat, Bool, Bool, Bool)] = [
+            ("H1", 20, true, false, false), ("hi", 20, true, true, false), ("hc", 18, false, false, true),
+            ("P ", 15, false, false, false), ("pi ", 15, false, true, false), ("pb ", 15, true, false, false),
+            ("pbi", 15, true, true, false), ("pc", 13.5, false, false, true), ("pl", 15, false, false, false),
+            ("ps", 15, false, false, false), ("pi2", 15, false, true, false), ("pb2", 15, true, false, false),
+            ("ti", 15, true, true, false), ("tb", 15, true, false, false), ("tc", 13.5, false, false, true),
+            ("tj", 15, false, true, false), ("li", 15, false, true, false), ("lc", 13.5, false, false, true),
+            ("lb", 15, true, false, false), ("qi", 15, false, true, false),
+        ]
+        for (word, size, bold, italic, mono) in want {
+            guard let f = font(out, word) else { XCTFail("no font at \(word)"); continue }
+            let t = f.fontDescriptor.symbolicTraits
+            XCTAssertEqual(f.pointSize, size, accuracy: 0.01, word)
+            XCTAssertEqual([t.contains(.bold), t.contains(.italic), t.contains(.monoSpace)], [bold, italic, mono], word)
+        }
+        XCTAssertNotNil(at(out, "ps")[.strikethroughStyle])
+        XCTAssertNotNil(at(out, "pl")[.link])
     }
 
     // MARK: Heavy (PROSPER_HEAVY_TESTS=1): budgets wide enough for a loaded machine.
@@ -687,7 +785,9 @@ final class MarkdownRendererTests: XCTestCase {
 
     /// Round 2 item 2: at most 50,000 inline-styled runs a document; later runs take the block's style.
     func testStyledRunCap() {
-        let out = render((0...R.maxStyledRuns).map { "*e\($0)*" }.joined(separator: " "))
+        // #1211: in paragraphs of 1,000 runs, under the per-paragraph bound
+        func styled(_ r: ClosedRange<Int>) -> String { r.map { "*e\($0)*" + ($0 % 1000 == 999 ? "\n\n" : " ") }.joined() }
+        let out = render(styled(0...R.maxStyledRuns))
         func italic(_ word: String) -> Bool? {
             let r = (out.text.string as NSString).range(of: word)
             guard r.location != NSNotFound, let font = out.text.attribute(.font, at: r.location, effectiveRange: nil) as? NSFont else { return nil }
@@ -697,10 +797,10 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(italic("e49999"), true, "run 50,000 is styled")
         XCTAssertEqual(italic("e50000"), false, "run 50,001 is the paragraph's plain text")
         XCTAssertEqual(out.note, "Too many styles: the rest shown as plain text")
-        XCTAssertNil(render((1...R.maxStyledRuns).map { "*e\($0)*" }.joined(separator: " ")).note, "nothing trimmed at the cap")
+        XCTAssertNil(render(styled(1...R.maxStyledRuns)).note, "nothing trimmed at the cap")
         // Several caps: one note, each named once, in the order first hit.
         let both = render((0...R.maxLinks).map { "[l\($0)](https://example.com/\($0))" }.joined(separator: " ")
-                          + "\n\n" + String(repeating: "*e* ", count: R.maxStyledRuns))
+                          + "\n\n" + String(repeating: String(repeating: "*e* ", count: 1000) + "\n\n", count: R.maxStyledRuns / 1000))
         XCTAssertEqual(both.note, "Too many links, styles: the rest shown as plain text")
     }
 
@@ -850,6 +950,29 @@ final class MarkdownRendererTests: XCTestCase {
             let secs = Date().timeIntervalSince(t0)
             Self.fact("\(n) links, no cap: \(String(format: "%.3f", secs)) s on main")
             if secs > 10 { break }
+        }
+    }
+
+    /// #1211: one paragraph at the per-paragraph bound, emphasis and inline code, rendered and laid out on main (as show()
+    /// does), and the same paragraph with twice the runs (the rest plain). Up to 40,001 parsed runs: under 48 MiB at 1.2 KiB a
+    /// run. Measured here: render 0.26 s and layout 0.07 s at the bound; the 10 s ceilings are over ten times that.
+    func testStyledParagraphAtTheBound() throws {
+        try requireHeavyTests()
+        let style = Self.style, doc = Self.document, p = R.maxStyledRunsPerParagraph
+        for (name, unit) in [("emphasis", "*a* "), ("inline code", "`a` ")] {
+            for n in [p, 2 * p] {
+                try autoreleasepool {
+                    let box = OutputBox()
+                    timed("render \(name) x \(n)", ceiling: 10) { box.set(R.render(String(repeating: unit, count: n), document: doc, style: style, loader: { _, _, _ in nil })) }
+                    let out = try XCTUnwrap(box.get())
+                    XCTAssertEqual(out.note, n > p ? "Too many styles in one paragraph: the rest shown as plain text" : nil, name)
+                    let start = Date()
+                    Self.layout(out.text)   // on main, as show() does: not cancellable, bounded by the cap
+                    let secs = Date().timeIntervalSince(start)
+                    Self.fact("\(name) x \(n) in one paragraph: layout \(String(format: "%.3f", secs)) s on main")
+                    XCTAssertLessThan(secs, 10, name)
+                }
+            }
         }
     }
 

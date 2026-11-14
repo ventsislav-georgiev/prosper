@@ -912,6 +912,9 @@ tag from the now-released section and put it on the new top draft.
 - Fans: when one fan does not take a new speed from the slider, Prosper now hands every fan back to
   macOS and shows the speed it will restore, instead of leaving one fan at the new speed; a fan that
   rejects the speed after another took it is no longer reported as an overheat. (#1033)
+- Text Viewer: Markdown with a great many bare links or e-mail addresses is shown as its source
+  instead of stalling, a paragraph with over 10,000 styled pieces shows its rest as plain text with
+  a note, and Markdown with lots of emphasis renders faster (#1211)
 
 ## v2.174.0
 

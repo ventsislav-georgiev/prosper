@@ -57,6 +57,10 @@ enum MarkdownRenderer {
     /// Runs with inline styling (emphasis, code, links) per document; later runs take their block's
     /// plain style. Round 2: 524,000 alternating italic runs took 5 s to lay out.
     static let maxStyledRuns = 50_000
+    /// #1211: styled runs (and images) in one paragraph, up to its line end; later ones in it take the block's plain
+    /// style. TextKit 1 lays a paragraph out whole: 16,000 emphasis runs in one took 0.11 s on main, linear so far; longer
+    /// ones were not measured (64 MiB). The longest paragraph in this repository's Markdown has 39.
+    static let maxStyledRunsPerParagraph = 10_000
     /// Local images decoded per document; later ones show their alt text.
     static let maxImages = 64
     /// #1187: the parser and the pass below cost 12 to 17 µs per attributed run, linear in the runs, and
@@ -148,21 +152,25 @@ enum MarkdownRenderer {
     /// text (its text and the break after it), one for each emphasis, strikethrough, code or link
     /// delimiter, two for a "<" (a tag or autolink, and the text after it), and one for each table pipe
     /// between two cells (a line's first and last pipe open no cell). Quote and list markers open a block,
-    /// counted with its line. At least the parser's run count on every shape measured. One pass over the bytes.
+    /// counted with its line. #1211 (F1187-1): two for each "." or ":" followed by a non-blank byte, so every bare
+    /// autolink (http://a, www.a, a@b.c: a link run and the text after it) counts at least two, and a sentence's
+    /// ". " or ": " nothing. At least the parser's run count on every shape measured. One pass over the bytes.
     nonisolated static func markupCount(_ s: String) -> Int {
-        var n = 0, text = false, pipe = false
+        var n = 0, text = false, pipe = false, dot = false
         for b in s.utf8 {
             switch b {
-            case 0x0A, 0x0D: (text, pipe) = (false, false)   // a pipe that ends its line opens no cell
-            case 0x20, 0x09: continue
+            case 0x0A, 0x0D: (text, pipe, dot) = (false, false, false)   // a pipe that ends its line opens no cell
+            case 0x20, 0x09: dot = false
             default:
                 if !text {
                     (n, text) = (n + 2, true)
                     if b == UInt8(ascii: "|") { continue }   // nor does one that starts it
                 }
                 if pipe { (n, pipe) = (n + 1, false) }
+                if dot { (n, dot) = (n + 2, false) }
                 switch b {
                 case UInt8(ascii: "|"): pipe = true
+                case UInt8(ascii: "."), UInt8(ascii: ":"): dot = true
                 case UInt8(ascii: "<"): n += 2
                 case UInt8(ascii: "*"), UInt8(ascii: "_"), UInt8(ascii: "~"), UInt8(ascii: "`"),
                      UInt8(ascii: "["), UInt8(ascii: "]"): n += 1
@@ -214,6 +222,8 @@ private final class Converter {
     var slugCounts: [String: Int] = [:]
     var images = 0
     var links = 0, styledRuns = 0
+    var paragraphRuns = 0   // styled runs since the last line end (emit resets it)
+    var fonts: [FontKey: NSFont] = [:]   // a run's font per block font and the inline bits that change it
     var trimmed: [String] = []   // the caps that drew something as plain text, in first-hit order
 
     init(style: R.Style, document: URL, loader: @escaping TextViewerImageLoader) {
@@ -236,6 +246,7 @@ private final class Converter {
         var text = text
         var inline = inline
         var link = link
+        var image = image
         if !inline.subtracting([.lineBreak, .softBreak]).isEmpty || link != nil {
             styledRuns += 1
             if styledRuns > R.maxStyledRuns {
@@ -246,6 +257,14 @@ private final class Converter {
         }
         let id = block?.components.first?.identity ?? -1   // raw HTML blocks carry no intent
         if id != blockID { text = start(block?.components ?? [], id: id, text: text) }
+        // #1211: counted after start(), whose "\n" between blocks ends the last paragraph; a wide row's " | " does not
+        if !inline.subtracting([.lineBreak, .softBreak]).isEmpty || link != nil || image != nil {
+            paragraphRuns += 1
+            if paragraphRuns > R.maxStyledRunsPerParagraph {
+                trim("styles in one paragraph")
+                (inline, link, image) = (inline.intersection([.lineBreak, .softBreak]), nil, nil)   // an image shows its alt text
+            }
+        }
         if heading != nil { heading?.text += text }
         if let image { return addImage(alt: text, src: image) }
         let attrs = attributes(inline, link: link)
@@ -359,7 +378,12 @@ private final class Converter {
         return text
     }
 
-    private func attributes(_ inline: InlinePresentationIntent, link: URL?) -> [NSAttributedString.Key: Any] {
+    /// #1211: deriving a run's font cost 30% of a render of emphasis runs (8 us a run); it depends only on these.
+    struct FontKey: Hashable { let font: NSFont, inline: InlinePresentationIntent.RawValue }
+
+    private func runFont(_ inline: InlinePresentationIntent) -> NSFont {
+        let key = FontKey(font: blockFont, inline: inline.intersection([.code, .inlineHTML, .blockHTML, .stronglyEmphasized, .emphasized]).rawValue)
+        if let f = fonts[key] { return f }
         var font = blockFont
         if inline.contains(.code) || inline.contains(.inlineHTML) || inline.contains(.blockHTML), font != mono {
             font = NSFont.monospacedSystemFont(ofSize: font.pointSize * 0.9, weight: .regular)
@@ -370,6 +394,12 @@ private final class Converter {
         if traits != font.fontDescriptor.symbolicTraits {
             font = NSFont(descriptor: font.fontDescriptor.withSymbolicTraits(traits), size: font.pointSize) ?? font
         }
+        fonts[key] = font
+        return font
+    }
+
+    private func attributes(_ inline: InlinePresentationIntent, link: URL?) -> [NSAttributedString.Key: Any] {
+        let font = runFont(inline)
         var a: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: blockColor, .paragraphStyle: para]
         if inline.contains(.strikethrough) { a[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
         if inline.contains(.code) { a[.backgroundColor] = style.card.color }
@@ -422,6 +452,7 @@ private final class Converter {
         guard let last = text.last else { return }
         out.append(NSAttributedString(string: text, attributes: attrs))
         lineStart = last == "\n"
+        if lineStart { paragraphRuns = 0 }
         lastAttrs = attrs
     }
 
