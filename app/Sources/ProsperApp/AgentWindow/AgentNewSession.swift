@@ -124,15 +124,24 @@ enum AgentNewSession {
 /// Isolation: @MainActor.
 @MainActor
 final class AgentNewSessionPoolWatch: ObservableObject {
-    let routing: CCPool.Routing?
+    private(set) var routing: CCPool.Routing?
     private var changes: AnyCancellable?
+    /// #1219 (R1205-2): held only while there is no runtime yet; the first one built attaches and this goes.
+    private var arrival: AnyCancellable?
 
-    // shortcut: the runtime is the one built when the form opened; an extension first turned on while the form is
-    // open shows its hint at the next open.
     init(_ runtime: CCPoolRuntime?) {
-        routing = runtime?.routing
+        if let runtime { attach(runtime); return }
+        // The sink runs on main: CCPoolRuntime.push is @MainActor and sends there.
+        arrival = CCPoolRuntime.built.sink { [weak self] made in self?.attach(made) }
+    }
+
+    private func attach(_ runtime: CCPoolRuntime) {
+        guard routing == nil else { return }
+        objectWillChange.send()
+        routing = runtime.routing
         // The sink runs on main: the pane model is @MainActor and publishes only there.
-        changes = runtime?.model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        changes = runtime.model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        arrival = nil
     }
 
     /// What the form shows beside "Runs:" for `argv`, read at each redraw.

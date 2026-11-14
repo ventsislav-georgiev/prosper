@@ -384,8 +384,8 @@ final class CCPoolConnection: @unchecked Sendable {
         // label may have moved to another account (rename, remove and add, a Replace) while it was in flight.
         let id = ex.accountID
         store.mutate { st in if let owner = st.label(ofID: id) { st.remember(owner) } }
-        // shortcut: the usage sample (display only) is matched by a read just before, not under the store's lock.
-        if let owner = store.read({ $0.label(ofID: id) }) { store.recordUsage(owner, limits: limits) }
+        // #1219: the usage sample (display only) goes to that account, its label resolved under the lock of the write.
+        store.recordUsage(id: id, limits: limits)
 
         if response.statusCode == 429 {
             var spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)

@@ -143,8 +143,8 @@ final class CCPoolPaneModelTests: XCTestCase {
         let r = try ccpoolPaneRig()
         try r.add(["a", "b", "c"])
         r.store.mutate { $0.current = "b" }
-        r.store.recordUsage("b", limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.2"]).limits)
         let idB = try XCTUnwrap(r.store.snapshot.accounts["b"]?.id)
+        r.store.recordUsage(id: idB, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.2"]).limits)
         r.model.select("b")
         XCTAssertEqual(r.model.renameDraft, "b")
         r.model.rename("b", to: "  bee ")

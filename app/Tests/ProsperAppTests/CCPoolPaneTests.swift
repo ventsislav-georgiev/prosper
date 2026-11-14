@@ -289,7 +289,8 @@ final class CCPoolPaneTests: XCTestCase {
         XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeTitle) }, "the Agent Sessions row is shown")
         XCTAssertTrue(s.contains { $0.contains("Add an account first.") }, "no account: the row says why it is disabled")
         XCTAssertEqual(CCPoolPane.routeScope, "New sessions started from Prosper that run claude. "
-                       + "Shells, headroom, other programs and sessions started in a terminal are not routed.")
+                       + "Shells, headroom, other programs and sessions started in a terminal are not routed. "
+                       + "Resumed sessions are not routed.")
         XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeScope) }, "the scope line is shown")
         XCTAssertTrue(s.contains { $0.contains("Starts when the first account is added.") }, "the proxy row says why it is stopped")
         XCTAssertTrue(s.contains { $0.contains("ANTHROPIC_BASE_URL=") }, "terminal use, read-only text")

@@ -164,7 +164,9 @@ final class CCPoolStore: @unchecked Sendable {
 
     /// Like `mutate`, but a change that cannot be written is undone in memory too: `saved` is false
     /// and the state is as before. For changes that pair with a Keychain write (P2a follow-up c).
-    func mutateOrUndo<T>(_ body: (inout CCPoolState) -> T) -> (out: T, saved: Bool) {
+    /// `usage`, when given, runs under the same lock right after a change was saved (#1219: a rename moves its sample there).
+    func mutateOrUndo<T>(_ body: (inout CCPoolState) -> T,
+                         usage moveUsage: ((inout [String: CCPoolUsageSample]) -> Void)? = nil) -> (out: T, saved: Bool) {
         // Every account-set change comes through here (QA #734 INFO-6).
         let (out, saved, hook) = lock.withLock { () -> (T, Bool, (@Sendable () -> Void)?) in
             var next = state
@@ -175,6 +177,7 @@ final class CCPoolStore: @unchecked Sendable {
                 return (out, false, nil)
             }
             state = next
+            moveUsage?(&usage)
             return (out, true, _onChange)
         }
         hook?()
@@ -183,12 +186,14 @@ final class CCPoolStore: @unchecked Sendable {
 
     // MARK: Usage (in memory)
 
-    /// Record what a response or a probe said about `label`'s claims. Ignored without numbers.
-    func recordUsage(_ label: String, limits: [String: CCPoolLimit]) {
+    /// Record what a response or a probe said about an account's claims. Ignored without numbers.
+    /// #1219 (R1205-1): the sample of the account with Keychain id `id`, its label resolved under the lock the write
+    /// takes: a renamed account keeps it, the new holder of its old label gets none, a gone account nothing.
+    func recordUsage(id: String, limits: [String: CCPoolLimit]) {
         let util = CCPoolCore.utils(limits)
         guard !util.isEmpty else { return }
         let at = now
-        lock.withLock { if state.accounts[label] != nil { usage[label] = CCPoolUsageSample(util: util, at: at) } }
+        lock.withLock { if let label = state.label(ofID: id) { usage[label] = CCPoolUsageSample(util: util, at: at) } }
     }
 
     func usageSample(_ label: String) -> CCPoolUsageSample? { lock.withLock { usage[label] } }
@@ -234,8 +239,9 @@ final class CCPoolStore: @unchecked Sendable {
     /// Why a state write failed, for callers that report it.
     private var writeFailure: CCPoolStoreError { unreadable ? .stateUnreadable : .stateWriteFailed }
 
-    /// Store the token under a fresh opaque id, then list the account. Nothing is stored on error.
-    func addAccount(label: String, token: String, secrets: CCPoolSecrets) throws {
+    /// Store the token under a fresh opaque id, then list the account. Nothing is stored on error. Returns the id.
+    @discardableResult
+    func addAccount(label: String, token: String, secrets: CCPoolSecrets) throws -> String {
         let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !unreadable else { throw CCPoolStoreError.stateUnreadable }
@@ -258,6 +264,7 @@ final class CCPoolStore: @unchecked Sendable {
             do { try secrets.remove(id: id) } catch { logger.note(label, "add undone; its Keychain item could not be deleted") }
             throw added ? writeFailure : CCPoolStoreError.duplicateLabel
         }
+        return id
     }
 
     /// Returns the removed account's Keychain id (its upstream session is dropped by the service)
@@ -291,7 +298,9 @@ final class CCPoolStore: @unchecked Sendable {
         let to = newLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         if let problem = Self.labelProblem(to) { throw problem }
         guard to != label else { return }
-        let (outcome, saved) = mutateOrUndo { st -> CCPoolStoreError? in
+        // #1219: the sample moves under the lock of the state change, before the change hook runs: a fresher sample
+        // written under the new label after it is never overwritten by the old label's older one.
+        let (outcome, saved) = mutateOrUndo({ st -> CCPoolStoreError? in
             guard let acct = st.accounts[label] else { return .noSuchAccount }
             guard st.accounts[to] == nil else { return .duplicateLabel }
             st.accounts.removeValue(forKey: label)
@@ -299,10 +308,9 @@ final class CCPoolStore: @unchecked Sendable {
             st.order = st.order.map { $0 == label ? to : $0 }
             if st.current == label { st.current = to }
             return nil
-        }
+        }, usage: { u in if let s = u.removeValue(forKey: label) { u[to] = s } })
         if let outcome { throw outcome }
         guard saved else { throw writeFailure }
-        lock.withLock { if let u = usage.removeValue(forKey: label) { usage[to] = u } }
     }
 
     /// Move `label` by `offset` places in the pick order (negative = up), clamped. False when it

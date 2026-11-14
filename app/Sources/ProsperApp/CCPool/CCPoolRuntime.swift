@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// #871 P2b-1, spec 3.2: the proxy runs while the bundled ccpool extension is live AND the pool
@@ -126,9 +127,16 @@ final class CCPoolRuntime {
 
     /// #1190 INFO-5 (b): the push, on a slot a test owns. The first live push builds; a push while
     /// nothing is built and the extension is off builds nothing.
+    /// #1219 (R1205-2): each instance push() builds, sent on main right after it is stored (an open New session form
+    /// attaches its hint to it). Main-actor isolated, as push() is.
+    static let built = PassthroughSubject<CCPoolRuntime, Never>()
+
     @discardableResult
     static func push(_ live: Bool, into slot: inout CCPoolRuntime?, build: () -> CCPoolRuntime?) -> Task<Void, Never>? {
-        if slot == nil, live { slot = build() }
+        if slot == nil, live, let made = build() {
+            slot = made
+            built.send(made)
+        }
         return slot?.setLive(live)
     }
 

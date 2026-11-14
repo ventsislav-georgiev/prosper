@@ -56,6 +56,7 @@ final class CCPoolService: @unchecked Sendable {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: CCPoolConnection] = [:]
     private var _status: Status = .stopped
+    private var _onStatusChange: (@Sendable () -> Void)?
     /// The last start() failed at bind time after the probe found the port free (TIME_WAIT, a
     /// socket bound but not listening): the case a brief retry can win.
     private var bindRaced = false
@@ -74,6 +75,14 @@ final class CCPoolService: @unchecked Sendable {
     }
 
     var status: Status { lock.withLock { _status } }
+
+    /// #1219 (R1205-3): called after a status change no caller asked for (a listener lost after its start), on the
+    /// thread that saw it (the listener's queue) and outside the lock. Start, stop and restart are not reported here:
+    /// their callers (the pane model's proxy jobs) publish. The pane model sets its republisher (formed nonisolated).
+    var onStatusChange: (@Sendable () -> Void)? {
+        get { lock.withLock { _onStatusChange } }
+        set { lock.withLock { _onStatusChange = newValue } }
+    }
 
     /// The published listener (tests deliver its state changes through its own handler, A6).
     var currentListener: NWListener? { lock.withLock { listener } }
@@ -239,16 +248,17 @@ final class CCPoolService: @unchecked Sendable {
     /// nil for a cancel nobody asked for). The status says so and the listener is dropped, so the
     /// pane offers Start again and no session routes to it.
     func listenerLost(_ error: NWError?, from failed: NWListener? = nil) {
-        let lost = lock.withLock { () -> NWListener? in
-            guard let l = listener, failed == nil || failed === l else { return nil }
+        let (lost, hook) = lock.withLock { () -> (NWListener?, (@Sendable () -> Void)?) in
+            guard let l = listener, failed == nil || failed === l else { return (nil, nil) }
             listener = nil
             _status = .failed(Self.reasonLost)
-            return l
+            return (l, _onStatusChange)
         }
         guard let lost else { return }
         lost.stateUpdateHandler = nil
         lost.cancel()
         logger.note(nil, "listener stopped after start: \(error.map { "\($0)" } ?? "cancelled")")
+        hook?()
     }
 
     private func finishStart(_ s: Status, note: String, detail: String = "") -> Status {

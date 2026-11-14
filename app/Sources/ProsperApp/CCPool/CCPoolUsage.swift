@@ -101,8 +101,8 @@ enum CCPoolUsage {
                 logger.note(named, "refresh: account gone during the probe; nothing recorded")
                 continue
             }
-            // shortcut: the usage sample (display only) is written just after the mutate, not under its lock.
-            store.recordUsage(owned.owner, limits: p.limits)
+            // #1219 (R1205-1): the sample goes to the account by its id, resolved under the lock of the write.
+            store.recordUsage(id: id, limits: p.limits)
             let held = owned.cooldown.filter { Double($0.value) > now && spent[$0.key] == nil }
             logger.note(owned.owner, "refresh: status \(p.status); spent \(spent.keys.sorted()); held \(held.keys.sorted())")
             rows.append(Row(label: owned.owner, limits: p.limits, status: p.status, spent: spent, held: held))

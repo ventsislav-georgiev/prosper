@@ -939,6 +939,10 @@ tag from the now-released section and put it on the new top draft.
   pending. (#1215)
 - Fans: a fan speed that isn't a real number (from a damaged saved setting or a bad sensor reading)
   is never sent to the fans or saved; that fan stays with macOS. (#1215)
+- Account pool: Settings now says that resumed sessions are not routed through the pool; a proxy
+  that stops on its own shows at once in Settings and in the New session form's "via ccpool" hint,
+  and an already open New session form shows that hint as soon as the pool extension is turned on.
+  (#1219)
 
 ## v2.174.0
 

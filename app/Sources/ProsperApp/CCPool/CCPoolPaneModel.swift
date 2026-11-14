@@ -96,6 +96,8 @@ final class CCPoolPaneModel: ObservableObject {
         self.launcherPath = launcherPath
         self.lifecycle = lifecycle
         store.onChange = Self.republisher(self)
+        // #1219 (R1205-3): a listener lost after its start changes the status off main and tells nobody else.
+        service.onStatusChange = Self.republisher(self)
     }
 
     /// QA #739 INFO-9: a state change made by the proxy (a limit, `current`) or by a hold reaches
@@ -284,8 +286,9 @@ final class CCPoolPaneModel: ObservableObject {
         guard store.read({ $0.accounts[label] == nil }) else { return .failed(CCPoolStoreError.duplicateLabel.description) }
         let probe = await CCPoolUsage.probe(token: token, base: base)
         if let s = probe?.status, s == 401 || s == 403 { return .rejected }
+        let id: String
         do {
-            try store.addAccount(label: label, token: token, secrets: secrets)
+            id = try store.addAccount(label: label, token: token, secrets: secrets)
         } catch let e as CCPoolStoreError {
             return .failed(e.description)
         } catch let e as CCPoolSecretsError {
@@ -293,7 +296,8 @@ final class CCPoolPaneModel: ObservableObject {
         } catch {
             return .failed("ccpool: the account could not be stored")
         }
-        if let p = probe { store.recordUsage(label, limits: p.limits) }
+        // #1219 (R1205-1): by the new account's id: a rename right after the add keeps the sample on it.
+        if let p = probe { store.recordUsage(id: id, limits: p.limits) }
         // A 3xx is never followed (QA #734 INFO-10) and says nothing about the token.
         return .added(verified: probe.map { $0.status < 300 || (400..<500).contains($0.status) } ?? false)
     }

@@ -330,4 +330,103 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         await rt.setLive(false)?.value
         XCTAssertEqual(rt.service.status, .stopped, "flips after the form closed: no call into it, no crash")
     }
+
+    /// #1219 (R1205-2), mutants a1 and a2: a form opened before the pool was ever built (no runtime) shows no hint;
+    /// the first build through push(into:) is announced and the watch attaches to it, so the hint follows that runtime;
+    /// a later build is not attached (no second subscription), and a push into a built slot builds and announces nothing.
+    /// This row's own runtimes (port 0 on loopback, scratch suite, memory secrets), never the app's.
+    func testCCPoolFormHintAttachesWhenThePoolIsFirstBuilt() async throws {
+        final class Count { var n = 0 }
+        let claude = AgentNewSession.argv("claude", shell: "/bin/zsh")
+        var slot: CCPoolRuntime?
+        let watch = AgentNewSessionPoolWatch(slot)
+        let count = Count()
+        let redraws = watch.objectWillChange.sink { count.n += 1 }   // main: every publish here is on main
+        defer { redraws.cancel() }
+        XCTAssertTrue(watch.hint(claude) == nil, "no runtime: no hint")
+
+        let rt = runtime()
+        let service = rt.service
+        addTeardownBlock { service.stop() }
+        try rt.store.addAccount(label: "Example Org", token: "tok-example", secrets: rt.secrets)
+        rt.model.routeAgentSessions = true
+        XCTAssertEqual(count.n, 0, "not built through push yet: nothing attached")
+
+        let start = CCPoolRuntime.push(true, into: &slot) { rt }
+        XCTAssertTrue(slot === rt)
+        XCTAssertGreaterThan(count.n, 0, "the build is announced: the form redraws")
+        await start?.value
+        guard case .running = rt.service.status else { return XCTFail("live with an account: \(rt.service.status)") }
+        XCTAssertEqual(watch.hint(claude), AgentNewSession.viaPoolHint, "the hint follows the runtime built")
+
+        var other: CCPoolRuntime?
+        let rt2 = runtime()
+        let service2 = rt2.service
+        addTeardownBlock { service2.stop() }
+        let start2 = CCPoolRuntime.push(true, into: &other) { rt2 }
+        await start2?.value
+        var before = count.n
+        rt2.model.routeAgentSessions = true
+        XCTAssertEqual(count.n, before, "a later build is not attached")
+
+        var calls = 0
+        _ = CCPoolRuntime.push(true, into: &slot) { calls += 1; return nil }
+        XCTAssertEqual(calls, 0, "a built slot builds nothing")
+
+        before = count.n
+        rt.model.routeAgentSessions = false
+        XCTAssertGreaterThan(count.n, before, "still attached to the first: the form redraws")
+        XCTAssertTrue(watch.hint(claude) == nil, "toggle off: no hint")
+    }
+
+    /// Records the thread each status-hook call ran on, then calls the hook the pane model installed.
+    private final class HookThreads: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _onMain: [Bool] = []
+        var onMain: [Bool] { lock.withLock { _onMain } }
+        func add(_ main: Bool) { lock.withLock { _onMain.append(main) } }
+    }
+
+    /// Formed here, nonisolated (never @MainActor): the service calls it on its listener queue.
+    nonisolated private static func spy(_ threads: HookThreads, then hook: (@Sendable () -> Void)?) -> @Sendable () -> Void {
+        { threads.add(Thread.isMainThread); hook?() }
+    }
+
+    /// #1219 (R1205-3), mutant l1: a listener lost after its start (cancelled by nobody the service knows, so Network
+    /// delivers .cancelled to the service's own handler on its listener queue) publishes on the pane model and on an
+    /// open form's watch, and the hint is gone at that publish. This row's own runtime, port 0 on loopback.
+    func testCCPoolLostListenerPublishesAndTheHintGoes() async throws {
+        let rt = runtime()
+        let service = rt.service
+        addTeardownBlock { service.stop() }
+        try rt.store.addAccount(label: "Example Org", token: "tok-example", secrets: rt.secrets)
+        rt.model.routeAgentSessions = true
+        await rt.setLive(true)?.value
+        guard case .running = rt.service.status else { return XCTFail("live with an account: \(rt.service.status)") }
+        let claude = AgentNewSession.argv("claude", shell: "/bin/zsh")
+        let watch = AgentNewSessionPoolWatch(rt)
+        XCTAssertEqual(watch.hint(claude), AgentNewSession.viaPoolHint)
+
+        let threads = HookThreads()
+        XCTAssertNotNil(rt.service.onStatusChange, "the pane model installed its republisher")
+        rt.service.onStatusChange = Self.spy(threads, then: rt.service.onStatusChange)
+        let onModel = expectation(description: "the pane model publishes")
+        let onWatch = expectation(description: "the form's watch publishes")
+        onModel.assertForOverFulfill = false
+        onWatch.assertForOverFulfill = false
+        var hintAtPublish: [String?] = []
+        let subs = [rt.model.objectWillChange.sink { onModel.fulfill() },
+                    watch.objectWillChange.sink { hintAtPublish.append(watch.hint(claude)); onWatch.fulfill() }]
+        defer { subs.forEach { $0.cancel() } }
+
+        let listener = try XCTUnwrap(rt.service.currentListener)
+        listener.cancel()
+        await fulfillment(of: [onModel, onWatch], timeout: 10)
+
+        XCTAssertEqual(rt.service.status, .failed(CCPoolService.reasonLost))
+        XCTAssertEqual(threads.onMain, [false], "called once, on the listener's queue, not on main")
+        XCTAssertTrue(hintAtPublish.first.map { $0 == nil } ?? false, "the hint is gone at the publish: \(hintAtPublish)")
+        XCTAssertTrue(watch.hint(claude) == nil)
+        XCTAssertEqual(rt.model.routeDisabledReason, "The proxy is not running.")
+    }
 }

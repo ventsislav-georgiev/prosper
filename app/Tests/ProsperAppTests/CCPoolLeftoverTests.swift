@@ -97,7 +97,7 @@ final class CCPoolLeftoverTests: XCTestCase {
             if moved.count == 0, h.header("authorization")?.contains("tok-first") == true {
                 moved.bump()
                 try? store.renameAccount("Example Org", to: "Example Org (old)")
-                try? store.addAccount(label: "Example Org", token: "tok-second", secrets: secrets)
+                _ = try? store.addAccount(label: "Example Org", token: "tok-second", secrets: secrets)
             }
             return anthropic.reply(h, b)
         }
@@ -119,6 +119,59 @@ final class CCPoolLeftoverTests: XCTestCase {
         store.mutate { $0.current = "Example Org" }
         XCTAssertEqual(CCPoolTestClient.request(port: port)?.status, 200)
         XCTAssertEqual(anthropic.get { $0.seen }, ["Bearer tok-second"], "it still serves")
+    }
+
+    // #1219, mutant u3: the usage sample of an answer follows the account that sent the request, renamed while it was in
+    // flight; the account that took its label (never asked) has no sample. Fake upstream on an ephemeral loopback port.
+    nonisolated func testCCPoolAnswerUsageFollowsTheAccountNotItsLabel() throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = CCPoolMemorySecrets()
+        try store.addAccount(label: "Example Org", token: "tok-first", secrets: secrets)
+        let anthropic = CCPoolFakeAnthropic()
+        anthropic.set { $0.usage = ["tok-first": 0.40, "tok-second": 0.10] }
+        let moved = LeftoverCounter()
+        let up = try CCPoolFakeServer { h, b in
+            if moved.count == 0, h.header("authorization")?.contains("tok-first") == true {
+                moved.bump()
+                try? store.renameAccount("Example Org", to: "Example Org (old)")
+                _ = try? store.addAccount(label: "Example Org", token: "tok-second", secrets: secrets)
+            }
+            return anthropic.reply(h, b)
+        }
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:\(up.port)")!
+        let service = CCPoolService(config: cfg, store: store, secrets: secrets, logger: CCPoolCapturingLogger())
+        defer { service.stop(); up.stop() }
+        guard case .running(let port) = service.start(), port != 0 else { return XCTFail("\(service.status)") }
+
+        store.mutate { $0.current = "Example Org" }
+        XCTAssertEqual(CCPoolTestClient.request(port: port)?.status, 200)
+        XCTAssertEqual(moved.count, 1, "the label moved while the request was in flight")
+        XCTAssertEqual(anthropic.get { $0.seen }, ["Bearer tok-first"], "only the first account was asked")
+        XCTAssertTrue(store.usageSample("Example Org (old)") != nil, "the account that answered has its sample")
+        XCTAssertTrue(store.usageSample("Example Org") == nil, "the account that took the label has none")
+    }
+
+    // #1219, mutant m1: a rename moves the old sample in the lock of its state change, before the change hook runs, so
+    // a fresher sample written under the new label from that hook stays (it is not overwritten by the older one).
+    nonisolated func testCCPoolRenameKeepsAFresherSample() throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = CCPoolMemorySecrets()
+        let id = try store.addAccount(label: "Example Org", token: "tok-first", secrets: secrets)
+        let older = CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.2"]).limits
+        let fresher = CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.7"]).limits
+        store.recordUsage(id: id, limits: older)
+        let wrote = LeftoverCounter()
+        store.onChange = {
+            guard wrote.count == 0 else { return }
+            wrote.bump()
+            store.recordUsage(id: id, limits: fresher)
+        }
+        try store.renameAccount("Example Org", to: "Example Org (old)")
+        XCTAssertEqual(wrote.count, 1)
+        XCTAssertEqual(store.usageSample("Example Org (old)")?.util, CCPoolCore.utils(fresher), "the fresher sample stays")
+        XCTAssertTrue(store.usageSample("Example Org") == nil, "nothing left under the old label")
     }
 
     /// #1205 (R1190-1): a Refresh whose probe is answered by a fake upstream on an ephemeral port that, while
@@ -150,7 +203,7 @@ final class CCPoolLeftoverTests: XCTestCase {
         anthropic.set { $0.usage = ["tok-first": 0.995, "tok-second": 0.10] }
         let report = try await refreshWhileMoving(store, secrets, anthropic, token: "tok-first") {
             try? store.renameAccount("Example Org", to: "Example Org (old)")
-            try? store.addAccount(label: "Example Org", token: "tok-second", secrets: secrets)
+            _ = try? store.addAccount(label: "Example Org", token: "tok-second", secrets: secrets)
         }
         XCTAssertEqual(report.rows.map(\.label), ["Example Org (old)"], "the row names the account probed, as it is called now")
         let snap = store.snapshot
@@ -160,6 +213,32 @@ final class CCPoolLeftoverTests: XCTestCase {
         XCTAssertEqual(snap.accounts["Example Org"]?.reset, [:], "nor given its resets")
         XCTAssertTrue(store.usageSample("Example Org") == nil, "nor its usage sample")
         XCTAssertTrue(store.usageSample("Example Org (old)") != nil)
+    }
+
+    // #1219 (R1205-1), mutant u2: the add-time probe's usage sample goes to the account added, by its id. The store's
+    // change hook (it runs on the add's thread right after the account is listed and before the sample is written)
+    // renames it and adds another account under its label: the sample lands on the renamed account, the new holder has none.
+    nonisolated func testCCPoolAddProbeUsageFollowsTheAccountNotItsLabel() async throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = CCPoolMemorySecrets()
+        let anthropic = CCPoolFakeAnthropic()
+        anthropic.set { $0.usage = ["tok-first": 0.40, "tok-second": 0.10] }
+        let up = try CCPoolFakeServer { h, b in anthropic.reply(h, b) }
+        defer { up.stop() }
+        let moved = LeftoverCounter()
+        store.onChange = {
+            guard moved.count == 0 else { return }
+            moved.bump()
+            try? store.renameAccount("Example Org", to: "Example Org (old)")
+            _ = try? store.addAccount(label: "Example Org", token: "tok-second", secrets: secrets)
+        }
+        let result = await CCPoolPaneModel.add(label: "Example Org", token: "tok-first", store: store, secrets: secrets,
+                                               base: URL(string: "http://127.0.0.1:\(up.port)")!)
+        XCTAssertEqual(result, .added(verified: true))
+        XCTAssertEqual(moved.count, 1, "the label moved between the add and the sample")
+        XCTAssertEqual(store.read { $0.order }, ["Example Org (old)", "Example Org"])
+        XCTAssertTrue(store.usageSample("Example Org (old)") != nil, "the account probed has its sample")
+        XCTAssertTrue(store.usageSample("Example Org") == nil, "the account that took the label has none")
     }
 
     // #1205 (R1190-1), mutant g1: an account removed during the probe gets nothing (it is gone), and neither does the
@@ -174,7 +253,7 @@ final class CCPoolLeftoverTests: XCTestCase {
             try store.addAccount(label: "Example Org", token: old, secrets: secrets)
             let report = try await refreshWhileMoving(store, secrets, anthropic, token: old) {
                 _ = try? store.removeAccount(label: "Example Org", secrets: secrets)
-                try? store.addAccount(label: "Example Org", token: new, secrets: secrets)
+                _ = try? store.addAccount(label: "Example Org", token: new, secrets: secrets)
             }
             XCTAssertEqual(report.rows.count, 0, "\(old): a gone account has no row, the new holder of its label none either")
             XCTAssertEqual(store.snapshot.accounts["Example Org"]?.cooldown, [:], "\(old): the new holder is not benched")
