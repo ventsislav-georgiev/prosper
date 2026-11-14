@@ -128,15 +128,20 @@ final class AgentController {
     private let makeHarness: (@MainActor () async throws -> CodingHarness)?
     /// end()'s model release; a seam so tests can observe and park it (#412).
     private let releaseModel: @MainActor () async -> Void
+    /// The agent model setting, read once per run (#893). A seam so a test can change the
+    /// setting between the reads in its own defaults suite; called on the main actor only.
+    private let readAgentModel: @MainActor () -> String
 
     init(store: AgentSessionStore = .shared,
          resolveCodex: @escaping @MainActor () async throws -> URL = { try await AgentController.resolveCodexExecutable() },
          makeHarness: (@MainActor () async throws -> CodingHarness)? = nil,
-         releaseModel: @escaping @MainActor () async -> Void = { await ModelResidencyCoordinator.shared.releaseAgent() }) {
+         releaseModel: @escaping @MainActor () async -> Void = { await ModelResidencyCoordinator.shared.releaseAgent() },
+         agentModel: @escaping @MainActor () -> String = { Preferences.agentModel }) {
         self.store = store
         self.resolveCodex = resolveCodex
         self.makeHarness = makeHarness
         self.releaseModel = releaseModel
+        self.readAgentModel = agentModel
     }
 
     // MARK: - Public API
@@ -417,9 +422,15 @@ final class AgentController {
     // MARK: - Run
 
     private func run(goal: String, generation: Int) async {
+        // #893: the agent model setting is read ONCE per run, where the model load starts
+        // (ensureHarness), and that value labels the load, opens the codex session and names the
+        // history row. Three reads let a change during the load open a session under another model.
+        var model: String?
         do {
-            let harness = try await ensureHarness(generation)
-            let session = try await ensureSession(harness)
+            let harness = try await ensureHarness(generation, model: &model)
+            let runModel = model ?? readAgentModel()   // harness kept from an earlier run: no load, this is the read
+            model = runModel
+            let session = try await ensureSession(harness, model: runModel)
             guard !abandoned(generation) else {
                 // Stopped before turn/start went out. A Stop that landed after the spawn began
                 // can leave .loadingModel up: settle it, unless a newer run owns the phase by now.
@@ -474,14 +485,14 @@ final class AgentController {
             } else if pendingResumeID == nil {
                 let failed = SessionID(raw: "failed-" + UUID().uuidString)
                 session = failed
-                persistSessionMeta(failed)
+                persistSessionMeta(failed, model: model ?? readAgentModel())   // nil: failed before the read
                 persistTranscript()
             }
             await end(generation: generation)
         }
     }
 
-    private func ensureHarness(_ generation: Int) async throws -> CodingHarness {
+    private func ensureHarness(_ generation: Int, model: inout String?) async throws -> CodingHarness {
         if let harness { return harness }
         // Resolve the codex helper — downloaded on first use (like the model), so a
         // fresh install that never opens the agent never pulls the ~86 MB binary. Do this
@@ -497,7 +508,9 @@ final class AgentController {
         // Stop pressed during the download: don't go on to load the model and start codex,
         // nor stomp a re-submitted run's "Preparing…" phase.
         guard !abandoned(generation) else { throw CancellationError() }
-        phase = .loadingModel(progress: 0, status: "Loading \(Preferences.agentModel)…")
+        let loading = readAgentModel()
+        model = loading
+        phase = .loadingModel(progress: 0, status: "Loading \(loading)…")
         let harness: CodingHarness
         if let makeHarness { harness = try await makeHarness() } else { harness = try await spawnCodexHarness(executable) }
         // Stop during the model load / spawn / handshake ran end() while `self.harness`
@@ -531,7 +544,7 @@ final class AgentController {
                             llmBaseURL: baseURL, llmToken: token)
     }
 
-    private func ensureSession(_ harness: CodingHarness) async throws -> SessionID {
+    private func ensureSession(_ harness: CodingHarness, model: String) async throws -> SessionID {
         if let session { return session }
         // Permissions (F4): bypass-all = no approvals + full filesystem; otherwise the
         // configured approval policy + a network-gated workspace-write sandbox.
@@ -545,7 +558,7 @@ final class AgentController {
             sandbox = .workspaceWrite(networkAccess: Preferences.agentNetworkAccess)
         }
         let opts = SessionOptions(
-            cwd: workingDirectory, model: Preferences.agentModel,
+            cwd: workingDirectory, model: model,
             approvalPolicy: policy, sandbox: sandbox
         )
         // Resuming a persisted session: re-attach the existing Codex thread rather
@@ -560,7 +573,7 @@ final class AgentController {
                 let resumed = try await harness.resumeSession(SessionID(raw: resumeID), options: opts)
                 pendingResumeID = nil
                 self.session = resumed
-                persistSessionMeta(resumed)
+                persistSessionMeta(resumed, model: model)
                 return resumed
             } catch {
                 log.warning("resume of thread \(resumeID, privacy: .public) failed (\(String(describing: error), privacy: .public)); starting a fresh session")
@@ -569,12 +582,12 @@ final class AgentController {
         let session = try await harness.newSession(opts)
         pendingResumeID = nil
         self.session = session
-        persistSessionMeta(session)
+        persistSessionMeta(session, model: model)
         return session
     }
 
     /// Persist (create/refresh) session metadata. Title = the first user goal.
-    private func persistSessionMeta(_ session: SessionID) {
+    private func persistSessionMeta(_ session: SessionID, model: String) {
         // Prefer a title the user typed in the header; else derive from the first goal.
         let derived = items.first.flatMap { item -> String? in
             if case .user(_, let text) = item { return text }
@@ -583,7 +596,6 @@ final class AgentController {
         let title = sessionTitle.isEmpty ? derived : sessionTitle
         if sessionTitle.isEmpty { sessionTitle = title }
         let cwd = workingDirectory
-        let model = Preferences.agentModel
         let id = session.raw
         Task { await store.upsertSession(id: id, cwd: cwd, model: model, title: title) }
     }

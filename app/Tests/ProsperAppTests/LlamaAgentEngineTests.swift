@@ -492,6 +492,120 @@ final class LlamaAgentEngineTests: XCTestCase {
         XCTAssertEqual(Set(all.map(\.id)).count, all.count)
     }
 
+    // MARK: #893 think gate (fake token ids, no model)
+
+    /// Fake ids: 1 `<think>`, 2 `</think>`, 3 `<tool_call>`, 9 any other token.
+    private let thinkOpen: Int32 = 1, thinkClose: Int32 = 2, toolCall: Int32 = 3, other: Int32 = 9
+
+    /// Which chain sampled each token of `tokens`, in order: "grammar" or "plain".
+    private func chains(_ tokens: [Int32]) -> [String] {
+        var gate = ThinkGate(open: thinkOpen, close: thinkClose)
+        return tokens.map { token in
+            defer { gate.feed(token) }
+            return gate.pick(grammar: "grammar", plain: "plain")
+        }
+    }
+
+    /// Think then call: the block samples without the grammar, the call after `</think>` with it.
+    func testThinkGateArmsGrammarAfterThinkCloses() {
+        XCTAssertEqual(chains([thinkOpen, other, other, thinkClose, toolCall, other]),
+                       ["grammar", "plain", "plain", "plain", "grammar", "grammar"])
+    }
+
+    /// A `<tool_call>` token inside the think block is sampled by the plain chain, so it never
+    /// starts the grammar; the real call after the block does.
+    func testThinkGateToolCallInsideThinkIsNotTheTrigger() {
+        XCTAssertEqual(chains([thinkOpen, other, toolCall, other, thinkClose, toolCall]),
+                       ["grammar", "plain", "plain", "plain", "plain", "grammar"])
+    }
+
+    /// No closing tag: the whole output stays off the grammar, whatever its length (O(1) state).
+    func testThinkGateUnclosedThinkNeverArms() {
+        let tokens = [thinkOpen] + Array(repeating: [toolCall, other], count: 100_000).flatMap { $0 }
+        let picked = chains(tokens)
+        XCTAssertEqual(picked.first, "grammar")
+        XCTAssertEqual(picked.dropFirst().filter { $0 == "grammar" }.count, 0)
+        XCTAssertEqual(picked.count, 200_001)
+    }
+
+    /// No think at all (Qwen3-Coder): every token on the grammar chain, today's sampling. A
+    /// `<think>` token after the first one is text (a call's argument may hold it) and never disarms.
+    func testThinkGateWithoutLeadingThinkIsTodaysChain() {
+        XCTAssertEqual(chains([other, toolCall, other, thinkOpen, toolCall, thinkClose]),
+                       Array(repeating: "grammar", count: 6))
+        XCTAssertEqual(chains([thinkClose, toolCall]), ["grammar", "grammar"])
+    }
+
+    /// Nested opener: the first `</think>` ends the block, same rule as ToolCallParser.dropLeadingThink.
+    func testThinkGateFirstCloseEndsTheBlock() {
+        XCTAssertEqual(chains([thinkOpen, thinkOpen, thinkClose, toolCall]),
+                       ["grammar", "plain", "plain", "grammar"])
+    }
+
+    // MARK: #893 rider: AgentController reads the agent model setting once per run
+
+    /// The row's own defaults suite stands in for the setting; `reads` counts the controller's reads.
+    @MainActor private final class ModelSetting {
+        let suite: UserDefaults
+        var reads = 0
+        init(_ suite: UserDefaults) { self.suite = suite }
+        func read() -> String { reads += 1; return suite.string(forKey: "agentModel") ?? "" }
+    }
+
+    /// A harness that records the model each codex session was opened with.
+    @MainActor private final class ModelRecordingHarness: CodingHarness {
+        nonisolated let events: AsyncStream<HarnessEvent>
+        private let sink: AsyncStream<HarnessEvent>.Continuation
+        private(set) var sessionModels: [String] = []
+        init() { (events, sink) = AsyncStream<HarnessEvent>.makeStream() }
+        func start() async throws {}
+        func shutdown() async { sink.finish() }
+        func newSession(_ opts: SessionOptions) async throws -> SessionID {
+            sessionModels.append(opts.model)
+            return SessionID(raw: "thread-893")
+        }
+        func resumeSession(_ id: SessionID, options: SessionOptions) async throws -> SessionID { id }
+        func forkSession(_ id: SessionID) async throws -> SessionID { id }
+        func sendPrompt(session: SessionID, input: [PromptInput]) async throws -> TurnID { TurnID(raw: "turn-893") }
+        func steer(session: SessionID, turn: TurnID, input: [PromptInput]) async throws {}
+        func abort(session: SessionID, turn: TurnID?) async throws {}
+        func respondToApproval(_ id: ApprovalID, decision: ApprovalDecision) async throws {}
+        nonisolated var capabilities: HarnessCapabilities {
+            HarnessCapabilities(forking: false, liveApprovals: false, ptyExec: false, images: false)
+        }
+    }
+
+    /// The setting changes from model-a to model-b while the harness is made (the model load's
+    /// place, after the label read, before the old session read). The codex session and the history
+    /// row keep model-a, from one read. Nothing reads or writes the app's defaults.
+    @MainActor
+    func testAgentControllerReadsAgentModelOncePerRun() async {
+        let setting = ModelSetting(scratchDefaults("agent-model-893"))
+        setting.suite.set("example/model-a", forKey: "agentModel")
+        let harness = ModelRecordingHarness()
+        let dir = tempDir("agent-model-893")
+        let store = AgentSessionStore(directory: dir)
+        let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: {
+            setting.suite.set("example/model-b", forKey: "agentModel")
+            return harness
+        }, releaseModel: {}, agentModel: { setting.read() })
+        addTeardownBlock { @MainActor in
+            await controller.end()
+            _ = await store.recentSessions(limit: 1)   // let the persist land before the dir goes
+        }
+        controller.submit(goal: "go")
+        var stored: String?
+        // A budget of polls, not a deadline (#709).
+        for _ in 0..<1000 {
+            stored = await store.recentSessions(limit: 1).first?.model
+            if stored != nil, !harness.sessionModels.isEmpty { break }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(harness.sessionModels, ["example/model-a"])
+        XCTAssertEqual(stored, "example/model-a")
+        XCTAssertEqual(setting.reads, 1)
+    }
+
     // MARK: on-device e2e (gated — GGUF download + Metal load)
 
     /// The llama twin of `AgentToolCallE2ETests`: full production path

@@ -132,6 +132,83 @@ final class ToolCallParserTests: XCTestCase {
         XCTAssertEqual(json(r.toolCalls[0].argumentsJSON)["text"] as? String, "hello world")
     }
 
+    // MARK: #893 think block on the qwenXML format (Qwen3.6 is a thinking model)
+
+    /// Think then call: the block is not answer text, the call after it is the call.
+    func testQwenThinkThenCallDropsThink() {
+        let text = "<think>\nThe user wants the files listed. I will call shell.\n</think>\n\n<tool_call>\n{\"name\": \"shell\", \"arguments\": {\"command\": [\"ls\"]}}\n</tool_call>"
+        let r = ToolCallParser.parse(text, format: .qwenXML)
+        XCTAssertEqual(r.content, "")
+        XCTAssertEqual(r.toolCalls.map(\.name), ["shell"])
+        XCTAssertEqual(r.toolCalls.first?.argumentsJSON, #"{"command":["ls"]}"#)
+    }
+
+    /// A tool_call written inside the think block is the model planning, not a call; the real
+    /// call after `</think>` is the only one, and the prose between is the visible text.
+    func testQwenToolCallInsideThinkIsNotACall() {
+        let text = "<think>\nMaybe <tool_call>\n{\"name\": \"rm\", \"arguments\": {\"path\": \"/\"}}\n</tool_call> no, read first.\n</think>\n\nReading the file.\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.swift\"}}\n</tool_call>"
+        let r = ToolCallParser.parse(text, format: .qwenXML)
+        XCTAssertEqual(r.toolCalls.map(\.name), ["read_file"])
+        XCTAssertEqual(r.content, "Reading the file.")
+    }
+
+    /// No closing tag: the whole output is thinking. Neither its JSON call nor a bare
+    /// Qwen3-Coder function block inside it becomes a call, and none of it is answer text.
+    func testQwenUnclosedThinkIsNotAnswerNorCall() {
+        let jsonForm = ToolCallParser.parse("<think>\nPlan: <tool_call>\n{\"name\": \"rm\", \"arguments\": {}}\n</tool_call> then more thinking", format: .qwenXML)
+        XCTAssertTrue(jsonForm.toolCalls.isEmpty)
+        XCTAssertEqual(jsonForm.content, "")
+        let bare = ToolCallParser.parse("<think>plan <function=rm>\n<parameter=path>\n/\n</parameter>\n</function>\n</tool_call>", format: .qwenXML)
+        XCTAssertTrue(bare.toolCalls.isEmpty)
+        XCTAssertEqual(bare.content, "")
+    }
+
+    /// No think at all (Qwen3-Coder): the bytes parse exactly as before #893, literal expectations.
+    func testQwenCoderBytesUnchangedWithoutThink() {
+        let bare = "I'll list the files.\n<function=shell>\n<parameter=command>\n[\"ls\", \"-la\"]\n</parameter>\n</function>\n</tool_call>"
+        let tagged = "Listing.\n<tool_call>\n<function=shell>\n<parameter=command>\n[\"ls\"]\n</parameter>\n</function>\n</tool_call>"
+        XCTAssertEqual(ToolCallParser.dropLeadingThink(bare), bare)
+        XCTAssertEqual(ToolCallParser.dropLeadingThink(tagged), tagged)
+        let r1 = ToolCallParser.parse(bare, format: .qwenXML)
+        XCTAssertEqual(r1.content, "I'll list the files.")
+        XCTAssertEqual(r1.toolCalls.map(\.name), ["shell"])
+        XCTAssertEqual(r1.toolCalls.first?.argumentsJSON, #"{"command":["ls","-la"]}"#)
+        let r2 = ToolCallParser.parse(tagged, format: .qwenXML)
+        XCTAssertEqual(r2.content, "Listing.")
+        XCTAssertEqual(r2.toolCalls.first?.argumentsJSON, #"{"command":["ls"]}"#)
+    }
+
+    /// Only a block that OPENS the output is thinking: prose about the tag, a call whose argument
+    /// holds it, or a block after leading whitespace stay as they were.
+    func testQwenThinkElsewhereIsText() {
+        let prose = "The <think> tag wraps reasoning, so a lone <think> here is text."
+        XCTAssertEqual(ToolCallParser.parse(prose, format: .qwenXML).content, prose)
+        let call = ToolCallParser.parse("<tool_call>\n{\"name\": \"write\", \"arguments\": {\"text\": \"<think>\"}}\n</tool_call>", format: .qwenXML)
+        XCTAssertEqual(call.toolCalls.first?.argumentsJSON, #"{"text":"<think>"}"#)
+        XCTAssertEqual(ToolCallParser.parse(" <think>x</think>y", format: .qwenXML).content, "<think>x</think>y")
+        // Nested opener: the first `</think>` ends the block (the stream and the grammar gate agree).
+        XCTAssertEqual(ToolCallParser.parse("<think>a<think>b</think>c</think>answer", format: .qwenXML).content, "c</think>answer")
+    }
+
+    /// The think block is not replayed in history: the assistant turn re-serializes the visible text only.
+    func testQwenThinkNotReplayed() {
+        let text = "<think>\nread it first\n</think>\n\nReading the file.\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.swift\"}}\n</tool_call>"
+        let r = ToolCallParser.parse(text, format: .qwenXML)
+        let replay = ToolCallParser.serializeAssistant(content: r.content, toolCalls: r.toolCalls, format: .qwenXML)
+        XCTAssertEqual(replay, "Reading the file.\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\":\"a.swift\"}}\n</tool_call>")
+    }
+
+    /// Megabytes of think text, unclosed or with many nested openers: one forward search, the same answer.
+    func testQwenThinkMegabytesParseOnce() {
+        let unclosed = "<think>" + String(repeating: "<think><tool_call>{\"name\": \"rm\", \"arguments\": {}}</tool_call>", count: 20_000)
+        XCTAssertGreaterThan(unclosed.utf8.count, 1_000_000)
+        let r1 = ToolCallParser.parse(unclosed, format: .qwenXML)
+        XCTAssertTrue(r1.toolCalls.isEmpty)
+        XCTAssertEqual(r1.content, "")
+        let closed = "<think>" + String(repeating: "<think>a", count: 150_000) + "</think>ok"
+        XCTAssertEqual(ToolCallParser.parse(closed, format: .qwenXML).content, "ok")
+    }
+
     // MARK: Mistral / Devstral
 
     func testMistralToolCalls() {

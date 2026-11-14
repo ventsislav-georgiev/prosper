@@ -842,6 +842,11 @@ tag from the now-released section and put it on the new top draft.
   its new end, and an emptied file shows from the top. (#1155)
 - Text Viewer: reloading a large Markdown document is fast again (1 MiB took about 2 s). (#1155)
 - Text Viewer: Markdown documents now draw up to 8,000 links as links (was 2,000). (#1155)
+- Coding agent on Qwen3.6 (and other thinking models): the model's opening think block no longer
+  shows up as the answer or goes back into the conversation, and a tool call the model only sketches
+  while thinking is no longer run. (#893)
+- Coding agent: changing the agent model while a model is loading no longer opens the session under
+  the other model's name. (#893)
 
 ## v2.174.0
 

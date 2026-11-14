@@ -472,6 +472,11 @@ actor LlamaAgentEngine: AgentChatEngine {
         // ---- sampler chain (per request; freed with the chain)
         let chain = llama_sampler_chain_init(llama_sampler_chain_default_params())
         defer { llama_sampler_free(chain) }
+        // #893: the same chain without the grammar, sampling inside a think block that opens
+        // the output (`ThinkGate`); nil when there is no grammar or no single think tokens.
+        var thinkChain: UnsafeMutablePointer<llama_sampler>?
+        defer { if let thinkChain { llama_sampler_free(thinkChain) } }
+        var gate: ThinkGate?
         if Self.grammarEnabled, !tools.isEmpty {
             let names = tools.compactMap { ($0["function"] as? [String: any Sendable])?["name"] as? String }
             if let grammar = Self.toolCallGrammar(toolNames: names) {
@@ -487,16 +492,27 @@ actor LlamaAgentEngine: AgentChatEngine {
                                 vocab, g, r, nil, 0, &triggerTokens, 1)
                         }
                     }
-                    if let sampler { llama_sampler_chain_add(chain, sampler) }
+                    if let sampler {
+                        llama_sampler_chain_add(chain, sampler)
+                        let open = tokenize(ToolCallParser.thinkOpen, addSpecial: false, parseSpecial: true)
+                        let close = tokenize(ToolCallParser.thinkClose, addSpecial: false, parseSpecial: true)
+                        if open.count == 1, close.count == 1, let first = open.first, let last = close.first {
+                            gate = ThinkGate(open: first, close: last)
+                            thinkChain = llama_sampler_chain_init(llama_sampler_chain_default_params())
+                        }
+                    }
                 }
             }
         }
-        if temperature <= 0.01 {
-            llama_sampler_chain_add(chain, llama_sampler_init_greedy())
-        } else {
-            if topP < 1.0 { llama_sampler_chain_add(chain, llama_sampler_init_top_p(topP, 1)) }
-            llama_sampler_chain_add(chain, llama_sampler_init_temp(temperature))
-            llama_sampler_chain_add(chain, llama_sampler_init_dist(0x50524F53))
+        for c in [chain, thinkChain] {
+            guard let c else { continue }
+            if temperature <= 0.01 {
+                llama_sampler_chain_add(c, llama_sampler_init_greedy())
+            } else {
+                if topP < 1.0 { llama_sampler_chain_add(c, llama_sampler_init_top_p(topP, 1)) }
+                llama_sampler_chain_add(c, llama_sampler_init_temp(temperature))
+                llama_sampler_chain_add(c, llama_sampler_init_dist(0x50524F53))
+            }
         }
 
         // ---- decode loop
@@ -511,7 +527,8 @@ actor LlamaAgentEngine: AgentChatEngine {
 
         decode: while generated < budget {
             if Task.isCancelled { break }
-            let token = llama_sampler_sample(chain, ctx, -1)
+            let token = llama_sampler_sample(gate?.pick(grammar: chain, plain: thinkChain) ?? chain, ctx, -1)
+            gate?.feed(token)
             Perf.end("model.ttft", &ttft)
             if llama_vocab_is_eog(vocab, token) { break }
 
@@ -562,6 +579,31 @@ actor LlamaAgentEngine: AgentChatEngine {
         // cache bookkeeping above only records tokens actually fed, so the
         // prefix stays truthful either way.
     }
+}
+
+/// #893: holds the lazy tool-call grammar back while a think block that opens the output is
+/// open. Qwen's thinking models open with the `<think>` token; a `<tool_call>` token inside the
+/// block is the model planning, and once it started the grammar the forced call was real and
+/// `</think>` could never follow. Same block as `ToolCallParser.dropLeadingThink`. Fed every
+/// sampled token in order; O(1) state whatever the block's length. A value type used inside
+/// the engine actor's `stream`, no closures.
+struct ThinkGate {
+    let open: Int32
+    let close: Int32
+    private(set) var inThink = false
+    private var sampled = false
+
+    mutating func feed(_ token: Int32) {
+        if !sampled {
+            sampled = true
+            inThink = token == open
+        } else if inThink, token == close {
+            inThink = false
+        }
+    }
+
+    /// The chain that samples the next token: the grammar one only outside the think block.
+    func pick<T>(grammar: T, plain: T) -> T { inThink ? plain : grammar }
 }
 
 /// Incremental UTF-8 assembly for per-token byte pieces: emits the longest

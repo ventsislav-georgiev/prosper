@@ -40,7 +40,8 @@ enum ToolCallParser {
     static func parse(_ text: String, format: ToolCallFormat) -> ToolCallParseResult {
         switch format {
         case .qwenXML, .hermesJSON:
-            let tagged = parseTagged(text, open: "<tool_call>", close: "</tool_call>")
+            let visible = dropLeadingThink(text)
+            let tagged = parseTagged(visible, open: "<tool_call>", close: "</tool_call>")
             // Qwen3-Coder routinely omits the opening `<tool_call>` tag — the turn
             // starts directly with `<function=…>` and ends with a stray
             // `</tool_call>`. Mirror the reference parser's back-off
@@ -48,9 +49,9 @@ enum ToolCallParser {
             // `<function=…></function>` blocks from the whole output).
             // Require call-structure evidence beyond the bare opener so prose that
             // merely MENTIONS `<function=` is not eaten as a tool call.
-            if tagged.toolCalls.isEmpty, text.contains("<function="),
-               text.contains("</function>") || text.contains("<parameter=") {
-                return parseBareXMLFunctions(text)
+            if tagged.toolCalls.isEmpty, visible.contains("<function="),
+               visible.contains("</function>") || visible.contains("<parameter=") {
+                return parseBareXMLFunctions(visible)
             }
             return tagged
         case .mistral: return parseMistral(text)
@@ -422,6 +423,21 @@ enum ToolCallParser {
             }
         }
         return out
+    }
+
+    static let thinkOpen = "<think>"
+    static let thinkClose = "</think>"
+
+    /// #893: Qwen's thinking models open their output with `<think>`. A think block that OPENS the
+    /// output is not answer text: dropped through its first `</think>`; unclosed, the whole output is
+    /// thinking and nothing is left (a `<tool_call>` inside it is the model planning, not a call). A
+    /// `<think>` anywhere else is text, so prose about the tag or a call writing it stays whole.
+    /// `StreamSplitter`'s leading-think phase applies this same rule to the live stream, and
+    /// `ThinkGate` holds the tool-call grammar until the same block closes. One forward search, no regex.
+    static func dropLeadingThink(_ text: String) -> String {
+        guard text.hasPrefix(thinkOpen) else { return text }
+        guard let close = text.range(of: thinkClose) else { return "" }
+        return String(text[close.upperBound...])
     }
 
     /// `{json}` → `<arg_key>k</arg_key>\n<arg_value>v</arg_value>` pairs (GLM replay).

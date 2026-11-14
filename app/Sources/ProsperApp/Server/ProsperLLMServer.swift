@@ -448,7 +448,7 @@ private final class HTTPConnection: @unchecked Sendable {
             // wise stares at a spinner for the whole decode), then validate the
             // buffered tool calls. Repair retries (rare) stay fully buffered.
             let itemID = "msg_\(responseID)"
-            var splitter = StreamSplitter(markers: Self.markers(for: format))
+            var splitter = StreamSplitter(format: format)
             var addedItem = false
             var streamed = ""
             let result = try await generateValidated(engine: engine, request: chat, format: format) { chunk in
@@ -496,7 +496,7 @@ private final class HTTPConnection: @unchecked Sendable {
             emit("response.output_item.added", ResponsesPayload.outputItemAdded(
                 sequence: seq, index: outputIndex,
                 item: ResponsesPayload.messageItem(id: itemID, text: "", status: "in_progress")))
-            var splitter = StreamSplitter(markers: Self.markers(for: format))
+            var splitter = StreamSplitter(format: format)
             let stream = engine.generateChat(
                 messages: chat.chatTurns(format: format), tools: [],
                 maxTokens: chat.maxTokens, temperature: chat.temperature,
@@ -577,7 +577,7 @@ private final class HTTPConnection: @unchecked Sendable {
 
         // No tools requested → pure content; stream live with a tail-guard so we
         // never split a (defensively watched) marker across a delta.
-        var splitter = StreamSplitter(markers: Self.markers(for: format))
+        var splitter = StreamSplitter(format: format)
         let stream = engine.generateChat(
             messages: request.chatTurns(format: format), tools: [],
             maxTokens: request.maxTokens, temperature: request.temperature,
@@ -675,22 +675,6 @@ private final class HTTPConnection: @unchecked Sendable {
     /// (the prompt can be multi-MB; joining it just to count chars is wasted copying).
     private static func estimateTokens<S: Sequence>(_ parts: S) -> Int where S.Element == String {
         max(1, parts.reduce(0) { $0 + $1.count } / 4)
-    }
-
-    /// Open markers we defensively avoid splitting mid-delta while streaming content.
-    private static func markers(for format: ToolCallFormat) -> [String] {
-        switch format {
-        // `<function=` too: Qwen3-Coder routinely skips the opening `<tool_call>`
-        // tag and starts the call block directly (ToolCallParser back-off parses
-        // it); without the marker the block streams as user-visible prose.
-        case .qwenXML, .hermesJSON: return ["<tool_call>", "<function="]
-        case .mistral: return ["[TOOL_CALLS]"]
-        case .harmony: return ["<|channel|>", "<|message|>", "to=functions."]
-        case .nemotron: return ["<toolcall>", "<think>"]
-        case .glm: return ["<tool_call>", "<arg_key>", "<arg_value>", "<think>"]
-        case .kimi: return ["<|tool_calls_section_begin|>", "<|tool_call_begin|>", "<think>"]
-        case .minimax: return ["<minimax:tool_call>", "<invoke name=", "<think>"]
-        }
     }
 
     // MARK: Writers
@@ -852,50 +836,103 @@ private struct HTTPRequest {
 /// can never be emitted as user-visible content split across two deltas. On the first
 /// marker occurrence it stops emitting (the buffered remainder is parsed by the
 /// caller). For the default Qwen path with no tool request this simply streams prose.
+/// #893: for qwenXML/hermesJSON a think block that opens the output is never emitted —
+/// `ToolCallParser.dropLeadingThink`'s rule, applied incrementally, so a client never sees
+/// think text in a delta that the final message leaves out, or the reverse. Bounded:
+/// between calls it holds at most the guard tail (or, inside the think block, the last
+/// `</think>`.count - 1 characters); think text is dropped as it arrives.
 struct StreamSplitter {
+    private enum Phase { case start, think, afterThink, text, stopped }
     private let markers: [String]
     private let guardLen: Int
-    private var acc = ""
-    private var sent = 0
-    private var stopped = false
+    private var pending = ""
+    private var phase: Phase
 
-    init(markers: [String]) {
+    init(format: ToolCallFormat) {
+        self.init(markers: Self.markers(for: format),
+                  leadingThink: format == .qwenXML || format == .hermesJSON)
+    }
+
+    init(markers: [String], leadingThink: Bool = false) {
         self.markers = markers
         self.guardLen = max(0, (markers.map(\.count).max() ?? 1) - 1)
+        self.phase = leadingThink ? .start : .text
+    }
+
+    /// Open markers we defensively avoid splitting mid-delta while streaming content.
+    static func markers(for format: ToolCallFormat) -> [String] {
+        switch format {
+        // `<function=` too: Qwen3-Coder routinely skips the opening `<tool_call>`
+        // tag and starts the call block directly (ToolCallParser back-off parses
+        // it); without the marker the block streams as user-visible prose.
+        case .qwenXML, .hermesJSON: return ["<tool_call>", "<function="]
+        case .mistral: return ["[TOOL_CALLS]"]
+        case .harmony: return ["<|channel|>", "<|message|>", "to=functions."]
+        case .nemotron: return ["<toolcall>", "<think>"]
+        case .glm: return ["<tool_call>", "<arg_key>", "<arg_value>", "<think>"]
+        case .kimi: return ["<|tool_calls_section_begin|>", "<|tool_call_begin|>", "<think>"]
+        case .minimax: return ["<minimax:tool_call>", "<invoke name=", "<think>"]
+        }
     }
 
     mutating func ingest(_ chunk: String) -> String {
-        acc += chunk
-        guard !stopped else { return "" }
-        if let pos = earliestMarker() {
-            stopped = true
-            return emit(upTo: pos)
-        }
-        return emit(upTo: max(sent, acc.count - guardLen))
+        guard phase != .stopped else { return "" }
+        pending += chunk
+        return advance(atEnd: false)
     }
 
     mutating func finish() -> String {
-        guard !stopped else { return "" }
-        return emit(upTo: acc.count)
+        guard phase != .stopped else { return "" }
+        return advance(atEnd: true)
     }
 
-    private func earliestMarker() -> Int? {
-        var best: Int?
-        for m in markers {
-            if let r = acc.range(of: m) {
-                let p = acc.distance(from: acc.startIndex, to: r.lowerBound)
-                best = min(best ?? p, p)
+    /// UTF-8 bytes held back between calls (#893: rows pin the bound).
+    var heldCount: Int { pending.utf8.count }
+
+    private mutating func advance(atEnd: Bool) -> String {
+        if phase == .start {
+            if pending.hasPrefix(ToolCallParser.thinkOpen) {
+                pending.removeFirst(ToolCallParser.thinkOpen.count)
+                phase = .think
+            } else if !atEnd, ToolCallParser.thinkOpen.hasPrefix(pending) {
+                return ""   // may still open a think block: at most 6 characters held
+            } else {
+                phase = .text
             }
         }
-        return best
+        if phase == .think {
+            guard let close = pending.range(of: ToolCallParser.thinkClose) else {
+                // Think text is never shown: keep only what could begin `</think>`; unclosed at the end, all of it goes.
+                pending = atEnd ? "" : String(pending.suffix(ToolCallParser.thinkClose.count - 1))
+                return ""
+            }
+            pending = String(pending[close.upperBound...])
+            phase = .afterThink
+        }
+        if phase == .afterThink {
+            // Nothing was shown before the block, and the final text is trimmed: drop the
+            // whitespace after `</think>` so the streamed text stays a prefix of the final one.
+            let blank = pending.unicodeScalars.prefix { CharacterSet.whitespacesAndNewlines.contains($0) }
+            pending = String(pending.unicodeScalars[blank.endIndex...])
+            guard !pending.isEmpty else { return "" }
+            phase = .text
+        }
+        if let pos = earliestMarker() {
+            phase = .stopped
+            defer { pending = "" }
+            return String(pending[..<pos])
+        }
+        let cut = atEnd ? pending.endIndex
+            : pending.index(pending.endIndex, offsetBy: -guardLen, limitedBy: pending.startIndex) ?? pending.startIndex
+        defer { pending = String(pending[cut...]) }
+        return String(pending[..<cut])
     }
 
-    private mutating func emit(upTo pos: Int) -> String {
-        guard pos > sent else { return "" }
-        let start = acc.index(acc.startIndex, offsetBy: sent)
-        let end = acc.index(acc.startIndex, offsetBy: pos)
-        sent = pos
-        return String(acc[start..<end])
+    /// Earliest marker in the unsent text. A marker can't start in text already sent: the
+    /// guard holds back `max marker length - 1` characters, so any marker there was whole
+    /// in the pending text of an earlier call and stopped the stream then.
+    private func earliestMarker() -> String.Index? {
+        markers.compactMap { pending.range(of: $0)?.lowerBound }.min()
     }
 }
 
