@@ -391,8 +391,8 @@ extension ManagedConfigQATests {
     }
 
     /// The note text typed out once: the tests pin the words, not a reference to the constant.
-    private static let changedNote = "This file changed after the sheet opened, in a place the diff does not show "
-        + "(a hidden value or line endings): this approval is for the file as it is now."
+    private static let changedNote = "This file changed after the sheet opened, somewhere these lines do not show "
+        + "(another part of the file, a hidden value, the line endings or a byte order mark): this approval is for the file as it is now."
 
     /// `sheet` with the changed-under-the-sheet note on its one file.
     private func withChangedNote(_ sheet: ManagedConfigChangeSet?) -> ManagedConfigChangeSet? {
@@ -485,7 +485,7 @@ extension ManagedConfigQATests {
         XCTAssertEqual(r.pieces, [.init(id: "rules", action: .remove)])
         XCTAssertEqual(env.consent.seen.count, 2, "the Remove asked")
         XCTAssertEqual(env.consent.seen.last?.files.first?.notes,
-                       ["The rules block was edited by hand: Remove deletes those edits too (the file as it is now goes to the backups)."])
+                       ["The rules block was edited by hand: Remove deletes those edits too. A copy of the file as it is now goes to the backups, which keep the copies from Prosper's last 5 writes to this file."])
         XCTAssertTrue(env.consent.seen.last?.files.first?.lines.contains(.init(sign: .removed, text: "Follow the kit rules, and mine.")) ?? false)
         XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
         let pre = backups(env, suffix: ".pre")
@@ -520,7 +520,7 @@ extension ManagedConfigQATests {
         XCTAssertEqual(env.consent.seen.count, 2)
         let file = env.consent.seen.last?.files.first
         XCTAssertTrue(file?.lines.contains(.init(sign: .removed, text: "Follow my rules instead.")) ?? false, "the sheet shows the edit it replaces")
-        XCTAssertTrue(file?.notes.contains("The rules block was edited by hand: Repair replaces those edits too (the file as it is now goes to the backups).") ?? false)
+        XCTAssertTrue(file?.notes.contains("The rules block was edited by hand: Repair replaces those edits too. A copy of the file as it is now goes to the backups, which keep the copies from Prosper's last 5 writes to this file.") ?? false)
         XCTAssertEqual(env.bytes(env.claudeMD), applied)
         XCTAssertEqual(env.mc.status(owner: env.owner).map(\.state), [.applied], "recorded now")
         let removed = await env.mc.remove(owner: env.owner)
@@ -720,7 +720,7 @@ extension ManagedConfigQATests {
         let r = await env.mc.remove(owner: env.owner)
         XCTAssertEqual(r.status, .done)
         XCTAssertEqual(env.consent.seen.last?.files.first?.notes,
-                       ["The rules block was edited by hand: Remove deletes those edits too (the file as it is now goes to the backups)."])
+                       ["The rules block was edited by hand: Remove deletes those edits too. A copy of the file as it is now goes to the backups, which keep the copies from Prosper's last 5 writes to this file."])
         XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
     }
 

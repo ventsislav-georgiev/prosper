@@ -49,6 +49,9 @@ struct OrderedJSON: Sendable {
             throw ParseError(line: 1, reason: "the file is not UTF-8 text")
         }
         var parser = Parser(b: bytes)
+        // #1227: a UTF-8 byte order mark at byte 0 is not JSON; the parse starts after it and every range
+        // stays an offset into `bytes`, so each splice keeps the mark at byte 0. A mark anywhere else is refused.
+        parser.i = OrderedJSON.markLength(bytes)
         let root = try parser.value(depth: 0)
         try parser.skipWhitespace()
         if parser.i < bytes.count { throw parser.fail("unexpected text after the JSON value") }
@@ -57,6 +60,8 @@ struct OrderedJSON: Sendable {
     }
 
     var text: String { String(decoding: bytes, as: UTF8.self) }
+    /// 3 when `bytes` start with a UTF-8 byte order mark, else 0.
+    static func markLength(_ bytes: [UInt8]) -> Int { bytes.starts(with: Lines.bom) ? Lines.bom.count : 0 }
     var newline: String { OrderedJSON.newline(of: bytes) }
 
     /// B-INFO-9: the file's majority line ending; a tie or a file with none is LF.
@@ -174,7 +179,8 @@ struct OrderedJSON: Sendable {
     /// Leading spaces/tabs of the line that holds `offset`.
     func lineIndent(_ offset: Int) -> String {
         var start = min(offset, bytes.count)
-        while start > 0, bytes[start - 1] != 0x0A { start -= 1 }
+        let first = OrderedJSON.markLength(bytes) // the mark is no indent
+        while start > first, bytes[start - 1] != 0x0A { start -= 1 }
         var end = start
         while end < bytes.count, bytes[end] == 0x20 || bytes[end] == 0x09 { end += 1 }
         return String(decoding: bytes[start..<end], as: UTF8.self)

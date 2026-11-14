@@ -123,4 +123,151 @@ final class ManagedConfigBOMTests: XCTestCase {
         XCTAssertEqual(env.bytes(url), Self.mine + Self.lf + Self.block() + Self.lf)
         XCTAssertEqual(env.mode(url), 0o600, "the user's chmod stays")
     }
+
+    // MARK: #1227 R1025-1: a JSON target that starts with a mark
+
+    private static func count(_ needle: [UInt8], in hay: [UInt8]?) -> Int {
+        guard let hay, hay.count >= needle.count else { return 0 }
+        return (0...(hay.count - needle.count)).filter { hay[$0..<$0 + needle.count].elementsEqual(needle) }.count
+    }
+
+    /// Set, append and union into a settings.json behind a mark write the mark plus exactly the bytes the
+    /// same file without the mark gets, show the same sheet lines (none carries U+FEFF), and Remove gives
+    /// back the original bytes, mark included. The parent refused every case as corrupt ("invalid JSON").
+    func testJSONBehindAMarkKeepsItAtByteZeroThroughSetAppendAndRemove() async throws {
+        // the last input: the root indented on line 0, so the mark must not count as indentation
+        let inputs = ["{\n  \"theme\": \"dark\"\n}\n", "{}",
+                      "{\n  \"statusLine\": {\"type\": \"command\", \"command\": \"my-own\"}\n}\n", "  {\n  }\n"]
+        let pieces = [MCPieces.statusLine(), MCPieces.hook(), MCPieces.allow(["Bash(ls:*)"])]
+        for (i, input) in inputs.enumerated() {
+            for (j, piece) in pieces.enumerated() {
+                let label = "bom-json-\(i)-\(j)"
+                let marked = makeMCEnv(label: label + "-mark"), plain = makeMCEnv(label: label + "-plain")
+                try Data(Self.bom + Array(input.utf8)).write(to: marked.settings)
+                try Data(input.utf8).write(to: plain.settings)
+                let a = await marked.mc.apply([piece], owner: marked.owner)
+                let b = await plain.mc.apply([piece], owner: plain.owner)
+                XCTAssertEqual(a.status, .done, label)
+                XCTAssertEqual(b.status, .done, label)
+                let written = try XCTUnwrap(plain.bytes(plain.settings), label)
+                XCTAssertEqual(marked.bytes(marked.settings), Self.bom + written, "\(label): the mark at byte 0, the rest as without it")
+                XCTAssertEqual(Self.count(Self.bom, in: marked.bytes(marked.settings)), 1, "\(label): one mark, never two")
+                XCTAssertEqual(marked.consent.seen.first?.files.map(\.lines), plain.consent.seen.first?.files.map(\.lines), label)
+                XCTAssertFalse(marked.consent.seen.first?.files.contains { $0.lines.contains { $0.text.unicodeScalars.contains("\u{FEFF}") } } ?? true, label)
+                XCTAssertEqual(marked.mc.status(owner: marked.owner).map(\.state), plain.mc.status(owner: plain.owner).map(\.state), label)
+
+                let removed = await marked.mc.remove(owner: marked.owner)
+                _ = await plain.mc.remove(owner: plain.owner)
+                XCTAssertEqual(removed.status, .done, label)
+                let back = try XCTUnwrap(plain.bytes(plain.settings), label)
+                XCTAssertEqual(marked.bytes(marked.settings), Self.bom + back, "\(label): Remove: the mark and what the file without it gets")
+                // an emptied `{\n  }` comes back as `{}` (OrderedJSON.removingChild shortcut), with or without the mark
+                if i < 3 { XCTAssertEqual(back, Array(input.utf8), "\(label): Remove restores the bytes") }
+            }
+        }
+    }
+
+    /// Still refused as corrupt, nothing asked, the file byte for byte as it was: a file that is only a mark
+    /// (or a mark and whitespace), a mark before invalid JSON (with the reason the same bytes without the mark
+    /// get), a second mark, a mark not at byte 0, and the UTF-16 marks. An empty file WITHOUT a mark is
+    /// blank and gets the skeleton (unchanged); a mark-only file is not treated as blank.
+    func testJSONMarkOnlyInvalidOrNotAtByteZeroIsRefusedAndLeftAsItWas() async throws {
+        let refused: [[UInt8]] = [
+            Self.bom,
+            Self.bom + [0x20, 0x0A],
+            Self.bom + Self.bom + Array("{}".utf8),
+            Array("{".utf8) + Self.bom + Array("\"a\": 1}".utf8),
+            [0x20] + Self.bom + Array("{}".utf8),
+            [0xFE, 0xFF, 0x00, 0x7B, 0x00, 0x7D],
+            [0xFF, 0xFE, 0x7B, 0x00, 0x7D, 0x00],
+        ]
+        for (i, bytes) in refused.enumerated() {
+            let env = makeMCEnv(label: "bom-refused-\(i)")
+            try Data(bytes).write(to: env.settings)
+            let r = await env.mc.apply([MCPieces.statusLine()], owner: env.owner)
+            XCTAssertEqual(r.status, .refused, "case \(i)")
+            XCTAssertTrue(r.refusals.count == 1 && r.refusals.allSatisfy { r in guard case .corrupt = r.reason else { return false }; return true }, "case \(i)")
+            XCTAssertEqual(env.consent.seen.count, 0, "case \(i): no sheet")
+            XCTAssertEqual(env.bytes(env.settings), bytes, "case \(i): left as it was")
+        }
+        for invalid in ["{\"a\": 1,}", "{\"a\": 1} x"] {
+            let marked = makeMCEnv(label: "bom-invalid-mark"), plain = makeMCEnv(label: "bom-invalid-plain")
+            try Data(Self.bom + Array(invalid.utf8)).write(to: marked.settings)
+            try Data(invalid.utf8).write(to: plain.settings)
+            let a = await marked.mc.apply([MCPieces.statusLine()], owner: marked.owner)
+            let b = await plain.mc.apply([MCPieces.statusLine()], owner: plain.owner)
+            XCTAssertEqual(a.refusals.map(\.reason), b.refusals.map(\.reason), invalid)
+            XCTAssertEqual(a.status, .refused, invalid)
+            XCTAssertEqual(marked.bytes(marked.settings), Self.bom + Array(invalid.utf8), invalid)
+        }
+    }
+
+    /// A mark inside a string value is a legal character: accepted as before and kept where it is.
+    func testAMarkInsideAJSONStringIsKeptWhereItIs() async throws {
+        let env = makeMCEnv()
+        let original = Array("{\n  \"note\": \"a".utf8) + Self.bom + Array("b\"\n}\n".utf8)
+        try Data(original).write(to: env.settings)
+        let r = await env.mc.apply([MCPieces.statusLine()], owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        let written = try XCTUnwrap(env.bytes(env.settings))
+        XCTAssertFalse(written.starts(with: Self.bom), "not moved to byte 0")
+        XCTAssertTrue(written.starts(with: original.prefix(original.count - 3)), "the user's value as it was, mark inside")
+        XCTAssertEqual(Self.count(Self.bom, in: written), 1)
+        _ = await env.mc.remove(owner: env.owner)
+        XCTAssertEqual(env.bytes(env.settings), original)
+    }
+
+    // MARK: #1227 R1025-3: what the sheet shows
+
+    /// A top insert into a text file that starts with a mark: these literal lines, no U+FEFF on any of them.
+    func testTopInsertIntoAMarkedTextFileShowsTheseSheetLines() async throws {
+        let env = makeMCEnv()
+        try Data(Self.bom + Self.mine).write(to: env.claudeMD)
+        let r = await env.mc.apply([MCPieces.block(position: .top)], owner: env.owner)
+        XCTAssertEqual(r.status, .done)
+        typealias Line = ManagedConfigChangeSet.Line
+        XCTAssertEqual(env.consent.seen.count, 1)
+        XCTAssertEqual(env.consent.seen.first?.files.map(\.lines), [[
+            Line(sign: .added, text: "<!-- >>> prosper:kit-a:rules v1.0.0 \u{00B7} managed by Prosper, edits show as drift >>> -->"),
+            Line(sign: .added, text: "Follow the kit rules."),
+            Line(sign: .added, text: "<!-- <<< prosper:kit-a:rules <<< -->"),
+            Line(sign: .added, text: ""),
+            Line(sign: .context, text: "# mine"),
+        ]])
+        XCTAssertEqual(env.consent.seen.first?.files.map(\.notes), [["Read by new Claude Code sessions and after /compact."]])
+    }
+
+    /// A change that only drops or adds the mark (the user's save while the sheet is up; Prosper itself never
+    /// makes one) leaves the lines equal, so it shows as the second sheet with the changed-under-the-sheet
+    /// note; the write then keeps what the user saved. The added mark on a text file is QATests a7 (c).
+    func testAMarkDroppedOrAddedUnderTheSheetIsAskedAgainWithTheNote() async throws {
+        let text = Array("# one\n# two\n# three\n# four\n".utf8)
+        let json = Array("{\n  \"theme\": \"dark\"\n}\n".utf8)
+        let cases: [(label: String, file: String, before: [UInt8], during: [UInt8], piece: ManagedConfigPiece)] = [
+            ("text-drop", "CLAUDE.md", Self.bom + text, text, MCPieces.block()),
+            ("json-drop", "settings.json", Self.bom + json, json, MCPieces.statusLine()),
+            ("json-add", "settings.json", json, Self.bom + json, MCPieces.statusLine()),
+        ]
+        for c in cases {
+            let env = makeMCEnv(label: "bom-sheet-" + c.label)
+            let url = env.claude.appendingPathComponent(c.file)
+            try Data(c.before).write(to: url)
+            let during = c.during
+            // runs inside ManagedConfig.apply's task (cooperative pool), on the first sheet only
+            let consent = MCScriptedConsent { call, _ in
+                if call == 1 { try? Data(during).write(to: url) }
+                return true
+            }
+            let mc = ManagedConfig(roots: env.mc.roots, consent: consent, writer: env.writer)
+            let r = await mc.apply([c.piece], owner: env.owner)
+            XCTAssertEqual(r.status, .done, c.label)
+            XCTAssertEqual(consent.seen.count, 2, "\(c.label): the mark differs in bytes, asked again")
+            XCTAssertEqual(consent.seen.first?.files.map(\.lines), consent.seen.last?.files.map(\.lines), "\(c.label): the same lines")
+            XCTAssertEqual(consent.seen.first?.files.first?.notes.contains(ManagedConfigPlan.changedUnderSheetNote), false, c.label)
+            XCTAssertEqual(consent.seen.last?.files.first?.notes.last, ManagedConfigPlan.changedUnderSheetNote, c.label)
+            let written = env.bytes(url)
+            XCTAssertEqual(written?.starts(with: Self.bom), c.during.starts(with: Self.bom), "\(c.label): the user's mark or none")
+            XCTAssertEqual(Self.count(Self.bom, in: written), c.during.starts(with: Self.bom) ? 1 : 0, c.label)
+        }
+    }
 }

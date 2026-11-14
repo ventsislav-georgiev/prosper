@@ -981,6 +981,10 @@ tag from the now-released section and put it on the new top draft.
   speed; saved fan speeds that can no longer be read while Prosper holds the fans now turn manual
   off and hand the fans back; a garbage fan count from the SMC can no longer crash the fan helper.
   (#1225)
+- A Claude Code settings.json (or another JSON file Prosper manages) that starts with a byte order
+  mark is no longer refused as corrupt: Prosper edits it and keeps the mark where it is. The consent
+  sheet says more exactly why it asks again and how many backups of a hand-edited file are kept
+  (#1227)
 
 ## v2.174.0
 

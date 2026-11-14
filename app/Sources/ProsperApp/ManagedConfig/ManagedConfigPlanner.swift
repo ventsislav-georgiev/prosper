@@ -508,7 +508,8 @@ struct ManagedConfigPlanner {
     /// A-INFO-10 / A-INFO-1: the sheet says when a block it deletes or replaces holds hand edits.
     /// Piece id only, never the text (errata C11). Every write of an existing file backs it up first.
     private func driftNote(_ w: inout Work, _ id: String, _ verb: String) {
-        let note = "The \(id) block was edited by hand: \(verb) those edits too (the file as it is now goes to the backups)."
+        let note = "The \(id) block was edited by hand: \(verb) those edits too. A copy of the file as it is now goes to the backups, "
+            + "which keep the copies from Prosper's last \(ManagedConfig.preWriteBackupsKept) writes to this file."
         if !w.notes.contains(note) { w.notes.append(note) }
     }
 

@@ -52,8 +52,8 @@ struct ManagedConfigPlan: Sendable {
     }
 
     /// #946 r2: a re-ask only because the bytes differ would show the very sheet already approved.
-    static let changedUnderSheetNote = "This file changed after the sheet opened, in a place the diff does not show "
-        + "(a hidden value or line endings): this approval is for the file as it is now."
+    static let changedUnderSheetNote = "This file changed after the sheet opened, somewhere these lines do not show "
+        + "(another part of the file, a hidden value, the line endings or a byte order mark): this approval is for the file as it is now."
 }
 
 /// #870: the managed-config primitive. Writes only what it can later find and remove exactly,

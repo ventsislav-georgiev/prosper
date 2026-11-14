@@ -10,7 +10,7 @@ import XCTest
 /// Every file is under the row's tempDir(); every chmod is undone in a defer. Byte fixtures are arrays.
 final class ManagedConfigCommitTests: XCTestCase {
     private static let replacement: [UInt8] = [0xEF, 0xBF, 0xBD] // U+FFFD as UTF-8
-    private static let removeNote = "The rules block was edited by hand: Remove deletes those edits too (the file as it is now goes to the backups)."
+    private static let removeNote = "The rules block was edited by hand: Remove deletes those edits too. A copy of the file as it is now goes to the backups, which keep the copies from Prosper's last 5 writes to this file."
 
     private func replacing(_ bytes: [UInt8], _ old: [UInt8], with new: [UInt8]) -> [UInt8] {
         var out: [UInt8] = [], i = 0
