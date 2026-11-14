@@ -687,6 +687,9 @@ tag from the now-released section and put it on the new top draft.
   action written there, and no longer again whenever Prosper re-reads the config in the background
   (opening its settings, after you edit the file, or after a callback was stopped for running too
   long). (#1149)
+- Extensions: a host function called from inside a Lua coroutine now reads its arguments from, and
+  returns its results to, that coroutine, so extensions that use coroutines get the right values
+  back. (#1151)
 
 ## v2.174.0
 

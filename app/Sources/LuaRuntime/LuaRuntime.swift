@@ -49,6 +49,12 @@ public final class LuaRuntime {
 
     /// `lua_State *`. Recreated on `reset()`.
     private var L: OpaquePointer!
+    /// #1151: the Lua thread whose host call is running (a coroutine's own thread when a coroutine made the call),
+    /// nil outside host calls. Set and put back per host call by the trampoline, and put back by `pcall` whatever
+    /// unwound; read and written only on the runtime's own lane, like `L`.
+    private var caller: OpaquePointer?
+    /// The thread the stack helpers act on: the caller's, else the main thread.
+    private var thread: OpaquePointer? { caller ?? L }
     private let maxInstructions: Int32
     private let memoryLimit: Int
     /// When true, `load` survives the sandbox, text chunks only (a binary chunk is
@@ -85,6 +91,8 @@ public final class LuaRuntime {
     var memoryInUse: Int { clua_mem_of(L).pointee.used }
     /// The highest `memoryInUse` so far. Same thread rule.
     var memoryPeak: Int { clua_mem_of(L).pointee.peak }
+    /// The main thread's stack height in its current frame. Same thread rule.
+    var mainStackHeight: Int32 { lua_gettop(L) }
 
     // MARK: - State lifecycle
 
@@ -202,6 +210,9 @@ public final class LuaRuntime {
     /// Protected call with a freshly-armed instruction budget, shared by every
     /// thread of the state and sticky once spent (#1126, clua_shim.c).
     private func pcall(args: Int32, results: Int32, budget: Int32? = nil) throws {
+        // A host call that unwound with a Lua error never ran the trampoline's restore.
+        let previousCaller = caller
+        defer { caller = previousCaller }
         clua_budget_arm(L, budget ?? maxInstructions)
         let enforced = clua_mem_enforce(L, 1)
         let status = clua_pcall(L, args, results, 0)
@@ -255,41 +266,50 @@ public final class LuaRuntime {
         else { return 0 }
         let box = Unmanaged<FnBox>.fromOpaque(boxPtr).takeUnretainedValue()
         let runtime = Unmanaged<LuaRuntime>.fromOpaque(rtPtr).takeUnretainedValue()
-        return box.fn(runtime)
+        // #1151: the helpers act on the thread that made this call until it returns, then on the previous one again.
+        let previousCaller = runtime.caller
+        runtime.caller = L
+        defer { runtime.caller = previousCaller }
+        // The count is applied to the calling thread's frame: never more values than that frame holds.
+        return min(max(box.fn(runtime), 0), lua_gettop(L))
     }
 
     // MARK: - Stack helpers (for use inside registered host functions)
+    // They act on the thread that made the running host call (#1151).
 
     /// Number of arguments passed to the current host function.
-    public var argumentCount: Int32 { lua_gettop(L) }
+    public var argumentCount: Int32 { lua_gettop(thread) }
 
     /// String argument at 1-based index `i`, or nil if not a string.
     public func stringArgument(_ i: Int32) -> String? {
-        clua_tostring(L, i).map { String(cString: $0) }
+        clua_tostring(thread, i).map { String(cString: $0) }
     }
 
     /// Number argument at 1-based index `i`, or nil if not a number.
     public func numberArgument(_ i: Int32) -> Double? {
         var isNum: Int32 = 0
-        let v = lua_tonumberx(L, i, &isNum)
+        let v = lua_tonumberx(thread, i, &isNum)
         return isNum != 0 ? v : nil
     }
 
     /// Boolean argument at 1-based index `i` using Lua truthiness (nil/false →
     /// false, everything else → true), or nil if no value occupies the slot.
     public func boolArgument(_ i: Int32) -> Bool? {
-        guard lua_type(L, i) != LUA_TNONE else { return nil }
-        return lua_toboolean(L, i) != 0
+        guard lua_type(thread, i) != LUA_TNONE else { return nil }
+        return lua_toboolean(thread, i) != 0
     }
 
+    /// The thread to push one value on, or nil when its stack cannot grow (the push is then skipped).
+    private var pushTarget: OpaquePointer? { lua_checkstack(thread, 1) != 0 ? thread : nil }
+
     /// Push a string result.
-    public func push(_ s: String) { lua_pushstring(L, s) }
+    public func push(_ s: String) { if let T = pushTarget { lua_pushstring(T, s) } }
     /// Push a number result.
-    public func push(_ d: Double) { lua_pushnumber(L, d) }
+    public func push(_ d: Double) { if let T = pushTarget { lua_pushnumber(T, d) } }
     /// Push a boolean result.
-    public func push(_ b: Bool) { lua_pushboolean(L, b ? 1 : 0) }
+    public func push(_ b: Bool) { if let T = pushTarget { lua_pushboolean(T, b ? 1 : 0) } }
     /// Push nil.
-    public func pushNil() { lua_pushnil(L) }
+    public func pushNil() { if let T = pushTarget { lua_pushnil(T) } }
 
     /// Materialise a JSON value (as produced by `JSONSerialization`) on the stack
     /// as the equivalent Lua value, so heavy JSON parsing happens in native code
@@ -304,38 +324,38 @@ public final class LuaRuntime {
     /// Net stack effect: +1. Recursion is depth-bounded and grows the C stack so
     /// pathological nesting can't crash the host.
     public func pushJSON(_ value: Any, depth: Int32 = 0) {
-        guard depth < 256, lua_checkstack(L, 3) != 0 else { lua_pushnil(L); return }
+        guard depth < 256, lua_checkstack(thread, 3) != 0 else { lua_pushnil(thread); return }
         switch value {
         case let s as String:
-            lua_pushstring(L, s)
+            lua_pushstring(thread, s)
         case let n as NSNumber:
             if CFGetTypeID(n as CFTypeRef) == CFBooleanGetTypeID() {
-                lua_pushboolean(L, n.boolValue ? 1 : 0)
+                lua_pushboolean(thread, n.boolValue ? 1 : 0)
             } else {
                 // objCType 'd' (100) / 'f' (102) are reals; the rest are integral.
                 let t = n.objCType.pointee
                 if t == 100 || t == 102 {
-                    lua_pushnumber(L, n.doubleValue)
+                    lua_pushnumber(thread, n.doubleValue)
                 } else {
-                    lua_pushinteger(L, lua_Integer(n.int64Value))
+                    lua_pushinteger(thread, lua_Integer(n.int64Value))
                 }
             }
         case let dict as [String: Any]:
-            lua_createtable(L, 0, Int32(clamping: dict.count))
+            lua_createtable(thread, 0, Int32(clamping: dict.count))
             for (k, v) in dict where !(v is NSNull) {
                 pushJSON(v, depth: depth + 1)
-                lua_setfield(L, -2, k)
+                lua_setfield(thread, -2, k)
             }
         case let arr as [Any]:
-            lua_createtable(L, Int32(clamping: arr.count), 0)
+            lua_createtable(thread, Int32(clamping: arr.count), 0)
             var idx: lua_Integer = 0
             for e in arr where !(e is NSNull) {
                 pushJSON(e, depth: depth + 1)
                 idx += 1
-                lua_rawseti(L, -2, idx)
+                lua_rawseti(thread, -2, idx)
             }
         default:
-            lua_pushnil(L)   // NSNull or an unexpected type
+            lua_pushnil(thread)   // NSNull or an unexpected type
         }
     }
 
@@ -358,15 +378,15 @@ public final class LuaRuntime {
     /// Read the Lua value at `index` into a Foundation JSON value (recursively).
     private func toJSONValue(at index: Int32, depth: Int32) -> Any {
         guard depth < 256 else { return NSNull() }
-        let t = lua_type(L, index)
+        let t = lua_type(thread, index)
         if t == LUA_TBOOLEAN {
-            return lua_toboolean(L, index) != 0
+            return lua_toboolean(thread, index) != 0
         }
         if t == LUA_TNUMBER {
-            if lua_isinteger(L, index) != 0 {
-                return Int(lua_tointegerx(L, index, nil))
+            if lua_isinteger(thread, index) != 0 {
+                return Int(lua_tointegerx(thread, index, nil))
             }
-            let d = lua_tonumberx(L, index, nil)
+            let d = lua_tonumberx(thread, index, nil)
             return d.isFinite ? d : NSNull()
         }
         if t == LUA_TSTRING {
@@ -382,48 +402,48 @@ public final class LuaRuntime {
     /// Binary-safe read of a Lua string at `index` (handles embedded NULs).
     private func luaString(at index: Int32) -> String? {
         var len = 0
-        guard let cs = lua_tolstring(L, index, &len) else { return nil }
+        guard let cs = lua_tolstring(thread, index, &len) else { return nil }
         return cs.withMemoryRebound(to: UInt8.self, capacity: len) {
             String(decoding: UnsafeBufferPointer(start: $0, count: len), as: UTF8.self)
         }
     }
 
     private func tableToJSON(at index: Int32, depth: Int32) -> Any {
-        guard lua_checkstack(L, 4) != 0 else { return NSNull() }
+        guard lua_checkstack(thread, 4) != 0 else { return NSNull() }
         // Absolute index so the pushes below don't shift a relative one.
-        let abs = index < 0 ? lua_gettop(L) + index + 1 : index
-        let seqLen = Int(lua_rawlen(L, abs))
+        let abs = index < 0 ? lua_gettop(thread) + index + 1 : index
+        let seqLen = Int(lua_rawlen(thread, abs))
 
         // Count entries to tell a pure 1..n sequence (array) from a map.
         var count = 0
-        lua_pushnil(L)
-        while lua_next(L, abs) != 0 {
+        lua_pushnil(thread)
+        while lua_next(thread, abs) != 0 {
             count += 1
-            clua_pop(L, 1)   // pop value, keep key for the next step
+            clua_pop(thread, 1)   // pop value, keep key for the next step
         }
 
         if count > 0 && count == seqLen {
             var arr: [Any] = []
             arr.reserveCapacity(seqLen)
             for i in 1...seqLen {
-                lua_rawgeti(L, abs, lua_Integer(i))
+                lua_rawgeti(thread, abs, lua_Integer(i))
                 arr.append(toJSONValue(at: -1, depth: depth + 1))
-                clua_pop(L, 1)
+                clua_pop(thread, 1)
             }
             return arr
         }
 
         var dict: [String: Any] = [:]
-        lua_pushnil(L)
-        while lua_next(L, abs) != 0 {
+        lua_pushnil(thread)
+        while lua_next(thread, abs) != 0 {
             // key at -2, value at -1. Duplicate the key before stringifying:
             // lua_tolstring coerces a number key in place, which would corrupt
             // the key lua_next relies on to advance.
-            lua_pushvalue(L, -2)
+            lua_pushvalue(thread, -2)
             let key = luaString(at: -1) ?? ""
-            clua_pop(L, 1)   // pop the duplicated key
+            clua_pop(thread, 1)   // pop the duplicated key
             dict[key] = toJSONValue(at: -1, depth: depth + 1)
-            clua_pop(L, 1)   // pop value, keep original key for lua_next
+            clua_pop(thread, 1)   // pop value, keep original key for lua_next
         }
         return dict
     }
