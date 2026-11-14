@@ -77,10 +77,13 @@ struct ManagedConfigPlanner {
 
     // MARK: work files
 
-    private mutating func work(_ url: URL, target: String, backupRel: String, kitDir: URL?, kind: ManagedConfigPiece.Kind) -> Work {
+    private mutating func work(_ url: URL, target: String, backupRel: String, kitDir: URL?,
+                               kind: ManagedConfigPiece.Kind) throws(ManagedConfigRefusalReason) -> Work {
         if let w = works[url.path] { return w }
         let json = kind == .json
         let base = FileManager.default.contents(atPath: url.path).map { Array($0) }
+        // #1240: nil is also an existing file that cannot be read; never plan it as a new file (no backup, replaced).
+        if base == nil, !ManagedConfig.absent(url) { throw .unreadable }
         let record = state.files.first { $0.path == url.path }
         let blank = base.map { $0.allSatisfy { [0x20, 0x09, 0x0A, 0x0D].contains($0) } } ?? true
         var st = stat()
@@ -152,7 +155,7 @@ struct ManagedConfigPlanner {
             var movedFrom: String?
             if let r = record(piece.id) { movedFrom = relocate(from: r.path, to: resolved.url) }
             let existing = record(piece.id)
-            var w = work(resolved.url, target: resolved.display, backupRel: resolved.backupRel, kitDir: resolved.kitDir, kind: piece.kind)
+            var w = try work(resolved.url, target: resolved.display, backupRel: resolved.backupRel, kitDir: resolved.kitDir, kind: piece.kind)
             if let movedFrom { w.movedFrom = movedFrom }
             let action: ManagedConfigPieceAction.Kind
             switch piece.kind {
@@ -424,7 +427,10 @@ struct ManagedConfigPlanner {
         if access(dir.path, W_OK) != 0 || (FileManager.default.fileExists(atPath: url.path) && access(url.path, W_OK) != 0) {
             return refuse(.unwritable("read-only file or directory"))
         }
-        var w = work(url, target: r.target, backupRel: resolved.backupRel, kitDir: nil, kind: r.piece.kind)
+        var w: Work
+        do throws(ManagedConfigRefusalReason) {
+            w = try work(url, target: r.target, backupRel: resolved.backupRel, kitDir: nil, kind: r.piece.kind)
+        } catch { return refuse(error) }
         if let movedFrom { w.movedFrom = movedFrom }
         var action: ManagedConfigPieceAction.Kind = .forget
         switch r.piece.kind {

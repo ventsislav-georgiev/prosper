@@ -179,6 +179,8 @@ final class ManagedConfig: Sendable {
         if let stateBytes {
             guard let decoded = Self.decodeState(stateBytes) else { return refused(.stateUnreadable) }
             state = decoded
+        } else if !Self.absent(stateURL) {
+            return refused(.stateUnreadable) // #1240: an empty state saved over it would drop every record
         }
         var planner = ManagedConfigPlanner(roots: roots, owner: owner, now: now(), state: state)
         switch operation {
@@ -259,10 +261,10 @@ final class ManagedConfig: Sendable {
         ManagedConfig.writeLock.lock()
         defer { ManagedConfig.writeLock.unlock() }
         let stateBytes = read(stateURL)
-        guard hash(stateBytes) == plan.stateHash else { return .changed(committed: []) }
+        guard hash(stateBytes, at: stateURL) == plan.stateHash else { return .changed(committed: []) }
         var state = stateBytes.flatMap(Self.decodeState) ?? ManagedConfigState()
         // Spec 2.5 step 1: every target still matches the plan before anything is written.
-        for f in plan.files where f.writes && hash(read(f.url)) != f.baseHash { return .changed(committed: []) }
+        for f in plan.files where f.writes && hash(read(f.url), at: f.url) != f.baseHash { return .changed(committed: []) }
         // A-INFO-6: the path shape is re-checked after consent too: a symlink that appeared or went
         // while the sheet was up is a concurrent change (replan, and the sheet again if the set differs).
         for f in plan.files where f.writes {
@@ -291,7 +293,7 @@ final class ManagedConfig: Sendable {
                         if first { firstBackup = backup?.path }
                     }
                     if f.delete {
-                        guard hash(read(f.url)) == f.baseHash else { if let backup { _ = unlink(backup.path) }; return .changed(committed: committed) }
+                        guard hash(read(f.url), at: f.url) == f.baseHash else { if let backup { _ = unlink(backup.path) }; return .changed(committed: committed) }
                         guard unlink(f.url.path) == 0 else {
                             return .failed("removing \(f.target) failed: \(String(cString: strerror(errno)))", committed: committed)
                         }
@@ -301,7 +303,7 @@ final class ManagedConfig: Sendable {
                         let mode = stat(f.url.path, &st) == 0 ? st.st_mode & 0o7777 : f.mode
                         let temp = try writer.writeTemp(bytes, besides: f.url, mode: mode)
                         // errata C9: re-read and compare right before rename; Claude Code writes this file too.
-                        guard hash(read(f.url)) == f.baseHash else {
+                        guard hash(read(f.url), at: f.url) == f.baseHash else {
                             _ = unlink(temp.path)
                             if let backup { _ = unlink(backup.path) }
                             return .changed(committed: committed)
@@ -590,7 +592,7 @@ final class ManagedConfig: Sendable {
 
     /// nil: the file exists and does not decode. Absent file: an empty state.
     private func decodedState() -> ManagedConfigState? {
-        guard let bytes = read(stateURL) else { return ManagedConfigState() }
+        guard let bytes = read(stateURL) else { return Self.absent(stateURL) ? ManagedConfigState() : nil } // #1240
         return Self.decodeState(bytes)
     }
 
@@ -608,6 +610,11 @@ final class ManagedConfig: Sendable {
 
     private func read(_ url: URL) -> [UInt8]? { FileManager.default.contents(atPath: url.path).map { Array($0) } }
     private func hash(_ bytes: [UInt8]?) -> String { bytes.map(OrderedJSON.sha256) ?? "absent" }
+    /// #1240: what is at `url` now, against a plan's hash. read() answers nil for an existing file it cannot
+    /// read too: that is "unreadable", which no plan holds, so the commit answers changed and the replan refuses.
+    private func hash(_ bytes: [UInt8]?, at url: URL) -> String { bytes != nil || Self.absent(url) ? hash(bytes) : "unreadable" }
+    /// #1240: absent only when lstat says ENOENT; an entry that is there, or an lstat that fails otherwise, is not.
+    static func absent(_ url: URL) -> Bool { var st = stat(); return lstat(url.path, &st) != 0 && errno == ENOENT }
 
     private static var encoder: JSONEncoder {
         let e = JSONEncoder()

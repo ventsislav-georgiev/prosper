@@ -1035,6 +1035,11 @@ tag from the now-released section and put it on the new top draft.
 - Fans: when the Prosper helper refuses a Manual speed, Prosper now shows the helper's own reason
   instead of guessing it. When a fan did not take the speed or the temperature could not be read,
   the fans go back to macOS and the speed is not saved for later. (#1234)
+- Fixed (data loss): when an extension changed one of your config files through managed config and
+  that file existed but could not be read (its permissions, or a cloud file that was not
+  downloaded), Prosper treated it as a new file and replaced it with no backup. Prosper now refuses
+  the change and says the file exists but cannot be read; the file is left exactly as it is. The
+  same holds for the file where Prosper records its managed changes. (#1240)
 
 ## v2.174.0
 

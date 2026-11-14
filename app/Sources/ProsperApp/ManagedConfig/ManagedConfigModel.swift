@@ -57,6 +57,7 @@ enum ManagedConfigRefusalReason: Error, Equatable, Sendable, CustomStringConvert
     case symlinkNotOwned
     case notRegularFile
     case unwritable(String)
+    case unreadable
     case wrongKind(String)
     case localSettings
     case refusedJSONPath(String)
@@ -77,6 +78,7 @@ enum ManagedConfigRefusalReason: Error, Equatable, Sendable, CustomStringConvert
         case .symlinkNotOwned: return "refused path: the symlink points to a file you do not own"
         case .notRegularFile: return "refused path: not a regular file"
         case .unwritable(let why): return "unwritable (\(why))"
+        case .unreadable: return "unreadable: the file exists but cannot be read"
         case .wrongKind(let why): return "refused: \(why)"
         case .localSettings: return "refused: settings.local.json is Claude Code's local-scope file; user settings go to settings.json"
         case .refusedJSONPath(let path): return "refused JSON path \(path): not in the managed-key allowlist"
