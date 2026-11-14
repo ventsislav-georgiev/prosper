@@ -75,7 +75,7 @@ final class ManagedConfigConsentModel: ObservableObject {
     /// #1235 (B-INFO-6): the manifest's display name as shown: outside data, so every control, format (direction),
     /// separator and other unseen scalar is dropped by the tree's rule for shown outside strings. nil when none is known.
     var displayName: String? {
-        let shown = CCPoolStore.shown(changes.displayName ?? "", max: 120).trimmingCharacters(in: .whitespaces)
+        let shown = OutsideText.shown(changes.displayName ?? "", max: 120).trimmingCharacters(in: .whitespaces)
         return shown.isEmpty ? nil : shown
     }
 
