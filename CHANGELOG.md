@@ -1044,6 +1044,9 @@ tag from the now-released section and put it on the new top draft.
   was still running: no command, link, key press, settings change, notification or release of
   something the extension holds again. A reset now re-registers its shortcuts and themes right away.
   (#1238)
+- File search: "Open in Prosper" on a file with no extension no longer does nothing when macOS
+  disagrees about whether it is text; the viewer opens it and says so itself if it is not text.
+  (#1164)
 
 ## v2.174.0
 

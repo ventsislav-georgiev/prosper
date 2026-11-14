@@ -54,13 +54,18 @@ enum FileActions {
     /// dismisses, matching Raycast.
     static func dismissesRunner(_ id: String) -> Bool { id != ID.quickLook }
 
+    /// #1164: the mark the runner's row activation passes. The runner callback holds only (id, path), not the hit,
+    /// and a row's action list holds file.view only for a hit the search marked viewable.
+    static func runnerMark(_ id: String) -> Bool { id == ID.view }
+
     /// Runs a built-in action against `path`. Returns true if it was a recognized
     /// built-in (so the caller can record frecency / dismiss). Unknown / missing
     /// path → false (caller routes custom actions elsewhere), and so does file.view on a path
-    /// that is not a text document (nothing ran).
+    /// that is not a text document (nothing ran). `viewable` (#1164): the caller is a row the search marked
+    /// viewable, so file.view trusts the path and the viewer's own refusal answers for a non-text file.
     @discardableResult
     @MainActor
-    static func perform(_ id: String, path: String) -> Bool {
+    static func perform(_ id: String, path: String, viewable: Bool = false) -> Bool {
         guard isBuiltIn(id), !path.isEmpty else { return false }
         let url = URL(fileURLWithPath: path)
         // Re-check existence: the index can lag a delete between search and act. Nothing ran, so
@@ -76,8 +81,9 @@ enum FileActions {
             QuickLook.preview(path)
         case ID.view:
             // host.files.act can name any path: only a text document reaches the viewer; anything
-            // else is not handled, so the dispatcher records no frecency for it (#1130).
-            guard TextViewerRouting.isDocument(url) else { return false }
+            // else is not handled, so the dispatcher records no frecency for it (#1130). A viewable-marked
+            // row skips the Launch Services read (it can disagree with Spotlight on a name with no extension).
+            guard viewable || TextViewerRouting.isDocument(url) else { return false }
             TextViewerIntake.shared.receive(url)
         case ID.copyPath:
             let pb = Pasteboard.general
@@ -106,11 +112,22 @@ enum FileActions {
 /// the real OS (mocked UI interaction).
 protocol FileActionPerforming: Sendable {
     @MainActor @discardableResult func perform(_ id: String, path: String) -> Bool
+    /// #1164: `viewable` marks a row the search offered file.view on. Default: ignored.
+    @MainActor @discardableResult func perform(_ id: String, path: String, viewable: Bool) -> Bool
+}
+
+extension FileActionPerforming {
+    @MainActor @discardableResult func perform(_ id: String, path: String, viewable: Bool) -> Bool {
+        perform(id, path: path)
+    }
 }
 
 /// Production performer: the real `FileActions` OS operations.
 struct LiveFileActionPerformer: FileActionPerforming {
     @MainActor func perform(_ id: String, path: String) -> Bool { FileActions.perform(id, path: path) }
+    @MainActor func perform(_ id: String, path: String, viewable: Bool) -> Bool {
+        FileActions.perform(id, path: path, viewable: viewable)
+    }
 }
 
 /// Couples a file action to its side effects: run it through the performer, and
@@ -133,8 +150,9 @@ final class FileActionDispatcher {
     /// Runs `id` against `path`; on a handled engagement, bumps frecency. Returns
     /// whether the action was a recognized built-in (so callers can branch).
     @discardableResult
-    func run(id: String, path: String, now: TimeInterval = Date().timeIntervalSince1970) -> Bool {
-        let handled = performer.perform(id, path: path)
+    func run(id: String, path: String, viewable: Bool = false,
+             now: TimeInterval = Date().timeIntervalSince1970) -> Bool {
+        let handled = viewable ? performer.perform(id, path: path, viewable: true) : performer.perform(id, path: path)
         if handled, FileActions.engagementIDs.contains(id) {
             frecency.record(path: path, now: now)
         }

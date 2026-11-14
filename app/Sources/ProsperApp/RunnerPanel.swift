@@ -353,7 +353,8 @@ final class RunnerPanel {
             return
         }
         if FileActions.dismissesRunner(id) { dismiss() }
-        FileActionDispatcher.live.run(id: id, path: path)
+        // #1164: a runner row offers file.view only on a hit the search marked viewable (files/init.lua:60).
+        FileActionDispatcher.live.run(id: id, path: path, viewable: FileActions.runnerMark(id))
     }
 
     /// Executes a `:` meta command, then hides the panel.
