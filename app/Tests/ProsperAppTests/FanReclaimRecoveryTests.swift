@@ -820,7 +820,8 @@ final class FanReclaimRecoveryTests: XCTestCase {
             Preferences.fanTargets = dragged   // the commit's own persist
             FanControlHelper.presetPending = false
             let reset = expectation(description: "\(refusal): every fan handed to macOS")
-            XCTAssertTrue(StatsPopupView.commitKeptAsPreset(refusal, dragged, reset: { reset.fulfill() }))
+            let kept = StatsPopupView.settleCommit([refusal], dragged, previous: [0: 9, 1: 9], reset: { reset.fulfill() })
+            XCTAssertTrue(kept.shown == dragged && kept.error == nil, "\(refusal) reverted the slider")
             await fulfillment(of: [reset], timeout: 1)
             XCTAssertTrue(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, dragged, "\(refusal) reverted the preset")
@@ -828,17 +829,34 @@ final class FanReclaimRecoveryTests: XCTestCase {
             XCTAssertTrue(FanControlHelper.recoveryLifecycleArmed)
             await disarmPreset()
         }
+        // #1033: no reply keeps the PREVIOUS targets as the preset and hands every fan back too.
+        let previous: [Int: Double] = [0: 1500, 1: 1600]
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = dragged
+        let handedBack = expectation(description: "no reply: every fan handed to macOS")
+        let reverted = StatsPopupView.settleCommit([.unavailable], dragged, previous: previous, reset: { handedBack.fulfill() })
+        XCTAssertTrue(reverted.shown == previous, "an unreachable helper kept the new targets")
+        XCTAssertEqual(reverted.error, FanManualReply.unavailable.errorText)
+        await fulfillment(of: [handedBack], timeout: 1)
+        XCTAssertEqual(Preferences.fanTargets, previous)
+        XCTAssertTrue(FanControlHelper.presetPending)
+        await disarmPreset()
         let none = expectation(description: "no reset")
         none.isInverted = true
-        Preferences.fanManualEnabled = true
-        XCTAssertFalse(StatsPopupView.commitKeptAsPreset(.unavailable, dragged, reset: { none.fulfill() }),
-                       "an unreachable helper kept the preset")
+        let released = expectation(description: "Automatic landed during the commit: released")
         Preferences.fanManualEnabled = false   // Automatic (popup or phone) landed during the commit
-        XCTAssertFalse(StatsPopupView.commitKeptAsPreset(.refused, dragged, reset: { none.fulfill() }))
+        Preferences.fanTargets = [:]
+        let late = StatsPopupView.settleCommit([.refused], dragged, previous: previous,
+                                               reset: { none.fulfill() }, release: { released.fulfill() })
+        XCTAssertTrue(late.shown == nil && late.error == nil)
         XCTAssertFalse(Preferences.fanManualEnabled, "a late refusal turned manual back on")
+        XCTAssertEqual(Preferences.fanTargets, [:], "a late refusal wrote targets back over Automatic")
+        await fulfillment(of: [released], timeout: 1)
         FanControlHelper.presetPending = true
         Preferences.fanManualEnabled = true
-        XCTAssertFalse(StatsPopupView.commitKeptAsPreset(.engaged, dragged, reset: { none.fulfill() }))
+        let landed = StatsPopupView.settleCommit([.engaged, .engaged], dragged, previous: previous,
+                                                 reset: { none.fulfill() }, release: { none.fulfill() })
+        XCTAssertTrue(landed.shown == dragged && landed.error == nil)
         XCTAssertFalse(FanControlHelper.presetPending, "an engaged commit landed the targets")
         await fulfillment(of: [none], timeout: 0.3)
         await disarmPreset()
@@ -908,17 +926,17 @@ final class FanReclaimRecoveryTests: XCTestCase {
         FanControlHelper.lastRefusedFan = nil
         let targets: [Int: Double] = [0: 2000, 1: 2000, 2: 2000]
         var engaged: [Int] = []
-        var reply = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return i == 1 ? .refused : .engaged }
-        XCTAssertEqual(reply, .refused)
+        var replies = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return i == 1 ? .refused : .engaged }
+        XCTAssertEqual(replies, [.engaged, .refused])
         XCTAssertEqual(engaged, [0, 1], "a fan after the refused one was pinned")
         FanControlHelper.lastRefusedFan = 1   // what setManualReply records for that refusal
         engaged = []
-        reply = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return i == 1 ? .settling : .engaged }
-        XCTAssertEqual(reply, .settling)
+        replies = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return i == 1 ? .settling : .engaged }
+        XCTAssertEqual(replies, [.settling])
         XCTAssertEqual(engaged, [1], "the retry pinned a sibling before the refused fan")
         engaged = []
-        reply = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return .engaged }
-        XCTAssertEqual(reply, .engaged)
+        replies = await FanControlHelper.engageAll(targets) { i, _ in engaged.append(i); return .engaged }
+        XCTAssertEqual(replies, [.engaged, .engaged, .engaged])
         XCTAssertEqual(engaged, [1, 0, 2])
     }
 

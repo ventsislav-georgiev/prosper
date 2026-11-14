@@ -909,6 +909,9 @@ tag from the now-released section and put it on the new top draft.
   shown as source", instead of taking several seconds to draw. (#1187)
 - Agent Sessions: the header of an open session no longer shows the folder path; hover the session
   name to see it (VoiceOver reads it too). (#1191)
+- Fans: when one fan does not take a new speed from the slider, Prosper now hands every fan back to
+  macOS and shows the speed it will restore, instead of leaving one fan at the new speed; a fan that
+  rejects the speed after another took it is no longer reported as an overheat. (#1033)
 
 ## v2.174.0
 

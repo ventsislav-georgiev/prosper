@@ -1051,17 +1051,29 @@ struct StatsPopupView: View {
         commitAll(t)
     }
 
-    /// #737: a commit the helper's latch refused keeps `targets` as the pending preset instead of
-    /// reverting (savePreset hands macOS every fan; recovery applies the preset when the helper
-    /// accepts). Never after Automatic (here or from the phone) turned manual off meanwhile.
-    /// Engaged: the targets landed. `reset` is the test seam. True = kept, no revert.
-    @discardableResult
-    @MainActor static func commitKeptAsPreset(_ reply: FanManualReply, _ targets: [Int: Double],
-                                              reset: @escaping @MainActor () async -> Void = { _ = await FanControlHelper.resetAll() }) -> Bool {
-        if reply == .engaged { FanControlHelper.presetPending = false }
-        guard reply.isLatchRefusal, Preferences.fanManualEnabled else { return false }
-        FanControlHelper.savePreset(targets, reset: reset)
-        return true
+    /// A slider commit's outcome by `FanCommit`'s one rule (#1033): landed, or every fan handed to
+    /// macOS by savePreset with `targets` (the latch, #737) or `previous` (no reply, write failure) as
+    /// the pending preset, or released when Automatic turned manual off meanwhile. Returns the targets
+    /// the slider shows now (nil = leave it) and the status line. Runs on main; `reset` (savePreset's
+    /// handback) and `release` run in main-actor Tasks.
+    @MainActor static func settleCommit(_ replies: [FanManualReply], _ targets: [Int: Double], previous: [Int: Double],
+                                        reset: @escaping @MainActor () async -> Void = { _ = await FanControlHelper.resetAll() },
+                                        release: @escaping @MainActor () async -> Void = { await FanControlHelper.sleepSafeRelease() })
+        -> (shown: [Int: Double]?, error: String?) {
+        switch FanCommit.decide(replies, fans: targets.count, manualEnabled: Preferences.fanManualEnabled) {
+        case .landed:
+            FanControlHelper.presetPending = false
+            return (targets, nil)
+        case .keepNew:
+            FanControlHelper.savePreset(targets, reset: reset)
+            return (targets, nil)   // the pending line says it
+        case .keepPrevious(let reply):
+            FanControlHelper.savePreset(previous, reset: reset)
+            return (previous, reply.errorText)
+        case .release:
+            Task { await release() }
+            return (nil, nil)
+        }
     }
 
     private func clampRPM(_ v: Double, _ fan: FanReading) -> Double {
@@ -1081,17 +1093,14 @@ struct StatsPopupView: View {
             // recovery arm again. A still-live drag re-raises it on its next frame.
             Task { @MainActor in FanControlHelper.userAdjusting = false }
             Task { @MainActor in
-                // #926: stops at the first fan that does not engage; that reply is the request's.
-                let reply = await FanControlHelper.engageAll(targets)
-                // A newer drag/commit owns the slider (and the status line) now.
+                // #926: stops at the first fan that does not engage.
+                let replies = await FanControlHelper.engageAll(targets)
+                // A newer drag/commit owns the slider (and the status line) now; its own outcome decides.
                 guard fanTargets == targets, !fanOwner.isDragging else { return }
-                guard !Self.commitKeptAsPreset(reply, targets) else { fanError = nil; return }
-                fanError = reply.errorText
-                // Unavailable: the hardware isn't running these targets — revert once to the
-                // last committed ones.
-                guard reply != .engaged else { return }
-                Preferences.fanTargets = previous
-                fanTargets = previous
+                let (shown, error) = Self.settleCommit(replies, targets, previous: previous)
+                fanError = error
+                guard let shown, shown != targets else { return }
+                fanTargets = shown
                 fanOwner = FanTargetOwner()
             }
         }

@@ -97,10 +97,19 @@ enum FanManualReply: Equatable {
     case settling      // live helper replied false; the target is at or above it (#586)
     case unavailable   // no reply from the helper
     case needsApproval // the helper's Login Items switch is off (#728); the popup words it as unavailable
+    case writeFailed   // live helper replied false where its heat gate was open (#1033, see `afterAnAccept`)
 
     /// #737: a live helper's refusal (its latch) makes the user's speed a pending preset;
     /// no reply (.unavailable / .needsApproval) stays a failure.
     var isLatchRefusal: Bool { self == .refused || self == .settling }
+
+    /// #1033: this reply from a later fan of a request whose earlier fan the helper just accepted.
+    /// That accept proved the heat gate open, and only a trip or a handback restarts its settle
+    /// window (FanControlCore.latch / pinHandedBack), so a false at or above macOS's speed is not
+    /// the window: the SMC write threw, or the helper could not read its sensors. The Bool reply
+    /// cannot say which, nor split a false below macOS's speed; that needs a reason in the
+    /// protocol (entry 1208).
+    var afterAnAccept: FanManualReply { self == .settling ? .writeFailed : self }
 
     /// Name a live helper's `false` by the helper's rule (#586): after a trip it lets a
     /// pin at or above macOS's speed for the fan (`FanControlCore.macOSSpeed`) take the
@@ -112,8 +121,8 @@ enum FanManualReply: Equatable {
     }
 
     /// The single status line the fan popup shows for a failed engage/commit.
-    // ponytail: a refusal is read as the latch; the helper also replies false when the
-    // SMC write itself throws (rare). Grow the protocol a reason enum if that needs its own text.
+    // shortcut: a first fan's false, or a later one below macOS's speed, is still read as the latch
+    // though the helper also replies false when the SMC write throws; entry 1208's reason reply splits it.
     var errorText: String? {
         switch self {
         case .engaged: return nil
@@ -128,7 +137,35 @@ enum FanManualReply: Equatable {
             return "Couldn’t enable manual control — the Prosper helper isn’t "
                 + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
                 + "General ▸ Login Items ▸ Allow in the Background, then try again."
+        case .writeFailed:
+            return "A fan didn’t take the new speed, so macOS runs every fan again. Try again."
         }
+    }
+}
+
+/// #1033, the one rule for a slider commit: afterwards either every fan runs the targets the slider and
+/// the saved targets show, or every fan is handed back to macOS and the slider and the saved targets
+/// show a pending preset (the popup's "Waiting for macOS…" line) - never a split. When in doubt, macOS.
+enum FanCommit: Equatable {
+    /// Every fan took `targets`.
+    case landed
+    /// The helper's heat latch refused: every fan to macOS, `targets` wait as the preset (#737).
+    case keepNew(FanManualReply)
+    /// No reply, or a write failure: every fan to macOS, the previous targets wait as the preset.
+    case keepPrevious(FanManualReply)
+    /// Manual went off while the commit was in flight (Automatic, here or from the phone): every fan
+    /// to macOS, nothing saved.
+    case release
+
+    /// `replies` = engageAll's per-fan results in engage order; `fans` = how many fans the commit
+    /// asked for. Anything short of one .engaged per fan is not landed.
+    static func decide(_ replies: [FanManualReply], fans: Int, manualEnabled: Bool) -> FanCommit {
+        guard manualEnabled else { return .release }
+        guard let failed = replies.firstIndex(where: { $0 != .engaged }) else {
+            return replies.count == fans ? .landed : .keepPrevious(.unavailable)
+        }
+        let reply = failed > 0 ? replies[failed].afterAnAccept : replies[failed]
+        return reply.isLatchRefusal ? .keepNew(reply) : .keepPrevious(reply)
     }
 }
 
@@ -357,14 +394,16 @@ enum FanControlHelper {
     }
 
     /// The slider commit's burst (#926): every fan in `engageOrder`, stopping at the first that
-    /// does not engage, whose reply is the request's. `engage` is the test seam.
+    /// does not engage. Returns each fan's reply in that order, for `FanCommit.decide` (#1033).
+    /// `engage` is the test seam.
     static func engageAll(_ targets: [Int: Double],
-                          engage: (Int, Double) async -> FanManualReply = { await setManualReply($0, rpm: $1) }) async -> FanManualReply {
+                          engage: (Int, Double) async -> FanManualReply = { await setManualReply($0, rpm: $1) }) async -> [FanManualReply] {
+        var replies: [FanManualReply] = []
         for (i, rpm) in engageOrder(targets) {
-            let reply = await engage(i, rpm)
-            guard reply == .engaged else { return reply }
+            replies.append(await engage(i, rpm))
+            guard replies.last == .engaged else { break }
         }
-        return .engaged
+        return replies
     }
 
     /// The popup's Manual click, from the click to the saved pref; `saved` = every fan engaged
