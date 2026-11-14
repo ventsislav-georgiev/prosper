@@ -198,14 +198,28 @@ final class DchControlFramesTests: XCTestCase {
         let sent = wire("signal 15 from 4242 /usr/bin/pkill -f claude --resume")
         XCTAssertEqual(sent["end"] as? String, "signal 15")
         XCTAssertEqual(sent["end_from"] as? String, "pkill")
+        // #937: end_from is what it was (the first word's basename); end_command is the whole cleaned command.
+        XCTAssertEqual(sent["end_command"] as? String, "/usr/bin/pkill -f claude --resume")
+        let plain = wire("signal 15 from 4242 /usr/bin/pkill")
+        XCTAssertEqual(plain["end_from"] as? String, "pkill")
+        XCTAssertEqual(plain["end_command"] as? String, "/usr/bin/pkill")
+        let spaced = wire("signal 15 from 4242 /Applications/Some App.app/Contents/MacOS/some --flag")
+        XCTAssertEqual(spaced["end_from"] as? String, "Some")   // exactly what today's phone saw
+        XCTAssertEqual(spaced["end_command"] as? String, "/Applications/Some App.app/Contents/MacOS/some --flag")
+        let long = wire("signal 15 from 4242 " + String(repeating: "k", count: 120))
+        XCTAssertEqual((long["end_command"] as? String)?.count, 120)   // the wire is not cut at 48
+        let hidden = wire("signal 15 from 4242 \u{1b}\u{202e}")
+        XCTAssertTrue(hidden["end_command"] == nil)
         let bare = wire("signal 9 from 4242")
         XCTAssertEqual(bare["end"] as? String, "signal 9")
         XCTAssertFalse(bare.keys.contains("end_from"))
+        XCTAssertFalse(bare.keys.contains("end_command"))
         for end in ["signal 15", "signal 9", "exit 0", "exit 1", "killed", "stopped", "vanished", "",
                     "signal x from 3 cmd", "signal 15 from x cmd", "sig 15 from 1 x"] {
             let o = wire(end)
             XCTAssertEqual(o["end"] as? String, end, end)
             XCTAssertFalse(o.keys.contains("end_from"), end)
+            XCTAssertFalse(o.keys.contains("end_command"), end)
         }
     }
 

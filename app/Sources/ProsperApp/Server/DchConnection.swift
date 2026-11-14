@@ -1428,6 +1428,7 @@ struct DchControlOps: Sendable {
         if let s = AgentIsland.signalSender(r.end) {
             o["end"] = s.end
             if let from = s.from { o["end_from"] = from }
+            if let c = s.command { o["end_command"] = c }   // #937: additive, the whole cleaned command (at most 120 characters)
         }
         return o
     }

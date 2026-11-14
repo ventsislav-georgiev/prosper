@@ -748,7 +748,8 @@ bytes as an image (see [M11](#known-gaps)); its gate is `paste_image` or a Prosp
 | Type | Name | Request | Reply | Op |
 |------|------|---------|-------|----|
 | 0x0a | putClipboard | raw image bytes | 0x14 (empty), after the Mac's pasteboard holds it; also when the bytes are not an image (M11) | `paste_image` (the phone sends it on the attached connection before ctrl-V) |
-| 0x0b | history | empty or `{}` | 0x1b `[{name, alias?, end, last_seen, started, runtime, cwd?, command?, agent_name?, takes, pinned?}]` | `history` |
+| 0x0b | history | empty or `{}` | 0x1b `[{name, alias?, end, last_seen, started, runtime, cwd?, command?, agent_name?, takes, pinned?, end_from?, end_command?}]` | `history` |
+| | | | | `end_command` (Prosper #937, additive, an older phone ignores it): present only when `end` was a signal sent by a process with a command; the whole sender command as dch recorded it (argv joined by spaces, so a path with a space is not split), control and format characters dropped, blanks folded, at most 120 characters. `end_from` is unchanged: the first word's basename. |
 | 0x0c | revive | `{"name"}` or `{"all": true}`, plus `"no_message"?: bool` | 0x14 `{"names": [string], "message"?}` | `revive` (`revive_no_message`) |
 | 0x0d | restart | `{"names": [string]}` or `{"all": true}` | 0x14 `{"names"}` | `restart` |
 | 0x0e | stop | `{"names": [string]}` | 0x14 `{"names"}` | `stop` |

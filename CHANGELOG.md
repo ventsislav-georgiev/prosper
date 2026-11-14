@@ -985,6 +985,9 @@ tag from the now-released section and put it on the new top draft.
   mark is no longer refused as corrupt: Prosper edits it and keeps the mark where it is. The consent
   sheet says more exactly why it asks again and how many backups of a hand-edited file are kept
   (#1227)
+- A session that ended on a signal now shows the whole command of the process that sent it in its
+  end label (a path with spaces is no longer cut at the first space), shortened to 48 characters;
+  the phone also gets the whole command in a new optional field (#937)
 
 ## v2.174.0
 

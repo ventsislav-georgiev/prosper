@@ -155,15 +155,20 @@ final class AgentIslandControlsTests: XCTestCase {
             ("signal 150", "crashed (signal 150)"),
             ("", "vanished"), ("vanished", "vanished"),
             ("paused", "paused"), ("exitx", "exitx"),
-            // #839: dch 1.40.1 names the sender; the pid never shows, the cmd as its program's basename.
-            ("signal 15 from 4242 /usr/bin/pkill -f claude --resume", "ended (signal 15) from pkill"),
+            // #839: dch 1.40.1 names the sender; the pid never shows. #937: the whole cleaned command, not its first word.
+            ("signal 15 from 4242 /usr/bin/pkill -f claude --resume", "ended (signal 15) from /usr/bin/pkill -f claude --resume"),
             ("signal 1 from 77 launchd", "ended (signal 1) from launchd"),
             ("signal 2 from 77", "ended (signal 2)"), ("signal 15 from 77 ", "ended (signal 15)"), ("signal 15 from 4242", "ended (signal 15)"),
-            ("signal 9 from 4242 /bin/kill -9 99", "crashed (signal 9) from kill"),
-            ("signal 11 from 1 /sbin/launchd", "crashed (signal 11) from launchd"),
-            ("signal 15 from 5 " + String(repeating: "k", count: 120), "ended (signal 15) from " + String(repeating: "k", count: 120)),
-            ("signal 15 from 5 /opt/" + String(repeating: "k", count: 115), "ended (signal 15) from " + String(repeating: "k", count: 115)),
+            ("signal 9 from 4242 /bin/kill -9 99", "crashed (signal 9) from /bin/kill -9 99"),
+            ("signal 11 from 1 /sbin/launchd", "crashed (signal 11) from /sbin/launchd"),
+            ("signal 15 from 5 " + String(repeating: "k", count: 120), "ended (signal 15) from " + String(repeating: "k", count: 48) + "\u{2026}"),
+            ("signal 15 from 5 /opt/" + String(repeating: "k", count: 115), "ended (signal 15) from /opt/" + String(repeating: "k", count: 43) + "\u{2026}"),
             // Malformed: as before.
+            // #937: a path with a space is never cut; hidden characters dropped, blanks folded; only-hidden reads as no sender.
+            ("signal 15 from 5 /Applications/Some App.app/Contents/MacOS/some", "ended (signal 15) from /Applications/Some App.app/Contents/MacOS/some"),
+            ("signal 15 from 5 /Applications/Some App.app/Contents/MacOS/some --flag x", "ended (signal 15) from /Applications/Some App.app/Contents/MacOS/some -\u{2026}"),   // 48 characters, then the cut
+            ("signal 15 from 5 /usr/bin/a\u{1b}b\u{0}c\u{202e}d  e", "ended (signal 15) from /usr/bin/abcd e"),
+            ("signal 15 from 5 \u{1b}\u{202e}\u{0}", "ended (signal 15)"), ("signal 15 from 5    ", "ended (signal 15)"),
             ("signal x from", "crashed (signal x from)"), ("signal 15 from", "crashed (signal 15 from)"),
             ("signal 15 from x cmd", "crashed (signal 15 from x cmd)"), ("signal 15 to 3 cmd", "crashed (signal 15 to 3 cmd)"),
             ("signal x from 3 cmd", "crashed (signal x from 3 cmd)"), ("sig 15 from 1 x", "sig 15 from 1 x"),
@@ -6020,5 +6025,18 @@ extension AgentIslandControlsTests {
         XCTAssertNil(m.refusalText(.live(a.key)))
         f.release.signal()
         settle(c) { !c.runner.isBusy(a.key) }
+    }
+
+    /// #937: 120 characters (dch's cap) show cut at 48 with an ellipsis; a longer record is cut at 120; no grapheme is split.
+    func testSenderCommandCutsInDisplayOnly() {
+        let cmd = String(repeating: "k", count: 120)
+        XCTAssertEqual(AgentIsland.signalSender("signal 15 from 5 " + cmd)?.command, cmd)
+        XCTAssertEqual(AgentIsland.signalSender("signal 15 from 5 " + cmd + "zzz")?.command, cmd)
+        XCTAssertEqual(AgentIsland.displayCommand(cmd), String(repeating: "k", count: 48) + "\u{2026}")
+        XCTAssertEqual(AgentIsland.displayCommand(String(repeating: "k", count: 48)), String(repeating: "k", count: 48))
+        let accented = String(repeating: "e\u{301}", count: 60)   // 60 characters of 2 scalars each
+        let shown = AgentIsland.displayCommand(accented)
+        XCTAssertEqual(shown.unicodeScalars.count, 48 * 2 + 1)
+        XCTAssertTrue(shown.hasSuffix("\u{2026}"))
     }
 }
