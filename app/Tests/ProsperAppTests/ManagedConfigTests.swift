@@ -34,6 +34,7 @@ final class MCWriter: ManagedConfigFileWriter, @unchecked Sendable {
     private var _interleave: (@Sendable (URL, Int) -> Void)?
     private var _failReplace = false
     private var _failOnly: String?
+    private var _beforeReplace: (@Sendable (URL) -> Void)?
 
     func temps(_ url: URL) -> Int { lock.withLock { _temps[url.lastPathComponent, default: 0] } }
     func replaces(_ url: URL) -> Int { lock.withLock { _replaces[url.lastPathComponent, default: 0] } }
@@ -41,6 +42,8 @@ final class MCWriter: ManagedConfigFileWriter, @unchecked Sendable {
     func interleave(_ f: (@Sendable (URL, Int) -> Void)?) { lock.withLock { _interleave = f } }
     /// `only`: fail just the rename onto that file name; otherwise every rename outside the state dir.
     func failReplace(_ on: Bool, only name: String? = nil) { lock.withLock { _failReplace = on; _failOnly = name } }
+    /// #1226: called with the target right before the real rename (the last instant of the commit).
+    func beforeReplace(_ f: (@Sendable (URL) -> Void)?) { lock.withLock { _beforeReplace = f } }
 
     func writeTemp(_ data: [UInt8], besides target: URL, mode: mode_t) throws -> URL {
         let temp = try real.writeTemp(data, besides: target, mode: mode)
@@ -53,11 +56,12 @@ final class MCWriter: ManagedConfigFileWriter, @unchecked Sendable {
     }
 
     func replace(_ target: URL, with temp: URL) throws {
-        let fail = lock.withLock { () -> Bool in
+        let (fail, hook) = lock.withLock { () -> (Bool, (@Sendable (URL) -> Void)?) in
             _replaces[target.lastPathComponent, default: 0] += 1
-            return _failReplace && (_failOnly.map { target.lastPathComponent == $0 } ?? !target.path.contains("/state/"))
+            return (_failReplace && (_failOnly.map { target.lastPathComponent == $0 } ?? !target.path.contains("/state/")), _beforeReplace)
         }
         if fail { throw ManagedConfigPOSIXWriter.WriteError(step: "rename", code: EIO) }
+        hook?(target)
         try real.replace(target, with: temp)
     }
 }

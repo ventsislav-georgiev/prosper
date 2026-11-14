@@ -179,13 +179,13 @@ struct ManagedConfigPlanner {
         case .corrupt(let lines):
             throw .corrupt("broken prosper markers at line(s) \(lines.map(String.init).joined(separator: ", "))")
         case .present(let b, let e):
-            let onDisk = ManagedTextBlock.text(of: w.text, begin: b, end: e)
-            if onDisk.utf8.elementsEqual(block.utf8) { // A-INFO-3: bytes, not String ==
+            let onDisk = ManagedTextBlock.bytes(of: w.text, begin: b, end: e)
+            if onDisk.elementsEqual(block.utf8) { // A-INFO-3, #1226: the file's bytes, not a String
                 if existing == nil { upsert(&w, record); return .adopt }
                 return .noop
             }
             // F1 (QA #723): with no record, only the byte-equal block is ours; anything else is an edit.
-            let edited = !(existing?.written ?? block).utf8.elementsEqual(onDisk.utf8)
+            let edited = !(existing?.written ?? block).utf8.elementsEqual(onDisk)
             if edited, !repair { throw .drifted }
             if edited { driftNote(&w, piece.id, "Repair replaces") }
             step(&w, ManagedTextBlock.replacing(begin: b, end: e, with: block, in: w.text))
@@ -434,7 +434,7 @@ struct ManagedConfigPlanner {
                 return refuse(.corrupt("broken prosper markers at line(s) \(lines.map(String.init).joined(separator: ", "))"))
             case .present(let b, let e):
                 // A-INFO-10: an edited block is drift here too; Remove asks (spec 2.5) and the sheet names it
-                if !ManagedTextBlock.text(of: w.text, begin: b, end: e).utf8.elementsEqual(r.written.utf8) {
+                if !ManagedTextBlock.bytes(of: w.text, begin: b, end: e).elementsEqual(r.written.utf8) {
                     driftNote(&w, r.piece.id, "Remove deletes")
                 }
                 step(&w, ManagedTextBlock.removing(begin: b, end: e, from: w.text))

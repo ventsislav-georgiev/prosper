@@ -304,11 +304,25 @@ final class ManagedConfig: Sendable {
                             if let backup { _ = unlink(backup.path) }
                             return .changed(committed: committed)
                         }
-                        do { try writer.replace(f.url, with: temp) } catch {
+                        // #1226 (R1025-4): a chmod since the stat above, up to the rename itself, is kept. `old` holds
+                        // the file being replaced (a chmod by path lands on it until the rename), `new` the temp.
+                        let old = open(f.url.path, O_RDONLY | O_NONBLOCK), new = open(temp.path, O_RDONLY)
+                        defer { if old >= 0 { _ = close(old) }; if new >= 0 { _ = close(new) } }
+                        func held() -> mode_t? { var s = stat(); return old >= 0 && fstat(old, &s) == 0 ? s.st_mode & 0o7777 : nil }
+                        let before = held() ?? mode
+                        do {
+                            if before != mode, fchmod(new, before) != 0 {
+                                throw ManagedConfigPOSIXWriter.WriteError(step: "chmod", code: errno)
+                            }
+                            try writer.replace(f.url, with: temp)
+                        } catch {
                             _ = unlink(temp.path)
                             if let backup { _ = unlink(backup.path) }
                             throw error
                         }
+                        // a chmod in the last instant before the rename: the replaced file shows it, the new one takes it.
+                        // shortcut: fchmod failing here is ignored (the bytes have landed; undoing them would lose more).
+                        if let after = held(), after != before { _ = fchmod(new, after) }
                     }
                 } catch {
                     return .failed("writing \(f.target) failed: \(error)", committed: committed)
@@ -439,15 +453,15 @@ final class ManagedConfig: Sendable {
                 s.path = t.url.path
                 let bytes = read(t.url) ?? []
                 if case .present(let b, let e) = ManagedTextBlock.find(owner: owner.id, piece: p.id, in: bytes) {
-                    let text = ManagedTextBlock.text(of: bytes, begin: b, end: e)
+                    let onDisk = ManagedTextBlock.bytes(of: bytes, begin: b, end: e)
                     let block = p.text.flatMap { body in ManagedTextBlock.syntax(for: t.url).map {
                         ManagedTextBlock.render(owner: owner.id, piece: p.id, version: owner.version, body: body, syntax: $0)
                     } }
                     // F1 (QA #723): adopt only the byte-equal block; an edited one is drift and stays unowned.
-                    // A-INFO-3: bytes, not String == (which takes an NFD re-save for the same text).
-                    guard let block, text.utf8.elementsEqual(block.utf8) else { s.state = .drifted; out.append(s); continue }
-                    adopted.append(.init(owner: owner.id, piece: p, target: t.display, path: t.url.path, written: text,
-                                         hash: OrderedJSON.sha256(Array(text.utf8)), version: owner.version, appliedAt: now(),
+                    // A-INFO-3, #1226: the file's bytes, not String == (NFD) nor a lossy decode (U+FFFD).
+                    guard let block, onDisk.elementsEqual(block.utf8) else { s.state = .drifted; out.append(s); continue }
+                    adopted.append(.init(owner: owner.id, piece: p, target: t.display, path: t.url.path, written: block,
+                                         hash: OrderedJSON.sha256(onDisk), version: owner.version, appliedAt: now(),
                                          sourceDir: owner.extensionDir?.path))
                     s.state = .adopted
                 }
@@ -491,7 +505,7 @@ final class ManagedConfig: Sendable {
             case .absent: return .missing
             case .corrupt: return .corrupt
             case .present(let b, let e):
-                guard ManagedTextBlock.text(of: bytes, begin: b, end: e).utf8.elementsEqual(r.written.utf8) else { return .drifted } // A-INFO-3
+                guard ManagedTextBlock.bytes(of: bytes, begin: b, end: e).elementsEqual(r.written.utf8) else { return .drifted } // A-INFO-3, #1226
                 for line in ManagedTextBlock.bodyLines(of: r.written) where line.hasPrefix("@/") {
                     let path = String(line.dropFirst()).replacingOccurrences(of: "\\ ", with: " ")
                     if !FileManager.default.fileExists(atPath: path) { return .importMissing }

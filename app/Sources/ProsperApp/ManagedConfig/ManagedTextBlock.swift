@@ -64,10 +64,11 @@ enum ManagedTextBlock {
         return .corrupt(lines: (begins + ends).sorted().map { $0 + 1 })
     }
 
-    /// The on-disk block text, "\n"-joined, for comparison with the recorded one.
-    static func text(of bytes: [UInt8], begin: Int, end: Int) -> String {
+    /// The on-disk block's own bytes, "\n"-joined, for comparison with the recorded text's UTF-8.
+    /// #1226: raw bytes, never a decode: a lossy decode makes an invalid byte equal to U+FFFD.
+    static func bytes(of bytes: [UInt8], begin: Int, end: Int) -> [UInt8] {
         let lines = Lines(bytes)
-        return (begin...end).map { lines.text($0) }.joined(separator: "\n")
+        return Array((begin...end).map { bytes[lines.range($0)] }.joined(separator: [0x0A]))
     }
 
     /// Lines of the block body (between the markers).

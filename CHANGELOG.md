@@ -972,6 +972,10 @@ tag from the now-released section and put it on the new top draft.
   included. (#1107)
 - Agent Sessions: dragging the window by its top strip, or clicking the thin line beside the session
   list, no longer moves the arrow keys between the list and the session. (#1196)
+- Managed config: a permission change you make to a managed file (chmod) is kept when Prosper
+  applies, removes or repairs a piece, even if it lands while the write is in progress; and a
+  managed block edited so that one byte is no longer valid text is shown as your edit instead of
+  being taken as unchanged. (#1226)
 
 ## v2.174.0
 
