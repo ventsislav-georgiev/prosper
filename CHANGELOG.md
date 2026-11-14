@@ -915,6 +915,9 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer: Markdown with a great many bare links or e-mail addresses is shown as its source
   instead of stalling, a paragraph with over 10,000 styled pieces shows its rest as plain text with
   a note, and Markdown with lots of emphasis renders faster (#1211)
+- Themes: in Blossom, Daylight, Fern, Lavender, Mint and Solar the green text of the "Open in
+  terminal" and "New shell" buttons is a little darker, so it reads clearly on its tinted button
+  fill (#1206)
 
 ## v2.174.0
 

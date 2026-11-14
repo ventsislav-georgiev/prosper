@@ -304,7 +304,12 @@ final class ThemeTests: XCTestCase {
             // #1124: nudged again for the washed rail top (margin >= 0.05 there too in the model; the rendered top reads about 0.014 lower, QA 1129).
             ("theme-daylight", "blue", "#015FCC"),         // #1124 #0062D1 (4.36:1 washed, as Ink indigo)
             ("theme-daylight", "blueBright", "#0063C6"),   // #1124 #0065C7 (4.45:1 washed); #911 #006DD4 (4.07:1 on bgBottom); #1F8CF9 before
-            ("theme-daylight", "terminal", "#08754D"),     // #1199 #087D52 (4.14:1 on bgBottom, 4.38:1 under an added diff row)
+            ("theme-daylight", "terminal", "#076945"),     // #1206 #08754D (3.93:1 on its button wash); #1199 #087D52 (4.14:1 on bgBottom, 4.38:1 under an added diff row)
+            ("theme-blossom", "terminal", "#0F6642"),      // #1206 #11734A (3.90:1 on its button wash)
+            ("theme-lavender", "terminal", "#0F6642"),     // #1206 #11734A (3.88:1 on its button wash; 4.538 plain on bgBottom)
+            ("theme-fern", "terminal", "#0E6E2E"),         // #1206 #0E712F (4.41:1 on its button wash)
+            ("theme-mint", "terminal", "#0A6E35"),         // #1206 #0A7136 (4.43:1 on its button wash)
+            ("theme-solar", "terminal", "#2F6D11"),        // #1206 #306F11 (4.45:1 on its button wash)
             ("theme-graphite", "indigo", "#8794A2"),       // #911 #798796 (3.88:1 on cardHi); #717F8E before
             ("theme-silver", "blueBright", "#57667B"),     // #1124 #59687D (4.44:1 washed); #911 #607086 (4.08:1 on bgBottom); #637288 before
             ("theme-silver", "indigo", "#5A6578"),         // #1124 #5C677A (4.45:1 washed); #911 #636F84 (4.10:1 on bgBottom); #657186 before

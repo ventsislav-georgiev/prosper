@@ -165,8 +165,7 @@ final class ThemeContrastTests: XCTestCase {
     /// transcript's Card, the plan label in AccountPane and the key label in SyncPane inside
     /// NeonSection's neonCard, the added line in ManagedConfigConsentSheet) and cardAddedRow (the "+"
     /// mark in DiffRow: card under a 12 percent wash of the token itself).
-    /// Not in the rule, by facts: OpenInTerminalButton and AgentPillButton text sit on a 12 percent
-    /// wash over whatever host paints them (four hosts, no static surface); the terminal icons
+    /// Not in this rule: OpenInTerminalButton and AgentPillButton text (#1206 has its own row, testTerminalButtonTextClearsItsWashOverEachHost); the terminal icons
     /// (AgentTranscriptView empty state, AgentsWindow todo icon, SyncPane checkmark) and the mixer's
     /// "playing" fill are glyphs, not text.
     func testTerminalTextClearsTheSurfacesItIsPaintedOn() throws {
@@ -189,6 +188,66 @@ final class ThemeContrastTests: XCTestCase {
         XCTAssertEqual(pairs, themes.count * 4, "the terminal token on four surfaces per theme")
     }
 
+    /// #1206: the terminal token as the TEXT of OpenInTerminalButton and AgentPillButton(tint: terminal):
+    /// painted on Neon.terminal.opacity(0.12) over the host's surface, which SwiftUI composites per
+    /// channel as host * 0.88 + terminal * 0.12 (the cardAddedRow formula). The hosts, by the view code:
+    /// bgTop/bgBottom (the window backdrop: TerminalFirstView in AgentTranscriptView:108, AgentActionNotice
+    /// in the composer and prompt panel AgentsWindow:1324/1423/1454, the new-session form AgentNewSession:181;
+    /// the backdrop is the bgTop to bgBottom gradient) and card (AgentTerminalCard AgentTerminal:811 on
+    /// its :830 fill, AgentNoticeLine AgentWindowControls:364 on its :369 fill). Written out, so the walk
+    /// cannot quietly shrink; the theme list is literal and must be every bundled theme.
+    func testTerminalButtonTextClearsItsWashOverEachHost() throws {
+        let expected = ["Default", "theme-amber", "theme-blossom", "theme-contrast-dark", "theme-contrast-light",
+                        "theme-crimson", "theme-daylight", "theme-default", "theme-ember", "theme-emerald",
+                        "theme-fern", "theme-gold", "theme-graphite", "theme-indigo", "theme-lavender",
+                        "theme-lime", "theme-mint", "theme-rose", "theme-silver", "theme-solar",
+                        "theme-teal", "theme-violet"]
+        let themes = try themes()
+        XCTAssertEqual(expected.count, 22)
+        XCTAssertEqual(Set(themes.map(\.title)), Set(expected), "the literal list is every bundled theme")
+        var pairs = 0
+        for d in themes {
+            let p = ThemePalette.load(for: d)
+            let t = Self.srgb(NSColor(p.terminal))
+            let hosts: [(String, NSColor)] = [("bgTop", NSColor(p.bgTop)), ("bgBottom", NSColor(p.bgBottom)),
+                                              ("card", NSColor(p.card))]
+            XCTAssertEqual(hosts.map(\.0), ["bgTop", "bgBottom", "card"], d.title)
+            for (hn, host) in hosts {
+                let h = Self.srgb(host)
+                let wash = NSColor(srgbRed: h.r * 0.88 + t.r * 0.12, green: h.g * 0.88 + t.g * 0.12,
+                                   blue: h.b * 0.88 + t.b * 0.12, alpha: h.a)
+                let r = Self.contrast(NSColor(p.terminal), on: wash)
+                XCTAssertGreaterThanOrEqual(r, Self.minimum, "\(d.title): terminal on its wash over \(hn) is \(r):1")
+                pairs += 1
+            }
+        }
+        XCTAssertEqual(pairs, 22 * 3, "the terminal token on its wash over three host surfaces per theme")
+        XCTAssertEqual(pairs, themes.count * 3)
+    }
+
+    /// #1206: the six themes whose terminal read under 4.5:1 on its wash over a host (Blossom #11734A
+    /// 3.90, Daylight #08754D 3.93, Lavender #11734A 3.88, Fern #0E712F 4.41, Mint #0A7136 4.43, Solar
+    /// #306F11 4.45, all on bgBottom): the smallest lightness change that clears 4.55 on all seven
+    /// surfaces, hue within 0.5 degrees. A revert fails here by name. Lavender's plain 4.538 on bgBottom
+    /// rides on the same nudge.
+    func testNudgedWashTerminalTokensArePinned() throws {
+        let pinned: [(theme: String, hex: String)] = [
+            ("theme-blossom", "#0F6642"), ("theme-daylight", "#076945"), ("theme-fern", "#0E6E2E"),
+            ("theme-lavender", "#0F6642"), ("theme-mint", "#0A6E35"), ("theme-solar", "#2F6D11"),
+        ]
+        XCTAssertEqual(pinned.count, 6)
+        let dir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
+        for (theme, hex) in pinned {
+            let spec = try ThemeSpec.decode(Data(contentsOf: dir.appendingPathComponent("\(theme)/theme.json")))
+            let got = Self.srgb(NSColor(try XCTUnwrap(spec.colors["terminal"], theme)))
+            let want = Self.srgb(NSColor(try XCTUnwrap(Color(hex: hex))))
+            XCTAssertTrue(abs(got.r - want.r) < 0.001 && abs(got.g - want.g) < 0.001 && abs(got.b - want.b) < 0.001,
+                          "\(theme) terminal is not \(hex)")
+        }
+    }
+
     /// #1199: Daylight's terminal, written out (#087D52 read 4.14:1 on bgBottom and 4.38:1 on the
     /// added-row wash): the smallest lightness change that clears 4.55 on all four surfaces, hue
     /// within 0.5 degrees. Also pinned in ThemeTests.testNudgedBaseTokensArePinned.
@@ -198,9 +257,9 @@ final class ThemeContrastTests: XCTestCase {
             .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
         let spec = try ThemeSpec.decode(Data(contentsOf: dir.appendingPathComponent("theme-daylight/theme.json")))
         let got = Self.srgb(NSColor(try XCTUnwrap(spec.colors["terminal"])))
-        let want = Self.srgb(NSColor(try XCTUnwrap(Color(hex: "#08754D"))))
+        let want = Self.srgb(NSColor(try XCTUnwrap(Color(hex: "#076945"))))
         XCTAssertTrue(abs(got.r - want.r) < 0.001 && abs(got.g - want.g) < 0.001 && abs(got.b - want.b) < 0.001,
-                      "theme-daylight terminal is not #08754D")
+                      "theme-daylight terminal is not #076945")
     }
 
     /// #1129: textSecondary of the two themes that read under 4.5 on the washed rail top, written
