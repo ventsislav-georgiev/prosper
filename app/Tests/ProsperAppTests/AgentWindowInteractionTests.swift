@@ -1687,6 +1687,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         w.show()
         let model = try XCTUnwrap(w.model)
         XCTAssertTrue(model.interaction.controller === c)
+        XCTAssertTrue(model.lastLiveHome === w.lastLive, "R1193-1: the owner hands its lastLive map to the model")
         XCTAssertNotNil(c.onStoreChanged)
         XCTAssertNotNil(c.onHoldChanged)
         XCTAssertEqual(presented, 1)
@@ -1703,6 +1704,15 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertNil(model.interaction.session, "the interaction let go of the session")
         XCTAssertFalse(win.isVisible, "never on screen")
         XCTAssertEqual(AgentsWindow.title, "Agent Sessions")
+        // R1193-1: a show after the close builds a new model on the same owner's map (4.1a: it outlives the close).
+        w.show()
+        let again = try XCTUnwrap(w.model)
+        XCTAssertTrue(again !== model, "a new model")
+        XCTAssertTrue(again.lastLiveHome === w.lastLive, "the same home as before the close")
+        XCTAssertEqual(presented, 3)
+        try XCTUnwrap(built).close()
+        XCTAssertNil(w.model)
+        XCTAssertEqual(dismissed, 2)
     }
 
     /// #626 INFO-7: the status menu's "Agent Sessions…" item opens AgentsWindow.shared. #805

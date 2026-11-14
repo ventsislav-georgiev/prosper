@@ -162,8 +162,7 @@ enum AgentSidebar {
 
 /// #831 B1 step 2 (4.1a, rider R899-3): the lastLive map's home. The window's owner (`AgentsWindow`) keeps one for the
 /// process and hands it to every model it builds, so a pane's last live sight outlives a window close; a model built
-/// without one (tests) gets its own. shortcut: nothing prunes it before step 3 (prune on load and on a layout delete);
-/// each window open adds at most one entry per shown pane.
+/// without one (tests) gets its own. B1 step 3 (R1193-3): pruned to the store's panes on load and on a layout delete.
 @MainActor
 final class AgentLastLiveHome {
     var map: AgentPaneLayout.LastLiveMap = [:]
@@ -196,17 +195,29 @@ final class AgentWindowModel: ObservableObject {
     /// #831 B1 (spec 3.5): the focused pane's RESOLVED content as a row (`.live` -> .live(k), `.history` -> .history(id),
     /// anything else nil), written only by `settle()`. Stored so `$selection` publishes one change per change.
     @Published private(set) var selection: AgentSidebar.RowID?
-    /// #831 A2: the window's one layout, in memory: the store is neither loaded nor saved before phase B1, so nothing
-    /// is restored on open and the first-row pick holds. Every selection change goes into its focused pane through
-    /// the browse rule (`show`, 7.1).
+    /// #831: the window's active layout. B1 step 3 (8.1): restored from the store on open (init, `layouts`), else a
+    /// fresh one; every change is saved (`autosave`). Every selection change goes into its focused pane through the
+    /// browse rule (`show`, 7.1). 15.0: a multi-pane layout keeps its whole tree here with the split gate off;
+    /// `shownPanes` reduces it to the focused pane, and nothing saves that reduction.
     private(set) var layout = PaneLayout.single() {
         didSet {
             // 4.1a: a retarget or a closed pane loses its sight; a layout switch (another id) keeps every layout's.
             if oldValue.id == layout.id { lastLive = AgentPaneLayout.retargeted(lastLive, from: oldValue, to: layout) }
             syncRuntimes(switched: oldValue.id != layout.id)
             settle()
+            autosave()
         }
     }
+    /// 8.1 / 8.2: where the layouts load from and save to: the owner passes the app's defaults, tests a private
+    /// XCTestDefaults suite. nil: the model neither loads nor saves (every model built without one).
+    private let layoutDefaults: UserDefaults?
+    /// 8.1: the window's layouts as loaded and as last saved; nil without `layoutDefaults`.
+    private(set) var layouts: PaneLayoutStore?
+    /// Counts blob writes (tests: a change writes once, a publish that changes nothing writes nothing).
+    private(set) var layoutWrites = 0
+    /// R899-2: the browse rule's refusal of the last pick (select() kept the layout as it was); the next pick that
+    /// lands drops it. The pane notice line (3.3) draws its `notice`.
+    @Published private(set) var paneRefusal: PaneRefusal?
     /// #831 A2 (4.1a): the panes' last live sights, stamped by `stampLastLive` in the store's publish sink only.
     /// B1 step 2 (R899-3): kept by the window's owner (`lastLiveHome`), so it outlives this model.
     private(set) var lastLive: AgentPaneLayout.LastLiveMap {
@@ -327,14 +338,26 @@ final class AgentWindowModel: ObservableObject {
     /// 5.2: what the ask and plan sinks are bound to: the focused pane, its model, its resolved row.
     private struct Bound: Equatable {
         let pane: UUID
-        let model: ObjectIdentifier
         let row: AgentSidebar.RowID?
         let ended: Bool
     }
     private var bound: Bound?
+    /// R1193-6: the bound model itself, compared with ===: a switch frees the old models before it makes the new
+    /// ones, so a new model can take a freed one's address (an ObjectIdentifier would compare equal).
+    private weak var boundModel: AgentTranscriptModel?
 
-    init(lastLive home: AgentLastLiveHome = AgentLastLiveHome()) {
+    init(lastLive home: AgentLastLiveHome = AgentLastLiveHome(), layouts d: UserDefaults? = nil) {
         lastLiveHome = home
+        layoutDefaults = d
+        // 8.1: the window loads the store when it opens, never at app launch. Nothing is written here: a repaired or
+        // multi-pane blob (15.0) stays as stored until a change. R1193-3: sights of panes in no stored layout go; an
+        // inactive layout's panes keep theirs (only temporarily absent).
+        if let d {
+            let s = Preferences.agentWindowLayouts(in: d)
+            layouts = s
+            lastLiveHome.map = AgentPaneLayout.pruned(home.map, keeping: s)
+            if let l = s.activeLayout { layout = l }
+        }
         for p in layout.panes { runtimes[p.id] = AgentPaneRuntime(pane: p.id) }
         terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
         // OQ-66: an OSC 52 write needs the session to be the focused pane's, live now (4.3: resolved at the write).
@@ -350,10 +373,10 @@ final class AgentWindowModel: ObservableObject {
     /// `pendingAsk` / `pendingPlan` are set by the @MainActor transcript model, and Published sends on the setter's thread.
     private func rebind() {
         let f = closed ? nil : focusedRuntime
-        let now = f.map { Bound(pane: $0.pane, model: ObjectIdentifier($0.transcript), row: Self.resolvedRow($0.content),
-                                ended: $0.ended != nil) }
-        guard now != bound else { return }
+        let now = f.map { Bound(pane: $0.pane, row: Self.resolvedRow($0.content), ended: $0.ended != nil) }
+        guard now != bound || f?.transcript !== boundModel else { return }
         bound = now
+        boundModel = f?.transcript
         // #798: the transcript's pending AskUserQuestion is what a question form is checked against.
         askSubscription = f?.transcript.$pendingAsk.sink { [weak self] ask in
             MainActor.assumeIsolated { self?.interaction.ask = ask }
@@ -381,12 +404,43 @@ final class AgentWindowModel: ObservableObject {
         }
     }
 
-    /// The window's active layout replaced: a layout switch, or a focus or tree change. Plan step 3 loads the saved one
-    /// through here; until then only tests call it, with multi-pane layouts built under the split gate (15.0).
+    /// The window's active layout replaced: a layout switch, or a focus or tree change (saved, 8.1). Only tests call it
+    /// before B2/B3 route verbs, with multi-pane layouts built under the split gate (15.0).
     func adopt(_ l: PaneLayout) {
         guard !closed else { return }
         layout = l
         follow()
+    }
+
+    /// 8.1 Delete (B3 routes it): refused on the last layout, or with no store. R899-3: the deleted layout's sights go
+    /// (the other layouts keep theirs); a deleted active layout hands over to the MRU's next, which is adopted.
+    @discardableResult
+    func deleteLayout(_ id: UUID) -> PaneRefusal? {
+        guard !closed, let s = layouts else { return .noSuchLayout }
+        switch s.deleting(id) {
+        case let .failure(r):
+            return r
+        case let .success(out):
+            autosave(out)
+            lastLive = AgentPaneLayout.pruned(lastLive, keeping: out)
+            if let next = out.activeLayout, next.id != layout.id { adopt(next) }
+            return nil
+        }
+    }
+
+    /// 8.1: a change of the active layout (or `next`, a whole store) is written once; a call that changes nothing
+    /// writes nothing. Runs on the main actor (the layout's didSet, deleteLayout). Causes of the early returns: no
+    /// store loaded (`layoutDefaults` nil), the window closed; for a layout change also the island off (`store` nil:
+    /// bind(nil) empties the pane, which is not the user's change; the blob keeps their target), the 9-layout cap
+    /// (`storing` nil); and no change.
+    /// shortcut: one write per committed change, not coalesced per run-loop turn (8.1); B2's divider (save at drag end)
+    /// and B3's chained verbs are where coalescing pays.
+    private func autosave(_ next: PaneLayoutStore? = nil) {
+        guard let d = layoutDefaults, !closed, let s = layouts else { return }
+        guard let n = next ?? (store == nil ? nil : s.storing(layout)), n != s else { return }
+        layouts = n
+        layoutWrites += 1
+        Preferences.setAgentWindowLayouts(n, in: d)
     }
 
     /// Follows `store` (nil: the island is off). Called on open and whenever the
@@ -622,7 +676,13 @@ final class AgentWindowModel: ObservableObject {
         let next = id.map { layout.show(target($0), placement: .focused, minimum: PaneLayout.minimumPane, in: .zero,
                                         splitsEnabled: AgentPaneLayout.splitsEnabled) }
             ?? layout.replace(layout.focused, target: nil)
-        if case let .success(l) = next { layout = l }
+        switch next {
+        case let .success(l):
+            if paneRefusal != nil { paneRefusal = nil }
+            layout = l
+        case let .failure(r):
+            paneRefusal = r   // R899-2: kept for the pane notice line, never dropped silently
+        }
         follow()
     }
 

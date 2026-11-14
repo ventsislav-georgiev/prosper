@@ -95,22 +95,21 @@ final class AgentWindowD1Tests: XCTestCase {
     @MainActor
     func windowModel(_ store: AgentIslandStore?, opened: @escaping (AgentSession) -> Void = { _ in },
                      visible: @escaping (Bool) -> Void = { _ in },
-                     lastLive: AgentLastLiveHome = AgentLastLiveHome()) -> AgentWindowModel {
-        let m = AgentWindowModel(lastLive: lastLive)
+                     lastLive: AgentLastLiveHome = AgentLastLiveHome(), layouts: UserDefaults? = nil) -> AgentWindowModel {
+        let m = AgentWindowModel(lastLive: lastLive, layouts: layouts)
         m.now = { Self.now }
         m.openSession = opened
         m.resume = { _ in }
         m.onVisible = visible
         m.ageInterval = 3600
-        m.transcript.offMain = { $0() }
-        m.transcript.makeWatch = { _, _ in NSObject() }
-        m.transcript.tickInterval = 3600
-        // #831 B1 step 2: a pane runtime made later (a fixture's panes, a layout switch) gets the same seams.
+        // #831 B1 step 2: a pane runtime made later (a fixture's panes, a layout switch) gets the same seams; step 3:
+        // so does every runtime init made (a restored multi-pane layout has one per pane, the focused one included).
         m.onNewRuntime = { r in
             r.transcript.offMain = { $0() }
             r.transcript.makeWatch = { _, _ in NSObject() }
             r.transcript.tickInterval = 3600
         }
+        m.runtimes.values.forEach(m.onNewRuntime)
         m.bind(store)
         return m
     }

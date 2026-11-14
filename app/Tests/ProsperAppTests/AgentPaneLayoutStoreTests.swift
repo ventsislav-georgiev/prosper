@@ -522,6 +522,34 @@ final class AgentPaneLayoutStoreTests: XCTestCase {
             XCTFail("the History leaf")
         }
     }
+
+    /// R899-1 (#831 B1 step 3): a blob that holds a NUL byte is corrupt in decode() and never newer in isNewer(), before
+    /// any parse. Built as bytes: the spec's blob (v 1, and v 2) in UTF-16, which JSONDecoder reads (so without the
+    /// check it would decode, and a quote byte inside a UTF-16 char would fool the nesting scan), and UTF-8 with one NUL.
+    func testABlobWithANulByteIsCorruptBeforeAnyParse() throws {
+        struct V: Decodable { var v: Int? }
+        let newer = specBlob.replacingOccurrences(of: "\"v\": 1", with: "\"v\": 2")
+        XCTAssertEqual(decode(specBlob).store.layouts.count, 2, "control: the UTF-8 blob decodes")
+        XCTAssertTrue(PaneLayoutStore.isNewer(Data(newer.utf8)), "control: its v 2 is newer")
+        var parsed = 0
+        for encoding in [String.Encoding.utf16LittleEndian, .utf16, .utf32] {
+            for (why, text) in [("v 1", specBlob), ("v 2", newer)] {
+                let bytes = try XCTUnwrap(text.data(using: encoding))
+                XCTAssertTrue(bytes.contains(0), "\(encoding) \(why) holds NULs")
+                if (try? JSONDecoder().decode(V.self, from: bytes))?.v != nil { parsed += 1 }
+                let d = PaneLayoutStore.decode(bytes)
+                XCTAssertEqual(d.repairs, [.corruptBlob], "\(encoding) \(why)")
+                XCTAssertTrue(d.needsBackup, "the bytes are kept (agentWindowLayoutsCorrupt)")
+                XCTAssertEqual(d.store.layouts.count, 1, "the default store, never the decoded two")
+                XCTAssertFalse(PaneLayoutStore.isNewer(bytes), "\(encoding) \(why): never parsed for its v")
+            }
+        }
+        XCTAssertGreaterThan(parsed, 0, "the hole is real: the parser reads one of these, so only the NUL check stops it")
+        var one = Data(newer.utf8)
+        one.append(0)
+        XCTAssertEqual(PaneLayoutStore.decode(one).repairs, [.corruptBlob])
+        XCTAssertFalse(PaneLayoutStore.isNewer(one))
+    }
 }
 
 private extension Result {

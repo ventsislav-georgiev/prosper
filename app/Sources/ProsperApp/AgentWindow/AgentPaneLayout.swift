@@ -755,6 +755,23 @@ struct PaneLayoutStore: Hashable {
         return .success(out)
     }
 
+    /// 8.1 autosave: the store with `l` saved as the active layout: replaced in place when the store holds its id,
+    /// else added. nil at the 9-layout cap (nowhere to save it).
+    func storing(_ l: PaneLayout) -> PaneLayoutStore? {
+        var out = self
+        if let i = layouts.firstIndex(where: { $0.id == l.id }) {
+            out.layouts[i] = l
+        } else {
+            guard case let .success(added) = adding(l) else { return nil }
+            out = added
+        }
+        guard case let .success(active) = out.activate(l.id) else { return nil }
+        return active
+    }
+
+    /// The active layout (decode() and every operation keep `active` among `layouts`; the first as a fallback).
+    var activeLayout: PaneLayout? { layouts.first { $0.id == active } ?? layouts.first }
+
     private struct Blob: Codable {
         var v: Int?
         var active: UUID?
@@ -792,9 +809,9 @@ struct PaneLayoutStore: Hashable {
     }
 
     /// The blob's "v" is newer than this build's (8.2: kept in the backup key before this build writes). False for a
-    /// blob over the size or nesting cap: those are read as nothing, never parsed.
+    /// blob over the size or nesting cap, or holding a NUL byte (R899-1): those are read as nothing, never parsed.
     static func isNewer(_ data: Data) -> Bool {
-        guard data.count <= maxBlobBytes, nesting(data) <= maxNesting else { return false }
+        guard data.count <= maxBlobBytes, !data.contains(0), nesting(data) <= maxNesting else { return false }
         return ((try? JSONDecoder().decode(Probe.self, from: data))?.v ?? 0) > version
     }
 
@@ -807,6 +824,8 @@ struct PaneLayoutStore: Hashable {
     static func decode(_ data: Data?) -> (store: PaneLayoutStore, repairs: [PaneRepair], needsBackup: Bool) {
         guard let data else { return (makeDefault(), [], false) }
         if data.count > maxBlobBytes { return (makeDefault(), [.corruptBlob], true) }
+        // R899-1: UTF-8 JSON never holds a raw NUL; UTF-16/32 (which JSONDecoder reads) do, and fool the byte scan.
+        if data.contains(0) { return (makeDefault(), [.corruptBlob], true) }
         if nesting(data) > maxNesting { return (makeDefault(), [.corruptBlob], true) }
         let needsBackup = isNewer(data)
         guard let blob = try? JSONDecoder().decode(Blob.self, from: data) else {
