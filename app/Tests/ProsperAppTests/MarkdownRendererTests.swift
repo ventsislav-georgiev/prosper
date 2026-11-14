@@ -116,6 +116,18 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(String(linked.characters), "alt")
         XCTAssertEqual(linked.runs.first?.link, URL(string: "https://example.com/"))
         XCTAssertTrue(linked.runs.first?.imageURL == nil, "the image inside a link is dropped by the parser")
+        // #1213: with source positions on, that run's range (1-based line and UTF-8 byte column, end inclusive) is the
+        // image's own source; a non-ASCII byte before it moves the columns by its bytes, not its characters.
+        var pos = opts
+        pos.appliesSourcePositionAttributes = true
+        let badge = try AttributedString(markdown: "[![alt](p.png)](#top)", options: pos)
+        XCTAssertEqual(badge.runs.count, 1)
+        XCTAssertTrue(badge.runs.first?.imageURL == nil)
+        let p = try XCTUnwrap(badge.runs.first?.markdownSourcePosition)
+        XCTAssertEqual([p.startLine, p.startColumn, p.endLine, p.endColumn], [1, 2, 1, 14], "\"![alt](p.png)\"")
+        let wide = try AttributedString(markdown: "\u{E9} [![a](p.png)](#top)", options: pos)
+        let w = try XCTUnwrap(wide.runs.first { $0.link != nil }?.markdownSourcePosition)
+        XCTAssertEqual([w.startLine, w.startColumn, w.endLine, w.endColumn], [1, 5, 1, 15], "byte columns")
     }
 
     func testEveryConstruct() throws {
@@ -337,17 +349,173 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertFalse(html.contains("•\tb"), html)
     }
 
-    /// R886-5, KNOWN FAULT (left.txt): the parser drops an image inside a link (testParserFacts), so
-    /// the renderer sees only its alt text as link text and the picture is never requested.
-    func testImageInsideLinkIsItsAltTextKnownFault() {
+    /// A loader that draws an 8 x 8 picture for every request.
+    private func drawingLoader() throws -> Loader {
         let loader = Loader()
-        let out = render("[![alt](p.png)](https://example.com/)", loader)
-        XCTAssertEqual(loader.requests, [])
-        XCTAssertEqual(out.text.string, "alt")
-        XCTAssertEqual(out.text.attribute(.link, at: 0, effectiveRange: nil) as? URL, URL(string: "https://example.com/"))
-        let remote = render("[![badge](https://example.com/b.svg)](https://example.com/home)")
-        XCTAssertEqual(remote.text.string, "badge")
-        XCTAssertEqual(remote.text.attribute(.link, at: 0, effectiveRange: nil) as? URL, URL(string: "https://example.com/home"))
+        loader.image = ImagePolicy.decode(try pngData(width: 8, height: 8), maxPixelSize: 8)
+        return loader
+    }
+
+    private func linkString(_ out: R.Output, at i: Int) -> String? {
+        guard i >= 0, i < out.text.length else { return nil }
+        return (out.text.attribute(.link, at: i, effectiveRange: nil) as? URL)?.absoluteString
+    }
+
+    /// #1213 (R886-5, was the known fault): an image inside a link. The parser drops the image (testParserFacts); its
+    /// source slice parsed alone gives it back. A local image is drawn and keeps the outer link; a remote one is never
+    /// loaded: "[image: alt]" in the secondary colour, linked to the outer target, not to the image.
+    func testImageInsideLink() throws {
+        let loader = try drawingLoader()
+        let out = render("[![alt](p.png)](#top)", loader)
+        XCTAssertEqual(loader.requests, ["p.png"], "asked once, with the image's own source")
+        XCTAssertEqual(out.text.string, "\u{FFFC}")
+        XCTAssertTrue(out.text.attribute(.attachment, at: 0, effectiveRange: nil) is NSTextAttachment)
+        XCTAssertEqual(linkString(out, at: 0), "#top", "the outer link on the picture")
+        XCTAssertEqual(out.text.attribute(.toolTip, at: 0, effectiveRange: nil) as? String, "#top", "D6: the target")
+
+        let remoteLoader = try drawingLoader()
+        let remote = render("[![badge](https://example.com/b.svg)](https://example.com/home)", remoteLoader)
+        XCTAssertEqual(remoteLoader.requests, [], "a remote image is never requested")
+        XCTAssertEqual(remote.text.string, "[image: badge]")
+        XCTAssertEqual(linkString(remote, at: 0), "https://example.com/home")
+        let color = (remote.text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?.usingColorSpace(.sRGB)
+        XCTAssertEqual(color?.redComponent ?? -1, 0.5, accuracy: 0.01, "the secondary colour")
+
+        let refused = Loader()   // a local image the loader refuses: the mark, with the outer link
+        let mark = render("[![alt](p.png)](#top)", refused)
+        XCTAssertEqual(refused.requests, ["p.png"])
+        XCTAssertEqual(mark.text.string, "[image: alt]")
+        XCTAssertEqual(linkString(mark, at: 0), "#top")
+
+        let empty = try drawingLoader()   // left.txt: an empty alt gives the parser no run at all; it stays lost
+        XCTAssertEqual(render("[![](p.png)](#top)", empty).text.string, "")
+        XCTAssertEqual(empty.requests, [])
+    }
+
+    /// #1213: anything but exactly one image in the slice is marked "[image: text]" with the outer link, not loaded;
+    /// text BEFORE the image starts the slice with that text, so the run is drawn as before. Plain links and images in
+    /// the same file are drawn as before.
+    func testImageInsideLinkFallbacks() throws {
+        let cases: [(String, String)] = [
+            ("[![a](p.png) and text](#top)", "[image: a and text]"),   // text after the image
+            ("[![a](p.png)![b](q.png)](#top)", "[image: ab]"),         // two images
+            ("[![alt][r]](#top)\n\n[r]: p.png", "[image: alt]"),       // a reference image: no definition in the slice
+        ]
+        for (md, shown) in cases {
+            let loader = try drawingLoader()
+            let out = render(md, loader)
+            XCTAssertEqual(out.text.string, shown, md)
+            XCTAssertEqual(loader.requests, [], md)
+            XCTAssertEqual(linkString(out, at: 0), "#top", md)
+        }
+        let before = render("[x ![a](p.png)](#top)")
+        XCTAssertEqual(before.text.string, "x a", "text before the image: drawn as before (left.txt)")
+        XCTAssertEqual(linkString(before, at: 0), "#top")
+        let loader = try drawingLoader()
+        let mixed = render("[![a](p.png)](#top) [b](#top) ![c](q.png)", loader)
+        XCTAssertEqual(loader.requests, ["p.png", "q.png"])
+        XCTAssertEqual(mixed.text.string, "\u{FFFC} b \u{FFFC}")
+        XCTAssertEqual(linkString(mixed, at: 2), "#top", "the plain link")
+        XCTAssertEqual(mixed.text.attribute(.toolTip, at: 4, effectiveRange: nil) as? String, "c", "the plain image")
+        XCTAssertTrue(linkString(mixed, at: 4) == nil)
+    }
+
+    /// #1213: two forms in one paragraph; non-ASCII bytes before a form on its line; CRLF and lone CR line ends: the byte
+    /// range of each is right, so each local image is asked for once.
+    func testImageInsideLinkByteRange() throws {
+        let loader = try drawingLoader()
+        let two = render("[![a](p.png)](#top) and [![b](https://example.com/b.svg)](#top)", loader)
+        XCTAssertEqual(loader.requests, ["p.png"])
+        XCTAssertEqual(two.text.string, "\u{FFFC} and [image: b]")
+        XCTAssertEqual(linkString(two, at: two.text.length - 1), "#top")
+        let wide = try drawingLoader()
+        let w = render("\u{E9} \u{E4} [![\u{FC}](p.png)](#top) \u{F6} [![b](q.png)](#top)\nx\u{1F600} [![c](r.png)](#top)", wide)
+        XCTAssertEqual(wide.requests, ["p.png", "q.png", "r.png"], w.text.string)
+        let crlf = try drawingLoader()
+        _ = render("one\r\n\r\n\u{E9} [![a](p.png)](#top)\r\nnext [![b](q.png)](#top)\rlast [![c](r.png)](#top)\r\n", crlf)
+        XCTAssertEqual(crlf.requests, ["p.png", "q.png", "r.png"])
+    }
+
+    /// #1213: inside a list item, a quote, a quote's second line and a list in a quote the parser's columns are right
+    /// (the part 2 ticket): the picture, asked once.
+    func testImageInsideLinkInContainers() throws {
+        for (name, md, src) in [("list", "- [![a](p.png)](#top)", "p.png"), ("quote", "> [![a](q.png)](#top)", "q.png"),
+                                ("quote line 2", "> x\n> [![a](r.png)](#top)", "r.png"),
+                                ("nested", "> - y\n>   [![a](s.png)](#top)", "s.png")] {
+            let loader = try drawingLoader()
+            let out = render(md, loader)
+            XCTAssertEqual(loader.requests, [src], name)
+            print("MR1213b container \(name): \(loader.requests.isEmpty ? "as before" : "drawn") \(out.text.string.debugDescription)")
+        }
+    }
+
+    /// #1213: the slice parses are capped at maxImages per document, remote ones included; past the cap a form is
+    /// marked without a parse. The image counts toward maxImages and toward the per-paragraph bound like any image.
+    func testImageInsideLinkCaps() throws {
+        let remote = (0..<R.maxImages).map { "[![r\($0)](https://example.com/\($0).svg)](#top)" }.joined(separator: " ")
+        let loader = try drawingLoader()
+        let out = render(remote + " [![last](p.png)](#top)", loader)
+        XCTAssertEqual(loader.requests, [], "the form past the slice-parse cap is not parsed, so not loaded")
+        XCTAssertTrue(out.text.string.hasSuffix(" [image: last]"), String(out.text.string.suffix(40)))
+        XCTAssertEqual(linkString(out, at: out.text.length - 1), "#top")
+
+        let images = (0..<R.maxImages).map { "![i\($0)](p\($0).png)" }.joined(separator: " ")
+        let full = Loader()
+        let shown = render(images + " [![last](q.png)](#top)", full)
+        XCTAssertEqual(full.requests.count, R.maxImages)
+        XCTAssertEqual(full.requests.last, "p63.png", "the form's image is past maxImages: not requested")
+        XCTAssertTrue(shown.text.string.hasSuffix(" [image: last]"))
+        XCTAssertEqual(linkString(shown, at: shown.text.length - 1), "#top")
+
+        autoreleasepool {   // run p + 1 of a paragraph: its text, plain, not requested
+            let p = R.maxStyledRunsPerParagraph
+            let bound = Loader()
+            let md = (0..<p).map { "*e\($0)*" }.joined(separator: " ") + " [![over](p.png)](#top)"
+            let o = render(md, bound)
+            XCTAssertEqual(bound.requests, [])
+            XCTAssertTrue(o.text.string.hasSuffix(" over"), String(o.text.string.suffix(20)))
+            XCTAssertTrue(linkString(o, at: o.text.length - 1) == nil)
+        }
+    }
+
+    /// #1213: the gate. Source positions only for a source holding the bytes "[!["; every other option as before.
+    func testSourcePositionsOnlyForTheForm() {
+        for md in [Self.everyConstruct, "", "[a](#top) ![b](p.png) [ ![c](q.png)](#top)", "[!x", "![[a]](p.png)"] {
+            XCTAssertFalse(R.parsingOptions(for: md).appliesSourcePositionAttributes, md)
+        }
+        for md in ["[![a](p.png)](#top)", "x[![", "\u{E9}[![\u{301}"] {
+            XCTAssertTrue(R.parsingOptions(for: md).appliesSourcePositionAttributes, md)
+        }
+        let o = R.parsingOptions(for: "[![")
+        XCTAssertFalse(o.allowsExtendedAttributes)
+        XCTAssertTrue(o.interpretedSyntax == .full)
+        XCTAssertTrue(o.failurePolicy == .returnPartiallyParsedIfPossible)
+        XCTAssertTrue(o.languageCode == nil)
+    }
+
+    /// #1213: the line table and the bounds check. The parser cannot be made to report a position off its source, so
+    /// the row calls the map directly: every position that does not lie on its line is no slice, nothing traps.
+    func testSourceMapChecksPositions() {
+        let m = R.SourceMap("ab\ncd\r\nef\rg")
+        XCTAssertEqual(m.starts, [0, 3, 7, 10])
+        func s(_ l: Int, _ c: Int, _ el: Int, _ ec: Int) -> String? {
+            m.slice(line: l, column: c, toLine: el, column: ec).map { String(decoding: $0, as: UTF8.self) }
+        }
+        XCTAssertEqual(s(1, 1, 1, 2), "ab")
+        XCTAssertEqual(s(2, 1, 2, 2), "cd")
+        XCTAssertEqual(s(1, 2, 3, 1), "b\ncd\r\ne")
+        XCTAssertEqual(s(4, 1, 4, 1), "g")
+        XCTAssertEqual(s(1, 3, 1, 3), "\n", "a line's end byte is on it")
+        for bad in [(0, 1, 1, 1), (1, 0, 1, 1), (1, 1, 1, 4), (5, 1, 5, 1), (4, 2, 4, 2), (1, 2, 1, 1), (2, 1, 1, 1),
+                    (Int.max, 1, 1, 1), (1, Int.max, 1, Int.max), (Int.min, Int.min, Int.min, Int.min), (1, 1, Int.max, Int.max),
+                    (-1, -1, -1, -1)] {
+            XCTAssertTrue(s(bad.0, bad.1, bad.2, bad.3) == nil, "\(bad)")
+        }
+        let empty = R.SourceMap("")
+        XCTAssertTrue(empty.slice(line: 1, column: 1, toLine: 1, column: 1) == nil)
+        let ends = R.SourceMap("a\n")
+        XCTAssertEqual(ends.starts, [0, 2])
+        XCTAssertTrue(ends.slice(line: 2, column: 1, toLine: 2, column: 1) == nil, "the empty last line holds nothing")
     }
 
     /// R886-3: exactly 1 MiB is parsed; one byte more, or 1 MiB of characters over 1 MiB of bytes, is source.
@@ -446,6 +614,9 @@ final class MarkdownRendererTests: XCTestCase {
             ("a.b", 2), ("a:b", 2), (".a", 2), ("a..b", 2), ("a.", 2), ("a. b", 2), ("a: b", 2), ("a.\nb", 4), ("a@b", 2),
             ("a@b.co", 4), ("www.a", 4), ("http://a", 4), ("www.a.co", 4), ("http://a.co", 4), ("a@b.co a@b.co", 6),
             ("a@ b.c", 2), ("a@b. c", 2), ("a@b.c.d", 4), ("w. a", 2), ("a:/", 4),
+            // F1213-1: two for an "&" before "#" or an ASCII letter (an entity), nothing for any other "&"
+            ("a&#64;b.c", 4), ("a&commat;b.c", 4), ("a@b&#46;c", 4), ("&amp;", 4), ("AT&T", 4), ("a & b", 2), ("a&&b", 4),
+            ("a&", 2), ("&#", 4), ("x&=y", 2), ("a&\nb", 4), ("&&&", 2),
         ] + Self.autolinkShapes
         for (md, n) in cases { XCTAssertEqual(R.markupCount(md), n, md.debugDescription) }
     }
@@ -463,6 +634,11 @@ final class MarkdownRendererTests: XCTestCase {
         ("http://a,http://b", 6), ("http://a.co,www.b.co", 6), ("a@b.co;http://c", 6), ("www.a@b.c", 6),
         ("https://a@b.c", 6), ("a@www.b", 4), ("a:b@c.d", 4), ("http://a.co.", 4), ("<http://a>", 6), ("<a@b.c>", 6),
         ("[x](http://a)", 6), ("`www.a`", 6), ("a.b.c.d.e", 2), ("v1.2.3:", 2), ("C:\\x", 2),
+        // F1213-1 (QA 950): "@" or "." spelled as an entity is still linked
+        ("a&#64;b.c", 4), ("a&#x40;b.c", 4), ("a&#X40;b.c", 4), ("a&#0064;b.c", 4), ("a&commat;b.c", 4), ("a@b&#46;c", 4),
+        ("a&#64;b&#46;c", 6), ("a@b&period;c", 4), ("&amp;", 4), ("AT&T", 4), ("a&b.c", 4), ("&#64;", 4), ("a&#64;b", 4),
+        ("a&#64;b&#46;c&#46;d", 8), ("www&period;a", 4), ("http&colon;//a", 4), ("a&#x40;b.c,c&#x40;d.e", 6),
+        ("*a&#64;b.c*", 6), ("a&NotAnEntity;b.c", 4), ("a&#9999999999;b.c", 4), ("a&#64b.c", 4),
     ]
 
     /// #1213: on every shape above, and on #1187's inline shapes, 100 units count at least the runs the parser makes of
@@ -484,7 +660,8 @@ final class MarkdownRendererTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(R.markupCount(md), runs, name)
             }
         }
-        XCTAssertGreaterThanOrEqual(linked, 40, "the table holds shapes the parser links (41 a join in the probe)")
+        print("MR1213b linked documents \(linked)")
+        XCTAssertGreaterThanOrEqual(linked, 107, "the table holds shapes the parser links (107 in the #1213 part 2 run)")
     }
 
     /// #1187: at maxMarkup the file is rendered as before; one more delimiter and it is its source, with the note.
@@ -540,6 +717,25 @@ final class MarkdownRendererTests: XCTestCase {
         let src = render(at + "a@b.co")
         XCTAssertEqual(src.note, R.tooMuchMarkupNote)
         XCTAssertEqual(src.text.string, at + "a@b.co")
+    }
+
+    /// F1213-1: e-mails spelled with an entity count toward the markup cap: at it the file is Markdown, one more is source.
+    func testMarkupCapCountsEntityAutolinks() {
+        let mails = String(repeating: "a&#64;b.c ", count: 1000)   // 2 each: the "&" before "#"
+        XCTAssertEqual(R.markupCount(mails), 2 + 2000)
+        let at = mails + String(repeating: "*a _a ", count: (R.maxMarkup - 2002) / 2)   // openers with no closer: one run
+        XCTAssertEqual(R.markupCount(at), R.maxMarkup)
+        autoreleasepool {
+            let out = render(at)
+            XCTAssertTrue(out.note == nil, out.note ?? "")
+            var links = 0
+            out.text.enumerateAttribute(.link, in: NSRange(location: 0, length: out.text.length)) { v, _, _ in if v != nil { links += 1 } }
+            XCTAssertEqual(links, 1000, "every e-mail spelled with an entity is a link run")
+        }
+        XCTAssertEqual(R.markupCount(at + "a&#64;b.c"), R.maxMarkup + 2)
+        let src = render(at + "a&#64;b.c")
+        XCTAssertEqual(src.note, R.tooMuchMarkupNote)
+        XCTAssertEqual(src.text.string, at + "a&#64;b.c")
     }
 
     /// Styled runs of `out` (font italic), counted run by run.
@@ -690,6 +886,25 @@ final class MarkdownRendererTests: XCTestCase {
         let out = try XCTUnwrap(box.get())
         XCTAssertNil(out.note)
         timed("layout 5000 lines", ceiling: 5) { Self.layout(out.text) }
+    }
+
+    /// #1213: the most forms the caps allow (24,000 at 6 markup each, under maxMarkup; about 750 KB, about 29 MiB of
+    /// runs): exactly maxImages slice parses, every form marked; counted, with a wide time ceiling.
+    func testImagesInsideLinksAtTheCaps() throws {
+        try requireHeavyTests()
+        let n = 24_000
+        let md = (0..<n).map { "[![i\($0)](p\($0).png)](#top)" }.joined(separator: "\n\n")
+        XCTAssertEqual(R.markupCount(md), 6 * n)
+        let loader = Loader()
+        let style = Self.style, doc = Self.document
+        let box = OutputBox()
+        timed("render \(n) images inside links", ceiling: 20) {
+            box.set(R.render(md, document: doc, style: style, loader: loader.load))
+        }
+        let out = try XCTUnwrap(box.get())
+        XCTAssertEqual(loader.requests.count, R.maxImages, "one slice parse per form up to maxImages, then none")
+        XCTAssertEqual(out.text.string.components(separatedBy: "[image: ").count - 1, n, "every form marked")
+        XCTAssertEqual(out.note, R.trimmedNote(["links"]))
     }
 
     /// R5: hostile shapes: no crash, no recursion by depth here, 10 s each to render and lay out.

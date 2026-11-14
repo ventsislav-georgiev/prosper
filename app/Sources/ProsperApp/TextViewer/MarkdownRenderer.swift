@@ -88,19 +88,88 @@ enum MarkdownRenderer {
         guard source.utf8.count <= maxSourceBytes else { return plain(source, style: style, note: tooLargeNote) }
         guard nestingBound(source) <= maxNesting else { return plain(source, style: style, note: tooDeepNote) }
         guard markupCount(source) <= maxMarkup else { return plain(source, style: style, note: tooMuchMarkupNote) }
-        let options = AttributedString.MarkdownParsingOptions(
-            allowsExtendedAttributes: false, interpretedSyntax: .full,
-            failurePolicy: .returnPartiallyParsedIfPossible, languageCode: nil)
+        let options = parsingOptions(for: source)
         guard let parsed = try? AttributedString(markdown: source, options: options) else {
             return plain(source, style: style, note: unparsedNote)
         }
+        // #1213: the parser drops an image inside a link and keeps its alt text as the link text. With source positions
+        // on, that run's range is the image's own source, which is parsed alone to recover the image.
+        let map = options.appliesSourcePositionAttributes ? SourceMap(source) : nil
+        var sliceParses = 0, sliceBytes = 0
         let c = Converter(style: style, document: document, loader: loader)
         for run in parsed.runs {
             if Task.isCancelled { break }
+            var image = run.imageURL, badge = false
+            if let map, run.link != nil, image == nil, let pos = run.markdownSourcePosition,
+               let slice = map.slice(line: pos.startLine, column: pos.startColumn, toLine: pos.endLine, column: pos.endColumn),
+               slice.starts(with: [UInt8(ascii: "!"), UInt8(ascii: "[")]) {
+                badge = true
+                // Capped and counted: at most maxImages slice parses, together at most the source's own bytes; past
+                // either the form is marked without a parse.
+                if sliceParses < maxImages, slice.count <= map.bytes.count - sliceBytes {
+                    sliceParses += 1
+                    sliceBytes += slice.count
+                    image = linkedImage(String(decoding: slice, as: UTF8.self), options: options)
+                }
+            }
             c.add(String(parsed[run.range].characters), block: run.presentationIntent,
-                  inline: run.inlinePresentationIntent ?? [], link: run.link, image: run.imageURL)
+                  inline: run.inlinePresentationIntent ?? [], link: run.link, image: image, badge: badge)
         }
         return c.finish()
+    }
+
+    /// The parse options for `source`: the system parser, full syntax. #1213: source positions (about 20% more parse
+    /// time) only when the source holds the bytes "[![", where an image inside a link can start; other files parse
+    /// exactly as before.
+    nonisolated static func parsingOptions(for source: String) -> AttributedString.MarkdownParsingOptions {
+        var options = AttributedString.MarkdownParsingOptions(
+            allowsExtendedAttributes: false, interpretedSyntax: .full,
+            failurePolicy: .returnPartiallyParsedIfPossible, languageCode: nil)
+        options.appliesSourcePositionAttributes = source.utf8.firstRange(of: "[![".utf8) != nil
+        return options
+    }
+
+    /// #1213: the image of an image inside a link, from its source slice parsed alone: only when the slice is exactly
+    /// one run with an image (no text around it, not two images, not a reference whose definition is elsewhere).
+    nonisolated static func linkedImage(_ slice: String, options: AttributedString.MarkdownParsingOptions) -> URL? {
+        guard let parsed = try? AttributedString(markdown: slice, options: options) else { return nil }
+        var runs = parsed.runs.makeIterator()
+        guard let first = runs.next(), runs.next() == nil else { return nil }
+        return first.imageURL
+    }
+
+    /// #1213: the source's UTF-8 bytes and where each line starts, to turn a parser's source position (1-based line and
+    /// byte column, end inclusive) into bytes. A line ends at "\n", "\r\n" or a lone "\r", as the parser's lines do.
+    /// Positions are checked against the table: one that does not fit is no slice.
+    struct SourceMap {
+        let bytes: [UInt8]
+        let starts: [Int]
+
+        init(_ source: String) {
+            bytes = Array(source.utf8)
+            var starts = [0]
+            var i = 0
+            while i < bytes.count {
+                let b = bytes[i]
+                i += 1
+                if b == 0x0A || (b == 0x0D && (i == bytes.count || bytes[i] != 0x0A)) { starts.append(i) }
+            }
+            self.starts = starts
+        }
+
+        /// The bytes from (line, column) to (toLine, column) inclusive, or nil when either does not lie on its line.
+        func slice(line: Int, column: Int, toLine: Int, column endColumn: Int) -> ArraySlice<UInt8>? {
+            guard let a = offset(line, column), let b = offset(toLine, endColumn), a <= b else { return nil }
+            return bytes[a...b]
+        }
+
+        private func offset(_ line: Int, _ column: Int) -> Int? {
+            guard line >= 1, line <= starts.count, column >= 1 else { return nil }
+            let start = starts[line - 1]
+            let end = line < starts.count ? starts[line] : bytes.count
+            guard column <= end - start else { return nil }   // so start + column - 1 < end <= bytes.count
+            return start + column - 1
+        }
     }
 
     /// An upper bound on the container nesting any line can reach: every block quote or list level
@@ -155,8 +224,9 @@ enum MarkdownRenderer {
     /// counted with its line. #1211 (F1187-1), #1213: a bare autolink (a link run and the text after it) counts two:
     /// two for each ":" followed by "/" (a scheme's "://"), two for a "." after a "w" or "W" and two for the first "." after an
     /// "@" in one word, each "." only when a non-blank byte follows it. Other dots and colons ("a.b", "1.2.3", "x:y")
-    /// count nothing: the parser links none of them. At least the parser's run count on every shape measured
-    /// (#1213 probe). One pass over the bytes.
+    /// count nothing: the parser links none of them. F1213-1: two for each "&" followed by "#" or an ASCII letter (an
+    /// entity can spell an e-mail's "@" or "." and the parser still links it); "& ", "&&", "&=" count nothing. At least the
+    /// parser's run count on every shape measured (#1213 probe). One pass over the bytes.
     nonisolated static func markupCount(_ s: String) -> Int {
         var n = 0, text = false, pipe = false, dot = false, at = false
         var prev: UInt8 = 0x20
@@ -179,6 +249,8 @@ enum MarkdownRenderer {
                     if prev == UInt8(ascii: "w") || prev == UInt8(ascii: "W") { dot = true } else if at { (dot, at) = (true, false) }
                 case UInt8(ascii: "/"): if prev == UInt8(ascii: ":") { n += 2 }
                 case UInt8(ascii: "<"): n += 2
+                case UInt8(ascii: "#"), UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"):
+                    if prev == UInt8(ascii: "&") { n += 2 }   // F1213-1: an entity
                 case UInt8(ascii: "*"), UInt8(ascii: "_"), UInt8(ascii: "~"), UInt8(ascii: "`"),
                      UInt8(ascii: "["), UInt8(ascii: "]"): n += 1
                 default: break
@@ -249,17 +321,22 @@ private final class Converter {
         maxPixelSize = Int(min(16384, TextViewerTextView.columnWidth * s * 2))
     }
 
-    func add(_ text: String, block: PresentationIntent?, inline: InlinePresentationIntent, link: URL?, image: URL?) {
+    /// `badge` (#1213): the run is an image inside a link, `link` is the outer link and `image` its image if the slice
+    /// parse found one; with no image it is marked "[image: text]". Past a cap that drops the link it is plain text.
+    func add(_ text: String, block: PresentationIntent?, inline: InlinePresentationIntent, link: URL?, image: URL?,
+             badge: Bool = false) {
         var text = text
         var inline = inline
         var link = link
         var image = image
+        var badge = badge
         if !inline.subtracting([.lineBreak, .softBreak]).isEmpty || link != nil {
             styledRuns += 1
             if styledRuns > R.maxStyledRuns {
                 trim("styles")
                 inline = inline.intersection([.lineBreak, .softBreak])
                 link = nil
+                if badge { (image, badge) = (nil, false) }
             }
         }
         let id = block?.components.first?.identity ?? -1   // raw HTML blocks carry no intent
@@ -269,11 +346,11 @@ private final class Converter {
             paragraphRuns += 1
             if paragraphRuns > R.maxStyledRunsPerParagraph {
                 trim("styles in one paragraph")
-                (inline, link, image) = (inline.intersection([.lineBreak, .softBreak]), nil, nil)   // an image shows its alt text
+                (inline, link, image, badge) = (inline.intersection([.lineBreak, .softBreak]), nil, nil, false)   // an image shows its alt text
             }
         }
         if heading != nil { heading?.text += text }
-        if let image { return addImage(alt: text, src: image) }
+        if image != nil || badge { return addImage(alt: text, src: image, link: link) }
         let attrs = attributes(inline, link: link)
         if inline.contains(.lineBreak) {   // a hard break: a newline, the rest of the block without the marker indent
             emit("\n", attrs)
@@ -431,10 +508,12 @@ private final class Converter {
     }
 
     /// D7: a local image through the loader (inside the tree, capped); anything else, or a refusal,
-    /// shows "[image: alt]", and a remote one keeps its link (D6) without ever being loaded.
-    private func addImage(alt: String, src: URL) {
-        let local = ImagePolicy.isLocal(src)
-        if local, images < R.maxImages {
+    /// shows "[image: alt]", and a remote one keeps its link (D6) without ever being loaded. #1213: `link` is the
+    /// outer link of an image inside a link, kept on the picture or on the mark instead of the image's own; no `src`
+    /// is a form whose image was not recovered: the mark only.
+    private func addImage(alt: String, src: URL?, link: URL? = nil) {
+        let local = src.map(ImagePolicy.isLocal) ?? false
+        if let src, local, images < R.maxImages {
             images += 1
             if let cg = loader(src, document, maxPixelSize) {
                 var size = NSSize(width: CGFloat(cg.width) / 2, height: CGFloat(cg.height) / 2)
@@ -445,12 +524,18 @@ private final class Converter {
                 attachment.bounds = CGRect(origin: .zero, size: size)
                 let s = NSMutableAttributedString(attachment: attachment)
                 s.addAttributes([.paragraphStyle: para, .toolTip: alt], range: NSRange(location: 0, length: s.length))
+                if let link {   // through LinkPolicy and maxLinks like any link; its tooltip is the target (D6)
+                    let a = attributes([], link: link)
+                    if let l = a[.link], let tip = a[.toolTip] {
+                        s.addAttributes([.link: l, .toolTip: tip], range: NSRange(location: 0, length: s.length))
+                    }
+                }
                 out.append(s)
                 lineStart = false
                 return
             }
         }
-        var a = attributes([], link: local ? nil : src)
+        var a = attributes([], link: link ?? (local ? nil : src))
         a[.foregroundColor] = style.secondary.color
         emit("[image: \(alt)]", a)
     }

@@ -930,6 +930,9 @@ tag from the now-released section and put it on the new top draft.
   title". (#1210)
 - Agent Sessions reopens on the session you were last reading (also after a relaunch, and after
   Agent Island is turned off and on) instead of jumping to the first session in the list. (#1217)
+- Text Viewer: in Markdown, a picture inside a link (the usual badge form) shows its picture again
+  when the image is a local file, with the link kept on it; a web image there shows "[image: name]"
+  linked to the link's target instead of only its name. (#1213)
 
 ## v2.174.0
 
