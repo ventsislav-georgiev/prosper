@@ -88,6 +88,11 @@ final class AgentsWindow {
         let hosting = NSHostingController(rootView: Themed { AgentWindowRootView(model: model) })
         let win = AgentsNSWindow(contentViewController: hosting)
         win.model = model
+        // 4.2 Pick Another: the sidebar gets the keys (called on the main actor, from a button's action).
+        model.focusSidebar = { [weak win] in
+            win?.sidebarFocused = true
+            win?.makeFirstResponder(nil)
+        }
         win.title = title
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         // #860: Settings' chrome. The title hides (the sidebar's "Agent Sessions" header names the
@@ -343,7 +348,7 @@ struct AgentWindowRootView: View {
                 .frame(width: sz(290))
                 .background(NeonSidebarSurface())
             Rectangle().fill(Neon.stroke).frame(width: 1)
-            AgentDetailView(model: model, transcript: model.transcript, scrolls: scrolls)
+            AgentPaneArea(model: model, scrolls: scrolls)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(SettingsBackground())
         }
@@ -714,6 +719,8 @@ struct AgentDetailView: View {
     @ObservedObject var transcript: AgentTranscriptModel
     /// False for offscreen evidence (no ScrollView).
     var scrolls = true
+    /// #831 B1 step 4 (9.2): more than one pane shown: the one-line header (one pane: the full header).
+    var compact = false
 
     /// QA #668 F1: the input box's lock store; nil for an ended session's held row (the plain, ended pane).
     var inputStore: AgentIslandStore? { model.focusedEnded ? nil : model.store }
@@ -727,13 +734,22 @@ struct AgentDetailView: View {
             let ended = model.focusedEnded
             let mode = model.paneMode
             VStack(spacing: 0) {
-                AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
-                                   level: $model.verbosity, todos: transcript.todos,
-                                   todosOpen: mode == .terminal ? floatingTodos : $transcript.todosOpen,
-                                   store: model.store, ask: { model.ask($0, s) }, ended: ended,
-                                   rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
-                                   endRename: { model.endRename($0, $1) },
-                                   mode: mode, setMode: { model.switchMode($0, for: s) })
+                Group {
+                    if compact {
+                        AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
+                                              ask: { model.ask($0, s) }, open: { model.openSelected() },
+                                              mode: mode, setMode: { model.switchMode($0, for: s) })
+                    } else {
+                        AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
+                                           level: $model.verbosity, todos: transcript.todos,
+                                           todosOpen: mode == .terminal ? floatingTodos : $transcript.todosOpen,
+                                           store: model.store, ask: { model.ask($0, s) }, ended: ended,
+                                           rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
+                                           endRename: { model.endRename($0, $1) },
+                                           mode: mode, setMode: { model.switchMode($0, for: s) })
+                    }
+                }
+                .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if mode == .terminal {
                     terminalPane(row, s)
@@ -742,10 +758,40 @@ struct AgentDetailView: View {
                 }
             }
         } else if let row = model.selectedRow, let r = row.record {
-            AgentHistoryDetail(row: row, record: r, store: model.store, refusal: model.refusalText(row.id),
-                               act: { model.act($0, r) })
-                .overlay(alignment: .top) { confirmStrip }   // #829 G8: Remove asks, over the pane's top
+            titled(row.title) {
+                AgentHistoryDetail(row: row, record: r, store: model.store, refusal: model.refusalText(row.id),
+                                   act: { model.act($0, r) })
+                    .overlay(alignment: .top) { confirmStrip }   // #829 G8: Remove asks, over the pane's top
+            }
+        } else if let title = AgentPanePlaceholder.title(model.content) {
+            // 4.2 (QA 956 R1217-a): a pane that holds a target whose session is gone says so by name; the list (and Pick
+            // Another) still picks another session into it. Same slot as the empty pane's below.
+            let pane = model.layout.focused
+            titled(title) {
+                AgentPanePlaceholder(title: title, close: model.layout.panes.count > 1 ? { model.closePane(pane) } : nil,
+                                     pick: { model.pickAnother(pane) })
+            }
         } else {
+            titled("") { emptyPane }
+        }
+    }
+
+    /// 9.2: with several panes, every content keeps the one-line header's height above it (table 4.2: only the body
+    /// swaps); one pane: the body alone, as before.
+    @ViewBuilder func titled<B: View>(_ title: String, @ViewBuilder _ body: () -> B) -> some View {
+        if compact {
+            VStack(spacing: 0) {
+                AgentCompactHeader(title: title).modifier(AgentPaneProbe(kind: "header"))
+                Rectangle().fill(Neon.stroke).frame(height: 1)
+                body()
+            }
+        } else {
+            body()
+        }
+    }
+
+    /// No target: today's state (the hint and the New session pill, #847).
+    var emptyPane: some View {
             AgentEmptyState(icon: "sidebar.left", title: "Select a session",
                             detail: "Up and down move through the list; Return or a click moves into it.") {
                 AgentPillButton(title: "New session", icon: "plus", tint: Neon.blue,
@@ -754,7 +800,6 @@ struct AgentDetailView: View {
                     .accessibilityLabel("New session")
                     .padding(.top, sz(4))
             }
-        }
     }
 
     @ViewBuilder func transcriptPane(_ row: AgentSidebar.Row, _ s: AgentSession, ended: Bool) -> some View {
@@ -820,6 +865,293 @@ struct AgentDetailView: View {
     }
 }
 
+// MARK: - #831 B1 step 4: the pane area (view A)
+
+/// The pane area's coordinate space (pane frames are the model's, in it).
+let agentPaneAreaSpace = "agentPaneArea"
+
+private struct AgentComposerTwoLinesKey: EnvironmentKey { static let defaultValue = false }
+private struct AgentPaneIDKey: EnvironmentKey { static let defaultValue: UUID? = nil }
+
+extension EnvironmentValues {
+    /// 5.1: more than one row of panes is shown: the composer row is 44·s.
+    var agentComposerTwoLines: Bool {
+        get { self[AgentComposerTwoLinesKey.self] }
+        set { self[AgentComposerTwoLinesKey.self] = newValue }
+    }
+    /// The pane a view is drawn in (AgentPaneProbe).
+    var agentPaneID: UUID? {
+        get { self[AgentPaneIDKey.self] }
+        set { self[AgentPaneIDKey.self] = newValue }
+    }
+}
+
+/// Tests: a pane part's frame in the pane area, by pane, through `AgentPaneArea.probe` (nil in the product). The action
+/// runs on the main actor (SwiftUI calls it from layout).
+struct AgentPaneProbe: ViewModifier {
+    let kind: String
+    @Environment(\.agentPaneID) private var pane
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentPaneAreaSpace)) }) { r in
+            if let pane { AgentPaneArea.probe?(kind, pane, r) }
+        }
+    }
+}
+
+/// #831 B1 step 4 (spec 4.2, 5.1, 9.2, R1193-4): the pane area. One pane view per entry of the model's frames, at its
+/// frame (the model tiles; this view only places); its size is the model's `paneArea`. Split gate off (15.0): the
+/// focused pane alone at the whole area, so a person sees the one-pane window. More than one pane shown: the compact
+/// headers (9.2); more than one row of panes: the 44·s composer row (5.1). A layout property, never focus or state.
+struct AgentPaneArea: View {
+    @ObservedObject var model: AgentWindowModel
+    var scrolls = true
+    /// Tests only: (part, pane, frame in the area) as "pane", "header" and "composer" are laid out.
+    static var probe: ((String, UUID, CGRect) -> Void)?
+
+    var body: some View {
+        GeometryReader { proxy in
+            let area = CGRect(origin: .zero, size: proxy.size)
+            let frames = model.paneFrames(in: area)
+            let compact = frames.count > 1
+            let twoLines = Set(frames.values.map { ($0.minY * 1000).rounded() }).count > 1
+            ZStack(alignment: .topLeading) {
+                ForEach(model.layout.order.filter { frames[$0] != nil }, id: \.self) { id in
+                    let f = frames[id] ?? .zero
+                    pane(id, compact: compact)
+                        .frame(width: f.width, height: f.height)
+                        .clipped()
+                        // 7.5: the line on an edge shared with a neighbour is an overlay, never padding: the pane keeps its frame.
+                        .overlay(alignment: .topLeading) { edge(f) }
+                        .modifier(AgentPaneProbe(kind: "pane"))
+                        .environment(\.agentPaneID, id)
+                        .environment(\.agentComposerTwoLines, twoLines)
+                        .position(x: f.midX, y: f.midY)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            .coordinateSpace(.named(agentPaneAreaSpace))
+            .onAppear { feed(area) }
+            .onChange(of: proxy.size) { _, size in feed(CGRect(origin: .zero, size: size)) }
+        }
+    }
+
+    /// R1193-4: the area's size reaches the model, once per size.
+    func feed(_ area: CGRect) {
+        if model.paneArea != area { model.paneArea = area }
+    }
+
+    @ViewBuilder func pane(_ id: UUID, compact: Bool) -> some View {
+        if id == model.layout.focused {
+            AgentDetailView(model: model, transcript: model.transcript, scrolls: scrolls, compact: compact)
+        } else if let r = model.runtimes[id] {
+            AgentUnfocusedPane(model: model, runtime: r, transcript: r.transcript, interaction: model.interaction,
+                               scrolls: scrolls)
+        }
+    }
+
+    @ViewBuilder func edge(_ f: CGRect) -> some View {
+        if f.minX > 0.5 { Rectangle().fill(Neon.stroke).frame(width: 1).frame(maxHeight: .infinity) }
+        if f.minY > 0.5 { Rectangle().fill(Neon.stroke).frame(height: 1).frame(maxWidth: .infinity) }
+    }
+}
+
+/// #831 B1 step 4: a pane that does not hold the input (reachable only with the split gate set, 15.0): the compact
+/// header, the pane's own transcript and the inert composer slot (5.1); its History card without buttons (a press on
+/// an unfocused pane focuses it first: step 5); the 4.2 placeholders.
+struct AgentUnfocusedPane: View {
+    @ObservedObject var model: AgentWindowModel
+    @ObservedObject var runtime: AgentPaneRuntime
+    @ObservedObject var transcript: AgentTranscriptModel
+    @ObservedObject var interaction: AgentWindowInteraction
+    var scrolls = true
+
+    /// The session it draws: Ended's kept row (4.4), else the live session's row.
+    var shown: (row: AgentSidebar.Row, session: AgentSession)? {
+        if let e = runtime.ended, let s = e.row.session { return (e.row, s) }
+        if case .live(let s)? = runtime.content, let row = model.row(.live(s.key)) { return (row, s) }
+        return nil
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let p = shown {
+                let ended = runtime.ended != nil
+                AgentCompactHeader.of(p.row, p.session, cwd: transcript.cwd, ended: ended, store: model.store,
+                                      ask: { model.ask($0, p.session) }, open: { model.openSession(p.session) },
+                                      mode: .transcript, setMode: { model.switchMode($0, for: p.session) })
+                    .modifier(AgentPaneProbe(kind: "header"))
+                Rectangle().fill(Neon.stroke).frame(height: 1)
+                AgentTranscriptView(model: transcript, scrolls: scrolls, ownsLifecycle: false, level: model.verbosity,
+                                    ended: ended)
+                    .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                    .clipped()
+                Rectangle().fill(Neon.stroke).frame(height: 1)
+                AgentInertComposer(text: AgentInertComposer.text(draft: interaction.draft(for: p.session.key),
+                                                                 title: p.row.title, ended: ended),
+                                   blocked: !ended && p.session.state == .blocked)
+            } else {
+                let title = AgentPanePlaceholder.title(runtime.content)
+                AgentCompactHeader(title: historyTitle ?? title ?? "").modifier(AgentPaneProbe(kind: "header"))
+                Rectangle().fill(Neon.stroke).frame(height: 1)
+                if case .history(let r)? = runtime.content {
+                    AgentHistoryDetail(row: model.row(.history(r.id)) ?? AgentSidebar.row(r, now: model.now()), record: r,
+                                       store: nil, act: { _ in })
+                } else if let title {
+                    AgentPanePlaceholder(title: title, close: { model.closePane(runtime.pane) },
+                                         pick: { model.pickAnother(runtime.pane) })
+                } else {
+                    AgentEmptyState(icon: "sidebar.left", title: "Select a session", detail: AgentPanePlaceholder.detail)
+                }
+            }
+        }
+    }
+
+    var historyTitle: String? {
+        if case .history(let r)? = runtime.content { return model.row(.history(r.id))?.title ?? r.id.name }
+        return nil
+    }
+}
+
+/// #831 4.2: the pane holds a target whose session is not running, or whose record was removed: it says so by name,
+/// with Pick Another (focus the pane, the sidebar gets the keys) and, with more than one pane, Close Pane.
+struct AgentPanePlaceholder: View {
+    let title: String
+    var close: (() -> Void)?
+    let pick: () -> Void
+
+    static let detail = "Pick another session from the list."
+
+    /// 4.2's words for a content that has no row (`.live` and `.history` draw their own; no target: nil).
+    static func title(_ c: PaneContent?) -> String? {
+        switch c {
+        case let .notRunning(k)?: "\(k.name) isn't running"
+        case let .removed(t)?: "\(name(t)) was removed from History"
+        case .live?, .history?, nil: nil
+        }
+    }
+
+    static func name(_ t: PaneTarget) -> String {
+        switch t {
+        case let .session(_, name), let .remote(_, name): name
+        case let .history(_, id, _): id
+        }
+    }
+
+    var body: some View {
+        AgentEmptyState(icon: "moon.zzz", title: title, detail: Self.detail) {
+            HStack(spacing: sz(8)) {
+                if let close { AgentPillButton(title: "Close Pane", icon: "xmark", tint: Neon.textSecondary, action: close) }
+                AgentPillButton(title: "Pick Another", icon: "sidebar.left", tint: Neon.blue, action: pick)
+            }
+            .padding(.top, sz(4))
+        }
+    }
+}
+
+/// #831 9.2: the header of a pane among several: one line, 26·s, in every content and focus state. The title gives way
+/// first (cut in the middle; its whole text and the folder in the help); the state chip keeps its widest-variant slot
+/// (#828), the mode toggle (icon pair) and the "⋯" keep their size.
+struct AgentCompactHeader: View {
+    let title: String
+    var project: String?
+    var chip: AgentStateChip?
+    var mode = AgentPaneMode.transcript
+    var setMode: ((AgentPaneMode) -> Void)?
+    var ended = false
+    var menu: AgentSessionMenuButton?
+
+    static var height: CGFloat { sz(26) }
+
+    static func of(_ row: AgentSidebar.Row, _ s: AgentSession, cwd: String?, ended: Bool, store: AgentIslandStore?,
+                   ask: @escaping (AgentWindowVerb) -> Void, open: @escaping () -> Void, mode: AgentPaneMode,
+                   setMode: @escaping (AgentPaneMode) -> Void) -> AgentCompactHeader {
+        AgentCompactHeader(title: row.title, project: AgentSessionHeader.project(cwd: cwd, session: s),
+                           chip: AgentStateChip(state: s.state, ended: ended), mode: mode, setMode: setMode, ended: ended,
+                           menu: AgentSessionMenuButton(store: ended ? nil : store, session: s, ask: ask, open: open, ended: ended))
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: sz(8)) {
+            AgentProjectTitle(text: Text(title).font(Neon.font(13, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                .lineLimit(1).truncationMode(.middle), label: title, project: project, help: project.map { "\(title)\n\($0)" })
+            if let chip { chip }
+            Spacer(minLength: 0)
+            if let setMode {
+                AgentPaneModeToggle(mode: mode, style: .icons, set: setMode, off: ended ? AgentPaneModeToggle.endedReason : nil)
+                    .disabled(ended).opacity(ended ? 0.45 : 1)
+            }
+            if let menu { menu }
+        }
+        .padding(.horizontal, sz(10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: Self.height)
+        .clipped()
+    }
+}
+
+/// #1191, R1191-1: a header title: the folder is its tooltip and accessibility value only when there is one, so a title
+/// with none keeps its own words as value; the words stay its label.
+struct AgentProjectTitle<T: View>: View {
+    let text: T
+    let label: String
+    let project: String?
+    /// The tooltip when it says more than the folder (the compact header's whole title); nil: the folder.
+    var help: String?
+    var body: some View {
+        if let project {
+            text.help(help ?? project).accessibilityLabel(label).accessibilityValue(project)
+        } else {
+            text.accessibilityLabel(label)
+        }
+    }
+}
+
+/// #831 5.1: the composer slot of a pane that does not hold the input: the row only, at the focused row's height,
+/// dimmed and inert, hidden from accessibility (13, QA INFO-7). The session's draft (first line), else "Message <title>…";
+/// a blocked session: "Needs input · ⌘J"; Ended: the ended placeholder.
+struct AgentInertComposer: View {
+    let text: String
+    var blocked = false
+    @Environment(\.agentComposerTwoLines) private var twoLines
+
+    static let needsInput = "Needs input · ⌘J"
+
+    static func text(draft: String, title: String, ended: Bool) -> String {
+        if ended { return AgentInteractionPane.endedPlaceholder }
+        let line = draft.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        return line.trimmingCharacters(in: .whitespaces).isEmpty ? "Message \(title)…" : line
+    }
+
+    var body: some View {
+        let h = AgentInteractionPane.rowHeight(twoLines: twoLines)
+        HStack(alignment: .bottom, spacing: sz(8)) {
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                if blocked {
+                    Text(Self.needsInput).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                        .padding(.horizontal, sz(7)).padding(.vertical, sz(2))
+                        .background(Capsule().fill(Neon.blue.opacity(0.2)))
+                        .padding(.horizontal, sz(6)).padding(.vertical, sz(6))
+                } else {
+                    Text(text).font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
+                        .lineLimit(1).truncationMode(.tail).padding(.horizontal, sz(9)).padding(.vertical, sz(7))
+                }
+            }
+            .frame(height: h)
+            .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.bgBottom))
+            .overlay(RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke, lineWidth: 1))
+            AgentSendColumn(canInterrupt: false, canSend: false, interrupt: {}, send: {}, side: twoLines)
+        }
+        .frame(height: h)
+        .modifier(AgentPaneProbe(kind: "composer"))
+        .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(0.5)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 struct AgentSessionHeader: View {
     let row: AgentSidebar.Row
     let session: AgentSession
@@ -850,7 +1182,9 @@ struct AgentSessionHeader: View {
 
     /// #1191: the session's folder, no longer drawn in the header: the title's tooltip and accessibility value carry it
     /// (two sessions of one name stay apart for VoiceOver). Nil when there is no text at all.
-    var project: String? {
+    var project: String? { Self.project(cwd: cwd, session: session) }
+
+    static func project(cwd: String?, session: AgentSession) -> String? {
         let text = cwd.map { ($0 as NSString).abbreviatingWithTildeInPath }
             ?? (session.key.dir == DchCommand.defaultSocketDir ? "dch \(session.name)" : "dch \(session.name) in \(session.key.dir)")
         return text.isEmpty ? nil : text
@@ -958,10 +1292,8 @@ struct AgentSessionHeader: View {
     /// takes this line exactly when the floor, the chip and the extras fit (the extras are dropped first).
     func slotLine(folder withFolder: Bool) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
-            let title = Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                .lineLimit(1).truncationMode(.tail)
-                // #1191: the folder moved here: the tooltip, and the accessibility value (the words stay the label).
-                .help(project ?? "").accessibilityLabel(row.title).accessibilityValue(project ?? "")
+            let title = AgentProjectTitle(text: Text(row.title).font(Neon.font(15, weight: .semibold))
+                .foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail), label: row.title, project: project)
             if withFolder {
                 AgentWidthFloor(floor: Self.titleFloor) { title }.layoutPriority(1)
             } else {
@@ -1327,6 +1659,12 @@ struct AgentInteractionPane: View {
     var lock: String?
     /// QA #668 F1: the session ended (a held row): nothing is sent, interrupted or answered.
     var ended = false
+    /// #831 B1 step 4 (5.1): the pane area's: more than one row of panes shown.
+    @Environment(\.agentComposerTwoLines) private var twoLines
+
+    /// 5.1: the composer row's fixed height, from the UI scale and the layout alone (never focus or state): 60·s, or 44·s
+    /// (two lines) when more than one row of panes is shown.
+    static func rowHeight(twoLines: Bool) -> CGFloat { twoLines ? sz(44) : sz(60) }
 
     var canSend: Bool {
         (session.state == .idle || session.state == .done) && !model.busy && lock == nil && !ended
@@ -1363,12 +1701,14 @@ struct AgentInteractionPane: View {
                             .allowsHitTesting(false)
                     }
                 }
-                .frame(height: sz(60))
+                .frame(height: Self.rowHeight(twoLines: twoLines))
                 .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.bgBottom))
                 .overlay(RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke, lineWidth: 1))
                 AgentSendColumn(canInterrupt: canInterrupt, canSend: canSend,
-                                interrupt: { model.interrupt() }, send: { model.send() })
+                                interrupt: { model.interrupt() }, send: { model.send() }, side: twoLines)
             }
+            .frame(height: Self.rowHeight(twoLines: twoLines))
+            .modifier(AgentPaneProbe(kind: "composer"))
         }
         .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1384,8 +1724,11 @@ struct AgentSendColumn: View {
     let canSend: Bool
     let interrupt: () -> Void
     let send: () -> Void
+    /// #831 5.1: the 44·s row has no room for two pills one above the other: side by side there.
+    var side = false
     var body: some View {
-        VStack(spacing: sz(6)) {
+        let stack = side ? AnyLayout(HStackLayout(spacing: sz(6))) : AnyLayout(VStackLayout(spacing: sz(6)))
+        stack {
             AgentPillButton(title: "Interrupt", icon: "stop.fill", tint: Neon.magenta, enabled: canInterrupt, fill: true,
                             action: interrupt)
                 .help("Press Esc in the session")

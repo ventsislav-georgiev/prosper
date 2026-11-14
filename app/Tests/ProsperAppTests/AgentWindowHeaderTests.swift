@@ -226,9 +226,11 @@ extension AgentWindowD1Tests {
                     let (win, tree) = headerAXTree(header, CGSize(width: width, height: 80 * scale)) { $0.named("Session actions") }
                     defer { win.close() }
                     let tag = "\(mode) \(scale) cwd \(cwd ?? "nil")"
-                    let title = try XCTUnwrap(tree.first { !$0.ignored && $0.label == "api" }, "the title (\(tag))")
+                    // R1191-1: with no folder the title's words are its value (ticket 2: no node had the label then).
+                    let title = try XCTUnwrap(tree.first { !$0.ignored && $0.named("api") }, "the title (\(tag))")
                     XCTAssertEqual(title.help, text ?? "", "the tooltip carries the path (\(tag))")
-                    XCTAssertEqual(title.value, text ?? "", "the accessibility value carries the path (\(tag))")
+                    // R1191-1: no folder text, no value set: the title keeps its own words as value.
+                    XCTAssertEqual(title.value, text ?? "api", "the accessibility value carries the path (\(tag))")
                     // Drawn nowhere else: no other element reads it, and no folder glyph.
                     if let text { XCTAssertEqual(tree.filter { $0.reads(text) }.count, 1, "only the title reads it (\(tag))") }
                     XCTAssertFalse(tree.contains { $0.reads("Move") }, "no folder glyph (\(tag))")
@@ -681,5 +683,89 @@ extension AgentWindowD1Tests {
                 XCTAssertFalse(win.isVisible, "never on screen")
             }
         }
+    }
+
+    /// R1.5 (14.2), 9.2: the compact header (a pane among several) at 300·s, in every state, at 0.7, 0.85 and 1.0: one
+    /// line of 26·s, nothing past its edge (the title gives way first; the chip, the toggle and the "⋯" keep their
+    /// size), the "⋯" read once. Real accessibility tree of a never-shown window.
+    @MainActor
+    func testCompactHeaderFitsThreeHundredPointsInEveryState() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            let width = sz(300)
+            var menus: [CGRect] = []
+            for (state, ended) in [(AgentState.working, false), (.blocked, false), (.idle, false), (.done, true)] {
+                let s = session("api", state, alias: Self.headerTitle)
+                let m = windowModel(store([s]))
+                m.setVisible(true)   // the rows are built on show
+                defer { m.close() }
+                let row = try XCTUnwrap(m.row(.live(s.key)))
+                let header = AgentCompactHeader.of(row, s, cwd: Self.headerPath, ended: ended, store: nil, ask: { _ in },
+                                                   open: {}, mode: .transcript, setMode: { _ in })
+                XCTAssertEqual(NSHostingView(rootView: header.frame(width: width)).fittingSize.height, (AgentCompactHeader.height - 0.001).rounded(.up),
+                               accuracy: 0.01, "one line of 26·s, fittingSize rounds up to a whole point (\(state) \(scale))")
+                let (win, tree) = headerAXTree(header, CGSize(width: width, height: AgentCompactHeader.height)) { $0.named("Session actions") }
+                defer { win.close() }
+                let tag = "\(state) ended \(ended) \(scale)"
+                let menu = tree.filter { $0.named("Session actions") }
+                XCTAssertEqual(menu.count, 1, "one \"⋯\" (\(tag))")
+                let edge = tree.first?.frame.maxX ?? 0
+                for e in tree where !e.ignored && e.frame.width > 0 {
+                    XCTAssertLessThanOrEqual(e.frame.maxX, edge + 0.5, "\(e.name) inside the header (\(tag))")
+                }
+                XCTAssertTrue(tree.contains { $0.named(row.title) }, "the title is read whole (\(tag))")
+                menus.append(menu.first?.frame ?? .null)
+                XCTAssertFalse(win.isVisible, "never on screen")
+            }
+            XCTAssertEqual(Set(menus.map { ($0.minX * 2).rounded() }).count, 1, "the \"⋯\" never moves with the state (\(scale))")
+        }
+    }
+
+    /// 4.2 (QA 956 R1217-a): the window opens on a saved target whose session is gone: the pane says so by name ("gone
+    /// isn't running", Pick Another; no Close Pane with one pane), never the empty pane's "Select a session"; the empty
+    /// pane keeps that state. Both fill the same pane frame. The list still picks a session into the same pane.
+    @MainActor
+    func testAPaneWhoseSessionIsGoneSaysSoByNameAndDiffersFromTheEmptyPane() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1.0
+        let d = paneDefaults()
+        let gone = PaneLayout.single(.session(dir: "/tmp/dch-test", name: "gone"))
+        Preferences.setAgentWindowLayouts(try PaneLayoutStore.makeDefault().adding(gone).get().activate(gone.id).get(), in: d)
+        let st = store([session("web", .idle)])
+        let m = windowModel(st, layouts: d)
+        m.setVisible(true)
+        defer { m.close() }
+        XCTAssertEqual(m.layout.id, gone.id, "the saved layout")
+        XCTAssertEqual(m.content, .notRunning(paneKey("gone")))
+        XCTAssertTrue(m.selection == nil)
+        let restoreAX = headerAXOn()
+        defer { restoreAX() }
+        let size = CGSize(width: 1000, height: 680)
+        let words = "gone isn't running"
+        let (win, tree) = headerAXTree(AgentWindowRootView(model: m, scrolls: false), size) { $0.reads(words) }
+        defer { win.close() }
+        XCTAssertTrue(tree.contains { $0.reads(words) }, "the pane names the session: \(tree.map(\.names))")
+        XCTAssertTrue(tree.contains { $0.reads("Pick Another") }, "the way out")
+        XCTAssertFalse(tree.contains { $0.reads("Close Pane") }, "one pane: nothing to close")
+        XCTAssertFalse(tree.contains { $0.reads("Select a session") }, "not the empty pane")
+        let held = paneSnapshot(m, size)["pane 0"]
+
+        m.select(nil)
+        let (win2, empty) = headerAXTree(AgentWindowRootView(model: m, scrolls: false), size) { $0.reads("Select a session") }
+        defer { win2.close() }
+        XCTAssertTrue(empty.contains { $0.reads("Select a session") }, "no target: the empty pane")
+        XCTAssertFalse(empty.contains { $0.reads(words) })
+        assertSame(paneSnapshot(m, size)["pane 0"], held, "the same pane frame")
+
+        let pane = m.layout.focused
+        m.select(.live(paneKey("web")))
+        XCTAssertEqual(m.selection, .live(paneKey("web")), "the list picks into the pane")
+        XCTAssertEqual(m.layout.focused, pane)
+        XCTAssertFalse(win.isVisible || win2.isVisible, "never on screen")
     }
 }

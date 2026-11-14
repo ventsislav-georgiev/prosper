@@ -249,15 +249,34 @@ final class AgentWindowModel: ObservableObject {
     /// object across a row change in that pane (rewrite 11, restated per pane runtime); another pane's is another.
     var transcript: AgentTranscriptModel { focusedRuntime?.transcript ?? detachedTranscript }
     /// The shown panes (11.1) from frames in `paneArea`: with the split gate off, the focused pane alone (15.0).
-    var shownPanes: Set<UUID> {
-        switch layout.frames(in: paneArea, minimum: PaneLayout.minimumPane, splitsEnabled: AgentPaneLayout.splitsEnabled) {
-        case let .tiled(f): Set(f.keys)
-        case let .tooSmall(id): [id]
+    var shownPanes: Set<UUID> { Set(paneFrames(in: paneArea).keys) }
+    /// #831 B1 step 4: the panes to draw in `area` and where (the view passes its own size, so a frame is never a
+    /// layout pass behind): the layout's frames; too small (3.4): the focused pane alone at the whole area.
+    func paneFrames(in area: CGRect) -> [UUID: CGRect] {
+        switch layout.frames(in: area, minimum: PaneLayout.minimumPane, splitsEnabled: AgentPaneLayout.splitsEnabled) {
+        case let .tiled(f): f
+        case let .tooSmall(id): [id: area]
         }
     }
-    /// The pane area's size (the view sets it from plan step 4; tests set it). `.zero`: the focused pane alone.
+    /// The pane area's size: written by the view (AgentPaneArea, R1193-4) and by tests. `.zero`: the focused pane alone.
+    /// Not @Published (the view draws from its own size); the same size again follows nothing.
     var paneArea: CGRect = .zero {
-        didSet { if paneArea != oldValue { follow() } }
+        didSet { if paneArea != oldValue { paneAreaChanges += 1; follow() } }
+    }
+    /// Counts `paneArea` changes (tests: the same size twice is one change).
+    private(set) var paneAreaChanges = 0
+    /// 4.2 "Pick Another": the window gives the sidebar the keys (AgentsWindow wires it; tests count it).
+    var focusSidebar: () -> Void = {}
+
+    /// 4.2 "Pick Another": focuses the pane and gives the sidebar the keys; starts nothing.
+    func pickAnother(_ pane: UUID) {
+        if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
+        focusSidebar()
+    }
+
+    /// 4.2 "Close Pane": the last pane is refused (7.3), so a one-pane window draws no Close Pane.
+    func closePane(_ pane: UUID) {
+        if case let .success(l) = layout.close(pane) { adopt(l) }
     }
 
     private(set) var store: AgentIslandStore?

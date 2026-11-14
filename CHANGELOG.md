@@ -955,6 +955,9 @@ tag from the now-released section and put it on the new top draft.
 - The coding agent's approval card now shows "Asked by a sub-agent of this session" as its own
   labelled line above the command, so the selectable command text holds only the command and keeps
   all its lines. (#1221)
+- Agent Sessions: when the window opens on a session that is no longer running, the pane now says
+  "<name> isn't running" with a Pick Another button, instead of the empty "Select a session" state.
+  (#1195)
 
 ## v2.174.0
 
