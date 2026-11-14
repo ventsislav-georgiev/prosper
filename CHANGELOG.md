@@ -899,6 +899,8 @@ tag from the now-released section and put it on the new top draft.
   while a key rule uses the key. (#1189)
 - Daylight theme: the terminal green used for agent replies, diff additions and status labels is
   slightly darker, so it reads clearly on the light backgrounds. (#1199)
+- Agent Island Sidekicks: a session alias or title that ends in a Unicode line separator is no
+  longer taken as ending with the pattern's "$", the same as in dch's own picker. (#1184)
 
 ## v2.174.0
 

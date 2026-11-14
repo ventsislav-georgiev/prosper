@@ -309,7 +309,8 @@ enum AgentIsland {
     /// valid regex (Settings then says it is matched as text).
     static func sidekickRegex(_ pattern: String) -> NSRegularExpression? {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        return p.isEmpty ? nil : try? NSRegularExpression(pattern: p, options: .caseInsensitive)
+        // #1184: LF only ends a line, as POSIX: an alias or harness title can end in U+2028 etc. (dch cuts only LF/CR/blanks), and ICU's "$" would match before it.
+        return p.isEmpty ? nil : try? NSRegularExpression(pattern: p, options: [.caseInsensitive, .useUnixLineSeparators])
     }
 
     /// Never without sidekicks; always when they are all there is; else the chosen tab.

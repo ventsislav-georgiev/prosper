@@ -167,6 +167,63 @@ final class DchConfigWriterTests: XCTestCase {
         }
     }
 
+    // MARK: - #1184: the picker's other texts, line ends and the text fallback
+
+    private static func sessions(_ rows: [(name: String, alias: String)]) -> [AgentSession] {
+        rows.map { AgentSession(key: AgentSessionKey(dir: "/d", name: $0.name), alias: $0.alias, activity: 0, state: .idle, agents: 0) }
+    }
+
+    /// An alias or harness title can end in VT, FF, U+0085, U+2028, U+2029 (dch cuts LF, CR and blanks only); ICU's "$"
+    /// would match before them, POSIX's does not. Literal table: alias, dch's answer (regexec), the island's.
+    func testAnAliasEndingInALineSeparatorIsNotSplitOffByDollar() {
+        let restore = Self.cLocale()
+        defer { restore() }
+        let table: [(alias: String, hit: Bool)] = [
+            ("x-qa", true), ("x-qa\u{2028}", false), ("x-qa\u{2029}", false), ("x-qa\u{85}", false),
+            ("x-qa\u{0B}", false), ("x-qa\u{0C}", false), ("x-qa\r", false), ("x-qa\u{2028}y", false), ("x-qay", false),
+        ]
+        for (alias, hit) in table {
+            XCTAssertEqual(Self.dchMatches("-qa$", alias), hit, "dch: \(alias.debugDescription)")
+            let split = AgentIsland.split(Self.sessions([(name: "api", alias: alias)]), pattern: "-qa$")
+            XCTAssertEqual(!split.sidekicks.isEmpty, hit, "island: \(alias.debugDescription)")
+        }
+        // "^" at the other end: an alias starting with a separator is not "^qa"
+        XCTAssertEqual(Self.dchMatches("^qa", "\u{2028}qa"), false)
+        XCTAssertTrue(AgentIsland.split(Self.sessions([(name: "api", alias: "\u{2028}qa")]), pattern: "^qa").sidekicks.isEmpty)
+    }
+
+    /// Gap 1 as it stands: --ls-json's "harness" folds into the alias only when the alias is empty
+    /// (DchCommand.parseListJSON), so a title-only match splits like dch's picker when no alias is set, and
+    /// does not when one is. The second row pins the known difference (left.txt: needs a new AgentSession field).
+    func testHarnessTitleMatchesOnlyWhenNoAliasHidesIt() {
+        let json = #"[{"name":"api","alias":"","harness":"web-qa","state":"idle"},{"name":"app","alias":"Agent A","harness":"web-qa","state":"idle"}]"#
+        let list = DchCommand.parseListJSON(Data(json.utf8)).map {
+            AgentSession(key: AgentSessionKey(dir: "/d", name: $0.name), alias: $0.alias, activity: 0, state: .idle, agents: 0)
+        }
+        let split = AgentIsland.split(list, pattern: "-qa$")
+        XCTAssertEqual(split.sidekicks.map(\.name), ["api"], "no alias: the title is the alias")
+        XCTAssertEqual(split.primary.map(\.name), ["app"], "alias set: the title is not at hand (dch would split it off)")
+    }
+
+    /// dch's picker: a pattern regcomp refuses, or one regexec finds in "", is matched as plain text ignoring case.
+    /// The island does the same; literal table (pattern, text, expected).
+    func testInvalidAndEmptyMatchingPatternsAreMatchedAsText() {
+        let restore = Self.cLocale()
+        defer { restore() }
+        XCTAssertNil(Self.dchMatches("(qa", "x"), "dch: not an ERE, text")
+        XCTAssertEqual(Self.dchMatches("(qa)*", ""), true, "dch: matches empty, text")
+        let table: [(pattern: String, name: String, hit: Bool)] = [
+            ("(qa", "web(QA", true), ("(qa", "web-qa", false), ("(qa", "web-qa(", false),
+            ("(qa)*", "A-(QA)*", true), ("(qa)*", "api-qa", false), ("(qa)*", "api", false),
+        ]
+        for (p, n, hit) in table {
+            let split = AgentIsland.split(Self.sessions([(name: n, alias: "")]), pattern: p)
+            XCTAssertEqual(!split.sidekicks.isEmpty, hit, "\(p) on \(n)")
+        }
+        XCTAssertEqual(AgentIsland.sidekickMatch("(qa"), .invalid)
+        XCTAssertEqual(AgentIsland.sidekickMatch("(qa)*"), .matchesEmpty)
+    }
+
     // MARK: - The path and the gate
 
     func testThePathIsDchsRule() {
@@ -649,9 +706,10 @@ final class DchConfigWriterTests: XCTestCase {
             let n = "x-end" + String(Character(u))
             if Self.islandMatches(p, n) != Self.dchMatches(p, n) { differ.append(v) }
         }
-        XCTAssertEqual(differ, [0x00, 0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029])
+        // #1184: the island's regex takes LF as the only line end, so VT FF CR NEL LS PS no longer differ; NUL and LF still do
+        XCTAssertEqual(differ, [0x00, 0x0A])
         XCTAssertEqual(differ.filter { !nameRuleRefuses($0) }, [], "a name dch can carry")
-        XCTAssertTrue(Self.islandMatches(p, "x-end\r\n") && Self.dchMatches(p, "x-end\r\n") == false, "CRLF: CR and LF are refused too")
+        XCTAssertTrue(!Self.islandMatches(p, "x-end\r\n") && Self.dchMatches(p, "x-end\r\n") == false, "CRLF: neither")
         XCTAssertTrue(Self.islandMatches(p, "x-end") && Self.dchMatches(p, "x-end") == true)
     }
 
