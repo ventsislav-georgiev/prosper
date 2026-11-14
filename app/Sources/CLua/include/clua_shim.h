@@ -82,9 +82,21 @@ void         clua_pushhostfunction(lua_State *L, lua_CFunction f);
 #define CLUA_WORK_STRING_MIN      4096
 #define CLUA_WORK_ALLOC_BYTES     64    /* bytes of an allocation per unit (clua_mem_alloc) */
 #define CLUA_WORK_ALLOC_MIN       4096
+/* #1166 (same unit; the measured ns per step in parentheses) */
+#define CLUA_WORK_BYTE            1     /* one byte decoded by utf8.len (0.9-1.1) or hashed as a long-string key (1.2) */
+#define CLUA_WORK_SKIP_BYTES      2     /* bytes per unit walked by utf8.offset/codes (0.25-0.3) or by upper, lower,
+                                           reverse (0.34-0.38) */
+#define CLUA_WORK_ADDCHAR         2     /* one byte of string.format literal text (1.9) or string.pack padding (2.1) */
+#define CLUA_WORK_NUMERAL         3     /* one byte of a string read as a number (1.0-2.7, strtod the slow case) */
+#define CLUA_WORK_OPTION          5     /* one string.pack/packsize/unpack option (2.3-4.3) */
+#define CLUA_WORK_VALUE           5     /* one value of string.byte/char or one byte of utf8.codepoint (2.1-5.0) */
+#define CLUA_WORK_UTF8_CHAR       32    /* one argument of utf8.char (29-31) */
 /* Charge count * weight units (saturating). Raises "execution budget exceeded" when the armed limit is passed and
 ** leaves the budget spent; does nothing when no budget is armed or the cap is off (state setup, host functions). */
 void         clua_work(lua_State *L, size_t count, size_t weight);
+/* #1166: the same charge where no lua_State is at hand (ltable.c), against the state whose Lua runs on this OS thread.
+** It never raises: over the limit the budget is spent, so the next instruction of any thread raises. */
+void         clua_work_nostate(size_t count, size_t weight);
 /* Two strings of la and lb bytes compared by one instruction (lvm.c). */
 #define CLUA_WORK_STRINGS(L, la, lb) do { size_t clua_l_ = (la) < (lb) ? (la) : (lb); \
     if (clua_l_ >= CLUA_WORK_STRING_MIN) clua_work((L), clua_l_ / CLUA_WORK_STRING_BYTES, 1); } while (0)

@@ -129,6 +129,7 @@ static int str_reverse (lua_State *L) {
   size_t l, i;
   luaL_Buffer b;
   const char *s = luaL_checklstring(L, 1, &l);
+  clua_work(L, l / CLUA_WORK_SKIP_BYTES, 1);  /* #1166: reverse */
   char *p = luaL_buffinitsize(L, &b, l);
   for (i = 0; i < l; i++)
     p[i] = s[l - i - 1];
@@ -142,6 +143,7 @@ static int str_lower (lua_State *L) {
   size_t i;
   luaL_Buffer b;
   const char *s = luaL_checklstring(L, 1, &l);
+  clua_work(L, l / CLUA_WORK_SKIP_BYTES, 1);  /* #1166: lower */
   char *p = luaL_buffinitsize(L, &b, l);
   for (i=0; i<l; i++)
     p[i] = tolower(uchar(s[i]));
@@ -155,6 +157,7 @@ static int str_upper (lua_State *L) {
   size_t i;
   luaL_Buffer b;
   const char *s = luaL_checklstring(L, 1, &l);
+  clua_work(L, l / CLUA_WORK_SKIP_BYTES, 1);  /* #1166: upper */
   char *p = luaL_buffinitsize(L, &b, l);
   for (i=0; i<l; i++)
     p[i] = toupper(uchar(s[i]));
@@ -204,6 +207,7 @@ static int str_byte (lua_State *L) {
     return luaL_error(L, "string slice too long");
   n = (int)(pose -  posi) + 1;
   luaL_checkstack(L, n, "string slice too long");
+  clua_work(L, (size_t)n, CLUA_WORK_VALUE);  /* #1166: byte */
   for (i=0; i<n; i++)
     lua_pushinteger(L, uchar(s[posi+i-1]));
   return n;
@@ -214,6 +218,7 @@ static int str_char (lua_State *L) {
   int n = lua_gettop(L);  /* number of arguments */
   int i;
   luaL_Buffer b;
+  clua_work(L, (size_t)n, CLUA_WORK_VALUE);  /* #1166: char */
   char *p = luaL_buffinitsize(L, &b, n);
   for (i=1; i<=n; i++) {
     lua_Unsigned c = (lua_Unsigned)luaL_checkinteger(L, i);
@@ -1307,6 +1312,7 @@ static int str_format (lua_State *L) {
   const char *strfrmt_end = strfrmt+sfl;
   const char *flags;
   luaL_Buffer b;
+  clua_work(L, sfl, CLUA_WORK_ADDCHAR);  /* #1166: the format is walked byte by byte */
   luaL_buffinit(L, &b);
   while (strfrmt < strfrmt_end) {
     if (*strfrmt != L_ESC)
@@ -1584,6 +1590,8 @@ static KOption getdetails (Header *h, size_t totalsize,
       luaL_argerror(h->L, 1, "format asks for alignment not power of 2");
     *ntoalign = (align - (int)(totalsize & (align - 1))) & (align - 1);
   }
+  /* #1166: one option of pack, packsize or unpack, and the alignment bytes pack adds for it */
+  clua_work(h->L, 1, CLUA_WORK_OPTION + (size_t)*ntoalign * CLUA_WORK_ADDCHAR);  /* #1166 */
   return opt;
 }
 
@@ -1691,6 +1699,7 @@ static int str_pack (lua_State *L) {
         luaL_argcheck(L, len <= (size_t)size, arg,
                          "string longer than given size");
         luaL_addlstring(&b, s, len);  /* add string */
+        clua_work(L, (size_t)size - len, CLUA_WORK_ADDCHAR);  /* #1166: padding */
         while (len++ < (size_t)size)  /* pad extra space */
           luaL_addchar(&b, LUAL_PACKPADBYTE);
         break;

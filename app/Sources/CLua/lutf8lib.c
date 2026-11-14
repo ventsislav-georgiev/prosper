@@ -19,6 +19,7 @@
 
 #include "lauxlib.h"
 #include "lualib.h"
+#include "clua_shim.h"  /* #1166: clua_work */
 
 
 #define MAXUNICODE	0x10FFFFu
@@ -106,6 +107,8 @@ static int utflen (lua_State *L) {
                    "initial position out of bounds");
   luaL_argcheck(L, --posj < (lua_Integer)len, 3,
                    "final position out of bounds");
+  if (posi <= posj)  /* #1166 */
+    clua_work(L, (size_t)(posj - posi + 1), CLUA_WORK_BYTE);  /* #1166 */
   while (posi <= posj) {
     const char *s1 = utf8_decode(s + posi, NULL, !lax);
     if (s1 == NULL) {  /* conversion error? */
@@ -140,6 +143,7 @@ static int codepoint (lua_State *L) {
     return luaL_error(L, "string slice too long");
   n = (int)(pose -  posi) + 1;  /* upper bound for number of returns */
   luaL_checkstack(L, n, "string slice too long");
+  clua_work(L, (size_t)n, CLUA_WORK_VALUE);  /* #1166: per byte decoded and pushed */
   n = 0;  /* count the number of returns */
   se = s + pose;  /* string end */
   for (s += posi - 1; s < se;) {
@@ -171,6 +175,7 @@ static int utfchar (lua_State *L) {
   else {
     int i;
     luaL_Buffer b;
+    clua_work(L, (size_t)n, CLUA_WORK_UTF8_CHAR);  /* #1166 */
     luaL_buffinit(L, &b);
     for (i = 1; i <= n; i++) {
       pushutfchar(L, i);
@@ -191,9 +196,11 @@ static int byteoffset (lua_State *L) {
   const char *s = luaL_checklstring(L, 1, &len);
   lua_Integer n  = luaL_checkinteger(L, 2);
   lua_Integer posi = (n >= 0) ? 1 : len + 1;
+  lua_Integer start;  /* #1166 */
   posi = u_posrelat(luaL_optinteger(L, 3, posi), len);
   luaL_argcheck(L, 1 <= posi && --posi <= (lua_Integer)len, 3,
                    "position out of bounds");
+  start = posi;  /* #1166 */
   if (n == 0) {
     /* find beginning of current byte sequence */
     while (posi > 0 && iscontp(s + posi)) posi--;
@@ -219,6 +226,7 @@ static int byteoffset (lua_State *L) {
        }
      }
   }
+  clua_work(L, (size_t)(posi > start ? posi - start : start - posi) / CLUA_WORK_SKIP_BYTES, 1);  /* #1166 */
   if (n == 0)  /* did it find given character? */
     lua_pushinteger(L, posi + 1);
   else  /* no such character */
@@ -232,7 +240,9 @@ static int iter_aux (lua_State *L, int strict) {
   const char *s = luaL_checklstring(L, 1, &len);
   lua_Unsigned n = (lua_Unsigned)lua_tointeger(L, 2);
   if (n < len) {
+    lua_Unsigned n0 = n;  /* #1166 */
     while (iscontp(s + n)) n++;  /* go to next character */
+    clua_work(L, (size_t)(n - n0) / CLUA_WORK_SKIP_BYTES, 1);  /* #1166 */
   }
   if (n >= len)  /* (also handles original 'n' being negative) */
     return 0;  /* no more codepoints */

@@ -37,6 +37,7 @@
 #include "lstring.h"
 #include "ltable.h"
 #include "lvm.h"
+#include "clua_shim.h"  /* #1166: clua_work_nostate */
 
 
 /*
@@ -164,6 +165,8 @@ static Node *mainpositionTV (const Table *t, const TValue *key) {
     }
     case LUA_VLNGSTR: {
       TString *ts = tsvalue(key);
+      if (ts->extra == 0)  /* #1166: luaS_hashlongstr reads it all, once per string */
+        clua_work_nostate(ts->u.lnglen, CLUA_WORK_BYTE);  /* #1166: hash */
       return hashpow2(t, luaS_hashlongstr(ts));
     }
     case LUA_VFALSE:
@@ -229,6 +232,9 @@ static int equalkey (const TValue *k1, const Node *n2, int deadok) {
     case LUA_VLCF:
       return fvalue(k1) == fvalueraw(keyval(n2));
     case ctb(LUA_VLNGSTR):
+      if (tsvalue(k1) != keystrval(n2) && tsslen(tsvalue(k1)) == tsslen(keystrval(n2)) &&  /* #1166: a memcmp */
+          tsslen(tsvalue(k1)) >= CLUA_WORK_STRING_MIN)  /* #1166 */
+        clua_work_nostate(tsslen(tsvalue(k1)) / CLUA_WORK_STRING_BYTES, 1);  /* #1166: key compare */
       return luaS_eqlngstr(tsvalue(k1), keystrval(n2));
     default:
       return gcvalue(k1) == gcvalueraw(keyval(n2));

@@ -207,10 +207,17 @@ static int forlimit (lua_State *L, lua_Integer init, const TValue *lim,
 **   ra + 2 : step
 **   ra + 3 : control variable
 */
+/* #1166: the bytes of a string that is read as a number, else 0 */
+static size_t numeral_len (const TValue *o) {  /* #1166 */
+  return ttisstring(o) ? tsslen(tsvalue(o)) : 0;  /* #1166 */
+}  /* #1166 */
+
 static int forprep (lua_State *L, StkId ra) {
   TValue *pinit = s2v(ra);
   TValue *plimit = s2v(ra + 1);
   TValue *pstep = s2v(ra + 2);
+  if (l_unlikely(ttisstring(pinit) || ttisstring(plimit) || ttisstring(pstep)))  /* #1166: read as numbers */
+    clua_work(L, numeral_len(pinit) + 2 * numeral_len(plimit) + numeral_len(pstep), CLUA_WORK_NUMERAL);  /* #1166: the limit twice (forlimit) */
   if (ttisinteger(pinit) && ttisinteger(pstep)) { /* integer loop? */
     lua_Integer init = ivalue(pinit);
     lua_Integer step = ivalue(pstep);
@@ -1638,7 +1645,8 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         StkId ra = RA(i);
         TValue *rb = KB(i);
         /* basic types do not use '__eq'; we can use raw equality */
-        int cond = luaV_rawequalobj(s2v(ra), rb);
+        int cond;  /* #1166: luaV_equalobj with L for the long-string charge (lvm.c #1145); a K is never a table */
+        Protect(cond = luaV_equalobj(L, s2v(ra), rb));  /* #1166: or userdata, so no __eq runs */
         docondjump();
         vmbreak;
       }

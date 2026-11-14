@@ -784,6 +784,12 @@ tag from the now-released section and put it on the new top draft.
   Prosper for up to half a second. Converter windows such as Base64 now convert in the background:
   typing stays responsive while a large paste converts, and the other pane fills in when the
   conversion finishes. (#1146)
+- More of the Lua library now counts toward an extension's time budget: the utf8 functions,
+  string.pack/unpack/packsize, string.format, upper/lower/reverse/byte/char, numbers read from text,
+  and comparisons of long strings in equality tests and table keys. An extension that loops over
+  them stops with an "execution budget exceeded" error instead of keeping Prosper busy. (#1166)
+- Ordinary extension work with these functions (formatting, parsing numbers, walking UTF-8 text,
+  packing data) runs as before. (#1166)
 
 ## v2.174.0
 

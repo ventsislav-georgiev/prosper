@@ -29,6 +29,7 @@
 #include "ltm.h"
 #include "lundump.h"
 #include "lvm.h"
+#include "clua_shim.h"  /* #1166: clua_work */
 
 
 
@@ -328,6 +329,9 @@ LUA_API int lua_isuserdata (lua_State *L, int idx) {
 LUA_API int lua_rawequal (lua_State *L, int index1, int index2) {
   const TValue *o1 = index2value(L, index1);
   const TValue *o2 = index2value(L, index2);
+  if (ttislngstring(o1) && ttislngstring(o2) && tsvalue(o1) != tsvalue(o2) &&  /* #1166: a memcmp runs */
+      tsslen(tsvalue(o1)) == tsslen(tsvalue(o2)))  /* #1166 */
+    CLUA_WORK_STRINGS(L, tsslen(tsvalue(o1)), tsslen(tsvalue(o2)));  /* #1166: rawequal */
   return (isvalid(L, o1) && isvalid(L, o2)) ? luaV_rawequalobj(o1, o2) : 0;
 }
 
@@ -369,6 +373,7 @@ LUA_API int lua_compare (lua_State *L, int index1, int index2, int op) {
 
 
 LUA_API size_t lua_stringtonumber (lua_State *L, const char *s) {
+  clua_work(L, strlen(s), CLUA_WORK_NUMERAL);  /* #1166: stringtonumber */
   size_t sz = luaO_str2num(s, s2v(L->top.p));
   if (sz != 0)
     api_incr_top(L);
@@ -379,6 +384,7 @@ LUA_API size_t lua_stringtonumber (lua_State *L, const char *s) {
 LUA_API lua_Number lua_tonumberx (lua_State *L, int idx, int *pisnum) {
   lua_Number n = 0;
   const TValue *o = index2value(L, idx);
+  if (ttisstring(o)) clua_work(L, tsslen(tsvalue(o)), CLUA_WORK_NUMERAL);  /* #1166: tonumberx */
   int isnum = tonumber(o, &n);
   if (pisnum)
     *pisnum = isnum;
@@ -389,6 +395,7 @@ LUA_API lua_Number lua_tonumberx (lua_State *L, int idx, int *pisnum) {
 LUA_API lua_Integer lua_tointegerx (lua_State *L, int idx, int *pisnum) {
   lua_Integer res = 0;
   const TValue *o = index2value(L, idx);
+  if (ttisstring(o)) clua_work(L, tsslen(tsvalue(o)), CLUA_WORK_NUMERAL);  /* #1166: tointegerx */
   int isnum = tointeger(o, &res);
   if (pisnum)
     *pisnum = isnum;

@@ -19,6 +19,7 @@
 
 #include "lauxlib.h"
 #include "lualib.h"
+#include "clua_shim.h"  /* #1166: clua_work */
 
 
 static int luaB_print (lua_State *L) {
@@ -101,6 +102,7 @@ static int luaB_tonumber (lua_State *L) {
     luaL_checktype(L, 1, LUA_TSTRING);  /* no numbers as strings */
     s = lua_tolstring(L, 1, &l);
     luaL_argcheck(L, 2 <= base && base <= 36, 2, "base out of range");
+    clua_work(L, l, CLUA_WORK_NUMERAL);  /* #1166: b_str2int reads it all */
     if (b_str2int(s, (int)base, &n) == s + l) {
       lua_pushinteger(L, n);
       return 1;

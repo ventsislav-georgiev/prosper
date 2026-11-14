@@ -1,3 +1,4 @@
+import CLua
 import Foundation
 import XCTest
 @testable import LuaRuntime
@@ -6,13 +7,19 @@ import XCTest
 /// functions, long-string comparisons, large allocations) is charged against the call's budget, so it ends a call
 /// like the instruction count does. Every charge site has a row: the same call at the same budget returns with a
 /// small input and is ended by a larger one, so only the charge tells the two apart. Inputs are small (a few times
-/// the row's budget); every loop is bounded.
+/// the row's budget); every loop is bounded. #1166 adds the utf8 library, string.pack/packsize/unpack, plain
+/// string.format text, upper/lower/reverse/byte/char, strings read as numbers, raw equality of long strings, and
+/// long-string table keys (hashed once, compared on a collision).
 final class LuaLibraryWorkTests: XCTestCase {
 
     private static let spent = LuaRuntime.LuaError.runtime("execution budget exceeded")
 
     /// One charge site: `setup` defines globals and `f(n)`; `f(under)` returns at `budget`, `f(over)` is ended.
     struct Site { let setup: String; let budget: Int32; let under: Int; let over: Int }
+
+    /// A long string compared with a long string constant of the chunk (OP_EQK).
+    private static let eqkSetup = #"A = ("x"):rep(32768)"# + "\nfunction f(n) local k = 0; for i = 1, tonumber(n) do if A == \""
+        + String(repeating: "x", count: 32768) + #"" then k = k + 1 end end; return tostring(k) end"#
 
     /// Every charge site, by name (literal; testTheSiteTableIsComplete pins the names).
     static let sites: [String: Site] = [
@@ -91,6 +98,97 @@ final class LuaLibraryWorkTests: XCTestCase {
             A = ("x"):rep(256 * 1024)
             function f(n) local k = 0; for i = 1, tonumber(n) do k = k + #(A .. "y") end; return tostring(k) end
             """#, budget: 1_000, under: 2, over: 50),
+        // #1166: the allocation charge inside a coroutine that never yields ends it at its next instruction too.
+        "co_alloc": Site(setup: #"""
+            A = ("x"):rep(256 * 1024)
+            local function body(n) local k = 0; for i = 1, n do P = i; k = k + #(A .. "y") end; return k end
+            function f(n) return tostring(coroutine.wrap(body)(tonumber(n))) end
+            function reached() return tostring(P) end
+            """#, budget: 1_000, under: 2, over: 50),
+        // #1166 sites (lutf8lib.c, lstrlib.c, lbaselib.c, lapi.c, lvm.c, ltable.c).
+        "utf8_len": Site(setup: #"""
+            S = ("a"):rep(1 << 20)
+            function f(n) return tostring(utf8.len(S, 1, tonumber(n))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 20),
+        "utf8_codepoint": Site(setup: #"""
+            S = ("a"):rep(1 << 17)
+            function f(n) return tostring(select("#", utf8.codepoint(S, 1, tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 17),
+        "utf8_offset": Site(setup: #"""
+            S = ("a"):rep(1 << 21)
+            function f(n) return tostring(utf8.offset(S, tonumber(n))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 21),
+        "utf8_codes": Site(setup: #"""
+            S = ("\x80"):rep(1 << 21); IT = utf8.codes("a")
+            function f(n) return tostring((IT(S, #S - tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 21),
+        "utf8_char": Site(setup: #"""
+            T = {}; for i = 1, 65536 do T[i] = 0x10FFFF end
+            function f(n) return tostring(#utf8.char(table.unpack(T, 1, tonumber(n)))) end
+            """#, budget: 10_000, under: 100, over: 65_536),
+        "pack_option": Site(setup: #"""
+            F = (" "):rep(1 << 18)
+            function f(n) return tostring(string.packsize(F:sub(1, tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 18),
+        "pack_pad": Site(setup: #"function f(n) return tostring(#string.pack("c" .. n, "")) end"#,
+                         budget: 10_000, under: 1_000, over: 1 << 20),
+        "format": Site(setup: #"""
+            F = ("a"):rep(1 << 20)
+            function f(n) return tostring(#string.format(F:sub(1, tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 20),
+        "upper": Site(setup: #"""
+            S = ("a"):rep(1 << 21)
+            function f(n) return tostring(#S:sub(1, tonumber(n)):upper()) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 21),
+        "lower": Site(setup: #"""
+            S = ("A"):rep(1 << 21)
+            function f(n) return tostring(#S:sub(1, tonumber(n)):lower()) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 21),
+        "reverse": Site(setup: #"""
+            S = ("a"):rep(1 << 21)
+            function f(n) return tostring(#S:sub(1, tonumber(n)):reverse()) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 21),
+        "byte": Site(setup: #"""
+            S = ("a"):rep(1 << 17)
+            function f(n) return tostring(select("#", S:byte(1, tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 17),
+        "char": Site(setup: #"""
+            T = {}; for i = 1, 131072 do T[i] = 97 end
+            function f(n) return tostring(#string.char(table.unpack(T, 1, tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 17),
+        "tonumber_base": Site(setup: #"""
+            S = ("1"):rep(1 << 18)
+            function f(n) return tostring(tonumber(S:sub(1, tonumber(n)), 10)) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 18),
+        "stringtonumber": Site(setup: #"""
+            Z = ("0"):rep((1 << 18) - 1) .. "7"
+            function f(n) return tostring(tonumber(Z:sub(-tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 18),
+        "tointegerx": Site(setup: #"""
+            Z = ("0"):rep((1 << 18) - 1) .. "7"
+            function f(n) return string.sub("abcdefgh", Z:sub(-tonumber(n))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 18),
+        "tonumberx": Site(setup: #"""
+            Z = ("0"):rep((1 << 18) - 1) .. "7"
+            function f(n) return tostring(math.sqrt(Z:sub(-tonumber(n)))) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 18),
+        "forprep": Site(setup: #"""
+            Z = ("0"):rep((1 << 18) - 1) .. "7"
+            function f(n) local k = 0; for i = 1, Z:sub(-tonumber(n)) do k = k + 1 end; return tostring(k) end
+            """#, budget: 10_000, under: 1_000, over: 1 << 18),
+        "rawequal": Site(setup: #"""
+            A = ("x"):rep(65536); B = ("x"):rep(65536)
+            function f(n) local k = 0; for i = 1, tonumber(n) do if rawequal(A, B) then k = k + 1 end end; return tostring(k) end
+            """#, budget: 1_000, under: 2, over: 50),
+        "eqk": Site(setup: eqkSetup, budget: 1_000, under: 2, over: 50),
+        "key_compare": Site(setup: #"""
+            A = ("x"):rep(65536); B = ("x"):rep(65536); T = {[A] = 1}; local _ = T[B]
+            function f(n) local k = 0; for i = 1, tonumber(n) do k = k + T[B] end; return tostring(k) end
+            """#, budget: 1_000, under: 2, over: 50),
+        "key_hash": Site(setup: #"""
+            A = ("x"):rep(65536); T = {}
+            function f(n) local k = 0; for i = 1, tonumber(n) do if T[A .. i] == nil then k = k + 1 end end; return tostring(k) end
+            """#, budget: 10_000, under: 2, over: 50),
     ]
 
     /// f(under) returns, f(over) is ended with the budget error and leaves the stack at rest, and the runtime then
@@ -113,7 +211,10 @@ final class LuaLibraryWorkTests: XCTestCase {
     func testTheSiteTableIsComplete() {
         XCTAssertEqual(Set(Self.sites.keys), [
             "str_rep", "class", "max_expand", "capture", "match", "balance", "frontier", "find_scan", "find_candidate",
-            "quoted", "insert", "remove", "move", "concat", "sort", "lt", "le", "eq", "alloc",
+            "quoted", "insert", "remove", "move", "concat", "sort", "lt", "le", "eq", "alloc", "co_alloc",
+            "utf8_len", "utf8_codepoint", "utf8_offset", "utf8_codes", "utf8_char", "pack_option", "pack_pad", "format",
+            "upper", "lower", "reverse", "byte", "char", "tonumber_base", "stringtonumber", "tointegerx", "tonumberx",
+            "forprep", "rawequal", "eqk", "key_compare", "key_hash",
         ])
     }
 
@@ -138,6 +239,40 @@ final class LuaLibraryWorkTests: XCTestCase {
     func testLongStringLessEqual() throws { try assertCharged("le") }
     func testLongStringEqual() throws { try assertCharged("eq") }
     func testLargeAllocations() throws { try assertCharged("alloc") }
+    func testLargeAllocationsInACoroutine() throws {
+        try assertCharged("co_alloc")
+        // Ended inside the coroutine, not when it returns to the main thread: the loop stops well short of the end.
+        let lua = try LuaRuntime()
+        let site = try XCTUnwrap(Self.sites["co_alloc"])
+        try lua.run(site.setup)
+        XCTAssertThrowsError(try lua.callGlobal("f", [String(site.over)], budget: site.budget)) {
+            XCTAssertEqual($0 as? LuaRuntime.LuaError, Self.spent)
+        }
+        let reached = try XCTUnwrap(Int(lua.callGlobal("reached", [], budget: site.budget) ?? ""))
+        XCTAssertLessThan(reached, site.over / 2)
+    }
+    func testUtf8Len() throws { try assertCharged("utf8_len") }
+    func testUtf8Codepoint() throws { try assertCharged("utf8_codepoint") }
+    func testUtf8Offset() throws { try assertCharged("utf8_offset") }
+    func testUtf8CodesIterator() throws { try assertCharged("utf8_codes") }
+    func testUtf8Char() throws { try assertCharged("utf8_char") }
+    func testPackOptions() throws { try assertCharged("pack_option") }
+    func testPackPadding() throws { try assertCharged("pack_pad") }
+    func testFormatText() throws { try assertCharged("format") }
+    func testUpper() throws { try assertCharged("upper") }
+    func testLower() throws { try assertCharged("lower") }
+    func testReverse() throws { try assertCharged("reverse") }
+    func testByte() throws { try assertCharged("byte") }
+    func testChar() throws { try assertCharged("char") }
+    func testToNumberWithABase() throws { try assertCharged("tonumber_base") }
+    func testStringToNumber() throws { try assertCharged("stringtonumber") }
+    func testIntegerArgumentFromAString() throws { try assertCharged("tointegerx") }
+    func testNumberArgumentFromAString() throws { try assertCharged("tonumberx") }
+    func testForLimitFromAString() throws { try assertCharged("forprep") }
+    func testRawEqual() throws { try assertCharged("rawequal") }
+    func testLongStringEqualToAConstant() throws { try assertCharged("eqk") }
+    func testLongStringKeyCompare() throws { try assertCharged("key_compare") }
+    func testLongStringKeyHash() throws { try assertCharged("key_hash") }
 
     // MARK: - Ordinary heavy use passes under the default budget
 
@@ -204,6 +339,38 @@ final class LuaLibraryWorkTests: XCTestCase {
         }
         try lua.run("function f() local s = slow(); local k = 0; for i = 1, 10 do k = k + 1 end; return tostring(#s + k) end")
         XCTAssertEqual(try lua.callGlobal("f", budget: 1_000), "4194314")
+    }
+
+    /// #1166 (R1145-2): a host function that reads a long numeral argument is not charged for it; the script's own
+    /// work after it fits the limit only because of that.
+    func testAHostFunctionReadingANumeralIsNotCharged() throws {
+        let lua = try LuaRuntime()
+        lua.register("read") { rt in
+            rt.push(rt.numberArgument(1) ?? -1)
+            return 1
+        }
+        try lua.run(#"""
+            Z = ("0"):rep(99999) .. "7"
+            function f() local v = read(Z); string.rep("", 150000); return tostring(v) end
+            """#)
+        XCTAssertEqual(try lua.callGlobal("f", budget: 10_000), "7.0")
+    }
+
+    // MARK: - A state without the counter
+
+    /// #1166 (R1145-1): arming and disarming the budget on a state not made by clua_newstate leaves its allocator data
+    /// alone; the instruction count still ends the call.
+    func testABudgetOnAStateWithoutTheCounter() throws {
+        let L = try XCTUnwrap(luaL_newstate())
+        defer { lua_close(L) }
+        luaL_openlibs(L)
+        XCTAssertEqual(luaL_loadstring(L, "local k = 0; for i = 1, 100000 do k = k + #string.rep('ab', 3) end; return k"), LUA_OK)
+        let armed = clua_budget_arm(L, 1_000)
+        XCTAssertEqual(armed, 1)
+        XCTAssertNotEqual(clua_pcall(L, 0, 1, 0), LUA_OK)
+        XCTAssertEqual(clua_budget_disarm(L, armed), 1)
+        clua_pop(L, 1)
+        XCTAssertEqual(lua_gettop(L), 0)
     }
 
     // MARK: - One limit per outermost call

@@ -62,25 +62,32 @@ static void budget_hook(lua_State *L, lua_Debug *ar) {
 
 /* #1154: one budget per outermost call. A call made from inside a host call finds the hook set and leaves it, so it
 ** runs on the outer count, and a spent budget stays spent; only the call that armed the budget removes it. */
+/* R1145-1 (#1166): the counter of a state made by clua_newstate; NULL for any other (luaL_newstate's ud is not one). */
+static clua_mem *counter_of(lua_State *L) {
+    return G(L)->frealloc == clua_mem_alloc ? (clua_mem *)G(L)->ud : NULL;
+}
+
 int clua_budget_arm(lua_State *L, int count) {
-    clua_mem *m = (clua_mem *)G(L)->ud;
+    clua_mem *m = counter_of(L);
     if (lua_gethook(L) != NULL)
         return 0;
     if (count < 1)
         count = 1; /* 0 or less would never fire */
     lua_sethook(L, budget_hook, LUA_MASKCOUNT, count);
-    m->work = 0; /* #1145: the library-work limit goes with the budget */
-    m->worklimit = (size_t)count * CLUA_WORK_PER_INSTRUCTION;
+    if (m != NULL) {
+        m->work = 0; /* #1145: the library-work limit goes with the budget (the one reset: each call its own limit) */
+        m->worklimit = (size_t)count * CLUA_WORK_PER_INSTRUCTION;
+    }
     return 1;
 }
 
 int clua_budget_disarm(lua_State *L, int armed) {
-    clua_mem *m = (clua_mem *)G(L)->ud;
+    clua_mem *m = counter_of(L);
     int spent = lua_gethook(L) == budget_spent;
     if (armed) {
         lua_sethook(L, NULL, 0, 0);
-        m->work = 0;
-        m->worklimit = 0;
+        if (m != NULL)
+            m->worklimit = 0; /* nothing is charged outside an armed call */
     }
     return spent;
 }
@@ -88,11 +95,10 @@ int clua_budget_disarm(lua_State *L, int armed) {
 /* #1145: library work. The raise happens inside a library function or a comparison instruction (both may raise
 ** there already) and leaves the budget spent exactly as budget_hook does. */
 void clua_work(lua_State *L, size_t count, size_t weight) {
-    clua_mem *m;
+    clua_mem *m = counter_of(L);
     size_t units;
-    if (G(L)->frealloc != clua_mem_alloc)
+    if (m == NULL)
         return; /* a state not made by clua_newstate (luaL_newstate in ExtensionLuaSuiteTests): no counter */
-    m = (clua_mem *)G(L)->ud;
     if (m->worklimit == 0 || !m->enforce)
         return; /* no armed call, or a host function is running (it must never raise) */
     units = weight != 0 && count > SIZE_MAX / weight ? SIZE_MAX : count * weight;
@@ -101,6 +107,21 @@ void clua_work(lua_State *L, size_t count, size_t weight) {
         lua_sethook(G(L)->mainthread, budget_spent, LUA_MASKCOUNT, 1);
         luaG_runerror(L, "execution budget exceeded");
     }
+}
+
+/* #1166: the counter whose cap was last turned on on this OS thread (the state whose Lua runs here), for charges
+** made where no lua_State is at hand. Set by clua_mem_enforce and host_call's restore, cleared by clua_close. */
+static _Thread_local clua_mem *thread_counter;
+
+void clua_work_nostate(size_t count, size_t weight) {
+    clua_mem *m = thread_counter;
+    size_t units;
+    if (m == NULL || m->worklimit == 0 || !m->enforce)
+        return; /* no armed call, or a host function is running */
+    units = weight != 0 && count > SIZE_MAX / weight ? SIZE_MAX : count * weight;
+    m->work = units > SIZE_MAX - m->work ? SIZE_MAX : m->work + units;
+    if (m->work > m->worklimit)
+        lua_sethook(m->main, budget_spent, LUA_MASKCOUNT, 1); /* the allocator's way: never raise here */
 }
 
 /* #1126: setmetatable without finalizers, which would run outside the per-call budget. */
@@ -211,6 +232,8 @@ lua_State *clua_newstate(size_t cap) {
 void clua_close(lua_State *L) {
     clua_mem *m = mem_of(L);
     m->enforce = 0;
+    if (thread_counter == m)
+        thread_counter = NULL; /* #1166 */
     lua_close(L);
     free(m);
 }
@@ -223,6 +246,10 @@ int clua_mem_enforce(lua_State *L, int on) {
     clua_mem *m = mem_of(L);
     int was = m->enforce;
     m->enforce = on;
+    if (on)
+        thread_counter = m; /* #1166 */
+    else if (thread_counter == m)
+        thread_counter = NULL; /* #1166: set only while its Lua runs, so a state closed elsewhere is never read */
     return was;
 }
 
@@ -248,6 +275,8 @@ static int host_call(lua_State *L) {
     m->enforce = 0;
     n = f(L);
     m->enforce = was;
+    if (was)
+        thread_counter = m; /* #1166: a call into another runtime made by f pointed it there */
     if (was && m->used > m->cap) {
         m->refused = 1;
         lua_pushliteral(L, "not enough memory");
