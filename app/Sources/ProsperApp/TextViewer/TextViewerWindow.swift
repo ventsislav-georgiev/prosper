@@ -64,14 +64,18 @@ final class TextViewerModel: ObservableObject {
     private var requested: MarkdownRenderer.Style?
     /// Reads the file, off the main thread. A seam: a row holds a read to order two loads.
     private let read: @Sendable (URL) -> Result<TextViewerDocument, TextViewerDocument.Refusal>
+    /// #1236: the plain render's paragraph cap. A seam: a row passes a small one, so a cut needs no large file.
+    private let maxParagraphUnits: Int
 
     init(url: URL, resolved: URL, actions: TextViewerActions, imageLoader: @escaping TextViewerImageLoader = ImagePolicy.load,
-         read: @escaping @Sendable (URL) -> Result<TextViewerDocument, TextViewerDocument.Refusal> = TextViewerDocument.load) {
+         read: @escaping @Sendable (URL) -> Result<TextViewerDocument, TextViewerDocument.Refusal> = TextViewerDocument.load,
+         maxParagraphUnits: Int = MarkdownRenderer.maxParagraphUnits) {
         self.url = url
         self.resolved = resolved
         self.actions = actions
         self.imageLoader = imageLoader
         self.read = read
+        self.maxParagraphUnits = maxParagraphUnits
         isMarkdown = TextViewerRouting.isMarkdown(url)
         refresh(style: .current)
     }
@@ -112,13 +116,13 @@ final class TextViewerModel: ObservableObject {
         job?.cancel()
         generation += 1
         requested = style
-        let (gen, path, markdown, loader, reader) = (generation, resolved, isMarkdown, imageLoader, self.read)
+        let (gen, path, markdown, loader, reader, cap) = (generation, resolved, isMarkdown, imageLoader, self.read, maxParagraphUnits)
         job = Task.detached(priority: .userInitiated) { [weak self] in
             let next = reader(path)
             if Task.isCancelled { return }
             let output = (try? next.get()).map { doc in
                 markdown ? MarkdownRenderer.render(doc.text, document: path, style: style, loader: loader)
-                         : MarkdownRenderer.plain(doc.text, style: style)
+                         : MarkdownRenderer.plain(doc.text, style: style, maxParagraphUnits: cap)
             }
             await self?.apply(next, output, generation: gen)
         }

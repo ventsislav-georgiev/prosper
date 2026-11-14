@@ -958,3 +958,119 @@ final class TextViewerWindowTests: XCTestCase {
         }
     }
 }
+
+/// #1236: the cut through the model (a small cap passed in through its seam), its note on the accessibility tree and
+/// across a reload. Offscreen: windows never shown; the private pasteboard; fakes in a tempDir().
+extension TextViewerWindowTests {
+
+    func testReloadKeepsTheCutAndTheNoteAndCopyTextCopiesWhatIsShown() throws {
+        let url = tempDir("tv-cut").appendingPathComponent("long.txt")
+        try write("ab\n" + String(repeating: "x", count: 20) + "\nafter\n", url)
+        let model = TextViewerModel(url: url, resolved: url, actions: fakeActions(), maxParagraphUnits: 8)
+        loaded(model)
+        XCTAssertEqual(model.output?.text.string, "ab\nxxxxxxxx")
+        XCTAssertEqual(model.output?.note, MarkdownRenderer.cutNote(8))
+        model.copyText()
+        XCTAssertEqual(Pasteboard.general.string(forType: .string), "ab\nxxxxxxxx", "Copy Text copies what is shown")
+        let first = try XCTUnwrap(model.output?.text)
+        var n = model.loads
+        model.reload()
+        waitUntil("the same bytes reloaded", { model.loads > n })
+        XCTAssertTrue(model.output?.text === first, "the same bytes keep the shown text")
+        XCTAssertEqual(model.output?.note, MarkdownRenderer.cutNote(8))
+        try write("cd\n" + String(repeating: "y", count: 30) + "\n", url)
+        n = model.loads
+        model.reload()
+        waitUntil("the new bytes reloaded", { model.loads > n })
+        XCTAssertEqual(model.output?.text.string, "cd\nyyyyyyyy", "a reload cuts again")
+        XCTAssertEqual(model.output?.note, MarkdownRenderer.cutNote(8), "and keeps the note")
+        try write("cd\nyyyyyyyy\n", url)
+        n = model.loads
+        model.reload()
+        waitUntil("the short bytes reloaded", { model.loads > n })
+        XCTAssertEqual(model.output?.text.string, "cd\nyyyyyyyy\n", "at the cap: whole")
+        XCTAssertTrue(model.output?.note == nil, "and no note")
+    }
+
+    private struct AXItem { let text: String; let frame: CGRect }
+
+    private func axCollect(_ e: Any, _ out: inout [AXItem], depth: Int = 0) {
+        guard depth < 40, let o = e as? NSObject else { return }
+        func text(_ key: String) -> String {
+            guard o.responds(to: Selector(key)) else { return "" }
+            let v = o.value(forKey: key)
+            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
+        }
+        let frame = o.responds(to: Selector("accessibilityFrame")) ? ((o.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue ?? .zero) : .zero
+        let label = text("accessibilityLabel")
+        out.append(AXItem(text: label.isEmpty ? text("accessibilityValue") : label, frame: frame))
+        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axCollect(k, &out, depth: depth + 1) }
+    }
+
+    private func axFlags(_ set: [Bool]?) -> [Bool] {
+        let attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"], app = NSApplication.shared
+        let get = Selector(("accessibilityAttributeValue:")), put = Selector(("accessibilitySetValue:forAttribute:"))
+        let prior = attrs.map { app.responds(to: get) ? ((app.perform(get, with: $0)?.takeUnretainedValue() as? NSNumber)?.boolValue ?? false) : false }
+        if let set, app.responds(to: put) { for (a, f) in zip(attrs, set) { app.perform(put, with: NSNumber(value: f), with: a) } }
+        return prior
+    }
+
+    /// The root view in a never-shown window, its AX tree walked (built once this process asks, as the AX client
+    /// rows of AgentIslandCountSymbolsTests do; the flags are put back) until `done` holds, to a 5 s ceiling.
+    private func axTree(_ model: TextViewerModel, _ size: CGSize, until done: ([AXItem]) -> Bool) -> [AXItem] {
+        let prior = axFlags(nil)
+        defer { _ = axFlags(prior) }
+        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        defer { win.close() }
+        let host = NSHostingView(rootView: TextViewerRootView(model: model))
+        host.frame = CGRect(origin: .zero, size: size)
+        win.contentView = host
+        _ = axFlags([true, true])
+        var tree: [AXItem] = []
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            tree = []
+            axCollect(host, &tree)
+        } while !done(tree) && Date() < deadline
+        XCTAssertFalse(win.isVisible, "never shown")
+        return tree
+    }
+
+    /// The note is read on the accessibility tree at UI scale 0.7, 0.85 and 1.0, and every element above it (the header)
+    /// keeps its frame when it appears: the note is a row of its own below the header and its rule, never in it.
+    func testCutNoteOnTheAccessibilityTreeAtEveryScale() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let dir = tempDir("tv-cut")
+        let long = dir.appendingPathComponent("long/notes.txt"), short = dir.appendingPathComponent("short/notes.txt")
+        for u in [long, short] { try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true) }
+        try write("ab\n" + String(repeating: "x", count: 20) + "\nafter\n", long)
+        try write("ab\n" + String(repeating: "x", count: 8) + "\nafter\n", short)
+        let note = MarkdownRenderer.cutNote(8)
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            let size = CGSize(width: 820 * scale, height: 640 * scale)
+            func tree(_ url: URL, _ done: @escaping ([AXItem]) -> Bool) -> [AXItem] {
+                let model = TextViewerModel(url: url, resolved: url, actions: fakeActions(), maxParagraphUnits: 8)
+                loaded(model)
+                return axTree(model, size, until: done)
+            }
+            let with = tree(long) { t in t.contains { $0.text == note } && t.contains { $0.text == "notes.txt" } }
+            let without = tree(short) { t in t.contains { $0.text == "notes.txt" } }
+            let tag = "scale \(scale)"
+            let banner = try XCTUnwrap(with.first { $0.text == note }, "\(tag): \(with.map(\.text))")
+            XCTAssertFalse(without.contains { $0.text == note }, tag)
+            // AX frames are in screen points, y up: the header is the part above the note.
+            let header = with.filter { $0.frame.height > 0 && $0.frame.minY >= banner.frame.maxY && $0.text != note }
+            XCTAssertTrue(header.contains { $0.text == "notes.txt" }, "\(tag): \(header.map(\.text))")
+            for item in header {
+                XCTAssertTrue(without.contains { $0.text == item.text && $0.frame == item.frame },
+                              "\(tag): \(item.text) at \(item.frame) moved when the note appeared")
+            }
+            fputs("tv1236 fact \(tag): note frame \(banner.frame), \(header.count) header elements unmoved\n", stderr)
+        }
+    }
+}

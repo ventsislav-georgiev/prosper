@@ -619,4 +619,42 @@ final class TextViewerLayoutTests: XCTestCase {
         _ = try autoreleasepool { try oneLineStep(Self.widePiece, units: side, "4-byte") }
         _ = try autoreleasepool { try oneLineStep(Self.spacedPiece, units: side, "space every 80") }
     }
+
+    /// #1236, heavy only (no assertion on time): at the product cap, a one-line text of cap + 64 units is shown cut to
+    /// the cap and the layout manager holds no more glyphs than the shown text. Predicted first with the ladder's
+    /// formula and its 1 Mi step (42.4 MiB held while shown and reloaded: 35.4 B per glyph past the 7 B of text); over
+    /// 48 MiB it would run at half the cap passed in instead. Also logged: the extra scan over 4 Mi units of ordinary
+    /// 80-unit lines (4 MiB, no view), the cost a 16 MiB ordinary file pays four times over.
+    func testProductCapCutShowsTheCapOnly() throws {
+        try requireHeavyTests()
+        autoreleasepool {
+            let ordinary = String(repeating: String(repeating: "abcdefghi ", count: 8) + "\n", count: (4 << 20) / 81)
+            let t0 = Date()
+            let cut = R.paragraphCut(ordinary, cap: R.maxParagraphUnits)
+            Self.fact(String(format: "#1236 scan of %ld ordinary units: %.4f s", ordinary.utf16.count, Date().timeIntervalSince(t0)))
+            XCTAssertTrue(cut == nil, "no paragraph over the cap")
+        }
+        let mib = Self.predictedMiB(R.maxParagraphUnits + 64, perGlyph: 42.4 - 7, lastMiB: 0)
+        let cap = mib <= 48 ? R.maxParagraphUnits : R.maxParagraphUnits / 2
+        Self.fact(String(format: "#1236 predicted %.1f MiB for cap + 64 units at the product cap; cap used %ld", mib, cap))
+        try autoreleasepool {
+            let before = Self.footprint()
+            let t0 = Date()
+            let out = R.plain(String(repeating: "x", count: cap + 64), style: Self.style, maxParagraphUnits: cap)
+            let render = Date().timeIntervalSince(t0)
+            XCTAssertEqual(out.text.length, cap)
+            XCTAssertEqual(out.note, R.cutNote(cap))
+            let h = try host()
+            defer { h.window.close() }
+            let t1 = Date()
+            h.view.show(out.text)
+            try draw(h)
+            let show = Date().timeIntervalSince(t1)
+            let lm = try XCTUnwrap(h.view.layoutManager)
+            XCTAssertEqual(h.view.textStorage?.length, cap, "the storage holds the shown text only")
+            XCTAssertLessThanOrEqual(lm.numberOfGlyphs, cap, "no glyphs past the shown text")
+            Self.fact(String(format: "#1236 cap %ld: plain with the cut %.3f s, show+draw %.3f s, %ld glyphs, footprint +%.1f MiB",
+                             cap, render, show, lm.numberOfGlyphs, Double(max(0, Self.footprint() - before)) / 1_048_576))
+        }
+    }
 }

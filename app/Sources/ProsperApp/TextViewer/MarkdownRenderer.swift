@@ -75,11 +75,74 @@ enum MarkdownRenderer {
     /// Round 3: the note when a cap drew part of the file as plain text; `kinds` in order, e.g. ["links"].
     nonisolated static func trimmedNote(_ kinds: [String]) -> String { "Too many \(kinds.joined(separator: ", ")): the rest shown as plain text" }
 
-    /// Plain text (D5) and the source fallback: one monospaced run, no parsing.
-    nonisolated static func plain(_ text: String, style: Style, note: String? = nil) -> Output {
+    /// #1236: the longest paragraph the plain render shows, in UTF-16 units. TextKit 1 lays a paragraph out whole on
+    /// the main thread at every show (#1180: 1 Mi units 0.17 s and 42 MiB held, linear); past it the text is cut.
+    static let maxParagraphUnits = 1 << 20
+    /// #1236: the note when the plain render cut the text; `cap` with a comma every three digits in every locale.
+    nonisolated static func cutNote(_ cap: Int) -> String {
+        let n = cap.formatted(.number.grouping(.automatic).locale(Locale(identifier: "en_US")))
+        return "Shown up to \(n) characters of a long line: the rest of the file is not shown"
+    }
+
+    /// Plain text (D5) and the source fallback: one monospaced run, no parsing. #1236: a text with a paragraph longer
+    /// than `maxParagraphUnits` is shown up to that paragraph's cap (paragraphCut) and nothing after, with cutNote
+    /// after any note already given; any other text is shown whole, as before.
+    nonisolated static func plain(_ text: String, style: Style, note: String? = nil,
+                                  maxParagraphUnits cap: Int = maxParagraphUnits) -> Output {
         let font = NSFont.monospacedSystemFont(ofSize: 13 * style.scale, weight: .regular)
-        let s = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: style.text.color])
-        return Output(text: s, anchors: [:], note: note, style: style)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: style.text.color]
+        guard let cut = paragraphCut(text, cap: cap) else {
+            return Output(text: NSAttributedString(string: text, attributes: attrs), anchors: [:], note: note, style: style)
+        }
+        let shown = NSAttributedString(string: String(text[..<cut]), attributes: attrs)
+        return Output(text: shown, anchors: [:], note: [note, cutNote(cap)].compactMap { $0 }.joined(separator: " \u{00B7} "), style: style)
+    }
+
+    /// #1236: where the shown text ends when a paragraph holds more than `cap` UTF-16 units: in the first such paragraph,
+    /// at its cap, moved back to the start of the character that straddles it; nil when there is none. Paragraphs end
+    /// where NSString's paragraphRange (and so TextKit 1) ends them: "\n", "\r" (and so "\r\n") and U+2029; U+2028 and
+    /// U+0085 end a line, not a paragraph, which is laid out whole with them. One pass over the UTF-16 units, no
+    /// allocation; a text of at most `cap` UTF-8 bytes has at most `cap` units and is not scanned.
+    nonisolated static func paragraphCut(_ text: String, cap: Int) -> String.Index? {
+        let cap = max(cap, 0)
+        guard text.utf8.count > cap else { return nil }
+        let units = text.utf16
+        var run = 0, i = units.startIndex, start = units.startIndex
+        while i < units.endIndex {
+            switch units[i] {
+            case 0x0A, 0x0D, 0x2029:
+                run = 0
+                start = units.index(after: i)
+            default:
+                if run == cap { return characterStart(text, at: i, floor: start) }
+                run += 1
+            }
+            units.formIndex(after: &i)
+        }
+        return nil
+    }
+
+    /// The start of the character (grapheme) holding the unit at `i`, looked for at most 256 UTF-16 units back and never
+    /// before `floor`, a paragraph start. A longer character (a run of combining marks) is cut at the scalar at `i`: the
+    /// walk is over a window of at most 512 units, so it cannot run long on any text.
+    private nonisolated static func characterStart(_ text: String, at i: String.Index, floor: String.Index) -> String.Index {
+        let units = text.utf16, scalars = text.unicodeScalars, reach = 256
+        var at = i
+        if at.samePosition(in: scalars) == nil, at > floor { units.formIndex(before: &at) }   // the low half of a pair
+        var from = units.index(at, offsetBy: -reach, limitedBy: floor) ?? floor
+        if from.samePosition(in: scalars) == nil, from < at { units.formIndex(after: &from) }
+        var to = units.index(at, offsetBy: reach, limitedBy: units.endIndex) ?? units.endIndex
+        if to.samePosition(in: scalars) == nil, to > at { units.formIndex(before: &to) }
+        // The window's graphemes read the scalars after `at` too: a mark after it joins the character before it.
+        let limit = units.distance(from: from, to: at)
+        var best = 0, offset = 0
+        for c in String(scalars[from..<to]) {
+            if offset > limit { break }
+            best = offset
+            offset += c.utf16.count
+        }
+        if best == 0, from != floor { return at }   // no boundary in reach: a scalar boundary instead
+        return units.index(from, offsetBy: best)
     }
 
     /// Parses and converts `source`, the Markdown document at `document`. Off the main thread; stops

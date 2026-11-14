@@ -1011,6 +1011,9 @@ tag from the now-released section and put it on the new top draft.
   keep-awake, timers, menu bar items, key rules, file watches), so for example resetting OpenLid
   during a timed session no longer keeps the Mac awake; a reset extension that is on starts again
   right away, as when it is switched off and on. (#1038)
+- Text Viewer: a file with a line longer than 1,048,576 characters now opens without freezing the
+  window: it is shown up to that point of the long line, and a note under the header says the rest
+  of the file is not shown. (#1236)
 
 ## v2.174.0
 

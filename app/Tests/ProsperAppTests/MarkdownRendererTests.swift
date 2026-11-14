@@ -255,8 +255,9 @@ final class MarkdownRendererTests: XCTestCase {
     func testSizeCap() {
         let big = String(repeating: "a", count: R.maxSourceBytes + 1)
         let out = render(big)
-        XCTAssertEqual(out.note, R.tooLargeNote)
-        XCTAssertEqual(out.text.length, R.maxSourceBytes + 1)
+        // #1236: one line one unit over the paragraph cap too: shown as source and cut at the cap.
+        XCTAssertEqual(out.note, R.tooLargeNote + " \u{00B7} " + R.cutNote(R.maxParagraphUnits))
+        XCTAssertEqual(out.text.length, R.maxParagraphUnits)
         XCTAssertNil(render(String(repeating: "a", count: 1000)).note)
     }
 
@@ -698,8 +699,8 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(at.text.length, R.maxSourceBytes)
         XCTAssertTrue(font(at, "aaaa")?.fontDescriptor.symbolicTraits.contains(.monoSpace) == false, "body text, not source")
         let over = render(atCap + "a")
-        XCTAssertEqual(over.note, R.tooLargeNote)
-        XCTAssertEqual(over.text.length, R.maxSourceBytes + 1)
+        XCTAssertEqual(over.note, R.tooLargeNote + " \u{00B7} " + R.cutNote(R.maxParagraphUnits), "#1236: and one unit over the paragraph cap")
+        XCTAssertEqual(over.text.length, R.maxParagraphUnits)
         let bytesOver = render(String(atCap.dropLast()) + "é")
         XCTAssertEqual(bytesOver.note, R.tooLargeNote, "the cap counts UTF-8 bytes, not characters")
     }
@@ -1450,5 +1451,133 @@ final class MarkdownRendererTests: XCTestCase {
         private var value: R.Output?
         func set(_ v: R.Output) { lock.lock(); value = v; lock.unlock() }
         func get() -> R.Output? { lock.lock(); defer { lock.unlock() }; return value }
+    }
+}
+
+/// #1236: the plain render cuts a text whose paragraph is longer than the cap, at a whole character, with a note. Pure
+/// rows with a small cap passed in (no file, no view, nothing over a few MiB).
+extension MarkdownRendererTests {
+
+    private func shown(_ text: String, cap: Int, note: String? = nil) -> (String, String?) {
+        let out = R.plain(text, style: Self.style, note: note, maxParagraphUnits: cap)
+        return (out.text.string, out.note)
+    }
+
+    func testCutOneUnitOverTheCapAndWholeAtTheCap() {
+        let over = shown(String(repeating: "a", count: 9), cap: 8)
+        XCTAssertEqual(over.0, String(repeating: "a", count: 8), "one unit over: cut at the cap")
+        XCTAssertEqual(over.1, R.cutNote(8))
+        let at = String(repeating: "a", count: 8) + "\n" + String(repeating: "b", count: 8)
+        XCTAssertTrue(R.paragraphCut(at, cap: 8) == nil, "every paragraph at the cap exactly")
+        let whole = shown(at, cap: 8)
+        XCTAssertEqual(whole.0, at, "the same text as today")
+        XCTAssertTrue(whole.1 == nil, "no note")
+        XCTAssertTrue(shown(at, cap: 8, note: R.tooDeepNote).1 == R.tooDeepNote, "a note given is kept as is")
+    }
+
+    /// The cap lands inside a character: the shown text ends before it. Each literal written as escapes.
+    func testCutNeverSplitsACharacter() {
+        let a = { (n: Int) in String(repeating: "a", count: n) }
+        let cases: [(what: String, text: String, cap: Int, shown: String)] = [
+            ("a 4-byte character", a(7) + "\u{1D400}" + "z", 8, a(7)),
+            ("a joined emoji", a(4) + "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}" + "z", 8, a(4)),
+            ("a flag (two regional indicators)", a(6) + "\u{1F1E7}\u{1F1EC}" + "z", 8, a(6)),
+            ("a base letter and a combining mark", a(7) + "e\u{0301}" + "z", 8, a(7)),
+            ("a 4-byte character at a cap of 1", "\u{1D400}", 1, ""),
+            ("a whole character just under the cap", a(6) + "\u{1D400}" + "z", 8, a(6) + "\u{1D400}"),
+        ]
+        for c in cases {
+            let (text, note) = shown(c.text, cap: c.cap)
+            XCTAssertEqual(text, c.shown, c.what)
+            XCTAssertEqual(text.utf16.count, c.shown.utf16.count, c.what)
+            XCTAssertEqual(note, R.cutNote(c.cap), c.what)
+        }
+    }
+
+    /// A character longer than the walk back (256 units of combining marks) is cut at a scalar at the cap; a shorter
+    /// run of marks that starts within reach moves the cut back to its base letter.
+    func testALongRunOfMarksIsCutAtAScalar() {
+        let marks = { (n: Int) in String(repeating: "\u{0301}", count: n) }
+        let far = String(repeating: "x", count: 10) + "a" + marks(600)
+        let cut = shown(far, cap: 400).0
+        XCTAssertEqual(cut.utf16.count, 400, "no character start within 256 units: a scalar boundary at the cap")
+        XCTAssertTrue(cut.unicodeScalars.last == "\u{0301}")
+        let near = String(repeating: "x", count: 300) + "a" + marks(600)
+        XCTAssertEqual(shown(near, cap: 400).0, String(repeating: "x", count: 300), "the base letter starts within reach")
+        XCTAssertEqual(shown("a" + marks(300), cap: 8).0, "", "the paragraph's first character is longer than the cap")
+    }
+
+    func testShortLinesThenALongLine() {
+        let text = "ab\r\ncd\n" + String(repeating: "x", count: 20) + "\nafter\n"
+        let (cut, note) = shown(text, cap: 8)
+        XCTAssertEqual(cut, "ab\r\ncd\n" + String(repeating: "x", count: 8), "the short lines whole, the long one's first cap units, nothing after")
+        XCTAssertEqual(note, R.cutNote(8))
+    }
+
+    /// What ends a paragraph is what TextKit 1 takes (NSString's paragraphRange): a literal table, one row per character,
+    /// each checked against paragraphRange too. Six units, the character, six units: a cap of 8 cuts only one paragraph.
+    func testParagraphSeparatorsAsTextKitSeesThem() {
+        let table: [(name: String, sep: String, ends: Bool)] = [
+            ("LF", "\n", true), ("CR", "\r", true), ("CR LF", "\r\n", true), ("U+2029", "\u{2029}", true),
+            ("U+2028", "\u{2028}", false), ("U+0085", "\u{0085}", false),
+        ]
+        for row in table {
+            let text = "aaaaaa" + row.sep + "bbbbbb"
+            let first = (text as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+            XCTAssertEqual(first.length < (text as NSString).length, row.ends, "\(row.name): NSString's paragraphRange")
+            let (cut, note) = shown(text, cap: 8)
+            if row.ends {
+                XCTAssertEqual(cut, text, "\(row.name) ends a paragraph: nothing cut")
+                XCTAssertTrue(note == nil, row.name)
+            } else {
+                XCTAssertEqual(cut, "aaaaaa" + row.sep + "b", "\(row.name) does not end one: a 13-unit paragraph, cut at 8")
+                XCTAssertEqual(note, R.cutNote(8), row.name)
+            }
+        }
+        // Bare "\r" lines under the cap are not cut; one paragraph of U+2028-joined lines over it is.
+        XCTAssertTrue(R.paragraphCut(Array(repeating: "abcdefgh", count: 50).joined(separator: "\r"), cap: 8) == nil)
+        XCTAssertTrue(R.paragraphCut(Array(repeating: "abc", count: 3).joined(separator: "\u{2028}"), cap: 8) != nil)
+    }
+
+    /// No content traps: empty, only separators, a replacement character from a lossy decode, caps of 0 and 1, a negative cap.
+    func testEdgeTextsDoNotTrap() {
+        XCTAssertTrue(shown("", cap: 0) == ("", nil))
+        XCTAssertTrue(shown("\n\r\n\u{2029}\r", cap: 0) == ("\n\r\n\u{2029}\r", nil))
+        XCTAssertTrue(shown("ab", cap: 0) == ("", R.cutNote(0)))
+        XCTAssertTrue(shown("\n\nab", cap: 1) == ("\n\na", R.cutNote(1)))
+        XCTAssertTrue(shown("\u{FFFD}\u{FFFD}", cap: 1) == ("\u{FFFD}", R.cutNote(1)))
+        XCTAssertTrue(shown(String(decoding: [0x61, 0xFF, 0x62], as: UTF8.self), cap: 2).0 == "a\u{FFFD}")
+        XCTAssertTrue(shown("ab", cap: -5).0 == "", "a negative cap is taken as 0")
+    }
+
+    func testCutNoteLiteralAndWithAnotherNote() {
+        XCTAssertEqual(R.cutNote(R.maxParagraphUnits),
+                       "Shown up to 1,048,576 characters of a long line: the rest of the file is not shown")
+        XCTAssertEqual(R.maxParagraphUnits, 1_048_576)
+        XCTAssertEqual(shown(String(repeating: "a", count: 9), cap: 8, note: R.tooLargeNote).1,
+                       "Over 1 MiB: shown as source \u{00B7} Shown up to 8 characters of a long line: the rest of the file is not shown")
+    }
+
+    /// A Markdown file over the source cap is shown as source through the plain render: at the product cap, one line of
+    /// cap + 64 units shows cap units with both notes. About 1 MiB of source and 2 MiB of shown text; no view.
+    func testMarkdownOverTheSourceCapWithALongLineIsCut() {
+        let source = String(repeating: "x", count: R.maxParagraphUnits + 64)
+        XCTAssertGreaterThan(source.utf8.count, R.maxSourceBytes)
+        let out = R.render(source, document: Self.document, style: Self.style, loader: { _, _, _ in nil })
+        XCTAssertEqual(out.text.length, R.maxParagraphUnits)
+        XCTAssertEqual(out.note, R.tooLargeNote + " \u{00B7} " + R.cutNote(R.maxParagraphUnits))
+    }
+
+    /// Rendered Markdown needs no cut: a code block of one line filling the 1 MiB source cap renders a paragraph under
+    /// the paragraph cap (UTF-16 units are never more than UTF-8 bytes).
+    func testRenderedCodeLineUnderTheSourceCapIsUnderTheCap() {
+        let line = String(repeating: "a", count: R.maxSourceBytes - 9)
+        let source = "```\n" + line + "\n```\n"
+        XCTAssertEqual(source.utf8.count, R.maxSourceBytes)
+        let out = R.render(source, document: Self.document, style: Self.style, loader: { _, _, _ in nil })
+        XCTAssertTrue(out.note == nil, "rendered, not shown as source")
+        XCTAssertGreaterThanOrEqual(out.text.length, line.utf16.count, "the code line is shown")
+        XCTAssertTrue(R.paragraphCut(out.text.string, cap: R.maxParagraphUnits) == nil, "no rendered paragraph over the cap")
+        Self.fact("#1236: a one-line code block at the source cap renders a \(line.utf16.count)-unit paragraph, cap \(R.maxParagraphUnits)")
     }
 }
