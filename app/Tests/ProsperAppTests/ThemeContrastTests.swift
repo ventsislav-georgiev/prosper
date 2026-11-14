@@ -160,6 +160,49 @@ final class ThemeContrastTests: XCTestCase {
         XCTAssertEqual(pairs, themes.count * 2 * 6, "two text tokens on six surfaces per theme")
     }
 
+    /// #1199: the terminal token painted as TEXT, on the surfaces its call sites sit on, written out:
+    /// bgTop and bgBottom (ChatWindow agent bubble, on ChatBackdrop's gradient), card (the "$" in the
+    /// transcript's Card, the plan label in AccountPane and the key label in SyncPane inside
+    /// NeonSection's neonCard, the added line in ManagedConfigConsentSheet) and cardAddedRow (the "+"
+    /// mark in DiffRow: card under a 12 percent wash of the token itself).
+    /// Not in the rule, by facts: OpenInTerminalButton and AgentPillButton text sit on a 12 percent
+    /// wash over whatever host paints them (four hosts, no static surface); the terminal icons
+    /// (AgentTranscriptView empty state, AgentsWindow todo icon, SyncPane checkmark) and the mixer's
+    /// "playing" fill are glyphs, not text.
+    func testTerminalTextClearsTheSurfacesItIsPaintedOn() throws {
+        let themes = try themes()
+        var pairs = 0
+        for d in themes {
+            let p = ThemePalette.load(for: d)
+            let t = Self.srgb(NSColor(p.terminal)), c = Self.srgb(NSColor(p.card))
+            let added = NSColor(srgbRed: c.r * 0.88 + t.r * 0.12, green: c.g * 0.88 + t.g * 0.12,
+                                blue: c.b * 0.88 + t.b * 0.12, alpha: c.a)
+            let surfaces: [(String, NSColor)] = [("bgTop", NSColor(p.bgTop)), ("bgBottom", NSColor(p.bgBottom)),
+                                                 ("card", NSColor(p.card)), ("cardAddedRow", added)]
+            XCTAssertEqual(surfaces.map(\.0), ["bgTop", "bgBottom", "card", "cardAddedRow"], d.title)
+            for (sn, s) in surfaces {
+                let r = Self.contrast(NSColor(p.terminal), on: s)
+                XCTAssertGreaterThanOrEqual(r, Self.minimum, "\(d.title): terminal on \(sn) is \(r):1")
+                pairs += 1
+            }
+        }
+        XCTAssertEqual(pairs, themes.count * 4, "the terminal token on four surfaces per theme")
+    }
+
+    /// #1199: Daylight's terminal, written out (#087D52 read 4.14:1 on bgBottom and 4.38:1 on the
+    /// added-row wash): the smallest lightness change that clears 4.55 on all four surfaces, hue
+    /// within 0.5 degrees. Also pinned in ThemeTests.testNudgedBaseTokensArePinned.
+    func testNudgedDaylightTerminalIsPinned() throws {
+        let dir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
+        let spec = try ThemeSpec.decode(Data(contentsOf: dir.appendingPathComponent("theme-daylight/theme.json")))
+        let got = Self.srgb(NSColor(try XCTUnwrap(spec.colors["terminal"])))
+        let want = Self.srgb(NSColor(try XCTUnwrap(Color(hex: "#08754D"))))
+        XCTAssertTrue(abs(got.r - want.r) < 0.001 && abs(got.g - want.g) < 0.001 && abs(got.b - want.b) < 0.001,
+                      "theme-daylight terminal is not #08754D")
+    }
+
     /// #1129: textSecondary of the two themes that read under 4.5 on the washed rail top, written
     /// out (Fern #547252 was 4.3942 there, Mint #527267 4.3371): the smallest lightness change
     /// that clears 4.55 on all six surfaces, hue within 0.5 degrees. A revert fails here by name.

@@ -301,9 +301,10 @@ final class ThemeTests: XCTestCase {
     func testNudgedBaseTokensArePinned() throws {
         let pinned: [(theme: String, token: String, hex: String)] = [
             // #1095: nudged again for bgBottom, sidebar and cardHi (margin >= 0.05 on every surface).
-            // #1124: nudged again for the washed rail top (margin >= 0.05 there too).
+            // #1124: nudged again for the washed rail top (margin >= 0.05 there too in the model; the rendered top reads about 0.014 lower, QA 1129).
             ("theme-daylight", "blue", "#015FCC"),         // #1124 #0062D1 (4.36:1 washed, as Ink indigo)
             ("theme-daylight", "blueBright", "#0063C6"),   // #1124 #0065C7 (4.45:1 washed); #911 #006DD4 (4.07:1 on bgBottom); #1F8CF9 before
+            ("theme-daylight", "terminal", "#08754D"),     // #1199 #087D52 (4.14:1 on bgBottom, 4.38:1 under an added diff row)
             ("theme-graphite", "indigo", "#8794A2"),       // #911 #798796 (3.88:1 on cardHi); #717F8E before
             ("theme-silver", "blueBright", "#57667B"),     // #1124 #59687D (4.44:1 washed); #911 #607086 (4.08:1 on bgBottom); #637288 before
             ("theme-silver", "indigo", "#5A6578"),         // #1124 #5C677A (4.45:1 washed); #911 #636F84 (4.10:1 on bgBottom); #657186 before

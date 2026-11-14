@@ -897,6 +897,8 @@ tag from the now-released section and put it on the new top draft.
 - Open Agent Sessions' default shortcut (Shift-Option-S) now also steps aside for Hammerspoon Compat
   key rules and for a key mapping you just added in Settings, and its Settings row says it is off
   while a key rule uses the key. (#1189)
+- Daylight theme: the terminal green used for agent replies, diff additions and status labels is
+  slightly darker, so it reads clearly on the light backgrounds. (#1199)
 
 ## v2.174.0
 
