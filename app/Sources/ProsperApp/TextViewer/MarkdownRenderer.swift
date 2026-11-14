@@ -50,9 +50,10 @@ enum MarkdownRenderer {
     /// Table cells drawn as NSTextTable cells per document; from the row that passes it on, rows are
     /// " | "-joined text. Round 2: TextKit 1 lays tables out on the main thread at about 11 µs a cell.
     static let maxTableCells = 50_000
-    /// Links drawn as links per document; later ones are their plain text. Round 2: 150,000 rendered
-    /// links did not lay out in 120 s (8,000 bare links take 0.04 s), and TextKit 1 lays out on main.
-    static let maxLinks = 2_000
+    /// Links drawn as links per document; later ones are their plain text. #1155: a link costs what any
+    /// styled run costs; TextKit 1 lays a paragraph out whole, superlinear in its runs (8,000 links in
+    /// one paragraph 0.14 s, 16,000 0.64 s, 32,000 3.8 s, debug build), so the cap is the 8,000 step.
+    static let maxLinks = 8_000
     /// Runs with inline styling (emphasis, code, links) per document; later runs take their block's
     /// plain style. Round 2: 524,000 alternating italic runs took 5 s to lay out.
     static let maxStyledRuns = 50_000

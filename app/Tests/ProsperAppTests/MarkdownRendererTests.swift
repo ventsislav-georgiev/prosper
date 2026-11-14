@@ -461,7 +461,7 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertEqual(over.note, "Too many table cells: the rest shown as plain text")
     }
 
-    /// Round 2 item 2: at most 2,000 links a document are links; the 2,001st is its plain text.
+    /// Round 2 item 2: at most maxLinks (#1155: 8,000) links a document are links; the next is its plain text.
     func testLinkCountCap() {
         let out = render((0...R.maxLinks).map { "[l\($0)](https://example.com/\($0))" }.joined(separator: " "))
         var linked: [String] = []
@@ -469,11 +469,11 @@ final class MarkdownRendererTests: XCTestCase {
             if v != nil { linked.append((out.text.string as NSString).substring(with: range)) }
         }
         XCTAssertEqual(linked.count, R.maxLinks)
-        XCTAssertEqual(linked.last, "l1999")
+        XCTAssertEqual(linked.last, "l\(R.maxLinks - 1)")
         XCTAssertEqual(out.note, "Too many links: the rest shown as plain text")
         XCTAssertNil(render((1...R.maxLinks).map { "[l\($0)](https://example.com/\($0))" }.joined(separator: " ")).note,
                      "nothing trimmed at the cap")
-        let last = (out.text.string as NSString).range(of: "l2000")
+        let last = (out.text.string as NSString).range(of: "l\(R.maxLinks)")
         XCTAssertNotEqual(last.location, NSNotFound)
         guard last.location != NSNotFound else { return }
         XCTAssertTrue(out.text.attribute(.link, at: last.location, effectiveRange: nil) == nil)

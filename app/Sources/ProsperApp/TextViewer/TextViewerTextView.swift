@@ -49,6 +49,7 @@ final class TextViewerTextView: NSTextView {
         view.isHorizontallyResizable = false
         view.autoresizingMask = [.width]
         view.textContainer?.widthTracksTextView = true
+        view.layoutManager?.allowsNonContiguousLayout = true   // #1155: lay out what is drawn or asked for, not the whole text
         view.minSize = .zero
         view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         scroll.documentView = view
@@ -61,20 +62,64 @@ final class TextViewerTextView: NSTextView {
     /// D6: a clicked link, for the model to decide; AppKit's own handling never runs.
     var onLink: ((URL) -> Void)?
 
-    /// Shows the rendered (or plain) text, keeping the scroll position as a fraction of the height
-    /// (D9: a reload keeps the place).
+    /// #1155: a text up to this many UTF-16 units is laid out whole at show (exact height, a resize lays it
+    /// out again, as before); a longer one only where it is drawn or asked for. Rule: every kind a size can
+    /// hold lays out whole in under 0.1 s on main here (debug build, M4 Pro), except one paragraph at the
+    /// link cap, which is bounded by maxLinks and costs the same without the whole layout as soon as it is
+    /// on screen. Measured at the 16,384 step: 4-byte lines 0.021 s, mixed Markdown (16,348 units)
+    /// 0.020 s, small tables 4.7 us per unit (5,499 units 0.027 s, 22,585 units 0.106 s; ~0.077 s at
+    /// 16,384), one long table (8,294 units) 0.031 s; the link-cap paragraph (8,000 links, 15,999 units)
+    /// 0.147 s whole, 0.151 s first screen only.
+    nonisolated static let wholeLayoutLength = 16_384
+
+    /// Shows the rendered (or plain) text (D9: a reload keeps the place). #1155: above wholeLayoutLength
+    /// only the first screen and the line the place needs are laid out here; the height of text not laid
+    /// out yet is TextKit's estimate, so the place is kept as the first character of the line at the top
+    /// and the offset into it, not as a fraction of the height.
     func show(_ text: NSAttributedString) {
         guard text !== shown else { return }
         shown = text
         let clip = enclosingScrollView?.contentView
-        let fraction = clip.map { $0.bounds.minY / max(1, frame.height) } ?? 0
+        let place = clip.flatMap { topPlace($0) }
+        // Emptied first: 1 MiB of Markdown set over the old text took 1.12 s, over an empty one 0.01 s.
+        textStorage?.setAttributedString(NSAttributedString())
+        let whole = text.length <= Self.wholeLayoutLength
+        if let lm = layoutManager, lm.allowsNonContiguousLayout == whole { lm.allowsNonContiguousLayout = !whole }
         textStorage?.setAttributedString(text)
         typingAttributes = text.length > 0 ? text.attributes(at: 0, effectiveRange: nil) : [:]
         guard let clip, let lm = layoutManager, let tc = textContainer else { return }
-        lm.ensureLayout(for: tc)
+        if whole {
+            lm.ensureLayout(for: tc)
+        } else if clip.bounds.height > 0 {
+            // The window's next layout pass lays out the first screen anyway (#1155 ticket 3: 934 lines from
+            // the start); laid out after the place below it, it would push the place down by the estimate's error.
+            lm.ensureLayout(forBoundingRect: NSRect(x: 0, y: 0, width: tc.size.width, height: clip.bounds.height), in: tc)
+        }
+        guard let place else { sizeToFit(); return }
+        guard place.character < text.length else {   // the text got shorter than the place: its end, or the top
+            sizeToFit()
+            if text.length > 0 {
+                scrollRangeToVisible(NSRange(location: text.length, length: 0))
+            } else {
+                clip.scroll(to: NSPoint(x: 0, y: -(enclosingScrollView?.contentInsets.top ?? 0)))
+            }
+            enclosingScrollView?.reflectScrolledClipView(clip)
+            return
+        }
+        let y = lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: place.character), effectiveRange: nil).minY
         sizeToFit()
-        clip.scroll(to: NSPoint(x: 0, y: (fraction * frame.height).rounded()))
+        clip.scroll(to: NSPoint(x: 0, y: (y + textContainerOrigin.y + place.offset).rounded()))
         enclosingScrollView?.reflectScrolledClipView(clip)
+    }
+
+    /// The first character of the line fragment at the top of `clip`, and how far the clip's top is
+    /// below that line's top (negative in the inset above the first line). Lays out that line only.
+    private func topPlace(_ clip: NSClipView) -> (character: Int, offset: CGFloat)? {
+        guard let lm = layoutManager, let tc = textContainer, (textStorage?.length ?? 0) > 0 else { return nil }
+        let y = clip.bounds.minY - textContainerOrigin.y
+        var line = NSRange()
+        let rect = lm.lineFragmentRect(forGlyphAt: lm.glyphIndex(for: NSPoint(x: 0, y: max(0, y)), in: tc), effectiveRange: &line)
+        return (lm.characterIndexForGlyph(at: line.location), y - rect.minY)
     }
 
     override func setFrameSize(_ newSize: NSSize) {

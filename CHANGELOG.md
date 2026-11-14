@@ -835,6 +835,13 @@ tag from the now-released section and put it on the new top draft.
   instead of once per keystroke. (#1172)
 - Prosper no longer rewrites a dch config that has a line over 1023 bytes. dch reads such a line in
   pieces, so a piece could set a key Prosper cannot see. (#1172)
+- Text Viewer: opening or reloading a large file no longer freezes the app for seconds; only the
+  part on screen is laid out, so the scroll bar of a large file is an estimate that settles as you
+  scroll. Ordinary documents are laid out whole as before, with an exact scroll bar. (#1155)
+- Text Viewer: a reload keeps the same line at the top of the window; a file that got shorter shows
+  its new end, and an emptied file shows from the top. (#1155)
+- Text Viewer: reloading a large Markdown document is fast again (1 MiB took about 2 s). (#1155)
+- Text Viewer: Markdown documents now draw up to 8,000 links as links (was 2,000). (#1155)
 
 ## v2.174.0
 
