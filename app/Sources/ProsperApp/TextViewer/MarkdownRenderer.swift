@@ -89,8 +89,9 @@ enum MarkdownRenderer {
         guard nestingBound(source) <= maxNesting else { return plain(source, style: style, note: tooDeepNote) }
         guard markupCount(source) <= maxMarkup else { return plain(source, style: style, note: tooMuchMarkupNote) }
         let options = parsingOptions(for: source)
-        // #1222: with positions on, the parser reads the text its columns are counted in (positionSource).
-        let text = options.appliesSourcePositionAttributes ? positionSource(source) : source
+        // #1222: with positions on, the parser reads the text its columns are counted in (positionSource). #1229: every
+        // file's leading BOMs dropped, so two or more draw as one does, with or without positions.
+        let text = options.appliesSourcePositionAttributes ? positionSource(source) : withoutLeadingBOMs(source)
         guard let parsed = try? AttributedString(markdown: text, options: options) else {
             return plain(source, style: style, note: unparsedNote)
         }
@@ -140,11 +141,18 @@ enum MarkdownRenderer {
     /// #1222: the text the parser's source positions are counted in. The parser reads a NUL as U+FFFD (three bytes) and
     /// skips a leading BOM yet adds its three bytes to the later lines of the block that started on line 1 (#1222
     /// report); with both written out here its columns are this text's bytes. It draws the same characters either way.
-    /// A second leading BOM and a lazy continuation line still shift: those forms fall back (not a form, or the mark).
+    /// A lazy continuation line still shifts: that form falls back (not a form, or the mark).
     nonisolated static func positionSource(_ s: String) -> String {
-        var t = s.unicodeScalars.first == "\u{FEFF}" ? String(s.unicodeScalars.dropFirst()) : s
+        var t = withoutLeadingBOMs(s)
         if t.utf8.contains(0) { t = String(String.UnicodeScalarView(t.unicodeScalars.map { $0 == "\u{0}" ? "\u{FFFD}" : $0 })) }
         return t
+    }
+
+    /// #1229: `s` without its leading BOMs (only those before any other character). The parser skips the first itself,
+    /// yet a second keeps line 1 from opening a block ("# T" stays a paragraph), a third is drawn, and with positions the later
+    /// lines of the first block stay 3 bytes off (#1229 report). No count is kept: drop(while:) stops at the first other scalar or the end.
+    nonisolated static func withoutLeadingBOMs(_ s: String) -> String {
+        s.unicodeScalars.first == "\u{FEFF}" ? String(s.unicodeScalars.drop(while: { $0 == "\u{FEFF}" })) : s
     }
 
     /// What a link run's source slice that starts "![" holds, parsed alone.

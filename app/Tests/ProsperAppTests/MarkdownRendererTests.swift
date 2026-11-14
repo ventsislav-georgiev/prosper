@@ -554,7 +554,7 @@ final class MarkdownRendererTests: XCTestCase {
             ("\u{FEFF}\u{0}" + form, [1, 8, 1, 18], [1, 5, 1, 15]),
             ("\u{FEFF}x\n\u{0}" + form, [2, 8, 2, 18], [2, 5, 2, 15]),
             ("x\u{FEFF}" + form, [1, 6, 1, 16], [1, 6, 1, 16]),                 // a BOM later in the text is text
-            ("\u{FEFF}\u{FEFF}x\n" + form, [2, 5, 2, 15], nil),                 // the parser skips the second one too
+            ("\u{FEFF}\u{FEFF}x\n" + form, [2, 5, 2, 15], [2, 2, 2, 12]),      // #1229: every leading BOM dropped
             ("> x\n" + form, [2, 4, 2, 14], nil),                               // lazy: + the first line's prefix
             ("> > x\n" + form, [2, 6, 2, 16], nil),
             ("- x\n" + form, [2, 4, 2, 14], nil),
@@ -576,7 +576,7 @@ final class MarkdownRendererTests: XCTestCase {
                            String(try AttributedString(markdown: md, options: plain).characters), "the same text drawn")
         }
         XCTAssertEqual(R.positionSource("\u{FEFF}a\u{0}b"), "a\u{FFFD}b")
-        XCTAssertEqual(R.positionSource("\u{FEFF}\u{FEFF}"), "\u{FEFF}", "one leading BOM only")
+        XCTAssertEqual(R.positionSource("\u{FEFF}\u{FEFF}"), "", "#1229: every leading BOM")
         XCTAssertEqual(R.positionSource("a\u{FEFF}"), "a\u{FEFF}")
         XCTAssertEqual(R.positionSource(""), "")
     }
@@ -587,7 +587,7 @@ final class MarkdownRendererTests: XCTestCase {
         let form = "[![a](p.png)](#top)"
         for md in ["\u{0}" + form, "\u{0}\u{0}" + form, "[![a\u{0}b](p.png)](#top)", "\u{0}\r\n\u{0}" + form,
                    "\u{FEFF}" + form, "\u{FEFF}x\n" + form, "\u{FEFF}x\ny\n" + form, "\u{FEFF}> x\n> " + form,
-                   "\u{FEFF}x\n\u{0}" + form, "\u{FEFF}\u{0}" + form] {
+                   "\u{FEFF}x\n\u{0}" + form, "\u{FEFF}\u{0}" + form, "\u{FEFF}\u{FEFF}x\n" + form] {
             let loader = try drawingLoader()
             let out = render(md, loader)
             XCTAssertEqual(loader.requests, ["p.png"], md.debugDescription)
@@ -596,12 +596,49 @@ final class MarkdownRendererTests: XCTestCase {
         }
         let nulLoader = try drawingLoader()
         XCTAssertEqual(render("\u{0}" + form, nulLoader).text.string, "\u{FFFD}\u{FFFC}", "the NUL drawn as the parser draws it")
-        for md in ["\u{FEFF}\u{FEFF}x\n" + form, "> x\n" + form, "- x\n" + form] {
+        for md in ["> x\n" + form, "- x\n" + form] {
             let loader = try drawingLoader()
             let out = render(md, loader)
             XCTAssertEqual(loader.requests, [], md.debugDescription)
             XCTAssertTrue(out.text.string.hasSuffix("a"), "\(md.debugDescription): as before #1213, the alt as link text")
             XCTAssertEqual(linkString(out, at: out.text.length - 1), "#top", md.debugDescription)
+        }
+    }
+
+    /// #1229 (N1222-a): two or more leading BOMs draw as one does, with or without an image inside a link; a BOM after
+    /// any other character stays text.
+    func testLeadingBOMsDrawAsOne() throws {
+        let form = "[![a](p.png)](#top)", b = "\u{FEFF}"
+        let one = render(b + "# Title")
+        XCTAssertEqual(font(one, "Title")?.pointSize, 20, "one leading BOM: a heading, as before")
+        for md in [b + b + "# Title", b + b + b + "# Title"] {
+            let out = render(md)
+            XCTAssertEqual(out.text.string, one.text.string, md.debugDescription)
+            XCTAssertEqual(font(out, "Title")?.pointSize, 20, "\(md.debugDescription): a heading without the form too")
+        }
+        for md in [b + "# Title " + form, b + b + "# Title " + form, b + b + b + "# Title " + form] {
+            let loader = try drawingLoader()
+            let out = render(md, loader)
+            XCTAssertEqual(font(out, "Title")?.pointSize, 20, "\(md.debugDescription): a heading with the form")
+            XCTAssertEqual(loader.requests, ["p.png"], md.debugDescription)
+            XCTAssertEqual(linkString(out, at: out.text.length - 1), "#top", md.debugDescription)
+        }
+        let plainOne = render(b + "plain words")
+        for md in [b + b + "plain words", b + b + b + "plain words"] {
+            let out = render(md)
+            XCTAssertEqual(out.text.string, plainOne.text.string, md.debugDescription)
+            XCTAssertEqual(font(out, "plain")?.pointSize, 15, md.debugDescription)
+        }
+        let loader = try drawingLoader()
+        let three = render(b + b + b + "x\n" + form, loader)
+        XCTAssertEqual(loader.requests, ["p.png"], "three BOMs, the form on line 2")
+        XCTAssertTrue(three.text.string.hasSuffix("\u{FFFC}"), three.text.string.debugDescription)
+        for md in ["x\u{FEFF}y", b + "x\u{FEFF}y", b + b + "x\u{FEFF}y " + form] {
+            XCTAssertTrue(render(md).text.string.contains("x\u{FEFF}y"), "\(md.debugDescription): a BOM after text is text")
+        }
+        for (s, want) in [("", ""), (b, ""), (b + b + "a" + b, "a" + b), ("a" + b, "a" + b), (" " + b + "a", " " + b + "a"),
+                          (String(repeating: b, count: 100_000), ""), (String(repeating: b, count: 100_000) + "a", "a")] {
+            XCTAssertEqual(R.withoutLeadingBOMs(s), want, "\(s.unicodeScalars.count) scalars")
         }
     }
 

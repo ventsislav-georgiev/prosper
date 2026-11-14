@@ -992,6 +992,9 @@ tag from the now-released section and put it on the new top draft.
   starting on the other one; a fan speed that lands after its request gave up is handed back to
   macOS; a Mac that reports a bogus fan count no longer retries the fan reset forever; a fan with no
   reading shows a dash instead of 0% (#1230)
+- Text Viewer: a Markdown file that starts with two or more byte order marks is drawn like one that
+  starts with one (its first line is a heading again, and a picture inside a link shows as a
+  picture) (#1229)
 
 ## v2.174.0
 
