@@ -269,6 +269,19 @@ final class AgentPaneLayoutTests: XCTestCase {
         XCTAssertEqual(refusal(l.replace(UUID(), target: nil)), .noSuchPane)
     }
 
+    /// A history target is its session and record id; `seen` is display data only (QA M22).
+    func testHistoryTargetsDifferingOnlyInSeenAreOneTarget() throws {
+        let (x, y, z) = (F.h("docs.1762700000", seen: 1), F.h("docs.1762700000", seen: 2), F.h("docs.1762700000"))
+        XCTAssertEqual(x, y)
+        XCTAssertEqual(x, z)
+        XCTAssertEqual(Set([x, y, z]).count, 1)
+        XCTAssertEqual(Set([x, y]).count, 1)
+        XCTAssertNotEqual(x, F.h("docs.1762700001", seen: 1), "another record id is another target")
+        let (a, b) = (F.pane(x), F.pane())
+        let l = F.layout(.split(.columns, ratio: 0.5, .leaf(a), .leaf(b)))
+        XCTAssertEqual(refusal(l.replace(b.id, target: y)), .shown(a.id), "the no-duplicates rule refuses the second")
+    }
+
     // MARK: Invariants and repair (3.2)
 
     func testRepairEmptiesDuplicateTargetsAfterTheFirstIncludingTheNamesOwnHistory() {

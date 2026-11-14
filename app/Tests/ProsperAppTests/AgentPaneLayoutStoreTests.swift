@@ -441,6 +441,39 @@ final class AgentPaneLayoutStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.active, b.id)
     }
 
+    /// Spec 8.2 (tolerant decode): an axis this build does not know reads as columns. No repair is reported for it:
+    /// the only repairs appended are those of `repaired()` and the store checks, none looks at the axis (QA M28).
+    func testAnUnknownSplitAxisReadsAsColumnsWithoutARepair() {
+        let (store, repairs, backup) = decode("""
+            {"v": 1, "layouts": [{"id": "\(ids[2])", "focused": "\(ids[3])", "tree": {"split": "diagonal", "ratio": 0.3,
+              "first": {"pane": "\(ids[3])"}, "second": {"pane": "\(ids[4])"}}}]}
+            """)
+        XCTAssertEqual(repairs, [])
+        XCTAssertFalse(backup)
+        XCTAssertEqual(store.layouts.map(\.id), [ids[2]], "not the default store")
+        XCTAssertEqual(store.layouts.first?.panes.map(\.id), [ids[3], ids[4]])
+        var axis: PaneNode.Axis?
+        var ratio: Double?
+        if case let .split(a, r, _, _)? = store.layouts.first?.tree { (axis, ratio) = (a, r) }
+        XCTAssertTrue(axis == .columns)
+        XCTAssertEqual(ratio, 0.3)
+    }
+
+    /// A deleted active layout hands over to the most recently used one, not the first in the list (QA M29).
+    func testDeletingTheActiveLayoutHandsOverToTheMostRecentlyUsedNotTheFirst() throws {
+        var store = PaneLayoutStore.makeDefault()
+        let a = store.active
+        let (b, c) = (PaneLayout.single(), PaneLayout.single())
+        store = try store.adding(b).get().adding(c).get()
+        XCTAssertEqual(store.layouts.map(\.id), [a, b.id, c.id])
+        store = try store.activate(b.id).get().activate(c.id).get().activate(a).get()
+        XCTAssertEqual(store.mru, [a, c.id, b.id])
+        let deleted = try store.deleting(a).get()
+        XCTAssertEqual(deleted.layouts.map(\.id), [b.id, c.id])
+        XCTAssertEqual(deleted.active, c.id, "the MRU's next, though b is first in the list")
+        XCTAssertEqual(deleted.mru, [c.id, b.id])
+    }
+
     /// QA 794 rider 1: a blob nested past `maxNesting` is corrupt before the parser or the tree decoder recurses into it:
     /// the default store, the bytes kept, no stack overflow. Built as bytes, never as a recursive value.
     func testADeeplyNestedBlobIsCorruptWithoutRecursing() {
