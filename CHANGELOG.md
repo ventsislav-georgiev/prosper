@@ -1053,6 +1053,9 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal: a phone's session list stream to this Mac now refuses kill and rename with "watch
   connections cannot kill or rename", as dch serve 1.66.0 does; kill and rename on their own
   connection work as before (#1178)
+- Fan control: after the overheat cut-off hands the fans back to macOS, the background helper now
+  stays running (up to 30 minutes) until the Mac has cooled below 80 °C, so reopening Prosper can no
+  longer bring back a quieter-than-macOS manual fan speed while the Mac is still hot (#981)
 
 ## v2.174.0
 

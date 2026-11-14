@@ -422,7 +422,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
 
     // Only armed once no client is connected (and, by connectionClosed, the
     // override is already off). Must run on `q`.
-    private func armIdleExit_locked() {
+    private func armIdleExit_locked(stayingSince: ContinuousClock.Instant? = nil) {
         cancelIdleExit_locked()
         let t = DispatchSource.makeTimerSource(queue: q)
         t.schedule(deadline: .now() + .seconds(idleExitSeconds))
@@ -431,6 +431,13 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             // Remote-wake keeps the daemon resident with zero clients; never exit
             // while it's armed. Otherwise defer to the lid core's idle rule.
             if self.remoteWake.isResident { return }
+            // #981: a tripped latch keeps the daemon (one read per fire) until cool or the bound, so a relaunched app meets it.
+            let since = stayingSince ?? ContinuousClock.now
+            if !self.fanQ.sync(execute: { self.fanCore.idleMayExit(self.fan, stayed: ContinuousClock.now - since) }) {
+                if self.core.remoteHoldOn { _ = self.core.clearRemoteHold() }   // idleFired's orphan clear, without its exit
+                self.armIdleExit_locked(stayingSince: since)
+                return
+            }
             self.core.idleFired()
         }
         t.resume()

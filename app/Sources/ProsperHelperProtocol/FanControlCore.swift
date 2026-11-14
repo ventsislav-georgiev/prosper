@@ -325,6 +325,25 @@ public final class FanControlCore {
         return rpm >= macOS ? true : refuse(.belowMacOS)
     }
 
+    /// Entry 981: the longest a latched daemon with no client stays resident waiting for a cool reading
+    /// (`idleMayExit`). How long a chassis takes to fall below `reArmCelsius` after a trip is not measured;
+    /// half an hour is generous for that and still ends a root process whose sensor never reads complete.
+    public static let latchedStaySeconds: Double = 30 * 60
+
+    /// Entry 981: the daemon's idle exit (10 s after its last client) asks this first, on fanQ. The latch lives
+    /// only in this process, so an exit while latched lets a relaunched app re-pin into a new, unlatched one.
+    /// Unlatched: true (exit as today), nothing read. Latched: ONE complete hottest read, judged by the gate's
+    /// own re-arm: a reading it accepts clears the latch and answers true. Anything else answers false (stay, ask
+    /// again at the next fire) until `stayed` reaches `latchedStaySeconds`, then true with the latch kept.
+    public func idleMayExit(_ fan: FanHardware?, stayed: Duration) -> Bool {
+        guard tripLatched else { return true }
+        let seen = lastRefusal
+        // macOSRPM nil: every latched path of the gate except the re-arm refuses, so true here means re-armed.
+        if mayEngageManual(rpm: 0, maxCelsius: fan?.maxTemperature(complete: true), macOSRPM: nil) { return true }
+        lastRefusal = seen   // no engage was refused: keep the daemon's once-per-reason log line as it was
+        return stayed >= .seconds(Self.latchedStaySeconds)
+    }
+
     private func refuse(_ why: Refusal) -> Bool {
         lastRefusal = why
         return false
