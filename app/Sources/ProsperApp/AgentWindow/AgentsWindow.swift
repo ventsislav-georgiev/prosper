@@ -154,6 +154,22 @@ final class AgentsNSWindow: NSWindow {
         return frames.first { $0.key != focused && $0.value.contains(p) }?.key
     }
 
+    /// #900 B2 step 3 (7.4): a left mouse-down at `p` in the content of `size` (top-left origin; outside data). Zoomed,
+    /// the view draws the zoomed pane over the whole pane area and no other (AgentPaneArea.drawn), so a down anywhere in
+    /// the area is that pane's: it is the focused one, the panes take the keys and the click passes (never a hidden
+    /// pane's tile). Otherwise the model's rule, unchanged. True: the down only focused a pane (swallowed).
+    /// shortcut: AgentWindowModel.mouseDown hit-tests the tiling and that file was closed to this step; fold it in there.
+    @MainActor static func mouseDown(_ m: AgentWindowModel, at p: CGPoint, in size: CGSize) -> Bool {
+        if let a = m.paneAreaFrame(in: size), a.contains(p) {
+            let local = CGRect(origin: .zero, size: a.size), drawn = AgentPaneArea.drawn(m, in: local)
+            if drawn.count < m.paneFrames(in: local).count, let z = drawn.keys.first {
+                m.focusPane(z)   // the focused pane: the layout stays as it is
+                return false
+            }
+        }
+        return m.mouseDown(at: p, in: size)
+    }
+
     /// 7.6: a small state machine over the left button. A mouse-down that only focused a pane is swallowed, and so are
     /// its drags and its up; any other down starts a click that passes. Every other event type passes.
     struct FocusClick: Equatable {
@@ -324,7 +340,7 @@ final class AgentsNSWindow: NSWindow {
             let r = contentLayoutRect, at = event.locationInWindow
             let p = CGPoint(x: at.x - r.minX, y: r.maxY - at.y)
             let inSidebar = model.sidebarFrame(in: r.size)?.contains(p) == true
-            focusing = model.mouseDown(at: p, in: r.size)
+            focusing = Self.mouseDown(model, at: p, in: r.size)
             // #822: a sidebar click takes the keys from the terminal, so the arrows select again;
             // #845: from the input box too (a row's click then moves them in again, on mouse-up).
             if inSidebar, responderKind == .terminal || firstResponder is AgentComposerTextView { makeFirstResponder(nil) }
@@ -405,9 +421,14 @@ struct AgentWindowRootView: View {
             // (AgentWindowBand.shown; AgentWindowModel.paneAreaFrame mirrors this column for the 7.2 click rule).
             Group {
                 if AgentWindowBand.shown {
-                    VStack(spacing: 0) {
-                        AgentWindowBand(model: model)
-                        AgentPaneArea(model: model, scrolls: scrolls)
+                    // #900 B2 step 3: the band's chip reads the pane area from this geometry (the model's paneArea is
+                    // not published, so a resize to too small would not redraw the band).
+                    GeometryReader { proxy in
+                        VStack(spacing: 0) {
+                            AgentWindowBand(model: model, area: CGRect(x: 0, y: 0, width: proxy.size.width,
+                                                                       height: max(0, proxy.size.height - AgentWindowBand.height)))
+                            AgentPaneArea(model: model, scrolls: scrolls)
+                        }
                     }
                 } else {
                     AgentPaneArea(model: model, scrolls: scrolls)
@@ -936,13 +957,15 @@ let agentBandSpace = "agentWindowBand"
 
 /// #831 9.1: the window-level band over the pane area, one row of 30·s whatever the number of panes, shown only while
 /// the split gate is on (`shown`; #1224: off, the window is the parent's and the header draws the picker). Slots, left to
-/// right: the layout slot and the chip slot (empty before the Layouts section, zoom and the too-small chip: B2/B3), the
+/// right: the layout slot (empty before the Layouts section) and the chip slot (zoom and too small: `chip`), the
 /// All slot (its room kept, empty until phase C: no control, no text, no accessibility element), the verbosity picker
 /// (moved in from the session header). Fixed slots: each slot's size comes from the UI scale alone. A narrow band gives
 /// way in `Tier` order: the chip slot first, then the layout slot, then the picker's icons, then its menu; the All slot
 /// and the picker never go.
 struct AgentWindowBand: View {
     @ObservedObject var model: AgentWindowModel
+    /// #900 B2 step 3: the pane area under the band (the root's geometry); nil: the model's paneArea.
+    var area: CGRect?
     /// Tests only: (slot, frame in the band) as "layout", "chip", "all", "picker" and "band" are laid out. Main actor
     /// (SwiftUI calls it from layout).
     static var probe: ((String, CGRect) -> Void)?
@@ -961,14 +984,29 @@ struct AgentWindowBand: View {
     /// Widest first, so ViewThatFits takes the first that fits: the order in which the slots give way.
     enum Tier: CaseIterable { case full, noChip, noLayout, icons, menu }
 
+    /// 7.4 / 3.4 (#900 B2 step 3): the chip slot's words for the pane area `area`. Zoomed (the view draws one pane over a
+    /// tiling of more): "Zoomed · i of n", i the zoomed pane's place in tree order. Else too small: "k panes hidden,
+    /// window too small". nil otherwise, and always with the split gate off (15.0: a decoded multi-pane layout shows its
+    /// focused pane with no chip). Both: the zoom's words (the zoomed pane is the focused one, drawn the same).
+    @MainActor static func chip(_ m: AgentWindowModel, in area: CGRect) -> String? {
+        let order = m.layout.order
+        guard shown, order.count > 1 else { return nil }
+        if let z = m.layout.zoomed, m.shownPanes == [z], let i = order.firstIndex(of: z) {
+            return "Zoomed · \(i + 1) of \(order.count)"
+        }
+        let hidden = order.count - m.paneFrames(in: area).count
+        return hidden > 0 ? "\(hidden) \(hidden == 1 ? "pane" : "panes") hidden, window too small" : nil
+    }
+
     var body: some View {
         let on = Self.transcriptShown(model)
+        let chip = Self.chip(model, in: area ?? model.paneArea)
         ViewThatFits(in: .horizontal) {
-            line(.full, on: on)
-            line(.noChip, on: on)
-            line(.noLayout, on: on)
-            line(.icons, on: on)
-            line(.menu, on: on)
+            line(.full, on: on, chip: chip)
+            line(.noChip, on: on, chip: chip)
+            line(.noLayout, on: on, chip: chip)
+            line(.icons, on: on, chip: chip)
+            line(.menu, on: on, chip: chip)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Self.height)
@@ -976,7 +1014,7 @@ struct AgentWindowBand: View {
         .coordinateSpace(.named(agentBandSpace))
     }
 
-    func line(_ t: Tier, on: Bool) -> some View {
+    func line(_ t: Tier, on: Bool, chip: String?) -> some View {
         HStack(spacing: sz(8)) {
             // Slots that give way are left out of the stack, never zero-width (a zero-width child still takes a spacing).
             if t == .full || t == .noChip {
@@ -984,6 +1022,10 @@ struct AgentWindowBand: View {
             }
             if t == .full {
                 Text(Self.chipWidest).font(Neon.font(11)).lineLimit(1).fixedSize().hidden().accessibilityHidden(true)
+                    // #900 B2 step 3: the words over the widest variant's room: the slot never changes a frame.
+                    .overlay(alignment: .leading) {
+                        if let chip { Text(chip).font(Neon.font(11)).foregroundStyle(Neon.textSecondary).lineLimit(1) }
+                    }
                     .modifier(AgentBandProbe(kind: "chip"))
             }
             Spacer(minLength: 0)
@@ -1001,7 +1043,7 @@ struct AgentWindowBand: View {
     /// shortcut: the band observes the window model only, so an unfocused pane's own change (gate on) shows at the
     /// model's next publish; upgrade when B2 lets a person see two panes.
     static func transcriptShown(_ m: AgentWindowModel) -> Bool {
-        m.paneFrames(in: m.paneArea).keys.contains { id in
+        m.shownPanes.contains { id in   // #900 B2 step 3: a zoomed-away pane is not drawn
             if id == m.layout.focused {
                 return m.newSession == nil && m.selectedRow?.session != nil && m.paneMode == .transcript
             }
@@ -1067,7 +1109,7 @@ struct AgentPaneArea: View {
     var body: some View {
         GeometryReader { proxy in
             let area = CGRect(origin: .zero, size: proxy.size)
-            let frames = model.paneFrames(in: area)
+            let frames = Self.drawn(model, in: area)
             let compact = frames.count > 1
             let twoLines = Set(frames.values.map { ($0.minY * 1000).rounded() }).count > 1
             let ids = model.layout.order.filter { frames[$0] != nil }
@@ -1095,6 +1137,19 @@ struct AgentPaneArea: View {
             .onAppear { feed(area) }
             .onChange(of: proxy.size) { _, size in feed(CGRect(origin: .zero, size: size)) }
         }
+    }
+
+    /// #900 B2 step 3 (7.4, R1.1): the frames this view draws (and the window hit-tests) in `area`: the model's tiling;
+    /// zoomed (the model's shownPanes is the zoomed pane alone while the tiling holds more), that pane over the whole
+    /// area and no other. The tiling itself is never changed, so an unzoom draws exactly the frames from before the zoom.
+    /// N900-b: a split while zoomed is measured against that tiling, not this rect: the layout unzooms first
+    /// (PaneLayout.split), so the result is the tiling with one more pane, not zoomed. shownPanes reads the model's
+    /// paneArea, which can be a pass behind a resize; under a zoom it is the zoomed pane for any area (too small shows
+    /// the focused pane, which is the zoomed one), so this holds on every pass.
+    @MainActor static func drawn(_ m: AgentWindowModel, in area: CGRect) -> [UUID: CGRect] {
+        let frames = m.paneFrames(in: area)
+        guard frames.count > 1, let z = m.layout.zoomed, m.shownPanes == [z] else { return frames }
+        return [z: area]
     }
 
     /// R1193-4: the area's size reaches the model, once per size.
@@ -1149,12 +1204,15 @@ struct AgentPaneDim: View {
     }
 }
 
-/// 13: with more than one pane shown, a pane is one accessibility container under `label`; one pane: the tree as before.
+/// 13: with more than one pane shown, a pane is one accessibility container under `label`; one pane: no name.
+/// R1196-a (#900 B2 step 3): one branch per window, chosen by the split gate (read at layout, fixed while a window is
+/// drawn), never by the pane count, so a pane's content keeps its identity (its @State, its NSViews: the composer, the
+/// terminal) across 1, 2, 1 panes and a zoom. Gate off (always one pane, no label): the content as before, no container.
 struct AgentPaneContainer: ViewModifier {
     let label: String?
     @ViewBuilder func body(content: Content) -> some View {
-        if let label {
-            content.accessibilityElement(children: .contain).accessibilityLabel(label)
+        if AgentPaneLayout.splitsEnabled {
+            content.accessibilityElement(children: .contain).accessibilityLabel(label ?? "")
         } else {
             content
         }
