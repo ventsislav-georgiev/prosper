@@ -1007,6 +1007,10 @@ tag from the now-released section and put it on the new top draft.
   Claude sessions that Prosper starts from the island, the New session window or the phone use it
   from their first turn, unless the command already names a model. Empty keeps Claude Code's own
   default; Restart and Resume keep each session's model. (#1228)
+- Untrusting an extension, or resetting a built-in one, now releases everything it was holding (a
+  keep-awake, timers, menu bar items, key rules, file watches), so for example resetting OpenLid
+  during a timed session no longer keeps the Mac awake; a reset extension that is on starts again
+  right away, as when it is switched off and on. (#1038)
 
 ## v2.174.0
 

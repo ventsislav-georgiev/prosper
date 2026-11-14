@@ -214,7 +214,7 @@ handler = "install_rules"
 
 | Event | Payload | When |
 | ----- | ------- | ---- |
-| `system.launch` | — | once, at startup |
+| `system.launch` | — | at startup, and again each time the extension is switched back on or a built-in one is reset |
 | `system.wake` | — | wake from sleep |
 | `system.sleep` | — | machine about to sleep |
 | `screen.locked` | `{ locked }` | screen locked / unlocked |
@@ -225,6 +225,8 @@ handler = "install_rules"
 | `lid.changed` | — | clamshell open/close |
 | `url.open` | `{ url }` | a link opened while Prosper is the default browser |
 | `timer.fired` | `{ id }` | a scheduled `host.timer` fired |
+
+A `system.launch` handler must be safe to run more than once: schedule timers by id, set key rules and menu items as a whole, and rebuild state from `host.prefs` rather than counting runs.
 
 A native watcher stays dormant until at least one **enabled** extension subscribes. [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/) subscribes to `system.launch`/`battery.changed`/`network.changed`/`system.wake`/`lid.changed`; [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/) to `app.activated`; [`url-dispatcher`](app/Sources/ProsperApp/Resources/extensions/url-dispatcher/) to `url.open` and (behind its `clean_copied` toggle) `clipboard.changed`; [`clipclear`](app/Sources/ProsperApp/Resources/extensions/clipclear/) to `system.launch`/`clipboard.changed`/`system.sleep`/`system.wake`/`screen.locked`; [`appupdates`](app/Sources/ProsperApp/Resources/extensions/appupdates/) to `system.launch` (to arm its durable poll timer).
 

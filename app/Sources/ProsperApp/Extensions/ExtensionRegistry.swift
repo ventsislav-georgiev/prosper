@@ -922,7 +922,7 @@ final class ExtensionRegistry: ObservableObject {
     /// shared tap swallows a matched chord in its hot path and only then dispatches
     /// to the (now gone) extension, so a lingering rule silently eats the keystroke
     /// system-wide until relaunch — e.g. pasteplain's opt-in ⌘V would stop pasting
-    /// anything at all. Shared by disable and uninstall so neither can drift.
+    /// anything at all. Shared by disable, uninstall, reset and untrust so none can drift.
     private func teardown(_ record: ExtensionRecord) {
         record.runtime = nil
         // #930: retire FIRST: an in-flight call that returns after this sweeps again,
@@ -947,10 +947,16 @@ final class ExtensionRegistry: ObservableObject {
         // key rules, and only its system.launch handler restores them (openlid's
         // "kept awake" state, pasteplain's rules). Replay that one-shot to this
         // extension alone; deliverEvent skips it unless it is live (trusted too).
-        if enabled && !wasEnabled {
-            for sub in eventSubscribers("system.launch") where sub.extensionID == id {
-                Task { await self.deliverEvent(extensionID: sub.extensionID, handler: sub.handler, payloadJSON: "{}") }
-            }
+        if enabled && !wasEnabled { replayLaunch(id: id) }
+    }
+
+    /// #930/#1038: re-run `id`'s system.launch handler after a teardown that leaves it live (re-enable, reset).
+    /// Each delivery is a main-actor Task that queues on the extension's lane, so it runs after a call still
+    /// running there and after that call's late release. A disabled or untrusted extension gets nothing.
+    private func replayLaunch(id: String) {
+        guard record(id: id)?.isLive == true else { return }
+        for sub in record(id: id)?.manifest.contributes?.allEvents ?? [] where sub.event == "system.launch" {
+            Task { await self.deliverEvent(extensionID: id, handler: sub.handler, payloadJSON: "{}") }
         }
     }
 
@@ -1188,10 +1194,12 @@ final class ExtensionRegistry: ObservableObject {
         let fm = FileManager.default
         if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
         try fm.copyItem(at: pristine, to: dest)
-        record.runtime = nil
-        asyncRuntimes.invalidate(id: id)
-        TimerScheduler.shared.cancelAll(extID: id)
+        // #1038: the old code's VMs, in-flight calls, timers and held resources go; settings, trust and
+        // the enabled state stay. After the copy, so a failed reset changes nothing.
+        teardown(record)
         discover()
+        // Like a re-enable: only the launch handler restores what the teardown released (key rules, menu items).
+        replayLaunch(id: id)
     }
 
     // MARK: - Disabled-id persistence
@@ -1258,9 +1266,8 @@ final class ExtensionRegistry: ObservableObject {
         // explicit re-grant.
         clearPrivilege(id: id)
         setPhoneApproved(false, id: id)
-        record.runtime = nil
-        asyncRuntimes.invalidate(id: id)
-        TimerScheduler.shared.cancelAll(extID: id)
+        // #1038: same teardown as disable, after trust is off: no VM is left to release what it held.
+        teardown(record)
         rebuildRoutes()
         objectWillChange.send()
         onEnabledChanged?()
