@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import XCTest
 @testable import ProsperApp
@@ -508,5 +509,160 @@ final class AgentPaneLayoutTests: XCTestCase {
         XCTAssertEqual(one.walk(rows, down: false), F.s("api"))
         XCTAssertEqual(PaneLayout.single(F.s("web")).walk(rows, down: true), nil)
         XCTAssertEqual(PaneLayout.single().walk([], down: true), nil)
+    }
+
+    /// #831 A2 (#580): a plain click swaps the focused pane between a session and the name's own record (the window's
+    /// follow-to-History and its row click do), in place; to the side, or for another pane, the shown pane takes focus.
+    func testAPlainShowSwapsTheFocusedPaneBetweenASessionAndItsOwnRecord() throws {
+        let one = PaneLayout.single(F.s("api"))
+        let toRecord = try one.show(F.h("api", seen: 5), placement: .focused, minimum: F.minimum, in: area, splitsEnabled: true).get()
+        XCTAssertEqual(toRecord.panes.map(\.target), [F.h("api", seen: 5)])
+        XCTAssertEqual(toRecord.order, one.order, "in place")
+        let back = try toRecord.show(F.s("api"), placement: .focused, minimum: F.minimum, in: area, splitsEnabled: false).get()
+        XCTAssertEqual(back.panes.map(\.target), [F.s("api")])
+        let gatedSide = try one.show(F.h("api"), placement: .side, minimum: F.minimum, in: area, splitsEnabled: false).get()
+        XCTAssertEqual(gatedSide.panes.map(\.target), [F.h("api")], "gate off: ⌥-click is a plain click (15.0)")
+        let side = try one.show(F.h("api"), placement: .side, minimum: F.minimum, in: area, splitsEnabled: true).get()
+        XCTAssertEqual(side.tree, one.tree, "to the side with the gate on: its pane takes focus, nothing else changes")
+        XCTAssertEqual(side.focused, one.focused)
+    }
+
+    // MARK: 12 Keys
+
+    typealias Ctx = PaneKeys.Context
+
+    @MainActor
+    func ev(_ code: UInt16, _ flags: NSEvent.ModifierFlags, _ chars: String, _ ign: String? = nil,
+            type: NSEvent.EventType = .keyDown) -> NSEvent? {
+        NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                         characters: chars, charactersIgnoringModifiers: ign ?? chars, isARepeat: false, keyCode: code)
+    }
+
+    @MainActor
+    func act(_ e: NSEvent?, _ c: Ctx = Ctx(responder: .other, keyFocus: .pane, panes: 2, splitsEnabled: true)) -> PaneAction? {
+        guard let e else { XCTFail("no event"); return nil }
+        return PaneKeys.action(for: e, context: c)
+    }
+
+    /// 12.1, the literal table: key code, modifiers, characters, characters ignoring modifiers, the action.
+    let table: [(UInt16, NSEvent.ModifierFlags, String, String, PaneAction)] = [
+        (2, [.command], "d", "d", .split(.columns)),
+        (2, [.command, .shift], "D", "d", .split(.rows)),
+        (123, [.command, .option], "", "", .focus(.left)),
+        (124, [.command, .option], "", "", .focus(.right)),
+        (125, [.command, .option], "", "", .focus(.down)),
+        (126, [.command, .option], "", "", .focus(.up)),
+        (30, [.command], "]", "]", .cycle(1)),
+        (33, [.command], "[", "[", .cycle(-1)),
+        (13, [.command], "w", "w", .closePane),
+        (36, [.command, .shift], "\r", "\r", .zoom),
+        (76, [.command, .shift], "\u{3}", "\u{3}", .zoom),
+        (18, [.command], "1", "1", .layout(1)),
+        (21, [.command], "4", "4", .layout(4)),
+        (25, [.command], "9", "9", .layout(9)),
+        (83, [.command], "1", "1", .layout(1)),
+        (48, [.control], "\t", "\t", .previousLayout),
+        (17, [.command, .shift], "T", "t", .allModes),
+        (38, [.command], "j", "j", .nextNeedsYou),
+        (1, [.control, .command], "\u{13}", "s", .toggleSidebar),
+    ]
+
+    @MainActor
+    func testEveryPaneKeyOfTheTableMapsToItsAction() {
+        for (code, mods, chars, ign, want) in table {
+            XCTAssertEqual(act(ev(code, mods, chars, ign)), want, "\(code) \(mods.rawValue)")
+            XCTAssertTrue(act(ev(code, mods, chars, ign, type: .keyUp)) == nil, "a key up is nothing")
+        }
+    }
+
+    /// Modifiers match exactly: the table's key under any of the 15 other Command/Option/Control/Shift sets is not its
+    /// action (⇧⌘D is a split, but rows), and ⌥⌘1 stays the verbosity key, never layout 1.
+    @MainActor
+    func testEveryOtherModifierSetIsNotTheKeysAction() {
+        let bits: [NSEvent.ModifierFlags] = [.command, .option, .control, .shift]
+        let sets = (0..<16).map { n in bits.indices.reduce(into: NSEvent.ModifierFlags()) { if n & (1 << $1) != 0 { $0.insert(bits[$1]) } } }
+        XCTAssertEqual(Set(sets.map(\.rawValue)).count, 16)
+        for (code, mods, chars, ign, want) in table {
+            for m in sets where m != mods {
+                XCTAssertNotEqual(act(ev(code, m, chars, ign)), want, "\(code) under \(m.rawValue)")
+            }
+        }
+        for (code, n) in [(UInt16(18), 1), (19, 2), (20, 3)] {
+            XCTAssertTrue(act(ev(code, [.command, .option], "\(n)", "\(n)")) == nil, "⌥⌘\(n) is not ⌘\(n)")
+            XCTAssertEqual(act(ev(code, [.command], "\(n)", "\(n)")), .layout(n))
+        }
+        let optionOne = ev(18, [.command, .option], "1", "1")
+        XCTAssertTrue(act(optionOne) == nil, "⌥⌘1 is not ⌘1")
+        XCTAssertTrue(optionOne.flatMap { AgentsNSWindow.verbosity(for: $0) } != nil, "it stays #821's verbosity key")
+        XCTAssertTrue(act(ev(18, [.command, .capsLock, .numericPad], "1", "1")) == .layout(1), "other flags are ignored")
+    }
+
+    /// 15.0: with the split gate off ⌘D and ⇧⌘D are not pane keys (they stay whatever they were before #831).
+    @MainActor
+    func testTheSplitGateTurnsTheSplitKeysOff() {
+        let off = Ctx(responder: .other, keyFocus: .pane, panes: 2, splitsEnabled: false)
+        XCTAssertTrue(act(ev(2, [.command], "d", "d"), off) == nil)
+        XCTAssertTrue(act(ev(2, [.command, .shift], "D", "d"), off) == nil)
+        XCTAssertEqual(act(ev(13, [.command], "w", "w"), off), .closePane, "only the split keys")
+    }
+
+    /// 12.1: with one pane ⌘W closes the window as before (nil here), and the pane-to-pane keys are nothing.
+    @MainActor
+    func testWithOnePaneThePaneToPaneKeysAreNothing() {
+        let one = Ctx(responder: .other, keyFocus: .pane, panes: 1, splitsEnabled: true)
+        let paneOnly: Set<UInt16> = [13, 30, 33, 123, 124, 125, 126, 36, 76]
+        for (code, mods, chars, ign, want) in table {
+            let got = act(ev(code, mods, chars, ign), one)
+            if paneOnly.contains(code) {
+                XCTAssertTrue(got == nil, "\(code)")
+            } else {
+                XCTAssertEqual(got, want, "\(code) does not need two panes")
+            }
+        }
+    }
+
+    /// 7.1 / 7.2: plain arrows and Return walk the sidebar only while it has the key focus and nothing that types does.
+    @MainActor
+    func testPlainArrowsAndReturnAreTheSidebarsOnlyWithItsFocusAndNoTypingResponder() {
+        let codes: [UInt16] = [126, 125, 123, 124, 36, 76]
+        for code in codes {
+            XCTAssertEqual(act(ev(code, [], ""), Ctx(responder: .other, keyFocus: .sidebar, panes: 2, splitsEnabled: false)),
+                           .sidebar, "\(code)")
+            for r in [AgentsNSWindow.ResponderKind.text, .terminal] {
+                XCTAssertTrue(act(ev(code, [], ""), Ctx(responder: r, keyFocus: .sidebar, panes: 2, splitsEnabled: false)) == nil)
+            }
+            XCTAssertTrue(act(ev(code, [], ""), Ctx(responder: .other, keyFocus: .pane, panes: 1, splitsEnabled: false)) == nil)
+        }
+        for code: UInt16 in [48, 53, 2, 49] {
+            XCTAssertTrue(act(ev(code, [], ""), Ctx(responder: .other, keyFocus: .sidebar, panes: 2, splitsEnabled: false)) == nil,
+                          "\(code): Tab, Esc and letters stay the responder's")
+        }
+    }
+
+    /// 14.1: ⌘↑/⌘↓ stay the window's (previous / next session, a text view's start and end) whatever the first
+    /// responder, and ⌘⌫ in a text view stays the text view's: none is a pane key.
+    @MainActor
+    func testCommandArrowsAndCommandDeleteAreNotPaneKeys() {
+        for r in [AgentsNSWindow.ResponderKind.text, .terminal, .other] {
+            for focus in [PaneKeys.KeyFocus.sidebar, .pane] {
+                let c = Ctx(responder: r, keyFocus: focus, panes: 3, splitsEnabled: true)
+                XCTAssertTrue(act(ev(126, [.command], ""), c) == nil, "⌘↑")
+                XCTAssertTrue(act(ev(125, [.command], ""), c) == nil, "⌘↓")
+                XCTAssertTrue(act(ev(51, [.command], "\u{7f}"), c) == nil, "⌘⌫")
+            }
+        }
+    }
+
+    /// #882 / #887: the letter decides, never the key position. Cyrillic: the Command-modified Latin `characters`;
+    /// "Dvorak - QWERTY ⌘": the QWERTY `characters`; plain Dvorak: the typed letter at whatever key it sits.
+    @MainActor
+    func testPaneLetterKeysFollowTheChordRule() {
+        XCTAssertEqual(act(ev(13, [.command], "w", "ц")), .closePane, "Cyrillic ⌘W")
+        XCTAssertEqual(act(ev(2, [.command], "d", "в")), .split(.columns), "Cyrillic ⌘D")
+        XCTAssertEqual(act(ev(1, [.control, .command], "\u{13}", "s")), .toggleSidebar, "⌃⌘S: the control character is skipped")
+        XCTAssertEqual(act(ev(38, [.command], "j", "h")), .nextNeedsYou, "Dvorak - QWERTY ⌘: the QWERTY letter")
+        XCTAssertEqual(act(ev(14, [.command], "d", "d")), .split(.columns), "plain Dvorak: D sits on QWERTY's E key")
+        XCTAssertTrue(act(ev(2, [.command], "e", "e")) == nil, "and QWERTY's D key types E there: not a split")
+        XCTAssertTrue(act(ev(13, [.command], ",", ",")) == nil, "Dvorak - QWERTY ⌘: ⌘, on the W key is Settings")
     }
 }

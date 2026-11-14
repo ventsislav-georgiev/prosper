@@ -1,10 +1,11 @@
-import CoreGraphics
+import AppKit
 import Foundation
 
 // #831 Phase A: split panes and saved layouts in the Agent Sessions window, the pure model (spec v3.1
-// §3, §4.1-4.1a, §7.1, §8.1-8.2, §15.0). Foundation and CoreGraphics only: no view, no window, no
-// defaults, no file access. Geometry is top-left origin, y growing down (SwiftUI's), in ·s points the
-// caller has already scaled with sz(). Nothing calls this yet; Phase A2 wires it into the window model.
+// §3, §4.1-4.1a, §7.1, §8.1-8.2, §12, §15.0). No view, no window, no defaults, no file access; AppKit only for
+// the NSEvent PaneKeys reads. Geometry is top-left origin, y growing down (SwiftUI's), in ·s points the
+// caller has already scaled with sz(). Phase A2 wires one in-memory layout into the window model; PaneKeys is
+// not routed before B2.
 
 // MARK: - 3.1 Types
 
@@ -107,6 +108,8 @@ enum PaneRefusal: Error, Equatable {
     /// Delete of the only layout (8.1).
     case lastLayout
     case noSuchLayout
+    /// A layout whose id the store already holds (QA 794 rider 2).
+    case layoutExists
 
     var notice: String? {
         switch self {
@@ -582,8 +585,15 @@ enum AgentPaneLayout {
     /// argument cannot read it. A test pins the two equal.
     static let recordSlack: TimeInterval = 65
 
-    /// 4.1a: the window model's [pane id: LastLive], kept for the process lifetime.
-    typealias LastLiveMap = [UUID: LastLive]
+    /// 4.1a, QA 669 INFO-N7: a pane of a layout. Pane ids are unique per layout only (a Duplicate may copy them), so
+    /// the lastLive map is keyed by the layout and the pane (#831 A2).
+    struct PaneSlot: Hashable {
+        var layout: UUID
+        var pane: UUID
+    }
+
+    /// 4.1a: the window model's [layout and pane: LastLive].
+    typealias LastLiveMap = [PaneSlot: LastLive]
 
     /// 4.1. Pure: reads no file, runs nothing. `lastLive` is this pane's entry in the map, nil when none.
     static func resolve(_ target: PaneTarget, sessions: [AgentSession], history: [DchHistoryRecord],
@@ -622,23 +632,34 @@ enum AgentPaneLayout {
         return true
     }
 
-    /// 4.1a: stamps every visible pane whose `.session` target is live in this publish, with the store
+    /// 4.1a: stamps every visible pane of `layout` whose `.session` target is live in this publish, with the store
     /// poll's time `at` (never a later refresh's).
-    static func stamp(_ map: LastLiveMap, panes: [Pane], visible: Set<UUID>, sessions: [AgentSession],
+    static func stamp(_ map: LastLiveMap, layout: UUID, panes: [Pane], visible: Set<UUID>, sessions: [AgentSession],
                       at: TimeInterval) -> LastLiveMap {
         var out = map
         for p in panes where visible.contains(p.id) {
             guard case let .session(dir, name)? = p.target,
                   let s = sessions.first(where: { $0.key == AgentSessionKey(dir: dir, name: name) }) else { continue }
-            out[p.id] = LastLive(at: at, claudeSessionID: s.claudeSessionID ?? "")
+            out[PaneSlot(layout: layout, pane: p.id)] = LastLive(at: at, claudeSessionID: s.claudeSessionID ?? "")
         }
         return out
     }
 
-    /// 4.1a: entries for pane ids in no layout are dropped (store load, layout or pane delete).
+    /// 4.1a: entries for panes in no layout are dropped (store load, layout or pane delete).
     static func pruned(_ map: LastLiveMap, keeping store: PaneLayoutStore) -> LastLiveMap {
-        let ids = Set(store.layouts.flatMap(\.order))
-        return map.filter { ids.contains($0.key) }
+        let slots = Set(store.layouts.flatMap { l in l.order.map { PaneSlot(layout: l.id, pane: $0) } })
+        return map.filter { slots.contains($0.key) }
+    }
+
+    /// 4.1a, QA 794 rider 3: `old` became `new`; a pane of it that closed or now has another target loses its entry
+    /// (a new target has no last sight). Other layouts' entries, and panes `old` does not hold, are kept.
+    static func retargeted(_ map: LastLiveMap, from old: PaneLayout, to new: PaneLayout) -> LastLiveMap {
+        let was = Dictionary(old.panes.map { ($0.id, $0.target) }, uniquingKeysWith: { a, _ in a })
+        let now = Dictionary(new.panes.map { ($0.id, $0.target) }, uniquingKeysWith: { a, _ in a })
+        return map.filter { slot, _ in
+            guard slot.layout == old.id, let before = was[slot.pane] else { return true }
+            return now[slot.pane] == .some(before)
+        }
     }
 }
 
@@ -652,8 +673,11 @@ extension PaneLayout {
     /// refused at the cap or below the minimum. With the split gate off `.side` acts as `.focused` (15.0).
     func show(_ target: PaneTarget, placement: Placement, minimum: CGSize, in area: CGRect,
               splitsEnabled: Bool) -> Result<PaneLayout, PaneRefusal> {
-        if let shown = pane(showing: target) { return focus(shown) }
-        guard placement == .side, splitsEnabled else { return replace(focused, target: target) }
+        let plain = placement == .focused || !splitsEnabled
+        // #580: a plain click may swap the focused pane between a session and the name's own record (#831 A2: the
+        // window's follow-to-History does); anywhere else, or to the side, the pane already showing it takes focus.
+        if let shown = pane(showing: target), shown != focused || !plain { return focus(shown) }
+        guard !plain else { return replace(focused, target: target) }
         var r = area
         if case let .tiled(f) = frames(in: area, minimum: minimum, splitsEnabled: true), let mine = f[focused] { r = mine }
         return split(axis: r.width >= r.height ? .columns : .rows, target: target, minimum: minimum, in: area)
@@ -708,9 +732,10 @@ struct PaneLayoutStore: Hashable {
         return .success(out)
     }
 
-    /// New / Duplicate: refused at 9 layouts.
+    /// New / Duplicate: refused at 9 layouts, and for a layout id the store already holds (QA 794 rider 2).
     func adding(_ layout: PaneLayout) -> Result<PaneLayoutStore, PaneRefusal> {
         guard layouts.count < Self.maxLayouts else { return .failure(.layoutCap) }
+        guard !layouts.contains(where: { $0.id == layout.id }) else { return .failure(.layoutExists) }
         var out = self
         out.layouts.append(layout)
         return .success(out)
@@ -743,16 +768,47 @@ struct PaneLayoutStore: Hashable {
     /// anything over this is corrupt, refused before any JSON work.
     static let maxBlobBytes = 1 << 20
 
+    /// QA 794 rider 1: the deepest `{`/`[` nesting decoded. A full layout sits about 10 deep (6 panes, every split on
+    /// one side) and repair cuts leaves past 6, so 64 leaves room for a blob it repairs; anything deeper is corrupt,
+    /// refused before the JSON parser or the tree decoder recurses into it.
+    static let maxNesting = 64
+
+    /// The deepest `{`/`[` nesting of `data` outside strings, in one iterative pass: no recursion, whatever the bytes.
+    static func nesting(_ data: Data) -> Int {
+        var depth = 0, deepest = 0, inString = false, escaped = false
+        for b in data {
+            if inString {
+                if escaped { escaped = false } else if b == 0x5C { escaped = true } else if b == 0x22 { inString = false }
+            } else if b == 0x22 {
+                inString = true
+            } else if b == 0x7B || b == 0x5B {
+                depth += 1
+                deepest = max(deepest, depth)
+            } else if b == 0x7D || b == 0x5D {
+                depth -= 1
+            }
+        }
+        return deepest
+    }
+
+    /// The blob's "v" is newer than this build's (8.2: kept in the backup key before this build writes). False for a
+    /// blob over the size or nesting cap: those are read as nothing, never parsed.
+    static func isNewer(_ data: Data) -> Bool {
+        guard data.count <= maxBlobBytes, nesting(data) <= maxNesting else { return false }
+        return ((try? JSONDecoder().decode(Probe.self, from: data))?.v ?? 0) > version
+    }
+
     /// Tolerant decode (8.2): unknown fields ignored, missing optional ones nil, every layout repaired (3.2),
-    /// never dropped. nil data is the default store; a corrupt or oversized blob is the default store with
-    /// `.corruptBlob`. `needsBackup`: the caller copies the raw bytes once to the backup key before its
+    /// never dropped. nil data is the default store; a corrupt, oversized or too deeply nested blob is the default
+    /// store with `.corruptBlob`. `needsBackup`: the caller copies the raw bytes once to the backup key before its
     /// first write. True for a blob whose "v" is newer than this build's, and for any non-empty blob that
-    /// does not decode (or is over `maxBlobBytes`), so one bad field never costs the user their layouts.
-    /// nil and empty data: false (nothing to keep).
+    /// does not decode (or is over `maxBlobBytes` or `maxNesting`), so one bad field never costs the user their
+    /// layouts. nil and empty data: false (nothing to keep).
     static func decode(_ data: Data?) -> (store: PaneLayoutStore, repairs: [PaneRepair], needsBackup: Bool) {
         guard let data else { return (makeDefault(), [], false) }
         if data.count > maxBlobBytes { return (makeDefault(), [.corruptBlob], true) }
-        let needsBackup = ((try? JSONDecoder().decode(Probe.self, from: data))?.v ?? 0) > version
+        if nesting(data) > maxNesting { return (makeDefault(), [.corruptBlob], true) }
+        let needsBackup = isNewer(data)
         guard let blob = try? JSONDecoder().decode(Blob.self, from: data) else {
             return (makeDefault(), [.corruptBlob], !data.isEmpty)
         }
@@ -783,5 +839,93 @@ struct PaneLayoutStore: Hashable {
         let e = JSONEncoder()
         e.outputFormatting = [.sortedKeys]
         return try e.encode(Blob(v: Self.version, active: active, mru: mru, layouts: layouts))
+    }
+}
+
+// MARK: - 12 Keys (pure; Phase B2 routes them)
+
+/// What a pane key asks for (12.1). Data only: the window acts on it.
+enum PaneAction: Equatable {
+    /// ⌘D: `.columns` (the new pane to the right); ⇧⌘D: `.rows` (below).
+    case split(PaneNode.Axis)
+    /// ⌥⌘arrows: the neighbour that way (a zoom moves with it, 7.4).
+    case focus(PaneLayout.Direction)
+    /// ⌘] (+1) and ⌘[ (-1): the next or previous pane in tree order, wrapping.
+    case cycle(Int)
+    /// ⌘W with more than one pane (with one, ⌘W closes the window as before #831).
+    case closePane
+    /// ⇧⌘Return.
+    case zoom
+    /// ⌘1…⌘9: layout N.
+    case layout(Int)
+    /// ⌃Tab: the MRU pair.
+    case previousLayout
+    /// ⇧⌘T: every pane Transcript or Terminal (Phase C).
+    case allModes
+    /// ⌘J: the next session that needs you.
+    case nextNeedsYou
+    /// ⌃⌘S.
+    case toggleSidebar
+    /// Plain arrows and Return for the sidebar walk (7.1).
+    case sidebar
+}
+
+/// 12: every new pane key through one pure function, shaped like `AgentsNSWindow.verbosity(for:)`. nil: not a pane
+/// key here, so the key behaves as before #831 (the window's own route, the first responder).
+enum PaneKeys {
+    /// 7.2: which side takes the plain keys (B1 replaces `sidebarFocused` with it).
+    enum KeyFocus { case sidebar, pane }
+
+    struct Context {
+        var responder: AgentsNSWindow.ResponderKind
+        var keyFocus: KeyFocus
+        /// The active layout's pane count.
+        var panes: Int
+        /// 15.0: the caller passes `AgentPaneLayout.splitsEnabled`.
+        var splitsEnabled: Bool
+    }
+
+    /// The letters follow #882's chord rule (`AgentsNSWindow.chordLetter`: the Command-modified Latin letter on a
+    /// Cyrillic or Greek layout, the typed letter on Dvorak, never the key position); digits and arrows go by key
+    /// code, as #1110's ⌘1…⌘9 and the verbosity keys do. Modifiers must match exactly, so ⌥⌘1 (verbosity) is never ⌘1.
+    @MainActor
+    static func action(for event: NSEvent, context c: Context) -> PaneAction? {
+        guard event.type == .keyDown else { return nil }
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let key = AgentsNSWindow.chordLetter(event)
+        let many = c.panes > 1
+        switch mods {
+        case [.command]:
+            if let n = AgentsNSWindow.digit(event.keyCode) { return .layout(n) }
+            switch key {
+            case "d": return c.splitsEnabled ? .split(.columns) : nil
+            case "w": return many ? .closePane : nil
+            case "]": return many ? .cycle(1) : nil
+            case "[": return many ? .cycle(-1) : nil
+            case "j": return .nextNeedsYou
+            default: return nil
+            }
+        case [.command, .shift]:
+            if event.keyCode == 36 || event.keyCode == 76 { return many ? .zoom : nil }
+            switch key {
+            case "d": return c.splitsEnabled ? .split(.rows) : nil
+            case "t": return .allModes
+            default: return nil
+            }
+        case [.command, .option]:
+            let d: [UInt16: PaneLayout.Direction] = [123: .left, 124: .right, 125: .down, 126: .up]
+            return many ? d[event.keyCode].map(PaneAction.focus) : nil
+        case [.control]:
+            return event.keyCode == 48 ? .previousLayout : nil
+        case [.control, .command]:
+            return key == "s" ? .toggleSidebar : nil
+        case []:
+            guard c.keyFocus == .sidebar, c.responder == .other, [126, 125, 123, 124, 36, 76].contains(event.keyCode) else {
+                return nil
+            }
+            return .sidebar
+        default:
+            return nil
+        }
     }
 }

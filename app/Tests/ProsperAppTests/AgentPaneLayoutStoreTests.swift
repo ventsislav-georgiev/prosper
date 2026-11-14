@@ -132,23 +132,71 @@ final class AgentPaneLayoutStoreTests: XCTestCase {
 
     // MARK: The lastLive map (4.1a)
 
+    typealias Slot = AgentPaneLayout.PaneSlot
+    let lid = UUID()
+
     func testStampingRecordsVisibleLiveSessionPanesAtThePollTime() {
         let p = [F.pane(F.s("api")), F.pane(F.s("docs")), F.pane(F.s("web")), F.pane(F.h("api")), F.pane()]
         let visible = Set([p[0].id, p[2].id, p[3].id, p[4].id])
         let old = LastLive(at: t - 100, claudeSessionID: "S0")
-        let map = AgentPaneLayout.stamp([p[1].id: old], panes: p, visible: visible,
+        let map = AgentPaneLayout.stamp([Slot(layout: lid, pane: p[1].id): old], layout: lid, panes: p, visible: visible,
                                         sessions: [session("api", sid: "S1"), session("docs", sid: "S2"), session("x")], at: t)
-        XCTAssertEqual(map, [p[0].id: LastLive(at: t, claudeSessionID: "S1"), p[1].id: old],
+        XCTAssertEqual(map, [Slot(layout: lid, pane: p[0].id): LastLive(at: t, claudeSessionID: "S1"),
+                             Slot(layout: lid, pane: p[1].id): old],
                        "hidden keeps its last stamp; not live, History and empty panes get none")
-        let noID = AgentPaneLayout.stamp([:], panes: [p[2]], visible: [p[2].id], sessions: [session("web")], at: t)
-        XCTAssertEqual(noID, [p[2].id: LastLive(at: t, claudeSessionID: "")])
+        let noID = AgentPaneLayout.stamp([:], layout: lid, panes: [p[2]], visible: [p[2].id], sessions: [session("web")], at: t)
+        XCTAssertEqual(noID, [Slot(layout: lid, pane: p[2].id): LastLive(at: t, claudeSessionID: "")])
     }
 
-    func testPruningDropsEntriesForPanesInNoLayout() {
+    func testPruningDropsEntriesForPanesInNoLayout() throws {
         let store = PaneLayoutStore.makeDefault()
-        let kept = store.layouts.first?.focused ?? UUID()
+        let l = try XCTUnwrap(store.layouts.first)
+        let kept = Slot(layout: l.id, pane: l.focused)
         let entry = LastLive(at: t, claudeSessionID: "")
-        XCTAssertEqual(AgentPaneLayout.pruned([kept: entry, UUID(): entry], keeping: store), [kept: entry])
+        XCTAssertEqual(AgentPaneLayout.pruned([kept: entry, Slot(layout: l.id, pane: UUID()): entry,
+                                               Slot(layout: UUID(), pane: l.focused): entry], keeping: store), [kept: entry],
+                       "the same pane id under a layout the store does not hold goes too")
+    }
+
+    /// QA 669 INFO-N7 (entry 898 item b): pane ids are unique per layout only, so the map is keyed by layout AND pane: a
+    /// layout that holds the same pane id (a Duplicate that copied it) neither reads nor overwrites the other's sight.
+    func testTheLastLiveMapKeysTheLayoutAndThePane() {
+        let pane = F.pane(F.s("api"))
+        let (a, b) = (UUID(), UUID())
+        var map = AgentPaneLayout.stamp([:], layout: a, panes: [pane], visible: [pane.id], sessions: [session("api", sid: "S1")],
+                                        at: t)
+        map = AgentPaneLayout.stamp(map, layout: b, panes: [pane], visible: [pane.id], sessions: [session("api", sid: "S2")],
+                                    at: t + 30)
+        XCTAssertEqual(map[Slot(layout: a, pane: pane.id)], LastLive(at: t, claudeSessionID: "S1"), "a's sight is a's")
+        XCTAssertEqual(map[Slot(layout: b, pane: pane.id)], LastLive(at: t + 30, claudeSessionID: "S2"))
+        XCTAssertEqual(map.count, 2)
+        // Retargeting the pane in one layout drops that layout's entry only.
+        let la = PaneLayout(id: a, name: nil, tree: .leaf(pane), focused: pane.id, zoomed: nil)
+        let moved = AgentPaneLayout.retargeted(map, from: la, to: (try? la.replace(pane.id, target: F.s("docs")).get()) ?? la)
+        XCTAssertEqual(moved, [Slot(layout: b, pane: pane.id): LastLive(at: t + 30, claudeSessionID: "S2")])
+    }
+
+    /// QA 794 rider 3 (4.1a): a pane given another target, or closed, loses its last live sight; the same target set
+    /// again (a History target's `seen` aside) keeps it, and so does every other pane.
+    func testRetargetingOrClosingAPaneClearsItsLastLiveSight() throws {
+        let (a, b) = (F.pane(F.s("api")), F.pane(F.s("docs")))
+        let l = F.layout(.split(.columns, ratio: 0.5, .leaf(a), .leaf(b)))
+        let sight = LastLive(at: t, claudeSessionID: "S1")
+        let map: AgentPaneLayout.LastLiveMap = [Slot(layout: l.id, pane: a.id): sight, Slot(layout: l.id, pane: b.id): sight,
+                                                Slot(layout: lid, pane: a.id): sight]
+        let same = try l.replace(a.id, target: F.s("api")).get()
+        XCTAssertEqual(AgentPaneLayout.retargeted(map, from: l, to: same), map, "the same target: kept")
+        let other = try l.replace(a.id, target: F.s("web")).get()
+        XCTAssertEqual(AgentPaneLayout.retargeted(map, from: l, to: other),
+                       [Slot(layout: l.id, pane: b.id): sight, Slot(layout: lid, pane: a.id): sight], "a new target has no last sight")
+        let ownRecord = try l.replace(a.id, target: F.h("api")).get()
+        XCTAssertTrue(AgentPaneLayout.retargeted(map, from: l, to: ownRecord)[Slot(layout: l.id, pane: a.id)] == nil,
+                      "the name's own record is another target (#580)")
+        let emptied = try l.replace(a.id, target: nil).get()
+        XCTAssertTrue(AgentPaneLayout.retargeted(map, from: l, to: emptied)[Slot(layout: l.id, pane: a.id)] == nil)
+        let closed = try l.close(b.id).get()
+        XCTAssertEqual(AgentPaneLayout.retargeted(map, from: l, to: closed),
+                       [Slot(layout: l.id, pane: a.id): sight, Slot(layout: lid, pane: a.id): sight], "closed: gone")
     }
 
     // MARK: The store (8.1, 8.2)
@@ -348,6 +396,11 @@ final class AgentPaneLayoutStoreTests: XCTestCase {
         for _ in 1..<9 { store = try store.adding(.single()).get() }
         XCTAssertEqual(store.layouts.count, 9)
         XCTAssertEqual(store.adding(.single()).refused, .layoutCap)
+        // QA 794 rider 2: a layout id the store holds is refused (checked under the cap too).
+        let eight = try store.deleting(store.active).get()
+        XCTAssertEqual(eight.adding(try XCTUnwrap(eight.layouts.last)).refused, .layoutExists)
+        XCTAssertEqual(eight.adding(PaneLayout.single(id: eight.active)).refused, .layoutExists, "by id, whatever its tree")
+        XCTAssertEqual(try eight.adding(.single()).get().layouts.count, 9)
         XCTAssertEqual(PaneRefusal.layoutCap.menuSuffix, "(9 layouts max)")
         let blob = try store.encode()
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: blob) as? [String: Any])
@@ -386,6 +439,39 @@ final class AgentPaneLayoutStoreTests: XCTestCase {
         let reloaded = PaneLayoutStore.decode(try store.encode()).store
         XCTAssertEqual(reloaded.mru, [b.id, c.id, a])
         XCTAssertEqual(reloaded.active, b.id)
+    }
+
+    /// QA 794 rider 1: a blob nested past `maxNesting` is corrupt before the parser or the tree decoder recurses into it:
+    /// the default store, the bytes kept, no stack overflow. Built as bytes, never as a recursive value.
+    func testADeeplyNestedBlobIsCorruptWithoutRecursing() {
+        func chain(_ splits: Int) -> Data {
+            var d = Data("{\"v\": 1, \"layouts\": [{\"id\": \"\(ids[2])\", \"focused\": \"\(ids[3])\", \"tree\": ".utf8)
+            let open = Data("{\"split\": \"rows\", \"first\": {\"pane\": \"\(ids[3])\"}, \"second\": ".utf8)
+            for _ in 0..<splits { d.append(open) }
+            d.append(Data("{\"pane\": \"\(ids[4])\"}".utf8))
+            d.append(Data(repeating: UInt8(ascii: "}"), count: splits))
+            d.append(Data("}]}".utf8))
+            return d
+        }
+        XCTAssertEqual(PaneLayoutStore.nesting(chain(5)), 9, "the root, layouts, the layout, 5 splits, the last leaf")
+        let kept = PaneLayoutStore.decode(chain(PaneLayoutStore.maxNesting - 4))   // nesting 64 exactly
+        XCTAssertEqual(PaneLayoutStore.nesting(chain(PaneLayoutStore.maxNesting - 4)), PaneLayoutStore.maxNesting)
+        XCTAssertFalse(kept.repairs.contains(.corruptBlob), "at the cap: decoded and repaired, \(kept.repairs)")
+        XCTAssertEqual(kept.store.layouts.first?.panes.count, 6, "cut to six")
+        let deep = PaneLayoutStore.decode(chain(PaneLayoutStore.maxNesting - 3))
+        XCTAssertEqual(deep.repairs, [.corruptBlob], "one level over")
+        XCTAssertTrue(deep.needsBackup)
+        XCTAssertEqual(deep.store.layouts.first?.panes.count, 1)
+        // As deep as the size cap allows with the shortest level: 1 MiB of nesting.
+        var huge = Data()
+        let level = Data("{\"second\":".utf8)
+        while huge.count + level.count <= PaneLayoutStore.maxBlobBytes - 2 { huge.append(level) }
+        huge.append(Data("{}".utf8))
+        XCTAssertLessThanOrEqual(huge.count, PaneLayoutStore.maxBlobBytes)
+        XCTAssertEqual(PaneLayoutStore.decode(huge).repairs, [.corruptBlob])
+        XCTAssertFalse(PaneLayoutStore.isNewer(huge), "never parsed for its version either")
+        // Braces inside strings do not count; an escaped quote does not end the string.
+        XCTAssertEqual(PaneLayoutStore.nesting(Data(#"{"a": "{{[[\"{{", "b": [1]}"#.utf8)), 2)
     }
 
     func testOddCharactersInADirAndNameRoundTrip() throws {

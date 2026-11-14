@@ -167,7 +167,22 @@ enum AgentSidebar {
 @MainActor
 final class AgentWindowModel: ObservableObject {
     @Published private(set) var sections: [AgentSidebar.Section] = []
+    /// #831 A2 (spec 3.5): a view of the focused pane's target by the RAW mapping (never through resolve in phase A),
+    /// written only by `layout`'s didSet. Stored so `$selection` publishes one change per change, as before.
     @Published private(set) var selection: AgentSidebar.RowID?
+    /// #831 A2: the window's one layout, in memory: the store is neither loaded nor saved before phase B1, so nothing
+    /// is restored on open and the first-row pick holds. Every selection change goes into its focused pane through
+    /// the browse rule (`show`, 7.1).
+    private(set) var layout = PaneLayout.single() {
+        didSet {
+            lastLive = AgentPaneLayout.retargeted(lastLive, from: oldValue, to: layout)
+            let s = Self.rowID(layout.panes.first { $0.id == layout.focused }?.target)
+            if s != selection { selection = s }
+        }
+    }
+    /// #831 A2 (4.1a): the panes' last live sights, stamped by `stampLastLive` in the store's publish sink only.
+    /// shortcut: it lives as long as this model (a window close drops it); B1 moves it to the window's owner (4.1a).
+    private(set) var lastLive: AgentPaneLayout.LastLiveMap = [:]
     /// False while the island is off (no store): the window says so.
     @Published private(set) var hasStore = false
     /// The only conversation model: rebound on each selection, stopped on deselect,
@@ -252,7 +267,7 @@ final class AgentWindowModel: ObservableObject {
     /// When the followed session's live row was first seen gone (the hold's start).
     private var heldSince: TimeInterval?
     /// dch writes a record each minute: a Stop or Kill's record has ended by then, with slack.
-    static let recordSlack: TimeInterval = 65
+    static let recordSlack: TimeInterval = AgentPaneLayout.recordSlack
     /// #829 G8: a record the window removed (its id): once its row is gone, the next History row
     /// is selected (else the previous, else none), never through nothing. A manual pick drops it.
     private(set) var removing: AgentSessionKey?
@@ -305,8 +320,36 @@ final class AgentWindowModel: ObservableObject {
             .sink { [weak self] v, details, actions in
                 MainActor.assumeIsolated {
                     self?.refresh(sessions: v.0, history: v.1, sort: v.2, pattern: v.3, details: details, actions: actions)
+                    self?.stampLastLive(v.0)   // after the refresh: a pane it just filled is stamped by this publish
                 }
             }
+    }
+
+    /// #831 A2 (4.1a, entry 898 item a): a store publish stamps the shown panes whose session it lists live, at the
+    /// publish's own time: the store has no poll time, and this sink runs as it publishes. The age tick never stamps
+    /// (its values are the last publish's, so its clock would date a sight it never made); nor does a hidden window.
+    private func stampLastLive(_ sessions: [AgentSession]) {
+        guard visible, !closed else { return }
+        // shortcut: with the split gate off only the focused pane draws (15.0); B1 takes the shown panes from frames.
+        lastLive = AgentPaneLayout.stamp(lastLive, layout: layout.id, panes: layout.panes, visible: [layout.focused],
+                                         sessions: sessions, at: now())
+    }
+
+    /// 3.5, phase A: the RAW mapping of a pane target to its sidebar row, never through resolve. A remote pane has none.
+    nonisolated static func rowID(_ t: PaneTarget?) -> AgentSidebar.RowID? {
+        switch t {
+        case let .session(dir, name)?: .live(AgentSessionKey(dir: dir, name: name))
+        case let .history(dir, id, _)?: .history(AgentSessionKey(dir: dir, name: id))
+        case .remote?, nil: nil
+        }
+    }
+
+    /// The pane target of a sidebar row; a History row's carries the record's lastSeen as `seen` (3.1).
+    private func target(_ id: AgentSidebar.RowID) -> PaneTarget {
+        switch id {
+        case let .live(k): .session(dir: k.dir, name: k.name)
+        case let .history(k): .history(dir: k.dir, id: k.name, seen: row(id)?.record?.lastSeen)
+        }
     }
 
     /// Rebuilds the sidebar from the store's current values (the age clock's tick).
@@ -407,8 +450,14 @@ final class AgentWindowModel: ObservableObject {
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true) {
         if manual { following = nil; removing = nil; pendingSpawn = nil; newSession = nil }
-        if selection != id {
-            selection = id
+        let was = selection
+        // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
+        // pick replaces its target (or swaps it for the name's own record, #580), so `selection` becomes `id`.
+        let next = id.map { layout.show(target($0), placement: .focused, minimum: PaneLayout.minimumPane, in: .zero,
+                                        splitsEnabled: AgentPaneLayout.splitsEnabled) }
+            ?? layout.replace(layout.focused, target: nil)
+        if case let .success(l) = next { layout = l }
+        if selection != was {
             confirming = nil
             refusal = nil
             renameEdit = nil

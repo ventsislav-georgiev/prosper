@@ -454,6 +454,14 @@ enum Preferences {
         static let agentWindowClipboardWrites = "agentWindowClipboardWrites"
         // #847: the folder the window's last new session started in (expanded path); per Mac, not in SyncedKeys.
         static let agentWindowNewSessionFolder = "agentWindowNewSessionFolder"
+        // #831 (spec 8.2): the window's pane layouts (PaneLayoutStore's blob); the bytes of a blob with a newer "v",
+        // kept before this build writes; the bytes of a blob that did not decode, kept the same way in a key of its own
+        // so neither case overwrites the other; the hidden sidebar (7.2). Per Mac (socket dirs and names are this
+        // Mac's), not in SyncedKeys.
+        static let agentWindowLayouts = "agentWindowLayouts"
+        static let agentWindowLayoutsBackup = "agentWindowLayoutsBackup"
+        static let agentWindowLayoutsCorrupt = "agentWindowLayoutsCorrupt"
+        static let agentWindowSidebarHidden = "agentWindowSidebarHidden"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1178,6 +1186,39 @@ enum Preferences {
     static var agentWindowNewSessionFolder: String? {
         get { defaults.string(forKey: Keys.agentWindowNewSessionFolder) }
         set { defaults.set(newValue, forKey: Keys.agentWindowNewSessionFolder) }
+    }
+
+    /// #831 (8.2): the Agent Sessions window's layouts. The window neither loads nor saves them before phase B1.
+    static var agentWindowLayouts: PaneLayoutStore {
+        get { agentWindowLayouts(in: defaults) }
+        set { setAgentWindowLayouts(newValue, in: defaults) }
+    }
+
+    /// The blob goes to decode() as read: decode refuses one over its size or nesting cap, and a corrupt one reads as
+    /// the default store. `d` is a seam for tests (a private suite); the app passes `defaults`.
+    static func agentWindowLayouts(in d: UserDefaults) -> PaneLayoutStore {
+        PaneLayoutStore.decode(d.data(forKey: Keys.agentWindowLayouts)).store
+    }
+
+    /// Writes the blob. Before that, a stored blob decode() asks to keep is copied: one with a newer "v" to
+    /// `agentWindowLayoutsBackup` (8.2), any other (corrupt, over a cap) to `agentWindowLayoutsCorrupt`, so a corrupt
+    /// blob never overwrites a newer version's copy, nor the other way round (entry 898 item c). Each key holds the
+    /// latest copy of its case. A copy keeps at most `PaneLayoutStore.maxBlobBytes` (1 MiB) bytes, the prefix; the rest
+    /// is dropped (no blob this build writes comes near it; a newer "v" over the cap reads as corrupt). A store that
+    /// cannot encode writes nothing.
+    static func setAgentWindowLayouts(_ store: PaneLayoutStore, in d: UserDefaults) {
+        guard let data = try? store.encode() else { return }
+        if let old = d.data(forKey: Keys.agentWindowLayouts), PaneLayoutStore.decode(old).needsBackup {
+            let key = PaneLayoutStore.isNewer(old) ? Keys.agentWindowLayoutsBackup : Keys.agentWindowLayoutsCorrupt
+            d.set(Data(old.prefix(PaneLayoutStore.maxBlobBytes)), forKey: key)
+        }
+        d.set(data, forKey: Keys.agentWindowLayouts)
+    }
+
+    /// #831 (7.2): the Agent Sessions window's sidebar hidden (⌃⌘S); unset reads as shown. Nothing reads it before B2.
+    static var agentWindowSidebarHidden: Bool {
+        get { defaults.bool(forKey: Keys.agentWindowSidebarHidden) }
+        set { defaults.set(newValue, forKey: Keys.agentWindowSidebarHidden) }
     }
 
     /// Agent Island's terminal raw value (`AgentTerminal`); unset or uninstalled
