@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// Spotlight-backed file finder (`f <name>`), the Alfred/Raycast "find a file and
 /// act on it" capability. Wraps **`NSMetadataQuery`** with a structured query —
@@ -69,11 +70,21 @@ enum FileSearchEngine {
         let kind: String      // localized kind (e.g. "PDF document")
         let size: Int64
         let modified: TimeInterval
+        let viewable: Bool    // the Text Viewer opens it (isViewable); the files extension offers Open in Prosper
 
         /// JSON object the Lua layer decodes (via host.json) into a list item.
         var jsonObject: [String: Any] {
             ["name": name, "path": path, "display": display,
-             "isDir": isDir, "kind": kind, "size": size, "modified": modified]
+             "isDir": isDir, "kind": kind, "size": size, "modified": modified, "viewable": viewable]
+        }
+    }
+
+    /// #1148: the viewer's own rule (TextViewerRouting.isDocument) over the hit's path, with every type of
+    /// Spotlight's tree for an extensionless name (order-free; identifiers UTType does not know are dropped).
+    /// Reads no file: `isDirectory` is given so URL does not stat the path. Never a folder (the viewer refuses one).
+    static func isViewable(path: String, isDir: Bool, contentTypeTree: [String]) -> Bool {
+        !isDir && TextViewerRouting.isDocument(URL(fileURLWithPath: path, isDirectory: false)) {
+            contentTypeTree.compactMap { UTType($0) }
         }
     }
 
@@ -249,7 +260,8 @@ enum FileSearchEngine {
         func candidate(home: String) -> Candidate {
             Candidate(hit: FileHit(
                 name: name, path: path, display: FileSearchEngine.abbreviate(path, home: home),
-                isDir: isDir, kind: kind, size: size, modified: modified))
+                isDir: isDir, kind: kind, size: size, modified: modified,
+                viewable: FileSearchEngine.isViewable(path: path, isDir: isDir, contentTypeTree: contentTypeTree)))
         }
     }
 
@@ -397,7 +409,8 @@ enum FileSpotlight {
         let isDir = tree.contains("public.folder")
         let hit = FileSearchEngine.FileHit(
             name: name, path: path, display: FileSearchEngine.abbreviate(path, home: home),
-            isDir: isDir, kind: kind, size: size, modified: modified)
+            isDir: isDir, kind: kind, size: size, modified: modified,
+            viewable: FileSearchEngine.isViewable(path: path, isDir: isDir, contentTypeTree: tree))
         return FileSearchEngine.Candidate(hit: hit)
     }
 }

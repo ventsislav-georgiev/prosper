@@ -757,6 +757,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: Command-1 to Command-9 jump to the session at that place in the sidebar and put
   the keyboard in it (its terminal or its message box), from anywhere in the window; each of the
   first nine live sessions shows its ⌘ number as a chip, as in Clipboard History. (#1110)
+- File search now offers "Open in Prosper" on every file the Text Viewer can show (logs, source code
+  and other plain-text files), not only Markdown and .txt files. (#1148)
 
 ## v2.174.0
 

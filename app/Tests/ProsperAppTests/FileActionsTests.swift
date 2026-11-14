@@ -62,7 +62,7 @@ final class FileActionsTests: XCTestCase {
 }
 
 /// #1106 (design #1105 D4): the shipped `files` extension offers "Open in Prosper" (file.view) only
-/// on Markdown and plain-text rows, after Reveal, and the native action opens only a text document.
+/// on rows the search marked viewable (#1148), after Reveal, and the native action opens only a text document.
 @MainActor
 final class FileActionsViewRowTests: XCTestCase {
 
@@ -94,15 +94,17 @@ final class FileActionsViewRowTests: XCTestCase {
     }
 
     func testViewIsOfferedOnlyOnDocumentRows() async throws {
-        let paths: [(String, Bool)] = [
-            ("/Users/example/notes.md", false), ("/Users/example/README.MD", false), ("/Users/example/todo.txt", false),
-            ("/Users/example/a.b.markdown", false), ("/Users/example/page.html", false), ("/Users/example/photo.png", false),
-            ("/Users/example/report.pdf", false), ("/Users/example/Makefile", false), ("/Users/example/.md", false),
-            ("/Users/example/docs.md", true),
+        // (path, isDir, viewable): #1148 the flag comes from the search (FileSearchViewableTests pins the rule).
+        let paths: [(String, Bool, Bool)] = [
+            ("/Users/example/notes.md", false, true), ("/Users/example/README.MD", false, true),
+            ("/Users/example/todo.txt", false, true), ("/Users/example/a.b.markdown", false, true),
+            ("/Users/example/page.html", false, false), ("/Users/example/photo.png", false, false),
+            ("/Users/example/report.pdf", false, false), ("/Users/example/Makefile", false, false),
+            ("/Users/example/.md", false, false), ("/Users/example/docs.md", true, false),
         ]
         let svc = RowServices()
         let rows = paths.map { ["name": ($0.0 as NSString).lastPathComponent, "path": $0.0, "display": $0.0,
-                                "isDir": $0.1, "kind": "Document"] as [String: Any] }
+                                "isDir": $0.1, "kind": "Document", "viewable": $0.2] as [String: Any] }
         svc.rows = try XCTUnwrap(String(data: JSONSerialization.data(withJSONObject: rows), encoding: .utf8))
         let registry = ExtensionRegistry(systemDir: extensionsDir(), userDir: tempDir("tv-files-ext"),
                                          defaults: scratchDefaults("tv-files"), services: svc)
@@ -135,7 +137,7 @@ final class FileActionsViewRowTests: XCTestCase {
         XCTAssertEqual(section.controls?.first?.title, "Open Markdown and text files from Finder's Open With menu")
     }
 
-    /// Every extension the Lua row treats as viewable is a document to the native router.
+    /// The Markdown and plain-text extensions (any case) are documents to the native rule, which since #1148 also sets the search hit's viewable flag.
     func testLuaViewableExtensionsAreDocuments() {
         for ext in ["md", "markdown", "mdown", "mkd", "txt", "text", "MD"] {
             XCTAssertTrue(TextViewerRouting.isDocument(URL(fileURLWithPath: "/Users/example/a.\(ext)")), ext)

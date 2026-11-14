@@ -14,14 +14,22 @@ enum TextViewerRouting {
     /// that the file exists or is regular; the viewer refuses a missing file, a directory or a FIFO
     /// itself, so a text-typed file URL never falls through to a browser.
     nonisolated static func isDocument(_ url: URL) -> Bool {
+        isDocument(url) { [(try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType].compactMap { $0 } }
+    }
+
+    /// The same rule with the types of an extensionless name from the caller: the one type a file read
+    /// gives above, every type of the Spotlight tree a search hit already holds for FileSearchEngine.isViewable
+    /// (#1148), which reads nothing. Order-free: an HTML type anywhere refuses, then a Markdown or plain-text
+    /// type anywhere accepts, no type refuses. A name with an extension decides by that extension's one type.
+    nonisolated static func isDocument(_ url: URL, typesWithoutExtension: () -> [UTType]) -> Bool {
         guard url.isFileURL else { return false }
         let ext = url.pathExtension.lowercased()
         if markdownExtensions.contains(ext) { return true }
-        let type = ext.isEmpty ? (try? url.resourceValues(forKeys: [.contentTypeKey]))?.contentType
-                               : UTType(filenameExtension: ext)
-        guard let type, !type.conforms(to: .html) else { return false }   // the .html link case stays the router's
-        if let md = UTType(markdownTypeID), type.conforms(to: md) { return true }
-        return type.conforms(to: .plainText)
+        let types = ext.isEmpty ? typesWithoutExtension() : [UTType(filenameExtension: ext)].compactMap { $0 }
+        // the .html link case stays the router's
+        guard !types.isEmpty, !types.contains(where: { $0.conforms(to: .html) }) else { return false }
+        let md = UTType(markdownTypeID)
+        return types.contains { t in md.map { t.conforms(to: $0) } == true || t.conforms(to: .plainText) }
     }
 
     /// True when `url` is shown as Markdown (P1b renders it; P1a shows its source).

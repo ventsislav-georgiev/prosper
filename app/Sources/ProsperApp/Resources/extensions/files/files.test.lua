@@ -27,6 +27,23 @@ h.eq(out.items[1].title, "report.pdf", "row title is the file name")
 h.eq(out.items[1].launch, "/Users/x/Docs/report.pdf", "path rides along for actions")
 h.eq(out.items[1].actions[1].id, "file.open", "primary action is Open")
 
+-- ── #1148: Open in Prosper follows the hit's viewable flag, not the name ─────
+local function has_view(item)
+    for _, a in ipairs(item.actions) do
+        if a.id == "file.view" then return true end
+    end
+    return false
+end
+out = run("f any", {
+    { name = "server.log", path = "/Users/example/server.log", viewable = true },
+    { name = "notes.md", path = "/Users/example/notes.md", viewable = false },
+    { name = "todo.txt", path = "/Users/example/todo.txt" },  -- no field: an older host
+})
+h.eq(has_view(out.items[1]), true, "viewable hit offers Open in Prosper")
+h.eq(out.items[1].actions[3].id, "file.view", "after Open and Reveal")
+h.eq(has_view(out.items[2]), false, "viewable=false: no Open in Prosper, whatever the name")
+h.eq(has_view(out.items[3]), false, "absent field: no Open in Prosper")
+
 -- ext: token strips a leading dot
 _, env = run("f ext:.png logo", hits)
 h.eq(env.fileQuery.ext[1], "png", "ext: leading dot stripped")

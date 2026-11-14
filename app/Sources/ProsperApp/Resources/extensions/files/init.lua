@@ -46,32 +46,18 @@ local function parse(q)
     }
 end
 
--- #1106: extensions of the Markdown and plain-text files the text viewer opens
--- (a subset of TextViewerRouting.isDocument, which a Swift test checks).
-local VIEWABLE = {
-    md = true, markdown = true, mdown = true, mkd = true, txt = true, text = true,
-}
-
--- True for a file (not a folder) whose extension is viewable; a bare dotfile
--- (".md") has no extension. The extension is lowercased by byte range, never
--- through a locale-dependent class or string.lower.
-local function is_document(f)
-    if f.isDir then return false end
-    local ext = (f.path or ""):match("[^/]%.([^./]+)$")
-    if ext == nil then return false end
-    ext = ext:gsub("[A-Z]", function(c) return string.char(c:byte() + 32) end)
-    return VIEWABLE[ext] == true
-end
-
 -- The actions a file row offers, in priority order. The first is the primary
 -- (Enter); the runner maps the rest to ⌘⏎ / ⌥⏎ and the ⌘K actions panel.
--- "Open in Prosper" (file.view) comes after Reveal, on text documents only.
+-- "Open in Prosper" (file.view) comes after Reveal, only on a hit the native
+-- search marked viewable (#1148: the Text Viewer's own rule over the name and
+-- Spotlight's content type). A hit without the field (an older or third-party
+-- host) gets no such action.
 local function file_actions(f)
     local actions = {
         { id = "file.open",       title = "Open",            icon = "arrow.up.forward.app" },
         { id = "file.reveal",     title = "Reveal in Finder", icon = "folder" },
     }
-    if is_document(f) then
+    if f.viewable == true then
         actions[#actions + 1] = { id = "file.view", title = "Open in Prosper", icon = "doc.text" }
     end
     for _, a in ipairs({

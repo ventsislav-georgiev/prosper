@@ -10,7 +10,7 @@ final class FileSearchEngineTests: XCTestCase {
     private func hit(_ name: String, _ path: String, isDir: Bool = false,
                      modified: TimeInterval = 0) -> FileSearchEngine.FileHit {
         FileSearchEngine.FileHit(name: name, path: path, display: path, isDir: isDir,
-                                 kind: "File", size: 0, modified: modified)
+                                 kind: "File", size: 0, modified: modified, viewable: false)
     }
 
     private func cand(_ name: String, _ path: String, modified: TimeInterval = 0)

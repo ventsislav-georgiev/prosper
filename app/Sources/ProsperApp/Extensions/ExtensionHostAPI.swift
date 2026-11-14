@@ -1761,7 +1761,7 @@ struct ExtensionHost {
 
     -- File finder (Spotlight). search{…} takes an options table — name plus
     -- optional kind/ext/in/content/limit filters — and returns a Lua array of
-    -- { name, path, display, isDir, kind, size, modified } hits ({} when nothing
+    -- { name, path, display, isDir, kind, size, modified, viewable } hits ({} when nothing
     -- matches). act(id, path) runs a built-in file operation (open / reveal /
     -- quicklook / copyPath / copyFile / openWith / enclosingFolder / trash).
     -- Powers the `files` system extension.
