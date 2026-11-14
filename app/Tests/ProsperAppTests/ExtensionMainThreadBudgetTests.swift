@@ -564,4 +564,151 @@ final class ExtensionMainThreadBudgetTests: XCTestCase {
                               "one keystroke over calc and units no longer fits one command budget")
         }
     }
+
+    // MARK: - #1176: one pass over several declaring extensions (resolvePlaceholder, EventTapHost.refresh)
+
+    private static let passName = "passph"
+    /// Extensions that decline before the one that answers.
+    private static let decliners = 3
+    /// A decliner's work: just under the call budget, so the row tells "each step keeps the whole call budget"
+    /// apart from any budget shared by the pass (a shared one would cut a later decliner).
+    private static let nearlyCall = Int(ExtensionRegistry.MainThreadBudget.call) - 20_000
+
+    /// A user folder of `decliners` extensions that declare `passph` and event_taps and decline after `work` empty
+    /// loop iterations (`pass_ran` counts the steps that ran to their end), then one that answers. Folder names sort
+    /// in records order, so a pass visits every decliner before the answer.
+    private func makePassRegistry(_ label: String, work: Int) throws
+        -> (registry: ExtensionRegistry, decliners: [String], answerer: String) {
+        let user = tempDir(label).appendingPathComponent("user")
+        let decliners = (1...Self.decliners).map { "com.example.pass\($0)" }
+        let answerer = "com.example.pass9"
+        let decline = """
+        local ran = 0
+        local function spin(n) for i = 1, n do end end
+        function pass_ph(raw) spin(\(work)); ran = ran + 1; return nil end
+        function hs_eventtap_probe() spin(\(work)); ran = ran + 1; return "" end
+        function pass_ran() return tostring(ran) end
+        """
+        let answer = """
+        function pass_ph(raw) return "ph" end
+        function hs_eventtap_probe() return "keyDown" end
+        """
+        for id in decliners + [answerer] {
+            let dir = user.appendingPathComponent(id)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let manifest = """
+            [extension]
+            id = "\(id)"
+            name = "\(id.split(separator: ".").last ?? "pass")"
+            title = "Pass"
+            description = "A test extension"
+            version = "1.0.0"
+            author = "tester"
+
+            [extension.host]
+            min_version = "2.0.0"
+            api_level = 1
+            event_taps = true
+
+            [extension.entry]
+            main = "init.lua"
+
+            [[contributes.placeholders]]
+            name = "\(Self.passName)"
+            handler = "pass_ph"
+            """
+            try manifest.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+            try (id == answerer ? answer : decline)
+                .write(to: dir.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+        }
+        let services = BudgetServices()
+        let registry = ExtensionRegistry(systemDir: nil, userDir: user, hostVersion: "2.0.0",
+                                         defaults: scratchDefaults("pass-budget"), services: services)
+        services.registry = registry
+        registry.discover()
+        for id in decliners + [answerer] { try registry.trust(id: id) }
+        XCTAssertEqual(registry.eventTapExtensionIDs(), decliners + [answerer], "the pass visits every decliner first")
+        return (registry, decliners, answerer)
+    }
+
+    private func ran(_ registry: ExtensionRegistry, _ id: String) -> String? {
+        registry.callExtensionString(extensionID: id, function: "pass_ran", arg: "")
+    }
+
+    /// Instructions one step of the pass runs: `function` of `id` in the registry's own VM, counted by bisection.
+    private func stepCount(_ registry: ExtensionRegistry, _ id: String, _ function: String) throws -> Int {
+        let record = try XCTUnwrap(registry.record(id: id))
+        let rt = try record.runtime ?? registry.activate(record)
+        let measured = try XCTUnwrap(minimumBudget { _ = try rt.callGlobal(function, [Self.passName], budget: $0) },
+                                     "\(id).\(function) spends the default budget")
+        XCTAssertTrue(measured.error == nil, "\(id).\(function) ends with \(measured.error ?? "")")
+        return measured.count
+    }
+
+    /// After a pass that answered: every decliner ran to its end, and the pass costs the sum of its steps, under
+    /// one call budget per declaring extension (the bound stated at resolvePlaceholder and EventTapHost.refresh).
+    private func assertPassCounts(_ registry: ExtensionRegistry, _ decliners: [String], _ answerer: String,
+                                  function: String, label: String) throws {
+        let call = Int(ExtensionRegistry.MainThreadBudget.call), load = Int(ExtensionRegistry.MainThreadBudget.load)
+        for id in decliners {
+            XCTAssertEqual(ran(registry, id), "1", "\(id): a step late in the pass must keep the whole call budget")
+        }
+        var steps: [Int] = []
+        for id in decliners + [answerer] { steps.append(try stepCount(registry, id, function)) }
+        let record = try XCTUnwrap(registry.record(id: answerer))
+        let entry = try XCTUnwrap(minimumBudget { _ = try self.runEntry(record, budget: $0) })
+        let boot = try XCTUnwrap(minimumBudget { _ = try self.installed(record, budget: $0) })
+        let pass = steps.reduce(0, +)
+        let firstPass = pass + steps.count * (entry.count + 2 * boot.count)
+        print("PASS1176 \(label): \(decliners.count) decliners + 1 answer, steps \(steps), pass \(pass);"
+              + " entry chunk \(entry.count), host bootstrap \(boot.count), first pass with every activation \(firstPass)")
+        XCTAssertEqual(steps.count, decliners.count + 1)
+        for step in steps.dropLast() {
+            XCTAssertGreaterThanOrEqual(step, Self.nearlyCall)
+            XCTAssertLessThan(step, call, "a declining step fits the call budget")
+        }
+        XCTAssertGreaterThan(pass, decliners.count * Self.nearlyCall, "the pass is the sum of whole steps")
+        XCTAssertLessThanOrEqual(pass, steps.count * call, "the stated bound: one call budget per declaring extension")
+        XCTAssertLessThanOrEqual(firstPass, steps.count * (call + 3 * load),
+                                   "activation runs exactly three load-budgeted chunks: host bootstrap, UI bootstrap, entry chunk")
+    }
+
+    func testPlaceholderPassOverDecliningExtensionsCountsInstructions() throws {
+        let (registry, decliners, answerer) = try makePassRegistry("pass-ph", work: Self.nearlyCall)
+        XCTAssertEqual(registry.resolvePlaceholder(name: Self.passName, raw: Self.passName), "ph",
+                       "the extension after \(decliners.count) near-budget decliners still answers")
+        try assertPassCounts(registry, decliners, answerer, function: "pass_ph", label: "placeholder")
+    }
+
+    func testEventTapRefreshPassOverDecliningExtensionsCountsInstructions() throws {
+        let (registry, decliners, answerer) = try makePassRegistry("pass-tap", work: Self.nearlyCall)
+        withTapHost(registry) { host in
+            host.refresh()
+            XCTAssertTrue(host.wantsKeyDown, "the extension after the near-budget decliners turns the keyDown gate on")
+        }
+        try assertPassCounts(registry, decliners, answerer, function: "hs_eventtap_probe", label: "event-tap refresh")
+    }
+
+    /// A runaway in every declining step is cut at its own call budget (exactly `call` instructions: the hook's
+    /// count) and the pass goes on to the extension that answers. `spin` ends on its own under the default budget.
+    func testPlaceholderPassCutsEachRunawayStepAtTheCallBudget() throws {
+        assertBetween(ExtensionRegistry.MainThreadBudget.call)
+        let (registry, decliners, _) = try makePassRegistry("pass-ph-runaway", work: Self.spin)
+        XCTAssertEqual(registry.resolvePlaceholder(name: Self.passName, raw: Self.passName), "ph")
+        for id in decliners {
+            XCTAssertEqual(ran(registry, id), "0", "\(id): a runaway step must be cut at the call budget")
+        }
+    }
+
+    func testEventTapRefreshPassCutsEachRunawayProbeAtTheCallBudget() throws {
+        assertBetween(ExtensionRegistry.MainThreadBudget.call)
+        let (registry, decliners, _) = try makePassRegistry("pass-tap-runaway", work: Self.spin)
+        withTapHost(registry) { host in
+            host.refresh()
+            XCTAssertTrue(host.wantsKeyDown, "the extension after the runaways still turns the keyDown gate on")
+        }
+        for id in decliners {
+            XCTAssertEqual(ran(registry, id), "0", "\(id): a runaway probe must be cut at the call budget")
+        }
+    }
 }

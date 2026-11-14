@@ -612,6 +612,8 @@ final class ExtensionRegistry: ObservableObject {
     /// or nil when no enabled extension contributes `name`. Used by the snippet
     /// engine; resolution happens only when a snippet actually uses the placeholder
     /// (never on the per-keystroke hot path).
+    /// #1176, the bound of one lookup: each handler runs on its own call budget (activation first: three load budgets, one each for the
+    /// two host bootstraps and the entry chunk, a fixed count), so a lookup costs at most 3 x load + call per live extension that declares `name`, wherever it sits in the order.
     func resolvePlaceholder(name: String, raw: String) -> String? {
         let lower = name.lowercased()
         for record in records where record.isLive {

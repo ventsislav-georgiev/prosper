@@ -69,6 +69,11 @@ final class EventTapHost {
     /// never hold two. If two extensions ever need *simultaneous* taps, multiplex the
     /// dispatch loop here over all `eventTapExtensionIDs()`; today only the
     /// hammerspoon-compat shim opts in, so one is enough.
+    ///
+    /// #1176, the bound of one pass: each probe runs on its own call budget (activation first: three load budgets, one each for the
+    /// two host bootstraps and the entry chunk, a fixed count), so a pass costs at most 3 x load + call per live
+    /// extension that declares event_taps. No budget is shared by the pass:
+    /// sharing would cut a whole Hammerspoon config's probe once a second declaring extension is installed.
     func refresh() {
         guard let reg = registry else { return }
         let wasActive = isActive
