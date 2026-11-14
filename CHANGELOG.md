@@ -748,13 +748,17 @@ tag from the now-released section and put it on the new top draft.
   config is applied and from hotkeys, timers and other callbacks. (#1158)
 - Hammerspoon Compat: an app object kept by a hotkey, timer, URL or app-watcher callback that was
   stopped for running too long can no longer hide an app from a later run of the config (#1158)
-- Ships dch 1.64.0 (was 1.62.0). In the X-ray view the reader reads on into the next and the
+- Ships dch 1.65.0 (was 1.62.0). In the X-ray view the reader reads on into the next and the
   previous prompt, and `]` and `[` step between prompts. The tabs are Prompts (Commands for a shell
   session), Responses (what the agent answered at the end of each turn, newest first), Refs (the
   refs on the screen right now come first) and Search (type a word or phrase to find where the
   session said it). `dch --xray <session> --search <text> --json` does the same from a script. On
   macOS a stopped session is no longer taken for a dead one and started over, and a stop while
-  `dch -a` starts no longer leaves the shell on a raw terminal.
+  `dch -a` starts no longer leaves the shell on a raw terminal. With 1.65.0 the session list on
+  macOS stays fast after sessions that were killed hard or crashed (the betas that shipped 1.63.0
+  and 1.64.0 slowed down there), a command typed while the one before it still runs gets its own
+  chapter in X-ray, opening a chapter of a long session is much faster, and a second Claude started
+  in one session is seen by X-ray. (#1167)
 - Agent Sessions: Command-1 to Command-9 jump to the session at that place in the sidebar and put
   the keyboard in it (its terminal or its message box), from anywhere in the window; each of the
   first nine live sessions shows its ⌘ number as a chip, as in Clipboard History. (#1110)
