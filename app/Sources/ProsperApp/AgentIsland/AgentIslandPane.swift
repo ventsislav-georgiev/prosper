@@ -46,6 +46,17 @@ struct AgentIslandPane: View {
         return nil
     }
 
+    private func aliasesMenu(_ title: String) -> some View {
+        Menu(title) {
+            ForEach(Self.modelAliases, id: \.self) { a in Button(a) { model = a; saveModel() } }
+        }
+        .controlSize(Self.aliasesControlSize(ThemeRuntime.scale))
+        .fixedSize()
+        .accessibilityLabel("Model aliases")
+    }
+    /// The Menu's size class per UI scale (regular is 24 high: right at 1.0 only; small, 20 high, stretched the field at 0.85: ticket 1 of #1237).
+    static func aliasesControlSize(_ scale: CGFloat) -> ControlSize { scale < 1 ? .mini : .regular }
+
     private func saveModel() {
         modelRefusal = Self.commitModel(model)
         if modelRefusal == nil { model = Preferences.agentIslandDefaultModel; modelSaved = model }
@@ -122,11 +133,13 @@ struct AgentIslandPane: View {
                         .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(200))
                         .accessibilityLabel("Default model")
                         .onSubmit { saveModel() }
-                    Menu("Aliases") {
-                        ForEach(Self.modelAliases, id: \.self) { a in Button(a) { model = a; saveModel() } }
+                    // #1237: a Menu ignores the UI scale (24 high at every scale): its control size follows it, so it is
+                    // never taller than the field; fixedSize plus ViewThatFits is the house shape (SettingsWindow's
+                    // ActivityControls), the short form only where "Aliases" does not fit. Both run on the main actor.
+                    ViewThatFits(in: .horizontal) {
+                        aliasesMenu("Aliases")
+                        aliasesMenu("...")
                     }
-                    .fixedSize()
-                    .accessibilityLabel("Model aliases")
                 }
             }
         }

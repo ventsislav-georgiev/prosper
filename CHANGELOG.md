@@ -1029,6 +1029,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent settings: the config consent sheet shows the extension on its own line, its button says what
   it does (Apply, Remove or Repair), and it no longer lists a backup for a file that does not exist
   yet. (#1235)
+- Agent Island Default model: a command that resumes or continues an existing Claude conversation
+  keeps the model it ran on instead of getting the Default model, and the Aliases menu in the
+  setting follows the interface size. (#1237)
 
 ## v2.174.0
 

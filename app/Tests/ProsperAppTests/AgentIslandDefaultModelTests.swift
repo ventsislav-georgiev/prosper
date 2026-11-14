@@ -28,6 +28,8 @@ final class AgentIslandDefaultModelTests: XCTestCase {
             (["env", "-i", "claude"], ["env", "-i", "claude", "--model", "opus"], "env's own flag (claudeRuns)"),
             (["claude", "--model", "sonnet"], ["claude", "--model", "sonnet"], "a typed --model wins"),
             (["claude", "--chrome", "--model=sonnet"], ["claude", "--chrome", "--model=sonnet"], "a typed --model= wins"),
+            // Item 1 of #1237 closed with a fact: Claude Code's public CLI reference (code.claude.com/docs/en/cli-reference,
+            // read 2026-11-14) documents `--model` only, no short form (the documented short forms are -c -n -p -r -v -w).
             (["claude", "-m", "sonnet"], ["claude", "--model", "opus", "-m", "sonnet"],
              "the flag table has no short form for --model: -m is not a model flag"),
             (["claude", "--agent", "--model"], ["claude", "--model", "opus", "--agent", "--model"],
@@ -47,6 +49,39 @@ final class AgentIslandDefaultModelTests: XCTestCase {
             (["claude", "mcp", "list"], ["claude", "mcp", "list"], "a claude command is not a session"),
         ]
         for r in rows { XCTAssertEqual(AgentIsland.withModel(r.argv, model: "opus"), r.out, r.why) }
+    }
+
+    /// #1237 (N1228-a): a command that continues an existing conversation keeps the model it ran on (literal argv values).
+    func testWithModelSkipsACommandThatContinuesAnExistingConversation() {
+        let skips: [[String]] = [
+            ["claude", "--resume"], ["claude", "--resume", "abc"], ["claude", "--resume=abc"], ["claude", "-r"],
+            ["claude", "-r", "abc"], ["claude", "--continue"], ["claude", "-c"], ["claude", "--from-pr"],
+            ["claude", "--from-pr", "123"], ["claude", "--from-pr=123"], ["claude", "--teleport"],
+            ["claude", "--teleport", "abc"], ["claude", "--teleport=abc"], ["claude", "--chrome", "-c"],
+            ["headroom", "wrap", "claude", "--resume", "abc"], ["/usr/bin/env", "FOO=1", "claude", "-c"],
+        ]
+        for a in skips { XCTAssertEqual(AgentIsland.withModel(a, model: "opus"), a, a.joined(separator: " ")) }
+        let adds: [(argv: [String], out: [String], why: String)] = [
+            (["claude", "--session-id", "abc"], ["claude", "--model", "opus", "--session-id", "abc"], "a new conversation"),
+            (["claude", "--fork-session"], ["claude", "--model", "opus", "--fork-session"], "fork-session alone acts on nothing"),
+            (["claude", "--name", "--resume"], ["claude", "--model", "opus", "--name", "--resume"], "a session NAME that looks like an option"),
+            (["claude", "--append-system-prompt", "-c"], ["claude", "--model", "opus", "--append-system-prompt", "-c"],
+             "a value that looks like -c"),
+            (["claude", "--", "-c"], ["claude", "--model", "opus", "--", "-c"], "after -- it is the prompt"),
+        ]
+        for r in adds { XCTAssertEqual(AgentIsland.withModel(r.argv, model: "opus"), r.out, r.why) }
+        XCTAssertEqual(AgentIsland.withModel(["claude", "-cp"], model: "opus"), ["claude", "--model", "opus", "-cp"],
+                       "-cp is one cluster word, never matching -c (pinned as it is; not read as -p either)")
+        XCTAssertEqual(AgentIsland.withModel(["claude", "-cn", "x"], model: "opus"), ["claude", "--model", "opus", "-cn", "x"],
+                       "a combined short group never matches -c: the model is added (pinned as it is)")
+    }
+
+    /// KNOWN LIMIT (#1237 item 2, decided: leave as is): a plain two-word line whose second word is claude, no dashed word
+    /// before it, is read as a wrapper for BOTH flags, so an editor opening a file named claude gets them (never run).
+    func testKnownLimitATwoWordLineWithClaudeSecondIsReadAsAWrapperForBothFlags() {
+        XCTAssertEqual(AgentIsland.withModel(["vim", "claude"], model: "opus"), ["vim", "claude", "--model", "opus"])
+        XCTAssertEqual(AgentIsland.naming(["vim", "claude"], name: "api"), ["vim", "claude", "--name", "api"])
+        XCTAssertEqual(AgentIsland.withModel(["vim", "-R", "claude"], model: "opus"), ["vim", "-R", "claude"], "a dashed word before it: not read so")
     }
 
     func testWithModelAddsNothingForASavedValueThatFailsTheRule() {
@@ -174,6 +209,64 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                         hint = (f, ti, s, m)
                     }
                 }
+            }
+        }
+    }
+
+    /// #1237 item 4: the subtitle is passed to NeonRow (SettingsTheme.swift, closed) as a plain string, so no line limit
+    /// can be set here; this pins every text of the slot. The four refusals as literals, a fifth fails this row.
+    func testTheFourRefusalsAreTheseAndNoFifth() {
+        let literal = ["Type a model name", "Only A-Z a-z 0-9 ._:-[]", "Too long: 128 max", "Cannot start with -"]
+        let probes = ["", "op us", String(repeating: "a", count: 129), "-x"]
+        XCTAssertEqual(probes.map { AgentIsland.modelRefusal($0) }, literal)
+        XCTAssertEqual(AgentIsland.modelMax, 128)
+        // "Type a model name" never reaches the slot (an empty field clears the key); the other three do, as "Not used: ...".
+    }
+
+    /// #1237 items 3 and 4 on the real tree at 0.7, 0.85 and 1.0: the Aliases menu is not taller than the field, it sits
+    /// inside the row, and the row's extent (title, subtitle, field, menu) is the same with the hint and with each
+    /// refusal (one subtitle line each). The menu still reads Aliases and is enabled. No menu is opened.
+    @MainActor
+    func testAliasesMenuFollowsTheScaleAndTheRowKeepsOneFrameInEveryState() {
+        withSavedModel {
+            let savedScale = ThemeRuntime.scale
+            defer { ThemeRuntime.scale = savedScale }
+            let states: [(stored: String, line: String)] = [
+                ("claude-example-1", AgentIslandPane.modelHint),
+                ("op us", "Not used: Only A-Z a-z 0-9 ._:-[]"),
+                (String(repeating: "a", count: 129), "Not used: Too long: 128 max"),
+                ("-opus", "Not used: Cannot start with -"),
+            ]
+            for scale in [0.7, 0.85, 1.0] as [CGFloat] {
+                ThemeRuntime.scale = scale
+                let size = CGSize(width: sz(560), height: sz(900))
+                var rowHeights: [CGFloat] = [], subHeights: [CGFloat] = []
+                for (stored, line) in states {
+                    Preferences.agentIslandDefaultModel = stored
+                    func field(_ t: [AXNode]) -> AXNode? { t.first { $0.label == "Default model" && $0.role == "AXTextField" } }
+                    func settled(_ t: [AXNode]) -> Bool {
+                        t.contains { $0.named("Model aliases") } && t.contains { $0.named(line) }
+                            && abs((field(t)?.frame.width ?? 0) - sz(200)) <= 1
+                    }
+                    let tree = axTree(size, until: settled)
+                    guard let f = field(tree)?.frame, let menuNode = tree.first(where: { $0.named("Model aliases") }),
+                          let ti = tree.first(where: { $0.role == "AXStaticText" && $0.named("Default model") })?.frame,
+                          let s = tree.first(where: { $0.named(line) })?.frame
+                    else { XCTFail("the row's nodes at \(scale): \(line)"); continue }
+                    let m = menuNode.frame
+                    print("#1237 FRAMES at \(scale) \(line): field \(NSStringFromRect(f)) menu \(NSStringFromRect(m)) title \(NSStringFromRect(ti)) sub \(NSStringFromRect(s))")
+                    XCTAssertLessThanOrEqual(m.height, f.height + 1, "the menu is not taller than the field at \(scale)")
+                    let row = f.union(ti).union(s)
+                    XCTAssertGreaterThanOrEqual(m.minY, row.minY - 1, "the menu inside the row, top, at \(scale)")
+                    XCTAssertLessThanOrEqual(m.maxY, row.maxY + 1, "the menu inside the row, bottom, at \(scale)")
+                    XCTAssertTrue(menuNode.enabled, "the menu is enabled at \(scale)")
+                    XCTAssertTrue(tree.contains { $0.named("Aliases") || $0.named("Model aliases") }, "it reads Aliases at \(scale)")
+                    rowHeights.append(row.union(m).height)
+                    subHeights.append(s.height)
+                }
+                XCTAssertEqual(rowHeights.count, 4, "all four states read at \(scale)")
+                for h in rowHeights { XCTAssertEqual(h, rowHeights.first ?? 0, accuracy: 0.5, "the row's height is the same in every state at \(scale)") }
+                for h in subHeights { XCTAssertEqual(h, subHeights.first ?? 0, accuracy: 0.5, "one subtitle line in every state at \(scale)") }
             }
         }
     }

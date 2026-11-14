@@ -195,6 +195,14 @@ final class DchCreateNameTests: XCTestCase {
                        "an attach: once, after the name (used only if it starts the session)")
     }
 
+    /// #1237: a phone's create that resumes a conversation keeps its model (the same withModel).
+    func testAPhoneCreateThatResumesGetsNoDefaultModel() {
+        let k = "agentIslandDefaultModel", saved = Preferences.defaults.object(forKey: k)
+        defer { Preferences.defaults.set(saved, forKey: k) }
+        Preferences.agentIslandDefaultModel = "sonnet"
+        XCTAssertEqual(spawned("work", ["claude", "--resume", "abc"]), ["-E", "-n", "work", "--", "claude", "--name", "work", "--resume", "abc"])
+    }
+
     /// No name: dch picks one Prosper does not know beforehand, so Claude stays unnamed.
     func testNoNameLeavesClaudeUnnamed() {
         XCTAssertEqual(spawned(nil, ["claude"]), ["-E", "--", "claude"])

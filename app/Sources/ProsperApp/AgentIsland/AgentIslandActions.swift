@@ -1062,19 +1062,34 @@ extension AgentIsland {
         return nil
     }
 
+    /// #1237 (N1228-a): the options that continue an EXISTING conversation (a resumed one keeps the model it ran on,
+    /// as Restart and Resume already do): withModel adds nothing when claudeArgs holds one. `--fork-session` and
+    /// `--session-id` alone start a NEW conversation and do not skip (fork-session acts only with resume or continue,
+    /// which skip already). Only `o[0]` of an option counts, so a value (`--name --resume`, `--append-system-prompt -c`)
+    /// never does; a combined short group (`-cp`, `-rfoo`) is one option word `-cp` here and does NOT match (pinned
+    /// as it is). `--resume=`, `--from-pr=` and `--teleport=` are the table's "o" options and take the = spelling.
+    private static let conversationFlags: Set<String> = ["--resume", "-r", "--continue", "-c", "--from-pr", "--teleport"]
+    private static let conversationFlagsEq = ["--resume=", "--from-pr=", "--teleport="]
+
     /// #1228: a NEW session's argv with the Default model: `--model <model>` right after the claude token (naming's
     /// walk), only when (a) it is an interactive Claude that is the program run (argv[0] or after `env`: claudeRuns)
     /// or behind plain wrapper words (`headroom wrap claude`; a dashed word before it makes that claude an option's
     /// value or another program's argument), (b) it carries no --model / --model= of its own (claudeArgs: a typed
-    /// model wins; the table has no short form) and (c) `model` passes modelRefusal (the key can be written from
-    /// outside). Anything else (a shell, codex, an empty argv, an unset model) comes back as is.
+    /// model wins; the table has no short form: Claude Code's CLI reference, read 2026-11-14, documents `--model`
+    /// only), (c) it continues no existing conversation (conversationFlags) and (d) `model` passes modelRefusal (the
+    /// key can be written from outside). Anything else (a shell, codex, an empty argv, an unset model) comes back as is.
+    /// shortcut: the walk reads a line whose second word is `claude` with no dashed word before it (`vim claude`) as a
+    /// wrapper, for --name and --model alike: a list of known wrapper words would stop unknown wrappers (a person's
+    /// own launcher script, the common case) from getting the flags; an editor opening a file named claude is the
+    /// rare one, and the form shows the command before it starts. Upgrade if that ever bites.
     static func withModel(_ argv: [String], model: String) -> [String] {
         guard modelRefusal(model) == nil, isInteractiveClaude(argv),
               let tok = argv.firstIndex(where: { dchBase($0, is: "claude") }),
               claudeRuns(argv, tok: tok) || !argv[..<tok].contains(where: { $0.hasPrefix("-") }),
               !claudeArgs(argv[(tok + 1)...]).contains(where: { arg in
                   guard case .option(let o, _) = arg, let a = o.first else { return false }
-                  return a == "--model" || a.hasPrefix("--model=")
+                  return a == "--model" || a.hasPrefix("--model=") || conversationFlags.contains(a)
+                      || conversationFlagsEq.contains { a.hasPrefix($0) }
               })
         else { return argv }
         var out = argv
