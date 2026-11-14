@@ -312,6 +312,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ExtensionKeyRules.shared.onRulesChanged = { [weak self] in
             Task { @MainActor in self?.reconcileKeyTap() }
         }
+        // #1189: an extension's key rules moved a chord, so Open Agent Sessions' default may stand down or come back.
+        // On the next main turn, outside the engine's own setRules call; registerHotKeys never fires this (no loop).
+        ExtensionKeyRules.shared.onExtensionChordsChanged = { [weak self] in
+            Task { @MainActor in self?.registerHotKeys() }
+        }
         // A resident eventtap (hammerspoon-compat) activates AFTER its rules are set
         // (the probe runs once rules install). Re-reconcile when that flips so the tap
         // comes up for a pure-eventtap config even with inline autocomplete off.
@@ -817,21 +822,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isAvailable: { $0.isAvailable(registry: extensions) },
             appResolves: { AppControl.resolvedBundleURL($0) != nil },
             extensionCombos: extensionRegistrations.map(\.combo),
-            ruleTriggers: ShortcutRulesStore.shared.rules.filter(\.enabled).map(\.trigger))
+            ruleTriggers: ShortcutRulesStore.shared.rules.filter(\.enabled).map(\.trigger),
+            extensionRuleChords: ExtensionKeyRules.shared.extensionKeyboardChords)
+        // #1189: the built-ins are collected first and registered after the window actions, through
+        // ShortcutStore.builtInRegistrations (availability, modifier and stand-down guards), same order as before.
+        var builtIns: [(action: ShortcutAction, payload: () -> Void)] = []
         func add(_ action: ShortcutAction, _ handler: @escaping () -> Void) {
-            // An extension-owned shortcut (e.g. Translate's ⌥L) is skipped while its
-            // extension is disabled, so a dead binding never claims the combo.
-            guard action.isAvailable(registry: extensions) else { return }
-            let combo = ShortcutStore.combo(for: action)
-            guard combo.carbonModifiers != 0 else { return }
-            guard !ShortcutAction.defaultStandsDown(action, saved: ShortcutStore.savedCombo(for: action) != nil,
-                                                    combo: combo, held: held) else { return }
-            bound.append(
-                (GlobalHotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers,
-                              id: action.hotKeyId, handler: handler),
-                 "\(action.title) (\(combo.label))",
-                 action == .runner && combo.chord == action.defaultCombo.chord)
-            )
+            builtIns.append((action, handler))
         }
 
         // The hotkeys that open a window or panel run `windowHotkey`'s closure for their action,
@@ -872,6 +869,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for entry in windowActions {
             let op = entry.op
             add(entry.action) { DispatchQueue.main.async { WindowManager.perform(op) } }
+        }
+        for reg in ShortcutStore.builtInRegistrations(builtIns, isAvailable: { $0.isAvailable(registry: extensions) },
+                                                      held: held) {
+            bound.append(
+                (GlobalHotKey(keyCode: reg.combo.keyCode, modifiers: reg.combo.carbonModifiers,
+                              id: reg.action.hotKeyId, handler: reg.payload),
+                 "\(reg.action.title) (\(reg.combo.label))",
+                 reg.action == .runner && reg.combo.chord == reg.action.defaultCombo.chord)
+            )
         }
 
         // User-defined custom shortcuts: each opens the runner pre-seeded with

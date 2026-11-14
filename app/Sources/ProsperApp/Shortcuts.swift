@@ -590,20 +590,47 @@ enum ShortcutStore {
     /// #1177: the chords the person's own bindings would claim at registration: a SAVED built-in
     /// choice on an available action, a recorded custom shortcut (the registered prefix), an app
     /// shortcut that would register, the extension registrations (manifest keybindings and the
-    /// person's extension shortcuts) and enabled native key rules. Defaults nobody chose are not in it.
+    /// person's extension shortcuts) and the key rules (`keyRuleChords`). Defaults nobody chose are not in it.
     /// The closures are non-escaping and run synchronously on the caller's actor (main, in registerHotKeys).
     static func heldChords(isAvailable: (ShortcutAction) -> Bool,
                            appResolves: (String) -> Bool,
                            extensionCombos: [KeyCombo],
-                           ruleTriggers: [String]) -> Set<KeyCombo> {
+                           ruleTriggers: [String],
+                           extensionRuleChords: Set<KeyCombo> = []) -> Set<KeyCombo> {
         var held = Set(ShortcutAction.allCases.filter(isAvailable).compactMap { savedCombo(for: $0) }.map(\.chord))
         held.formUnion(customShortcuts().filter { $0.combo.carbonModifiers != 0 }
             .prefix(GlobalHotKey.customMaxRegistered).map(\.combo.chord))
         held.formUnion(AppShortcut.registrations(appShortcuts())
             .filter { appResolves($0.shortcut.target) }.map { $0.shortcut.combo.chord })
         held.formUnion(extensionCombos.map(\.chord))
-        held.formUnion(ruleTriggers.compactMap { KeyCombo.parse($0)?.chord })
+        held.formUnion(keyRuleChords(ruleTriggers: ruleTriggers, extensionRuleChords: extensionRuleChords))
         return held.filter { $0.carbonModifiers != 0 }
+    }
+
+    /// #1189: the hotkey chords key rules hold: enabled native rule triggers (`ruleTriggers`) and the keyboard
+    /// chords an extension loaded (`ExtensionKeyRules.extensionKeyboardChords`). A media key or a bare key holds none.
+    static func keyRuleChords(ruleTriggers: [String], extensionRuleChords: Set<KeyCombo>) -> Set<KeyCombo> {
+        Set(ruleTriggers.compactMap { KeyCombo.parse($0)?.chord }).union(extensionRuleChords.map(\.chord))
+            .filter { $0.carbonModifiers != 0 }
+    }
+
+    /// #1189: the built-in hotkeys `registerHotKeys` registers, in `wanted` order, decided before any
+    /// `GlobalHotKey` exists: an available action whose combo has a modifier, unless its default stands down
+    /// (`ShortcutAction.defaultStandsDown`). `payload` (the handler there) rides along untouched.
+    static func builtInRegistrations<Payload>(_ wanted: [(action: ShortcutAction, payload: Payload)],
+                                              isAvailable: (ShortcutAction) -> Bool,
+                                              held: Set<KeyCombo>)
+        -> [(action: ShortcutAction, combo: KeyCombo, payload: Payload)] {
+        wanted.compactMap { entry -> (action: ShortcutAction, combo: KeyCombo, payload: Payload)? in
+            // An extension-owned shortcut (e.g. Translate's ⌥L) is skipped while its extension is disabled.
+            guard isAvailable(entry.action) else { return nil }
+            let combo = ShortcutStore.combo(for: entry.action)
+            // Unset / cleared: never register a bare key.
+            guard combo.carbonModifiers != 0 else { return nil }
+            guard !ShortcutAction.defaultStandsDown(entry.action, saved: savedCombo(for: entry.action) != nil,
+                                                    combo: combo, held: held) else { return nil }
+            return (entry.action, combo, entry.payload)
+        }
     }
 
     static func setCombo(_ combo: KeyCombo, for action: ShortcutAction) {

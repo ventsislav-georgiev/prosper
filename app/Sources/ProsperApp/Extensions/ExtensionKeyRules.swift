@@ -221,6 +221,7 @@ final class ExtensionKeyRules {
     /// Replace one extension's rule set (called from its `on_launch`). Empty/!valid
     /// JSON clears that extension's rules.
     func setRules(extensionID: String, json: String) {
+        let before = extensionKeyboardChords
         var rules = KeyRuleEngine.decode(json: json)
         // Stamp the owner so an `.invoke` resolution can be dispatched to the right lane.
         for i in rules.indices { rules[i].extensionID = extensionID }
@@ -228,7 +229,27 @@ final class ExtensionKeyRules {
         rebuild()
         NSLog("prosper: ExtensionKeyRules.setRules ext=%@ decoded=%d total=%d", extensionID, rules.count, ruleCount)
         onRulesChanged?()
+        if extensionKeyboardChords != before { onExtensionChordsChanged?() }
     }
+
+    /// #1189: the keyboard chords loaded by owners other than the native store (Hammerspoon Compat), as
+    /// Carbon chords (display ""), so Open Agent Sessions' default can stand down on them. Read-only.
+    var extensionKeyboardChords: Set<KeyCombo> {
+        Set(byExtension.filter { $0.key != ShortcutRulesStore.ownerID }.values.joined().compactMap { rule -> KeyCombo? in
+            let c = rule.chord
+            guard c.mediaCode == nil, let key = UInt32(exactly: c.keyCode) else { return nil }
+            var mods = 0
+            if c.cmd { mods |= cmdKey }
+            if c.alt { mods |= optionKey }
+            if c.ctrl { mods |= controlKey }
+            if c.shift { mods |= shiftKey }
+            return KeyCombo(keyCode: key, carbonModifiers: UInt32(mods), display: "")
+        })
+    }
+
+    /// #1189: fired on the main actor, synchronously, after `extensionKeyboardChords` changed. Never for the
+    /// native owner, whose rules `registerHotKeys` itself re-applies, so the re-run it drives cannot loop.
+    var onExtensionChordsChanged: (() -> Void)?
 
     /// Re-invoke a named Lua handler with an arg on the owning extension's lane —
     /// set by the app to `ExtensionRegistry.deliverEvent`. (extensionID, handler, arg)
@@ -241,9 +262,11 @@ final class ExtensionKeyRules {
 
     func removeRules(extensionID: String) {
         guard byExtension[extensionID] != nil else { return }
+        let before = extensionKeyboardChords
         byExtension[extensionID] = nil
         rebuild()
         onRulesChanged?()
+        if extensionKeyboardChords != before { onExtensionChordsChanged?() }
     }
 
     var isEmpty: Bool { ruleCount == 0 }

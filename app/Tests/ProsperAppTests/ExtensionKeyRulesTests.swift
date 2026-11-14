@@ -290,4 +290,65 @@ final class ExtensionKeyRulesTests: XCTestCase {
         XCTAssertEqual(mgr.evaluate(chord: KeyChord(keyCode: 0), bundleID: nil), .passThrough)
         mgr.removeRules(extensionID: "m")
     }
+
+    // MARK: #1189 — the chords an extension's key rules hold, and the re-run they drive
+
+    /// A fresh engine (never `shared`): Compat rules passed as values, no tap, no file.
+    @MainActor
+    func testExtensionKeyboardChordsSkipNativeOwnerAndMediaKeys() {
+        let rules = ExtensionKeyRules()
+        let s = KeyCombo.parse("shift+alt+s")!.chord
+        let j = KeyCombo.parse("cmd+ctrl+j")!.chord
+        XCTAssertEqual(rules.extensionKeyboardChords, [])
+        rules.setRules(extensionID: "com.example.compat", json: """
+        [ { "from": "shift+alt+s", "launch": "com.example.fake" },
+          { "from": "media:PLAY", "swallow": true },
+          { "from": "f8", "system": "PLAY" } ]
+        """)
+        rules.setRules(extensionID: ShortcutRulesStore.ownerID, json: #"[ { "from": "cmd+ctrl+j", "swallow": true } ]"#)
+        let f8 = KeyCombo.parse("f8")!.chord
+        // ⇧⌥S as a Carbon chord; the bare f8 is in (heldChords drops it by its modifier filter); media and the native owner are not.
+        XCTAssertEqual(rules.extensionKeyboardChords, [s, f8])
+        XCTAssertFalse(rules.extensionKeyboardChords.contains(j), "native rules are read from ShortcutRulesStore, not here")
+        XCTAssertEqual(ShortcutStore.keyRuleChords(ruleTriggers: [], extensionRuleChords: rules.extensionKeyboardChords), [s])
+        rules.removeRules(extensionID: "com.example.compat")
+        XCTAssertEqual(rules.extensionKeyboardChords, [])
+    }
+
+    /// The re-run trigger, counted (no wait): `onExtensionChordsChanged` fires once per change of an extension's
+    /// keyboard chords, never for the native owner or the reserved chords, the only two things registerHotKeys
+    /// writes into the engine. The recorder does those writes, so a trigger that fired on them would count
+    /// past 1 at once (capped at 10 so a looping build fails instead of overflowing the stack).
+    @MainActor
+    func testExtensionChordChangeRerunsOnceAndNeverLoops() {
+        let rules = ExtensionKeyRules()
+        var reruns = 0
+        rules.onExtensionChordsChanged = { [unowned rules] in
+            reruns += 1
+            guard reruns < 10 else { return }
+            // What registerHotKeys does to the engine: reserve its chords, re-apply the native rules.
+            rules.setReservedChords([KeyChord(keyCode: 49, cmd: true)])
+            rules.setRules(extensionID: ShortcutRulesStore.ownerID, json: #"[ { "from": "cmd+ctrl+j", "swallow": true } ]"#)
+        }
+        defer { rules.onExtensionChordsChanged = nil }
+        let compat = "com.example.compat"
+
+        rules.setRules(extensionID: compat, json: #"[ { "from": "shift+alt+s", "swallow": true } ]"#)
+        XCTAssertEqual(reruns, 1, "a Compat rule on a new chord re-runs registration once")
+        rules.setRules(extensionID: compat, json: #"[ { "from": "shift+alt+s", "launch": "com.example.fake" } ]"#)
+        XCTAssertEqual(reruns, 1, "same chord, other action: nothing to re-register")
+        rules.setRules(extensionID: ShortcutRulesStore.ownerID, json: #"[ { "from": "shift+alt+s", "swallow": true } ]"#)
+        XCTAssertEqual(reruns, 1, "a native rule change goes through persistKeyMappings' hook, not this one")
+        rules.setReservedChords([])
+        XCTAssertEqual(reruns, 1)
+        rules.setRules(extensionID: compat, json: #"[ { "from": "media:PLAY", "swallow": true } ]"#)
+        XCTAssertEqual(reruns, 2, "⇧⌥S released (only a media key left)")
+        rules.removeRules(extensionID: compat)
+        XCTAssertEqual(reruns, 2, "a media key never held a hotkey chord")
+        rules.setRules(extensionID: compat, json: #"[ { "from": "shift+alt+s", "swallow": true } ]"#)
+        rules.removeRules(extensionID: compat)
+        XCTAssertEqual(reruns, 4, "added then removed: two re-runs")
+        rules.removeRules(extensionID: compat)
+        XCTAssertEqual(reruns, 4, "removing nothing re-runs nothing")
+    }
 }

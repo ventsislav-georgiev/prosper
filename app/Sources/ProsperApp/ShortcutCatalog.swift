@@ -150,7 +150,9 @@ enum ShortcutCatalog {
         activationTargets: [ActivationTarget] = [],
         customShortcuts: [CustomShortcut] = [],
         appShortcuts: [AppShortcut] = [],
-        spotlightChords: Set<KeyCombo> = []
+        spotlightChords: Set<KeyCombo> = [],
+        keyRuleChords: Set<KeyCombo> = [],
+        savedActions: Set<ShortcutAction> = []
     ) -> [BindableAction] {
         var out: [BindableAction] = []
         out.reserveCapacity(prosperActions.count + manifestKeybindings.count
@@ -158,11 +160,13 @@ enum ShortcutCatalog {
 
         for action in prosperActions {
             let (category, title) = splitLabel(action.title, fallback: "Prosper")
+            let combo = combos[action] ?? action.defaultCombo
             out.append(BindableAction(
                 kind: .prosper, key: action.rawValue, title: title,
                 category: category, storageLabel: action.title, icon: action.catalogIcon,
-                combo: combos[action] ?? action.defaultCombo,
-                defaultCombo: action.defaultCombo))
+                combo: combo, defaultCombo: action.defaultCombo,
+                conflictNote: keyRuleNote(action, saved: savedActions.contains(action), combo: combo,
+                                          keyRuleChords: keyRuleChords)))
         }
 
         for kb in manifestKeybindings {
@@ -235,7 +239,7 @@ enum ShortcutCatalog {
         let duplicateNotes = conflicts(in: out)
         if !duplicateNotes.isEmpty || !spotlightChords.isEmpty {
             out = out.map { row in
-                var parts: [String] = []
+                var parts = row.conflictNote.map { [$0] } ?? []  // #1189: keeps a key-rule note
                 if let others = duplicateNotes[row.id] {
                     parts.append("Also used by \(others.joined(separator: ", ")) \u{2014} only one will fire.")
                 }
@@ -267,6 +271,14 @@ enum ShortcutCatalog {
             }
         }
         return notes
+    }
+
+    /// #1189: the row note while a built-in's default stands down for a key rule (native or an extension's) on its
+    /// chord: today only an unsaved Open Agent Sessions (`ShortcutAction.defaultStandsDown`). nil otherwise.
+    static func keyRuleNote(_ action: ShortcutAction, saved: Bool, combo: KeyCombo,
+                            keyRuleChords: Set<KeyCombo>) -> String? {
+        ShortcutAction.defaultStandsDown(action, saved: saved, combo: combo, held: keyRuleChords)
+            ? "Off while a key rule uses this key \u{2014} record another shortcut for this action." : nil
     }
 
     /// Substring match over the precomputed folded text, plus the "Bound only"

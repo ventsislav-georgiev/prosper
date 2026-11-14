@@ -182,7 +182,8 @@ final class ShortcutDefaultsTests: XCTestCase {
         XCTAssertEqual(unsetKeyCombo.carbonModifiers, 0)
     }
 
-    private let touchedKeys = ["shortcut.agentSessions", "shortcut.windowLeftHalf", "shortcut.custom", "shortcut.apps"]
+    private let touchedKeys = ["shortcut.agentSessions", "shortcut.windowLeftHalf", "shortcut.custom", "shortcut.apps",
+                               "shortcut.runner", "shortcut.runnerBackslash", "shortcut.clipboard"]
 
     /// Runs `body` on the scratch store with none of the keys these rows touch set, and removes them after.
     private func withCleanKeys(_ body: () throws -> Void) rethrows {
@@ -194,9 +195,11 @@ final class ShortcutDefaultsTests: XCTestCase {
     }
 
     private func held(available: (ShortcutAction) -> Bool = { _ in true }, appResolves: (String) -> Bool = { _ in true },
-                      extensionCombos: [KeyCombo] = [], ruleTriggers: [String] = []) -> Set<KeyCombo> {
+                      extensionCombos: [KeyCombo] = [], ruleTriggers: [String] = [],
+                      extensionRuleChords: Set<KeyCombo> = []) -> Set<KeyCombo> {
         ShortcutStore.heldChords(isAvailable: available, appResolves: appResolves,
-                                 extensionCombos: extensionCombos, ruleTriggers: ruleTriggers)
+                                 extensionCombos: extensionCombos, ruleTriggers: ruleTriggers,
+                                 extensionRuleChords: extensionRuleChords)
     }
 
     /// Each kind of the person's own binding, read from the scratch store; defaults nobody chose hold nothing.
@@ -257,5 +260,142 @@ final class ShortcutDefaultsTests: XCTestCase {
             Preferences.defaults.removeObject(forKey: ShortcutStore.appsKey)
             XCTAssertFalse(standsDown(), "the binding gone: the default registers again at the next run")
         }
+    }
+
+    // MARK: - #1189: the registration seam, extension key rules, the Settings note, the custom cap
+
+    private struct Registration {
+        let name: String
+        let saved: KeyCombo?
+        let available: Bool
+        let held: Set<KeyCombo>
+        let registered: [ShortcutAction]
+    }
+
+    /// The list registerHotKeys registers its built-ins from, read without making a GlobalHotKey. Literal table;
+    /// `wanted` is a fixed four, the payload rides along.
+    func testBuiltInRegistrationsSeamTable() {
+        let s = shiftOptS.chord
+        let wanted: [(action: ShortcutAction, payload: String)] =
+            [(.runner, "r"), (.runnerBackslash, "b"), (.agentSessions, "s"), (.clipboard, "c")]
+        let rows: [Registration] = [
+            Registration(name: "nothing saved, chord free", saved: nil, available: true, held: [],
+                         registered: [.runner, .agentSessions, .clipboard]),
+            Registration(name: "nothing saved, chord held: stands down", saved: nil, available: true, held: [s],
+                         registered: [.runner, .clipboard]),
+            Registration(name: "saved ⇧⌥S, chord held: the person's choice", saved: shiftOptS, available: true, held: [s],
+                         registered: [.runner, .agentSessions, .clipboard]),
+            Registration(name: "cleared", saved: unsetKeyCombo, available: true, held: [],
+                         registered: [.runner, .clipboard]),
+            Registration(name: "not available (island off)", saved: nil, available: false, held: [],
+                         registered: [.runner, .clipboard]),
+        ]
+        XCTAssertEqual(rows.count, 5)
+        withCleanKeys {
+            for row in rows {
+                if let saved = row.saved { ShortcutStore.setCombo(saved, for: .agentSessions) } else { ShortcutStore.reset(.agentSessions) }
+                let list = ShortcutStore.builtInRegistrations(
+                    wanted, isAvailable: { $0 != .agentSessions || row.available }, held: row.held)
+                XCTAssertEqual(list.map(\.action), row.registered, row.name)
+                XCTAssertEqual(list.first?.payload, "r", row.name)
+                XCTAssertEqual(list.last?.payload, "c", row.name)
+                XCTAssertEqual(list.last?.combo, ShortcutAction.clipboard.defaultCombo, row.name)
+            }
+        }
+    }
+
+    /// Gap 1 end to end on values: a Compat rule on ⇧⌥S, loaded into a fresh engine (never `shared`, no file),
+    /// is held, so the seam leaves Open Agent Sessions out; the rule gone, it is back.
+    @MainActor
+    func testExtensionKeyRuleMakesTheDefaultStandDown() {
+        withCleanKeys {
+            let engine = ExtensionKeyRules()
+            engine.setRules(extensionID: "com.example.compat", json: #"[ { "from": "alt+shift+s", "swallow": true } ]"#)
+            let wanted: [(action: ShortcutAction, payload: Int)] = [(.agentSessions, 1)]
+            func registered(_ chords: Set<KeyCombo>) -> [ShortcutAction] {
+                ShortcutStore.builtInRegistrations(wanted, isAvailable: { _ in true },
+                                                   held: held(extensionRuleChords: chords)).map(\.action)
+            }
+            XCTAssertEqual(held(extensionRuleChords: engine.extensionKeyboardChords), [shiftOptS.chord])
+            XCTAssertEqual(registered(engine.extensionKeyboardChords), [])
+            engine.removeRules(extensionID: "com.example.compat")
+            XCTAssertEqual(registered(engine.extensionKeyboardChords), [.agentSessions])
+            // A native rule held in the engine is not counted twice or instead of the store's: heldChords reads it
+            // from ShortcutRulesStore (ruleTriggers).
+            engine.setRules(extensionID: ShortcutRulesStore.ownerID, json: #"[ { "from": "alt+shift+s", "swallow": true } ]"#)
+            XCTAssertEqual(registered(engine.extensionKeyboardChords), [.agentSessions])
+        }
+    }
+
+    /// Rider (batch 5, held-custom-uncapped survived): a custom shortcut past the registered cap is never
+    /// registered, so on ⇧⌥S it holds nothing and the default does not stand down. One under the cap, it does.
+    func testCustomShortcutPastTheCapHoldsNothing() {
+        XCTAssertEqual(GlobalHotKey.customMaxRegistered, 100)
+        withCleanKeys {
+            let j = KeyCombo(keyCode: UInt32(kVK_ANSI_J), carbonModifiers: UInt32(controlKey | cmdKey), display: "⌃⌘J")
+            let filler = (0..<100).map { _ in CustomShortcut(combo: j, prefix: "ex ", label: "Example Prefix") }
+            let mine = CustomShortcut(combo: shiftOptS, prefix: "api ", label: "Example API")
+            ShortcutStore.setCustomShortcuts(filler + [mine])
+            XCTAssertEqual(ShortcutStore.customShortcuts().count, 101)
+            XCTAssertEqual(held(), [j.chord], "the 101st is past the cap: not registered, holds nothing")
+            XCTAssertFalse(ShortcutAction.defaultStandsDown(.agentSessions, saved: false,
+                                                            combo: ShortcutStore.combo(for: .agentSessions), held: held()))
+            ShortcutStore.setCustomShortcuts(Array(filler.dropLast()) + [mine])
+            XCTAssertEqual(held(), [j.chord, shiftOptS.chord], "the 100th is registered and holds ⇧⌥S")
+        }
+    }
+
+    /// Gap 2: a key mapping edit in Settings re-runs registration at once (the hook is a counter here; registerHotKeys
+    /// is never called). Scratch store only; the native rules and their key are put back after.
+    @MainActor
+    func testAKeyMappingEditRerunsRegistration() {
+        XCTAssertTrue(Preferences.defaults is XCTestDefaults, "never the app's or the operator's defaults")
+        guard Preferences.defaults is XCTestDefaults else { return }
+        let rulesKey = "nativeShortcutRules"
+        let hadKey = Preferences.defaults.object(forKey: rulesKey) != nil
+        let rulesBefore = ShortcutRulesStore.shared.rules
+        defer {
+            ShortcutRulesStore.shared.setRules(rulesBefore)
+            if !hadKey { Preferences.defaults.removeObject(forKey: rulesKey) }
+        }
+        let model = SettingsModel()
+        var reruns = 0
+        model.onShortcutsChanged = { reruns += 1 }
+        model.addKeyMapping()
+        XCTAssertEqual(reruns, 1, "add")
+        guard var rule = model.keyMappings.last else { return XCTFail("added rule missing") }
+        rule.trigger = "shift+alt+s"
+        model.updateKeyMapping(rule)
+        XCTAssertEqual(reruns, 2, "a trigger recorded")
+        XCTAssertEqual(ShortcutRulesStore.shared.rules.last?.trigger, "shift+alt+s", "stored before the re-run reads it")
+        model.removeKeyMapping(id: rule.id)
+        XCTAssertEqual(reruns, 3, "remove")
+    }
+
+    private let keyRuleNoteText = "Off while a key rule uses this key \u{2014} record another shortcut for this action."
+
+    /// Gap 3: the one sentence, as a function and on the Settings row (ShortcutCatalog.build, no window).
+    func testKeyRuleNoteOnTheAgentSessionsRow() {
+        let s = shiftOptS
+        let a = ShortcutAction.clipboard.defaultCombo
+        XCTAssertEqual(ShortcutCatalog.keyRuleNote(.agentSessions, saved: false, combo: s, keyRuleChords: [s.chord]),
+                       keyRuleNoteText)
+        XCTAssertTrue(ShortcutCatalog.keyRuleNote(.agentSessions, saved: true, combo: s, keyRuleChords: [s.chord]) == nil)
+        XCTAssertTrue(ShortcutCatalog.keyRuleNote(.agentSessions, saved: false, combo: s, keyRuleChords: []) == nil)
+        XCTAssertTrue(ShortcutCatalog.keyRuleNote(.clipboard, saved: false, combo: a, keyRuleChords: [a.chord]) == nil)
+
+        let rules = ShortcutStore.keyRuleChords(ruleTriggers: ["shift+alt+s"], extensionRuleChords: [])
+        func note(saved: Set<ShortcutAction> = [], apps: [AppShortcut] = []) -> String? {
+            ShortcutCatalog.build(prosperActions: ShortcutAction.allCases, combos: [:], appShortcuts: apps,
+                                  keyRuleChords: rules, savedActions: saved)
+                .first { $0.key == ShortcutAction.agentSessions.rawValue }?.conflictNote
+        }
+        XCTAssertEqual(note(), keyRuleNoteText)
+        XCTAssertTrue(note(saved: [.agentSessions]) == nil, "a saved ⇧⌥S registers: no note")
+        XCTAssertEqual(note(apps: [AppShortcut(target: "com.example.fake", combo: s, name: "Fake App")]),
+                       keyRuleNoteText + " Also used by Fake App \u{2014} only one will fire.")
+        let clipboardRow = ShortcutCatalog.build(prosperActions: [.clipboard], combos: [:],
+                                                 keyRuleChords: [a.chord]).first
+        XCTAssertTrue(clipboardRow?.conflictNote == nil, "every other row: no note")
     }
 }

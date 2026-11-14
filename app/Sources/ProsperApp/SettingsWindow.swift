@@ -703,6 +703,7 @@ final class SettingsModel: ObservableObject {
 
     private func persistKeyMappings() {
         ShortcutRulesStore.shared.setRules(keyMappings)
+        onShortcutsChanged?()  // #1189: a rule on ⇧⌥S makes Open Agent Sessions' default stand down at once
     }
 
     func addKeyMapping() {
@@ -2282,7 +2283,12 @@ private struct ShortcutsPane: View {
             // not per row, and empty (no hint anywhere) whenever Spotlight has been
             // moved off ⌘Space.
             spotlightChords: SpotlightShortcutConflict.spotlightUsesCommandSpace()
-                ? [ShortcutAction.runner.defaultCombo.chord] : [])
+                ? [ShortcutAction.runner.defaultCombo.chord] : [],
+            // #1189: Open Agent Sessions' default stands down on a key rule's chord; its row says so.
+            keyRuleChords: ShortcutStore.keyRuleChords(
+                ruleTriggers: model.keyMappings.filter(\.enabled).map(\.trigger),
+                extensionRuleChords: ExtensionKeyRules.shared.extensionKeyboardChords),
+            savedActions: Set(ShortcutAction.allCases.filter { ShortcutStore.savedCombo(for: $0) != nil }))
     }
 
     var body: some View {

@@ -894,6 +894,9 @@ tag from the now-released section and put it on the new top draft.
   disappears. A missing file that turns out to be a folder is no longer watched, and invisible
   direction-control characters in a file's name are shown spelled out in the window title and
   header. (#1186)
+- Open Agent Sessions' default shortcut (Shift-Option-S) now also steps aside for Hammerspoon Compat
+  key rules and for a key mapping you just added in Settings, and its Settings row says it is off
+  while a key rule uses the key. (#1189)
 
 ## v2.174.0
 
