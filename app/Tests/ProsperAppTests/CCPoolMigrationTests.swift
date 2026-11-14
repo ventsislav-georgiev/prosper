@@ -251,6 +251,20 @@ final class CCPoolMigrationTests: XCTestCase {
         XCTAssertEqual(snap.accounts["beta"]?.held, Int(t0) + 7200)
     }
 
+    // #1190 (mutant v7): a hand hold that already ended is not carried onto the new token.
+    func testCCPoolReplaceDropsAHoldThatEnded() throws {
+        let vault = try write(tempDir(), CCPoolMigration.vaultFileName, #"{"accounts": {"alpha": {"token": "tok-a2"}}}"#)
+        let st = store()
+        let secrets = CCPoolMemorySecrets()
+        try st.addAccount(label: "alpha", token: "tok-a", secrets: secrets)
+        st.mutate { s in s.hold("alpha", hours: 1, now: t0 - 7200) }   // ended an hour ago
+        XCTAssertEqual(st.snapshot.accounts["alpha"]?.held, Int(t0) - 3600)
+        let out = try CCPoolMigration.run(vault: vault, store: st, secrets: secrets, choices: ["alpha": .replace], now: t0)
+        XCTAssertEqual(out.replaced, ["alpha"])
+        XCTAssertTrue(st.snapshot.accounts["alpha"]?.held == nil, "an ended hold is not the new token's")
+        XCTAssertEqual(st.snapshot.accounts["alpha"]?.cooldown, [:])
+    }
+
     // QA #751 INFO-5: a new item this import could not delete again is named in the notes, label only.
     func testCCPoolImportNamesAnItemItCouldNotDelete() throws {
         let vault = try fixture()

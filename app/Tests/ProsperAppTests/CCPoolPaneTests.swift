@@ -274,7 +274,10 @@ final class CCPoolPaneTests: XCTestCase {
     func testCCPoolPaneCopy() async throws {
         let r = try ccpoolPaneRig()
         XCTAssertTrue(CCPoolPane.mintHint.contains("claude setup-token"))
-        XCTAssertTrue(CCPoolPane.labelHint.contains("Labels are visible to local processes"), "errata C6")
+        // #1190 INFO-6: caption() is Text(String), which shows Markdown marks as typed.
+        XCTAssertFalse(CCPoolPane.mintHint.contains("`"))
+        XCTAssertTrue(CCPoolPane.labelHint.contains("Labels are not secret"), "errata C6")
+        XCTAssertTrue(CCPoolPane.accountsFooter.contains("the order of this list breaks ties"))
         XCTAssertTrue(CCPoolPane.refreshHint.contains("one tiny request per account"))
         // QA #739 INFO-1 (B8): the order only breaks ties.
         XCTAssertFalse(CCPoolPane.accountsFooter.contains("Tried in this order"))

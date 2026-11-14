@@ -901,6 +901,9 @@ tag from the now-released section and put it on the new top draft.
   slightly darker, so it reads clearly on the light backgrounds. (#1199)
 - Agent Island Sidekicks: a session alias or title that ends in a Unicode line separator is no
   longer taken as ending with the pattern's "$", the same as in dch's own picker. (#1184)
+- Account pool: quitting Prosper while the proxy is still starting no longer leaves its port held,
+  and a limit reported for an account that was renamed or replaced mid-request now holds back that
+  account, not the one that took its name. (#1190)
 
 ## v2.174.0
 

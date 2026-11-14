@@ -47,6 +47,21 @@ final class CCPoolLifecycle: @unchecked Sendable {
             }
         }
     }
+
+    /// #1190 INFO-1: the app quits. Not live any more, and a stop queued behind any start or restart
+    /// in flight, so a listener that start publishes late is stopped too. Blocks the caller (main, at
+    /// quit) up to `timeout`; false when that ran out (a start still in its probe or bind): the stop
+    /// stays queued and runs when that start returns, if the process is still alive.
+    @discardableResult
+    func quit(timeout: TimeInterval) -> Bool {
+        live = false
+        let done = DispatchSemaphore(value: 0)
+        queue.async { [self] in
+            settleNow(restart: false)
+            done.signal()
+        }
+        return done.wait(timeout: .now() + timeout) == .success
+    }
 }
 
 /// #871 P2b-1: the one owner of the production ccpool objects: the store (state.json, 0600 in a
@@ -94,10 +109,11 @@ final class CCPoolRuntime {
     /// form's hint): the pane's toggle, this proxy's status and this pool's accounts, read at each call.
     var routing: CCPool.Routing { service.routing(on: routeOn) }
 
-    /// The app quits: the listener goes now, and no queued start binds again.
-    func quit() {
-        lifecycle.live = false
-        service.stop()
+    /// The app quits: the stop runs on the life cycle's queue, after any start in flight (#1190
+    /// INFO-1), and no queued start binds again. Waits at most `timeout` on main; past it the
+    /// published listener is stopped here as before and the queued stop catches a late one.
+    func quit(timeout: TimeInterval = 2) {
+        if !lifecycle.quit(timeout: timeout) { service.stop() }
     }
 
     // MARK: The app's instance
@@ -106,9 +122,14 @@ final class CCPoolRuntime {
     private(set) static var shared: CCPoolRuntime?
 
     /// AppDelegate's push of the extension's live flag, at launch and on every enable/disable.
-    static func setExtensionLive(_ live: Bool) {
-        if shared == nil, live { shared = production() }
-        shared?.setLive(live)
+    static func setExtensionLive(_ live: Bool) { push(live, into: &shared, build: production) }
+
+    /// #1190 INFO-5 (b): the push, on a slot a test owns. The first live push builds; a push while
+    /// nothing is built and the extension is off builds nothing.
+    @discardableResult
+    static func push(_ live: Bool, into slot: inout CCPoolRuntime?, build: () -> CCPoolRuntime?) -> Task<Void, Never>? {
+        if slot == nil, live { slot = build() }
+        return slot?.setLive(live)
     }
 
     /// The production objects, or nil under XCTest: no test run builds them, reads the real

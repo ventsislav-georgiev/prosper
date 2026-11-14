@@ -595,6 +595,25 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(r.trashed.urls, [r.vault])
     }
 
+    // #1190 (mutant v6): a second "Move to the Trash" click while the first Trash step runs does nothing.
+    func testCCPoolSecondTrashClickWhileBusyDoesNothing() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        await m.runImport()?.value
+        XCTAssertNil(m.trashBlockedReason, "the import offers the Trash")
+        let first = m.finishImport(trash: true)
+        let second = m.finishImport(trash: true)   // same main-actor turn: the first Trash step is still running
+        XCTAssertTrue(first != nil)
+        XCTAssertTrue(second == nil, "the second click does nothing")
+        await first?.value
+        await second?.value
+        XCTAssertEqual(r.trashed.urls, [r.vault], "one Trash step")
+        XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
+    }
+
     // QA #739 INFO-2 (B2): the Trash is offered only when every vault token is in the pool.
     func testCCPoolTrashOnlyWhenEveryTokenIsHeld() async throws {
         let r = try ccpoolPaneRig()

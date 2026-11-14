@@ -256,6 +256,37 @@ final class CCPoolFollowUpTests: XCTestCase {
         XCTAssertEqual(log.lines.filter { $0.contains("port held by another program") }.count, 1)
     }
 
+    // #1190 INFO-5 (c): the configured port is held when the life cycle starts the proxy (launch with an
+    // account). Not running, no bind tried, one look per event and never a loop on the queue. The port
+    // is this row's own ephemeral listener, never a fixed one.
+    @MainActor
+    func testCCPoolLifeCycleLeavesAHeldPortAlone() async throws {
+        let (fd, port) = try foreignListener()
+        defer { close(fd) }
+        let probes = Counter()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = port
+        cfg.upstream = dead
+        cfg.probeTimeout = 0.5
+        cfg.portProbe = { p, t in probes.bump(); return CCPoolPortProbe.probe(port: p, timeout: t) }
+        let log = CCPoolCapturingLogger()
+        let dir = tempDir()
+        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+                               vaultURL: dir.appendingPathComponent("old").appendingPathComponent(CCPoolMigration.vaultFileName),
+                               defaults: scratchDefaults("ccpool-held"), probeBase: dead, logger: log, trash: { _ in })
+        defer { rt.service.stop() }
+        try rt.store.addAccount(label: "Example Org", token: "tok-example", secrets: rt.secrets)
+        await rt.setLive(true)?.value
+        XCTAssertEqual(rt.service.status, .heldByOther)
+        XCTAssertEqual(probes.count, 1, "one look: \(log.lines)")
+        XCTAssertEqual(log.lines.filter { $0.contains("listener did not start") }.count, 0, "no bind was tried")
+        await rt.model.reconcileProxy()?.value
+        XCTAssertEqual(probes.count, 2, "the next event looks once more")
+        XCTAssertEqual(rt.service.status, .heldByOther)
+        rt.quit()
+        XCTAssertEqual(rt.service.status, .stopped)
+    }
+
     // Review carry 2 (A6 a): a listener that goes to .waiting (or is cancelled by nobody) after it
     // was running stops reading "running", and no session routes to it.
     @MainActor

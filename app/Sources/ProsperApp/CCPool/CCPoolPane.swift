@@ -6,9 +6,10 @@ import SwiftUI
 struct CCPoolPane: View {
     @ObservedObject var model: CCPoolPaneModel
 
-    static let mintHint = "Mint it with `claude setup-token` while logged into that account."
+    static let mintHint = "Get one by running claude setup-token in a terminal while signed in to that account."
     /// Errata C6: the label is stored in the clear.
-    static let labelHint = "Labels are visible to local processes (the proxy health answer, the state file, the Keychain item name); the token is not."
+    static let labelHint = "Labels are not secret: other programs on this Mac can see them (in the proxy's status reply, its state file "
+        + "and the Keychain item name). Tokens stay in the Keychain."
     static let refreshHint = "Costs one tiny request per account, straight to Anthropic."
     static let routeTitle = "Start new Claude sessions through the pool"
     /// P2b-2: what the toggle reaches, as built (spec 3.6; no global routing in v1).
@@ -17,7 +18,7 @@ struct CCPoolPane: View {
     /// QA #739 INFO-1: CCPoolCore.pick keeps the current account while it has room, then takes the
     /// soonest five-hour reset; the list order only breaks ties.
     static let accountsFooter = "The current account is used while it has room, then the one whose five-hour window resets soonest; "
-        + "this order breaks ties. Remove deletes the Keychain item too."
+        + "the order of this list breaks ties. Remove deletes the Keychain item too."
 
     var body: some View {
         // QA #739 INFO-9: a state change in the store (a limit, a hold, `current`) republishes the
@@ -161,7 +162,7 @@ struct CCPoolPane: View {
                 }
                 if let pool = model.poolText {
                     NeonDivider()
-                    caption("Pool headroom: \(pool)")
+                    caption("Free across all accounts: \(pool)")
                 }
             }
         }

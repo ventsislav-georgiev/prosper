@@ -380,8 +380,12 @@ final class CCPoolConnection: @unchecked Sendable {
         }
         let (limits, unknown) = CCPoolCore.parseLimits(headers)
         if !unknown.isEmpty { log.note(label, "unknown claim window \(unknown.joined(separator: ",")); not benching on it") }
-        store.mutate { $0.remember(label) }
-        store.recordUsage(label, limits: limits)
+        // #1190 INFO-2: what this answer says belongs to the account that sent it, by its Keychain id: the
+        // label may have moved to another account (rename, remove and add, a Replace) while it was in flight.
+        let id = ex.accountID
+        store.mutate { st in if let owner = st.label(ofID: id) { st.remember(owner) } }
+        // shortcut: the usage sample (display only) is matched by a read just before, not under the store's lock.
+        if let owner = store.read({ $0.label(ofID: id) }) { store.recordUsage(owner, limits: limits) }
 
         if response.statusCode == 429 {
             var spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
@@ -411,7 +415,10 @@ final class CCPoolConnection: @unchecked Sendable {
                 return decide(.allow)
             }
             log.note(label, line, private: privateDetail)
-            store.mutate { st in for (claim, until) in spent { st.bench(label, claim: claim, until: until, now: now) } }
+            store.mutate { st in
+                guard let owner = st.label(ofID: id) else { return }
+                for (claim, until) in spent { st.bench(owner, claim: claim, until: until, now: now) }
+            }
             let claims = spent.keys.sorted().joined(separator: ",")
             if replayable {
                 log.note(label, "out on \(claims); rotating to another account and retrying request")
@@ -425,8 +432,9 @@ final class CCPoolConnection: @unchecked Sendable {
             // Retire before streaming: the body can take a minute to drain (B15).
             let spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
             store.mutate { st in
-                st.recordResets(label, limits: limits, now: now)
-                for (claim, until) in spent { st.bench(label, claim: claim, until: until, now: now) }
+                guard let owner = st.label(ofID: id) else { return }
+                st.recordResets(owner, limits: limits, now: now)
+                for (claim, until) in spent { st.bench(owner, claim: claim, until: until, now: now) }
             }
             if !spent.isEmpty {
                 log.note(label, "now full on \(spent.keys.sorted().joined(separator: ",")); retired before it could reject anything")
@@ -556,4 +564,9 @@ final class CCPoolConnection: @unchecked Sendable {
         default: return HTTPURLResponse.localizedString(forStatusCode: status).capitalized
         }
     }
+}
+
+extension CCPoolState {
+    /// #1190 INFO-2: the label the account with Keychain id `id` carries now; nil once it is gone.
+    func label(ofID id: String) -> String? { accounts.first { $0.value.id == id }?.key }
 }
