@@ -226,18 +226,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LiveExtensionHostServices.shared.windowPresenter = { [weak self] extID, node in
             guard let self else { return }
             self.runnerPanel?.dismiss()
-            self.extensionViewPanel.present(
-                owner: extID,
-                node: node,
-                transform: { fn, input in
-                    self.extensions.callExtensionString(extensionID: extID, function: fn, arg: input) ?? ""
-                },
-                onAction: { id, value, form in
-                    let formJSON = (try? JSONEncoder().encode(form))
-                        .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-                    return await self.extensions.callExtensionViewAsync(
-                        extensionID: extID, function: id, args: [value ?? "", formJSON])
-                })
+            Self.presentExtensionView(extID: extID, node: node, registry: self.extensions,
+                                      panel: self.extensionViewPanel)
         }
         // host.window.close → dismiss the open extension window (form/dialog submit).
         LiveExtensionHostServices.shared.windowCloser = { [weak self] in
@@ -945,12 +935,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                               id: GlobalHotKey.extensionIdBase + UInt32(i)) { [weak self] in
                     Task { @MainActor in
                         guard let self else { return }
-                        // #1113: a window command whose window is up toggles it instead.
-                        ExtensionShortcuts.toggleWindow(commandID: commandID, registry: self.extensions,
-                                                        panel: self.extensionViewPanel) {
+                        // #1113/#1123: a window command whose window holds this press's view toggles it instead.
+                        Self.extensionHotkeyPressed(commandID: commandID, item: item, registry: self.extensions,
+                                                    panel: self.extensionViewPanel) { pressed in
                             Task { @MainActor in
                                 await ExtensionShortcuts.fire(commandID: commandID, item: item,
                                                               registry: self.extensions)
+                                self.extensionViewPanel.pressEnded(pressed)
                             }
                         }
                     }
@@ -1019,17 +1010,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Window-launching extension commands (manifest `launches_window`) bound to a
         // custom shortcut fire IMMEDIATELY — no visible runner, no typed prefix. The
         // handler opens its own window via host.window.open (→ windowPresenter).
-        if let routed = extensions.route(query: prefill), routed.command.launchesWindow {
-            let id = routed.command.id
-            // #1113: its window up and owned by this extension: WindowToggle's rule instead.
-            ExtensionShortcuts.toggleWindow(commandID: id, registry: extensions, panel: extensionViewPanel) {
-                Task { @MainActor in _ = await self.extensions.invokeAsync(commandID: id, query: prefill) }
+        if Self.openWindowCommand(prefill: prefill, registry: extensions, panel: extensionViewPanel, invoke: { id, pressed in
+            Task { @MainActor in
+                _ = await self.extensions.invokeAsync(commandID: id, query: prefill)
+                self.extensionViewPanel.pressEnded(pressed)
             }
-            return
-        }
+        }) { return }
         let panel = runnerPanel ?? RunnerPanel()
         runnerPanel = panel
         panel.toggle(prefix: prefill)   // #1113: every caller is a hotkey (custom shortcut, bound quickdir)
+    }
+
+    /// #1123: openRunner's window-command branch, apart from launch so a row runs it on a fake panel. A prefill
+    /// routed to a `launches_window` command follows toggleWindow with the prefill, whole, as its text (#1113:
+    /// its own view up: WindowToggle's rule instead); false for any other prefill. Main actor; `invoke` runs
+    /// synchronously when the press fires, with the command id and the press's identity, which the caller hands
+    /// to ExtensionViewPanel.pressEnded once the invoke has ended.
+    static func openWindowCommand(prefill: String, registry: ExtensionRegistry, panel: ExtensionViewPanel,
+                                  invoke: (_ commandID: String, _ pressed: ExtensionViewPanel.Identity?) -> Void) -> Bool {
+        guard let routed = registry.route(query: prefill), routed.command.launchesWindow else { return false }
+        let id = routed.command.id
+        let pressed = ExtensionShortcuts.windowIdentity(commandID: id, text: prefill, registry: registry)
+        ExtensionShortcuts.toggleWindow(commandID: id, text: prefill, registry: registry, panel: panel) {
+            invoke(id, pressed)
+        }
+        return true
+    }
+
+    /// #1123: an extension hotkey press, apart from registration so a row runs it on a fake panel. Its text is
+    /// the query `ExtensionShortcuts.fire` hands the handler for this item. Main actor; `fire` runs synchronously
+    /// with the press's identity (nil for a command that opens no window), for ExtensionViewPanel.pressEnded.
+    static func extensionHotkeyPressed(commandID: String, item: String, registry: ExtensionRegistry,
+                                       panel: ExtensionViewPanel, fire: (_ pressed: ExtensionViewPanel.Identity?) -> Void) {
+        let text = ExtensionShortcuts.query(commandID: commandID, item: item, registry: registry)
+        let pressed = ExtensionShortcuts.windowIdentity(commandID: commandID, text: text, registry: registry)
+        ExtensionShortcuts.toggleWindow(commandID: commandID, text: text, registry: registry, panel: panel) {
+            fire(pressed)
+        }
+    }
+
+    /// #1123: the presenter's view into the panel (host.window.open), apart from launch so a row runs it on a
+    /// fake panel. The owner is the extension; the panel matches it against the identity a press left pending.
+    /// Called on main (mainSync); `transform` runs on main from the view, `onAction` on the main actor.
+    static func presentExtensionView(extID: String, node: ExtensionViewNode, registry: ExtensionRegistry,
+                                     panel: ExtensionViewPanel) {
+        panel.present(
+            owner: extID,
+            node: node,
+            transform: { fn, input in
+                registry.callExtensionString(extensionID: extID, function: fn, arg: input) ?? ""
+            },
+            onAction: { id, value, form in
+                let formJSON = (try? JSONEncoder().encode(form))
+                    .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                return await registry.callExtensionViewAsync(
+                    extensionID: extID, function: id, args: [value ?? "", formJSON])
+            })
     }
 
     private func startAutocompleteIfReady() {

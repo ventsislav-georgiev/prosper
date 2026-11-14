@@ -693,6 +693,9 @@ tag from the now-released section and put it on the new top draft.
 - Runner and Clipboard History no longer press Command-V unless the app you opened them from is back
   in front: if it has quit or another app came forward meanwhile, nothing is typed, the text stays
   on the clipboard and you hear a beep, as with snippet fill-ins. (#1150)
+- Two shortcuts on one extension's window (another text, such as "ql add GitHub" and "ql add Jira",
+  or another window command of the same extension) now each open their own view; only the shortcut
+  that opened the view brings it back or closes it. (#1123)
 
 ## v2.174.0
 

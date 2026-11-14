@@ -333,12 +333,28 @@ enum ExtensionShortcuts {
     /// extension's view the panel holds follows WindowToggle's rule: not focused, the window comes
     /// back with the view kept; focused, it closes. Anything else fires as before: it opens the
     /// window, or replaces another extension's view, and never closes it.
+    /// #1123: the view is this press's only when it holds the same identity (extension, command and `text`,
+    /// the query the handler gets, compared whole); a press on another command or text opens its own view.
+    /// A view no shortcut named (the runner, the extension itself) keeps 1113's extension rule.
     @MainActor
-    static func toggleWindow(commandID: String, registry: ExtensionRegistry, panel: ExtensionViewPanel,
-                             fire: () -> Void) {
-        guard let cmd = registry.command(id: commandID), cmd.command.launchesWindow,
-              panel.owner == cmd.record.id else { return fire() }
-        WindowToggle.apply(panel.window, open: fire, focus: panel.focus, close: panel.close)
+    static func toggleWindow(commandID: String, text: String = "", registry: ExtensionRegistry,
+                             panel: ExtensionViewPanel, fire: () -> Void) {
+        guard let mine = windowIdentity(commandID: commandID, text: text, registry: registry) else { return fire() }
+        // Every fire leaves this press's identity for the view its handler presents.
+        guard panel.owner == mine.extensionID, (panel.identity ?? mine) == mine else {
+            panel.pending = mine
+            return fire()
+        }
+        WindowToggle.apply(panel.window, open: { panel.pending = mine; fire() }, focus: panel.focus, close: panel.close)
+    }
+
+    /// #1123: what a press on a `launches_window` command stands for; nil for any other command (toggleWindow
+    /// fires it without leaving anything pending).
+    @MainActor
+    static func windowIdentity(commandID: String, text: String,
+                               registry: ExtensionRegistry) -> ExtensionViewPanel.Identity? {
+        guard let cmd = registry.command(id: commandID), cmd.command.launchesWindow else { return nil }
+        return ExtensionViewPanel.Identity(extensionID: cmd.record.id, commandID: commandID, text: text)
     }
 
     // MARK: - Registration input

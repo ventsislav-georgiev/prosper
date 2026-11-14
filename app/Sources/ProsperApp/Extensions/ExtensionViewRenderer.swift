@@ -541,7 +541,29 @@ final class ExtensionViewPanel {
     /// #1113: the extension whose view the window holds, nil once it closes (either way: the close
     /// button or host.window.close). A hotkey on that extension's window command toggles the window.
     private(set) var owner: String?
+    /// #1123: what a shortcut asked for: the extension, the command and the text its handler got, compared whole.
+    struct Identity: Equatable, Sendable {
+        let extensionID: String
+        let commandID: String
+        let text: String
+    }
+    /// #1123: the shortcut press whose view the window holds; nil when nothing named it (the runner, or the
+    /// extension opening a window by itself), cleared with the owner.
+    private(set) var identity: Identity?
+    /// #1123: set by ExtensionShortcuts.toggleWindow right before it fires; the next present takes it when its
+    /// extension matches (the handler presents during the invoke the fire starts) and drops it either way; pressEnded drops one no present took once that invoke has ended.
+    var pending: Identity?
     private var closeObserver: NSObjectProtocol?
+
+    /// #1123: the invoke a press started has ended (main actor, from the press's fire Task after its await). The
+    /// handler presents during that invoke, so a pending identity still equal to this press's was taken by no
+    /// present and goes: a view the extension opens after this is the extension acting by itself and is named
+    /// after no press (the 1113 rule applies to it; a re-present into its own open window keeps that view's
+    /// identity). A later press's pending, another identity, stays. shortcut: two presses of ONE shortcut in
+    /// flight share one value, so the first to end clears both; a press number would tell them apart.
+    func pressEnded(_ pressed: Identity?) {
+        if let pressed, pending == pressed { pending = nil }
+    }
 
     /// The on-screen calls, a seam (#1113): a test must not order the window front or make it key.
     var onScreen: (NSWindow) -> Void = { win in
@@ -598,10 +620,14 @@ final class ExtensionViewPanel {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.owner = nil
+                    self?.identity = nil
                     DockPolicy.windowDidHide(win)
                 }
             }
         }
+        // #1123: the press that fired names the view; the same extension re-presenting into its open window keeps it.
+        identity = pending?.extensionID == owner ? pending : (owner == self.owner ? identity : nil)
+        pending = nil
         self.owner = owner
         onScreen(win)
     }
