@@ -421,6 +421,25 @@ final class TextViewerLayoutTests: XCTestCase {
         XCTAssertEqual(h.clip.bounds.minY, -h.scroll.contentInsets.top, accuracy: 0.5, "the clip is at the top")
     }
 
+    /// R1155-1: the same reload to an empty text in a text area shorter than the empty text's own height
+    /// (its insets and one line). AppKit keeps the clip inside the new frame, which there is not the top:
+    /// show itself puts the clip at the top.
+    func testReloadToAnEmptyTextInAShortAreaIsAtTheTop() throws {
+        let h = try host()
+        defer { h.window.close() }
+        h.window.setContentSize(NSSize(width: 820, height: 20))
+        h.scroll.tile()
+        h.view.show(NSAttributedString(string: String(repeating: "line\n", count: 400)))
+        scroll(h, toY: 1_000)
+        XCTAssertGreaterThan(h.clip.bounds.minY, 500, "scrolled down")
+        h.view.show(NSAttributedString())
+        try draw(h)
+        Self.fact("empty, short area: clip \(h.clip.bounds), frame \(h.view.frame.height)")
+        XCTAssertEqual(h.view.textStorage?.length, 0)
+        XCTAssertGreaterThan(h.view.frame.height, h.clip.bounds.height + 1, "the empty text is taller than the area")
+        XCTAssertEqual(h.clip.bounds.minY, -h.scroll.contentInsets.top, accuracy: 0.5, "the clip is at the top")
+    }
+
     /// TextViewerWindow's "#fragment" scroll calls scrollRangeToVisible on the anchor's character; the
     /// same call here, to the middle of 1 MiB of Markdown.
     func testFarJumpInMarkdownShowsTheLine() throws {

@@ -34,6 +34,8 @@ struct TextViewerDocument: Equatable {
 
     /// Reads `url` (following a symlink to its target). Never blocks on a FIFO: O_NONBLOCK on the
     /// open, then the type and size from fstat on that same descriptor, before any read.
+    /// R1162-2: links are followed on purpose (the person chose this path, and a resolved path can keep a
+    /// system link such as /var); what is protected is the opened file's type and size, not its name.
     static func load(_ url: URL) -> Result<TextViewerDocument, Refusal> {
         let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { return .failure(errno == ENOENT || errno == ENOTDIR ? .missing : .unreadable) }

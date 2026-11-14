@@ -103,6 +103,31 @@ final class TextViewerDocumentTests: XCTestCase {
         XCTAssertEqual(try doc(link).text, "# hi\n")
     }
 
+    /// R1162-2: a link changed between two loads (a reload) is followed to what it names at the open, and
+    /// the type is the opened file's: a pipe or a folder behind the link is refused without blocking.
+    func testRepointedSymlinkIsCheckedAtTheOpen() throws {
+        let dir = tempDir("tv-doc")
+        let first = try file("first.md", Array("one\n".utf8), in: dir)
+        let second = try file("second.md", Array("two\n".utf8), in: dir)
+        let fifo = dir.appendingPathComponent("pipe.md")
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
+        let sub = dir.appendingPathComponent("folder")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: false)
+        let link = dir.appendingPathComponent("link.md")
+        func point(at target: URL) throws {
+            try? FileManager.default.removeItem(at: link)
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        }
+        try point(at: first)
+        XCTAssertEqual(try doc(link).text, "one\n")
+        try point(at: second)
+        XCTAssertEqual(try doc(link).text, "two\n", "the link the person opened is followed, to its target now")
+        try point(at: fifo)
+        XCTAssertEqual(TextViewerDocument.load(link), .failure(.notRegular), "a pipe behind the link")
+        try point(at: sub)
+        XCTAssertEqual(TextViewerDocument.load(link), .failure(.notRegular), "a folder behind the link")
+    }
+
     func testLineEndings() {
         let cases: [(String, TextViewerDocument.LineEnding)] = [
             ("", .none), ("one line", .none), ("a\nb\n", .lf), ("a\r\nb\r\n", .crlf), ("a\rb\r", .cr),
