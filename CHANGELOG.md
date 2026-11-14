@@ -759,6 +759,10 @@ tag from the now-released section and put it on the new top draft.
   first nine live sessions shows its ⌘ number as a chip, as in Clipboard History. (#1110)
 - File search now offers "Open in Prosper" on every file the Text Viewer can show (logs, source code
   and other plain-text files), not only Markdown and .txt files. (#1148)
+- Hammerspoon Compat: a timer's running() now reports whether the timer is armed (started, stopped,
+  or a one-shot that already fired) instead of always answering true. (#1161)
+- Hammerspoon Compat: a config that replaces a standard string function can no longer act with
+  permissions left over from an earlier run that was stopped for running too long. (#1161)
 
 ## v2.174.0
 

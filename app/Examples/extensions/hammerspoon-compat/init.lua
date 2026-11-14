@@ -84,17 +84,24 @@ end
 
 -- The ctx whose fired callback is running right now, else nil (#1158). Same shape as
 -- `registering`: a callback that spends its budget never reaches the line that clears it,
--- so run_user_config clears it before any new run, and an object of the aborted ctx kept
--- where a later run can reach it cannot act from that run.
+-- so an object of the aborted ctx kept where a later run can reach it could act later.
 local firing = nil
 
 -- The register ctx whose config top level is running right now, else nil (#1156). An object
 -- made in a register run acts at register time only while this names its ctx, so one the
 -- config stores where a later run can reach it (the shared string/table/math tables) cannot
--- act from that later run. run_user_config sets it around the chunk; a run that spends its
--- budget never reaches the line that clears it, so ensure_ctx and hs_eventtap_dispatch, which
--- can run config code without a new run_user_config, clear it first.
+-- act from that later run. run_user_config sets it around the chunk.
 local registering = nil
+
+-- A run or callback that spends its budget never reaches the line that clears its marker.
+-- Every host entry point therefore clears both on its first line (#1161): the shim calls
+-- library functions a config can replace (string.match, ...) before it sets a marker, and
+-- that config code must not act under a marker a stopped run left.
+
+-- Host timers this VM armed and has not seen cancelled or fired once, by creation index
+-- (the id is "hst_<idx>", the same in every run of one config). timer:running() reads it;
+-- an evicted VM starts empty and learns a repeating timer again when it fires.
+local timer_running = {}
 
 local function build_hs(ctx)
     local warned = {}
@@ -447,21 +454,26 @@ local function build_hs(ctx)
     -- multiply timers; it only repopulates ctx.timers so the right closure fires.
     local function schedule_timer(seconds, fn, repeating)
         local idx = #ctx.timers + 1
-        ctx.timers[idx] = { fn = fn }
+        ctx.timers[idx] = { fn = fn, repeating = repeating }
         local id = "hst_" .. idx
         local function arm()
             if type(seconds) == "number" and fn then
                 host.timer.schedule(repeating
                     and { id = id, every = seconds, handler = "hs_timer_fired" }
                     or  { id = id, after = seconds, handler = "hs_timer_fired" })
+                timer_running[idx] = true
             end
         end
         if allowed() then arm() end -- created started (hs semantics); rebuild won't re-arm
         return setmetatable({}, { __index = function(_, k)
             -- Gated like doAfter/doEvery: a re-run's top level must not re-arm or cancel it (#1158).
-            if k == "stop" then return function(s) if allowed() then host.timer.cancel(id) end; return s end end
+            if k == "stop" then return function(s)
+                if allowed() then host.timer.cancel(id); timer_running[idx] = nil end
+                return s
+            end end
             if k == "start" then return function(s) if allowed() then arm() end; return s end end
-            if k == "running" then return function() return true end end
+            -- What this VM did to host timer `id` (#1161), not a host query; see timer_running.
+            if k == "running" then return function() return timer_running[idx] == true end end
             return function(s) return s end -- fire()/setNextTrigger()/… chainable no-op
         end })
     end
@@ -791,7 +803,6 @@ end
 -- out / retargeting an hs.application.watcher) takes effect on the next event
 -- without a manual re-read, instead of the stale closure glitch-switching the layout.
 local function ensure_ctx()
-    registering = nil -- left set by a register run that spent its budget; no top level runs here
     if not (_HS and _HS.ctx) or _HS.mtime ~= config_mtime() then
         run_user_config("rebuild")
     end
@@ -815,6 +826,7 @@ local function fire_timer(idx)
     local ctx = _HS and _HS.ctx
     local t = ctx and ctx.timers and ctx.timers[idx]
     if not (t and t.fn) then return false end
+    timer_running[idx] = t.repeating or nil -- a one-shot is spent once it fires; a repeating one runs on
     firing = ctx
     local ok, err = pcall(t.fn)
     firing = nil
@@ -850,6 +862,7 @@ local function teardown()
         for i = 1, #_HS.ctx.timers do host.timer.cancel("hst_" .. i) end
     end
     _HS = nil
+    timer_running = {}
     host.keys.set_rules({}) -- drop all our key rules
     host.log.info("hammerspoon-compat: disabled, rules cleared")
 end
@@ -858,6 +871,7 @@ end
 
 -- system.launch: the ONLY thing that runs unconditionally. Gated on `enabled`.
 function on_launch(_payload)
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     if not is_enabled() then return end -- disabled => do nothing at all
     install()
 end
@@ -866,6 +880,7 @@ end
 -- HOT PATH: warm VM fires the cached closure directly (no I/O / parse). A cold or
 -- evicted VM rebuilds the closures once (effects suppressed), then fires.
 function hs_dispatch(arg)
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     if not is_enabled() then return end
     local idx = tonumber(arg)
     if not idx then return end
@@ -876,6 +891,7 @@ end
 -- timer.fired event -> fire the timer closure. payload is JSON {id="hst_<idx>"}.
 -- Same warm/cold contract as hs_dispatch: warm VM fires directly; cold rebuilds once.
 function hs_timer_fired(payload)
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     if not is_enabled() then return end
     local data = payload and host.json.decode(payload) or nil
     local id = data and data.id
@@ -907,6 +923,7 @@ end
 -- NOTE: url-dispatcher also subscribes url.open — if both are enabled WITH routing,
 -- a link opens twice. Disable url-dispatcher to let init.lua drive URL routing.
 function hs_url_open(payload)
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     if not is_enabled() then return end
     local data = payload and host.json.decode(payload) or nil
     if type(data) ~= "table" then return end
@@ -926,6 +943,7 @@ end
 -- (appName, "activated", appObject). Same warm/cold contract as hs_dispatch. Common
 -- use: per-app keyboard input source switching via hs.keycodes.currentSourceID.
 function hs_app_activated(payload)
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     if not is_enabled() then return end
     local data = payload and host.json.decode(payload) or nil
     if type(data) ~= "table" then return end
@@ -956,6 +974,7 @@ end
 -- Returns "keyDown", "systemDefined", "keyDown,systemDefined", or "" (no tap).
 -- Re-runs the config (effects suppressed) so a live edit/reload is picked up.
 function hs_eventtap_probe()
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     if not is_enabled() then _HS = nil; return "" end
     local ctx = run_user_config("rebuild")
     if not (ctx and ctx.eventtaps) then return "" end
@@ -982,8 +1001,8 @@ end
 -- HOT PATH: fires the cached closures directly (no reparse). Cold/evicted VM
 -- rebuilds once. firing = ctx lets the callback's side-effecting hs.* run.
 function hs_eventtap_dispatch(payload)
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     if not is_enabled() then return "false" end
-    registering = nil -- as in ensure_ctx: this hot path fires without a new run_user_config
     if not (_HS and _HS.ctx and _HS.ctx.eventtaps) then run_user_config("rebuild") end
     local ctx = _HS and _HS.ctx
     if not (ctx and ctx.eventtaps) then return "false" end
@@ -1154,6 +1173,7 @@ end
 -- nothing — the toggle would never install rules without a restart/Apply).
 -- That lets the enable toggle install/teardown live, the moment it's flipped.
 function settings_render(section_id, _state)
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     return host.ui.settings.render(host.ui.settings.ui {
         title = "Hammerspoon",
         subtitle = "Run your ~/.hammerspoon/init.lua through Prosper",
@@ -1215,6 +1235,7 @@ end
 -- pref itself, then installs (on) or tears down (off) immediately — no restart,
 -- no separate Apply step.
 function settings_action(section_id, actionID, value, _formJSON)
+    firing, registering = nil, nil -- first line of every entry point: see `registering`
     if actionID == "set:enabled" then
         host.prefs.set("enabled", value == "true" and "true" or "false")
         if is_enabled() then install() else teardown() end

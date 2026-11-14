@@ -574,6 +574,19 @@ check(#scheduled == 4 and #cancelled == 2 and cancelled[2] == "hst_1",
       "a fired callback stops and starts it")
 table.__t_stop = nil
 
+-- 9p. timer:running() answers what this VM did to the host timer (#1161): armed at
+--     register; turning the extension off cancels every timer, so false after that.
+FAKE_INIT = [[
+table.__t_timer = hs.timer.doEvery(60, function() end)
+]]
+env._HS = nil
+on_launch(nil)
+check(table.__t_timer:running() == true, "timer running() after register armed it")
+env.settings_action("hammerspoon-compat", "set:enabled", "false", "{}")
+check(table.__t_timer:running() == false, "timer running() after turning the extension off")
+prefs.enabled = "true"
+table.__t_timer = nil
+
 -- 9m. A register ctx allows effects only while its top level runs or one of its callbacks
 --     fires (#1156). An app object a register run stores in a table every run shares (the
 --     standard `table` library here) cannot hide from a later run's top level; its own fired

@@ -10,8 +10,9 @@ import LuaRuntime
 ///
 /// Every host call is a stub: `host.apps.frontmost` returns a fixed fake app, `host.apps.hide` only records
 /// the bundle id it was given, `host.apps.windows` answers 0, `host.fs.read` returns the config string of
-/// the row, and everything else the paths touch is a no-op. No app is hidden, no event is posted, no tap
-/// is installed, and no file is read.
+/// the row, `host.timer.schedule`/`cancel` and `host.alert.show` only append to a list, `host.keyboard` answers a
+/// fixed layout and no layouts, and everything else the paths touch is a no-op. No app is hidden, no event is
+/// posted, no tap is installed, no timer is armed, and no file is read.
 final class HammerspoonCompatFiringTests: XCTestCase {
 
     private static let front = "com.example.front"
@@ -60,7 +61,10 @@ final class HammerspoonCompatFiringTests: XCTestCase {
         local noop = function() end
         __t_timer_log = {}
         function __t_timers() return table.concat(__t_timer_log, ",") end
+        __t_alert_log = {}
+        function __t_alerts() return table.concat(__t_alert_log, "|") end
         host = {
+            alert = { show = function(t) __t_alert_log[#__t_alert_log + 1] = t end },
             prefs = { get = function(k) if k == "enabled" then return "true" end end, set = noop },
             fs = { read = function() return __t_read() end },
             json = { decode = function(s) return __t_jdec(s) end, encode = function() return "{}" end },
@@ -68,6 +72,8 @@ final class HammerspoonCompatFiringTests: XCTestCase {
             time = function() return 0 end,
             env = { get = function() return nil end },
             keys = { set_rules = noop, stroke = noop, system = noop },
+            -- The settings diagnostics list layouts with ipairs: the catch-all stub below never ends that list.
+            keyboard = { current_source = function() return "com.example.layout" end, layouts = function() return {} end },
             timer = {
                 schedule = function(o) __t_timer_log[#__t_timer_log + 1] = "schedule " .. tostring(o.id) end,
                 cancel = function(id) __t_timer_log[#__t_timer_log + 1] = "cancel " .. tostring(id) end,
@@ -92,6 +98,20 @@ final class HammerspoonCompatFiringTests: XCTestCase {
             make_app("Probe", "com.example.probe", 1, c).hide()
             host.apps.hide = real
             return tostring(hit)
+        end
+        -- The global functions init.lua defines: every global the stub did not define before it loads.
+        function __t_defined()
+            local out = {}
+            for k, v in pairs(_G) do
+                if type(v) == "function" and not __t_before[k] then out[#out + 1] = k end
+            end
+            table.sort(out)
+            return table.concat(out, ",")
+        end
+        do
+            local before = { __t_before = true }
+            for k in pairs(_G) do before[k] = true end
+            __t_before = before
         end
         """#, name: "=hoststub")
         try lua.run(Self.facadeSource(), name: "@hammerspoon-compat")
@@ -311,5 +331,181 @@ final class HammerspoonCompatFiringTests: XCTestCase {
         try lua.callGlobal("hs_dispatch", ["1"])
         XCTAssertEqual(try lua.callGlobal("__t_timers"), registered + ",cancel hst_1,schedule hst_1",
                        "a fired callback stops and starts it")
+    }
+
+    // MARK: - #1161: config code the shim runs before an entry point's callback, timer running()
+
+    /// Every global function the host calls into, each with arguments that reach its callback or its run.
+    private static let entryPoints: [(String, [String])] = [
+        ("on_launch", [""]),
+        ("hs_dispatch", ["1"]),
+        ("hs_timer_fired", [#"{"id":"hst_1"}"#]),
+        ("hs_url_open", [#"{"url":"https://example.com/a?b=c"}"#]),
+        ("hs_app_activated", [#"{"name":"Example","bundleID":"com.example.other","pid":7}"#]),
+        ("hs_eventtap_probe", []),
+        ("hs_eventtap_dispatch",
+         [#"{"type":"keyDown","keyCode":0,"flags":{"cmd":false,"alt":false,"ctrl":false,"shift":false,"fn":false}}"#]),
+        ("settings_render", ["hammerspoon-compat", "{}"]),
+        ("settings_action", ["hammerspoon-compat", "reload", "", "{}"]),
+    ]
+
+    /// The entry points that call a library function the config replaced before their callback runs.
+    private static let callsReplacedFunctionFirst: Set<String> = ["hs_timer_fired", "hs_url_open"]
+
+    /// The entry point list above is every global function init.lua defines but make_app (a helper the shim
+    /// calls, never the host), so a new entry point fails here until it is added to the rows below.
+    func testTheEntryPointsAreEveryGlobalFunctionInitLuaDefinesButMakeApp() throws {
+        XCTAssertEqual(Self.entryPoints.map { $0.0 }, ["on_launch", "hs_dispatch", "hs_timer_fired", "hs_url_open",
+                                                     "hs_app_activated", "hs_eventtap_probe", "hs_eventtap_dispatch",
+                                                     "settings_render", "settings_action"])
+        let (lua, _) = try makeRuntime(config: "")
+        XCTAssertEqual(try lua.callGlobal("__t_defined"),
+                       (Self.entryPoints.map { $0.0 } + ["make_app"]).sorted().joined(separator: ","))
+    }
+
+    /// Replaces the string functions the shim uses (and table.concat) with ones that hide through whatever
+    /// app object sits in `table.parked`, then call the original. Installed once per VM.
+    private static let replacedLibrary = """
+    if not table.replaced then
+        table.replaced = true
+        local function poke()
+            table.pokes = (table.pokes or 0) + 1
+            if table.parked then table.parked:hide() end
+        end
+        for _, n in ipairs({ "match", "gmatch", "find", "format", "gsub", "lower", "byte", "char" }) do
+            local f = string[n]
+            string[n] = function(...) poke(); return f(...) end
+        end
+        local concat = table.concat
+        table.concat = function(...) poke(); return concat(...) end
+    end
+    local function noop() end
+    hs.timer.doAfter(60, noop)
+    hs.urlevent.httpCallback = noop
+    hs.application.watcher.new(noop):start()
+    hs.eventtap.new({ hs.eventtap.event.types.keyDown }, noop):start()
+
+    """
+
+    private func probes(_ lua: LuaRuntime) throws {
+        try lua.run("""
+        function __t_runs() return tostring(table.runs) end
+        function __t_pokes() return tostring(table.pokes or 0) end
+        """, name: "=probe")
+    }
+
+    /// #1161: a register run that spends its budget in the top level leaves `registering` on its ctx, after
+    /// parking an app object of that ctx. Each entry point, called next on the same warm VM, runs the config's
+    /// replaced string functions inside the shim; none of that hides through the parked object.
+    func testAReplacedStringFunctionHidesNothingAfterARegisterRunAbortedOnItsBudget() throws {
+        let config = Self.replacedLibrary + """
+        hs.hotkey.bind({"cmd", "alt"}, "j", noop)
+        table.runs = (table.runs or 0) + 1
+        if table.runs == 2 then table.parked = hs.application.frontmostApplication(); for i = 1, 5000000 do end end
+        """
+        for (name, args) in Self.entryPoints {
+            let (lua, hidden) = try makeRuntime(config: config)
+            try probes(lua)
+            XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "keyDown", name)   // run 1: published
+            assertSpent(lua, "on_launch", "")                                          // run 2: register, aborted
+            XCTAssertEqual(try lua.callGlobal("__t_runs"), "2", "\(name): the register got past the park line")
+            XCTAssertEqual(hidden(), [], name)
+            let pokes = try lua.callGlobal("__t_pokes")
+            try lua.callGlobal(name, args)
+            XCTAssertEqual(hidden(), [], "\(name): config code inside the shim must not hide under the stopped register")
+            if Self.callsReplacedFunctionFirst.contains(name) {
+                XCTAssertNotEqual(try lua.callGlobal("__t_pokes"), pokes, "\(name): the replaced function ran")
+            }
+        }
+    }
+
+    /// #1161: a callback that spends its budget leaves `firing` on its ctx, after parking an app object of
+    /// that ctx. Each entry point, called next on the same warm VM, runs the config's replaced string functions
+    /// inside the shim; none of that hides through the parked object (the entry point's own callback is a no-op).
+    func testAReplacedStringFunctionHidesNothingAfterACallbackAbortedOnItsBudget() throws {
+        let config = Self.replacedLibrary + """
+        hs.hotkey.bind({"cmd", "alt"}, "j", noop)
+        hs.hotkey.bind({"cmd", "alt"}, "k", function()
+            table.parked = hs.application.frontmostApplication(); for i = 1, 5000000 do end
+        end)
+        """
+        for (name, args) in Self.entryPoints {
+            let (lua, hidden) = try makeRuntime(config: config)
+            try probes(lua)
+            XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "keyDown", name)   // run 1: published
+            assertSpent(lua, "hs_dispatch", "2")                                       // its callback parks, aborts
+            XCTAssertEqual(try lua.callGlobal("__t_firing"), "true", "\(name): the abort leaves firing on")
+            let pokes = try lua.callGlobal("__t_pokes")
+            try lua.callGlobal(name, args)
+            XCTAssertEqual(hidden(), [], "\(name): config code inside the shim must not hide under the stopped callback")
+            if Self.callsReplacedFunctionFirst.contains(name) {
+                XCTAssertNotEqual(try lua.callGlobal("__t_pokes"), pokes, "\(name): the replaced function ran")
+            }
+        }
+    }
+
+    /// #1161: an ordinary config that adds a string helper and wraps a string function keeps both for its own
+    /// code: the fired callback calls the helper and its wrapper (the alert recorder shows what it computed).
+    func testAConfigsOwnStringHelperAndWrapperStillWork() throws {
+        let config = """
+        local calls = 0
+        local lower = string.lower
+        string.lower = function(s) if s == "ABC" then calls = calls + 1 end; return lower(s) end
+        function string.shout(s) return s:upper() .. "!" end
+        hs.hotkey.bind({"cmd", "alt"}, "o", function()
+            hs.alert.show(("hi"):shout() .. " " .. ("ABC"):lower() .. " " .. tostring(calls))
+        end)
+        """
+        let (lua, _) = try makeRuntime(config: config)
+        try lua.callGlobal("hs_dispatch", ["1"])
+        XCTAssertEqual(try lua.callGlobal("__t_alerts"), "HI! abc 1")
+    }
+
+    /// #1161: timer:running() answers what this VM did to the host timer: armed at register, stopped and
+    /// started from a callback, a one-shot that fired, the same answers from a rebuild's objects, and a
+    /// repeating timer that fires on a VM that never armed it. The host timer is the recorder above.
+    func testATimersRunningFollowsStartStopAndFiring() throws {
+        let config = """
+        local once = hs.timer.doAfter(60, function() end)
+        local every = hs.timer.doEvery(60, function() end)
+        table.timers = { once, every }
+        hs.hotkey.bind({"cmd", "alt"}, "s", function() every:stop() end)
+        hs.hotkey.bind({"cmd", "alt"}, "t", function() every:start() end)
+        hs.hotkey.bind({"cmd", "alt"}, "o", function() once:start() end)
+        """
+        let probe = """
+        function __t_running()
+            return tostring(table.timers[1]:running()) .. "," .. tostring(table.timers[2]:running())
+        end
+        """
+        let (lua, _) = try makeRuntime(config: config)
+        try lua.run(probe, name: "=probe")
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "false,false", "a rebuild arms nothing")
+        try lua.callGlobal("on_launch", [""])
+        XCTAssertEqual(try lua.callGlobal("__t_timers"), "schedule hst_1,schedule hst_2")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,true", "register arms both")
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,true", "a rebuild's objects name the same timers")
+        try lua.callGlobal("hs_dispatch", ["1"])
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,false", "stopped from a callback")
+        try lua.callGlobal("hs_dispatch", ["2"])
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,true", "started again from a callback")
+        try lua.callGlobal("hs_timer_fired", [#"{"id":"hst_1"}"#])
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "false,true", "a one-shot that fired is spent")
+        try lua.callGlobal("hs_timer_fired", [#"{"id":"hst_2"}"#])
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "false,true", "a repeating one runs on")
+        XCTAssertEqual(try lua.callGlobal("hs_eventtap_probe"), "")
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "false,true", "the next rebuild's objects agree")
+        try lua.callGlobal("hs_dispatch", ["3"])
+        XCTAssertEqual(try lua.callGlobal("__t_running"), "true,true", "the one-shot started again")
+        XCTAssertEqual(try lua.callGlobal("__t_timers"),
+                       "schedule hst_1,schedule hst_2,cancel hst_2,schedule hst_2,schedule hst_1")
+
+        let (cold, _) = try makeRuntime(config: config)
+        try cold.run(probe, name: "=probe")
+        try cold.callGlobal("hs_timer_fired", [#"{"id":"hst_2"}"#])
+        XCTAssertEqual(try cold.callGlobal("__t_running"), "false,true", "a VM that never armed it learns it on a fire")
+        XCTAssertEqual(try cold.callGlobal("__t_timers"), "", "and makes no host timer call")
     }
 }
