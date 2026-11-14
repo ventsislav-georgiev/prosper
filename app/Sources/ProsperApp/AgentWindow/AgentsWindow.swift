@@ -89,8 +89,7 @@ final class AgentsWindow {
         let win = AgentsNSWindow(contentViewController: hosting)
         win.model = model
         // 4.2 Pick Another: the sidebar gets the keys (called on the main actor, from a button's action).
-        model.focusSidebar = { [weak win] in
-            win?.sidebarFocused = true
+        model.focusSidebar = { [weak win] in   // the model set keyFocus = .sidebar already
             win?.makeFirstResponder(nil)
         }
         win.title = title
@@ -132,8 +131,50 @@ final class AgentsWindow {
 /// #845: a row click, Return and Right (on an unfolded section) move the keyboard into the session.
 final class AgentsNSWindow: NSWindow {
     weak var model: AgentWindowModel?
-    /// The last click was in the sidebar (where the window starts).
-    var sidebarFocused = true
+    /// #831 7.2: the model's `keyFocus` (B1 step 5); the name stays for the routes and their rows. No model: the sidebar.
+    var sidebarFocused: Bool {
+        get { model.map { $0.keyFocus == .sidebar } ?? true }
+        set { model?.keyFocus = newValue ? .sidebar : .pane }
+    }
+    /// 7.6: the focusing click's down, drags and up are swallowed together.
+    private(set) var focusClick = FocusClick()
+    /// R6.9 (tests): every first-responder change asked of this window, AppKit's own included.
+    private(set) var responderAsks = 0
+
+    @discardableResult override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        responderAsks += 1
+        return super.makeFirstResponder(responder)
+    }
+
+    /// 7.6, pure: the pane a mouse-down at `p` (the pane area's coordinates, outside data) only focuses: one whose frame
+    /// holds `p` and that is not `focused`. nil: the click passes (on the focused pane, outside every frame, a point
+    /// that is not finite). With one pane every click passes. Frames tile half-open, so a shared edge is one pane's.
+    static func firstClick(at p: CGPoint, frames: [UUID: CGRect], focused: UUID) -> UUID? {
+        guard p.x.isFinite, p.y.isFinite else { return nil }
+        return frames.first { $0.key != focused && $0.value.contains(p) }?.key
+    }
+
+    /// 7.6: a small state machine over the left button. A mouse-down that only focused a pane is swallowed, and so are
+    /// its drags and its up; any other down starts a click that passes. Every other event type passes.
+    struct FocusClick: Equatable {
+        private(set) var swallowing = false
+        /// True: swallow this event. `focusing` is read on a mouse-down only.
+        mutating func take(_ type: NSEvent.EventType, focusing: Bool) -> Bool {
+            switch type {
+            case .leftMouseDown:
+                swallowing = focusing
+                return focusing
+            case .leftMouseDragged:
+                return swallowing
+            case .leftMouseUp:
+                let s = swallowing
+                swallowing = false
+                return s
+            default:
+                return false
+            }
+        }
+    }
 
     /// #822 (spec 5.3): who gets a key.
     enum KeyRoute: Equatable {
@@ -271,13 +312,19 @@ final class AgentsNSWindow: NSWindow {
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown {
-            sidebarFocused = event.locationInWindow.x < sz(290)
+        var focusing = false
+        if event.type == .leftMouseDown, let model {
+            // 7.2: the frames come from the model's geometry in the content (top-left origin), never x alone.
+            let r = contentLayoutRect, at = event.locationInWindow
+            let p = CGPoint(x: at.x - r.minX, y: r.maxY - at.y)
+            let inSidebar = model.sidebarFrame(in: r.size)?.contains(p) == true
+            focusing = model.mouseDown(at: p, in: r.size)
             // #822: a sidebar click takes the keys from the terminal, so the arrows select again;
             // #845: from the input box too (a row's click then moves them in again, on mouse-up).
-            if sidebarFocused, responderKind == .terminal || firstResponder is AgentComposerTextView { makeFirstResponder(nil) }
-            if sidebarFocused { model?.dropPendingFocus() }   // QA #694 INFO-2: a row's click asks again, on mouse-up
+            if inSidebar, responderKind == .terminal || firstResponder is AgentComposerTextView { makeFirstResponder(nil) }
+            if inSidebar { model.dropPendingFocus() }   // QA #694 INFO-2: a row's click asks again, on mouse-up
         }
+        if focusClick.take(event.type, focusing: focusing) { return }   // 7.6: the first click only focuses
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
                                  terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil,
@@ -914,14 +961,20 @@ struct AgentPaneArea: View {
             let frames = model.paneFrames(in: area)
             let compact = frames.count > 1
             let twoLines = Set(frames.values.map { ($0.minY * 1000).rounded() }).count > 1
+            let ids = model.layout.order.filter { frames[$0] != nil }
             ZStack(alignment: .topLeading) {
-                ForEach(model.layout.order.filter { frames[$0] != nil }, id: \.self) { id in
+                ForEach(ids, id: \.self) { id in
                     let f = frames[id] ?? .zero
+                    let label: String? = compact ? "\(title(id)), pane \((ids.firstIndex(of: id) ?? 0) + 1) of \(ids.count)" : nil
                     pane(id, compact: compact)
                         .frame(width: f.width, height: f.height)
                         .clipped()
                         // 7.5: the line on an edge shared with a neighbour is an overlay, never padding: the pane keeps its frame.
                         .overlay(alignment: .topLeading) { edge(f) }
+                        // 7.6: the focus border or the dim, an overlay too (fixed slots: nothing moves when focus does).
+                        .overlay { mark(id, compact: compact) }
+                        // 13: more than one pane shown: each pane one container, "<title>, pane i of n".
+                        .modifier(AgentPaneContainer(label: label))
                         .modifier(AgentPaneProbe(kind: "pane"))
                         .environment(\.agentPaneID, id)
                         .environment(\.agentComposerTwoLines, twoLines)
@@ -952,6 +1005,50 @@ struct AgentPaneArea: View {
     @ViewBuilder func edge(_ f: CGRect) -> some View {
         if f.minX > 0.5 { Rectangle().fill(Neon.stroke).frame(width: 1).frame(maxHeight: .infinity) }
         if f.minY > 0.5 { Rectangle().fill(Neon.stroke).frame(height: 1).frame(maxWidth: .infinity) }
+    }
+
+    /// 7.6: more than one pane shown: the focused pane's 2·s accent border inside its frame, every other pane the dim.
+    /// One pane: neither (R1.3). Both take no hits and are hidden from accessibility (13: decorative).
+    @ViewBuilder func mark(_ id: UUID, compact: Bool) -> some View {
+        if compact {
+            if id == model.layout.focused {
+                Rectangle().strokeBorder(Neon.blue, lineWidth: sz(2))
+                    .allowsHitTesting(false).accessibilityHidden(true).modifier(AgentPaneProbe(kind: "mark"))
+            } else {
+                AgentPaneDim().modifier(AgentPaneProbe(kind: "mark"))
+            }
+        }
+    }
+
+    /// 13: the pane's name for its container: the row's title, the record's, the gone target's name; "Empty" for none.
+    func title(_ id: UUID) -> String {
+        switch model.runtimes[id]?.content {
+        case let .live(s)?: model.row(.live(s.key))?.title ?? s.key.name
+        case let .history(r)?: model.row(.history(r.id))?.title ?? r.id.name
+        case let .notRunning(k)?: k.name
+        case let .removed(t)?: AgentPanePlaceholder.name(t)
+        case nil: "Empty"
+        }
+    }
+}
+
+/// 7.6: an unfocused pane's dim. It takes no hits (the window's first-click rule decides) and is hidden from
+/// accessibility (13).
+struct AgentPaneDim: View {
+    var body: some View {
+        Neon.bgBottom.opacity(0.25).allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
+/// 13: with more than one pane shown, a pane is one accessibility container under `label`; one pane: the tree as before.
+struct AgentPaneContainer: ViewModifier {
+    let label: String?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let label {
+            content.accessibilityElement(children: .contain).accessibilityLabel(label)
+        } else {
+            content
+        }
     }
 }
 

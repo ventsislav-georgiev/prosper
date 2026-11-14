@@ -268,15 +268,56 @@ final class AgentWindowModel: ObservableObject {
     /// 4.2 "Pick Another": the window gives the sidebar the keys (AgentsWindow wires it; tests count it).
     var focusSidebar: () -> Void = {}
 
+    /// #831 7.2 (R6.1): which side takes plain arrows and Return; replaces the window's own Bool (`sidebarFocused` now
+    /// reads and writes this). Set by a click (`mouseDown`), Tab, Pick Another and the pane focus actions; a publish, an
+    /// autosave or an attention change never sets it (R6.9). Not @Published: nothing draws it.
+    var keyFocus: PaneKeys.KeyFocus = .sidebar
+
     /// 4.2 "Pick Another": focuses the pane and gives the sidebar the keys; starts nothing.
     func pickAnother(_ pane: UUID) {
         if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
+        keyFocus = .sidebar
         focusSidebar()
     }
 
-    /// 4.2 "Close Pane": the last pane is refused (7.3), so a one-pane window draws no Close Pane.
+    /// 4.2 "Close Pane": the last pane is refused (7.3), so a one-pane window draws no Close Pane. 7.2: a close moves the
+    /// keys to the panes.
     func closePane(_ pane: UUID) {
-        if case let .success(l) = layout.close(pane) { adopt(l) }
+        if case let .success(l) = layout.close(pane) { adopt(l); keyFocus = .pane }
+    }
+
+    /// 7.6: the first click on an unfocused pane focuses it; the panes take the keys (7.2).
+    func focusPane(_ pane: UUID) {
+        if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
+        keyFocus = .pane
+    }
+
+    /// 7.2: the sidebar's frame in the root view's content of `size` (top-left origin; AgentWindowRootView.split: the
+    /// sidebar sz(290) wide, a 1 pt line, the pane area). nil while no sidebar is drawn (the island off: one message).
+    func sidebarFrame(in size: CGSize) -> CGRect? {
+        hasStore ? CGRect(x: 0, y: 0, width: sz(290), height: size.height) : nil
+    }
+
+    /// The pane area's frame in the same content: right of the sidebar and its line; nil with no store.
+    func paneAreaFrame(in size: CGSize) -> CGRect? {
+        hasStore ? CGRect(x: sz(290) + 1, y: 0, width: max(0, size.width - sz(290) - 1), height: size.height) : nil
+    }
+
+    /// 7.2 / 7.6: a left mouse-down at `p` in the content of `size` (top-left origin). Outside data: a point or size that
+    /// is not finite changes nothing. In the sidebar: the sidebar takes the keys. In a pane frame: the panes do, and an
+    /// unfocused pane is focused (`AgentsNSWindow.firstClick`). Elsewhere (the 1 pt line): nothing changes.
+    /// True: the click only focused a pane, so the window swallows it with its drags and its up.
+    func mouseDown(at p: CGPoint, in size: CGSize) -> Bool {
+        guard p.x.isFinite, p.y.isFinite, size.width.isFinite, size.height.isFinite else { return false }
+        if sidebarFrame(in: size)?.contains(p) == true { keyFocus = .sidebar; return false }
+        guard let a = paneAreaFrame(in: size), a.contains(p) else { return false }
+        let local = CGPoint(x: p.x - a.minX, y: p.y - a.minY)
+        let frames = paneFrames(in: CGRect(origin: .zero, size: a.size))
+        guard frames.values.contains(where: { $0.contains(local) }) else { return false }
+        keyFocus = .pane
+        guard let id = AgentsNSWindow.firstClick(at: local, frames: frames, focused: layout.focused) else { return false }
+        focusPane(id)
+        return true
     }
 
     private(set) var store: AgentIslandStore?

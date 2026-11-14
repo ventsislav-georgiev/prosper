@@ -111,6 +111,8 @@ extension AgentWindowD1Tests {
             let fullHeader = try XCTUnwrap(one["header 0"], "the header (\(scale))")
             XCTAssertGreaterThan(fullHeader.height, AgentCompactHeader.height + 1, "one pane: the full header (\(scale))")
             XCTAssertEqual(one["composer 0"]?.height ?? -1, sz(60), accuracy: 0.5, "60·s (\(scale))")
+            // R1.3 (7.6): one pane: no focus border, no dim; the slots above are step 4's, unchanged.
+            XCTAssertTrue(one["mark 0"] == nil, "one pane: neither the border nor the dim (\(scale))")
 
             // Two panes, columns.
             AgentPaneLayout.splitsEnabled = true
@@ -120,6 +122,8 @@ extension AgentWindowD1Tests {
             for i in 0..<2 {
                 let id = m.layout.order[i]
                 assertSame(base["pane \(i)"], frames[id], "pane \(i) at the model's frame (\(scale))")
+                // 7.6: the border (focused) or the dim (the other) is an overlay at the pane's own frame.
+                assertSame(base["mark \(i)"], frames[id], "the focus mark of pane \(i) covers its frame exactly (\(scale))")
                 let h = base["header \(i)"], p = base["pane \(i)"]
                 XCTAssertEqual(h?.minX ?? -1, p?.minX ?? -2, accuracy: 0.5, "header \(i) starts at the pane's edge (\(scale))")
                 XCTAssertEqual(h?.width ?? -1, p?.width ?? -2, accuracy: 0.5, "header \(i) spans the pane (\(scale))")
@@ -182,6 +186,9 @@ extension AgentWindowD1Tests {
         m.interaction.draft = "half a thought"
         settle(host)
         let writes = m.layoutWrites
+        // R6.9 (7.2): the panes hold the keys; nothing below may change that or ask for a first responder.
+        m.keyFocus = .pane
+        let asks = win.responderAsks
         for i in 0..<50 { st.sessions = [session("api", .idle, ago: Double(60 + i)), session("web", .idle)] }
         st.sessions = [session("api", .idle), session("web", .blocked)]   // attention in the other pane
         var renamed = m.layout
@@ -192,6 +199,8 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(win.firstResponder === field, "the same field keeps the keys")
         XCTAssertEqual(m.interaction.draft, "half a thought")
         XCTAssertEqual(m.selection, selection)
+        XCTAssertEqual(m.keyFocus, .pane, "R6.9: no publish, autosave or attention change moves the key focus")
+        XCTAssertEqual(win.responderAsks, asks, "R6.9: and none asks for a first responder")
         XCTAssertFalse(win.isVisible)
     }
 
@@ -218,11 +227,14 @@ extension AgentWindowD1Tests {
         m.focusSidebar = { asked += 1 }
         m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
         let second = try XCTUnwrap(m.layout.order.last)
+        m.keyFocus = .pane
         m.pickAnother(second)
         XCTAssertEqual(m.layout.focused, second)
         XCTAssertEqual(asked, 1)
+        XCTAssertEqual(m.keyFocus, .sidebar, "7.2: Pick Another gives the sidebar the keys")
         m.closePane(second)
         XCTAssertEqual(m.layout.panes.count, 1)
+        XCTAssertEqual(m.keyFocus, .pane, "7.2: a close gives the panes the keys")
         let last = m.layout.focused
         m.closePane(last)
         XCTAssertEqual(m.layout.panes.count, 1, "the last pane stays (7.3)")

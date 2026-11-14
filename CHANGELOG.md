@@ -970,6 +970,8 @@ tag from the now-released section and put it on the new top draft.
   scroll and not only the visible part, to the clipboard as a PNG; a very long document is copied at
   1x, and past the image height limit its top part is copied and the notice names the lines
   included. (#1107)
+- Agent Sessions: dragging the window by its top strip, or clicking the thin line beside the session
+  list, no longer moves the arrow keys between the list and the session. (#1196)
 
 ## v2.174.0
 
