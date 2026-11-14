@@ -774,4 +774,66 @@ final class FanControlCoreTests: XCTestCase {
         XCTAssertEqual(core.holder, idA)
         XCTAssertEqual(core.supervise(maxCelsius: 50, isManualEngaged: { _ in false }), .reassert([0]))
     }
+
+    // MARK: - Entry 1208: one engage body, a code per outcome
+
+    /// Each outcome on the fake fan (no SMC): the code `setFanManualRPMWithReason` replies, and on an identical
+    /// second core the Bool `setFanManualRPM` replies, which is `code == .engaged` with the same calls made
+    /// (one body). A throwing write is code 4 and still throws from the Bool path.
+    func testEngageCodePerOutcomeAndTheBoolIsCodeZero() throws {
+        struct Case { let name: String; let latched: Bool; let advance: Double; let rpm: Double; let want: FanEngageCode
+                      let setUp: (FakeFan) -> Void }
+        let cases = [
+            Case(name: "unlatched", latched: false, advance: 0, rpm: 1800, want: .engaged, setUp: { _ in }),
+            Case(name: "inside the window", latched: true, advance: 0, rpm: 5000, want: .settling, setUp: { _ in }),
+            Case(name: "below macOS", latched: true, advance: 60, rpm: 2000, want: .belowMacOS,
+                 setUp: { $0.actual = [0: 3000]; $0.target = [0: 3000] }),
+            Case(name: "sensor unreadable", latched: true, advance: 60, rpm: 5000, want: .unreadable,
+                 setUp: { $0.temperature = nil }),
+            Case(name: "speed unreadable", latched: true, advance: 60, rpm: 5000, want: .unreadable, setUp: { _ in }),
+            Case(name: "latched at macOS speed", latched: true, advance: 60, rpm: 3000, want: .engaged,
+                 setUp: { $0.actual = [0: 3000]; $0.target = [0: 2000] }),
+            Case(name: "write throws", latched: false, advance: 0, rpm: 2000, want: .writeFailed,
+                 setUp: { $0.writeFails = true }),
+            Case(name: "NaN", latched: false, advance: 0, rpm: .nan, want: .inert, setUp: { _ in }),
+            Case(name: "infinity, latched", latched: true, advance: 60, rpm: .infinity, want: .inert, setUp: { _ in }),
+        ]
+        for c in cases {
+            func make() -> (FanControlCore, FakeFan) {
+                let clock = Clock()
+                let core = c.latched ? makeTripped(clock) : makeCore().0
+                clock.advance(c.advance)
+                let fan = FakeFan()
+                c.setUp(fan)
+                return (core, fan)
+            }
+            let (codeCore, codeFan) = make()
+            var failures = 0
+            let code = codeCore.engageCode(codeFan, index: 0, rpm: c.rpm, holder: idA, arm: { codeFan.calls.append("arm") },
+                                           refused: { _ in }, failed: { _ in failures += 1 })
+            XCTAssertEqual(code, c.want, c.name)
+            XCTAssertEqual(failures, c.want == .writeFailed ? 1 : 0, c.name)
+            let (boolCore, boolFan) = make()
+            var bool: Bool?
+            do {
+                bool = try boolCore.engage(boolFan, index: 0, rpm: c.rpm, holder: idA, arm: { boolFan.calls.append("arm") },
+                                           refused: { _ in })
+            } catch {
+                XCTAssertEqual(c.want, .writeFailed, "\(c.name): only a failed write throws")
+            }
+            XCTAssertEqual(bool ?? false, code == .engaged, "\(c.name): the Bool reply is code == 0")
+            XCTAssertEqual(boolFan.calls, codeFan.calls, "\(c.name): one body, the same reads, arm and write")
+            XCTAssertEqual(boolCore.heldTargets, codeCore.heldTargets, c.name)
+            XCTAssertEqual(boolCore.lastRefusal, codeCore.lastRefusal, c.name)
+        }
+    }
+
+    /// The codes on the wire are the protocol's constants, and the identity this helper build answers.
+    func testEngageCodeRawValuesAndTheHelperIdentityConstants() {
+        XCTAssertEqual([FanEngageCode.engaged, .settling, .belowMacOS, .unreadable, .writeFailed, .inert].map(\.rawValue),
+                       [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(helperProtocolVersion, 1)
+        XCTAssertEqual(helperCapabilityFanReason, 1)
+        XCTAssertEqual(helperCapabilities & helperCapabilityFanReason, helperCapabilityFanReason)
+    }
 }

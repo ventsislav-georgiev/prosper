@@ -38,6 +38,9 @@ final class DchFanCommandsTests: XCTestCase {
             func sleepNow(withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) { reply(false) }
             func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) { autos.append(index); reply(true) }
+            // Entry 1208: the app never sends these on the fan connection.
+            func helperInfo(withReply reply: @escaping (Int, Int) -> Void) { XCTFail("helperInfo on the fan connection") }
+            func setFanManualRPMWithReason(_ index: Int, rpm: Double, withReply reply: @escaping (Int) -> Void) { XCTFail("reason engage") }
             /// Replies late, like a real helper, so a reply sent before the reset landed shows.
             func resetAllFans(withReply reply: @escaping (Bool) -> Void) {
                 resets += 1

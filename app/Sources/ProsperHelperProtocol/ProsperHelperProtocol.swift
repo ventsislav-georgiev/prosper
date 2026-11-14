@@ -86,4 +86,38 @@ public let legacyHelperLabel = "eu.illegible.prosper.lidhelper"
     /// by the app on explicit disable and on system sleep, and by the daemon itself
     /// on cold start + on last-client-drop. Idempotent. `reply(true)` once issued.
     func resetAllFans(withReply reply: @escaping (Bool) -> Void)
+
+    /// Entry 1208: which helper answers. `protocolVersion` is `helperProtocolVersion` of the helper's
+    /// build, `capabilities` its `helperCapabilities` bit set. Constants: touches no fan, no SMC, no pmset,
+    /// and replies at once (not behind a fan write). A helper from before this call closes the connection
+    /// it arrives on, so the app asks it on a throwaway connection of its own, never the fan or lid one.
+    func helperInfo(withReply reply: @escaping (_ protocolVersion: Int, _ capabilities: Int) -> Void)
+
+    /// Entry 1208: `setFanManualRPM` with the helper's reason, a `FanEngageCode` raw value. Same gate,
+    /// arm, write and queue as `setFanManualRPM` (whose `true` is exactly code 0). Only sent to a helper
+    /// whose `helperInfo` has `helperCapabilityFanReason`.
+    func setFanManualRPMWithReason(_ index: Int, rpm: Double, withReply reply: @escaping (_ code: Int) -> Void)
+}
+
+/// Entry 1208: `helperInfo`'s version. 1 = the first revision with `helperInfo` and `setFanManualRPMWithReason`.
+public let helperProtocolVersion = 1
+/// `helperInfo`'s capability bit 0: the helper answers `setFanManualRPMWithReason`.
+public let helperCapabilityFanReason = 1
+/// What this build's helper answers in `helperInfo`.
+public let helperCapabilities = helperCapabilityFanReason
+
+/// Entry 1208: `setFanManualRPMWithReason`'s reply. A reader treats any other value as `writeFailed`.
+public enum FanEngageCode: Int, Sendable {
+    /// The pin landed (`setFanManualRPM` replies true for this one only).
+    case engaged = 0
+    /// The kill-switch latch: inside the settle window after a trip or a handback.
+    case settling = 1
+    /// The kill-switch latch: the speed is below the one macOS runs the fan at.
+    case belowMacOS = 2
+    /// The kill-switch latch: the hottest sensor or the fan's speed did not read (fail closed).
+    case unreadable = 3
+    /// The SMC write threw; the fan was handed back where that could be done.
+    case writeFailed = 4
+    /// Nothing tried: no SMC controller, no current connection, or a non-finite speed.
+    case inert = 5
 }

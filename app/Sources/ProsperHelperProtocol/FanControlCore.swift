@@ -75,18 +75,38 @@ public final class FanControlCore {
     /// while latched), then `arm` (the supervision timer), then the write. False = refused: nothing
     /// armed or written, and `refused` gets the reason once per change in a latched episode (the
     /// daemon's log line). A throwing write rethrows with the holder and target still recorded.
+    /// Entry 1208: the Bool is `engageCode(...) == .engaged` of the one body, the thrown write error rethrown.
     public func engage(_ fan: FanHardware, index: Int, rpm: Double, holder: ObjectIdentifier,
                        arm: () -> Void, refused: (Refusal) -> Void) throws -> Bool {
+        var thrown: Error?
+        let code = engageCode(fan, index: index, rpm: rpm, holder: holder, arm: arm, refused: refused,
+                              failed: { thrown = $0 })
+        if let thrown { throw thrown }
+        return code == .engaged
+    }
+
+    /// Entry 1208: the one engage body, for `setFanManualRPM` and `setFanManualRPMWithReason`. The gate, the
+    /// arm and the write as `engage` documents; the outcome as a code. A non-finite speed is `.inert` before
+    /// anything (manualRequest refuses it too, but keeps `lastRefusal`, so the code cannot come from there).
+    /// A refusal's code is the reason the gate just recorded. A throwing write goes to `failed` (the daemon's
+    /// log line) and is `.writeFailed`, with the holder and target still recorded as before.
+    public func engageCode(_ fan: FanHardware, index: Int, rpm: Double, holder: ObjectIdentifier,
+                           arm: () -> Void, refused: (Refusal) -> Void, failed: (Error) -> Void) -> FanEngageCode {
+        guard rpm.isFinite else { return .inert }
         let seen = lastRefusal
         guard manualRequest(index: index, rpm: rpm, holder: holder,
                             maxCelsius: fan.maxTemperature(complete: true),
                             macOSRPM: Self.macOSSpeed(current: fan.currentRPM(index), target: fan.targetRPM(index))) else {
             if let why = lastRefusal, why != seen { refused(why) }
-            return false
+            switch lastRefusal {
+            case .settling?: return .settling
+            case .belowMacOS?: return .belowMacOS
+            case .unreadable?, nil: return .unreadable   // nil: unreachable, every gate refusal records its reason
+            }
         }
         arm()
-        try fan.setManual(index, rpm: rpm)
-        return true
+        do { try fan.setManual(index, rpm: rpm) } catch { failed(error); return .writeFailed }
+        return .engaged
     }
 
     /// `setFanAuto` succeeded on `index`. Returns true when the daemon must arm

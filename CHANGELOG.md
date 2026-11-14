@@ -1018,6 +1018,9 @@ tag from the now-released section and put it on the new top draft.
   the next one through, and asking twice for the same change (a double Uninstall) shows one sheet
   instead of two; a second request shares the first one's answer only when it would write exactly
   the same bytes, with the same file mode, to the same files. (#947)
+- Fans: when the Prosper helper still running is from an older version, a refused Manual fan speed
+  now says that the helper cannot tell Prosper why it refused. Prosper says so only after the helper
+  has shown it is older. (#1208)
 
 ## v2.174.0
 

@@ -174,10 +174,28 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // wouldn't trigger the crash reset (the fan would outlive its only client until
         // the next drop / cold start). A handler always has a current connection, so this
         // only rejects a genuinely connectionless call.
-        guard let conn = NSXPCConnection.current() else { reply(false); return }
+        // Entry 1208: one body for both selectors; this one replies true for code 0 only.
+        engageFan(index, rpm: rpm) { reply($0 == .engaged) }
+    }
+
+    /// Entry 1208: `setFanManualRPM` with its reason code (`FanEngageCode`); the same body, queue and checks.
+    func setFanManualRPMWithReason(_ index: Int, rpm: Double, withReply reply: @escaping (Int) -> Void) {
+        engageFan(index, rpm: rpm) { reply($0.rawValue) }
+    }
+
+    /// Entry 1208: which helper answers. Constants, replied here on the XPC queue that delivered the call:
+    /// not on `q` and not on `fanQ`, where a fan write can take seconds and would read as an old helper.
+    func helperInfo(withReply reply: @escaping (Int, Int) -> Void) {
+        reply(helperProtocolVersion, helperCapabilities)
+    }
+
+    /// The engage both fan selectors share. Called inside the XPC handler, so `current()` is that call's
+    /// connection; the gate, arm and write run in FanControlCore.engageCode inside one fanQ block.
+    private func engageFan(_ index: Int, rpm: Double, reply: @escaping (FanEngageCode) -> Void) {
+        guard let conn = NSXPCConnection.current() else { reply(.inert); return }
         let cid = ObjectIdentifier(conn)
         fanQ.async {
-            guard let fan = self.fan else { fanLog.error("setFanManualRPM: no SMC fan controller — inert"); reply(false); return }
+            guard let fan = self.fan else { fanLog.error("setFanManualRPM: no SMC fan controller — inert"); reply(.inert); return }
             // Kill-switch hysteresis: a pin was just reset at the cut-off. Never hold a
             // fan below macOS's own speed then: ANY client's engage is refused before
             // any write or arming until the chassis is back below re-arm, except one at
@@ -185,20 +203,17 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             // settle window has passed.
             // The core also records holder + target and arms crash-safety BEFORE the
             // risky write (see FanControlCore.manualRequest). Read, gate, arm and write all
-            // run in FanControlCore.engage, inside this one fanQ block (unit-tested, #926).
-            do {
-                guard try self.fanCore.engage(fan, index: index, rpm: rpm, holder: cid,
-                                              arm: { self.armFanKillSwitch_fanQ() },
-                                              refused: { why in
-                    // One line per reason change in a latched episode, not one per retry.
-                    fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) refused (\(why.rawValue, privacy: .public)): kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C; at or above macOS's speed after \(FanControlCore.reTakeSettleSeconds, privacy: .public) s")
-                }) else { reply(false); return }
-                fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) ok")
-                reply(true)
-            } catch {
+            // run in FanControlCore.engageCode, inside this one fanQ block (unit-tested, #926, #1208).
+            let code = self.fanCore.engageCode(fan, index: index, rpm: rpm, holder: cid,
+                                               arm: { self.armFanKillSwitch_fanQ() },
+                                               refused: { why in
+                // One line per reason change in a latched episode, not one per retry.
+                fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) refused (\(why.rawValue, privacy: .public)): kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C; at or above macOS's speed after \(FanControlCore.reTakeSettleSeconds, privacy: .public) s")
+            }, failed: { error in
                 fanLog.error("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)")
-                reply(false)
-            }
+            })
+            if code == .engaged { fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) ok") }
+            reply(code)
         }
     }
 

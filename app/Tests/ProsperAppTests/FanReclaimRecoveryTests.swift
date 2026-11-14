@@ -216,6 +216,8 @@ final class FanReclaimRecoveryTests: XCTestCase {
             func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) {}
             func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) {}
             func resetAllFans(withReply reply: @escaping (Bool) -> Void) {}
+            func helperInfo(withReply reply: @escaping (Int, Int) -> Void) {}
+            func setFanManualRPMWithReason(_ index: Int, rpm: Double, withReply reply: @escaping (Int) -> Void) {}
         }
         final class Conn: NSXPCConnection {
             override func remoteObjectProxyWithErrorHandler(_ handler: @escaping (Error) -> Void) -> Any { Proxy() }
@@ -1560,6 +1562,9 @@ private final class FakeHelperConnection: NSXPCConnection, @unchecked Sendable {
         func setFanManualRPM(_ index: Int, rpm: Double, withReply reply: @escaping (Bool) -> Void) { reply(manualReply) }
         func setFanAuto(_ index: Int, holdUnlock: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
         func resetAllFans(withReply reply: @escaping (Bool) -> Void) { resets += 1; onReset?(); if replies { reply(true) } }
+        // Entry 1208: the app never sends these on the fan connection.
+        func helperInfo(withReply reply: @escaping (Int, Int) -> Void) { XCTFail("helperInfo on the fan connection") }
+        func setFanManualRPMWithReason(_ index: Int, rpm: Double, withReply reply: @escaping (Int) -> Void) { XCTFail("reason engage") }
     }
     let proxy = Proxy()
     /// Set: replies are dropped and the error handler fires on a background queue,

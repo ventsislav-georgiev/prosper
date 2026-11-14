@@ -208,6 +208,7 @@ enum LidSleepHelper {
             log.error("lid helper register failed: \(error.localizedDescription, privacy: .public)")
             return .failed
         }
+        Task { @MainActor in FanControlHelper.helperMayHaveChanged() }   // entry 1208: a new registration may change which helper answers
         switch svc.status {
         case .enabled:
             Preferences.defaults.set(currentVersion, forKey: registeredVersionKey)

@@ -132,15 +132,17 @@ enum FanManualReply: Equatable {
     // shortcut: a first fan's false, or a later one below macOS's speed, is still read as the latch
     // though the helper also replies false when the SMC write throws; entry 1208's reason reply splits it.
     var errorText: String? {
+        // Entry 1208: a helper from an older version gives no reason, so these two names are the app's guess.
+        let old = FanControlHelper.oldHelperAnswers.withLock { $0 } ? " " + Self.oldHelperSentence : ""
         switch self {
         case .engaged: return nil
         case .refused:
             return "Fans are held automatic until the Mac cools down — the overheat "
                 + "cut-off tripped, and macOS runs them faster than this. Try again in a few "
-                + "minutes, or pick a faster speed."
+                + "minutes, or pick a faster speed." + old
         case .settling:
             return "The overheat cut-off just handed the fans to macOS. "
-                + "Try again in a few seconds."
+                + "Try again in a few seconds." + old
         case .unavailable, .needsApproval:
             return "Couldn’t enable manual control — the Prosper helper isn’t "
                 + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
@@ -149,6 +151,9 @@ enum FanManualReply: Equatable {
             return "A fan didn’t take the new speed, so macOS runs every fan again. Try again."
         }
     }
+
+    /// Entry 1208: added to a refusal while `FanControlHelper.helperIdentity` is `.old`.
+    static let oldHelperSentence = "The Prosper helper is from an older version, so Prosper can’t tell why."
 }
 
 /// R1218-1: a fan speed the app may send, save or seed from: finite, above 0, under SMCFanController's
@@ -311,7 +316,8 @@ enum FanControlHelper {
         // @Sendable: XPC calls it on its own queue, never inferred MainActor (#477).
         // c is only compared by identity, on main.
         nonisolated(unsafe) let conn = c
-        let clear: @Sendable () -> Void = { Task { @MainActor in if connection === conn { connection = nil } } }
+        // Entry 1208: a drop from the helper's side may be an update's old helper going: ask again.
+        let clear: @Sendable () -> Void = { Task { @MainActor in if connection === conn { connection = nil; helperMayHaveChanged() } } }
         c.invalidationHandler = clear
         c.interruptionHandler = clear
         c.resume()
@@ -325,6 +331,7 @@ enum FanControlHelper {
     private static func ensureConnection(presentModal: Bool = true) async -> (NSXPCConnection?, LidSleepHelper.RegisterOutcome) {
         let outcome = await LidSleepHelper.ensureRegisteredOutcome(feature: "Manual fan control", presentModal: presentModal)
         guard outcome == .enabled else { return (nil, outcome) }
+        if connection == nil { fanConnectionMade() }   // entry 1208: a stale old verdict goes back to unknown
         let c = connection ?? makeConnection()
         connection = c
         return (c, outcome)
@@ -564,7 +571,135 @@ enum FanControlHelper {
             c.invalidate()
             if connection === c { connection = nil }
         }
+        askHelperIdentityIfIdle()   // entry 1208: every fan just went to macOS; asks only with manual off
         return ok
+    }
+
+    // MARK: - Which helper answers (entry 1208)
+
+    /// What the helper on the Mach service said about itself: `.current` replied to `helperInfo` with a
+    /// version of 1 or more and capability bit 0; `.old` gave positive evidence of an older helper (a reply
+    /// without them, or the interruption an older helper gives on two throwaways in a row); nil = not known
+    /// (not asked yet, one interruption, silence until the ceiling, or any other error). Kept for the app
+    /// run; only the refusal text reads it (`FanManualReply.errorText`, through `oldHelperAnswers`).
+    enum HelperIdentity: Equatable { case current, old }
+    private(set) static var helperIdentity: HelperIdentity? = nil {
+        didSet { let old = helperIdentity == .old; oldHelperAnswers.withLock { $0 = old } }
+    }
+    /// `helperIdentity == .old`, readable off main for the nonisolated refusal text.
+    nonisolated static let oldHelperAnswers = OSAllocatedUnfairLock(initialState: false)
+    /// The open ask's throwaway connection; nil = no ask open.
+    private(set) static var identityConnection: NSXPCConnection?
+    /// Bumped by every ask and every `helperMayHaveChanged`: an answer to an older ask changes nothing.
+    private static var identityAsk = 0
+    /// Interruptions (4097) in a row, each on its own throwaway. A current helper gives one too when its
+    /// process ends during the ask (idle exit, crash, restart, update); an older helper gives it every time.
+    private(set) static var identityInterruptions = 0
+    /// Seam: the throwaway connection. The live one is never made under XCTest; rows pass a fake.
+    static var makeIdentityConnection: () -> NSXPCConnection? = { liveIdentityConnection() }
+    /// Seam: the 6 s ceiling, which runs its argument once on main. Rows keep the argument and run it themselves.
+    static var identityCeiling: (@escaping @Sendable @MainActor () -> Void) -> Void = { fire in
+        Task { @MainActor in try? await Task.sleep(nanoseconds: 6_000_000_000); fire() }
+    }
+    /// Seam: the second ask after a first interruption, about 1 s later; runs its argument once on main. Rows
+    /// keep the argument and run it themselves.
+    static var identityRetry: (@escaping @Sendable @MainActor () -> Void) -> Void = { fire in
+        Task { @MainActor in try? await Task.sleep(nanoseconds: 1_000_000_000); fire() }
+    }
+
+    /// A bare connection to the helper's Mach service, made here and never through `makeConnection` or the
+    /// lid helper's: no `clear` handler, nothing held, so the helper closing it changes no app state (an
+    /// older helper closes the connection an unknown call arrives on). Nil under XCTest: no row reaches the
+    /// real Mach service.
+    nonisolated static func liveIdentityConnection() -> NSXPCConnection? {
+        guard NSClassFromString("XCTestCase") == nil else { return nil }
+        let c = NSXPCConnection(machServiceName: helperMachServiceName, options: .privileged)
+        c.remoteObjectInterface = NSXPCInterface(with: ProsperHelperProtocol.self)
+        return c
+    }
+
+    /// Ask which helper answers, on the throwaway, only while no fan can be held: manual off and no engage
+    /// in flight (an engage made before the answer uses the Bool method as before). Not again once
+    /// answered, nor while an ask is open.
+    static func askHelperIdentityIfIdle() {
+        guard helperIdentity == nil, identityConnection == nil, !Preferences.fanManualEnabled, engagesInFlight == 0,
+              let c = makeIdentityConnection() else { return }
+        identityAsk &+= 1
+        let ask = identityAsk
+        identityConnection = c
+        let (answered, failed) = identityHandlers(ask)
+        c.resume()
+        guard let proxy = c.remoteObjectProxyWithErrorHandler(failed) as? ProsperHelperProtocol else {
+            identityEnded(ask, .unknown)
+            return
+        }
+        identityCeiling { identityEnded(ask, .unknown) }
+        proxy.helperInfo(withReply: answered)
+    }
+
+    /// The ask's reply and error handlers. XPC runs both on its own queue, so they are formed here,
+    /// nonisolated and @Sendable, and each hops to main before touching the ask's state. The reply's values
+    /// come from outside: only compared and masked with a constant. The error's domain and code are outside
+    /// data too: only compared, on XPC's queue; only the verdict crosses to main.
+    nonisolated private static func identityHandlers(_ ask: Int) -> (@Sendable (Int, Int) -> Void, @Sendable (Error) -> Void) {
+        ({ version, caps in
+            let current = version >= 1 && caps & helperCapabilityFanReason != 0
+            Task { @MainActor in identityEnded(ask, current ? .current : .old) }
+        }, { error in
+            let end = identityEnd(error as NSError)
+            Task { @MainActor in identityEnded(ask, end) }
+        })
+    }
+
+    /// How an ask ended: a reply (current or old), the interruption, or nothing known.
+    enum IdentityEnd: Sendable { case current, old, interrupted, unknown }
+
+    /// The error handler's reading. Only the interruption an older helper gives for the unknown `helperInfo`
+    /// (the probe: NSCocoaErrorDomain 4097, NSXPCConnectionInterrupted) counts; any other error (a helper not
+    /// approved, not registered or not reachable: the connection invalid, 4099) is unknown, asked again.
+    nonisolated static func identityEnd(_ e: NSError) -> IdentityEnd {
+        e.domain == NSCocoaErrorDomain && e.code == CocoaError.Code.xpcConnectionInterrupted.rawValue ? .interrupted : .unknown
+    }
+
+    /// Every exit of an ask (reply, error handler, ceiling) ends here, on main. A reply decides at once and a
+    /// current one wins even after the ceiling (it only changes a text). An interruption while the ask is open
+    /// counts: the second in a row reads old; the first asks again through `identityRetry` (still only if
+    /// idle then; otherwise the next idle moment asks). Silence or another error while open clears the count
+    /// and records nothing; the next idle moment asks again. The throwaway is invalidated every time: left
+    /// open on a new helper it would hold the helper's last-client lid release and its idle exit.
+    private static func identityEnded(_ ask: Int, _ end: IdentityEnd) {
+        guard ask == identityAsk else { return }
+        let open = identityConnection != nil
+        identityConnection?.invalidate()
+        identityConnection = nil
+        switch end {
+        case .current: helperIdentity = .current; identityInterruptions = 0
+        case .old: helperIdentity = .old; identityInterruptions = 0
+        case .interrupted where open:
+            identityInterruptions += 1
+            if identityInterruptions >= 2 { helperIdentity = .old; identityInterruptions = 0 }
+            else { identityRetry { askHelperIdentityIfIdle() } }
+        case .interrupted: break
+        case .unknown: if open { identityInterruptions = 0 }
+        }
+    }
+
+    /// Ask again at the next idle moment: after the fan connection dropped from the helper's side, and the
+    /// hook for a re-registration of the helper (an update's old helper process may have answered before).
+    /// An open ask is closed and its answer dropped.
+    static func helperMayHaveChanged() {
+        identityAsk &+= 1
+        identityConnection?.invalidate()
+        identityConnection = nil
+        helperIdentity = nil
+        identityInterruptions = 0
+    }
+
+    /// A NEW fan connection was made: an old verdict may be stale (the helper approved or updated since), so
+    /// it goes back to unknown and is asked again at the next idle moment, never in front of this engage. A
+    /// current verdict stays (only a re-registration, which calls `helperMayHaveChanged`, can change it).
+    static func fanConnectionMade() {
+        if helperIdentity == .old { helperMayHaveChanged() }
     }
 
     /// Ceiling for a COLD first engage: the AS unlock is 0.5 s settle + 150 spaced
