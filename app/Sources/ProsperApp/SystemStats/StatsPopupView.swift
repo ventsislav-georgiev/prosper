@@ -981,6 +981,7 @@ struct StatsPopupView: View {
             // #1223: nothing pinned; with manual on, Automatic (R1223-1) so the text stays true.
             fanError = Self.unreadFanText
             if Preferences.fanManualEnabled { selectAutoAll() }
+            else { FanControlHelper.automaticGeneration &+= 1 }   // R1230-1, as refuseUnreadFans
             return
         }
         fanError = nil
@@ -1097,6 +1098,25 @@ struct StatsPopupView: View {
         }
     }
 
+    /// The slider burst (#926: stops at the first fan that does not engage), up to settleCommit. F1230-a:
+    /// `automatic` is captured at the commit. Automatic chosen since, on either surface, sends no further pin
+    /// and hands back what landed (lateEngageLanded: held only while a newer engage is in flight, which owns
+    /// the fans, #282), here, before the caller's view guard that an Automatic moves; nil = nothing to settle.
+    /// `engage` is the test seam; its wrapper runs on main inside engageAll.
+    @MainActor static func commitBurst(_ targets: [Int: Double], since automatic: Int,
+                                       engage: (Int, Double) async -> FanManualReply = {
+                                           await FanControlHelper.setManualReply($0, rpm: $1) }) async -> [FanManualReply]? {
+        let replies = await FanControlHelper.engageAll(targets) { i, rpm in
+            guard automatic == FanControlHelper.automaticGeneration else { return .unavailable }   // stops the loop
+            return await engage(i, rpm)
+        }
+        guard automatic == FanControlHelper.automaticGeneration else {
+            FanControlHelper.lateEngageLanded(true)
+            return nil
+        }
+        return replies
+    }
+
     /// The Manual click's seed: every adjustable fan at its current speed in its range, over the saved
     /// targets. #1223: nil when any fan has no usable reading - the whole click is refused, never a split
     /// with that fan on macOS and the others pinned (#1033's rule).
@@ -1113,11 +1133,13 @@ struct StatsPopupView: View {
     /// no usable reading. Pins nothing. With manual already on it ends in Automatic by the Automatic path
     /// (`selectAuto`: manual off saved, every fan handed back, awaited), so "macOS keeps running the fans"
     /// stays true (R1223-1: a reset alone was re-pinned by the reclaim recovery a tick later). With manual
-    /// off every fan is with macOS already: nothing is called or saved. The popup does the same inline.
+    /// off nothing is called or saved, but the Automatic counter moves (R1230-1): an engage in flight on the other
+    /// surface then saves nothing and hands its pins back, so the text stays true. The popup does the same inline.
     nonisolated static let unreadFanText = "Couldn’t read a fan’s speed, so macOS keeps running the fans. Try again."
 
     @MainActor static func refuseUnreadFans(fanIDs: [Int], presentModal: Bool = true) async -> String {
         if Preferences.fanManualEnabled { await selectAuto(fanIDs: fanIDs, presentModal: presentModal).value }
+        else { FanControlHelper.automaticGeneration &+= 1 }   // R1230-1: an engage in flight elsewhere saves nothing
         return unreadFanText
     }
 
@@ -1127,6 +1149,7 @@ struct StatsPopupView: View {
     private func commitAll(_ targets: [Int: Double]) {
         fanCommitWork?.cancel()
         FanControlHelper.userAdjusting = true
+        let automatic = FanControlHelper.automaticGeneration   // F1230-a: at the commit, before the burst's first pin
         let work = DispatchWorkItem {
             let previous = Preferences.fanTargets   // the last ASKED targets, not the last landed (R1215-2)
             Preferences.fanTargets = targets
@@ -1135,7 +1158,8 @@ struct StatsPopupView: View {
             Task { @MainActor in FanControlHelper.userAdjusting = false }
             Task { @MainActor in
                 // #926: stops at the first fan that does not engage.
-                let replies = await FanControlHelper.engageAll(targets)
+                // F1230-a: nil = an Automatic since the commit; commitBurst handed back what landed.
+                guard let replies = await Self.commitBurst(targets, since: automatic) else { return }
                 // A newer drag/commit owns the slider (and the status line) now; its own outcome decides.
                 guard fanTargets == targets, !fanOwner.isDragging else { return }
                 let (shown, error) = Self.settleCommit(replies, targets, previous: previous)

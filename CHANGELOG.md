@@ -999,6 +999,10 @@ tag from the now-released section and put it on the new top draft.
   longer undone, and Prosper refuses to write when its own temporary file has been replaced by a
   link; the MCP and hooks files read a leading byte order mark the same way on every macOS version.
   (#1231)
+- Fans: choosing Automatic (in the stats popup or from the phone) while a fan speed change from the
+  slider is still being applied now hands every fan back to macOS; before, a fan could stay at the
+  slider's speed while the popup said Automatic. A Manual request refused because a fan had no
+  reading now also stops a Manual change still in flight from the other surface. (#1233)
 
 ## v2.174.0
 

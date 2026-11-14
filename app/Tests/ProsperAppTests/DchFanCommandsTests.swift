@@ -642,6 +642,164 @@ final class DchFanCommandsTests: XCTestCase {
         }
     }
 
+    /// R1230-1: the phone's Manual refused for an unread fan with manual already off, while the popup's Manual engage
+    /// is in flight. The refusal calls nothing, but counts as an Automatic: the engage lands, saves nothing, and its
+    /// pin goes back, so "macOS keeps running the fans" stays true.
+    func testRefusedManualWithManualOffDuringAnEngageCountsAsAutomatic() async {
+        await withFanState {
+            let fake = FakeConnection()
+            let (gate, open) = AsyncStream<Void>.makeStream()
+            let started = expectation(description: "the popup's first engage is in flight")
+            FanControlHelper.inject(connection: fake, engagesInFlight: 1)
+            let popup = Task { @MainActor in
+                await StatsPopupView.engageManual([0: 3000, 1: 2500], firstReply: Self.gated(gate, started),
+                                                  engage: { _, _ in .engaged })
+            }
+            await fulfillment(of: [started], timeout: 2)
+            let unread = Self.twoFans.map { FanReading(id: $0.id, min: $0.min, max: $0.max,
+                                                        current: $0.id == 0 ? nil : $0.current, manual: false) }
+            let refused = await run(ops(fans: unread, log: Log()), "fans.manual", "60%")
+            XCTAssertEqual(Self.message(refused), StatsPopupView.unreadFanText)
+            XCTAssertEqual(fake.proxy.resets, 0, "manual off: the refusal called the helper")
+            let handBack = expectation(description: "the landed pin went back to macOS")
+            handBack.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReset = { handBack.fulfill() }
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // the first engage's call returned
+            open.yield(); open.finish()
+            let (saved, _) = await popup.value
+            await fulfillment(of: [handBack], timeout: 2)
+            fake.proxy.onReset = nil
+            XCTAssertFalse(saved, "the engage saved over the refusal")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [9: 1], "the refusal and the engage both save nothing")
+            XCTAssertEqual(fake.proxy.resets, 1)
+        }
+    }
+
+    // MARK: Automatic during a slider burst (F1230-a)
+
+    private static let burstTargets: [Int: Double] = [0: 3000, 1: 2500]
+
+    /// A slider-burst engage: logs "pin <fan>" (the pin is on the helper's queue) and, for `held`, holds the reply
+    /// until the row opens `gate`; `started` is fulfilled once that pin went out. Runs off main (nonisolated).
+    nonisolated private static func burstEngage(_ log: Log, held: Int, _ gate: AsyncStream<Void>,
+                                                _ started: XCTestExpectation) -> @Sendable (Int, Double) async -> FanManualReply {
+        { i, _ in
+            log.add("pin \(i)")
+            if i == held { started.fulfill(); for await _ in gate { break } }
+            return .engaged
+        }
+    }
+
+    /// A two-fan burst (fan 0 then fan 1) whose pin of `held` is in flight while `automatic` runs, then lands.
+    /// The burst holds the connection (the injected count) while in flight, as setManualReply does. Returns the
+    /// burst's result and the helper's queue in order (pins and resets), after the release the burst owes.
+    private func burstWithAutomatic(held: Int, _ automatic: () async -> Void) async -> (replies: [FanManualReply]?, queue: [String]) {
+        let log = Log(), fake = FakeConnection()
+        let (gate, open) = AsyncStream<Void>.makeStream()
+        let started = expectation(description: "the burst's pin of fan \(held) is in flight")
+        fake.proxy.onReset = { log.add("reset") }
+        FanControlHelper.inject(connection: fake, engagesInFlight: 1)
+        Preferences.fanManualEnabled = true
+        Preferences.fanTargets = Self.burstTargets   // what the commit saved before its burst
+        let since = FanControlHelper.automaticGeneration
+        let burst = Task { @MainActor in
+            await StatsPopupView.commitBurst(Self.burstTargets, since: since,
+                                             engage: Self.burstEngage(log, held: held, gate, started))
+        }
+        await fulfillment(of: [started], timeout: 2)
+        await automatic()
+        let handBack = expectation(description: "the burst's pins went back to macOS")
+        handBack.assertForOverFulfill = false   // the queue below says it
+        fake.proxy.onReset = { log.add("reset"); handBack.fulfill() }
+        FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // the burst's call returned
+        open.yield(); open.finish()
+        let replies = await burst.value
+        await fulfillment(of: [handBack], timeout: 2)
+        fake.proxy.onReset = nil
+        return (replies, log.calls)
+    }
+
+    /// F1230-a: the popup's Automatic (selectAuto, what its button runs) between the two pins of a slider burst.
+    /// No second pin goes out, and fan 0's pin goes back after the Automatic's reset; nothing to settle.
+    func testPopupAutoBetweenABurstsPinsSendsNoMoreAndHandsBack() async {
+        await withFanState {
+            let (replies, queue) = await burstWithAutomatic(held: 0) { await StatsPopupView.selectAuto(fanIDs: [0, 1]).value }
+            XCTAssertEqual(queue, ["pin 0", "reset", "reset"], "a pin after the Automatic, or no hand-back")
+            XCTAssertTrue(replies == nil, "the burst settled after an Automatic")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [:])
+        }
+    }
+
+    /// F1230-a: the same with the phone's "Fans: Auto".
+    func testPhoneAutoBetweenABurstsPinsSendsNoMoreAndHandsBack() async {
+        await withFanState {
+            let (replies, queue) = await burstWithAutomatic(held: 0) {
+                let auto = await self.run(self.ops(log: Log()), "fans.auto")
+                XCTAssertEqual(Self.result(auto), ["text": "Auto"])
+            }
+            XCTAssertEqual(queue, ["pin 0", "reset", "reset"], "a pin after the Automatic, or no hand-back")
+            XCTAssertTrue(replies == nil, "the burst settled after an Automatic")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [:])
+        }
+    }
+
+    /// F1230-a: Automatic while the burst's last pin is in flight (after it went out, before the view guard: there
+    /// is no await between the burst's end and the guard). Both pins go back after the Automatic's reset.
+    func testAutoAfterABurstsLastPinHandsBackBeforeTheGuard() async {
+        await withFanState {
+            let (replies, queue) = await burstWithAutomatic(held: 1) { await StatsPopupView.selectAuto(fanIDs: [0, 1]).value }
+            XCTAssertEqual(queue, ["pin 0", "pin 1", "reset", "reset"])
+            XCTAssertTrue(replies == nil, "the burst settled after an Automatic")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [:])
+        }
+    }
+
+    /// F1230-a: Automatic after the commit and before the burst's first pin (the 0.4 s debounce): no pin goes out.
+    /// With nothing in flight the Automatic tore the connection down, so the burst's release has nothing to call.
+    func testAutoBeforeABurstsFirstPinSendsNone() async {
+        await withFanState {
+            let log = Log(), fake = FakeConnection()
+            fake.proxy.onReset = { log.add("reset") }
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            let since = FanControlHelper.automaticGeneration
+            await StatsPopupView.selectAuto(fanIDs: [0, 1]).value
+            let replies = await StatsPopupView.commitBurst(Self.burstTargets, since: since,
+                                                           engage: { i, _ in log.add("pin \(i)"); return .engaged })
+            await Task { @MainActor in }.value   // the burst's queued release ran (no connection: no call)
+            fake.proxy.onReset = nil
+            XCTAssertTrue(replies == nil, "the burst settled after an Automatic")
+            XCTAssertEqual(log.calls, ["reset"], "a pin went out after the Automatic")
+            XCTAssertTrue(FanControlHelper.connection == nil)
+        }
+    }
+
+    /// F1230-a, unchanged: a burst with no Automatic pins both fans, hands nothing back and settles as landed.
+    /// The marker is a main-actor job queued after any release the burst could have queued.
+    func testBurstWithNoAutomaticStillSettles() async {
+        await withFanState {
+            let log = Log(), fake = FakeConnection()
+            fake.proxy.onReset = { log.add("reset") }
+            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+            Preferences.fanManualEnabled = true
+            Preferences.fanTargets = Self.burstTargets
+            let replies = await StatsPopupView.commitBurst(Self.burstTargets, since: FanControlHelper.automaticGeneration,
+                                                           engage: { i, _ in log.add("pin \(i)"); return .engaged })
+            await Task { @MainActor in log.add("marker") }.value
+            fake.proxy.onReset = nil
+            XCTAssertEqual(replies, [.engaged, .engaged])
+            XCTAssertEqual(log.calls, ["pin 0", "pin 1", "marker"])
+            let out = StatsPopupView.settleCommit(replies ?? [], Self.burstTargets, previous: [9: 1])
+            XCTAssertEqual(out.shown, Self.burstTargets)
+            XCTAssertTrue(out.error == nil)
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, Self.burstTargets)
+        }
+    }
+
     // MARK: Gates
 
     func testOffRefusesFanCommandsAndTouchesNothing() async {

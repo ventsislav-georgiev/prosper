@@ -65,7 +65,9 @@ public final class SMCFanController {
 
     /// R1218-a: capped at `maxFans` before Int() (a float FNum of 2^63 or more trapped the root helper).
     /// Capped, not zeroed: resetAll still clears every real fan's mode key on a garbage count.
-    /// N1225-a: 10 = the one-digit indexes keyAllowed writes (F0Md...F9Md); above it resetAll failed every time.
+    /// N1225-a: 10 = the one-digit indexes keyAllowed writes (F0Md...F9Md); the guard refuses F10Md and up.
+    /// N1230-b: a count over the real fans still makes resetAll false on a Mac (the raw write asks for the
+    /// absent key's info and throws), after the real fans are cleared: the safe side, crash safety stays armed.
     public func fanCount() -> Int {
         guard let v = smc.read("FNum")?.double, v.isFinite, v >= 0 else { return 0 }
         return Int(Swift.min(v, Self.maxFans))

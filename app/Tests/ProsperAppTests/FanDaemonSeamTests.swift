@@ -36,6 +36,7 @@ final class FanDaemonSeamTests: XCTestCase {
     }
 
     /// SMCAccess with no SMC behind it: values by key, every attempted write recorded in order.
+    /// N1230-b: a write to a key it was not given throws, as the real write does (it asks for the key's info first).
     private final class FakeSMC: SMCAccess {
         struct Rejected: Error {}
         var values: [String: SMCValue] = [:]
@@ -46,7 +47,7 @@ final class FanDaemonSeamTests: XCTestCase {
         func allKeys() -> [String] { values.keys.sorted() }
         func writeRawUnchecked(_ key: String, _ bytes: [UInt8]) throws {
             writes.append("\(key) \(bytes)")
-            if failing.contains(key) { throw Rejected() }
+            if failing.contains(key) || values[key] == nil { throw Rejected() }
         }
         func set(_ key: String, _ type: String, _ value: Double) {
             values[key] = SMCValue(key: key, type: type, bytes: [], double: value)
@@ -385,15 +386,21 @@ final class FanDaemonSeamTests: XCTestCase {
         XCTAssertTrue(smc.writes.contains("F0Md [0]") && smc.writes.contains("F1Md [0]"), "\(smc.writes.prefix(4))")
     }
 
-    /// N1225-a: a garbage count over the cap still resets true (every write the guard can serve, then Ftst):
-    /// no index of 10 or more is tried, so crash safety does not retry forever. Fake SMC only.
-    func testResetAllIsTrueForAGarbageCountOverTheCap() {
+    /// N1225-a, restated by N1230-b: a garbage count over the cap tries the ten one-digit mode keys and no index of
+    /// 10 or more. With two fans present the absent keys throw (as on a Mac): FALSE, the safe side (crash safety
+    /// stays armed), after the two real fans and Ftst are cleared. With every fan up to the cap present: TRUE.
+    /// Fake SMC only.
+    func testResetAllIsFalseForAGarbageCountWithAbsentFansTrueWhenAllExist() {
         for (fnum, ftst) in [(11.0, true), (64, true), (9.3e18, true), (11, false), (64, false)] {
-            let (fc, smc) = board(fans: 2, ftst: ftst)
-            smc.set("FNum", "ui8 ", fnum)
-            XCTAssertTrue(fc.resetAll(), "FNum \(fnum) Ftst \(ftst): \(smc.writes.suffix(3))")
-            XCTAssertEqual(smc.writes.filter { $0.hasSuffix("Md [0]") }.count, 10, "FNum \(fnum)")
-            XCTAssertTrue(smc.writes.contains("F9Md [0]") && !smc.writes.contains { $0.hasPrefix("F10") }, "FNum \(fnum)")
+            for fans in [2, 10] {
+                let (fc, smc) = board(fans: fans, ftst: ftst)
+                smc.set("FNum", "ui8 ", fnum)
+                XCTAssertEqual(fc.resetAll(), fans == 10, "FNum \(fnum) Ftst \(ftst) fans \(fans): \(smc.writes.suffix(3))")
+                XCTAssertEqual(Array(smc.writes.prefix(2)), ["F0Md [0]", "F1Md [0]"], "FNum \(fnum) fans \(fans)")
+                XCTAssertEqual(smc.writes.filter { $0.hasSuffix("Md [0]") }.count, 10, "FNum \(fnum) fans \(fans)")
+                XCTAssertTrue(smc.writes.contains("F9Md [0]") && !smc.writes.contains { $0.hasPrefix("F10") }, "FNum \(fnum)")
+                XCTAssertEqual(smc.writes.contains("Ftst [0]"), ftst, "FNum \(fnum) fans \(fans)")
+            }
         }
     }
 
