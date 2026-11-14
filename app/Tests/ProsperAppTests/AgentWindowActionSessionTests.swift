@@ -100,7 +100,7 @@ extension AgentWindowD1Tests {
     }
 
     /// R1193-2: the focused pane leaves Ended with its row unchanged (an emptying select(nil): the row is nil before and
-    /// after): the model's observers are told (the view reads focusedEnded), at least once.
+    /// after): the model's observers are told (the view reads focusedEnded), once.
     @MainActor
     func testAgentWindowTheFocusedPaneLeavingEndedWithTheRowUnchangedTellsTheModelsObservers() throws {
         let url = tempDir().appendingPathComponent("a.jsonl")
@@ -116,10 +116,10 @@ extension AgentWindowD1Tests {
         XCTAssertNil(m.selection, "an Ended pane resolves to no row")
         var notices = 0
         let sub = m.objectWillChange.sink { notices += 1 }
-        m.select(nil)
+        m.select(nil, manual: false)   // manual would write the @Published newSession and notice by itself
         sub.cancel()
         XCTAssertFalse(m.focusedEnded)
         XCTAssertNil(m.selection, "the row is unchanged")
-        XCTAssertGreaterThanOrEqual(notices, 1, "told even though no @Published value of the model changed")
+        XCTAssertEqual(notices, 1, "told, once, even though no @Published value of the model changed")
     }
 }
