@@ -27,7 +27,7 @@ final class MarketplacePublishPreviewTests: XCTestCase {
 
         let model = PublishConfirmation()
         let published = Recorder()
-        model.ask(ext, publish: { published.count += 1 })
+        model.ask(ext, publish: { _ in published.count += 1 })
         let shown = try XCTUnwrap(model.plan)
         XCTAssertEqual(PublishConfirmation.lines(shown),
                        ["3 files will be published:", "extension.toml", "init.lua", "lib/util.lua",
@@ -72,7 +72,7 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         }
         let model = PublishConfirmation()
         let published = Recorder()
-        model.ask(ext, publish: { published.count += 1 })
+        model.ask(ext, publish: { _ in published.count += 1 })
         model.confirm()
         XCTAssertEqual(published.count, 0, "a refused plan never publishes")
         XCTAssertTrue(model.plan == plan, "the refusal stays on screen")
@@ -110,7 +110,7 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         let ext = try fixture(["extension.toml", "init.lua"])
         let model = PublishConfirmation()
         let published = Recorder()
-        let button = PublishButton(title: "Publish", help: "", dir: ext, model: model, publish: { published.count += 1 })
+        let button = PublishButton(title: "Publish", help: "", dir: ext, model: model, publish: { _ in published.count += 1 })
         button.tap()
         XCTAssertEqual(published.count, 0, "the Publish button published without the confirmation")
         XCTAssertEqual(model.plan?.members, ["./extension.toml", "./init.lua"])
@@ -134,7 +134,7 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         let ext = try fixture(["extension.toml", "init.lua"])
         let model = PublishConfirmation()
         let published = Recorder()
-        let button = PublishButton(title: "Publish", help: "", dir: ext, model: model, publish: { published.count += 1 })
+        let button = PublishButton(title: "Publish", help: "", dir: ext, model: model, publish: { _ in published.count += 1 })
         button.tap()
         XCTAssertEqual(PublishConfirmation.actionTitle(try XCTUnwrap(model.plan)), "Publish 2 files")
         try FileManager.default.createDirectory(at: ext.appendingPathComponent("lib"), withIntermediateDirectories: true)
@@ -166,7 +166,7 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         let ext = try fixture(["extension.toml", "init.lua", ".DS_Store"])
         let model = PublishConfirmation()
         let published = Recorder()
-        let hosted = Hosted(row(model, ext, publish: { published.count += 1 }), width: paneRowWidth())
+        let hosted = Hosted(row(model, ext, publish: { _ in published.count += 1 }), width: paneRowWidth())
         defer { hosted.close() }
         let lines = ["2 files will be published:", "extension.toml", "init.lua", "1 hidden or test item left out"]
 
@@ -194,8 +194,8 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         try FileManager.default.createSymbolicLink(atPath: ext.appendingPathComponent("x.lua").path,
                                                    withDestinationPath: "extension.toml")
         let model = PublishConfirmation()
-        model.ask(ext, publish: {})
-        let hosted = Hosted(row(model, ext, publish: {}), width: paneRowWidth())
+        model.ask(ext, publish: { _ in })
+        let hosted = Hosted(row(model, ext, publish: { _ in }), width: paneRowWidth())
         defer { hosted.close() }
         let why = "Can't publish symbolic links (every install refuses them): x.lua"
         let items = hosted.wait { items in items.contains { $0.has(why) } && items.contains { $0.isButton("Cancel") } ? items : nil }
@@ -213,7 +213,7 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         let model = PublishConfirmation()
         let offer = Offer()
         let published = Recorder()
-        let hosted = Hosted(OfferedRow(offer: offer, model: model, dir: ext, publish: { published.count += 1 }),
+        let hosted = Hosted(OfferedRow(offer: offer, model: model, dir: ext, publish: { _ in published.count += 1 }),
                             width: paneRowWidth())
         defer { hosted.close() }
         let publish = try XCTUnwrap(hosted.wait { $0.first { $0.isButton("Publish") } }, "no Publish button in the tree")
@@ -248,12 +248,12 @@ final class MarketplacePublishPreviewTests: XCTestCase {
             ThemeRuntime.scale = scale
             for dir in [ext, linked] {
                 let model = PublishConfirmation()
-                model.ask(dir, publish: {})
+                model.ask(dir, publish: { _ in })
                 let plan = try XCTUnwrap(model.plan)
                 let lines = PublishConfirmation.lines(plan)
                 let actions = (plan.refusal == nil ? [PublishConfirmation.actionTitle(plan)] : []) + ["Cancel"]
                 let width = paneRowWidth()
-                let hosted = Hosted(row(model, dir, publish: {}), width: width)
+                let hosted = Hosted(row(model, dir, publish: { _ in }), width: width)
                 defer { hosted.close() }
                 let items = hosted.wait { items in
                     lines.allSatisfy { l in items.contains { $0.has(l) } }
@@ -287,6 +287,143 @@ final class MarketplacePublishPreviewTests: XCTestCase {
                 }
                 XCTAssertFalse(hosted.window.isVisible, "never shown")
             }
+        }
+    }
+
+    // MARK: - #1160: the packer packs the confirmed list; the list survives the button's new title
+
+    /// The confirmation hands its plan to the publish, and the packer given that plan packs it and nothing
+    /// else: a file written after the confirm is not in the archive (a fresh walk would have packed it).
+    @MainActor
+    func testFileAddedAfterTheConfirmIsNotPacked() throws {
+        let ext = try fixture(["extension.toml", "init.lua", "lib/util.lua"])
+        let want = ["./extension.toml", "./init.lua", "./lib/util.lua"]
+        let model = PublishConfirmation()
+        let published = Recorder()
+        model.ask(ext, publish: { published.plans.append($0) })
+        model.confirm()
+        XCTAssertEqual(published.plans.count, 1)
+        let plan = try XCTUnwrap(published.plans.last, "the confirmation did not hand over its plan")
+        XCTAssertEqual(plan.members, want)
+        try Data("x".utf8).write(to: ext.appendingPathComponent("late.lua"))
+        try Data("x".utf8).write(to: ext.appendingPathComponent("lib/late.lua"))
+        XCTAssertEqual(RemoteInstaller.publishMembers(ext).count, 5, "the folder now holds two more files")
+        XCTAssertEqual(try packedMembers(ext, plan: plan), want, "a file added after the confirm was packed")
+    }
+
+    /// A member removed after the confirm stops the publish and the message names it; nothing is packed.
+    @MainActor
+    func testMemberRemovedAfterTheConfirmStopsThePublish() throws {
+        let ext = try fixture(["extension.toml", "init.lua", "lib/util.lua"])
+        let model = PublishConfirmation()
+        let published = Recorder()
+        model.ask(ext, publish: { published.plans.append($0) })
+        model.confirm()
+        let plan = try XCTUnwrap(published.plans.last, "the confirmation did not hand over its plan")
+        try FileManager.default.removeItem(at: ext.appendingPathComponent("lib/util.lua"))   // inside tempDir()
+        let why = "The folder changed after you confirmed the list, so nothing was published: lib/util.lua (removed)."
+            + " Publish again to see the new list."
+        XCTAssertThrowsError(try RemoteInstaller.packageForPublish(ext, plan: plan)) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError, .cannotPublish(why))
+        }
+    }
+
+    /// A member replaced by a link after the confirm, a member reached through a folder now replaced by a
+    /// link, and a member now a folder all stop the publish, each named.
+    @MainActor
+    func testMemberReplacedByALinkAfterTheConfirmStopsThePublish() throws {
+        let ext = try fixture(["extension.toml", "init.lua", "lib/util.lua", "x.lua"])
+        let elsewhere = try fixture(["util.lua"])   // another tempDir() of this row, holding a real util.lua
+        let model = PublishConfirmation()
+        let published = Recorder()
+        model.ask(ext, publish: { published.plans.append($0) })
+        model.confirm()
+        let plan = try XCTUnwrap(published.plans.last, "the confirmation did not hand over its plan")
+        let fm = FileManager.default
+        try fm.removeItem(at: ext.appendingPathComponent("init.lua"))   // every path here is inside tempDir()
+        try fm.createSymbolicLink(atPath: ext.appendingPathComponent("init.lua").path, withDestinationPath: "extension.toml")
+        try fm.removeItem(at: ext.appendingPathComponent("lib"))
+        try fm.createSymbolicLink(atPath: ext.appendingPathComponent("lib").path, withDestinationPath: elsewhere.path)
+        try fm.removeItem(at: ext.appendingPathComponent("x.lua"))
+        try fm.createDirectory(at: ext.appendingPathComponent("x.lua"), withIntermediateDirectories: false)
+        let why = "The folder changed after you confirmed the list, so nothing was published: init.lua (now a symbolic link),"
+            + " lib/util.lua (now a symbolic link), x.lua (no longer a regular file). Publish again to see the new list."
+        XCTAssertThrowsError(try RemoteInstaller.packageForPublish(ext, plan: plan)) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError, .cannotPublish(why))
+        }
+    }
+
+    /// The list stays open when the live version arrives and the button's title changes from "Publish" to
+    /// "Publish v1.1" (the real PublishActions in a never-shown window); its action still publishes once.
+    @MainActor
+    func testListStaysOpenWhenTheLiveVersionArrives() throws {
+        let ext = try fixture(["extension.toml", "init.lua"])
+        let model = PublishConfirmation()
+        let live = Live()
+        let published = Recorder()
+        let hosted = Hosted(LiveRow(live: live, model: model, dir: ext, publish: { published.plans.append($0) }),
+                            width: paneRowWidth())
+        defer { hosted.close() }
+        let publish = try XCTUnwrap(hosted.wait { $0.first { $0.isButton("Publish") } }, "no Publish button in the tree")
+        XCTAssertTrue(press(publish.object))
+        XCTAssertNotNil(hosted.wait { $0.first { $0.isButton("Publish 2 files") } }, "the list did not open")
+
+        live.version = "1.0"
+        XCTAssertNotNil(hosted.wait { $0.first { $0.isButton("Publish v1.1") } }, "the title did not change")
+        // A second update that keeps the title: once it is drawn, the first update's disappear actions have run.
+        live.version = "1.0.1"
+        XCTAssertNotNil(hosted.wait { $0.first { $0.has("v1.0.1 published") } }, "the second update was not drawn")
+        XCTAssertTrue(model.plan != nil, "the title change closed the list")
+        let confirm = try XCTUnwrap(hosted.items().first { $0.isButton("Publish 2 files") }, "the list left the tree")
+        XCTAssertTrue(press(confirm.object))
+        XCTAssertNotNil(hosted.wait { _ in published.plans.count == 1 ? true : nil }, "the list's action did not publish")
+        XCTAssertEqual(published.plans.last?.members, ["./extension.toml", "./init.lua"])
+        XCTAssertFalse(hosted.window.isVisible, "never shown")
+    }
+
+    // MARK: - R1160-1: a name that is not valid UTF-8 is refused by name
+
+    /// The listing's decode flags a name whose bytes are not valid UTF-8 (U+FFFD for each bad byte) and
+    /// keeps valid ones exact; the plan's refusal names it. APFS refuses such a name (EILSEQ), so this is
+    /// where the refusal is tested on this machine.
+    @MainActor
+    func testListedNameFlagsBytesThatAreNotUTF8() {
+        for ok in ["init.lua", "café-\u{1F600}.lua", "e\u{301}.lua"] {
+            XCTAssertTrue(RemoteInstaller.listedName(Array(ok.utf8)) == (ok, true), ok)
+        }
+        let bad: [UInt8] = Array("bad".utf8) + [0xFF] + Array(".lua".utf8)
+        XCTAssertTrue(RemoteInstaller.listedName(bad) == ("bad\u{FFFD}.lua", false))
+        XCTAssertFalse(RemoteInstaller.listedName([0x80]).exact, "a lone continuation byte")
+        XCTAssertFalse(RemoteInstaller.listedName(Array("a".utf8) + [0xE2, 0x82]).exact, "a cut sequence")
+        XCTAssertFalse(RemoteInstaller.listedName([0xC0, 0xAF]).exact, "an overlong slash")
+        let plan = RemoteInstaller.PublishPlan(members: ["./init.lua"], notUTF8: ["lib/bad\u{FFFD}.lua"])
+        let why = "Can't publish file names that are not valid UTF-8 (\u{FFFD} marks the bytes that can't be shown): "
+            + "lib/bad\u{FFFD}.lua"
+        XCTAssertEqual(plan.refusal, why)
+        XCTAssertEqual(PublishConfirmation.lines(plan), [why])
+    }
+
+    /// The same through the folder, where the file system accepts the name: the plan names the file and the
+    /// packer refuses it. Skipped where the file system refuses to create such a name (APFS: EILSEQ).
+    func testNonUTF8NameInTheFolderIsRefusedByName() throws {
+        let ext = try fixture(["extension.toml", "init.lua"])
+        let path: [UInt8] = Array(ext.path.utf8) + Array("/bad".utf8) + [0xFF] + Array(".lua".utf8) + [0]
+        let fd = path.withUnsafeBufferPointer {
+            $0.withMemoryRebound(to: CChar.self) { open($0.baseAddress!, O_CREAT | O_EXCL | O_WRONLY, 0o644) }
+        }
+        guard fd >= 0 else {
+            let e = errno
+            throw XCTSkip("this file system refuses a name that is not valid UTF-8 (errno \(e) "
+                          + "\(String(cString: strerror(e)))); testListedNameFlagsBytesThatAreNotUTF8 covers the refusal")
+        }
+        close(fd)
+        let plan = RemoteInstaller.publishPlan(ext)
+        XCTAssertEqual(plan.notUTF8, ["bad\u{FFFD}.lua"])
+        XCTAssertEqual(plan.unreadable, [])
+        let why = "Can't publish file names that are not valid UTF-8 (\u{FFFD} marks the bytes that can't be shown): bad\u{FFFD}.lua"
+        XCTAssertEqual(plan.refusal, why)
+        XCTAssertThrowsError(try RemoteInstaller.packageForPublish(ext)) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError, .cannotPublish(why))
         }
     }
 
@@ -361,10 +498,11 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         return ext
     }
 
-    /// The member names of the packer's archive, read back with tar -t from the row's own folder.
-    private func packedMembers(_ ext: URL) throws -> [String] {
+    /// The member names of the packer's archive (given `plan`, or walking the folder), read back with tar -t
+    /// from the row's own folder.
+    private func packedMembers(_ ext: URL, plan: RemoteInstaller.PublishPlan? = nil) throws -> [String] {
         let tgz = ext.deletingLastPathComponent().appendingPathComponent("out.tgz")
-        try XCTUnwrap(Data(base64Encoded: try RemoteInstaller.packageForPublish(ext))).write(to: tgz)
+        try XCTUnwrap(Data(base64Encoded: try RemoteInstaller.packageForPublish(ext, plan: plan))).write(to: tgz)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
         p.arguments = ["-tzf", tgz.path]
@@ -378,7 +516,8 @@ final class MarketplacePublishPreviewTests: XCTestCase {
 
     /// The row's composition: the Publish button among the actions, the list under them.
     @MainActor
-    private func row(_ model: PublishConfirmation, _ dir: URL, publish: @escaping @MainActor () -> Void) -> some View {
+    private func row(_ model: PublishConfirmation, _ dir: URL,
+                     publish: @escaping @MainActor (RemoteInstaller.PublishPlan) -> Void) -> some View {
         VStack(alignment: .leading, spacing: sz(6)) {
             HStack(spacing: sz(12)) {
                 PublishButton(title: "Publish", help: "Publish this extension to the marketplace", dir: dir,
@@ -421,7 +560,10 @@ final class MarketplacePublishPreviewTests: XCTestCase {
 
 /// What a publish closure was asked to do (main actor, like the closures that write it).
 @MainActor
-private final class Recorder { var count = 0 }
+private final class Recorder {
+    var count = 0
+    var plans: [RemoteInstaller.PublishPlan] = []   // #1160: the plans the confirmation handed over
+}
 
 /// Whether the row offers Publish, as the trusted, not-publishing condition does (main actor).
 @MainActor
@@ -432,11 +574,33 @@ private struct OfferedRow: View {
     @ObservedObject var offer: Offer
     let model: PublishConfirmation
     let dir: URL
-    let publish: @MainActor () -> Void
+    let publish: @MainActor (RemoteInstaller.PublishPlan) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: sz(6)) {
             HStack(spacing: sz(12)) {
                 if offer.on { PublishButton(title: "Publish", help: "", dir: dir, model: model, publish: publish) }
+            }
+            PublishConfirmView(model: model)
+        }
+    }
+}
+
+/// The live Marketplace version a row has fetched, set by the row instead of the network (main actor).
+@MainActor
+private final class Live: ObservableObject { @Published var version: String? }
+
+/// The row's publish part as ExtensionRow composes it: the real PublishActions among the actions (local
+/// version 1.1, not publishing), the list under them.
+private struct LiveRow: View {
+    @ObservedObject var live: Live
+    let model: PublishConfirmation
+    let dir: URL
+    let publish: @MainActor (RemoteInstaller.PublishPlan) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(6)) {
+            HStack(spacing: sz(12)) {
+                PublishActions(publishing: false, published: live.version, version: "1.1", dir: dir, model: model,
+                               publish: publish)
             }
             PublishConfirmView(model: model)
         }

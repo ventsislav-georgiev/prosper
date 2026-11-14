@@ -771,6 +771,13 @@ tag from the now-released section and put it on the new top draft.
   stops with an "execution budget exceeded" error instead. (#1145)
 - Ordinary extension work (searching and replacing in large text, sorting or joining long lists)
   runs as before. (#1145)
+- Publishing an extension to the Marketplace now uploads exactly the files you confirmed: a file
+  added after you confirm is not sent, and a confirmed file that was removed or replaced by a link
+  stops the publish and is named. (#1160)
+- The publish list no longer closes on its own when the Marketplace version loads and the button
+  changes to "Publish v<version>". (#1160)
+- A file whose name is not valid UTF-8 is now named when it stops a publish, instead of the whole
+  folder being reported as unreadable. (#1160)
 
 ## v2.174.0
 

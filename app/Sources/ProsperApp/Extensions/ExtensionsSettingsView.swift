@@ -143,12 +143,12 @@ private struct ExtensionRow: View {
                     HStack(spacing: sz(6)) {
                         Text(meta.title).font(Neon.font(.body)).bold()
                         if record.isSystem {
-                            badge("SYSTEM")
+                            rowBadge("SYSTEM")
                         } else if !record.trusted {
-                            badge("UNTRUSTED")
+                            rowBadge("UNTRUSTED")
                         }
                         if record.privileged && !record.isSystem {
-                            badge("PRIVILEGED")
+                            rowBadge("PRIVILEGED")
                         }
                         Text("v\(meta.version)").font(Neon.font(.caption)).foregroundColor(.secondary)
                     }
@@ -209,7 +209,8 @@ private struct ExtensionRow: View {
                                 .rowAction()
                                 .help("Allow host.shell, the coding-agent, and destructive file ops. This extension could run any command as you — only grant configs you have read.")
                         }
-                        publishButton
+                        PublishActions(publishing: publishing, published: publishedVersion, version: meta.version,
+                                       dir: registry.directory(id: record.id), model: confirmation, publish: publish)
                     } else {
                         Button("Trust", action: trust)
                             .rowAction(prominent: true)
@@ -227,29 +228,6 @@ private struct ExtensionRow: View {
         }
         .padding(.vertical, sz(4))
         .task(id: record.id) { await refreshPublishedVersion() }
-    }
-
-    @ViewBuilder private var publishButton: some View {
-        if publishing {
-            ProgressView().controlSize(.small)
-        } else if let pv = publishedVersion {
-            if SemanticVersion(meta.version) > SemanticVersion(pv) {
-                // Local build is ahead of the marketplace — show what's live AND
-                // offer the version bump.
-                badge("v\(pv) published")
-                    .help("Version \(pv) is live on the marketplace")
-                PublishButton(title: "Publish v\(meta.version)", prominent: true,
-                              help: "Push the newer local version (\(meta.version)) to the marketplace",
-                              dir: registry.directory(id: record.id), model: confirmation, publish: publish)
-            } else {
-                // Up to date (local == live, or somehow behind) — nothing to push.
-                badge("Published v\(pv)")
-                    .help("This version is live on the marketplace")
-            }
-        } else {
-            PublishButton(title: "Publish", help: "Publish this extension to the marketplace",
-                          dir: registry.directory(id: record.id), model: confirmation, publish: publish)
-        }
     }
 
     private func refreshPublishedVersion() async {
@@ -275,13 +253,6 @@ private struct ExtensionRow: View {
                 colors: colors))
         }
         return ("theme", swatches.isEmpty ? nil : .init(themes: swatches))
-    }
-
-    private func badge(_ text: String) -> some View {
-        Text(text).font(Neon.font(.caption2)).bold()
-            .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
-            .background(Color.secondary.opacity(0.2))
-            .clipShape(Capsule())
     }
 
     // MARK: Actions
@@ -331,7 +302,8 @@ private struct ExtensionRow: View {
         }
     }
 
-    private func publish() {
+    /// The confirmation's action (main actor) with the plan the person confirmed: exactly its members are packed.
+    private func publish(_ plan: RemoteInstaller.PublishPlan) {
         guard let dir = registry.directory(id: record.id) else { return }
         rowError = nil
         publishing = true
@@ -342,7 +314,8 @@ private struct ExtensionRow: View {
                 // packageForPublish spawns tar + gzip + base64 (sync). This Task
                 // inherits the View's MainActor, so run the blocking work off-main
                 // to keep the UI responsive while a (≤256KB) artifact is packed.
-                let blob = try await Task.detached { try RemoteInstaller.packageForPublish(dir) }.value
+                // The detached closure runs on the global executor and takes only Sendable values (URL, PublishPlan).
+                let blob = try await Task.detached { try RemoteInstaller.packageForPublish(dir, plan: plan) }.value
                 let manifest = MarketClient.PublishManifest(
                     id: m.id, name: m.name, title: m.title, description: m.description,
                     version: m.version, author: m.author, icon: m.icon, license: m.license)
@@ -365,10 +338,11 @@ private struct ExtensionRow: View {
 @MainActor final class PublishConfirmation: ObservableObject {
     @Published private(set) var plan: RemoteInstaller.PublishPlan?
     private var dir: URL?
-    private var publish: (@MainActor () -> Void)?
+    private var publish: (@MainActor (RemoteInstaller.PublishPlan) -> Void)?
 
-    /// Opens the confirmation with what a publish of `dir` would send; publishes nothing.
-    func ask(_ dir: URL, publish: @escaping @MainActor () -> Void) {
+    /// Opens the confirmation with what a publish of `dir` would send; publishes nothing. `publish` runs on
+    /// the main actor with the confirmed plan, whose members are all a publish may pack (#1160).
+    func ask(_ dir: URL, publish: @escaping @MainActor (RemoteInstaller.PublishPlan) -> Void) {
         // shortcut: walks the folder on the main actor, slow only for a linked development folder with a large published tree; move it off main if that is reported.
         plan = RemoteInstaller.publishPlan(dir)
         self.dir = dir
@@ -382,7 +356,7 @@ private struct ExtensionRow: View {
         let now = RemoteInstaller.publishPlan(dir)
         guard now == plan else { self.plan = now; return }
         cancel()
-        run()
+        run(plan)
     }
 
     func cancel() { plan = nil; dir = nil; publish = nil }
@@ -413,7 +387,7 @@ struct PublishButton: View {
     let help: String
     let dir: URL?
     @ObservedObject var model: PublishConfirmation
-    let publish: @MainActor () -> Void
+    let publish: @MainActor (RemoteInstaller.PublishPlan) -> Void
 
     /// The button's action (main actor), a property so a row can run it without a window.
     var tap: @MainActor () -> Void {
@@ -425,6 +399,45 @@ struct PublishButton: View {
             // The list closes whenever the row stops offering Publish (untrusted, publishing, already live).
             .onDisappear { model.cancel() }
     }
+}
+
+/// A row's publish state among its actions: a spinner while publishing, the live version's badge, and the
+/// Publish button while the local version is not live. One `if` holds the button whatever its title, so
+/// "Publish" becoming "Publish v<x>" when the live version arrives keeps it (and its open list) (#1160).
+struct PublishActions: View {
+    let publishing: Bool
+    let published: String?      // latest live version; nil = never published, yanked or not fetched yet
+    let version: String         // the local version
+    let dir: URL?
+    let model: PublishConfirmation
+    let publish: @MainActor (RemoteInstaller.PublishPlan) -> Void
+
+    var body: some View {
+        let ahead = published.map { SemanticVersion(version) > SemanticVersion($0) }
+        if publishing {
+            ProgressView().controlSize(.small)
+        } else {
+            if let pv = published {
+                // Ahead: what is live, next to the version bump; else up to date (or behind): nothing to push.
+                rowBadge(ahead == true ? "v\(pv) published" : "Published v\(pv)")
+                    .help(ahead == true ? "Version \(pv) is live on the marketplace" : "This version is live on the marketplace")
+            }
+            if ahead != false {
+                PublishButton(title: ahead == true ? "Publish v\(version)" : "Publish", prominent: ahead == true,
+                              help: ahead == true ? "Push the newer local version (\(version)) to the marketplace"
+                                  : "Publish this extension to the marketplace",
+                              dir: dir, model: model, publish: publish)
+            }
+        }
+    }
+}
+
+/// Not named `badge`: inside a view body that name is SwiftUI's View.badge modifier on `self`, which recurses.
+@MainActor private func rowBadge(_ text: String) -> some View {
+    Text(text).font(Neon.font(.caption2)).bold()
+        .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
+        .background(Color.secondary.opacity(0.2))
+        .clipShape(Capsule())
 }
 
 /// The list under a row's actions while a publish waits for its confirmation.

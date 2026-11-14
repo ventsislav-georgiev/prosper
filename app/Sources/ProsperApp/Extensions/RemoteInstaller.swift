@@ -310,7 +310,9 @@ enum RemoteInstaller {
 
     /// Every name in `dir` with its lstat file type: a link reads as a link, never
     /// followed. readdir, not FileManager: FileManager listings omit "._*" names.
-    private static func entries(_ dir: URL) throws -> [(name: String, type: mode_t)] {
+    /// A name that is not valid UTF-8 goes to `notUTF8` (shown with U+FFFD, called synchronously on the
+    /// caller's thread) and is left out; without it, such a name throws "cannot stat" as before.
+    private static func entries(_ dir: URL, notUTF8: ((String) -> Void)? = nil) throws -> [(name: String, type: mode_t)] {
         guard let d = opendir(dir.path) else {
             throw InstallError.extractFailed("cannot read \(dir.lastPathComponent)")
         }
@@ -320,9 +322,9 @@ enum RemoteInstaller {
         let nameOffset = MemoryLayout<dirent>.offset(of: \dirent.d_name)!
         while let e = readdir(d) {
             let len = min(Int(e.pointee.d_namlen), MemoryLayout<dirent>.size - nameOffset)
-            let name = String(decoding: UnsafeRawBufferPointer(start: UnsafeRawPointer(e) + nameOffset, count: len),
-                              as: UTF8.self)
+            let (name, exact) = listedName(UnsafeRawBufferPointer(start: UnsafeRawPointer(e) + nameOffset, count: len))
             if name == "." || name == ".." { continue }
+            if !exact, let notUTF8 { notUTF8(name); continue }
             var st = stat()
             guard lstat(dir.appendingPathComponent(name).path, &st) == 0 else {
                 throw InstallError.extractFailed("cannot stat \(name)")
@@ -330,6 +332,13 @@ enum RemoteInstaller {
             out.append((name, st.st_mode & S_IFMT))
         }
         return out
+    }
+
+    /// A listed name's bytes as text, and whether the text is that name: false when the bytes are not
+    /// valid UTF-8 (each bad byte reads U+FFFD, so a path built from the text reaches no file).
+    static func listedName<C: Collection>(_ bytes: C) -> (text: String, exact: Bool) where C.Element == UInt8 {
+        let text = String(decoding: bytes, as: UTF8.self)
+        return (text, text.utf8.elementsEqual(bytes))
     }
 
     /// Removes every hidden file and folder under `dir`, at any depth; recurses into
@@ -384,9 +393,11 @@ enum RemoteInstaller {
     /// An explicit member list, not tar patterns: `--exclude '.*'` matches the root
     /// "." and empties the archive. --no-mac-metadata/--no-xattrs keep macOS from
     /// adding "._x" AppleDouble members and xattr records (provenance, quarantine).
-    static func packageForPublish(_ dir: URL) throws -> String {
-        let plan = publishPlan(dir)
-        if let why = plan.refusal { throw InstallError.cannotPublish(why) }
+    /// `confirmed` (#1160): the plan the person confirmed; its members and nothing else are packed, and a
+    /// member that changed since (`changedMembers`) stops the publish by name. nil walks the folder now.
+    static func packageForPublish(_ dir: URL, plan confirmed: PublishPlan? = nil) throws -> String {
+        let plan = confirmed ?? publishPlan(dir)
+        if let why = plan.refusal ?? changedMembers(plan.members, in: dir) { throw InstallError.cannotPublish(why) }
         // Fixed owner fields: by default every header names the publisher's account.
         // paxr = bsdtar's default (restricted pax), named so a default change cannot bring
         // GNU @LongLink headers (they carry an owner name).
@@ -401,17 +412,43 @@ enum RemoteInstaller {
     /// 256 KB, so thousands of files never get here — switch to --null -T - if it must.
     static func publishMembers(_ dir: URL) -> [String] { publishPlan(dir).members }
 
+    /// Why the confirmed `members` cannot be packed as confirmed, naming each: gone, unreadable, or no longer
+    /// a regular file reached through real folders (a link there would pack something else). nil when all are.
+    /// shortcut: tar opens the members a moment after this check; a swap in that moment packs a link entry
+    /// (no -H/-L), which every install refuses, or fails tar; an open-by-fd packer would close it.
+    static func changedMembers(_ members: [String], in dir: URL) -> String? {
+        let changed = members.compactMap { member -> String? in
+            let name = String(member.dropFirst(2)), parts = name.split(separator: "/")
+            var path = dir.path, st = stat()
+            for (i, part) in parts.enumerated() {
+                path += "/\(part)"
+                guard lstat(path, &st) == 0 else { return name + (errno == EACCES ? " (can't be read)" : " (removed)") }
+                let type = st.st_mode & S_IFMT
+                if type == S_IFLNK { return name + " (now a symbolic link)" }
+                if type != (i == parts.count - 1 ? S_IFREG : S_IFDIR) { return name + " (no longer a regular file)" }
+            }
+            return nil
+        }
+        return changed.isEmpty ? nil : "The folder changed after you confirmed the list, so nothing was published: "
+            + changed.joined(separator: ", ") + ". Publish again to see the new list."
+    }
+
     /// What a publish of a folder sends, and what stops it (#1141). Paths are relative to the folder.
-    struct PublishPlan: Equatable {
+    struct PublishPlan: Equatable, Sendable {
         var members: [String] = []     // "./<path>", sorted: exactly what the packer sends
         var leftOut = 0                // hidden and test entries not sent; a left-out folder counts once
         var links: [String] = []       // symbolic links: every install refuses an archive holding one
         var unreadable: [String] = []  // folders the walk could not list: their files would go missing
+        var notUTF8: [String] = []     // names that are not valid UTF-8 (U+FFFD per bad byte): no path made from them reaches the file
 
         /// Why this folder cannot be published, naming the files; nil when it can.
         var refusal: String? {
             if !links.isEmpty {
                 return "Can't publish symbolic links (every install refuses them): " + links.joined(separator: ", ")
+            }
+            if !notUTF8.isEmpty {
+                return "Can't publish file names that are not valid UTF-8 (\u{FFFD} marks the bytes that can't be shown): "
+                    + notUTF8.joined(separator: ", ")
             }
             if !unreadable.isEmpty {
                 let one = unreadable.count == 1
@@ -427,7 +464,12 @@ enum RemoteInstaller {
     static func publishPlan(_ dir: URL) -> PublishPlan {
         var plan = PublishPlan()
         func walk(_ url: URL, _ rel: String) {
-            guard let list = try? entries(url) else {
+            // Runs synchronously inside entries, on this walk's thread. A hidden one is left out like any other.
+            let named = { (name: String) in
+                let path = rel.isEmpty ? name : rel + "/" + name
+                if isLeftOutOfPublish(path) { plan.leftOut += 1 } else { plan.notUTF8.append(path) }
+            }
+            guard let list = try? entries(url, notUTF8: named) else {
                 plan.unreadable.append(rel.isEmpty ? url.lastPathComponent : rel)
                 return
             }
@@ -448,6 +490,7 @@ enum RemoteInstaller {
         plan.members.sort()
         plan.links.sort()
         plan.unreadable.sort()
+        plan.notUTF8.sort()
         return plan
     }
 
