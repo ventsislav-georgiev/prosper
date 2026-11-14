@@ -180,6 +180,28 @@ final class TextViewerModel: ObservableObject {
 
     func openInDefaultApp() { if let app = defaultApp { actions.openWith(url, app) } }
     func reveal() { actions.reveal(url) }
+
+    /// D15 (#1107): what the last Screenshot did, shown under the header for 5 s.
+    @Published private(set) var notice: String?
+    /// R1107-2: which screenshot said the notice; a timer clears only its own.
+    private var noticeGeneration = 0
+
+    /// D15: the header's Screenshot. One PNG of the whole shown text (all of the scroll) on the clipboard
+    /// through the Pasteboard.general seam, at the window's column width, appearance and backing scale.
+    /// Reads the live view; never scrolls it, selects in it or lays it out.
+    func screenshot() {
+        guard let text = output?.text, let view = textView, let column = view.textContainer?.size.width else { return }
+        let said = DocumentImage.copy(text, column: column, appearance: view.effectiveAppearance, background: DocumentImage.surface,
+                                      backing: view.window?.backingScaleFactor ?? 1, to: Pasteboard.general)
+        notice = said
+        noticeGeneration += 1
+        let generation = noticeGeneration
+        // Runs on the main actor; a newer screenshot's notice is left in place, even when it says the same.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            if let self, self.noticeGeneration == generation { self.notice = nil }
+        }
+    }
 }
 
 @MainActor
@@ -349,6 +371,7 @@ struct TextViewerRootView: View {
         VStack(spacing: 0) {
             TextViewerHeader(model: model)
             Rectangle().fill(Neon.stroke).frame(height: 1)
+            if let notice = model.notice { banner(notice) }
             switch model.state {
             case nil:
                 Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)   // the first load is on its way
@@ -386,7 +409,7 @@ struct TextViewerRootView: View {
     }
 }
 
-/// The header row, left to right: [Read | Edit], the file name, Copy ▾, Open With ▾.
+/// The header row, left to right: [Read | Edit], the file name, Copy ▾, Open With ▾, Screenshot (#1107).
 struct TextViewerHeader: View {
     @ObservedObject var model: TextViewerModel
 
@@ -398,12 +421,26 @@ struct TextViewerHeader: View {
                 .foregroundStyle(Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: sz(8))
+            // #1107: where the titled menus and Screenshot do not fit (UI scale 0.7 at the minimum width), the
+            // menus show their icons only. Laid out before the name, which truncates first.
+            ViewThatFits(in: .horizontal) {
+                actions(titles: true)
+                actions(titles: false)
+            }
+            .layoutPriority(1)
+        }
+        .padding(.horizontal, sz(14))
+        .padding(.vertical, sz(8))
+    }
+
+    private func actions(titles: Bool) -> some View {
+        HStack(spacing: sz(10)) {
             Menu {
                 ForEach(model.copyItems, id: \.title) { item in
                     Button(item.title) { model.copy(item.title) }.disabled(!item.enabled)
                 }
             } label: {
-                Label("Copy", systemImage: "doc.on.doc").font(Neon.font(11, weight: .medium))
+                label("Copy", "doc.on.doc", titles: titles)
             }
             .menuStyle(.borderlessButton).fixedSize()
             Menu {
@@ -412,12 +449,36 @@ struct TextViewerHeader: View {
                 }
                 Button("Reveal in Finder") { model.reveal() }
             } label: {
-                Label("Open With", systemImage: "arrow.up.forward.app").font(Neon.font(11, weight: .medium))
+                label("Open With", "arrow.up.forward.app", titles: titles)
             }
             .menuStyle(.borderlessButton).fixedSize()
+            TextViewerScreenshotButton(model: model)
         }
-        .padding(.horizontal, sz(14))
-        .padding(.vertical, sz(8))
+    }
+
+    @ViewBuilder private func label(_ title: String, _ symbol: String, titles: Bool) -> some View {
+        if titles {
+            Label(title, systemImage: symbol).font(Neon.font(11, weight: .medium))
+        } else {
+            Image(systemName: symbol).font(Neon.font(11, weight: .medium)).help(title).accessibilityLabel(title)
+        }
+    }
+}
+
+/// D15 (#1107): Screenshot, the whole document as one image on the clipboard. Read mode only: there is
+/// no Edit mode yet; P3 (#1108) hides this button in Edit.
+struct TextViewerScreenshotButton: View {
+    @ObservedObject var model: TextViewerModel
+
+    var body: some View {
+        Button { model.screenshot() } label: {
+            Image(systemName: "camera.viewfinder").font(Neon.font(11, weight: .medium))
+        }
+        .buttonStyle(.borderless)
+        .fixedSize()
+        .disabled(model.output == nil)
+        .help("Copy an image of the whole document")
+        .accessibilityLabel("Screenshot")
     }
 }
 

@@ -966,6 +966,10 @@ tag from the now-released section and put it on the new top draft.
   with "-" or is shaped like a session id); with only such sessions left the button is not shown, on
   the Mac and on the phone. A name shaped like a session id gets its own explanation, and a resume
   whose Claude is not running reads as not resumed, matching the "failed" count. (#950)
+- Text viewer: a Screenshot button in the header copies one image of the whole document, all of the
+  scroll and not only the visible part, to the clipboard as a PNG; a very long document is copied at
+  1x, and past the image height limit its top part is copied and the notice names the lines
+  included. (#1107)
 
 ## v2.174.0
 

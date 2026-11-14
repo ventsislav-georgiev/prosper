@@ -786,6 +786,72 @@ final class TextViewerWindowTests: XCTestCase {
         }
     }
 
+    /// #1107 D15, the entry's done-condition through the window's own chain: the header's action puts ONE
+    /// PNG of the whole document (taller than the window) on the test pasteboard, as wide as the live
+    /// column plus margins and as tall as the live view's laid-out text plus margins; the notice says
+    /// its size; the live view's scroll and selection are the same after. Unwindowed, so backing 1.
+    /// Bytes: the settle snapshot 820 x 400 x 4 = 1,312,000; the image 792 x about 1,950 x 4 = about 6.2 MB.
+    func testScreenshotCopiesTheWholeDocumentAndLeavesTheViewAlone() throws {
+        _ = ThemeStore.shared
+        let saved = (ThemeRuntime.scale, ThemeRuntime.palette, ThemeRuntime.opacity, ThemeRuntime.frost)
+        defer { (ThemeRuntime.scale, ThemeRuntime.palette, ThemeRuntime.opacity, ThemeRuntime.frost) = saved }
+        ThemeRuntime.opacity = 1
+        ThemeRuntime.frost = false
+        ThemeRuntime.scale = 1
+        let url = tempDir("tv-shot").appendingPathComponent("shot.txt")
+        try write((1...120).map { "Line \($0) of the screenshot sample" }.joined(separator: "\n") + "\n", url)
+        let model = TextViewerModel(url: url, resolved: url, actions: fakeActions())
+        loaded(model)
+        let view = NSHostingView(rootView: TextViewerRootView(model: model))
+        view.frame = CGRect(x: 0, y: 0, width: 820, height: 400)
+        _ = try snapshot(view, backing: 1)
+        let tv = try XCTUnwrap(model.textView)
+        tv.setSelectedRange(NSRange(location: 40, length: 12))
+        let clip = try XCTUnwrap(tv.enclosingScrollView?.contentView)
+        clip.scroll(to: NSPoint(x: 0, y: 600))
+        tv.enclosingScrollView?.reflectScrolledClipView(clip)
+        let visible = tv.visibleRect, selection = tv.selectedRanges
+        XCTAssertGreaterThan(visible.minY, 0, "scrolled down before the screenshot")
+        let pb = Pasteboard.general
+        pb.clearContents()
+        pb.setString("before", forType: .string)
+        model.screenshot()
+        XCTAssertEqual(tv.visibleRect, visible, "the live view is not scrolled")
+        XCTAssertEqual(tv.selectedRanges, selection, "nor its selection changed")
+        XCTAssertEqual(pb.pasteboardItems?.count, 1)
+        XCTAssertEqual(pb.pasteboardItems?.first?.types, [.png], "PNG data only (pb.types adds the server's translations)")
+        let rep = try XCTUnwrap(pb.data(forType: .png).flatMap(NSBitmapImageRep.init(data:)))
+        let lm = try XCTUnwrap(tv.layoutManager), tc = try XCTUnwrap(tv.textContainer)
+        let height = lm.usedRect(for: tc).height
+        XCTAssertGreaterThan(height, 400, "taller than the window")
+        XCTAssertEqual(rep.pixelsWide, Int((tc.size.width + 2 * DocumentImage.margin).rounded(.up)))
+        XCTAssertEqual(rep.pixelsHigh, Int((height + 2 * DocumentImage.margin).rounded(.up)))
+        XCTAssertEqual(model.notice, DocumentImage.copiedNotice(width: rep.pixelsWide, height: rep.pixelsHigh))
+    }
+
+    /// #1107: with the Screenshot button the header fits the window's minimum width at UI scale 0.7, 0.85
+    /// and 1.0: the size it takes when offered that width (the name truncates; where the titled menus do not
+    /// fit they show icons) is within it. Ticket 1 measured the ideal width with titles: 327 pt at 0.7
+    /// (minimum 294) and 359 at 0.85 (minimum 357). The button has a size of its own (fixedSize). Measured,
+    /// never drawn on screen.
+    func testHeaderFitsTheMinimumWidthAtEveryScale() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let url = tempDir("tv-head").appendingPathComponent("a.md")
+        try write("# a\n", url)
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            let model = TextViewerModel(url: url, resolved: url, actions: fakeActions())
+            let minimum = TextViewerWindows.contentMinSize(scale: scale).width
+            let header = NSHostingController(rootView: TextViewerHeader(model: model))
+                .sizeThatFits(in: CGSize(width: minimum, height: 200)).width
+            XCTAssertLessThanOrEqual(header, minimum, "scale \(scale): header \(header)")
+            let button = NSHostingView(rootView: TextViewerScreenshotButton(model: model)).fittingSize
+            XCTAssertGreaterThan(button.width, 0, "scale \(scale)")
+            XCTAssertGreaterThan(button.height, 0, "scale \(scale)")
+        }
+    }
+
     /// The brief: Read is on the left and is the only mode; Edit is drawn, disabled, until P3.
     func testReadIsLeftAndEditIsOff() {
         XCTAssertEqual(TextViewerModeSwitch.segments,
@@ -833,7 +899,7 @@ final class TextViewerWindowTests: XCTestCase {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/TextViewer")
         let names = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }.sorted()
-        XCTAssertEqual(names, ["ImagePolicy.swift", "LinkPolicy.swift", "MarkdownRenderer.swift", "TextViewerDocument.swift",
+        XCTAssertEqual(names, ["DocumentImage.swift", "ImagePolicy.swift", "LinkPolicy.swift", "MarkdownRenderer.swift", "TextViewerDocument.swift",
                                "TextViewerRouting.swift", "TextViewerTextView.swift", "TextViewerWindow.swift"])
         // #1118: no URL-based loader either (Data(contentsOf:), CGImageSourceCreateWithURL, NSImage(contentsOf:)):
         // every byte is read through the guarded open in TextViewerDocument and ImagePolicy.
