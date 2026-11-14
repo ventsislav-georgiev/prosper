@@ -808,12 +808,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // skipped when it has no modifier (unset / cleared by the user) so a
         // disabled shortcut never registers a bare key.
         var bound: [(key: GlobalHotKey, label: String, isDefaultRunner: Bool)] = []
+        let extensionRegistrations = ExtensionShortcuts.registrations(
+            registry: extensions,
+            overrides: ShortcutStore.extensionKeybindings(),
+            userShortcuts: ShortcutStore.extensionShortcuts())
+        // #1177: the chords the person's own bindings hold, so Open Agent Sessions' default stands down on them.
+        let held = ShortcutStore.heldChords(
+            isAvailable: { $0.isAvailable(registry: extensions) },
+            appResolves: { AppControl.resolvedBundleURL($0) != nil },
+            extensionCombos: extensionRegistrations.map(\.combo),
+            ruleTriggers: ShortcutRulesStore.shared.rules.filter(\.enabled).map(\.trigger))
         func add(_ action: ShortcutAction, _ handler: @escaping () -> Void) {
             // An extension-owned shortcut (e.g. Translate's ⌥L) is skipped while its
             // extension is disabled, so a dead binding never claims the combo.
             guard action.isAvailable(registry: extensions) else { return }
             let combo = ShortcutStore.combo(for: action)
             guard combo.carbonModifiers != 0 else { return }
+            guard !ShortcutAction.defaultStandsDown(action, saved: ShortcutStore.savedCombo(for: action) != nil,
+                                                    combo: combo, held: held) else { return }
             bound.append(
                 (GlobalHotKey(keyCode: combo.keyCode, modifiers: combo.carbonModifiers,
                               id: action.hotKeyId, handler: handler),
@@ -924,10 +936,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // binding can never land on the same id, and so a disabled extension drops
         // its hotkeys: the walk is gated on `isLive`, and this whole function
         // re-runs from `extensions.onEnabledChanged`.
-        for (i, reg) in ExtensionShortcuts.registrations(
-            registry: extensions,
-            overrides: ShortcutStore.extensionKeybindings(),
-            userShortcuts: ShortcutStore.extensionShortcuts()).enumerated() {
+        for (i, reg) in extensionRegistrations.enumerated() {
             let commandID = reg.commandID
             let item = reg.item
             bound.append(

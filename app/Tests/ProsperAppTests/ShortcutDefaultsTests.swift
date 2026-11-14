@@ -128,4 +128,134 @@ final class ShortcutDefaultsTests: XCTestCase {
             appShortcuts: [AppShortcut(target: "com.example.fake", combo: s, name: "Fake App")])
         XCTAssertTrue(clearedRows.allSatisfy { $0.conflictNote == nil }, "cleared: nothing to flag")
     }
+
+    // MARK: - #1177 round 2: the default stands down on a chord the person's own binding holds
+
+    private var shiftOptS: KeyCombo { KeyCombo(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: shiftOption, display: "⇧⌥S") }
+
+    private struct Case {
+        let name: String
+        let action: ShortcutAction
+        let saved: Bool
+        let combo: KeyCombo
+        let held: Set<KeyCombo>
+        let standsDown: Bool
+    }
+
+    /// The decision, as a literal table. Only an unsaved Open Agent Sessions on a held chord stands down.
+    func testDefaultStandsDownTable() {
+        let s = shiftOptS
+        let a = KeyCombo(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: shiftOption, display: "⇧⌥A")
+        let j = KeyCombo(keyCode: UInt32(kVK_ANSI_J), carbonModifiers: UInt32(controlKey | cmdKey), display: "⌃⌘J")
+        let left = KeyCombo(keyCode: UInt32(kVK_LeftArrow), carbonModifiers: UInt32(controlKey | optionKey), display: "⌃⌥←")
+        let space = KeyCombo(keyCode: UInt32(kVK_Space), carbonModifiers: UInt32(cmdKey), display: "⌘Space")
+        let sOtherLabel = KeyCombo(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: shiftOption, display: "recorded elsewhere")
+        let cases: [Case] = [
+            Case(name: "nothing saved, held chord", action: .agentSessions, saved: false, combo: s, held: [s], standsDown: true),
+            Case(name: "nothing saved, held, combo under another label", action: .agentSessions, saved: false,
+                 combo: sOtherLabel, held: [s], standsDown: true),
+            Case(name: "nothing saved, free chord", action: .agentSessions, saved: false, combo: s, held: [], standsDown: false),
+            Case(name: "nothing saved, other chords held", action: .agentSessions, saved: false, combo: s, held: [a, j],
+                 standsDown: false),
+            Case(name: "saved ⇧⌥S on a held chord", action: .agentSessions, saved: true, combo: s, held: [s], standsDown: false),
+            Case(name: "saved other combo on a held chord", action: .agentSessions, saved: true, combo: j, held: [j],
+                 standsDown: false),
+            Case(name: "cleared (saved unset)", action: .agentSessions, saved: true, combo: unsetKeyCombo, held: [s],
+                 standsDown: false),
+            Case(name: "clipboard default on a held chord", action: .clipboard, saved: false, combo: a, held: [a],
+                 standsDown: false),
+            Case(name: "window default on a held chord", action: .windowLeftHalf, saved: false, combo: left, held: [left],
+                 standsDown: false),
+            Case(name: "runner default on a held chord", action: .runner, saved: false, combo: space, held: [space],
+                 standsDown: false),
+            Case(name: "another action unsaved on ⇧⌥S held", action: .settings, saved: false, combo: s, held: [s],
+                 standsDown: false),
+        ]
+        XCTAssertEqual(cases.count, 11)
+        for c in cases {
+            // heldChords returns chords (display stripped), so the table's held sets go in as chords too.
+            XCTAssertEqual(ShortcutAction.defaultStandsDown(c.action, saved: c.saved, combo: c.combo,
+                                                            held: Set(c.held.map(\.chord))),
+                           c.standsDown, c.name)
+        }
+        // A cleared choice is not registered as today: registerHotKeys' `add` skips a combo with no modifier.
+        XCTAssertEqual(unsetKeyCombo.carbonModifiers, 0)
+    }
+
+    private let touchedKeys = ["shortcut.agentSessions", "shortcut.windowLeftHalf", "shortcut.custom", "shortcut.apps"]
+
+    /// Runs `body` on the scratch store with none of the keys these rows touch set, and removes them after.
+    private func withCleanKeys(_ body: () throws -> Void) rethrows {
+        XCTAssertTrue(Preferences.defaults is XCTestDefaults, "never the app's or the operator's defaults")
+        guard Preferences.defaults is XCTestDefaults else { return }
+        for k in touchedKeys { XCTAssertTrue(Preferences.defaults.object(forKey: k) == nil, "leftover \(k)") }
+        defer { for k in touchedKeys { Preferences.defaults.removeObject(forKey: k) } }
+        try body()
+    }
+
+    private func held(available: (ShortcutAction) -> Bool = { _ in true }, appResolves: (String) -> Bool = { _ in true },
+                      extensionCombos: [KeyCombo] = [], ruleTriggers: [String] = []) -> Set<KeyCombo> {
+        ShortcutStore.heldChords(isAvailable: available, appResolves: appResolves,
+                                 extensionCombos: extensionCombos, ruleTriggers: ruleTriggers)
+    }
+
+    /// Each kind of the person's own binding, read from the scratch store; defaults nobody chose hold nothing.
+    func testHeldChordsReadEachKindOfBinding() {
+        withCleanKeys {
+            let s = shiftOptS.chord
+            XCTAssertEqual(held(), [], "nothing saved: built-in defaults (⇧⌥S included) hold nothing")
+
+            // A saved built-in choice (a window action), only while its action is available.
+            ShortcutStore.setCombo(shiftOptS, for: .windowLeftHalf)
+            XCTAssertEqual(held(), [s])
+            XCTAssertEqual(held(available: { $0 != .windowLeftHalf }), [], "an unavailable action registers nothing")
+            ShortcutStore.setCombo(unsetKeyCombo, for: .windowLeftHalf)
+            XCTAssertEqual(held(), [], "a cleared built-in holds nothing")
+            ShortcutStore.reset(.windowLeftHalf)
+
+            // A recorded custom shortcut holds its chord; an unrecorded one (no modifier) holds nothing.
+            let unrecorded = KeyCombo(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: 0, display: "S")
+            ShortcutStore.setCustomShortcuts([CustomShortcut(combo: unrecorded, prefix: "ex ", label: "Example Prefix")])
+            XCTAssertEqual(held(), [], "an unrecorded custom shortcut holds nothing")
+            ShortcutStore.setCustomShortcuts([CustomShortcut(combo: shiftOptS, prefix: "ex ", label: "Example Prefix")])
+            XCTAssertEqual(held(), [s])
+            Preferences.defaults.removeObject(forKey: "shortcut.custom")
+
+            // An app shortcut holds its chord only when it would register (its app is on this Mac).
+            ShortcutStore.setAppShortcuts([AppShortcut(target: "com.example.fake", combo: shiftOptS, name: "Fake App")])
+            XCTAssertEqual(held(), [s])
+            XCTAssertEqual(held(appResolves: { _ in false }), [], "no app on this Mac: not registered, holds nothing")
+            Preferences.defaults.removeObject(forKey: ShortcutStore.appsKey)
+
+            // Extension registrations (manifest keybindings and the person's extension shortcuts).
+            XCTAssertEqual(held(extensionCombos: [shiftOptS]), [s])
+            // Native key rules: a parseable trigger with a modifier; a bare key or a media key holds no hotkey chord.
+            XCTAssertEqual(held(ruleTriggers: ["shift+alt+s"]), [s])
+            XCTAssertEqual(held(ruleTriggers: ["f7", "media:PLAY", ""]), [])
+        }
+    }
+
+    /// The registerHotKeys inputs end to end on the scratch store: nothing saved + a held chord stands down;
+    /// the person saving ⇧⌥S for Open Agent Sessions themselves makes it register (first claim wins, as today).
+    func testUnsavedDefaultStandsDownAndASavedChoiceDoesNot() {
+        withCleanKeys {
+            ShortcutStore.setAppShortcuts([AppShortcut(target: "com.example.fake", combo: shiftOptS, name: "Fake App")])
+            func standsDown() -> Bool {
+                ShortcutAction.defaultStandsDown(.agentSessions,
+                                                 saved: ShortcutStore.savedCombo(for: .agentSessions) != nil,
+                                                 combo: ShortcutStore.combo(for: .agentSessions), held: held())
+            }
+            XCTAssertTrue(ShortcutStore.savedCombo(for: .agentSessions) == nil)
+            XCTAssertTrue(standsDown())
+            ShortcutStore.setCombo(shiftOptS, for: .agentSessions)
+            XCTAssertFalse(standsDown(), "a saved ⇧⌥S is the person's choice")
+            // A blob that does not decode reads as nothing saved, as combo(for:) already treats it.
+            Preferences.defaults.set(Data("not json".utf8), forKey: storeKey)
+            XCTAssertTrue(ShortcutStore.savedCombo(for: .agentSessions) == nil)
+            XCTAssertEqual(ShortcutStore.combo(for: .agentSessions), ShortcutAction.agentSessions.defaultCombo)
+            XCTAssertTrue(standsDown())
+            Preferences.defaults.removeObject(forKey: ShortcutStore.appsKey)
+            XCTAssertFalse(standsDown(), "the binding gone: the default registers again at the next run")
+        }
+    }
 }

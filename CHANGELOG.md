@@ -848,7 +848,11 @@ tag from the now-released section and put it on the new top draft.
 - Coding agent: changing the agent model while a model is loading no longer opens the session under
   the other model's name. (#893)
 - Open Agent Sessions now has a default shortcut, Shift-Option-S (while the Agent Island extension
-  is on). A shortcut you set or cleared yourself is kept; change it in Settings > Shortcuts. (#1177)
+  is on). A shortcut you set or cleared yourself is kept, and if you already use Shift-Option-S for
+  another Prosper shortcut, an app or extension shortcut, or one of your key rules in Settings,
+  yours keeps the key. Where Shift-Option-S types a character (Í on the U.S. layout), that
+  character cannot be typed with it while the shortcut is active, as with Clipboard History on
+  Shift-Option-A. Change it in Settings > Shortcuts. (#1177)
 - The Marketplace publish list no longer closes when you scroll its extension far out of view in
   Settings; it still closes when publishing is no longer offered. (#1174)
 - Installing an extension now refuses a download that holds a named pipe, socket or device, naming

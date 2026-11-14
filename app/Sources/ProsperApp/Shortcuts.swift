@@ -559,6 +559,17 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     }
 }
 
+extension ShortcutAction {
+    /// #1177: a default nobody chose never takes a key from a binding the person made. Only
+    /// Open Agent Sessions stands down, and only with nothing saved (`saved` false) and its chord
+    /// in `held` (`ShortcutStore.heldChords`); then it is not registered and raises no notice.
+    /// Every other action, and a saved choice, registers as before (first claim wins).
+    static func defaultStandsDown(_ action: ShortcutAction, saved: Bool, combo: KeyCombo,
+                                  held: Set<KeyCombo>) -> Bool {
+        action == .agentSessions && !saved && held.contains(combo.chord)
+    }
+}
+
 /// Persists per-action key combos in UserDefaults (JSON), falling back to the
 /// built-in defaults. Pure value layer — registration lives in AppDelegate.
 enum ShortcutStore {
@@ -566,11 +577,33 @@ enum ShortcutStore {
     private static func key(_ action: ShortcutAction) -> String { "shortcut.\(action.rawValue)" }
 
     static func combo(for action: ShortcutAction) -> KeyCombo {
-        guard let data = defaults.data(forKey: key(action)),
-              let combo = try? JSONDecoder().decode(KeyCombo.self, from: data) else {
-            return action.defaultCombo
-        }
-        return combo
+        savedCombo(for: action) ?? action.defaultCombo
+    }
+
+    /// The person's own saved choice, a clear (`unsetKeyCombo`) included; nil when nothing
+    /// decodable is saved, which is exactly when `combo(for:)` falls back to the default.
+    static func savedCombo(for action: ShortcutAction) -> KeyCombo? {
+        guard let data = defaults.data(forKey: key(action)) else { return nil }
+        return try? JSONDecoder().decode(KeyCombo.self, from: data)
+    }
+
+    /// #1177: the chords the person's own bindings would claim at registration: a SAVED built-in
+    /// choice on an available action, a recorded custom shortcut (the registered prefix), an app
+    /// shortcut that would register, the extension registrations (manifest keybindings and the
+    /// person's extension shortcuts) and enabled native key rules. Defaults nobody chose are not in it.
+    /// The closures are non-escaping and run synchronously on the caller's actor (main, in registerHotKeys).
+    static func heldChords(isAvailable: (ShortcutAction) -> Bool,
+                           appResolves: (String) -> Bool,
+                           extensionCombos: [KeyCombo],
+                           ruleTriggers: [String]) -> Set<KeyCombo> {
+        var held = Set(ShortcutAction.allCases.filter(isAvailable).compactMap { savedCombo(for: $0) }.map(\.chord))
+        held.formUnion(customShortcuts().filter { $0.combo.carbonModifiers != 0 }
+            .prefix(GlobalHotKey.customMaxRegistered).map(\.combo.chord))
+        held.formUnion(AppShortcut.registrations(appShortcuts())
+            .filter { appResolves($0.shortcut.target) }.map { $0.shortcut.combo.chord })
+        held.formUnion(extensionCombos.map(\.chord))
+        held.formUnion(ruleTriggers.compactMap { KeyCombo.parse($0)?.chord })
+        return held.filter { $0.carbonModifiers != 0 }
     }
 
     static func setCombo(_ combo: KeyCombo, for action: ShortcutAction) {
