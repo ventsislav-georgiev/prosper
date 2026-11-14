@@ -731,6 +731,9 @@ tag from the now-released section and put it on the new top draft.
   does nothing. (#1118)
 - File search no longer gives a file the ranking of a file deleted from the same path more than 30
   days before. (#1153)
+- The Agent island now shows a session's agents and merged pull requests as an icon plus a number,
+  as the Agent Sessions window does; the narrower merged count leaves room for more pull request
+  chips, and VoiceOver and the tooltips read "3 agents" and "192 merged pull requests" (#1137)
 
 ## v2.174.0
 

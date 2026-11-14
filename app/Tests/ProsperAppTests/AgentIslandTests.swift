@@ -1898,14 +1898,14 @@ final class AgentIslandTests: XCTestCase {
 
     /// #762: the row draws no tasks (#772: the meta no longer carries them).
     func testMergedLabelAndRowLabelWithMeta() {
-        XCTAssertEqual(AgentIsland.mergedLabel(DchSessionMeta(merged: 18)), "18 merged")
-        XCTAssertNil(AgentIsland.mergedLabel(DchSessionMeta(merged: 0)))
-        XCTAssertNil(AgentIsland.mergedLabel(nil))
+        XCTAssertEqual(AgentIsland.mergedCount(DchSessionMeta(merged: 18)), 18)
+        XCTAssertTrue(AgentIsland.mergedCount(DchSessionMeta(merged: 0)) == nil)
+        XCTAssertTrue(AgentIsland.mergedCount(nil) == nil)
         let s = session("s", .working, activity: 100, alias: "T")
         var m = s; m.meta = DchSessionMeta(openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working", "no meta: unchanged")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
-                       "T, Working, 3 merged, open pull requests o/r#12", "#525: owner kept here; no tasks")
+                       "T, Working, 3 merged pull requests, open pull requests o/r#12", "#525: owner kept here; no tasks")
         m.meta = DchSessionMeta(openPRs: (1...5).map { pr("o/r", $0) })
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(m, now: 112),
                        "T, Working, open pull requests o/r#1, o/r#2, o/r#3 and 2 more pending PRs", "QA #347 L-e")
@@ -1917,10 +1917,11 @@ final class AgentIslandTests: XCTestCase {
     /// QA #347 L-d: every drawn count caps at "99999+".
     func testCountsCapAt99999() {
         XCTAssertEqual([99_999, 100_000, Int.max].map(AgentIsland.count), ["99999", "99999+", "99999+"])
-        XCTAssertEqual(AgentIsland.mergedLabel(DchSessionMeta(merged: 100_000)), "99999+ merged")
+        XCTAssertEqual(AgentIsland.mergedCount(DchSessionMeta(merged: 100_000)).map(AgentSidebar.Count.merged.words),
+                       "99999+ merged pull requests")
         var s = session("s", .working, activity: 100, alias: "T")
         s.meta = DchSessionMeta(merged: Int.max)
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 99999+ merged")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112), "T, Working, 99999+ merged pull requests")
         // Layout: an Int.max merged label still leaves the chips their room.
         let three = (1...3).map { pr("o/r", $0) }
         XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: three, merged: Int.max)).chips.count, 3)
@@ -1930,7 +1931,7 @@ final class AgentIslandTests: XCTestCase {
     /// as the PR line lays them out.
     private func lineWidth(_ meta: DchSessionMeta, _ chips: [AgentIsland.PRChip], _ more: Int) -> CGFloat {
         let parts = chips.map { AgentIsland.chipWidth($0.label) } + (more > 0 ? [AgentIsland.chipWidth(AgentIsland.moreLabel(more))] : [])
-        let merged = AgentIsland.mergedLabel(meta).map { AgentIsland.chipWidth($0) - 2 * AgentIsland.chipInset + AgentIsland.mergedGap } ?? 0
+        let merged = AgentIsland.mergedCount(meta).map { AgentIsland.countWidth(.merged, $0) + AgentIsland.mergedGap } ?? 0
         return parts.reduce(0, +) + CGFloat(max(parts.count - 1, 0)) * AgentIsland.chipSpacing + merged
     }
 
@@ -1963,8 +1964,10 @@ final class AgentIslandTests: XCTestCase {
                        "perf-1: both fit, the long repo uncut")
         XCTAssertEqual(labels([cde, sol, pr("o/r", 1)], merged: 66).0, ["cde-codebase#370", "solution#20399", "r#1"])
         let sec = labels([cde, sol, pr("o/r", 1), pr("o/s", 2)], merged: 66)
-        XCTAssertEqual(sec.0, ["cde-codebase#370", "solution#20399"], "sec-1: a third chip and +1 do not fit")
-        XCTAssertEqual(sec.1, 2)
+        // #1137: the merged count is drawn as symbol plus number, narrower than "66 merged": a third chip and +1 fit
+        // (332 pt of chips against 392 less the drawn count and its gap; the old words left 329).
+        XCTAssertEqual(sec.0, ["cde-codebase#370", "solution#20399", "r#1"], "sec-1: a third chip and +1 fit")
+        XCTAssertEqual(sec.1, 1)
         let wide = labels([cde, sol, ads], merged: 99_999)
         XCTAssertEqual(wide.0, ["cde-codebase#370", "solution#20399"], "three wide chips do not fit")
         XCTAssertEqual(wide.1, 1)
@@ -2017,10 +2020,10 @@ final class AgentIslandTests: XCTestCase {
         let tight = AgentIsland.chipWidth("r#1") + AgentIsland.chipSpacing + AgentIsland.chipWidth(AgentIsland.moreLabel(9))
         XCTAssertEqual(AgentIsland.prChips(many, budget: tight).chips.count, 1)
         let mergedMeta = DchSessionMeta(openPRs: many.openPRs, merged: 999_999_999)
-        let merged = AgentIsland.prChips(mergedMeta, budget: tight + AgentIsland.chipWidth("99999+ merged") - 2 * AgentIsland.chipInset + AgentIsland.mergedGap)
+        let merged = AgentIsland.prChips(mergedMeta, budget: tight + AgentIsland.countWidth(.merged, 999_999_999) + AgentIsland.mergedGap)
         XCTAssertEqual(merged.chips.count, 1, "budget less merged and gap is exactly one chip")
         XCTAssertEqual(AgentIsland.prChips(mergedMeta, budget: tight).chips.count, 0)
-        let short = tight + AgentIsland.chipWidth("99999+ merged") - 2 * AgentIsland.chipInset + AgentIsland.mergedGap - 0.5
+        let short = tight + AgentIsland.countWidth(.merged, 999_999_999) + AgentIsland.mergedGap - 0.5
         XCTAssertEqual(AgentIsland.prChips(mergedMeta, budget: short).chips.count, 0, "the full gap, not a chip spacing")
         XCTAssertEqual(merged.chips.count + merged.more, 10)
         XCTAssertEqual(three.count, 3)
@@ -2586,10 +2589,10 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(AgentIsland.prChips(both, show: noPRs).chips, [])
         XCTAssertEqual(AgentIsland.prChips(DchSessionMeta(openPRs: (1...9).map { pr("o/r", $0) }), show: noPRs).more, 0,
                        "no +N pending PRs either")
-        XCTAssertEqual(AgentIsland.mergedLabel(both, show: noPRs), "4 merged", "only N merged left")
+        XCTAssertEqual(AgentIsland.mergedCount(both, show: noPRs), 4, "only the merged count left")
         XCTAssertTrue(AgentIsland.hasPRLine(both, show: noMerged))
         XCTAssertFalse(AgentIsland.hasPRLine(mergedOnly, show: noMerged), "Merged off: no line")
-        XCTAssertNil(AgentIsland.mergedLabel(both, show: noMerged))
+        XCTAssertTrue(AgentIsland.mergedCount(both, show: noMerged) == nil)
         XCTAssertFalse(AgentIsland.hasPRLine(both, show: neither), "both off")
         var s = session("s", .working)
         s.meta = both
@@ -2635,11 +2638,13 @@ final class AgentIslandTests: XCTestCase {
         var s = session("s", .working, activity: 100, alias: "T", agents: 2)
         s.meta = DchSessionMeta(openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: .all),
-                       "T, Working, 3 merged, open pull requests o/r#12", "#762: no tasks, no dch name")
+                       "T, Working, 2 agents, 3 merged pull requests, open pull requests o/r#12", "#762: no tasks, no dch name")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(openPRs: false)),
-                       "T, Working, 3 merged")
+                       "T, Working, 2 agents, 3 merged pull requests")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(merged: false)),
-                       "T, Working, open pull requests o/r#12")
+                       "T, Working, 2 agents, open pull requests o/r#12")
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(agents: false)),
+                       "T, Working, 3 merged pull requests, open pull requests o/r#12", "#1137: Agents off, not read")
     }
 
     /// A Settings toggle reaches the open island at once: the controller reads

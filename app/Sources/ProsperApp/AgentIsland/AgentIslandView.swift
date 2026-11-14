@@ -1158,11 +1158,10 @@ struct AgentIslandRow: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Color.white)
                             .lineLimit(1)
-                        if show.agents, session.agents > 0 {
-                            Text("+\(session.agents) agent\(session.agents == 1 ? "" : "s")")
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        if let n = AgentIsland.agentsCount(session, show: show) {   // #1137: symbol plus number
+                            AgentIslandCount(kind: .agents, n: n)
                                 .foregroundStyle(Color.white.opacity(0.5))
-                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .padding(.horizontal, AgentIsland.chipInset).padding(.vertical, 1)
                                 .background(Capsule().fill(Color.white.opacity(0.1)))
                                 .fixedSize()
                         }
@@ -1210,7 +1209,7 @@ struct AgentIslandRow: View {
 
     /// #525: the PR line. Open PRs as "repo#12" chips in the agents capsule's
     /// style (a button when the URL passed the allowlist, else a dimmer label),
-    /// "+N pending PRs", then "18 merged" right-aligned. `AgentIsland.prChips`
+    /// "+N pending PRs", then the merged count (#1137: symbol plus number) right-aligned. `AgentIsland.prChips`
     /// measured it all to fit `rowTextWidth`. Static, no animation.
     func prLineView(_ prs: (chips: [AgentIsland.PRChip], more: Int)) -> some View {
         HStack(spacing: 0) {
@@ -1229,11 +1228,8 @@ struct AgentIslandRow: View {
             }
             .fixedSize()
             Spacer(minLength: AgentIsland.mergedGap)
-            if let merged = AgentIsland.mergedLabel(session.meta, show: show) {
-                Text(verbatim: merged)
-                    .font(Font(AgentIslandGeometry.chipFont))
-                    .foregroundStyle(Color.white.opacity(0.5))
-                    .fixedSize()
+            if let n = AgentIsland.mergedCount(session.meta, show: show) {
+                AgentIslandCount(kind: .merged, n: n).foregroundStyle(Color.white.opacity(0.5))
             }
         }
     }
@@ -1246,6 +1242,26 @@ struct AgentIslandRow: View {
             .padding(.horizontal, AgentIsland.chipInset).padding(.vertical, 1)
             .background(Capsule().fill(Color.white.opacity(0.1)))
             .contentShape(Capsule())
+    }
+}
+
+/// #1137: a count as the Agent Sessions window draws it (AgentSidebar.Count's symbol plus the capped number), in the
+/// island's fixed chip font; `AgentIsland.countWidth` measures exactly this. VoiceOver and the help read the words.
+/// Never cut (fixedSize).
+struct AgentIslandCount: View {
+    let kind: AgentSidebar.Count
+    let n: Int
+
+    var body: some View {
+        HStack(spacing: AgentIsland.countGap) {
+            Image(systemName: kind.symbol).frame(width: AgentIsland.symbolWidth(kind))
+            Text(verbatim: AgentIsland.count(n))
+        }
+        .font(Font(AgentIslandGeometry.chipFont))
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: kind.words(n)))
+        .help(Text(verbatim: kind.words(n)))   // after the element: a help set on an ignored child never reaches AX
     }
 }
 

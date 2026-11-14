@@ -376,7 +376,10 @@ enum AgentIsland {
         let age = age(of: s, now: now)
         let (chips, more) = prChips(s.meta, show: d, budget: .infinity)
         let prs = chips.map(\.fullName).joined(separator: ", ") + (more > 0 ? " and \(more) more pending PR\(more == 1 ? "" : "s")" : "")
-        return [s.title, s.state.label, ago(age), mergedLabel(s.meta, show: d),
+        // #1137: the counts in the Agent Sessions window's words ("3 agents", "192 merged pull requests").
+        let agents: String? = agentsCount(s, show: d).map { AgentSidebar.Count.agents.words($0) }
+        let merged: String? = mergedCount(s.meta, show: d).map { AgentSidebar.Count.merged.words($0) }
+        return [s.title, s.state.label, ago(age), agents, merged,
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }
@@ -387,17 +390,42 @@ enum AgentIsland {
     /// cannot squeeze the title.
     static func count(_ n: Int) -> String { n > 99_999 ? "99999+" : "\(n)" }
 
-    /// "18 merged", right-aligned on the PR line; nil for none or Merged off.
-    static func mergedLabel(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all) -> String? {
+    /// #1137: the live subagents the title line draws (symbol plus number, AgentIslandCount); nil for none, a negative
+    /// from dch's unclamped `agents`, or Agents off.
+    static func agentsCount(_ s: AgentSession, show d: AgentIslandRowDetails = .all) -> Int? {
+        d.agents && s.agents > 0 ? s.agents : nil
+    }
+
+    /// #1137: the merged PRs drawn right-aligned on the PR line (symbol plus number); nil for none or Merged off.
+    static func mergedCount(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all) -> Int? {
         guard d.merged, let n = m?.merged, n > 0 else { return nil }
-        return "\(count(n)) merged"
+        return n
+    }
+
+    /// #1137: the gap between a count's symbol and its number (AgentIslandCount).
+    static let countGap: CGFloat = 2
+
+    /// #1137: a count's symbol slot: the symbol's width at the chip font's size and weight, rounded up. AgentIslandCount
+    /// lays the symbol out in exactly this width, so the budget and the drawn line agree. Main only (view bodies, the
+    /// window's rows).
+    static func symbolWidth(_ c: AgentSidebar.Count) -> CGFloat {
+        let size = CTFontGetSize(AgentIslandGeometry.chipFont)
+        // chipFont is monospacedSystemFont(ofSize: 10, weight: .medium); a missing symbol draws nothing, the size covers it.
+        return (NSImage(systemSymbolName: c.symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: size, weight: .medium))?.size.width ?? size).rounded(.up)
+    }
+
+    /// #1137: a count as AgentIslandCount draws it: the symbol slot, the gap and the capped number (rounded up, as
+    /// SwiftUI rounds a text's width).
+    static func countWidth(_ c: AgentSidebar.Count, _ n: Int) -> CGFloat {
+        symbolWidth(c) + countGap + AgentIslandGeometry.width(count(n), AgentIslandGeometry.chipFont).rounded(.up)
     }
 
     /// #525: a row draws a third line, the PR line, only for open PRs with a
     /// label or a merged count; `prChips` and the row height agree through this.
     /// #534: only the ones toggled on count, so a row with neither is 48 pt again.
     static func hasPRLine(_ m: DchSessionMeta?, show d: AgentIslandRowDetails) -> Bool {
-        (d.openPRs && (m?.openPRs.contains { $0.label != nil } ?? false)) || mergedLabel(m, show: d) != nil
+        (d.openPRs && (m?.openPRs.contains { $0.label != nil } ?? false)) || mergedCount(m, show: d) != nil
     }
 
     /// One open PR as the row draws it. `url` is set only when it passed the
@@ -417,7 +445,7 @@ enum AgentIsland {
     static let maxPRChips = 3
     /// The repo is cut to this many characters (with "…") only when the chips do
     /// not fit uncut. Set so one cut chip with a 10-digit number fits the PR line
-    /// next to the worst "+NN pending PRs" and "99999+ merged" (tested).
+    /// next to the worst "+NN pending PRs" and a 99999+ merged count (tested).
     static let maxRepoChars = 18
     static let maxTitleChars = 200
     /// The PR line's width: the row's text column.
@@ -445,7 +473,7 @@ enum AgentIsland {
     static func prChips(_ m: DchSessionMeta?, show d: AgentIslandRowDetails = .all,
                         budget: CGFloat = prChipBudget) -> (chips: [PRChip], more: Int) {
         guard d.openPRs else { return ([], 0) }
-        let budget = budget - (mergedLabel(m, show: d).map { chipWidth($0) - 2 * chipInset + mergedGap } ?? 0)
+        let budget = budget - (mergedCount(m, show: d).map { countWidth(.merged, $0) + mergedGap } ?? 0)
         let all = (m?.openPRs ?? []).compactMap { pr -> (full: PRChip, cut: PRChip)? in
             guard let label = pr.label, let hash = label.lastIndex(of: "#") else { return nil }
             let repo = label[..<hash], num = label[hash...]
