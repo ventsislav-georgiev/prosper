@@ -61,6 +61,8 @@ public final class LuaRuntime {
     /// #1201: host state that lives for ONE entry into the VM (one outermost `run`/`callGlobal`, nested calls
     /// included) and is nil outside one: cleared when that call returns or throws, and by `reset()`. Per runtime,
     /// never shared; read and written only on the runtime's own lane, like `L`.
+    /// One slot, one owner: the extension host's secret-path matcher. A second user would overwrite it on every
+    /// call and be overwritten by it; key the slot by type before adding one.
     public var entryLocal: AnyObject?
     private let maxInstructions: Int32
     private let memoryLimit: Int

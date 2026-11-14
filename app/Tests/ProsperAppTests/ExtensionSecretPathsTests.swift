@@ -152,6 +152,34 @@ final class ExtensionSecretPathsTests: XCTestCase {
         XCTAssertEqual(SecretPaths.ccpoolHomeVariable, CCPoolMigration.homeVariable)
     }
 
+    /// #1201 (R921-4): CCPOOL_HOME protects the folder the pool would open for the same value: a relative
+    /// value counts from the app's working directory, a leading "~" included; a "~" value is refused under
+    /// the home as well. The working directory is a folder in the fake home, set through the seam.
+    func testCCPoolHomeRelativeAndTildeValuesAreRefused() throws {
+        let savedCwd = SecretPaths.workingDirectory
+        addTeardownBlock { SecretPaths.workingDirectory = savedCwd }
+        SecretPaths.workingDirectory = path("work")
+        let poolFile = "work/pool/vault.json", literal = "work/~/vault/vault.json", expanded = "vault/vault.json"
+        for f in [poolFile, literal, expanded, "work/other/vault.json"] { try write(f, "fake:" + f) }
+        let cases: [(value: String, refused: [String], allowed: [String])] = [
+            ("pool", [poolFile], [literal, expanded]),
+            ("./pool", [poolFile], [literal, expanded]),
+            ("~/vault", [literal, expanded], [poolFile]),
+        ]
+        for c in cases {
+            SecretPaths.environment = ["CCPOOL_HOME": c.value]
+            XCTAssertEqual(SecretPaths.matcher().roots.count, SecretPaths.listed.count + c.refused.count, c.value)
+            let automation = try host(system: false), system = try host(system: true)
+            for f in c.refused {
+                XCTAssertEqual(try call(automation, "rd", path(f)), "NIL", c.value + " " + f)
+                XCTAssertEqual(try call(system, "rd", path(f)), "fake:" + f, c.value + " " + f)
+            }
+            for f in c.allowed + ["work/other/vault.json"] {
+                XCTAssertEqual(try call(automation, "rd", path(f)), "fake:" + f, c.value + " " + f)
+            }
+        }
+    }
+
     /// One notice line per refused path per VM (the #1048 shape): repeated calls on one path stay
     /// quiet, a new VM notices again, the system tier never logs, and distinct paths past the cap
     /// stay silent. No line names the path.
@@ -380,6 +408,56 @@ final class ExtensionSecretPathsTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: path(".ssh/sub"), withIntermediateDirectories: true)
         XCTAssertEqual(try call(try host(system: false), "ls", path(".ssh")), "")
         XCTAssertEqual(try call(try host(system: true), "ls", path(".ssh")), "id_test,sub")
+    }
+
+    /// #1201 (R921-3): below the system tier a listing of a visible folder does not name a secret child
+    /// (also through a symlinked folder, another letter case and the CCPOOL_HOME folder); the system tier
+    /// names them. The children are judged below the resolved folder: one listing costs the roots and the
+    /// folder, for any number of children (counted in resolved paths, never timed).
+    func testListDirsOfVisibleFolderNamesNoSecretChild() throws {
+        var resolved = 0
+        let prefix = home
+        SecretPaths.onCanonical = { if $0.hasPrefix(prefix) { resolved += 1 } }
+        let roots = SecretPaths.listed.count
+        for i in 0..<300 {
+            try FileManager.default.createDirectory(atPath: path("Library/f\(i)"), withIntermediateDirectories: true)
+        }
+        try link("notes/cfg", to: ".config")
+        let automation = try host(system: false), system = try host(system: true)
+        resolved = 0
+        XCTAssertEqual(try call(automation, "ls", path(".config")), "prosper")
+        XCTAssertEqual(resolved, roots + 1, "one listing: the roots and the folder, nothing per child")
+        let library = try call(automation, "ls", path("Library")).split(separator: ",")
+        XCTAssertEqual(library.count, 300)
+        XCTAssertFalse(library.contains("Keychains"))
+        XCTAssertEqual(resolved, 2 * (roots + 1), "301 children cost no resolved path either")
+        XCTAssertEqual(try call(automation, "ls", path("notes/cfg")), "prosper")
+        XCTAssertEqual(try call(automation, "ls", home), ".claude,.config,.docker,Library,notes")
+        XCTAssertEqual(try call(system, "ls", path(".config")), "gcloud,gh,mcpbridge,prosper")
+        XCTAssertTrue(try call(system, "ls", path("Library")).split(separator: ",").contains("Keychains"))
+        let caseSensitive = try URL(fileURLWithPath: home).resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+            .volumeSupportsCaseSensitiveNames
+        if caseSensitive != true { XCTAssertEqual(try call(automation, "ls", path(".CONFIG")), "prosper") }
+        let real = try XCTUnwrap(KitPOSIXFileReader().realPath(home))
+        if FileManager.default.fileExists(atPath: "/System/Volumes/Data" + real + "/.config") {
+            XCTAssertEqual(try call(automation, "ls", "/System/Volumes/Data" + real + "/.config"), "prosper")
+        }
+        try write("vaults/pool/vault.json", "fake:pool")
+        try FileManager.default.createDirectory(atPath: path("vaults/plain"), withIntermediateDirectories: true)
+        SecretPaths.environment = ["CCPOOL_HOME": path("vaults/pool")]
+        XCTAssertEqual(try call(automation, "ls", path("vaults")), "plain")
+        XCTAssertEqual(try call(system, "ls", path("vaults")), "plain,pool")
+    }
+
+    /// list_dirs judges a child by its name below the resolved folder. That is exact because the live
+    /// listing names real folders only: no symlink, no hidden name, no file. This row turns red if it changes.
+    func testLiveListingNamesRealFoldersOnly() throws {
+        for dir in ["tree/real", "tree/.hidden"] {
+            try FileManager.default.createDirectory(atPath: path(dir), withIntermediateDirectories: true)
+        }
+        try write("tree/file.txt", "plain")
+        try link("tree/link", to: "tree/real")
+        XCTAssertEqual(LiveExtensionHostServices.shared.listDirectories(path("tree")), ["real"])
     }
 
     func testSymlinkFromAllowedFolderIntoSecretOneIsRefused() throws {

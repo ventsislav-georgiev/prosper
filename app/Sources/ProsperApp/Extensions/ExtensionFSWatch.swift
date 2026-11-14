@@ -83,6 +83,32 @@ enum SecretPaths {
     nonisolated(unsafe) static var environment: [String: String] = NSClassFromString("XCTestCase") != nil
         ? [:] : ProcessInfo.processInfo.environment
 
+    /// Seam: the folder a relative CCPOOL_HOME counts from. The app's working directory; nil under XCTest,
+    /// so no test resolves a path outside its own temp folder by accident.
+    nonisolated(unsafe) static var workingDirectory: String? = NSClassFromString("XCTestCase") != nil
+        ? nil : FileManager.default.currentDirectoryPath
+
+    /// #1201 (R921-4): the folders a CCPOOL_HOME value names. The pool reads the value as a file path:
+    /// as given when absolute, else from the app's working directory, a leading "~" included (a file
+    /// path does not expand it). A "~" value is protected under the home as well, as before, in case
+    /// another reader of the variable expands it. Empty means unset for the pool: nothing to add.
+    static func ccpoolFolders(_ value: String) -> [String] {
+        guard !value.isEmpty else { return [] }
+        var folders: [String] = []
+        if value.hasPrefix("/") {
+            folders.append(value)
+        } else if let cwd = workingDirectory {
+            folders.append((cwd as NSString).appendingPathComponent(value))
+        }
+        if value.hasPrefix("~") {
+            // `home` for "~" and "~/": the same folder NSString expands to in the app, and the seam in tests.
+            let expanded = value == "~" || value.hasPrefix("~/")
+                ? home + String(value.dropFirst()) : (value as NSString).expandingTildeInPath
+            if expanded.hasPrefix("/") { folders.append(expanded) }
+        }
+        return folders
+    }
+
     private static let logger = Logger(subsystem: "com.prosper.app", category: "extension")
 
     /// Seam: where a refusal line goes. A test captures the lines; the app logs a notice.
@@ -108,23 +134,33 @@ enum SecretPaths {
 
         /// True when `path` is a root or below one, judged on the file the kernel would open:
         /// tilde expanded, then symlinks and ".." resolved, case-folded on a case-insensitive volume.
-        func denies(_ path: String) -> Bool {
+        func denies(_ path: String) -> Bool { resolve(path).map(covers) ?? false }
+
+        /// `path` tilde expanded and resolved (`canonical`); nil for an empty path.
+        func resolve(_ path: String) -> String? {
             let expanded = (path as NSString).expandingTildeInPath
-            guard !expanded.isEmpty else { return false }
-            let real = SecretPaths.canonical(expanded)
+            guard !expanded.isEmpty else { return nil }
+            return SecretPaths.canonical(expanded)
+        }
+
+        /// A resolved path is a root or below one.
+        func covers(_ real: String) -> Bool {
             let p = caseInsensitive ? real.lowercased() : real
             return roots.contains { SecretPaths.isAtOrBelow(p, $0) }
         }
+
+        /// #1201 (R921-3): a folder `name` listed in the folder that resolved to `real` is covered. Judged
+        /// below the resolved folder, with no resolved path per child: the host's listing names real folders
+        /// only (ExtensionSecretPathsTests pins that), and a real folder resolves to its folder plus its name.
+        func coversChild(_ name: String, of real: String) -> Bool {
+            covers(SecretPaths.folded((real as NSString).appendingPathComponent(name)))
+        }
     }
 
-    /// Resolves every listed path under `home`, plus CCPOOL_HOME when it is an absolute path after
-    /// tilde expansion (a relative or empty value adds nothing).
+    /// Resolves every listed path under `home`, plus the folders a CCPOOL_HOME value names.
     static func matcher() -> Matcher {
-        var paths = listed.map { (home as NSString).appendingPathComponent($0) }
-        if let pool = environment[ccpoolHomeVariable].map({ ($0 as NSString).expandingTildeInPath }),
-           pool.hasPrefix("/") {
-            paths.append(pool)
-        }
+        let paths = listed.map { (home as NSString).appendingPathComponent($0) }
+            + ccpoolFolders(environment[ccpoolHomeVariable] ?? "")
         let fold = (try? URL(fileURLWithPath: home).resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?
             .volumeSupportsCaseSensitiveNames != true
         return Matcher(roots: paths.map(canonical), caseInsensitive: fold)
@@ -154,9 +190,14 @@ enum SecretPaths {
     static func canonical(_ path: String) -> String {
         onCanonical?(path)
         let reader = KitPOSIXFileReader(), ns = path as NSString
-        var p = reader.realPath(path)
+        return folded(reader.realPath(path)
             ?? reader.realPath(ns.deletingLastPathComponent).map { ($0 as NSString).appendingPathComponent(ns.lastPathComponent) }
-            ?? FilePaths.existingPrefixResolved(URL(fileURLWithPath: path)).path
+            ?? FilePaths.existingPrefixResolved(URL(fileURLWithPath: path)).path)
+    }
+
+    /// The two spellings `canonical` folds: the data volume's firmlinks and /private.
+    static func folded(_ path: String) -> String {
+        var p = path
         for prefix in ["/System/Volumes/Data", "/private"] where p.hasPrefix(prefix + "/") {
             p.removeFirst(prefix.count)
         }

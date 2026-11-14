@@ -469,15 +469,21 @@ struct ExtensionHost {
         var noticed: Set<SHA256Digest> = []
         // #1201: the roots are resolved once per handler run (one entry into the VM): a root that becomes
         // a symlink during a run is seen from the next run.
-        func secret(_ rt: LuaRuntime, _ path: String, _ call: String) -> Bool {
-            guard !systemTier else { return false }
+        func entryMatcher(_ rt: LuaRuntime) -> SecretPaths.Matcher {
             let roots = rt.entryLocal as? SecretPaths.EntryRoots ?? SecretPaths.EntryRoots()
             rt.entryLocal = roots
-            guard roots.matcher.denies(path) else { return false }
+            return roots.matcher
+        }
+        func refused(_ path: String, _ call: String) -> Bool {
             if noticed.count < SecretPaths.noticeCap, noticed.insert(SHA256.hash(data: Data(path.utf8))).inserted {
                 SecretPaths.logRefusal(extensionID: extID, call: call)
             }
             return true
+        }
+        func secret(_ rt: LuaRuntime, _ path: String, _ call: String) -> Bool {
+            guard !systemTier else { return false }
+            guard entryMatcher(rt).denies(path) else { return false }
+            return refused(path, call)
         }
 
         // --- clipboard ---
@@ -688,7 +694,18 @@ struct ExtensionHost {
         // owns json_decode). Kept alive past the bootstrap nil-out, like http.
         lua.register("__h_fs_list_dirs") { rt in
             let path = rt.stringArgument(1) ?? ""
-            let dirs = secret(rt, path, "fs.list_dirs") ? [] : services.listDirectories(path)
+            var dirs: [String] = []
+            if systemTier {
+                dirs = services.listDirectories(path)
+            } else {
+                // #1201 (R921-3): a secret child is not named either. The folder is resolved once; each
+                // child costs a string join and the root compares, no file system call (the listing has no cap).
+                let m = entryMatcher(rt)
+                if let real = m.resolve(path) {
+                    if m.covers(real) { _ = refused(path, "fs.list_dirs") }
+                    else { dirs = services.listDirectories(path).filter { !m.coversChild($0, of: real) } }
+                }
+            }
             let data = (try? JSONSerialization.data(withJSONObject: dirs)) ?? Data("[]".utf8)
             rt.push(String(data: data, encoding: .utf8) ?? "[]")
             return 1
