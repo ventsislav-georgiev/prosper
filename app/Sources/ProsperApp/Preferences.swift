@@ -1644,7 +1644,11 @@ enum Preferences {
         get {
             let raw = defaults.dictionary(forKey: Keys.fanTargets) as? [String: Double] ?? [:]
             // #393: only canonical keys; "1", "01" and "+1" all parse to 1 and would trap uniqueKeysWithValues.
-            return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in Int(k).flatMap { String($0) == k ? ($0, v) : nil } })
+            // R1218-1: a saved speed is outside data: non-finite or out of range is dropped (that fan stays with macOS).
+            return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in
+                guard FanRPM.usable(v) else { return nil }
+                return Int(k).flatMap { String($0) == k ? ($0, v) : nil }
+            })
         }
         set {
             let raw = Dictionary(uniqueKeysWithValues: newValue.map { (String($0.key), $0.value) })

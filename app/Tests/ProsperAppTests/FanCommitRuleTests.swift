@@ -105,4 +105,80 @@ final class FanCommitRuleTests: XCTestCase {
             FanControlHelper.presetPending = false
         }
     }
+
+    // MARK: - R1218-1: non-finite and out-of-range speeds
+
+    /// The literal inputs every guard below is fed. Nothing here converts a value with Int().
+    private static let unusable: [Double] = [.nan, .infinity, -.infinity, -1, 0, 20_000, 1e300]
+
+    func testUsableRPMTable() {
+        for (rpm, want) in [(Double.nan, false), (.infinity, false), (-.infinity, false), (-1, false), (0, false),
+                            (1e300, false), (20_000, false), (19_999, true), (1, true), (1500, true)] {
+            XCTAssertEqual(FanRPM.usable(rpm), want, "\(rpm)")
+        }
+    }
+
+    /// The saved-targets getter drops every unusable value it reads (written raw into the scratch
+    /// suite's defaults, as a damaged or hand-edited plist would hold them); usable ones stay.
+    func testSavedTargetsGetterDropsUnusableSpeeds() {
+        let previous = Preferences.defaults.object(forKey: "fanTargets")
+        defer { Preferences.defaults.set(previous, forKey: "fanTargets") }
+        var raw: [String: Double] = ["7": 1500]
+        for (i, v) in Self.unusable.enumerated() { raw[String(i)] = v }
+        Preferences.defaults.set(raw, forKey: "fanTargets")
+        XCTAssertEqual(Preferences.fanTargets, [7: 1500])
+    }
+
+    /// savePreset never saves an unusable target: the raw saved value (not the filtering getter) holds
+    /// only the usable fan, and every fan is still handed back once.
+    func testSavePresetNeverSavesAnUnusableTarget() async {
+        let manual = Preferences.fanManualEnabled, previous = Preferences.defaults.object(forKey: "fanTargets")
+        defer {
+            Preferences.fanManualEnabled = manual; Preferences.defaults.set(previous, forKey: "fanTargets")
+            FanControlHelper.removeSleepObservers(); FanControlHelper.deferReclaimRetry(now: .distantPast)
+            FanControlHelper.presetPending = false
+        }
+        var targets: [Int: Double] = [7: 1500]
+        for (i, v) in Self.unusable.enumerated() { targets[i] = v }
+        let handedBack = expectation(description: "every fan handed to macOS")
+        FanControlHelper.savePreset(targets, reset: { handedBack.fulfill() })
+        await fulfillment(of: [handedBack], timeout: 2)
+        let saved = Preferences.defaults.dictionary(forKey: "fanTargets") as? [String: Double]
+        XCTAssertEqual(saved, ["7": 1500])
+        XCTAssertTrue(Preferences.fanManualEnabled)
+        XCTAssertTrue(FanControlHelper.presetPending)
+        Preferences.fanManualEnabled = false
+        await FanControlHelper.resetAll(teardown: true)   // no connection injected: drops the timer savePreset armed
+    }
+
+    /// No unusable speed reaches the helper call: the reply is a write failure (not the latch, so no
+    /// caller saves it as a preset) and registration is never asked. The fake registration answers
+    /// .failed, so even a call past the guard opens no connection.
+    func testSetManualReplyNeverSendsAnUnusableSpeed() async {
+        let registration = LidSleepHelper.registration, present = HelperApproval.present
+        defer { LidSleepHelper.registration = registration; HelperApproval.present = present; HelperApproval.lastShown = .distantPast; FanControlHelper.inject(connection: nil, engagesInFlight: 0) }
+        FanControlHelper.inject(connection: nil, engagesInFlight: 0)
+        let asked = LockedBox()
+        LidSleepHelper.registration = { asked.set(true); return .failed }
+        HelperApproval.present = { _ in asked.set(false) }   // never a real modal
+        for rpm in Self.unusable {
+            let reply = await FanControlHelper.setManualReply(0, rpm: rpm, presentModal: false, macOSRPM: { _ in nil })
+            XCTAssertEqual(reply, .writeFailed, "\(rpm)")
+            XCTAssertFalse(reply.isLatchRefusal)
+        }
+        XCTAssertEqual(asked.get(), [], "an unusable speed went on to the helper's registration")
+        XCTAssertEqual(FanControlHelper.engagesInFlight, 0)
+    }
+
+    /// The popup Manual click's seed: a non-finite current speed drops the fan (it stays with macOS);
+    /// a finite one is clamped into the fan's range as before.
+    func testManualSeedDropsANonFiniteCurrentSpeed() {
+        let fan = FanReading(id: 0, min: 1000, max: 5000, current: 0, manual: false)
+        for v in [Double.nan, .infinity, -.infinity] {
+            XCTAssertTrue(StatsPopupView.clampRPM(v, fan) == nil, "\(v)")
+        }
+        for (v, want) in [(-1.0, 1000.0), (0, 1000), (1500, 1500), (1e300, 5000)] {
+            XCTAssertEqual(StatsPopupView.clampRPM(v, fan), want, "\(v)")
+        }
+    }
 }

@@ -967,26 +967,38 @@ final class FanReclaimRecoveryTests: XCTestCase {
         }
     }
 
-    /// #926 r2: a later fan's .settling is the same live refusal as on the first fan: the preset is
-    /// kept, the reply is .settling (not .refused), and the fan this click pinned is handed back once.
+    /// #1215 (was #926 r2's "settling keeps the preset"): fan 0 was just accepted, so a later fan's
+    /// .settling is not the settle window but a write failure, named as the slider commit names it
+    /// (#1033): not saved, .writeFailed, and fan 0's pin handed back once. Manual off before the click:
+    /// nothing saved and the release tears down. Manual on with an earlier preset pending: that preset
+    /// stays as it was and the connection stays for its recovery.
     @MainActor
-    func testALaterFansSettlingKeepsThePresetAndSaysSettling() async {
-        await withPopupFakes { targets, _ in
-            FanControlHelper.presetPending = false
-            let fake = FakeHelperConnection()
-            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
-            var restEngaged: [Int] = []
-            let (saved, reply) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
-                engage: { i, _ in restEngaged.append(i); return .settling })
-            XCTAssertEqual(restEngaged, [1])
-            XCTAssertTrue(saved)
-            XCTAssertEqual(reply, .settling)
-            XCTAssertTrue(Preferences.fanManualEnabled)
-            XCTAssertEqual(Preferences.fanTargets, targets)
-            XCTAssertTrue(FanControlHelper.presetPending)
-            for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
-            XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back")
-            await disarmPreset()
+    func testALaterFansSettlingIsAWriteFailureAndHandsBackThePin() async {
+        for manualBefore in [false, true] {
+            await withPopupFakes { targets, sentinel in
+                Preferences.fanManualEnabled = manualBefore
+                FanControlHelper.presetPending = manualBefore
+                let fake = FakeHelperConnection()
+                FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+                var restEngaged: [Int] = []
+                let (saved, reply) = await FanControlHelper.popupEngage(targets, first: 0, engageFirst: { .engaged },
+                    engage: { i, _ in restEngaged.append(i); return .settling })
+                XCTAssertEqual(restEngaged, [1], "manual \(manualBefore)")
+                XCTAssertFalse(saved, "a write failure was saved as the latch's preset (manual \(manualBefore))")
+                XCTAssertEqual(reply, .writeFailed, "manual \(manualBefore)")
+                XCTAssertEqual(Preferences.fanManualEnabled, manualBefore)
+                XCTAssertEqual(Preferences.fanTargets, sentinel, "the click's targets were saved")
+                XCTAssertEqual(FanControlHelper.presetPending, manualBefore)
+                for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
+                XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back (manual \(manualBefore))")
+                if manualBefore {
+                    XCTAssertTrue(FanControlHelper.connection === fake, "manual on: the release tore the connection down")
+                } else {
+                    await waitForTeardown()
+                    XCTAssertTrue(FanControlHelper.connection == nil, "manual off: the release did not tear down")
+                }
+                await disarmPreset()
+            }
         }
     }
 
@@ -1379,7 +1391,7 @@ final class FanManualReplyTests: XCTestCase {
     }
 }
 
-private final class LockedBox: @unchecked Sendable {
+final class LockedBox: @unchecked Sendable {   // shared with FanCommitRuleTests (R1218-1)
     private let lock = NSLock(); private var v: [Bool] = []
     func set(_ b: Bool) { lock.lock(); v.append(b); lock.unlock() }
     func get() -> [Bool] { lock.lock(); defer { lock.unlock() }; return v }

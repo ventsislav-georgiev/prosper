@@ -304,20 +304,21 @@ final class DchFanCommandsTests: XCTestCase {
         }
     }
 
-    /// A later .settling is a live refusal too: the same pending reply and preset as .refused.
-    func testALaterFansSettlingRepliesPendingAndSavesThePreset() async {
-        await withFanState {
-            let log = Log(), fake = FakeConnection()
-            FanControlHelper.inject(connection: fake, engagesInFlight: 0)
+    /// #1215: a later .settling after fan 0 was accepted is a write failure, as in the slider commit:
+    /// the phone gets the write-failure text (not "Manual pending … applies when the Mac cools down"),
+    /// nothing is saved, and fan 0 is released (manual was off: reset and teardown).
+    func testALaterFansSettlingRepliesTheWriteFailureAndSavesNothing() async throws {
+        try await withFanState {
+            let log = Log()
+            let sink = releaseSink()
             let f = await run(ops(log: log, later: .settling), "fans.manual", "60%")
-            XCTAssertEqual(Self.result(f), ["text": "Manual pending · 4080 / 3400 rpm",
-                                            "detail": "target at 60%, applies when the Mac cools down"])
+            XCTAssertEqual(Self.message(f), "A fan didn’t take the new speed, so macOS runs every fan again. Try again.")
+            XCTAssertEqual(Self.message(f), try XCTUnwrap(FanManualReply.writeFailed.errorText))
             XCTAssertEqual(log.calls.filter { $0 != "read" }, ["first 0 4080", "engage 1 3400"])
-            XCTAssertTrue(Preferences.fanManualEnabled)
-            XCTAssertEqual(Preferences.fanTargets, [0: 4080, 1: 3400])
-            XCTAssertTrue(FanControlHelper.presetPending)
-            for _ in 0..<200 where fake.proxy.resets == 0 { try? await Task.sleep(nanoseconds: 10_000_000) }
-            XCTAssertEqual(fake.proxy.resets, 1, "fan 0's pin was not handed back")
+            XCTAssertFalse(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [9: 1])
+            XCTAssertFalse(FanControlHelper.presetPending)
+            await awaitRelease(sink)
         }
     }
 

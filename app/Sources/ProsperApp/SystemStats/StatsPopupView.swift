@@ -963,7 +963,7 @@ struct StatsPopupView: View {
         fanError = nil
         fanBusy = true
         var t = Preferences.fanTargets
-        for f in fansAdjustable { t[f.id] = clampRPM(f.current, f) }
+        for f in fansAdjustable { t[f.id] = Self.clampRPM(f.current, f) }   // nil drops the fan: it stays with macOS
         let targets = t
         Task {
             guard !targets.isEmpty else { fanBusy = false; return }
@@ -1076,8 +1076,11 @@ struct StatsPopupView: View {
         }
     }
 
-    private func clampRPM(_ v: Double, _ fan: FanReading) -> Double {
-        Swift.min(Swift.max(v, fan.min), fan.max)
+    /// The Manual click's seed: the fan's current speed in its range. R1218-1: nil for a non-finite reading
+    /// (max/min keep a NaN, and an infinity would become a made-up min or max).
+    static func clampRPM(_ v: Double, _ fan: FanReading) -> Double? {
+        guard v.isFinite else { return nil }
+        return Swift.min(Swift.max(v, fan.min), fan.max)
     }
 
     /// Debounce BOTH the slow root SMC writes and the UserDefaults persist: a slider

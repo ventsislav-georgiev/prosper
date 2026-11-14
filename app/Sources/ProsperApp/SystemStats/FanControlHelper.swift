@@ -143,6 +143,13 @@ enum FanManualReply: Equatable {
     }
 }
 
+/// R1218-1: a fan speed the app may send, save or seed from: finite, above 0, under SMCFanController's
+/// 20 000 rpm sanity ceiling (its bounds read refuses a fan at or over it). Anything else: that fan stays
+/// with macOS.
+enum FanRPM {
+    static func usable(_ rpm: Double) -> Bool { rpm.isFinite && rpm > 0 && rpm < 20_000 }
+}
+
 /// #1033, the one rule for a slider commit: afterwards either every fan runs the targets the slider and
 /// the saved targets show, or every fan is handed back to macOS and the slider and the saved targets
 /// show a pending preset (the popup's "Waiting for macOS…" line) - never a split. When in doubt, macOS.
@@ -315,6 +322,8 @@ enum FanControlHelper {
     /// `macOSRPM` (the test seam) is read off-main, and only on a refusal.
     static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12, presentModal: Bool = true,
                                macOSRPM: @escaping @Sendable (Int) -> Double? = { FanInfo.macOSRPM($0) }) async -> FanManualReply {
+        // R1218-1: never send an unusable speed; a failure every caller hands back on (not the latch).
+        guard FanRPM.usable(rpm) else { return .writeFailed }
         // In flight from before the registration await: a willSleep while this engage
         // waits there must still reset the fans an earlier engage pinned (#343).
         engagesInFlight += 1
@@ -371,16 +380,17 @@ enum FanControlHelper {
 
     /// The popup's engage of every fan after the first, in `engageOrder`. `.engaged` = every fan
     /// landed; nil = a sleep stopped it (released, do not save the pref); any other reply is the
-    /// first fan that did not engage, its own reply, and the request stops there (#926: one decision
-    /// for every fan; the caller hands back what landed). `generation` is the popup's, captured
-    /// before its first engage (#345). `engage`/`landed` are the test seams.
+    /// first fan that did not engage, named as after an accept (#1215: a .settling is .writeFailed,
+    /// as in the slider commit), and the request stops there (#926: one decision for every fan; the
+    /// caller hands back what landed). `generation` is the popup's, captured before its first
+    /// engage (#345). `engage`/`landed` are the test seams.
     static func engageRest(_ targets: [Int: Double], skipping first: Int, since generation: Int = Self.reclaimGeneration,
                            engage: (Int, Double) async -> FanManualReply = { await setManualReply($0, rpm: $1) },
                            landed: (Int) -> Bool = { laterEngageLanded(since: $0) }) async -> FanManualReply? {
         for (i, rpm) in engageOrder(targets) where i != first {
             let reply = await engage(i, rpm)
             guard landed(generation) else { return nil }
-            guard reply == .engaged else { return reply }
+            guard reply == .engaged else { return reply.afterAnAccept }
         }
         return .engaged
     }
@@ -434,7 +444,8 @@ enum FanControlHelper {
         }
         // #926: a later fan's reply does what it does on the first fan, and this click's pins go back
         // to macOS. A live refusal makes the targets the pending preset (savePreset hands the fans
-        // back); no reply stays a failure (#737): nothing saved, released like a failed first engage.
+        // back); no reply (#737) or a write failure (#1215) stays a failure: nothing saved, released
+        // like a failed first engage.
         // engageRest's last `landed` check ran after its last await: no await from there to here.
         guard rest == .engaged else {
             if rest.isLatchRefusal { savePreset(targets) } else { Task { await sleepSafeRelease() } }
@@ -453,6 +464,7 @@ enum FanControlHelper {
     /// the pending line both need every fan back on auto. The helper gates every re-apply.
     static func savePreset(_ targets: [Int: Double], now: Date = Date(),
                            reset: @escaping @MainActor () async -> Void = { _ = await resetAll() }) {
+        let targets = targets.filter { FanRPM.usable($0.value) }   // R1218-1: a dropped fan stays with macOS
         Preferences.fanManualEnabled = true
         Preferences.fanTargets = targets
         presetPending = true

@@ -933,6 +933,12 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer: in Markdown, a picture inside a link (the usual badge form) shows its picture again
   when the image is a local file, with the link kept on it; a web image there shows "[image: name]"
   linked to the link's target instead of only its name. (#1213)
+- Fans: when one fan doesn't take a speed set from the popup's Manual button or the phone's "Fans:
+  Manual", Prosper now says so ("A fan didn’t take the new speed, so macOS runs every fan again")
+  and hands every fan back to macOS, instead of blaming the overheat cut-off and saving the speed as
+  pending. (#1215)
+- Fans: a fan speed that isn't a real number (from a damaged saved setting or a bad sensor reading)
+  is never sent to the fans or saved; that fan stays with macOS. (#1215)
 
 ## v2.174.0
 
