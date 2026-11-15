@@ -77,6 +77,7 @@ type ManifestInput = {
 
 const ID_RE = /^[a-z0-9]+(\.[a-z0-9-]+)+$/i; // reverse-DNS-ish
 const MAX_ID_LEN = 128; // the app refuses a longer id at install
+const MAX_MANIFEST_LEN = 16_384; // same 16 KB bound as the preview: one row, one browse payload
 const RESERVED_PREFIX = "com.prosper."; // the ids of the extensions built into Prosper
 const SEMVER_RE = /^\d+\.\d+\.\d+([-+].+)?$/;
 
@@ -125,6 +126,8 @@ async function publish(c: Ctx) {
   }
   // A published extension can never claim to be a bundled system one.
   if (m.system === true) return c.json({ error: "system_not_allowed" }, 400);
+  // The whole manifest JSON is stored and its text fields reach the browse payload: bound it (UTF-16 units, as the preview cap).
+  if (JSON.stringify(m).length > MAX_MANIFEST_LEN) return c.json({ error: "manifest_too_large" }, 400);
 
   const max = intEnv(c.env.MARKET_MAX_BYTES, 262_144); // 256 KB — extensions are tiny
   // Bound the encoded string before atob so an oversized blob can't force a large
@@ -132,7 +135,12 @@ async function publish(c: Ctx) {
   if (body.blob.length > Math.ceil(max * 4 / 3) + 16) {
     return c.json({ error: "too_large", max: String(max) }, 413);
   }
-  const bytes = b64ToBytes(body.blob);
+  let bytes: Uint8Array;
+  try {
+    bytes = b64ToBytes(body.blob);
+  } catch {
+    return c.json({ error: "invalid_body" }, 400); // not valid base64
+  }
   if (bytes.length === 0) return c.json({ error: "empty_artifact" }, 400);
   // max as a string: the app decodes error bodies as [String: String] (MarketClient.errorText).
   if (bytes.length > max) return c.json({ error: "too_large", max: String(max) }, 413);

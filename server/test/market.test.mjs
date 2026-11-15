@@ -640,3 +640,44 @@ test("publish: optional manifest fields absent or plain strings are accepted", a
     assert.equal(r.status, 200, `${JSON.stringify(extra)}: ${r.text}`);
   }
 });
+
+// #1248 round 4: invalid base64 is a 400, and the manifest is capped at 16384 characters of JSON; no D1, no KV.
+const rawPublish = (t, manifest, blob) =>
+  t.req("/publish", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN[PUB]}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ manifest, blob }),
+  });
+const goodBlob = Buffer.from(gzipSync(cleanTar("org.example.kit", "1.0.0"))).toString("base64");
+const baseManifest = { id: "org.example.kit", version: "1.0.0", name: "n", title: "T", author: "A" };
+
+test("publish: a blob that is not valid base64 is a 400 invalid_body, no D1 statement, no KV write", async () => {
+  for (const blob of ["AAAA*AAA", "AAAAA", "A===", "!!!!"]) {
+    const t = setup();
+    const r = await rawPublish(t, baseManifest, blob);
+    assert.equal(r.status, 400, `${blob}: ${r.text}`);
+    assert.deepEqual(r.json, { error: "invalid_body" }, blob);
+    assert.deepEqual(marketSql(t), [], `${blob}: no D1 statement`);
+    assert.equal(t.kv.size, 0, `${blob}: no KV write`);
+  }
+});
+
+test("publish: a manifest of exactly 16384 characters is accepted, one more is refused with no D1 and no rate-limit key", async () => {
+  const fill = (n) => {
+    const m = { ...baseManifest, description: "" };
+    m.description = "x".repeat(n - JSON.stringify(m).length);
+    assert.equal(JSON.stringify(m).length, n);
+    return m;
+  };
+  const ok = setup();
+  const a = await rawPublish(ok, fill(16_384), goodBlob);
+  assert.equal(a.status, 200, a.text);
+  assert.equal(ok.log.length, 5, "session pair, owner SELECT, dupe SELECT, one batch");
+  assert.deepEqual([...ok.kv.keys()].sort(), ["pkg:org.example.kit:1.0.0", `rl:publish:${PUB}`]);
+  const over = setup();
+  const b = await rawPublish(over, fill(16_385), goodBlob);
+  assert.equal(b.status, 400, b.text);
+  assert.deepEqual(b.json, { error: "manifest_too_large" });
+  assert.deepEqual(marketSql(over), [], "no D1 statement");
+  assert.equal(over.kv.size, 0, "no KV write, rate-limit key untouched");
+});
