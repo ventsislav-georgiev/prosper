@@ -123,11 +123,11 @@ enum QuickdirStore {
         all().first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
-    /// Immediate subdirectories of a quickdir's root, filtered (case-insensitive
-    /// contains) by `filter`, sorted by name.
     /// #985 test seam: how many folder listings were asked for (a row proves an off extension asks for none).
     static let listingCalls = OSAllocatedUnfairLock(initialState: 0)
 
+    /// Immediate subdirectories of a quickdir's root, filtered (case-insensitive
+    /// contains) by `filter`, sorted by name.
     static func listing(config: QuickdirConfig, filter: String) -> [QuickdirHit] {
         listingCalls.withLock { $0 += 1 }
         let expanded = (config.path as NSString).expandingTildeInPath

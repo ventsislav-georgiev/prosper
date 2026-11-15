@@ -304,5 +304,42 @@ final class ShortcutTargetLiveTests: XCTestCase {
         let dirs = try declared("quickdirs")
         XCTAssertEqual(dirs.id, "com.prosper.quickdirs")
         XCTAssertTrue(dirs.prefixes.contains("qd "))
+        XCTAssertEqual(Set(ActivationTarget.builtins.map(\.prefix)), ["o ", "> ", "ql ", ":", ""],
+                       "a new built-in target needs an owner line above")
+    }
+
+    /// Round 3: the cheap prefix test comes first, then liveness, then the listing. No liveness-ask
+    /// counter exists in the tree and none is added, so the order is pinned by outcome: off, none of
+    /// the five queries is a native listing and no folder is listed; on, the four ql/qd ones are and
+    /// the plain one is not. (A wrong prefix test cuts a ql/qd query off: the on leg fails.)
+    /// Runs on the main actor (class is @MainActor); the router hops itself.
+    func testUniversalListingsKeepTheirOutcomeWithThePrefixTestFirst() async throws {
+        let reg = try gateFixture([(CommandRouter.quicklinksID, ["quicklinks.run"]),
+                                   (CommandRouter.quickdirsID, ["quickdirs.run"])]).registry()
+        install(reg)
+        try quickdirInTempDir()
+        setPref(#"{"zzqlink985":"https://example.com/"}"#, "ext.com.prosper.quicklinks.links")
+        enum Kind { case ql, qdMenu, qd, other }
+        func kind(_ o: RunnerOutcome) -> Kind {
+            switch o {
+            case .quicklinks: return .ql
+            case .quickdirsMenu: return .qdMenu
+            case .quickdirs: return .qd
+            default: return .other
+            }
+        }
+        let queries = ["zzplain985", "ql", "ql zzql", "qd", "qd zq"]
+        try reg.setEnabled(false, id: CommandRouter.quicklinksID)
+        try reg.setEnabled(false, id: CommandRouter.quickdirsID)
+        let before = QuickdirStore.listingCalls.withLock { $0 }
+        var off: [Kind] = []
+        for q in queries { off.append(kind(await CommandRouter.run(q, mode: .universal))) }
+        XCTAssertEqual(off, [.other, .other, .other, .other, .other], "off: no native listing for any of the five")
+        XCTAssertEqual(QuickdirStore.listingCalls.withLock { $0 }, before, "off: no folder listed")
+        try reg.setEnabled(true, id: CommandRouter.quicklinksID)
+        try reg.setEnabled(true, id: CommandRouter.quickdirsID)
+        var on: [Kind] = []
+        for q in queries { on.append(kind(await CommandRouter.run(q, mode: .universal))) }
+        XCTAssertEqual(on, [.other, .ql, .ql, .qdMenu, .qd], "on: ql and qd queries list, the plain one does not")
     }
 }

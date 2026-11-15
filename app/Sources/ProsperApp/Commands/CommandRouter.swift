@@ -441,14 +441,17 @@ enum CommandRouter {
         // 0a3. Quicklinks listing. `ql` alone lists all; `ql <text>` filters by
         //      name/description. Management verbs (add/rm/...) are NOT handled here
         //      — they fall through to the Lua extension (step 3.5) / meta (`ql new`).
-        if await MainActor.run(body: { extensionLive(quicklinksID) }), let ql = quicklinksListing(trimmed) {
+        let lowerTrimmed = trimmed.lowercased()
+        if lowerTrimmed == "ql" || lowerTrimmed.hasPrefix("ql "),
+           await MainActor.run(body: { extensionLive(quicklinksID) }), let ql = quicklinksListing(trimmed) {
             return await attachLaunchers(ql, query: trimmed)
         }
 
         // 0a4. Quickdirs. `qd` alone shows the picker; `qd <name|prefix> <filter>`
         //      browses that quickdir's subdirectories. Management verbs (add/rm/...)
         //      fall through to the Lua extension (step 3.5).
-        if await MainActor.run(body: { extensionLive(quickdirsID) }), let qd = quickdirsUniversal(trimmed) {
+        if lowerTrimmed == "qd" || lowerTrimmed.hasPrefix("qd "),
+           await MainActor.run(body: { extensionLive(quickdirsID) }), let qd = quickdirsUniversal(trimmed) {
             return await attachLaunchers(qd, query: trimmed)
         }
 
