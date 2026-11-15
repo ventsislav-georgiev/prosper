@@ -25,7 +25,9 @@ export const requireSession: Middleware = async (c, next) => {
   c.set("email", row.email);
   c.set("tokenHash", hash);
   c.executionCtx.waitUntil(
-    c.env.DB.prepare(`UPDATE sessions SET last_seen = ?1 WHERE token_hash = ?2`)
+    // Only a session not seen for an hour is written (a WHERE that matches nothing writes
+    // nothing): D1 bills rows written, and nothing reads this column to the minute.
+    c.env.DB.prepare(`UPDATE sessions SET last_seen = ?1 WHERE token_hash = ?2 AND last_seen < ?1 - 3600`)
       .bind(now, hash)
       .run(),
   );

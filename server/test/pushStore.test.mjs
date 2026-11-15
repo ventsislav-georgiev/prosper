@@ -2293,7 +2293,10 @@ test("#1022: the cron's online-Mac read counts each Mac's own cards once, throug
     assert.ok(steps[0].startsWith("SEARCH t USING INDEX idx_push_tokens_mac (email=? AND mac_id=?)"), why);
     // The offline-retry probe (#1073) is a correlated EXISTS on f, through the same index: allowed, and only that one.
     assert.ok(!plan.some((d) => d.includes("idx_push_tokens_kind") || (d.includes("SUBQUERY") && !d.startsWith("CORRELATED SCALAR SUBQUERY"))), why);
-    assert.ok(plan.filter((d) => /^SEARCH f /.test(d)).every((d) => d.startsWith("SEARCH f USING INDEX idx_push_tokens_mac (email=? AND mac_id=?)")), why);
+    // every() is true on an empty list: require the probe's SEARCH and no SCAN of f.
+    const fSteps = plan.filter((d) => /^SEARCH f /.test(d));
+    assert.ok(fSteps.length >= 1 && fSteps.every((d) => d.startsWith("SEARCH f USING INDEX idx_push_tokens_mac (email=? AND mac_id=?)")), why);
+    assert.ok(!plan.some((d) => /^SCAN f\b/.test(d)), why);
   };
   // D1 has no sqlite_stat1 unless someone ran ANALYZE.
   checkPlan("fixture, no sqlite_stat1");
@@ -2310,6 +2313,71 @@ test("#1022: the cron's online-Mac read counts each Mac's own cards once, throug
   checkPlan("1,000 Macs, no sqlite_stat1");
   t.raw.exec("ANALYZE");
   checkPlan("1,000 Macs, sqlite_stat1");
+});
+
+test("#1089: a Mac's lapse still fires from its own last_seen, which every heartbeat writes", async () => {
+  const t = setup();
+  await registerPhone(t);
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, { device_id: PHONE, kind: "la_update", token: tok("3"), env: "production", activity_id: "act-1", mac_id: MAC });
+  await t.settle();
+  t.takeCalls();
+  for (let seq = 2; seq < 6; seq++) {
+    t.clock.now += 60;
+    assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq })).status, 204); // heartbeat
+    assert.deepEqual(t.rows(`SELECT last_seen FROM push_macs`), [{ last_seen: t.clock.now }]);
+    await runCron(t.deps);
+  }
+  assert.deepEqual(t.takeCalls().filter((c) => c.body.aps.event === "end"), [], "heartbeats keep the Mac online");
+  t.clock.now += 180;
+  await runCron(t.deps);
+  assert.deepEqual(t.takeCalls().map((c) => c.body.aps.event), ["end"]);
+  assert.deepEqual(t.rows(`SELECT online FROM push_macs`), [{ online: 0 }]);
+});
+
+// QA 822: the audit below sees only the texts this file's tests made the store prepare. A new
+// prepare( in pushStore.mjs bumps SITES (and a new text must be listed in HEADS): red until both are
+// updated on purpose, so a query no test runs is not left out of the audit unseen.
+const PREPARE_SITES = 34;
+const STORE_SQL_HEADS = [
+  "DELETE FROM devices WHERE email = ?1",
+  "DELETE FROM devices WHERE email = ?1 AND device_id = ?2",
+  "DELETE FROM push_macs WHERE email = ?1",
+  "DELETE FROM push_macs WHERE email = ?1 AND mac_id = ?2",
+  "DELETE FROM push_tokens WHERE NOT EXISTS (SELECT 1 FROM sess",
+  "DELETE FROM push_tokens WHERE email = ?1",
+  "DELETE FROM push_tokens WHERE email = ?1 AND +kind = 'la_upd",
+  "DELETE FROM push_tokens WHERE email = ?1 AND device_id = ?2 ",
+  "DELETE FROM push_tokens WHERE email = ?1 AND device_id IN ( ",
+  "DELETE FROM push_tokens WHERE token_hash = ?1",
+  "DELETE FROM sessions WHERE expires_at IS NOT NULL AND expire",
+  "DELETE FROM sessions WHERE token_hash = ?1",
+  "INSERT INTO push_macs (email, mac_id, seq, last_seen, online",
+  "INSERT INTO push_tokens (email, device_id, kind, activity_id",
+  "SELECT e.email, e.device_id, e.activity_id, e.token, e.env, ",
+  "SELECT email, device_id, kind, activity_id, token, env FROM ",
+  "SELECT email, device_id, kind, activity_id, token, env, mode",
+  "SELECT m.email, m.mac_id, m.seq, m.last_seen, m.online, m.sn",
+  "SELECT m.mac_id, m.online, m.last_seen, m.snapshot, m.starte",
+  "SELECT m.seq, m.last_seen, m.online, m.snapshot, m.last_push",
+  "SELECT name FROM devices WHERE email = ?1 AND device_id = ?2",
+  "UPDATE OR REPLACE push_tokens SET kind = 'la_expired' WHERE ",
+  "UPDATE push_macs SET online = ?3, snapshot = ?4, idle_since ",
+  "UPDATE push_macs SET rl_count = CASE WHEN rl_window = ?3 THE",
+  "UPDATE push_macs SET started_at = ?3, rev = rev + 1 WHERE em",
+  "UPDATE push_tokens SET due_at = ?6 WHERE email = ?1 AND devi",
+  "UPDATE push_tokens SET fails = MIN(fails + 1, ?6) WHERE emai",
+  "UPDATE push_tokens SET fails = fails + 1, due_at = CASE WHEN",
+  "UPDATE push_tokens SET mac_id = ?5, env = ?6, updated_at = ?",
+  "UPDATE push_tokens SET pushed_at = ?6, due_at = NULL, fails ",
+  "UPDATE push_tokens SET token = ?4, env = ?5, updated_at = ?6",
+];
+test("#1089 audit pin: the prepare( sites and the recorded SQL texts are the literal lists", () => {
+  const src = readFileSync(new URL("../src/pushStore.mjs", import.meta.url), "utf8");
+  const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  assert.equal((code.match(/\bprepare\(/g) ?? []).length, PREPARE_SITES, "a prepare( site was added or removed: run it in a test, list its text, then update PREPARE_SITES");
+  const heads = new Set([...STORE_SQL].map((s) => s.replace(/\s+/g, " ").trim().slice(0, 60)));
+  assert.deepEqual([...heads].sort(), [...STORE_SQL_HEADS].sort());
 });
 
 // Runs last: it reads the SQL every test above made the store prepare.
