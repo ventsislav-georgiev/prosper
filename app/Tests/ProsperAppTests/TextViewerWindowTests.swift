@@ -899,7 +899,7 @@ final class TextViewerWindowTests: XCTestCase {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/TextViewer")
         let names = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }.sorted()
-        XCTAssertEqual(names, ["DocumentImage.swift", "ImagePolicy.swift", "LinkPolicy.swift", "MarkdownRenderer.swift", "TextFileWriter.swift",
+        XCTAssertEqual(names, ["CapsuleSwitch.swift", "DocumentImage.swift", "ImagePolicy.swift", "LinkPolicy.swift", "MarkdownRenderer.swift", "TextFileWriter.swift",
                                "TextViewerDocument.swift", "TextViewerRouting.swift", "TextViewerTextView.swift", "TextViewerWindow.swift"])
         // #1118: no URL-based loader either (Data(contentsOf:), CGImageSourceCreateWithURL, NSImage(contentsOf:)):
         // every byte is read through the guarded open in TextViewerDocument and ImagePolicy.
