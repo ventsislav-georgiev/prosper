@@ -57,7 +57,7 @@ final class CCPoolPinRoutingTests: XCTestCase {
     }
 
     private func route(_ st: CCPoolState, _ key: String?, quota: Bool = false, exclude: Set<String> = [])
-        -> (account: String?, state: CCPoolState) {
+        -> (account: String?, state: CCPoolState, followed: Bool) {
         CCPoolCore.route(st, key: key, quotaCheck: quota, model: "claude-opus-5", exclude: exclude, now: t0)
     }
 
@@ -227,22 +227,81 @@ final class CCPoolPinRoutingTests: XCTestCase {
         return Rig(up: up, store: store, secrets: secrets, log: log, rec: rec, seams: seams, port: p)
     }
 
-    func testTwoConversationsKeepTheirAccountsWhileCurrentChanges() throws {
+    /// Two sessions pinned to different accounts, and `current` where the last pick put it (Example Org B).
+    private func twoPinned() throws -> Rig {
         let r = try rig()
         XCTAssertEqual(r.via("sess-example-1"), "tok-a")
         r.setCurrent(orgB)
         XCTAssertEqual(r.via("sess-example-2"), "tok-b")
-        XCTAssertEqual(r.via(nil), "tok-b", "a request without the header follows current")
-        XCTAssertEqual(r.via("sess-example-1"), "tok-a", "its pin, not current")
-        r.setCurrent(orgB)
+        XCTAssertEqual(r.store.snapshot.current, orgB)
+        XCTAssertEqual(r.store.snapshot.pins.mapValues(\.account), ["sess-example-1/": orgA, "sess-example-2/": orgB])
+        return r
+    }
+
+    func testTwoConversationsKeepTheirAccountsAndCurrentStaysWhereThePickPutIt() throws {
+        let r = try twoPinned()
+        let w0 = r.seams.writes
+        for round in 1...4 {
+            XCTAssertEqual(r.via("sess-example-1"), "tok-a", "round \(round)")
+            XCTAssertEqual(r.store.snapshot.current, orgB, "a reply that followed a pin does not move current: \(round)")
+            XCTAssertEqual(r.via("sess-example-2"), "tok-b", "round \(round)")
+            XCTAssertEqual(r.store.snapshot.current, orgB, "round \(round)")
+        }
         XCTAssertEqual(r.via("sess-example-1", "agent-example-1"), "tok-a", "a subagent follows its session")
-        r.setCurrent(orgA)
-        XCTAssertEqual(r.via("sess-example-2"), "tok-b")
-        r.setCurrent(orgA)
-        XCTAssertEqual(r.via(nil), "tok-a")
-        XCTAssertEqual(r.store.snapshot.pins.mapValues(\.account),
-                       ["sess-example-1/": orgA, "sess-example-2/": orgB, "sess-example-1/agent-example-1": orgA])
+        XCTAssertEqual(r.store.snapshot.current, orgB)
+        XCTAssertEqual(r.seams.writes, w0 + 1, "eight alternations write nothing; only the subagent's new pin is saved")
         XCTAssertEqual(r.rec.waits, [], "no wait")
+    }
+
+    func testRequestWithoutSessionIdGoesToCurrentNotToTheAccountThatAnsweredLast() throws {
+        let r = try twoPinned()
+        XCTAssertEqual(r.via("sess-example-1"), "tok-a")
+        XCTAssertEqual(r.via(nil), "tok-b", "current (the last pick), not the pinned account that answered last")
+        XCTAssertEqual(r.via("sess-example-1"), "tok-a")
+        XCTAssertEqual(r.via(nil), "tok-b")
+        XCTAssertEqual(r.store.snapshot.current, orgB)
+    }
+
+    func testMovedConversationsReplyDoesMoveCurrent() throws {
+        let r = try rig()
+        r.setCurrent(orgA)
+        XCTAssertEqual(r.via("sess-example-1"), "tok-a")
+        let until = Int(r.seams.now) + 600
+        r.store.mutate { $0.accounts[orgA]?.cooldown[CCPoolCore.fiveHour] = until }
+        XCTAssertEqual(r.via("sess-example-1"), "tok-b", "the pinned account is benched: the session moves")
+        XCTAssertEqual(r.store.snapshot.pins.mapValues(\.account), ["sess-example-1/": orgB])
+        XCTAssertEqual(r.store.snapshot.current, orgB, "that reply came from pick: current moves with it")
+    }
+
+    func testRouteSaysWhetherAPinGaveTheAnswer() {
+        let pinB: [String: CCPoolState.Pin] = ["sess-example-1/": .init(account: orgB, seen: t0 - 10)]
+        XCTAssertTrue(route(pool(pins: pinB), "sess-example-1/").followed, "its own pin")
+        XCTAssertTrue(route(pool(pins: pinB), "sess-example-1/", quota: true).followed, "a quota check that follows a pin")
+        XCTAssertTrue(route(pool(pins: pinB), "sess-example-1/agent-example-1").followed, "the sibling's pin")
+        XCTAssertFalse(route(pool(), "sess-example-1/").followed, "a new conversation")
+        XCTAssertFalse(route(pool(pins: pinB, benchB: true), "sess-example-1/").followed, "a move")
+        XCTAssertFalse(route(pool(pins: pinB), "sess-example-1/", exclude: [orgB]).followed, "a move (tried)")
+        XCTAssertFalse(route(pool(pins: pinB), nil).followed, "no key")
+        XCTAssertFalse(route(pool(pins: pinB), "sess example/").followed, "no usable key")
+        XCTAssertFalse(route(pool(), "sess-example-1/", quota: true).followed, "a quota check without a usable pin")
+        XCTAssertFalse(route(pool(pins: pinB, benchB: true), "sess-example-1/", quota: true).followed, "a quota check, pin unusable")
+    }
+
+    func testQuotaCheckNeverRevivesAnExpiredPinButARealRequestDoes() {
+        let st = pool(pins: ["sess-example-1/": .init(account: orgA, seen: t0 - 3601)])
+        let q = route(st, "sess-example-1/", quota: true)
+        XCTAssertEqual(q.account, orgA)
+        XCTAssertFalse(q.followed, "an expired pin is not followed")
+        XCTAssertEqual(q.state, st, "a quota check changes nothing")
+        XCTAssertEqual(q.state.pins["sess-example-1/"]?.seen, t0 - 3601, "not re-stamped")
+        var after = q.state
+        XCTAssertTrue(after.pinnedAccount("sess-example-1/", now: t0) == nil, "still expired")
+        let real = route(st, "sess-example-1/")
+        XCTAssertEqual(real.account, orgA)
+        XCTAssertEqual(real.state.pins["sess-example-1/"]?.seen, t0, "a real request pins it again")
+        var live = real.state
+        XCTAssertEqual(live.pinnedAccount("sess-example-1/", now: t0), orgA)
+        XCTAssertEqual(real.state, st, "the same account: the file content is the same, no write")
     }
 
     func testQuotaCheckCreatesNoPinAndFollowsAnExistingOne() throws {
@@ -269,16 +328,13 @@ final class CCPoolPinRoutingTests: XCTestCase {
         for (sid, agent) in bad {
             XCTAssertEqual(r.via(sid, agent), "tok-a", "follows current: \(sid.count) \(agent?.count ?? 0)")
         }
-        // A non-ASCII value is no key either; whether URLSession forwards such a header is not this entry's
-        // question, so the row asks only that it did not follow the session's pin.
-        for (sid, agent) in [("sess-\u{e9}", nil), ("sess-example-1", "agent-\u{e9}")] as [(String, String?)] {
-            let token = r.via(sid, agent)
-            XCTAssertTrue(token == nil || token == "tok-a", token ?? "nil")
-        }
+        // Non-ASCII values are not sent here: whether URLSession forwards such a header is not this entry's
+        // question, and the pure rows testPinKeyFromHeaders and testBadAgentValueIsNoSessionIdEvenWhenTheSessionIsPinned
+        // pin the rule (R1259-c).
         XCTAssertEqual(Set(r.store.snapshot.pins.keys), ["sess-example-1/agent-example-1"], "no bad value became a key")
         let lines = r.log.lines
         let leaked = lines.filter { l in ["sess-example", "sess example", "agent-example", "agent example", "aaaaaaaaaa",
-                                          "ssssssssss", "\u{e9}"].contains { l.contains($0) } }
+                                          "ssssssssss"].contains { l.contains($0) } }
         XCTAssertEqual(leaked, [], "no header value in any log line")
     }
 

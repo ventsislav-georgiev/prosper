@@ -54,6 +54,8 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     let label: String
     let accountID: String
     let retried: Bool
+    /// #1259: the account came from a pin (CCPoolCore.route), not from `pick`.
+    let followedPin: Bool
     var task: URLSessionDataTask?
     var mode = Mode.deciding
     var snippet = Data()
@@ -64,11 +66,12 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     var retryAfter: String?
     var suspended = false
 
-    init(connection: CCPoolConnection, label: String, accountID: String, retried: Bool) {
+    init(connection: CCPoolConnection, label: String, accountID: String, retried: Bool, followedPin: Bool) {
         self.connection = connection
         self.label = label
         self.accountID = accountID
         self.retried = retried
+        self.followedPin = followedPin
     }
 
     func upstreamResponse(_ response: HTTPURLResponse, decide: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
@@ -175,6 +178,8 @@ final class CCPoolConnection: @unchecked Sendable {
     private var throttleRetries = 0
     /// #1256: the 429 being retried, while its retry waits or is in flight; the retry never leaves its account.
     private var retryingThrottle: CCPoolExchange?
+    /// #1259: the LAST route call of this request followed a pin; its reply does not move `current`.
+    private var followedPin = false
 
     init(conn: NWConnection, config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger,
          upstream: CCPoolUpstream, boundPort: UInt16, onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
@@ -369,10 +374,19 @@ final class CCPoolConnection: @unchecked Sendable {
         let now = store.now
         // #1259: a keyed request follows (and pins) its session; no usable key = `pick` as before, nothing changed.
         let key = head.flatMap(Self.pinKey)
-        let picked = store.mutate { st -> String? in
-            let (name, next) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: tried, now: now)
-            st = next
-            return name
+        let picked: String?
+        if key == nil {
+            picked = store.read { CCPoolCore.pick($0, model: model, exclude: tried, now: now) }
+            followedPin = false
+        } else {
+            var followed = false
+            picked = store.mutate { st -> String? in
+                let (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: tried, now: now)
+                st = next
+                followed = f
+                return name
+            }
+            followedPin = followed
         }
         guard let label = picked else { return noAccounts() }
         tried.insert(label)
@@ -405,7 +419,7 @@ final class CCPoolConnection: @unchecked Sendable {
         } else if !body.isEmpty {
             req.httpBody = body
         }
-        let ex = CCPoolExchange(connection: self, label: label, accountID: accountID, retried: retried)
+        let ex = CCPoolExchange(connection: self, label: label, accountID: accountID, retried: retried, followedPin: followedPin)
         exchange = ex
         ex.task = upstream.start(req, accountID: accountID, handler: ex)
     }
@@ -426,7 +440,7 @@ final class CCPoolConnection: @unchecked Sendable {
         // #1190 INFO-2: what this answer says belongs to the account that sent it, by its Keychain id: the
         // label may have moved to another account (rename, remove and add, a Replace) while it was in flight.
         let id = ex.accountID
-        store.mutate { st in if let owner = st.label(ofID: id) { st.remember(owner) } }
+        if !ex.followedPin { store.mutate { st in if let owner = st.label(ofID: id) { st.remember(owner) } } }
         // #1219: the usage sample (display only) goes to that account, its label resolved under the lock of the write.
         store.recordUsage(id: id, limits: limits)
 

@@ -204,9 +204,10 @@ enum CCPoolCore {
     /// the placement score). No usable key: `pick` as today, state untouched. A key: its own pin, then its session's
     /// main conversation, then the session's latest; each only while in `order`, not excluded and eligible. None of
     /// them: `pick`. A request pins (or moves) its key to the account; a quota check only touches a pin it follows.
+    /// `followed` is true when a pin gave the answer (#1259 R1259-a).
     static func route(_ state: CCPoolState, key: String?, quotaCheck: Bool, model: String?,
-                      exclude: Set<String>, now: Double) -> (account: String?, state: CCPoolState) {
-        guard let key, CCPoolState.validPinKey(key) else { return (pick(state, model: model, exclude: exclude, now: now), state) }
+                      exclude: Set<String>, now: Double) -> (account: String?, state: CCPoolState, followed: Bool) {
+        guard let key, CCPoolState.validPinKey(key) else { return (pick(state, model: model, exclude: exclude, now: now), state, false) }
         // Lookups read an expired copy: a lookup alone never changes what the file holds (expired pins leave it
         // with the next pin or move, which expires first).
         var live = state
@@ -217,16 +218,17 @@ enum CCPoolCore {
             .map(\.value.account)
         let usable = { (n: String) in state.order.contains(n) && state.accounts[n] != nil && !exclude.contains(n)
             && eligible(state.accounts[n], model: model, now: now) }
-        guard let name = ([live.pins[key]?.account].compactMap { $0 } + siblings).first(where: usable)
-                ?? pick(state, model: model, exclude: exclude, now: now) else { return (nil, state) }
+        // followed: the answer came from a pin, not from `pick`; its reply then leaves `current` where it is.
+        let pinned = ([live.pins[key]?.account].compactMap { $0 } + siblings).first(where: usable)
+        guard let name = pinned ?? pick(state, model: model, exclude: exclude, now: now) else { return (nil, state, false) }
         var st = state
-        if st.pins[key]?.account == name {
+        if live.pins[key]?.account == name {   // the expired copy: an idle pin is never revived by a touch (R1259-q1)
             st.touchPin(key, now: now)   // stamp only: kept in memory, never written (Pin == ignores it)
         } else if !quotaCheck {
             st.expirePins(now: now)
             st.pin(key, to: name, now: now)
         }
-        return (name, st)
+        return (name, st, pinned != nil)
     }
 
     /// The recorded rollover for `claim`, or +inf when never seen (an unseen window is a full one).
