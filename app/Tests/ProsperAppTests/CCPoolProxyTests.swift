@@ -113,6 +113,9 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
     var reject: [String: Int] = [:]    // token -> 401/403, no rate-limit headers
     var overloadRetryAfter: String?    // Retry-After sent with an overload 429 (P2a follow-up a)
     var errorPad = 0                   // bytes of padding in a 429 error body (QA #733 INFO-3)
+    var gzipReply: Data?               // #1264: a 200 body sent gzip-encoded, only to a request that asked for gzip
+    private(set) var acceptEncodings: [String] = []   // accept-encoding values received
+    private(set) var gzipServed = 0
     private(set) var seen: [String] = []       // Authorization values answered, in order
     private(set) var apiKeys: [String] = []    // x-api-key values received
     private(set) var bodySizes: [Int] = []
@@ -133,6 +136,8 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
             if let k = head.header("x-api-key") { apiKeys.append(k) }
             bodySizes.append(body.count)
             paths.append(head.path)
+            let accept = head.header("accept-encoding")
+            if let accept { acceptEncodings.append(accept) }
             let has = { (set: Set<String>) in set.contains { auth.contains($0) } }
             if let status = reject.first(where: { auth.contains($0.key) })?.value {
                 return .respond(status, [("content-type", "application/json")],
@@ -156,6 +161,11 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
             var out = Data(limited ? #"{"type":"error","error":{"message":"limit\#(String(repeating: "p", count: errorPad))"}}"#.utf8
                 : #"{"type":"message","content":[{"type":"text","text":"hi"}]}"#.utf8)
             if has(big), !limited { out = Data(#"{"type":"message","pad":""#.utf8) + Data(repeating: 120, count: 400_000) + Data(#""}"#.utf8) }
+            if let gz = gzipReply, !limited, accept?.lowercased().contains("gzip") == true {
+                h.append(("Content-Encoding", "gzip"))
+                out = gz
+                gzipServed += 1
+            }
             return .respond(limited ? 429 : 200, h, out)
         }
     }
@@ -594,6 +604,36 @@ final class CCPoolProxyTests: XCTestCase {
         let bare = try XCTUnwrap(r.post())
         XCTAssertEqual(bare.status, 429)
         XCTAssertNil(bare.header("retry-after"), "none invented when upstream sent none")
+    }
+
+    /// #1264 gap 10, a FACT row (pins today's behaviour): the client asks for gzip, the upstream answers gzip
+    /// bytes with their header. The native pool lets URLSession ask for and decode the encoding, so the client
+    /// gets the decoded bytes, no Content-Encoding and no Content-Length (chunked framing carries the length):
+    /// self-consistent, and readable by a client that asked for gzip (identity is always acceptable).
+    func testCCPoolGzipReplyReachesTheClientDecoded() throws {
+        let plain = Data(#"{"type":"message","content":[{"type":"text","text":"hi from a gzip reply"}]}"#.utf8)
+        // `gzip -9 -n` of `plain`.
+        let gz = Data([
+            0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03, 0xab, 0x56, 0x2a, 0xa9, 0x2c, 0x48, 0x55, 0xb2, 0x52, 0xca,
+            0x4d, 0x2d, 0x2e, 0x4e, 0x4c, 0x4f, 0x55, 0xd2, 0x51, 0x4a, 0xce, 0xcf, 0x2b, 0x49, 0xcd, 0x2b, 0x51, 0xb2, 0x8a, 0xae,
+            0x86, 0x49, 0x96, 0xa4, 0x56, 0x94, 0x00, 0x65, 0xc0, 0x94, 0x95, 0x52, 0x46, 0xa6, 0x42, 0x5a, 0x51, 0x7e, 0xae, 0x42,
+            0xa2, 0x42, 0x7a, 0x55, 0x66, 0x81, 0x42, 0x51, 0x6a, 0x41, 0x4e, 0xa5, 0x52, 0x6d, 0x6c, 0x2d, 0x00, 0x63, 0x16, 0x96,
+            0x1d, 0x4c, 0x00, 0x00, 0x00,
+        ])
+        let r = try rig(["one"])
+        r.anthropic.set { $0.gzipReply = gz }
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, headers: [
+            ("content-type", "application/json"), ("authorization", "Bearer client-token-should-be-replaced"),
+            ("accept-encoding", "gzip"),
+        ]))
+        XCTAssertEqual(r.anthropic.get { $0.gzipServed }, 1, "the upstream really answered gzip")
+        XCTAssertTrue(r.anthropic.get { $0.acceptEncodings }.last?.lowercased().contains("gzip") == true,
+                      "the upstream was asked for gzip (by URLSession: the client's own header is not forwarded)")
+        XCTAssertEqual(resp.status, 200)
+        XCTAssertEqual(resp.body, plain, "decoded bytes")
+        XCTAssertTrue(resp.header("content-encoding") == nil, "no encoding claimed for decoded bytes")
+        XCTAssertTrue(resp.header("content-length") == nil, "no stale gzip length")
+        XCTAssertEqual(resp.header("transfer-encoding")?.lowercased(), "chunked", "the chunked framing carries the length")
     }
 
     // P2a follow-up (b): a query string does not send the health path upstream.

@@ -384,4 +384,137 @@ final class CCPoolMigrationTests: XCTestCase {
         XCTAssertTrue(texts.contains { $0.contains("alpha") }, "the texts are real")
         for text in texts { XCTAssertFalse(text.contains("tok-"), "token leaked into: \(text.prefix(300))") }
     }
+
+    // MARK: #1264 a person moving from the Python proxy
+
+    /// A reference-shaped home: the vault in a custom order (C, A, B: the Python pick order is the vault's key
+    /// order, there is no "order" key) and a state.json as the Python writes it (indent 2): current, a bench and a
+    /// reset at a fixed time after `now`, and pins (one bad key, one to an account not in the vault, one not a text).
+    private func referenceHome(vaultText: String? = nil, stateText: String? = nil) throws -> URL {
+        let dir = tempDir()
+        let until = Int(t0) + 7200
+        let vault = try write(dir, CCPoolMigration.vaultFileName, vaultText ?? """
+            {
+              "accounts": {
+                "Example Org C": {"token": "tok-example-c"},
+                "Example Org A": {"token": "tok-example-a"},
+                "Example Org B": {"token": "tok-example-b"}
+              }
+            }
+            """)
+        _ = try write(dir, CCPoolMigration.stateFileName, stateText ?? """
+            {
+              "current": "Example Org A",
+              "accounts": {
+                "Example Org B": {"cooldown": {"five_hour": \(until)}, "reset": {"five_hour": \(until)}}
+              },
+              "pins": {
+                "sess-example-1/": "Example Org B",
+                "sess-example-1/agent-example-1": "Example Org B",
+                "sess-example-2/": "Example Org C",
+                "sess-example-3/": "Example Org Z",
+                "bad key/": "Example Org A",
+                "sess-example-4/": 7
+              }
+            }
+            """)
+        return vault
+    }
+
+    private let referencePins = ["sess-example-1/": "Example Org B", "sess-example-1/agent-example-1": "Example Org B",
+                                 "sess-example-2/": "Example Org C"]
+
+    /// Order, benches and pins come over; tokens go to the (fake) secrets store only, never the state file or the log.
+    func testCCPoolReferenceStateKeepsOrderBenchesAndPins() throws {
+        let vault = try referenceHome()
+        let log = CCPoolCapturingLogger()
+        let t = t0
+        let st = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"), clock: { t }, logger: log)
+        let secrets = CCPoolMemorySecrets()
+        let out = try CCPoolMigration.run(vault: vault, store: st, secrets: secrets, choices: [:], now: t0)
+        let names = ["Example Org C", "Example Org A", "Example Org B"]
+        XCTAssertEqual(out.imported, names)
+        XCTAssertEqual(out.notes, [])
+        for snap in [st.snapshot, CCPoolStore(directory: st.directory).snapshot] {   // in memory, then read back from the file
+            XCTAssertEqual(snap.order, names, "the vault's order is the pick order")
+            XCTAssertEqual(snap.current, "Example Org A")
+            XCTAssertEqual(snap.accounts["Example Org B"]?.cooldown, ["five_hour": Int(t0) + 7200])
+            XCTAssertEqual(snap.accounts["Example Org B"]?.reset, ["five_hour": Int(t0) + 7200])
+            XCTAssertEqual(snap.accounts["Example Org A"]?.cooldown, [:])
+            XCTAssertEqual(snap.pins.mapValues(\.account), referencePins,
+                           "valid keys to pool accounts only: the bad key, the unknown account and the number are dropped")
+        }
+        XCTAssertEqual(st.snapshot.pins["sess-example-2/"]?.seen, t0, "stamped at the import, as Python load_pins")
+        XCTAssertEqual(secrets.count, 3)
+        for (label, tok) in zip(names, ["tok-example-c", "tok-example-a", "tok-example-b"]) {
+            XCTAssertEqual(try secrets.token(id: try XCTUnwrap(st.snapshot.accounts[label]?.id)), tok, label)
+        }
+        let file = try String(contentsOf: st.stateURL, encoding: .utf8)
+        XCTAssertTrue(file.contains("sess-example-2"), "the pins are in the file (JSONEncoder writes / as \\/)")
+        let texts = [file, "\(out)"] + CCPoolPaneModel.summary(out) + log.lines
+        for text in texts { XCTAssertFalse(text.contains("tok-example"), "token leaked into: \(text.prefix(300))") }
+
+        // The pool's own pin wins over the old file's on a second import.
+        st.mutate { _ = $0.pin("sess-example-2/", to: "Example Org A", now: t0) }
+        _ = try CCPoolMigration.run(vault: vault, store: st, secrets: secrets, choices: [:], now: t0)
+        XCTAssertEqual(st.snapshot.pins["sess-example-2/"]?.account, "Example Org A")
+    }
+
+    /// A truncated vault is refused whole: the pool, its file and the secrets store stay as they were. A truncated
+    /// state file: the accounts still come over, no bench and no pin from it, and the summary says so.
+    func testCCPoolReferenceFilesTruncatedLeaveThePoolAlone() throws {
+        let st = store()
+        let secrets = CCPoolMemorySecrets()
+        try st.addAccount(label: "Example Org A", token: "tok-example-old", secrets: secrets)
+        st.mutate { _ = $0.pin("sess-example-9/", to: "Example Org A", now: t0) }
+        let before = st.snapshot
+        let fileBefore = try Data(contentsOf: st.stateURL)
+        let good = try String(contentsOf: try referenceHome(), encoding: .utf8)
+        let cut = try referenceHome(vaultText: String(good.prefix(good.count / 2)))
+        XCTAssertThrowsError(try CCPoolMigration.run(vault: cut, store: st, secrets: secrets, choices: [:], now: t0)) {
+            XCTAssertEqual($0 as? CCPoolMigration.ReadError, .notJSON)
+            XCTAssertFalse("\($0)".contains("tok-"), "never quotes the file")
+        }
+        XCTAssertTrue(st.snapshot == before, "nothing changed in the pool")
+        XCTAssertEqual(try Data(contentsOf: st.stateURL), fileBefore)
+        XCTAssertEqual(secrets.count, 1)
+
+        let fresh = store()
+        let halfState = try referenceHome(stateText: #"{"current": "Example Org A", "pins": {"sess-example-1/": "Exam"#)
+        let out = try CCPoolMigration.run(vault: halfState, store: fresh, secrets: CCPoolMemorySecrets(), choices: [:], now: t0)
+        XCTAssertEqual(out.imported, ["Example Org C", "Example Org A", "Example Org B"])
+        XCTAssertEqual(CCPoolPaneModel.summary(out).last, CCPoolMigration.noteStateUnreadable, "what the person reads")
+        XCTAssertEqual(fresh.snapshot.pins.count, 0)
+        XCTAssertEqual(fresh.snapshot.accounts["Example Org B"]?.cooldown, [:])
+        XCTAssertTrue(fresh.snapshot.current == nil)
+    }
+
+    /// Files above the cap are refused, though both are valid JSON (padded with spaces): only cap + 1 bytes are read.
+    func testCCPoolReferenceFilesAboveTheCapAreRefused() throws {
+        let pad = { (text: String) -> Data in
+            let d = Data(text.utf8)
+            return d + Data(repeating: 0x20, count: CCPoolMigration.maxFileBytes + 1 - d.count)
+        }
+        let st = store()
+        let secrets = CCPoolMemorySecrets()
+        let vault = try referenceHome()
+        try pad(try String(contentsOf: vault, encoding: .utf8)).write(to: vault)
+        XCTAssertThrowsError(try CCPoolMigration.inspect(vault: vault, store: st)) {
+            XCTAssertEqual($0 as? CCPoolMigration.ReadError, .tooLarge)
+        }
+        XCTAssertThrowsError(try CCPoolMigration.run(vault: vault, store: st, secrets: secrets, choices: [:], now: t0)) {
+            XCTAssertEqual($0 as? CCPoolMigration.ReadError, .tooLarge)
+        }
+        XCTAssertEqual(st.snapshot.order, [])
+        XCTAssertEqual(secrets.count, 0)
+
+        let home = try referenceHome()
+        let state = CCPoolMigration.stateURL(vault: home)
+        try pad(try String(contentsOf: state, encoding: .utf8)).write(to: state)
+        let out = try CCPoolMigration.run(vault: home, store: st, secrets: secrets, choices: [:], now: t0)
+        XCTAssertEqual(out.imported.count, 3)
+        XCTAssertEqual(out.notes, [CCPoolMigration.noteStateUnreadable])
+        XCTAssertEqual(st.snapshot.pins.count, 0, "nothing carried from an oversized state file")
+        XCTAssertTrue(st.snapshot.current == nil)
+    }
 }

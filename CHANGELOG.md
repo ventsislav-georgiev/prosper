@@ -1243,6 +1243,9 @@ tag from the now-released section and put it on the new top draft.
   however its path is spelled.
 - bullet: "Check for Updates" now says when it could not check an extension (offline or Marketplace
   unreachable) instead of "All extensions up to date."
+- Account pool: importing from the Python ccpool now also keeps each session's account (its pins),
+  alongside the account order and the accounts resting until a limit resets; an import file larger
+  than 4 MiB is refused.
 
 ## v2.174.0
 

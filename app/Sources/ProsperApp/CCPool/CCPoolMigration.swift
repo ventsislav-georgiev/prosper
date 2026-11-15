@@ -3,7 +3,7 @@ import Foundation
 /// #871 spec 3.7: the one-time import from the Python ccpool. The vault (`{accounts: {label:
 /// {token}}}`) is read only on an explicit import call; each token goes into `CCPoolSecrets`, is
 /// read back and compared by byte length in memory, then listed in the store under its label.
-/// `cooldown`, `reset` and `current` are carried from the Python state file. Nothing here prints,
+/// `cooldown`, `reset`, `current` and `pins` (#1264) are carried from the Python state file. Nothing here prints,
 /// logs or returns a token: errors and outcomes name labels only, never quote the files.
 ///
 /// Isolation: none (an enum of static functions). Blocking file and Keychain I/O: call off main.
@@ -68,13 +68,14 @@ enum CCPoolMigration {
 
     /// Why nothing was imported. Never quotes the file.
     enum ReadError: Error, Equatable, CustomStringConvertible {
-        case unreadable, notJSON, noAccounts
+        case unreadable, notJSON, noAccounts, tooLarge
 
         var description: String {
             switch self {
             case .unreadable: return "ccpool import: the old vault could not be read; nothing imported"
             case .notJSON: return "ccpool import: the old vault is not valid JSON; nothing imported"
             case .noAccounts: return "ccpool import: the old vault has no accounts list; nothing imported"
+            case .tooLarge: return "ccpool import: the old vault is larger than 4 MiB; nothing imported"
             }
         }
     }
@@ -87,7 +88,20 @@ enum CCPoolMigration {
     static let reasonReadBack = "the stored token did not read back intact; not imported"
     static let reasonState = "the account list could not be saved; not imported"
     static let noteOrphan = "a Keychain item made for this import could not be deleted; it is listed nowhere"
-    static let noteStateUnreadable = "the old state file could not be read; cooldowns were not carried"
+    static let noteStateUnreadable = "the old state file could not be read; cooldowns and pins were not carried"
+
+    /// #1264: both files are outside data, read at most this far. A reference state of 512 pins is about 100 KiB
+    /// and a vault of a few accounts a few KiB: 4 MiB is far above any real file and still cheap to hold.
+    static let maxFileBytes = 4 << 20
+
+    /// nil when unreadable; `tooLarge` when above the cap (only cap + 1 bytes are ever read).
+    static func readCapped(_ url: URL) -> (data: Data?, tooLarge: Bool) {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return (nil, false) }
+        defer { try? h.close() }
+        let d: Data
+        do { d = try h.read(upToCount: maxFileBytes + 1) ?? Data() } catch { return (nil, false) }
+        return d.count > maxFileBytes ? (nil, true) : (d, false)
+    }
 
     // MARK: Read
 
@@ -99,7 +113,9 @@ enum CCPoolMigration {
 
     /// Labels and tokens in vault order (the Python pick order breaks ties by it).
     private static func readVault(_ url: URL) throws -> [(label: String, token: String?)] {
-        guard let data = try? Data(contentsOf: url) else { throw ReadError.unreadable }
+        let read = readCapped(url)
+        if read.tooLarge { throw ReadError.tooLarge }
+        guard let data = read.data else { throw ReadError.unreadable }
         // OrderedJSON keeps the key order; its errors carry a line number and a reason, no content.
         guard let doc = try? OrderedJSON(bytes: Array(data)) else { throw ReadError.notJSON }
         guard case .object(let accounts)? = doc.node(at: ["accounts"])?.value else { throw ReadError.noAccounts }
@@ -113,11 +129,13 @@ enum CCPoolMigration {
     struct Carried {
         var current: String?
         var accounts: [String: (cooldown: [String: Int], reset: [String: Int])]
+        /// Conversation key -> label (Python "pins"); valid keys only, at most CCPoolState.pinCap.
+        var pins: [String: String] = [:]
     }
 
     /// The Python state, or nil when there is none or it does not decode.
     static func readState(_ url: URL) -> Carried? {
-        guard let data = try? Data(contentsOf: url),
+        guard let data = readCapped(url).data,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         func epochs(_ any: Any?) -> [String: Int] {
             ((any as? [String: Any]) ?? [:]).compactMapValues { v in
@@ -129,6 +147,9 @@ enum CCPoolMigration {
         for (label, rec) in (obj["accounts"] as? [String: Any]) ?? [:] {
             let r = rec as? [String: Any]
             out.accounts[label] = (epochs(r?["cooldown"]), epochs(r?["reset"]))
+        }
+        for (key, account) in (obj["pins"] as? [String: Any]) ?? [:] where out.pins.count < CCPoolState.pinCap {
+            if let account = account as? String, CCPoolState.validPinKey(key) { out.pins[key] = account }
         }
         return out
     }
@@ -254,9 +275,13 @@ enum CCPoolMigration {
             }
         }
         // `current` carries when the pool has none of its own yet.
-        if let cur = carried?.current {
+        if let carried {
             store.mutate { st in
-                if st.accounts[cur] != nil, st.current.map({ st.accounts[$0] == nil }) ?? true { st.current = cur }
+                if let cur = carried.current, st.accounts[cur] != nil, st.current.map({ st.accounts[$0] == nil }) ?? true {
+                    st.current = cur
+                }
+                // Python load_pins: each pin to an account now in the pool, stamped now; the pool's own pin wins.
+                for (key, account) in carried.pins where st.pins[key] == nil { st.pin(key, to: account, now: now) }
             }
         }
         return out
