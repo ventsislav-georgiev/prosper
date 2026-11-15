@@ -507,10 +507,12 @@ final class CCPoolConnection: @unchecked Sendable {
             log.note(label, "out on \(claims); request body above the replay cap, passing the 429 through")
         } else {
             // #1263: a reply after throttles (retries, plus the move that the last 429 caused): a count and fixed words.
+            // #1263 (R1263-q1): the status is the reply's own Int; a non-2xx reply is "answered", never "served".
             if throttleRetries > 0 || movedFrom != nil {
-                let moved = movedFrom != nil
-                log.note(label, "served after \(throttleRetries + (moved ? 1 : 0)) throttled attempt(s); attempt=\(attempts); "
-                    + "retry=\(throttleRetries); outcome=\(moved ? "moved-served" : "served")")
+                let moved = movedFrom != nil, code = response.statusCode
+                let word = !(200...299).contains(code) ? "answered" : moved ? "moved-served" : "served"
+                log.note(label, "served after \(throttleRetries + (moved ? 1 : 0)) throttled attempt(s); status=\(code); "
+                    + "attempt=\(attempts); retry=\(throttleRetries); outcome=\(word)")
             }
             // Retire before streaming: the body can take a minute to drain (B15).
             let spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
@@ -577,6 +579,8 @@ final class CCPoolConnection: @unchecked Sendable {
             }
             log.note(ex.label, "upstream unreachable (\(code.map { "\($0.rawValue)" } ?? "error")\(reused ? ", pooled" : ""))")
             exchange = nil
+            // #1263 (R1262-a): the destination of the one move never answered: the conversation goes back where its cache is.
+            if let first = movedFrom { pinBack(first, answer: nil) }
             fail(502, "upstream unreachable", type: "api_error")
         case .snippet:
             finishSnippet(ex)
@@ -610,16 +614,26 @@ final class CCPoolConnection: @unchecked Sendable {
         guard ex === exchange else { return }
         exchange = nil
         ex.task?.cancel()
-        // #1263: what this 429 leads to, decided here from the same conditions as the branches below.
-        let retries = replayable && !quotaCheck && throttleRetries < CCPoolCore.throttleBackoff.count && attempts < maxAttempts
-        let moves = movedFrom == nil && replayable && !quotaCheck && attempts < maxAttempts && head.flatMap(Self.pinKey) != nil
-        let outcome = retries ? "retry" : movedFrom != nil ? "pinned-back" : moves ? "move" : "returned"
-        log.note(ex.label, ex.pendingNote + shape + "; resp-headers=" + ex.responseHeaders
-                 + "; attempt=\(attempts); retry=\(throttleRetries); outcome=\(outcome); " + ex.pendingReason,
-                 private: ex.pendingPrivate + "; body=" + String(decoding: ex.snippet.prefix(Self.snippetCap), as: UTF8.self))
+        // #1263 (R1263-a): what this 429 leads to is decided ONCE; its word is logged and the switch below acts on it.
+        // Each later `if` overrides the earlier ones: retry beats pinned-back beats move beats returned.
+        var next = ThrottleNext.returned
+        // #1262: after the same-account retries, ONE move (Python relay() 486-496). No usable key, a quota check or a
+        // body that cannot be sent again never moves.
+        if replayable, !quotaCheck, attempts < maxAttempts, head.flatMap(Self.pinKey) != nil {
+            next = .move
+        }
+        // #1262: refused at the destination too (Python relay() 497-502): back where the cache is, never a second move.
+        if movedFrom != nil { next = .pinnedBack }
         // #1256: a throughput 429 is retried on the SAME account, up to 3 times, unless the body is the
         // client's quota check or could not be sent again (above the replay cap). Python relay() 478-485.
         if replayable, !quotaCheck, throttleRetries < CCPoolCore.throttleBackoff.count, attempts < maxAttempts {
+            next = .retry
+        }
+        log.note(ex.label, ex.pendingNote + shape + "; resp-headers=" + ex.responseHeaders
+                 + "; attempt=\(attempts); retry=\(throttleRetries); outcome=\(next.rawValue); " + ex.pendingReason,
+                 private: ex.pendingPrivate + "; body=" + String(decoding: ex.snippet.prefix(Self.snippetCap), as: UTF8.self))
+        switch next {
+        case .retry:
             let delay = CCPoolCore.throttleDelay(retryAfter: ex.retryAfter, retry: throttleRetries)
             throttleRetries += 1
             attempts += 1
@@ -631,30 +645,32 @@ final class CCPoolConnection: @unchecked Sendable {
                 guard let self, !self.closed else { return }
                 self.send(label: label, accountID: id, retried: false)
             }
-            return
-        }
-        // #1262: refused at the destination too (Python relay() 497-502): back where the cache is, one 429, no retry.
-        if let first = movedFrom { return pinBack(first, answer: ex) }
-        // #1262: after the same-account retries, ONE move (Python relay() 486-496): route() with every tried account
-        // excluded places and pins the conversation (#1261); one send there. No usable key, a quota check or a body
-        // that cannot be sent again never moves.
-        if replayable, !quotaCheck, attempts < maxAttempts, head.flatMap(Self.pinKey) != nil {
+        case .pinnedBack:
+            // One 429, no retry. `movedFrom` is set whenever `next` is pinnedBack.
+            pinBack(movedFrom ?? ex, answer: ex)
+        case .move:
+            // route() with every tried account excluded places and pins the conversation (#1261); one send there.
             movedFrom = ex
             log.note(ex.label, "throttled after \(throttleRetries) same-account retries; moving the conversation once")
-            return attempt(moving: ex)
+            attempt(moving: ex)
+        case .returned:
+            answerThrottle(ex)
         }
-        answerThrottle(ex)
     }
 
+    /// #1263: what a throughput 429 leads to; the raw value is the logged outcome word.
+    private enum ThrottleNext: String { case retry, pinnedBack = "pinned-back", move, returned }
+
     /// #1262: the move did not help: the conversation's pin goes back to the first account (one write, a fresh
-    /// stamp; no write when it is already there) and ONE 429 goes out, `answer`'s Retry-After.
-    private func pinBack(_ first: CCPoolExchange, answer: CCPoolExchange) {
+    /// stamp; no write when it is already there) and ONE 429 goes out, `answer`'s Retry-After. #1263 (R1262-a):
+    /// `answer` nil = the pool answers itself (its 502 after a transport failure at the destination).
+    private func pinBack(_ first: CCPoolExchange, answer: CCPoolExchange?) {
         if let key = head.flatMap(Self.pinKey) {
             let now = store.now, id = first.accountID
             store.mutate { st in if let owner = st.label(ofID: id) { st.pin(key, to: owner, now: now) } }
         }
         log.note(first.label, "conversation pinned back after its one move")
-        answerThrottle(answer)
+        if let answer { answerThrottle(answer) }
     }
 
     private func answerThrottle(_ ex: CCPoolExchange) {

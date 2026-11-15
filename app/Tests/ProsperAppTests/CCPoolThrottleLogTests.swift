@@ -23,7 +23,8 @@ final class SplitLog: CCPoolLogger, @unchecked Sendable {
     var served: [Line] { lines.filter { $0.pub.hasPrefix("served after ") } }
 }
 
-/// The stub upstream: tok-a answers its first call 200, then `throttles` throttles carrying `extra` headers; tok-b 200.
+/// The stub upstream: tok-a answers its first call 200, then `throttles` throttles carrying `extra` headers, then `after`;
+/// tok-b 200.
 final class ShapeUpstream: @unchecked Sendable {
     private let lock = NSLock()
     private var aCalls = 0
@@ -31,9 +32,10 @@ final class ShapeUpstream: @unchecked Sendable {
     private let throttles: Int
     private let bThrottles: Int
     private let extra: [(String, String)]
+    private let after: Int
     static let busy = "SNIPPET-BUSY-TEXT"
-    init(throttles: Int, bThrottles: Int = 0, extra: [(String, String)]) {
-        self.throttles = throttles; self.bThrottles = bThrottles; self.extra = extra
+    init(throttles: Int, bThrottles: Int = 0, extra: [(String, String)], after: Int = 200) {
+        self.throttles = throttles; self.bThrottles = bThrottles; self.extra = extra; self.after = after
     }
     func reply(_ head: CCPoolRequestHead, _ body: Data) -> CCPoolFakeServer.Reply {
         let token = String((head.header("authorization") ?? "").dropFirst("Bearer ".count))
@@ -42,6 +44,7 @@ final class ShapeUpstream: @unchecked Sendable {
         if (token == "tok-a" && n >= 2 && n <= 1 + throttles) || (token == "tok-b" && m <= bThrottles) {
             return .respond(429, [("content-type", "application/json")] + extra, Data(Self.busy.utf8))
         }
+        if token == "tok-a", n == 2 + throttles, after != 200 { return .respond(after, [("content-type", "application/json")], Data(#"{"type":"error"}"#.utf8)) }
         return .respond(200, [("content-type", "application/json")], Data(#"{"type":"message","content":[]}"#.utf8))
     }
 }
@@ -64,13 +67,13 @@ final class CCPoolThrottleLogTests: XCTestCase {
         }
     }
 
-    private func rig(throttles: Int, bThrottles: Int = 0, extra: [(String, String)] = []) throws -> Rig {
+    private func rig(throttles: Int, bThrottles: Int = 0, extra: [(String, String)] = [], after: Int = 200) throws -> Rig {
         // The delay recorder first: no row waits.
         let rec = ThrottleWaitRecorder()
         let saved = CCPoolConnection.throttleWait
         CCPoolConnection.throttleWait = { s, q, go in rec.wait(s, q, go) }
         addTeardownBlock { CCPoolConnection.throttleWait = saved }
-        let up = ShapeUpstream(throttles: throttles, bThrottles: bThrottles, extra: extra)
+        let up = ShapeUpstream(throttles: throttles, bThrottles: bThrottles, extra: extra, after: after)
         let server = try CCPoolFakeServer { h, b in up.reply(h, b) }
         XCTAssertNotEqual(server.port, 0)
         let log = SplitLog()
@@ -108,7 +111,7 @@ final class CCPoolThrottleLogTests: XCTestCase {
         let priv = "; model=claude-opus-5; body=" + ShapeUpstream.busy
         XCTAssertEqual(r.log.throttles.map(\.priv), Array(repeating: priv, count: 4))
         XCTAssertEqual(r.log.served.map(\.pub),
-                       ["served after 4 throttled attempt(s); attempt=5; retry=3; outcome=moved-served"])
+                       ["served after 4 throttled attempt(s); status=200; attempt=5; retry=3; outcome=moved-served"])
         XCTAssertEqual(r.log.served.map(\.label), [orgB])
         // The public part never holds the model, the snippet or a header value.
         for l in r.log.lines {
@@ -124,7 +127,7 @@ final class CCPoolThrottleLogTests: XCTestCase {
         let a = try rig(throttles: 2)
         XCTAssertEqual(a.post(Self.work, sid: sid)?.status, 200)
         XCTAssertEqual(a.post(Self.work, sid: sid)?.status, 200)
-        XCTAssertEqual(a.log.served.map(\.pub), ["served after 2 throttled attempt(s); attempt=3; retry=2; outcome=served"])
+        XCTAssertEqual(a.log.served.map(\.pub), ["served after 2 throttled attempt(s); status=200; attempt=3; retry=2; outcome=served"])
         let b = try rig(throttles: 4, bThrottles: 1)
         XCTAssertEqual(b.post(Self.work, sid: sid)?.status, 200)
         XCTAssertEqual(b.post(Self.work, sid: sid)?.status, 429)
@@ -231,5 +234,16 @@ final class CCPoolThrottleLogTests: XCTestCase {
         }
         XCTAssertFalse(r.log.throttles.isEmpty)
         XCTAssertTrue(r.log.throttles.allSatisfy { !$0.pub.contains(orgA) && !$0.pub.contains(orgB) }, "the label is its own argument")
+    }
+
+    // R1263-q1 (QA r1151): three throttles then a 500 on the same account: the note says the status and "answered",
+    // never "served"; the 500 goes to the client as it came.
+    func testThreeThrottlesThenA500IsAnswered() throws {
+        let r = try rig(throttles: 3, after: 500)
+        XCTAssertEqual(r.post(Self.work, sid: nil)?.status, 200)
+        XCTAssertEqual(r.post(Self.work, sid: nil)?.status, 500)
+        XCTAssertEqual(r.rec.waits.count, 3)
+        XCTAssertEqual(r.log.served.map(\.pub), ["served after 3 throttled attempt(s); status=500; attempt=4; retry=3; outcome=answered"])
+        XCTAssertEqual(r.log.served.map(\.priv), [""], "nothing private either")
     }
 }

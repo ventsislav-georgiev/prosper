@@ -28,13 +28,21 @@ final class CCPoolThrottleMoveTests: XCTestCase {
         func calls(from: Int) -> [String: Int] { up.tokens.dropFirst(from).reduce(into: [:]) { $0[$1, default: 0] += 1 } }
     }
 
-    private func rig(_ count: Int = 2, replayCap: Int = 32 << 20) throws -> Rig {
+    /// `dropping`: that token's requests are read and the connection closed unanswered; every other reply then says
+    /// "Connection: close", so no request rides a pooled connection and none is resent (one call, literal).
+    private func rig(_ count: Int = 2, replayCap: Int = 32 << 20, dropping: String? = nil) throws -> Rig {
         let rec = ThrottleWaitRecorder()
         let saved = CCPoolConnection.throttleWait
         CCPoolConnection.throttleWait = { s, q, go in rec.wait(s, q, go) }
         addTeardownBlock { CCPoolConnection.throttleWait = saved }
         let up = PinUpstream()
-        let server = try CCPoolFakeServer { h, b in up.reply(h, b) }
+        let server = try CCPoolFakeServer { h, b in
+            let reply = up.reply(h, b)
+            guard let dropping else { return reply }
+            if h.header("authorization") == "Bearer \(dropping)" { return .drop }
+            guard case .respond(let status, let headers, let body) = reply else { return reply }
+            return .respond(status, headers + [("Connection", "close")], body)
+        }
         XCTAssertNotEqual(server.port, 0)
         let seams = PinSeams(now: Date().timeIntervalSince1970)
         let log = ThrottleLog()
@@ -182,5 +190,26 @@ final class CCPoolThrottleMoveTests: XCTestCase {
         XCTAssertEqual(resp.header("retry-after"), "6")
         XCTAssertEqual(r.calls(from: n), ["tok-a": 4])
         XCTAssertEqual(r.pins, [key: orgA])
+    }
+
+    // R1262-a: after the one move the destination closes the connection unanswered (a transport failure): the pool's
+    // own 502 goes out and the conversation is pinned back on A first (one write), no second move, no retry.
+    func testTransportFailureAtTheDestinationPinsBack() throws {
+        let r = try rig(3, dropping: "tok-b")
+        pinnedOnA(r)
+        r.up.set("tok-a", fourThrottles)
+        let n = r.up.tokens.count, w = r.seams.writes
+        let resp = try XCTUnwrap(r.post(sid))
+        XCTAssertEqual(resp.status, 502, resp.text)
+        XCTAssertTrue(resp.text.contains("upstream unreachable"), resp.text)
+        XCTAssertEqual(r.calls(from: n), ["tok-a": 4, "tok-b": 1], "no third account, no resend")
+        XCTAssertEqual(r.pins, [key: orgA])
+        XCTAssertEqual(r.seams.writes, w + 2, "the move, then the pin back")
+        XCTAssertEqual(r.rec.waits, [1, 2, 4], "no wait at the destination")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("pinned back") }, ["Example Org A: conversation pinned back after its one move"])
+        // The next turn goes where the cache is.
+        let m = r.up.tokens.count
+        XCTAssertEqual(r.post(sid)?.status, 200)
+        XCTAssertEqual(r.calls(from: m), ["tok-a": 1])
     }
 }

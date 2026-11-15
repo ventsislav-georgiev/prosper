@@ -1249,6 +1249,11 @@ tag from the now-released section and put it on the new top draft.
 - Extensions: after host.fs.unwatch returns, a file-watch handler no longer runs even when its event
   was already on its way, and unwatching a path through a symlink that was retargeted since the
   watch now stops the watch instead of leaving it running.
+- Account pool: when a moved conversation's new account fails to answer at all, the conversation
+  goes back to the account it came from (where its cache is); the log line after throttled attempts
+  now shows the reply's status and says "answered" instead of "served" for an error reply; importing
+  from the Python ccpool no longer pushes out the pool's own conversation pins when the pin list is
+  full.
 
 ## v2.174.0
 

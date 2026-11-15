@@ -133,8 +133,9 @@ enum CCPoolMigration {
         var pins: [String: String] = [:]
     }
 
-    /// The Python state, or nil when there is none or it does not decode.
-    static func readState(_ url: URL) -> Carried? {
+    /// The Python state, or nil when there is none or it does not decode. #1264 (R1264-q1): only pins to an account in
+    /// `known` are kept, filtered BEFORE the cap, so pins of unknown accounts never crowd out good ones.
+    static func readState(_ url: URL, known: Set<String>) -> Carried? {
         guard let data = readCapped(url).data,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         func epochs(_ any: Any?) -> [String: Int] {
@@ -149,7 +150,7 @@ enum CCPoolMigration {
             out.accounts[label] = (epochs(r?["cooldown"]), epochs(r?["reset"]))
         }
         for (key, account) in (obj["pins"] as? [String: Any]) ?? [:] where out.pins.count < CCPoolState.pinCap {
-            if let account = account as? String, CCPoolState.validPinKey(key) { out.pins[key] = account }
+            if let account = account as? String, known.contains(account), CCPoolState.validPinKey(key) { out.pins[key] = account }
         }
         return out
     }
@@ -183,7 +184,8 @@ enum CCPoolMigration {
                     choices: [String: Choice], now: Double) throws -> Outcome {
         let entries = try readVault(vault)
         let stateURL = stateURL(vault: vault)
-        let carried = readState(stateURL)
+        // The vault's labels and the pool's own: the only accounts an imported pin can point at.
+        let carried = readState(stateURL, known: Set(entries.map(\.label)).union(store.read { $0.accounts.keys }))
         var out = Outcome()
         out.vaultLink = try? FileManager.default.destinationOfSymbolicLink(atPath: vault.path)
         if carried == nil, FileManager.default.fileExists(atPath: stateURL.path) { out.notes.append(noteStateUnreadable) }
@@ -281,7 +283,11 @@ enum CCPoolMigration {
                     st.current = cur
                 }
                 // Python load_pins: each pin to an account now in the pool, stamped now; the pool's own pin wins.
-                for (key, account) in carried.pins where st.pins[key] == nil { st.pin(key, to: account, now: now) }
+                // #1264 (R1264-q1): an import is stamped newer than every own pin, so it only fills free room: capPins
+                // evicts the oldest and would drop the pool's live pins for a dead process's.
+                for (key, account) in carried.pins where st.pins[key] == nil && st.pins.count < CCPoolState.pinCap {
+                    st.pin(key, to: account, now: now)
+                }
             }
         }
         return out

@@ -517,4 +517,21 @@ final class CCPoolMigrationTests: XCTestCase {
         XCTAssertEqual(st.snapshot.pins.count, 0, "nothing carried from an oversized state file")
         XCTAssertTrue(st.snapshot.current == nil)
     }
+
+    /// R1264-q1 (QA r1158): a pool already holding pinCap pins of its own imports none of the old file's 3 pins: an import
+    /// is stamped newer than every own pin, and the cap evicts the oldest, so it would push out the pool's live pins.
+    func testCCPoolImportNeverEvictsOwnPins() throws {
+        let st = store()
+        let secrets = CCPoolMemorySecrets()
+        try st.addAccount(label: "Example Org A", token: "tok-example-own", secrets: secrets)
+        st.mutate { s in for i in 0..<CCPoolState.pinCap { _ = s.pin("own-example-\(i)/", to: "Example Org A", now: t0 - 10) } }
+        XCTAssertEqual(st.snapshot.pins.count, CCPoolState.pinCap)
+        let out = try CCPoolMigration.run(vault: try referenceHome(), store: st, secrets: secrets, choices: [:], now: t0)
+        XCTAssertEqual(out.imported, ["Example Org C", "Example Org B"])
+        let pins = st.snapshot.pins
+        XCTAssertEqual(pins.count, 512)
+        XCTAssertEqual(pins["own-example-0/"]?.account, "Example Org A", "the oldest own pin is still there")
+        XCTAssertEqual(pins.keys.filter { $0.hasPrefix("own-example-") }.count, 512)
+        XCTAssertTrue(referencePins.keys.allSatisfy { pins[$0] == nil }, "no imported pin")
+    }
 }
