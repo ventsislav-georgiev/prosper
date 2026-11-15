@@ -416,7 +416,8 @@ final class AgentsNSWindow: NSWindow {
         let c = PaneKeys.Context(responder: responder, keyFocus: m.keyFocus, panes: m.layout.panes.count,
                                  splitsEnabled: AgentPaneLayout.splitsEnabled)
         switch PaneKeys.action(for: event, context: c) {
-        case .layout(let n)?: m.switchLayout(number: n)
+        case .layout(let n)?: m.switchLayout(number: n)   // a held digit repeats onto the active layout: a no-op
+        case .previousLayout? where event.isARepeat: break   // R901-s3-a: a held ⌃Tab is consumed, nothing flips or writes
         case .previousLayout?: m.previousLayout()
         default: return false
         }
@@ -530,6 +531,8 @@ struct AgentSidebarView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: sz(2)) {
+                            // #901 B3 step 4a (8.1): the first section; nil (gate off, one layout of one pane): no view.
+                            if let rows = model.layoutRows { AgentLayoutsSection(model: model, rows: rows) }
                             ForEach(model.sections) { section in
                                 // #828: Sessions, Sidekicks and History fold on a header click
                                 // (remembered per Mac); a folded section keeps its selection.
@@ -609,6 +612,74 @@ struct AgentSidebarTitleRow: View {
     /// #1103 F2: the content starts under the titlebar (no .fullSizeContentView), so the row's centre sits on the
     /// session header's title line: 14 + 18 / 2 = AgentSessionHeader's 10 + 26 / 2.
     static var padTop: CGFloat { sz(14) }
+}
+
+/// #901 B3 step 4a (8.1 :625-631): the Layouts section, built only from `model.layoutRows` (gate on and the show rule).
+/// Header: the section label and count, then "+" (New layout); at 9 layouts the "+" is disabled and the fixed words
+/// "(9 layouts max)" show. Rows: "⌃N", the name (one line, middle-truncated), the fixed empty attention slot (step 5);
+/// the active row in accent text. Height: the header plus one fixed-height row per layout (text height at the scale +
+/// sz paddings); the "⌃N" label and the words are fixedSize, never an sz frame on text. Not in `sections`, so out of the
+/// up/down walk and the ⌘1…9 jump. Folding and the context menu are step 4b. Closures run on the main actor (Buttons).
+struct AgentLayoutsSection: View {
+    @ObservedObject var model: AgentWindowModel
+    let rows: [AgentWindowModel.LayoutRow]
+    static let title = "Layouts"
+    /// The attention slot's fixed width (section 10, step 5 fills it).
+    static var attentionWidth: CGFloat { sz(14) }
+
+    /// A row's click: the keys' own model call; the active row and a refusal are no-ops (nothing written, no beep).
+    @MainActor static func click(_ m: AgentWindowModel, _ r: AgentWindowModel.LayoutRow) { m.switchLayout(number: r.number) }
+    /// The header "+": New layout; at the cap the model refuses (.layoutCap) and the button is disabled anyway.
+    @MainActor static func plus(_ m: AgentWindowModel) { m.newLayout() }
+    static func full(_ rows: [AgentWindowModel.LayoutRow]) -> Bool { rows.count >= PaneLayoutStore.maxLayouts }
+
+    var body: some View {
+        let full = Self.full(rows)
+        AgentSectionHeader(title: Self.title, count: rows.count)
+            .overlay(alignment: .trailing) {
+                HStack(spacing: sz(4)) {
+                    if full {
+                        Text(PaneRefusal.layoutCap.menuSuffix ?? "").font(Neon.font(9.5)).foregroundStyle(Neon.textSecondary)
+                            .lineLimit(1).fixedSize()
+                    }
+                    Button { Self.plus(model) } label: {
+                        Image(systemName: "plus").font(Neon.font(9.5, weight: .bold)).frame(width: sz(14), height: sz(14))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Neon.textSecondary)
+                    .disabled(full)
+                    .help("New layout")
+                    .accessibilityLabel("New layout")
+                }
+                .padding(.horizontal, sz(8)).padding(.top, sz(12)).padding(.bottom, sz(4))
+            }
+        ForEach(rows) { r in
+            Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r) }
+                .buttonStyle(.plain)
+                .accessibilityLabel(r.name)
+                .accessibilityAddTraits(r.active ? .isSelected : [])
+        }
+    }
+}
+
+/// #901 B3 step 4a: one Layouts row ("⌃N  name" and the attention slot).
+struct AgentLayoutRowView: View {
+    let row: AgentWindowModel.LayoutRow
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
+            Text("⌃\(row.number)").font(Neon.font(10.5, weight: .medium).monospacedDigit())
+                .foregroundStyle(Neon.textSecondary).fixedSize()
+            Text(row.name).font(Neon.font(12.5, weight: .medium))
+                .foregroundStyle(row.active ? Neon.blue : Neon.textPrimary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 0)
+            Color.clear.frame(width: AgentLayoutsSection.attentionWidth, height: 1)   // step 5's attention slot, empty
+        }
+        .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
 }
 
 struct AgentSectionHeader: View {

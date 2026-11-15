@@ -838,6 +838,40 @@ final class AgentWindowModel: ObservableObject {
         return switchLayout(s.layouts[n - 1].id)
     }
 
+    /// #901 B3 step 4a (8.1): one row of the sidebar's Layouts section. `name` is as drawn: the set name, else the
+    /// automatic name of its panes' titles, through OutsideText.shown (outside data: never an id or a format string).
+    struct LayoutRow: Identifiable, Equatable {
+        let id: UUID
+        /// 1...9, the stored order (the ⌃N key).
+        let number: Int
+        let name: String
+        let active: Bool
+    }
+
+    /// #901 B3 step 4a (8.1 :625-627): the Layouts section's rows in the stored order; nil: the section is not built.
+    /// Gate off: nil before anything is read (nothing drawn, routed or read aloud). Shown when the active layout has two or
+    /// more panes or there are two or more layouts. A pure read of the state a user action changes (`layout`, `layouts`,
+    /// `sections` for the titles): a refresh that changes none of them gives the same rows.
+    var layoutRows: [LayoutRow]? {
+        guard AgentPaneLayout.splitsEnabled, let s = layouts, layout.panes.count >= 2 || s.layouts.count >= 2 else { return nil }
+        return s.layouts.prefix(PaneLayoutStore.maxLayouts).enumerated().map { i, stored in
+            let l = stored.id == layout.id ? layout : stored   // the active one as it is now (island off too)
+            let name = l.name ?? PaneLayoutStore.automaticName(l.panes.map { layoutTitle($0.target) })
+            return LayoutRow(id: l.id, number: i + 1, name: OutsideText.shown(name), active: l.id == layout.id)
+        }
+    }
+
+    /// A pane's title for an automatic layout name: the sidebar row's title; a gone target the pane's own word for it
+    /// (AgentPaneArea.title: its name); no target "Empty".
+    private func layoutTitle(_ t: PaneTarget?) -> String {
+        switch t {
+        case let .session(d, n)?: row(.live(AgentSessionKey(dir: d, name: n)))?.title ?? n
+        case let .history(d, id, _)?: row(.history(AgentSessionKey(dir: d, name: id)))?.title ?? id
+        case let .remote(_, n)?: n
+        case nil: "Empty"
+        }
+    }
+
     /// 8.1 ⌃Tab: the MRU pair, the layout active before this one. One layout: a no-op (.noSuchLayout), nothing written.
     @discardableResult
     func previousLayout() -> PaneRefusal? {

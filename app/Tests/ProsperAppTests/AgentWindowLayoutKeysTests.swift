@@ -209,4 +209,99 @@ extension AgentWindowD1Tests {
         let plain = String(repeating: "ab", count: 32)
         XCTAssertEqual(PaneLayoutStore.cleanName(plain), plain)
     }
+
+    // MARK: #901 B3 step 4a riders on the keys
+
+    @MainActor
+    private func repeatKey(_ code: UInt16, _ chars: String) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control], timestamp: 0, windowNumber: 0, context: nil,
+                         characters: chars, charactersIgnoringModifiers: chars, isARepeat: true, keyCode: code)!
+    }
+
+    /// R901-s3-a: a HELD ⌃Tab repeats; each repeat is consumed and does nothing (no flip, no write), as the route does
+    /// for a held ⌘N. A held ⌃digit repeats onto the layout its first press made active: a no-op, no write.
+    @MainActor
+    func testAgentWindowLayoutKeysRepeatIsConsumedAndDoesNothing() throws {
+        gate(true)
+        let a = paneLayout([paneTarget("a")]), b = paneLayout([paneTarget("b")])
+        let (d, _) = try keysSuite([a, b], active: a.id)
+        let m = windowModel(store([session("a", .idle), session("b", .idle)]), layouts: d)
+        defer { m.close() }
+        m.setVisible(true)
+        XCTAssertTrue(AgentsNSWindow.layoutKey(layoutKeyEvent(48, [.control], "\t"), m, responder: .terminal), "a lone MRU")
+        XCTAssertTrue(AgentsNSWindow.layoutKey(layoutKeyEvent(19, [.control], "2"), m, responder: .terminal))
+        XCTAssertEqual(m.layout.id, b.id)
+        XCTAssertEqual(m.layoutWrites, 1)
+        for _ in 0..<3 {
+            XCTAssertTrue(AgentsNSWindow.layoutKey(repeatKey(19, "2"), m, responder: .terminal), "a held ⌃2: consumed")
+        }
+        XCTAssertEqual(m.layout.id, b.id)
+        XCTAssertEqual(m.layoutWrites, 1, "a held ⌃2 writes nothing")
+        XCTAssertTrue(AgentsNSWindow.layoutKey(layoutKeyEvent(48, [.control], "\t"), m, responder: .terminal))
+        XCTAssertEqual(m.layout.id, a.id, "the first ⌃Tab flips")
+        XCTAssertEqual(m.layoutWrites, 2)
+        for _ in 0..<3 {
+            XCTAssertTrue(AgentsNSWindow.layoutKey(repeatKey(48, "\t"), m, responder: .terminal), "a held ⌃Tab: consumed")
+        }
+        XCTAssertEqual(m.layout.id, a.id, "a repeat flips nothing")
+        XCTAssertEqual(m.layoutWrites, 2, "a repeat writes nothing")
+    }
+
+    /// R901-s3-b: the New session form keeps the layout keys (false: the key travels on to the form), nothing switched or
+    /// written. The rename field's half is left out: renameEdit is set only inside the rename verb's path
+    /// (AgentWindowModel.ask/rename), which a row may not run (report.txt item 1).
+    @MainActor
+    func testAgentWindowLayoutKeysStandDownForTheNewSessionForm() throws {
+        gate(true)
+        try withNewSessionPrefs {
+            Preferences.agentIslandNewSessionCommand = "claude"   // typed: the form asks the island nothing
+            let a = paneLayout([paneTarget("a")]), b = paneLayout([paneTarget("b")])
+            let (d, bytes) = try keysSuite([a, b], active: a.id)
+            let st = store([session("a", .idle), session("b", .idle)])
+            st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])   // a value: the form's gate, never run
+            let m = windowModel(st, layouts: d)
+            defer { m.close() }
+            m.home = "/Users/example"
+            m.spawnSession = { _, _, _, _ in XCTFail("no spawn"); return nil }   // main actor (the model calls it)
+            m.setVisible(true)
+            m.openNewSession()
+            XCTAssertTrue(m.newSession != nil, "the form is open")
+            for e in [layoutKeyEvent(19, [.control], "2"), layoutKeyEvent(48, [.control], "\t")] {
+                XCTAssertFalse(AgentsNSWindow.layoutKey(e, m, responder: .text), "\(e.keyCode): the form keeps it")
+            }
+            XCTAssertEqual(m.layout.id, a.id)
+            XCTAssertEqual(m.layoutWrites, 0)
+            XCTAssertEqual(d.data(forKey: "agentWindowLayouts"), bytes)
+        }
+    }
+
+    /// R901-s3-c: a built mouse-down (never posted) handed to layoutKey: false, nothing switched or written; nothing a
+    /// mouse event lacks is read from it (a key-only property would raise here).
+    @MainActor
+    func testAgentWindowLayoutKeysIgnoreAMouseEvent() throws {
+        gate(true)
+        let a = paneLayout([paneTarget("a")]), b = paneLayout([paneTarget("b")])
+        let (d, _) = try keysSuite([a, b], active: a.id)
+        let m = windowModel(store([session("a", .idle), session("b", .idle)]), layouts: d)
+        defer { m.close() }
+        m.setVisible(true)
+        for flags: NSEvent.ModifierFlags in [[], [.control]] {
+            let e = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                                                     windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            for r: AgentsNSWindow.ResponderKind in [.text, .terminal, .other] {
+                XCTAssertFalse(AgentsNSWindow.layoutKey(e, m, responder: r), "\(flags.rawValue) \(r)")
+            }
+        }
+        XCTAssertEqual(m.layout.id, a.id)
+        XCTAssertEqual(m.layoutWrites, 0)
+    }
+
+    /// R901-s3-q1: cleanName's SECOND pass. After the per-Character cut, 16 leading consonants re-join the next syllable
+    /// into a 17-scalar Character; the second pass stops the name there, so every Character keeps at most the cap.
+    func testAgentWindowLayoutKeysNameSecondCapHoldsAfterRejoin() {
+        let cap = ThemeVariant.labelCharScalarMax
+        let raw = String(repeating: "\u{1100}", count: 200) + "\u{1161}" + "\u{AC00}" + "x"
+        let out = PaneLayoutStore.cleanName(raw) ?? ""   // the stop may leave nothing: automatic, still bounded
+        XCTAssertTrue(out.allSatisfy { $0.unicodeScalars.count <= cap }, "every Character at most \(cap) scalars")
+    }
 }
