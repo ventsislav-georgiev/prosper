@@ -80,6 +80,18 @@ enum CCPoolUsage {
             // P2a: a 401/403 is a rejected token, said as such (spec 3.4), never a usage reading.
             if let status = answer?.status, status == 401 || status == 403 {
                 logger.note(named, "refresh: token rejected (\(status))")
+                // #1278: a 401 takes the account out of routing, by its id under the lock (the first stamp kept);
+                // a 403 (permission, not the token) stays the pane's display-only verdict and writes nothing.
+                let now = store.now
+                let marked = status != 401 ? nil : store.mutate { st -> String? in
+                    guard let owner = st.label(ofID: id), st.accounts[owner]?.refused == nil,
+                          now.isFinite, (0..<1e12).contains(now) else { return nil }
+                    st.accounts[owner]?.refused = Int(now)
+                    return owner
+                }
+                if let marked {
+                    logger.note(marked, "token rejected (401); not routed until a reply succeeds, Refresh, Release or a new token")
+                }
                 rows.append(Row(label: named, limits: nil, status: status))
                 continue
             }
@@ -91,11 +103,14 @@ enum CCPoolUsage {
             let now = store.now
             let spent = CCPoolCore.exhaustedClaims(p.limits, now: now, threshold: threshold)
             // Resolved again under the store's lock: the writes land on that account or nowhere.
-            let owned = store.mutate { st -> (owner: String, cooldown: [String: Int])? in
+            let owned = store.mutate { st -> (owner: String, cooldown: [String: Int], cleared: Bool)? in
                 guard let owner = st.label(ofID: id) else { return nil }
                 for (claim, until) in spent { st.bench(owner, claim: claim, until: until, now: now) }
                 st.recordResets(owner, limits: p.limits, now: now)
-                return (owner, st.accounts[owner]?.cooldown ?? [:])
+                // #1278: the token answered with its limits, so it works: back in routing.
+                let cleared = st.accounts[owner]?.refused != nil
+                if cleared { st.accounts[owner]?.refused = nil }
+                return (owner, st.accounts[owner]?.cooldown ?? [:], cleared)
             }
             guard let owned else {
                 logger.note(named, "refresh: account gone during the probe; nothing recorded")
@@ -103,6 +118,7 @@ enum CCPoolUsage {
             }
             // #1219 (R1205-1): the sample goes to the account by its id, resolved under the lock of the write.
             store.recordUsage(id: id, limits: p.limits)
+            if owned.cleared { logger.note(owned.owner, "token accepted again; back in routing") }
             let held = owned.cooldown.filter { Double($0.value) > now && spent[$0.key] == nil }
             logger.note(owned.owner, "refresh: status \(p.status); spent \(spent.keys.sorted()); held \(held.keys.sorted())")
             rows.append(Row(label: owned.owner, limits: p.limits, status: p.status, spent: spent, held: held))

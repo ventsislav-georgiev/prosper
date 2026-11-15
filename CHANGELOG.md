@@ -1266,6 +1266,11 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: switching the transcript's detail level no longer jumps to the end; you stay on
   the turn you were reading (macOS 15 and later). Once older lines were dropped to save memory, the
   transcript says older history is in the terminal instead of loading a page above the gap.
+- Settings > Account pool now says "token rejected since <day time>, not routed" for an account
+  whose token was refused (401) and is left out of routing; Refresh now takes such an account out of
+  routing on a 401 and puts it back when its token answers again (a 403 still only shows "token
+  rejected"); and when every other account is only rate limited, the pool answers with the reset
+  time instead of trying a rejected token.
 
 ## v2.174.0
 

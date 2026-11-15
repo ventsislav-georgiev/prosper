@@ -95,7 +95,7 @@ final class CCPoolPaneModelTests: XCTestCase {
             ("b", .ready, "ready"),
             ("c", .limited(until: t0 + 3600, claims: ["five_hour", "seven_day"]), "limited until Fri 09:00 (5h, week)"),
             ("d", .held(until: t0 + 18000), "held until Fri 13:00"),
-            ("e", .rejected, "token rejected"),
+            ("e", .refused(since: t0), "token rejected since Fri 08:00, not routed"),   // #1278: a Refresh 401 takes it out of routing
             ("f", .unverified, "not verified"),
             ("g", .rejected, "token rejected"),
         ]
@@ -424,7 +424,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         }
         try r.secrets.remove(id: try XCTUnwrap(r.store.snapshot.accounts["c"]?.id))
         await m.refreshUsage()?.value
-        XCTAssertEqual(row(m, "a")?.state, .rejected)
+        XCTAssertEqual(row(m, "a")?.state, .refused(since: t0))
         XCTAssertTrue(row(m, "b")?.usageText.hasPrefix("5h 50%") ?? false, row(m, "b")?.usageText ?? "")
         XCTAssertEqual(row(m, "c")?.state, .unverified)
 
@@ -534,7 +534,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertFalse(m.canRunImport, "the import waits for the Refresh")
         XCTAssertNil(m.runImport())
         await refresh?.value
-        XCTAssertEqual(row(m, "a")?.state, .rejected)
+        XCTAssertEqual(row(m, "a")?.state, .refused(since: t0))
         let run = m.runImport()
         XCTAssertNotNil(run)
         XCTAssertTrue(m.importRunning)
@@ -711,5 +711,141 @@ final class CCPoolPaneModelTests: XCTestCase {
             usleep(20_000)
         }
         return done()
+    }
+}
+
+/// Runs `move` once, on the first probe that carries `token` (#1278 rename-during-probe row).
+private final class PaneMoveOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func first() -> Bool { lock.withLock { defer { done = true }; return !done } }
+}
+
+// #1278 step C: Settings says a token is out of routing, and Refresh marks (401) or clears (an answer with limits) it,
+// by Keychain id under the store lock; a 403 stays the pane's display-only "token rejected". Fakes only; the stub
+// upstream on an ephemeral loopback port; the store in tempDir(); the pane's time zone is UTC (Fri 08:00 = t0).
+extension CCPoolPaneModelTests {
+    private var orgA: String { "Example Org A" }
+    private var orgB: String { "Example Org B" }
+    private var orgD: String { "Example Org D" }
+    private var markLine: String {
+        "Example Org A: token rejected (401); not routed until a reply succeeds, Refresh, Release or a new token"
+    }
+
+    private func addAB(_ r: CCPoolPaneRig) throws {
+        try r.store.addAccount(label: orgA, token: "tok-a", secrets: r.secrets)
+        try r.store.addAccount(label: orgB, token: "tok-b", secrets: r.secrets)
+        r.model.objectWillChange.send()
+    }
+
+    // C1: refused is first: before a hand hold, a limit and the pane's own "token rejected"; the time in the pane's zone.
+    func testC1RefusedTextComesFirst() throws {
+        let mon10 = t0 + 3 * 86400 + 2 * 3600   // Mon 10:00 UTC
+        var acct = CCPoolState.Account(id: "id-example-a", refused: mon10)
+        let utc = TimeZone(identifier: "UTC")!
+        let alone = CCPoolPaneModel.rowState(label: orgA, account: acct, current: orgA, now: Double(mon10),
+                                             rejected: [], unverified: [])
+        XCTAssertEqual(alone, .refused(since: mon10))
+        XCTAssertEqual(CCPoolPaneModel.stateText(alone, timeZone: utc), "token rejected since Mon 10:00, not routed")
+        acct.held = mon10 + 3600
+        acct.cooldown = [CCPoolCore.fiveHour: mon10 + 7200]
+        let all = CCPoolPaneModel.rowState(label: orgA, account: acct, current: nil, now: Double(mon10),
+                                           rejected: [orgA], unverified: [orgA])
+        XCTAssertEqual(all, .refused(since: mon10), "held, limited and the pane's verdict all lose to refused")
+        XCTAssertEqual(CCPoolPaneModel.stateText(all, timeZone: utc), "token rejected since Mon 10:00, not routed")
+    }
+
+    // C2: a Refresh 401 marks A (by id, under the lock) with the clock's epoch, logs once; a second 401 keeps the stamp.
+    func testC2Refresh401MarksTheAccount() async throws {
+        let r = try ccpoolPaneRig()
+        try addAB(r)
+        r.anthropic.set { $0.reject = ["tok-a": 401] }
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.store.snapshot.accounts[orgA]?.refused, t0)
+        XCTAssertTrue(r.store.snapshot.accounts[orgB]?.refused == nil)
+        XCTAssertEqual(row(r.model, orgA)?.state, .refused(since: t0))
+        XCTAssertEqual(row(r.model, orgA)?.stateText, "token rejected since Fri 08:00, not routed")
+        XCTAssertEqual(row(r.model, orgB)?.stateText, "ready")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") }, [markLine])
+        r.clock.advance(600)
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.store.snapshot.accounts[orgA]?.refused, t0, "the first stamp is kept")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") }, [markLine], "no second mark line")
+        for line in r.log.lines { XCTAssertFalse(line.contains("tok-"), "token in a log line: \(line)") }
+    }
+
+    // C3: a Refresh answered with rate-limit headers puts a refused A back in routing and says so.
+    func testC3RefreshWithAnAnswerClearsTheMark() async throws {
+        let r = try ccpoolPaneRig()
+        try addAB(r)
+        r.store.mutate { $0.accounts[orgA]?.refused = t0 - 60 }
+        XCTAssertEqual(row(r.model, orgA)?.stateText, "token rejected since Fri 07:59, not routed")
+        await r.model.refreshUsage()?.value
+        XCTAssertTrue(r.store.snapshot.accounts[orgA]?.refused == nil)
+        XCTAssertEqual(row(r.model, orgA)?.state, .ready)
+        XCTAssertEqual(row(r.model, orgA)?.stateText, "ready")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("back in routing") },
+                       ["Example Org A: token accepted again; back in routing"])
+    }
+
+    // C4: a Refresh 403 writes nothing to the store: an unmarked A stays routed with the pane's "token rejected", a
+    // marked A stays marked (a 403 neither sets nor clears).
+    func testC4Refresh403WritesNothing() async throws {
+        let r = try ccpoolPaneRig()
+        try addAB(r)
+        r.anthropic.set { $0.reject = ["tok-a": 403] }
+        let before = r.store.snapshot
+        await r.model.refreshUsage()?.value
+        XCTAssertTrue(r.store.snapshot.accounts[orgA]?.refused == nil)
+        XCTAssertEqual(r.store.snapshot.accounts[orgA], before.accounts[orgA], "nothing written to A")
+        XCTAssertEqual(row(r.model, orgA)?.state, .rejected)
+        XCTAssertEqual(row(r.model, orgA)?.stateText, "token rejected")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") }, [])
+        r.store.mutate { $0.accounts[orgA]?.refused = t0 - 60 }
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.store.snapshot.accounts[orgA]?.refused, t0 - 60, "a 403 does not clear either")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("back in routing") }, [])
+    }
+
+    // C5: a rename carries the mark (same token), a remove drops it, a new token under the same label starts clean.
+    func testC5RenameKeepsTheMarkRemoveDropsIt() async throws {
+        let r = try ccpoolPaneRig()
+        try addAB(r)
+        r.store.mutate { $0.accounts[orgA]?.refused = t0 }
+        try r.store.renameAccount(orgA, to: orgD)
+        XCTAssertEqual(r.store.snapshot.accounts[orgD]?.refused, t0)
+        XCTAssertEqual(row(r.model, orgD)?.stateText, "token rejected since Fri 08:00, not routed")
+        _ = try r.store.removeAccount(label: orgD, secrets: r.secrets)
+        XCTAssertTrue(r.store.snapshot.accounts[orgD] == nil)
+        try r.store.addAccount(label: orgD, token: "tok-d", secrets: r.secrets)
+        XCTAssertTrue(r.store.snapshot.accounts[orgD]?.refused == nil)
+        XCTAssertEqual(row(r.model, orgD)?.stateText, "ready")
+    }
+
+    // C6 (mutant refresh-by-label-not-id): A is renamed to D while its probe is in flight and a new A (tok-b) takes the
+    // label; the probe's 401 marks the account probed (D, by its Keychain id), never the new holder of the label.
+    func testC6Refresh401DuringARenameMarksTheAccountProbed() async throws {
+        let r = try ccpoolPaneRig()
+        try r.store.addAccount(label: orgA, token: "tok-a", secrets: r.secrets)
+        r.anthropic.set { $0.reject = ["tok-a": 401] }
+        let once = PaneMoveOnce()
+        let store = r.store, secrets = r.secrets, anthropic = r.anthropic, a = orgA, d = orgD
+        let up = try CCPoolFakeServer { h, b in
+            if h.header("authorization")?.contains("tok-a") == true, once.first() {
+                try? store.renameAccount(a, to: d)
+                _ = try? store.addAccount(label: a, token: "tok-b", secrets: secrets)
+            }
+            return anthropic.reply(h, b)
+        }
+        defer { up.stop() }
+        XCTAssertNotEqual(up.port, 0)
+        let report = await CCPoolUsage.refresh(store: store, secrets: secrets,
+                                               base: URL(string: "http://127.0.0.1:\(up.port)")!, logger: r.log)
+        XCTAssertFalse(once.first(), "the label moved while the probe was in flight")
+        XCTAssertEqual(report.rows.map(\.label), [orgD])
+        XCTAssertEqual(r.store.snapshot.accounts[orgD]?.refused, t0, "the account probed is marked")
+        XCTAssertTrue(r.store.snapshot.accounts[orgA]?.refused == nil, "the new holder of its label is not")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") },
+                       ["Example Org D: token rejected (401); not routed until a reply succeeds, Refresh, Release or a new token"])
     }
 }

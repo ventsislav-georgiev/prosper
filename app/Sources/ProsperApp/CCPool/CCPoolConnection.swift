@@ -390,11 +390,16 @@ final class CCPoolConnection: @unchecked Sendable {
         let picked: String?
         // #1278: a refused token is skipped (pins too). Nothing else left and not the move: a last resort routes once
         // more ignoring refusal only (cooldowns still count), so the result can only be a refused account.
+        // R1278b-a: only when no account outside the refused ones is left at all; one that is merely benched could
+        // serve later, so the client gets today's 429 with its reset time instead of a rejected token's 401.
+        func lastResort(_ st: CCPoolState) -> Bool {
+            last == nil && !st.accounts.contains { !tried.contains($0.key) && $0.value.refused == nil }
+        }
         var anyway = false
         if key == nil {
             picked = store.read { st -> String? in
                 if let n = CCPoolCore.pick(st, model: model, exclude: tried.union(st.refusedLabels), now: now) { return n }
-                guard last == nil else { return nil }
+                guard lastResort(st) else { return nil }
                 anyway = true
                 return CCPoolCore.pick(st, model: model, exclude: tried, now: now)
             }
@@ -404,7 +409,7 @@ final class CCPoolConnection: @unchecked Sendable {
             picked = store.mutate { st -> String? in
                 var (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model,
                                                        exclude: tried.union(st.refusedLabels), now: now)
-                if name == nil, last == nil {
+                if name == nil, lastResort(st) {
                     anyway = true
                     (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: tried, now: now)
                 }
@@ -416,7 +421,7 @@ final class CCPoolConnection: @unchecked Sendable {
             followedPin = followed || last != nil
         }
         guard let label = picked else { return last.map { pinBack($0, answer: $0) } ?? noAccounts() }
-        if anyway { log.note(label, "every routable account's token is rejected; trying it anyway") }
+        if anyway { log.note(label, "no other account is routable; trying a rejected token") }
         tried.insert(label)
         guard let id = store.read({ $0.accounts[label]?.id }) else { return last.map { pinBack($0, answer: $0) } ?? attempt() }
         send(label: label, accountID: id, retried: false)

@@ -77,12 +77,13 @@ final class CCPoolAuthRefusedTests: XCTestCase {
         XCTAssertEqual(r.refused(orgA), Int(r.seams.now), "a reply of another account clears nothing")
     }
 
-    // B2: a second 401 keeps the first stamp and writes nothing (A reached by the last resort, B benched).
+    // B2: a second 401 keeps the first stamp and writes nothing (A reached by the last resort, B refused too: since
+    // R1278b-a a merely benched B answers 429 instead of reaching the last resort).
     func testB2ASecond401WritesNothing() throws {
         let r = try rig()
         let stamp = Int(r.seams.now)
         r.refuse(orgA, at: stamp)
-        r.bench(orgB)
+        r.refuse(orgB, at: stamp)
         r.seams.now += 60
         r.up.set("tok-a", [.status(401)])
         let w = r.seams.writes
@@ -219,8 +220,8 @@ final class CCPoolAuthRefusedTests: XCTestCase {
         XCTAssertEqual(r.calls(from: 0), ["tok-a": 1])
         XCTAssertTrue(r.refused(orgA) == nil)
         XCTAssertEqual(r.refused(orgB), stamp)
-        XCTAssertEqual(r.log.lines.filter { $0.contains("trying it anyway") },
-                       ["Example Org A: every routable account's token is rejected; trying it anyway"])
+        XCTAssertEqual(r.log.lines.filter { $0.contains("trying a rejected token") },
+                       ["Example Org A: no other account is routable; trying a rejected token"])
     }
 
     // B9: all benched beats the last resort: today's 429, no upstream call.
@@ -251,6 +252,31 @@ final class CCPoolAuthRefusedTests: XCTestCase {
         XCTAssertEqual(r.pins, [key: orgA])
         XCTAssertEqual(r.seams.writes, w)
         XCTAssertTrue(r.log.lines.contains("Example Org A: conversation pinned back after its one move"))
-        XCTAssertEqual(r.log.lines.filter { $0.contains("trying it anyway") }, [])
+        XCTAssertEqual(r.log.lines.filter { $0.contains("trying a rejected token") }, [])
+    }
+
+    // R1278b-a (a): a healthy account that is only benched beats the last resort: A refused, B benched (five_hour) ->
+    // today's 429 with B's reset, zero upstream calls, no last-resort line. (b), every account refused, is B8.
+    func testB12ABenchedHealthyAccountBeatsTheLastResort() throws {
+        let r = try rig()
+        r.refuse(orgA, at: Int(r.seams.now))
+        r.bench(orgB)
+        let resp = try XCTUnwrap(r.post())
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertTrue(resp.text.contains("all pooled accounts are rate limited. Earliest reset "), resp.text)
+        XCTAssertEqual(r.up.tokens.count, 0)
+        XCTAssertEqual(r.log.lines.filter { $0.contains("trying a rejected token") }, [])
+        // The same request keyed: route() finds nothing and the last resort stays off too.
+        let keyed = try XCTUnwrap(r.post(sid))
+        XCTAssertEqual(keyed.status, 429, keyed.text)
+        XCTAssertEqual(r.up.tokens.count, 0)
+        // (c) Both refused and both benched: the last resort is reached but still honours cooldowns (B9 no longer
+        // reaches it: its B is not refused).
+        r.refuse(orgB, at: Int(r.seams.now))
+        r.bench(orgA)
+        let benched = try XCTUnwrap(r.post())
+        XCTAssertEqual(benched.status, 429, benched.text)
+        XCTAssertTrue(benched.text.contains("all pooled accounts are rate limited. Earliest reset "), benched.text)
+        XCTAssertEqual(r.up.tokens.count, 0)
     }
 }

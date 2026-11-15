@@ -19,6 +19,8 @@ final class CCPoolPaneModel: ObservableObject {
         case active, ready
         case limited(until: Int, claims: [String])
         case held(until: Int)
+        /// #1278: the account's token got a 401 (proxy or Refresh) at `since`; routing skips it.
+        case refused(since: Int)
         case rejected
         /// The last check of this token could not answer (network error, no rate-limit headers).
         case unverified
@@ -159,9 +161,10 @@ final class CCPoolPaneModel: ObservableObject {
         }
     }
 
-    /// Precedence: a rejected token, a hand hold, a limit, an unanswered check, current, ready.
+    /// Precedence: a token out of routing, a rejected token, a hand hold, a limit, an unanswered check, current, ready.
     nonisolated static func rowState(label: String, account: CCPoolState.Account, current: String?, now: Double,
                                      rejected: Set<String>, unverified: Set<String>) -> RowState {
+        if let since = account.refused { return .refused(since: since) }
         if rejected.contains(label) { return .rejected }
         if let h = account.held, Double(h) > now { return .held(until: h) }
         let live = account.cooldown.filter { Double($0.value) > now }
@@ -180,6 +183,7 @@ final class CCPoolPaneModel: ObservableObject {
         case .limited(let until, let claims):
             return "limited until \(timeText(until, timeZone: timeZone)) (\(claims.map { CCPoolCore.display[$0] ?? $0 }.joined(separator: ", ")))"
         case .held(let until): return "held until \(timeText(until, timeZone: timeZone))"
+        case .refused(let since): return "token rejected since \(timeText(since, timeZone: timeZone)), not routed"
         case .rejected: return "token rejected"
         case .unverified: return "not verified"
         }
