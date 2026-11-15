@@ -378,6 +378,7 @@ struct AIModelsPane: View {
     private func catalogRow(_ row: Row, role: ModelRole) -> some View {
         let state = disk[row.id] ?? ModelFiles.DiskState(downloaded: false, sizeBytes: nil)
         let downloaded = state.downloaded
+        let partial = state.partialBytes != nil
         let isCurrent = (role == .inline ? model.coreModel : model.agentModel) == row.id
         let label = CustomModelStore.label(for: row.id, fallback: row.fallbackLabel)
         HStack(alignment: .firstTextBaseline) {
@@ -387,25 +388,42 @@ struct AIModelsPane: View {
                     if isCurrent { tag("In use", Neon.blue) }
                     if row.isCustom { tag("Custom", Neon.magenta) }
                 }
-                Text(subtitle(row, downloaded: downloaded))
+                Text(Self.subtitleText(state: state, catalogSubtitle: row.subtitle, ramNote: row.ramNote,
+                                       downloadStatus: downloads.isDownloading(row.id) ? downloads.status : nil))
                     .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary).lineLimit(2)
             }
             Spacer(minLength: sz(12))
-            rowActions(row, role: role, downloaded: downloaded, isCurrent: isCurrent)
+            rowActions(row, role: role, downloaded: downloaded, partial: partial, isCurrent: isCurrent)
         }
     }
 
-    private func subtitle(_ row: Row, downloaded: Bool) -> String {
-        if downloads.isDownloading(row.id) { return downloads.status + row.ramNote }
-        if downloaded, let sz = disk[row.id]?.sizeBytes {
-            return "Downloaded · \(MLXEngine.fmtBytes(sz)) on disk" + row.ramNote
+    /// The row's subtitle, pure so a test pins it (#1040). A partly downloaded model (not
+    /// downloaded, bytes on disk) says so with its size.
+    static func subtitleText(state: ModelFiles.DiskState, catalogSubtitle: String?, ramNote: String,
+                             downloadStatus: String?) -> String {
+        if let downloadStatus { return downloadStatus + ramNote }
+        if state.downloaded, let sz = state.sizeBytes {
+            return "Downloaded \u{B7} \(MLXEngine.fmtBytes(sz)) on disk" + ramNote
         }
-        if let s = row.subtitle, !s.isEmpty { return s }
-        return downloaded ? "Downloaded" : "Not downloaded"
+        if let sz = state.partialBytes {
+            return "Partly downloaded \u{B7} \(MLXEngine.fmtBytes(sz)) on disk" + ramNote
+        }
+        if let s = catalogSubtitle, !s.isEmpty { return s }
+        return state.downloaded ? "Downloaded" : "Not downloaded"
+    }
+
+    /// "Resume" for a partly downloaded model, else "Download" (pure, #1040).
+    static func downloadButtonTitle(_ state: ModelFiles.DiskState) -> String {
+        state.partialBytes != nil ? "Resume" : "Download"
+    }
+
+    /// Delete is offered when downloaded or partly downloaded (pure, #1040).
+    static func offersDelete(_ state: ModelFiles.DiskState) -> Bool {
+        state.downloaded || state.partialBytes != nil
     }
 
     @ViewBuilder
-    private func rowActions(_ row: Row, role: ModelRole, downloaded: Bool, isCurrent: Bool) -> some View {
+    private func rowActions(_ row: Row, role: ModelRole, downloaded: Bool, partial: Bool, isCurrent: Bool) -> some View {
         if downloads.isDownloading(row.id) {
             HStack(spacing: sz(8)) {
                 NeonProgressBar(progress: downloads.progress).frame(width: sz(90))
@@ -414,15 +432,17 @@ struct AIModelsPane: View {
         } else {
             let fits = Self.fits(row.id, role: role)
             HStack(spacing: sz(6)) {
-                if downloaded {
-                    // Delete bumps downloads.revision when the async unlink finishes,
-                    // which rebuilds disk state — no premature refresh needed.
+                // Delete bumps downloads.revision when the async unlink finishes,
+                // which rebuilds disk state — no premature refresh needed. A partly
+                // downloaded model offers Delete too (its bytes are otherwise unreachable).
+                if downloaded || partial {
                     Button("Delete") { downloads.delete(row.id) }
                         .buttonStyle(.neonDestructive)
-                } else {
+                }
+                if !downloaded {
                     // Disable while ANY download is in flight, else start() would
                     // silently cancel it.
-                    Button("Download") { downloads.start(row.id) }.buttonStyle(.neon)
+                    Button(partial ? "Resume" : "Download") { downloads.start(row.id) }.buttonStyle(.neon)
                         .disabled(anyDownloadActive || !fits)
                 }
                 Menu {
@@ -431,7 +451,7 @@ struct AIModelsPane: View {
                             if role == .inline { model.coreModel = row.id } else { model.agentModel = row.id }
                         }.disabled(!fits)
                     }
-                    if downloaded {
+                    if downloaded || partial {
                         Button("Reveal in Finder") { ModelFiles.reveal(row.id) }
                     }
                     if row.isCustom {

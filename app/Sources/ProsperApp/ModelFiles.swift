@@ -145,6 +145,7 @@ enum ModelFiles {
     /// download of the same model both finished; the other one renamed first). Else errno.
     private static func markComplete(_ dir: URL) -> Int32 {
         let complete = dir.appendingPathComponent(completeMarker).path
+        // No fsync before this rename, on purpose: after a power loss either the rename landed (complete, and every file was verified before it) or it did not (in-progress stays: the model reads as not ready and resumes), so both outcomes are safe.
         if rename(dir.appendingPathComponent(downloadingMarker).path, complete) == 0 { return 0 }
         let err = errno
         if err == ENOENT, FileManager.default.fileExists(atPath: complete) { return 0 }
@@ -161,20 +162,41 @@ enum ModelFiles {
 
     /// True when THIS model is ready: on disk (see `weightsOnDisk`) and not inside a
     /// download that has not completed (`downloadingMarker`). `hubURL` is injectable for tests.
-    static func isModelDownloaded(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> Bool {
-        !downloadInProgress(modelDir(modelId, hubURL: hubURL)) && weightsOnDisk(modelId, hubURL: hubURL)
+    static func isModelDownloaded(_ modelId: String, hubURL: URL = ModelPaths.hubURL,
+                                  gguf: GGUFLookup = ModelFiles.registeredGGUF) -> Bool {
+        !downloadInProgress(modelDir(modelId, hubURL: hubURL)) && weightsOnDisk(modelId, hubURL: hubURL, gguf: gguf)
     }
 
-    /// Today's file checks without the markers: the GGUF file exists, or a
+    /// Partly downloaded (#1040): NOT downloaded, yet real bytes sit on disk (an interrupted
+    /// download: the in-progress marker with files, a GGUF of the wrong size, or a marker-less
+    /// dir without a complete weight set). The byte count, or nil. Pure disk read.
+    static func partialBytes(_ modelId: String, hubURL: URL = ModelPaths.hubURL,
+                             gguf: GGUFLookup = ModelFiles.registeredGGUF) -> Int64? {
+        diskState(modelId, hubURL: hubURL, gguf: gguf).partialBytes
+    }
+
+    /// A registered single-file GGUF: where it lives and the exact size the registry records.
+    /// Injectable (default: the registry + `LlamaAgentEngine.fileURL`) so tests use a temp file.
+    typealias GGUFLookup = (String) -> (url: URL, bytes: Int64)?
+    static func registeredGGUF(_ id: String) -> (url: URL, bytes: Int64)? {
+        AgentModelRegistry.gguf(for: id).map { (url: LlamaAgentEngine.fileURL(fileName: $0.fileName), bytes: $0.bytes) }
+    }
+
+    /// Size on disk of `url` (nil when absent). One stat, no read of the file: a size check
+    /// only (a sha256 of a multi-GB file would block; see report, item 2).
+    private static func fileSize(_ url: URL) -> Int64? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64
+    }
+
+    /// Today's file checks without the markers: the GGUF file exists with exactly the size the
+    /// registry records (a truncated or longer file is not downloaded, #1040), or a
     /// `hub/models--<sanitized id>/snapshots/*` dir holds a complete weight set (see
     /// `holdsWeights`). The crash-loop guard asks this: a load that dies after a lazy load
     /// finished an interrupted download must still arm it (#435, #1005).
-    static func weightsOnDisk(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> Bool {
+    static func weightsOnDisk(_ modelId: String, hubURL: URL = ModelPaths.hubURL,
+                              gguf: GGUFLookup = ModelFiles.registeredGGUF) -> Bool {
         guard !modelId.isEmpty else { return false }
-        if let gguf = AgentModelRegistry.gguf(for: modelId) {
-            return FileManager.default.fileExists(
-                atPath: LlamaAgentEngine.fileURL(fileName: gguf.fileName).path)
-        }
+        if let g = gguf(modelId) { return fileSize(g.url) == g.bytes }
         let fm = FileManager.default
         let snapshots = hubURL
             .appendingPathComponent(cacheDirName(for: modelId))
@@ -185,7 +207,8 @@ enum ModelFiles {
         return revs.contains(where: holdsWeights)
     }
 
-    struct DiskState: Equatable { let downloaded: Bool; let sizeBytes: Int64? }
+    /// `partialBytes` is set only when `downloaded` is false and bytes are on disk (#1040).
+    struct DiskState: Equatable { let downloaded: Bool; let sizeBytes: Int64?; var partialBytes: Int64? = nil }
 
     /// Download state for a model in ONE filesystem walk: whether weights are present
     /// and the real on-disk size. `hubURL` is injectable for tests.
@@ -199,19 +222,19 @@ enum ModelFiles {
     ///     also covers a flat, non-cache layout.
     /// One walk, not two (vs separate `isModelDownloaded` + size), because the AI Models
     /// pane computes this for every catalog row.
-    static func diskState(_ modelId: String, hubURL: URL = ModelPaths.hubURL) -> DiskState {
+    static func diskState(_ modelId: String, hubURL: URL = ModelPaths.hubURL,
+                          gguf: GGUFLookup = ModelFiles.registeredGGUF) -> DiskState {
         guard !modelId.isEmpty else { return DiskState(downloaded: false, sizeBytes: nil) }
-        if let gguf = AgentModelRegistry.gguf(for: modelId) {
-            // Single-file GGUF (llama.cpp agent rows) — no HF cache walk.
-            let path = LlamaAgentEngine.fileURL(fileName: gguf.fileName).path
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-                  let size = attrs[.size] as? Int64
-            else { return DiskState(downloaded: false, sizeBytes: nil) }
-            return DiskState(downloaded: true, sizeBytes: size)
+        if let g = gguf(modelId) {
+            // Single-file GGUF (llama.cpp agent rows) — no HF cache walk. Downloaded only at the
+            // registry's exact size; any other non-empty size is a partial file.
+            guard let size = fileSize(g.url) else { return DiskState(downloaded: false, sizeBytes: nil) }
+            if size == g.bytes { return DiskState(downloaded: true, sizeBytes: size) }
+            return DiskState(downloaded: false, sizeBytes: nil, partialBytes: size > 0 ? size : nil)
         }
         let fm = FileManager.default
         let root = modelDir(modelId, hubURL: hubURL)
-        guard !downloadInProgress(root) else { return DiskState(downloaded: false, sizeBytes: nil) }
+        let inProgress = downloadInProgress(root)
         let keys: Set<URLResourceKey> = [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]
         guard let en = fm.enumerator(at: root, includingPropertiesForKeys: Array(keys)) else {
             return DiskState(downloaded: false, sizeBytes: nil)
@@ -225,8 +248,12 @@ enum ModelFiles {
             else { continue }
             total += Int64(sz)
         }
-        let hasWeights = weightDirs.contains(where: holdsWeights)
-        return DiskState(downloaded: hasWeights, sizeBytes: hasWeights ? total : nil)
+        // The marker wins over the weights (as in `isModelDownloaded`); the walk still runs so an
+        // interrupted download reports the bytes it left.
+        if !inProgress, weightDirs.contains(where: holdsWeights) {
+            return DiskState(downloaded: true, sizeBytes: total)
+        }
+        return DiskState(downloaded: false, sizeBytes: nil, partialBytes: total > 0 ? total : nil)
     }
 
     /// Decorates a model picker row label with a download-state marker so the user

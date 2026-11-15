@@ -54,14 +54,22 @@ struct AgentPane: View {
                 Button("Delete") { downloads.delete(id) }.buttonStyle(.neonDestructive)
             }
         } else {
+            // Not downloaded; bytes on disk = an interrupted download (#1040): say so, offer Delete.
+            let partial = ModelFiles.partialBytes(id)
             HStack {
                 if let err = downloads.errorMessage {
                     Text(err).font(Neon.font(.caption)).foregroundStyle(Neon.magenta).lineLimit(2)
+                } else if let partial {
+                    Text("Partly downloaded \u{B7} \(MLXEngine.fmtBytes(partial)) on disk.")
+                        .font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 } else {
                     Text("Not downloaded.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 }
                 Spacer()
-                Button("Download") { downloads.start(id) }.buttonStyle(.neon)
+                if partial != nil {
+                    Button("Delete") { downloads.delete(id) }.buttonStyle(.neonDestructive)
+                }
+                Button(partial != nil ? "Resume" : "Download") { downloads.start(id) }.buttonStyle(.neon)
                     .disabled(!AgentModelRegistry.fits(id) || downloads.activeModelId != nil)
             }
         }

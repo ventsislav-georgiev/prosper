@@ -1354,6 +1354,9 @@ tag from the now-released section and put it on the new top draft.
   (no colour codes or hidden direction characters, at most 200 characters).
 - Pressing Stop while the coding agent is still waiting for its model no longer leaves codex waiting
   two minutes on that request: it is cancelled at once.
+- AI models: a model whose download was interrupted now shows "Partly downloaded" with the space it
+  uses, offers Resume and Delete, and a GGUF model file that is smaller or larger than expected no
+  longer shows as downloaded.
 
 ## v2.174.0
 

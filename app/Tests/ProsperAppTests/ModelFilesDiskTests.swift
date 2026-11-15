@@ -235,7 +235,10 @@ final class ModelFilesDiskTests: XCTestCase {
             "model.safetensors.index.json", "tokenizer.json",
         ])
         XCTAssertFalse(ModelFiles.isModelDownloaded("gap/m", hubURL: hub))
-        XCTAssertEqual(ModelFiles.diskState("gap/m", hubURL: hub), ModelFiles.DiskState(downloaded: false, sizeBytes: nil))
+        let gap = ModelFiles.diskState("gap/m", hubURL: hub)
+        XCTAssertFalse(gap.downloaded)
+        XCTAssertTrue(gap.sizeBytes == nil)
+        XCTAssertGreaterThanOrEqual(gap.partialBytes ?? 0, 210)   // the 210 blob bytes + the index file (#1040)
     }
 
     // Legacy rule: no marker at all (downloaded before the markers) and today's checks pass.

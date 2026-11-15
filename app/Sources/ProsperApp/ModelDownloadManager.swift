@@ -41,9 +41,13 @@ final class ModelDownloadManager: ObservableObject {
             do {
                 if let gguf = AgentModelRegistry.gguf(for: modelId) {
                     // Single-file GGUF (llama.cpp agent rows).
+                    let dest = LlamaAgentEngine.fileURL(fileName: gguf.fileName)
+                    // start() only gets here when the file is not intact (#1040): a wrong-size file
+                    // would make fetch() report "Downloaded." from its exists check, so clear it.
+                    try? FileManager.default.removeItem(at: dest)
                     try await GGUFDownload.fetch(
                         url: gguf.downloadURL,
-                        dest: LlamaAgentEngine.fileURL(fileName: gguf.fileName),
+                        dest: dest,
                         expectedBytes: gguf.bytes
                     ) { p, s in
                         Task { @MainActor in
