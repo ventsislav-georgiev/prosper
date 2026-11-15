@@ -128,22 +128,19 @@ final class AppIndex {
 
     // MARK: - Pure helpers (no shared state → unit-testable)
 
-    /// Enumerates `.app` bundles across the standard search directories,
-    /// de-duplicating by display name (a user copy in /Applications wins over a
-    /// system copy of the same name), sorted by name.
-    ///
-    /// The sort is for the Settings app-pickers, which show this list verbatim and
-    /// were otherwise in filesystem scan order (visibly shuffled). Dedup precedence
-    /// is unaffected — that's enforced by the first-seen guard in `add`, not by the
-    /// output order. Search is unaffected too: `rank` / `SearchScore.before` sort by
-    /// score with their own tie-breaks, so this only makes equal-score ties
-    /// deterministic instead of dependent on directory enumeration.
-    /// CFBundleIdentifier read straight from `<app>/Contents/Info.plist`. Never
-    /// `Bundle(url:)`: that registers every scanned app in `Bundle.allBundles` for the
-    /// life of the process. A missing, oversized or malformed plist gives nil, which is
-    /// what `Bundle(url:)?.bundleIdentifier` gave for such an app.
+    /// CFBundleIdentifier read straight from `<app>/Contents/Info.plist`, else from
+    /// `<app>/WrappedBundle/Info.plist` (an iOS app wrapped for Apple silicon: a symlink to
+    /// `Wrapper/X.app`, whose plist is flat). Never `Bundle(url:)`: that registers every
+    /// scanned app in `Bundle.allBundles` for the life of the process. A missing, oversized
+    /// or malformed plist gives nil, which is what `Bundle(url:)?.bundleIdentifier` gave.
     nonisolated static func bundleIdentifier(ofApp path: String) -> String? {
-        let plist = (path as NSString).appendingPathComponent("Contents/Info.plist")
+        for rel in ["Contents/Info.plist", "WrappedBundle/Info.plist"] {
+            if let id = bundleIdentifier(inPlist: (path as NSString).appendingPathComponent(rel)) { return id }
+        }
+        return nil
+    }
+
+    nonisolated private static func bundleIdentifier(inPlist plist: String) -> String? {
         // stat follows symlinks like Bundle did; the regular-file test keeps a FIFO from blocking the read.
         var st = stat()
         guard stat(plist, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG,
@@ -164,6 +161,16 @@ final class AppIndex {
         lastBuild = list != nil ? Date() : .distantPast
     }
 
+    /// Enumerates `.app` bundles across the standard search directories,
+    /// de-duplicating by display name (a user copy in /Applications wins over a
+    /// system copy of the same name), sorted by name.
+    ///
+    /// The sort is for the Settings app-pickers, which show this list verbatim and
+    /// were otherwise in filesystem scan order (visibly shuffled). Dedup precedence
+    /// is unaffected — that's enforced by the first-seen guard in `add`, not by the
+    /// output order. Search is unaffected too: `rank` / `SearchScore.before` sort by
+    /// score with their own tie-breaks, so this only makes equal-score ties
+    /// deterministic instead of dependent on directory enumeration.
     nonisolated static func scan(dirs: [String] = searchDirs,
                                  nested: [String] = nestedRoots,
                                  extraPaths: [String] = extraAppPaths) -> [AppEntry] {

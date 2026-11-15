@@ -60,6 +60,38 @@ final class AppIndexFakeTreeTests: XCTestCase {
         XCTAssertTrue((ids["Big"] ?? nil) == nil, "an oversized plist is not parsed")
     }
 
+    /// A wrapped iOS app: X.app/WrappedBundle is a symlink to Wrapper/X.app, whose Info.plist is flat.
+    func testWrappedIosAppGetsItsIdFromWrappedBundle() throws {
+        let root = tempDir()
+        let fm = FileManager.default
+        let app = root.appendingPathComponent("Wrapped.app", isDirectory: true)
+        let inner = app.appendingPathComponent("Wrapper/Wrapped.app", isDirectory: true)
+        try fm.createDirectory(at: inner, withIntermediateDirectories: true)
+        let plist: [String: Any] = ["CFBundleIdentifier": "com.example.wrapped", "CFBundleName": "Wrapped"]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: inner.appendingPathComponent("Info.plist"))
+        try fm.createSymbolicLink(atPath: app.appendingPathComponent("WrappedBundle").path,
+                                  withDestinationPath: "Wrapper/Wrapped.app")
+        // Both.app has a Contents/ plist AND a WrappedBundle: Contents/ wins.
+        let both = root.appendingPathComponent("Both.app", isDirectory: true)
+        try fm.createDirectory(at: both.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: both.appendingPathComponent("WrappedBundle"), withIntermediateDirectories: true)
+        for (dir, id) in [("Contents", "com.example.both"), ("WrappedBundle", "com.example.bothwrapped")] {
+            try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": id], format: .xml, options: 0)
+                .write(to: both.appendingPathComponent("\(dir)/Info.plist"))
+        }
+        let found = scanned(root).filter { $0.name == "Wrapped" }
+        let ids = Dictionary(uniqueKeysWithValues: scanned(root).map { ($0.name, $0.bundleId) })
+        XCTAssertEqual(ids.count, 2)
+        XCTAssertEqual(ids["Both"] ?? nil, "com.example.both")
+        XCTAssertEqual(found.count, 1)
+        XCTAssertEqual(found.first?.bundleId, "com.example.wrapped")
+        XCTAssertEqual(found.first?.name, "Wrapped")
+        let prefixes = [root.path, root.resolvingSymlinksInPath().path]
+        let leaked = Bundle.allBundles.filter { b in prefixes.contains { b.bundleURL.path.hasPrefix($0) } }
+        XCTAssertTrue(leaked.isEmpty, "scan registered \(leaked.count) bundle(s) in Bundle.allBundles")
+    }
+
     /// No row of the three index consumers scans the default (real) roots.
     func testNoRowScansTheDefaultRoots() throws {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
