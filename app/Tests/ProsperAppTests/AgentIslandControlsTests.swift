@@ -2028,7 +2028,10 @@ final class AgentIslandControlsTests: XCTestCase {
         let f = FakeProc(), runner = f.runner(bound: 60), res = Results(), k = AgentSessionKey(dir: "/d", name: "a")
         XCTAssertTrue(runner.start(k, path: "/fake/dch", args: [], bound: 0.2, env: { [:] }, done: res.add))
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
-        Thread.sleep(forTimeInterval: 0.5)
+        // The job's own 0.2 s bound sends the SIGTERM; wait for it, up to the old 0.5 s pause.
+        let sentBy = Date().addingTimeInterval(0.5)
+        while f.sent.isEmpty && Date() < sentBy { usleep(2000) }
+        XCTAssertFalse(f.sent.isEmpty, "the per-job bound sent no SIGTERM within 0.5 s")
         XCTAssertEqual(f.sent, [4242])
         f.release.signal()
         XCTAssertEqual(res.done.wait(timeout: .now() + 5), .success)
