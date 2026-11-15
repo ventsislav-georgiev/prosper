@@ -324,7 +324,7 @@ final class CodexWireSchemaTests: XCTestCase {
     }
 
     /// #184 W13: the command output delta has no `stream` (only command/exec's has one), so stdout
-    /// and stderr arrive merged: every chunk is stdout, whatever extra key a frame carries.
+    /// and stderr arrive merged: one chunk of text, whatever extra key a frame carries (#998 F3: no stream field).
     func testCommandOutputDeltaHasNoStreamSoEveryChunkIsStdout() throws {
         let schema = try CodexWireSchema.shared()
         let delta = schema.def("#/definitions/v2/CommandExecutionOutputDeltaNotification")
@@ -334,7 +334,6 @@ final class CodexWireSchemaTests: XCTestCase {
         XCTAssertEqual(schema.violations(in: frame), [])   // codex's frames are not strict
         let events = CodexHarness.mapNotification(method: "item/commandExecution/outputDelta", params: params)
         guard events.count == 1, case .toolCallOutput("c1", let chunk)? = events.first else { return XCTFail("\(events)") }
-        XCTAssertEqual(chunk.stream, .stdout)
         XCTAssertEqual(chunk.text, "oops\n")
     }
 

@@ -82,6 +82,16 @@ actor CodexHarness: CodingHarness {
     /// That turn's id once codex names it (its turn/started or the turn/start reply): a turn/completed
     /// naming another turn of the thread is a stopped turn's late end, not this turn's.
     private var currentTurn: String?
+    /// QA #172: per command item, the end of its output held back for the item's next chunk (see `splitHeldTail`);
+    /// what is still held shows at the turn end or the exit. Cleared with the turn.
+    private var heldOutput: [String: String] = [:]
+    /// F1 (#998): this turn's transcript notice of requests of other threads declined, and how many. A new
+    /// id per prompt: one notice per turn, updated in place.
+    private var foreignNotice = (id: "declined-" + UUID().uuidString, count: 0)
+    /// F2 (#998): the last lines of codex's stderr, for the exit message. Bounded by `boundedTail`.
+    private var stderrTail = ""
+    static let stderrTailLines = 16
+    static let stderrTailBytes = 4096
     /// Seconds a request waits for its reply before failing with `HarnessError.timeout`.
     private var replyTimeout: @Sendable (String) -> TimeInterval = { CodexHarness.defaultReplyTimeout(for: $0) }
 
@@ -152,13 +162,14 @@ actor CodexHarness: CodingHarness {
             guard let self else { return }
             for await chunk in self.inboundStream { await self.ingest(chunk) }
         }
-        // stderr = logs only.
+        // stderr = logs, and a bounded tail for the exit message (F2). Decoded lossily: a chunk cut inside
+        // a character still counts. shortcut: one Task per chunk, so two chunks in one instant can swap and
+        // a chunk landing after the exit misses the message; an ordered stream like stdout's if that is seen.
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty, let self else { return }
-            if let s = String(data: data, encoding: .utf8) {
-                Task { await self.logStderr(s) }
-            }
+            let s = String(decoding: data, as: UTF8.self)
+            Task { await self.logStderr(s) }
         }
         proc.terminationHandler = { [weak self] p in
             guard let self else { return }
@@ -202,6 +213,8 @@ actor CodexHarness: CodingHarness {
         process = nil
         proc?.terminationHandler = nil   // teardown owns this exit; no second entry
         cleanupIO()
+        // QA #101: the group kill below reaches no one when codex does not lead its group (ESRCH): signal it alone.
+        if let proc, proc.isRunning, getpgid(proc.processIdentifier) != proc.processIdentifier { proc.terminate() }
         // No waitUntilExit: Foundation reaps codex itself, and the wait parked a cooperative
         // thread for seconds past the reap; ncpu parked ones starve escalate's queue (#446).
         if let proc { Self.killGroup(proc.processIdentifier) }   // escalate unregisters the group (#377)
@@ -270,8 +283,10 @@ actor CodexHarness: CodingHarness {
         else { Thread.detachNewThread { escalate(pgid, grace: grace) } }
     }
 
-    /// kill(-0)/kill(-1) would hit us / everything; and a codex that somehow isn't its
-    /// own group leader would hand us our own pgid: leak its group, don't signal ours.
+    /// kill(-0)/kill(-1) would hit us / everything. QA #105: every caller (codex here, DchCtl, PidGuards)
+    /// passes a child's pid, never a looked-up pgid, so `!= getpgrp()` does not fire for them (our group's
+    /// id is our leader's pid, alive while we are); it stays as the belt for a caller that passes a pgid.
+    /// A codex that does not lead its group is not signalled here at all (ESRCH): shutdown signals its pid.
     /// A pure predicate so ProcessGroupKillTests pins it without sending a signal (#327).
     nonisolated static func mayKillGroup(_ pgid: pid_t) -> Bool { pgid > 1 && pgid != getpgrp() }
 
@@ -313,7 +328,7 @@ actor CodexHarness: CodingHarness {
         consumer?.cancel()
         consumer = nil
         approvalReplies.removeAll()   // codex is gone; no reply can land
-        fileChanges.removeAll()
+        fileChanges.removeAll(); heldOutput.removeAll()
         spawnParents.removeAll(); turnRunning = false; currentTurn = nil; stoppedTurn = nil
         inboundContinuation.finish()
         eventContinuation.finish()
@@ -375,7 +390,7 @@ actor CodexHarness: CodingHarness {
         ]
         params["sandboxPolicy"] = sandboxPolicies[session.raw]
         activeThread = session.raw   // before the request: the turn's frames can beat its reply
-        turnRunning = true; currentTurn = nil
+        turnRunning = true; currentTurn = nil; foreignNotice = ("declined-" + UUID().uuidString, 0)
         let result: [String: Any]
         do { result = try await sendRequest(method: Wire.turnStart, params: params) } catch { turnRunning = false; throw error }
         // TurnStartResponse = { turn: Turn { id, items, status } }.
@@ -416,7 +431,7 @@ actor CodexHarness: CodingHarness {
         } catch {
             // The controller settles the turn on this throw while codex's may run on (#1086): no sub-agent
             // card on an idle session, and none left waiting.
-            turnRunning = false; declineSubAgentRequests()
+            turnRunning = false; declineSubAgentRequests(); flushHeldOutput()
             throw error
         }
     }
@@ -513,7 +528,7 @@ actor CodexHarness: CodingHarness {
                 }
             case .serverRequest(let id, let method, let params):
                 handleServerRequest(id: id, method: method, params: params)
-            case .notification(let method, let params):
+            case .notification(let method, var params):
                 if method == Wire.threadStarted { noteSpawn(params) }
                 if method == Wire.threadClosed { noteClosed(params) }
                 let thread = params["threadId"] as? String
@@ -530,6 +545,15 @@ actor CodexHarness: CodingHarness {
                     log.info("dropped \(method, privacy: .public) of thread \(thread, privacy: .public), not the session's")
                     continue
                 }
+                // QA #172: a chunk's cut-off end waits for the item's next chunk; the completed item's whole output
+                // replaces the deltas, so its held end is dropped.
+                if method == Wire.commandOutputDelta, let item = params["itemId"] as? String {
+                    let (shown, held) = Self.splitHeldTail((heldOutput.removeValue(forKey: item) ?? "") + (params["delta"] as? String ?? ""))
+                    if !held.isEmpty { heldOutput[item] = held }
+                    if shown.isEmpty { continue }
+                    params["delta"] = shown
+                }
+                if method == Wire.itemCompleted, let item = (params["item"] as? [String: Any])?["id"] as? String { heldOutput[item] = nil }
                 // A turn ending orphans any approval it left unanswered (codex won't
                 // re-request); drop the mappings so they can't accumulate across turns.
                 // fileChanges is unbounded within a turn and cleared by the turn end
@@ -547,6 +571,7 @@ actor CodexHarness: CodingHarness {
                        ended == stoppedTurn, ended != currentTurn {
                         log.info("late turn/completed of the stopped turn \(ended, privacy: .public)")
                     } else {
+                        flushHeldOutput()
                         declineSubAgentRequests()
                         approvalReplies.removeAll(); fileChanges.removeAll(); turnRunning = false; currentTurn = nil
                     }
@@ -575,6 +600,24 @@ actor CodexHarness: CodingHarness {
         if let thread, foreign, !isSubAgent(thread) {
             log.info("declined \(method, privacy: .public) of thread \(thread, privacy: .public), not the session's")
             try? writeLine(JSONRPC.response(id: id, result: Self.approvalResult(method: method, requested: [:], decision: .decline)))
+            // F1: the user sees it, once per turn: the params carry no label (strangers are never recorded, #1098).
+            // Not for the session's own sub-agent asking after its turn ended: that thread is not another one's.
+            if activeThread.flatMap({ Self.hops(from: thread, to: $0, parent: { spawnParents[$0] }) }) == nil {
+                foreignNotice.count += 1
+                eventContinuation.yield(.toolCallCompleted(ToolCall(id: foreignNotice.id, name: "approval", argumentsJSON: "",
+                                                                    status: .failed, output: Self.foreignNoticeText(foreignNotice.count))))
+            }
+            return
+        }
+        // QA #15: the session's request of the turn a Stop gave up on, or while none of its turns runs, and any
+        // request while the stopped turn is still the running one: the controller settled (or is settling) that
+        // turn and would show the card on an idle session. Declined, so codex does not wait on it.
+        let turn = params["turnId"] as? String
+        let late = !foreign && (!turnRunning || (turn != nil && turn == stoppedTurn))
+        let stopping = stoppedTurn != nil && currentTurn == stoppedTurn
+        if late || stopping {
+            log.info("declined \(method, privacy: .public) of a stopped or ended turn")
+            try? writeLine(JSONRPC.response(id: id, result: Self.approvalResult(method: method, requested: [:], decision: .decline)))
             return
         }
         let approvalID = ApprovalID(raw: UUID().uuidString)
@@ -599,6 +642,29 @@ actor CodexHarness: CodingHarness {
     }
 
     static let subAgentLabel = "Asked by a sub-agent of this session"
+
+    static func foreignNoticeText(_ count: Int) -> String {
+        "Declined \(count) approval request\(count == 1 ? "" : "s") from another codex thread (a fork, a review "
+            + "or a sub-agent this session did not start)"
+    }
+
+    /// QA #172 (#998): splits off the end a later chunk can complete: a CR with only SGR codes after it (the LF of a
+    /// CRLF may come next) and an ESC sequence cut short. Over `heldOutputCap` UTF-8 bytes nothing is held: the peer's
+    /// text, so the hold stays bounded. `\z`, not `$`: ICU's `$` also matches before a final newline.
+    static func splitHeldTail(_ s: String) -> (shown: String, held: String) {
+        guard let tail = s.range(of: #"(\r(\x{1B}\[[0-9;]*m)*)?(\x{1B}(\[[0-9;]*)?)?\z"#, options: .regularExpression),
+              s.utf8.distance(from: tail.lowerBound, to: s.endIndex) <= heldOutputCap else { return (s, "") }
+        return (String(s[..<tail.lowerBound]), String(s[tail.lowerBound...]))
+    }
+    static let heldOutputCap = 256
+
+    /// What `splitHeldTail` still holds goes out as is (a lone CR shows escaped, as before #998).
+    private func flushHeldOutput() {
+        for (item, text) in heldOutput.sorted(by: { $0.key < $1.key }) {
+            eventContinuation.yield(.toolCallOutput(id: item, chunk: ToolOutputChunk(text: text)))
+        }
+        heldOutput.removeAll()
+    }
 
     /// Declines every shown sub-agent request: its card is gone, and codex would wait on it forever.
     private func declineSubAgentRequests() {
@@ -658,6 +724,19 @@ actor CodexHarness: CodingHarness {
 
     private func logStderr(_ s: String) {
         log.debug("[codex] \(s, privacy: .public)")
+        stderrTail = Self.boundedTail(stderrTail + s)
+    }
+
+    /// F2 (#998): the last `stderrTailLines` lines of `s`, then its last `stderrTailBytes` UTF-8 bytes.
+    static func boundedTail(_ s: String) -> String {
+        let lines = s.split(separator: "\n", omittingEmptySubsequences: false).suffix(stderrTailLines).joined(separator: "\n")
+        return String(decoding: lines.utf8.suffix(stderrTailBytes), as: UTF8.self)
+    }
+
+    /// The exit message's suffix: ": " and the tail's last non-blank line, or nothing.
+    static func stderrSuffix(_ tail: String) -> String {
+        let last = tail.split(whereSeparator: \.isNewline).last { !$0.allSatisfy(\.isWhitespace) }
+        return last.map { ": " + $0.trimmingCharacters(in: .whitespaces) } ?? ""
     }
 
     /// An exit we didn't ask for (`shutdown` clears the handler first), so it is an
@@ -669,9 +748,10 @@ actor CodexHarness: CodingHarness {
         terminated = true
         process = nil
         Self.killGroup(pgid)   // codex is gone; its children are not; escalate unregisters it (#377)
-        let error = HarnessError.backendError(signaled
+        flushHeldOutput()
+        let error = HarnessError.backendError((signaled
             ? "codex app-server was killed by signal \(code)"
-            : "codex app-server exited with code \(code)")
+            : "codex app-server exited with code \(code)") + Self.stderrSuffix(stderrTail))
         for (_, cont) in pending { cont.resume(throwing: error) }
         pending.removeAll()
         eventContinuation.yield(.error(error))
@@ -944,8 +1024,8 @@ actor CodexHarness: CodingHarness {
         case Wire.commandOutputDelta:
             let itemID = (params["itemId"] as? String) ?? (params["id"] as? String) ?? ""
             // #184: this notification has no `stream` field (only command/exec's does): stdout and
-            // stderr arrive merged, so every chunk is stdout.
-            return [.toolCallOutput(id: itemID, chunk: ToolOutputChunk(stream: .stdout, text: (params["delta"] as? String) ?? ""))]
+            // stderr arrive merged, and the chunk carries no stream (#998 F3).
+            return [.toolCallOutput(id: itemID, chunk: ToolOutputChunk(text: (params["delta"] as? String) ?? ""))]
 
         case Wire.itemStarted:
             guard let item = params["item"] as? [String: Any] else { return [] }

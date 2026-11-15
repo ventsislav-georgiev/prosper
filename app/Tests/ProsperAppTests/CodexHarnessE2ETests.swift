@@ -100,6 +100,10 @@ final class CodexHarnessE2ETests: XCTestCase {
     /// on purpose and goes out unlogged). STALEFIRST: a turn/start after a WEDGE turn sends the wedged turn's late
     /// turn/completed{interrupted} before its reply and turn/started (the new turn not yet named), not after.
     /// ENDFIRST (#1098 r2): the turn's turn/completed{completed} and then its reply in one write, no turn/started.
+    /// #998: LATEASK (with HANG) answers the interrupt, then sends a command approval of the stopped turn ("srv-late-1")
+    /// before its turn/completed and another ("srv-late-2") after it. CRASH writes two lines and a blank one to
+    /// stderr and exits with code 3 mid-turn. SPLITOUT streams a command's output as "a\r" and "\x1b[0m\nb\r"
+    /// (a CR, then its SGR and LF in the next delta; a CR last) and ends the turn with no item/completed.
     private static let mockServer = #"""
     import sys, json, os, time, subprocess
 
@@ -120,6 +124,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     current_turn = None
     current_thread = "thread-1"   # the last turn/start's threadId
     wedged = False
+    late_ask = False
     turn_seq = 0
     RESUME_AS = os.path.join(os.path.dirname(LOG), "resume-as")
     held = []   # RESUMEAS: the answered thread's usage, sent ahead of the next start/fork reply
@@ -488,6 +493,22 @@ final class CodexHarnessE2ETests: XCTestCase {
                      {"jsonrpc": "2.0", "method": "turn/completed", "params": {"threadId": prev_thread,
                       "turn": dict(TURN, id=prev_turn, rootTurnId=prev_turn, items=[], status="completed")}})
             wedged = "WEDGE" in prompt
+            late_ask = "LATEASK" in prompt
+            if "CRASH" in prompt:
+                sys.stderr.write("mock warming up\npanic: mock crash\n\n")
+                sys.stderr.flush()
+                time.sleep(0.3)
+                sys.exit(3)
+            if "SPLITOUT" in prompt:
+                o = {"threadId": current_thread, "turnId": current_turn}
+                send({"jsonrpc": "2.0", "method": "item/started", "params": dict(o, startedAtMs=0, item={
+                    "id": "cmd-split", "type": "commandExecution", "cwd": "/tmp", "command": "ls", "commandActions": [],
+                    "status": "inProgress"})})
+                for d in ("a\r", "\x1b[0m\nb\r"):
+                    send({"jsonrpc": "2.0", "method": "item/commandExecution/outputDelta",
+                          "params": dict(o, itemId="cmd-split", delta=d)})
+                finish_turn()
+                continue
             if "EXIT0" in prompt:
                 time.sleep(0.3)
                 sys.exit(0)
@@ -543,8 +564,16 @@ final class CodexHarnessE2ETests: XCTestCase {
                 send({"jsonrpc": "2.0", "id": mid, "result": {"turnId": current_turn}})
             else:
                 send({"jsonrpc": "2.0", "id": mid, "result": {}})
+                late = {"jsonrpc": "2.0", "method": "item/commandExecution/requestApproval", "params": {
+                    "threadId": current_thread, "turnId": current_turn, "itemId": "cmd-late", "startedAtMs": 0,
+                    "command": "rm -rf build", "cwd": "/tmp"}}
+                if late_ask:
+                    send(dict(late, id="srv-late-1"))
                 send({"jsonrpc": "2.0", "method": "turn/completed",
                       "params": {"threadId": current_thread, "turn": turn("interrupted")}})
+                if late_ask:
+                    send(dict(late, id="srv-late-2"))
+                    late_ask = False
                 current_turn = None
         elif mid is not None:
             error(mid, "unknown method " + str(method))
@@ -954,6 +983,21 @@ final class CodexHarnessE2ETests: XCTestCase {
                                                 "srv-review": [Self.declined], "srv-unknown": [Self.declined]])
     }
 
+    /// #998 F1: requests of other threads declined in one turn show one transcript notice, updated with their count
+    /// (a tool card the controller upserts by id); the params carry no thread label, so the notice is plain.
+    func testDeclinedRequestsOfOtherThreadsShowOneNoticePerTurn() async throws {
+        let (events, exe) = try await runPlan([["fork", "thread-f", "thread-1"], ["ask", "thread-f", "srv-fork"],
+                                               ["ask", "thread-x", "srv-unknown"]], answer: .accept)
+        let notices = events.compactMap { e -> ToolCall? in if case .toolCallCompleted(let c) = e, c.name == "approval" { return c }; return nil }
+        XCTAssertEqual(Set(notices.map(\.id)).count, 1, "one notice per turn: \(events)")
+        XCTAssertEqual(notices.count, 2, "\(events)")
+        XCTAssertEqual(notices.last?.output, CodexHarness.foreignNoticeText(2))
+        XCTAssertEqual(CodexHarness.foreignNoticeText(1), "Declined 1 approval request from another codex thread "
+                       + "(a fork, a review or a sub-agent this session did not start)")
+        XCTAssertEqual(Self.cards(events), [], "\(events)")
+        XCTAssertEqual(Self.replies(exe: exe), ["srv-fork": [Self.declined], "srv-unknown": [Self.declined]])
+    }
+
     /// The schema orders nothing: a child whose thread/started comes after its request is a stranger
     /// for that request (declined, as before #1086); its next request, once announced, gets a card.
     func testChildAnnouncedAfterItsRequestIsDeclinedForThatRequestOnly() async throws {
@@ -1308,6 +1352,25 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertNotNil(interrupts.first?["id"])
     }
 
+    /// #998 QA #15: after a Stop, codex asks for the stopped turn once between the interrupt's reply and its
+    /// turn/completed (the controller still names that turn, so a card would flip its phase back) and once
+    /// after it (no turn runs). Both are declined with no card: the phase stays settled and codex waits on nothing.
+    func testALateApprovalAfterAStopIsDeclinedWithNoCard() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(Self.threadOpts)
+        let turn = try await harness.sendPrompt(session: session, input: [.text("HANG LATEASK")])
+        try await harness.abort(session: session, turn: turn)
+        let replies = try await Self.awaitReplies(["srv-late-1", "srv-late-2"], exe: exe)
+        await harness.shutdown()
+        let events = await Self.drain(harness, timeout: 5) ?? []
+        XCTAssertEqual(replies, ["srv-late-1": [Self.declined], "srv-late-2": [Self.declined]])
+        XCTAssertEqual(Self.cards(events), [], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 aborted"], "\(events)")
+    }
+
     /// #174: a request codex doesn't answer in time fails with `.timeout` instead of hanging
     /// its caller, and the late reply is logged and dropped: the next request gets its own.
     func testUnansweredRequestTimesOutAndItsLateReplyIsDropped() async throws {
@@ -1483,6 +1546,35 @@ final class CodexHarnessE2ETests: XCTestCase {
             XCTFail("a dead harness must refuse requests")
         } catch HarnessError.notStarted {}
         await harness.shutdown()
+    }
+
+    /// #998 F2: codex's last stderr line (the blank one after it skipped) rides on the exit error, where the
+    /// user sees it; before, stderr went to the debug log only.
+    func testCrashExitMessageCarriesTheLastStderrLine() async throws {
+        let (exe, home) = try makeMock()
+        let harness = CodexHarness(executableURL: exe, codexHome: home,
+                                   llmBaseURL: "http://127.0.0.1:0/v1", llmToken: "test-token")
+        try await harness.start()
+        let session = try await harness.newSession(Self.threadOpts)
+        async let eventsTask = Self.drain(harness, timeout: 10)
+        try await harness.sendPrompt(session: session, input: [.text("CRASH mid-turn")])
+        let drained = await eventsTask
+        let events = try XCTUnwrap(drained, "event stream still open after codex exited")
+        XCTAssertEqual(Self.errors(in: events), ["codex app-server exited with code 3: panic: mock crash"], "\(events)")
+        await harness.shutdown()
+    }
+
+    /// #998 F2: the tail keeps the last `stderrTailLines` lines and at most `stderrTailBytes` bytes.
+    func testStderrTailIsBoundedByLinesAndBytes() {
+        XCTAssertEqual(CodexHarness.stderrTailLines, 16)
+        XCTAssertEqual(CodexHarness.stderrTailBytes, 4096)
+        let many = (1...40).map { "line \($0)" }.joined(separator: "\n")
+        XCTAssertEqual(CodexHarness.boundedTail(many), (25...40).map { "line \($0)" }.joined(separator: "\n"))
+        let long = String(repeating: "x", count: 10_000) + "end"
+        XCTAssertEqual(CodexHarness.boundedTail(long).utf8.count, 4096)
+        XCTAssertTrue(CodexHarness.boundedTail(long).hasSuffix("xend"))
+        XCTAssertEqual(CodexHarness.stderrSuffix("a\n  last one \n \n"), ": last one")
+        XCTAssertEqual(CodexHarness.stderrSuffix("\n \n"), "")
     }
 
     /// #167: codex killed mid-turn fails the in-flight request with the same error the
@@ -2628,8 +2720,8 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testControllerTranscriptToolCallIsEscapedPerChunk() async {
         let items = await transcript(after: [
             .toolCallStarted(ToolCall(id: "c1", name: "shell", argumentsJSON: "{\"cmd\":\"echo a\u{202E}b\"}")),
-            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(stream: .stdout, text: "\u{1B}[0;31mred\u{1B}[0m\r")),
-            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(stream: .stdout, text: "\nnext\u{2067}")),
+            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(text: "\u{1B}[0;31mred\u{1B}[0m\r")),
+            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(text: "\nnext\u{2067}")),
         ])
         let calls = items.compactMap { if case .toolCall(_, _, let args, _, let out) = $0 { return (args, out) }; return nil }
         XCTAssertEqual(calls.first?.0, #"{"cmd":"echo a\u{202E}b"}"#)
@@ -2642,7 +2734,7 @@ final class CodexHarnessE2ETests: XCTestCase {
     func testControllerTranscriptToolCallCompletedOutputIsEscaped() async {
         let items = await transcript(after: [
             .toolCallStarted(ToolCall(id: "c1", name: "shell", argumentsJSON: "{}")),
-            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(stream: .stdout, text: "partial")),
+            .toolCallOutput(id: "c1", chunk: ToolOutputChunk(text: "partial")),
             .toolCallCompleted(ToolCall(id: "c1", name: "shell", argumentsJSON: "{}", status: .succeeded,
                                         output: "a\u{202E}b\u{1B}[2Jc")),
         ])
@@ -2681,6 +2773,36 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(WireText.oneLine(#"C:\Users\Bob\ a\\b \d+"#), #"C:\Users\Bob\ a\\b \d+"#)
         XCTAssertEqual(WireText.multiLine(#"a\nb"#), #"a\nb"#, "a diff keeps its backslashes verbatim")
         XCTAssertEqual(CodexHarness.commandSummary(["printf", #"a\nb"#]), #"printf 'a\\nb'"#)
+    }
+
+    /// #998 QA #172: the harness holds a chunk's end that the next chunk can complete (a CR with only SGR codes
+    /// after it, an ESC sequence cut short), so each chunk escapes like the whole output; past the cap it holds nothing.
+    func testSplitHeldTailHoldsOnlyAnEndTheNextChunkCanComplete() {
+        let cases: [(String, String, String)] = [
+            ("a\r", "a", "\r"), ("a\r\u{1B}[0m", "a", "\r\u{1B}[0m"), ("a\u{1B}[3", "a", "\u{1B}[3"), ("a\u{1B}", "a", "\u{1B}"),
+            ("a\r\n", "a\r\n", ""), ("a\n", "a\n", ""), ("red\u{1B}[0m", "red\u{1B}[0m", ""), ("\r\u{1B}[0m\r", "\r\u{1B}[0m", "\r"),
+            ("", "", ""),
+        ]
+        for (whole, shown, held) in cases {
+            let split = CodexHarness.splitHeldTail(whole)
+            XCTAssertEqual(split.shown, shown, whole.debugDescription)
+            XCTAssertEqual(split.held, held, whole.debugDescription)
+        }
+        let long = "a\r" + String(repeating: "\u{1B}[0m", count: 100)
+        XCTAssertEqual(CodexHarness.splitHeldTail(long).held, "", "over heldOutputCap nothing is held")
+        let first = CodexHarness.splitHeldTail("x\r"), second = CodexHarness.splitHeldTail(first.held + "\u{1B}[0m\ny")
+        XCTAssertEqual(WireText.toolOutput(first.shown) + WireText.toolOutput(second.shown), WireText.toolOutput("x\r\u{1B}[0m\ny"))
+    }
+
+    /// #998 QA #172: over the wire, the CR cut from its SGR and LF reaches the transcript joined, and the CR still held
+    /// when the turn ends with no item/completed (a crash, an abort) is flushed before the turn end.
+    func testSplitOutputIsJoinedAndTheHeldEndFlushedAtTheTurnEnd() async throws {
+        let (harness, session, _) = try await harnessOnThread1()
+        let events = try await Self.runTurn(harness, session, "SPLITOUT")
+        await harness.shutdown()
+        let chunks = events.compactMap { e -> String? in if case .toolCallOutput("cmd-split", let c) = e { return c.text }; return nil }
+        XCTAssertEqual(chunks, ["a", "\r\u{1B}[0m\nb", "\r"], "\(events)")
+        XCTAssertEqual(Self.ended(events), ["turn-1 completed"], "\(events)")
     }
 
     /// #358: tool output drops well-formed SGR colour codes; any other ESC sequence (an OSC) escapes.

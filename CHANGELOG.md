@@ -1313,6 +1313,15 @@ tag from the now-released section and put it on the new top draft.
   again.
 - After a restart in the middle of a Homebrew upgrade, Upgrade is available again at once instead of
   after two hours.
+- Coding agent: when codex asks for approval on behalf of another thread (a fork, a review or a sub-
+  agent this session did not start), the request is still declined, and the transcript now shows a
+  "Declined N approval requests from another codex thread" notice for that turn.
+- Coding agent: when codex quits unexpectedly, the error now ends with the last line codex printed
+  to its error output (for example its panic message).
+- Coding agent: after you press Stop, an approval codex still asks for the stopped turn is declined
+  automatically instead of bringing the approval bar back.
+- Coding agent: command output whose line ending or color code was split across two updates no
+  longer shows a stray carriage return or escape code in the live tool card.
 
 ## v2.174.0
 

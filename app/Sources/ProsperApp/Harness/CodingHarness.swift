@@ -210,9 +210,8 @@ struct ToolCall: Sendable {
     enum Status: Sendable { case running, succeeded, failed }
 }
 
+/// Command output, stdout and stderr merged: codex's output delta names no stream (#184, #998 F3).
 struct ToolOutputChunk: Sendable {
-    enum Stream: Sendable { case stdout, stderr }
-    let stream: Stream
     let text: String
 }
 
