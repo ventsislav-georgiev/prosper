@@ -211,7 +211,9 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
             } catch let e as WhoisUnusable {
                 once(.unusable(e.cause), !e.askAgain)
             } catch {
-                once(.unusable(String(describing: error)), true)
+                // #988: an unforeseen error's text can hold a path: the Settings line gets our sentence, the log the text.
+                self.log.error("dch server: owner check failed: \(String(String(describing: error).prefix(300)), privacy: .private)")
+                once(.unusable("Tailscale's answer couldn't be checked"), true)
             }
         }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {

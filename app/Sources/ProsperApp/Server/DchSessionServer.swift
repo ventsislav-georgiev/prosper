@@ -305,8 +305,11 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
             return "No Tailscale address on this Mac; Remote Terminal starts when Tailscale connects."
         case .posix(.EADDRINUSE)?:
             return "Port \(port) on your Tailscale address is in use (dch serve?). Remote Terminal keeps retrying."
-        case let e?:
-            return "Remote Terminal couldn't listen on port \(port) (\(e)). It keeps retrying."
+        // #988: the error's number, never its description; the description is in the log (logFailure).
+        case .posix(let code)?:
+            return "Remote Terminal couldn't listen on port \(port) (error \(code.rawValue)). It keeps retrying."
+        case _?:
+            return "Remote Terminal couldn't listen on port \(port). It keeps retrying."
         }
     }
 

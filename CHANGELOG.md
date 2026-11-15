@@ -1127,6 +1127,9 @@ tag from the now-released section and put it on the new top draft.
 - When the Mac cannot load the model or finish an answer for the phone, the phone now gets a plain
   sentence instead of the Mac's internal error text; the Remote Terminal status in Settings says in
   plain words why Tailscale on the Mac is not connected (#988)
+- When a rename from the phone fails, the phone gets a short sentence from Prosper instead of dch's
+  raw output; the Remote Terminal status in Settings no longer shows raw error text for a listen or
+  Tailscale check failure (#988)
 
 ## v2.174.0
 

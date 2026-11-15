@@ -536,7 +536,7 @@ final class DchControlFramesTests: XCTestCase {
         for (path, payload, want) in [
             (try dch("[ \"$1 $2 $3\" = '-m a b' ] || exit 9"), rename, DchFrame.encode(DchFrame.ok, [])),
             (try dch("echo \"no session 'a'\" >&2; echo second >&2; exit 1"), rename,
-             DchControlOps.error("Couldn't rename a: no session 'a'")),
+             DchControlOps.error("Couldn't rename a: dch exited 1")),
             (try dch("exit 3"), rename, DchControlOps.error("Couldn't rename a: dch exited 3")),
             (dir.appendingPathComponent("missing").path, rename, DchControlOps.error("Couldn't rename a: dch could not be run")),
             ("/usr/bin/false", Data("{}".utf8), DchFrame.encode(DchFrame.ok, [])),

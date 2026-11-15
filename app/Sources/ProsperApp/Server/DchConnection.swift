@@ -2395,13 +2395,27 @@ enum DchCommand {
     }
 
     /// Set (or clear, when empty) a session's display alias. #811: nil on exit 0, else one
-    /// line for the phone: dch's first stderr line, or its exit status.
+    /// line for the phone (renameFailure).
     static func setAlias(_ name: String, alias: String) -> String? {
         let r = runCapturingBoth(args: ["-m", name, alias])
         guard r.status != 0 else { return nil }
-        let line = r.err.split(whereSeparator: \.isNewline).first.map { String($0.prefix(120)) }
-        let shown = name.count > 64 ? String(name.prefix(64)) + "…" : name
-        return "Couldn't rename \(shown): \(line ?? (r.status < 0 ? "dch could not be run" : "dch exited \(r.status)"))"
+        return renameFailure(name, err: r.err, status: r.status)
+    }
+
+    private static let log = Logger(subsystem: "com.prosper.app", category: "DchServer")
+
+    /// #988: the phone's text for a refused `dch -m`: a sentence of ours for each of dch -m's own refusal lines
+    /// (dch.c A_SETALIAS at v1.69.0), else its exit status; never dch's line itself (a remote route or another
+    /// binary could print a path or a host). The name is the phone's own, echoed cut as before. dch's line goes to the log.
+    static func renameFailure(_ name: String, err: String, status: Int32) -> String {
+        let line = err.split(whereSeparator: \.isNewline).first.map { String($0.prefix(120)) }
+        let shown = name.count > 64 ? String(name.prefix(64)) + "\u{2026}" : name
+        if let line { log.error("dch server: dch -m refused: \(line, privacy: .private)") }
+        switch line {
+        case "no session: \(name)"?: return "Couldn't rename \(shown): no session: \(shown)"
+        case "dch: name looks like a session_id"?: return "Couldn't rename \(shown): the new name looks like a session id"
+        default: return "Couldn't rename \(shown): \(status < 0 ? "dch could not be run" : "dch exited \(status)")"
+        }
     }
 
     private static func runCapturing(args: [String]) -> String {
