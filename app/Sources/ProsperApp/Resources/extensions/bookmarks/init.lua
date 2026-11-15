@@ -112,13 +112,23 @@ local function decode(str)
     return t
 end
 
+-- True when the parent folder lists fine and does not name `path`: the browser is not installed, so the
+-- spawned `ls` is skipped (#1101). An empty/refused parent listing proves nothing: ask `ls` as before.
+local function absent(path)
+    local parent, name = path:match("^(.*)/([^/]+)$")
+    if not parent then return false end
+    local sibs = host.fs.list_dirs(parent)
+    if type(sibs) ~= "table" or #sibs == 0 then return false end
+    for _, n in ipairs(sibs) do if n == name then return false end end
+    return true
+end
 -- host.fs.list_dirs answers {} for a missing dir and for one macOS refuses alike. On {},
 -- ask `ls` why (its stderr only): nothing or ENOENT stays silent (no profiles, not
 -- installed); a refusal is logged naming the browser, never the path (#1085).
 local function list_dirs(path, browser)
     local d = host.fs.list_dirs(path)
     if type(d) ~= "table" then d = {} end
-    if #d == 0 then
+    if #d == 0 and not absent(path) then
         local why = sh("ls " .. shq(path) .. " 2>&1 >/dev/null")
         local kind = (why ~= "") and failure_kind(why) or nil
         if kind then host.log.warn("bookmarks: " .. browser .. " profile list failed (" .. kind .. ")") end

@@ -287,4 +287,45 @@ do  -- a listing that worked never shells out to ls
     h.eq(#e.logs, 0, "a good listing logs nothing")
 end
 
+-- ── #1101: a browser whose folder is absent from a listable parent costs no `ls` ─
+do
+    local function lsCount(sent) local n = 0 for _, c in ipairs(sent) do if c:find("^ls ") then n = n + 1 end end return n end
+    local SUP = HOME .. "/Library/Application Support"
+    local r, sent = listing(CHROME, "ls: x: No such file or directory")
+    local g, e = fresh(r, { fsDirs = { [SUP .. "/Google"] = { "Other" } } })   -- Google lists, no Chrome in it
+    h.eq(g.bookmarks_run("bm import"), "No bookmarks found.", "absent: nothing imported")
+    h.eq(lsCount(sent), 0, "absent folder, listable parent: no ls spawned")
+    r, sent = listing(CHROME, "ls: x: No such file or directory")
+    g = fresh(r, { fsDirs = {} })   -- parent unlistable: proves nothing, ls still asked
+    g.bookmarks_run("bm import")
+    h.eq(lsCount(sent), 1, "unlistable parent: one ls as before")
+    r, sent = listing(CHROME, "ls: " .. CHROME .. ": Operation not permitted")
+    g, e = fresh(r, { fsDirs = { [SUP .. "/Google"] = { "Chrome" } } })   -- there but refused: still logged
+    g.bookmarks_run("bm import")
+    h.eq(lsCount(sent), 1, "present but unlistable: one ls")
+    h.eq(e.logs[#e.logs], "bookmarks: Chrome profile list failed (permission denied)", "present but refused: logged")
+end
+
+-- ── #1101: the display names the log and the Settings counts use are pinned ─────
+do
+    local NAMES = { "Chrome", "Brave", "Edge", "Vivaldi", "Opera", "Arc", "Firefox", "Zen", "Safari" }
+    -- Every source on; every listing and read fails with a denial, so each browser logs its own name.
+    local function deny(cmd)
+        if cmd:find("printf", 1, true) then return HOME end
+        if cmd:find("^ls ") then return "ls: x: Operation not permitted" end
+        return "\n__prosper_read_failed__\ncat: x: Operation not permitted"
+    end
+    local host, env = h.makeHost{ shellRouter = deny, fsDirs = {}, perms = { ["full-disk-access"] = true } }
+    env.logs = {}
+    local function rec(m) env.logs[#env.logs + 1] = m end
+    host.log = { info = rec, warn = rec, error = rec }
+    local G = h.load(h.dir() .. "init.lua", host)
+    G.bookmarks_run("bm import")
+    local seen = {}
+    for _, m in ipairs(env.logs) do local n = m:match("^bookmarks: (%S+) ") if n then seen[n] = true end end
+    local want = {}
+    for _, n in ipairs(NAMES) do want[n] = true; h.eq(seen[n], true, "log names " .. n) end
+    for n in pairs(seen) do h.eq(want[n], true, "unexpected browser name in the log: " .. n) end
+end
+
 print("ok bookmarks")
