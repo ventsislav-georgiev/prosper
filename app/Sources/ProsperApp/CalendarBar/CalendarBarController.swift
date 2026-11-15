@@ -30,8 +30,13 @@ final class CalendarBarStore: ObservableObject {
         didSet { if selectedDay != oldValue { detailEventID = nil } }
     }
     @Published var eventsByDay: [Date: [CalendarEventInfo]] = [:] {
-        // #928: a refetch that no longer has the open event closes its detail.
-        didSet { if detailEventID != nil, detailEvent == nil { detailEventID = nil } }
+        // #928: a refetch that no longer has the open event closes its detail, unless the event
+        // only changed its identifier (moved calendar, server sync): see sameEventID.
+        didSet {
+            if let id = detailEventID, detailEvent == nil {
+                detailEventID = Self.sameEventID(id, was: oldValue, now: eventsByDay)
+            }
+        }
     }
     @Published var pinned = false     // popover survives focus loss while set
     @Published var accessGranted = CalendarEventCenter.authorized
@@ -45,6 +50,23 @@ final class CalendarBarStore: ObservableObject {
     var detailEvent: CalendarEventInfo? {
         guard let id = detailEventID else { return nil }
         return eventsByDay.values.lazy.flatMap { $0 }.first { $0.id == id }
+    }
+
+    /// #928 N928-a: the new id of the event `id` named in `old` when that id is gone from `new`.
+    /// Same day, title, start, end and all-day flag, and exactly ONE such event in the day's old
+    /// list (the open one: a pre-existing twin is never taken for it) and exactly ONE in the new
+    /// list; zero or two or more give nil (the detail closes: never a guess between two).
+    nonisolated static func sameEventID(_ id: String, was old: [Date: [CalendarEventInfo]],
+                                        now new: [Date: [CalendarEventInfo]]) -> String? {
+        guard let (day, open) = old.lazy.compactMap({ entry in entry.value.first { $0.id == id }.map { (entry.key, $0) } }).first
+        else { return nil }
+        let same = { (e: CalendarEventInfo) in
+            e.title == open.title && e.startDate == open.startDate && e.endDate == open.endDate
+                && e.isAllDay == open.isAllDay
+        }
+        guard (old[day] ?? []).filter(same).count == 1 else { return nil }
+        let hits = (new[day] ?? []).filter(same)
+        return hits.count == 1 ? hits.first?.id : nil
     }
 
     init(style: CalendarBarStyle) {

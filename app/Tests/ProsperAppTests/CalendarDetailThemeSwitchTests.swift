@@ -68,6 +68,76 @@ final class CalendarDetailThemeSwitchTests: XCTestCase {
         XCTAssertTrue(store.detailEvent == nil)
     }
 
+    /// The same made-up event under a new identifier (another calendar), with fields overridden.
+    private func copy(_ e: CalendarEventInfo, id: String, title: String? = nil, start: Date? = nil,
+                      end: Date? = nil, allDay: Bool? = nil) -> CalendarEventInfo {
+        CalendarEventInfo(id: id, title: title ?? e.title, location: e.location,
+                          startDate: start ?? e.startDate, endDate: end ?? e.endDate,
+                          isAllDay: allDay ?? e.isAllDay, isStartDay: e.isStartDay, isEndDay: e.isEndDay,
+                          isTentative: e.isTentative, color: e.color, calendarID: "cal-example-2",
+                          videoURL: e.videoURL, notes: e.notes, attendees: e.attendees)
+    }
+
+    // N928-a: the open event's identifier changes in a refetch (moved calendar, server sync).
+    func testOpenDetailFollowsItsEventToANewIdentifier() {
+        let (store, ev) = calendarStore()
+        let moved = copy(ev, id: "example-1-moved")
+        let unrelated = copy(ev, id: "example-3", title: "Example review")
+        store.eventsByDay = [store.selectedDay: [unrelated, moved]]
+        XCTAssertEqual(store.detailEventID, moved.id)
+        XCTAssertEqual(store.detailEvent, moved)
+    }
+
+    func testOpenDetailClosesWhenTwoEventsMatchItsOldFields() {
+        let (store, ev) = calendarStore()
+        store.eventsByDay = [store.selectedDay: [copy(ev, id: "example-1-a"), copy(ev, id: "example-1-b")]]
+        XCTAssertTrue(store.detailEventID == nil, "two matches: the detail guessed one")
+    }
+
+    func testOpenDetailClosesWhenAnyMatchedFieldDiffers() {
+        let probe = calendarStore().1
+        let variants = [
+            copy(probe, id: "v-title", title: "Example meeting 2"),
+            copy(probe, id: "v-start", start: probe.startDate.addingTimeInterval(60)),
+            copy(probe, id: "v-end", end: probe.endDate.addingTimeInterval(60)),
+            copy(probe, id: "v-allday", allDay: true),
+        ]
+        for v in variants {
+            let (store, _) = calendarStore()
+            store.eventsByDay = [store.selectedDay: [v]]
+            XCTAssertTrue(store.detailEventID == nil, "\(v.id): a differing event kept the detail open")
+        }
+        // The same fields on another day are not the open event either.
+        let (store, ev) = calendarStore()
+        let nextDay = store.selectedDay.addingTimeInterval(86_400)
+        store.eventsByDay = [nextDay: [copy(ev, id: "v-day")]]
+        XCTAssertTrue(store.detailEventID == nil, "a match on another day kept the detail open")
+    }
+
+    // N928-b: the label's theme sink lives as long as the window. No window is built: the sink is
+    // set as showWindow sets it (ModelSetup.swift showWindow) and the close path is called directly.
+    func testModelSetupLabelSinkEndsWithTheWindowAndComesBackOnReshow() {
+        let saved = (ThemeRuntime.palette, ThemeRuntime.scale, NSApp?.appearance)
+        defer { (ThemeRuntime.palette, ThemeRuntime.scale) = (saved.0, saved.1); NSApp?.appearance = saved.2 }
+        let theme = themeStore()
+        let setup = ModelSetup()
+        let label = NSTextField(labelWithString: "Preparing the language model")
+        let marker = NSColor(srgbRed: 1, green: 0, blue: 1, alpha: 1)
+        setup.labelTheme = ModelSetup.followTheme(label, store: theme)
+        defer { setup.labelTheme = nil }
+        setup.windowWillClose(Notification(name: NSWindow.willCloseNotification))
+        XCTAssertTrue(setup.labelTheme == nil, "the close path kept the label sink")
+        label.textColor = marker
+        theme.select(id: ThemeVariantTests.hcLightID)
+        XCTAssertTrue(label.textColor == marker, "a theme switch after the close reached the label")
+        // A re-show makes the sink again (showWindow), and it follows the next switch.
+        setup.labelTheme = ModelSetup.followTheme(label, store: theme)
+        label.textColor = marker
+        theme.select(id: ThemeVariantTests.hcDarkID)
+        XCTAssertTrue(ThemeVariantTests.same(Color(nsColor: label.textColor ?? .clear), Neon.textPrimary),
+                      "the re-shown label did not follow the theme")
+    }
+
     func testModelSetupLabelFollowsTheThemesPrimaryText() {
         let saved = (ThemeRuntime.palette, ThemeRuntime.scale, NSApp?.appearance)
         defer { (ThemeRuntime.palette, ThemeRuntime.scale) = (saved.0, saved.1); NSApp?.appearance = saved.2 }

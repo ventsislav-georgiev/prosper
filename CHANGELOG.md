@@ -1101,6 +1101,8 @@ tag from the now-released section and put it on the new top draft.
   name or id of an extension built into Prosper; the install says why and changes nothing. A
   built-in extension is now recognised by its own id as well as its folder, and an installed
   extension can no longer take a built-in's place (#1246)
+- Calendar: an event you have open in a pinned Calendar stays open when its calendar syncs and the
+  event gets a new identifier (it closes, as before, if two events look the same) (#928)
 
 ## v2.174.0
 

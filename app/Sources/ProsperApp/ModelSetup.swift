@@ -18,7 +18,8 @@ final class ModelSetup: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var progressBar: NSProgressIndicator?
     private var statusLabel: NSTextField?
-    private var labelTheme: AnyCancellable?
+    /// The label's theme sink (#928): made in showWindow, dropped in windowWillClose (the window's lifetime).
+    var labelTheme: AnyCancellable?
     private weak var retryButton: NSButton?
     private var operation: Operation?
     private var isRunning = false
@@ -234,5 +235,6 @@ final class ModelSetup: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         if let window { DockPolicy.windowDidHide(window) }
         window = nil
+        labelTheme = nil
     }
 }
