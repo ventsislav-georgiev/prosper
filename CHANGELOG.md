@@ -1328,6 +1328,8 @@ tag from the now-released section and put it on the new top draft.
   2 sessions?") show at the top of the sidebar, the same ones the island asks.
 - Settings > General > Clipboard: when macOS asks before Prosper reads other apps' copies, the line
   is now a link that opens the Paste from Other Apps setting, like the blocked warning.
+- The clipboard panel now says so when history is not being saved (Prosper cannot read its device
+  key), while your new clips stay listed until Prosper quits.
 
 ## v2.174.0
 

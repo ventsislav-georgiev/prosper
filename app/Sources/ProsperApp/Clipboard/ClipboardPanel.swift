@@ -548,6 +548,18 @@ struct ClipboardView: View {
 
             Divider()
 
+            // #1000: while the store cannot save (store.notice), say so above the list; the clips held in memory stay listed.
+            if let notice = store.notice {
+                Text(notice)
+                    .font(Neon.font(.caption))
+                    .foregroundColor(Neon.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, sz(14))
+                    .padding(.vertical, sz(6))
+                Divider()
+            }
+
             if store.items.isEmpty && store.receiving.isEmpty {
                 emptyState
             } else {
@@ -1157,7 +1169,7 @@ struct ClipboardView: View {
         onCopy(item)
     }
 
-    private func deleteSelected() {
+    func deleteSelected() {   // internal: the #1000 row calls it without a key event
         guard let item = filtered.first(where: { $0.id == model.selectedId }) else { return }
         guard store.receiving[item.id] == nil else { store.cancel(item.id); return }   // #632
         let nextId = ClipboardPanelModel.afterDelete(item.id, in: filtered.map(\.id))
@@ -1623,7 +1635,8 @@ private struct ClipboardKeyHandling: NSViewRepresentable {
             // ⌘A → select all in the filter field (the borderless panel doesn't
             // route the standard selectAll: key equivalent on its own).
             if mods == .command, e.keyCode == 0 {  // A
-                if let editor = w.firstResponder as? NSText { editor.selectAll(nil); return nil }
+                // The monitor runs on the main thread; hop in with the check the file already uses (#1000).
+                if MainActor.assumeIsolated({ (w.firstResponder as? NSText)?.selectAll(nil) != nil }) { return nil }
                 return e
             }
             // ⌃C → clear the filter field. (⌘C below copies the selected entry.)
@@ -1649,7 +1662,7 @@ private struct ClipboardKeyHandling: NSViewRepresentable {
                 // If the user has an active text selection (e.g. clicked into the
                 // preview text view), let the native `copy:` copy that selection.
                 // Otherwise copy the whole selected history entry to the clipboard.
-                if let tv = w.firstResponder as? NSTextView, tv.selectedRange().length > 0 {
+                if MainActor.assumeIsolated({ (w.firstResponder as? NSTextView).map { $0.selectedRange().length > 0 } ?? false }) {
                     return e
                 }
                 h.copy(); return nil
