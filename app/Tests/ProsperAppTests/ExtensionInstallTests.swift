@@ -468,8 +468,10 @@ final class ExtensionManifestCapTests: XCTestCase {
     private let d = TOMLGuard.maxDepth
     /// The existing malformed-manifest reason. Only `TOMLGuard` (inside decodeGuarded) and the bounded
     /// read throw it, so seeing it proves the decoder never ran.
-    private let nestedReason = ExtensionLoadError.parse(String(describing: TOMLGuard.Rejected()))
-    private var tooLarge: ExtensionLoadError { nestedReason }
+    private let nestedReason = ExtensionLoadError.parse(String(describing: TOMLGuard.Rejected(limit: .depth)))
+    /// #1082: the bounded read's own reason, naming the size limit (it was the guard's shared text).
+    private let tooLarge = ExtensionLoadError.parse("extension.toml is over the 1048576-byte size limit")
+    private let unterminatedReason = ExtensionLoadError.parse(String(describing: TOMLGuard.Rejected(limit: .unterminatedString)))
 
     private static let head = """
     [extension]
@@ -594,7 +596,7 @@ final class ExtensionManifestCapTests: XCTestCase {
         let dir = tempDir().appendingPathComponent("e")
         for tail in ["s = \"[[[", "s = '[[[", "s = \"\"\"[[[\n", "s = '''[[[\n", "s = \"x\\"] {
             try writeExt(dir, tail)
-            assertRefused(try load(dir), nestedReason, tail)
+            assertRefused(try load(dir), unterminatedReason, tail)
         }
     }
 

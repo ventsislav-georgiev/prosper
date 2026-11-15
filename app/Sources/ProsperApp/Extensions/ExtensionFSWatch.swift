@@ -32,13 +32,12 @@ enum FSReads {
         return s
     }
 
-    /// UTF-8 contents of a text file, or nil (missing / too big / not UTF-8).
+    /// UTF-8 contents of a text file, or nil (missing / too big / not UTF-8 / not a regular file).
     /// Capped so a stray huge file can't blow the VM's memory — an init.lua and its
-    /// requires are kilobytes.
-    static func read(_ path: String, maxBytes: Int = 1 << 20) -> String? {
+    /// requires are kilobytes. #1082: at most maxBytes + 1 bytes are read, and a pipe never blocks the lane.
+    static func read(_ path: String, maxBytes: Int = BoundedFileRead.fsReadMaxBytes) -> String? {
         let p = (path as NSString).expandingTildeInPath
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: p)), data.count <= maxBytes else { return nil }
-        return String(data: data, encoding: .utf8)
+        return try? BoundedFileRead.text(URL(fileURLWithPath: p), maxBytes: maxBytes)
     }
 }
 

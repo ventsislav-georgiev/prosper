@@ -10,9 +10,16 @@ enum TOMLGuard {
     static let maxBytes = 1 << 20
     static let maxDepth = 64
 
-    struct Rejected: Error, CustomStringConvertible {
+    /// #1082 (QA 787 INFO-1): the reason names the one limit the text passed.
+    struct Rejected: Error, CustomStringConvertible, Equatable {
+        enum Limit: Equatable, Sendable { case size, depth, unterminatedString }
+        let limit: Limit
         var description: String {
-            "TOML rejected: over \(TOMLGuard.maxBytes) bytes, nested deeper than \(TOMLGuard.maxDepth), or an unterminated string"
+            switch limit {
+            case .size: "TOML rejected: over the \(TOMLGuard.maxBytes)-byte size limit"
+            case .depth: "TOML rejected: nested deeper than the depth limit of \(TOMLGuard.maxDepth)"
+            case .unterminatedString: "TOML rejected: an unterminated string"
+            }
         }
     }
 
@@ -28,9 +35,12 @@ enum TOMLGuard {
     /// counts. Dots after `=` and inside arrays are values (floats, dates) and cost nothing.
     /// Strings and comments end exactly where TOMLDecoder's lexer ends them, so the two
     /// never disagree about which brackets are code (QA #125).
-    static func accepts(_ text: String) -> Bool {
+    static func accepts(_ text: String) -> Bool { refusal(text) == nil }
+
+    /// What `accepts` decides, with the limit that refused the text; nil when it is accepted.
+    static func refusal(_ text: String) -> Rejected? {
         let bytes = text.utf8
-        guard bytes.count <= maxBytes else { return false }
+        guard bytes.count <= maxBytes else { return Rejected(limit: .size) }
         let b = Array(bytes)
         let n = b.count
         let quote = UInt8(ascii: "\""), backslash = UInt8(ascii: "\\"), newline = UInt8(ascii: "\n")
@@ -74,14 +84,14 @@ enum TOMLGuard {
                 while i < n && b[i] != newline { i += 1 }
                 continue
             case quote, UInt8(ascii: "'"):
-                guard let end = stringEnd(i) else { return false }
+                guard let end = stringEnd(i) else { return Rejected(limit: .unterminatedString) }
                 i = end
                 continue
             case UInt8(ascii: "["), UInt8(ascii: "{"):
                 if c == UInt8(ascii: "["), open.isEmpty, !inValue { headerSegments = 1 }
                 open.append((base, c == UInt8(ascii: "[")))
                 frames += 1
-                if frames > maxDepth { return false }
+                if frames > maxDepth { return Rejected(limit: .depth) }
                 base = frames
                 inValue = c == UInt8(ascii: "[")
             case UInt8(ascii: "]"), UInt8(ascii: "}"):
@@ -91,10 +101,10 @@ enum TOMLGuard {
             case UInt8(ascii: "."):
                 if !inValue {
                     frames += 1
-                    if frames > maxDepth { return false }
+                    if frames > maxDepth { return Rejected(limit: .depth) }
                 } else if let segments = headerSegments {
                     // Quoted segments are skipped whole by the string case, so their dots never land here.
-                    if segments + 1 > maxDepth { return false }
+                    if segments + 1 > maxDepth { return Rejected(limit: .depth) }
                     headerSegments = segments + 1
                 }
             case UInt8(ascii: "="):
@@ -107,14 +117,14 @@ enum TOMLGuard {
             }
             i += 1
         }
-        return true
+        return nil
     }
 }
 
 extension TOMLDecoder {
     /// `decode(_:from:)` behind `TOMLGuard`: a rejected text throws like a parse error.
     func decodeGuarded<T: Decodable>(_ type: T.Type, from text: String) throws -> T {
-        guard TOMLGuard.accepts(text) else { throw TOMLGuard.Rejected() }
+        if let refused = TOMLGuard.refusal(text) { throw refused }
         return try decode(type, from: text)
     }
 }

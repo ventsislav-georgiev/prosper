@@ -258,7 +258,7 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
                                   privileged: spec.privileged, trusted: spec.trusted,
                                   configOwner: spec.configOwner,
                                   isCurrent: { [weak self] in self?.callIsCurrent(id) ?? false }).install(into: rt)
-                let source = try String(contentsOf: spec.entryURL, encoding: .utf8)
+                let source = try BoundedFileRead.text(spec.entryURL, maxBytes: BoundedFileRead.entryLuaMaxBytes)
                 try rt.run(source, name: "@\(spec.extensionID)")
                 lock.lock(); cache[spec.extensionID] = rt; lock.unlock()
             }
@@ -1002,7 +1002,7 @@ final class ExtensionRegistry: ObservableObject {
                           privileged: record.privileged, trusted: record.trusted,
                           configOwner: record.loaded.managedConfigOwner)
             .install(into: rt)
-        let source = try String(contentsOf: record.loaded.entryURL, encoding: .utf8)
+        let source = try BoundedFileRead.text(record.loaded.entryURL, maxBytes: BoundedFileRead.entryLuaMaxBytes)
         try rt.run(source, name: "@\(record.id)")
         record.runtime = rt
         return rt

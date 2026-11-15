@@ -273,7 +273,7 @@ struct ExtensionRow: View {
             guard members.contains("./" + t.path),
                   !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }),
                   RemoteInstaller.changedMembers(["./" + t.path], in: dir) == nil,
-                  let data = try? Data(contentsOf: dir.appendingPathComponent(t.path)),
+                  let data = try? BoundedFileRead.data(dir.appendingPathComponent(t.path), maxBytes: BoundedFileRead.themeJSONMaxBytes),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let colors = obj["colors"] as? [String: String] else { continue }
             swatches.append(.init(

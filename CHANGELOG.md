@@ -1304,6 +1304,9 @@ tag from the now-released section and put it on the new top draft.
 - Always allow, island answers and the Agents window no longer type into a session while its Claude
   is suspended (Ctrl-Z) or in the background: the prompt is left to you and the row says "Claude is
   not in front in that session; nothing was typed" (needs dch 1.63.0 or later).
+- An extension whose script or theme file is too large is now refused with a reason that names the
+  file and the size limit, and an extension manifest that is refused now says whether it was too
+  large or nested too deeply.
 
 ## v2.174.0
 

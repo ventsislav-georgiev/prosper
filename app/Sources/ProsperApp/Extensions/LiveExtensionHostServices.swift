@@ -485,7 +485,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             panel.allowedContentTypes = [.json]
             panel.allowsMultipleSelection = false
             guard panel.runModal() == .OK, let url = panel.url,
-                  let json = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+                  let json = try? BoundedFileRead.text(url, maxBytes: BoundedFileRead.snippetImportMaxBytes) else { return "" }
             _ = SnippetStore.importJSON(json)
             return "Imported"
         }
