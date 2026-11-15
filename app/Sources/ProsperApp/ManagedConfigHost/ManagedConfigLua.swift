@@ -75,8 +75,10 @@ enum ManagedConfigLua {
     /// #1232: the owner's declaration as its last valid status call gave it (spec 2.4: its current pieces; a repair may
     /// name a few, so it does not count), kept where the status refresh and the uninstall read it (main actor).
     /// Called off main; the hop carries Sendable values only.
+    /// r2 (R1232-2): capped at KitManifest.maxPieces (a kit's own bound on its pieces); over it nothing is kept, not a cut list.
     static func remember(_ declared: [ManagedConfigPiece], of owner: ManagedConfigOwner) {
-        Task { @MainActor in ManagedConfigRefresh.current?.declared[owner.id] = declared }
+        let kept = declared.count <= KitManifest.maxPieces ? declared : nil
+        Task { @MainActor in ManagedConfigRefresh.current?.declared[owner.id] = kept }
     }
 
     // MARK: Lua -> pieces

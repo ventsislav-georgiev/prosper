@@ -185,7 +185,7 @@ final class ManagedConfigRepairWiringTests: XCTestCase {
 
     // MARK: item 3, uninstall
 
-    func testUninstallCheckNamesAnUnrecordedBlockAndWritesNothing() async throws {
+    func testUninstallCheckNamesAnEditedUnrecordedBlockAndWritesNoUserFile() async throws {
         let env = makeMCEnv()
         let o = owner(env)
         let (_, edited) = try await Self.lostAndEdited(env, o)
@@ -200,15 +200,18 @@ final class ManagedConfigRepairWiringTests: XCTestCase {
         XCTAssertTrue(env.consent.seen.count == 1, "only the setup's apply asked")
         XCTAssertFalse(FileManager.default.fileExists(atPath: env.state.appendingPathComponent("state.json").path), "no state written")
 
-        // byte-equal but unrecorded: named too, and not adopted by the check
+        // #1232 r2 (F1232-1): byte-equal but unrecorded: adopted in Prosper's own state, not named; the edited one still is
         let piece = MCPieces.block("other", text: "Other rules.")
         let block = ManagedTextBlock.render(owner: o.id, piece: "other", version: o.version, body: "Other rules.",
                                             syntax: try XCTUnwrap(ManagedTextBlock.syntax(for: env.claudeMD)))
-        try Data(edited + Array(block.utf8)).write(to: env.claudeMD)
+        let withOther = edited + Array(block.utf8)
+        try Data(withOther).write(to: env.claudeMD)
         let twice = await ExtensionRegistry.removeManagedPieces(owner: o, declared: [MCPieces.block(), piece], provider: provider)
         let both = try XCTUnwrap(twice)
-        XCTAssertTrue(both.contains("other in "), both)
-        XCTAssertEqual(env.mc.ownerIDs(), [], "nothing adopted")
+        XCTAssertTrue(both.contains(#"rules in "claude:CLAUDE.md""#), both)
+        XCTAssertFalse(both.contains("other in "), both)
+        XCTAssertEqual(env.mc.ownerIDs(), [o.id], "the byte-equal block is adopted in Prosper's state")
+        XCTAssertEqual(env.bytes(env.claudeMD), withOther, "the person's bytes are unchanged")
     }
 
     @MainActor

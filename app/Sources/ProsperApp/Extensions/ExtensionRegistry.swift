@@ -1011,7 +1011,7 @@ final class ExtensionRegistry: ObservableObject {
         guard let record = record(id: id) else { throw ExtensionError.notFound(id) }
         let wasEnabled = record.enabled
         record.enabled = enabled
-        if !enabled { teardown(record) }
+        if !enabled { teardown(record); ManagedConfigRefresh.current?.declared[id] = nil } // #1232 r2: a disabled one declares nothing
         asyncRuntimes.invalidate(id: id)        // re-enable drops the stale twin too
         persistDisabled()
         persistEnabled()
@@ -1048,10 +1048,12 @@ final class ExtensionRegistry: ObservableObject {
         guard !first.isSystem else { throw ExtensionError.cannotUninstallSystem(id) }
         if let provider = managedConfig {
             // #1232: the pieces the extension last declared (host.config.status), read on main while its folder is here
-            let declared = ManagedConfigRefresh.current?.declared[id] ?? []
+            // r2 (F1232-2): a disabled extension makes no status calls, so a declaration of it is stale: none is passed
+            let declared = first.enabled ? (ManagedConfigRefresh.current?.declared[id] ?? []) : []
             if let kept = await Self.removeManagedPieces(owner: first.loaded.managedConfigOwner, declared: declared, provider: provider) {
                 throw ExtensionError.managedConfigKept(id: id, reason: kept)
             }
+            ManagedConfigRefresh.current?.declared[id] = nil // r2: dropped with the uninstall (a reinstall starts with none)
             ManagedConfigRefresh.current?.rescan()
         }
         // re-read after the await: the record list may have been rebuilt meanwhile
@@ -1077,7 +1079,9 @@ final class ExtensionRegistry: ObservableObject {
     /// r2 (R2-1): a provider that cannot resolve (slow or fish login shell, relative
     /// CLAUDE_CONFIG_DIR) stops only an owner the state has records for.
     /// #1232: a declared block of the owner with no record (lost, edited or not) is one Remove cannot take: the
-    /// uninstall names it and stops before any sheet, writing nothing (status without pieces and plan only read).
+    /// uninstall names it and stops before any sheet, writing no person's file.
+    /// r2 (F1232-1): status with the declared pieces first adopts a byte-equal block (a record in Prosper's own state
+    /// file, as the extension's status call does), so only the edited ones stop it; at most five are named.
     nonisolated static func removeManagedPieces(owner: ManagedConfigOwner, declared: [ManagedConfigPiece] = [],
                                                 provider: ManagedConfigProvider) async -> String? {
         let config: ManagedConfig
@@ -1089,7 +1093,8 @@ final class ExtensionRegistry: ObservableObject {
         case .success(let c): config = c
         }
         guard config.stateIsReadable() else { return ManagedConfigRefusalReason.stateUnreadable.description }
-        let recorded = config.status(owner: owner)
+        if !declared.isEmpty { _ = config.status(owner: owner, declared: declared) } // the adopt; writes state.json only
+        let recorded = config.status(owner: owner) // recomputed: the adopted ones are recorded now
         let blocks = declared.filter { p in p.kind == .block && !recorded.contains { $0.id == p.id } }
         if !blocks.isEmpty {
             let plan = config.plan(blocks, owner: owner) // adopt: byte-equal, drifted: edited; both on disk with no record
@@ -1097,10 +1102,12 @@ final class ExtensionRegistry: ObservableObject {
                 plan.actions.contains { $0.id == p.id && $0.action == .adopt } || plan.refusals.contains { $0.pieceID == p.id && $0.reason == .drifted }
             }
             if !named.isEmpty {
+                let names = named.map { "\($0.id) in \(String(reflecting: $0.target))" }
                 return "Not uninstalled: Prosper has no record of these blocks of the extension, so Remove cannot take them out: "
-                    + named.map { "\($0.id) in \(String(reflecting: $0.target))" }.joined(separator: ", ")
+                    + names.prefix(5).joined(separator: ", ") + (names.count > 5 ? " and \(names.count - 5) more" : "")
                     + ". Nothing was changed. Repair them from the extension (they are then recorded and uninstall removes them), "
-                    + "or delete them from the file yourself (only their two prosper marker lines, to keep your text), then uninstall again."
+                    + "or delete them from the file yourself (only their two prosper marker lines, to keep your text), then uninstall again. "
+                    + "Or turn the extension off, then uninstall it: Prosper then leaves these blocks in the file as they are."
             }
         }
         guard !recorded.isEmpty else { return nil }
