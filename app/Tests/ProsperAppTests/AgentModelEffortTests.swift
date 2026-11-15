@@ -201,6 +201,18 @@ final class AgentModelEffortTests: XCTestCase {
         XCTAssertTrue(AgentModelEffort.read(size: 0) { _, _ in data } == nil)
     }
 
+    func testAShortReadHoldingAWholeLineReadsAsNothing() {
+        let data = assistant("claude-a-1-1")
+        // Control: the same bytes read honestly give the model.
+        let honest = AgentModelEffort.read(size: UInt64(data.count)) { off, len in
+            data.subdata(in: Int(off)..<(Int(off) + len))
+        }
+        XCTAssertTrue(honest?.model == "claude-a-1-1")
+        // Size larger than the bytes returned: the chunk is shorter than asked, so nothing.
+        let short = AgentModelEffort.read(size: UInt64(data.count + 10)) { _, _ in data }
+        XCTAssertTrue(short == nil)
+    }
+
     // MARK: - Short name
 
     func testShortNames() {
