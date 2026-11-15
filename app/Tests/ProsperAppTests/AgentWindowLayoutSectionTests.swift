@@ -63,7 +63,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(rows.map(\.active), [false, true, false, false, false])
         let drawn = rows.last?.name ?? ""
         XCTAssertEqual(drawn, OutsideText.shown(drawn), "through the shared cap")
-        XCTAssertEqual(drawn, "e\u{301}\u{301}", "at most \(2) marks on the base")
+        XCTAssertEqual(drawn, "e\u{301}\u{301}\u{301}", "at most \(OutsideText.maxMarks) marks on the base")
     }
 
     /// A click switches through switchLayout(number:) (one write); the active row's click writes nothing; no click opens,
