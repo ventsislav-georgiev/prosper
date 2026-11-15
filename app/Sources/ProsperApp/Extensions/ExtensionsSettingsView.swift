@@ -163,7 +163,7 @@ struct ExtensionRow: View {
                     .frame(width: sz(22))
                 VStack(alignment: .leading, spacing: sz(2)) {
                     HStack(spacing: sz(6)) {
-                        Text(meta.title).font(Neon.font(.body)).bold()
+                        ExtensionRowTitle(text: ExtensionRowText.title(meta.title, id: meta.id))
                         if record.isSystem {
                             rowBadge("SYSTEM")
                         } else if !record.trusted {
@@ -172,10 +172,10 @@ struct ExtensionRow: View {
                         if record.privileged && !record.isSystem {
                             rowBadge("PRIVILEGED")
                         }
-                        Text("v\(meta.version)").font(Neon.font(.caption)).foregroundColor(.secondary)
+                        Text(verbatim: ExtensionRowText.version(meta.version)).font(Neon.font(.caption)).foregroundColor(.secondary)
                     }
-                    Text(meta.description).font(Neon.font(.caption)).foregroundColor(.secondary)
-                    Text("by \(meta.author)").font(Neon.font(.caption2)).foregroundColor(.secondary)
+                    Text(verbatim: ExtensionRowText.description(meta.description)).font(Neon.font(.caption)).foregroundColor(.secondary)
+                    Text(verbatim: ExtensionRowText.byLine(meta.author)).font(Neon.font(.caption2)).foregroundColor(.secondary)
                 }
                 Spacer()
                 Toggle("", isOn: Binding(
@@ -202,7 +202,7 @@ struct ExtensionRow: View {
                     set: { registry.setPhoneApproved($0, id: record.id) }))
                     .toggleStyle(.checkbox)
                     .font(Neon.font(.caption))
-                    .help("List " + (record.manifest.contributes?.phoneCommands ?? []).map(\.title).joined(separator: ", ")
+                    .help("List " + ExtensionRowText.help((record.manifest.contributes?.phoneCommands ?? []).map(\.title).joined(separator: ", "))
                           + " on the iPhone's Commands screen. An update that changes these commands turns this off again.")
             }
 
@@ -483,6 +483,46 @@ extension View {
 }
 
 /// Not named `badge`: inside a view body that name is SwiftUI's View.badge modifier on `self`, which recurses.
+/// #1251: an extension's own texts (manifest or Marketplace package) as the extension list and the Marketplace rows draw
+/// them: through OutsideText.shown (unseen scalars dropped, at most two marks per character) with a bound per field, drawn
+/// verbatim (no Markdown, no localization lookup). Display only: ids and versions used in logic stay the decoded values.
+enum ExtensionRowText {
+    static let titleMax = 80, versionMax = 24, authorMax = 80, descriptionMax = 300, helpMax = 160
+
+    /// The title; one with nothing visible left (empty, spaces or marks only) falls back to the id, then to "Extension".
+    static func title(_ title: String, id: String) -> String {
+        for s in [title, id] {
+            let shown = OutsideText.shown(s, max: titleMax)
+            if shown.unicodeScalars.contains(where: { $0 != " " && !isMark($0) }) { return shown }
+        }
+        return "Extension"
+    }
+
+    static func version(_ v: String) -> String { "v" + OutsideText.shown(v, max: versionMax) }
+    static func description(_ d: String) -> String { OutsideText.shown(d, max: descriptionMax) }
+    /// An empty author reads "by " as before.
+    static func byLine(_ author: String) -> String { "by " + OutsideText.shown(author, max: authorMax) }
+    static func help(_ s: String) -> String { OutsideText.shown(s, max: helpMax) }
+
+    private static func isMark(_ u: Unicode.Scalar) -> Bool {
+        let c = u.properties.generalCategory
+        return c == .nonspacingMark || c == .enclosingMark
+    }
+}
+
+/// #1251: the row's title line: one line, truncated, clipped to its own bounds so no mark it draws reaches the badges
+/// beside it or the lines under it; it gives way first when the row is narrow (the badges and the version keep their size).
+struct ExtensionRowTitle: View {
+    let text: String
+
+    var body: some View {
+        Text(verbatim: text).font(Neon.font(.body)).bold()
+            .lineLimit(1)
+            .clipped()
+            .layoutPriority(-1)
+    }
+}
+
 @MainActor private func rowBadge(_ text: String) -> some View {
     Text(text).font(Neon.font(.caption2)).bold()
         .padding(.horizontal, sz(5)).padding(.vertical, sz(1))

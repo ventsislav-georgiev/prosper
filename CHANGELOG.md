@@ -1145,6 +1145,9 @@ tag from the now-released section and put it on the new top draft.
   tailscale whois with that address in Terminal to see why (#988)
 - Agent Sessions: while you rename a session, the title, state and counts under the Rename field are
   hidden from VoiceOver by their own flag, not only by being transparent (#1239)
+- The extension list in Settings and the Marketplace show an extension's name, version, description
+  and author without invisible characters or piled-up accent marks, and a long name is cut to one
+  line, so these texts cannot cover the UNTRUSTED badge or the lines around it (#1251)
 
 ## v2.174.0
 

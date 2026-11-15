@@ -296,21 +296,7 @@ struct MarketplaceRootView: View {
             HStack(alignment: .top) {
                 Image(systemName: pkg.icon ?? (pkg.isTheme ? "paintpalette" : "puzzlepiece.extension"))
                     .foregroundColor(.accentColor).frame(width: sz(22))
-                VStack(alignment: .leading, spacing: sz(2)) {
-                    HStack(spacing: sz(6)) {
-                        Text(pkg.title).font(Neon.font(.body)).bold()
-                        if pkg.isTheme {
-                            Text("THEME").font(Neon.font(.caption2)).bold()
-                                .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
-                                .background(Color.accentColor.opacity(0.25))
-                                .clipShape(Capsule())
-                        }
-                        Text("v\(pkg.latestVersion)").font(Neon.font(.caption)).foregroundColor(.secondary)
-                    }
-                    Text(pkg.description).font(Neon.font(.caption)).foregroundColor(.secondary)
-                    Text("by \(pkg.author) · \(pkg.downloads) downloads")
-                        .font(Neon.font(.caption2)).foregroundColor(.secondary)
-                }
+                MarketplacePackageTexts(pkg: pkg)
                 Spacer()
                 if installingID == pkg.id {
                     ProgressView().controlSize(.small)
@@ -342,6 +328,31 @@ struct MarketplaceRootView: View {
                     installError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
                 }
             }
+        }
+    }
+}
+
+/// #1251: a package's own texts in its row (title, THEME badge, version, description, author line), each drawn verbatim
+/// through ExtensionRowText: a package is outside data written by its publisher. The title line is clipped to its bounds.
+struct MarketplacePackageTexts: View {
+    let pkg: MarketClient.Package
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(2)) {
+            HStack(spacing: sz(6)) {
+                Text(verbatim: ExtensionRowText.title(pkg.title, id: pkg.id)).font(Neon.font(.body)).bold()
+                    .lineLimit(1).clipped().layoutPriority(-1)
+                if pkg.isTheme {
+                    Text("THEME").font(Neon.font(.caption2)).bold()
+                        .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
+                        .background(Color.accentColor.opacity(0.25))
+                        .clipShape(Capsule())
+                }
+                Text(verbatim: ExtensionRowText.version(pkg.latestVersion)).font(Neon.font(.caption)).foregroundColor(.secondary)
+            }
+            Text(verbatim: ExtensionRowText.description(pkg.description)).font(Neon.font(.caption)).foregroundColor(.secondary)
+            Text(verbatim: ExtensionRowText.byLine(pkg.author) + " \u{00B7} \(pkg.downloads) downloads")
+                .font(Neon.font(.caption2)).foregroundColor(.secondary)
         }
     }
 }
@@ -398,6 +409,6 @@ struct ThemePreviewStrip: View {
         .frame(height: sz(44))
         .clipShape(RoundedRectangle(cornerRadius: sz(6)))
         .overlay(RoundedRectangle(cornerRadius: sz(6)).strokeBorder(.white.opacity(0.08)))
-        .help("\(swatch.title) · \(swatch.appearance ?? "dark")")
+        .help(ExtensionRowText.help("\(swatch.title) \u{00B7} \(swatch.appearance ?? "dark")"))
     }
 }
