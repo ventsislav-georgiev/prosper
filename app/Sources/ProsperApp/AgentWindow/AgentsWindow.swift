@@ -1009,6 +1009,7 @@ struct AgentDetailView: View {
     func terminalPane(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
         AgentTerminalPane(controller: model.terminal, open: { model.openSelected() })
             .frame(minHeight: 0, maxHeight: .infinity)
+            .modifier(AgentPaneProbe(kind: "terminal"))   // tests only: the terminal's own frame, before the overlay (nil probe: nothing)
             .overlay(alignment: .top) {
                 VStack(spacing: 0) {
                     overTop(row, s)
