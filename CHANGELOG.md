@@ -1061,6 +1061,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions sidebar: the model and effort label ends at the same place on every row, stays
   through a short gap in what dch reports, and shows on a session that has been working since a new
   conversation began (#1267)
+- Agent Sessions sidebar: a session's model and effort now show as two small badges at the end of
+  the second line (the effort badge tinted by level, low to max), with the age after them; the
+  Command-digit shortcut chip moved up to the end of the session name's line.
 
 ## v2.174.0
 

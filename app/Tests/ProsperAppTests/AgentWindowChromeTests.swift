@@ -647,6 +647,15 @@ extension AgentWindowD1Tests {
         let size = view.bounds.size
         let cyan: (NSColor) -> Bool = { $0.blueComponent > 0.85 && $0.greenComponent > 0.65 && $0.redComponent < 0.5 }
         let barStrip = CGRect(x: 0, y: 0, width: sz(14), height: size.height)
+        // #1268 (R6): the band leaves out the Command-digit chip's column only: the chip sits on line one, inside the
+        // band, and is drawn `active` on the selected row by design (pinned in testDigitJumpChipKeepsTheRowHeightAnd
+        // TheTitleInPlace). From the view's constants: the rail sz(290), the list's inset sz(8), the row's padding
+        // sz(10), the slot as wide as the nine chips together (titleLine). Never wider than that slot.
+        let chipSlot = NSHostingView(rootView: ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.fixedSize())
+            .fittingSize.width
+        let chipEnd = sz(290) - sz(8) - sz(10)
+        let chipColumn = (chipEnd - chipSlot)..<chipEnd
+        XCTAssertLessThanOrEqual(chipColumn.upperBound - chipColumn.lowerBound, chipSlot, "the band leaves out no more than the chip's slot")
 
         /// The selected row's middle (view points), from the selection bar's cyan rows.
         func barMid(_ rep: NSBitmapImageRep) throws -> CGFloat {
@@ -662,20 +671,25 @@ extension AgentWindowD1Tests {
         }
         /// Blue differences `on - off` over the right half of the rail (clear of the bar's glow), in
         /// the 8 pt band around `mid`: (fill pixels, edge pixels, pixels bluer by > 0.03).
-        func row(_ on: NSBitmapImageRep, _ off: NSBitmapImageRep, mid: CGFloat) -> (fill: Int, edge: Int, any: Int) {
+        /// #1268 (item 5, cause): `at` is where the `any` pixels are, in view points (x from the rail's left, y from the
+        /// band's top), as "x minX-maxX y minY-maxY", printed by the unselected assertion.
+        func row(_ on: NSBitmapImageRep, _ off: NSBitmapImageRep, mid: CGFloat) -> (fill: Int, edge: Int, any: Int, at: String) {
             let s = CGFloat(on.pixelsWide) / size.width
             var fill = 0, edge = 0, any = 0
-            for y in Int((mid - 4) * s)..<Int((mid + 4) * s) {
-                for x in Int(sz(145) * s)..<Int(sz(290) * s) {
+            var box = (x0: Int.max, x1: Int.min, y0: Int.max, y1: Int.min)
+            let top = Int((mid - 4) * s)
+            for y in top..<Int((mid + 4) * s) {
+                for x in Int(sz(145) * s)..<Int(sz(290) * s) where !chipColumn.contains(CGFloat(x) / s) {
                     guard let a = on.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
                           let b = off.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                     let d = a.blueComponent - b.blueComponent
-                    if d > 0.03 { any += 1 }
+                    if d > 0.03 { any += 1; box = (min(box.x0, x), max(box.x1, x), min(box.y0, y - top), max(box.y1, y - top)) }
                     if d > 0.05 && d < 0.25 { fill += 1 }
                     if d > 0.3 { edge += 1 }
                 }
             }
-            return (fill, edge, any)
+            let at = any == 0 ? "none" : "x \(CGFloat(box.x0) / s)-\(CGFloat(box.x1) / s) y \(CGFloat(box.y0) / s)-\(CGFloat(box.y1) / s)"
+            return (fill, edge, any, at)
         }
 
         let backings: [CGFloat] = [1, 2]
@@ -697,7 +711,8 @@ extension AgentWindowD1Tests {
                 // The right edge: one 1 pt column, 8 pt high, less a backing pixel of antialiasing at each end.
                 XCTAssertGreaterThanOrEqual(edge, 6, "\(name) selected: the accent edge (\(x), \(r))")
                 // The same band with the row unselected: nothing bluer than when selected elsewhere.
-                XCTAssertEqual(row(off, on, mid: mid).any, 0, "\(name) unselected: no fill, no edge (\(x))")
+                let un = row(off, on, mid: mid)
+                XCTAssertEqual(un.any, 0, "\(name) unselected: no fill, no edge (\(x)) at \(un.at)")
             }
         }
         XCTAssertFalse(win.isVisible, "never on screen")

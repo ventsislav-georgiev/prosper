@@ -100,7 +100,7 @@ final class AgentRowModelEffortTests: XCTestCase {
         atScales { scale in
             let slots = claude.map { ideal(AgentSidebarRowView(row: $0, selected: false).modelSlotView) }
             let lines = claude.map { ideal(AgentSidebarRowView(row: $0, selected: false, number: 4)
-                .detailLine([], chipSlot: true, modelSlot: true)) }
+                .detailLine([], modelSlot: true)) }
             for (i, r) in claude.enumerated() {
                 XCTAssertEqual(slots[i].width, slots[0].width, accuracy: 0.01, "slot width, \(r.modelText) (\(scale))")
                 XCTAssertEqual(slots[i].height, slots[0].height, accuracy: 0.01, "slot height, \(r.modelText) (\(scale))")
@@ -114,9 +114,14 @@ final class AgentRowModelEffortTests: XCTestCase {
                 }
             }
             XCTAssertGreaterThan(slots[0].width, sz(40), "the slot has room (\(scale))")
-            for text in ["Fable 9.2 · medium", "Fable 9.2 · xhigh", "Opus 9.9 · medium", AgentSidebarRowView.modelWidest] {
-                XCTAssertLessThanOrEqual(ideal(Text(text).font(Neon.font(10))).width, slots[0].width + 0.01,
-                                         "\(text) fits the slot whole (\(scale))")
+            // #1268: the pair as two badges (was one text at font 10).
+            for (m, e) in [("Fable 9.2", "medium"), ("Fable 9.2", "xhigh"), ("Opus 9.9", "medium"),
+                           (AgentSidebarRowView.modelWidest, AgentSidebarRowView.effortWidest)] {
+                let pair = HStack(spacing: sz(3)) {
+                    AgentSidebarRowView.badge(m, AgentSidebarRowView.neutralLook)
+                    AgentSidebarRowView.badge(e, AgentSidebarRowView.effortLook(e))
+                }
+                XCTAssertLessThanOrEqual(ideal(pair).width, slots[0].width + 0.01, "\(m) \(e) fits the slot whole (\(scale))")
             }
             for r in none {
                 let v = AgentSidebarRowView(row: r, selected: false)
@@ -177,8 +182,8 @@ final class AgentRowModelEffortTests: XCTestCase {
     }
 
     /// The second line as the row draws it, at the sidebar's width: the state text starts at the same x with a value,
-    /// without one and on a row with no slot (nothing is added to the stack's spacing); the value is drawn whole, at
-    /// the same trailing edge for both texts; at a narrow row the last variant keeps the state text whole, no slot.
+    /// without one and on a row with no slot (nothing is added to the stack's spacing); the value is drawn whole, the
+    /// last badge's fill at the same trailing edge with and without an effort (#1268); at a narrow row the last variant keeps the state text whole, no slot.
     @MainActor
     func testModelEffortSecondLineKeepsItsStartAndTheNarrowVariant() {
         let rows = [row(session("api", model: "claude-fable-9-2-20991231", effort: "high")),
@@ -189,33 +194,92 @@ final class AgentRowModelEffortTests: XCTestCase {
             var starts: [CGFloat] = [], ends: [CGFloat] = []
             for r in rows {
                 let width = column(sz(274))
+                // #1268: the last badge (the effort's, else the model's) is the value's trailing text (was modelText).
+                let last = r.effort ?? r.model ?? ""
                 let t = tree(AgentSidebarRowView(row: r, selected: false, number: 4).detailVariants
                     .frame(width: width, alignment: .leading), CGSize(width: width, height: sz(30))) { t in
-                    t.contains { $0.label == "Idle" } && (r.modelText.isEmpty || t.contains { $0.label == r.modelText })
+                    t.contains { $0.label == "Idle" } && (last.isEmpty || t.contains { $0.label == last })
                 }
                 guard let state = t.first(where: { $0.label == "Idle" }) else {
                     XCTFail("state text (\(scale)) in \(t.map(\.label).filter { !$0.isEmpty })"); continue
                 }
                 XCTAssertGreaterThan(state.frame.width, 0)
                 starts.append(state.frame.minX)
-                guard !r.modelText.isEmpty else { continue }
-                guard let value = t.first(where: { $0.label == r.modelText }) else {
-                    XCTFail("\(r.modelText) drawn at the sidebar's width (\(scale))"); continue
+                guard !last.isEmpty else { continue }
+                guard let value = t.first(where: { $0.label == last }) else {
+                    XCTFail("\(last) drawn at the sidebar's width (\(scale))"); continue
                 }
-                XCTAssertGreaterThanOrEqual(value.frame.width + 0.5, ideal(Text(r.modelText).font(Neon.font(10))).width,
-                                            "\(r.modelText) whole (\(scale))")
+                XCTAssertGreaterThanOrEqual(value.frame.width + 0.5, ideal(Text(last).font(Neon.font(8.5, weight: .medium))).width - 0.5,
+                                            "\(last) whole (\(scale))")
                 XCTAssertGreaterThan(value.frame.minX, state.frame.maxX, "trailing (\(scale))")
                 ends.append(value.frame.maxX)
             }
             XCTAssertEqual(starts.count, rows.count)
             for x in starts { XCTAssertEqual(x, starts.first ?? -1, accuracy: 0.5, "the line starts at the same x: \(starts) (\(scale))") }
             XCTAssertEqual(ends.count, 2)
-            XCTAssertEqual(ends.first ?? -1, ends.last ?? -2, accuracy: 0.5, "same trailing edge: \(ends) (\(scale))")
+            // #1268: the LAST badge's BACKGROUND ends at the slot's end on a model-and-effort row and on a model-only row,
+            // so the badges' edge lines up down the sidebar (was: the texts' accessibility frames, which are the Text
+            // without its sz(3) padding; they are printed beside it). Read by pixels: the rightmost drawn pixel left of
+            // the age slot, over a black canvas, at the column's width. slotEnd uses the age slot's fittingSize (whole
+            // points, rounded up), so the real end R is in [slotEnd, slotEnd + 1); the last pixel the badge's fill
+            // touches is within one backing pixel (1 pt at 1x) before R, and a pixel the edge covers under about a tenth
+            // can read blank: so [slotEnd - 1.5, slotEnd + 1], and the two rows within 1 pt of each other. A badge edge
+            // sz(3) apart (2.1 pt at 0.7) fails the second at every scale.
+            let lineWidth = column(sz(274))
+            let slotEnd = lineWidth - ideal(AgentSidebarRowView(row: rows[0], selected: false).ageSlot).width - sz(5)
+            var badgeEnds: [CGFloat] = []
+            for r in rows.prefix(2) {
+                let root = ZStack(alignment: .topLeading) {
+                    Color.black
+                    AgentSidebarRowView(row: r, selected: false, number: 4).detailVariants
+                        .frame(width: lineWidth, height: sz(30), alignment: .leading)
+                }
+                .frame(width: lineWidth + 24, height: sz(30) + 24, alignment: .topLeading)
+                .environment(\.colorScheme, .dark)
+                let h = NSHostingView(rootView: root)
+                h.frame = CGRect(x: 0, y: 0, width: lineWidth + 24, height: sz(30) + 24)
+                h.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+                h.layoutSubtreeIfNeeded()
+                guard let rep = h.bitmapImageRepForCachingDisplay(in: h.bounds) else { XCTFail("no bitmap (\(scale))"); continue }
+                h.cacheDisplay(in: h.bounds, to: rep)
+                let k = CGFloat(rep.pixelsWide) / (lineWidth + 24)
+                var last = 0
+                for y in 0..<Int(sz(30) * k) {
+                    for x in Int((slotEnd - sz(20)) * k)..<Int((slotEnd + sz(5) - 0.5) * k) {
+                        guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        if c.redComponent + c.greenComponent + c.blueComponent > 0.003 { last = max(last, x) }
+                    }
+                }
+                badgeEnds.append(CGFloat(last) / k)
+                // #1268 (R8): on the model-and-effort row the two badges draw different fills, as drawn: the model's
+                // neutral grey wash and the effort's ("high") accent wash, each over the black canvas.
+                if r.effort != nil {
+                    var grey = 0, accent = 0
+                    for y in 0..<Int(sz(30) * k) {
+                        for x in Int((slotEnd - sz(120)) * k)..<Int(slotEnd * k) {
+                            guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                            let hi = max(c.redComponent, c.greenComponent, c.blueComponent)
+                            if hi > 0.02 && hi < 0.08 && c.blueComponent - c.redComponent < 0.02 { grey += 1 }
+                            if c.blueComponent - c.redComponent > 0.1 && hi < 0.4 { accent += 1 }
+                        }
+                    }
+                    let least = Int(sz(40) * k * k)
+                    XCTAssertTrue(grey > least && accent > least, "model and effort fills differ: grey \(grey), accent \(accent) px (\(scale))")
+                }
+            }
+            print("BADGE1268B-EDGE scale \(scale) slotEnd \(slotEnd) badge fill ends \(badgeEnds) (effort row, model-only row); "
+                  + "text frame ends \(ends)")
+            XCTAssertEqual(badgeEnds.count, 2)
+            for x in badgeEnds {
+                XCTAssertTrue(x <= slotEnd + 1 && x >= slotEnd - 1.5, "badge edge \(x) at the slot's end \(slotEnd): \(badgeEnds) (\(scale))")
+            }
+            XCTAssertEqual(badgeEnds.first ?? -1, badgeEnds.last ?? -9, accuracy: 1, "one badge edge on both rows: \(badgeEnds) (\(scale))")
 
-            // Narrow: the last variant, no slot, the state text whole. sz(120), not sz(110): at 0.7 the last variant (text +
-            // its spacing before the Spacer, 48 pt) does not fit sz(110)'s 47.6 pt column and cuts the text 1 pt, today too.
+            // Narrow: the last variant, no slot, the state text whole. #1268: sz(150) (was sz(120)): the last variant now
+            // carries the age slot too (the sidebar itself is a fixed sz(290)).
             let narrow = row(session("api", .blocked, model: "claude-fable-9-2", effort: "high"))
-            let width = column(sz(120))
+            let width = column(sz(150))
             let t = tree(AgentSidebarRowView(row: narrow, selected: false, number: 4).detailVariants
                 .frame(width: width, alignment: .leading), CGSize(width: width, height: sz(30))) { t in
                 t.contains { $0.label == "Needs input" }
@@ -248,27 +312,22 @@ final class AgentRowModelEffortTests: XCTestCase {
         let r = busy(true)
         atScales { scale in
             let v = AgentSidebarRowView(row: r, selected: false, number: 4)
-            let widths = [ideal(v.detailLine(r.prs, chipSlot: true, modelSlot: true)).width,
-                          ideal(v.detailLine(r.prs, chipSlot: true)).width,
-                          ideal(v.detailLine([], open: r.prCount, chipSlot: true, modelSlot: true)).width,
-                          ideal(v.detailLine([], open: r.prCount, chipSlot: true)).width,
-                          ideal(v.detailLine([], chipSlot: true, modelSlot: true)).width,
-                          ideal(v.detailLine([], chipSlot: true)).width,
+            // #1268: the four variants (chips + badges, count + badges, count, none); no chip on this line any more.
+            let widths = [ideal(v.detailLine(r.prs, modelSlot: true)).width,
+                          ideal(v.detailLine([], open: r.prCount, modelSlot: true)).width,
+                          ideal(v.detailLine([], open: r.prCount)).width,
                           ideal(v.detailLine([])).width]
-            XCTAssertEqual(widths.count, 7)
+            XCTAssertEqual(widths.count, 4)
             // As row widths: the variant is taken from this row width up (until one before it fits).
             let rowWidths = widths.map { ($0 + 2 * sz(10) + sz(14) + sz(8)).rounded(.up) }
             print("MODEL1203-WIDTHS scale \(scale) sidebarRow \(sz(274)) column \(column(sz(274))) "
                   + "variantIdeal \(widths.map { ($0 * 10).rounded() / 10 }) fromRowWidth \(rowWidths)")
-            for i in [0, 2, 4] {
-                XCTAssertGreaterThan(widths[i], widths[i + 1], "with-slot variant \(i + 1) wider than its twin (\(scale))")
-            }
-            for (a, b) in [(1, 3), (3, 5), (5, 6)] {
-                XCTAssertGreaterThan(widths[a], widths[b], "today's variants in their order: \(a + 1) > \(b + 1) (\(scale))")
+            for (a, b) in [(0, 1), (1, 2), (2, 3)] {
+                XCTAssertGreaterThan(widths[a], widths[b], "the variants in their order: \(a + 1) > \(b + 1) (\(scale))")
             }
             XCTAssertLessThanOrEqual(ideal(AgentSidebarRowView(row: busy(false), selected: false, number: 4)
-                .detailLine([], chipSlot: true, modelSlot: true)).width, column(sz(274)),
-                                     "a plain row keeps the slot and the ⌘ chip at the sidebar's width (\(scale))")
+                .detailLine([], modelSlot: true)).width, column(sz(274)),
+                                     "a plain row keeps the badges at the sidebar's width (\(scale))")
         }
     }
 
@@ -291,25 +350,22 @@ final class AgentRowModelEffortTests: XCTestCase {
                     }
                     let claude = line(busy(withPRs)), today = line(busy(withPRs, claude: false))
                     let tag = "\(withPRs ? "busy" : "plain") at \(w) (\(scale))"
-                    let slotShown = claude.contains { $0.label == "Fable 9.2 · high" }
-                    func labels(_ t: [AX]) -> Set<String> { Set(t.map(\.label).filter { !$0.isEmpty && $0 != "Fable 9.2 · high" }) }
-                    XCTAssertEqual(labels(claude), labels(today), "the slot takes nothing away: \(tag)")
+                    // #1268: two badges (was one "Fable 9.2 · high" text); the PR chips give way to their count before
+                    // the badges go (item 3), so the badges may stand beside the count where today's row keeps chips.
+                    let badges: Set = ["Fable 9.2", "high"]
+                    let slotShown = claude.contains { $0.label == "Fable 9.2" }
+                    func labels(_ t: [AX]) -> Set<String> { Set(t.map(\.label).filter { !$0.isEmpty && !badges.contains($0) }) }
+                    XCTAssertTrue(labels(claude).subtracting(labels(today)).isSubset(of: ["2 open pull requests"]),
+                                  "the slot takes nothing but the chips (to their count) away: \(tag)")
+                    XCTAssertTrue(labels(claude).contains("Needs input"), "the state text stays: \(tag)")
+                    XCTAssertEqual(slotShown, claude.contains { $0.label == "high" }, "both badges or none: \(tag)")
                     XCTAssertFalse(today.contains { $0.label.contains("Fable") }, "no slot without modelSlot: \(tag)")
                     let x = [claude, today].map { $0.first { $0.label == "Needs input" }?.frame.minX ?? -100 }
                     XCTAssertEqual(x.first ?? -1, x.last ?? -2, accuracy: 0.5, "state text at the same x: \(tag)")
                     print("MODEL1203-TAKEN \(tag) slot \(slotShown) labels \(labels(claude).sorted())")
-                    if w == 274 {
-                        if withPRs {
-                            XCTAssertEqual(labels(claude), ["Needs input", "3 agents", "192 merged pull requests",
-                                                            "2 open pull requests"], "today's open count kept: \(tag)")
-                        }
-                        XCTAssertEqual(slotShown, !withPRs, "slot only where it fits beside today's variant: \(tag)")
-                    }
-                    if w == 220 && withPRs {
-                        XCTAssertFalse(labels(claude).contains("2 open pull requests"), "today's chip-only variant: \(tag)")
-                    }
-                    // The ⌘4 chip on the full row, found as the DigitJump rows find it (its own element, named).
-                    if w == 274 || (w == 220 && withPRs) {
+                    if w == 274 && !withPRs { XCTAssertTrue(slotShown, "a plain row shows the badges at the sidebar's width: \(tag)") }
+                    // #1268: the ⌘4 chip is on the first line at every width (was: only where line two had room).
+                    if w == 274 || w == 110 {
                         let full = tree(AgentSidebarRowView(row: busy(withPRs), selected: false, number: 4).frame(width: width),
                                         CGSize(width: width, height: sz(60))) { t in t.contains { $0.label == "Command-4" } }
                         XCTAssertTrue(full.contains { $0.label == "Command-4" && $0.frame.width > 0 }, "⌘4 chip kept: \(tag)")
@@ -393,8 +449,9 @@ extension AgentRowModelEffortTests {
         return out
     }
 
-    /// At the sidebar's width, every scale, 1x and 2x: the model text of a row with no number ends where the same row's
-    /// ends with the widest digit's chip (and never right of any numbered row's), the state text starts at the same x.
+    /// #1268 (was #1267's edge with a chip-wide room on line two): at the sidebar's width, every scale, 1x and 2x, the
+    /// badges of a row with no number end where the same row's end with the widest digit's number and with ⌘1 (line
+    /// two carries no chip any more), the age is the last thing on the line, and the state text starts at the same x.
     @MainActor
     func testModelTextEndsAtTheSameEdgeWithAndWithoutAChip() {
         let r = row(session("api", model: "claude-fable-9-2-20991231", effort: "high"))
@@ -402,49 +459,55 @@ extension AgentRowModelEffortTests {
             let wide = widestDigit()
             for px: CGFloat in [1, 2] {
                 let width = column(sz(274))
-                var ends: [CGFloat] = [], starts: [CGFloat] = []
+                var ends: [CGFloat] = [], starts: [CGFloat] = [], ages: [CGFloat] = []
                 for number in [nil, wide, 1] as [Int?] {
                     let t = tree1267(AgentSidebarRowView(row: r, selected: false, number: number).detailVariants
                         .frame(width: width, alignment: .leading), CGSize(width: width, height: sz(30)), backing: px) { t in
-                        t.contains { $0.label == "Idle" } && t.contains { $0.label == r.modelText }
+                        t.contains { $0.label == "Idle" } && t.contains { $0.label == "high" } && t.contains { $0.label == "4m" }
                     }
                     let tag = "number \(number.map(String.init) ?? "none") (\(scale), \(Int(px))x)"
-                    guard let value = t.first(where: { $0.label == r.modelText }), let state = t.first(where: { $0.label == "Idle" })
-                    else { XCTFail("model and state text drawn: \(tag)"); continue }
-                    ends.append(value.frame.maxX); starts.append(state.frame.minX)
+                    guard let value = t.first(where: { $0.label == "high" }), let state = t.first(where: { $0.label == "Idle" }),
+                          let age = t.first(where: { $0.label == "4m" })
+                    else { XCTFail("badge, state and age drawn: \(tag)"); continue }
+                    XCTAssertLessThan(value.frame.maxX, age.frame.minX, "the age after the badges: \(tag)")
+                    XCTAssertEqual(age.frame.maxX, width, accuracy: 1 / px + 0.01, "the age ends the line: \(tag)")
+                    ends.append(value.frame.maxX); starts.append(state.frame.minX); ages.append(age.frame.maxX)
                 }
                 let tag = "\(scale), \(Int(px))x: ends \(ends)"
                 XCTAssertEqual(ends.count, 3, tag)
-                XCTAssertEqual(ends.first ?? -1, ends.dropFirst().first ?? -2, accuracy: 0.5 / px + 0.01, "same trailing edge: \(tag)")
-                XCTAssertLessThanOrEqual(ends.first ?? 1e9, (ends.last ?? -1) + 0.5 / px + 0.01, "never right of ⌘1's: \(tag)")
+                for x in ends { XCTAssertEqual(x, ends.first ?? -1, accuracy: 0.5 / px + 0.01, "same trailing edge: \(tag)") }
+                for x in ages { XCTAssertEqual(x, ages.first ?? -1, accuracy: 0.5 / px + 0.01, "same age edge: \(tag)") }
                 for x in starts { XCTAssertEqual(x, starts.first ?? -1, accuracy: 0.5 / px + 0.01, "state text x: \(tag)") }
             }
         }
     }
 
-    /// The line widths: a chipless Claude row's slot variant is as wide as the widest-digit row's; a row with no slot
-    /// (Codex or shell, History) and every variant without the slot are today's (no room added).
+    /// #1268 (was #1267's chipless room beside the slot): the chip's room is on the first line of EVERY row (a number
+    /// or not, Claude or not, live or History), the second line is the same width with any number, and a row with no
+    /// slot (Codex or shell, History) adds none.
     @MainActor
     func testChiplessRoomOnlyBesideTheModelSlot() {
         let claude = row(session("api", model: "claude-fable-9-2", effort: "high"))
         let none = [row(session("api", model: "claude-fable-9-2", effort: "high", path: nil)), history("api")]
         atScales { scale in
             let wide = widestDigit()
-            let chipless = AgentSidebarRowView(row: claude, selected: false)
-            let numbered = AgentSidebarRowView(row: claude, selected: false, number: wide)
-            XCTAssertEqual(ideal(chipless.detailLine([], chipSlot: true, modelSlot: true)).width,
-                           ideal(numbered.detailLine([], chipSlot: true, modelSlot: true)).width, accuracy: 0.01, "slot line (\(scale))")
-            // Without the slot a chipless row keeps no chip room, as today.
-            XCTAssertEqual(ideal(chipless.detailLine([], chipSlot: true)).width, ideal(chipless.detailLine([])).width,
-                           accuracy: 0.01, "no slot, no room (\(scale))")
+            for r in [claude] + none {
+                let chipless = AgentSidebarRowView(row: r, selected: false)
+                let numbered = AgentSidebarRowView(row: r, selected: false, number: wide)
+                XCTAssertEqual(ideal(chipless.titleLine).width, ideal(numbered.titleLine).width, accuracy: 0.01,
+                               "\(r.title): the chip's room on line one with no number (\(scale))")
+                XCTAssertGreaterThanOrEqual(ideal(chipless.titleLine).width,
+                                            ideal(Text(r.title).font(Neon.font(12.5, weight: .medium))).width
+                                                + sz(6) + sz(4) + ideal(AgentDigitChip(number: wide)).width - 0.01,
+                                            "\(r.title): the room is the widest chip's (\(scale))")
+                XCTAssertEqual(ideal(chipless.detailLine([], modelSlot: true)).width,
+                               ideal(numbered.detailLine([], modelSlot: true)).width, accuracy: 0.01,
+                               "\(r.title): line two does not carry the chip (\(scale))")
+            }
             for r in none {
                 let v = AgentSidebarRowView(row: r, selected: false)
-                let today = ideal(v.detailLine([])).width
-                for (tag, w) in [("chip+slot", ideal(v.detailLine([], chipSlot: true, modelSlot: true)).width),
-                                 ("chip", ideal(v.detailLine([], chipSlot: true)).width),
-                                 ("variants", ideal(v.detailVariants).width)] {
-                    XCTAssertEqual(w, today, accuracy: 0.01, "\(r.title) \(tag): unchanged (\(scale))")
-                }
+                XCTAssertEqual(ideal(v.detailLine([], modelSlot: true)).width, ideal(v.detailLine([])).width, accuracy: 0.01,
+                               "\(r.title): no slot (\(scale))")
             }
         }
     }

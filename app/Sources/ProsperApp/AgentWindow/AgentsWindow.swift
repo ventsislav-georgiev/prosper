@@ -574,23 +574,7 @@ struct AgentSidebarRowView: View {
             }
             .frame(width: sz(14))
             VStack(alignment: .leading, spacing: sz(3)) {
-                HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
-                    Text(row.title).font(Neon.font(12.5, weight: .medium))
-                        .foregroundStyle(row.state == nil ? Neon.textSecondary : Neon.textPrimary)
-                        .lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: sz(4))
-                    if !row.age.isEmpty || row.state != nil {
-                        // #828: a fixed slot, so "now" -> "1m" never re-truncates the title; #829 (QA #660
-                        // note 4): the widest age the formatter returns, so "120d" fits it too. R1115-2: a live
-                        // row keeps it with no age (working, #1114), so working <-> idle never moves the title.
-                        ZStack(alignment: .trailing) {
-                            Text(AgentIsland.ageWidest).hidden()
-                            Text(row.age).foregroundStyle(Neon.textSecondary)
-                        }
-                        .font(Neon.font(10).monospacedDigit())
-                        .fixedSize()
-                    }
-                }
+                titleLine
                 detailVariants
             }
         }
@@ -605,8 +589,8 @@ struct AgentSidebarRowView: View {
         .accessibilityLabel(([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail, row.modelWords] + row.countWords
                              + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? .isSelected : [])
-        // #1110: drawn over the slot the detail line kept (outside the row's element, so it is read with its own name
-        // and help); no slot, no chip.
+        // #1110: drawn over the slot the title line keeps (#1268; outside the row's element, so it is read with its own
+        // name and help); no number, no chip.
         .overlayPreferenceValue(AgentDigitChipSlot.self) { slot in
             if let slot, let number {
                 GeometryReader { proxy in
@@ -622,7 +606,7 @@ struct AgentSidebarRowView: View {
     }
 }
 
-/// #1110: the bounds of the ⌘<n> chip's slot on the row's detail line.
+/// #1110: the bounds of the ⌘<n> chip's slot (#1268: at the end of the row's title line).
 private struct AgentDigitChipSlot: PreferenceKey {
     static let defaultValue: Anchor<CGRect>? = nil
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
@@ -656,47 +640,119 @@ struct AgentDigitChip: View {
 }
 
 extension AgentSidebarRowView {
-    /// The second line. The PR chips whole, else their count, else none: never a cut-off chip. #1110: the ⌘<n> chip's
-    /// room is kept on every variant but the last, so it goes after the PR chips, whole. #1203: the model slot shows only
-    /// where the variant taken without it still fits with it (each variant is tried with the slot first, then as before).
+    /// The first line. #1268: the title, then the ⌘<n> chip's slot at its end on EVERY row (the widest digit's chip, at
+    /// no height, so every title is cut at the same place and the row's height never changes); the chip is drawn over
+    /// it by the row, only with a number, and overhangs into the row's padding as it did on the second line.
+    var titleLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
+            Text(row.title).font(Neon.font(12.5, weight: .medium))
+                .foregroundStyle(row.state == nil ? Neon.textSecondary : Neon.textPrimary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: sz(4))
+            // Digits are proportional: the nine together are the widest whatever the font.
+            ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
+                .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { $0 }
+        }
+    }
+
+    /// The second line. The PR chips whole, else their count, else none: never a cut-off chip. #1268: what gives way
+    /// first is the PR chips (to their count), then the model badges, then the count; the state text and the age slot
+    /// are on every variant. #1203: the badges show only where the line still fits with them.
     var detailVariants: some View {
         ViewThatFits(in: .horizontal) {
-            if row.modelSlot { detailLine(row.prs, chipSlot: true, modelSlot: true) }
-            detailLine(row.prs, chipSlot: true)
-            if !row.prs.isEmpty {
-                if row.modelSlot { detailLine([], open: row.prCount, chipSlot: true, modelSlot: true) }
-                detailLine([], open: row.prCount, chipSlot: true)
-            }
-            if row.modelSlot { detailLine([], chipSlot: true, modelSlot: true) }
-            detailLine([], chipSlot: true)
+            detailLine(row.prs, modelSlot: true)
+            if !row.prs.isEmpty { detailLine([], open: row.prCount, modelSlot: true) }
+            detailLine([], open: row.prCount)
             detailLine([])
         }
     }
 
-    /// #1203: the model slot's width, a display text no shorter than any known short name with the longest effort
-    /// word (not a model id). A longer name is cut in the middle to it.
-    static let modelWidest = "Sonnet 4.5 · medium"
+    /// #1203: the model slot's width. #1268: the widest known short name and the widest effort word, each in its badge
+    /// (not a model id); a longer name is cut in the middle inside its badge.
+    static let modelWidest = "Sonnet 4.5"
+    static let effortWidest = "medium"
 
-    /// #1203: the model and effort of the last answer, in a slot as wide as `modelWidest` whether or not a value is
-    /// known (no size change when it arrives): the hidden widest text sizes it, the value is drawn over it.
+    /// #1268: the effort badge's look by level, quietest to strongest, from the theme's own tokens (text, fill, fill
+    /// opacity); an unknown word, and the model badge, take the neutral look. Every pair clears 4.5:1 over the sidebar
+    /// on every bundled theme (AgentRowBadgeTests): a token's own 0.12 fill does not for most tokens, so the fill is
+    /// quieter than the PR chips' and the strong levels keep textPrimary on an accent wash.
+    typealias BadgeLook = (text: KeyPath<ThemePalette, Color>, fill: KeyPath<ThemePalette, Color>, opacity: Double)
+    static var neutralLook: BadgeLook { (\ThemePalette.textSecondary, \ThemePalette.textSecondary, 0.06) }
+    static func effortLook(_ effort: String?) -> BadgeLook {
+        switch effort ?? "" {
+        case "low": (\ThemePalette.textSecondary, \ThemePalette.blue, 0.06)
+        case "medium": (\ThemePalette.textPrimary, \ThemePalette.blue, 0.12)
+        case "high": (\ThemePalette.textPrimary, \ThemePalette.blue, 0.24)
+        case "xhigh": (\ThemePalette.textPrimary, \ThemePalette.magenta, 0.18)
+        case "max": (\ThemePalette.textPrimary, \ThemePalette.magenta, 0.32)
+        default: neutralLook
+        }
+    }
+
+    /// #1268: one badge: 8.5 medium (the PR chips are 9.5), padding sz(3) x sz(1), radius sz(3).
+    static func badge(_ text: String, _ look: BadgeLook) -> some View {
+        let p = ThemeRuntime.palette
+        return Text(text).font(Neon.font(8.5, weight: .medium)).foregroundStyle(p[keyPath: look.text])
+            .lineLimit(1).truncationMode(.middle)
+            .padding(.horizontal, sz(3)).padding(.vertical, sz(1))
+            .background(RoundedRectangle(cornerRadius: sz(3)).fill(p[keyPath: look.fill].opacity(look.opacity)))
+    }
+
+    /// #1268: which text with which look, in drawing order: the model's (neutral), then the effort's (by level); no
+    /// model, none (an effort comes only with a model). On the selected row (the chip's `active: selected`) a look with
+    /// the quiet text (the neutral and low ones) draws textPrimary: textSecondary misses 4.5:1 over the selected fill on
+    /// 7 themes, textPrimary clears it on all 22 (AgentRowBadgeTests); fills and every other look unchanged.
+    static func badges(model: String?, effort: String?, selected: Bool = false) -> [(text: String, look: BadgeLook)] {
+        guard let model else { return [] }
+        let all = [(text: model, look: neutralLook)] + (effort.map { [(text: $0, look: effortLook($0))] } ?? [])
+        guard selected else { return all }
+        return all.map { b -> (text: String, look: BadgeLook) in
+            guard b.look.text == neutralLook.text else { return b }
+            return (text: b.text, look: (text: \ThemePalette.textPrimary, fill: b.look.fill, opacity: b.look.opacity))
+        }
+    }
+
+    /// #1203: the model and effort of the last answer, in a slot as wide as the widest pair whether or not a value is
+    /// known (no size change when it arrives): the hidden widest pair sizes it, the value is drawn over it, trailing.
+    /// #1268: two badges, the model's (neutral) then the effort's (tinted by level); no model, nothing drawn. The words
+    /// stay the row's (modelWords): the badges are inside the row's element and add none of their own.
     var modelSlotView: some View {
-        Text(Self.modelWidest).hidden()
-            .overlay(alignment: .trailing) {
-                Text(row.modelText).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+        HStack(spacing: sz(3)) {
+            Self.badge(Self.modelWidest, Self.neutralLook)
+            Self.badge(Self.effortWidest, Self.neutralLook)
+        }
+        .hidden()
+        .overlay(alignment: .trailing) {
+            let shown = Self.badges(model: row.model, effort: row.effort, selected: selected)
+            HStack(spacing: sz(3)) {
+                // The effort badge (second) keeps its word whole before the model's name is cut.
+                ForEach(shown.indices, id: \.self) { i in Self.badge(shown[i].text, shown[i].look).layoutPriority(Double(i)) }
             }
-            .font(Neon.font(10))
-            .fixedSize()
-            .help("Model and effort of the last answer")
+        }
+        .fixedSize()
+        // At no height, as the chip's slot: the badges never change the line's height at any scale (0.7 read 1 pt).
+        .frame(height: 0)
+        .help("Model and effort of the last answer")
+    }
+
+    /// #1268: the age at the end of the second line, in one slot as wide as the widest age text (`ageWidest`), so
+    /// nothing before it moves when it ticks; a live row keeps it with no age (working), as the first line did (#828,
+    /// #829, R1115-2).
+    var ageSlot: some View {
+        ZStack(alignment: .trailing) {
+            Text(AgentIsland.ageWidest).hidden()
+            Text(row.age).foregroundStyle(Neon.textSecondary)
+        }
+        .font(Neon.font(10).monospacedDigit())
+        .fixedSize()
     }
 
     /// #1115: the state text, the count groups (no " · ": the gap and the symbol separate them), then the PR chips,
     /// or with `open` the open PRs' count as a blue group in their place.
-    /// #1110: `chipSlot` keeps the ⌘<n> chip's width at the end (a numbered row only) at no height: the chip is drawn over
-    /// it by the row and overhangs into the row's padding, so the row's height never changes.
-    /// #1203: `modelSlot` puts the model slot after the Spacer, before the chip slot (a Claude row only): trailing, so
-    /// it never moves the state text, and it is never a zero-width child (it always has the widest text's width).
-    /// #1267: a row with the slot and no number keeps a hidden chip's room after it too (no anchor: nothing is drawn).
-    func detailLine(_ chips: [String], open: Int = 0, chipSlot: Bool = false, modelSlot: Bool = false) -> some View {
+    /// #1203: `modelSlot` puts the model slot after the Spacer (a Claude row only): trailing, so it never moves the state
+    /// text, and it is never a zero-width child (it always has the widest pair's width).
+    /// #1268: then the age slot, the last thing on the line (live and History rows); the ⌘<n> chip is on the first line.
+    func detailLine(_ chips: [String], open: Int = 0, modelSlot: Bool = false) -> some View {
         HStack(spacing: sz(5)) {
             Text(row.detail).font(Neon.font(10.5))
                 .foregroundStyle(row.state == .blocked ? agentStateColor(.blocked) : Neon.textSecondary)
@@ -710,13 +766,7 @@ extension AgentSidebarRowView {
             }
             Spacer(minLength: 0)
             if modelSlot, row.modelSlot { modelSlotView }
-            if chipSlot, let number {
-                AgentDigitChip(number: number).hidden().frame(height: 0)
-                    .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { $0 }
-            } else if chipSlot, modelSlot, row.modelSlot {
-                // #1267: no number, the same room after the model slot (the widest digit's chip), so its edge lines up.
-                ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
-            }
+            if !row.age.isEmpty || row.state != nil { ageSlot }
         }
     }
 }

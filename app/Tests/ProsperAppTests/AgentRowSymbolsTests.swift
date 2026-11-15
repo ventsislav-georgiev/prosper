@@ -122,40 +122,87 @@ extension AgentWindowD1Tests {
 
     // MARK: The fit
 
-    /// Five-digit counts (99999 agents and merged, and dch's cap of 50 open PRs as the chips' fallback) beside every
-    /// state text fit the sidebar's text column whole at UI scale 0.7, 0.85 and 1.0; with the drawn cap ("99999+") the
-    /// state and both groups still fit whole (the open count may give way to none: the ViewThatFits order). The row
-    /// never grows a line. Measured ideal widths include the line's trailing spacing before its Spacer (conservative).
+    /// #1268 (R5): which step of line two's ladder shows, from a literal table (state text, group digits, UI scale):
+    /// the open PRs' count (`count`) or the line without it (`none`); the chips never fit (long names). Up to 999 every
+    /// state keeps the open count at every scale; 9999 too except "Relaunching\u{2026}" at 0.7 and 0.85; 99999 per state as
+    /// measured. The cap "99999+" (a row with no PRs: the line without the count) fits whole except "Relaunching\u{2026}"
+    /// at 0.7, where the last step is drawn in less than it needs (measured 165 vs 162.4): the one `cut` cell. What
+    /// shows is read by pixels (the ladder renders exactly as the wanted step, not as the other); every other cell
+    /// fits uncut; the row's height is the same in every cell. Widths print as BADGE1268C-FIT.
     @MainActor
-    func testRowSymbolsFitEveryScaleWithFiveDigitCounts() {
+    func testRowSymbolsLadderStepByStateDigitsAndScaleFromALiteralTable() throws {
         _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let states = AgentState.allCases.map(\.label) + AgentIsland.runningTexts.sorted()
+        let relaunching = "Relaunching\u{2026}"
+        // The state texts that DROP the open count, per (digits, scale); every other state keeps it.
+        let drops: [Int: [CGFloat: Set<String>]] = [
+            999: [0.7: [], 0.85: [], 1.0: []],
+            9_999: [0.7: [relaunching], 0.85: [relaunching], 1.0: []],
+            99_999: [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}"],
+                     0.85: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}"],
+                     1.0: ["Needs input", relaunching, "Restarting\u{2026}"]],
+        ]
+        let cut: Set<String> = ["\(relaunching) 99999+ 0.7"]
+        let named = drops.values.flatMap { $0.values }.reduce(Set<String>()) { $0.union($1) }
+        XCTAssertTrue(named.isSubset(of: Set(states)), "the table names the app's state texts: \(named.subtracting(states))")
+        func differ(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Int {
+            guard a.pixelsWide == b.pixelsWide, a.pixelsHigh == b.pixelsHigh else { return -1 }
+            var n = 0
+            for y in 0..<a.pixelsHigh {
+                for x in 0..<a.pixelsWide {
+                    guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                          let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent)
+                        + abs(p.blueComponent - q.blueComponent) > 0.02 { n += 1 }
+                }
+            }
+            return n
+        }
+        func ideal<V: View>(_ v: V) -> CGFloat { NSHostingView(rootView: v.fixedSize()).fittingSize.width }
+        var cells = 0
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             // The 290 pt sidebar less its 8 pt list inset each side; in a row: padding 10 each side, the glyph slot 14, its gap 8.
             let width = sz(290) - sz(16), column = width - 2 * sz(10) - sz(14) - sz(8)
+            let long = String(repeating: "w", count: 40)
             for state in states {
-                func big(_ n: Int) -> AgentSidebar.Row {
-                    AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: state, age: "",
-                                     prs: ["api#1", "api#2", "+48"], prCount: DchSessionMeta.maxOpenPRs, agents: n, merged: n)
-                }
-                let plain = AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: state, age: "", prs: [])
-                func ideal(_ r: AgentSidebar.Row, open: Int) -> CGFloat {
-                    NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false).detailLine([], open: open).fixedSize())
-                        .fittingSize.width
-                }
-                XCTAssertLessThanOrEqual(ideal(big(99_999), open: DchSessionMeta.maxOpenPRs), column,
-                                         "\"\(state)\", both five-digit groups and the open count fit uncut at \(scale)")
-                XCTAssertLessThanOrEqual(ideal(big(100_000), open: 0), column, "\"\(state)\" and both 99999+ groups fit uncut at \(scale)")
                 func height(_ r: AgentSidebar.Row) -> CGFloat {
                     NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false).frame(width: width)).fittingSize.height
                 }
-                XCTAssertEqual(height(big(99_999)), height(plain), accuracy: 0.5, "one detail line (\(state) \(scale))")
-                XCTAssertEqual(height(big(100_000)), height(plain), accuracy: 0.5, "one detail line, 99999+ (\(state) \(scale))")
+                let plainHeight = height(AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: state, age: "", prs: []))
+                for digits in [999, 9_999, 99_999, 100_000] {
+                    let capped = digits > 99_999
+                    let r = AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: state, age: "",
+                                             prs: capped ? [] : [long + "#1", long + "#2", "+48"],
+                                             prCount: capped ? 0 : DchSessionMeta.maxOpenPRs, agents: digits, merged: digits)
+                    let tag = "\(state) \(capped ? "99999+" : String(digits)) \(scale)"
+                    XCTAssertTrue(capped || drops[digits]?[scale] != nil, "\(tag): in the table")
+                    let keeps = !capped && !(drops[digits]?[scale]?.contains(state) ?? false)
+                    let v = AgentSidebarRowView(row: r, selected: false)
+                    let count = v.detailLine([], open: r.prCount), none = v.detailLine([])
+                    let shownIdeal = keeps ? ideal(count) : ideal(none)
+                    print("BADGE1268C-FIT \(tag) column \(column) count \(ideal(count)) none \(ideal(none)) shows \(keeps ? "count" : "none")")
+                    if cut.contains(tag) {
+                        XCTAssertGreaterThan(shownIdeal, column, "\(tag): the last step, drawn in less than it needs")
+                    } else {
+                        XCTAssertLessThanOrEqual(shownIdeal, column, "\(tag): \(keeps ? "count" : "none") fits uncut")
+                    }
+                    let size = CGSize(width: column, height: NSHostingView(rootView: v.detailVariants.frame(width: column)).fittingSize.height)
+                    let shown = try render(v.detailVariants.frame(width: column), size: size, dark: true)
+                    let want = try render((keeps ? count : none).frame(width: column), size: size, dark: true)
+                    XCTAssertEqual(differ(shown, want), 0, "\(tag): \(keeps ? "the open count" : "the line without it") shows")
+                    if !capped {
+                        let other = try render((keeps ? none : count).frame(width: column), size: size, dark: true)
+                        XCTAssertGreaterThan(differ(shown, other), 0, "\(tag): and not the other step")
+                    }
+                    XCTAssertEqual(height(r), plainHeight, accuracy: 0.5, "\(tag): the row's height")
+                    cells += 1
+                }
             }
         }
+        XCTAssertEqual(cells, 3 * 4 * states.count)
     }
 
     /// The ViewThatFits order stays chips, then the open count, then none: at the sidebar's width the detail line's
@@ -169,9 +216,12 @@ extension AgentWindowD1Tests {
             ThemeRuntime.scale = scale
             let width = sz(290) - sz(16), left = sz(10) + sz(14) + sz(8)
             let long = String(repeating: "w", count: 40)
+            // #1268: the text column (was width - left: the row's right padding was left out); at 0.7 the two chips no
+            // longer fit beside the age slot (ideal 165 vs 162.4 in round one), so that row shows the count there.
+            let column = width - left - sz(10)
             let cases: [(String, AgentSidebar.Row, Int)] = [   // the option that shows: 0 chips, 1 the count, 2 none
                 ("chips", AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: "Working", age: "",
-                                           prs: ["api#1", "api#2"], prCount: 2, agents: 3, merged: 192), 0),
+                                           prs: ["api#1", "api#2"], prCount: 2, agents: 3, merged: 192), scale == 0.7 ? 1 : 0),
                 ("count", AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: "Working", age: "",
                                            prs: [long + "#1", long + "#2"], prCount: 2, agents: 3, merged: 192), 1),
             ]
@@ -179,8 +229,8 @@ extension AgentWindowD1Tests {
                 let v = AgentSidebarRowView(row: row, selected: false)
                 let ideal = [v.detailLine(row.prs), v.detailLine([], open: row.prCount), v.detailLine([])]
                     .map { NSHostingView(rootView: $0.fixedSize()).fittingSize.width }
-                XCTAssertLessThanOrEqual(ideal[want], width - left, "\(tag): the wanted option fits (\(scale))")
-                if want == 1 { XCTAssertGreaterThan(ideal[0], width - left, "count: the chips do not fit (\(scale))") }
+                XCTAssertLessThanOrEqual(ideal[want], column, "\(tag): the wanted option fits (\(scale))")
+                if want == 1 { XCTAssertGreaterThan(ideal[0], column, "\(tag): the chips do not fit (\(scale))") }
                 let other = want == 0 ? ideal[1] : ideal[2]
                 XCTAssertGreaterThan(abs(ideal[want] - other), 2 * (sz(3) + 1) + sz(4), "\(tag): the options tell apart (\(scale))")
                 let size = CGSize(width: width, height: NSHostingView(rootView: v.frame(width: width)).fittingSize.height)
@@ -198,9 +248,11 @@ extension AgentWindowD1Tests {
                     }
                 }
                 // Where each option's ink ends: its ideal width less the line's spacing before its Spacer, and for
-                // chips the chip's inner padding.
+                // chips the chip's inner padding. #1268: every option now ends with the age slot (empty here: a working
+                // row), after the Spacer's second spacing, so the ink ends that much before the option's end.
                 let edge = CGFloat(last) / k
-                let ends = ideal.indices.map { left + ideal[$0] - sz(5) - ($0 == 0 ? sz(4) : 0) }
+                let age = NSHostingView(rootView: v.ageSlot.fixedSize()).fittingSize.width
+                let ends = ideal.indices.map { left + ideal[$0] - sz(5) - sz(5) - age - ($0 == 0 ? sz(4) : 0) }
                 let shown = ends.indices.min { abs(ends[$0] - edge) < abs(ends[$1] - edge) }
                 XCTAssertEqual(shown, want, "\(tag): option \(want) shows (\(scale)); option ends \(ends), ink to \(edge)")
                 XCTAssertEqual(edge, ends[want], accuracy: sz(3) + 1, "\(tag): ink to \(edge), option ends \(ends) (\(scale))")
@@ -212,7 +264,8 @@ extension AgentWindowD1Tests {
 
     /// A working row has no age (#1114) but keeps the hidden widest-age slot, so the title does not move when the
     /// session goes working to idle and back: same ideal width, title ink ends at the same pixel. A History row with
-    /// no age (no dch timestamp) keeps no slot, as before.
+    /// no age (no dch timestamp) keeps no slot, as before. #1268 (R2): the slot is the last thing on line two; line one
+    /// ends with the chip's room on every row, so the title never depends on the age.
     @MainActor
     func testRowSymbolsLiveRowKeepsTheAgeSlotWithNoAge() throws {
         _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
@@ -231,8 +284,8 @@ extension AgentWindowD1Tests {
                 let rep = try render(v, size: size, dark: true)
                 try save(rep, "1115-slot-\(row.detail)-\(scale)")
                 let k = CGFloat(rep.pixelsWide) / (size.width + 24)
-                let slot = NSHostingView(rootView: Text("00m").font(Neon.font(10).monospacedDigit()).fixedSize()).fittingSize.width
-                let limit = Int((size.width - sz(10) - slot - sz(2)) * k)
+                // #1268 (R2): line one carries no age, so its whole width is read (was: left of a "00m" slot there).
+                let limit = Int(size.width * k)
                 var last = 0
                 for y in Int(sz(8) * k)..<Int(sz(24) * k) {
                     for x in 0..<limit {
@@ -245,12 +298,19 @@ extension AgentWindowD1Tests {
             }
             XCTAssertEqual(ideal.first, ideal.last, "working and idle rows are as wide at \(scale): \(ideal)")
             XCTAssertEqual(edges.first, edges.last, "the title ends at the same pixel, working or idle, at \(scale): \(edges)")
+            // #1268 (R2): the slot is on line two: the working row's line two (no age) is as wide as with an age.
+            func line(_ age: String) -> CGFloat {
+                let r = AgentSidebar.Row(id: live("x"), title: title, state: .working, detail: "Working", age: age, prs: [])
+                return NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false).detailLine([]).fixedSize()).fittingSize.width
+            }
+            XCTAssertEqual(line(""), line("4m"), accuracy: 0.01, "a live row keeps the age slot on line two with no age (\(scale))")
         }
         ThemeRuntime.scale = 1.0
+        // #1268 (R2): line two is where the age is (was: the whole row's width, now the title line's whatever the age).
         func wide(_ age: String) -> CGFloat {
             let r = AgentSidebar.Row(id: .history(AgentSessionKey(dir: "/tmp/dch-test", name: "old")), title: title, state: nil,
                                      detail: "Ended · exited", age: age, prs: [])
-            return NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false).fixedSize()).fittingSize.width
+            return NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false).detailLine([]).fixedSize()).fittingSize.width
         }
         XCTAssertLessThan(wide(""), wide("2h"), "a History row with no age keeps no slot (unchanged)")
     }
