@@ -42,7 +42,11 @@ enum StatsFormat {
         return String(format: "%.0f B/s", v)
     }
 
-    static func percent(_ fraction: Double) -> String { "\(Int((fraction * 100).rounded()))%" }
+    /// A NaN, infinite or out-of-Int-range value shows as no value (the em dash), never a trap (R1050-1).
+    static func percent(_ fraction: Double) -> String {
+        guard let n = Int(exactly: (fraction * 100).rounded()) else { return "\u{2014}" }
+        return "\(n)%"
+    }
     static func temp(_ celsius: Double) -> String { String(format: "%.0f°", celsius) }
     /// Detail-list temperature, exelban-style one decimal + unit: "37.3°C".
     static func tempDetail(_ celsius: Double) -> String { String(format: "%.1f°C", celsius) }

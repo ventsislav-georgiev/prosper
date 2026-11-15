@@ -159,6 +159,93 @@ final class StatsPopupGateTests: XCTestCase {
         p.stop()
         _ = p.history("net.up")   // queue.sync: the stop has been applied
     }
+
+    // MARK: - #1051: the rebuilt poller's state, counted through a second poller's ticks
+
+    /// Delivers `n` snapshots from an unpaused reference poller: the clock the checks below
+    /// count in, instead of a fixed wait.
+    private func referenceTicks(_ n: Int) {
+        var cfg = StatsPoller.Config()
+        cfg.baseInterval = 0.05; cfg.activeInterval = 0.05; cfg.slowDivider = 1
+        let ref = StatsPoller(modules: [.memory], config: cfg, deliverQueue: DispatchQueue(label: "test.stats.ref"))
+        let got = expectation(description: "\(n) reference ticks")
+        got.expectedFulfillmentCount = n
+        got.assertForOverFulfill = false
+        ref.onSnapshot = { _ in got.fulfill() }
+        ref.start()
+        wait(for: [got], timeout: 5)
+        ref.stop()
+    }
+
+    /// Item 1: a poller rebuilt while the screen is hidden takes no sample and delivers
+    /// nothing until resumed; a mutant that drops setPaused ticks like the reference does.
+    func testPollerRebuiltWithScreenHiddenTakesNoSampleUntilResumed() {
+        var cfg = StatsPoller.Config()
+        cfg.baseInterval = 0.05; cfg.activeInterval = 0.05; cfg.slowDivider = 1
+        let p = StatsPoller(modules: [.memory], config: cfg, deliverQueue: DispatchQueue(label: "test.stats.hidden"))
+        let lock = NSLock()
+        var delivered = 0
+        var resumed: XCTestExpectation?
+        p.onSnapshot = { _ in lock.withLock { delivered += 1; resumed?.fulfill(); resumed = nil } }
+        defer { p.stop() }
+        StatsController.startPrimed(p, popupShown: false, screenHidden: true)
+        referenceTicks(8)   // the unpaused reference ticks eight times (about 0.4 s)
+        XCTAssertEqual(p.history("memory").count, 0, "a hidden screen takes no sample")   // queue.sync
+        XCTAssertEqual(lock.withLock { delivered }, 0, "a hidden screen delivers nothing")
+
+        let back = expectation(description: "first sample on resume")
+        lock.withLock { resumed = back }
+        p.setPaused(false)
+        wait(for: [back], timeout: 5)
+        XCTAssertGreaterThan(p.history("memory").count, 0, "resume polls")
+    }
+
+    /// Item 2: a poller rebuilt with the popup closed never starts the ping thread. The
+    /// poller's own eight ticks are the clock; a mutant that opens the popup pings at start.
+    func testPollerRebuiltWithPopupClosedDoesNotPing() {
+        URLProtocol.registerClass(NoNetwork.self)
+        let lock = NSLock()
+        var pings = 0
+        NetPingReader.pinger = { _, _, _ in lock.withLock { pings += 1 }; return 5 }
+        var cfg = StatsPoller.Config()
+        cfg.baseInterval = 0.05; cfg.activeInterval = 0.05; cfg.slowDivider = 1
+        let p = StatsPoller(modules: [.network], config: cfg, deliverQueue: DispatchQueue(label: "test.stats.closed"))
+        let got = expectation(description: "eight ticks")
+        got.expectedFulfillmentCount = 8
+        got.assertForOverFulfill = false
+        p.onSnapshot = { _ in got.fulfill() }
+        StatsController.startPrimed(p, popupShown: false, screenHidden: false)
+        wait(for: [got], timeout: 5)
+        p.stop()
+        _ = p.history("net.up")   // queue.sync: the stop has been applied
+        XCTAssertEqual(lock.withLock { pings }, 0, "a closed popup must not ping")
+    }
+
+    /// Item 4: the popover delegate's step with a fake shown state. Shown turns the popup
+    /// readers on and clears a stale pause; closed leaves them off and the pause alone.
+    func testPopupStateChangedTellsThePollerTheShownState() {
+        let lock = NSLock()
+        var freq = 0
+        CPUReader.onFrequencySample = { lock.withLock { freq += 1 } }
+        let (p, _) = poller([.cpu], ticks: 3)
+        defer { p.stop() }
+        var lit = ScreenGate()
+        StatsController.popupStateChanged(shown: false, screen: &lit, poller: p)
+        _ = p.history("cpu")   // queue.sync
+        XCTAssertEqual(lock.withLock { freq }, 0, "closed on a lit screen: the clock stays off")
+
+        var screen = ScreenGate()
+        screen.apply(.sleep)
+        StatsController.popupStateChanged(shown: false, screen: &screen, poller: p)
+        _ = p.history("cpu")   // queue.sync
+        XCTAssertEqual(lock.withLock { freq }, 0, "closed: the clock stays off")
+        XCTAssertTrue(screen.hidden, "closed: a stale pause stays")
+
+        StatsController.popupStateChanged(shown: true, screen: &screen, poller: p)
+        _ = p.history("cpu")
+        XCTAssertGreaterThan(lock.withLock { freq }, 0, "shown: the clock is sampled")
+        XCTAssertFalse(screen.hidden, "shown: the stale pause is cleared")
+    }
 }
 
 /// Fails every URLSession request in-process so no test traffic leaves the machine.

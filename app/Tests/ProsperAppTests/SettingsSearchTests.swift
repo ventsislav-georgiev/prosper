@@ -165,15 +165,27 @@ final class SettingsSearchTests: XCTestCase {
         XCTAssertEqual(indexed, literals, "moduleSearchIndex drifted from SystemStatsPane's rows")
     }
 
-    /// Sidebar group order, pinned. The two feature groups appear only while their
-    /// master switch is on, so the expectation follows the live preferences.
+    /// Sidebar group order, pinned to literals for each of the four switch states (#1051; it
+    /// used to follow the live preferences). The two feature groups appear only while their
+    /// master switch is on. The switches are put back afterwards.
     @MainActor
     func testSidebarGroupOrder() {
-        var expected = ["General", "System Stats", "Volume Mixer", "AI Models"]
-        if Preferences.autocompleteEnabled { expected.append("Inline Autocomplete") }
-        if Preferences.agentEnabled { expected.append("Coding Agent") }
-        expected.append("More")
-        XCTAssertEqual(settingsSidebarGroups(registry: nil).map(\.0), expected)
+        let keys = ["autocompleteEnabled", "agentEnabled"]
+        let saved = keys.map { Preferences.defaults.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { Preferences.defaults.set(v, forKey: k) } }
+        func names(autocomplete: Bool, agent: Bool) -> [String] {
+            Preferences.autocompleteEnabled = autocomplete
+            Preferences.agentEnabled = agent
+            return settingsSidebarGroups(registry: nil).map(\.0)
+        }
+        XCTAssertEqual(names(autocomplete: false, agent: false),
+                       ["General", "System Stats", "Volume Mixer", "AI Models", "More"])
+        XCTAssertEqual(names(autocomplete: true, agent: false),
+                       ["General", "System Stats", "Volume Mixer", "AI Models", "Inline Autocomplete", "More"])
+        XCTAssertEqual(names(autocomplete: false, agent: true),
+                       ["General", "System Stats", "Volume Mixer", "AI Models", "Coding Agent", "More"])
+        XCTAssertEqual(names(autocomplete: true, agent: true),
+                       ["General", "System Stats", "Volume Mixer", "AI Models", "Inline Autocomplete", "Coding Agent", "More"])
     }
 
     // MARK: - 5. Extension index, straight off the manifest

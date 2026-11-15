@@ -119,6 +119,26 @@ final class SystemStatsStyleTests: XCTestCase {
         XCTAssertEqual(StatsFormat.bytes(1_048_576), "1 MB")
     }
 
+    /// R1050-1: a non-finite or out-of-range value shows as no value (the em dash); never a trap.
+    func testPercentOfANonFiniteValueShowsNoValue() {
+        let none = "\u{2014}"
+        XCTAssertEqual(StatsFormat.percent(.nan), none)
+        XCTAssertEqual(StatsFormat.percent(.infinity), none)
+        XCTAssertEqual(StatsFormat.percent(-.infinity), none)
+        XCTAssertEqual(StatsFormat.percent(1e300), none, "finite but past Int")
+        XCTAssertEqual(StatsFormat.percent(0), "0%")
+        XCTAssertEqual(StatsFormat.percent(1), "100%")
+    }
+
+    /// The same value through primaryText, the call the gate key and the menu widget make every tick.
+    func testPrimaryTextOfANonFiniteSampleShowsNoValue() {
+        var snap = StatsSnapshot()
+        snap.cpu = CPUSample(total: .nan, performance: 0, efficiency: 0, system: 0, user: 0, idle: 0, perCore: [])
+        XCTAssertEqual(StatsModule.cpu.primaryText(snap, showUnit: true), "\u{2014}")
+        snap.cpu = CPUSample(total: .infinity, performance: 0, efficiency: 0, system: 0, user: 0, idle: 0, perCore: [])
+        XCTAssertEqual(StatsModule.cpu.primaryText(snap, showUnit: true), "\u{2014}")
+    }
+
     // MARK: - Persistence round-trip
 
     func testStyleCodableRoundTrip() throws {

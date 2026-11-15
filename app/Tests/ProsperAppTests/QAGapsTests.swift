@@ -102,6 +102,22 @@ final class QAGapsTests: XCTestCase {
         XCTAssertEqual(model.selectedIndex, 4)
     }
 
+    /// #1051: the field's key mapping, reached with the model (no window, no key event):
+    /// up steps to the previous row, down to the next.
+    @MainActor
+    func testRunnerArrowKeyHandlersMapUpToPrevAndDownToNext() {
+        let model = RunnerModel()
+        let keys = model.arrowKeyHandlers { 5 }
+        model.selectedIndex = 2
+        keys.up()
+        drainMain()
+        XCTAssertEqual(model.selectedIndex, 1, "up is the previous row")
+        keys.down()
+        keys.down()
+        drainMain()
+        XCTAssertEqual(model.selectedIndex, 3, "down is the next row")
+    }
+
     @MainActor
     func testRunnerRowCountIsReadInsideTheHop() {
         let model = RunnerModel()

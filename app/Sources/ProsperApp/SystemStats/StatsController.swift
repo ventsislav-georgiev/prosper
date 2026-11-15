@@ -36,8 +36,7 @@ final class StatsController {
         // #217: an open popover proves the user is looking, so a pause left by a
         // missed wake/unlock notification is stale — clear it before the popup
         // toggle (which no-ops on a paused poller).
-        self.screen.reconcile(popoverShown: self.popover.isShown); self.applyPause()
-        self.poller?.setPopupActive(self.popover.isShown)
+        Self.popupStateChanged(shown: self.popover.isShown, screen: &self.screen, poller: self.poller)
         self.updateOutsideClickMonitor()
         // #197: we closed → end the open item's session (not B's, mid A → B switch).
         if !self.popover.isShown, let m = self.openModule, let item = self.items[m]?.item {
@@ -172,6 +171,14 @@ final class StatsController {
         }
         Self.startPrimed(p, popupShown: popover.isShown, screenHidden: screenHidden)
         poller = p
+    }
+
+    /// The delegate's poller/screen-gate step as a function a test can call with a fake shown state
+    /// (#1051): a shown popover clears a stale pause, the pause is applied, then the popup flag is set.
+    nonisolated static func popupStateChanged(shown: Bool, screen: inout ScreenGate, poller: StatsPoller?) {
+        screen.reconcile(popoverShown: shown)
+        poller?.setPaused(screen.hidden)
+        poller?.setPopupActive(shown)
     }
 
     /// Starts a (re)built poller in the controller's current state (QA #265 seam).
