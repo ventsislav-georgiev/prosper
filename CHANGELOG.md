@@ -748,7 +748,7 @@ tag from the now-released section and put it on the new top draft.
   config is applied and from hotkeys, timers and other callbacks. (#1158)
 - Hammerspoon Compat: an app object kept by a hotkey, timer, URL or app-watcher callback that was
   stopped for running too long can no longer hide an app from a later run of the config (#1158)
-- Ships dch 1.71.0 (was 1.62.0). In the X-ray view the reader reads on into the next and the
+- Ships dch 1.73.0 (was 1.62.0). In the X-ray view the reader reads on into the next and the
   previous prompt, and `]` and `[` step between prompts. The tabs are Prompts (Commands for a shell
   session), Responses (what the agent answered at the end of each turn, newest first), Refs (the
   refs on the screen right now come first) and Search (type a word or phrase to find where the
@@ -756,23 +756,31 @@ tag from the now-released section and put it on the new top draft.
   macOS a stopped session is no longer taken for a dead one and started over, and a stop while `dch
   -a` starts no longer leaves the shell on a raw terminal. With 1.65.0 the session list on macOS
   stays fast after sessions that were killed hard or crashed (the beta that shipped 1.64.0 slowed
-  down there), a command typed while the one before it still runs gets its own chapter
-  in X-ray, opening a chapter of a long session is much faster, and a second Claude started in one
-  session is seen by X-ray. With 1.66.0 the X-ray view has a Tasks tab (the task list of a Claude
-  Code or Codex session) and a Memory tab (its memories and instruction files), `dch --xray
-  <session> --tasks --json` and `--memory --json` print them for a script, a refused `--send` or
-  `--run` leaves nothing typed, and Claude started under a wrapper no longer gets text typed where a
-  shell would read it. With 1.67.0 `dch --xray <session> --follow --json` goes on when the session
-  is restarted, and `--run` is refused with the code `not_foreground` when Claude sits under a
-  wrapper that does not pass the keyboard on. With 1.68.0 a Search hit in the X-ray view opens at
-  its own place when the same text appears more than once, and `--tasks` and `--memory` no longer
-  run a configured command line over 1023 bytes cut short: they skip it, say so in a warning and
-  answer from their own reading. With 1.69.0 `dch --xray <session> --follow --json` and the X-ray
-  view keep going across restarts however quickly they follow each other, and `--run` types again
-  into the program in front of a suspended Claude when that program is the end of a pipeline whose
-  first command has finished. With 1.70.0 Enter on a Search hit opens the right one when the same
-  text comes again past the clipped part. With 1.71.0 a Search hit opens the entry it came from
-  when the same text sits in several entries of one prompt. (#1167, #1178)
+  down there), a command typed while the one before it still runs gets its own chapter in X-ray,
+  opening a chapter of a long session is much faster, and a second Claude started in one session is
+  seen by X-ray. With 1.66.0 the X-ray view has a Tasks tab (the task list of a Claude Code or Codex
+  session) and a Memory tab (its memories and instruction files), `dch --xray <session> --tasks
+  --json` and `--memory --json` print them for a script, a refused `--send` or `--run` leaves
+  nothing typed, and Claude started under a wrapper no longer gets text typed where a shell would
+  read it. With 1.67.0 `dch --xray <session> --follow --json` goes on when the session is restarted,
+  and `--run` is refused with the code `not_foreground` when Claude sits under a wrapper that does
+  not pass the keyboard on. With 1.68.0 a Search hit in the X-ray view opens at its own place when
+  the same text appears more than once, and `--tasks` and `--memory` no longer run a configured
+  command line over 1023 bytes cut short: they skip it, say so in a warning and answer from their
+  own reading. With 1.69.0 `dch --xray <session> --follow --json` and the X-ray view keep going
+  across restarts however quickly they follow each other, and `--run` types again into the program
+  in front of a suspended Claude when that program is the end of a pipeline whose first command has
+  finished. With 1.70.0 Enter on a Search hit opens the right one when the same text comes again
+  past the clipped part. With 1.71.0 a Search hit opens the entry it came from when the same text
+  sits in several entries of one prompt. With 1.72.0 X-ray lists a Claude Code or Codex session's
+  task list (`dch --xray <session> --tasks --json`), tells prompts another agent sent apart from the
+  ones you typed, and keeps following a session across quick restarts; a remote attach with the
+  X-ray view open answers a starting program as a local one does; a config line holding a stray NUL
+  byte no longer hides or damages the line after it; and revive and respawn wait for the session's
+  MCP servers before the first prompt. With 1.73.0 X-ray's references now find a mention in the
+  middle of a very large transcript, the reference card keeps the newest mentions when the machine
+  is busy, and a slow Tailscale lookup no longer locks a phone out of the Mac for 30 s. (#1167,
+  #1178, #1282)
 - Agent Sessions: Command-1 to Command-9 jump to the session at that place in the sidebar and put
   the keyboard in it (its terminal or its message box), from anywhere in the window; each of the
   first nine live sessions shows its ⌘ number as a chip, as in Clipboard History. (#1110)
@@ -1278,9 +1286,6 @@ tag from the now-released section and put it on the new top draft.
   sends links back to itself.
 - Live Activity: when a Mac goes offline or stops reporting, a card that Apple failed to close is
   now closed again on the next minute (up to 3 tries), instead of staying on the lock screen.
-- Ships dch 1.73.0 (was 1.72.0). X-ray's references now find a mention in the middle of a very
-  large transcript, the reference card keeps the newest mentions when the machine is busy, and a
-  slow Tailscale lookup no longer locks a phone out of the Mac for 30 s. (#1282)
 - VoiceOver: the shortcut recorder in Settings and in the Assign Shortcut dialog now says which
   action it sets ("Open Runner, Command R"), announces "Waiting for keys" when you start recording
   and reads out the new shortcut once you press it, and no longer lets VoiceOver stop on the key
@@ -1332,6 +1337,17 @@ tag from the now-released section and put it on the new top draft.
   key), while your new clips stay listed until Prosper quits.
 - Agent Sessions: a click on a session whose Claude is suspended or in the background no longer
   types into it when dch has no transcript for that session (island card and Agents window).
+- Agent Sessions: sessions Prosper starts or restarts now tell programs the terminal draws 24-bit
+  colour, so Claude Code colours match Ghostty. Sessions already running keep their colours until
+  restarted (#1266)
+- Agent Sessions: the New session form's Name field starts empty and stays empty when cleared; the
+  automatic name shows as the placeholder and is still used when nothing is typed (#1265)
+- Agent Sessions sidebar: the model and effort label ends at the same place on every row, stays
+  through a short gap in what dch reports, and shows on a session that has been working since a new
+  conversation began (#1267)
+- Agent Sessions sidebar: a session's model and effort now show as two small badges at the end of
+  the second line (the effort badge tinted by level, low to max), with the age after them; the
+  Command-digit shortcut chip moved up to the end of the session name's line.
 
 ## v2.174.0
 

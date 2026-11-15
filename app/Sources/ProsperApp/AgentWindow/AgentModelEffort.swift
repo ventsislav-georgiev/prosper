@@ -121,13 +121,30 @@ struct AgentModelEffort: Equatable, Sendable {
         guard let path = row.transcriptPath, !path.isEmpty, let size = io.size(path) else { return row }
         var s = row
         if let p = previous, p.transcriptPath == path, let seen = p.modelReadSize {
-            if seen == size || (size > seen && row.state == .working) {
+            // #1267: a nil cached under a working row is read again (once per list answer while nil), so a read
+            // before the first answer of a stretch does not hide the model until the row stops working.
+            if seen == size || (size > seen && row.state == .working && p.model != nil) {
                 s.model = p.model; s.effort = p.effort; s.modelReadSize = seen
                 return s
             }
         }
         let found = read(size: size) { io.read(path, $0, $1) }
         s.model = found?.model; s.effort = found?.effort; s.modelReadSize = size
+        return s
+    }
+
+    /// #1267: list answers in a row with no transcript mapping that keep the label (dch answers null whenever unsure).
+    static let carryAnswers = 3
+
+    /// #1267: `row` (already resolved) with no mapping in this answer keeps `previous`'s model, effort and slot (same
+    /// key) for at most `carryAnswers` answers in a row, then drops as before. Display only: the path and the Claude
+    /// id stay nil (the pane, auto-allow and the phone keep today's rule), and modelReadSize too, so a mapping that
+    /// returns is read afresh.
+    static func carry(_ row: AgentSession, previous: AgentSession?) -> AgentSession {
+        guard row.transcriptPath == nil, let p = previous, p.key == row.key,
+              p.transcriptPath != nil || p.modelCarried > 0, p.modelCarried < carryAnswers else { return row }
+        var s = row
+        s.model = p.model; s.effort = p.effort; s.modelCarried = p.modelCarried + 1
         return s
     }
 }

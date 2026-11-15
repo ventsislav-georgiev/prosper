@@ -1361,7 +1361,7 @@ extension AgentIsland {
     /// when the probe failed (the well-known dirs go in front of the process PATH).
     static func controlEnv(dir: String, login: String?,
                            base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
-        var env = listEnv(dir: dir, base: base)
+        var env = DchCommand.withColour(listEnv(dir: dir, base: base))   // #1266: sessions this env starts draw 24-bit
         env["PATH"] = LoginPath.path(login: login, process: base["PATH"] ?? "",
                                      home: base["HOME"] ?? NSHomeDirectory())
         return env

@@ -11,13 +11,14 @@ extension AgentWindowD1Tests {
     final class BandProbeBox { var seen: [String: CGRect] = [:] }
 
     /// Every band part's frame by kind ("band", "layout", "chip", "all", "picker"), from a fresh never-shown window at
-    /// `size`. The probe closure runs on the main actor (SwiftUI layout).
+    /// `size`, on the pixel grid of `backing` (nil: the screen's). The probe closure runs on the main actor (SwiftUI layout).
     @MainActor
-    func bandSnapshot(_ m: AgentWindowModel, _ size: CGSize) -> [String: CGRect] {
+    func bandSnapshot(_ m: AgentWindowModel, _ size: CGSize, backing: CGFloat? = nil) -> [String: CGRect] {
         let box = BandProbeBox()
         AgentWindowBand.probe = { kind, r in box.seen[kind] = r }
         defer { AgentWindowBand.probe = nil }
-        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        let win = BandFixedBackingWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        win.fixedBacking = backing
         win.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: AgentWindowRootView(model: m, scrolls: false))
         host.frame = CGRect(origin: .zero, size: size)
@@ -47,6 +48,8 @@ extension AgentWindowD1Tests {
         let restoreModes = transcriptMode(["api"])
         defer { ThemeRuntime.scale = saved; Preferences.agentWindowVerbosity = level; AgentPaneLayout.splitsEnabled = gate; restoreModes() }
         AgentPaneLayout.splitsEnabled = true
+        let screen = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true).backingScaleFactor
+        print("#1253 band: this machine's backing scale \(screen); the row lays out at 1x and 2x whatever it is")
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             let chipText = bandChipMeasured
@@ -58,18 +61,24 @@ extension AgentWindowD1Tests {
             let empty = windowModel(store([]))
             empty.setVisible(true)
             defer { empty.close() }
-            for (label, size) in [("min", AgentsWindow.contentMinSize(scale: scale)), ("wide", CGSize(width: 1600, height: 900))] {
-                let tag = "\(label) \(scale)"
+            let sizes = [("min", AgentsWindow.contentMinSize(scale: scale)), ("wide", CGSize(width: 1600, height: 900))]
+            // #1253: on the 1x pixel grid of CI's runner and the 2x of a Retina Mac, whatever this machine's screen.
+            for (label, size, px) in sizes.flatMap({ s in [CGFloat(1), 2].map { (s.0, s.1, $0) } }) {
+                let tag = "\(label) \(scale) \(Int(px))x"
                 m.verbosity = .default
                 st.sessions = [session("api", .idle)]
-                let base = bandSnapshot(m, size)
+                let base = bandSnapshot(m, size, backing: px)
                 let band = try XCTUnwrap(base["band"], tag)
+                let f = { (k: String) in base[k].map { "\($0.minX)...\($0.maxX) w \($0.width)" } ?? "none" }
+                print("#1253 band \(tag): band.width \(band.width) picker \(f("picker")) all \(f("all")) layout \(f("layout"))"
+                      + " chip \(f("chip")) chipText \(chipText) want picker.maxX \(band.width - sz(16)) all.maxX+sz(8) \((base["all"]?.maxX ?? 0) + sz(8))")
                 XCTAssertEqual(band.height, AgentWindowBand.height, accuracy: 0.5, "one row of 30·s (\(tag))")
                 XCTAssertEqual(band.width, size.width - sz(290) - 1, accuracy: 0.5, "over the whole pane column (\(tag))")
                 XCTAssertEqual(m.paneArea.height, size.height - AgentWindowBand.height, accuracy: 0.5, "the area under it (\(tag))")
                 let all = try XCTUnwrap(base["all"], tag), picker = try XCTUnwrap(base["picker"], tag)
                 XCTAssertEqual(all.width, AgentWindowBand.allWidth, accuracy: 0.5, "the All slot keeps its room (\(tag))")
-                XCTAssertEqual(picker.maxX, band.width - sz(16), accuracy: 0.5, "the picker at the trailing edge (\(tag))")
+                // #1253: one device pixel, the picker's edge snaps to the grid (1x, wide 0.85: 1338.4 for 1338.9).
+                XCTAssertEqual(picker.maxX, band.width - sz(16), accuracy: 1 / px, "the picker at the trailing edge (\(tag))")
                 XCTAssertEqual(all.maxX + sz(8), picker.minX, accuracy: 0.5, "the All slot right before it (\(tag))")
                 XCTAssertLessThanOrEqual(picker.height, AgentWindowBand.height + 0.5, "the picker fits the row (\(tag))")
                 if let l = base["layout"] { XCTAssertEqual(l.width, AgentWindowBand.layoutWidth, accuracy: 0.5, "layout slot (\(tag))") }
@@ -86,16 +95,16 @@ extension AgentWindowD1Tests {
                 }
                 for v in AgentVerbosity.allCases {
                     m.verbosity = v
-                    same(bandSnapshot(m, size), "\(v)")
+                    same(bandSnapshot(m, size, backing: px), "\(v)")
                 }
                 m.verbosity = .default
                 for state in [AgentState.working, .blocked, .done] {
                     st.sessions = [session("api", state)]
-                    same(bandSnapshot(m, size), "\(state)")
+                    same(bandSnapshot(m, size, backing: px), "\(state)")
                 }
                 st.sessions = [session("api", .idle)]
                 XCTAssertFalse(AgentWindowBand.transcriptShown(empty), "no transcript shown: the picker off, dimmed (\(tag))")
-                same(bandSnapshot(empty, size), "no session")
+                same(bandSnapshot(empty, size, backing: px), "no session")
             }
             // 7.2: the band is in no pane: a click there leaves the keys; a click under it is the pane's.
             let size = CGSize(width: 1600, height: 900), x = sz(290) + 1 + 50
@@ -305,4 +314,10 @@ extension AgentWindowD1Tests {
         out.append((names, frame))
         for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { bandAX(k, &out, depth: depth + 1) }
     }
+}
+
+/// A window whose backing scale can be pinned (see KeyMappingRowLayoutTests): SwiftUI snaps the hosted views to it.
+private final class BandFixedBackingWindow: NSWindow {
+    var fixedBacking: CGFloat?
+    override var backingScaleFactor: CGFloat { fixedBacking ?? super.backingScaleFactor }
 }

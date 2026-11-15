@@ -217,19 +217,23 @@ extension AgentWindowD1Tests {
 
     /// Review round (s7): the age sits in a fixed slot, so its ticking never changes what the
     /// title gets: the row's ideal width (title + slot) and the title's room are the same for
-    /// every age.
+    /// every age. #1268 (R2): the slot ends line two; the title never depends on the age, and nothing on line two
+    /// before the slot moves when the age changes.
     @MainActor
     func testAgentWindowSidebarAgeSlotKeepsTheTitleWidth() throws {
         let savedScale = ThemeRuntime.scale
         defer { ThemeRuntime.scale = savedScale }
+        // #1268 (R2): a Claude row with both badges, so line two has something before the age slot that could move.
         func row(_ age: String) -> AgentSidebar.Row {
             AgentSidebar.Row(id: live("x"), title: "a long session title that truncates in the sidebar", state: .working,
-                             detail: "Working", age: age, prs: [])
+                             detail: "Working", age: age, prs: [], modelSlot: true, model: "Opus 5.5", effort: "high")
         }
-        let ages = ["now", "1m", "10m", "59m"]
+        let ages = ["now", "1m", "10m", "59m", "120d"]
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
-            var ideal: Set<Int> = [], edges: Set<Int> = []
+            var ideal: Set<Int> = [], edges: Set<Int> = [], reps: [NSBitmapImageRep] = []
+            let ageSlot = NSHostingView(rootView: AgentSidebarRowView(row: row("now"), selected: false).ageSlot.fixedSize())
+                .fittingSize.width
             for age in ages {
                 let v = AgentSidebarRowView(row: row(age), selected: false)
                 ideal.insert(Int((NSHostingView(rootView: v.fixedSize()).fittingSize.width * 2).rounded()))
@@ -239,8 +243,10 @@ extension AgentWindowD1Tests {
                 let rep = try render(v, size: size, dark: true)
                 try save(rep, "828-row-age-\(age)-\(scale)")
                 let k = CGFloat(rep.pixelsWide) / (size.width + 24)
-                let slot = NSHostingView(rootView: Text("00m").font(Neon.font(10).monospacedDigit()).fixedSize()).fittingSize.width
-                let limit = Int((size.width - sz(10) - slot - sz(2)) * k)
+                // #1268 (R2): line one carries no age (it ends with the chip's room), so its whole width is read (was:
+                // left of a "00m" slot there).
+                let limit = Int(size.width * k)
+                reps.append(rep)
                 var last = 0
                 for y in Int(sz(8) * k)..<Int(sz(24) * k) {
                     for x in 0..<limit {
@@ -253,6 +259,22 @@ extension AgentWindowD1Tests {
             }
             XCTAssertEqual(ideal.count, 1, "the row's width does not follow the age at \(scale): \(ideal)")
             XCTAssertEqual(edges.count, 1, "the title ends at the same pixel for every age at \(scale): \(edges)")
+            // #1268 (R2): left of the age slot (the last thing on line two, sz(10) inside the row's edge) every pixel is the
+            // same for "now" and every other age, "120d" included: the badges and the state text never move.
+            guard let first = reps.first else { return XCTFail("no render (\(scale))") }
+            let left = Int((sz(290) - sz(16) - sz(10) - ageSlot - 1) * CGFloat(first.pixelsWide) / (sz(290) - sz(16) + 24))
+            for (age, rep) in zip(ages, reps).dropFirst() {
+                var diff = 0
+                for y in 0..<min(rep.pixelsHigh, first.pixelsHigh) {
+                    for x in 0..<left {
+                        guard let a = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                              let b = first.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+                            + abs(a.blueComponent - b.blueComponent) > 0.02 { diff += 1 }
+                    }
+                }
+                XCTAssertEqual(diff, 0, "nothing before the age slot moves, \"now\" against \"\(age)\" at \(scale)")
+            }
         }
     }
 

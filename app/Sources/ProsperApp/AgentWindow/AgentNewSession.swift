@@ -11,6 +11,8 @@ struct AgentNewSessionForm: Equatable {
     var folder: String
     var name = ""
     var nameEdited = false
+    /// The Name field's text: what was typed. The automatic name is the placeholder only; as text it came back when the field was emptied.
+    var nameFieldText: String { name }
     /// As typed; "" runs the login shell.
     var command: String
     /// Set while the runner works.
@@ -188,7 +190,7 @@ struct AgentNewSessionView: View {
                 }
             }
             field("Name", error: errors.name) {
-                TextField(model.newSessionAutoName, text: Binding(get: { form.nameEdited ? form.name : model.newSessionAutoName },
+                TextField(model.newSessionAutoName, text: Binding(get: { form.nameFieldText },
                                                                  set: { model.setNewSessionName($0) }))
                     .focused($focus, equals: .name)
                     .accessibilityLabel("Name")

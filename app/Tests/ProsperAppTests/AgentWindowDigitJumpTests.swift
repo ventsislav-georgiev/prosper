@@ -309,7 +309,8 @@ extension AgentWindowD1Tests {
     }
 
     /// The chip never changes a row's height or moves anything left of it (the glyph, the title, the state text), at
-    /// 0.7, 0.85 and 1.0; too narrow a row draws none (whole or not at all), at the same height.
+    /// 0.7, 0.85 and 1.0; #1268 (R1): a narrow row draws it too, on line one, and cuts the title where a row without a
+    /// number does.
     @MainActor
     func testDigitJumpChipKeepsTheRowHeightAndTheTitleInPlace() throws {
         _ = ThemeStore.shared
@@ -352,15 +353,61 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(overflow(drawn, content: size, canvas: CGSize(width: size.width + 24, height: size.height + 24)), 0,
                                "the chip inside the row (\(row.title) \(scale))")
             }
-            // Too narrow for the chip: none at all in the tree, never a cut one.
+            // #1268 (R1): the chip is at the end of line one at every width (was: too narrow, no chip): drawn at sz(110)
+            // too, whole inside the row, at the same height in the row as at sz(274).
             let narrow = digitTree(AgentSidebarRowView(row: rows[1], selected: false, number: 4).frame(width: sz(110)),
-                                   CGSize(width: sz(110), height: 80 * scale)) { t in t.contains { $0.label.hasPrefix("web,") } }
+                                   CGSize(width: sz(110), height: 80 * scale)) { t in
+                t.contains { $0.label.hasPrefix("web,") } && t.contains { $0.label == "Command-4" }
+            }
             XCTAssertTrue(narrow.contains { $0.label.hasPrefix("web,") }, "the row is read (\(scale))")
-            XCTAssertFalse(narrow.contains { $0.label.hasPrefix("Command-") }, "no room: no chip (\(scale))")
             let wide = digitTree(AgentSidebarRowView(row: rows[1], selected: false, number: 4).frame(width: sz(274)),
                                  CGSize(width: sz(274), height: 80 * scale)) { t in t.contains { $0.label == "Command-4" } }
             XCTAssertTrue(wide.contains { $0.label == "Command-4" && $0.help == "Select this session (⌘4)" },
                           "the PR chips gave way, the chip is drawn (\(scale))")
+            if let nRow = narrow.first(where: { $0.label.hasPrefix("web,") }), let nChip = narrow.first(where: { $0.label == "Command-4" }),
+               let wRow = wide.first(where: { $0.label.hasPrefix("web,") }), let wChip = wide.first(where: { $0.label == "Command-4" }) {
+                XCTAssertTrue(nRow.frame.contains(nChip.frame), "the chip whole inside the narrow row (\(scale))")
+                XCTAssertGreaterThan(nChip.frame.minX, nRow.frame.midX, "at the trailing end (\(scale))")
+                XCTAssertEqual(nChip.frame.midY - nRow.frame.minY, wChip.frame.midY - wRow.frame.minY, accuracy: 0.5,
+                               "on line one, as at the sidebar's width (\(scale))")
+            } else {
+                XCTFail("R1: the chip drawn in a narrow row too (\(scale)): \(narrow.map(\.label).filter { !$0.isEmpty })")
+            }
+            // The title cut at the same place with and without a number at sz(110): left of the chip every pixel is the
+            // same (the chip's room is kept on every row); the row's height is pinned equal above.
+            let nSize = CGSize(width: sz(110), height: NSHostingView(rootView: AgentSidebarRowView(row: rows[2], selected: false)
+                .frame(width: sz(110))).fittingSize.height)
+            let nWithout = try render(AgentSidebarRowView(row: rows[2], selected: false), size: nSize, dark: true)
+            let nWith = try render(AgentSidebarRowView(row: rows[2], selected: false, number: 7), size: nSize, dark: true)
+            let nk = CGFloat(nWith.pixelsWide) / (nSize.width + 24)
+            var nDiff = 0
+            for y in 0..<min(nWith.pixelsHigh, nWithout.pixelsHigh) {
+                for x in 0..<Int(nSize.width * 0.6 * nk) {
+                    guard let a = nWith.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                          let b = nWithout.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+                        + abs(a.blueComponent - b.blueComponent) > 0.02 { nDiff += 1 }
+                }
+            }
+            XCTAssertEqual(nDiff, 0, "the title cut at the same place with and without a number at sz(110) (\(scale))")
+            // #1268 (R6): the selected row's chip is drawn `active` (a solid accent fill), an unselected row's is not:
+            // accent pixels right of the title, at the sidebar's width (the selection bar is at the left).
+            let aSize = CGSize(width: sz(274), height: NSHostingView(rootView: AgentSidebarRowView(row: rows[0], selected: false)
+                .frame(width: sz(274))).fittingSize.height)
+            func accent(_ selected: Bool) throws -> Int {
+                let rep = try render(AgentSidebarRowView(row: rows[0], selected: selected, number: 7), size: aSize, dark: true)
+                let k = CGFloat(rep.pixelsWide) / (aSize.width + 24)
+                var n = 0
+                for y in 0..<rep.pixelsHigh {
+                    for x in Int(aSize.width * 0.6 * k)..<rep.pixelsWide {
+                        guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        if c.blueComponent > 0.85 && c.greenComponent > 0.65 && c.redComponent < 0.5 { n += 1 }
+                    }
+                }
+                return n
+            }
+            let onChip = try accent(true), offChip = try accent(false)
+            XCTAssertGreaterThan(onChip, 3 * offChip + 30, "the selected row's chip is active: \(onChip) vs \(offChip) accent px (\(scale))")
         }
     }
 }

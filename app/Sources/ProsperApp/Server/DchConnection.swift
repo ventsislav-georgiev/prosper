@@ -2231,8 +2231,16 @@ enum DchCommand {
         return args
     }
 
+    /// #1266: the terminal draws 24-bit colour, so a program is told so (a Dock-launched app has no
+    /// COLORTERM and Claude Code then sends the nearest of 256 colours). A value already there is kept.
+    static func withColour(_ env: [String: String]) -> [String: String] {
+        var env = env
+        if (env["COLORTERM"] ?? "").isEmpty { env["COLORTERM"] = "truecolor" }
+        return env
+    }
+
     static func childEnv() -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+        var env = withColour(ProcessInfo.processInfo.environment)
         env["TERM"] = "xterm-256color"
         // If Prosper was itself launched from inside a dch session, its env carries
         // DCH_SESSION and dch would refuse to spawn ("nesting disabled"). Strip it.
