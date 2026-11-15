@@ -4,22 +4,28 @@ import Foundation
 // process. A version, slug, publisher and hash are outside text and are only compared for equality.
 // `step` never traps: an event that does not fit the phase returns the state unchanged and no action.
 // The actions are values a later step carries out; nothing here installs, renders or writes a kit.
+//
+// CONTRACT with the caller (S5): every answer-expecting action (validateStaged, renderStaged, askConsent,
+// swap, writeShims, applyWiring) is answered EXACTLY ONCE, by the event that carries the version AND the
+// tree hash of the action. An answer is compared with `staged` (or, after the swap, `live`) WHOLE: an
+// answer for another version or another tree is ignored (S4b, R917-s4-q1). swapBack is ONE atomic rename
+// swap in the store step and cannot fail half way, so it has no answer and no failure edge.
 
-struct KitRef: Equatable, Sendable {
+struct KitRef: Hashable, Sendable {
     var version: String
     var treeHash: String
     var slug: String
 }
 
-enum KitUpdatePhase: Equatable, Sendable {
+enum KitUpdatePhase: Hashable, Sendable {
     case idle, validating, rendering, consenting, swapping, shims, wiring, rollingBack
 }
 
-enum KitUpdateRefusal: Equatable, Sendable {
-    case slugChanged, publisherChanged, validation, consentDenied
+enum KitUpdateRefusal: Hashable, Sendable {
+    case slugChanged, publisherChanged, validation, consentDenied, render, shims
 }
 
-struct KitUpdateState: Equatable, Sendable {
+struct KitUpdateState: Hashable, Sendable {
     var live: KitRef
     var staged: KitRef? = nil
     var previous: KitRef? = nil
@@ -31,20 +37,24 @@ struct KitUpdateState: Equatable, Sendable {
     var lastRefusal: KitUpdateRefusal? = nil
 }
 
-enum KitUpdateEvent: Equatable, Sendable {
+/// Every answer carries (version, tree): the tree hash of the staged copy the action was about.
+enum KitUpdateEvent: Hashable, Sendable {
     case staged(version: String, treeHash: String, slug: String, publisher: String?)
-    case validatedOk(String)
-    case validationRefused(String)
-    case rendered(String)
-    case consentGiven(String)
-    case consentDenied(String)
-    case swapped(String)
-    case swapFailed(String)
-    case shimsWritten(String)
-    case shimsFailed(String)
-    case wiringApplied(String)
-    case wiringFailed(String)
+    case validatedOk(String, tree: String)
+    case validationRefused(String, tree: String)
+    case rendered(String, tree: String)
+    case renderFailed(String, tree: String)
+    case consentGiven(String, tree: String)
+    case consentDenied(String, tree: String)
+    case swapped(String, tree: String)
+    case swapFailed(String, tree: String)
+    case shimsWritten(String, tree: String)
+    case shimsFailed(String, tree: String)
+    case wiringApplied(String, tree: String)
+    case wiringFailed(String, tree: String)
     case rollbackRequested
+    /// The person (or the app) gives up the pending update; honoured only before the swap.
+    case cancel
 }
 
 enum KitUpdateAction: Hashable, Sendable {
@@ -62,6 +72,15 @@ enum KitUpdateAction: Hashable, Sendable {
 }
 
 enum KitUpdateMachine {
+    private static func isStaged(_ s: KitUpdateState, _ v: String, _ t: String) -> Bool {
+        guard let st = s.staged else { return false }
+        return st.version == v && st.treeHash == t
+    }
+
+    private static func isLive(_ s: KitUpdateState, _ v: String, _ t: String) -> Bool {
+        s.live.version == v && s.live.treeHash == t
+    }
+
     static func step(_ s: KitUpdateState, _ e: KitUpdateEvent) -> (KitUpdateState, [KitUpdateAction]) {
         var n = s
         switch e {
@@ -76,52 +95,65 @@ enum KitUpdateMachine {
             n.phase = .validating
             n.lastRefusal = nil
             return (n, out + [.copyToStaged(version), .validateStaged(version)])
-        case let .validatedOk(v):
-            guard s.phase == .validating, v == s.staged?.version else { return (s, []) }
+        case let .validatedOk(v, t):
+            guard s.phase == .validating, isStaged(s, v, t) else { return (s, []) }
             n.phase = .rendering
             return (n, [.renderStaged(v)])
-        case let .validationRefused(v):
-            guard s.phase == .validating, v == s.staged?.version else { return (s, []) }
+        case let .validationRefused(v, t):
+            guard s.phase == .validating, isStaged(s, v, t) else { return (s, []) }
             n.phase = .idle; n.staged = nil; n.lastRefusal = .validation
             return (n, [.dropStaged(v)])
-        case let .rendered(v):
-            guard s.phase == .rendering, v == s.staged?.version else { return (s, []) }
+        case let .rendered(v, t):
+            guard s.phase == .rendering, isStaged(s, v, t) else { return (s, []) }
             n.phase = .consenting
             return (n, [.askConsent(v)])
-        case let .consentGiven(v):
-            guard s.phase == .consenting, v == s.staged?.version else { return (s, []) }
+        case let .renderFailed(v, t):
+            guard s.phase == .rendering, isStaged(s, v, t) else { return (s, []) }
+            n.phase = .idle; n.staged = nil; n.lastRefusal = .render
+            return (n, [.dropStaged(v)])
+        case let .consentGiven(v, t):
+            guard s.phase == .consenting, isStaged(s, v, t) else { return (s, []) }
             n.phase = .swapping
             return (n, [.swap(v)])
-        case let .consentDenied(v):
-            guard s.phase == .consenting, v == s.staged?.version else { return (s, []) }
+        case let .consentDenied(v, t):
+            guard s.phase == .consenting, isStaged(s, v, t) else { return (s, []) }
             n.phase = .idle; n.staged = nil; n.lastRefusal = .consentDenied
             return (n, [.dropStaged(v)])
-        case let .swapped(v):
-            guard s.phase == .swapping, let st = s.staged, v == st.version else { return (s, []) }
+        case let .swapped(v, t):
+            guard s.phase == .swapping, let st = s.staged, isStaged(s, v, t) else { return (s, []) }
             n.retiring = s.previous; n.previous = s.live; n.live = st; n.phase = .shims
             return (n, [.keepPrevious(s.live.version), .writeShims(v)])
-        case let .swapFailed(v):
-            guard s.phase == .swapping, v == s.staged?.version else { return (s, []) }
+        case let .swapFailed(v, t):
+            guard s.phase == .swapping, isStaged(s, v, t) else { return (s, []) }
             n.phase = .idle; n.staged = nil
             return (n, [.dropStaged(v)])
-        case let .shimsWritten(v):
-            guard s.phase == .shims, v == s.live.version else { return (s, []) }
+        case let .shimsWritten(v, t):
+            guard s.phase == .shims, isLive(s, v, t) else { return (s, []) }
             n.phase = .wiring
             return (n, [.applyWiring(v)])
-        case let .shimsFailed(v):
-            guard s.phase == .shims, v == s.live.version, let old = s.previous else { return (s, []) }
-            n.live = old; n.previous = s.retiring; n.retiring = nil; n.staged = nil; n.phase = .idle
-            return (n, [.swapBack, .writeShims(old.version), .dropStaged(v)])
-        case let .wiringApplied(v):
-            guard v == s.live.version else { return (s, []) }
+        case let .shimsFailed(v, t):
+            guard isLive(s, v, t) else { return (s, []) }
+            if s.phase == .shims, let old = s.previous {
+                n.live = old; n.previous = s.retiring; n.retiring = nil; n.staged = nil; n.phase = .idle
+                return (n, [.swapBack, .writeShims(old.version), .dropStaged(v)])
+            }
+            // Bounded: a failed shim write while rolling back swaps back ONCE and lands in idle, so the answer
+            // to the rewrite after that swap back (another shimsFailed) is out of phase and ignored.
+            if s.phase == .rollingBack, let newer = s.previous {
+                n.live = newer; n.previous = s.live; n.phase = .idle; n.lastRefusal = .shims
+                return (n, [.swapBack, .writeShims(newer.version)])
+            }
+            return (s, [])
+        case let .wiringApplied(v, t):
+            guard isLive(s, v, t) else { return (s, []) }
             if s.phase == .wiring {
                 n.phase = .idle; n.staged = nil; n.retiring = nil
                 return (n, s.retiring.map { [.dropPrevious($0.version)] } ?? [])
             }
             if s.phase == .rollingBack { n.phase = .idle; return (n, []) }
             return (s, [])
-        case let .wiringFailed(v):
-            guard v == s.live.version else { return (s, []) }
+        case let .wiringFailed(v, t):
+            guard isLive(s, v, t) else { return (s, []) }
             if s.phase == .wiring, let old = s.previous {
                 n.live = old; n.previous = s.retiring; n.retiring = nil; n.staged = nil; n.phase = .idle
                 return (n, [.swapBack, .writeShims(old.version), .dropStaged(v)])
@@ -135,9 +167,16 @@ enum KitUpdateMachine {
             guard s.phase == .idle, let prev = s.previous else { return (s, []) }
             n.live = prev; n.previous = s.live; n.phase = .rollingBack
             return (n, [.swapBack, .writeShims(prev.version), .applyWiring(prev.version)])
+        case .cancel:
+            // Only before the swap; once swapping has begun the update is half applied and runs to its answer.
+            guard s.phase == .validating || s.phase == .rendering || s.phase == .consenting,
+                  let st = s.staged else { return (s, []) }
+            n.phase = .idle; n.staged = nil
+            return (n, [.dropStaged(st.version)])
         }
     }
 }
+
 
 struct KitFileFact: Equatable, Sendable {
     var size: Int
