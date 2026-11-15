@@ -2,7 +2,7 @@ import XCTest
 @testable import ProsperApp
 
 // #1259: a request follows its session's pin (ccpool v1.9.0 ccpool_proxy.py conversation() 83-85, choose() 114-147;
-// test_ccpool_proxy.py 306-333 and 426-427). The placement score and the throttle move are later entries.
+// test_ccpool_proxy.py 306-333 and 426-427). #1261: a key with no usable pin is placed by the score (CCPoolPlacementTests).
 // Fakes only; the stub upstream on an ephemeral loopback port; every rig installs the wait recorder FIRST.
 
 /// The stub upstream: records which token each request went with; a scripted token answers ThrottleUpstream's script,
@@ -310,7 +310,7 @@ final class CCPoolPinRoutingTests: XCTestCase {
         XCTAssertEqual(r.via("sess-example-1", body: throttleQuotaCheck), "tok-a")
         XCTAssertEqual(r.store.snapshot, before, "state compared before and after")
         XCTAssertTrue(r.store.snapshot.pins.isEmpty)
-        r.setCurrent(orgB)
+        r.store.mutate { $0.order = [orgB, orgA] }   // #1261: a new key is placed, ties by order (no longer `current`)
         XCTAssertEqual(r.via("sess-example-2"), "tok-b")
         r.setCurrent(orgA)
         XCTAssertEqual(r.via("sess-example-2", body: throttleQuotaCheck), "tok-b", "follows the pin")
@@ -319,7 +319,7 @@ final class CCPoolPinRoutingTests: XCTestCase {
 
     func testBadHeaderValueIsTreatedAsNoSessionIdAndNoValueIsLogged() throws {
         let r = try rig()
-        r.setCurrent(orgB)
+        r.store.mutate { $0.order = [orgB, orgA] }   // #1261: a new key is placed, ties by order (no longer `current`)
         XCTAssertEqual(r.via("sess-example-1", "agent-example-1"), "tok-b")
         r.setCurrent(orgA)
         let bad: [(String, String?)] = [("sess example-2", nil), (String(repeating: "s", count: 129), nil),
@@ -340,7 +340,7 @@ final class CCPoolPinRoutingTests: XCTestCase {
 
     func testThrottleRetryOfAPinnedRequestStaysOnItsAccount() throws {
         let r = try rig()
-        r.setCurrent(orgB)
+        r.store.mutate { $0.order = [orgB, orgA] }   // #1261: a new key is placed, ties by order (no longer `current`)
         XCTAssertEqual(r.via("sess-example-1"), "tok-b")
         r.setCurrent(orgA)
         r.up.set("tok-b", [.throttle(nil), .throttle("3")])
@@ -357,7 +357,7 @@ final class CCPoolPinRoutingTests: XCTestCase {
 
     func testMissingTokenMovesTheSession() throws {
         let r = try rig()
-        r.setCurrent(orgB)
+        r.store.mutate { $0.order = [orgB, orgA] }   // #1261: a new key is placed, ties by order (no longer `current`)
         XCTAssertEqual(r.via("sess-example-1"), "tok-b")
         r.setCurrent(orgB)
         let id = try XCTUnwrap(r.store.snapshot.accounts[orgB]?.id)
@@ -381,10 +381,10 @@ final class CCPoolPinRoutingTests: XCTestCase {
         XCTAssertEqual(r.seams.writes, w1, "three touches, no write")
         XCTAssertEqual(try Data(contentsOf: r.store.stateURL), file)
         XCTAssertEqual(r.store.snapshot.pins["sess-example-1/"]?.seen, at + 300, "the touch is kept in memory")
-        XCTAssertEqual(r.via("sess-example-2"), "tok-a")
-        XCTAssertEqual(r.seams.writes, w1 + 1, "another new pin is saved")
+        XCTAssertEqual(r.via("sess-example-2"), "tok-b", "#1261: placed by the score, orgA holds a live session")
+        XCTAssertEqual(r.seams.writes, w1 + 2, "another new pin is saved, and current moves to the placed account")
         let obj = try JSONSerialization.jsonObject(with: Data(contentsOf: r.store.stateURL)) as? [String: Any]
-        XCTAssertEqual(obj?["pins"] as? [String: String], ["sess-example-1/": orgA, "sess-example-2/": orgA])
+        XCTAssertEqual(obj?["pins"] as? [String: String], ["sess-example-1/": orgA, "sess-example-2/": orgB])
     }
 
     // MARK: Removal and rename

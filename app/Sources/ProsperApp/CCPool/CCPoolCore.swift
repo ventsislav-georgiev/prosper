@@ -54,9 +54,17 @@ struct CCPoolState: Codable, Equatable, Sendable {
 
     /// Equal = the same file content (CCPoolStore.mutate writes only on a change). #1260 (R1260-a): a capacity row
     /// counts by its `written` numbers only, so a reply that only adds pending dollars never rewrites the file.
+    /// #1261 (R1260-f): and only the rows encode writes, so a row of an id outside the pool rewrites nothing.
     static func == (a: CCPoolState, b: CCPoolState) -> Bool {
         a.current == b.current && a.order == b.order && a.accounts == b.accounts && a.pins == b.pins
-            && a.capacity.compactMapValues(\.written) == b.capacity.compactMapValues(\.written)
+            && a.savedCapacity.compactMapValues(\.written) == b.savedCapacity.compactMapValues(\.written)
+    }
+
+    /// The capacity rows the file holds: accounts in the pool, sampled, and accepted by the row check (#1261 R1260-g:
+    /// a non-finite or out-of-range number is never handed to the encoder, so it cannot fail the whole save).
+    var savedCapacity: [String: CCPoolCapacityState] {
+        let ids = Set(accounts.values.map(\.id))
+        return capacity.filter { ids.contains($0.key) && $0.value.written != nil && $0.value.isValid }
     }
 
     /// Not named CodingKeys: both coders are written by hand, and Account keeps its own synthesized keys.
@@ -100,8 +108,7 @@ struct CCPoolState: Codable, Equatable, Sendable {
         // Absent when empty: a file without pins is written exactly as before this key existed.
         if !pins.isEmpty { try c.encode(pins.mapValues(\.account), forKey: .pins) }
         // #1260: numbers only, by Keychain id, only for accounts in the pool and only once sampled; absent when none.
-        let ids = Set(accounts.values.map(\.id))
-        let saved = capacity.filter { ids.contains($0.key) && $0.value.written != nil }
+        let saved = savedCapacity
         if !saved.isEmpty { try c.encode(saved, forKey: .capacity) }
     }
 
@@ -218,10 +225,11 @@ enum CCPoolCore {
         }?.element
     }
 
-    /// #1259: the account for a request and the state after (Python choose(), ccpool_proxy.py 114-147, without
-    /// the placement score). No usable key: `pick` as today, state untouched. A key: its own pin, then its session's
-    /// main conversation, then the session's latest; each only while in `order`, not excluded and eligible. None of
-    /// them: `pick`. A request pins (or moves) its key to the account; a quota check only touches a pin it follows.
+    /// #1259: the account for a request and the state after (Python choose(), ccpool_proxy.py 114-147). No usable
+    /// key: `pick` as today, state untouched. A key: its own pin, then its session's main conversation, then the
+    /// session's latest; each only while in `order`, not excluded and eligible. None of them (a new conversation, or
+    /// the move after a refusal, its account in `exclude`): `place` (#1261). A request pins (or moves) its key to the
+    /// account; a quota check only touches a pin it follows.
     /// `followed` is true when a pin gave the answer (#1259 R1259-a).
     static func route(_ state: CCPoolState, key: String?, quotaCheck: Bool, model: String?,
                       exclude: Set<String>, now: Double) -> (account: String?, state: CCPoolState, followed: Bool) {
@@ -236,9 +244,9 @@ enum CCPoolCore {
             .map(\.value.account)
         let usable = { (n: String) in state.order.contains(n) && state.accounts[n] != nil && !exclude.contains(n)
             && eligible(state.accounts[n], model: model, now: now) }
-        // followed: the answer came from a pin, not from `pick`; its reply then leaves `current` where it is.
+        // followed: the answer came from a pin, not from `place`; its reply then leaves `current` where it is.
         let pinned = ([live.pins[key]?.account].compactMap { $0 } + siblings).first(where: usable)
-        guard let name = pinned ?? pick(state, model: model, exclude: exclude, now: now) else { return (nil, state, false) }
+        guard let name = pinned ?? place(state, model: model, exclude: exclude, now: now) else { return (nil, state, false) }
         var st = state
         if live.pins[key]?.account == name {   // the expired copy: an idle pin is never revived by a touch (R1259-q1)
             st.touchPin(key, now: now)   // stamp only: kept in memory, never written (Pin == ignores it)
@@ -247,6 +255,37 @@ enum CCPoolCore {
             st.pin(key, to: name, now: now)
         }
         return (name, st, pinned != nil)
+    }
+
+    /// #1261: where a new or moving conversation goes (Python place(), ccpool_proxy.py 150-166): among the accounts of
+    /// `order` that are in the pool, not excluded and eligible (never wider than `pick`), the highest
+    /// (1 - utilization now) x capacity / (live sessions + 1). Utilization now = the saved running max while its
+    /// window's reset is after `now`, else 0. Live sessions = distinct session ids pinned to it in an expired copy
+    /// (a lookup changes nothing). Learned numbers are outside data: a non-finite or negative score is 0. An account
+    /// at or above 100%, or whose row fails the row check, ranks after every other; all there: still one is
+    /// returned, as in the reference. Ties: the soonest five-hour reset, then `order`.
+    static func place(_ state: CCPoolState, model: String?, exclude: Set<String>, now: Double) -> String? {
+        var live = state
+        live.expirePins(now: now)
+        var sessions: [String: Set<Substring>] = [:]   // bounded by the pin cap
+        for (key, pin) in live.pins { sessions[pin.account, default: []].insert(key.prefix { $0 != "/" }) }
+        let rows = state.order.compactMap { state.accounts[$0].flatMap { state.capacity[$0.id] } }.filter(\.isValid)
+        func rank(_ n: String) -> (full: Bool, score: Double) {
+            let row = state.accounts[n].flatMap { state.capacity[$0.id] }
+            if let row, !row.isValid { return (true, 0) }
+            let util = row.flatMap { r in r.reset.map { $0 > now ? r.maxUtilization : 0 } } ?? 0
+            let score = (1 - util) * CCPoolCapacity.capacity(of: row, among: rows) / Double((sessions[n]?.count ?? 0) + 1)
+            return (util >= 1, score.isFinite && score > 0 ? score : 0)
+        }
+        let ready = state.order.enumerated().filter { state.accounts[$0.element] != nil && !exclude.contains($0.element)
+            && eligible(state.accounts[$0.element], model: model, now: now) }
+            .map { (name: $0.element, index: $0.offset, rank: rank($0.element),
+                    reset: resetAt(state.accounts[$0.element], fiveHour, now: now)) }
+        return ready.min { a, b in
+            if a.rank.full != b.rank.full { return !a.rank.full }
+            if a.rank.score != b.rank.score { return a.rank.score > b.rank.score }
+            return a.reset != b.reset ? a.reset < b.reset : a.index < b.index
+        }?.name
     }
 
     /// The recorded rollover for `claim`, or +inf when never seen (an unseen window is a full one).

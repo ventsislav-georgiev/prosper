@@ -55,12 +55,19 @@ extension CCPoolCapacityState {
               c.allKeys.count == fields.count, Set(c.allKeys.map(\.stringValue)) == Set(fields) else { return nil }
         var v: [Double] = []
         for name in fields {
-            guard let d = try? c.decode(Double.self, forKey: Field(stringValue: name)),
-                  d.isFinite, d >= 0, d <= CCPoolCapacity.maxTokens else { return nil }
+            guard let d = try? c.decode(Double.self, forKey: Field(stringValue: name)) else { return nil }
             v.append(d)
         }
-        guard v.count == 5, v[1] <= CCPoolCapacity.maxUtilization else { return nil }
-        return CCPoolCapacityState(reset: v[0], maxUtilization: v[1], pendingDollars: v[2], dollars: v[3], points: v[4])
+        guard v.count == 5 else { return nil }
+        let s = CCPoolCapacityState(reset: v[0], maxUtilization: v[1], pendingDollars: v[2], dollars: v[3], points: v[4])
+        return s.isValid ? s : nil
+    }
+
+    /// #1261 (R1260-g, R1260-q1): what a capacity row may hold, on read (checked) and on write (encode): every number
+    /// finite and 0...CCPoolCapacity.maxTokens, the running max at most CCPoolCapacity.maxUtilization.
+    var isValid: Bool {
+        [reset ?? 0, maxUtilization, pendingDollars, dollars, points].allSatisfy { $0.isFinite && $0 >= 0 && $0 <= CCPoolCapacity.maxTokens }
+            && maxUtilization <= CCPoolCapacity.maxUtilization
     }
 }
 

@@ -1223,6 +1223,9 @@ tag from the now-released section and put it on the new top draft.
 - Extension updates: an update from the Marketplace that was refused for its content is not
   downloaded again until the Marketplace lists a new version (until the app restarts), and a
   published theme's preview is read only from the theme files you confirmed in the publish list.
+- Account pool: a new conversation (or one that has to move) now goes to the account with the most
+  five-hour headroom per live session, weighted by what each plan has been learned to hold, instead
+  of always to the current account; conversations already pinned stay where they are.
 
 ## v2.174.0
 
