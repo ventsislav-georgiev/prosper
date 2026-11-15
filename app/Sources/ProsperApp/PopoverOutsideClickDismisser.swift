@@ -147,13 +147,20 @@ final class PopoverOutsideClickDismisser {
     /// OPEN on exactly the menu case. The owner pid is not gated by Screen
     /// Recording (window names are; we don't read them).
     private static func ownerPID(at p: NSPoint) -> pid_t? {
-        let n = NSWindow.windowNumber(at: p, belowWindowWithWindowNumber: 0)
-        guard n > 0,
-              let info = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(n))
-                as? [[String: Any]],
-              let pid = info.first?[kCGWindowOwnerPID as String] as? Int
+        ownerPID(windowNumber: NSWindow.windowNumber(at: p, belowWindowWithWindowNumber: 0)) {
+            CGWindowListCopyWindowInfo([.optionIncludingWindow], $0) as? [[String: Any]]
+        }
+    }
+
+    /// #980: `ownerPID(at:)`'s decision. `info` is the window-list read, called (synchronously, on
+    /// the caller's thread) only for a window number > 0. The first entry's owner pid; no bounds
+    /// or layer rule (the topmost window is the system's pick). Outside data: a window number or
+    /// pid that does not fit gives nil, never a trap.
+    nonisolated static func ownerPID(windowNumber n: Int, info: (CGWindowID) -> [[String: Any]]?) -> pid_t? {
+        guard n > 0, let id = CGWindowID(exactly: n),
+              let pid = info(id)?.first?[kCGWindowOwnerPID as String] as? Int
         else { return nil }
-        return pid_t(pid)
+        return pid_t(exactly: pid)
     }
 
     /// Pure decision. Our own window under the click (popover, its menus,
