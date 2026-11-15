@@ -304,4 +304,40 @@ extension AgentWindowD1Tests {
         let out = PaneLayoutStore.cleanName(raw) ?? ""   // the stop may leave nothing: automatic, still bounded
         XCTAssertTrue(out.allSatisfy { $0.unicodeScalars.count <= cap }, "every Character at most \(cap) scalars")
     }
+
+    /// R901-s3-b, the rename half (#901 B3 step 4b): while the inline LAYOUT rename field is open, and while the SESSION
+    /// rename field is open (its own state, set through the openRenameField seam: no ask, no select, no verb), layoutKey
+    /// returns false and consumes nothing: nothing switched or written. With both closed the same key switches.
+    /// GUARD layout-keys-ignore-the-rename-field.
+    @MainActor
+    func testAgentWindowLayoutKeysStandDownForTheRenameFields() throws {
+        gate(true)
+        let a = paneLayout([paneTarget("a")]), b = paneLayout([paneTarget("b")])
+        let (d, bytes) = try keysSuite([a, b], active: a.id)
+        let m = windowModel(store([session("a", .idle), session("b", .idle)]), layouts: d)
+        defer { m.close() }
+        m.setVisible(true)
+        let keys = [layoutKeyEvent(19, [.control], "2"), layoutKeyEvent(48, [.control], "\t")]
+        m.beginLayoutRename(a.id)
+        XCTAssertEqual(m.layoutRenaming, a.id, "the layout field is open")
+        for e in keys {
+            for r: AgentsNSWindow.ResponderKind in [.text, .terminal, .other] {
+                XCTAssertFalse(AgentsNSWindow.layoutKey(e, m, responder: r), "\(e.keyCode) \(r): the layout field keeps it")
+            }
+        }
+        m.endLayoutRename(a.id, nil)
+        m.openRenameField(AgentRenameEdit(key: AgentSessionKey(dir: "/tmp/dch-test", name: "a"), text: ""))
+        XCTAssertTrue(m.renaming != nil, "the session field is open")
+        for e in keys {
+            XCTAssertFalse(AgentsNSWindow.layoutKey(e, m, responder: .text), "\(e.keyCode): the session field keeps it")
+        }
+        XCTAssertEqual(m.layout.id, a.id)
+        XCTAssertEqual(m.layoutWrites, 0)
+        XCTAssertEqual(d.data(forKey: "agentWindowLayouts"), bytes)
+        let closed = windowModel(store([session("a", .idle), session("b", .idle)]), layouts: d)
+        defer { closed.close() }
+        closed.setVisible(true)
+        XCTAssertTrue(AgentsNSWindow.layoutKey(try XCTUnwrap(keys.first), closed, responder: .text), "no field: the key switches")
+        XCTAssertEqual(closed.layout.id, b.id)
+    }
 }

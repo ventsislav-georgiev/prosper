@@ -169,7 +169,7 @@ extension AgentWindowD1Tests {
     @MainActor
     private func sidebarTree(_ m: AgentWindowModel, until done: @escaping ([AXTreeNode]) -> Bool = { _ in true }) -> [AXTreeNode] {
         AXTreeSupport.tree(AgentSidebarView(model: m), CGSize(width: sz(274), height: 900)) { t in
-            t.contains { $0.label.hasPrefix("docs,") } && done(t)
+            t.contains { $0.label.hasPrefix("docs,") && !$0.label.contains(", Control ") } && done(t)   // 4b: a session row
         }
     }
 
@@ -191,8 +191,8 @@ extension AgentWindowD1Tests {
         let (m, _) = try sectionModel([a, b], active: b.id)
         defer { m.close() }
         let tree = sidebarTree(m) { t in t.contains { $0.label == "New layout" } }
-        let rows = unique(tree) { ["Review", "api + docs"].contains($0.label) }
-        XCTAssertEqual(rows.map(\.label), ["Review", "api + docs"], "drawn order")
+        let rows = unique(tree) { ["Review, Control 1", "api + docs, Control 2"].contains($0.label) }
+        XCTAssertEqual(rows.map(\.label), ["Review, Control 1", "api + docs, Control 2"], "drawn order, the key read too")
         XCTAssertTrue(rows.allSatisfy { $0.role == "AXButton" }, rows.map(\.role).description)
         XCTAssertEqual(rows.map(\.selected), [false, true], "the active row reads selected")
         XCTAssertGreaterThan(rows.first?.frame.minY ?? 0, rows.last?.frame.minY ?? 0, "top to bottom (AX y grows upward)")
@@ -229,7 +229,7 @@ extension AgentWindowD1Tests {
         defer { ThemeRuntime.scale = saved }
         let titles = ["api", "docs"]
         func sessionRows(_ t: [AXTreeNode]) -> [CGRect] {
-            titles.compactMap { n in unique(t) { $0.label.hasPrefix("\(n),") }.first?.frame }
+            titles.compactMap { n in unique(t) { $0.label.hasPrefix("\(n),") && !$0.label.contains(", Control ") }.first?.frame }
         }
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
@@ -243,9 +243,10 @@ extension AgentWindowD1Tests {
             hidden.close()
             let a = paneLayout([paneTarget("api")]), b = paneLayout([paneTarget("docs")]), c = paneLayout([nil])
             let (shown, _) = try sectionModel([a, b, c])
-            let tree = sidebarTree(shown) { t in t.contains { $0.label == "Empty" } }
+            let tree = sidebarTree(shown) { t in t.contains { $0.label == "Empty, Control 3" } }
             let moved = sessionRows(tree)
-            let layoutRows = unique(tree) { ["api", "docs", "Empty"].contains($0.label) && $0.role == "AXButton" }
+            let layoutRows = unique(tree) { ["api, Control 1", "docs, Control 2", "Empty, Control 3"].contains($0.label)
+                && $0.role == "AXButton" }
             shown.close()
             XCTAssertEqual(base.count, 2, "\(scale)")
             XCTAssertEqual(same, base, "not built: byte for byte the gate-off frames (\(scale))")
@@ -259,6 +260,222 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(layoutRows.count, 3, "\(scale)")
             XCTAssertTrue(layoutRows.allSatisfy { abs($0.frame.height - (layoutRows.first?.frame.height ?? 0)) < 0.5 },
                           "one row height (\(scale))")
+        }
+    }
+
+    // MARK: #901 B3 step 4b: the context menu, the inline rename, folding, the band's name slot
+
+    /// The menu entry `verb` of the row `id`'s list (a value: no menu is popped).
+    @MainActor
+    private func entry(_ m: AgentWindowModel, _ id: UUID, _ verb: AgentLayoutVerb) throws -> AgentLayoutMenuEntry {
+        try XCTUnwrap(AgentWindowControls.layoutMenu(m, id).first { $0.verb == verb })
+    }
+
+    /// Item 2: each row's entry list as literals: Rename / Duplicate / Delete, all on with two layouts. Delete through its
+    /// entry: one write; then the last layout's Delete reads "Delete (last layout)", off, and running it writes nothing.
+    /// At 9 Duplicate reads "Duplicate (9 layouts max)", off. Gate off: no entries at all. GUARD delete-allowed-on-the-last.
+    @MainActor
+    func testAgentWindowLayoutSectionMenuEntriesAreValuesAndDeleteStopsAtTheLast() throws {
+        gate(true)
+        let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("docs")])
+        let (m, d) = try sectionModel([a, b])
+        defer { m.close() }
+        let calls = Calls()
+        calls.wire(m)
+        let two = AgentWindowControls.layoutMenu(m, a.id)
+        XCTAssertEqual(two.map(\.title), ["Rename", "Duplicate", "Delete"])
+        XCTAssertEqual(two.map(\.enabled), [true, true, true])
+        XCTAssertEqual(AgentWindowControls.layoutMenu(m, b.id), two, "the same list on every row")
+        AgentWindowControls.runLayout(try entry(m, b.id, .delete), m, b.id)
+        XCTAssertEqual(m.layoutWrites, 1, "one write")
+        XCTAssertEqual(savedLayouts(d).layouts.map(\.id), [a.id])
+        let last = AgentWindowControls.layoutMenu(m, a.id)
+        XCTAssertEqual(last.map(\.title), ["Rename", "Duplicate", "Delete (last layout)"])
+        XCTAssertEqual(last.map(\.enabled), [true, true, false])
+        AgentWindowControls.runLayout(try entry(m, a.id, .delete), m, a.id)
+        XCTAssertEqual(m.layoutWrites, 1, "a disabled entry runs nothing")
+        XCTAssertEqual(m.layouts?.layouts.count, 1)
+        for _ in 0..<8 { AgentLayoutsSection.plus(m) }
+        XCTAssertEqual(m.layoutRows?.count, 9)
+        let full = AgentWindowControls.layoutMenu(m, a.id)
+        XCTAssertEqual(full.map(\.title), ["Rename", "Duplicate (9 layouts max)", "Delete"])
+        XCTAssertEqual(full.map(\.enabled), [true, false, true])
+        XCTAssertTrue(calls.all.isEmpty && calls.records.isEmpty, "no session verb")
+        gate(false)
+        XCTAssertEqual(AgentWindowControls.layoutMenu(m, a.id), [], "gate off: no entry")
+    }
+
+    /// Item 2: Duplicate makes ONE layout, active (D2), named by D3, with one write; no session verb runs.
+    @MainActor
+    func testAgentWindowLayoutSectionDuplicateMakesOneActiveLayout() throws {
+        gate(true)
+        var opened = 0
+        let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("docs")])
+        let (m, d) = try sectionModel([a, b], opened: { _ in opened += 1 })
+        defer { m.close() }
+        let calls = Calls()
+        calls.wire(m)
+        AgentWindowControls.runLayout(try entry(m, a.id, .duplicate), m, a.id)
+        XCTAssertEqual(m.layoutWrites, 1, "one write")
+        let rows = try XCTUnwrap(m.layoutRows)
+        XCTAssertEqual(rows.map(\.name), ["Review", "docs", "Review 2"])
+        XCTAssertEqual(rows.map(\.active), [false, false, true], "the copy is active")
+        XCTAssertEqual(m.layout.id, rows.last?.id)
+        XCTAssertFalse([a.id, b.id].contains(m.layout.id), "fresh ids")
+        let saved = savedLayouts(d)
+        XCTAssertEqual(saved.layouts.count, 3)
+        XCTAssertEqual(saved.active, rows.last?.id)
+        XCTAssertEqual(opened, 0)
+        XCTAssertTrue(calls.all.isEmpty && calls.records.isEmpty, "no session verb")
+    }
+
+    /// Item 2: Delete of the ACTIVE layout leaves the MRU's next one active and adopted (the model op's rule), one write.
+    @MainActor
+    func testAgentWindowLayoutSectionDeleteOfTheActiveHandsOverToTheMRUNext() throws {
+        gate(true)
+        let a = paneLayout([paneTarget("api")]), b = paneLayout([paneTarget("docs")]), c = paneLayout([nil])
+        let (m, d) = try sectionModel([a, b, c])
+        defer { m.close() }
+        let rows = try XCTUnwrap(m.layoutRows)
+        AgentLayoutsSection.click(m, try XCTUnwrap(rows.last))    // c
+        AgentLayoutsSection.click(m, try XCTUnwrap(rows.dropFirst().first))   // b
+        AgentLayoutsSection.click(m, try XCTUnwrap(rows.last))    // c again: MRU c, b, a
+        XCTAssertEqual(m.layoutWrites, 3)
+        AgentWindowControls.runLayout(try entry(m, c.id, .delete), m, c.id)
+        XCTAssertEqual(m.layoutWrites, 4, "one write")
+        XCTAssertEqual(m.layout.id, b.id, "the MRU's next")
+        XCTAssertEqual(m.layoutRows?.map(\.name), ["api", "docs"])
+        XCTAssertEqual(m.layoutRows?.map(\.active), [false, true])
+        XCTAssertEqual(savedLayouts(d).active, b.id)
+    }
+
+    /// Item 2: Rename opens the inline field's state (no write); Escape (nil) closes it and writes nothing; Return writes
+    /// ONCE with the name cleaned by the model (D1); a late end of the closed field changes nothing. Gate off: Rename
+    /// opens nothing. GUARD rename-commits-on-cancel.
+    @MainActor
+    func testAgentWindowLayoutSectionInlineRenameCommitsOnceAndCancelWritesNothing() throws {
+        gate(true)
+        let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("docs")])
+        let (m, d) = try sectionModel([a, b])
+        defer { m.close() }
+        let calls = Calls()
+        calls.wire(m)
+        AgentWindowControls.runLayout(try entry(m, a.id, .rename), m, a.id)
+        XCTAssertEqual(m.layoutRenaming, a.id, "the field is open")
+        XCTAssertEqual(m.layoutWrites, 0)
+        m.endLayoutRename(a.id, nil)
+        XCTAssertTrue(m.layoutRenaming == nil)
+        XCTAssertEqual(m.layoutWrites, 0, "Escape: nothing written")
+        XCTAssertEqual(m.layoutRows?.first?.name, "Review")
+        AgentWindowControls.runLayout(try entry(m, a.id, .rename), m, a.id)
+        m.endLayoutRename(a.id, "  Docs\u{7}   pass\t ")
+        XCTAssertTrue(m.layoutRenaming == nil)
+        XCTAssertEqual(m.layoutWrites, 1, "Return: one write")
+        XCTAssertEqual(m.layoutRows?.first?.name, "Docs pass", "cleaned by the model")
+        XCTAssertEqual(savedLayouts(d).layouts.first?.name, "Docs pass")
+        m.endLayoutRename(a.id, "Other")
+        XCTAssertEqual(m.layoutWrites, 1, "a late end changes nothing")
+        XCTAssertTrue(calls.all.isEmpty && calls.records.isEmpty, "no session verb (no dch -m)")
+        gate(false)
+        m.beginLayoutRename(a.id)
+        XCTAssertTrue(m.layoutRenaming == nil, "gate off: no field")
+    }
+
+    /// Item 4: the header folds through agentWindowCollapsedSections ("Layouts"): folded, the rows are out of the drawn
+    /// tree and the active layout is unchanged; 50 refreshes keep it folded and publish nothing; a new model reads it back;
+    /// unfolding brings the rows back. GUARD section-folds-without-persisting.
+    @MainActor
+    func testAgentWindowLayoutSectionFoldsAndUnfoldsThroughTheCollapsedSet() throws {
+        let pref = "agentWindowCollapsedSections"
+        let saved = Preferences.defaults.object(forKey: pref)
+        defer { Preferences.defaults.set(saved, forKey: pref) }
+        Preferences.defaults.removeObject(forKey: pref)
+        gate(true)
+        let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("api"), paneTarget("docs")])
+        let (m, _) = try sectionModel([a, b], active: b.id)
+        defer { m.close() }
+        let open = sidebarTree(m) { t in t.contains { $0.label == "Review, Control 1" } }
+        XCTAssertTrue(open.contains { $0.label == "Review, Control 1" })
+        m.toggleCollapsed(AgentLayoutsSection.title)
+        XCTAssertTrue(m.isCollapsed(AgentLayoutsSection.title))
+        XCTAssertEqual(Preferences.defaults.stringArray(forKey: pref), ["Layouts"], "its own entry in the set")
+        XCTAssertEqual(m.layout.id, b.id, "the active layout unchanged")
+        XCTAssertEqual(m.layoutWrites, 0)
+        m.refresh()
+        var published = 0
+        let sink = m.objectWillChange.sink { _ in published += 1 }   // main actor, inside refresh()
+        defer { sink.cancel() }
+        for _ in 0..<50 { m.refresh() }
+        XCTAssertEqual(published, 0, "nothing published")
+        XCTAssertTrue(m.isCollapsed(AgentLayoutsSection.title), "still folded")
+        sink.cancel()
+        let folded = sidebarTree(m)
+        XCTAssertFalse(folded.contains { $0.label.hasSuffix(", Control 1") || $0.label.hasSuffix(", Control 2") }, "rows out")
+        XCTAssertTrue(folded.contains { $0.label == "Layouts, 2" }, "the header stays, with its count")
+        let (next, _) = try sectionModel([a, b], active: b.id)
+        defer { next.close() }
+        XCTAssertTrue(next.isCollapsed(AgentLayoutsSection.title), "read back")
+        m.toggleCollapsed(AgentLayoutsSection.title)
+        XCTAssertEqual(Preferences.defaults.stringArray(forKey: pref), [])
+        let back = sidebarTree(m) { t in t.contains { $0.label == "Review, Control 1" } }
+        XCTAssertTrue(back.contains { $0.label == "api + docs, Control 2" }, "unfolded: the rows again")
+    }
+
+    /// Item 5 (9.1 :708) at 1.0, 0.85 and 0.7: with two layouts the band's slot draws the active row's "⌃N name" inside the
+    /// layout slot, and every band frame equals the one-layout-of-one-pane band's (no slot built there). Gate off: no slot
+    /// row and no band at all. GUARD band-slot-built-with-the-gate-off.
+    @MainActor
+    func testAgentWindowLayoutBandNameSlotAtThreeScales() throws {
+        _ = ThemeStore.shared   // seeds ThemeRuntime.scale first, before the scale is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let size = CGSize(width: 1400, height: 800)
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            gate(true)
+            let (one, _) = try sectionModel([paneLayout([paneTarget("api")])])
+            XCTAssertTrue(AgentWindowBand.layoutSlot(one) == nil, "\(scale)")
+            let base = bandSnapshot(one, size)
+            one.close()
+            let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("docs")])
+            let (two, _) = try sectionModel([a, b])
+            let slot = try XCTUnwrap(AgentWindowBand.layoutSlot(two))
+            XCTAssertEqual(slot.name, two.layoutRows?.first { $0.active }?.name)
+            XCTAssertEqual(slot.name, "Review")
+            XCTAssertEqual(slot.number, 1)
+            let shown = bandSnapshot(two, size)
+            two.close()
+            XCTAssertTrue(base["layoutName"] == nil, "one layout of one pane: not built (\(scale))")
+            XCTAssertTrue(base["layout"] != nil, "\(scale)")
+            for k in base.keys.sorted() { XCTAssertEqual(shown[k], base[k], "\(k) unchanged (\(scale))") }
+            let name = try XCTUnwrap(shown["layoutName"], "\(scale)"), room = try XCTUnwrap(shown["layout"])
+            XCTAssertTrue(name.minX >= room.minX - 0.5 && name.maxX <= room.maxX + 0.5, "in the slot (\(scale)): \(name) \(room)")
+            XCTAssertTrue(name.width > 0)
+            gate(false)
+            let (off, _) = try sectionModel([a, b])
+            XCTAssertTrue(AgentWindowBand.layoutSlot(off) == nil, "gate off (\(scale))")
+            XCTAssertTrue(bandSnapshot(off, size).isEmpty, "gate off: no band, no slot (\(scale))")
+            off.close()
+        }
+    }
+
+    /// R901-s4a-q1: automaticName joins cleaned titles with " + " (and "…" when long); a title that starts with `cap`
+    /// combining marks would hang them on the separator's space or the "…". Every Character of the drawn name keeps at
+    /// most `cap` scalars, both for the plain join and for one cut to "…" right before that title.
+    @MainActor
+    func testAgentWindowLayoutSectionNameCharactersStayUnderTheScalarCap() throws {
+        gate(true)
+        let cap = ThemeVariant.labelCharScalarMax, marks = String(repeating: "\u{301}", count: cap)
+        let plain = paneLayout([paneTarget("api"), paneTarget(marks + "x")])
+        let cut = paneLayout([paneTarget(String(repeating: "a", count: 40)), paneTarget(marks + String(repeating: "x", count: 31))])
+        let (m, _) = try sectionModel([plain, cut], sessions: ["api"])
+        defer { m.close() }
+        let rows = try XCTUnwrap(m.layoutRows)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.last?.name.contains("…") == true, "the second one is cut")
+        for r in rows {
+            XCTAssertTrue(r.name.allSatisfy { $0.unicodeScalars.count <= cap }, "\(r.number): \(r.name.unicodeScalars.count)")
+            XCTAssertEqual(r.name, OutsideText.shown(r.name), "drawn through the shared cap")
         }
     }
 }

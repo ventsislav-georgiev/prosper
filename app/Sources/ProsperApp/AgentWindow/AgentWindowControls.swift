@@ -48,7 +48,48 @@ enum AgentPaneVerb: Equatable {
     case equalize
 }
 
+/// #901 B3 step 4b (8.1): what a Layouts row's context menu entry runs.
+enum AgentLayoutVerb: Equatable { case rename, duplicate, delete }
+
+/// One entry of a Layouts row's context menu, a value (rows read the list; no menu is popped).
+struct AgentLayoutMenuEntry: Equatable, Identifiable {
+    let title: String
+    let enabled: Bool
+    let verb: AgentLayoutVerb
+    var id: AgentLayoutVerb { verb }
+}
+
 enum AgentWindowControls {
+    /// #901 B3 step 4b: Delete's fixed words on the last layout, read as PaneRefusal.menuSuffix reads ("Delete (last
+    /// layout)", as "Split Right (6 panes max)"); PaneRefusal has no words for .lastLayout.
+    static let lastLayoutSuffix = "(last layout)"
+
+    /// #901 B3 step 4b (8.1): a Layouts row's context menu: Rename, Duplicate, Delete. Gate off or no store: empty (the
+    /// section is not built then either). Duplicate is off at the 9-layout cap with its words; Delete is off on the last
+    /// layout with `lastLayoutSuffix`. A pure read of the store's own answers.
+    @MainActor
+    static func layoutMenu(_ m: AgentWindowModel, _ id: UUID) -> [AgentLayoutMenuEntry] {
+        guard AgentPaneLayout.splitsEnabled, let s = m.layouts else { return [] }
+        func entry(_ title: String, _ verb: AgentLayoutVerb, _ suffix: String?) -> AgentLayoutMenuEntry {
+            AgentLayoutMenuEntry(title: suffix.map { "\(title) \($0)" } ?? title, enabled: suffix == nil, verb: verb)
+        }
+        let full = s.layouts.count >= PaneLayoutStore.maxLayouts ? PaneRefusal.layoutCap.menuSuffix : nil
+        var last: String? { if case .failure(.lastLayout) = s.deleting(id) { return lastLayoutSuffix }; return nil }
+        return [entry("Rename", .rename, nil), entry("Duplicate", .duplicate, full), entry("Delete", .delete, last)]
+    }
+
+    /// The entry's run: the model op once (Rename only opens the inline field; Delete asks nothing, 8.1). A disabled
+    /// entry runs nothing; gate off nothing runs (deleteLayout itself is ungated, D4). Main actor (a Button's action).
+    @MainActor
+    static func runLayout(_ e: AgentLayoutMenuEntry, _ m: AgentWindowModel, _ id: UUID) {
+        guard AgentPaneLayout.splitsEnabled, e.enabled else { return }
+        switch e.verb {
+        case .rename: m.beginLayoutRename(id)
+        case .duplicate: m.duplicateLayout(id)
+        case .delete: m.deleteLayout(id)
+        }
+    }
+
     /// The header "⋯" and row context menu for a live session: the island row menu's items,
     /// gates and titles (AgentIslandView.Drawn). An item that asks gets an ellipsis; a disabled
     /// one reads the island's title, its reason included. A name dch would read as a flag gets

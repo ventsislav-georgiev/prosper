@@ -113,7 +113,7 @@ enum AgentSidebar {
     static let needsYouTitle = "Needs you"
     /// #828: the sections a header click folds away. Needs you never folds: it is the list of
     /// sessions waiting on the human.
-    static let collapsible: Set<String> = ["Sessions", "Sidekicks", "History"]
+    static let collapsible: Set<String> = ["Sessions", "Sidekicks", "History", "Layouts"]   // #901 B3 step 4b: Layouts
 
     /// Waiting for the human: blocked on a prompt, or done (the turn is over and the
     /// next message is theirs). Working and idle sessions are not.
@@ -635,6 +635,10 @@ final class AgentWindowModel: ObservableObject {
     /// anew (a ViewThatFits variant swap) carries on with it.
     @Published private(set) var renameEdit: AgentRenameEdit?
     var renaming: AgentSessionKey? { renameEdit?.key }
+    /// R901-s3-b (tests): the session rename field's state set without ask()'s select: no session verb, no attach.
+    func openRenameField(_ edit: AgentRenameEdit) { renameEdit = edit }
+    /// #901 B3 step 4b (8.1): the Layouts row whose name is an inline field now; nil: none. Set only with the gate on.
+    @Published private(set) var layoutRenaming: UUID?
     /// #829 (R5): the question the confirm strip shows; dropped by a selection change.
     @Published private(set) var confirming: AgentWindowConfirm?
     /// QA #665 INFO-6: an answer a gate refused since the question; dropped by a selection change or the next ask.
@@ -808,6 +812,21 @@ final class AgentWindowModel: ObservableObject {
             adopt(l)
         }
         return nil
+    }
+
+    /// #901 B3 step 4b (8.1): a Layouts row's Rename opens its inline field. Gate off, or an id the store does not hold:
+    /// nothing opens. Main actor (a menu entry's run).
+    func beginLayoutRename(_ id: UUID) {
+        guard AgentPaneLayout.splitsEnabled, layouts?.layouts.contains(where: { $0.id == id }) == true else { return }
+        layoutRenaming = id
+    }
+
+    /// The inline field's end, once: `text` nil (Escape, the focus left) writes nothing; Return renames through
+    /// renameLayout (the D1 cleaning there, one write, none when unchanged). Another row's late end changes nothing.
+    func endLayoutRename(_ id: UUID, _ text: String?) {
+        guard layoutRenaming == id else { return }
+        layoutRenaming = nil
+        if let text { renameLayout(id, to: text) }
     }
 
     /// #901 B3 step 2 (8.1, 11.2): a switch to layout `id` (step 3 routes the keys, step 4 the rows). Refused as a value

@@ -315,10 +315,10 @@ final class AgentsNSWindow: NSWindow {
         // otherwise (the gate off, an edge, one pane) today's route below, unchanged.
         let pane = PaneKeys.Context(responder: responderKind, keyFocus: model.keyFocus, panes: model.layout.panes.count,
                                     splitsEnabled: AgentPaneLayout.splitsEnabled)
-        if let a = PaneKeys.treeAction(for: event, context: pane, renaming: model.renaming != nil,
+        if let a = PaneKeys.treeAction(for: event, context: pane, renaming: model.renaming != nil || model.layoutRenaming != nil,
                                        form: model.newSession != nil), model.perform(a) { return true }
         switch Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                          terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil,
+                          terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
                           form: model.newSession != nil) {
         case .close: performClose(nil)
         case .verbosity(let v): model.verbosity = v
@@ -400,7 +400,7 @@ final class AgentsNSWindow: NSWindow {
         if AgentPaneLayout.splitsEnabled, let model, Self.layoutKey(event, model, responder: responderKind) { return }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                                 terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil,
+                                 terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
                                  form: model.newSession != nil) == .sidebar,
            Self.handle(event, model) { return }
         super.sendEvent(event)
@@ -412,7 +412,7 @@ final class AgentsNSWindow: NSWindow {
     /// session form keep the key, as for the tree keys. Gate off: PaneKeys is nil, false, the key travels as before.
     /// Runs on the main actor, inside sendEvent; rows pass a built event.
     @MainActor static func layoutKey(_ event: NSEvent, _ m: AgentWindowModel, responder: ResponderKind) -> Bool {
-        guard m.renaming == nil, m.newSession == nil else { return false }
+        guard m.renaming == nil, m.layoutRenaming == nil, m.newSession == nil else { return false }   // 4b: the layout field too
         let c = PaneKeys.Context(responder: responder, keyFocus: m.keyFocus, panes: m.layout.panes.count,
                                  splitsEnabled: AgentPaneLayout.splitsEnabled)
         switch PaneKeys.action(for: event, context: c) {
@@ -619,7 +619,10 @@ struct AgentSidebarTitleRow: View {
 /// "(9 layouts max)" show. Rows: "⌃N", the name (one line, middle-truncated), the fixed empty attention slot (step 5);
 /// the active row in accent text. Height: the header plus one fixed-height row per layout (text height at the scale +
 /// sz paddings); the "⌃N" label and the words are fixedSize, never an sz frame on text. Not in `sections`, so out of the
-/// up/down walk and the ⌘1…9 jump. Folding and the context menu are step 4b. Closures run on the main actor (Buttons).
+/// up/down walk and the ⌘1…9 jump. Closures run on the main actor (Buttons, the field's handlers).
+/// Step 4b: the header folds through agentWindowCollapsedSections ("Layouts"; folded: rows left out, the active layout
+/// unchanged); each row's context menu draws AgentWindowControls.layoutMenu (Rename opens the inline field in place of
+/// the name, Duplicate, Delete); the row being renamed is drawn without its Button, the field over the name's own slot.
 struct AgentLayoutsSection: View {
     @ObservedObject var model: AgentWindowModel
     let rows: [AgentWindowModel.LayoutRow]
@@ -634,8 +637,9 @@ struct AgentLayoutsSection: View {
     static func full(_ rows: [AgentWindowModel.LayoutRow]) -> Bool { rows.count >= PaneLayoutStore.maxLayouts }
 
     var body: some View {
-        let full = Self.full(rows)
-        AgentSectionHeader(title: Self.title, count: rows.count)
+        let full = Self.full(rows), folded = model.isCollapsed(Self.title)
+        AgentSectionHeader(title: Self.title, count: rows.count, collapsed: folded,
+                           toggle: { model.toggleCollapsed(Self.title) })
             .overlay(alignment: .trailing) {
                 HStack(spacing: sz(4)) {
                     if full {
@@ -653,18 +657,70 @@ struct AgentLayoutsSection: View {
                 }
                 .padding(.horizontal, sz(8)).padding(.top, sz(12)).padding(.bottom, sz(4))
             }
-        ForEach(rows) { r in
-            Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r) }
-                .buttonStyle(.plain)
-                .accessibilityLabel(r.name)
-                .accessibilityAddTraits(r.active ? .isSelected : [])
+        ForEach(folded ? [] : rows) { r in
+            if model.layoutRenaming == r.id {
+                AgentLayoutRowView(row: r, edit: model.layouts?.layouts.first { $0.id == r.id }?.name ?? "") {
+                    model.endLayoutRename(r.id, $0)
+                }
+            } else {
+                Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Self.label(r))
+                    .accessibilityAddTraits(r.active ? .isSelected : [])
+                    .contextMenu {
+                        ForEach(AgentWindowControls.layoutMenu(model, r.id)) { e in
+                            Button(e.title) { AgentWindowControls.runLayout(e, model, r.id) }.disabled(!e.enabled)
+                        }
+                    }
+            }
         }
+    }
+
+    /// R901-s4a-a: VoiceOver reads what a sighted person sees, the name and the "⌃N" key.
+    static func label(_ r: AgentWindowModel.LayoutRow) -> String { "\(r.name), Control \(r.number)" }
+}
+
+/// #901 B3 step 4b: a Layouts row's inline name field: Return ends with the text (the model cleans it), Escape, the focus
+/// leaving and the field going away end with nil; each ends once (the model ignores a second end). Main actor.
+struct AgentLayoutNameField: View {
+    let placeholder: String
+    @State var text: String
+    let end: (String?) -> Void
+    @FocusState private var focused: Bool
+    @State private var ended = false
+
+    init(placeholder: String, text: String, end: @escaping (String?) -> Void) {
+        self.placeholder = placeholder
+        _text = State(initialValue: text)
+        self.end = end
+    }
+
+    private func finish(_ t: String?) {
+        guard !ended else { return }
+        ended = true
+        end(t)
+    }
+
+    var body: some View {
+        TextField(placeholder, text: $text).textFieldStyle(.plain).font(Neon.font(12.5, weight: .medium))
+            .foregroundStyle(Neon.textPrimary).lineLimit(1)
+            .accessibilityLabel("Layout name")
+            .focused($focused)
+            .onSubmit { finish(text) }
+            .onExitCommand { finish(nil) }
+            .onAppear { focused = true }
+            .onChange(of: focused) { was, now in if was, !now { finish(nil) } }
+            .onDisappear { finish(nil) }
     }
 }
 
 /// #901 B3 step 4a: one Layouts row ("⌃N  name" and the attention slot).
 struct AgentLayoutRowView: View {
     let row: AgentWindowModel.LayoutRow
+    /// Step 4b: the inline rename field's first text; nil: no field.
+    var edit: String?
+    /// The field's end, once: Return's text, or nil (Escape, the focus left, the field gone). Main actor.
+    var end: (String?) -> Void = { _ in }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
@@ -673,6 +729,9 @@ struct AgentLayoutRowView: View {
             Text(row.name).font(Neon.font(12.5, weight: .medium))
                 .foregroundStyle(row.active ? Neon.blue : Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
+                // Step 4b: the field lies over the name's slot, the name goes transparent: no frame moves.
+                .opacity(edit == nil ? 1 : 0).accessibilityHidden(edit != nil)
+                .overlay(alignment: .leading) { if let edit { AgentLayoutNameField(placeholder: row.name, text: edit, end: end) } }
             Spacer(minLength: 0)
             Color.clear.frame(width: AgentLayoutsSection.attentionWidth, height: 1)   // step 5's attention slot, empty
         }
@@ -1186,6 +1245,9 @@ struct AgentWindowBand: View {
     /// picker all read it. Off (the product, the split gate's default): no band, the parent's window. Read at layout
     /// time, not observed: a flip shows at the next build of the view, as the split gate does.
     @MainActor static var shown: Bool { AgentPaneLayout.splitsEnabled }
+    /// #901 B3 step 4b: the layout slot's row, the Layouts section's active one; nil (gate off, one layout of one pane):
+    /// nothing is built in the slot.
+    @MainActor static func layoutSlot(_ m: AgentWindowModel) -> AgentWindowModel.LayoutRow? { m.layoutRows?.first { $0.active } }
     static var height: CGFloat { sz(30) }
     /// shortcut: fixed widths for slots that draw nothing before B2/B3/C; the phase that fills one sizes it to its widest.
     static var layoutWidth: CGFloat { sz(100) }
@@ -1232,7 +1294,23 @@ struct AgentWindowBand: View {
         HStack(spacing: sz(8)) {
             // Slots that give way are left out of the stack, never zero-width (a zero-width child still takes a spacing).
             if t == .full || t == .noChip {
-                Color.clear.frame(width: Self.layoutWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "layout"))
+                Color.clear.frame(width: Self.layoutWidth).accessibilityHidden(true)
+                    // #901 B3 step 4b (9.1 :708): "⌃N name" of the active layout over the slot's fixed room, only while the
+                    // Layouts section is built (layoutRows: gate on and the show rule); else the slot stays empty.
+                    .overlay(alignment: .leading) {
+                        if let r = Self.layoutSlot(model) {
+                            HStack(spacing: sz(6)) {
+                                Text("⌃\(r.number)").font(Neon.font(10.5, weight: .medium).monospacedDigit())
+                                    .foregroundStyle(Neon.textSecondary).fixedSize()
+                                Text(r.name).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
+                            .frame(maxWidth: Self.layoutWidth, alignment: .leading)
+                            .accessibilityElement(children: .combine).accessibilityLabel(AgentLayoutsSection.label(r))
+                            .modifier(AgentBandProbe(kind: "layoutName"))
+                        }
+                    }
+                    .modifier(AgentBandProbe(kind: "layout"))
             }
             if t == .full {
                 Text(Self.chipWidest).font(Neon.font(11)).lineLimit(1).fixedSize().hidden().accessibilityHidden(true)
