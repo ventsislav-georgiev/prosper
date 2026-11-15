@@ -148,4 +148,79 @@ final class MarketplaceUpdateSkipTests: XCTestCase {
         XCTAssertEqual(mixed.status(force: true), "1 update could not be installed.", "the count sentence wins over Updated N")
         XCTAssertEqual(mixed.status(force: false), "1 update could not be installed.")
     }
+
+    // MARK: - R1182-q6 / q7: unchecked versus not installed (the pure decision a row can drive)
+
+    private typealias Reg = ExtensionRegistry
+    private let kit = "com.example.kit"
+
+    /// What checkForUpdates does for a list of market candidates and the outcomes of GitHub tries, through the same values.
+    private func status(_ tally: Reg.UpdateTally, force: Bool = true) -> String? { tally.status(force: force) }
+
+    func testFetchFailureOnlyReadsCouldNotCheck() {
+        var t = Reg.UpdateTally()
+        t.record(Reg.outcome(threwAt: .fetch))
+        XCTAssertEqual(status(t), "Could not check 1 extension for updates.")
+        t.record(Reg.outcome(threwAt: .fetch))
+        XCTAssertEqual(status(t), "Could not check 2 extensions for updates.")
+        XCTAssertEqual(Reg.outcome(threwAt: .install), .failed, "bindMarketIdentity, installLocal and installFromMarket stay failed")
+        XCTAssertEqual(Reg.outcome(threwAt: nil), .installed)
+    }
+
+    func testOneFailedPlusOneUncheckedShowsBothSentencesInOrder() {
+        var t = Reg.UpdateTally()
+        t.record(Reg.outcome(threwAt: .install))
+        t.record(Reg.outcome(threwAt: .fetch))
+        XCTAssertEqual(status(t), "Could not check 1 extension for updates. 1 update could not be installed.")
+        t.record(Reg.outcome(threwAt: .install))
+        t.record(Reg.outcome(threwAt: .fetch))
+        XCTAssertEqual(status(t), "Could not check 2 extensions for updates. 2 updates could not be installed.")
+        t.record(Reg.outcome(threwAt: nil))
+        XCTAssertEqual(status(t, force: false), "Could not check 2 extensions for updates. 2 updates could not be installed.",
+                       "an install does not bring Updated N back while a count is above 0")
+    }
+
+    func testUpToDateNeedsBothCountsAtZero() {
+        XCTAssertEqual(status(Reg.UpdateTally()), "All extensions up to date.")
+        var a = Reg.UpdateTally(); a.uncheckedOne()
+        XCTAssertNotEqual(status(a), "All extensions up to date.")
+        var b = Reg.UpdateTally(); b.failedOne()
+        XCTAssertNotEqual(status(b), "All extensions up to date.")
+        var c = Reg.UpdateTally(); c.record(Reg.outcome(threwAt: nil))
+        XCTAssertEqual(status(c), "Updated 1 extension.")
+    }
+
+    func testIndexFailureCountsEveryMarketCandidateAsUnchecked() {
+        var t = Reg.UpdateTally()
+        for id in ["com.example.kit", "com.example.other"] {
+            let step = Reg.marketStep(index: nil, id: id, current: SemanticVersion("1.0.0"), refused: Refused())
+            XCTAssertEqual(step, .unchecked)
+            t.record(step)
+        }
+        XCTAssertEqual(status(t), "Could not check 2 extensions for updates.")
+    }
+
+    func testMarketStepTable() {
+        var refused = Refused()
+        refused.note(refusal, id: kit, listed: "1.2.0")
+        let cur = SemanticVersion("1.0.0")
+        // a loaded index that does not list the id: nothing, counted nowhere
+        XCTAssertEqual(Reg.marketStep(index: [:], id: kit, current: cur, refused: Refused()), .nothing)
+        XCTAssertEqual(Reg.marketStep(index: ["com.example.other": "9.0.0"], id: kit, current: cur, refused: Refused()), .nothing)
+        // listed, not newer (equal and older)
+        XCTAssertEqual(Reg.marketStep(index: [kit: "1.0.0"], id: kit, current: cur, refused: Refused()), .nothing)
+        XCTAssertEqual(Reg.marketStep(index: [kit: "0.9.0"], id: kit, current: cur, refused: Refused()), .nothing)
+        // newer: try; the refused pair is skipped, another listed version is tried
+        XCTAssertEqual(Reg.marketStep(index: [kit: "1.2.0"], id: kit, current: cur, refused: Refused()), .install)
+        XCTAssertEqual(Reg.marketStep(index: [kit: "1.2.0"], id: kit, current: cur, refused: refused), .skipRefused)
+        XCTAssertEqual(Reg.marketStep(index: [kit: "1.3.0"], id: kit, current: cur, refused: refused), .install)
+        // a listed candidate that is not newer counts nothing: the check reads up to date
+        var t = Reg.UpdateTally()
+        t.record(Reg.marketStep(index: [kit: "1.0.0"], id: kit, current: cur, refused: Refused()))
+        XCTAssertEqual(status(t), "All extensions up to date.")
+        // a refused pair still reads as not installed (tenth round)
+        var s = Reg.UpdateTally()
+        s.record(Reg.marketStep(index: [kit: "1.2.0"], id: kit, current: cur, refused: refused))
+        XCTAssertEqual(status(s), "1 update could not be installed.")
+    }
 }

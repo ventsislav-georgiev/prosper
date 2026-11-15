@@ -1295,14 +1295,59 @@ final class ExtensionRegistry: ObservableObject {
     struct UpdateTally: Sendable {
         private(set) var installed = 0
         private(set) var notInstalled = 0
+        private(set) var unchecked = 0   // R1182-q6/q7: no newer version could be looked up (fetch or index failed)
         mutating func installedOne() { installed += 1 }
         mutating func skippedOne() { notInstalled += 1 }
         mutating func failedOne() { notInstalled += 1 }
-        /// nil = leave the status alone (an automatic check that installed nothing).
+        mutating func uncheckedOne() { unchecked += 1 }
+        /// The per-candidate decision and the outcome of a try land here (the call sites in checkForUpdates).
+        mutating func record(_ step: UpdateStep) {
+            switch step {
+            case .skipRefused: skippedOne()
+            case .unchecked: uncheckedOne()
+            case .nothing, .install: break
+            }
+        }
+        mutating func record(_ outcome: UpdateOutcome) {
+            switch outcome {
+            case .installed: installedOne()
+            case .failed: failedOne()
+            case .unchecked: uncheckedOne()
+            }
+        }
+        /// nil = leave the status alone (an automatic check that installed nothing). Counts only, no name or error text.
+        /// The check sentence, a space, the install sentence; "up to date" only when both counts are 0.
         func status(force: Bool) -> String? {
             guard force || installed > 0 else { return nil }
-            if notInstalled > 0 { return "\(notInstalled) update\(notInstalled == 1 ? "" : "s") could not be installed." }
+            var parts: [String] = []
+            if unchecked > 0 { parts.append("Could not check \(unchecked) extension\(unchecked == 1 ? "" : "s") for updates.") }
+            if notInstalled > 0 { parts.append("\(notInstalled) update\(notInstalled == 1 ? "" : "s") could not be installed.") }
+            if !parts.isEmpty { return parts.joined(separator: " ") }
             return installed == 0 ? "All extensions up to date." : "Updated \(installed) extension\(installed == 1 ? "" : "s")."
+        }
+    }
+
+    /// What the check does with one MARKET candidate (R1182-q7: pure, so a row drives it without the network).
+    enum UpdateStep: Sendable, Equatable { case nothing, skipRefused, unchecked, install }
+    /// Where a try threw: `.fetch` = before a newer version is known (R1182-q6), `.install` = after.
+    enum UpdateStage: Sendable { case fetch, install }
+    enum UpdateOutcome: Sendable, Equatable { case installed, failed, unchecked }
+
+    /// `index` nil = the Marketplace index failed to load: nothing can be said about any listing. A loaded index that does
+    /// not list the id, or lists a version that is not newer, is a plain `.nothing` (looked up, nothing to do).
+    nonisolated static func marketStep(index: [String: String]?, id: String, current: SemanticVersion,
+                                       refused: RefusedUpdates) -> UpdateStep {
+        guard let index else { return .unchecked }
+        guard let latest = index[id], current < SemanticVersion(latest) else { return .nothing }
+        return refused.skips(id: id, listed: latest) ? .skipRefused : .install
+    }
+
+    /// The outcome of a try: no throw = installed; a throw at `.fetch` = unchecked; any later throw = failed.
+    nonisolated static func outcome(threwAt stage: UpdateStage?) -> UpdateOutcome {
+        switch stage {
+        case nil: return .installed
+        case .fetch?: return .unchecked
+        case .install?: return .failed
         }
     }
 
@@ -1334,25 +1379,28 @@ final class ExtensionRegistry: ObservableObject {
         // Market extensions (prosper://market/<id>) share one index request rather
         // than polling per-package. GitHub-hosted ones keep the per-url tarball path.
         let marketPrefix = "prosper://market/"
-        let marketIndex = candidates.contains { $0.url.hasPrefix(marketPrefix) }
-            ? await MarketClient.index() : [:]
+        let marketIndex: [String: String]? = candidates.contains { $0.url.hasPrefix(marketPrefix) }
+            ? await MarketClient.index() : [:]   // nil = the index failed (R1182-q7)
 
         var tally = UpdateTally()
         for cand in candidates {
             var tried: (id: String, listed: String)?   // R1182-q1: the market pair this pass downloads
+            var stage = UpdateStage.install            // R1182-q6: .fetch only while RemoteInstaller.fetch runs
             do {
                 if cand.url.hasPrefix(marketPrefix) {
                     let pkgID = String(cand.url.dropFirst(marketPrefix.count))
-                    guard let latest = marketIndex[pkgID],
-                          cand.version < SemanticVersion(latest) else { continue }
-                    if refusedUpdates.skips(id: pkgID, listed: latest) { tally.skippedOne(); continue }
+                    let step = Self.marketStep(index: marketIndex, id: pkgID, current: cand.version, refused: refusedUpdates)
+                    tally.record(step)
+                    guard step == .install, let latest = marketIndex?[pkgID] else { continue }
                     tried = (pkgID, latest)
                     try await installFromMarket(id: pkgID, version: latest)
-                    tally.installedOne()
+                    tally.record(Self.outcome(threwAt: nil))
                     log.info("auto-updated market extension \(cand.id, privacy: .public) to \(latest, privacy: .public)")
                     continue
                 }
+                stage = .fetch
                 let remoteDir = try await RemoteInstaller.fetch(cand.url)
+                stage = .install
                 defer { RemoteInstaller.removeWorkFolder(holding: remoteDir) }
                 guard let remote = Self.manifestVersion(at: remoteDir), cand.version < remote else { continue }
                 // Same clobber guard as the market path: installLocal installs under the
@@ -1362,10 +1410,10 @@ final class ExtensionRegistry: ObservableObject {
                 try bindMarketIdentity(extDir: remoteDir, expected: cand.id, expectedVersion: nil)
                 injectUpdateURL(cand.url, intoManifestAt: remoteDir)   // keep origin sticky
                 try installLocal(from: remoteDir)
-                tally.installedOne()
+                tally.record(Self.outcome(threwAt: nil))
                 log.info("auto-updated extension \(cand.id, privacy: .public) to a newer version")
             } catch {
-                tally.failedOne()
+                tally.record(Self.outcome(threwAt: stage))
                 if let tried { refusedUpdates.note(error, id: tried.id, listed: tried.listed) }
                 let line = Self.updateFailureLog(id: cand.id, error: error)
                 log.error("\(line.shown, privacy: .public): \(line.why, privacy: .private)")

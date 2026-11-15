@@ -106,10 +106,10 @@ enum MarketClient {
         return BrowseResult(packages: resp.packages, cursor: resp.cursor)
     }
 
-    /// id -> latest_version for every active package (drives auto-update).
-    static func index() async -> [String: String] {
+    /// id -> latest_version for every active package (drives auto-update); nil when the index could not be loaded.
+    static func index() async -> [String: String]? {
         guard let (data, code) = try? await get(base("/market/index")), code < 300,
-              let resp = try? JSONDecoder().decode(IndexResponse.self, from: data) else { return [:] }
+              let resp = try? JSONDecoder().decode(IndexResponse.self, from: data) else { return nil }
         return Dictionary(resp.packages.map { ($0.id, $0.latest_version) }, uniquingKeysWith: { a, _ in a })
     }
 

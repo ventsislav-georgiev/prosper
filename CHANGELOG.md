@@ -1241,6 +1241,8 @@ tag from the now-released section and put it on the new top draft.
 - Extensions that watch a folder now get one change event per short burst (with a "more" count past
   256 files) instead of a flood, stop getting events once they unwatch, and watch a folder once
   however its path is spelled.
+- bullet: "Check for Updates" now says when it could not check an extension (offline or Marketplace
+  unreachable) instead of "All extensions up to date."
 
 ## v2.174.0
 
