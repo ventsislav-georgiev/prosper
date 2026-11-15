@@ -407,7 +407,7 @@ final class ClipboardStore: ObservableObject {
             let sealed = try ClipboardCrypto.encrypt(json, key: key)
             try sealed.write(to: indexURL, options: .atomic)
             protect(indexURL)
-            unlink(clearedURL.path)  // only now: the index no longer holds the cleared rows
+            removeMarker()  // only now: the index no longer holds the cleared rows
         } catch {
             NSLog("prosper: clipboard index write failed: \(error.localizedDescription)")
         }
@@ -416,8 +416,8 @@ final class ClipboardStore: ObservableObject {
     /// True only when index.json was read and decoded: the sweep runs only then.
     private func load() -> Bool {
         // #1294: a marker with no index has nothing to clear: ignored and removed.
-        guard FileManager.default.fileExists(atPath: indexURL.path) else { unlink(clearedURL.path); return false }
-        let marked = FileManager.default.fileExists(atPath: clearedURL.path)
+        guard FileManager.default.fileExists(atPath: indexURL.path) else { removeMarker(); return false }
+        let marked = markerApplies()
         // #1285: without the key the index is left unread and untouched, and no sweep runs.
         guard let key = self.key() else { unreadIndex = true; clearedWhileUnread = marked; refuse(); return false }
         guard let decoded = readIndex(key) else { return false }
@@ -434,10 +434,38 @@ final class ClipboardStore: ObservableObject {
         return try? JSONDecoder().decode([ClipboardItem].self, from: ClipboardCrypto.decryptOrPlaintext(raw, key: key))
     }
 
-    /// #1294: the empty marker (0600, no content); a failure is logged, never fatal.
+    /// #1294/#1296: the marker (0600) holds the hex SHA-256 of the sealed index it was made against (no key
+    /// needed); empty when the index cannot be read, and an empty marker from a #1294 build counts too.
+    /// A failure is logged, never fatal.
     private func markCleared() {
-        let fd = open(clearedURL.path, O_CREAT | O_WRONLY | O_NOFOLLOW, 0o600)
-        if fd < 0 || close(fd) != 0 { NSLog("prosper: clipboard clear marker not written (errno \(errno))") }
+        let fd = open(clearedURL.path, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { return NSLog("prosper: clipboard clear marker not written (errno \(errno))") }
+        let hex = (try? Data(contentsOf: indexURL)).map(Self.sha256Hex) ?? ""
+        let wrote = hex.withCString { write(fd, $0, strlen($0)) } == hex.utf8.count
+        if close(fd) != 0 || !wrote { NSLog("prosper: clipboard clear marker not written (errno \(errno))") }
+    }
+
+    private static func sha256Hex(_ d: Data) -> String { SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined() }
+
+    /// #1296: only lstat says regular file (never followed): a folder, link or FIFO of that name is ignored
+    /// and never removed; a name that exists but is not a regular file is logged once, at load.
+    private func markerIsRegular() -> Bool {
+        var st = stat()
+        return lstat(clearedURL.path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
+    }
+
+    private func removeMarker() { if markerIsRegular() { unlink(clearedURL.path) } }
+
+    /// #1296: a regular marker that is empty, or whose hash is the index.json on disk now. A mismatch means
+    /// the index was rewritten after the clear (a crash before the unlink): ignored, removed at the next persist.
+    private func markerApplies() -> Bool {
+        var st = stat()
+        guard lstat(clearedURL.path, &st) == 0 else { return false }
+        guard markerIsRegular() else { NSLog("prosper: clipboard clear marker is not a regular file: ignored"); return false }
+        guard st.st_size <= 128, let body = try? Data(contentsOf: clearedURL) else { return false }
+        if body.isEmpty { return true }
+        guard let raw = try? Data(contentsOf: indexURL) else { return false }
+        return body == Data(Self.sha256Hex(raw).utf8)
     }
 
     /// #1285: the key, asking keySource again until one call succeeds; nil while it throws.

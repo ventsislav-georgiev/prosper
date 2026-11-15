@@ -59,6 +59,7 @@ final class ClipboardPanelNoticeTests: XCTestCase {
         let open = OSAllocatedUnfairLock(initialState: false)
         let store = ClipboardStore(dir: tempDir(), keySource: gate(SymmetricKey(size: .bits256), open))
         let panel = ClipboardPanel(store: store)   // built, never ordered front
+        XCTAssertFalse(panel.panel.isVisible)
         let before = panel.panel.frame.height
         store.addText("alpha")
         pump { panel.panel.frame.height > before }
@@ -67,6 +68,7 @@ final class ClipboardPanelNoticeTests: XCTestCase {
         store.addText("beta")
         pump { panel.panel.frame.height <= before + 0.5 }
         XCTAssertEqual(panel.panel.frame.height, before, accuracy: 0.5, "back to its height once the line is gone")
+        XCTAssertFalse(panel.panel.isVisible)
     }
 
     private func pump(until done: () -> Bool) {

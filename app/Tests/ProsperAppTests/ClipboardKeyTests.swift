@@ -136,7 +136,9 @@ final class ClipboardKeyTests: XCTestCase {
         }
         var after = snapshot(d)
         let marker = after.removeValue(forKey: "index.cleared")
-        XCTAssertTrue(marker == Data(), "an empty marker beside the index")
+        // #1296: the marker holds the hex SHA-256 of the sealed index it was made against (was: empty).
+        let hex = SHA256.hash(data: before["index.json"] ?? Data()).map { String(format: "%02x", $0) }.joined()
+        XCTAssertTrue(marker == Data(hex.utf8), "the marker names the sealed index it was made against")
         XCTAssertTrue(after == before, "every other file is byte-identical: no key, no write")
         let perms = try FileManager.default.attributesOfItem(atPath: d.appending(path: "index.cleared").path)[.posixPermissions] as? Int
         XCTAssertEqual(perms, 0o600)
@@ -194,6 +196,80 @@ final class ClipboardKeyTests: XCTestCase {
         s.addText("delta")
         XCTAssertTrue(Set(s.items.compactMap { s.text(for: $0) }) == ["alpha", "delta"])
         XCTAssertFalse(blobNames(d).contains(names.plain))
+        // #1296: a relaunch with the key keeps the rows added after the clear (a folder is no marker).
+        let again = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(Set(again.items.compactMap { again.text(for: $0) }) == ["alpha", "delta"])
+        var isDir: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: d.appending(path: "index.cleared").path, isDirectory: &isDir) && isDir.boolValue,
+                      "Prosper never removes it")
+    }
+
+    private func texts(_ s: ClipboardStore) -> Set<String> { Set(s.items.compactMap { s.text(for: $0) }) }
+
+    /// #1296: a folder named index.cleared is not a marker: the unpinned rows stay, the folder stays.
+    func testFolderNamedLikeTheMarkerDropsNothing() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        _ = pinnedAndPlain(d, key)
+        try FileManager.default.createDirectory(at: d.appending(path: "index.cleared"), withIntermediateDirectories: false)
+        try age(d)
+        let s = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(texts(s) == ["alpha", "beta"])
+        var isDir: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: d.appending(path: "index.cleared").path, isDirectory: &isDir) && isDir.boolValue)
+    }
+
+    /// #1296: a symlink named index.cleared (to a regular file) is not a marker, is not followed, is not removed.
+    func testLinkNamedLikeTheMarkerDropsNothing() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        _ = pinnedAndPlain(d, key)
+        let target = tempDir().appending(path: "target")
+        XCTAssertTrue(FileManager.default.createFile(atPath: target.path, contents: nil))
+        let link = d.appending(path: "index.cleared")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        try age(d)
+        let s = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(texts(s) == ["alpha", "beta"])
+        s.addText("zeta")
+        XCTAssertTrue((try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) == target.path, "the link is left alone")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+    }
+
+    /// #1296: an empty marker (a #1294 build) still counts.
+    func testEmptyMarkerStillCounts() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        _ = pinnedAndPlain(d, key)
+        XCTAssertTrue(FileManager.default.createFile(atPath: d.appending(path: "index.cleared").path, contents: nil))
+        try age(d)
+        let s = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(texts(s) == ["alpha"])
+    }
+
+    /// #1296: a marker whose hash no longer matches index.json (crash before the unlink) is ignored, removed at the next persist.
+    func testMarkerForAnotherIndexIsIgnoredAndRemovedAtTheNextPersist() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        _ = pinnedAndPlain(d, key)
+        do {
+            let s = ClipboardStore(dir: d, keySource: gatedSource(key, OSAllocatedUnfairLock(initialState: false)))
+            s.clearAll()
+        }
+        let markerURL = d.appending(path: "index.cleared")
+        let stale = try Data(contentsOf: markerURL)
+        XCTAssertFalse(stale.isEmpty)
+        do {
+            let s = ClipboardStore(dir: d, keySource: { key })
+            s.addText("zeta")   // rewrites the index, unlinks the marker
+        }
+        XCTAssertTrue(FileManager.default.createFile(atPath: markerURL.path, contents: stale), "the unlink that did not happen")
+        try age(d)
+        let s = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(texts(s) == ["alpha", "zeta"], "the row added after the clear is kept")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: markerURL.path), "still there until a persist")
+        s.addText("eta")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: markerURL.path))
     }
 
     func testClearAllWithTheKeyPresentIsUnchanged() throws {
