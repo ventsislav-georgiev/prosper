@@ -742,6 +742,96 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         }
     }
 
+    // MARK: - R1182-e: the folder's extension.toml must still hold what the upload lists (pure plan, this row's tempDir())
+
+    /// An extension.toml for com.example.kit, each field in `change` given as TOML value text.
+    private static func kitToml(_ change: [String: String] = [:], themes: Bool = false, apiLevel: Int = 1) -> String {
+        let fields = [("id", "\"com.example.kit\""), ("name", "\"kit\""), ("title", "\"Kit\""),
+                      ("description", "\"A test extension\""), ("version", "\"1.0.0\""), ("author", "\"Example Author\""),
+                      ("icon", "\"icon.png\""), ("license", "\"MIT\"")]
+        var text = "[extension]\n" + fields.map { "\($0.0) = \(change[$0.0] ?? $0.1)\n" }.joined()
+        text += "\n[extension.host]\nmin_version = \"2.0.0\"\napi_level = \(apiLevel)\n\n[extension.entry]\nmain = \"init.lua\"\n"
+        if themes { text += "\n[[contributes.themes]]\nid = \"com.example.kit.dark\"\ntitle = \"Dark\"\npath = \"dark.json\"\n" }
+        return text
+    }
+
+    /// A folder in a fresh tempDir() of this row holding init.lua and `toml` as extension.toml.
+    private func kitFolder(_ toml: String) throws -> URL {
+        let ext = try fixture(["init.lua"])
+        try toml.write(to: ext.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+        return ext
+    }
+
+    private static func changedRefusal(_ fields: String) -> String {
+        "Can't publish: this folder's extension.toml changed since the extension was listed (" + fields
+            + "). Nothing was published. Press Publish again to open the list anew."
+    }
+
+    /// The record the row holds is the folder's manifest as loaded before the edit; the plan reads the folder again.
+    /// Same manifest: no refusal. Each uploaded field edited afterwards: refused by name, with no value of it shown.
+    func testUploadIsRefusedWhenTheFoldersManifestNoLongerMatchesTheRecord() throws {
+        let ext = try kitFolder(Self.kitToml())
+        let captured = try ExtensionLoader.load(directory: ext, isSystem: false, hostVersion: "0.0.0").manifest
+        XCTAssertTrue(RemoteInstaller.publishPlan(ext).uploadRefusal(captured) == nil, "the same manifest was refused")
+        let table: [(field: String, toml: String)] = [
+            ("id", Self.kitToml(["id": "\"com.example.other\""])),
+            ("version", Self.kitToml(["version": "\"1.0.1\""])),
+            ("name", Self.kitToml(["name": "\"kit2\""])),
+            ("title", Self.kitToml(["title": "\"Kit Two\""])),
+            ("description", Self.kitToml(["description": "\"Another test extension\""])),
+            ("author", Self.kitToml(["author": "\"Example Other\""])),
+            ("icon", Self.kitToml(["icon": "\"other.png\""])),
+            ("license", Self.kitToml(["license": "\"Apache-2.0\""])),
+            ("themes", Self.kitToml(themes: true)),
+            ("id, version", Self.kitToml(["id": "\"com.example.other\"", "version": "\"1.0.1\""])),
+        ]
+        XCTAssertEqual(table.count, 10)
+        for row in table {
+            try row.toml.write(to: ext.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+            let plan = RemoteInstaller.publishPlan(ext)
+            XCTAssertTrue(plan.refusal == nil, row.field)   // the list itself still offers the files
+            XCTAssertEqual(plan.uploadRefusal(captured), Self.changedRefusal(row.field), row.field)
+        }
+    }
+
+    /// A folder whose extension.toml no longer loads (one byte; an api_level this host lacks) refuses the upload with its
+    /// own sentence; the list's own refusal stays none, as before. R1182-q2 is not built (TOMLGuardTests pins three
+    /// decode sites): a bad version beside such an api_level is refused here, before any pack, but not for its version.
+    func testUploadIsRefusedWhenTheFoldersManifestDoesNotLoad() throws {
+        let ext = try kitFolder(Self.kitToml())
+        let captured = try ExtensionLoader.load(directory: ext, isSystem: false, hostVersion: "0.0.0").manifest
+        let unloaded = "Can't publish: this folder's extension.toml does not load as it is now, so it can't be checked "
+            + "against what the upload lists. Nothing was published."
+        for toml in ["x", Self.kitToml(apiLevel: 2), Self.kitToml(["version": "\" 1.2.0\""], apiLevel: 2)] {
+            try toml.write(to: ext.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+            let plan = RemoteInstaller.publishPlan(ext)
+            XCTAssertTrue(plan.manifest == nil && plan.badVersion == nil && plan.refusal == nil, toml)
+            XCTAssertEqual(plan.uploadRefusal(captured), unloaded, toml)
+        }
+    }
+
+    // MARK: - R1182-n: a refused version holding a character the cleaning drops is said to have one
+
+    private static let unshownRefusal = "Can't publish this version: it has a character that cannot be shown. The Marketplace "
+        + "takes a version written like 1.2.0 (three numbers joined by dots, then optionally - or + and a label), with nothing "
+        + "before or after it."
+
+    /// Read by the plan from a folder in this row's tempDir(); the versions are TOML escapes (a line feed, a direction
+    /// override). A plain bad version keeps the R1182-l sentence word for word.
+    func testARefusedVersionWithAnUnshownCharacterSaysSo() throws {
+        let rows: [(version: String, unshown: Bool, shown: String)] = [("1.2.0\\n", true, "1.2.0"),
+                                                                       ("1.2.0\\u202E", true, "1.2.0"),
+                                                                       ("v1.2.0", false, "v1.2.0")]
+        for row in rows {
+            let plan = RemoteInstaller.publishPlan(try kitFolder(Self.kitToml(["version": "\"\(row.version)\""])))
+            XCTAssertEqual(plan.badVersion, row.shown, row.version)
+            XCTAssertEqual(plan.versionUnshown, row.unshown, row.version)
+            XCTAssertEqual(plan.refusal, row.unshown ? Self.unshownRefusal : Self.versionRefusal(row.shown), row.version)
+        }
+        XCTAssertEqual(RemoteInstaller.PublishPlan(members: ["./extension.toml"], badVersion: "1.2.0", versionUnshown: true).refusal,
+                       Self.unshownRefusal)
+    }
+
     // MARK: - Helpers
 
     /// An extension folder in the row's own tempDir() holding a one-byte file at each relative path.

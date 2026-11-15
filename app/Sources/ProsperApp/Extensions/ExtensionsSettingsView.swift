@@ -334,6 +334,8 @@ struct ExtensionRow: View {
               Self.offers(now, publishing: publishing, published: publishedVersion) else { return }
         guard let dir = registry.directory(id: record.id) else { return }
         rowError = nil
+        // R1182-e: the upload lists this record's fields; the folder's extension.toml (read by the plan) must still hold them.
+        if let why = plan.uploadRefusal(record.manifest) { rowError = why; return }
         publishing = true
         let m = meta
         let themes = record.manifest.contributes?.allThemes ?? []

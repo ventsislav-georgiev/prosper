@@ -1190,6 +1190,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent: with Nemotron, GLM, Kimi or MiniMax models an unusual character right after the thinking
   tag no longer shows the model's reasoning as its answer, and a long answer that starts with a
   blank line keeps its last characters in the agent window (#1181)
+- Publishing an extension stops before any upload when its extension.toml changed after it was
+  listed; a refused version with a character that cannot be shown says so (#1182)
 
 ## v2.174.0
 

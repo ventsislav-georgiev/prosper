@@ -479,6 +479,26 @@ enum RemoteInstaller {
         var notUTF8: [String] = []     // names that are not valid UTF-8 (U+FFFD per bad byte): no path made from them reaches the file
         var notFiles: [String] = []    // #1168: neither a file, a folder nor a link (a pipe, socket or device): never opened
         var badVersion: String?        // R1182-l: extension.toml's version as shown, when the Marketplace would not list it as written
+        var versionUnshown = false     // R1182-n: that version holds a character the cleaning drops
+        var manifest: ExtensionManifest?  // R1182-e: extension.toml as this walk read it; nil when it did not load
+
+        /// R1182-e: why an upload listing `uploading` (the record the row was built from) must not go with this folder:
+        /// the folder's extension.toml did not load, or a field the upload sends differs from it. nil when all match.
+        func uploadRefusal(_ uploading: ExtensionManifest) -> String? {
+            guard let folder = manifest else {
+                return "Can't publish: this folder's extension.toml does not load as it is now, so it can't be checked "
+                    + "against what the upload lists. Nothing was published."
+            }
+            let (f, u) = (folder.extension, uploading.extension)
+            let fields: [(String, Bool)] = [("id", f.id == u.id), ("version", f.version == u.version), ("name", f.name == u.name),
+                                            ("title", f.title == u.title), ("description", f.description == u.description),
+                                            ("author", f.author == u.author), ("icon", f.icon == u.icon),
+                                            ("license", f.license == u.license),
+                                            ("themes", (folder.contributes?.allThemes ?? []) == (uploading.contributes?.allThemes ?? []))]
+            let changed = fields.filter { !$0.1 }.map { $0.0 }
+            return changed.isEmpty ? nil : "Can't publish: this folder's extension.toml changed since the extension was listed ("
+                + changed.joined(separator: ", ") + "). Nothing was published. Press Publish again to open the list anew."
+        }
 
         /// Why this folder cannot be published, naming the files; nil when it can.
         var refusal: String? {
@@ -499,7 +519,9 @@ enum RemoteInstaller {
                     + ", so \(one ? "its" : "their") files would be left out."
             }
             if let v = badVersion {
-                return "Can't publish version \"\(v)\": the Marketplace takes a version written like 1.2.0 (three numbers "
+                let lead = versionUnshown ? "Can't publish this version: it has a character that cannot be shown. The Marketplace"
+                    : "Can't publish version \"\(v)\": the Marketplace"
+                return lead + " takes a version written like 1.2.0 (three numbers "
                     + "joined by dots, then optionally - or + and a label), with nothing before or after it."
             }
             return members.isEmpty ? "There are no files to publish." : nil
@@ -543,8 +565,11 @@ enum RemoteInstaller {
         // R1182-l: read only when the walk saw a regular extension.toml at the top; an unreadable manifest is no version refusal.
         // The host version "0.0.0" is the loader's development host, so no host floor stops the read of the version text.
         if plan.members.contains("./extension.toml"),
-           let version = try? ExtensionLoader.load(directory: dir, isSystem: false, hostVersion: "0.0.0").manifest.extension.version {
+           let manifest = try? ExtensionLoader.load(directory: dir, isSystem: false, hostVersion: "0.0.0").manifest {
+            let version = manifest.extension.version
+            plan.manifest = manifest
             plan.badVersion = badPublishVersion(version)
+            plan.versionUnshown = plan.badVersion != nil && OutsideText.shown(version, max: .max) != version
         }
         plan.members.sort()
         plan.links.sort()
