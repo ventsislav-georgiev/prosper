@@ -160,4 +160,57 @@ final class BrowserSearchImporterTests: XCTestCase {
                                                       enabled: true, titleTemplate: nil)])
         XCTAssertEqual(leftovers(f), [], "the private copy is removed")
     }
+
+    /// 1003's rows through 211's seam (scratch: is tempDir:): a repeated provider name keeps the
+    /// first row, an http template is kept, a row without {searchTerms} is dropped, and the
+    /// browser's own file is byte-identical after the read (checked on a copy the row makes).
+    func testDuplicateNameHttpTemplateAndMissingPlaceholder() throws {
+        let f = try fixture()
+        makeDB(f.webData, """
+            CREATE TABLE keywords (short_name TEXT, url TEXT);
+            INSERT INTO keywords VALUES ('Example Search', 'https://search.example.com/?q={searchTerms}');
+            INSERT INTO keywords VALUES ('Example  search', 'https://other.example.com/?q={searchTerms}');
+            INSERT INTO keywords VALUES ('Ext Engine', 'chrome-extension://abc/?q={searchTerms}');
+            INSERT INTO keywords VALUES ('No Placeholder', 'https://example.org/');
+            INSERT INTO keywords VALUES ('Docs', 'http://docs.example.net/find?term={searchTerms}&x=1');
+            """)
+        let browserFile = f.webData.deletingLastPathComponent().appendingPathComponent("Copy of Web Data")
+        try FileManager.default.copyItem(at: f.webData, to: browserFile)
+        let before = try Data(contentsOf: browserFile)
+
+        var reports: [String] = []
+        let providers = BrowserSearchImporter.chromiumProviders(browser: "Brave", webData: browserFile,
+                                                                tempDir: f.copies) { reports.append($0) }
+        XCTAssertEqual(reports, [])
+        XCTAssertEqual(providers, [
+            FallbackProvider(id: "example-search", name: "Example Search",
+                             urlTemplate: "https://search.example.com/?q={query}", enabled: true, titleTemplate: nil),
+            FallbackProvider(id: "docs", name: "Docs",
+                             urlTemplate: "http://docs.example.net/find?term={query}&x=1", enabled: true, titleTemplate: nil),
+        ])
+        XCTAssertTrue(try Data(contentsOf: browserFile) == before, "the browser's own file is never written")
+        XCTAssertEqual(leftovers(f), [])
+    }
+
+    /// #1299: the fallback-search read failure names the browser from this list; a renamed entry
+    /// changes a log line, so the list is pinned literally and compared both ways by bundle id.
+    func testChromiumVendorNamesAreTheLiteralList() {
+        let expected: [String: (String, String)] = [
+            "com.google.Chrome": ("Chrome", "Google/Chrome/Default"),
+            "com.google.Chrome.beta": ("Chrome Beta", "Google/Chrome Beta/Default"),
+            "com.brave.Browser": ("Brave", "BraveSoftware/Brave-Browser/Default"),
+            "com.microsoft.edgemac": ("Edge", "Microsoft Edge/Default"),
+            "company.thebrowser.Browser": ("Arc", "Arc/User Data/Default"),
+            "com.vivaldi.Vivaldi": ("Vivaldi", "Vivaldi/Default"),
+        ]
+        XCTAssertEqual(Set(BrowserSearchImporter.chromiumVendors.keys), Set(expected.keys))
+        for (id, want) in expected {
+            let got = BrowserSearchImporter.chromiumVendorPath(for: id)
+            XCTAssertEqual(got?.browser, want.0, id)
+            XCTAssertEqual(got?.path, want.1, id)
+        }
+        XCTAssertEqual(BrowserSearchImporter.chromiumVendors.values.map(\.browser).sorted(),
+                       ["Arc", "Brave", "Chrome", "Chrome Beta", "Edge", "Vivaldi"])
+        XCTAssertTrue(BrowserSearchImporter.chromiumVendorPath(for: "com.apple.Safari") == nil)
+    }
 }

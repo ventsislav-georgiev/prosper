@@ -32,17 +32,19 @@ enum BrowserSearchImporter {
 
     /// Display name (for the log) and Application-Support subpath of the Chromium profile
     /// dir for a known browser bundle id, or nil for non-Chromium browsers. We read `Default`.
-    private static func chromiumVendorPath(for bundleID: String) -> (browser: String, path: String)? {
-        switch bundleID {
-        case "com.google.Chrome":            return ("Chrome", "Google/Chrome/Default")
-        case "com.google.Chrome.beta":       return ("Chrome Beta", "Google/Chrome Beta/Default")
-        case "com.brave.Browser":            return ("Brave", "BraveSoftware/Brave-Browser/Default")
-        case "com.microsoft.edgemac":        return ("Edge", "Microsoft Edge/Default")
-        case "company.thebrowser.Browser":   return ("Arc", "Arc/User Data/Default")
-        case "com.vivaldi.Vivaldi":          return ("Vivaldi", "Vivaldi/Default")
-        default:                             return nil
-        }
+    static func chromiumVendorPath(for bundleID: String) -> (browser: String, path: String)? {
+        chromiumVendors[bundleID]
     }
+
+    /// Internal so a test can hold the literal list (#1299); the log names come from here.
+    static let chromiumVendors: [String: (browser: String, path: String)] = [
+        "com.google.Chrome":          ("Chrome", "Google/Chrome/Default"),
+        "com.google.Chrome.beta":     ("Chrome Beta", "Google/Chrome Beta/Default"),
+        "com.brave.Browser":          ("Brave", "BraveSoftware/Brave-Browser/Default"),
+        "com.microsoft.edgemac":      ("Edge", "Microsoft Edge/Default"),
+        "company.thebrowser.Browser": ("Arc", "Arc/User Data/Default"),
+        "com.vivaldi.Vivaldi":        ("Vivaldi", "Vivaldi/Default"),
+    ]
 
     /// The fallback-search extension's import runs this, so it logs where that extension does.
     static let log = Logger(subsystem: "com.prosper.app", category: "extension")
