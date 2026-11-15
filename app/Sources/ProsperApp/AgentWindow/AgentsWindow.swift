@@ -161,6 +161,27 @@ final class AgentsNSWindow: NSWindow {
         m.mouseDown(at: p, in: size)
     }
 
+    /// #900 B2 step 5a (7.5): a left mouse event at `p` in the content of `size` (top-left origin; outside data, refused
+    /// before any use when not finite) for the dividers. A down in a divider's hit area begins its drag (a double-click
+    /// equalizes that split first); the drags and the up of that drag are the model's. True: the divider took it, so it
+    /// is neither taken by the first-click rule nor passed to a pane. The window calls it with the split gate on only.
+    @MainActor static func divider(_ event: NSEvent, _ m: AgentWindowModel, at p: CGPoint, in size: CGSize) -> Bool {
+        let finite = p.x.isFinite && p.y.isFinite && size.width.isFinite && size.height.isFinite
+        let a = finite ? m.paneAreaFrame(in: size) : nil
+        let local = a.map { CGPoint(x: p.x - $0.minX, y: p.y - $0.minY) }
+        switch event.type {
+        case .leftMouseDown:
+            guard let a, let local else { return false }
+            return m.dragBegan(at: local, in: a.size, clicks: event.clickCount)
+        case .leftMouseDragged, .leftMouseUp:
+            guard m.dividerDrag != nil else { return false }
+            if event.type == .leftMouseUp { m.dragEnded() } else if let local { m.dragMoved(to: local) }
+            return true
+        default:
+            return false
+        }
+    }
+
     /// 7.6: a small state machine over the left button. A mouse-down that only focused a pane is swallowed, and so are
     /// its drags and its up; any other down starts a click that passes. Every other event type passes.
     struct FocusClick: Equatable {
@@ -325,6 +346,11 @@ final class AgentsNSWindow: NSWindow {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        // #900 B2 step 5a (7.5): a divider's down, drags and up go to the model before the first-click rule (gate on only).
+        if AgentPaneLayout.splitsEnabled, let model, [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type) {
+            let r = contentLayoutRect, at = event.locationInWindow
+            if Self.divider(event, model, at: CGPoint(x: at.x - r.minX, y: r.maxY - at.y), in: r.size) { return }
+        }
         var focusing = false
         if event.type == .leftMouseDown, let model {
             // 7.2: the frames come from the model's geometry in the content (top-left origin), never x alone.
@@ -1170,6 +1196,19 @@ struct AgentPaneArea: View {
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            // #900 B2 step 5a (7.5): the resize cursor over each divider's 6·s hit area, an overlay (nothing inserted or
+            // resized; none with the gate off). The 1 pt line is each pane's `edge`; the window routes the clicks.
+            .overlay(alignment: .topLeading) {
+                ForEach(model.dividers(in: proxy.size), id: \.path) { d in
+                    Color.clear.contentShape(Rectangle())
+                        .frame(width: d.hitArea.width, height: d.hitArea.height)
+                        .position(x: d.hitArea.midX, y: d.hitArea.midY)
+                        .onHover { inside in
+                            if inside { (d.axis == .columns ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push() } else { NSCursor.pop() }
+                        }
+                        .accessibilityHidden(true)
+                }
+            }
             .coordinateSpace(.named(agentPaneAreaSpace))
             .onAppear { feed(area) }
             .onChange(of: proxy.size) { _, size in feed(CGRect(origin: .zero, size: size)) }
@@ -1204,8 +1243,8 @@ struct AgentPaneArea: View {
     }
 
     @ViewBuilder func edge(_ f: CGRect) -> some View {
-        if f.minX > 0.5 { Rectangle().fill(Neon.stroke).frame(width: 1).frame(maxHeight: .infinity) }
-        if f.minY > 0.5 { Rectangle().fill(Neon.stroke).frame(height: 1).frame(maxWidth: .infinity) }
+        if f.minX > 0.5 { Rectangle().fill(Neon.stroke).frame(width: 1).frame(maxHeight: .infinity).modifier(AgentPaneProbe(kind: "vline")) }
+        if f.minY > 0.5 { Rectangle().fill(Neon.stroke).frame(height: 1).frame(maxWidth: .infinity).modifier(AgentPaneProbe(kind: "hline")) }
     }
 
     /// 7.6: more than one pane shown: the focused pane's 2·s accent border inside its frame, every other pane the dim.

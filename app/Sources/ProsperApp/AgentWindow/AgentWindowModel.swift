@@ -220,7 +220,7 @@ final class AgentWindowModel: ObservableObject {
             // #900 B2 step 4b (7.2): a new value settle() did not already tell (a zoom, a split, a close or focus move that
             // keeps the row) is published once, so the sidebar's "in view" glyphs redraw. Gate on only: nothing changes off.
             if !settle(), layout != oldValue, AgentPaneLayout.splitsEnabled { objectWillChange.send() }
-            autosave()
+            if dividerDrag == nil { autosave() }   // #900 B2 step 5a (8.1): a divider drag saves once, at its end
         }
     }
     /// 8.1 / 8.2: where the layouts load from and save to: the owner passes the app's defaults, tests a private
@@ -416,6 +416,88 @@ final class AgentWindowModel: ObservableObject {
         guard let id = AgentsNSWindow.firstClick(at: local, frames: frames, focused: layout.focused) else { return false }
         focusPane(id)
         return true
+    }
+
+    // MARK: 7.5 Dividers (#900 B2 step 5a; split gate on only)
+
+    /// A divider in a pane area: the split at `path` (0 = first, 1 = second, from the root), its axis, its 1 pt line (the
+    /// second side's leading edge, where AgentPaneArea.edge draws it) and the split's own rect.
+    struct Divider: Equatable {
+        let path: [Int]
+        let axis: PaneNode.Axis
+        let line: CGRect
+        let split: CGRect
+        /// The line widened to 6·s across its axis, centred on it, clipped to the split's rect. Frames abut, so it overlaps
+        /// both neighbours' edges: inside it the divider wins over the panes (checked before the first-click rule).
+        @MainActor var hitArea: CGRect {
+            let d = (1 - sz(6)) / 2
+            return line.insetBy(dx: axis == .columns ? d : 0, dy: axis == .rows ? d : 0).intersection(split)
+        }
+    }
+
+    /// 7.5: the dividers in a pane area of `size`, parents before children. None with the gate off, one pane, zoomed,
+    /// too small (3.4: the focused pane alone) or a size that is not finite (refused before any use).
+    func dividers(in size: CGSize) -> [Divider] {
+        guard AgentPaneLayout.splitsEnabled, size.width.isFinite, size.height.isFinite, layout.zoomed == nil else { return [] }
+        let area = CGRect(origin: .zero, size: size)
+        guard case let .tiled(f) = layout.frames(in: area, minimum: paneMinimum, splitsEnabled: true), f.count > 1 else { return [] }
+        var out: [Divider] = []
+        func walk(_ n: PaneNode, _ r: CGRect, _ path: [Int]) {
+            guard case let .split(axis, ratio, a, b) = n else { return }
+            let (x, y) = PaneNode.divide(r, axis, ratio)
+            out.append(Divider(path: path, axis: axis, line: axis == .columns
+                ? CGRect(x: y.minX, y: r.minY, width: 1, height: r.height) : CGRect(x: r.minX, y: y.minY, width: r.width, height: 1),
+                               split: r))
+            walk(a, x, path + [0])
+            walk(b, y, path + [1])
+        }
+        walk(layout.tree, area, [])
+        return out
+    }
+
+    /// 7.5: the divider whose hit area holds `p` (pane-area coordinates, outside data: not finite is nil first); a parent
+    /// before its children, so where a nested line meets its parent's the parent's is hit.
+    func divider(at p: CGPoint, in size: CGSize) -> Divider? {
+        guard p.x.isFinite, p.y.isFinite else { return nil }
+        return dividers(in: size).first { $0.hitArea.contains(p) }
+    }
+
+    /// The divider drag under way: the divider, where it began along its axis, the split's ratio then, the area's size.
+    private(set) var dividerDrag: (divider: Divider, start: CGFloat, ratio: Double, size: CGSize)?
+
+    /// 7.5: a left mouse-down at `p` in a pane area of `size`: on a divider it begins that divider's drag (true). A
+    /// double-click (`clicks` 2 or more) first equalizes that split alone (deep false), saved once by the didSet.
+    /// Anywhere else false, nothing changes. A drag whose up never came is ended first.
+    func dragBegan(at p: CGPoint, in size: CGSize, clicks: Int = 1) -> Bool {
+        if dividerDrag != nil { dragEnded() }
+        guard !closed, let d = divider(at: p, in: size) else { return false }
+        if clicks >= 2, case let .success(l) = layout.equalize(path: d.path, deep: false), l != layout { adopt(l) }
+        guard case let .split(_, ratio, _, _)? = layout.tree.locate(d.path[...], in: .zero)?.node else { return false }
+        dividerDrag = (d, d.axis == .columns ? p.x : p.y, ratio, size)
+        terminal.liveResizeStarted()   // 7.5: the terminal re-grids at the drag's end only (one setSize)
+        return true
+    }
+
+    /// 7.5: the drag at `p`: ratio = the ratio at the start + the move along the axis / the split's length (compared
+    /// first: at least 1 pt, so never a division by zero; p and the start are finite, so the ratio is), through setRatio
+    /// (clamped at the minimum, 3.3), adopted live and NOT saved. An equal ratio (held at the clamp) adopts nothing.
+    func dragMoved(to p: CGPoint) {
+        guard let g = dividerDrag, p.x.isFinite, p.y.isFinite else { return }
+        let length = g.divider.axis == .columns ? g.divider.split.width : g.divider.split.height
+        guard length >= 1 else { return }
+        let r = g.ratio + Double(((g.divider.axis == .columns ? p.x : p.y) - g.start) / length)
+        guard case let .success(l) = layout.setRatio(path: g.divider.path, r, minimum: paneMinimum,
+                                                     in: CGRect(origin: .zero, size: g.size)), l != layout else { return }
+        adopt(l)
+    }
+
+    /// 7.5 / 8.1: the drag ends (its mouse-up): saved once, and only when the layout differs from the saved one (a drag
+    /// back to its start writes nothing); the terminal pushes its grid once.
+    func dragEnded() {
+        guard dividerDrag != nil else { return }
+        dividerDrag = nil
+        terminal.liveResizeEnded()
+        autosave()
     }
 
     private(set) var store: AgentIslandStore?

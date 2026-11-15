@@ -267,7 +267,7 @@ extension AgentWindowD1Tests {
                 win.contentView = host
                 defer { win.contentView = nil; win.close() }
                 let deadline = Date().addingTimeInterval(5)   // until both rows report, bounded
-                repeat { settle(host) } while (box.seen["title api"] == nil || box.seen["title web"] == nil) && Date() < deadline
+                repeat { settle(host) } while (["title api", "title web"] + (on ? ["glyph web", "slot api"] : [])).contains(where: { box.seen[$0] == nil }) && Date() < deadline
                 XCTAssertFalse(win.isVisible, "never on screen")
                 seen = box.seen
                 XCTAssertTrue(seen["title api"] != nil && seen["title web"] != nil, "both rows drawn: \(seen.keys.sorted())")
@@ -348,6 +348,31 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(sends, 6, "a toggle: once")
             m.toggleSidebar()
             XCTAssertEqual(sends, 7, "and back: once")
+        }
+    }
+
+    /// R900-4b-4 (15.0): with the gate off, a layout change of value that KEEPS the row publishes nothing, as on the parent
+    /// of a3d3d01a (its didSet sent nothing of its own; settle() publishes on a change of row or of focusedEnded only,
+    /// and here neither changes). The model, not a person: one pane with another pane id over the same target, the same
+    /// layout id. Gate on, the same adopt publishes once (round 2b), so the count can see a publish.
+    @MainActor
+    func testInViewGateOffLayoutChangeThatKeepsTheRowPublishesNothing() {
+        for on in [false, true] {
+            withTreeGate(on) {
+                let m = windowModel(store([session("api", .idle), session("web", .idle)]))
+                defer { m.close() }
+                m.adopt(paneLayout([paneTarget("api")]))
+                XCTAssertEqual(m.selection, .live(paneKey("api")))
+                var sends = 0
+                let sink = m.objectWillChange.sink { _ in sends += 1 }
+                defer { sink.cancel() }
+                let other = PaneLayout.single(paneTarget("api"), id: m.layout.id)
+                XCTAssertNotEqual(other, m.layout, "another pane id: another value")
+                m.adopt(other)
+                XCTAssertEqual(m.layout, other)
+                XCTAssertEqual(m.selection, .live(paneKey("api")), "the row kept (gate \(on))")
+                XCTAssertEqual(sends, on ? 1 : 0, on ? "gate on: once (round 2b)" : "gate off: nothing, as on the parent")
+            }
         }
     }
 }
