@@ -137,11 +137,7 @@ enum SecretPaths {
         func denies(_ path: String) -> Bool { resolve(path).map(covers) ?? false }
 
         /// `path` tilde expanded and resolved (`canonical`); nil for an empty path.
-        func resolve(_ path: String) -> String? {
-            let expanded = (path as NSString).expandingTildeInPath
-            guard !expanded.isEmpty else { return nil }
-            return SecretPaths.canonical(expanded)
-        }
+        func resolve(_ path: String) -> String? { SecretPaths.resolve(path) }
 
         /// A resolved path is a root or below one.
         func covers(_ real: String) -> Bool {
@@ -170,6 +166,14 @@ enum SecretPaths {
     /// runtime drops when that entry returns or throws. Built and read on the VM's own lane.
     final class EntryRoots {
         let matcher = SecretPaths.matcher()
+    }
+
+    /// `path` tilde expanded and resolved (`canonical`); nil for an empty path. The one resolver of the
+    /// deny-list and of the watch key (#983).
+    static func resolve(_ path: String) -> String? {
+        let expanded = (path as NSString).expandingTildeInPath
+        guard !expanded.isEmpty else { return nil }
+        return canonical(expanded)
     }
 
     /// One path: resolves the roots for this call only. Batches use `matcher()` once.
@@ -221,8 +225,9 @@ enum SecretPaths {
 }
 
 /// Live registry of extension path watchers. A watch fires the named handler with
-/// payload `{ paths = [changed…] }`. MainActor-bound; streams delivered on the main
-/// queue. The `invoke` hook is wired by the app to `ExtensionRegistry.deliverEvent`.
+/// payload `{ paths = [changed...] }` (plus `more = n` when a burst had more changed paths than one run lists).
+/// MainActor-bound; streams delivered on the main queue. The `invoke` hook is wired by the app to
+/// `ExtensionRegistry.deliverEvent`.
 @MainActor
 final class ExtensionFSWatch {
     static let shared = ExtensionFSWatch()
@@ -230,7 +235,21 @@ final class ExtensionFSWatch {
     /// (extensionID, handler, payloadJSON) — set by the app.
     var invoke: ((String, String, String) -> Void)?
 
+    /// #983: the stream's latency, and the window a burst is coalesced over: the first callback of a burst
+    /// schedules one run this long after it, callbacks inside the window only add paths.
+    static let latency: CFTimeInterval = 0.5
+    static let streamFlags = FSEventStreamCreateFlags(
+        kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+    /// #983: paths one run lists, and the cap of a watch's pending set; past it paths are only counted.
+    static let maxPathsPerRun = 256
+
+    /// #983 seam: runs a watch's coalesced flush after `latency`, on the main actor. Nil:
+    /// DispatchQueue.main.asyncAfter. Rows record the work and run it themselves (no wall-clock wait).
+    var schedule: ((TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void)?
+
+    @MainActor
     private final class Entry {
+        let key: String
         let extensionID: String
         let handler: String
         /// A host-side watch (#870 managed-config refresh): called instead of a Lua handler.
@@ -238,7 +257,15 @@ final class ExtensionFSWatch {
         /// #921: the watcher is below the system tier, so changes under a secret path are dropped.
         let hideSecrets: Bool
         var stream: FSEventStreamRef?
-        init(extensionID: String, handler: String, onChange: (@MainActor () -> Void)? = nil, hideSecrets: Bool = false) {
+        /// #983: the window's changed paths (at most `maxPathsPerRun`, in order, no repeats), the count past
+        /// the cap, and whether the window's flush is scheduled.
+        var pending: [String] = []
+        var seen: Set<String> = []
+        var more = 0
+        var flushScheduled = false
+        init(key: String, extensionID: String, handler: String, onChange: (@MainActor () -> Void)? = nil,
+             hideSecrets: Bool = false) {
+            self.key = key
             self.extensionID = extensionID
             self.handler = handler
             self.onChange = onChange
@@ -246,39 +273,58 @@ final class ExtensionFSWatch {
         }
     }
 
-    // keyed by "extensionID\u{1}path" so one extension can watch several paths.
+    // keyed by "extensionID\u{1}resolved path" so one extension can watch several paths.
     private var entries: [String: Entry] = [:]
 
-    private func key(_ extID: String, _ path: String) -> String { "\(extID)\u{1}\(path)" }
+    var watchCount: Int { entries.count }
+
+    /// #983: the resolved path (SecretPaths.resolve, the deny-list's own resolver), so every spelling of one
+    /// folder is one watch.
+    nonisolated static func key(_ extID: String, _ path: String) -> String { "\(extID)\u{1}\(resolved(path))" }
+
+    private nonisolated static func resolved(_ path: String) -> String { SecretPaths.resolve(path) ?? path }
+
+    /// #983: keys a host.fs.unwatch marked on the extension's lane and the main actor has not torn down yet.
+    private nonisolated static let unwatching = OSAllocatedUnfairLock<[String: Int]>(initialState: [:])
+
+    /// #983: called by host.fs.unwatch on the extension's lane BEFORE it returns: from here no run of that
+    /// watch starts. Returns the key for `finishUnwatch`, which the caller runs on the main actor.
+    nonisolated static func markUnwatch(extensionID: String, path: String) -> String {
+        let k = key(extensionID, path)
+        unwatching.withLock { $0[k, default: 0] += 1 }
+        return k
+    }
+
+    /// #983: the main-actor half of host.fs.unwatch: tears the watch down, then clears the lane's mark.
+    func finishUnwatch(key k: String) {
+        remove(k)
+        Self.unwatching.withLock { marks in
+            if let n = marks[k] { marks[k] = n > 1 ? n - 1 : nil }
+        }
+    }
 
     /// Start (or replace) a watch on `path` for `extensionID`, firing `handler`.
     func watch(extensionID: String, path: String, handler: String, onChange: (@MainActor () -> Void)? = nil,
                hideSecrets: Bool = false) {
-        let p = (path as NSString).expandingTildeInPath
-        let k = key(extensionID, p)
-        unwatch(extensionID: extensionID, path: p) // replace any existing watch on this path
+        let p = Self.resolved(path), k = "\(extensionID)\u{1}\(p)"
+        remove(k) // replace any existing watch on this path, under any spelling
 
-        let entry = Entry(extensionID: extensionID, handler: handler, onChange: onChange, hideSecrets: hideSecrets)
+        let entry = Entry(key: k, extensionID: extensionID, handler: handler, onChange: onChange, hideSecrets: hideSecrets)
         var ctx = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(entry).toOpaque(),
             retain: nil, release: nil, copyDescription: nil
         )
-        let callback: FSEventStreamCallback = { _, info, count, eventPaths, _, _ in
+        // Runs on the main queue (FSEventStreamSetDispatchQueue below), so it enters the main actor in place.
+        let callback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
             guard let info else { return }
             let entry = Unmanaged<Entry>.fromOpaque(info).takeUnretainedValue()
-            guard let paths = ExtensionFSWatch.visiblePaths(
-                Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String] ?? [],
-                hideSecrets: entry.hideSecrets) else { return }
-            let payload = ExtensionFSWatch.payloadJSON(paths)
-            Task { @MainActor in
-                if let onChange = entry.onChange { onChange() } else { ExtensionFSWatch.shared.invoke?(entry.extensionID, entry.handler, payload) }
-            }
+            let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String] ?? []
+            MainActor.assumeIsolated { ExtensionFSWatch.shared.receive(entry, paths) }
         }
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault, callback, &ctx, [p] as CFArray,
-            FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5,
-            FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow), Self.latency, Self.streamFlags
         ) else { return }
         FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)
@@ -287,8 +333,11 @@ final class ExtensionFSWatch {
     }
 
     func unwatch(extensionID: String, path: String) {
-        let p = (path as NSString).expandingTildeInPath
-        guard let entry = entries.removeValue(forKey: key(extensionID, p)) else { return }
+        remove(Self.key(extensionID, path))
+    }
+
+    private func remove(_ k: String) {
+        guard let entry = entries.removeValue(forKey: k) else { return }
         stop(entry)
     }
 
@@ -307,6 +356,49 @@ final class ExtensionFSWatch {
         entry.stream = nil
     }
 
+    /// #983 seam: `paths` as one FSEvents callback of the watch on `path`; false when there is no such watch.
+    @discardableResult
+    func deliver(_ paths: [String], extensionID: String, path: String) -> Bool {
+        guard let entry = entries[Self.key(extensionID, path)] else { return false }
+        receive(entry, paths)
+        return true
+    }
+
+    /// One FSEvents callback: secret paths dropped first (#921), the rest added to the window, the window's
+    /// flush scheduled once.
+    private func receive(_ entry: Entry, _ paths: [String]) {
+        guard let visible = Self.visiblePaths(paths, hideSecrets: entry.hideSecrets) else { return }
+        for p in visible where !entry.seen.contains(p) {
+            if entry.pending.count < Self.maxPathsPerRun {
+                entry.pending.append(p)
+                entry.seen.insert(p)
+            } else if entry.more < Int.max {
+                entry.more += 1
+            }
+        }
+        guard !entry.flushScheduled else { return }
+        entry.flushScheduled = true
+        let work: @MainActor @Sendable () -> Void = { ExtensionFSWatch.shared.flush(entry) }
+        if let schedule {
+            schedule(Self.latency, work)
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.latency) { MainActor.assumeIsolated { work() } }
+        }
+    }
+
+    /// The window's one run. A watch unwatched, replaced or removed since (on the main actor, or marked by
+    /// host.fs.unwatch on the extension's lane) never starts its handler.
+    private func flush(_ entry: Entry) {
+        entry.flushScheduled = false
+        let paths = entry.pending, more = entry.more
+        entry.pending = []
+        entry.seen = []
+        entry.more = 0
+        let k = entry.key
+        guard entries[k] === entry, !Self.unwatching.withLock({ $0[k] != nil }) else { return }
+        if let onChange = entry.onChange { onChange() } else { invoke?(entry.extensionID, entry.handler, Self.payloadJSON(paths, more: more)) }
+    }
+
     /// #921: the changed paths a watcher may see; nil (no event at all) when every one of them was
     /// a secret path, so a parent-folder watch below the system tier cannot time a secret change.
     nonisolated static func visiblePaths(_ paths: [String], hideSecrets: Bool) -> [String]? {
@@ -316,8 +408,10 @@ final class ExtensionFSWatch {
         return kept.isEmpty && !paths.isEmpty ? nil : kept
     }
 
-    nonisolated static func payloadJSON(_ paths: [String]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: ["paths": paths]),
+    /// `more`: changed paths past `maxPathsPerRun` in the window; the key is absent when there are none.
+    nonisolated static func payloadJSON(_ paths: [String], more: Int = 0) -> String {
+        let obj: [String: Any] = more > 0 ? ["paths": paths, "more": more] : ["paths": paths]
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
               let s = String(data: data, encoding: .utf8) else { return #"{"paths":[]}"# }
         return s
     }

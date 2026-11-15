@@ -1073,7 +1073,9 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         }
     }
     func fsUnwatch(extensionID: String, path: String) {
-        Task { @MainActor in ExtensionFSWatch.shared.unwatch(extensionID: extensionID, path: path) }
+        // #983: marked on the caller's lane, so no run of the watch starts once host.fs.unwatch returns.
+        let key = ExtensionFSWatch.markUnwatch(extensionID: extensionID, path: path)
+        Task { @MainActor in ExtensionFSWatch.shared.finishUnwatch(key: key) }
     }
 
     // MARK: Notifications

@@ -1238,6 +1238,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a session that ended in the middle of a task no longer reads "Working" in its
   conversation, and a picture sent on its own now starts its own turn even when it is the first
   message of a page loaded with "Load earlier".
+- Extensions that watch a folder now get one change event per short burst (with a "more" count past
+  256 files) instead of a flood, stop getting events once they unwatch, and watch a folder once
+  however its path is spelled.
 
 ## v2.174.0
 
