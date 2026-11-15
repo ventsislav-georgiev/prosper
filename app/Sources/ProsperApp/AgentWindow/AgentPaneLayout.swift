@@ -953,12 +953,12 @@ enum PaneKeys {
     /// #900 B2 step 1: the tree keys the window acts on (split, close, focus by direction and by order, zoom). 15.0: with
     /// the split gate off nil before the event is read, so every chord stays what it was before #831. The rename field
     /// (#829 G4) and the New session form (#887) keep today's routes too: ⌘W there closes the window, as before.
-    /// ⌃⌘S joins in step 4; ⌘1…9, ⌃Tab and ⌘J in B3; ⇧⌘T in C.
+    /// Step 4: ⌃⌘S (the sidebar) joins, behind the same gate; ⌘1…9, ⌃Tab and ⌘J in B3; ⇧⌘T in C.
     @MainActor
     static func treeAction(for event: NSEvent, context c: Context, renaming: Bool, form: Bool) -> PaneAction? {
         guard c.splitsEnabled, !renaming, !form else { return nil }
         switch action(for: event, context: c) {
-        case let a? where a.isTreeEdit: return a
+        case let a? where a.isTreeEdit || a == .toggleSidebar: return a
         default: return nil
         }
     }

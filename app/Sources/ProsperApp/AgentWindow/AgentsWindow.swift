@@ -413,10 +413,16 @@ struct AgentWindowRootView: View {
     // change repaints them in place; the panes on top add no full-width fill of their own.
     var split: some View {
         HStack(spacing: 0) {
-            AgentSidebarView(model: model)
-                .frame(width: sz(290))
-                .background(NeonSidebarSurface())
-            Rectangle().fill(Neon.stroke).frame(width: 1)
+            // #900 B2 step 4 (7.2): ⌃⌘S hides the sidebar and its line (gate on only, `sidebarShown`): the pane column takes
+            // the width and nothing else moves (the column keeps its place in the stack, so its identity). Rider 1197 (a):
+            // under the band's height while the band is shown, so the sidebar title sits on the session title's line.
+            if model.sidebarShown {
+                AgentSidebarView(model: model)
+                    .padding(.top, AgentWindowBand.shown ? AgentWindowBand.height : 0)
+                    .frame(width: sz(290))
+                    .background(NeonSidebarSurface())
+                Rectangle().fill(Neon.stroke).frame(width: 1)
+            }
             // #831 9.1: the band over the pane area, one whatever the number of panes, only while the split gate is on
             // (AgentWindowBand.shown; AgentWindowModel.paneAreaFrame mirrors this column for the 7.2 click rule).
             Group {
@@ -978,6 +984,8 @@ struct AgentWindowBand: View {
     /// shortcut: fixed widths for slots that draw nothing before B2/B3/C; the phase that fills one sizes it to its widest.
     static var layoutWidth: CGFloat { sz(100) }
     static var allWidth: CGFloat { sz(140) }
+    /// #900 B2 step 4: the show-sidebar glyph's square slot.
+    static var sidebarWidth: CGFloat { sz(22) }
     /// 3.4's chip at the 6-pane cap: the chip slot's widest variant.
     static let chipWidest = "5 panes hidden, window too small"
 
@@ -1029,6 +1037,17 @@ struct AgentWindowBand: View {
                     .modifier(AgentBandProbe(kind: "chip"))
             }
             Spacer(minLength: 0)
+            // #900 B2 step 4 (7.2): shows the sidebar again. The slot is laid out in every tier and state; while the
+            // sidebar is shown the button is invisible, disabled and not read (hidden, never removed: no frame moves).
+            Button { model.toggleSidebar() } label: {   // the action runs on the main actor (a SwiftUI button's)
+                Image(systemName: "sidebar.left").font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
+                    .frame(width: Self.sidebarWidth, height: Self.sidebarWidth).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(width: Self.sidebarWidth, height: Self.sidebarWidth)
+            .accessibilityLabel("Show sidebar").help(model.sidebarShown ? "" : "Show sidebar (⌃⌘S)")   // no tooltip over the empty slot
+            .opacity(model.sidebarShown ? 0 : 1).disabled(model.sidebarShown).accessibilityHidden(model.sidebarShown)
+            .modifier(AgentBandProbe(kind: "sidebar"))
             Color.clear.frame(width: Self.allWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "all"))
             AgentVerbosityPicker(level: $model.verbosity, style: t == .menu ? .menu : t == .icons ? .icons : .labels)
                 .disabled(!on).opacity(on ? 1 : 0.45)

@@ -281,9 +281,25 @@ final class AgentWindowModel: ObservableObject {
     /// autosave or an attention change never sets it (R6.9). Not @Published: nothing draws it.
     var keyFocus: PaneKeys.KeyFocus = .sidebar
 
+    /// #900 B2 step 4 (7.2, R900-2): the sidebar hidden by ⌃⌘S; read from `Preferences.agentWindowSidebarHidden` (a
+    /// Bool, nothing else) when the model is made and written on every toggle. Drawn only through `sidebarShown`.
+    @Published private(set) var sidebarHidden = Preferences.agentWindowSidebarHidden
+    /// The sidebar is drawn: always with the split gate off (15.0: the parent's window), else unless hidden. The root
+    /// view, `sidebarFrame` and `paneAreaFrame` all read this one value.
+    var sidebarShown: Bool { !(AgentPaneLayout.splitsEnabled && sidebarHidden) }
+
+    /// ⌃⌘S (through `perform`) and the band's show-sidebar glyph: hides or shows the sidebar and saves the choice.
+    /// Hidden, the panes take the keys (a hidden sidebar never holds them); shown again, the keys stay where they are.
+    func toggleSidebar() {
+        sidebarHidden.toggle()
+        Preferences.agentWindowSidebarHidden = sidebarHidden
+        if sidebarHidden { keyFocus = .pane }
+    }
+
     /// 4.2 "Pick Another": focuses the pane and gives the sidebar the keys; starts nothing.
     func pickAnother(_ pane: UUID) {
         if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
+        if !sidebarShown { toggleSidebar() }   // #900 B2 step 4: the pick is made in the sidebar, so it shows again
         keyFocus = .sidebar
         focusSidebar()
     }
@@ -320,6 +336,9 @@ final class AgentWindowModel: ObservableObject {
             next = layout.focus(step < 0 ? layout.previous : layout.next)
         case .zoom:
             next = .success(layout.toggleZoom())
+        case .toggleSidebar:   // #900 B2 step 4: always acts, so ⌃⌘S is always swallowed (gate on)
+            toggleSidebar()
+            return true
         default:
             return false
         }
@@ -344,16 +363,18 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// 7.2: the sidebar's frame in the root view's content of `size` (top-left origin; AgentWindowRootView.split: the
-    /// sidebar sz(290) wide, a 1 pt line, the pane area). nil while no sidebar is drawn (the island off: one message).
+    /// sidebar sz(290) wide, a 1 pt line, the pane area). nil while no sidebar is drawn (the island off: one message;
+    /// #900 B2 step 4: hidden by ⌃⌘S, so a click where it was is the pane area's).
     func sidebarFrame(in size: CGSize) -> CGRect? {
-        hasStore ? CGRect(x: 0, y: 0, width: sz(290), height: size.height) : nil
+        hasStore && sidebarShown ? CGRect(x: 0, y: 0, width: sz(290), height: size.height) : nil
     }
 
     /// The pane area's frame in the same content: right of the sidebar and its line, under the band while it is shown
     /// (AgentWindowBand.shown; 9.1: a click on the band is in no pane), else the whole height; nil with no store.
     func paneAreaFrame(in size: CGSize) -> CGRect? {
         let band = AgentWindowBand.shown ? AgentWindowBand.height : 0
-        return hasStore ? CGRect(x: sz(290) + 1, y: band, width: max(0, size.width - sz(290) - 1),
+        let lead = sidebarShown ? sz(290) + 1 : 0   // #900 B2 step 4: hidden, the pane area starts at x = 0
+        return hasStore ? CGRect(x: lead, y: band, width: max(0, size.width - lead),
                                  height: max(0, size.height - band)) : nil
     }
 
@@ -486,6 +507,7 @@ final class AgentWindowModel: ObservableObject {
             if let l = s.activeLayout { layout = l }
         }
         for p in layout.panes { runtimes[p.id] = AgentPaneRuntime(pane: p.id) }
+        if !sidebarShown { keyFocus = .pane }   // #900 B2 step 4: made hidden (the saved choice), the panes take the keys
         terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
         // OQ-66: an OSC 52 write needs the session to be the focused pane's, live now (4.3: resolved at the write).
         terminal.isSelected = { [weak self] key in self?.focusedLive?.key == key }
@@ -855,6 +877,12 @@ final class AgentWindowModel: ObservableObject {
     func move(_ delta: Int) {
         let ids = navigableIDs
         guard !ids.isEmpty else { return }
+        // #900 B2 step 4 (7.1, OQ-1): with the gate on and several panes the step goes through PaneLayout.walk: a row
+        // shown in another pane is skipped and the end is a no-op (no wrap). One pane or the gate off: today's walk.
+        if AgentPaneLayout.splitsEnabled, layout.panes.count > 1 {
+            if let t = layout.walk(ids.map { target($0) }, down: delta > 0), let id = Self.rowID(t) { select(id) }
+            return
+        }
         guard let sel = selection, let i = ids.firstIndex(of: sel) else { return select(ids[0]) }
         select(ids[min(max(i + delta, 0), ids.count - 1)])
     }

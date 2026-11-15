@@ -80,15 +80,15 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// Gate on: the tree keys map; everything not routed by this step is nil (⌃⌘S, ⌘1, ⌃Tab, ⌘J, ⇧⌘T); the rename
-    /// field and the New session form keep every chord on today's route; one pane routes only the splits.
+    /// Gate on: the tree keys and ⌃⌘S (step 4) map; everything else is nil (⌘1, ⌃Tab, ⌘J, ⇧⌘T); the rename field and
+    /// the New session form keep every chord on today's route; one pane routes only the splits and ⌃⌘S.
     @MainActor
     func testTreeKeysPureRouteMapsOnlyTheTreeKeys() {
         let two = PaneKeys.Context(responder: .terminal, keyFocus: .pane, panes: 2, splitsEnabled: true)
         let want: [String: PaneAction] = [
             "⌘D": .split(.columns), "⇧⌘D": .split(.rows), "⌘W": .closePane, "⌘]": .cycle(1), "⌘[": .cycle(-1),
             "⌥⌘←": .focus(.left), "⌥⌘→": .focus(.right), "⌥⌘↓": .focus(.down), "⌥⌘↑": .focus(.up),
-            "⇧⌘Return": .zoom, "⇧⌘Enter": .zoom,
+            "⇧⌘Return": .zoom, "⇧⌘Enter": .zoom, "⌃⌘S": .toggleSidebar,
         ]
         for c in Self.treeChords {
             let e = treeKey(c.code, c.mods, c.chars, c.ign)
@@ -97,7 +97,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(PaneKeys.treeAction(for: e, context: two, renaming: false, form: true) == nil, "the form: \(c.name)")
             let one = PaneKeys.Context(responder: .other, keyFocus: .pane, panes: 1, splitsEnabled: true)
             let alone = PaneKeys.treeAction(for: e, context: one, renaming: false, form: false)
-            XCTAssertTrue(alone == (c.name.hasSuffix("D") ? want[c.name] : nil), "one pane: \(c.name)")
+            XCTAssertTrue(alone == (c.name.hasSuffix("D") || c.name == "⌃⌘S" ? want[c.name] : nil), "one pane: \(c.name)")
         }
         let others: [(UInt16, NSEvent.ModifierFlags, String)] = [(18, [.command], "1"), (48, [.control], "\t"),
                                                                  (38, [.command], "j"), (17, [.command, .shift], "T")]
@@ -327,16 +327,19 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// With the gate on, ⌃⌘S is not routed yet (the sidebar step): the window passes it, as today, on every layout.
+    /// With the gate on, ⌃⌘S toggles the sidebar (step 4): each press is handled, the layout is unchanged, the window is
+    /// never asked to close, and after two presses the sidebar is shown again. The preference is saved and restored.
     @MainActor
-    func testTreeKeysControlCommandSStillPassesWithTheGateOn() throws {
-        try withTreeGate(true) {
+    func testTreeKeysControlCommandSTogglesTheSidebarWithTheGateOn() throws {
+        try withSidebarRow(gate: true) {
             let (win, m, rec) = treeWindow()
             defer { win.close(); m.close() }
             XCTAssertTrue(press(win, "⌘D"))
             let before = m.layout
-            XCTAssertFalse(win.performKeyEquivalent(with: treeKey(1, [.control, .command], "\u{13}", "ы")))
-            XCTAssertFalse(press(win, "⌃⌘S"))
+            XCTAssertTrue(win.performKeyEquivalent(with: treeKey(1, [.control, .command], "\u{13}", "ы")))
+            XCTAssertTrue(m.sidebarHidden, "the first press hides it")
+            XCTAssertTrue(press(win, "⌃⌘S"))
+            XCTAssertFalse(m.sidebarHidden, "two presses: shown again")
             XCTAssertTrue(m.layout == before)
             XCTAssertEqual(rec.asks, 0)
         }
