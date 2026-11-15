@@ -27,6 +27,43 @@ struct CCPoolCapacityState: Codable, Equatable, Sendable {
     var points: Double = 0
 }
 
+extension CCPoolCapacityState {
+    /// #1260 step B (R1260-a): the numbers whose change rewrites the state file. The pending dollars change on every
+    /// learned reply and are left out: they ride along with the next write. nil before the first sample (not written).
+    var written: [Double]? { reset.map { [$0, maxUtilization, dollars, points] } }
+
+    /// A state-file row is outside data (R1257-a): checked as it decodes, nil when bad, so one bad row never fails the file.
+    struct Row: Decodable {
+        let state: CCPoolCapacityState?
+        init(from decoder: Decoder) throws { state = CCPoolCapacityState.checked(decoder) }
+    }
+
+    private struct Field: CodingKey {
+        let stringValue: String
+        init(stringValue: String) { self.stringValue = stringValue }
+        var intValue: Int? { nil }
+        init?(intValue: Int) { return nil }
+    }
+
+    /// The row's fields, in this order, exactly (the synthesized coder's names).
+    static let fields = ["reset", "maxUtilization", "pendingDollars", "dollars", "points"]
+
+    /// Exactly the five fields; each a JSON number (decode(Double) refuses a string, a bool, a null), finite,
+    /// 0...CCPoolCapacity.maxTokens; the running max at most CCPoolCapacity.maxUtilization. Anything else: nil.
+    static func checked(_ decoder: Decoder) -> CCPoolCapacityState? {
+        guard let c = try? decoder.container(keyedBy: Field.self),
+              c.allKeys.count == fields.count, Set(c.allKeys.map(\.stringValue)) == Set(fields) else { return nil }
+        var v: [Double] = []
+        for name in fields {
+            guard let d = try? c.decode(Double.self, forKey: Field(stringValue: name)),
+                  d.isFinite, d >= 0, d <= CCPoolCapacity.maxTokens else { return nil }
+            v.append(d)
+        }
+        guard v.count == 5, v[1] <= CCPoolCapacity.maxUtilization else { return nil }
+        return CCPoolCapacityState(reset: v[0], maxUtilization: v[1], pendingDollars: v[2], dollars: v[3], points: v[4])
+    }
+}
+
 enum CCPoolCapacity {
     /// ccpool_proxy.py:177: below this many points an account's estimate is noise.
     static let minPoints = 0.05

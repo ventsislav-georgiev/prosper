@@ -259,7 +259,7 @@ final class CCPoolUsageTapTests: XCTestCase {
         XCTAssertEqual(want.points, 0.02, accuracy: 1e-12)
         XCTAssertEqual(want.pendingDollars, 0)
         let file = try String(contentsOf: r.dir.appendingPathComponent("state.json"), encoding: .utf8)
-        XCTAssertFalse(file.contains("capacity") || file.contains("dollars") || file.contains("points"), "in memory only in step A")
+        XCTAssertTrue(try JSONDecoder().decode(CCPoolState.self, from: Data(file.utf8)).capacity == [r.id: want], "step B: the file holds it")
     }
 
     func testJSONReplyBytesIdenticalAndLearnedByTheLiteralAmount() throws {

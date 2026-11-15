@@ -95,7 +95,8 @@ struct CCPoolUsageTap: Sendable {
         guard let cc = u["cache_creation"], !(cc is NSNull) else { return }
         guard let d = cc as? [String: Any], let w5 = field("ephemeral_5m_input_tokens", in: d),
               let w1 = field("ephemeral_1h_input_tokens", in: d) else { return giveUp() }
-        split = (w5, w1)
+        // R1260-b: Python `cc.get(key, unsplit)` then `w5 or 0`: a null counts 0; only an absent key takes the unsplit count.
+        split = (d["ephemeral_5m_input_tokens"] is NSNull ? 0 : w5, w1)
     }
 
     /// A token count: a JSON number (not a bool), finite, 0...CCPoolCapacity.maxTokens; anything else is nil.

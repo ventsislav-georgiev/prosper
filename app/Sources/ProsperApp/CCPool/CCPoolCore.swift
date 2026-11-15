@@ -49,17 +49,18 @@ struct CCPoolState: Codable, Equatable, Sendable {
     var accounts: [String: Account] = [:]
     /// Conversation key ("<session id>/<agent id>") -> pin. Saved as "pins": {key: account}, Python's shape.
     var pins: [String: Pin] = [:]
-    /// #1260 step A: capacity learned from relayed replies, by Keychain id. In memory only: not in `Keys` and not
-    /// part of ==, so a learn never rewrites the file or fires onChange (step B persists it).
+    /// #1260: capacity learned from relayed replies, by Keychain id. Saved as "capacity": {id: numbers} (step B).
     var capacity: [String: CCPoolCapacityState] = [:]
 
-    /// Equal = the same file content (CCPoolStore.mutate writes only on a change); `capacity` is not in the file.
+    /// Equal = the same file content (CCPoolStore.mutate writes only on a change). #1260 (R1260-a): a capacity row
+    /// counts by its `written` numbers only, so a reply that only adds pending dollars never rewrites the file.
     static func == (a: CCPoolState, b: CCPoolState) -> Bool {
         a.current == b.current && a.order == b.order && a.accounts == b.accounts && a.pins == b.pins
+            && a.capacity.compactMapValues(\.written) == b.capacity.compactMapValues(\.written)
     }
 
     /// Not named CodingKeys: both coders are written by hand, and Account keeps its own synthesized keys.
-    private enum Keys: String, CodingKey { case current, order, accounts, pins }
+    private enum Keys: String, CodingKey { case current, order, accounts, pins, capacity }
 
     init(current: String? = nil, order: [String] = [], accounts: [String: Account] = [:], pins: [String: Pin] = [:]) {
         self.current = current
@@ -84,6 +85,11 @@ struct CCPoolState: Codable, Equatable, Sendable {
             pins[key] = Pin(account: account, seen: -1)
         }
         capPins()
+        // #1260 (R1257-a): outside data too. Absent, null or not a map: empty; a bad row is dropped (Row), as is a row
+        // for an id no account holds; the file is never corrupt for it.
+        let ids = Set(accounts.values.map(\.id))
+        let rows = (try? c.decodeIfPresent([String: CCPoolCapacityState.Row].self, forKey: .capacity)) ?? nil
+        for (id, row) in rows ?? [:] where ids.contains(id) { capacity[id] = row.state }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -93,6 +99,10 @@ struct CCPoolState: Codable, Equatable, Sendable {
         try c.encode(accounts, forKey: .accounts)
         // Absent when empty: a file without pins is written exactly as before this key existed.
         if !pins.isEmpty { try c.encode(pins.mapValues(\.account), forKey: .pins) }
+        // #1260: numbers only, by Keychain id, only for accounts in the pool and only once sampled; absent when none.
+        let ids = Set(accounts.values.map(\.id))
+        let saved = capacity.filter { ids.contains($0.key) && $0.value.written != nil }
+        if !saved.isEmpty { try c.encode(saved, forKey: .capacity) }
     }
 
     /// A string, or nil for any other JSON value, so one bad pin entry does not fail the map.
