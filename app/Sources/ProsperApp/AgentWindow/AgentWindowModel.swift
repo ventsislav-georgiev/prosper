@@ -213,6 +213,9 @@ final class AgentWindowModel: ObservableObject {
     /// browse rule (`show`, 7.1). 15.0: a multi-pane layout keeps its whole tree here with the split gate off;
     /// `shownPanes` reduces it to the focused pane, and nothing saves that reduction.
     private(set) var layout = PaneLayout.single() {
+        // #900 B2 step 5b (R900-5a-1): any writer but the drag's own move (perform, select, bind, the store refresh, a
+        // pick, a nudge) ends a drag first: its live ratio is saved once, then this change by the didSet's rule.
+        willSet { if dividerDrag != nil, !dragMoving { dragEnded() } }
         didSet {
             // 4.1a: a retarget or a closed pane loses its sight; a layout switch (another id) keeps every layout's.
             if oldValue.id == layout.id { lastLive = AgentPaneLayout.retargeted(lastLive, from: oldValue, to: layout) }
@@ -464,6 +467,11 @@ final class AgentWindowModel: ObservableObject {
 
     /// The divider drag under way: the divider, where it began along its axis, the split's ratio then, the area's size.
     private(set) var dividerDrag: (divider: Divider, start: CGFloat, ratio: Double, size: CGSize)?
+    /// True only while dragMoved adopts its own move (the one writer of `layout` that keeps the drag).
+    private var dragMoving = false
+    /// R900-5a-1: the left button's down began a divider drag: the window's route swallows that button's drags and its
+    /// up even after the drag was ended by something else (a key, a close, resign key). Reset by the up and the next down.
+    var dividerHeld = false
 
     /// 7.5: a left mouse-down at `p` in a pane area of `size`: on a divider it begins that divider's drag (true). A
     /// double-click (`clicks` 2 or more) first equalizes that split alone (deep false), saved once by the didSet.
@@ -488,6 +496,8 @@ final class AgentWindowModel: ObservableObject {
         let r = g.ratio + Double(((g.divider.axis == .columns ? p.x : p.y) - g.start) / length)
         guard case let .success(l) = layout.setRatio(path: g.divider.path, r, minimum: paneMinimum,
                                                      in: CGRect(origin: .zero, size: g.size)), l != layout else { return }
+        dragMoving = true
+        defer { dragMoving = false }
         adopt(l)
     }
 
@@ -498,6 +508,26 @@ final class AgentWindowModel: ObservableObject {
         dividerDrag = nil
         terminal.liveResizeEnded()
         autosave()
+    }
+
+    /// 13: a divider's value: its split's ratio in whole percent, rounded. nil: no split at `path`, or a ratio (outside
+    /// data: a saved blob) that is not finite or not in [0, 1], refused before the Int conversion.
+    func dividerPercent(_ path: [Int]) -> Int? {
+        guard case let .split(_, r, _, _)? = layout.tree.locate(path[...], in: .zero)?.node, r.isFinite, r >= 0, r <= 1
+        else { return nil }
+        return Int((r * 100).rounded())
+    }
+
+    /// 13: the divider's adjustable action: its first side grows (`up`) or shrinks by 5 percent through setRatio (clamped
+    /// at the minimum and [0.1, 0.9] as a drag is), adopted only when the layout differs, so saved once by the didSet
+    /// (a drag under way is ended first by the willSet). Nothing for a path with no divider: the gate off, zoomed, too
+    /// small, one pane or a size that is not finite (dividers(in:) is empty); nothing at the clamp (no save, no publish).
+    func nudge(_ path: [Int], up: Bool, in size: CGSize) {
+        guard dividers(in: size).contains(where: { $0.path == path }),
+              case let .split(_, r, _, _)? = layout.tree.locate(path[...], in: .zero)?.node,
+              case let .success(l) = layout.setRatio(path: path, r + (up ? 0.05 : -0.05), minimum: paneMinimum,
+                                                     in: CGRect(origin: .zero, size: size)), l != layout else { return }
+        adopt(l)
     }
 
     private(set) var store: AgentIslandStore?
@@ -670,6 +700,7 @@ final class AgentWindowModel: ObservableObject {
     /// (the other layouts keep theirs); a deleted active layout hands over to the MRU's next, which is adopted.
     @discardableResult
     func deleteLayout(_ id: UUID) -> PaneRefusal? {
+        dragEnded()   // R900-5a-1: before the store is read and replaced, so the drag's save cannot bring a deleted layout back
         guard !closed, let s = layouts else { return .noSuchLayout }
         switch s.deleting(id) {
         case let .failure(r):
@@ -701,6 +732,7 @@ final class AgentWindowModel: ObservableObject {
     /// island rebuilds its store. The sidebar fills once the window is visible.
     func bind(_ store: AgentIslandStore?) {
         guard !closed else { return }
+        dragEnded()   // R900-5a-1: saved while the old store is still bound (bind(nil) makes autosave a no-op)
         self.store = store
         hasStore = store != nil
         subscription = nil
@@ -1441,6 +1473,7 @@ final class AgentWindowModel: ObservableObject {
     /// The window closed: stop everything for good.
     func close() {
         guard !closed else { return }
+        dragEnded()   // R900-5a-1: a drag under way is saved once and the terminal's hold released, before saves stop
         setVisible(false)
         closed = true
         pendingSpawn = nil   // its deadline timer goes with it

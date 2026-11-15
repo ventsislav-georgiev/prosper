@@ -141,6 +141,11 @@ final class AgentsNSWindow: NSWindow {
     /// R6.9 (tests): every first-responder change asked of this window, AppKit's own included.
     private(set) var responderAsks = 0
 
+    /// R900-5a-1: the window stops being key while a divider drag is under way (its up may never come): the drag ends,
+    /// saved once. No drag (always with the gate off): nothing.
+    override func resignKey() { super.resignKey(); Self.resignedKey(model) }
+    @MainActor static func resignedKey(_ m: AgentWindowModel?) { m?.dragEnded() }
+
     @discardableResult override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
         responderAsks += 1
         return super.makeFirstResponder(responder)
@@ -166,16 +171,22 @@ final class AgentsNSWindow: NSWindow {
     /// equalizes that split first); the drags and the up of that drag are the model's. True: the divider took it, so it
     /// is neither taken by the first-click rule nor passed to a pane. The window calls it with the split gate on only.
     @MainActor static func divider(_ event: NSEvent, _ m: AgentWindowModel, at p: CGPoint, in size: CGSize) -> Bool {
+        // R900-5a-1: a key ends a drag whose up was lost; the key itself goes on. First: it needs no area and no point.
+        if event.type == .keyDown { m.dragEnded(); return false }
         let finite = p.x.isFinite && p.y.isFinite && size.width.isFinite && size.height.isFinite
         let a = finite ? m.paneAreaFrame(in: size) : nil
         let local = a.map { CGPoint(x: p.x - $0.minX, y: p.y - $0.minY) }
         switch event.type {
         case .leftMouseDown:
+            m.dividerHeld = false
             guard let a, let local else { return false }
-            return m.dragBegan(at: local, in: a.size, clicks: event.clickCount)
+            m.dividerHeld = m.dragBegan(at: local, in: a.size, clicks: event.clickCount)
+            if let d = m.dividerDrag { AgentPaneArea.cursor(d.divider.axis).set() }   // R900-5a-2: held for the drag
+            return m.dividerHeld
         case .leftMouseDragged, .leftMouseUp:
-            guard m.dividerDrag != nil else { return false }
-            if event.type == .leftMouseUp { m.dragEnded() } else if let local { m.dragMoved(to: local) }
+            // R900-5a-1: the button stays the divider's after its drag was ended by something else (a no-op move then).
+            guard m.dividerHeld else { return false }
+            if event.type == .leftMouseUp { m.dragEnded(); m.dividerHeld = false } else if let local { m.dragMoved(to: local) }
             return true
         default:
             return false
@@ -347,8 +358,8 @@ final class AgentsNSWindow: NSWindow {
 
     override func sendEvent(_ event: NSEvent) {
         // #900 B2 step 5a (7.5): a divider's down, drags and up go to the model before the first-click rule (gate on only).
-        if AgentPaneLayout.splitsEnabled, let model, [.leftMouseDown, .leftMouseDragged, .leftMouseUp].contains(event.type) {
-            let r = contentLayoutRect, at = event.locationInWindow
+        if AgentPaneLayout.splitsEnabled, let model, [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown].contains(event.type) {
+            let r = contentLayoutRect, at = event.type == .keyDown ? CGPoint.zero : event.locationInWindow
             if Self.divider(event, model, at: CGPoint(x: at.x - r.minX, y: r.maxY - at.y), in: r.size) { return }
         }
         var focusing = false
@@ -1168,6 +1179,8 @@ struct AgentPaneArea: View {
     var scrolls = true
     /// Tests only: (part, pane, frame in the area) as "pane", "header" and "composer" are laid out.
     static var probe: ((String, UUID, CGRect) -> Void)?
+    /// R900-5a-2, pure: the resize cursor of a divider: left-right for columns (a vertical line), up-down for rows.
+    static func cursor(_ axis: PaneNode.Axis) -> NSCursor { axis == .columns ? .resizeLeftRight : .resizeUpDown }
 
     var body: some View {
         GeometryReader { proxy in
@@ -1198,15 +1211,27 @@ struct AgentPaneArea: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             // #900 B2 step 5a (7.5): the resize cursor over each divider's 6·s hit area, an overlay (nothing inserted or
             // resized; none with the gate off). The 1 pt line is each pane's `edge`; the window routes the clicks.
+            // Step 5b (R900-5a-2): the cursor is SET while the pointer moves over the band (no push or pop to unbalance
+            // when a divider leaves under a resting pointer); leaving the band resets the arrow unless a drag holds it.
+            // 13: each divider one splitter element (AgentDividerAXElement, the hover rect's background: the hit area's
+            // frame) after the panes (sort priority below theirs), parents first. The modifiers sit before .position, so
+            // the element's frame and the hover are the hit area, not the whole pane area.
             .overlay(alignment: .topLeading) {
                 ForEach(model.dividers(in: proxy.size), id: \.path) { d in
                     Color.clear.contentShape(Rectangle())
                         .frame(width: d.hitArea.width, height: d.hitArea.height)
-                        .position(x: d.hitArea.midX, y: d.hitArea.midY)
-                        .onHover { inside in
-                            if inside { (d.axis == .columns ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push() } else { NSCursor.pop() }
+                        .onContinuousHover { phase in
+                            if case .active = phase { Self.cursor(d.axis).set() } else if model.dividerDrag == nil { NSCursor.arrow.set() }
                         }
                         .accessibilityHidden(true)
+                        .background {
+                            AgentDividerAXElement(label: d.axis == .columns ? "Vertical divider" : "Horizontal divider",
+                                                  value: model.dividerPercent(d.path).map { "\($0) percent" },
+                                                  increment: { model.nudge(d.path, up: true, in: proxy.size) },
+                                                  decrement: { model.nudge(d.path, up: false, in: proxy.size) })
+                                .accessibilitySortPriority(-1)
+                        }
+                        .position(x: d.hitArea.midX, y: d.hitArea.midY)
                 }
             }
             .coordinateSpace(.named(agentPaneAreaSpace))
@@ -1277,6 +1302,34 @@ struct AgentPaneArea: View {
 struct AgentPaneDim: View {
     var body: some View {
         Neon.bgBottom.opacity(0.25).allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
+/// #900 B2 step 5b (13): one divider's accessibility element, an AppKit view because a SwiftUI element on a clear
+/// colour reads role AXUnknown and no value (measured): a splitter named `label`, valued "<n> percent", whose increment
+/// and decrement nudge the split. It draws nothing, takes the hover rect's frame (no room of its own), takes no hits
+/// (the window's route keeps the mouse) and never the keys (NSView's acceptsFirstResponder is false). updateNSView only
+/// stores plain values and the two closures; the closures run on the main actor from an accessibility call (AppKit
+/// delivers those on the main thread), never inside a view update.
+private struct AgentDividerAXElement: NSViewRepresentable {
+    let label: String, value: String?
+    let increment: @MainActor () -> Void, decrement: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> Element { Element() }
+    func updateNSView(_ v: Element, context: Context) {
+        v.label = label; v.value = value; v.increment = increment; v.decrement = decrement
+    }
+
+    final class Element: NSView {
+        var label = "", value: String?
+        var increment: @MainActor () -> Void = {}, decrement: @MainActor () -> Void = {}
+        override func isAccessibilityElement() -> Bool { true }
+        override func accessibilityRole() -> NSAccessibility.Role? { .splitter }
+        override func accessibilityLabel() -> String? { label }
+        override func accessibilityValue() -> Any? { value }
+        override func accessibilityPerformIncrement() -> Bool { increment(); return true }
+        override func accessibilityPerformDecrement() -> Bool { decrement(); return true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 
