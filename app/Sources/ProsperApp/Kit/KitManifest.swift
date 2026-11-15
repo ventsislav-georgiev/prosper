@@ -108,7 +108,7 @@ enum KitReason: String, Sendable, CaseIterable {
     case badHomepage = "homepage must be an https:// link"
     // kit dir (KitValidator)
     case badExtensionID = "the extension id must be [A-Za-z0-9._-]+, at most 128 characters, not starting with '-' and not only dots"
-    case badSlug = "the extension name (the kit slug) must be [a-z0-9-]+, at most 64 characters"
+    case badSlug = "the extension name (the kit slug) must be [a-z0-9-]+, at most 64 characters, not starting with '-'"
     case slugTaken = "another installed kit already uses this slug"
     case slugReserved = "this slug is reserved for Prosper's own files"
     case noReadme = "README.md is missing at the kit root"
@@ -202,6 +202,19 @@ struct KitManifest: Sendable, Equatable {
         }
     }
 
+    /// #917 S2a (QA ruling r1135): the S1 list stays, and OutsideText.isUnseen is added on top. A permission rule, a
+    /// matcher and every key not placed as display text is STRICT: no scalar isUnseen refuses (U+00A0 stands in for a space).
+    static func isStrictText(_ s: String) -> Bool { !s.unicodeScalars.contains { isControlScalar($0) || OutsideText.isUnseen($0) } }
+    /// Display text (title, choice values and defaults, homepage): the same, except U+200C, U+200D and U+FE0F (emoji sequences).
+    static let displayAllowed: Set<UInt32> = [0x200C, 0x200D, 0xFE0F]
+    static func isDisplayText(_ s: String) -> Bool {
+        !s.unicodeScalars.contains { isControlScalar($0) || (OutsideText.isUnseen($0) && !displayAllowed.contains($0.value)) }
+    }
+    /// The display keys by path; any other path is strict.
+    static func isDisplayPath(_ at: String) -> Bool {
+        at == "homepage" || (at.hasPrefix("settings[") && (at.hasSuffix("].title") || at.hasSuffix("].default") || at.contains("].values[")))
+    }
+
     static let topKeys: Set<String> = ["schema", "homepage", "requires", "pieces", "settings"]
     static let pieceKeys: [Piece.Kind: Set<String>] = [
         .claudeMD: ["source", "position"],
@@ -230,6 +243,17 @@ struct KitManifest: Sendable, Equatable {
     /// A pure check on the string; nothing is opened or fetched.
     static func isHTTPSLink(_ s: String) -> Bool {
         guard let u = URL(string: s), u.scheme?.lowercased() == "https", let host = u.host, !host.isEmpty else { return false }
+        // the host a person reads must be the host: no userinfo, no backslash, a numeric port in 1...65535
+        guard !s.contains("\\"), let r = s.range(of: "://") else { return false }
+        let rest = s[r.upperBound...]
+        let authority = rest[..<(rest.firstIndex { "/?#".contains($0) } ?? rest.endIndex)]
+        if authority.contains("@") { return false }
+        let tail = authority.hasPrefix("[") ? authority[(authority.firstIndex(of: "]") ?? authority.endIndex)...] : authority
+        if let c = tail.lastIndex(of: ":") {
+            let port = tail[tail.index(after: c)...]
+            // at most 5 digits first, so the Int cannot overflow
+            guard (1...5).contains(port.count), port.allSatisfy({ $0.isASCII && $0.isNumber }), let n = Int(port), (1...65535).contains(n) else { return false }
+        }
         return true
     }
     static func isValidCommand(_ s: String) -> Bool {
@@ -256,10 +280,11 @@ struct KitManifest: Sendable, Equatable {
         /// One rule for every string of the kit table, keys included (TOML allows quoted keys).
         mutating func plainText(_ v: KitTOML, _ at: String) {
             switch v {
-            case .string(let s): if !KitManifest.isPlainText(s) { refuse(at, .controlCharacter) }
+            case .string(let s):
+                if !(KitManifest.isDisplayPath(at) ? KitManifest.isDisplayText(s) : KitManifest.isStrictText(s)) { refuse(at, .controlCharacter) }
             case .table(let t):
                 for (k, x) in t.sorted(by: { $0.key < $1.key }) {
-                    guard KitManifest.isPlainText(k) else { refuse(at.isEmpty ? "kit" : at, .controlCharacter); continue }
+                    guard KitManifest.isStrictText(k) else { refuse(at.isEmpty ? "kit" : at, .controlCharacter); continue }
                     plainText(x, at.isEmpty ? k : "\(at).\(k)")
                 }
             case .array(let a): for (i, x) in a.enumerated() { plainText(x, "\(at)[\(i)]") }

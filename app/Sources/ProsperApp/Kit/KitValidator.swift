@@ -43,7 +43,10 @@ struct KitPOSIXFileReader: KitFileReader {
         guard let d = opendir(dir) else { return nil }
         defer { closedir(d) }
         var out: [String] = []
-        while let e = readdir(d) {
+        // a NULL with errno set is a read error, not the end of the list: the walk then refuses the folder
+        while true {
+            errno = 0
+            guard let e = readdir(d) else { if errno != 0 { return nil }; break }
             let name = withUnsafeBytes(of: e.pointee.d_name) { raw in Self.name(raw.prefix { $0 != 0 }) }
             if name != ".", name != ".." { out.append(name) }
         }
@@ -111,7 +114,7 @@ enum KitValidator {
         if !ManagedConfigPaths.isValidID(meta.id) || meta.id.allSatisfy({ $0 == "." }) || meta.id.hasPrefix("-") {
             run.refuse("extension.id", .badExtensionID)
         }
-        if !ManagedConfigPaths.isValidSlug(meta.name) { run.refuse("extension.name", .badSlug) }
+        if !ManagedConfigPaths.isValidSlug(meta.name) || meta.name.hasPrefix("-") { run.refuse("extension.name", .badSlug) }
         else if KitValidator.reservedSlugs.contains(meta.name) { run.refuse("extension.name", .slugReserved) }
         else if otherKitSlugs.contains(meta.name) { run.refuse("extension.name", .slugTaken) }
 

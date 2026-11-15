@@ -592,4 +592,15 @@ final class KitValidatorTests: XCTestCase {
         try f.write("bin/._helper", Data([0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x01]), mode: 0o755)
         assertRefused(try f.validate(source: .market), "bin/._helper", .binaryExecutable)
     }
+
+    /// S2a (R917-s1-d): a kit slug may not start with "-" (it may reach a runner argument list).
+    func testLeadingDashSlugRefused() throws {
+        func result(_ name: String) throws -> KitValidation {
+            let head = KitFixture.head.replacingOccurrences(of: "name        = \"calm-agent\"", with: "name        = \"\(name)\"")
+            return KitValidator.validate(kitDir: URL(fileURLWithPath: memRoot), manifest: try KitFixture.manifest(head: head), source: .market,
+                                         otherKitSlugs: [], reader: memoryKit(["CLAUDE.md": KitDirFixture.claudeMD]))
+        }
+        for name in ["-calm", "-", "--x"] { assertRefused(try result(name), "extension.name", .badSlug) }
+        _ = try validated(result("calm-agent-2"))
+    }
 }

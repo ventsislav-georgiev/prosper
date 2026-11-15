@@ -383,9 +383,10 @@ final class KitManifestTests: XCTestCase {
         for u: UInt32 in [0xFE0F, 0x00A0, 0x200C, 0x200D] {
             XCTAssertTrue(OutsideText.isUnseen(try XCTUnwrap(Unicode.Scalar(u))), String(u, radix: 16))
         }
-        let title = #"title   = "Theme \u2764\uFE0F\u00A0: a\u200Db a\u200Cb""#
+        let title = #"title   = "Theme \u2764\uFE0F: a\u200Db a\u200Cb""#
         XCTAssertEqual(try parse(KitFixture.kit(replacing: #"title   = "Default repo (owner/name)""#, with: title)).refusals, [])
-        XCTAssertEqual(try parse(KitFixture.kit(replacing: #"matcher = "Bash""#, with: #"matcher = "a\u200Db""#)).refusals, [])
+        // S2a (QA r1135): a matcher is strict, U+200D is refused there
+        try assertRefused(KitFixture.kit(replacing: #"matcher = "Bash""#, with: #"matcher = "a\u200Db""#), "pieces[2].matcher", .controlCharacter)
     }
 
     /// Ruling E-10: a piece id may not start with "-".
@@ -422,5 +423,67 @@ final class KitManifestTests: XCTestCase {
         XCTAssertEqual(KitReason.controlCharacter.rawValue, "text holds a control, line-separator, bidi-control or invisible character")
         XCTAssertEqual(KitReason.seedUnderHooks.rawValue, "a seed file may not land in the kit config's hooks/ folder: that folder is the user's")
         XCTAssertEqual(KitReason.tooLargeToCheck.rawValue, "executable is over 1 MiB, too large to check as text")
+    }
+
+    // MARK: #917 S2a riders (QA ruling r1135)
+
+    /// Display text: the fillers, the combining grapheme joiner, a variation selector and a no-break space are refused in a title.
+    func testTitleRefusesFillersAndLookAlikes() throws {
+        for u in ["034F", "3164", "FFA0", "206A", "FE00", "00A0", "2003", "0378"] {
+            try assertRefused(KitFixture.kit(replacing: #"title   = "Default repo (owner/name)""#, with: "title   = \"Ab\\u\(u)c\""),
+                              "settings[0].title", .controlCharacter)
+        }
+    }
+
+    /// Display text keeps the emoji sequences: a ZWJ family and a heart with U+FE0F pass in a title and in a default.
+    func testTitleKeepsEmojiSequences() throws {
+        let family = #"\U0001F468\u200D\U0001F469\u200D\U0001F467"#
+        let heart = #"\u2764\uFE0F"#
+        for text in [family, heart] {
+            XCTAssertEqual(try parse(KitFixture.kit(replacing: #"title   = "Default repo (owner/name)""#, with: "title   = \"A \(text)\"")).refusals, [], text)
+            XCTAssertEqual(try parse(KitFixture.kit(replacing: #"default = """#, with: "default = \"\(text)\"")).refusals, [], text)
+        }
+    }
+
+    /// Permission rules and matchers: strict, U+00A0 and U+FE0F refused, no allow-list (not even the display one).
+    func testRulesAndMatchersAreStrict() throws {
+        for u in ["00A0", "FE0F", "200C", "200D", "034F", "3164", "202F"] {
+            let esc = "\\u" + u
+            try assertRefused(KitFixture.kit(replacing: #"allow = ["Bash(calm-note:*)"]"#, with: "allow = [\"Bash(calm\(esc)note:*)\"]"), "pieces[4].allow[0]", .controlCharacter)
+            try assertRefused(KitFixture.kit(replacing: #"deny  = ["Bash(rm -rf:*)"]"#, with: "deny  = [\"Bash(rm\(esc)-rf:*)\"]"), "pieces[4].deny[0]", .controlCharacter)
+            try assertRefused(KitFixture.kit(replacing: "ask   = []", with: "ask   = [\"Bash(a\(esc)b)\"]"), "pieces[4].ask[0]", .controlCharacter)
+            try assertRefused(KitFixture.kit(replacing: #"matcher = "Bash""#, with: "matcher = \"Ba\(esc)sh\""), "pieces[2].matcher", .controlCharacter)
+        }
+    }
+
+    /// The classes are exact: display refuses what strict refuses except three scalars; both keep the S1 list.
+    func testDisplayAllowListIsThreeScalars() throws {
+        XCTAssertEqual(KitManifest.displayAllowed, [0x200C, 0x200D, 0xFE0F])
+        var onlyStrict: Set<UInt32> = []
+        for v in UInt32(0)...0x10FFFF {
+            guard let u = Unicode.Scalar(v) else { continue }
+            let s = String(Character(u))
+            if KitManifest.isDisplayText(s) != KitManifest.isStrictText(s) { onlyStrict.insert(v) }
+            if KitManifest.isControlScalar(u) { XCTAssertFalse(KitManifest.isStrictText(s) || KitManifest.isDisplayText(s), String(v, radix: 16)) }
+        }
+        XCTAssertEqual(onlyStrict, [0x200C, 0x200D, 0xFE0F])
+    }
+
+    /// The homepage must show its host: form -> passes (true) or is refused (false); a pure string check.
+    func testHomepageHostIsTheHost() throws {
+        let old = #"homepage = "https://example.com/calm-agent""#
+        let table: [(String, Bool)] = [
+            ("https://example.com", true), ("https://example.com/a?x=1#y", true), ("https://example.com:8443/x", true),
+            ("https://example.com:65535", true), ("https://example.com:1", true), ("https://[::1]:443/x", true),
+            ("https://example.com/p@th", true), ("https://example.com?q=a@b", true),
+            ("https://a.example@b.example", false), ("https://a:pw@b.example", false), ("https://a.example@b.example/x", false),
+            ("https://example.com:0", false), ("https://example.com:65536", false), ("https://example.com:", false),
+            ("https://example.com:80a", false), ("https://example.com:123456", false), ("https://example.com:99999999999999999999", false),
+            ("https:///x", false), ("https://example.com\\\\@evil.example", false),
+        ]
+        for (form, ok) in table {
+            let refusals = try parse(KitFixture.kit(replacing: old, with: "homepage = \"\(form)\"")).refusals
+            XCTAssertEqual(refusals.contains(KitRefusal(subject: "homepage", reason: .badHomepage)), !ok, form)
+        }
     }
 }
