@@ -4,15 +4,17 @@ import XCTest
 
 /// Counts what the layout manager lays out: every line fragment passes through this delegate call.
 final class TextViewerLayoutCount: NSObject, NSLayoutManagerDelegate, @unchecked Sendable {
-    var lines = 0, glyphs = 0
+    /// #1254: `passes` counts layouts from the first glyph (each pass of a contiguous layout starts there).
+    var lines = 0, glyphs = 0, passes = 0
     func layoutManager(_ layoutManager: NSLayoutManager, shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
                        lineFragmentUsedRect: UnsafeMutablePointer<NSRect>, baselineOffset: UnsafeMutablePointer<CGFloat>,
                        in textContainer: NSTextContainer, forGlyphRange glyphRange: NSRange) -> Bool {
         lines += 1
         glyphs += glyphRange.length
+        if glyphRange.location == 0 { passes += 1 }
         return false
     }
-    func reset() { lines = 0; glyphs = 0 }
+    func reset() { lines = 0; glyphs = 0; passes = 0 }
 }
 
 /// #1155: a show lays out what is drawn, not the whole text. Rows count the layout work (line
@@ -32,6 +34,7 @@ final class TextViewerLayoutTests: XCTestCase {
     static let measuredLinkBound = 8_000
     /// Printed for the report (one line to stderr, as MarkdownRendererTests.fact does).
     nonisolated static func fact(_ s: String) { fputs("vl fact \(s)\n", stderr) }
+    static func styleName(_ scroll: NSScrollView) -> String { scroll.scrollerStyle == .legacy ? "legacy" : "overlay" }
 
     private struct Host {
         let window: NSWindow
@@ -41,12 +44,15 @@ final class TextViewerLayoutTests: XCTestCase {
         var clip: NSClipView { scroll.contentView }
     }
 
-    /// The app's text area at scale 1 (820 x 640 less the header) in a window that is never shown.
-    private func host() throws -> Host {
+    /// The app's text area at scale 1 (820 x 640 less the header) in a window that is never shown. #1254: `style`
+    /// pins this scroll view's scroller style (nil: the system's preferred one, which follows the pointing device and
+    /// the "Show scroll bars" setting; the CI runner gets legacy). Nothing system-wide is set.
+    private func host(_ style: NSScroller.Style? = nil) throws -> Host {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 820, height: 560), styleMask: [.titled],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let (scroll, view) = TextViewerTextView.makeScrollable()
+        if let style { scroll.scrollerStyle = style }
         scroll.frame = CGRect(x: 0, y: 0, width: 820, height: 560)
         window.contentView = scroll
         scroll.tile()
@@ -123,15 +129,18 @@ final class TextViewerLayoutTests: XCTestCase {
     }
 
     /// Opens `url` through the model, shows its first load and draws it; asserts the counted work.
-    private func showCounted(_ url: URL, _ what: String, limit: Int = TextViewerLayoutTests.ceiling, file: StaticString = #filePath, line: UInt = #line) throws
+    private func showCounted(_ url: URL, _ what: String, limit: Int = TextViewerLayoutTests.ceiling, style: NSScroller.Style? = nil,
+                             file: StaticString = #filePath, line: UInt = #line) throws
         -> (Host, TextViewerModel, NSAttributedString) {
         let model = TextViewerModel(url: url, resolved: url, actions: actions(), imageLoader: { _, _, _ in nil })
         let text = try loaded(model, after: 0, file: file, line: line)
-        let h = try host()
+        let h = try host(style)
         h.count.reset()
         h.view.show(text)
         let ink = try draw(h)
-        Self.fact("\(what): show + first draw laid out \(h.count.glyphs) glyphs, \(h.count.lines) lines, of \(text.length)")
+        Self.fact("\(what): show + first draw laid out \(h.count.glyphs) glyphs, \(h.count.lines) lines, \(h.count.passes) passes, of \(text.length); "
+                  + "\(Self.styleName(h.scroll)) scrollers, clip width \(h.clip.bounds.width)")
+        if let style { XCTAssertEqual(h.scroll.scrollerStyle, style, "\(what): the pinned scroller style held", file: file, line: line) }
         XCTAssertLessThanOrEqual(h.count.glyphs, limit, "\(what): glyphs laid out by show and the first draw (\(h.count.lines) lines)",
                                  file: file, line: line)
         XCTAssertGreaterThan(ink, 200, "\(what): the visible text is drawn", file: file, line: line)
@@ -190,8 +199,8 @@ final class TextViewerLayoutTests: XCTestCase {
     enum Place { case top, middle, end }
 
     private func reloadKeepsThePlace(_ url: URL, _ place: Place, _ what: String, limit: Int = TextViewerLayoutTests.ceiling,
-                                     file: StaticString = #filePath, line: UInt = #line) throws {
-        let (h, model, text) = try showCounted(url, what, limit: limit, file: file, line: line)
+                                     style: NSScroller.Style? = nil, file: StaticString = #filePath, line: UInt = #line) throws {
+        let (h, model, text) = try showCounted(url, what, limit: limit, style: style, file: file, line: line)
         defer { h.window.close() }
         let lm = try XCTUnwrap(h.view.layoutManager)
         switch place {
@@ -218,7 +227,7 @@ final class TextViewerLayoutTests: XCTestCase {
         h.count.reset()
         h.view.show(grown)
         try draw(h)
-        Self.fact("\(what): reload laid out \(h.count.glyphs) glyphs, \(h.count.lines) lines")
+        Self.fact("\(what): reload laid out \(h.count.glyphs) glyphs, \(h.count.lines) lines, \(h.count.passes) passes")
         XCTAssertLessThanOrEqual(h.count.glyphs, limit, "\(what): glyphs laid out by the reload (\(h.count.lines) lines)",
                                  file: file, line: line)
         XCTAssertEqual(try topCharacter(h), before, "\(what): the same line at the top after the reload", file: file, line: line)
@@ -354,11 +363,70 @@ final class TextViewerLayoutTests: XCTestCase {
         return url
     }
 
+    /// #1254: overlay scrollers (a trackpad Mac's default) never take room from the text, so it is laid out once.
     func testReloadKeepsThePlaceInTheMiddleOfASmallText() throws {
-        try reloadKeepsThePlace(try smallFile(), .middle, "small middle", limit: TV.wholeLayoutLength)
+        try reloadKeepsThePlace(try smallFile(), .middle, "small middle", limit: TV.wholeLayoutLength, style: .overlay)
     }
     func testReloadKeepsThePlaceAtTheEndOfASmallText() throws {
-        try reloadKeepsThePlace(try smallFile(), .end, "small end", limit: TV.wholeLayoutLength)
+        try reloadKeepsThePlace(try smallFile(), .end, "small end", limit: TV.wholeLayoutLength, style: .overlay)
+    }
+
+    /// #1254: legacy scrollers ("Show scroll bars: Always", a mouse, the CI runner) take 17 pt once the text is taller than
+    /// the area: the width change lays a text under the size out whole a second time, plus one screen of its 4-byte lines
+    /// (560 pt of 16-pt lines: 35 and the one cut at the bottom, 36 x 4 glyphs). Runner: 32,784 and 32,808. A third whole
+    /// pass (3 x 16,320 = 48,960) or a second extra screen (32,808 + 144 = 32,952) is over it.
+    static let legacySmallBudget = 2 * TextViewerTextView.wholeLayoutLength + 36 * 4
+
+    func testReloadKeepsThePlaceInTheMiddleOfASmallTextWithLegacyScrollers() throws {
+        try reloadKeepsThePlace(try smallFile(), .middle, "small middle, legacy", limit: Self.legacySmallBudget, style: .legacy)
+    }
+    func testReloadKeepsThePlaceAtTheEndOfASmallTextWithLegacyScrollers() throws {
+        try reloadKeepsThePlace(try smallFile(), .end, "small end, legacy", limit: Self.legacySmallBudget, style: .legacy)
+    }
+    /// #1254: a large text keeps the ceiling with legacy scrollers too (it is never laid out whole).
+    func testReloadKeepsThePlaceInTheMiddleWithLegacyScrollers() throws {
+        try reloadKeepsThePlace(try plainFile(), .middle, "plain middle, legacy", style: .legacy)
+    }
+
+    /// #1254 probe (no assertion but that the pinned style held): the text container and clip widths before show, after show
+    /// and after the first draw, the layout passes and glyphs at show and at a reload, per scroller style; the same text as
+    /// the small rows. Times are facts only. "legacy, always" is legacy with autohidesScrollers off (room kept constant).
+    func testScrollerStyleProbe() throws {
+        let cases: [(String, NSScroller.Style?, Bool)] = [("default", nil, true), ("overlay", .overlay, true),
+                                                          ("legacy", .legacy, true), ("legacy, always", .legacy, false)]
+        for (name, style, autohides) in cases {
+            let url = try smallFile()
+            let model = TextViewerModel(url: url, resolved: url, actions: actions(), imageLoader: { _, _, _ in nil })
+            let text = try loaded(model, after: 0)
+            let h = try host(style)
+            defer { h.window.close() }
+            if !autohides { h.scroll.autohidesScrollers = false; h.scroll.tile() }
+            let tc = try XCTUnwrap(h.view.textContainer)
+            let w0 = (tc.size.width, h.clip.bounds.width)
+            h.count.reset()
+            let t0 = Date()
+            h.view.show(text)
+            let w1 = (tc.size.width, h.clip.bounds.width), s = (h.count.glyphs, h.count.lines, h.count.passes)
+            try draw(h)
+            let t1 = Date().timeIntervalSince(t0)
+            Self.fact(String(format: "probe %@ (%@ scrollers): container/clip width before show %.1f/%.1f, after show %.1f/%.1f, after the first draw %.1f/%.1f; "
+                             + "show %ld glyphs %ld lines %ld passes; show + first draw %ld glyphs %ld lines %ld passes, %.4f s, of %ld",
+                             name, Self.styleName(h.scroll), w0.0, w0.1, w1.0, w1.1, tc.size.width, h.clip.bounds.width,
+                             s.0, s.1, s.2, h.count.glyphs, h.count.lines, h.count.passes, t1, text.length))
+            let n = model.loads
+            try append(url, "\n\ntail line\n")
+            model.reload()
+            let grown = try loaded(model, after: n)
+            h.count.reset()
+            let t2 = Date()
+            h.view.show(grown)
+            let r = (h.count.glyphs, h.count.lines, h.count.passes, tc.size.width, h.clip.bounds.width)
+            try draw(h)
+            let t3 = Date().timeIntervalSince(t2)
+            Self.fact(String(format: "probe %@: reload show %ld glyphs %ld lines %ld passes (container/clip %.1f/%.1f); with the draw %ld glyphs %ld lines %ld passes, %.4f s, of %ld",
+                             name, r.0, r.1, r.2, r.3, r.4, h.count.glyphs, h.count.lines, h.count.passes, t3, grown.length))
+            if let style { XCTAssertEqual(h.scroll.scrollerStyle, style, "\(name): the pinned scroller style held") }
+        }
     }
 
     // MARK: R2-2: a reload to a shorter or an empty text; a far jump as the "#fragment" scroll does it.
