@@ -1158,6 +1158,8 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal: a phone's request to list, show, rename or close a session now gives up after 10
   seconds when dch on the Mac does not answer, so one stuck request no longer stalls every phone
   (#988)
+- Marketplace: when packing a folder for publishing fails, the message now shows tar's first line; a
+  failed unpack of a download shows one short sentence (#1182)
 
 ## v2.174.0
 

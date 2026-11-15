@@ -147,7 +147,7 @@ final class RemoteInstallerDrainTests: XCTestCase {
     }
 
     /// runTarCapture: bytes that are no archive fail the listing with extractFailed (the case as before), now the
-    /// fixed sentence; nothing is unpacked.
+    /// fixed sentence (R1182-i: no log promise); nothing is unpacked.
     func testListingOfANonArchiveThrowsExtractFailed() throws {
         let tmp = tempDir()
         let tgz = tmp.appendingPathComponent("bad.tgz")
@@ -179,11 +179,11 @@ final class RemoteInstallerDrainTests: XCTestCase {
         let r = try ran("printf 'tar: kit/a\\342\\200\\256b\\342\\200\\213.lua: Cannot open\\ntar: second line\\n' >&2; exit 1")
         XCTAssertEqual(r.status, 1)
         XCTAssertTrue(r.err.contains("Cannot open"), "the made-up line reached stderr")
-        let error = RemoteInstaller.tarFailed(["-xzf"], r)
+        let error = RemoteInstaller.tarFailed(["-xzf"], r, packing: false)
         XCTAssertEqual(error, .extractFailed(RemoteInstaller.tarFailedText))
         let shown = try XCTUnwrap(error.errorDescription)
-        XCTAssertEqual(shown, "Could not unpack the download: tar could not process the archive; its message is in the log")
-        for part in ["kit/", "Cannot open", "second line", "\u{202E}", "\u{200B}"] {
+        XCTAssertEqual(shown, "Could not unpack the download: tar could not unpack the archive")
+        for part in ["kit/", "Cannot open", "second line", "\u{202E}", "\u{200B}", "log"] {
             XCTAssertFalse(shown.contains(part), part)
         }
     }
@@ -202,5 +202,49 @@ final class RemoteInstallerDrainTests: XCTestCase {
         XCTAssertThrowsError(try RemoteInstaller.readNames(gone)) {
             XCTAssertEqual($0 as? RemoteInstaller.InstallError, .extractFailed("cannot read gonedir"))
         }
+    }
+
+    // MARK: - R1182-i / R1182-j, the publish pack shows tar's first line
+
+    private func packed(_ script: String) throws -> String {
+        let r = try ran(script)
+        let error = RemoteInstaller.tarFailed(["-czf"], r, packing: true)
+        guard case .extractFailed(let text) = error else { XCTFail("not extractFailed"); return "" }
+        return text
+    }
+
+    func testPublishShowsTarFirstLineAfterTheLead() throws {
+        XCTAssertEqual(try packed("printf 'tar: kit/init.lua: Cannot open\\nsecond line\\n' >&2; exit 1"),
+                       "tar could not pack the folder: tar: kit/init.lua: Cannot open")
+    }
+
+    func testPublishLineIsCleaned() throws {
+        let text = try packed("printf 'tar: kit/a\\342\\200\\256b\\342\\200\\213.lua: Cannot open\\n' >&2; exit 1")
+        XCTAssertEqual(text, "tar could not pack the folder: tar: kit/ab.lua: Cannot open")
+    }
+
+    func testPublishLineIsCutTo160() throws {
+        let text = try packed("printf 'tar: %s\\n' \"$(printf '%0400d' 0)\" >&2; exit 1")
+        let shown = String(text.dropFirst("tar could not pack the folder: ".count))
+        XCTAssertTrue(text.hasPrefix("tar could not pack the folder: tar: 000"))
+        XCTAssertEqual(shown.count, 160)
+    }
+
+    func testPublishWithNoLineShowsTheLeadAlone() throws {
+        XCTAssertEqual(try packed("exit 1"), "tar could not pack the folder")
+    }
+
+    func testDownloadShowsNothingOfTarText() throws {
+        let r = try ran("printf 'tar: kit/init.lua: Cannot open\\n' >&2; exit 1")
+        let error = RemoteInstaller.tarFailed(["-tzf"], r, packing: false)
+        XCTAssertEqual(error, .extractFailed("tar could not unpack the archive"))
+    }
+
+    /// R1182-j: an uncut stderr with one invalid byte between two words: both words, U+FFFD between, shown cleaned.
+    func testInvalidStderrByteReadsReplacementCharacter() throws {
+        let r = try ran("printf 'tar: alpha\\377beta: Cannot open\\n' >&2; exit 1")
+        XCTAssertEqual(r.err, "tar: alpha\u{FFFD}beta: Cannot open\n")
+        XCTAssertEqual(try packed("printf 'tar: alpha\\377beta: Cannot open\\n' >&2; exit 1"),
+                       "tar could not pack the folder: tar: alpha\u{FFFD}beta: Cannot open")
     }
 }

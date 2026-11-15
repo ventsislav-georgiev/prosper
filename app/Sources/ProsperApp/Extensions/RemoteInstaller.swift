@@ -552,14 +552,14 @@ enum RemoteInstaller {
     /// Run `tar` and return its raw stdout bytes (binary-safe, for packaging).
     private static func runTarData(_ args: [String]) throws -> Data {
         let r = try runDraining(args, captureOut: true)
-        guard r.status == 0 else { throw tarFailed(args, r) }
+        guard r.status == 0 else { throw tarFailed(args, r, packing: true) }
         return r.out
     }
 
     /// Run `tar` and return its stdout (used for listing entries).
     private static func runTarCapture(_ args: [String]) throws -> String {
         let r = try runDraining(args, captureOut: true)
-        guard r.status == 0 else { throw tarFailed(args, r) }
+        guard r.status == 0 else { throw tarFailed(args, r, packing: false) }
         // Lossy, never "": one non-UTF-8 name used to blank the whole listing and
         // let every entry past assertSafeArchive.
         return String(decoding: r.out, as: UTF8.self)
@@ -567,7 +567,7 @@ enum RemoteInstaller {
 
     private static func runTar(_ args: [String]) throws {
         let r = try runDraining(args, captureOut: false)
-        guard r.status == 0 else { throw tarFailed(args, r) }
+        guard r.status == 0 else { throw tarFailed(args, r, packing: false) }
     }
 
     /// R1182-h: runs `path` with stderr read to its end on another thread while this one reads stdout, so a child
@@ -602,19 +602,26 @@ enum RemoteInstaller {
         let data = captureOut ? out.fileHandleForReading.readDataToEndOfFile() : Data()
         group.wait()
         process.waitUntilExit()
-        // A cut can end inside a UTF-8 sequence: decode what is valid (U+FFFD for the cut end), never "" for all of it.
-        let text = String(data: err.kept, encoding: .utf8) ?? (err.cut ? String(decoding: err.kept, as: UTF8.self) : "")
+        // R1182-j: a cut can end inside a UTF-8 sequence and a raw name can be invalid: decode what is valid
+        // (U+FFFD for the rest), never "" for all of it.
+        let text = String(decoding: err.kept, as: UTF8.self)
         return (data, text, process.terminationStatus)
     }
 
-    /// R1182-f: what a person reads when tar fails; tar's own text can quote entry names over many lines.
-    static let tarFailedText = "tar could not process the archive; its message is in the log"
+    /// R1182-i: what a person reads when tar fails. A download: one fixed sentence, nothing of tar's text (it can quote
+    /// entry names over many lines). A publish pack (the person's own folder): a fixed lead, then tar's first line.
+    static let tarFailedText = "tar could not unpack the archive"
+    static let tarPackFailedText = "tar could not pack the folder"
 
-    /// The error for a failed tar run: a fixed sentence; tar's first line, cut to 120, goes to the log only, private
-    /// (DchOwnerCheck.logCLI's form).
-    static func tarFailed(_ args: [String], _ r: (out: Data, err: String, status: Int32)) -> InstallError {
-        let line = r.err.split(whereSeparator: \.isNewline).first.map { String($0.prefix(120)) } ?? "no message"
+    /// The error for a failed tar run. `packing` is the publish pack: its text is the lead plus tar's first line, cleaned
+    /// through OutsideText.shown (max 160); the lead alone when tar gave no line. tar's first line, cut to 120, goes to
+    /// the log, private, in both kinds (DchOwnerCheck.logCLI's form); the public field is the mode flag, never a path.
+    static func tarFailed(_ args: [String], _ r: (out: Data, err: String, status: Int32), packing: Bool) -> InstallError {
+        let first = r.err.split(whereSeparator: \.isNewline).first.map(String.init)
+        let line = first.map { String($0.prefix(120)) } ?? "no message"
         log.error("tar \(args.first ?? "", privacy: .public) exited \(r.status, privacy: .public): \(line, privacy: .private)")
-        return .extractFailed(tarFailedText)
+        guard packing else { return .extractFailed(tarFailedText) }
+        let shown = first.map { OutsideText.shown($0, max: 160) } ?? ""
+        return .extractFailed(shown.isEmpty ? tarPackFailedText : "\(tarPackFailedText): \(shown)")
     }
 }
