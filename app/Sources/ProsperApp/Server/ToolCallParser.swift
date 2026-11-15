@@ -117,17 +117,20 @@ enum ToolCallParser {
     /// Scans for `open … close` blocks holding `{"name":…, "arguments":{…}}`.
     /// Robust to: surrounding prose, multiple blocks, missing closing tag at the
     /// end of a truncated stream, and `arguments` being an object or a string.
+    /// #1181: the tags compared by Unicode scalars, as `StreamSplitter.earliestMarker`: a tag followed by a combining
+    /// mark is a tag, so the stream stops exactly where the parse starts a block, at every chunk cut.
     private static func parseTagged(_ text: String, open: String, close: String) -> ToolCallParseResult {
+        let scalars = text.unicodeScalars
         var calls: [ParsedToolCall] = []
         var content = ""
         var idx = text.startIndex
         var n = 0
-        while let openR = text.range(of: open, range: idx..<text.endIndex) {
-            content += text[idx..<openR.lowerBound]
+        while let openR = scalarRange(of: open, in: scalars[idx...]) {
+            content += String(scalars[idx..<openR.lowerBound])
             let bodyStart = openR.upperBound
             let bodyEnd: String.Index
             let nextIdx: String.Index
-            if let closeR = text.range(of: close, range: bodyStart..<text.endIndex) {
+            if let closeR = scalarRange(of: close, in: scalars[bodyStart...]) {
                 bodyEnd = closeR.lowerBound
                 nextIdx = closeR.upperBound
             } else {
@@ -135,7 +138,7 @@ enum ToolCallParser {
                 bodyEnd = text.endIndex
                 nextIdx = text.endIndex
             }
-            let body = text[bodyStart..<bodyEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = String(scalars[bodyStart..<bodyEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
             // Qwen3 emits a `{json}` body; Qwen3-Coder emits the xml_function body
             // `<function=name><parameter=key>value</parameter></function>`. Try both.
             if let call = callFromNameArgsJSON(body, index: n)
@@ -145,7 +148,7 @@ enum ToolCallParser {
             }
             idx = nextIdx
         }
-        content += text[idx..<text.endIndex]
+        content += String(scalars[idx...])
         return ToolCallParseResult(
             content: content.trimmingCharacters(in: .whitespacesAndNewlines),
             toolCalls: calls
@@ -446,7 +449,8 @@ enum ToolCallParser {
 
     /// The first `needle` in `scalars`, compared scalar by scalar (#1181). Forward scan, no regex:
     /// O(length x needle length); every index comes from the view itself.
-    static func scalarRange(of needle: String, in scalars: String.UnicodeScalarView) -> Range<String.Index>? {
+    static func scalarRange<S: BidirectionalCollection>(of needle: String, in scalars: S) -> Range<String.Index>?
+    where S.Element == Unicode.Scalar, S.Index == String.Index {
         let n = needle.unicodeScalars
         guard let first = n.first else { return nil }
         var from = scalars.startIndex

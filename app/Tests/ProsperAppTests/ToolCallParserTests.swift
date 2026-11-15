@@ -526,4 +526,41 @@ extension ToolCallParserTests {
             XCTAssertEqual(got.final, "<think>plan</think>ok")
         }
     }
+
+    /// #1181 (R1181-c): the tool-call markers are compared by Unicode scalars in the splitter and in parseTagged, as
+    /// the think tags: a marker followed by a combining mark (U+0301) is a marker. The table: the stream's text (the
+    /// same at every scalar cut, and per scalar), the parse's content and its call count, as literals. The stream's
+    /// text is a scalar prefix of the content in every row (the codex path sends the rest as its last delta).
+    func testToolCallMarkerThenCombiningMarkStreamAndParseAgreeAtEveryCut() {
+        let json = #"{"name": "shell", "arguments": {"command": "ls"}}"#
+        let coder = "\n<function=shell>\n<parameter=command>\nls\n</parameter>\n</function>\n"
+        let cases: [(text: String, stream: String, content: String, calls: Int)] = [
+            // The body starts with the mark: no JSON, no XML function: no call (before: all text, at most cuts).
+            ("ok<tool_call>\u{0301}" + json + "</tool_call>", "ok", "ok", 0),
+            // Qwen3-Coder body: the call (before: the back-off ran it too, while the stream showed the raw tag).
+            ("ok<tool_call>\u{0301}" + coder + "</tool_call>", "ok", "ok", 1),
+            // A mark after the closing tag: the block is whole, so the call (before: dropped as unterminated).
+            ("ok<tool_call>" + json + "</tool_call>\u{0301}", "ok", "ok\u{0301}", 1),
+            // Unterminated, the mark first: no call.
+            ("ok<tool_call>\u{0301}" + json, "ok", "ok", 0),
+            // The mark INSIDE the marker: its scalars are not there: text in both.
+            ("ok<tool_call\u{0301}>" + json + "</tool_call>", "ok<tool_call\u{0301}>" + json + "</tool_call>",
+             "ok<tool_call\u{0301}>" + json + "</tool_call>", 0),
+            // No mark: today's call.
+            ("ok<tool_call>" + json + "</tool_call>", "ok", "ok", 1),
+            // The splitter's defensive "<function=" stop; the parse needs call structure (as for any bare mention).
+            ("ok<function=\u{0301}shell></function>", "ok", "ok<function=\u{0301}shell></function>", 0),
+        ]
+        for c in cases {
+            let parsed = ToolCallParser.parse(c.text, format: .qwenXML)
+            XCTAssertEqual(parsed.content, c.content, "content of \(c.text.debugDescription)")
+            XCTAssertEqual(parsed.toolCalls.count, c.calls, "calls of \(c.text.debugDescription)")
+            XCTAssertTrue(parsed.content.unicodeScalars.starts(with: c.stream.unicodeScalars), c.text.debugDescription)
+            for cut in 0...c.text.unicodeScalars.count {
+                let got = streamsAndFinal(c.text, cut: cut)
+                XCTAssertEqual(got.cutOnce, c.stream, "stream cut at \(cut) of \(c.text.debugDescription)")
+                XCTAssertEqual(got.perScalar, c.stream, "stream per scalar of \(c.text.debugDescription)")
+            }
+        }
+    }
 }

@@ -1178,6 +1178,8 @@ tag from the now-released section and put it on the new top draft.
   Settings while it loads or another model is already in memory (#1181)
 - Phone chat: a thinking model's private reasoning is no longer shown; a reply that ends while still
   thinking shows a short notice instead (#1181)
+- Agent: a very short answer from the local model ("Done.") now shows in the agent window instead of
+  an empty reply (#1181)
 
 ## v2.174.0
 

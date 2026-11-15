@@ -485,14 +485,14 @@ private final class HTTPConnection: @unchecked Sendable {
                     emit("response.output_item.added", ResponsesPayload.outputItemAdded(
                         sequence: seq, index: outputIndex,
                         item: ResponsesPayload.messageItem(id: itemID, text: "", status: "in_progress")))
-                    if notice {   // the agent window shows text from deltas only
-                        emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
-                            sequence: seq, itemID: itemID, index: outputIndex, delta: final))
-                    }
-                } else if final.hasPrefix(streamed), final.count > streamed.count {
+                }
+                // #1181: the agent window shows text from deltas only: the unsent suffix of the validated text, by
+                // scalars, goes as one delta, all of it when nothing streamed (an answer within the 10-character guard).
+                let sent = streamed.unicodeScalars, all = final.unicodeScalars
+                if all.starts(with: sent), all.count > sent.count {
                     emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
                         sequence: seq, itemID: itemID, index: outputIndex,
-                        delta: String(final.dropFirst(streamed.count))))
+                        delta: String(all.dropFirst(sent.count))))
                 }
                 let item = ResponsesPayload.messageItem(id: itemID, text: final)
                 emit("response.output_item.done", ResponsesPayload.outputItemDone(sequence: seq, index: outputIndex, item: item))
@@ -965,7 +965,7 @@ struct StreamSplitter {
         if let pos = earliestMarker() {
             phase = .stopped
             defer { pending = "" }
-            return String(pending[..<pos])
+            return String(pending.unicodeScalars[..<pos])
         }
         let cut = atEnd ? pending.endIndex
             : pending.index(pending.endIndex, offsetBy: -guardLen, limitedBy: pending.startIndex) ?? pending.startIndex
@@ -976,8 +976,9 @@ struct StreamSplitter {
     /// Earliest marker in the unsent text. A marker can't start in text already sent: the
     /// guard holds back `max marker length - 1` characters, so any marker there was whole
     /// in the pending text of an earlier call and stopped the stream then.
+    /// #1181: by Unicode scalars, as `parseTagged` and the think tags: a marker followed by a combining mark is a marker.
     private func earliestMarker() -> String.Index? {
-        markers.compactMap { pending.range(of: $0)?.lowerBound }.min()
+        markers.compactMap { ToolCallParser.scalarRange(of: $0, in: pending.unicodeScalars)?.lowerBound }.min()
     }
 }
 
