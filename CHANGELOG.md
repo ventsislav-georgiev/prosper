@@ -1276,6 +1276,8 @@ tag from the now-released section and put it on the new top draft.
 - Links: when the URL Dispatcher fails or does not open a clicked link, Prosper now opens it in your
   saved fallback browser instead of losing it, and a developer build or fork of Prosper no longer
   sends links back to itself.
+- Live Activity: when a Mac goes offline or stops reporting, a card that Apple failed to close is
+  now closed again on the next minute (up to 3 tries), instead of staying on the lock screen.
 
 ## v2.174.0
 

@@ -2109,6 +2109,135 @@ test("#1014 round 2: a session with no card row whose expires_at is now survives
   assert.deepEqual(rowsOf(t, HASH[ALICE]), []);
 });
 
+// ---- #1073: a lapse's and an offline post's failed end is retried like the other pushes -----
+
+const FAIL500 = { status: 500, reason: "InternalServerError" };
+const cardFails = (t) => t.rows(`SELECT token, fails FROM push_tokens WHERE kind = 'la_update' ORDER BY token`).map((r) => [r.token[0], r.fails]);
+const endCalls = (t) => t.takeCalls().map((c) => `${c.token[0]} ${c.body.aps.event} ${c.body.aps["content-state"].online}`);
+
+// A Mac with one working card (token 3) whose card end goes out: by a lapse, or by an offline post.
+async function endedCard(t, via, fails = false) {
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, cardBody(PHONE, MAC, "3"));
+  await t.settle();
+  t.takeCalls();
+  if (fails) t.answers.set(tok("3"), FAIL500); // after the catch-up update, which would count too
+  if (via === "lapse") {
+    t.clock.now += 180;
+    await runCron(t.deps);
+  } else {
+    await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 2, offline: true });
+    await t.settle();
+  }
+}
+
+test("#1073: a failed lapse or offline end is retried on the next minute, at most 3 sends in a row; the card stays a card", async () => {
+  for (const via of ["lapse", "offline"]) {
+    const t = setup();
+    await endedCard(t, via, true);
+    assert.deepEqual(endCalls(t), ["3 end false"], `${via}: send 1`);
+    assert.deepEqual(cardFails(t), [["3", 1]], `${via}: the failed end keeps its card, one failure counted`);
+    for (const n of [2, 3]) {
+      t.clock.now += 60;
+      await runCron(t.deps);
+      assert.deepEqual(endCalls(t), ["3 end false"], `${via}: send ${n}`);
+      assert.deepEqual(cardFails(t), [["3", n]]);
+    }
+    for (let i = 0; i < 3; i++) {
+      t.clock.now += 60;
+      await runCron(t.deps);
+      assert.deepEqual(endCalls(t), [], `${via}: stops after the bound`);
+    }
+    assert.deepEqual(cardFails(t), [["3", 3]], `${via}: kept at the bound, not dropped, not counted ended`);
+  }
+});
+
+test("#1073: a success in between stops the retry and removes the card row", async () => {
+  for (const via of ["lapse", "offline"]) {
+    const t = setup();
+    await endedCard(t, via, true);
+    t.takeCalls();
+    t.answers.delete(tok("3"));
+    t.clock.now += 60;
+    await runCron(t.deps);
+    assert.deepEqual(endCalls(t), ["3 end false"], `${via}: the retry`);
+    assert.deepEqual(cardFails(t), [], `${via}: ended, row gone`);
+    t.clock.now += 60;
+    await runCron(t.deps);
+    assert.deepEqual(endCalls(t), [], `${via}: nothing more`);
+  }
+});
+
+test("#1073: only a failed end of an offline Mac is retried: not a fresh card, a spent one, an update failure of a live Mac, an alert or a start token", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 1, offline: true });
+  const row = (device, kind, act, c, fails) => {
+    insertCard(t, [ALICE, device, kind, act, MAC, c, HASH[ALICE]]);
+    t.raw.prepare(`UPDATE push_tokens SET fails = ? WHERE token = ?`).run(fails, tok(c));
+  };
+  row(PHONE, "la_update", "act-fresh", "3", 0); // never failed
+  row(PHONE2, "la_update", "act-spent", "4", 3); // the bound reached
+  row(PHONE, "alert", "", "5", 1);
+  row(PHONE, "la_start", "", "6", 2);
+  t.clock.now += 60;
+  await runCron(t.deps);
+  assert.deepEqual(endCalls(t), [], "nothing is pending");
+  // A live Mac's failed update goes the flush way: an update, never an end.
+  const live = setup();
+  await postSessions(live.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(live.deps, ALICE, cardBody(PHONE, MAC, "3"));
+  await live.settle();
+  live.takeCalls();
+  live.answers.set(tok("3"), FAIL500);
+  await postSessions(live.deps, ALICE, sessions(2, [S("a", "idle")]));
+  await live.settle();
+  live.takeCalls();
+  live.clock.now += 60;
+  await postSessions(live.deps, ALICE, { mac_id: MAC, seq: 3 });
+  await runCron(live.deps);
+  assert.deepEqual(live.takeCalls().map((c) => c.body.aps.event), ["update"]);
+  // The one pending row among them is the only send.
+  row(PHONE2, "la_update", "act-pending", "7", 1);
+  t.clock.now += 60;
+  await runCron(t.deps);
+  assert.deepEqual(endCalls(t), ["7 end false"]);
+});
+
+test("#1073 budget: a worst-case minute of lapses and failed-end retries over 20 Macs x 3 cards stays within 44 + 2 subrequests; every end gets its 3 sends", async () => {
+  const t = setup();
+  const macs = Array.from({ length: 20 }, (_, i) => `${String(i).padStart(2, "0")}`.repeat(32));
+  for (const [k, m] of macs.entries()) {
+    t.raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, m, "Mac");
+    t.clock.now = T0 + k;
+    await postSessions(t.deps, ALICE, { mac_id: m, seq: 1, sessions: [S("a", "working")] });
+    for (const ph of [PHONE, PHONE2, phoneId(3)]) await putToken(t.deps, ALICE, cardBody(ph, m, "3"));
+  }
+  await t.settle();
+  t.takeCalls();
+  t.answers.set(tok("3"), FAIL500); // every end fails
+  t.clock.now = T0 + 600;
+  const pending = () => t.rows(`SELECT COUNT(*) AS n FROM push_tokens WHERE kind = 'la_update' AND fails < 3`)[0].n;
+  const base = t.deps;
+  let runs = 0;
+  let sends = 0;
+  let mixed = false;
+  while (pending() > 0) {
+    t.deps = { ...base };
+    const n = countSubrequests(t);
+    const online = t.rows(`SELECT COUNT(*) AS n FROM push_macs WHERE online = 1`)[0].n;
+    await runCron(t.deps);
+    runs++;
+    sends += n.apns;
+    mixed ||= online > 0 && t.rows(`SELECT 1 FROM push_tokens WHERE fails > 1 LIMIT 1`).length > 0;
+    assert.ok(n.d1 + n.apns <= 44 + 2, `run ${runs}: ${n.d1} + ${n.apns}`);
+    t.clock.now += 60;
+    assert.ok(runs < 40);
+  }
+  assert.equal(sends, 20 * 3 * 3, "60 cards, 3 sends each, no more");
+  assert.ok(mixed, "a run retried while other Macs were still lapsing");
+  assert.ok(runs >= 8, `${runs} runs: the budget was binding`);
+});
+
 // ---- #1022: rows the minute cron's online-Mac read visits ---------------------
 
 const planOf = (raw, sql) => raw.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((r) => r.detail);
@@ -2162,7 +2291,9 @@ test("#1022: the cron's online-Mac read counts each Mac's own cards once, throug
     const why = `${label}: ${plan.join(" | ")}`;
     assert.equal(steps.length, 1, why);
     assert.ok(steps[0].startsWith("SEARCH t USING INDEX idx_push_tokens_mac (email=? AND mac_id=?)"), why);
-    assert.ok(!plan.some((d) => d.includes("idx_push_tokens_kind") || d.includes("SUBQUERY")), why);
+    // The offline-retry probe (#1073) is a correlated EXISTS on f, through the same index: allowed, and only that one.
+    assert.ok(!plan.some((d) => d.includes("idx_push_tokens_kind") || (d.includes("SUBQUERY") && !d.startsWith("CORRELATED SCALAR SUBQUERY"))), why);
+    assert.ok(plan.filter((d) => /^SEARCH f /.test(d)).every((d) => d.startsWith("SEARCH f USING INDEX idx_push_tokens_mac (email=? AND mac_id=?)")), why);
   };
   // D1 has no sqlite_stat1 unless someone ran ANALYZE.
   checkPlan("fixture, no sqlite_stat1");

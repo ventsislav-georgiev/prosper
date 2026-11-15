@@ -255,7 +255,7 @@ export function reduceSessions(prev, input, now) {
 
   if (input.offline) {
     Object.assign(mac, { online: false, sessions: [], idle_since: null });
-    push.end = { dismissal: now + OFFLINE_DISMISS_S };
+    push.end = { dismissal: now + OFFLINE_DISMISS_S, retry: true, keep: true };
     return { mac, push };
   }
   if (!input.sessions) {
@@ -308,16 +308,23 @@ export function reduceSessions(prev, input, now) {
  * The every-minute cron for one online Mac. hasCard = some phone holds a la_update
  * token for it; due = how many of those have an update due (a saver deferral, a failed
  * send's retry). Returns null (nothing to do) or {kind, mac, push}:
- *  lapse  - no heartbeat for 180 s: offline, cards end with online:false, dismissal +600;
+ *  lapse  - no heartbeat for 180 s: offline, cards end with online:false, dismissal +600
+ *           (a failed end keeps its card, failures counted, and the offline post's too);
+ *  reend  - an offline Mac's failed ends (pending cards), tried again, at most SEND_TRIES in a row;
  *  end    - nothing working/blocked for 10 min: cards end now (a failed end stays, retried);
  *  repush - last push over 50 min ago: same state again so the stale-date moves;
  *  flush  - only the due cards get the current state.
  */
-export function cronStep(mac, hasCard, now, due = 0) {
-  if (!mac.online) return null;
+export function cronStep(mac, hasCard, now, due = 0, pending = 0) {
   const push = noPush();
+  if (!mac.online) {
+    // An offline Mac whose end failed (cards kept at 0 < fails < SEND_TRIES): end them again.
+    if (!pending) return null;
+    push.end = { dismissal: now + OFFLINE_DISMISS_S, retry: true, keep: true, again: true };
+    return { kind: "reend", mac, push };
+  }
   if (now - mac.last_seen >= LAPSE_S) {
-    push.end = { dismissal: now + OFFLINE_DISMISS_S };
+    push.end = { dismissal: now + OFFLINE_DISMISS_S, retry: true, keep: true };
     return { kind: "lapse", mac: { ...mac, online: false, sessions: [], idle_since: null }, push };
   }
   if (!hasCard) return null;
@@ -346,11 +353,11 @@ export function cronStep(mac, hasCard, now, due = 0) {
 export const sendNow = (row, push, now) =>
   row.mode !== "saver" || !push.paced || row.pushed_at === null || now - row.pushed_at >= SAVER_GAP_S;
 
-const KIND_ORDER = { lapse: 0, end: 1, restart: 2, flush: 3, repush: 4 };
+const KIND_ORDER = { lapse: 0, reend: 1, end: 2, restart: 3, flush: 4, repush: 5 };
 const dueAt = ({ kind, row }) =>
   kind === "restart"
     ? row.created_at
-    : kind === "lapse"
+    : kind === "lapse" || kind === "reend"
       ? row.mac.last_seen
       : kind === "end"
         ? row.mac.idle_since
@@ -360,7 +367,7 @@ const dueAt = ({ kind, row }) =>
  * One cron run over every online Mac: rows = [{mac, cards, due, ...}] where cards = the
  * phones holding a card for it, due = those with an update due. A step costs its APNs
  * sends (cards; a flush, due) plus STEP_D1 queries. Lapses go first, then ends, then
- * flushes (#770), then re-pushes, each oldest due first; a step
+ * flushes (#770), then re-pushes (the failed-end retries of offline Macs share this budget), each oldest due first; a step
  * that no longer fits the budget waits for the next minute (its row is untouched, so
  * it is due again). -> [{kind, mac, push, row}] in send order.
  *
@@ -372,7 +379,7 @@ const dueAt = ({ kind, row }) =>
 export function planCron(rows, now, budget = CRON_BUDGET, expired = []) {
   const steps = [];
   for (const row of rows) {
-    const r = cronStep(row.mac, row.cards > 0, now, row.due ?? 0);
+    const r = cronStep(row.mac, row.cards > 0, now, row.due ?? 0, row.pending ?? 0);
     if (r) steps.push({ ...r, row });
   }
   for (const row of expired) {
@@ -385,7 +392,7 @@ export function planCron(rows, now, budget = CRON_BUDGET, expired = []) {
   let batch = 0; // the restarts' shared delete batch, paid by the first one taken
   for (const s of steps) {
     const cost =
-      s.kind === "restart" ? (s.start ? 2 : 1) + (batch ? 0 : 1) : (s.kind === "flush" ? s.row.due : s.row.cards) + STEP_D1;
+      s.kind === "restart" ? (s.start ? 2 : 1) + (batch ? 0 : 1) : (s.kind === "flush" ? s.row.due : s.kind === "reend" ? s.row.pending : s.row.cards) + STEP_D1;
     if (cost > left) continue;
     left -= cost;
     if (s.kind === "restart") batch = 1;

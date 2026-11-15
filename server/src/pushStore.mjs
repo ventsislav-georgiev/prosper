@@ -160,17 +160,20 @@ const keyed = (st, r, ...more) => st.bind(r.email, r.device_id, r.kind, r.activi
  * nothing due (a live row known to hold nothing to clear is not written). error or auth:
  * due now, so the next cron sends again, unless that was the SEND_TRIES-th failure in a row. A deferred row is
  * due 120 s after its last update. With `ending` (the cron's idle end) a failed end keeps
- * its row, failures counted, so the next cron ends it again; every other row goes.
+ * its row, failures counted, so the next cron ends it again; every other row goes. With `keep`
+ * (a lapse or offline end) a failed end keeps its row at every count, capped at SEND_TRIES: the
+ * retry stops there (it only reads 0 < fails < SEND_TRIES) but the card is still a card, so the
+ * Mac's return updates it instead of starting a second one beside it.
  */
-function cardStatements(db, cards, results, deferred, now, ending = false) {
+function cardStatements(db, cards, results, deferred, now, ending = false, keep = false) {
   const out = [];
   cards.forEach((r, i) => {
     const res = results[i];
     const failed = res === "error" || res === "auth";
     if (ending) {
       out.push(
-        failed && r.fails + 1 < SEND_TRIES
-          ? keyed(db.prepare(`UPDATE push_tokens SET fails = fails + 1 WHERE ${ROW_KEY}`), r)
+        failed && (keep || r.fails + 1 < SEND_TRIES)
+          ? keyed(db.prepare(`UPDATE push_tokens SET fails = MIN(fails + 1, ?6) WHERE ${ROW_KEY}`), r, SEND_TRIES)
           : keyed(db.prepare(`DELETE FROM push_tokens WHERE ${ROW_KEY}`), r),
       );
     } else if (failed) {
@@ -193,7 +196,8 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
   const cs = contentState(mac.sessions, mac.online);
   const pushes = [];
   // A flush takes only the cards with an update due.
-  const where = push.flush ? `+kind = 'la_update' AND mac_id = ?2 AND due_at <= ?3` : `+kind = 'la_update' AND mac_id = ?2`;
+  let where = push.flush ? `+kind = 'la_update' AND mac_id = ?2 AND due_at <= ?3` : `+kind = 'la_update' AND mac_id = ?2`;
+  if (push.end?.again) where += ` AND fails > 0 AND fails < ${SEND_TRIES}`; // only the failed ends
   const la = push.end || push.update ? await tokens(db, now, where, email, macId, ...(push.flush ? [now] : [])) : [];
   const cards = push.end ? la : la.filter((row) => sendNow(row, push, now));
   const deferred = push.end ? [] : la.filter((row) => !cards.includes(row));
@@ -221,7 +225,7 @@ async function dispatch(deps, email, macId, name, mac, push, now) {
   // An ended activity takes no more updates; the cron's idle end keeps a failed one to retry.
   const ending = !!push.end?.retry;
   await deliver(deps, pushes, push.end && !ending ? la : [], (sent) =>
-    push.end && !ending ? [] : cardStatements(db, cards, sent, deferred, now, ending),
+    push.end && !ending ? [] : cardStatements(db, cards, sent, deferred, now, ending, !!push.end?.keep),
   );
 }
 
@@ -533,10 +537,13 @@ export async function runCron(deps) {
   const { results } = await db
     .prepare(
       `SELECT m.email, m.mac_id, ${MAC_COLS}, d.name AS mac_name,
-         COUNT(t.mac_id) AS cards, COUNT(CASE WHEN t.due_at <= ?1 THEN 1 END) AS due
+         COUNT(t.mac_id) AS cards, COUNT(CASE WHEN t.due_at <= ?1 THEN 1 END) AS due,
+         COUNT(CASE WHEN t.fails > 0 AND t.fails < ${SEND_TRIES} THEN 1 END) AS pending
        FROM push_macs m LEFT JOIN devices d ON d.email = m.email AND d.device_id = m.mac_id
        LEFT JOIN push_tokens t ON t.email = m.email AND +t.kind = 'la_update' AND t.mac_id = m.mac_id
-       WHERE m.online = 1 GROUP BY m.email, m.mac_id`,
+       WHERE m.online = 1 OR (m.online = 0 AND EXISTS (SELECT 1 FROM push_tokens f WHERE f.email = m.email
+         AND f.mac_id = m.mac_id AND +f.kind = 'la_update' AND f.fails > 0 AND f.fails < ${SEND_TRIES}))
+       GROUP BY m.email, m.mac_id`,
     )
     .bind(now)
     .all();

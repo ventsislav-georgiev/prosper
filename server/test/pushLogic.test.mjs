@@ -404,7 +404,7 @@ test("#766: a subagent count change alone pushes nothing; the next real push car
 test("offline post ends the card: online false, dismissal now+600", () => {
   const a = step(null, post(1, [S("a", "working")]), 1000);
   const off = step(a.mac, { mac_id: HEX, seq: 2, offline: true, sessions: null }, 1100);
-  assert.deepEqual(off.push.end, { dismissal: 1700 });
+  assert.deepEqual(off.push.end, { dismissal: 1700, retry: true, keep: true });
   assert.equal(off.mac.online, false);
   assert.deepEqual(off.mac.sessions, []);
   assert.deepEqual(contentState(off.mac.sessions, off.mac.online).online, false);
@@ -429,7 +429,7 @@ test("cron lapse at 180 s without a heartbeat", () => {
   assert.equal(cronStep(live(), true, 1179), null);
   const r = cronStep(live(), true, 1180);
   assert.equal(r.kind, "lapse");
-  assert.deepEqual(r.push.end, { dismissal: 1780 });
+  assert.deepEqual(r.push.end, { dismissal: 1780, retry: true, keep: true });
   assert.equal(r.mac.online, false);
   assert.deepEqual(r.mac.sessions, [], "absent, never stale");
   assert.equal(cronStep(live(), false, 1180).kind, "lapse", "lapses with no card too");
