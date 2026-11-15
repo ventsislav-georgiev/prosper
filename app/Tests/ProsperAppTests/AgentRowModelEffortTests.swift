@@ -181,6 +181,18 @@ final class AgentRowModelEffortTests: XCTestCase {
         return out
     }
 
+    /// #1268: the ink's end is the right side of the last lit pixel column; nothing lit (0) is an edge near 0 that fails the bounds.
+    private func inkEnd(lastLit: Int, k: CGFloat) -> CGFloat { CGFloat(lastLit + 1) / k }
+
+    func testInkEndIsTheRightSideOfTheLastLitPixel() {
+        // CI, backing 1: the old left-edge readings were 138.554 / 168.391 / 200.0 (k = 1 up to the 0.7 / 0.85 rounding).
+        XCTAssertEqual(inkEnd(lastLit: 200, k: 1), 201.0)
+        XCTAssertEqual(inkEnd(lastLit: 168, k: 1), 169.0)
+        // Local, backing 2: the old reading was 169.27 (= 338.54 / 2); one pixel column is half a point.
+        XCTAssertEqual(inkEnd(lastLit: 338, k: 2), 169.5)
+        XCTAssertEqual(inkEnd(lastLit: 0, k: 2), 0.5)
+    }
+
     /// The second line as the row draws it, at the sidebar's width: the state text starts at the same x with a value,
     /// without one and on a row with no slot (nothing is added to the stack's spacing); the value is drawn whole, the
     /// last badge's fill at the same trailing edge with and without an effort (#1268); at a narrow row the last variant keeps the state text whole, no slot.
@@ -222,7 +234,8 @@ final class AgentRowModelEffortTests: XCTestCase {
             // without its sz(3) padding; they are printed beside it). Read by pixels: the rightmost drawn pixel left of
             // the age slot, over a black canvas, at the column's width. slotEnd uses the age slot's fittingSize (whole
             // points, rounded up), so the real end R is in [slotEnd, slotEnd + 1); the last pixel the badge's fill
-            // touches is within one backing pixel (1 pt at 1x) before R, and a pixel the edge covers under about a tenth
+            // touches is within one backing pixel (1 pt at 1x) before R, the edge is the RIGHT side of that pixel,
+            // (last + 1) / k (the left side, last / k, read a whole point short on the CI runner at backing 1, #1268), and a pixel the edge covers under about a tenth
             // can read blank: so [slotEnd - 1.5, slotEnd + 1], and the two rows within 1 pt of each other. A badge edge
             // sz(3) apart (2.1 pt at 0.7) fails the second at every scale.
             let lineWidth = column(sz(274))
@@ -251,7 +264,7 @@ final class AgentRowModelEffortTests: XCTestCase {
                         if c.redComponent + c.greenComponent + c.blueComponent > 0.003 { last = max(last, x) }
                     }
                 }
-                badgeEnds.append(CGFloat(last) / k)
+                badgeEnds.append(inkEnd(lastLit: last, k: k))
                 // #1268 (R8): on the model-and-effort row the two badges draw different fills, as drawn: the model's
                 // neutral grey wash and the effort's ("high") accent wash, each over the black canvas.
                 if r.effort != nil {
