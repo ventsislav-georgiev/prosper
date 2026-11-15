@@ -92,12 +92,35 @@ final class MenuBarTests: XCTestCase {
         let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
         var hits: [String] = []
         for case let url as URL in files where url.pathExtension == "swift" {
-            for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
-            where line.contains(/SPU(Updater|StandardUpdaterController)\s*(\.\s*init\s*)?\(/) {
-                hits.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
+            for line in Self.sparkleConstructionLines(in: try String(contentsOf: url, encoding: .utf8)) {
+                hits.append("\(url.lastPathComponent): \(line)")
             }
         }
         XCTAssertEqual(hits, ["AppUpdater.swift: updater = NSClassFromString(\"XCTestCase\") != nil ? nil : SPUUpdater("])
+    }
+
+    /// The trimmed lines of `text` that build a Sparkle updater. #1273: both spellings need the literal "SPU",
+    /// so a file without it cannot hold a match and skips the per-line work.
+    static func sparkleConstructionLines(in text: String) -> [String] {
+        guard text.range(of: "SPU", options: .literal) != nil else { return [] }
+        return text.split(separator: "\n").filter {
+            $0.contains(/SPU(Updater|StandardUpdaterController)\s*(\.\s*init\s*)?\(/)
+        }.map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// #1273: the per-file helper reports exactly the lines the old per-line loop reported (literal inputs).
+    func testSparkleConstructionLinesHelperReportsTheBuildingLines() {
+        func found(_ text: String) -> [String] { Self.sparkleConstructionLines(in: text) }
+        XCTAssertEqual(found("let a = 1\n  let u = SPUUpdater(hostBundle: b)\nlet c = 2\n"), ["let u = SPUUpdater(hostBundle: b)"])
+        XCTAssertEqual(found("SPUStandardUpdaterController (x)\nmid\nSPUUpdater . init ("),
+                       ["SPUStandardUpdaterController (x)", "SPUUpdater . init ("])
+        // holds the literal, no match
+        XCTAssertEqual(found("SPUUpdaterDelegate\nimport Sparkle // SPU\nlet s = SPUUpdater"), [])
+        XCTAssertEqual(found("let x = 1\nlet y = 2"), [])
+        // first and last line without a trailing newline; multi-byte characters before the match
+        XCTAssertEqual(found("SPUUpdater("), ["SPUUpdater("])
+        XCTAssertEqual(found("a\nb\nSPUUpdater("), ["SPUUpdater("])
+        XCTAssertEqual(found("caf\u{E9} \u{1F600} SPUUpdater("), ["caf\u{E9} \u{1F600} SPUUpdater("])
     }
 
     /// #385 (QA #153): with no SPUUpdater under XCTest, `automaticChecks` lives in
