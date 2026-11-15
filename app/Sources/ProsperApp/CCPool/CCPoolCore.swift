@@ -79,6 +79,18 @@ enum CCPoolCore {
         return min(max(n, 0), maxBench)
     }
 
+    /// #1256: the waits before the same-account retries of a throughput 429 (Python `BACKOFF`); one retry per step.
+    static let throttleBackoff = [1, 2, 4]
+    /// A Retry-After this short is the wait instead of the step (Python `0 < wait <= 10`).
+    static let throttleRetryAfterMax = 10
+
+    /// The wait in seconds before same-account retry `n` (0-based): the reply's Retry-After when it is
+    /// 1...10 s, else the backoff step. Never above 10 s; a bad, zero, negative or long header takes the step.
+    static func throttleDelay(retryAfter raw: String?, retry n: Int) -> Int {
+        let wait = retryAfterSeconds(raw)
+        return (1...throttleRetryAfterMax).contains(wait) ? wait : throttleBackoff[min(max(n, 0), throttleBackoff.count - 1)]
+    }
+
     static let fiveHour = "five_hour"
 
     /// Which claims a model draws on (ccpool_watch.CLAIMS), matched by substring, first hit wins.

@@ -110,6 +110,21 @@ final class CCPoolConnection: @unchecked Sendable {
 
     static func capped(_ s: String) -> String { String(decoding: s.utf8.prefix(logFieldCap), as: UTF8.self) }
 
+    /// #1256 delay seam: run `go` on `queue` after `seconds`. Tests install a recorder that records the
+    /// seconds and continues at once; no test runs this default.
+    nonisolated(unsafe) static var throttleWait: @Sendable (_ seconds: Int, _ queue: DispatchQueue,
+                                                            _ go: @escaping @Sendable () -> Void) -> Void = { seconds, queue, go in
+        queue.asyncAfter(deadline: .now() + .seconds(seconds), execute: go)
+    }
+
+    /// #1256: the client's quota check is a JSON body whose max_tokens is the integer 1 (Python
+    /// `req.get("max_tokens") == 1`); a bool, a float, a string or any other value is not one.
+    static func isQuotaCheck(_ obj: [String: Any]?) -> Bool {
+        guard let n = obj?["max_tokens"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
+              !["f", "d"].contains(String(cString: n.objCType)) else { return false }
+        return n.int64Value == 1
+    }
+
     let queue = DispatchQueue(label: "com.prosper.ccpool.conn")
     private let conn: NWConnection
     // X16: the dependencies are held strongly, never the service: a callback that outlives the
@@ -146,6 +161,12 @@ final class CCPoolConnection: @unchecked Sendable {
     private var exchange: CCPoolExchange?
     private var headSent = false
     private var outstanding = 0
+    /// #1256: the body is the client's quota check; its throughput 429 goes back at once.
+    private var quotaCheck = false
+    /// #1256: same-account retries of a throughput 429 made so far (at most throttleBackoff.count).
+    private var throttleRetries = 0
+    /// #1256: the 429 being retried, while its retry waits or is in flight; the retry never leaves its account.
+    private var retryingThrottle: CCPoolExchange?
 
     init(conn: NWConnection, config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger,
          upstream: CCPoolUpstream, boundPort: UInt16, onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
@@ -190,6 +211,7 @@ final class CCPoolConnection: @unchecked Sendable {
     func close() {
         guard !closed else { return }
         closed = true
+        if retryingThrottle != nil, exchange == nil { log.note(nil, "client left during a throttle wait; no retry") }
         if let ex = exchange { exchange = nil; ex.task?.cancel() }
         abortPump()
         conn.cancel()
@@ -259,7 +281,9 @@ final class CCPoolConnection: @unchecked Sendable {
         body.append(data.prefix(expected - body.count))
         if !streamed {
             guard body.count >= expected else { return true }
-            model = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["model"] as? String
+            let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            model = obj?["model"] as? String
+            quotaCheck = Self.isQuotaCheck(obj)
             startRelay()
             return true
         }
@@ -325,7 +349,8 @@ final class CCPoolConnection: @unchecked Sendable {
 
     private func startRelay() {
         relayStarted = true
-        maxAttempts = max(1, store.read { $0.order.count })
+        // #1256: accounts + the throttle retries (Python's bound), so the retries never cut the walk short.
+        maxAttempts = max(1, store.read { $0.order.count }) + CCPoolCore.throttleBackoff.count
         attempt()
     }
 
@@ -345,6 +370,8 @@ final class CCPoolConnection: @unchecked Sendable {
         // The token lives in this request only: read per attempt, never kept on the connection.
         guard let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {
             log.note(label, "token unavailable; skipping this account")
+            // #1256: a throttle retry never moves to another account: its last 429 goes back instead.
+            if let last = retryingThrottle { retryingThrottle = nil; return answerThrottle(last) }
             return attempt()
         }
         let base = config.upstream.absoluteString.hasSuffix("/")
@@ -372,6 +399,7 @@ final class CCPoolConnection: @unchecked Sendable {
 
     func onResponse(_ ex: CCPoolExchange, _ response: HTTPURLResponse, decide: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
         guard ex === exchange, !closed else { return decide(.cancel) }
+        retryingThrottle = nil
         let label = ex.label
         let now = store.now
         var headers: [String: String] = [:]
@@ -504,6 +532,26 @@ final class CCPoolConnection: @unchecked Sendable {
         ex.task?.cancel()
         log.note(ex.label, ex.pendingNote,
                  private: ex.pendingPrivate + "; body=" + String(decoding: ex.snippet.prefix(Self.snippetCap), as: UTF8.self))
+        // #1256: a throughput 429 is retried on the SAME account, up to 3 times, unless the body is the
+        // client's quota check or could not be sent again (above the replay cap). Python relay() 478-485.
+        if replayable, !quotaCheck, throttleRetries < CCPoolCore.throttleBackoff.count, attempts < maxAttempts {
+            let delay = CCPoolCore.throttleDelay(retryAfter: ex.retryAfter, retry: throttleRetries)
+            throttleRetries += 1
+            attempts += 1
+            retryingThrottle = ex
+            log.note(ex.label, "throttled; same-account retry \(throttleRetries) of \(CCPoolCore.throttleBackoff.count) in \(delay)s")
+            let label = ex.label, id = ex.accountID
+            // Runs on `queue` (the seam is handed it); a @Sendable closure from this nonisolated method, no actor.
+            Self.throttleWait(delay, queue) { [weak self] in
+                guard let self, !self.closed else { return }
+                self.send(label: label, accountID: id, retried: false)
+            }
+            return
+        }
+        answerThrottle(ex)
+    }
+
+    private func answerThrottle(_ ex: CCPoolExchange) {
         let extra: [(String, String)] = ex.retryAfter.map { $0.isEmpty ? [] : [("retry-after", $0)] } ?? []
         fail(429, "upstream rate limit (not account quota)", type: "rate_limit_error", headers: extra)
     }

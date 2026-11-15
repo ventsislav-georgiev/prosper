@@ -1199,6 +1199,10 @@ tag from the now-released section and put it on the new top draft.
   stray accent mark is read as a call, not shown as raw text (#1181)
 - Extensions: a publish whose tar cannot start now says it could not pack the folder, not that it
   could not unpack a download (#1182)
+- Account pool: a brief throttle from Anthropic (a 429 that is not spent quota) is now retried on
+  the same account up to three times, after 1, 2 and 4 seconds or the server's Retry-After up to 10
+  seconds, instead of failing at once; Claude Code's own quota checks still get their 429 at once
+  (#1256)
 
 ## v2.174.0
 
