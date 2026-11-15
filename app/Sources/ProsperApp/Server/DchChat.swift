@@ -176,7 +176,7 @@ final class DchChat: @unchecked Sendable {
             // #1181: a leading think block is never sent (the server's StreamSplitter, its format gate). No tool
             // markers: the phone chat has no tools, so every other turn goes out in today's chunks.
             let format = AgentModelRegistry.toolFormat(for: loadedId)
-            var splitter = StreamSplitter(markers: [], leadingThink: format == .qwenXML || format == .hermesJSON)
+            var splitter = StreamSplitter(markers: [], leadingThink: StreamSplitter.dropsLeadingThink(format))
             for try await chunk in stream {
                 let text = splitter.ingest(chunk)
                 if !text.isEmpty { send(DchFrame.encode(DchFrame.chatDelta, json: ["text": text])) }

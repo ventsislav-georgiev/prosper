@@ -1203,6 +1203,8 @@ tag from the now-released section and put it on the new top draft.
   the same account up to three times, after 1, 2 and 4 seconds or the server's Retry-After up to 10
   seconds, instead of failing at once; Claude Code's own quota checks still get their 429 at once
   (#1256)
+- Coding agent: the status says "Using <model> (already loaded)" instead of "Loading <your pick>"
+  when the run uses a model that was already loaded (#1181)
 
 ## v2.174.0
 

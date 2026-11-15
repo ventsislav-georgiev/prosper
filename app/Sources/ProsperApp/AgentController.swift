@@ -128,6 +128,9 @@ final class AgentController {
     /// harness (replacing the model load + spawn); nil spawns codex on the local model.
     private let resolveCodex: @MainActor () async throws -> URL
     private let makeHarness: (@MainActor () async throws -> CodingHarness)?
+    /// #1181 (R1181-h): the model load + spawn given (codex, the run's pick); answers the harness and the loaded id.
+    /// nil (production) is spawnCodexHarness. Called on the main actor only.
+    private let spawnHarness: (@MainActor (URL, String) async throws -> (harness: CodingHarness, loaded: String))?
     /// end()'s model release; a seam so tests can observe and park it (#412).
     private let releaseModel: @MainActor () async -> Void
     /// The agent model setting, read once per run (#893). A seam so a test can change the
@@ -137,11 +140,13 @@ final class AgentController {
     init(store: AgentSessionStore = .shared,
          resolveCodex: @escaping @MainActor () async throws -> URL = { try await AgentController.resolveCodexExecutable() },
          makeHarness: (@MainActor () async throws -> CodingHarness)? = nil,
+         spawnHarness: (@MainActor (URL, String) async throws -> (harness: CodingHarness, loaded: String))? = nil,
          releaseModel: @escaping @MainActor () async -> Void = { await ModelResidencyCoordinator.shared.releaseAgent() },
          agentModel: @escaping @MainActor () -> String = { Preferences.agentModel }) {
         self.store = store
         self.resolveCodex = resolveCodex
         self.makeHarness = makeHarness
+        self.spawnHarness = spawnHarness
         self.releaseModel = releaseModel
         self.readAgentModel = agentModel
     }
@@ -516,13 +521,20 @@ final class AgentController {
         phase = .loadingModel(progress: 0, status: "Loading \(loading)…")
         let harness: CodingHarness
         if let makeHarness { harness = try await makeHarness() } else {
-            let spawned = try await spawnCodexHarness(executable, model: loading)
+            let spawned: (harness: CodingHarness, loaded: String)
+            if let spawnHarness { spawned = try await spawnHarness(executable, loading) } else {
+                let codex = try await spawnCodexHarness(executable, model: loading)
+                spawned = (codex.harness, codex.loaded)
+            }
             harness = spawned.harness
             model = spawned.loaded   // #1181: the session and the history row name the model codex is configured for
         }
         // Stop during the model load / spawn / handshake ran end() while `self.harness`
         // was still nil: don't start or keep a codex nobody owns.
         guard !abandoned(generation) else { throw CancellationError() }
+        // #1181 (R1181-l): another model was already resident and the load kept it: say so instead of "Loading <pick>".
+        // The id is a value the setting's getter returned (the coordinator only holds callers' reads), as the pick is.
+        if let model, model != loading { phase = .loadingModel(progress: 0, status: "Using \(model) (already loaded)\u{2026}") }
         try await harness.start()
         guard !abandoned(generation) else { await harness.shutdown(); throw CancellationError() }
         self.harness = harness

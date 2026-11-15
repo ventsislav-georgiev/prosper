@@ -905,9 +905,11 @@ struct StreamSplitter {
     private var phase: Phase
 
     init(format: ToolCallFormat) {
-        self.init(markers: Self.markers(for: format),
-                  leadingThink: format == .qwenXML || format == .hermesJSON)
+        self.init(markers: Self.markers(for: format), leadingThink: Self.dropsLeadingThink(format))
     }
+
+    /// #1181 (R1181-i): the formats whose leading think block is never emitted; the one rule for the server and the phone chat.
+    static func dropsLeadingThink(_ format: ToolCallFormat) -> Bool { format == .qwenXML || format == .hermesJSON }
 
     init(markers: [String], leadingThink: Bool = false) {
         self.markers = markers
@@ -954,7 +956,7 @@ struct StreamSplitter {
 
     /// The whole output opens a think block that never closes: `dropLeadingThink`'s unclosed case, by scalars.
     static func endsInThink(_ text: String, format: ToolCallFormat) -> Bool {
-        guard format == .qwenXML || format == .hermesJSON else { return false }
+        guard dropsLeadingThink(format) else { return false }
         let scalars = text.unicodeScalars
         return scalars.starts(with: ToolCallParser.thinkOpen.unicodeScalars)
             && ToolCallParser.scalarRange(of: ToolCallParser.thinkClose, in: scalars) == nil
