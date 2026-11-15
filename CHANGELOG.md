@@ -1132,6 +1132,9 @@ tag from the now-released section and put it on the new top draft.
   Tailscale check failure (#988)
 - When an extension install is refused for an unsafe item, the message names that item without
   invisible or control characters (#1182)
+- Outside names that Prosper cleans before showing them (a linked old vault's path in the ccpool
+  settings, an item named in a refused extension install) now also keep at most two accent marks per
+  letter, so they cannot draw over nearby lines (#1251)
 
 ## v2.174.0
 

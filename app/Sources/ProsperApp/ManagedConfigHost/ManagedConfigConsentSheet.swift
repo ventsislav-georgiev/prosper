@@ -77,7 +77,7 @@ final class ManagedConfigConsentModel: ObservableObject {
     /// at most 2 combining marks (B1235-1), then the 120 cut. nil when none is known, and nil for a title shaped like an
     /// id (R1235-d: id characters with a dot) or equal to this owner's id: the id is then shown alone.
     var displayName: String? {
-        let cleaned = Self.capMarks(OutsideText.shown(changes.displayName ?? "", max: .max))
+        let cleaned = OutsideText.shown(changes.displayName ?? "", max: .max)
         let whole = cleaned.trimmingCharacters(in: .whitespaces)
         // id-shaped at any length: isValidID bounds its input at 128, so the title is checked in pieces of 128
         var idShaped = whole.contains("."), rest = Substring(whole)
@@ -88,23 +88,6 @@ final class ManagedConfigConsentModel: ObservableObject {
         if whole == changes.owner || idShaped { return nil }
         let shown = OutsideText.shown(cleaned, max: 120).trimmingCharacters(in: .whitespaces)
         return shown.isEmpty ? nil : shown
-    }
-
-    /// At most `max` nonspacing or enclosing marks (Mn, Me) per Character; the base and every other scalar stay.
-    static func capMarks(_ s: String, max: Int = 2) -> String {
-        var out = String.UnicodeScalarView()
-        for ch in s {
-            var marks = 0
-            for u in ch.unicodeScalars {
-                let c = u.properties.generalCategory
-                if c == .nonspacingMark || c == .enclosingMark {
-                    marks += 1
-                    if marks > max { continue }
-                }
-                out.append(u)
-            }
-        }
-        return String(out)
     }
 
     /// The title: the display name, or the id when no name is known (one line, drawn verbatim).
