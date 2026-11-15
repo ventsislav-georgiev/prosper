@@ -1169,8 +1169,7 @@ tag from the now-released section and put it on the new top draft.
   visible codes such as \u{202E}, and a line stays in its own row; what is written is unchanged
   (#1252)
 - Marketplace: an install or update is refused whenever the package's files read as another version
-  than its listing, however that version is written, so such a package is not fetched again every
-  day (#1182)
+  than its listing, however that version is written (#1182)
 - Marketplace: publishing stops before anything is sent when extension.toml's version is not written
   like 1.2.0, and says so (#1182)
 - Marketplace: a package whose files declare another id is explained in a plain sentence, and a
