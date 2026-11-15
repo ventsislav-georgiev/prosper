@@ -425,7 +425,7 @@ final class TextFileWriterTests: XCTestCase {
     }
 
     /// A text whose first scalar is U+FEFF: the encoding's own mark, then the text's (two, both shown by the load).
-    /// A file with two marks comes back byte for byte when the load shows the second; the UTF-8 load is Foundation's.
+    /// A file with two marks comes back byte for byte: the load shows the second (R1108-bom2 for UTF-8).
     func testASecondMarkIsWrittenOnlyWhenTheLoadShowedIt() throws {
         XCTAssertEqual(W.encode("\u{FEFF}a", encoding: .utf8), [0xEF, 0xBB, 0xBF, 0x61])
         XCTAssertEqual(W.encode("\u{FEFF}a", encoding: .utf8BOM), [0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, 0x61])
@@ -448,11 +448,83 @@ final class TextFileWriterTests: XCTestCase {
         let url = try file("u8.txt", original, in: dir)
         guard case .success(let doc) = TextViewerDocument.load(url) else { return XCTFail("refused u8.txt") }
         XCTAssertEqual(doc.encoding, .utf8BOM)
-        let shown = doc.text.unicodeScalars.first == "\u{FEFF}"
-        // Never a mark the load did not show: the save is exactly what the text holds.
-        XCTAssertEqual(W.encode(doc.text, encoding: doc.encoding), shown ? original : Array(original.dropFirst(3)))
-        if !shown {
-            throw XCTSkip("FACT (not this file's): TextViewerDocument.decode drops a second UTF-8 mark at String(data:encoding:.utf8); a load then save of EF BB BF EF BB BF loses 3 bytes")
+        XCTAssertEqual(doc.text, "\u{FEFF}a", "the second mark is the text's own")
+        XCTAssertEqual(W.save(doc.text, encoding: doc.encoding, to: url, expected: W.digest(original)), .success(W.digest(original)))
+        XCTAssertEqual(bytes(url), original, "load then save loses no byte")
+        XCTAssertEqual(names(dir), ["be.txt", "le.txt", "u8.txt"])
+    }
+
+    // MARK: round 4 (R1108-q1 one descriptor, R1108-q4 the link's target, R1108-r3-1 a relative path)
+
+    /// R1108-q1, QA's double swap, in place: between the open and the comparison the row moves its own file off the path
+    /// (to moved.txt) and puts a new a.txt there. One descriptor: the bytes compared are the bytes replaced, so newer bytes
+    /// in the opened file are never lost; a write that went to the moved file answers "changed on disk", never "saved".
+    func testTheInPlaceBranchComparesAndWritesOneDescriptor() throws {
+        let dir = tempDir("tfw-one-fd")
+        let url = dir.appendingPathComponent("a.txt")
+        let moved = dir.appendingPathComponent("moved.txt")
+        let other = seam { $0.st_uid = geteuid() &+ 1 }
+        let old = Array("old".utf8), theirs = Array("theirs".utf8)
+        func swap(_ there: [UInt8]) {
+            XCTAssertEqual(rename(url.path, moved.path), 0)
+            XCTAssertNotNil(try? file("a.txt", there, in: dir))
         }
+        // 1. The opened file holds newer bytes than the load; the path then names a file with the expected ones.
+        _ = try file("a.txt", theirs, in: dir)
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(old), stat: other, beforeCompare: { swap(old) }),
+                       .failure(.changedOnDisk))
+        XCTAssertEqual(bytes(moved), theirs, "the opened file's newer bytes are kept")
+        XCTAssertEqual(bytes(url), old)
+        XCTAssertEqual(names(dir), ["a.txt", "moved.txt"])
+        // 2. The opened file matches; the path then names another file: the bytes go to the file compared, the answer is "changed".
+        XCTAssertEqual(unlink(moved.path), 0)
+        _ = try file("a.txt", old, in: dir)
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(old), stat: other, beforeCompare: { swap(theirs) }),
+                       .failure(.changedOnDisk))
+        XCTAssertEqual(bytes(moved), Array("new".utf8), "written to the file that was compared")
+        XCTAssertEqual(bytes(url), theirs, "the file now at the path is untouched")
+        XCTAssertEqual(names(dir), ["a.txt", "moved.txt"])
+        // 3. No swap: saved, the seam called once, the bytes from the start (no hole).
+        XCTAssertEqual(unlink(moved.path), 0)
+        _ = try file("a.txt", Array("longer-old".utf8), in: dir)
+        var calls = 0
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("longer-old".utf8)), stat: other, beforeCompare: { calls += 1 }),
+                       .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(bytes(url), Array("new".utf8))
+        XCTAssertEqual(names(dir), ["a.txt"])
+    }
+
+    /// R1108-q4: a link whose target bytes are not UTF-8 (78 FF 79, made with symlink(2) from a byte array, relative, so inside
+    /// tempDir(); never followed by the row): the save answers EILSEQ and creates nothing, at the bytes or at a mangled name.
+    func testALinkTargetThatIsNotUTF8IsRefused() throws {
+        let dir = tempDir("tfw-link-bytes")
+        let link = dir.appendingPathComponent("link.txt")
+        let target = ([0x78, 0xFF, 0x79, 0x00] as [UInt8]).map { CChar(bitPattern: $0) }
+        XCTAssertEqual(symlink(target, link.path), 0)
+        XCTAssertEqual(names(dir), ["link.txt"])
+        XCTAssertEqual(W.resolve(link.path), .failure(.failed(.resolve, EILSEQ)))
+        for overwrite in [false, true] {
+            XCTAssertEqual(W.save("new", encoding: .utf8, to: link, expected: [], overwrite: overwrite), .failure(.failed(.resolve, EILSEQ)))
+            XCTAssertEqual(names(dir), ["link.txt"], "nothing created")
+        }
+        XCTAssertEqual(info(link).st_mode & S_IFMT, S_IFLNK)
+    }
+
+    /// R1108-r3-1: a path that does not start with "/" is refused by resolve, before any readlink or stat. A file URL with
+    /// no authority keeps a relative path; the folder named is a fresh UUID, so nothing of the kind exists anywhere.
+    func testARelativePathIsRefusedBeforeAnyStat() throws {
+        let rel = "tfw-relative-\(UUID().uuidString)/a.txt"
+        XCTAssertEqual(W.resolve(rel), .failure(.failed(.resolve, EINVAL)))
+        // Without the guard (a mutant) the row stops here: no save is ever tried on a path outside tempDir().
+        guard W.resolve(rel) == .failure(.failed(.resolve, EINVAL)) else { return }
+        let url = try XCTUnwrap(URL(string: "file:" + rel))
+        guard !url.path.hasPrefix("/") else { return XCTFail("the URL's path is absolute: \(url.path)") }
+        var stats = 0
+        let counting: W.Stat = { _ in stats += 1; return (ENOENT, stat()) }
+        for overwrite in [false, true] {
+            XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: [], overwrite: overwrite, stat: counting), .failure(.failed(.resolve, EINVAL)))
+        }
+        XCTAssertEqual(stats, 0, "refused before any stat")
     }
 }

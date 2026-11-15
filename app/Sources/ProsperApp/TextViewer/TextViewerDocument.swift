@@ -82,8 +82,10 @@ struct TextViewerDocument: Equatable {
         if bytes.prefix(sniffBytes).contains(0) { return .failure(.binary) }
         let bom = bytes.starts(with: [0xEF, 0xBB, 0xBF])
         let body = bom ? Array(bytes.dropFirst(3)) : bytes
-        if let s = String(data: Data(body), encoding: .utf8) { return .success(make(s, bom ? .utf8BOM : .utf8)) }
-        return .success(make(String(decoding: body, as: UTF8.self), .lossy))
+        // Strict: valid only when the text gives the bytes back. Unlike String(data:encoding:), a second leading mark
+        // stays in the text, so a save writes it back (R1108-bom2). Invalid bytes show as U+FFFD, read-only (D1).
+        let text = String(decoding: body, as: UTF8.self)
+        return .success(make(text, text.utf8.elementsEqual(body) ? (bom ? .utf8BOM : .utf8) : .lossy))
     }
 
     private static func make(_ text: String, _ encoding: Encoding) -> TextViewerDocument {

@@ -67,6 +67,27 @@ final class TextViewerDocumentTests: XCTestCase {
         XCTAssertEqual(d.text, "caf\u{FFFD}\n")
     }
 
+    /// R1108-bom2: the first UTF-8 mark is the encoding's; a mark after it is the text's own and stays, so a save writes it back.
+    /// No mark and one mark decode as before; an invalid byte is still U+FFFD, read-only.
+    func testASecondUTF8MarkStaysInTheText() {
+        let m: [UInt8] = [0xEF, 0xBB, 0xBF]
+        let cases: [([UInt8], String, TextViewerDocument.Encoding)] = [
+            ([0x61, 0x0A], "a\n", .utf8),
+            (m + [0x61, 0x0A], "a\n", .utf8BOM),
+            (m, "", .utf8BOM),
+            (m + m + [0x61], "\u{FEFF}a", .utf8BOM),
+            (m + m + m, "\u{FEFF}\u{FEFF}", .utf8BOM),
+            ([0x61] + m, "a\u{FEFF}", .utf8),
+            (m + [0x61, 0xFF], "a\u{FFFD}", .lossy),
+        ]
+        for (bytes, text, encoding) in cases {
+            guard case .success(let d) = TextViewerDocument.decode(Data(bytes)) else { XCTFail("refused \(bytes)"); continue }
+            XCTAssertEqual(d.text, text, "\(bytes)")
+            XCTAssertEqual(d.encoding, encoding, "\(bytes)")
+            XCTAssertEqual(d.readOnly, encoding == .lossy, "\(bytes)")
+        }
+    }
+
     /// Section 3 C1: a regular file, at most 16 MiB, not binary. Everything else is refused before
     /// the bytes are read whole, and a FIFO never blocks the open.
     func testRefusals() throws {

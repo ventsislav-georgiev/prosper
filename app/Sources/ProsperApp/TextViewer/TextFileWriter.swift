@@ -19,7 +19,8 @@ enum TextFileWriter {
         case lossy
         /// A folder, a pipe, a device or a link where the resolved file should be.
         case notRegular
-        /// The bytes on disk are not the ones last read or saved (D12): nothing was written.
+        /// The bytes on disk are not the ones last read or saved (D12): nothing was written. Or, in place, the path
+        /// names another file after the write: the bytes went to the file that was compared, moved off the path meanwhile.
         case changedOnDisk
         /// The file at the path is not the one stat saw (a swap before the open): nothing was written.
         case swapped
@@ -53,12 +54,18 @@ enum TextFileWriter {
     /// The last path component followed through symlinks (the link stays a link). A missing or dangling
     /// end is returned as is: the Deleted case. Directory components are left to the kernel.
     static func resolve(_ path: String) -> Result<String, Failure> {
+        // Absolute only (R1108-r3-1): a relative path is read against the process's folder and its folder part is the root.
+        // An absolute path stays absolute through every link below. A file URL's path is absolute: a belt.
+        guard path.hasPrefix("/") else { return .failure(.failed(.resolve, EINVAL)) }
         var path = path
         var buf = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
         for _ in 0..<32 {
             let n = readlink(path, &buf, Int(PATH_MAX))
             if n < 0 { return errno == EINVAL || errno == ENOENT ? .success(path) : .failure(.failed(.resolve, errno)) }
-            let dest = String(decoding: buf[0..<n].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            let target = buf[0..<n].map { UInt8(bitPattern: $0) }
+            // Strict (R1108-q4): a target that is not UTF-8 would name another, missing file, and a save would create it.
+            let dest = String(decoding: target, as: UTF8.self)
+            guard dest.utf8.elementsEqual(target) else { return .failure(.failed(.resolve, EILSEQ)) }
             path = dest.hasPrefix("/") ? dest : (path as NSString).deletingLastPathComponent + "/" + dest
         }
         return .failure(.failed(.resolve, ELOOP))
@@ -67,10 +74,12 @@ enum TextFileWriter {
     /// D11 steps 2-4. `expected` is the fingerprint of the bytes last read or saved; `overwrite` skips only
     /// that comparison (D12's "Overwrite the newer file on disk?"). The stat seam defaults to lstat: the
     /// resolved end is not a link, so a link that appears there is seen as one and refused, never followed.
-    /// A good save answers the fingerprint of the bytes written.
+    /// A good save answers the fingerprint of the bytes written. `beforeCompare` is a test seam: called once in the in-place
+    /// branch, on the opened and checked descriptor, right before the comparison.
     static func save(_ text: String, encoding: TextViewerDocument.Encoding, to url: URL, expected: Fingerprint,
                      overwrite: Bool = false, writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(),
-                     stat statAt: Stat = { p in var s = stat(); return (lstat(p, &s) == 0 ? 0 : errno, s) }) -> Result<Fingerprint, Failure> {
+                     stat statAt: Stat = { p in var s = stat(); return (lstat(p, &s) == 0 ? 0 : errno, s) },
+                     beforeCompare: () -> Void = {}) -> Result<Fingerprint, Failure> {
         guard let bytes = encode(text, encoding: encoding) else { return .failure(.lossy) }
         let path: String
         switch resolve(url.path) {
@@ -112,16 +121,25 @@ enum TextFileWriter {
         }
 
         // In place (another owner or group, or hard links): keeps the owner, the group, the inode and the links; not atomic.
-        if !overwrite, let changed = compare(path, expected) { return .failure(changed) }
+        // ONE descriptor (R1108-q1): the identity, the comparison, the truncate and the write all see the opened file.
         // No O_TRUNC at the open: a file swapped in after the stat must not be emptied before the check.
-        let fd = open(path, O_WRONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard fd >= 0 else { return .failure(.failed(.open, errno)) }
+        let fd = open(path, O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { let e = errno; return .failure(e == ENOENT && !overwrite ? .changedOnDisk : .failed(.open, e)) }
         defer { close(fd) }
         var now = stat()
         guard fstat(fd, &now) == 0 else { return .failure(.failed(.open, errno)) }
+        // The same inode as the regular file stat saw: so the type too.
         guard now.st_dev == st.st_dev, now.st_ino == st.st_ino else { return .failure(.swapped) }
+        beforeCompare()
+        if !overwrite, let changed = compare(fd, expected) { return .failure(changed) }
+        // The comparison read to the end: back to the start, or the write would leave a hole of zeros.
+        guard lseek(fd, 0, SEEK_SET) == 0 else { return .failure(.failed(.write, errno)) }
         guard ftruncate(fd, 0) == 0 else { return .failure(.incomplete(.truncate, errno)) }
         if let f = writeAll(fd, bytes) { return .failure(f) }
+        // Moved off the path meanwhile: the bytes went to the file compared, but the path names another: D12's
+        // "changed on disk", never "saved".
+        var after = stat()
+        guard lstat(path, &after) == 0, after.st_dev == now.st_dev, after.st_ino == now.st_ino else { return .failure(.changedOnDisk) }
         return .success(digest(bytes))
     }
 
@@ -141,6 +159,11 @@ enum TextFileWriter {
         let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return errno == ENOENT ? .changedOnDisk : .failed(.read, errno) }
         defer { close(fd) }
+        return compare(fd, expected)
+    }
+
+    /// The same on an open descriptor at offset 0 (the in-place branch's own).
+    private static func compare(_ fd: Int32, _ expected: Fingerprint) -> Failure? {
         var st = stat()
         guard fstat(fd, &st) == 0 else { return .failed(.read, errno) }
         guard st.st_mode & S_IFMT == S_IFREG else { return .notRegular }
