@@ -306,7 +306,8 @@ struct ThemeVariant: Sendable, Equatable {
             next = it.next()
             // A space separator (Zs: U+00A0, U+2009, U+202F, U+3000...) keeps the gap as U+0020; a tab,
             // line or paragraph separator (Zl, Zp) and controls are not Zs and stay dropped.
-            if c.properties.generalCategory == .spaceSeparator { kept.append(" ") }
+            // R928-5: U+0020 is Zs too, so this one test collapses a run of any spaces to one.
+            if c.properties.generalCategory == .spaceSeparator { if kept.last != " " { kept.append(" ") } }
             else if keeps(c, after: kept.last, before: next) { kept.append(c) }
         }
         var out = "", chars = 0, scalars = 0

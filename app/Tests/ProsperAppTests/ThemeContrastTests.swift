@@ -413,7 +413,7 @@ final class ThemeContrastTests: XCTestCase {
                     "NSAppearance(named:.darkAqua)", "NSAppearance(named:.aqua)",
                     ".init(named:.aqua)", ".init(named:.darkAqua)",
                     ".environment(\\.colorScheme,.dark)", ".environment(\\.colorScheme,.light)",
-                    ".darkAqua", ".vibrantDark", ".vibrantLight",
+                    ".darkAqua", ".Name.aqua", ".vibrantDark", ".vibrantLight",
                     ".accessibilityHighContrastAqua", ".accessibilityHighContrastDarkAqua",
                     ".accessibilityHighContrastVibrantLight", ".accessibilityHighContrastVibrantDark"]
         // #928: file, pin and the exact whitespace-stripped line allowed; each must match exactly once.

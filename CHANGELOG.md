@@ -1106,6 +1106,8 @@ tag from the now-released section and put it on the new top draft.
   extension can no longer take a built-in's place (#1246)
 - Calendar: an event you have open in a pinned Calendar stays open when its calendar syncs and the
   event gets a new identifier (it closes, as before, if two events look the same) (#928)
+- A theme or tint name with a long run of spaces now shows a single space, so the rest of the name
+  is no longer pushed out of view (#928)
 
 ## v2.174.0
 

@@ -111,8 +111,8 @@ final class ThemeLabelCleaningTests: XCTestCase {
             XCTAssertEqual(clean("Sky\(br)Blue"), "SkyBlue", br.debugDescription)
         }
         XCTAssertEqual(clean("Sky\u{2800}Blue"), "SkyBlue")
-        XCTAssertEqual(clean("Sky\u{00A0}\u{3000}Blue"), "Sky  Blue", "a run is not collapsed, as for U+0020 today")
-        XCTAssertEqual(clean("Sky  Blue"), "Sky  Blue")
+        XCTAssertEqual(clean("Sky\u{00A0}\u{3000}Blue"), "Sky Blue", "R928-5: a run collapses to one")
+        XCTAssertEqual(clean("Sky  Blue"), "Sky Blue")
         XCTAssertEqual(clean("\u{3000}Sky\u{00A0}"), "Sky", "trimmed")
         XCTAssertTrue(clean("\u{3000}") == nil, "only spaces: the caller's default")
         XCTAssertTrue(clean("\u{00A0}\u{2009}\u{3000}") == nil)
@@ -140,5 +140,19 @@ final class ThemeLabelCleaningTests: XCTestCase {
         XCTAssertEqual(clean("Ab" + c17), "Ab")
         XCTAssertEqual(clean("Ab" + c17 + "Cd"), "Ab", "stops: later text is not kept")
         XCTAssertTrue(clean(c17) == nil, "only the oversized Character: the default")
+    }
+
+    /// R928-5: a run of spaces (U+0020 or mapped separators) keeps one, so it cannot push the text out of the cut.
+    func testARunOfSpacesCollapsesToOne() {
+        XCTAssertEqual(Unicode.Scalar(0x20)!.properties.generalCategory, .spaceSeparator, "U+0020 takes the same test")
+        XCTAssertEqual(clean("Sky     Blue"), "Sky Blue")
+        XCTAssertEqual(clean("Sky \u{00A0} \u{3000}  Blue"), "Sky Blue", "U+0020 mixed with two mapped separators")
+        XCTAssertEqual(clean("Sky \u{200B} Blue"), "Sky Blue", "a dropped invisible between two spaces")
+        XCTAssertEqual(clean("Red" + String(repeating: "\u{00A0}", count: 29) + "A"), "Red A")
+        let run = "  \u{00A0}\u{3000} "
+        let words = String(repeating: "ab" + run, count: 40)
+        XCTAssertEqual(clean(words), "ab ab ab ab ab ab ab ab ab ab ab", "40 words: 32 kept Characters, 11 words")
+        XCTAssertTrue(clean("   \u{00A0}\u{3000}  ") == nil, "only spaces: the caller's default")
+        XCTAssertEqual(clean(" \u{1F600} \u{200D} \u{1F600} "), "\u{1F600} \u{1F600}", "a joiner after a space stays dropped")
     }
 }
