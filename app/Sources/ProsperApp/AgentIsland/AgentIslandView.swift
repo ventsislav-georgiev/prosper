@@ -1506,7 +1506,7 @@ struct AgentPromptCardView: View {
         cardText(text, G.questionFont)
             .foregroundStyle(color)
             .lineLimit(1)
-            .frame(height: G.cardQuestion, alignment: .leading)
+            .agentCardSlot(height: G.cardQuestion, alignment: .leading)
     }
 
     @ViewBuilder
@@ -1518,7 +1518,7 @@ struct AgentPromptCardView: View {
                     cardText(l, f)
                         .foregroundStyle(Color.white.opacity(0.6))
                         .lineLimit(1)
-                        .frame(height: height, alignment: .leading)
+                        .agentCardSlot(height: height, alignment: .leading)
                 }
             }
             .padding(.vertical, G.cardContextPad)
@@ -1557,20 +1557,20 @@ struct AgentPromptCardView: View {
                                 .fixedSize()
                         }
                     }
-                    .frame(height: row)
+                    .agentCardSlot(height: row)
                     // A too-wide label's rest (the option is off), shown in full.
                     rows(Array(label.dropFirst())) { r in
                         cardText(r, G.labelFont)
                             .foregroundStyle(text)
                             .lineLimit(1)
-                            .frame(height: G.cardLabelLine, alignment: .top)
+                            .agentCardSlot(height: G.cardLabelLine, alignment: .top)
                     }
                     // Continuation or description: dim, under the label.
                     rows(detail) { d in
                         cardText(d, G.detailFont)
                             .foregroundStyle(text.opacity(0.55))
                             .lineLimit(1)
-                            .frame(height: G.cardDetailLine, alignment: .top)
+                            .agentCardSlot(height: G.cardDetailLine, alignment: .top)
                     }
                 }
             }
@@ -1601,6 +1601,14 @@ struct AgentPromptCardView: View {
         }
         .buttonStyle(.plain)
         .padding(.bottom, 4)
+    }
+}
+
+extension View {
+    /// #1251: a permission card row in its fixed slot, clipped to it: no character's ink (a tall glyph, stacked
+    /// marks) leaves its row. Clipping only bounds drawing: no frame, size or accessibility element changes.
+    func agentCardSlot(height: CGFloat, alignment: Alignment = .center) -> some View {
+        frame(height: height, alignment: alignment).clipped()
     }
 }
 

@@ -95,10 +95,32 @@ struct AgentPrompt: Hashable {
     var topFound = true
 
     /// Any hidden or reordering character anywhere the card shows (Trojan
-    /// Source): only a "No…" option answers such a dialog.
+    /// Source), or (#1251) a base with more than `maxMarks` combining
+    /// marks: only a "No…" option answers such a dialog.
     var hasHiddenCharacters: Bool {
         ([question] + context + preview + notes + options.flatMap { [$0.label] + $0.detail })
-            .contains { $0.unicodeScalars.contains(where: Self.isHidden) }
+            .contains { field in
+                var marks = 0
+                return field.unicodeScalars.contains(where: Self.isHidden)
+                    || field.unicodeScalars.contains { Self.pastMarkCap($0, &marks) }
+            }
+    }
+
+    /// #1251: the marks one base may carry and still be drawn as it is (OutsideText.capMarks' count, per base: each
+    /// consonant of a conjunct is its own base); the card shows the further ones escaped, after the character.
+    static let maxMarks = 2
+
+    /// #1251 B1251-2: the one rule of both `hasHiddenCharacters` and `visible`: `marks` counts the marks on the current
+    /// base and starts again at every scalar that is not a mark; true for a mark past `maxMarks`.
+    static func pastMarkCap(_ u: Unicode.Scalar, _ marks: inout Int) -> Bool {
+        marks = isMark(u) ? marks + 1 : 0
+        return marks > maxMarks
+    }
+
+    /// #1251: a nonspacing or enclosing mark (Mn, Me): what stacks on one character.
+    static func isMark(_ u: Unicode.Scalar) -> Bool {
+        let c = u.properties.generalCategory
+        return c == .nonspacingMark || c == .enclosingMark
     }
 
     /// What the card renders literally: every printable character, wide glyphs
@@ -119,12 +141,21 @@ struct AgentPrompt: Hashable {
         }
     }
 
-    /// `s` with every hidden character escaped as ⟨U+202E⟩.
+    /// `s` with every hidden character escaped as ⟨U+202E⟩, and (#1251) each
+    /// base's marks past `maxMarks` escaped the same way, after its character, in order.
     static func visible(_ s: String) -> String {
-        guard s.unicodeScalars.contains(where: isHidden) else { return s }
+        // plain text (no hidden scalar, no mark) is returned as it is, unscanned by Character
+        guard s.unicodeScalars.contains(where: { isHidden($0) || isMark($0) }) else { return s }
+        let token = { (u: Unicode.Scalar) in "⟨U+\(String(format: "%04X", u.value))⟩" }
         var out = ""
-        for u in s.unicodeScalars {
-            if isHidden(u) { out += "⟨U+\(String(format: "%04X", u.value))⟩" } else { out.unicodeScalars.append(u) }
+        for ch in s {
+            var marks = 0, after = ""
+            for u in ch.unicodeScalars {
+                // a token inside the character would split a conjunct and hang its later scalars on the bracket
+                if pastMarkCap(u, &marks) { after += token(u); continue }
+                if isHidden(u) { out += token(u) } else { out.unicodeScalars.append(u) }
+            }
+            out += after
         }
         return out
     }

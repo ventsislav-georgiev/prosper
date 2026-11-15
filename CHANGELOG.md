@@ -1180,6 +1180,9 @@ tag from the now-released section and put it on the new top draft.
   thinking shows a short notice instead (#1181)
 - Agent: a very short answer from the local model ("Done.") now shows in the agent window instead of
   an empty reply (#1181)
+- Agent Island: a permission prompt with a letter piled with accent marks can no longer draw over
+  the command or the answer buttons: each card line stays in its row, the extra marks show as codes,
+  and such a prompt can only be declined from the card (approve it in the terminal) (#1251)
 
 ## v2.174.0
 

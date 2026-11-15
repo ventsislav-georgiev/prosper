@@ -70,4 +70,42 @@ final class OutsideTextTests: XCTestCase {
         XCTAssertTrue(whole.allSatisfy { Self.scalars(String($0)) == Self.scalars("a\u{0323}\u{0323}") })
         XCTAssertEqual(Self.scalars(CCPoolStore.shown(Self.stack("a", "\u{0323}"))), Self.scalars("a\u{0323}\u{0323}"), "the CCPool forward caps too")
     }
+
+    // MARK: B1251-2: the marks are counted per base, so ordinary conjuncts keep theirs
+
+    /// QA 1064's words: one conjunct is one character, and its viramas are marks.
+    static let words = [
+        "\u{0935}\u{0938}\u{094D}\u{0924}\u{094D}\u{0930}\u{094B}\u{0902}",         // Hindi "garments" (oblique plural)
+        "\u{0936}\u{093E}\u{0938}\u{094D}\u{0924}\u{094D}\u{0930}\u{094B}\u{0902}", // Hindi "scriptures" (oblique plural)
+        "\u{0938}\u{094D}\u{0924}\u{094D}\u{0930}\u{0948}\u{0923}",                 // Hindi "feminine"
+        "\u{092E}\u{0928}\u{094D}\u{0924}\u{094D}\u{0930}\u{0902}",                 // Hindi, a mantra form
+    ]
+    /// Bengali "with a weapon": a three-consonant conjunct with a vowel sign.
+    static let bengali = "\u{0985}\u{09B8}\u{09CD}\u{09A4}\u{09CD}\u{09B0}\u{09C7}"
+
+    func testOrdinaryConjunctsKeepEveryMark() {
+        for w in Self.words + [Self.bengali] {
+            XCTAssertEqual(Self.scalars(OutsideText.shown(w)), Self.scalars(w), "\(Self.scalars(w))")
+        }
+    }
+
+    func testEachBaseKeepsTwoMarks() {
+        // two letters, 24 marks each: two kept on each letter
+        let pile = "a" + String(repeating: "\u{0323}", count: 24) + "b" + String(repeating: "\u{0301}", count: 24)
+        XCTAssertEqual(Self.scalars(OutsideText.shown(pile)), Self.scalars("a\u{0323}\u{0323}b\u{0301}\u{0301}"))
+        // a two-consonant conjunct, three marks on each consonant: two kept on each
+        let conjunct = "\u{0938}\u{093C}\u{094D}\u{0951}\u{0924}\u{093C}\u{0902}\u{0951}"
+        XCTAssertEqual(Self.scalars(OutsideText.shown(conjunct)), Self.scalars("\u{0938}\u{093C}\u{094D}\u{0924}\u{093C}\u{0902}"))
+    }
+
+    func testShownCutsAfterACapThatDropsAThirdMarkVirama() {
+        // per base the third mark on a consonant can be its virama: the conjunct splits, so the cut still comes after the cap
+        let s = String(repeating: "\u{0915}\u{093C}\u{0951}\u{094D}", count: 3) + "\u{0915}"
+        XCTAssertLessThanOrEqual(OutsideText.shown(s, max: 2).count, 2)
+    }
+
+    func testShownCutsAfterACapThatSplitsACharacter() {
+        // R1251-a: the cap can split a character (a dropped third mark ends a conjunct), so the cut must come after the cap
+        XCTAssertLessThanOrEqual(OutsideText.shown(String(repeating: "\u{915}\u{94D}\u{93C}\u{900}", count: 3) + "\u{915}", max: 2).count, 2)
+    }
 }

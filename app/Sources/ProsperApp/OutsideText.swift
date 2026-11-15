@@ -23,20 +23,15 @@ enum OutsideText {
         return s.count <= max ? s : String(s.prefix(Swift.max(0, max - 1))) + "…"
     }
 
-    /// #1251 (B1235-1): at most `max` nonspacing or enclosing marks (Mn, Me) per Character, so one character's
-    /// ink stays near its own line; the base and every other scalar stay.
+    /// #1251 (B1235-1): at most `max` nonspacing or enclosing marks (Mn, Me) per BASE, so one glyph's ink stays near
+    /// its own line; every other scalar stays. B1251-2: the count starts again at every scalar that is not such a mark,
+    /// so each consonant of an Indic conjunct (one Character) carries its own marks and ordinary words stay whole.
     static func capMarks(_ s: String, max: Int = 2) -> String {
-        var out = String.UnicodeScalarView()
-        for ch in s {
-            var marks = 0
-            for u in ch.unicodeScalars {
-                let c = u.properties.generalCategory
-                if c == .nonspacingMark || c == .enclosingMark {
-                    marks += 1
-                    if marks > max { continue }
-                }
-                out.append(u)
-            }
+        var out = String.UnicodeScalarView(), marks = 0
+        for u in s.unicodeScalars {
+            let c = u.properties.generalCategory
+            marks = c == .nonspacingMark || c == .enclosingMark ? marks + 1 : 0
+            if marks <= max { out.append(u) }
         }
         return String(out)
     }
