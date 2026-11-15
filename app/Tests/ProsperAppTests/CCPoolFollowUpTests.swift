@@ -66,6 +66,16 @@ final class CCPoolFollowUpTests: XCTestCase {
     // (d): start retries a bind that lost to a socket the probe saw as free; a live listener is
     // never retried; restart rebinds the same port.
     func testCCPoolStartRetriesARacedBindAndRestartRebinds() throws {
+        // #1094: a port number given back can be taken by another process (an outgoing connection's
+        // source port) before the service binds it; the scenario then runs again on a fresh port.
+        for _ in 1...5 { if try racedBindScenario() { return } }
+        XCTFail("every attempt lost its released port to another process")
+    }
+
+    /// One run of (d) on its own ephemeral port. False when the port was lost to another process after the
+    /// test released it: the service's retry loop ran to its deadline (3 or more lost binds in one start)
+    /// and still read heldByOther. One lost bind is the product failing to retry, which stays a failure.
+    private func racedBindScenario() throws -> Bool {
         let (fd, port) = try boundNotListening()
         var fdOpen = true
         defer { if fdOpen { close(fd) } }
@@ -91,16 +101,23 @@ final class CCPoolFollowUpTests: XCTestCase {
         let closer = DispatchSemaphore(value: 0)
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.6) { close(fd); closer.signal() }
         t = Date()
-        XCTAssertEqual(svc.start(bindRetry: 8), .running(port: port), "the retry wins once the socket goes")
+        let won = svc.start(bindRetry: 8)
         let waited = Date().timeIntervalSince(t)
+        closer.wait()
+        fdOpen = false
+        let lostAfterRetry = log.lines.filter { $0.contains("listener did not start") }.count - lostBefore
+        if won == .heldByOther, lostAfterRetry >= 3 { return false }
+        XCTAssertEqual(won, .running(port: port), "the retry wins once the socket goes")
         XCTAssertGreaterThanOrEqual(waited, 0.5)
         let lost = log.lines.filter { $0.contains("listener did not start") }.count - lostBefore
         XCTAssertGreaterThanOrEqual(lost, 1, "the win came from a retry after a lost bind, not one waiting bind "
                                     + "(two lost binds took \(failFast) s; this start took \(waited) s)")
-        closer.wait()
-        fdOpen = false
 
-        XCTAssertEqual(svc.restart(), .running(port: port), "restart rebinds the same port")
+        let lostBeforeRestart = log.lines.filter { $0.contains("listener did not start") }.count
+        let restarted = svc.restart()
+        let lostInRestart = log.lines.filter { $0.contains("listener did not start") }.count - lostBeforeRestart
+        if restarted == .heldByOther, lostInRestart >= 3 { return false }
+        XCTAssertEqual(restarted, .running(port: port), "restart rebinds the same port")
         XCTAssertEqual(CCPoolPortProbe.probe(port: port, timeout: 5), .ccpool(pid: Int(getpid()), impl: "prosper"))
 
         // A live ccpool listener on the port: reported at once, never retried, never touched.
@@ -110,6 +127,7 @@ final class CCPoolFollowUpTests: XCTestCase {
         XCTAssertEqual(other.start(bindRetry: 5), .heldByCCPool(pid: Int(getpid())))
         XCTAssertLessThan(Date().timeIntervalSince(t1), 4, "no retry loop against a live listener")
         XCTAssertEqual(svc.status, .running(port: port), "the holder is left alone")
+        return true
     }
 
     // (e): removing an account drops its upstream URLSession with it.
