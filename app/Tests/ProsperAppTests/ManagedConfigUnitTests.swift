@@ -133,7 +133,7 @@ final class ManagedConfigUnitTests: XCTestCase {
         // reuse ManagedConfigPaths / ManagedConfigPlanner.hookEvents; they never call apply or remove.
         // #1108 P3a: the Text viewer's save uses the file-writer seam only; it never calls apply or remove.
         XCTAssertEqual(callers.sorted(), ["AppDelegate.swift", "ExtensionHostAPI.swift", "ExtensionRegistry.swift", "KitManifest.swift",
-                                          "KitRender.swift", "KitValidator.swift", "LiveExtensionHostServices.swift", "TextFileWriter.swift"])
+                                          "KitRender.swift", "KitStore.swift", "KitValidator.swift", "LiveExtensionHostServices.swift", "TextFileWriter.swift"])
     }
 
     /// Swift 6: the core carries no actor isolation (it runs off main; the sheet hops to main itself).
