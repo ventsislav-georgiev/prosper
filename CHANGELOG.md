@@ -1350,6 +1350,10 @@ tag from the now-released section and put it on the new top draft.
   instead of showing LOCAL.
 - Signing in on a Mac that cannot save the sign-in now says so ("Signed in for this session; the
   sign-in can't be saved on this Mac.") instead of reporting plain success.
+- When the coding agent's backend exits, the error now ends with codex's last message as plain text
+  (no colour codes or hidden direction characters, at most 200 characters).
+- Pressing Stop while the coding agent is still waiting for its model no longer leaves codex waiting
+  two minutes on that request: it is cancelled at once.
 
 ## v2.174.0
 

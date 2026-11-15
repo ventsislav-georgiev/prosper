@@ -324,6 +324,21 @@ final class ProcessGroupKillTests: XCTestCase {
         XCTAssertFalse(kill.contains("Task"), String(kill))
     }
 
+    /// QA #113 (#1286): shutdown leaves a socket path a live listener holds (another host's) and removes a stale one.
+    /// The live case goes through the probe seam (no test opens a listener); the real probe is checked on no listener.
+    @MainActor func testBunHarnessShutdownUnlinksOnlyASocketNoLiveListenerHolds() throws {
+        let sock = tempDir("bun-sock").appendingPathComponent(".host.sock")
+        try Data().write(to: sock)
+        let harness = BunHarness()
+        harness.shutdown(socket: sock, isLive: { _ in true })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sock.path), "another live host's socket was unlinked")
+        harness.shutdown(socket: sock, isLive: { _ in false })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sock.path), "a stale socket was left behind")
+        XCTAssertFalse(BunHarness.socketIsLive(sock), "a missing path has no listener")
+        try Data().write(to: sock)
+        XCTAssertFalse(BunHarness.socketIsLive(sock), "a plain file has no listener")
+    }
+
     /// BunHarness.stopHost (the process half of shutdown, minus the socket unlink) leaves
     /// no live group behind when it returns.
     @MainActor func testBunHarnessStopHostKillsTheHostGroup() throws {

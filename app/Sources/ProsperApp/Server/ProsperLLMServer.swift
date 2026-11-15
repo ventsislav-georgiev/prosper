@@ -159,6 +159,19 @@ final class ProsperLLMServer: @unchecked Sendable {
     }
 }
 
+extension ProsperLLMServer {
+    /// QA #219 (b) (#1286): what a cancelled request (user Stop, the model released during its load, a peer gone) gets.
+    /// With the SSE header out, the stream's end. Before it, a 499 at once: unanswered, codex waits out its stream idle
+    /// timeout (120 s). 499 (client closed request), not a 5xx: codex retries a 5xx (request_max_retries = 1), which
+    /// would queue the cancelled request again behind a fresh model load.
+    static func cancelledReply(headerSent: Bool) -> Data {
+        guard !headerSent else { return Data("data: [DONE]\n\n".utf8) }
+        let body = Data(#"{"error":{"message":"request cancelled","type":"cancelled"}}"#.utf8)
+        return Data(("HTTP/1.1 499 Client Closed Request\r\nContent-Type: application/json\r\n"
+            + "Content-Length: \(body.count)\r\nConnection: keep-alive\r\n\r\n").utf8) + body
+    }
+}
+
 // MARK: - Minimal HTTP/1.1 connection
 
 /// Parses one or more HTTP/1.1 requests off a single connection and dispatches them.
@@ -325,8 +338,8 @@ private final class HTTPConnection: @unchecked Sendable {
             } catch is CancellationError {
                 // User stop / client gone. If SSE already started and the socket is
                 // still up (user Stop, not a dead peer), terminate the stream so the
-                // client isn't left waiting on a half-open event stream.
-                if self.headerSent { self.sendSSEDone() }
+                // client isn't left waiting on a half-open event stream; before it, a 499.
+                self.sendRaw(ProsperLLMServer.cancelledReply(headerSent: self.headerSent))
             } catch {
                 self.log.error("completion failed: \(String(describing: error), privacy: .public)")
                 if self.headerSent {
@@ -386,8 +399,8 @@ private final class HTTPConnection: @unchecked Sendable {
                     )
                 }
             } catch is CancellationError {
-                // User stop / client gone — close the SSE stream if it was already open.
-                if self.headerSent { self.sendSSEDone() }
+                // User stop / client gone — close the SSE stream if it was already open, else a 499.
+                self.sendRaw(ProsperLLMServer.cancelledReply(headerSent: self.headerSent))
             } catch {
                 self.log.error("responses failed: \(String(describing: error), privacy: .public)")
                 if parsed.stream, self.headerSent {

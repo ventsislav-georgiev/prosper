@@ -1577,6 +1577,17 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(CodexHarness.stderrSuffix("\n \n"), "")
     }
 
+    /// R998a-q1 (#1286): codex's last stderr line reaches "Agent error: ..." with its SGR codes and bidi controls gone,
+    /// capped at 200 characters.
+    func testStderrSuffixDropsCSIAndUnseenScalarsAndIsCapped() {
+        let line = "\u{1B}[1;31mpanic: x\u{1B}[0m \u{202E}" + String(repeating: "y", count: 500)
+        let suffix = CodexHarness.stderrSuffix("first line\n" + line + "\n")
+        XCTAssertTrue(suffix.hasPrefix(": panic: x yyy"), suffix.debugDescription)
+        XCTAssertFalse(suffix.unicodeScalars.contains { $0 == "\u{1B}" || $0 == "\u{202E}" }, suffix.debugDescription)
+        XCTAssertEqual(suffix.count, 2 + 200)
+        XCTAssertTrue(suffix.hasSuffix("y\u{2026}"))
+    }
+
     /// #167: codex killed mid-turn fails the in-flight request with the same error the
     /// stream reports once (the controller shows it once), finishes the stream, and a
     /// fresh harness resumes the thread — what `AgentController` does on the next prompt.
@@ -3628,6 +3639,69 @@ final class CodexHarnessE2ETests: XCTestCase {
         XCTAssertEqual(controller.queued.map(\.text), ["second"], "the queued goal left the queue")
         XCTAssertFalse(started(), "the queued goal was started")
         XCTAssertEqual(load.calls, 1, "another run reached the load")
+        XCTAssertEqual(spawned.all.count, 1)
+    }
+
+    // MARK: - #1286 QA #219: Stop keeps an error; a release fired before a resubmit
+
+    /// QA #219 INFO (#1286): a Stop with no harness and no session (a run whose spawn failed: its end() already dropped
+    /// both) keeps the failure on screen; only a pending phase is idled there (#413).
+    @MainActor
+    func testStopWithNoHarnessKeepsTheError() async {
+        let dir = tempDir("stop-error")
+        let store = AgentSessionStore(directory: dir)
+        let release = Gate()
+        let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: {
+            throw HarnessError.spawnFailed("example")
+        }, releaseModel: { await release.pass() })
+        addTeardownBlock { @MainActor in
+            await controller.end()
+            _ = await store.recentSessions(limit: 1)   // let the persists land before the dir goes
+        }
+        controller.submit(goal: "first")
+        let ended = await Self.wait(2) { release.calls == 1 }
+        XCTAssertTrue(ended, "the failed run never reached end()'s release (phase \(controller.phase))")
+        let shown = controller.phase
+        guard case .error = shown else { return XCTFail("expected an error, got \(shown)") }
+        controller.stop()
+        XCTAssertEqual(controller.phase, shown, "Stop with no harness hid the error")
+        _ = await Self.wait(0.3) { false }
+        XCTAssertEqual(controller.phase, shown, "the deferred end() hid the error")
+    }
+
+    /// QA #219 (#1286): a release fired outside end() (a turn end, here Stop's settle with no turn, the window closed)
+    /// is tagged with its run: it releases when nothing newer started, and a submit accepted before its Task runs keeps
+    /// the model that run acquires.
+    @MainActor
+    func testAReleaseFiredBeforeAResubmitLeavesTheNewerRunsModel() async {
+        let dir = tempDir("release-tag")
+        let store = AgentSessionStore(directory: dir)
+        let spawned = Spawned()
+        let release = Gate()
+        let controller = AgentController(store: store, resolveCodex: { dir }, makeHarness: {
+            let harness = ParkingHarness("H", parks: false, failsPrompt: false)
+            spawned.all.append(harness)
+            return harness
+        }, releaseModel: { await release.pass() })
+        addTeardownBlock { @MainActor in
+            await controller.end()
+            _ = await store.recentSessions(limit: 1)   // let the persists land before the dir goes
+        }
+        XCTAssertFalse(ChatWindow.shared.isOpen)
+        controller.submit(goal: "first")
+        let opened = await Self.wait(2) { spawned.all.first?.prompts == 1 }
+        guard opened, let h = spawned.all.first else { return XCTFail("the first turn never opened (phase \(controller.phase))") }
+        h.completeTurn()
+        let released = await Self.wait(2) { controller.phase == .idle && release.calls == 1 }
+        XCTAssertTrue(released, "a turn end with the window closed did not release (calls \(release.calls), \(controller.phase))")
+
+        controller.stop()                    // no turn: settles at once and fires a release tagged with this run
+        controller.submit(goal: "second")    // accepted in the same job, before that release's Task runs
+        let second = await Self.wait(2) { h.prompts == 2 }
+        XCTAssertTrue(second, "the second turn never opened (phase \(controller.phase))")
+        _ = await Self.wait(0.3) { false }
+        XCTAssertEqual(release.calls, 1, "the stale release unloaded the model the resubmitted run acquired")
+        XCTAssertEqual(controller.phase, .running)
         XCTAssertEqual(spawned.all.count, 1)
     }
 

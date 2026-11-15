@@ -733,10 +733,12 @@ actor CodexHarness: CodingHarness {
         return String(decoding: lines.utf8.suffix(stderrTailBytes), as: UTF8.self)
     }
 
-    /// The exit message's suffix: ": " and the tail's last non-blank line, or nothing.
+    /// The exit message's suffix: ": " and the tail's last non-blank line, or nothing. R998a-q1 (#1286): codex's own
+    /// text, so its CSI sequences (SGR colours) go first, then it is shown as outside text: unseen scalars dropped, 200 cap.
     static func stderrSuffix(_ tail: String) -> String {
-        let last = tail.split(whereSeparator: \.isNewline).last { !$0.allSatisfy(\.isWhitespace) }
-        return last.map { ": " + $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        let plain = tail.replacingOccurrences(of: #"\x{1B}\[[0-9;?]*[ -/]*[@-~]"#, with: "", options: .regularExpression)
+        let last = plain.split(whereSeparator: \.isNewline).last { !$0.allSatisfy(\.isWhitespace) }
+        return last.map { ": " + OutsideText.shown($0.trimmingCharacters(in: .whitespaces), max: 200) } ?? ""
     }
 
     /// An exit we didn't ask for (`shutdown` clears the handler first), so it is an

@@ -16,6 +16,19 @@ final class ProsperLLMServerE2ETests: XCTestCase {
         return (code, String(data: data, encoding: .utf8) ?? "")
     }
 
+    /// QA #219 (b) (#1286): a request cancelled before its SSE header (a Stop, a release during the model load) is
+    /// answered at once with a framed 499, not left for codex's idle timeout; after the header, the stream's end.
+    /// The reply bytes only: driving a connection needs a listener, which this row does not open.
+    func testACancelledRequestIsAnsweredAtOnce() throws {
+        let reply = try XCTUnwrap(String(data: ProsperLLMServer.cancelledReply(headerSent: false), encoding: .utf8))
+        XCTAssertTrue(reply.hasPrefix("HTTP/1.1 499 "), reply)
+        let parts = reply.components(separatedBy: "\r\n\r\n")
+        XCTAssertEqual(parts.count, 2, reply)
+        XCTAssertTrue(reply.contains("\r\nContent-Length: \(parts.last?.utf8.count ?? -1)\r\n"), reply)
+        XCTAssertTrue(parts.last?.contains("\"error\"") == true, reply)
+        XCTAssertEqual(ProsperLLMServer.cancelledReply(headerSent: true), Data("data: [DONE]\n\n".utf8))
+    }
+
     func testServerBootsHealthAndAuth() async throws {
         let (port, token) = try ProsperLLMServer.shared.start()
         defer { ProsperLLMServer.shared.stop() }

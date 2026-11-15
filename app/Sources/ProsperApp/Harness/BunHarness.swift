@@ -151,12 +151,32 @@ final class BunHarness {
         }
     }
 
-    /// `socket` is settable so a test's shutdown never unlinks the live host socket (#1144).
-    func shutdown(socket: URL = BunHarness.socketURL) {
+    /// `socket` is settable so a test's shutdown never unlinks the live host socket (#1144). QA #113 (#1286): our host
+    /// is gone after stopHost, so a listener still accepting on the path is another host's (a second app sharing the
+    /// plugins dir): only a socket no live listener holds (a stale one) is removed. `isLive`: the probe, a test seam.
+    func shutdown(socket: URL = BunHarness.socketURL, isLive: (URL) -> Bool = BunHarness.socketIsLive) {
         eventsWatcher?.stop()
         eventsWatcher = nil
         stopHost()
-        try? FileManager.default.removeItem(at: socket)
+        if !isLive(socket) { try? FileManager.default.removeItem(at: socket) }
+    }
+
+    /// A listener accepts on the unix socket at `url`: a connect succeeds or is in progress (non-blocking, so a host
+    /// with a full backlog cannot stall the quit). A refused connect, a missing path or one too long for sun_path: false.
+    nonisolated static func socketIsLive(_ url: URL) -> Bool {
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { Darwin.close(fd) }
+        _ = fcntl(fd, F_SETFL, O_NONBLOCK)
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let path = Array(url.path.utf8CString)
+        guard path.count <= MemoryLayout.size(ofValue: addr.sun_path) else { return false }
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in path.withUnsafeBytes { raw.copyMemory(from: $0) } }
+        let r = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        return r == 0 || errno == EINPROGRESS || errno == EAGAIN
     }
 
     /// The process half of `shutdown`, apart so tests don't unlink the live socket.

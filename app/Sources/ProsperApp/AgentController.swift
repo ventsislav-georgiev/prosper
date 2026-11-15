@@ -131,7 +131,7 @@ final class AgentController {
     /// #1181 (R1181-h): the model load + spawn given (codex, the run's pick); answers the harness and the loaded id.
     /// nil (production) is spawnCodexHarness. Called on the main actor only.
     private let spawnHarness: (@MainActor (URL, String) async throws -> (harness: CodingHarness, loaded: String))?
-    /// end()'s model release; a seam so tests can observe and park it (#412).
+    /// The model release, end()'s and `releaseModelLater(firedIn:)`'s; a seam so tests can observe and park it (#412).
     private let releaseModel: @MainActor () async -> Void
     /// The agent model setting, read once per run (#893). A seam so a test can change the
     /// setting between the reads in its own defaults suite; called on the main actor only.
@@ -303,6 +303,13 @@ final class AgentController {
         // Keep an error phase visible (run() sets it just before tearing down) —
         // only a clean teardown returns to idle.
         if case .error = phase {} else { phase = .idle }
+    }
+
+    /// QA #219 (#1286): a release fired outside end() (turn end or codex exit with the window closed, the window closing),
+    /// tagged with the run it was fired in. A run submitted before this Task runs owns the model by then: releasing would
+    /// unload the model, or cancel the load, that run's acquire waits on.
+    private func releaseModelLater(firedIn generation: Int) {
+        Task { if generation == runGeneration { await releaseModel() } }
     }
 
     // MARK: - CLI queue (`prosper agent <prompt>`)
@@ -658,9 +665,7 @@ final class AgentController {
         // The harness reported the exit as `.error` already; this only catches a
         // backend that ended its stream silently, which would otherwise hang `.running`.
         if isActive { surfaceError("Agent backend exited.") }
-        if !ChatWindow.shared.isOpen {
-            Task { await ModelResidencyCoordinator.shared.releaseAgent() }
-        }
+        if !ChatWindow.shared.isOpen { releaseModelLater(firedIn: runGeneration) }
     }
 
     /// Show a failure once: codex death reaches us both as the `.error` event and as
@@ -807,7 +812,7 @@ final class AgentController {
         // drained so the next turn launches codex with the new servers/hooks.
         if agentConfigDirty { Task { await respawnHarnessForConfig() } }
         if ChatWindow.shared.isOpen { return }
-        Task { await ModelResidencyCoordinator.shared.releaseAgent() }
+        releaseModelLater(firedIn: runGeneration)
     }
 
     /// The agent's MCP or hooks config file changed (external edit / import). codex reads
@@ -890,7 +895,7 @@ final class AgentController {
     /// sees the window closed).
     func chatWindowDidClose() {
         guard !isActive else { return }
-        Task { await ModelResidencyCoordinator.shared.releaseAgent() }
+        releaseModelLater(firedIn: runGeneration)
     }
 
     // MARK: - Transcript mutation
