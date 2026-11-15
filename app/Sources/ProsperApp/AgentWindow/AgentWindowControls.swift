@@ -37,6 +37,8 @@ enum AgentWindowMenuEntry: Equatable {
     case open(enabled: Bool)
     /// #900 B2 step 6a (7.3): a pane item of the header "⋯" (only with the split gate on): runs at once, asks nothing.
     case pane(String, enabled: Bool, verb: AgentPaneVerb)
+    /// #900 B2 step 6b1 (7.1): a live row's "Open to the Side" (only with the split gate on): runs at once, asks nothing.
+    case side(String, enabled: Bool)
 }
 
 /// #900 B2 step 6a: what a pane item runs: the key's own PaneAction through `perform`, or Equalize (no key, no
@@ -80,6 +82,32 @@ enum AgentWindowControls {
         return [.open(enabled: !ended)] + (rest.isEmpty ? [] : [.divider] + rest)
     }
 
+    static let sideLabel = "Open to the Side"
+
+    /// #900 B2 step 6b1 (7.1, 3.3, 15.0): a live row's context menu: sessionMenu with "Open to the Side" right after Open
+    /// in terminal (the spec's table places it nowhere; first after Open, before the verbs that ask). Gate off: exactly
+    /// sessionMenu. At the cap the item is off with the cap's own suffix; no room leaves it on, so choosing it shows the
+    /// notice (one room rule, the layout's show). `side`: show(.side)'s refusal for the row, read only with the gate on.
+    @MainActor
+    static func rowMenu(_ s: AgentSession, store: AgentIslandStore, splits: Bool,
+                        side: @autoclosure () -> PaneRefusal?) -> [AgentWindowMenuEntry] {
+        let out = sessionMenu(s, store: store, ended: false)
+        guard splits else { return out }
+        let suffix = side()?.menuSuffix
+        return Array(out.prefix(1)) + [.side(suffix.map { "\(sideLabel) \($0)" } ?? sideLabel, enabled: suffix == nil)]
+            + out.dropFirst()
+    }
+
+    /// The row menu for `s`'s row in `m`: the gate and the layout's own answer for that row.
+    @MainActor
+    static func rowMenu(_ s: AgentSession, store: AgentIslandStore, in m: AgentWindowModel) -> [AgentWindowMenuEntry] {
+        func refusal() -> PaneRefusal? {
+            if case let .failure(r) = m.showing(.live(s.key), placement: .side) { return r }
+            return nil
+        }
+        return rowMenu(s, store: store, splits: AgentPaneLayout.splitsEnabled, side: refusal())
+    }
+
     static let closePaneLabel = "Close Pane (the session keeps running)"
 
     /// #900 B2 step 6a (7.3, 3.3, 15.0): the pane part of the header "⋯", appended after `sessionMenu` behind one
@@ -118,17 +146,19 @@ enum AgentWindowControls {
                         down: refusal(.rows))
     }
 
-    /// A pane item chosen in `pane`'s header: that pane is focused first through the model's focusPane (every drawn pane
-    /// has its own header, and perform acts on the focused one), then the key's action runs through perform (a refused
+    /// A pane item chosen in `pane`'s header: that pane is focused in the action's result (every drawn pane has its own
+    /// header; one layout write per choice, R900-6a-1), the key's action running through perform (a refused
     /// split puts the key's notice in the notice line). Equalize: the whole tree, as the divider's double-click adopts
     /// its split. A pane closed since the menu was built: nothing. Runs on the main actor (a Button's action).
     @MainActor
     static func runPane(_ v: AgentPaneVerb, pane: UUID, in m: AgentWindowModel) {
         guard m.layout.order.contains(pane) else { return }
-        m.focusPane(pane)
+        m.keyFocus = .pane   // focusPane's 7.2 rule; the focus itself rides in the action's one write (R900-6a-1)
         switch v {
-        case let .action(a): m.perform(a)
-        case .equalize: if case let .success(l) = m.layout.equalize(path: [], deep: true), l != m.layout { m.adopt(l) }
+        case let .action(a): m.perform(a, pane: pane)
+        case .equalize:
+            let l = (try? m.layout.focus(pane).get()) ?? m.layout
+            if case let .success(e) = l.equalize(path: [], deep: true), e != m.layout { m.adopt(e) }
         }
     }
 
@@ -265,10 +295,14 @@ struct AgentSessionMenuItems: View {
     /// #900 B2 step 6a: the header's pane items (AgentWindowControls.paneMenu; empty with the gate off) and their run.
     var panes: [AgentWindowMenuEntry] = []
     var pane: (AgentPaneVerb) -> Void = { _ in }
+    /// #900 B2 step 6b1: a sidebar row's model (its list is rowMenu: Open to the Side with the gate on) and the item's run.
+    var row: AgentWindowModel? = nil
+    var side: () -> Void = {}
 
     var body: some View {
-        AgentMenuEntries(entries: AgentWindowControls.sessionMenu(session, store: store, ended: ended) + panes, act: ask,
-                         open: open, pane: pane)
+        let base = row.map { AgentWindowControls.rowMenu(session, store: store, in: $0) }
+            ?? AgentWindowControls.sessionMenu(session, store: store, ended: ended)
+        AgentMenuEntries(entries: base + panes, act: ask, open: open, pane: pane, side: side)
     }
 }
 
@@ -286,6 +320,7 @@ struct AgentMenuEntries: View {
     let act: (AgentWindowVerb) -> Void
     var open: () -> Void = {}
     var pane: (AgentPaneVerb) -> Void = { _ in }
+    var side: () -> Void = {}
 
     var body: some View {
         ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
@@ -300,6 +335,8 @@ struct AgentMenuEntries: View {
                 Text(verbatim: text)
             case .pane(let title, let enabled, let verb):
                 Button(title) { pane(verb) }.disabled(!enabled)
+            case .side(let title, let enabled):
+                Button(title, action: side).disabled(!enabled)
             }
         }
     }

@@ -336,24 +336,26 @@ final class AgentWindowModel: ObservableObject {
     /// Zoom: frames ignore it (the view still draws the tiling until step 3); shownPanes and follow() honour it (step
     /// 2), so a focus key while zoomed moves the zoom: one pane suspends, one starts (7.4).
     @discardableResult
-    func perform(_ a: PaneAction) -> Bool {
+    func perform(_ a: PaneAction, pane: UUID? = nil) -> Bool {
         guard !closed else { return false }
+        // #900 B2 step 6b1 (R900-6a-1): `pane` (a header "⋯" item's) is focused in the result, so a choice writes once.
+        let base = pane.flatMap { try? layout.focus($0).get() } ?? layout
         let next: Result<PaneLayout, PaneRefusal>
         switch a {
         case let .split(axis):
-            next = splitting(axis)
+            next = splitting(axis, pane: pane)
         case .closePane:
-            next = layout.close(layout.focused)
+            next = base.close(base.focused)
         case let .focus(d):
             // The tree's tiling in a fixed square: adjacency depends on the ratios only, never on the size or the minimum.
             let square = CGRect(x: 0, y: 0, width: 1000, height: 1000)
-            guard case let .tiled(f) = layout.frames(in: square, minimum: .zero, splitsEnabled: true),
-                  let id = layout.neighbour(of: layout.focused, direction: d, frames: f) else { return false }
-            next = layout.focus(id)
+            guard case let .tiled(f) = base.frames(in: square, minimum: .zero, splitsEnabled: true),
+                  let id = base.neighbour(of: base.focused, direction: d, frames: f) else { return false }
+            next = base.focus(id)
         case let .cycle(step):
-            next = layout.focus(step < 0 ? layout.previous : layout.next)
+            next = base.focus(step < 0 ? base.previous : base.next)
         case .zoom:
-            next = .success(layout.toggleZoom())
+            next = .success(base.toggleZoom())
         case .toggleSidebar:   // #900 B2 step 4: always acts, so ⌃⌘S is always swallowed (gate on)
             toggleSidebar()
             return true
@@ -368,6 +370,7 @@ final class AgentWindowModel: ObservableObject {
             adopt(l)
             return true
         case let .failure(r):
+            if base != layout { keyFocus = .pane; adopt(base) }   // the menu's pane is focused even when its action is refused
             guard case .split = a else { return false }
             paneRefusal = r
             return true
@@ -974,14 +977,12 @@ final class AgentWindowModel: ObservableObject {
     /// `manual`: the human's pick (a click, a key, a menu); it drops a pending follow-to-History.
     /// Any change of row drops the confirm strip's question (R5).
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
-    func select(_ id: AgentSidebar.RowID?, manual: Bool = true) {
+    func select(_ id: AgentSidebar.RowID?, manual: Bool = true, placement: PaneLayout.Placement = .focused) {
         if manual { removing = nil; pendingSpawn = nil; newSession = nil }
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
         // `settle()` drops the strip's question on a change of row.
-        let next = id.map { layout.show(target($0), placement: .focused, minimum: paneMinimum, in: .zero,
-                                        splitsEnabled: AgentPaneLayout.splitsEnabled) }
-            ?? layout.replace(layout.focused, target: nil)
+        let next = id.map { showing($0, placement: placement) } ?? layout.replace(layout.focused, target: nil)
         switch next {
         case let .success(l):
             if paneRefusal != nil { paneRefusal = nil }
@@ -1009,9 +1010,32 @@ final class AgentWindowModel: ObservableObject {
         return true
     }
 
-    /// #845: a sidebar row's click: the human's pick, and the keyboard moves into it.
-    func click(_ id: AgentSidebar.RowID) {
+    /// #900 B2 step 6b1: the browse rule's answer for row `id` (select's own call; the row menu reads it). `.side` splits
+    /// in the pane area at the minimum paneFrames tiles with; `.focused` never reads the area.
+    func showing(_ id: AgentSidebar.RowID, placement: PaneLayout.Placement = .focused) -> Result<PaneLayout, PaneRefusal> {
+        layout.show(target(id), placement: placement, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size),
+                    splitsEnabled: AgentPaneLayout.splitsEnabled)
+    }
+
+    /// #845: a sidebar row's click: the human's pick, and the keyboard moves into it. #900 B2 step 6b1 (7.1, 15.0):
+    /// `flags`, the click's event modifiers (outside data), are read only with the split gate on, and Option alone (no
+    /// Command, Control or Shift) opens to the side; the gate off or any other set is today's click.
+    func click(_ id: AgentSidebar.RowID, flags: @autoclosure () -> NSEvent.ModifierFlags = []) {
+        if AgentPaneLayout.splitsEnabled, flags().intersection([.command, .option, .control, .shift]) == .option {
+            return openToTheSide(id)
+        }
         select(id)
+        focusSelection()
+    }
+
+    /// #900 B2 step 6b1 (7.1 rule 3, 3.3, 15.0): Option-click and the row menu's "Open to the Side". Gate off, a History
+    /// row or an id no longer in the list: the plain click. Gate on: the layout's own show(.side) (rule 1 focuses a pane
+    /// already showing it). A refusal (the cap, no room) is the key's refused split: the notice alone; layout,
+    /// selection, the New session form and the keys stay.
+    func openToTheSide(_ id: AgentSidebar.RowID) {
+        guard AgentPaneLayout.splitsEnabled, case .live = id, row(id) != nil else { return click(id) }
+        if case let .failure(r) = showing(id, placement: .side) { paneRefusal = r; return }
+        select(id, placement: .side)
         focusSelection()
     }
 

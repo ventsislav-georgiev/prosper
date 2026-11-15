@@ -499,7 +499,7 @@ struct AgentSidebarView: View {
                                                        ? { model.toggleCollapsed(section.title) } : nil)
                                 if !folded {
                                     ForEach(section.rows) { row in
-                                        Button { model.click(row.id) } label: {
+                                        Button { model.click(row.id, flags: NSApp.currentEvent?.modifierFlags ?? []) } label: {   // #900 B2 step 6b1: read with the gate on only
                                             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                                                 number: model.number(row.id), inView: inView.contains(row.id))
                                         }
@@ -508,7 +508,8 @@ struct AgentSidebarView: View {
                                             if let s = row.session, let store = model.store {
                                                 // #1103: the header's list, Open in terminal first (selects the row, as ask does).
                                                 AgentSessionMenuItems(store: store, session: s, ask: { model.ask($0, s) },
-                                                                      open: { open(s) })
+                                                                      open: { open(s) }, row: model,
+                                                                      side: { model.openToTheSide(row.id) })
                                             } else if let r = row.record, let store = model.store {
                                                 AgentHistoryMenuItems(store: store, record: r) { model.act($0, r) }
                                             }
