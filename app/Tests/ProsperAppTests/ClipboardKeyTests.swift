@@ -75,6 +75,71 @@ final class ClipboardKeyTests: XCTestCase {
         XCTAssertTrue(Set(again.items.compactMap { again.text(for: $0) }) == ["alpha", "beta", "gamma", "delta"], "every clip reads back")
     }
 
+    /// alpha (pinned) and beta (unpinned) sealed under `key` in `dir`; returns each one's blob name.
+    private func pinnedAndPlain(_ dir: URL, _ key: SymmetricKey) -> (pinned: String, plain: String) {
+        let s = ClipboardStore(dir: dir, keySource: { key })
+        s.addText("alpha")
+        s.addText("beta")
+        if let a = s.items.first(where: { s.text(for: $0) == "alpha" }) { s.togglePin(a) }
+        let p = s.items.first { $0.pinned }?.blobFile ?? ""
+        let u = s.items.first { !$0.pinned }?.blobFile ?? ""
+        return (p, u)
+    }
+
+    private func blobNames(_ dir: URL) -> Set<String> {
+        Set(snapshot(dir).keys.filter { $0 != "index.json" })
+    }
+
+    func testClearAllWithoutKeyIsNotUndoneWhenTheKeyReturns() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        let names = pinnedAndPlain(d, key)
+        XCTAssertTrue(!names.pinned.isEmpty && !names.plain.isEmpty && names.pinned != names.plain)
+        let open = OSAllocatedUnfairLock(initialState: false)
+        let s = ClipboardStore(dir: d, keySource: gatedSource(key, open))
+        s.addText("gamma")
+        s.clearAll()
+        s.clearAll()  // a second one changes nothing
+        XCTAssertTrue(s.items.isEmpty)
+        s.addText("delta")
+        open.withLock { $0 = true }
+        s.addText("epsilon")
+
+        let again = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(Set(again.items.compactMap { again.text(for: $0) }) == ["alpha", "delta", "epsilon"],
+                      "the unpinned disk row and the cleared clip are gone, the pinned one and the later clips stay")
+        XCTAssertEqual(again.items.filter(\.pinned).count, 1)
+        let blobs = blobNames(d)
+        XCTAssertTrue(blobs.contains(names.pinned), "the pinned row keeps its blob")
+        XCTAssertFalse(blobs.contains(names.plain), "the cleared disk row's blob is removed")
+        XCTAssertEqual(blobs.count, 3, "alpha, delta, epsilon")
+    }
+
+    func testClearAllWithoutKeyThenQuitLeavesTheDiskAsItWas() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        _ = pinnedAndPlain(d, key)
+        let before = snapshot(d)
+        do {
+            let s = ClipboardStore(dir: d, keySource: gatedSource(key, OSAllocatedUnfairLock(initialState: false)))
+            s.addText("gamma")
+            s.clearAll()
+        }
+        XCTAssertTrue(snapshot(d) == before, "nothing on disk changed: the record lives in memory only")
+        let again = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(Set(again.items.compactMap { again.text(for: $0) }) == ["alpha", "beta"], "the next launch sees every saved row")
+    }
+
+    func testClearAllWithTheKeyPresentIsUnchanged() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        let names = pinnedAndPlain(d, key)
+        let s = ClipboardStore(dir: d, keySource: { key })
+        s.clearAll()
+        XCTAssertTrue(s.items.compactMap { s.text(for: $0) } == ["alpha"])
+        XCTAssertTrue(blobNames(d) == [names.pinned])
+    }
+
     func testFailedFetchIsAskedAgainOnTheNextPersist() {
         let d = tempDir()
         let key = SymmetricKey(size: .bits256)
@@ -126,6 +191,23 @@ final class ClipboardKeyTests: XCTestCase {
                        ["device.key"], "no temp file left")
     }
 
+    /// #1288 q2: the temp is created by open(2) with 0600 and is gone before persist returns, so it
+    /// cannot be observed from outside (by construction, no seam); this pins the created file and
+    /// folder state with a permissive umask and a pre-existing 0755 folder.
+    func testKeyFileIsCreated0600UnderAPermissiveUmaskInAnExistingFolder() throws {
+        let dir = tempDir()
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        let old = umask(0)
+        defer { umask(old) }
+        let url = dir.appending(path: "device.key")
+        let key = try DatabaseKey.fetchOrCreate(at: url)
+        XCTAssertEqual(key.count, 64)
+        let perms = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        XCTAssertEqual(perms, 0o600)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["device.key"], "no temp left")
+        XCTAssertTrue(try DatabaseKey.fetchOrCreate(at: url) == key)
+    }
+
     func testMalformedKeyFileIsNeverReplaced() throws {
         let url = tempDir().appending(path: "device.key")
         let junk = Data("pdk1:not-a-key\n".utf8)
@@ -135,6 +217,8 @@ final class ClipboardKeyTests: XCTestCase {
     }
 
     func testUnreadableKeyFileIsNeverReplaced() throws {
+        // #1288: mode 0 does not stop root, so the unreadable state cannot be made (as the #1100 rows).
+        try XCTSkipIf(geteuid() == 0, "running as root: mode 0 does not deny the read")
         let url = tempDir().appending(path: "device.key")
         let original = try DatabaseKey.fetchOrCreate(at: url)
         let bytes = try Data(contentsOf: url)

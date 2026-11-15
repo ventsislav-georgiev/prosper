@@ -40,6 +40,8 @@ final class ClipboardStore: ObservableObject {
     nonisolated private let held = OSAllocatedUnfairLock(initialState: [String: Data]())
     /// #1285: index.json exists but was not read for want of the key; merged in before it is written.
     private var unreadIndex = false
+    /// #1288: Clear All ran while unreadIndex was set; the merge then keeps only the pinned disk rows.
+    private var clearedWhileUnread = false
     /// #1285: a plain line for the panel while history is not being saved; nil otherwise.
     @Published private(set) var notice: String?
     static let keyNotice = "Clipboard history is not being saved: Prosper cannot read its device key. New clips are kept until Prosper quits."
@@ -209,6 +211,7 @@ final class ClipboardStore: ObservableObject {
             removeBlobFile(item.blobFile!)
         }
         items.removeAll { !$0.pinned }
+        if unreadIndex { clearedWhileUnread = true }
         persist()
     }
 
@@ -378,11 +381,18 @@ final class ClipboardStore: ObservableObject {
             // The key is back: the history on disk joins the clips captured meanwhile.
             if let disk = readIndex(key) {
                 let mine = Set(items.map(\.id))
-                items += disk.filter { !mine.contains($0.id) }
+                let theirs = disk.filter { !mine.contains($0.id) }
+                // #1288: a Clear All in the window reaches the unpinned disk rows and their blobs now.
+                let kept = clearedWhileUnread ? theirs.filter(\.pinned) : theirs
+                if clearedWhileUnread {
+                    for row in theirs where !row.pinned { if let blob = row.blobFile { removeBlobFile(blob) } }
+                }
+                items += kept
                 sort()
                 evictIfNeeded()
             }
             unreadIndex = false
+            clearedWhileUnread = false
         }
         for (name, data) in held.withLock({ $0 }) where writeBlob(data, to: name, encrypt: true) {
             held.withLock { _ = $0.removeValue(forKey: name) }

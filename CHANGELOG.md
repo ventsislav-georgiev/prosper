@@ -1309,6 +1309,8 @@ tag from the now-released section and put it on the new top draft.
   large or nested too deeply.
 - Settings sync and the saved supporter sign-in no longer get sealed under a weak key when this
   Mac's device key cannot be read; they are skipped instead.
+- Clear All while history is not being saved now also clears the saved history once it is readable
+  again.
 
 ## v2.174.0
 

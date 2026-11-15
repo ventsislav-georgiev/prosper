@@ -111,8 +111,20 @@ enum DatabaseKey {
             attributes: [.posixPermissions: 0o700])
         let tmp = dir.appendingPathComponent(".device.key.\(UUID().uuidString)")
         defer { unlink(tmp.path) }
-        try Data(payload.utf8).write(to: tmp, options: [.withoutOverwriting])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmp.path)
+        // #1288: created 0600 by open(2), so the temp is never group/other readable.
+        let fd = open(tmp.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw KeyError.persistFailed }
+        var wrote = true
+        Array(payload.utf8).withUnsafeBytes { buf in
+            var off = 0
+            while off < buf.count {
+                let n = write(fd, buf.baseAddress! + off, buf.count - off)
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { wrote = false; break }
+                off += n
+            }
+        }
+        guard close(fd) == 0, wrote else { throw KeyError.persistFailed }
         guard link(tmp.path, keyFileURL.path) == 0 else { throw KeyError.persistFailed }
     }
 
