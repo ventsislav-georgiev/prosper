@@ -349,6 +349,9 @@ enum AgentStoreQuestion: Equatable { case restartAll, stopAll, killAll, clear }
 extension AgentWindowControls {
     static let islandSettingsLabel = "Agent Island Settings\u{2026}"
     static let autoAllowLabel = "Always allow permission prompts"
+    /// R897-q1: the question Always allow ON raises in the sidebar, and its confirming button.
+    static let alwaysAllowQuestion = "Always allow: Claude Code's permission prompts will be answered Yes, so commands run without your review."
+    static let alwaysAllowAction = "Turn on"
     static let sortLabel = "Sort"
     static let rowDetailsLabel = "Row details"
     /// Agent Island's Settings pane (Resources/extensions/agentisland/extension.toml: id and its sidebar section).
@@ -623,6 +626,18 @@ struct AgentStoreQuestionStrip: View {
     var body: some View {
         if let q = AgentWindowControls.storeQuestion(store) {
             AgentConfirmStrip(text: q.text, action: q.action, confirm: { answer(true) }, cancel: { answer(false) })
+        }
+    }
+}
+
+/// R897-q1: the Always allow question (Turn on / Cancel) while the model asks; nothing otherwise.
+struct AgentAlwaysAllowStrip: View {
+    @ObservedObject var model: AgentWindowModel
+
+    var body: some View {
+        if model.askingAlwaysAllow {
+            AgentConfirmStrip(text: AgentWindowControls.alwaysAllowQuestion, action: AgentWindowControls.alwaysAllowAction,
+                              confirm: { model.answerAlwaysAllow(true) }, cancel: { model.answerAlwaysAllow(false) })
         }
     }
 }

@@ -1357,6 +1357,8 @@ tag from the now-released section and put it on the new top draft.
 - AI models: a model whose download was interrupted now shows "Partly downloaded" with the space it
   uses, offers Resume and Delete, and a GGUF model file that is smaller or larger than expected no
   longer shows as downloaded.
+- Turning on Always allow from the Agent Sessions menu now asks first (Turn on or Cancel); turning
+  it off stays immediate.
 
 ## v2.174.0
 

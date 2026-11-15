@@ -301,6 +301,66 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertEqual(rec.args.count, 1, "no question up: an answer runs nothing")
     }
 
+    // MARK: Always allow asks first (R897-q1), Kill all asks in its title (R897-n1)
+
+    /// ON from the menu raises the strip and writes nothing; Cancel writes nothing; Turn on writes it. The setting is
+    /// the XCTest scratch defaults (Preferences.defaults), restored after; dch's config path is nil under XCTest.
+    @MainActor
+    func testSidebarAlwaysAllowOnAsksFirstAndWritesOnlyOnTurnOn() throws {
+        let k = "agentIslandAutoAllow", saved = Preferences.defaults.object(forKey: k)
+        defer { Preferences.defaults.set(saved, forKey: k) }
+        Preferences.agentIslandAutoAllow = false
+        let st = store([session("api")], dch: bin([1, 38, 0]))
+        let rec = Launches(), c = controller(st, rec), m = model(st, c)
+        defer { m.close() }
+        XCTAssertEqual(NSHostingView(rootView: AgentAlwaysAllowStrip(model: m).frame(width: 260)).fittingSize.height, 0,
+                       "no question before the item")
+        m.runSidebar(.autoAllow)
+        XCTAssertTrue(m.askingAlwaysAllow, "ON asks")
+        XCTAssertFalse(Preferences.agentIslandAutoAllow, "nothing is written before the answer")
+        XCTAssertEqual(AgentWindowControls.alwaysAllowQuestion,
+                       "Always allow: Claude Code's permission prompts will be answered Yes, so commands run without your review.")
+        XCTAssertEqual(AgentWindowControls.alwaysAllowAction, "Turn on")
+        let strip = NSHostingView(rootView: AgentAlwaysAllowStrip(model: m).frame(width: 260))   // fresh: a hosted tree is not re-read
+        XCTAssertGreaterThan(strip.fittingSize.height, 0, "the strip is drawn while asked")
+        m.answerAlwaysAllow(false)
+        XCTAssertFalse(m.askingAlwaysAllow)
+        XCTAssertFalse(Preferences.agentIslandAutoAllow, "Cancel writes nothing")
+        m.answerAlwaysAllow(true)
+        XCTAssertFalse(Preferences.agentIslandAutoAllow, "an answer with no question up writes nothing")
+        m.runSidebar(.autoAllow)
+        m.answerAlwaysAllow(true)
+        XCTAssertTrue(Preferences.agentIslandAutoAllow, "Turn on writes it")
+        XCTAssertFalse(m.askingAlwaysAllow)
+        XCTAssertEqual(rec.args.count, 0, "no dch run")
+    }
+
+    /// OFF stays immediate: no question, the setting is off at once.
+    @MainActor
+    func testSidebarAlwaysAllowOffWritesAtOnce() throws {
+        let k = "agentIslandAutoAllow", saved = Preferences.defaults.object(forKey: k)
+        defer { Preferences.defaults.set(saved, forKey: k) }
+        Preferences.agentIslandAutoAllow = true
+        let st = store([session("api")], dch: bin([1, 38, 0]))
+        let rec = Launches(), c = controller(st, rec), m = model(st, c)
+        defer { m.close() }
+        m.runSidebar(.autoAllow)
+        XCTAssertFalse(m.askingAlwaysAllow, "OFF does not ask")
+        XCTAssertFalse(Preferences.agentIslandAutoAllow, "OFF writes at once")
+    }
+
+    /// R897-n1: Kill all asks, so the item reads "Kill all..." (a literal, on and off), as the island's does.
+    @MainActor
+    func testSidebarKillAllTitleHasTheEllipsis() throws {
+        for dch in [bin([1, 38, 0]), nil] {
+            let st = store([session("api")], dch: dch)
+            let e = AgentWindowControls.sidebarMenu(store: st, autoAllow: false)
+            XCTAssertTrue(titles(e).contains("Kill all\u{2026}"), "titles: \(titles(e))")
+            XCTAssertEqual(entry(e, "Kill all\u{2026}"),
+                           .item("Kill all\u{2026}", enabled: dch != nil, checked: nil, verb: .killAll))
+        }
+    }
+
     // MARK: Settings
 
     /// "Agent Island Settings...": the model's opener seam, once; nothing asked, nothing run.

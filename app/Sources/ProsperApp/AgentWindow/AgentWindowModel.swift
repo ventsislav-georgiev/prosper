@@ -641,7 +641,19 @@ final class AgentWindowModel: ObservableObject {
 
     /// #897 (G9): a sidebar "..." item: the island's own call on `island()`.
     func runSidebar(_ v: AgentSidebarVerb) {
+        // R897-q1: Always allow ON asks first (the strip); nothing is written before its Turn on. OFF stays immediate.
+        if v == .autoAllow, !Preferences.agentIslandAutoAllow { askingAlwaysAllow = true; return }
         AgentWindowControls.runSidebar(v, island: island(), openSettings: openIslandSettings)
+    }
+
+    /// R897-q1: the Always allow question is up in the sidebar (the store's question type cannot carry it: window state).
+    @Published private(set) var askingAlwaysAllow = false
+
+    /// R897-q1: the strip's answer. Turn on writes the setting as Settings does; Cancel (and Esc) writes nothing.
+    func answerAlwaysAllow(_ yes: Bool) {
+        guard askingAlwaysAllow else { return }
+        askingAlwaysAllow = false
+        if yes { AgentIslandPane.autoAllowToggled(true, island()) }
     }
 
     /// #897 (G9): the sidebar strip's answer to the store's question up now, through the island's confirm call.

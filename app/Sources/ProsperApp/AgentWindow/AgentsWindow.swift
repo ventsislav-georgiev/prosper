@@ -528,6 +528,7 @@ struct AgentSidebarView: View {
             AgentSidebarTitleRow(model: model)
             // #897 (G9): the store's own list-wide question (the island's line), answered through its confirm call.
             if let store = model.store { AgentStoreQuestionStrip(store: store) { model.answerStoreQuestion($0) } }
+            AgentAlwaysAllowStrip(model: model)
             if !model.hasStore {
                 AgentEmptyState(icon: "rectangle.dashed", title: "Agent Island is off",
                                 detail: "Turn on Agent Island in Settings › Extensions to list your dch sessions here.")
