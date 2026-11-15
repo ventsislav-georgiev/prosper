@@ -117,6 +117,7 @@ final class MenuBarLiveBarGuardTests: XCTestCase {
             "ThemeTests.swift: let thickness = \(sys).thickness",
             "MenuBarTests.swift: XCTAssertFalse(controller.statusItem.statusBar === \(sys), \"item landed on the system bar\")",
             "MenuBarTests.swift: let m = \(mgr)()",
+            "MenuBarSeamTests.swift: let m = \(mgr)()",
             "WindowShortcutToggleMoreTests.swift: let cal = \(cal).shared",
             "WindowShortcutToggleMoreTests.swift: let cal = \(cal).shared",
             "MenuBarGapTests.swift: let system = \(sys)",

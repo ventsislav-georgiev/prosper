@@ -42,6 +42,15 @@ final class MenuBarManager: NSObject {
     /// Hosted room the expanded divider was last sized for (#198).
     private var appliedRoom: CGFloat?
 
+    /// Test seams (#980), set by tests only; each default is the expression it replaces. All three are called
+    /// on the main actor only (applyDividerLengths, reapplyAfterActivation and scheduleActivationReapply run there).
+    /// Hands the debounced work item to a queue (today: the main queue, 0.25 s later).
+    var scheduleActivation: (DispatchWorkItem) -> Void = { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: $0) }
+    /// The hosted room for a screen (today: the Accessibility-backed MenuBarAX.roomWidth).
+    var readRoom: (NSScreen?) -> CGFloat = { MenuBarAX.roomWidth(on: $0) }
+    /// The one place the divider length is written (today: the status item's own `length`).
+    var setSeparatorLength: (NSStatusItem?, CGFloat) -> Void = { $0?.length = $1 }
+
     /// The always-visible control item (rightmost of ours). Clicking it toggles the
     /// hidden section. It NEVER expands —
     /// that's the whole fix: a single divider that did double duty as chevron AND
@@ -192,8 +201,8 @@ final class MenuBarManager: NSObject {
     /// there are no inline `length =` pokes elsewhere.
     private func applyDividerLengths(room: CGFloat? = nil) {
         defer { updateChevron() }
-        if MenuBarHost.isHosted { appliedRoom = room ?? MenuBarAX.roomWidth(on: NSScreen.main) }
-        hiddenSeparator?.length = dividerLengths(room: appliedRoom)
+        if MenuBarHost.isHosted { appliedRoom = room ?? readRoom(NSScreen.main) }
+        setSeparatorLength(hiddenSeparator, dividerLengths(room: appliedRoom))
     }
 
     /// The length `applyDividerLengths` sets, from the live reveal state (#154: the
@@ -303,13 +312,13 @@ final class MenuBarManager: NSObject {
         }
     }
 
-    private func scheduleActivationReapply() {
+    func scheduleActivationReapply() {
         activationWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated { self?.reapplyAfterActivation() }
         }
         activationWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        scheduleActivation(work)
     }
 
     private func reapplyAfterActivation() {
@@ -323,7 +332,7 @@ final class MenuBarManager: NSObject {
         let anyExpanded = !revealed
         // One AX read of the frontmost app's menu bar per settled switch (none on a
         // notched display); it also keeps `roomWidth`'s last-measurement cache current.
-        let room = MenuBarAX.roomWidth(on: NSScreen.main)
+        let room = readRoom(NSScreen.main)
         guard MenuBarHost.shouldReapplyDivider(hosted: MenuBarHost.isHosted, anyDividerExpanded: anyExpanded,
                                                activatedOwnApp: ownFront,
                                                lastRoom: appliedRoom, newRoom: room) else { return }
