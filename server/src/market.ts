@@ -89,12 +89,31 @@ function b64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
+// Worst case of the two capped text fields (manifest and preview, 16384 UTF-16 units each) in the
+// request JSON: a unit may be written as a six-byte \uXXXX escape, which is longer than its UTF-8 form.
+const BODY_TEXT_BYTES = 2 * 6 * 16_384;
+// The JSON's own braces, keys, quotes and whitespace around the blob, manifest and preview.
+const BODY_FRAMING_BYTES = 4096;
+
 // POST /market/publish — create a package or push a new version.
 async function publish(c: Ctx) {
   const email = c.get("email");
-  const body = await c.req
-    .json<{ manifest?: ManifestInput; blob?: string; kind?: string; preview?: unknown }>()
-    .catch(() => null);
+  const max = intEnv(c.env.MARKET_MAX_BYTES, 262_144); // 256 KB — extensions are tiny
+  // R1248-7: bound the whole body before it is parsed; a refusal costs no D1, KV or rate-limit unit.
+  const bound = Math.ceil(max * 4 / 3) + 16 + BODY_TEXT_BYTES + BODY_FRAMING_BYTES;
+  const declared = c.req.header("content-length");
+  // A Content-Length that is not plain digits counts as absent; the capped read below decides.
+  if (declared !== undefined && /^\d{1,15}$/.test(declared) && Number(declared) > bound) {
+    return c.json({ error: "too_large", max: String(max) }, 413);
+  }
+  const text = await readCapped(c.req.raw.body, bound);
+  if (text === "too_large") return c.json({ error: "too_large", max: String(max) }, 413);
+  let body: { manifest?: ManifestInput; blob?: string; kind?: string; preview?: unknown } | null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = null;
+  }
   if (!body || !body.manifest || typeof body.blob !== "string") {
     return c.json({ error: "invalid_body" }, 400);
   }
@@ -129,7 +148,6 @@ async function publish(c: Ctx) {
   // The whole manifest JSON is stored and its text fields reach the browse payload: bound it (UTF-16 units, as the preview cap).
   if (JSON.stringify(m).length > MAX_MANIFEST_LEN) return c.json({ error: "manifest_too_large" }, 400);
 
-  const max = intEnv(c.env.MARKET_MAX_BYTES, 262_144); // 256 KB — extensions are tiny
   // Bound the encoded string before atob so an oversized blob can't force a large
   // allocation ahead of the byte-length check (base64 expands ~4/3 over raw).
   if (body.blob.length > Math.ceil(max * 4 / 3) + 16) {
@@ -426,6 +444,34 @@ async function gunzipCapped(bytes: Uint8Array, cap: number): Promise<Uint8Array 
     at += ch.length;
   }
   return out;
+}
+
+/** Read a request body as text, stopping once more than `cap` bytes have arrived (same loop as
+ *  gunzipCapped): at most `cap` bytes plus one chunk are held. A missing body reads as "". */
+async function readCapped(stream: ReadableStream<Uint8Array> | null, cap: number): Promise<string | "too_large"> {
+  if (!stream) return "";
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (let r = await reader.read(); !r.done; r = await reader.read()) {
+      total += r.value.length;
+      if (total > cap) {
+        reader.cancel().catch(() => {});
+        return "too_large";
+      }
+      chunks.push(r.value);
+    }
+  } catch {
+    return ""; // a broken stream reads as an empty body: invalid_body
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const ch of chunks) {
+    out.set(ch, at);
+    at += ch.length;
+  }
+  return new TextDecoder().decode(out);
 }
 
 const utf8 = new TextDecoder();

@@ -681,3 +681,87 @@ test("publish: a manifest of exactly 16384 characters is accepted, one more is r
   assert.deepEqual(marketSql(over), [], "no D1 statement");
   assert.equal(over.kv.size, 0, "no KV write, rate-limit key untouched");
 });
+
+// #1248 round 5 (R1248-7): the publish body is bounded before it is parsed. Default MARKET_MAX_BYTES 262144:
+// blob text ceil(262144*4/3)+16 = 349542, manifest and preview 2*6*16384 = 196608, framing 4096: bound 550246.
+const BOUND = 550_246;
+const okBody = (pad = 0) => JSON.stringify({ manifest: baseManifest, blob: goodBlob }) + " ".repeat(pad);
+const sized = (n) => okBody(n - Buffer.byteLength(okBody())); // valid JSON of exactly n bytes
+const post = (t, body, headers = {}, extra = {}) =>
+  t.req("/publish", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN[PUB]}`, "Content-Type": "application/json", ...headers },
+    body,
+    ...extra,
+  });
+const noSpend = (t, r) => {
+  assert.equal(r.status, 413, r.text);
+  assert.deepEqual(r.json, { error: "too_large", max: "262144" });
+  assert.deepEqual(marketSql(t), [], "no market D1 statement");
+  assert.equal(t.kv.size, 0, "no KV write, no rate-limit unit");
+};
+const chunked = (str, size, pulled) => {
+  const bytes = Buffer.from(str);
+  let at = 0;
+  return new ReadableStream({
+    pull(ctl) {
+      if (at >= bytes.length) return ctl.close();
+      const part = bytes.subarray(at, at + size);
+      at += part.length;
+      pulled.n += part.length;
+      ctl.enqueue(new Uint8Array(part));
+    },
+  });
+};
+
+test("publish body: a declared Content-Length over the bound is a 413 too_large at once", async () => {
+  const t = setup();
+  noSpend(t, await post(t, "{}", { "Content-Length": "550247" }));
+});
+
+test("publish body: a stream with no Content-Length over the bound is a 413 and the read stops early", async () => {
+  const t = setup();
+  const pulled = { n: 0 };
+  const r = await post(t, chunked(sized(BOUND + 1), 1024, pulled), {}, { duplex: "half" });
+  noSpend(t, r);
+  assert.ok(pulled.n <= BOUND + 1024 + 65_536, `pulled ${pulled.n}`); // bound plus one chunk (plus the stream's queue read-ahead)
+  const big = { n: 0 };
+  const r2 = await post(setup(), chunked("x".repeat(900_000), 1024, big), {}, { duplex: "half" });
+  assert.equal(r2.status, 413);
+  assert.ok(big.n < 900_000, `stopped early, pulled ${big.n}`);
+});
+
+test("publish body: a Content-Length that lies low over a larger body is the same 413", async () => {
+  const t = setup();
+  noSpend(t, await post(t, sized(BOUND + 1), { "Content-Length": "100" }));
+});
+
+test("publish body: the largest acceptable publish (exactly the bound) is accepted, one byte more is not", async () => {
+  const t = setup();
+  const a = await post(t, sized(BOUND));
+  assert.equal(a.status, 200, a.text);
+  assert.equal(t.log.length, 5, "session pair, owner SELECT, dupe SELECT, one batch");
+  assert.deepEqual([...t.kv.keys()].sort(), ["pkg:org.example.kit:1.0.0", `rl:publish:${PUB}`]);
+  const b = setup();
+  noSpend(b, await post(b, sized(BOUND + 1)));
+});
+
+test("publish body: a malformed Content-Length reads as absent and a small valid body is accepted", async () => {
+  for (const cl of ["abc", "-1", "1e3", "", "12 ", "0x10"]) {
+    const t = setup();
+    const r = await post(t, okBody(), { "Content-Length": cl }).catch((e) => e);
+    // the runtime may itself reject a header it cannot frame; whatever answers, it is never a 500
+    assert.ok(r.status === 200 || r.status === 400 || r instanceof Error, `${cl}: ${r.status}`);
+    if (r.status) assert.equal(r.status, 200, `${cl}: ${r.text}`);
+  }
+  const t = setup();
+  const bad = await post(t, "{not json");
+  assert.equal(bad.status, 400);
+  assert.deepEqual(bad.json, { error: "invalid_body" });
+});
+
+test("publish body: a declared Content-Length of exactly the bound is not refused by the header check", async () => {
+  const t = setup();
+  const r = await post(t, okBody(), { "Content-Length": "550246" }).catch((e) => e);
+  assert.ok(r instanceof Error || r.status === 200, `${r.status}`); // the runtime may reject a header that does not match the body
+});
