@@ -21,26 +21,47 @@ enum SyncCrypto {
     private static let version: UInt8 = 1
     private enum Source: UInt8 { case icloud = 0, device = 1 }
 
-    enum KeyMode: Equatable { case icloud, deviceFallback }
+    /// `.unavailable`: neither key can be read, so nothing is sealed (#1287).
+    enum KeyMode: Equatable { case icloud, deviceFallback, unavailable }
+
+    /// #1287 seams (tests only): where the two keys come from. `create` is false when a
+    /// blob is being opened, so a lookup never makes a key just to fail.
+    typealias KeyLookup = @Sendable (_ create: Bool) -> SymmetricKey?
+    private static let testKey = SymmetricKey(size: .bits256)
+    private static var underTest: Bool { NSClassFromString("XCTestCase") != nil }
+
+    /// The synced iCloud key. Under XCTest none (never the real Keychain).
+    nonisolated(unsafe) static var icloudKey: KeyLookup = { create in
+        if underTest { return nil }
+        return create ? SyncKeyStore.fetchOrCreate() : SyncKeyStore.fetch()
+    }
+
+    /// The device key, or nil when the device secret cannot be read: there is no fallback
+    /// secret, so nothing is ever sealed under a key anyone could compute. Under XCTest a
+    /// random per-process key (never the operator's key file).
+    nonisolated(unsafe) static var deviceKey: KeyLookup = { create in
+        if underTest { return testKey }
+        let url = DatabaseKey.keyFileURL
+        // A missing file stays missing on the open path; a malformed one reads as no key.
+        if !create, ((try? DatabaseKey.fetch(at: url)) ?? nil) == nil { return nil }
+        return try? ClipboardCrypto.fileKey(url)
+    }
 
     /// Which key the next `encrypt` will use, given current availability.
     static var mode: KeyMode {
-        SyncKeyStore.fetchOrCreate() != nil ? .icloud : .deviceFallback
+        if icloudKey(true) != nil { return .icloud }
+        return deviceKey(true) != nil ? .deviceFallback : .unavailable
     }
 
-    private static func deviceKey() -> SymmetricKey {
-        let secret = (try? DatabaseKey.fetchOrCreate()) ?? ""
-        return SymmetricKey(data: SHA256.hash(data: Data(secret.utf8)))
-    }
-
+    /// nil when no key is available: nothing is sealed.
     static func encrypt(_ plaintext: Data) -> Data? {
         let source: Source
         let key: SymmetricKey
-        if let icloud = SyncKeyStore.fetchOrCreate() {
+        if let icloud = icloudKey(true) {
             source = .icloud; key = icloud
-        } else {
-            source = .device; key = deviceKey()
-        }
+        } else if let device = deviceKey(true) {
+            source = .device; key = device
+        } else { return nil }
         guard let sealed = try? AES.GCM.seal(plaintext, using: key),
               let combined = sealed.combined else { return nil }
         var out = Data([version, source.rawValue])
@@ -56,15 +77,10 @@ enum SyncCrypto {
 
         let key: SymmetricKey?
         switch source {
-        case .icloud: key = SyncKeyStore.fetch()                       // nil ⇒ not synced here yet
-        case .device: key = hasDeviceKey ? deviceKey() : nil
+        case .icloud: key = icloudKey(false)                    // nil ⇒ not synced here yet
+        case .device: key = deviceKey(false)
         }
         guard let key, let box = try? AES.GCM.SealedBox(combined: body) else { return nil }
         return try? AES.GCM.open(box, using: key)
-    }
-
-    /// True if a device key file already exists (so we won't create one just to fail).
-    private static var hasDeviceKey: Bool {
-        ((try? DatabaseKey.fetch()) ?? nil) != nil
     }
 }

@@ -1307,6 +1307,8 @@ tag from the now-released section and put it on the new top draft.
 - An extension whose script or theme file is too large is now refused with a reason that names the
   file and the size limit, and an extension manifest that is refused now says whether it was too
   large or nested too deeply.
+- Settings sync and the saved supporter sign-in no longer get sealed under a weak key when this
+  Mac's device key cannot be read; they are skipped instead.
 
 ## v2.174.0
 
