@@ -255,6 +255,8 @@ final class AgentTerminalController: ObservableObject {
     var windowState: @MainActor (NSWindow?) -> AgentTerminalWindowState? = { $0.map(AgentTerminalWindowState.init) }
     /// OQ-66: Settings › Agent Island › "Let sessions set the clipboard while you're viewing them".
     var clipboardWrites: () -> Bool = { Preferences.agentWindowClipboardWrites }
+    /// #895: a font binding action for the surface, the call find makes (rows record it). Runs on main.
+    var fontAction: @MainActor (AgentTerminalHostView?, String) -> Void = { _ = $0?.surface?.performBindingAction($1) }
 
     enum SpawnError: Error, CustomStringConvertible {
         case underTests
@@ -546,6 +548,27 @@ final class AgentTerminalController: ObservableObject {
         if refocus { focus() }
     }
 
+    /// #895: the size a new surface is shown with: the stored one (checked and clamped by Preferences), else today's.
+    static var fontSize: Double { Preferences.agentWindowTerminalFontSize ?? Double(12 * ThemeRuntime.scale) }
+
+    /// #895: Command-plus (+1), Command-minus (-1), Command-0 (0, back to today's size: the key is removed). One write
+    /// and one action, or nothing at a limit or with nothing to reset. "set_font_size", not "reset_font_size": Ghostty
+    /// resets to its config's size, not to the size the surface was made with.
+    func zoomFont(_ step: Int) {
+        let range = Preferences.agentWindowTerminalFontRange
+        let now = Self.fontSize
+        if step == 0 {
+            let had = Preferences.agentWindowTerminalFontSize != nil
+            Preferences.agentWindowTerminalFontSize = nil   // a garbage value (read as unset) goes too
+            guard had else { return }   // the surface is at today's size already
+        } else {
+            let next = min(max(now + Double(step.signum()), range.lowerBound), range.upperBound)
+            guard next != now else { return }
+            Preferences.agentWindowTerminalFontSize = next
+        }
+        fontAction(view, "set_font_size:\(Float(Self.fontSize))")
+    }
+
     func searchTotal(_ n: Int?) { findTotal = n }
     func searchSelected(_ n: Int?) { findSelected = n }
 
@@ -640,7 +663,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         // The backend first: a controller set while the options still name `.exec` (the default)
         // would build a surface that runs a login shell.
         configuration = TerminalSurfaceOptions(backend: .inMemory(screen.session),
-                                               fontSize: Float(12 * ThemeRuntime.scale), context: .window)
+                                               fontSize: Float(AgentTerminalController.fontSize), context: .window)
         if controller !== look() { controller = look() }
     }
 

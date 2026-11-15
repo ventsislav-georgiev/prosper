@@ -1215,6 +1215,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions transcript: a tool that was still running when you pressed Load earlier now
   finishes properly when its result arrives, and an image sent without text starts its own turn
   instead of joining the previous one.
+- Agent Sessions: in Terminal mode, Command-plus and Command-minus make the terminal's text bigger
+  or smaller (8 to 32 points) and Command-0 puts it back to the usual size; this Mac remembers the
+  size.
 
 ## v2.174.0
 

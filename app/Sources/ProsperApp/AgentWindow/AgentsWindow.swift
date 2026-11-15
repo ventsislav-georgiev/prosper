@@ -230,6 +230,8 @@ final class AgentsNSWindow: NSWindow {
         case newSession, newShell
         /// #1110: ⌘1…⌘9, the numbered row at that position (1-based).
         case jump(Int)
+        /// #895: the terminal's text size: +1, -1, 0 (back to today's size).
+        case font(Int)
         /// Up, down, left, right, Return for the sidebar (sendEvent).
         case sidebar
         /// The window's, doing nothing here (⌥⌘1/2/3 in Terminal mode).
@@ -260,7 +262,7 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .toggleMode, .verbosity, .session, .jump, .find, .findNext: return form ? .swallow : r
+        case .toggleMode, .verbosity, .session, .jump, .find, .findNext, .font: return form ? .swallow : r
         default: return r
         }
     }
@@ -283,13 +285,18 @@ final class AgentsNSWindow: NSWindow {
             case "t": return .toggleMode
             case "f": return terminalMode ? .find : .pass
             case "g": return terminalMode ? .findNext(true) : .pass
-            default: break
+            // #895: the terminal's text size; Transcript keeps these keys. The 0 key by code too (AZERTY types a letter there).
+            case "=", "+": return terminalMode ? .font(1) : .pass
+            case "-": return terminalMode ? .font(-1) : .pass
+            case "0": return terminalMode ? .font(0) : .pass
+            default: if event.keyCode == 29 { return terminalMode ? .font(0) : .pass }
             }
             if event.keyCode == 126 || event.keyCode == 125 {
                 return responder == .text ? .pass : .session(event.keyCode == 126 ? -1 : 1)
             }
         }
         if mods == [.command, .shift], key == "g" { return terminalMode ? .findNext(false) : .pass }
+        if mods == [.command, .shift], key == "+" || key == "=" { return terminalMode ? .font(1) : .pass }   // #895: Shift-Command-=
         if mods.isEmpty, sidebarFocused, responder == .other, [126, 125, 123, 124, 36, 76].contains(event.keyCode) {
             return .sidebar
         }
@@ -322,6 +329,7 @@ final class AgentsNSWindow: NSWindow {
         case .jump(let n): model.selectNumbered(n)   // no row there: nothing, and the key stops here (no beep, not the terminal's)
         case .find: model.terminal.openFind()
         case .findNext(let forward): model.terminal.findNext(forward)
+        case .font(let step): model.terminal.zoomFont(step)
         // #847: the model checks the gate; refused, the key does nothing (handled: no beep).
         case .newSession: model.openNewSession()
         case .newShell: model.startShell()

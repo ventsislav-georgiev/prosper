@@ -1387,4 +1387,150 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertEqual(rig.children.map(\.redraws), [0, 1])
         rig.c.detach()
     }
+
+    // MARK: #895 P2 step 2: the font size (Command-plus, Command-minus, Command-0)
+
+    static let fontKey = "agentWindowTerminalFontSize"
+
+    /// Runs `body` with the font key holding `raw` (nil: unset) in the scratch defaults, put back after.
+    @MainActor
+    func withFontPref(_ raw: Any?, _ body: () throws -> Void) rethrows {
+        XCTAssertFalse(Preferences.defaults === UserDefaults.standard, "a private defaults store")
+        let saved = Preferences.defaults.object(forKey: Self.fontKey)
+        defer { Preferences.defaults.set(saved, forKey: Self.fontKey) }
+        Preferences.defaults.set(raw, forKey: Self.fontKey)
+        try body()
+    }
+
+    @MainActor
+    final class FontLog { var sent: [String] = [] }
+
+    /// A rig whose surface actions are recorded (the closure runs on main, from zoomFont).
+    @MainActor
+    func fontRig() -> (Rig, () -> [String]) {
+        let rig = Rig(), log = FontLog()
+        rig.c.fontAction = { _, action in log.sent.append(action) }
+        return (rig, { log.sent })
+    }
+
+    var fontRaw: Any? { Preferences.defaults.object(forKey: Self.fontKey) }
+
+    @MainActor
+    func testFontStepsClampAtFloorAndCeiling() {
+        withFontPref(31.0) {
+            let (rig, sent) = fontRig()
+            rig.c.zoomFont(1)
+            XCTAssertEqual(fontRaw as? Double, 32)
+            XCTAssertEqual(sent(), ["set_font_size:32.0"])
+            rig.c.zoomFont(1)
+            XCTAssertEqual(fontRaw as? Double, 32, "the ceiling holds")
+            XCTAssertEqual(sent().count, 1, "a step at the ceiling sends nothing")
+        }
+        withFontPref(9.0) {
+            let (rig, sent) = fontRig()
+            rig.c.zoomFont(-1)
+            XCTAssertEqual(fontRaw as? Double, 8)
+            rig.c.zoomFont(-1)
+            XCTAssertEqual(fontRaw as? Double, 8, "the floor holds")
+            XCTAssertEqual(sent(), ["set_font_size:8.0"], "a step at the floor sends nothing")
+        }
+        // Out of range on disk: read clamped, and a step at that limit writes nothing (the stored value stays as it was).
+        withFontPref(40.0) {
+            let (rig, sent) = fontRig()
+            rig.c.zoomFont(1)
+            XCTAssertEqual(fontRaw as? Double, 40, "nothing written at the ceiling")
+            XCTAssertEqual(sent(), [])
+        }
+        withFontPref(7.9) {
+            let (rig, sent) = fontRig()
+            rig.c.zoomFont(-1)
+            XCTAssertEqual(fontRaw as? Double, 7.9, "nothing written at the floor")
+            XCTAssertEqual(sent(), [])
+            rig.c.zoomFont(1)
+            XCTAssertEqual(fontRaw as? Double, 9, "up from the clamped 8")
+        }
+    }
+
+    @MainActor
+    func testFontResetClearsThePreference() {
+        let today = Float(12 * ThemeRuntime.scale)
+        withFontPref(20.0) {
+            let (rig, sent) = fontRig()
+            rig.c.zoomFont(0)
+            XCTAssertTrue(fontRaw == nil, "the key is removed, the default is never written")
+            XCTAssertEqual(sent(), ["set_font_size:\(today)"], "back to today's size, not Ghostty's config size")
+            rig.c.zoomFont(0)
+            XCTAssertEqual(sent().count, 1, "nothing to reset: no action")
+        }
+        withFontPref("big") {
+            let (rig, sent) = fontRig()
+            rig.c.zoomFont(0)
+            XCTAssertTrue(fontRaw == nil, "a garbage value goes too")
+            XCTAssertEqual(sent(), [], "the surface is at today's size already")
+        }
+    }
+
+    @MainActor
+    func testFontActionGoesToTheSurfaceOnce() {
+        let range = Preferences.agentWindowTerminalFontRange
+        let today = Double(12 * ThemeRuntime.scale)
+        withFontPref(nil) {
+            let (rig, sent) = fontRig()
+            rig.c.zoomFont(1)
+            let up = min(max(today + 1, range.lowerBound), range.upperBound)
+            XCTAssertEqual(fontRaw as? Double, up)
+            XCTAssertEqual(sent(), ["set_font_size:\(Float(up))"], "one action per step")
+            rig.c.zoomFont(-1)
+            XCTAssertEqual(sent().count, 2)
+            XCTAssertEqual(sent().last, "set_font_size:\(Float(min(max(up - 1, range.lowerBound), range.upperBound)))")
+            // The default seam with no view: nothing to send to, nothing traps.
+            let bare = AgentTerminalController()
+            bare.zoomFont(1)
+            XCTAssertEqual(AgentTerminalController.fontSize, min(max(up, range.lowerBound), range.upperBound))
+        }
+    }
+
+    @MainActor
+    func testStoredFontSizeIsUsedAtShowAndAGarbageValueIsIgnored() {
+        let today = Double(12 * ThemeRuntime.scale)
+        let table: [(Any, Double, String)] = [
+            ("big", today, "a string"), (Double.nan, today, "NaN"), (Double.infinity, today, "infinity"),
+            (0.0, today, "zero"), (-3.0, today, "negative"), (true, today, "a Bool"),
+            (7.9, 8, "below the floor"), (32.1, 32, "above the ceiling"), (1e9, 32, "far above"),
+            (14.0, 14, "in range"), (20, 20, "an integer"),
+        ]
+        for (stored, want, tag) in table {
+            withFontPref(stored) { XCTAssertEqual(AgentTerminalController.fontSize, want, tag) }
+        }
+        withFontPref(nil) { XCTAssertEqual(AgentTerminalController.fontSize, today, "unset: exactly today's") }
+        withFontPref(20.0) {
+            let v = startedView()
+            defer { v.tearDown() }
+            XCTAssertEqual(v.host.configuration.fontSize, 20, "the new surface is made at the stored size")
+        }
+        withFontPref(Double.nan) {
+            let v = startedView()
+            defer { v.tearDown() }
+            XCTAssertEqual(v.host.configuration.fontSize, Float(today), "garbage: today's size")
+        }
+    }
+
+    @MainActor
+    func testAFontStepKeepsTheChildAndTheScreen() {
+        withFontPref(nil) {
+            let (rig, sent) = fontRig()
+            rig.c.attach(Self.key)
+            rig.grid(100, 30)
+            XCTAssertEqual(rig.c.phase, .live)
+            let generation = rig.c.generation
+            for i in 0..<10 { rig.c.zoomFont(i % 3 == 2 ? 0 : (i % 2 == 0 ? 1 : -1)) }
+            XCTAssertGreaterThan(sent().count, 0)
+            XCTAssertEqual(rig.children.count, 1, "no new spawn")
+            XCTAssertEqual(rig.screens.count, 1, "no new screen")
+            XCTAssertEqual(rig.child?.terminated, 0)
+            XCTAssertEqual(rig.c.generation, generation, "no re-attach")
+            XCTAssertEqual(rig.c.phase, .live)
+            rig.c.detach()
+        }
+    }
 }

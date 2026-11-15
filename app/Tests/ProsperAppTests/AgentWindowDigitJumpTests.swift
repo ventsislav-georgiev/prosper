@@ -66,8 +66,8 @@ extension AgentWindowD1Tests {
             // Caps Lock and fn are not modifiers here.
             (18, "1", [.command, .capsLock], .other, true, false, false, .jump(1), "Caps Lock on"),
             // ⌘0 stays free (the terminal's font reset), on the top row and the keypad.
-            (29, "0", cmd, .terminal, true, false, false, .pass, "⌘0 is not taken"),
-            (82, "0", pad, .terminal, true, false, false, .pass, "keypad ⌘0 is not taken"),
+            (29, "0", cmd, .terminal, true, false, false, .font(0), "Command-0 is the font reset, not a jump"),
+            (82, "0", pad, .terminal, true, false, false, .font(0), "keypad Command-0 is the font reset, not a jump"),
             // Shift, Option or Control added: not this chord. ⌥⌘1/2/3 stay the verbosity chord (swallowed in Terminal mode).
             (18, "!", [.command, .shift], .other, true, false, false, .pass, "⇧⌘1"),
             (18, "1", [.command, .shift], .terminal, true, false, false, .pass, "AZERTY ⇧⌘1 (the shifted digit)"),

@@ -453,6 +453,8 @@ enum Preferences {
         static let agentWindowTranscriptSessions = "agentWindowTranscriptSessions"
         // OQ-66: a session's terminal may set the clipboard (OSC 52) while you view it; per Mac, not in SyncedKeys.
         static let agentWindowClipboardWrites = "agentWindowClipboardWrites"
+        // #895: the Agent Sessions terminal's text size in points (Command-plus, Command-minus, Command-0); per Mac, not in SyncedKeys.
+        static let agentWindowTerminalFontSize = "agentWindowTerminalFontSize"
         // #847: the folder the window's last new session started in (expanded path); per Mac, not in SyncedKeys.
         static let agentWindowNewSessionFolder = "agentWindowNewSessionFolder"
         // #831 (spec 8.2): the window's pane layouts (PaneLayoutStore's blob); the bytes of a blob with a newer "v",
@@ -1337,6 +1339,22 @@ enum Preferences {
     static var agentWindowClipboardWrites: Bool {
         get { defaults.object(forKey: Keys.agentWindowClipboardWrites) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.agentWindowClipboardWrites) }
+    }
+
+    /// #895: the Agent Sessions terminal's text size in points, nil when unset (today's 12 x the UI scale). The stored value is
+    /// outside data (another build or a hand edit): anything but a finite positive number reads as unset, the rest is clamped
+    /// to 8...32 pt. nil removes the key.
+    static let agentWindowTerminalFontRange = 8.0...32.0
+    static var agentWindowTerminalFontSize: Double? {
+        get {
+            guard let n = defaults.object(forKey: Keys.agentWindowTerminalFontSize) as? NSNumber,
+                  CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite, n.doubleValue > 0 else { return nil }
+            return min(max(n.doubleValue, agentWindowTerminalFontRange.lowerBound), agentWindowTerminalFontRange.upperBound)
+        }
+        set {
+            if let newValue { defaults.set(newValue, forKey: Keys.agentWindowTerminalFontSize) }
+            else { defaults.removeObject(forKey: Keys.agentWindowTerminalFontSize) }
+        }
     }
 
     /// #751: Always allow permission prompts; off when unset.
