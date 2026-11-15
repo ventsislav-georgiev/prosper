@@ -189,7 +189,7 @@ final class AgentTerminalTests: XCTestCase {
         // The grid is the view's: a later attach starts at once, on a fresh screen.
         c.attach(AgentSessionKey(dir: Self.key.dir, name: "beta"))
         XCTAssertEqual(rig.requests.count, 2)
-        XCTAssertEqual(rig.requests.last?.args, ["-E", "-a", "beta"])
+        XCTAssertEqual(rig.requests.last?.args, ["-E", "-a", "beta", "--scrollback", "2000"])
         XCTAssertEqual(rig.screens.count, 2, "one screen per attach")
         // A resize from the old screen is stale.
         rig.screens[0].events.resize(40, 10)
@@ -363,7 +363,7 @@ final class AgentTerminalTests: XCTestCase {
         second.events.resize(101, 26)
         spin()
         XCTAssertEqual(rig.requests.map { [$0.cols, $0.rows] }, [[101, 26], [101, 26]])
-        XCTAssertEqual(rig.requests.last?.args, ["-E", "-a", "beta"])
+        XCTAssertEqual(rig.requests.last?.args, ["-E", "-a", "beta", "--scrollback", "2000"])
         rig.ios[1].output(Array("beta replay".utf8))
         spin()
         XCTAssertEqual(String(decoding: second.fed, as: UTF8.self), "beta replay")
@@ -373,7 +373,7 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertEqual(rig.requests.count, 2)
         try XCTUnwrap(rig.screen).events.resize(101, 26)
         spin()
-        XCTAssertEqual(rig.requests.map(\.args), [["-E", "-a", "alpha"], ["-E", "-a", "beta"], ["-E", "-a", "alpha"]])
+        XCTAssertEqual(rig.requests.map(\.args), [["-E", "-a", "alpha", "--scrollback", "2000"], ["-E", "-a", "beta", "--scrollback", "2000"], ["-E", "-a", "alpha", "--scrollback", "2000"]])
         rig.ios[2].output(Array("alpha again".utf8))
         spin()
         XCTAssertEqual(String(decoding: rig.screen?.fed ?? [], as: UTF8.self), "alpha again")
@@ -416,7 +416,7 @@ final class AgentTerminalTests: XCTestCase {
         rig.clock.advance(0.25)
         XCTAssertEqual(rig.requests.count, 1, "beta's timer is not gamma's")
         rig.clock.advance(0.3)
-        XCTAssertEqual(rig.requests.last?.args, ["-E", "-a", "gamma"])
+        XCTAssertEqual(rig.requests.last?.args, ["-E", "-a", "gamma", "--scrollback", "2000"])
         XCTAssertEqual(rig.requests.count, 2)
         // No grid yet when the wait runs out: the client starts with the first one.
         let late = Rig()
@@ -1143,7 +1143,7 @@ final class AgentTerminalTests: XCTestCase {
         let fake = rig.c.spawn
         rig.c.spawn = { req, io in
             let child = try fake(req, io)
-            let bytes = Array(Self.replay(req.args.last ?? "", req.cols, req.rows).utf8)
+            let bytes = Array(Self.replay(req.args.dropFirst(2).first ?? "", req.cols, req.rows).utf8)
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.002) { io.output(bytes) }
             return child
         }
@@ -1153,7 +1153,7 @@ final class AgentTerminalTests: XCTestCase {
         func shows(_ tag: String, clients: Int) {
             wait("\(tag) attached") { rig.requests.count == clients }
             let req = rig.requests[clients - 1]
-            XCTAssertEqual(req.args.last, tag)
+            XCTAssertEqual(req.args.dropFirst(2).first, tag)
             var lines: [String] = []
             wait("\(tag)'s replay whole") {
                 v.session?.waitForPendingOutput()
@@ -1257,5 +1257,134 @@ final class AgentTerminalTests: XCTestCase {
             }
         }
         return n
+    }
+
+    // MARK: #895 P2 step 1: attach scrollback and the quiet-attach redraw
+
+    /// dch >= 1.40.0 knows `-a <name> --scrollback N` on both ends: the attach asks for the constant 2000.
+    @MainActor
+    func testAttachArgsCarryScrollbackForANewEnoughClient() {
+        for version in [[1, 40, 0], [1, 71, 0], [2, 0]] {
+            let rig = Rig(version: version)
+            rig.c.attach(Self.key)
+            rig.grid(100, 30)
+            XCTAssertEqual(rig.requests.map(\.args), [["-E", "-a", "alpha", "--scrollback", "2000"]], "client \(version)")
+            XCTAssertEqual(rig.requests.last?.env["DCH_SOCKET_DIR"], Self.key.dir)
+            rig.c.detach()
+        }
+        let plain = AgentTerminalSpawn.local(Self.key, cols: 80, rows: 24, dch: "/opt/example/bin/dch", env: [:])
+        XCTAssertEqual(plain.scrollback(nil), plain, "no count: today's attach exactly")
+    }
+
+    /// An older client would not know the flag, and an unknown version is not a new one: today's arguments.
+    @MainActor
+    func testAttachArgsHaveNoScrollbackForAnOldOrUnknownClient() {
+        for version in [[1, 39, 9], [1, 9, 99], nil] as [[Int]?] {
+            let rig = Rig(version: version)
+            rig.c.attach(Self.key)
+            rig.grid(100, 30)
+            XCTAssertEqual(rig.requests.map(\.args), [["-E", "-a", "alpha"]], "client \(String(describing: version))")
+            rig.c.detach()
+        }
+    }
+
+    /// The probe runs off main: the attach waits for its answer, but never past the screen wait (500 ms);
+    /// a client started without the answer gets today's arguments.
+    @MainActor
+    func testAttachWaitsForTheVersionProbeAtMostScreenWait() {
+        let rig = Rig(version: [1, 71, 0])
+        rig.c.probeOffMain = true
+        rig.c.attach(Self.key)
+        rig.grid(100, 30)   // the screen runs at the view's grid; main has not run the probe's answer yet
+        XCTAssertTrue(rig.requests.isEmpty, "waiting for the client's version")
+        rig.clock.advance(0.49)
+        XCTAssertTrue(rig.requests.isEmpty, "still inside the screen wait")
+        rig.clock.advance(0.02)
+        XCTAssertEqual(rig.requests.map(\.args), [["-E", "-a", "alpha"]], "started anyway, without the flag")
+        spin()
+        XCTAssertEqual(rig.requests.count, 1, "a late answer starts no second client")
+        rig.c.detach()
+        // An answer inside the wait starts the client with the flag, before the wait runs out.
+        let quick = Rig(version: [1, 71, 0])
+        quick.c.probeOffMain = true
+        quick.c.attach(Self.key)
+        quick.grid(100, 30)
+        wait("the probe answered") { quick.requests.count == 1 }
+        XCTAssertEqual(quick.requests.map(\.args), [["-E", "-a", "alpha", "--scrollback", "2000"]])
+        XCTAssertEqual(quick.clock.now, 0, "no screen wait spent")
+        quick.c.detach()
+    }
+
+    /// dch sends the whole history again to a re-attach that asks. The re-attach after a dropped client
+    /// (exit 0 while live, the master's OUT_CAP) asks again ON A FRESH SCREEN, so the history never stacks
+    /// on the old screen's copy.
+    @MainActor
+    func testReattachAfterOutCapAsksAgainOnAFreshScreen() throws {
+        let rig = Rig()
+        let c = rig.c
+        c.attach(Self.key)
+        rig.grid(100, 30)
+        let first = try XCTUnwrap(rig.screen)
+        rig.ios.last?.output(Array("history one".utf8))
+        spin()
+        rig.ios.last?.exit(0)
+        spin()
+        XCTAssertEqual(c.phase, .live, "reattached")
+        XCTAssertEqual(rig.requests.map(\.args), Array(repeating: ["-E", "-a", "alpha", "--scrollback", "2000"], count: 2))
+        XCTAssertEqual(rig.screens.count, 2, "one screen per attach, the re-attach too")
+        let second = try XCTUnwrap(rig.screen)
+        XCTAssertFalse(first === second, "the old screen and its history are gone")
+        XCTAssertTrue(c.screen === second)
+        rig.ios.last?.output(Array("history two".utf8))
+        spin()
+        XCTAssertEqual(String(decoding: second.fed, as: UTF8.self), "history two", "the history once, on the new screen")
+        XCTAssertEqual(String(decoding: first.fed, as: UTF8.self), "history one")
+        c.detach()
+    }
+
+    /// A quiet attach (nothing fed) gets one redraw 700 ms after the spawn, and only one.
+    @MainActor
+    func testNoByteWithin700msRedrawsOnce() {
+        let rig = Rig()
+        rig.c.attach(Self.key)
+        rig.grid(100, 30)
+        rig.clock.advance(0.69)
+        XCTAssertEqual(rig.child?.redraws, 0)
+        rig.clock.advance(0.02)
+        XCTAssertEqual(rig.child?.redraws, 1, "one redraw at 700 ms")
+        rig.clock.advance(5)
+        XCTAssertEqual(rig.child?.redraws, 1, "once per attach")
+        rig.c.detach()
+    }
+
+    /// A byte that reached the screen first means the attach drew: no redraw.
+    @MainActor
+    func testABytesBefore700msMeansNoRedraw() {
+        let rig = Rig()
+        rig.c.attach(Self.key)
+        rig.grid(100, 30)
+        rig.clock.advance(0.2)
+        rig.ios.last?.output(Array("x".utf8))
+        spin()
+        XCTAssertEqual(rig.screen?.fed, Array("x".utf8))
+        rig.clock.advance(1)
+        XCTAssertEqual(rig.child?.redraws, 0)
+        rig.c.detach()
+    }
+
+    /// A switch before 700 ms: the old attach's timer redraws nothing, the new child gets only its own.
+    @MainActor
+    func testJiggleOfAnOldAttachNeverHitsTheNewOne() {
+        let rig = Rig()
+        rig.c.attach(Self.key)
+        rig.grid(100, 30)
+        rig.clock.advance(0.4)
+        rig.c.attach(AgentSessionKey(dir: Self.key.dir, name: "beta"))
+        XCTAssertEqual(rig.requests.count, 2)
+        rig.clock.advance(0.35)   // alpha's 700 ms
+        XCTAssertEqual(rig.children.map(\.redraws), [0, 0], "the old timer is stale")
+        rig.clock.advance(0.4)    // beta's 700 ms
+        XCTAssertEqual(rig.children.map(\.redraws), [0, 1])
+        rig.c.detach()
     }
 }

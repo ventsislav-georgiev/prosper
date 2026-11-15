@@ -1209,6 +1209,9 @@ tag from the now-released section and put it on the new top draft.
 - Account pool: each Claude Code session now stays on one account and its subagents follow it, so
   its prompt cache is kept; a session moves only when its account runs out, is held or is removed
   (#1259)
+- Agent Sessions: a session opened in Terminal mode now arrives with its recent history (up to 2,000
+  lines) to scroll back through, and a session that draws nothing when it opens gets one refresh
+  after a moment.
 
 ## v2.174.0
 

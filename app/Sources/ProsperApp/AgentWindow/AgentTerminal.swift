@@ -38,6 +38,13 @@ struct AgentTerminalSpawn: Equatable {
         env["DCH_SOCKET_DIR"] = key.dir
         return AgentTerminalSpawn(exe: dch, args: ["-E", "-a", key.name], env: env, cols: cols, rows: rows)
     }
+
+    /// `--scrollback n` after the attach arguments (nil: unchanged). dch >= 1.40.0 then sends up to n rows
+    /// of history before the screen; an older master ignores it without a word, an older client would not know it.
+    func scrollback(_ n: Int?) -> AgentTerminalSpawn {
+        guard let n else { return self }
+        return AgentTerminalSpawn(exe: exe, args: args + ["--scrollback", String(n)], env: env, cols: cols, rows: rows)
+    }
 }
 
 /// The child's callbacks; both run on its pump thread.
@@ -199,6 +206,11 @@ final class AgentTerminalController: ObservableObject {
     /// The dch client re-sends its size on focus-in itself (DEC 1004, dch >= 1.39.0); older clients
     /// need the rows-1 jiggle. Off until the client's version is known.
     private(set) var focusJiggle = false
+    /// This attach's client version: probed (`versionKnown`, the answer may be nil) or not yet.
+    private var version: [Int]?
+    private var versionKnown = false
+    /// A byte of this attach reached the screen (no quiet-attach redraw then).
+    private var fed = false
     weak var view: AgentTerminalHostView?
 
     static let resizeDebounce: TimeInterval = 0.15
@@ -207,6 +219,11 @@ final class AgentTerminalController: ObservableObject {
     static let screenWait: TimeInterval = 0.5
     static let noticeFor: TimeInterval = 2
     static let focusResizeDch = [1, 39, 0]
+    /// `dch -a <name> --scrollback N`: client flag and master side since dch 1.40.0 (one commit).
+    static let scrollbackDch = [1, 40, 0]
+    static let scrollbackRows = 2000
+    /// An attach that fed no byte by then gets one redraw (a quiet program repaints).
+    static let quietRedrawAfter: TimeInterval = 0.7
 
     // Seams.
     var spawn: (AgentTerminalSpawn, AgentTerminalIO) throws -> AgentTerminalChild = AgentTerminalController.realSpawn
@@ -218,8 +235,14 @@ final class AgentTerminalController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) }
     }
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
-    /// The client binary's version, probed off main (cached per path and mtime).
-    var clientVersion: @Sendable (String) -> [Int]? = { DchCommand.probedVersion($0) }
+    /// The client binary's version, probed off main (cached per path and mtime). Nil under XCTest: the
+    /// probe runs before the spawn now, and a row never runs a real `dch --version`.
+    var clientVersion: @Sendable (String) -> [Int]? = {
+        NSClassFromString("XCTestCase") == nil ? DchCommand.probedVersion($0) : nil
+    }
+    /// Where that probe runs: off main in the app (a cache miss runs `dch --version`, up to 4 s); under
+    /// XCTest on main at once, so a fake's answer is in before the grid. A row that wants it late sets this.
+    var probeOffMain = NSClassFromString("XCTestCase") == nil
     /// QA #681 INFO-4: the session's socket is on disk. dch's master unlinks it at exit (atexit(unlink_socket), master.c:4234 at dch v1.49.0, :4333 at v1.58.0, the bundled tag)
     /// before its clients read EOF, so an exit 0 with the socket gone is an end even while the store (polled
     /// about once a second) still lists the session.
@@ -273,6 +296,9 @@ final class AgentTerminalController: ObservableObject {
         sentSize = nil
         screenGrid = nil
         screenWaitOver = false
+        version = nil
+        versionKnown = false
+        fed = false
         let events = AgentTerminalScreenEvents(
             write: { [writer] in writer.send([UInt8]($0)) },
             resize: { [weak self] cols, rows in
@@ -292,15 +318,36 @@ final class AgentTerminalController: ObservableObject {
             self.screenWaitOver = true
             self.start()
         }
+        // The client's version decides the scrollback flag; the attach waits for it at most screenWait.
+        let probe = clientVersion, path = DchCommand.dchPath
+        if probeOffMain {
+            // Runs on a utility queue; the answer runs on main and is dropped for a later attach.
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let v = probe(path)
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.versionProbed(v, generation: gen) } }
+            }
+        } else {
+            versionProbed(probe(path), generation: gen)
+        }
         if grid != nil { start() }
+    }
+
+    private func versionProbed(_ v: [Int]?, generation gen: Int) {
+        guard gen == generation else { return }
+        version = v
+        versionKnown = true
+        focusJiggle = v.map { !DchCommand.isAtLeast($0, Self.focusResizeDch) } ?? false
+        start()
     }
 
     private func start() {
         guard let key, let grid, child == nil, phase == .attaching,
-              screenWaitOver || screenGrid.map({ $0 == grid }) == true else { return }
+              screenWaitOver || (versionKnown && screenGrid.map({ $0 == grid }) == true) else { return }
         let box = AgentTerminalInbox()
         inbox = box
-        let req = request(key, grid.cols, grid.rows)
+        // Every attach asks again, a re-attach too: it always has a fresh screen (no history kept to repeat).
+        let asks = version.map { DchCommand.isAtLeast($0, Self.scrollbackDch) } ?? false
+        let req = request(key, grid.cols, grid.rows).scrollback(asks ? Self.scrollbackRows : nil)
         do {
             let c = try spawn(req, Self.io(box, owner: self))
             child = c
@@ -309,15 +356,11 @@ final class AgentTerminalController: ObservableObject {
             phase = .live
             c.run()
             if focusPending { focus() }   // #845: a click while it attached lands now
-            let probe = clientVersion, path = req.exe, gen = generation
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                let v = probe(path)
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        guard let self, self.generation == gen else { return }
-                        self.focusJiggle = v.map { !DchCommand.isAtLeast($0, Self.focusResizeDch) } ?? false
-                    }
-                }
+            let gen = generation
+            // Runs on main (the `after` seam); only this attach's child, only if it fed nothing.
+            after(Self.quietRedrawAfter) { [weak self] in
+                guard let self, self.generation == gen, !self.fed else { return }
+                self.child?.redraw()
             }
         } catch {
             inbox = nil
@@ -353,6 +396,7 @@ final class AgentTerminalController: ObservableObject {
         let bytes = box.take()
         guard !bytes.isEmpty else { return }
         screen.feed(bytes)
+        fed = true
         revealed = true
     }
 

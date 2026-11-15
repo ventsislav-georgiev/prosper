@@ -197,7 +197,7 @@ extension AgentWindowD1Tests {
             m.setMode(.transcript, for: two)   // two in Transcript, one in the default Terminal
             m.setVisible(true)
             m.select(.live(one.key))
-            XCTAssertEqual(t.spawned().map(\.args), [["-E", "-a", "one"]], "the default Terminal attaches")
+            XCTAssertEqual(t.spawned().map(\.args), [["-E", "-a", "one", "--scrollback", "2000"]], "the default Terminal attaches")
             XCTAssertTrue(m.terminal.isSelected(one.key), "OQ-66: the selection is the session a write may come from")
             XCTAssertFalse(m.terminal.isSelected(two.key))
             XCTAssertEqual(m.terminal.phase, .live)
@@ -228,7 +228,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(terminated(), [1, 1, 1, 1], "the session ended: detached")
             m.select(.live(two.key))
             XCTAssertEqual(m.toggleMode(), true, "two: Transcript to Terminal")
-            XCTAssertEqual(t.spawned().last?.args, ["-E", "-a", "two"])
+            XCTAssertEqual(t.spawned().last?.args, ["-E", "-a", "two", "--scrollback", "2000"])
             m.toggleMode()
             XCTAssertEqual(terminated().last, 1, "back to Transcript: detached")
             XCTAssertEqual(m.interaction.session?.key, two.key)
