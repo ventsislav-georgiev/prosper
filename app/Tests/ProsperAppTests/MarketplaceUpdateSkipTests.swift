@@ -88,4 +88,64 @@ final class MarketplaceUpdateSkipTests: XCTestCase {
             XCTAssertFalse(line.shown.contains("/Users/example"), line.shown)
         }
     }
+
+    /// R1182-q4: a failed open or read of the unpacked manifest (a missing file, a folder where the file should be) is
+    /// local and can pass next time: not remembered, the pair is tried again. Bytes that are not UTF-8 are the package's
+    /// own: remembered. Both errors come from the real reader on files inside the row's own tempDir().
+    func testManifestIOFailureIsNotRememberedButBadUTF8Is() throws {
+        let dir = tempDir()
+        let asFolder = dir.appendingPathComponent("folder.toml")
+        try FileManager.default.createDirectory(at: asFolder, withIntermediateDirectories: true)
+        let bad = dir.appendingPathComponent("bad.toml")
+        try Data([0x61, 0xFF, 0x0A]).write(to: bad)
+        var io: [Error] = []
+        for url in [dir.appendingPathComponent("missing.toml"), asFolder] {
+            do { _ = try ExtensionLoader.readManifest(url); XCTFail("\(url.lastPathComponent) must not read") } catch { io.append(error) }
+        }
+        XCTAssertEqual(io.count, 2)
+        var r = Refused()
+        for e in io {
+            guard case ExtensionLoadError.unreadable = e else { XCTFail("\(e)"); continue }
+            XCTAssertFalse(Refused.isRefusal(e), "\(e)")
+            r.note(e, id: "com.example.kit", listed: "1.2.0")
+            XCTAssertFalse(r.skips(id: "com.example.kit", listed: "1.2.0"), "tried again at the next check")
+        }
+        XCTAssertTrue(r.listed.isEmpty)
+        do { _ = try ExtensionLoader.readManifest(bad); XCTFail("bad bytes must not read") } catch {
+            XCTAssertEqual(error as? ExtensionLoadError, .invalidUTF8("extension.toml is not valid UTF-8"))
+            XCTAssertTrue(Refused.isRefusal(error))
+            r.note(error, id: "com.example.kit", listed: "1.2.0")
+        }
+        XCTAssertTrue(r.skips(id: "com.example.kit", listed: "1.2.0"))
+    }
+
+    /// R1182-q5: the status sentence. Nothing skipped or failed: as before. A skipped or failed candidate: one fixed
+    /// sentence with the count (plural pinned), never "up to date"; with an install in the same pass that sentence wins.
+    func testStatusSaysWhatWasNotInstalled() {
+        typealias Tally = ExtensionRegistry.UpdateTally
+        var none = Tally()
+        XCTAssertEqual(none.status(force: true), "All extensions up to date.")
+        XCTAssertNil(none.status(force: false), "an automatic check that did nothing keeps the status")
+        none.installedOne()
+        XCTAssertEqual(none.status(force: false), "Updated 1 extension.")
+        none.installedOne()
+        XCTAssertEqual(none.status(force: true), "Updated 2 extensions.")
+
+        var forcedOverRefused = Tally()
+        var refused = Refused()
+        refused.note(refusal, id: "com.example.kit", listed: "1.2.0")
+        if refused.skips(id: "com.example.kit", listed: "1.2.0") { forcedOverRefused.skippedOne() }
+        XCTAssertEqual(forcedOverRefused.status(force: true), "1 update could not be installed.")
+        forcedOverRefused.failedOne()
+        XCTAssertEqual(forcedOverRefused.status(force: true), "2 updates could not be installed.")
+
+        var failedOnly = Tally()
+        failedOnly.failedOne()
+        XCTAssertEqual(failedOnly.status(force: true), "1 update could not be installed.", "a failed candidate counts like a skipped one")
+        var mixed = Tally()
+        mixed.installedOne()
+        mixed.skippedOne()
+        XCTAssertEqual(mixed.status(force: true), "1 update could not be installed.", "the count sentence wins over Updated N")
+        XCTAssertEqual(mixed.status(force: false), "1 update could not be installed.")
+    }
 }

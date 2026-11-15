@@ -1229,6 +1229,9 @@ tag from the now-released section and put it on the new top draft.
 - Account pool: a conversation that is still throttled after three retries now moves once to the
   least busy other account; if that account is busy too, it goes back to its own account (where its
   cache is) and the 429 is returned.
+- The Check for Updates button no longer says "All extensions up to date" when an update was skipped
+  or failed: it says how many could not be installed, and a manifest that could not be read (not the
+  package's fault) is tried again at the next check.
 
 ## v2.174.0
 

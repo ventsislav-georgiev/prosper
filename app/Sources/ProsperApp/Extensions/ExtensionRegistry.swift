@@ -1280,6 +1280,7 @@ final class ExtensionRegistry: ObservableObject {
         static func isRefusal(_ error: Error) -> Bool {
             switch error {
             case ExtensionError.marketIdMismatch, ExtensionError.marketVersionMismatch: return true
+            case ExtensionLoadError.unreadable: return false   // R1182-q4: a failed open or read is local, may pass next time
             case is ExtensionLoadError: return true
             case RemoteInstaller.InstallError.unsafeArchive, RemoteInstaller.InstallError.manifestNotFound: return true
             default: return false
@@ -1288,6 +1289,22 @@ final class ExtensionRegistry: ObservableObject {
     }
 
     private var refusedUpdates = RefusedUpdates()
+
+    /// R1182-q5: what one check did. A skipped (refused) or failed candidate is not installed: the status then says so in one
+    /// fixed sentence (a count only, no name, path or error text) and never "up to date".
+    struct UpdateTally: Sendable {
+        private(set) var installed = 0
+        private(set) var notInstalled = 0
+        mutating func installedOne() { installed += 1 }
+        mutating func skippedOne() { notInstalled += 1 }
+        mutating func failedOne() { notInstalled += 1 }
+        /// nil = leave the status alone (an automatic check that installed nothing).
+        func status(force: Bool) -> String? {
+            guard force || installed > 0 else { return nil }
+            if notInstalled > 0 { return "\(notInstalled) update\(notInstalled == 1 ? "" : "s") could not be installed." }
+            return installed == 0 ? "All extensions up to date." : "Updated \(installed) extension\(installed == 1 ? "" : "s")."
+        }
+    }
 
     /// R1182-p: the update failure log line, "update check failed for <id>: <why>". `shown` (the id, as logged before) is
     /// its only public part; `why` (the error text, which can hold a folder name or a path) is logged private.
@@ -1320,7 +1337,7 @@ final class ExtensionRegistry: ObservableObject {
         let marketIndex = candidates.contains { $0.url.hasPrefix(marketPrefix) }
             ? await MarketClient.index() : [:]
 
-        var updated = 0
+        var tally = UpdateTally()
         for cand in candidates {
             var tried: (id: String, listed: String)?   // R1182-q1: the market pair this pass downloads
             do {
@@ -1328,10 +1345,10 @@ final class ExtensionRegistry: ObservableObject {
                     let pkgID = String(cand.url.dropFirst(marketPrefix.count))
                     guard let latest = marketIndex[pkgID],
                           cand.version < SemanticVersion(latest) else { continue }
-                    if refusedUpdates.skips(id: pkgID, listed: latest) { continue }
+                    if refusedUpdates.skips(id: pkgID, listed: latest) { tally.skippedOne(); continue }
                     tried = (pkgID, latest)
                     try await installFromMarket(id: pkgID, version: latest)
-                    updated += 1
+                    tally.installedOne()
                     log.info("auto-updated market extension \(cand.id, privacy: .public) to \(latest, privacy: .public)")
                     continue
                 }
@@ -1345,17 +1362,16 @@ final class ExtensionRegistry: ObservableObject {
                 try bindMarketIdentity(extDir: remoteDir, expected: cand.id, expectedVersion: nil)
                 injectUpdateURL(cand.url, intoManifestAt: remoteDir)   // keep origin sticky
                 try installLocal(from: remoteDir)
-                updated += 1
+                tally.installedOne()
                 log.info("auto-updated extension \(cand.id, privacy: .public) to a newer version")
             } catch {
+                tally.failedOne()
                 if let tried { refusedUpdates.note(error, id: tried.id, listed: tried.listed) }
                 let line = Self.updateFailureLog(id: cand.id, error: error)
                 log.error("\(line.shown, privacy: .public): \(line.why, privacy: .private)")
             }
         }
-        if force || updated > 0 {
-            updateStatus = updated == 0 ? "All extensions up to date." : "Updated \(updated) extension\(updated == 1 ? "" : "s")."
-        }
+        if let status = tally.status(force: force) { updateStatus = status }
     }
 
     /// Persist the GitHub origin as `update_url` in the extension's manifest so

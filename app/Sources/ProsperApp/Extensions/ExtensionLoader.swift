@@ -15,7 +15,10 @@ struct LoadedExtension: Sendable, Equatable {
 
 enum ExtensionLoadError: Error, Equatable {
     case manifestMissing(URL)
+    /// Opening or reading the file failed (local, can be transient: not remembered as a refusal of a package).
     case unreadable(String)
+    /// The bytes are not valid UTF-8 (a property of the package itself).
+    case invalidUTF8(String)
     case parse(String)
     /// Extension requires a newer host than we are.
     case incompatibleHost(need: String, have: String)
@@ -73,7 +76,7 @@ enum ExtensionLoader {
         let bytes = data ?? Data()
         guard bytes.count <= TOMLGuard.maxBytes else { throw ExtensionLoadError.parse(String(describing: TOMLGuard.Rejected())) }
         guard let text = String(data: bytes, encoding: .utf8) else {
-            throw ExtensionLoadError.unreadable("extension.toml is not valid UTF-8")
+            throw ExtensionLoadError.invalidUTF8("extension.toml is not valid UTF-8")
         }
         return text
     }

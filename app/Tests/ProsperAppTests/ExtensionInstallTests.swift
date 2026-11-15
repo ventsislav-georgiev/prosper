@@ -607,7 +607,7 @@ final class ExtensionManifestCapTests: XCTestCase {
         }
         try Data([0x61, 0xFF, 0x0A]).write(to: url)
         XCTAssertThrowsError(try String(contentsOf: url, encoding: .utf8))
-        assertRefused(try ExtensionLoader.readManifest(url), .unreadable("extension.toml is not valid UTF-8"), "bad utf8")
+        assertRefused(try ExtensionLoader.readManifest(url), .invalidUTF8("extension.toml is not valid UTF-8"), "bad utf8")
     }
 
     func testLocalInstallRefusesBeforeCopying() throws {
