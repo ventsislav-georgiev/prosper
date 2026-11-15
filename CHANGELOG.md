@@ -1118,7 +1118,7 @@ tag from the now-released section and put it on the new top draft.
   looking ignored (#927)
 - Two extension menu bar icons whose ids differed only by a space, a slash, a colon or another
   unusual character (for example "a b" and "a_b") no longer share one saved menu bar position; icons
-  with plain ids keep their saved position (#980)
+  with plain ids of up to 256 characters keep their saved position (#980)
 
 ## v2.174.0
 
