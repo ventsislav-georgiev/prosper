@@ -390,14 +390,16 @@ enum CommandRouter {
             // proper palette. Management verbs (add/rm/...) still fall through to
             // the Lua handler below. This is rendering-only special-casing; the
             // mode/label mechanism itself is fully manifest-driven.
-            if id == "quicklinks.run", let ql = quicklinksLockedListing(trimmed) {
+            if id == "quicklinks.run", let ql = quicklinksLockedListing(trimmed),
+               await MainActor.run(body: { extensionLive(quicklinksID) }) {
                 return ql
             }
             // Quickdirs locked-mode: a dynamic per-quickdir prefix (`arg` = the
             // quickdir name) browses just that directory; the generic `qd ` prefix
             // (arg = nil) shows the picker / token-selects a quickdir. Management
             // verbs fall through to the Lua handler.
-            if id == "quickdirs.run", let qd = quickdirsOutcome(arg: arg, rest: trimmed) {
+            if id == "quickdirs.run", let qd = quickdirsOutcome(arg: arg, rest: trimmed),
+               await MainActor.run(body: { extensionLive(quickdirsID) }) {
                 return qd
             }
             // Native coding agent (`g `): surface a launcher row that opens the agent

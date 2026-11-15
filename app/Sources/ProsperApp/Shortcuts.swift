@@ -252,8 +252,19 @@ struct ActivationTarget: Identifiable, Sendable, Equatable, Hashable {
                 ? "\(tr.label) · \(tr.ext)" : tr.label
             out.append(ActivationTarget(label: label, prefix: tr.prefix))
         }
-        for b in builtins where seenPrefix.insert(b.prefix).inserted { out.append(b) }
+        for b in builtins where ownerLive(b.prefix, registry) && seenPrefix.insert(b.prefix).inserted { out.append(b) }
         return out
+    }
+
+    /// #985: a built-in whose prefix an extension's manifest declares (Open App, Run Shell
+    /// Command, Quicklinks) is offered only while that extension is live; one no manifest
+    /// declares (Emoji Picker, Blank Runner) or with no registry (tests) always is.
+    @MainActor
+    private static func ownerLive(_ prefix: String, _ registry: ExtensionRegistry?) -> Bool {
+        let owners = (registry?.records ?? []).filter { r in
+            r.manifest.contributes?.allCommands.contains { $0.allPrefixes.contains(prefix) } ?? false
+        }
+        return owners.isEmpty || owners.contains { $0.isLive }
     }
 }
 

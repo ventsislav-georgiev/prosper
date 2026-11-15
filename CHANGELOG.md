@@ -1078,6 +1078,10 @@ tag from the now-released section and put it on the new top draft.
   says "Answer not sent: another job is running" instead of doing nothing, and switching Always
   allow off and on during its follow-up check no longer sends a stray Needs input for a prompt that
   was already answered (#927)
+- Settings › Shortcuts no longer offers Open App, Run Shell Command or Quicklinks as runner targets
+  while their extension is turned off; a shortcut you already saved on one keeps its row and says
+  its extension is off. The Quicklinks and Quickdirs runner modes also stop listing once their
+  extension is off (#985)
 
 ## v2.174.0
 

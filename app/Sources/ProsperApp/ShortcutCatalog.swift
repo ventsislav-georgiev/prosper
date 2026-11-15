@@ -109,6 +109,10 @@ struct BindableAction: Identifiable, Hashable, Sendable {
 /// Merges every shortcut source into one list, and filters it. Both pure.
 enum ShortcutCatalog {
 
+    /// #985: the note under a saved runner shortcut whose built-in target's extension is off.
+    static let disabledTargetNote =
+        "Its extension is turned off in Settings \u{203A} Extensions, so this shortcut only opens the runner."
+
     /// `\u{1}` joins a command id to an item title in `BindableExtensionAction.id`;
     /// the same split recovers them when a row is written back.
     static func splitExtensionKey(_ key: String) -> (commandID: String, item: String) {
@@ -212,12 +216,17 @@ enum ShortcutCatalog {
         for cs in customShortcuts where !targetPrefixes.contains(cs.prefix) {
             targets.append(ActivationTarget(label: cs.label, prefix: cs.prefix))
         }
+        // #985: allTargets drops a built-in only while its extension is off, so a saved
+        // built-in prefix missing from the targets is one whose extension is disabled.
+        let builtinPrefixes = Set(ActivationTarget.builtins.map(\.prefix))
         for target in targets {
             let saved = savedByPrefix[target.prefix]
+            let off = !targetPrefixes.contains(target.prefix) && builtinPrefixes.contains(target.prefix)
             out.append(BindableAction(
                 kind: .runnerPrefix, key: target.prefix, title: target.label,
                 category: "Runner", icon: "text.and.command.macwindow",
-                combo: saved?.combo ?? unsetKeyCombo, recordID: saved?.id))
+                combo: saved?.combo ?? unsetKeyCombo, recordID: saved?.id,
+                conflictNote: off ? disabledTargetNote : nil))
         }
 
         // Apps are the one source that cannot be enumerated as rows (hundreds
