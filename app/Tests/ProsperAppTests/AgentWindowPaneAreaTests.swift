@@ -133,7 +133,8 @@ extension AgentWindowD1Tests {
             }
             func same(_ why: String) {
                 let s = paneSnapshot(m, size)
-                XCTAssertEqual(Set(s.keys), Set(base.keys), "the same slots (\(why), \(scale))")
+                // #901 B3 step 5: the attention bar is an overlay a blocked unfocused pane adds (no slot): not a slot here.
+                XCTAssertEqual(Set(s.keys.filter { !$0.hasPrefix("attention") }), Set(base.keys), "the same slots (\(why), \(scale))")
                 for k in base.keys { assertSame(s[k], base[k], "\(k) (\(why), \(scale))") }
             }
             let second = try XCTUnwrap(m.layout.order.last)

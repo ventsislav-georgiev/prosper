@@ -478,4 +478,58 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(r.name, OutsideText.shown(r.name), "drawn through the shared cap")
         }
     }
+
+    // MARK: #901 B3 step 5: the attention slot, rider R901-s4b-q2
+
+    /// Item 3 (a): an inactive layout holding two blocked sessions reads "<name>, Control 2" valued "2 sessions need
+    /// input"; the active row and a row with none have no value. At 1.0, 0.85 and 0.7 every Layouts row's frame is the
+    /// same with the dot and count as without (every session idle). The store's sessions are set on the fake store.
+    @MainActor
+    func testAgentWindowLayoutSectionAttentionSlotReadsTheCountAndKeepsFrames() throws {
+        gate(true)
+        _ = ThemeStore.shared   // seeds ThemeRuntime.scale from the prefs before it is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let labels = ["api, Control 1", "docs + web, Control 2", "web, Control 3"]
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            let a = paneLayout([paneTarget("api")]), b = paneLayout([paneTarget("docs"), paneTarget("web")])
+            let c = paneLayout([paneTarget("web")])
+            let (m, _) = try sectionModel([a, b, c], sessions: ["api", "docs", "web"])
+            defer { m.close() }
+            let plainTree = sidebarTree(m) { t in t.contains { $0.label == "web, Control 3" } }
+            let plain = unique(plainTree) { labels.contains($0.label) && $0.role == "AXButton" }
+            try XCTUnwrap(m.store).sessions = [session("api", .blocked), session("docs", .blocked), session("web", .blocked)]
+            XCTAssertEqual(m.layoutRows?.map(\.blocked), [0, 2, 1], "\(scale)")
+            let tree = sidebarTree(m) { t in t.contains { $0.label == "docs + web, Control 2" && !$0.value.isEmpty } }
+            let marked = unique(tree) { labels.contains($0.label) && $0.role == "AXButton" }
+            XCTAssertEqual(marked.map(\.label), labels, "\(scale)")
+            XCTAssertEqual(marked.map(\.value), ["", "2 sessions need input", "1 session needs input"], "\(scale)")
+            XCTAssertEqual(plain.map(\.value), ["", "", ""], "\(scale)")
+            XCTAssertEqual(marked.map(\.frame), plain.map(\.frame), "no frame moves (\(scale))")
+            XCTAssertEqual(m.layoutWrites, 0, "\(scale)")
+        }
+    }
+
+    /// R901-s4b-q2: the inline field's state ends in the model when its layout is deleted (no write beyond the delete's
+    /// one) or when the active layout changes (the switch's one write only). GUARD renaming-survives-a-delete.
+    @MainActor
+    func testAgentWindowLayoutSectionRenameStateEndsWithItsLayoutOrASwitch() throws {
+        gate(true)
+        let a = paneLayout([paneTarget("api")]), b = paneLayout([paneTarget("docs")]), c = paneLayout([paneTarget("web")])
+        let (m, d) = try sectionModel([a, b, c], sessions: ["api", "docs", "web"])
+        defer { m.close() }
+        m.beginLayoutRename(b.id)
+        XCTAssertEqual(m.layoutRenaming, b.id)
+        XCTAssertNil(m.deleteLayout(b.id))
+        XCTAssertTrue(m.layoutRenaming == nil, "its layout deleted: no field left")
+        XCTAssertEqual(m.layoutWrites, 1, "the delete's one write only")
+        XCTAssertEqual(m.layout.id, a.id, "an inactive delete keeps the active layout")
+        m.beginLayoutRename(a.id)
+        XCTAssertEqual(m.layoutRenaming, a.id)
+        XCTAssertNil(m.switchLayout(c.id))
+        XCTAssertTrue(m.layoutRenaming == nil, "another active layout: no field left")
+        XCTAssertEqual(m.layoutWrites, 2, "the switch's one write only")
+        XCTAssertEqual(savedLayouts(d).layouts.map(\.name), [nil, nil], "no name written")
+    }
 }

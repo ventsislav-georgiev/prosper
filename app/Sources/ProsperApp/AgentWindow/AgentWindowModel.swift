@@ -228,6 +228,8 @@ final class AgentWindowModel: ObservableObject {
             // draws the old one's as inert): forget the old box, so a focus asked for waits for the new one (pending).
             if AgentPaneLayout.splitsEnabled, layout.focused != oldValue.focused { interaction.composer = nil }
             if dividerDrag == nil { autosave() }   // #900 B2 step 5a (8.1): a divider drag saves once, at its end
+            // R901-s4b-q2: another active layout ends an open inline rename (nothing written).
+            if layoutRenaming != nil, layout.id != oldValue.id { layoutRenaming = nil }
         }
     }
     /// 8.1 / 8.2: where the layouts load from and save to: the owner passes the app's defaults, tests a private
@@ -758,6 +760,7 @@ final class AgentWindowModel: ObservableObject {
             return r
         case let .success(out):
             autosave(out)
+            if let r = layoutRenaming, !out.layouts.contains(where: { $0.id == r }) { layoutRenaming = nil }   // R901-s4b-q2
             lastLive = AgentPaneLayout.pruned(lastLive, keeping: out)
             if let next = out.activeLayout, next.id != layout.id { adopt(next) }
             return nil
@@ -865,6 +868,53 @@ final class AgentWindowModel: ObservableObject {
         let number: Int
         let name: String
         let active: Bool
+        /// #901 B3 step 5 (section 10): blocked sessions in this layout's panes, an inactive layout only; 0 draws nothing.
+        var blocked = 0
+    }
+
+    /// #901 B3 step 5 (section 10): what a session in a pane asks of the person: blocked outranks done (the sidebar's order).
+    enum PaneNeed: Equatable { case blocked, done }
+
+    /// Section 10's map: the active layout's panes whose session needs you, and per INACTIVE layout the count of its
+    /// distinct blocked sessions (no entry for 0). Pure value.
+    struct Attention: Equatable {
+        var panes: [UUID: PaneNeed] = [:]
+        var layouts: [UUID: Int] = [:]
+    }
+
+    /// Needs-you sessions by key, as of the last visible refresh (refresh(sessions:)); nil with the gate off or before
+    /// the first visible refresh. Written only when it changes, so an equal refresh publishes nothing.
+    @Published private(set) var needs: [AgentSessionKey: PaneNeed]?
+
+    static func needing(_ sessions: [AgentSession]) -> [AgentSessionKey: PaneNeed] {
+        var out: [AgentSessionKey: PaneNeed] = [:]
+        for s in sessions where AgentSidebar.needsYou(s) { out[s.key] = s.state == .blocked ? .blocked : .done }
+        return out
+    }
+
+    /// The map from `needs`, the active layout as it is now and the stored layouts: a pure read; nil with the gate off.
+    var attention: Attention? {
+        guard AgentPaneLayout.splitsEnabled, let n = needs else { return nil }
+        return Self.attention(n, active: layout, stored: layouts?.layouts ?? [])
+    }
+
+    static func attention(_ needs: [AgentSessionKey: PaneNeed], active: PaneLayout, stored: [PaneLayout]) -> Attention {
+        func key(_ t: PaneTarget?) -> AgentSessionKey? {
+            if case let .session(d, n)? = t { AgentSessionKey(dir: d, name: n) } else { nil }   // history, remote: none
+        }
+        var a = Attention()
+        for p in active.panes { if let k = key(p.target), let v = needs[k] { a.panes[p.id] = v } }
+        for l in stored where l.id != active.id {
+            let blocked = Set(l.panes.compactMap { key($0.target) }.filter { needs[$0] == .blocked })
+            if !blocked.isEmpty { a.layouts[l.id] = blocked.count }
+        }
+        return a
+    }
+
+    /// Section 10's marks of pane `id`: nil for the focused pane (it never shows them) and for one that needs nothing.
+    func paneNeed(_ id: UUID) -> PaneNeed? {
+        guard id != layout.focused else { return nil }
+        return attention?.panes[id]
     }
 
     /// #901 B3 step 4a (8.1 :625-627): the Layouts section's rows in the stored order; nil: the section is not built.
@@ -873,10 +923,12 @@ final class AgentWindowModel: ObservableObject {
     /// `sections` for the titles): a refresh that changes none of them gives the same rows.
     var layoutRows: [LayoutRow]? {
         guard AgentPaneLayout.splitsEnabled, let s = layouts, layout.panes.count >= 2 || s.layouts.count >= 2 else { return nil }
+        let counts = attention?.layouts ?? [:]   // step 5: inactive layouts only (the map skips the active one)
         return s.layouts.prefix(PaneLayoutStore.maxLayouts).enumerated().map { i, stored in
             let l = stored.id == layout.id ? layout : stored   // the active one as it is now (island off too)
             let name = l.name ?? PaneLayoutStore.automaticName(l.panes.map { layoutTitle($0.target) })
-            return LayoutRow(id: l.id, number: i + 1, name: OutsideText.shown(name), active: l.id == layout.id)
+            return LayoutRow(id: l.id, number: i + 1, name: OutsideText.shown(name), active: l.id == layout.id,
+                             blocked: counts[l.id] ?? 0)
         }
     }
 
@@ -1005,6 +1057,9 @@ final class AgentWindowModel: ObservableObject {
         // Hidden or closed: nothing is rebuilt; showing again reads the store afresh.
         guard visible, !closed else { return }
         refreshes += 1
+        // #901 B3 step 5 (section 10): the attention source, on this visible refresh only; gate off: stays nil.
+        let n = AgentPaneLayout.splitsEnabled ? Self.needing(sessions) : nil
+        if n != needs { needs = n }
         let new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
                                         details: details, now: now(), actions: actions)
         let old = sections

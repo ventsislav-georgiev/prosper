@@ -666,6 +666,7 @@ struct AgentLayoutsSection: View {
                 Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r) }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Self.label(r))
+                    .accessibilityValue(Self.value(r))
                     .accessibilityAddTraits(r.active ? .isSelected : [])
                     .contextMenu {
                         ForEach(AgentWindowControls.layoutMenu(model, r.id)) { e in
@@ -678,6 +679,10 @@ struct AgentLayoutsSection: View {
 
     /// R901-s4a-a: VoiceOver reads what a sighted person sees, the name and the "⌃N" key.
     static func label(_ r: AgentWindowModel.LayoutRow) -> String { "\(r.name), Control \(r.number)" }
+    /// #901 B3 step 5: the dot and count read aloud; nothing for 0 (the slot draws nothing).
+    static func value(_ r: AgentWindowModel.LayoutRow) -> String {
+        r.blocked == 0 ? "" : r.blocked == 1 ? "1 session needs input" : "\(r.blocked) sessions need input"
+    }
 }
 
 /// #901 B3 step 4b: a Layouts row's inline name field: Return ends with the text (the model cleans it), Escape, the focus
@@ -733,10 +738,24 @@ struct AgentLayoutRowView: View {
                 .opacity(edit == nil ? 1 : 0).accessibilityHidden(edit != nil)
                 .overlay(alignment: .leading) { if let edit { AgentLayoutNameField(placeholder: row.name, text: edit, end: end) } }
             Spacer(minLength: 0)
-            Color.clear.frame(width: AgentLayoutsSection.attentionWidth, height: 1)   // step 5's attention slot, empty
+            Color.clear.frame(width: AgentLayoutsSection.attentionWidth, height: 1)   // the attention slot
         }
         .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
         .frame(maxWidth: .infinity, alignment: .leading)
+        // #901 B3 step 5 (section 10): an inactive layout's blocked count, a dot and the number over the slot (an
+        // overlay: no frame moves; 0 builds nothing). The sidebar's blocked colour; read aloud through the row's value.
+        .overlay(alignment: .trailing) {
+            if row.blocked > 0 {
+                HStack(spacing: sz(2)) {
+                    Circle().fill(agentStateColor(.blocked)).frame(width: sz(5), height: sz(5))
+                    Text("\(row.blocked)").font(Neon.font(9.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(agentStateColor(.blocked)).fixedSize()
+                }
+                .frame(width: AgentLayoutsSection.attentionWidth, alignment: .trailing)
+                .padding(.trailing, sz(10))
+                .allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
         .contentShape(Rectangle())
     }
 }
@@ -1439,6 +1458,8 @@ struct AgentPaneArea: View {
                         .overlay(alignment: .topLeading) { edge(f) }
                         // 7.6: the focus border or the dim, an overlay too (fixed slots: nothing moves when focus does).
                         .overlay { mark(id, compact: compact) }
+                        // #901 B3 step 5 (section 10): an unfocused pane's blocked session: the 3·s top-edge bar.
+                        .overlay(alignment: .top) { attentionBar(id, compact: compact) }
                         // 13: more than one pane shown: each pane one container, "<title>, pane i of n".
                         .modifier(AgentPaneContainer(label: label))
                         .modifier(AgentPaneProbe(kind: "pane"))
@@ -1521,6 +1542,17 @@ struct AgentPaneArea: View {
             } else {
                 AgentPaneDim().modifier(AgentPaneProbe(kind: "mark"))
             }
+        }
+    }
+
+    /// #901 B3 step 5 (section 10 :747): more than one pane shown and this pane's session blocked (paneNeed: never the
+    /// focused pane): a sz(3) bar on the top edge in the sidebar's blocked colour, an overlay (no frame moves), no hits,
+    /// hidden from accessibility (the header chip "Needs input" says it). It goes when the session stops being blocked
+    /// or the pane takes focus: no timer. Gate off: one pane, never compact, so never built.
+    @ViewBuilder func attentionBar(_ id: UUID, compact: Bool) -> some View {
+        if compact, model.paneNeed(id) == .blocked {
+            Rectangle().fill(agentStateColor(.blocked)).frame(height: sz(3)).frame(maxWidth: .infinity)
+                .allowsHitTesting(false).accessibilityHidden(true).modifier(AgentPaneProbe(kind: "attention"))
         }
     }
 
