@@ -115,7 +115,7 @@ final class MenuBarManager: NSObject {
     private func teardown() {
         rehideTimer?.invalidate(); rehideTimer = nil
         for item in [chevron, hiddenSeparator].compactMap({ $0 }) {
-            NSStatusBar.system.removeStatusItem(item)
+            ProsperStatusItems.bar.removeStatusItem(item)
         }
         chevron = nil
         hiddenSeparator = nil
@@ -135,7 +135,7 @@ final class MenuBarManager: NSObject {
 
     /// The always-visible clickable control. A click toggles the hidden section.
     private func makeChevron() -> NSStatusItem {
-        let item = NSStatusBar.system.statusItem(withLength: Lengths.standard)
+        let item = ProsperStatusItems.bar.statusItem(withLength: Lengths.standard)
         item.autosaveName = "ProsperMenuBarChevron"
         if let button = item.button {
             button.setAccessibilityIdentifier(MenuBarAX.identifierPrefix + "chevron")
@@ -172,7 +172,7 @@ final class MenuBarManager: NSObject {
     /// REVEALED (so the user can see where to ⌘-drag icons), and rides off-screen
     /// when expanded to hide. It is never the click target — the chevron is.
     private func makeSeparator(autosave: String, id: String) -> NSStatusItem {
-        let item = NSStatusBar.system.statusItem(withLength: Lengths.standard)
+        let item = ProsperStatusItems.bar.statusItem(withLength: Lengths.standard)
         item.autosaveName = autosave
         if let button = item.button {
             button.setAccessibilityIdentifier(MenuBarAX.identifierPrefix + id)   // how the hosted fit finds it

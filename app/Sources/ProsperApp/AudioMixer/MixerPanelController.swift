@@ -94,7 +94,7 @@ final class MixerPanelController {
 
     private func syncItem() {
         guard item == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: Self.itemWidth)
+        let item = ProsperStatusItems.bar.statusItem(withLength: Self.itemWidth)
         item.autosaveName = "ProsperVolumeMixer"
         // .content: stays in the menubar-management ordering/preview set.
         ProsperStatusItems.register(item, role: .content, name: "Volume")
@@ -257,7 +257,7 @@ final class MixerPanelController {
         // Off means nothing of the panel survives, subscribed to the mixer.
         popover.contentViewController = nil
         host = nil
-        if let item { NSStatusBar.system.removeStatusItem(item) }
+        if let item { ProsperStatusItems.bar.removeStatusItem(item) }
         item = nil
     }
 }

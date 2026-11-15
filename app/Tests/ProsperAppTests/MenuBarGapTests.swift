@@ -119,21 +119,77 @@ final class MenuBarLiveBarGuardTests: XCTestCase {
             "MenuBarTests.swift: let m = \(mgr)()",
             "WindowShortcutToggleMoreTests.swift: let cal = \(cal).shared",
             "WindowShortcutToggleMoreTests.swift: let cal = \(cal).shared",
+            "MenuBarGapTests.swift: let system = \(sys)",
         ]
         XCTAssertEqual(hits, allowed.sorted(), "a test line names the system bar or a controller that creates an item there")
     }
 
-    /// The controllers the row above guards are exactly the product sites that create a system-bar item.
+    /// The controllers the row above guards are exactly the product sites that create a status item: each makes it
+    /// on the accessor's bar (R980-a). And the only line under Sources that names the system bar, comments aside,
+    /// is the accessor's own, beside the two thickness reads (they make no item).
     func testTheGuardedControllersAreTheProductSites() throws {
-        let sys = Self.sys
-        let sites = try lines(under: "Sources") { $0.contains(sys + ".statusItem(") }
+        let sys = Self.sys, acc = "ProsperStatusItems" + ".bar"
+        let sites = try lines(under: "Sources") { $0.contains(acc + ".statusItem(") }
         let listed = [
-            "StatsController.swift: let item = \(sys).statusItem(withLength: NSStatusItem.variableLength)",
-            "CalendarBarController.swift: let item = \(sys).statusItem(withLength: NSStatusItem.variableLength)",
-            "MixerPanelController.swift: let item = \(sys).statusItem(withLength: Self.itemWidth)",
-            "MenuBarManager.swift: let item = \(sys).statusItem(withLength: Lengths.standard)",
-            "MenuBarManager.swift: let item = \(sys).statusItem(withLength: Lengths.standard)",
+            "StatsController.swift: let item = \(acc).statusItem(withLength: NSStatusItem.variableLength)",
+            "CalendarBarController.swift: let item = \(acc).statusItem(withLength: NSStatusItem.variableLength)",
+            "MixerPanelController.swift: let item = \(acc).statusItem(withLength: Self.itemWidth)",
+            "MenuBarManager.swift: let item = \(acc).statusItem(withLength: Lengths.standard)",
+            "MenuBarManager.swift: let item = \(acc).statusItem(withLength: Lengths.standard)",
         ]
-        XCTAssertEqual(sites, listed.sorted(), "a new system-bar site: list it and guard its controller in the row above")
+        XCTAssertEqual(sites, listed.sorted(), "a new status-item site: list it and guard its controller in the row above")
+        let named = try lines(under: "Sources") { line in
+            line.contains(sys) && !line.trimmingCharacters(in: .whitespaces).hasPrefix("//")
+        }
+        let only = [
+            "MenuBarBridging.swift: guard NSClassFromString(\"XCTestCase\") != nil else { return \(sys) }",
+            "MenuBarController.swift: let h = Preferences.menuBarIconSize.pointSize(thickness: \(sys).thickness)",
+            "StatsWidgetView.swift: private var thickness: CGFloat { \(sys).thickness }",
+        ]
+        XCTAssertEqual(named, only.sorted(), "a line names the system bar outside the accessor: use \(acc)")
+    }
+
+    /// R980-a at run time: under XCTest the accessor is one private bar (the same object every call, so an item is
+    /// removed from the bar that made it), never the system bar; and a MenuBarController built with its DEFAULT bar
+    /// has its item there. The system bar is only compared by identity. The two defaults are pinned by text first,
+    /// and the controller is built only when both checks hold, so a broken default or accessor never makes a live item.
+    @MainActor
+    func testUnderXCTestTheAccessorIsOnePrivateBar() throws {
+        let system = NSStatusBar.system
+        let bar = ProsperStatusItems.bar
+        XCTAssertTrue(ProsperStatusItems.bar === bar, "a new bar per call: an item would be removed from another bar")
+        let defaults = try lines(under: "Sources") { $0.contains(": NSStatusBar = ") }
+        let wanted = [
+            "ExtensionMenuBar.swift: var statusBar: NSStatusBar = ProsperStatusItems.bar",
+            "MenuBarBridging.swift: static let bar: NSStatusBar = {",
+            "MenuBarController.swift: statusBar: NSStatusBar = ProsperStatusItems.bar",
+        ]
+        XCTAssertEqual(defaults, wanted, "a status-bar default does not go through the accessor")
+        guard !(bar === system) else { return XCTFail("the accessor is the system bar under XCTest") }
+        guard defaults == wanted else { return }
+        let controller = MenuBarController(
+            onOpenRunner: {}, onOpenClipboard: {}, onOpenSettings: {},
+            onCheckForUpdates: {}, onRerunSetup: {}, onRestart: {}, onQuit: {})
+        defer { bar.removeStatusItem(controller.statusItem) }
+        XCTAssertTrue(controller.statusItem.statusBar === bar, "the default bar is not the accessor's")
+        XCTAssertFalse(controller.statusItem.statusBar === system, "the default put the item on the system bar")
+    }
+
+    /// R980-b: the rows of WindowShortcutToggleMoreTests that hold the real calendar controller call only its hotkey
+    /// seams (none reaches syncItem(), the one function that makes its item), and never reload(). A `cal` bound by
+    /// "let cal = fakeCalendar()" is the test's own CalendarFake: its lines are skipped until the next real binding.
+    func testCalendarRowsCallOnlyTheHotkeySeams() throws {
+        let url = app.appendingPathComponent("Tests/ProsperAppTests/WindowShortcutToggleMoreTests.swift")
+        let real = "let cal = CalendarBar" + "Controller.shared", fake = "let cal = fakeCalendar()"
+        var isReal = false, bindings = 0, used = Set<String>()
+        for line in try String(contentsOf: url, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false) {
+            XCTAssertFalse(line.contains(/\bcal\s*[?!]?\s*\.\s*reload\b/), "reload() after cal: \(line)")
+            if line.contains(real) { isReal = true; bindings += 1; continue }
+            if line.contains(fake) { isReal = false; continue }
+            guard isReal else { continue }
+            for m in line.matches(of: /\bcal\s*[?!]?\s*\.\s*(\w+)/) { used.insert(String(m.output.1)) }
+        }
+        XCTAssertEqual(bindings, 2, "the rows that bind the real calendar controller")
+        XCTAssertEqual(used, ["popupWindow", "shortcutEffect", "toggleFromShortcut"], "a new member on the real controller")
     }
 }

@@ -7,7 +7,7 @@ import XCTest
 /// macOS hands out (99 999), so none can be this process.
 final class MenuBarSeamTests: XCTestCase {
     /// A running app with a made-up bundle id (never a real process).
-    private final class FakeApp: NSRunningApplication {
+    private final class FakeApp: NSRunningApplication, @unchecked Sendable {
         private let bid: String?
         init(_ bid: String?) { self.bid = bid; super.init() }
         override var bundleIdentifier: String? { bid }

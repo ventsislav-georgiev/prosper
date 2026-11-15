@@ -211,7 +211,7 @@ final class CalendarBarController {
 
     private func syncItem() {
         if item == nil {
-            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            let item = ProsperStatusItems.bar.statusItem(withLength: NSStatusItem.variableLength)
             item.autosaveName = "ProsperCalendar"
             // .content: stays in the menubar-management ordering/preview set.
             ProsperStatusItems.register(item, role: .content, name: "Calendar")
@@ -426,7 +426,7 @@ final class CalendarBarController {
 
     private func teardown() {
         minuteTimer?.cancel(); minuteTimer = nil
-        if let item { NSStatusBar.system.removeStatusItem(item) }
+        if let item { ProsperStatusItems.bar.removeStatusItem(item) }
         item = nil; host = nil
         lastIconWidthKey = ""
         store.eventsByDay = [:]

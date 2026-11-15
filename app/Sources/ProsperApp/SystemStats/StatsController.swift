@@ -196,13 +196,13 @@ final class StatsController {
         let wanted = Set(modules)
         // Remove items for modules no longer shown.
         for (m, pair) in items where !wanted.contains(m) {
-            NSStatusBar.system.removeStatusItem(pair.item)
+            ProsperStatusItems.bar.removeStatusItem(pair.item)
             if let b = pair.item.button { buttonModule[ObjectIdentifier(b)] = nil }
             items[m] = nil
         }
         // Add items for newly shown modules.
         for m in widthGate.admit(modules, live: items.keys) {
-            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            let item = ProsperStatusItems.bar.statusItem(withLength: NSStatusItem.variableLength)
             item.autosaveName = "ProsperStats-\(m.rawValue)"
             // .content (not .control): Stats icons stay in the managed set so the user
             // can order/preview them — the whole point of multi-icon ordering.
@@ -302,7 +302,7 @@ final class StatsController {
 
     private func teardown() {
         poller?.stop(); poller = nil
-        for (_, pair) in items { NSStatusBar.system.removeStatusItem(pair.item) }
+        for (_, pair) in items { ProsperStatusItems.bar.removeStatusItem(pair.item) }
         items.removeAll(); buttonModule.removeAll()
         if popover.isShown { popover.performClose(nil) }
     }

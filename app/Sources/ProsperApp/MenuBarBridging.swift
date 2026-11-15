@@ -60,6 +60,14 @@ enum ProsperStatusItems {
     private static var entries: [Entry] = []
     private static var contentSerial = 0
 
+    /// #980 R980-a: the bar every Prosper status item is made on and removed from. The system bar in the app;
+    /// under XCTest one private bar for the whole process (same check as Pasteboard.general), so no path a test
+    /// reaches can put an item in the live menu bar.
+    static let bar: NSStatusBar = {
+        guard NSClassFromString("XCTestCase") != nil else { return NSStatusBar.system }
+        return NSStatusBar()
+    }()
+
     /// Register a Prosper-owned status item. `role` defaults to `.control` (chrome);
     /// pass `.content` + a human `name` for Stats/extension icons. Held weakly so
     /// removed items drop out on the next sweep.

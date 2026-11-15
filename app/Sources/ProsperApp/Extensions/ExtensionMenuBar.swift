@@ -44,7 +44,7 @@ final class ExtensionMenuBar: NSObject, NSMenuDelegate {
     /// Live status items keyed by "extID\u{1}id". Readable for tests.
     private(set) var items: [String: NSStatusItem] = [:]
     /// QA OQ-6: tests swap in a private `NSStatusBar()` so nothing lands on the real menu bar.
-    var statusBar: NSStatusBar = .system
+    var statusBar: NSStatusBar = ProsperStatusItems.bar
     /// The app-wide toast panel and its pending auto-hide. Readable for tests.
     private(set) var hud: NSPanel?
     private(set) var hudHide: DispatchWorkItem?

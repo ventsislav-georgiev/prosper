@@ -52,7 +52,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         onRerunSetup: @escaping () -> Void,
         onRestart: @escaping () -> Void,
         onQuit: @escaping () -> Void,
-        statusBar: NSStatusBar = .system
+        statusBar: NSStatusBar = ProsperStatusItems.bar
     ) {
         self.onOpenRunner = onOpenRunner
         self.onOpenClipboard = onOpenClipboard
