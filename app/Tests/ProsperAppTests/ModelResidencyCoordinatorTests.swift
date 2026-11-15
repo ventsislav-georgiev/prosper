@@ -304,4 +304,19 @@ final class ModelResidencyCoordinatorTests: XCTestCase {
         await c.releaseAgent()
         XCTAssertFalse(flag)
     }
+
+    // MARK: #1181 R1181-m: the resident-id accessor never answers a stale id
+
+    func testCurrentAgentModelIdIsNilWithoutAnEngine() async throws {
+        let f = Factory(singleton: false)
+        let c = f.coordinator()
+        let before = await c.currentAgentModelId()
+        XCTAssertTrue(before == nil)
+        _ = try await residentA(f, c)
+        let during = await c.currentAgentModelId()
+        XCTAssertTrue(during != nil)
+        await c.releaseAgent()
+        let after = await c.currentAgentModelId()
+        XCTAssertTrue(after == nil, "the id of a released engine is not reported")
+    }
 }

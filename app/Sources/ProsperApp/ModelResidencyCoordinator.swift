@@ -193,4 +193,7 @@ actor ModelResidencyCoordinator {
 
     /// The live agent engine, if resident (nil in inline mode).
     func currentAgentEngine() -> (any AgentChatEngine)? { agent }
+
+    /// The resident agent model's id; nil whenever no agent engine is resident (agentModelId alone can be stale).
+    func currentAgentModelId() -> String? { agent == nil ? nil : agentModelId }
 }

@@ -24,6 +24,9 @@ final class DchChat: @unchecked Sendable {
         NSClassFromString("XCTestCase") == nil && ModelFiles.isModelDownloaded($0)
     }
     var isResident: @Sendable () async -> Bool = { await ModelResidencyCoordinator.shared.currentAgentEngine() != nil }
+    /// The id of the resident agent model, nil when none. Default: asks the coordinator (a read; under XCTest nothing
+    /// is resident unless a row put an engine in, so it answers nil and loads nothing). Runs on the cooperative pool.
+    var residentId: @Sendable () async -> String? = { await ModelResidencyCoordinator.shared.currentAgentModelId() }
     /// Takes the id this chat read and returns the engine with the id it holds (#1181: another model may be
     /// resident); the think format follows the returned id. Runs on the cooperative pool.
     var acquire: @Sendable (String) async throws -> (engine: any AgentChatEngine, modelId: String) = { id in
@@ -118,7 +121,7 @@ final class DchChat: @unchecked Sendable {
         guard o?.isEmpty == true else { return reply(Self.error("malformed models request: send nothing or {}")) }
         let id = modelId()
         guard isModelOnDisk(id) else { return reply(DchFrame.encode(DchFrame.modelsResp, json: [Any]())) }
-        let row: [String: Any] = ["id": id, "name": AgentModelRegistry.model(for: id).label, "loaded": await isResident()]
+        let row: [String: Any] = ["id": id, "name": AgentModelRegistry.model(for: id).label, "loaded": await residentId() == id]
         reply(DchFrame.encode(DchFrame.modelsResp, json: [row]))
     }
 

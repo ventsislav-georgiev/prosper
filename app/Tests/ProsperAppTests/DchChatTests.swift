@@ -73,6 +73,7 @@ final class DchChatTests: XCTestCase {
         chat.modelId = { id }
         chat.isModelOnDisk = { m in m == id && s.get { $0.onDisk } }
         chat.isResident = { s.get { $0.resident } }
+        chat.residentId = { s.get { $0.resident } ? id : nil }
         chat.acquire = { id in
             s.get { s in
                 s.acquires += 1
