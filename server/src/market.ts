@@ -76,6 +76,8 @@ type ManifestInput = {
 };
 
 const ID_RE = /^[a-z0-9]+(\.[a-z0-9-]+)+$/i; // reverse-DNS-ish
+const MAX_ID_LEN = 128; // the app refuses a longer id at install
+const RESERVED_PREFIX = "com.prosper."; // the ids of the extensions built into Prosper
 const SEMVER_RE = /^\d+\.\d+\.\d+([-+].+)?$/;
 
 /** Decode a base64 string to bytes (Workers has atob). */
@@ -109,7 +111,9 @@ async function publish(c: Ctx) {
   const m = body.manifest;
   const id = (m.id ?? "").trim();
   const version = (m.version ?? "").trim();
-  if (!ID_RE.test(id)) return c.json({ error: "invalid_id" }, 400);
+  if (id.length > MAX_ID_LEN || !ID_RE.test(id)) return c.json({ error: "invalid_id" }, 400);
+  // ID_RE allows ASCII only, so toLowerCase is the plain ASCII fold. Refused for every publisher.
+  if (id.toLowerCase().startsWith(RESERVED_PREFIX)) return c.json({ error: "reserved_id" }, 400);
   if (!SEMVER_RE.test(version)) return c.json({ error: "invalid_version" }, 400);
   if (!m.title || !m.name || !m.author) return c.json({ error: "missing_fields" }, 400);
   // A published extension can never claim to be a bundled system one.

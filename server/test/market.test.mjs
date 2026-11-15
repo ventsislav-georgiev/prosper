@@ -524,3 +524,43 @@ test("the 413 bodies are string-only, so the app shows its friendly text", async
     assert.equal(t.kv.size, 0, what);
   }
 });
+
+// #1248: ids under com.prosper. (built-in extensions) and ids over 128 characters are refused before any
+// D1 statement or KV write; near misses stay accepted.
+const idOf = (n) => `org.example.${"a".repeat(n - "org.example.".length)}`;
+test("publish id rules: reserved namespace and the 128 cap, row by row", async () => {
+  const rows = [
+    // [id, accepted, error code when refused]
+    ["com.prosper.files", false, "reserved_id"],
+    ["COM.PROSPER.FILES", false, "reserved_id"],
+    ["Com.Prosper.Theme.Amber", false, "reserved_id"],
+    ["com.prosper.x", false, "reserved_id"],
+    ["com.prosperity.kit", true],
+    ["org.example.com.prosper.kit", true],
+    ["com.prosper-kit.example", true],
+    ["eu.example.prosper", true],
+    [idOf(128), true],
+    [idOf(129), false, "invalid_id"],
+    [`com.prosper.${"a".repeat(130)}`, false, "invalid_id"],
+  ];
+  for (const [id, ok, code] of rows) {
+    const t = setup();
+    const r = await t.publish(PUB, id);
+    if (ok) {
+      assert.equal(r.status, 200, `${id.slice(0, 40)}: ${r.text}`);
+      assert.ok(t.kv.has(`pkg:${id}:1.0.0`), id.slice(0, 40));
+    } else {
+      assert.equal(r.status, 400, `${id.slice(0, 40)}: ${r.text}`);
+      assert.deepEqual(r.json, { error: code }, id.slice(0, 40));
+      assert.deepEqual(marketSql(t), [], `${id.slice(0, 40)}: no D1 statement`);
+      assert.equal(t.kv.size, 0, `${id.slice(0, 40)}: no KV write`);
+    }
+  }
+});
+
+test("an accepted publish under the new rules spends the same D1 statements and KV puts", async () => {
+  const t = setup();
+  assert.equal((await t.publish(PUB, "com.prosperity.kit")).status, 200);
+  assert.equal(t.log.length, 5, "session pair, owner SELECT, dupe SELECT, one batch");
+  assert.deepEqual([...t.kv.keys()].sort(), ["pkg:com.prosperity.kit:1.0.0", `rl:publish:${PUB}`]);
+});
