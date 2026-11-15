@@ -1234,7 +1234,8 @@ tag from the now-released section and put it on the new top draft.
   package's fault) is tried again at the next check.
 - Account pool: the log line of a throttled (rate-limited, not out of quota) request now says its
   size, max_tokens, effort, speed, unusual response header names and how many tries it took and what
-  came of it, without ever logging a header value, a model name, a body byte or a session id.
+  came of it; the public part of the line never holds a header value, a model name, a body byte or a
+  session id.
 - Agent Sessions: a session that ended in the middle of a task no longer reads "Working" in its
   conversation, and a picture sent on its own now starts its own turn even when it is the first
   message of a page loaded with "Load earlier".
