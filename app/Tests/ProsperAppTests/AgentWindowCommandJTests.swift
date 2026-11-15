@@ -252,4 +252,115 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(d.data(forKey: "agentWindowLayouts"), bytes)
         XCTAssertEqual(m.layoutWrites, writes)
     }
+
+    /// R901-s6-q1 (#901 B3 step 7): A (api, focused) active, B (api-qa) stored, api-qa blocked. The stored-layout switch
+    /// REFUSES (a recording fake through the `switching` seam: no refusal is reachable through the model's own store,
+    /// report.txt 1b): asked once, for B and B's api-qa pane, with the keys still the sidebar's; nothing switches;
+    /// Command-J falls through to 7.1 rule 2: api-qa goes into A's focused pane (a row's click: the pane takes the keys).
+    /// GUARD refusal-ignored.
+    @MainActor
+    func testAgentWindowCommandJRefusedSwitchFallsThroughToTheFocusedPane() throws {
+        gate(true)
+        let a = paneLayout([paneTarget("api")]), b = paneLayout([paneTarget("api-qa")])
+        var opened = 0
+        let (m, _, d) = try jumpModel([a, b], [("api", .idle, 60), ("api-qa", .blocked, 30)], opened: { _ in opened += 1 })
+        defer { m.close() }
+        let calls = Calls()
+        calls.wire(m)
+        m.keyFocus = .sidebar
+        let target = try paneOf(b, "api-qa"), writes = m.layoutWrites
+        var asked: [(layout: UUID, pane: UUID, keys: PaneKeys.KeyFocus)] = []
+        XCTAssertTrue(m.nextNeedsYou(switching: { l, p in asked.append((l, p, m.keyFocus)); return .noSuchLayout }))
+        XCTAssertEqual(asked.count, 1, "the stored-layout switch was asked once")
+        XCTAssertEqual(asked.first?.layout, b.id)
+        XCTAssertEqual(asked.first?.pane, target)
+        XCTAssertEqual(asked.first?.keys, .sidebar, "the keys do not move before the switch is made")
+        XCTAssertEqual(m.layout.id, a.id, "refused: nothing switched")
+        XCTAssertEqual(savedLayouts(d).active, a.id)
+        XCTAssertEqual(m.layout.panes.count, 1)
+        XCTAssertEqual(focusedName(m), "api-qa", "fell through to rule 2: into the focused pane")
+        XCTAssertEqual(m.keyFocus, .pane, "rule 2 is a row's click: the pane takes the keys")
+        XCTAssertEqual(m.layoutWrites, writes + 1, "rule 2's one write")
+        XCTAssertEqual(opened, 0, "nothing opened")
+        XCTAssertTrue(calls.all.isEmpty && calls.records.isEmpty, "no session verb")
+    }
+
+    /// R901-s6-q2 (#901 B3 step 7): with the gate on and a field or the form open, a BUILT Command-J (never posted)
+    /// handed to a never-shown window does not reach nextNeedsYou: nothing switches, focuses or is written, and the
+    /// window answers as today's route does (the same event with the gate off, where the Command-J line is skipped).
+    /// A (api) active, B (api-qa) stored, api-qa blocked: without the exclusion Command-J would switch to B.
+    @MainActor
+    private func assertCommandJStandsDown(_ m: AgentWindowModel, _ d: UserDefaults, _ why: String,
+                                          file: StaticString = #filePath, line: UInt = #line) {
+        let before = m.layout, keys = m.keyFocus, writes = m.layoutWrites, bytes = d.data(forKey: "agentWindowLayouts")
+        let win = AgentsNSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 680), styleMask: [.titled, .closable],
+                                 backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        win.model = m
+        defer { win.model = nil; win.close() }
+        let on = win.performKeyEquivalent(with: treeKey(38, [.command], "j"))
+        XCTAssertEqual(m.layout, before, "\(why): nothing switched or focused", file: file, line: line)
+        XCTAssertEqual(m.keyFocus, keys, "\(why): the keys stay", file: file, line: line)
+        XCTAssertEqual(m.layoutWrites, writes, "\(why): nothing written", file: file, line: line)
+        XCTAssertEqual(d.data(forKey: "agentWindowLayouts"), bytes, file: file, line: line)
+        gate(false)   // today's route: the Command-J line skipped; gate(_:) restores the saved value at teardown
+        let today = win.performKeyEquivalent(with: treeKey(38, [.command], "j"))
+        gate(true)
+        XCTAssertEqual(on, today, "\(why): the event goes on to today's route", file: file, line: line)
+        XCTAssertEqual(m.layout, before, file: file, line: line)
+    }
+
+    /// The A/B fixture of the three stand-down rows.
+    @MainActor
+    private func standDownModel() throws -> (AgentWindowModel, AgentIslandStore, UserDefaults, PaneLayout) {
+        let a = paneLayout([paneTarget("api")]), b = paneLayout([paneTarget("api-qa")])
+        let (m, st, d) = try jumpModel([a, b], [("api", .idle, 60), ("api-qa", .blocked, 30)])
+        return (m, st, d, a)
+    }
+
+    /// R901-s6-q2 (a): the session Rename field open (openRenameField: no ask, no select, no verb). GUARD
+    /// rename-exclusion-dropped.
+    @MainActor
+    func testAgentWindowCommandJStandsDownForTheRenameField() throws {
+        gate(true)
+        let (m, _, d, a) = try standDownModel()
+        defer { m.close() }
+        m.openRenameField(AgentRenameEdit(key: AgentSessionKey(dir: "/tmp/dch-test", name: "api"), text: ""))
+        XCTAssertTrue(m.renaming != nil, "the rename field is open")
+        assertCommandJStandsDown(m, d, "rename field")
+        XCTAssertEqual(m.layout.id, a.id)
+        XCTAssertTrue(m.renaming != nil, "the field stays open")
+    }
+
+    /// R901-s6-q2 (b): a layout's inline Rename field open. GUARD layout-rename-exclusion-dropped.
+    @MainActor
+    func testAgentWindowCommandJStandsDownForTheLayoutRenameField() throws {
+        gate(true)
+        let (m, _, d, a) = try standDownModel()
+        defer { m.close() }
+        m.beginLayoutRename(a.id)
+        XCTAssertEqual(m.layoutRenaming, a.id, "the layout field is open")
+        assertCommandJStandsDown(m, d, "layout rename field")
+        XCTAssertEqual(m.layoutRenaming, a.id, "the field stays open")
+    }
+
+    /// R901-s6-q2 (c): the New session form open (a typed command: the island is asked nothing; the dch binary is a value
+    /// for the form's gate, never run; a spawn fails the row). GUARD form-exclusion-dropped.
+    @MainActor
+    func testAgentWindowCommandJStandsDownForTheNewSessionForm() throws {
+        gate(true)
+        try withNewSessionPrefs {
+            Preferences.agentIslandNewSessionCommand = "claude"
+            let (m, st, d, a) = try standDownModel()
+            defer { m.close() }
+            st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])
+            m.home = "/Users/example"
+            m.spawnSession = { _, _, _, _ in XCTFail("no spawn"); return nil }   // main actor (the model calls it)
+            m.openNewSession()
+            XCTAssertTrue(m.newSession != nil, "the form is open")
+            assertCommandJStandsDown(m, d, "New session form")
+            XCTAssertEqual(m.layout.id, a.id)
+            XCTAssertTrue(m.newSession != nil, "the form stays open")
+        }
+    }
 }

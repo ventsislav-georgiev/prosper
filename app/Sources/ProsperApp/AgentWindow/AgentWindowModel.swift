@@ -860,8 +860,10 @@ final class AgentWindowModel: ObservableObject {
     /// (7.1 rule 2: a row's click). Zoomed, the zoom moves with the focus (PaneLayout.focus). False, nothing read: the
     /// gate off or the window closed; false, nothing changed: no other session needs you. Never a session verb: only the
     /// window's pane runtimes stop and start. Main actor (the window's key route).
+    /// R901-s6-q1: a refused stored-layout switch moves no keys and falls through to the focused pane (rule 2).
+    /// `switching` (tests): the switch, nil = switchLayout(_:focus:); no refusal is reachable through the model's own store.
     @discardableResult
-    func nextNeedsYou() -> Bool {
+    func nextNeedsYou(switching: ((UUID, UUID) -> PaneRefusal?)? = nil) -> Bool {
         guard AgentPaneLayout.splitsEnabled, !closed else { return false }
         let rows = sections.first { $0.title == AgentSidebar.needsYouTitle }?.rows ?? []
         let mine = layout.panes.first { $0.id == layout.focused }?.target
@@ -871,9 +873,10 @@ final class AgentWindowModel: ObservableObject {
         func shown(_ l: PaneLayout) -> UUID? { l.panes.first { $0.target == t }?.id }   // a session, never a History pane
         if let p = shown(layout) {
             focusPane(p)
-        } else if let other = layouts?.layouts.first(where: { $0.id != layout.id && shown($0) != nil }), let p = shown(other) {
-            keyFocus = .pane
-            switchLayout(other.id, focus: p)
+        } else if let other = layouts?.layouts.first(where: { $0.id != layout.id && shown($0) != nil }), let p = shown(other),
+                  (switching ?? { self.switchLayout($0, focus: $1) })(other.id, p) == nil {
+            // The keys move only once switched; adopt's own focusSelection ran only if they were the pane's already.
+            if keyFocus != .pane { keyFocus = .pane; focusSelection() }
         } else {
             keyFocus = .pane
             select(next.id)
