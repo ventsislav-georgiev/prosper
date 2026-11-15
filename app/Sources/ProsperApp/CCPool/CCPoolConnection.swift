@@ -183,6 +183,8 @@ final class CCPoolConnection: @unchecked Sendable {
     private var retryingThrottle: CCPoolExchange?
     /// #1259: the LAST route call of this request followed a pin; its reply does not move `current`.
     private var followedPin = false
+    /// #1262: the first account's last throughput 429 once the conversation made its ONE move (Python `moved`, `back`).
+    private var movedFrom: CCPoolExchange?
 
     init(conn: NWConnection, config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger,
          upstream: CCPoolUpstream, boundPort: UInt16, onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
@@ -370,7 +372,8 @@ final class CCPoolConnection: @unchecked Sendable {
         attempt()
     }
 
-    private func attempt() {
+    /// #1262: `last` is set only for the one move: nowhere to go then ends the request with that 429, never a walk.
+    private func attempt(moving last: CCPoolExchange? = nil) {
         guard !closed else { return }
         guard attempts < maxAttempts else { return noAccounts() }
         attempts += 1
@@ -389,11 +392,12 @@ final class CCPoolConnection: @unchecked Sendable {
                 followed = f
                 return name
             }
-            followedPin = followed
+            // #1262: the move does not move `current` (Python's move calls place(), not choose()'s remember_last).
+            followedPin = followed || last != nil
         }
-        guard let label = picked else { return noAccounts() }
+        guard let label = picked else { return last.map { pinBack($0, answer: $0) } ?? noAccounts() }
         tried.insert(label)
-        guard let id = store.read({ $0.accounts[label]?.id }) else { return attempt() }
+        guard let id = store.read({ $0.accounts[label]?.id }) else { return last.map { pinBack($0, answer: $0) } ?? attempt() }
         send(label: label, accountID: id, retried: false)
     }
 
@@ -404,6 +408,8 @@ final class CCPoolConnection: @unchecked Sendable {
             log.note(label, "token unavailable; skipping this account")
             // #1256: a throttle retry never moves to another account: its last 429 goes back instead.
             if let last = retryingThrottle { retryingThrottle = nil; return answerThrottle(last) }
+            // #1262: after the one move nothing walks on: the conversation goes back, the first account's 429 goes out.
+            if let first = movedFrom { return pinBack(first, answer: first) }
             return attempt()
         }
         let base = config.upstream.absoluteString.hasSuffix("/")
@@ -605,7 +611,28 @@ final class CCPoolConnection: @unchecked Sendable {
             }
             return
         }
+        // #1262: refused at the destination too (Python relay() 497-502): back where the cache is, one 429, no retry.
+        if let first = movedFrom { return pinBack(first, answer: ex) }
+        // #1262: after the same-account retries, ONE move (Python relay() 486-496): route() with every tried account
+        // excluded places and pins the conversation (#1261); one send there. No usable key, a quota check or a body
+        // that cannot be sent again never moves.
+        if replayable, !quotaCheck, attempts < maxAttempts, head.flatMap(Self.pinKey) != nil {
+            movedFrom = ex
+            log.note(ex.label, "throttled after \(throttleRetries) same-account retries; moving the conversation once")
+            return attempt(moving: ex)
+        }
         answerThrottle(ex)
+    }
+
+    /// #1262: the move did not help: the conversation's pin goes back to the first account (one write, a fresh
+    /// stamp; no write when it is already there) and ONE 429 goes out, `answer`'s Retry-After.
+    private func pinBack(_ first: CCPoolExchange, answer: CCPoolExchange) {
+        if let key = head.flatMap(Self.pinKey) {
+            let now = store.now, id = first.accountID
+            store.mutate { st in if let owner = st.label(ofID: id) { st.pin(key, to: owner, now: now) } }
+        }
+        log.note(first.label, "conversation pinned back after its one move")
+        answerThrottle(answer)
     }
 
     private func answerThrottle(_ ex: CCPoolExchange) {

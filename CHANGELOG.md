@@ -1226,6 +1226,9 @@ tag from the now-released section and put it on the new top draft.
 - Account pool: a new conversation (or one that has to move) now goes to the account with the most
   five-hour headroom per live session, weighted by what each plan has been learned to hold, instead
   of always to the current account; conversations already pinned stay where they are.
+- Account pool: a conversation that is still throttled after three retries now moves once to the
+  least busy other account; if that account is busy too, it goes back to its own account (where its
+  cache is) and the 429 is returned.
 
 ## v2.174.0
 
