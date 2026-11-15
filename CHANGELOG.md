@@ -755,8 +755,8 @@ tag from the now-released section and put it on the new top draft.
   session said it). `dch --xray <session> --search <text> --json` does the same from a script. On
   macOS a stopped session is no longer taken for a dead one and started over, and a stop while `dch
   -a` starts no longer leaves the shell on a raw terminal. With 1.65.0 the session list on macOS
-  stays fast after sessions that were killed hard or crashed (the betas that shipped 1.63.0 and
-  1.64.0 slowed down there), a command typed while the one before it still runs gets its own chapter
+  stays fast after sessions that were killed hard or crashed (the beta that shipped 1.64.0 slowed
+  down there), a command typed while the one before it still runs gets its own chapter
   in X-ray, opening a chapter of a long session is much faster, and a second Claude started in one
   session is seen by X-ray. With 1.66.0 the X-ray view has a Tasks tab (the task list of a Claude
   Code or Codex session) and a Memory tab (its memories and instruction files), `dch --xray
@@ -770,9 +770,8 @@ tag from the now-released section and put it on the new top draft.
   answer from their own reading. With 1.69.0 `dch --xray <session> --follow --json` and the X-ray
   view keep going across restarts however quickly they follow each other, and `--run` types again
   into the program in front of a suspended Claude when that program is the end of a pipeline whose
-  first command has finished. With 1.70.0 a short line in dch's config that holds a NUL byte no
-  longer swallows the line after it (the betas that shipped 1.68.0 did that), and Enter on a Search
-  hit opens the right one when the same text comes again past the clipped part. (#1167, #1178)
+  first command has finished. With 1.70.0 Enter on a Search hit opens the right one when the same
+  text comes again past the clipped part. (#1167, #1178)
 - Agent Sessions: Command-1 to Command-9 jump to the session at that place in the sidebar and put
   the keyboard in it (its terminal or its message box), from anywhere in the window; each of the
   first nine live sessions shows its ⌘ number as a chip, as in Clipboard History. (#1110)
