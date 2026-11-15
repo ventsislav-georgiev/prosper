@@ -78,6 +78,8 @@ final class AgentController {
     // MARK: Internals
 
     private var harness: CodingHarness?
+    /// #1181: the model the kept harness was started for; set where `harness` is kept, cleared wherever it is nilled.
+    private var harnessModel: String?
     private var session: SessionID?
     private var currentTurn: TurnID?
     /// Turns Stop settled locally (codex didn't acknowledge the interrupt, or Stop
@@ -285,6 +287,7 @@ final class AgentController {
         eventPump = nil
         let dying = harness
         harness = nil
+        harnessModel = nil
         session = nil
         currentTurn = nil
         settledTurns.removeAll()   // the next codex numbers its turns afresh
@@ -428,7 +431,7 @@ final class AgentController {
         var model: String?
         do {
             let harness = try await ensureHarness(generation, model: &model)
-            let runModel = model ?? readAgentModel()   // harness kept from an earlier run: no load, this is the read
+            let runModel = model ?? harnessModel ?? readAgentModel()   // kept harness: its own model; the read is only the fallback
             model = runModel
             let session = try await ensureSession(harness, model: runModel)
             guard !abandoned(generation) else {
@@ -523,6 +526,7 @@ final class AgentController {
         try await harness.start()
         guard !abandoned(generation) else { await harness.shutdown(); throw CancellationError() }
         self.harness = harness
+        harnessModel = model
         pumpEvents(harness)
         return harness
     }
@@ -632,6 +636,7 @@ final class AgentController {
         persistTranscript()
         if let session { pendingResumeID = session.raw }
         harness = nil
+        harnessModel = nil
         eventPump = nil
         session = nil
         currentTurn = nil
@@ -826,6 +831,7 @@ final class AgentController {
         // kill. We shut down the captured local, not `self.harness`.
         let dying = harness
         harness = nil
+        harnessModel = nil
         currentTurn = nil
         settledTurns.removeAll()   // the next codex numbers its turns afresh
         await dying?.shutdown()

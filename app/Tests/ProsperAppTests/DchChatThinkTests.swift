@@ -42,7 +42,7 @@ final class DchChatThinkTests: XCTestCase {
         chat.modelId = { model }
         chat.isModelOnDisk = { $0 == model }
         chat.isResident = { false }
-        chat.acquire = { engine }
+        chat.acquire = { id in (engine, id) }
         chat.release = {}
         chat.macAgentBusy = { false }
         chat.macChatOpen = { false }
@@ -128,5 +128,63 @@ final class DchChatThinkTests: XCTestCase {
         let chunks = ["<think>x</think>", "answer"]
         let r = await run(chunks, model: Self.mistralId)
         XCTAssertEqual(r.texts, chunks)
+    }
+
+    // MARK: R1181-b: the acquire seam takes the id the chat read and the think rule follows the id it returns
+
+    /// One phone chat whose acquire records the ids it is called with and answers `returned`'s id (the id
+    /// the engine holds). The closure runs on the cooperative pool; the Box is the lock.
+    private func runWithAcquire(_ chunks: [String], reads model: String, returns returned: String) async
+        -> (texts: [String], acquiredWith: [String]) {
+        let chat = DchChat(), engine = Engine(chunks), ids = Box<[String]>([])
+        chat.modelId = { model }
+        chat.isModelOnDisk = { $0 == model }
+        chat.isResident = { false }
+        chat.acquire = { id in ids.with { $0.append(id) }; return (engine, returned) }
+        chat.release = {}
+        chat.macAgentBusy = { false }
+        chat.macChatOpen = { false }
+        chat.schedule = { _, _ in }
+        let frames = Box<[Data]>([])
+        await chat.chat(Self.body, send: { f in frames.with { $0.append(f) } }, reply: { _ in })
+        let texts = frames.with { $0 }.compactMap { f -> String? in
+            guard f.first == DchFrame.chatDelta, f.count > 5,
+                  let o = try? JSONSerialization.jsonObject(with: f.subdata(in: (f.startIndex + 5)..<f.endIndex)) as? [String: Any]
+            else { return nil }
+            return o["text"] as? String
+        }
+        return (texts, ids.with { $0 })
+    }
+
+    /// (a) acquire is called once, with the id the chat read (the setting is read once for the chat's checks).
+    func testAcquireIsCalledOnceWithTheIdTheChatRead() async {
+        let r = await runWithAcquire(["hi"], reads: Self.catalogId, returns: Self.catalogId)
+        XCTAssertEqual(r.acquiredWith, [Self.catalogId])
+        XCTAssertEqual(r.texts, ["hi"])
+    }
+
+    /// (b) the returned id decides the think rule, in both directions. Ids: the catalog row (qwenXML) and a
+    /// made-up custom mistral row; the scratch keys are restored.
+    func testThinkRuleFollowsTheReturnedId() async {
+        let d = Preferences.defaults, keys = ["customAgentModelsV1", "modelLabelOverridesV1"]
+        let saved = keys.map { d.object(forKey: $0) }
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer {
+            for (k, v) in zip(keys, saved) { d.set(v, forKey: k) }
+            AgentModelRegistry.physicalMemoryGB = savedGB
+        }
+        AgentModelRegistry.physicalMemoryGB = 64
+        CustomModelStore.upsert(CustomAgentModel(id: Self.mistralId, label: "A", sizeBytes: 0, note: "", toolFormat: .mistral))
+        XCTAssertEqual(AgentModelRegistry.toolFormat(for: Self.mistralId), .mistral)
+        let chunks = ["<think>plan</think>", "answer"]
+        // The chat read a qwenXML id, but the engine holds a mistral one: the block is sent as today.
+        let sent = await runWithAcquire(chunks, reads: Self.catalogId, returns: Self.mistralId)
+        XCTAssertEqual(sent.texts, chunks)
+        XCTAssertEqual(sent.acquiredWith, [Self.catalogId])
+        // The chat read a mistral id, but the engine holds a qwenXML one: the block is dropped.
+        let dropped = await runWithAcquire(chunks, reads: Self.mistralId, returns: Self.catalogId)
+        XCTAssertEqual(dropped.texts.joined(), "answer")
+        XCTAssertFalse(dropped.texts.contains { $0.contains("plan") })
+        XCTAssertEqual(dropped.acquiredWith, [Self.mistralId])
     }
 }

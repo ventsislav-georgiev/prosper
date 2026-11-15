@@ -73,11 +73,11 @@ final class DchChatTests: XCTestCase {
         chat.modelId = { id }
         chat.isModelOnDisk = { m in m == id && s.get { $0.onDisk } }
         chat.isResident = { s.get { $0.resident } }
-        chat.acquire = {
+        chat.acquire = { id in
             s.get { s in
                 s.acquires += 1
                 s.resident = true
-                return s.engine
+                return (s.engine, id)
             }
         }
         chat.release = {
@@ -382,10 +382,10 @@ final class DchChatTests: XCTestCase {
         let s = State()
         let chat = makeChat(s)
         let acquire = chat.acquire
-        chat.acquire = {
+        chat.acquire = { id in
             s.set { $0.acquiring += 1 }
             while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(5)) }
-            return try await acquire()
+            return try await acquire(id)
         }
         let r = connection(chat)
         ingest(r, Self.frame(DchFrame.chat, Self.chatBody()))

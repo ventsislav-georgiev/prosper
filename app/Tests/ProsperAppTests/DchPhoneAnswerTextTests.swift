@@ -39,7 +39,7 @@ final class DchPhoneAnswerTextTests: XCTestCase {
         func with<R>(_ f: (inout T) -> R) -> R { lock.withLock { f(&value) } }
     }
 
-    private func makeChat(acquire: @escaping @Sendable () async throws -> any AgentChatEngine) -> DchChat {
+    private func makeChat(acquire: @escaping @Sendable (String) async throws -> (engine: any AgentChatEngine, modelId: String)) -> DchChat {
         let chat = DchChat(), id = Self.modelId
         chat.modelId = { id }
         chat.isModelOnDisk = { $0 == id }
@@ -85,7 +85,7 @@ final class DchPhoneAnswerTextTests: XCTestCase {
             ("decodeFailed", LlamaAgentEngine.EngineError.decodeFailed, "The model could not be loaded on the Mac."),
         ]
         for (name, error, want) in rows {
-            let chat = makeChat(acquire: { throw error })
+            let chat = makeChat(acquire: { _ in throw error })
             let f = await answer(chat)
             XCTAssertEqual(f?.first, DchFrame.error, name)
             assertFixed(Self.message(f), want)
@@ -102,7 +102,7 @@ final class DchPhoneAnswerTextTests: XCTestCase {
         ]
         for (name, error, want) in rows {
             let engine = Engine(chunks: ["partial"], failure: error)
-            let chat = makeChat(acquire: { engine })
+            let chat = makeChat(acquire: { id in (engine, id) })
             let f = await answer(chat)
             XCTAssertEqual(f?.first, DchFrame.error, name)
             assertFixed(Self.message(f), want)
@@ -150,7 +150,7 @@ final class DchPhoneAnswerTextTests: XCTestCase {
     /// reply a second request is made and must run, not be refused as busy. The wait is a ceiling.
     func testRunningIsClearedBeforeTheReplyIsSent() async {
         let engine = Engine(chunks: ["a"])
-        let chat = makeChat(acquire: { engine })
+        let chat = makeChat(acquire: { id in (engine, id) })
         let second = Box<Data?>(nil)
         let replies = Box(0)
         let done = DispatchSemaphore(value: 0)
@@ -170,7 +170,7 @@ final class DchPhoneAnswerTextTests: XCTestCase {
     /// hops with queue.async), not on the thread that generates. The ceiling is the expectation's timeout.
     func testChatDeltasReachTheConnectionOnItsQueue() async {
         let engine = Engine(chunks: ["Hel", "lo"])
-        let chat = makeChat(acquire: { engine })
+        let chat = makeChat(acquire: { id in (engine, id) })
         let queue = DispatchQueue(label: "test.dchconn.phoneanswer")
         let key = DispatchSpecificKey<Bool>()
         queue.setSpecific(key: key, value: true)

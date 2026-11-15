@@ -24,8 +24,10 @@ final class DchChat: @unchecked Sendable {
         NSClassFromString("XCTestCase") == nil && ModelFiles.isModelDownloaded($0)
     }
     var isResident: @Sendable () async -> Bool = { await ModelResidencyCoordinator.shared.currentAgentEngine() != nil }
-    var acquire: @Sendable () async throws -> any AgentChatEngine = {
-        try await ModelResidencyCoordinator.shared.acquireAgent { _, _ in }
+    /// Takes the id this chat read and returns the engine with the id it holds (#1181: another model may be
+    /// resident); the think format follows the returned id. Runs on the cooperative pool.
+    var acquire: @Sendable (String) async throws -> (engine: any AgentChatEngine, modelId: String) = { id in
+        try await ModelResidencyCoordinator.shared.acquireLoadedAgent(modelId: id) { _, _ in }
     }
     var release: @Sendable () async -> Void = { await ModelResidencyCoordinator.shared.releaseAgent() }
     /// The Mac's own agent is mid-turn. The llama engine is one actor and a decode never
@@ -151,12 +153,15 @@ final class DchChat: @unchecked Sendable {
         let pending = lock.withLock { releasing }
         await pending?.value
         let engine: any AgentChatEngine
+        let loadedId: String
         do {
             let before = await isResident()
             // QA #502 INFO-2: closed while waiting on the release or isResident; the acquire's
             // load can't be cancelled, so never start one for nobody. The reply is dropped.
             guard !Task.isCancelled else { return DchFrame.encode(DchFrame.chatDone, json: ["stop": "stop"]) }
-            engine = try await acquire()
+            let loaded = try await acquire(model)
+            engine = loaded.engine
+            loadedId = loaded.modelId
             if !before { lock.withLock { phoneLoaded = true } }
         } catch {
             return Self.error(Self.loadFailureText(error))
@@ -170,7 +175,7 @@ final class DchChat: @unchecked Sendable {
                                              temperature: 0.7, topP: 0.95, stop: [])
             // #1181: a leading think block is never sent (the server's StreamSplitter, its format gate). No tool
             // markers: the phone chat has no tools, so every other turn goes out in today's chunks.
-            let format = AgentModelRegistry.toolFormat(for: model)
+            let format = AgentModelRegistry.toolFormat(for: loadedId)
             var splitter = StreamSplitter(markers: [], leadingThink: format == .qwenXML || format == .hermesJSON)
             for try await chunk in stream {
                 let text = splitter.ingest(chunk)

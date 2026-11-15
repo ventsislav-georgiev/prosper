@@ -1183,6 +1183,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: a permission prompt with a letter piled with accent marks can no longer draw over
   the command or the answer buttons: each card line stays in its row, the extra marks show as codes,
   and such a prompt can only be declined from the card (approve it in the terminal) (#1251)
+- Agent: the phone chat and a run that reuses a started coding agent stay on the model that is
+  loaded when the model setting changes in between (#1181)
 
 ## v2.174.0
 
