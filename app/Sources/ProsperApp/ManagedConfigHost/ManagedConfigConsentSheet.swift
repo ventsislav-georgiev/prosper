@@ -73,10 +73,38 @@ final class ManagedConfigConsentModel: ObservableObject {
     }
 
     /// #1235 (B-INFO-6): the manifest's display name as shown: outside data, so every control, format (direction),
-    /// separator and other unseen scalar is dropped by the tree's rule for shown outside strings. nil when none is known.
+    /// separator and other unseen scalar is dropped by the tree's rule for shown outside strings, then each character keeps
+    /// at most 2 combining marks (B1235-1), then the 120 cut. nil when none is known, and nil for a title shaped like an
+    /// id (R1235-d: id characters with a dot) or equal to this owner's id: the id is then shown alone.
     var displayName: String? {
-        let shown = OutsideText.shown(changes.displayName ?? "", max: 120).trimmingCharacters(in: .whitespaces)
+        let cleaned = Self.capMarks(OutsideText.shown(changes.displayName ?? "", max: .max))
+        let whole = cleaned.trimmingCharacters(in: .whitespaces)
+        // id-shaped at any length: isValidID bounds its input at 128, so the title is checked in pieces of 128
+        var idShaped = whole.contains("."), rest = Substring(whole)
+        while idShaped, !rest.isEmpty {
+            idShaped = ManagedConfigPaths.isValidID(String(rest.prefix(128)))
+            rest = rest.dropFirst(128)
+        }
+        if whole == changes.owner || idShaped { return nil }
+        let shown = OutsideText.shown(cleaned, max: 120).trimmingCharacters(in: .whitespaces)
         return shown.isEmpty ? nil : shown
+    }
+
+    /// At most `max` nonspacing or enclosing marks (Mn, Me) per Character; the base and every other scalar stay.
+    static func capMarks(_ s: String, max: Int = 2) -> String {
+        var out = String.UnicodeScalarView()
+        for ch in s {
+            var marks = 0
+            for u in ch.unicodeScalars {
+                let c = u.properties.generalCategory
+                if c == .nonspacingMark || c == .enclosingMark {
+                    marks += 1
+                    if marks > max { continue }
+                }
+                out.append(u)
+            }
+        }
+        return String(out)
     }
 
     /// The title: the display name, or the id when no name is known (one line, drawn verbatim).
@@ -143,18 +171,28 @@ final class ManagedConfigConsentModel: ObservableObject {
     }
 }
 
+/// #1235: the sheet's title line. Outside text, never interpreted (no Markdown, no link): one line, cut in the middle, and
+/// clipped to its own bounds (B1235-1), so nothing it draws reaches the id line under it.
+struct ManagedConfigConsentTitle: View {
+    let text: String
+
+    var body: some View {
+        Text(verbatim: text)
+            .font(Neon.font(15, weight: .semibold))
+            .foregroundStyle(Neon.textPrimary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(text)
+            .clipped()
+    }
+}
+
 struct ManagedConfigConsentView: View {
     @ObservedObject var model: ManagedConfigConsentModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(12)) {
-            // #1235: outside text, never interpreted (no Markdown, no link): one line, cut in the middle.
-            Text(verbatim: model.title)
-                .font(Neon.font(15, weight: .semibold))
-                .foregroundStyle(Neon.textPrimary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(model.title)
+            ManagedConfigConsentTitle(text: model.title)
             if let id = model.idLine {
                 // N1235-a: the line that says WHO asks is drawn whole: an owner id is at most 128 characters with no
                 // space (ManagedConfig.prepare refuses others), so it wraps by character over two lines at every scale;
