@@ -207,13 +207,15 @@ enum ExpandedInterfacePolicy {
     /// Cocoa space with `screens` (Cocoa frames, primary first). Every other slot of ours (the
     /// main icon, extensions, another owner's items, the live item) stays the dismisser's.
     /// Otherwise every client frame, as before #978. With `click`, the host is read only for
-    /// a click inside a client frame or on a menu bar: elsewhere the answer is the same without it.
+    /// a click inside a client frame or on a menu bar not left of every possible match
+    /// (`leftOfEveryMatch`): elsewhere the answer is the same without it.
     @MainActor
     static func systemOwnedFrames(_ items: [(frame: NSRect, sessionLive: Bool)], click: NSPoint? = nil,
                                   screens: [CGRect] = [], hostSlots: () -> [CGRect]? = { nil }) -> [NSRect] {
         let frames = items.filter { !$0.sessionLive }.map(\.frame)
         guard !frames.isEmpty,
-              click.map({ systemOwnsClick($0, itemFrames: frames) || onMenuBar($0, screens: screens) }) ?? true,
+              click.map({ systemOwnsClick($0, itemFrames: frames)
+                  || (onMenuBar($0, screens: screens) && !leftOfEveryMatch($0, frames: frames, screens: screens)) }) ?? true,
               let slots = hostSlots(), let laid = cocoaSlots(slots, screens: screens) else { return frames }
         return laid.filter { s in frames.contains { sameItem($0, s, screens: screens) } }
     }
@@ -242,6 +244,22 @@ enum ExpandedInterfacePolicy {
         screens.contains { $0.minX <= p.x && p.x <= $0.maxX && p.y <= $0.maxY && p.y >= $0.maxY - 48 }
     }
 
+    /// #1032 round 3: is `p` farther from its screen's right edge than every frame's left edge (on the frame's
+    /// own screen) plus 3 pt? A slot `sameItem` matches starts under 3 pt off that and extends right, so `p`
+    /// lands in none and the host read can be skipped. false (read) for a frame on no screen, a non-finite
+    /// distance, a point on no screen, or overlapping screens (the slot's screen is then not surely `p`'s).
+    static func leftOfEveryMatch(_ p: NSPoint, frames: [NSRect], screens: [CGRect]) -> Bool {
+        var reach = -CGFloat.infinity
+        for f in frames {
+            guard let cs = screen(of: f, in: screens), (cs.maxX - f.minX).isFinite else { return false }
+            if cs.maxX - f.minX > reach { reach = cs.maxX - f.minX }
+        }
+        let overlap = screens.contains { a in screens.contains { b in
+            a != b && a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY } }
+        let mine = screens.filter { $0.minX <= p.x && p.x <= $0.maxX && $0.minY <= p.y && p.y <= $0.maxY }
+        return !overlap && !mine.isEmpty && mine.allSatisfy { $0.maxX - p.x > reach + 3 }
+    }
+
     /// #1032: is host `slot` the item whose client frame is `client`? On the client frame's
     /// own display: within 3 pt of its x (#978). The host lays the same items right-aligned
     /// on every bar, so on another display: the same distance from that display's right edge
@@ -256,11 +274,14 @@ enum ExpandedInterfacePolicy {
     }
 
     /// #1032: the log line for a host read that came back partial or ran past `deadline`
-    /// (its slots are then not used, or used late), nil for a whole read in time. Counts only.
-    static func hostReadNote(complete: Bool, elapsed: TimeInterval, deadline: TimeInterval, count: Int) -> String? {
+    /// (its slots are then not used, or used late), nil for a whole read in time. Counts, plus the first
+    /// failed read's raw AXError and the literal attribute name (round 3).
+    static func hostReadNote(complete: Bool, elapsed: TimeInterval, deadline: TimeInterval, count: Int,
+                             firstError: MenuBarAX.ReadError? = nil) -> String? {
         let late = !(elapsed < deadline)
         guard !complete || late else { return nil }
-        return "host read \(late ? "past the deadline" : "partial") after \(String(format: "%.3f", elapsed)) s, \(count) items read"
+        let error = firstError.map { ", first error \($0.code) on \($0.attribute)" } ?? ""
+        return "host read \(late ? "past the deadline" : "partial") after \(String(format: "%.3f", elapsed)) s, \(count) items read\(error)"
     }
 
     /// #978: `pid`'s slots in a host layout (MenuBarAX.layout). nil for an empty one:
@@ -409,7 +430,7 @@ final class ExpandedInterfaceBridge: NSObject {
         guard let read = MenuBarAX.layoutRead(deadline: hostReadDeadline) else { return nil }
         if !hostReadNoted, let note = ExpandedInterfacePolicy.hostReadNote(
             complete: read.complete, elapsed: ProcessInfo.processInfo.systemUptime - start,
-            deadline: hostReadDeadline, count: read.laid.count) {
+            deadline: hostReadDeadline, count: read.laid.count, firstError: read.firstError) {
             hostReadNoted = true
             popoverLog.notice("\(note, privacy: .public)")
         }

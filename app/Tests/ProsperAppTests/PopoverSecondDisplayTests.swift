@@ -160,26 +160,33 @@ final class PopoverSecondDisplayTests: XCTestCase {
         XCTAssertTrue(P.systemOwnsClick(onB, itemFrames: partial), "B's click stays the system's")
     }
 
-    // A read failed unless it is .success, .noValue or .attributeUnsupported: the 0.25 s
-    // messaging timeout (.cannotComplete), an element gone between two reads (.invalidUIElement)
-    // and every other error leave the layout partial. Literals on both sides.
-    func testTimedOutReadIsAFailedRead() {
-        XCTAssertFalse(MenuBarAX.readFailed(.success))
-        XCTAssertFalse(MenuBarAX.readFailed(.noValue))
-        XCTAssertFalse(MenuBarAX.readFailed(.attributeUnsupported))
-        XCTAssertTrue(MenuBarAX.readFailed(.cannotComplete))
-        XCTAssertTrue(MenuBarAX.readFailed(.failure))
-        XCTAssertTrue(MenuBarAX.readFailed(.invalidUIElement))
-        XCTAssertTrue(MenuBarAX.readFailed(.illegalArgument))
-        XCTAssertTrue(MenuBarAX.readFailed(.invalidUIElementObserver))
-        XCTAssertTrue(MenuBarAX.readFailed(.notImplemented))
-        XCTAssertTrue(MenuBarAX.readFailed(.apiDisabled))
-        XCTAssertTrue(MenuBarAX.readFailed(.notEnoughPrecision))
-        XCTAssertTrue(MenuBarAX.readFailed(.parameterizedAttributeUnsupported))
-        XCTAssertTrue(MenuBarAX.readFailed(.actionUnsupported))
-        XCTAssertTrue(MenuBarAX.readFailed(.notificationUnsupported))
-        XCTAssertTrue(MenuBarAX.readFailed(.notificationAlreadyRegistered))
-        XCTAssertTrue(MenuBarAX.readFailed(.notificationNotRegistered))
+    // Round 3: a read failed ONLY on the messaging timeout (.cannotComplete), an element gone
+    // between two reads (.invalidUIElement) or the interface switched off (.apiDisabled); every other
+    // error is the element's answer (a healthy element may give one). Literals on both sides.
+    func testOnlyTimeoutAndGoneElementAreFailedReads() {
+        let failed: [AXError] = [.cannotComplete, .invalidUIElement, .apiDisabled]
+        let answers: [AXError] = [.success, .noValue, .attributeUnsupported, .failure, .illegalArgument, .notImplemented,
+                                  .actionUnsupported, .parameterizedAttributeUnsupported, .notificationUnsupported,
+                                  .invalidUIElementObserver, .notEnoughPrecision, .notificationAlreadyRegistered,
+                                  .notificationNotRegistered]
+        XCTAssertEqual(Set((failed + answers).filter(MenuBarAX.readFailed).map(\.rawValue)),
+                       Set([AXError.cannotComplete.rawValue, AXError.invalidUIElement.rawValue, AXError.apiDisabled.rawValue]))
+        for e in answers { XCTAssertFalse(MenuBarAX.readFailed(e), "\(e.rawValue) is an answer") }
+    }
+
+    // Round 3: the note carries the first failed read's raw AXError and a literal attribute name;
+    // without one the line is as before. Literal values, no clock, no Accessibility read.
+    func testHostReadNoteNamesTheFirstError() {
+        XCTAssertEqual(P.hostReadNote(complete: false, elapsed: 0.1, deadline: 0.25, count: 4,
+                                      firstError: (code: -25204, attribute: "children")),
+                       "host read partial after 0.100 s, 4 items read, first error -25204 on children")
+        XCTAssertEqual(P.hostReadNote(complete: false, elapsed: 0.3, deadline: 0.25, count: 2,
+                                      firstError: (code: AXError.invalidUIElement.rawValue, attribute: "position")),
+                       "host read past the deadline after 0.300 s, 2 items read, first error -25202 on position")
+        XCTAssertEqual(P.hostReadNote(complete: false, elapsed: 0.1, deadline: 0.25, count: 4, firstError: nil),
+                       "host read partial after 0.100 s, 4 items read")
+        XCTAssertTrue(P.hostReadNote(complete: true, elapsed: 0.1, deadline: 0.25, count: 9,
+                                     firstError: (code: -25204, attribute: "size")) == nil, "a whole read in time logs nothing")
     }
 
     // F1032-4: one line, counts only, when the host read is partial or past the deadline;
@@ -227,6 +234,40 @@ final class PopoverSecondDisplayTests: XCTestCase {
         XCTAssertEqual(reads, 0)
         XCTAssertEqual(frames(NSPoint(x: 3235, y: 1068)), [a1, b1, a2, b2], "the second display's bar")
         XCTAssertEqual(reads, 1)
+    }
+
+    // Round 3 (R1032-1): a bar click farther from its screen's right edge than every non-live client frame's
+    // left edge (140 pt for A, on the primary) plus 3 pt lies left of every slot that could match: no read.
+    // Every other bar click reads as before. `reads` is a local; the closure runs on main inside the call.
+    func testBarClickLeftOfEveryItemReadsNothing() {
+        var reads = 0
+        @MainActor func frames(_ click: NSPoint, items: Items? = nil, slots: [CGRect]? = nil) -> [NSRect] {
+            P.systemOwnedFrames(items ?? both, click: click, screens: [primary, right],
+                                hostSlots: { reads += 1; return slots ?? self.twoDisplays })
+        }
+        XCTAssertEqual(frames(NSPoint(x: 1200, y: 888)), [clientA, clientB], "first display, 240 pt from its edge")
+        XCTAssertEqual(frames(NSPoint(x: 3210, y: 1068)), [clientA, clientB], "second display, 150 pt from its edge")
+        XCTAssertEqual(frames(NSPoint(x: 3216, y: 1068)), [clientA, clientB], "144 pt: just past the margin")
+        XCTAssertEqual(frames(NSPoint(x: 700, y: 400)), [clientA, clientB], "below the bar")
+        XCTAssertEqual(reads, 0)
+        XCTAssertEqual(frames(NSPoint(x: 3217, y: 1068)), [a1, b1, a2, b2], "143 pt: on the margin, reads")
+        XCTAssertEqual(reads, 1)
+        // The round-3 counter-example: a 40 pt slot for the 30 pt A; a click in its right part is the system's.
+        let wide = CGRect(x: 3220, y: -180, width: 40, height: 24)   // AX; Cocoa (3220, 1056, 40, 24)
+        let click = NSPoint(x: 3257, y: 1068)
+        let wideFrames = frames(click, slots: [wide])
+        XCTAssertEqual(reads, 2)
+        XCTAssertTrue(P.systemOwnsClick(click, itemFrames: wideFrames), "a wide slot's click is still the system's")
+        // Not removed: right of every item (the clock, Control Center) still reads.
+        _ = frames(NSPoint(x: 3350, y: 1068))
+        XCTAssertEqual(reads, 3)
+        let offScreen = NSRect(x: -100_000, y: -100_000, width: 30, height: 24)
+        _ = frames(NSPoint(x: 1200, y: 888), items: [(clientA, false), (offScreen, false)])
+        XCTAssertEqual(reads, 4, "a client frame on no screen: the gate does not apply")
+        _ = frames(NSPoint(x: 1315, y: 888))
+        XCTAssertEqual(reads, 5, "inside a client frame")
+        XCTAssertFalse(owns(NSPoint(x: 1200, y: 888), items: both, slots: twoDisplays, screens: [primary, right]))
+        XCTAssertFalse(owns(NSPoint(x: 3210, y: 1068), items: both, slots: twoDisplays, screens: [primary, right]))
     }
 
     // The bridge hands its screens to the decision (the product's default reads NSScreen).

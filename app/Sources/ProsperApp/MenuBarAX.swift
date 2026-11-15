@@ -47,6 +47,9 @@ enum MenuBarAX {
         var pid: pid_t
     }
 
+    /// #1032: the first read that did not answer: its raw AXError and a literal name of the attribute.
+    typealias ReadError = (code: Int32, attribute: StaticString)
+
     static var trusted: Bool { AXIsProcessTrusted() }
 
     static var agentPID: pid_t? {
@@ -63,17 +66,19 @@ enum MenuBarAX {
     /// #1032: `layout()` plus whether every read answered. A failed read (the 0.25 s timeout)
     /// gives no value, so a container's items or a wrapper's owner go missing while the rest is
     /// found: `complete` is false then, and when the whole read runs past `deadline` seconds (the
-    /// rest is left unread). nil without the permission or the agent: nothing was read.
-    static func layoutRead(deadline: TimeInterval) -> (laid: [Laid], complete: Bool)? {
+    /// rest is left unread). nil without the permission or the agent: nothing was read. `firstError`:
+    /// the first failed read, for the log line (one optional field: the caller already takes this tuple).
+    static func layoutRead(deadline: TimeInterval) -> (laid: [Laid], complete: Bool, firstError: ReadError?)? {
         guard trusted, let agent = agentPID else { return nil }
         let end = ProcessInfo.processInfo.systemUptime + deadline
-        var failed = false
+        var failed: ReadError?
+        var late = false
         let root = bounded(AXUIElementCreateApplication(agent))   // per element (#224)
         let displays = displayBounds()
         var found: [Laid] = []
         func visit(_ e: AXUIElement, depth: Int) {
             guard depth <= 3 else { return }
-            guard ProcessInfo.processInfo.systemUptime < end else { failed = true; return }
+            guard ProcessInfo.processInfo.systemUptime < end else { late = true; return }
             bounded(e)
             if let f = frame(of: e, failed: &failed), isBarItem(f, displays: displays) {
                 let child = children(of: e, failed: &failed).first
@@ -89,7 +94,7 @@ enum MenuBarAX {
         let items = found.filter { a in
             !found.contains { b in a.frame != b.frame && a.frame.contains(b.frame) }
         }
-        return (items.sorted { $0.frame.minX < $1.frame.minX }, !failed)
+        return (items.sorted { $0.frame.minX < $1.frame.minX }, failed == nil && !late, failed)
     }
 
     /// #202: is `f` an item slot on some display's menu bar? Every display has its own
@@ -242,32 +247,35 @@ enum MenuBarAX {
     }
 
     private static func attribute(_ e: AXUIElement, _ name: String) -> AnyObject? {
-        var failed = false
-        return attribute(e, name, failed: &failed)
+        var failed: ReadError?
+        return attribute(e, name, "unlogged", failed: &failed)
     }
 
-    /// #1032: sets `failed` when the read itself failed, not when the element has no such value.
-    private static func attribute(_ e: AXUIElement, _ name: String, failed: inout Bool) -> AnyObject? {
+    /// #1032: sets `failed` (the first only) when the read itself failed, not when the element has no
+    /// such value. `label` is a literal of the caller's (StaticString), never a value from the host.
+    private static func attribute(_ e: AXUIElement, _ name: String, _ label: StaticString,
+                                  failed: inout ReadError?) -> AnyObject? {
         var v: AnyObject?
         let err = AXUIElementCopyAttributeValue(e, name as CFString, &v)
-        if readFailed(err) { failed = true }
+        if readFailed(err), failed == nil { failed = (err.rawValue, label) }
         return err == .success ? v : nil
     }
 
-    /// #1032: a read that did not answer: every error but .noValue / .attributeUnsupported (an
-    /// element without the attribute, a real answer). The messaging timeout's .cannotComplete,
-    /// an element gone between two reads (.invalidUIElement) and the rest leave the layout partial.
+    /// #1032: a read that did not answer: only the messaging timeout (.cannotComplete), an element gone
+    /// between two reads (.invalidUIElement) and the interface switched off (.apiDisabled, never one element's).
+    /// Any other error is the element's own answer: a healthy element may give one, and counting it would
+    /// leave every read partial.
     nonisolated static func readFailed(_ err: AXError) -> Bool {
-        !(err == .success || err == .noValue || err == .attributeUnsupported)
+        err == .cannotComplete || err == .invalidUIElement || err == .apiDisabled
     }
 
     private static func children(of e: AXUIElement) -> [AXUIElement] {
-        var failed = false
+        var failed: ReadError?
         return children(of: e, failed: &failed)
     }
 
-    private static func children(of e: AXUIElement, failed: inout Bool) -> [AXUIElement] {
-        (attribute(e, kAXChildrenAttribute, failed: &failed) as? [AXUIElement]) ?? []
+    private static func children(of e: AXUIElement, failed: inout ReadError?) -> [AXUIElement] {
+        (attribute(e, kAXChildrenAttribute, "children", failed: &failed) as? [AXUIElement]) ?? []
     }
 
     private static func pid(_ e: AXUIElement) -> pid_t {
@@ -288,13 +296,13 @@ enum MenuBarAX {
 
     /// Top-left-origin screen frame (same space as CGWindow bounds).
     private static func frame(of e: AXUIElement) -> CGRect? {
-        var failed = false
+        var failed: ReadError?
         return frame(of: e, failed: &failed)
     }
 
-    private static func frame(of e: AXUIElement, failed: inout Bool) -> CGRect? {
-        guard let p = attribute(e, kAXPositionAttribute, failed: &failed),
-              let s = attribute(e, kAXSizeAttribute, failed: &failed),
+    private static func frame(of e: AXUIElement, failed: inout ReadError?) -> CGRect? {
+        guard let p = attribute(e, kAXPositionAttribute, "position", failed: &failed),
+              let s = attribute(e, kAXSizeAttribute, "size", failed: &failed),
               CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
         var pt = CGPoint.zero, sz = CGSize.zero
         guard AXValueGetValue(p as! AXValue, .cgPoint, &pt), AXValueGetValue(s as! AXValue, .cgSize, &sz) else {
