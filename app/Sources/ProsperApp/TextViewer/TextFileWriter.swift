@@ -24,6 +24,10 @@ enum TextFileWriter {
         case changedOnDisk
         /// The file at the path is not the one stat saw (a swap before the open): nothing was written.
         case swapped
+        /// Locked (Finder's Locked: the user or system immutable flag): nothing was written (R1108-r3-b).
+        case locked
+        /// The link now names another file than the load opened, or a missing one (R1108-q3): nothing was written or created.
+        case retargeted
         /// Nothing was changed.
         case failed(Step, Int32)
         /// The in-place write failed after the truncate: the file may be incomplete.
@@ -75,23 +79,34 @@ enum TextFileWriter {
     /// that comparison (D12's "Overwrite the newer file on disk?"). The stat seam defaults to lstat: the
     /// resolved end is not a link, so a link that appears there is seen as one and refused, never followed.
     /// A good save answers the fingerprint of the bytes written. `beforeCompare` is a test seam: called once in the in-place
-    /// branch, on the opened and checked descriptor, right before the comparison.
+    /// branch, on the opened and checked descriptor, right before the comparison. `beforeRead` is a test seam too: called once
+    /// inside the comparison (either branch), between its fstat and its read. `identity` is what the load opened (nil: not
+    /// checked): only its path is compared with the one resolved now; it is never opened, created or removed.
     static func save(_ text: String, encoding: TextViewerDocument.Encoding, to url: URL, expected: Fingerprint,
-                     overwrite: Bool = false, writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(),
+                     overwrite: Bool = false, identity: TextViewerDocument.Identity? = nil,
+                     writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(),
                      stat statAt: Stat = { p in var s = stat(); return (lstat(p, &s) == 0 ? 0 : errno, s) },
-                     beforeCompare: () -> Void = {}) -> Result<Fingerprint, Failure> {
+                     beforeCompare: () -> Void = {}, beforeRead: () -> Void = {}) -> Result<Fingerprint, Failure> {
         guard let bytes = encode(text, encoding: encoding) else { return .failure(.lossy) }
         let path: String
         switch resolve(url.path) {
         case .success(let p): path = p
         case .failure(let f): return .failure(f)
         }
+        // R1108-q3: a link retargeted since the load (at another file or a missing name) is never written or created, even with
+        // overwrite. The same path with another inode (replaced there) stays the byte comparison's question.
+        if let identity, identity.path != path { return .failure(.retargeted) }
         let (code, st) = statAt(path)
         if code == ENOENT { return create(bytes, at: path) }
         guard code == 0 else { return .failure(.failed(.stat, code)) }
         guard st.st_mode & S_IFMT == S_IFREG else { return .failure(.notRegular) }
+        // Locked: its own answer, before any temp (the rename would fail with EPERM after the temp was written).
+        guard st.st_flags & UInt32(UF_IMMUTABLE | SF_IMMUTABLE) == 0 else { return .failure(.locked) }
         // Marked read-only by its owner: never written, by either branch (a rename would replace it anyway).
         guard st.st_mode & S_IWUSR != 0 else { return .failure(.failed(.open, EACCES)) }
+        // Nor a file an access list denies writing (R1108-r3-b): the rename needs only the folder, so the kernel is asked
+        // about the file itself, with the effective ids; the resolved end is not a link, NOFOLLOW is a belt.
+        guard faccessat(AT_FDCWD, path, W_OK, AT_EACCESS | AT_SYMLINK_NOFOLLOW) == 0 else { return .failure(.failed(.open, errno)) }
 
         // A new sibling takes the folder's group ("/." stats the folder itself, not a link to it); no chown, so a
         // file of another group is written in place, as for another owner.
@@ -111,7 +126,7 @@ enum TextFileWriter {
             let failure: Failure
             if copyfile(path, temp.path, nil, copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL | COPYFILE_NOFOLLOW_SRC | COPYFILE_NOFOLLOW_DST)) != 0 {
                 failure = .failed(.copyAttributes, errno)
-            } else if !overwrite, let changed = compare(path, expected) {
+            } else if !overwrite, let changed = compare(path, expected, beforeRead) {
                 failure = changed
             } else {
                 do { try writer.replace(target, with: temp); return .success(digest(bytes)) } catch { failure = .failed(.replace, errnoOf(error)) }
@@ -131,7 +146,7 @@ enum TextFileWriter {
         // The same inode as the regular file stat saw: so the type too.
         guard now.st_dev == st.st_dev, now.st_ino == st.st_ino else { return .failure(.swapped) }
         beforeCompare()
-        if !overwrite, let changed = compare(fd, expected) { return .failure(changed) }
+        if !overwrite, let changed = compare(fd, expected, beforeRead) { return .failure(changed) }
         // The comparison read to the end: back to the start, or the write would leave a hole of zeros.
         guard lseek(fd, 0, SEEK_SET) == 0 else { return .failure(.failed(.write, errno)) }
         guard ftruncate(fd, 0) == 0 else { return .failure(.incomplete(.truncate, errno)) }
@@ -155,21 +170,29 @@ enum TextFileWriter {
 
     /// The file's current bytes against `expected`, read by TextViewerDocument.load's rule (non-blocking,
     /// regular files only, at most maxBytes): nil when they match.
-    private static func compare(_ path: String, _ expected: Fingerprint) -> Failure? {
+    private static func compare(_ path: String, _ expected: Fingerprint, _ beforeRead: () -> Void) -> Failure? {
         let fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return errno == ENOENT ? .changedOnDisk : .failed(.read, errno) }
         defer { close(fd) }
-        return compare(fd, expected)
+        return compare(fd, expected, beforeRead)
     }
 
     /// The same on an open descriptor at offset 0 (the in-place branch's own).
-    private static func compare(_ fd: Int32, _ expected: Fingerprint) -> Failure? {
+    private static func compare(_ fd: Int32, _ expected: Fingerprint, _ beforeRead: () -> Void) -> Failure? {
         var st = stat()
         guard fstat(fd, &st) == 0 else { return .failed(.read, errno) }
         guard st.st_mode & S_IFMT == S_IFREG else { return .notRegular }
         // Past the viewer's limit it cannot be what was read or saved.
         guard st.st_size >= 0, st.st_size <= Int64(TextViewerDocument.maxBytes) else { return .changedOnDisk }
+        beforeRead()
         guard let data = TextViewerDocument.readAll(fd, size: Int(st.st_size)) else { return .failed(.read, errno) }
+        // Grown since the fstat (R1108-r4-a, a log another program appends to): a byte past the size read is not compared,
+        // and the truncate or the rename would drop it.
+        var more: UInt8 = 0
+        var n: Int
+        repeat { n = read(fd, &more, 1) } while n < 0 && errno == EINTR
+        if n < 0 { return .failed(.read, errno) }
+        if n > 0 { return .changedOnDisk }
         return digest([UInt8](data)) == expected ? nil : .changedOnDisk
     }
 

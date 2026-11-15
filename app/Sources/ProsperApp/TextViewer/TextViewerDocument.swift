@@ -29,6 +29,10 @@ struct TextViewerDocument: Equatable {
     let text: String
     let encoding: Encoding
     let lineEnding: LineEnding
+    /// R1108-q3: what the load opened, for a save to compare: the path as TextFileWriter.resolve gives it (the same rule the save
+    /// resolves by), the device and inode from the fstat of the descriptor read. Nil from decode alone.
+    struct Identity: Equatable, Sendable { let path: String; let device: dev_t; let inode: ino_t }
+    var identity: Identity? = nil
     /// Invalid UTF-8, shown through a lossy decode: read-only (D1).
     var readOnly: Bool { encoding == .lossy }
 
@@ -45,7 +49,8 @@ struct TextViewerDocument: Equatable {
         guard st.st_mode & S_IFMT == S_IFREG else { return .failure(.notRegular) }
         guard st.st_size >= 0, st.st_size <= Int64(maxBytes) else { return .failure(.tooLarge) }
         guard let data = readAll(fd, size: Int(st.st_size)) else { return .failure(.unreadable) }
-        return decode(data)
+        let opened = (try? TextFileWriter.resolve(url.path).get()).map { Identity(path: $0, device: st.st_dev, inode: st.st_ino) }
+        return decode(data).map { var d = $0; d.identity = opened; return d }
     }
 
     /// At most `size` bytes (the fstat size, already checked to be in 0...maxBytes): a file that grows

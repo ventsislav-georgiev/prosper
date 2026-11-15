@@ -527,4 +527,190 @@ final class TextFileWriterTests: XCTestCase {
         }
         XCTAssertEqual(stats, 0, "refused before any stat")
     }
+
+    // MARK: round 5 (R1108-r3-b an access list and Locked, R1108-r4-a a file that grows, R1108-q3 the load's identity)
+
+    /// Saves with the default seam (lstat: mine, the atomic branch) or as another owner (the in-place branch).
+    private func save(_ text: String, to url: URL, expected: [UInt8], overwrite: Bool = false, inPlace: Bool,
+                      flags: UInt32 = 0, writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(),
+                      beforeRead: () -> Void = {}) -> Result<W.Fingerprint, W.Failure> {
+        guard inPlace || flags != 0 else {
+            return W.save(text, encoding: .utf8, to: url, expected: W.digest(expected), overwrite: overwrite, writer: writer, beforeRead: beforeRead)
+        }
+        let st = seam { if inPlace { $0.st_uid = geteuid() &+ 1 }; $0.st_flags |= flags }
+        return W.save(text, encoding: .utf8, to: url, expected: W.digest(expected), overwrite: overwrite, writer: writer, stat: st, beforeRead: beforeRead)
+    }
+
+    /// R1108-r3-b: a 0644 file of the row whose access list (set in process) denies writing to everyone: the bit is set but the
+    /// kernel says no; never written by either branch, not even with overwrite: EACCES, bytes and the deny entry unchanged, no temp.
+    func testAnAccessListThatDeniesWritingIsNeverWritten() throws {
+        let dir = tempDir("tfw-acl-deny")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        var acl: acl_t? = acl_init(1)
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        var entry: acl_entry_t?
+        var perms: acl_permset_t?
+        let everyone = UUID(uuidString: "ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C")!.uuid   // the everyone group (gid 12)
+        XCTAssertEqual(acl_create_entry(&acl, &entry), 0)
+        XCTAssertEqual(acl_set_tag_type(entry, ACL_EXTENDED_DENY), 0)
+        XCTAssertEqual(withUnsafeBytes(of: everyone) { acl_set_qualifier(entry, $0.baseAddress) }, 0)
+        XCTAssertEqual(acl_get_permset(entry, &perms), 0)
+        XCTAssertEqual(acl_add_perm(perms, ACL_WRITE_DATA), 0)
+        XCTAssertEqual(acl_set_permset(entry, perms), 0)
+        guard acl_set_file(url.path, ACL_TYPE_EXTENDED, acl) == 0 else { return XCTFail("acl_set_file: errno \(errno)") }
+        let want = aclText(url)
+        XCTAssertTrue(want.contains("deny"), want)
+        XCTAssertNotEqual(info(url).st_mode & S_IWUSR, 0, "the owner-write bit is set")
+        XCTAssertEqual(faccessat(AT_FDCWD, url.path, W_OK, AT_EACCESS), -1, "the kernel says no")
+        for inPlace in [false, true] {
+            for overwrite in [false, true] {
+                let label = "inPlace \(inPlace) overwrite \(overwrite)"
+                let calls = Calls()
+                XCTAssertEqual(save("new", to: url, expected: Array("old".utf8), overwrite: overwrite, inPlace: inPlace, writer: RecordingWriter(calls: calls)),
+                               .failure(.failed(.open, EACCES)), label)
+                XCTAssertEqual(calls.all, [], label)
+                XCTAssertEqual(bytes(url), Array("old".utf8), label)
+                XCTAssertEqual(aclText(url), want, label)
+                XCTAssertEqual(names(dir), ["a.txt"], label)
+            }
+        }
+    }
+
+    /// R1108-r3-b: Finder's Locked (the user immutable flag, set with chflags(2) on the row's own file and cleared in the defer):
+    /// "locked", before any temp, by either branch, not even with overwrite; the system flag reaches the code through the seam only.
+    func testALockedFileIsNeverWritten() throws {
+        let dir = tempDir("tfw-locked")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        let before = info(url).st_flags
+        XCTAssertEqual(chflags(url.path, before | UInt32(UF_IMMUTABLE)), 0)
+        defer { XCTAssertEqual(chflags(url.path, before), 0, "the row's own flag is cleared") }
+        XCTAssertNotEqual(info(url).st_flags & UInt32(UF_IMMUTABLE), 0)
+        for inPlace in [false, true] {
+            for overwrite in [false, true] {
+                let label = "inPlace \(inPlace) overwrite \(overwrite)"
+                let calls = Calls()
+                XCTAssertEqual(save("new", to: url, expected: Array("old".utf8), overwrite: overwrite, inPlace: inPlace, writer: RecordingWriter(calls: calls)),
+                               .failure(.locked), label)
+                XCTAssertEqual(calls.all, [], label)
+                XCTAssertEqual(bytes(url), Array("old".utf8), label)
+                XCTAssertEqual(names(dir), ["a.txt"], label)
+            }
+        }
+    }
+
+    func testTheSystemImmutableFlagIsLockedThroughTheSeam() throws {
+        let dir = tempDir("tfw-locked-sys")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        for inPlace in [false, true] {
+            for overwrite in [false, true] {
+                XCTAssertEqual(save("new", to: url, expected: Array("old".utf8), overwrite: overwrite, inPlace: inPlace, flags: UInt32(SF_IMMUTABLE)),
+                               .failure(.locked), "inPlace \(inPlace) overwrite \(overwrite)")
+                XCTAssertEqual(bytes(url), Array("old".utf8))
+                XCTAssertEqual(names(dir), ["a.txt"])
+            }
+        }
+    }
+
+    /// R1108-r4-a: the row appends one byte to its own file between the comparison's fstat and its read: "changed on disk" in both
+    /// branches, the appended byte kept, nothing truncated, no temp. A file that did not grow saves; overwrite skips the comparison.
+    func testAFileThatGrowsDuringTheComparisonIsChangedOnDisk() throws {
+        let dir = tempDir("tfw-grow")
+        let url = dir.appendingPathComponent("a.txt")
+        let old = Array("old".utf8)
+        func append() {
+            let fd = open(url.path, O_WRONLY | O_APPEND | O_NOFOLLOW)
+            XCTAssertGreaterThanOrEqual(fd, 0)
+            XCTAssertEqual([UInt8(0x21)].withUnsafeBytes { write(fd, $0.baseAddress, 1) }, 1)
+            _ = close(fd)
+        }
+        for inPlace in [false, true] {
+            let label = "inPlace \(inPlace)"
+            _ = try file("a.txt", old, in: dir)
+            var calls = 0
+            XCTAssertEqual(save("new", to: url, expected: old, inPlace: inPlace, beforeRead: { calls += 1; append() }), .failure(.changedOnDisk), label)
+            XCTAssertEqual(calls, 1, label)
+            XCTAssertEqual(bytes(url), old + [0x21], "the appended byte is kept: \(label)")
+            XCTAssertEqual(names(dir), ["a.txt"], label)
+            // Not grown: saved, the seam called once.
+            _ = try file("a.txt", old, in: dir)
+            calls = 0
+            XCTAssertEqual(save("new", to: url, expected: old, inPlace: inPlace, beforeRead: { calls += 1 }), .success(W.digest(Array("new".utf8))), label)
+            XCTAssertEqual(calls, 1, label)
+            XCTAssertEqual(bytes(url), Array("new".utf8), label)
+            // Overwrite: no comparison, so no seam call; written.
+            calls = 0
+            XCTAssertEqual(save("newer", to: url, expected: old, overwrite: true, inPlace: inPlace, beforeRead: { calls += 1 }),
+                           .success(W.digest(Array("newer".utf8))), label)
+            XCTAssertEqual(calls, 0, label)
+            XCTAssertEqual(bytes(url), Array("newer".utf8), label)
+            XCTAssertEqual(names(dir), ["a.txt"], label)
+        }
+    }
+
+    /// R1108-q3: a link loaded at a.txt, then retargeted by the row at its own b.txt or at a missing c.txt: with the load's
+    /// identity the save is refused, with and without overwrite, and nothing is written or created. Without it (the control):
+    /// today's behaviour, b.txt written and c.txt created.
+    func testALinkRetargetedSinceTheLoadIsNeverWritten() throws {
+        let dir = tempDir("tfw-retarget")
+        let aaa = Array("aaa".utf8), bbb = Array("bbb".utf8)
+        let a = try file("a.txt", aaa, in: dir)
+        let b = try file("b.txt", bbb, in: dir)
+        let link = dir.appendingPathComponent("link.txt")
+        XCTAssertEqual(symlink("a.txt", link.path), 0)
+        guard case .success(let doc) = TextViewerDocument.load(link), let id = doc.identity else { return XCTFail("no identity") }
+        XCTAssertEqual(id.path, a.path)
+        func point(_ target: String) {
+            XCTAssertEqual(unlink(link.path), 0)
+            XCTAssertEqual(symlink(target, link.path), 0)
+        }
+        for target in ["b.txt", "c.txt"] {
+            point(target)
+            for overwrite in [false, true] {
+                XCTAssertEqual(W.save("new", encoding: .utf8, to: link, expected: W.digest(aaa), overwrite: overwrite, identity: id),
+                               .failure(.retargeted), "\(target) overwrite \(overwrite)")
+                XCTAssertEqual(bytes(a), aaa)
+                XCTAssertEqual(bytes(b), bbb)
+                XCTAssertEqual(names(dir), ["a.txt", "b.txt", "link.txt"], "nothing created")
+            }
+        }
+        // The control: no identity, today's behaviour.
+        point("b.txt")
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: link, expected: W.digest(aaa), overwrite: true), .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(bytes(b), Array("new".utf8), "without the identity the other file is written")
+        point("c.txt")
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: link, expected: W.digest(aaa)), .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(names(dir), ["a.txt", "b.txt", "c.txt", "link.txt"], "without the identity a file is created where the link points")
+        XCTAssertEqual(bytes(a), aaa)
+    }
+
+    /// R1108-q3: the same path, another inode (the row renames its own sibling over the file): the identity does not refuse; the byte
+    /// comparison decides (changed without overwrite, the same bytes saved) and overwrite writes. Deleted: created again at the path.
+    func testAFileReplacedOrDeletedAtTheSamePathKeepsTodaysAnswers() throws {
+        let dir = tempDir("tfw-identity-same")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        guard case .success(let doc) = TextViewerDocument.load(url), let id = doc.identity else { return XCTFail("no identity") }
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), identity: id), .success(W.digest(Array("new".utf8))))
+        func replace(_ with: [UInt8]) throws {
+            let side = try file("side.txt", with, in: dir)
+            XCTAssertEqual(rename(side.path, url.path), 0)
+            XCTAssertNotEqual(info(url).st_ino, id.inode)
+        }
+        let saved = W.digest(Array("new".utf8))
+        try replace(Array("theirs".utf8))
+        XCTAssertEqual(W.save("mine", encoding: .utf8, to: url, expected: saved, identity: id), .failure(.changedOnDisk))
+        XCTAssertEqual(bytes(url), Array("theirs".utf8))
+        XCTAssertEqual(W.save("mine", encoding: .utf8, to: url, expected: saved, overwrite: true, identity: id), .success(W.digest(Array("mine".utf8))))
+        XCTAssertEqual(bytes(url), Array("mine".utf8))
+        try replace(Array("same".utf8))
+        XCTAssertEqual(W.save("next", encoding: .utf8, to: url, expected: W.digest(Array("same".utf8)), identity: id), .success(W.digest(Array("next".utf8))),
+                       "the same bytes under another inode: saved")
+        XCTAssertEqual(names(dir), ["a.txt"])
+        for overwrite in [false, true] {
+            XCTAssertEqual(unlink(url.path), 0)
+            XCTAssertEqual(W.save("again", encoding: .utf8, to: url, expected: W.digest(Array("next".utf8)), overwrite: overwrite, identity: id),
+                           .success(W.digest(Array("again".utf8))), "deleted: created at the same path")
+            XCTAssertEqual(bytes(url), Array("again".utf8))
+            XCTAssertEqual(names(dir), ["a.txt"])
+        }
+    }
 }

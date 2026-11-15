@@ -160,4 +160,23 @@ final class TextViewerDocumentTests: XCTestCase {
         XCTAssertEqual(TextViewerDocument.decode(Data("x\r\ny\r\n".utf8)), .success(
             TextViewerDocument(text: "x\r\ny\r\n", encoding: .utf8, lineEnding: .crlf)))
     }
+
+    /// R1108-q3: the load records what it opened: the row's own lstat of its file; through a link, the target's path and inode,
+    /// never the link's. decode alone has none.
+    func testLoadGivesTheIdentityOfTheFileItRead() throws {
+        let dir = tempDir("tv-doc-identity")
+        let url = try file("a.txt", Array("one\n".utf8), in: dir)
+        var own = stat()
+        XCTAssertEqual(lstat(url.path, &own), 0)
+        let want = TextViewerDocument.Identity(path: url.path, device: own.st_dev, inode: own.st_ino)
+        XCTAssertEqual(try doc(url).identity, want)
+        let link = dir.appendingPathComponent("link.txt")
+        XCTAssertEqual(symlink("a.txt", link.path), 0)
+        var linkStat = stat()
+        XCTAssertEqual(lstat(link.path, &linkStat), 0)
+        let viaLink = try doc(link).identity
+        XCTAssertEqual(viaLink, want, "the target's path and inode")
+        XCTAssertNotEqual(viaLink?.inode, linkStat.st_ino, "not the link's")
+        XCTAssertTrue(((try? TextViewerDocument.decode(Data("x".utf8)).get())?.identity) == nil)
+    }
 }
