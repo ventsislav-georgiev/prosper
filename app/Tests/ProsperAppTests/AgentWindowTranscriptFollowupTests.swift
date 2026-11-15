@@ -197,4 +197,46 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(live.blocks.map(\.pending), [false, false, false, false, false])
         XCTAssertTrue(live.orphans.isEmpty)
     }
+
+    // MARK: step D, R1269-c-q1 and QA r1153 INFO: the dropped front
+
+    /// Red before (trim() kept leadsWithImageOnly for the line it dropped): the prepend that removed the orphan card put a
+    /// stray "[image]" card above "a", the line now first.
+    func testTranscriptFollowupATrimmedImageLineLeavesNoCard() {
+        var live = TranscriptAssembler()
+        live.maxBlocks = 3
+        for e in [tfUser([tfImage]), say("a"), toolResult("t1", "out"), say("b")] {
+            live.add(TranscriptDecoder.decode(line: line(e)), source: nil)
+        }
+        XCTAssertEqual(live.dropped, 1, "the image line was trimmed")
+        live.prepend(asm([tfPrompt("go"), toolUse("t1", "Bash", ["command": "ls"])]))
+        XCTAssertEqual(live.blocks.map(kind), ["user", "bash", "assistant", "assistant"], "the orphan card was removed, no card added")
+        XCTAssertFalse(live.blocks.contains { tfCard($0) })
+    }
+
+    /// Red before (atHistoryCap read the count alone): with a block dropped for the bound and the count under it again
+    /// (here: the bound raised by one), Load earlier joined a page above the hole and the dropped blocks were gone unmarked.
+    @MainActor
+    func testTranscriptFollowupNoPageIsJoinedAboveADroppedBlock() throws {
+        let url = tempDir().appendingPathComponent("hole.jsonl")
+        try write(url, (0..<200).map { say("message \($0) " + String(repeating: "x", count: 40)) })
+        let m = AgentTranscriptModel()
+        m.offMain = { $0() }
+        m.makeWatch = { _, _ in NSObject() }
+        m.tickInterval = 3600
+        m.pageBytes = 4096
+        m.maxBlocks = 5
+        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0", dchState: "idle",
+                                       sessionId: "s", transcriptPath: url.path))
+        m.start()
+        defer { m.stop() }
+        m.maxBlocks = 6
+        XCTAssertEqual(m.blocks.count, 5, "under the bound again")
+        XCTAssertTrue(m.olderAvailable)
+        XCTAssertTrue(m.atHistoryCap, "a block was dropped: older history is in the terminal")
+        let before = m.blocks.map(\.id)
+        m.loadEarlier()
+        XCTAssertEqual(m.blocks.map(\.id), before)
+    }
 }
+

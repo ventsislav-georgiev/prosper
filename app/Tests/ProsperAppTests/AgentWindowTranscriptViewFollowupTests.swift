@@ -141,4 +141,139 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(ended.isEmpty, "the summary is read")
         XCTAssertFalse(ended.contains { $0.contains("Working") }, "ended: \(ended)")
     }
+
+    // MARK: step D, QA 657 INFO-6: the reader's place across a level switch (macOS 15+)
+
+    /// 30 literal turns: "Prompt i", a Bash call with its result, "Done i": 3 blocks a turn, so turn i starts at id 3 * i.
+    private func tvTurns(_ n: Int) -> [[String: Any]] {
+        (0..<n).flatMap { i in
+            [entry("user", ["message": ["role": "user", "content": "Prompt \(i)"]]), toolUse("c\(i)", "Bash", ["command": "make \(i)"]),
+             toolResult("c\(i)", "ok \(i)"), say("Done \(i)")]
+        }
+    }
+
+    @MainActor
+    private func tvScrollView(_ v: NSView) -> NSScrollView? {
+        if let s = v as? NSScrollView { return s }
+        for c in v.subviews { if let s = tvScrollView(c) { return s } }
+        return nil
+    }
+
+    /// The clip's lower edge is the document's: the reader is at the end (a read; the rows never scroll the clip).
+    @MainActor
+    private func tvAtEnd(_ host: NSView) -> Bool {
+        guard let s = tvScrollView(host), let d = s.documentView else { return false }
+        return s.contentView.bounds.maxY >= d.frame.height - 2
+    }
+
+    @MainActor
+    private func tvHeight(_ host: NSView) -> CGFloat? { tvScrollView(host)?.documentView?.frame.height }
+
+    /// The "Prompt i" and "Done i" texts whose frame is inside the scroll area's, read the way an AX client reads them
+    /// (polled until `done` holds, to AXTreeSupport.poll's ceiling). The caller has turned the flags on.
+    @MainActor
+    private func tvInView(_ host: NSView, until done: ([String]) -> Bool = { _ in true }) -> [String] {
+        func names(_ tree: [AXTreeNode]) -> [String] {
+            guard let area = tree.first(where: { $0.role == "AXScrollArea" })?.frame else { return [] }
+            return tree.filter { $0.frame.intersects(area) }.flatMap(\.names)
+                .filter { $0.hasPrefix("Prompt ") || $0.hasPrefix("Done ") }
+        }
+        return names(AXTreeSupport.poll(host) { done(names($0)) })
+    }
+
+    /// Hosts the scrolling transcript of `n` turns in a window that is never shown, its place in a row-owned box (the
+    /// binding SwiftUI writes); the flags are on for this process only and put back.
+    @MainActor
+    private func tvScene(_ n: Int, _ check: (URL, AgentTranscriptModel, TVPlace, NSHostingView<TVPlaceHost>) throws -> Void) throws {
+        let url = tempDir().appendingPathComponent("s.jsonl")
+        try write(url, tvTurns(n))
+        let m = windowModel(store([session("api", .working, ago: 1, path: url.path)]))
+        m.setVisible(true)
+        defer { m.close() }
+        let place = TVPlace()
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let (win, host) = AXTreeSupport.hosted(TVPlaceHost(place: place, model: m.transcript, level: .focused),
+                                               CGSize(width: 560, height: 400))
+        defer { win.close() }
+        try check(url, m.transcript, place, host)
+    }
+
+    /// Switches the level and waits for the document to change height.
+    @MainActor
+    private func tvSwitch(_ host: NSHostingView<TVPlaceHost>, _ place: TVPlace, _ t: AgentTranscriptModel) {
+        let h0 = tvHeight(host)
+        host.rootView = TVPlaceHost(place: place, model: t, level: .verbose)
+        _ = AXTreeSupport.poll(host) { [self] _ in tvHeight(host) != h0 }
+    }
+
+    /// Kept from today: the first open lands at the end.
+    @MainActor
+    func testTranscriptViewFollowupFirstOpenLandsAtTheEnd() throws {
+        try tvScene(30) { _, _, place, host in
+            let seen = tvInView(host) { $0.contains("Done 29") }
+            XCTAssertTrue(seen.contains("Done 29"), "\(seen)")
+            XCTAssertFalse(seen.contains("Prompt 14"), "\(seen)")
+            XCTAssertTrue(tvAtEnd(host))
+            XCTAssertTrue(place.top == nil, "no place at the end")
+        }
+    }
+
+    /// Red before (AgentTranscriptView: the level in the ScrollView's id): a switch made a new ScrollView at the end.
+    @MainActor
+    func testTranscriptViewFollowupLevelSwitchKeepsTheReadersTopTurn() throws {
+        guard #available(macOS 15, *) else { throw XCTSkip("macOS 14 keeps today's jump to the end") }
+        try tvScene(30) { _, t, place, host in
+            _ = tvInView(host) { $0.contains("Done 29") }
+            place.top = 42   // turn 14
+            let before = tvInView(host) { $0.contains("Prompt 14") }
+            XCTAssertTrue(before.contains("Prompt 14"), "the reader is on turn 14: \(before)")
+            tvSwitch(host, place, t)
+            let after = tvInView(host) { $0.contains("Prompt 14") }
+            XCTAssertTrue(after.contains("Prompt 14"), "still turn 14 after the switch: \(after)")
+            XCTAssertFalse(after.contains("Done 29"), "\(after)")
+            XCTAssertFalse(tvAtEnd(host), "not at the end")
+            XCTAssertEqual(place.top, 42, "the place SwiftUI holds is turn 14's first block")
+        }
+    }
+
+    /// Red when the end keeps a place (a place left at the end): a new line no longer followed.
+    @MainActor
+    func testTranscriptViewFollowupAReaderAtTheEndStaysAtTheEnd() throws {
+        guard #available(macOS 15, *) else { throw XCTSkip("macOS 14 keeps today's behaviour") }
+        try tvScene(30) { url, t, place, host in
+            _ = tvInView(host) { $0.contains("Done 29") }
+            place.top = 42
+            _ = tvInView(host) { $0.contains("Prompt 14") }
+            place.top = 87   // turn 29, the last: back at the end
+            _ = AXTreeSupport.poll(host) { [self] _ in tvAtEnd(host) && place.top == nil }
+            XCTAssertTrue(tvAtEnd(host))
+            XCTAssertTrue(place.top == nil, "the end is no place: \(String(describing: place.top))")
+            tvSwitch(host, place, t)
+            _ = AXTreeSupport.poll(host) { [self] _ in tvAtEnd(host) }
+            XCTAssertTrue(tvAtEnd(host), "at the end after the switch")
+            // A long answer, taller than the pane: the end follows it.
+            let h0 = tvHeight(host)
+            try append(url, line(say("Tail\n" + String(repeating: "A long answer line\n", count: 60))))
+            t.poll()
+            _ = AXTreeSupport.poll(host) { [self] _ in tvHeight(host) != h0 && tvAtEnd(host) }
+            XCTAssertNotEqual(tvHeight(host), h0, "the new line is drawn")
+            XCTAssertTrue(tvAtEnd(host), "at the end after a new line")
+        }
+    }
+}
+
+/// The row-owned place: what SwiftUI writes as the reader scrolls, and what a row sets to scroll the way SwiftUI does.
+@MainActor final class TVPlace: ObservableObject {
+    @Published var top: Int?
+}
+
+struct TVPlaceHost: View {
+    @ObservedObject var place: TVPlace
+    let model: AgentTranscriptModel
+    var level: AgentVerbosity
+    var body: some View {
+        AgentTranscriptView(model: model, ownsLifecycle: false, level: level, position: $place.top)
+            .frame(width: 560, height: 400).environment(\.colorScheme, .dark)
+    }
 }

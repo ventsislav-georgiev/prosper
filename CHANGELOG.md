@@ -1263,6 +1263,9 @@ tag from the now-released section and put it on the new top draft.
   restart; it comes back when one of its replies succeeds, when you press Release or when you give
   it a new token. If every account's token is rejected, one is still tried so a fixed token is
   noticed.
+- Agent Sessions: switching the transcript's detail level no longer jumps to the end; you stay on
+  the turn you were reading (macOS 15 and later). Once older lines were dropped to save memory, the
+  transcript says older history is in the terminal instead of loading a page above the gap.
 
 ## v2.174.0
 

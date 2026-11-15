@@ -17,6 +17,12 @@ struct AgentTranscriptView: View {
     var level: AgentVerbosity = .default
     /// QA #668 INFO-2: the session ended (the window's held row): Open in terminal is off, in its slot.
     var ended = false
+    /// QA #657 INFO-6 (macOS 15+): the reader's top turn as SwiftUI reports it, with the list it belongs to (block ids
+    /// restart per file: another session or generation never takes this place); nil at the end.
+    @State var kept: (list: AgentTranscriptModel.ViewIdentity, turn: Int)? = nil
+    @State var atEnd = true
+    /// Test seam: a row moves the place through the binding SwiftUI writes (SwiftUI never sees an AppKit clip scroll).
+    var position: Binding<Int?>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,9 +36,14 @@ struct AgentTranscriptView: View {
                 // #821: and by the level, so a switch starts every fold as that level draws it.
                 let identity: [AnyHashable] = [model.viewIdentity, level]
                 if scrolls {
-                    ScrollView { LazyVStack(alignment: .leading, spacing: sz(10)) { rows } .padding(sz(14)) }
-                        .defaultScrollAnchor(.bottom)
-                        .id(identity)
+                    if #available(macOS 15, *) {
+                        keepsPlace
+                    } else {
+                        // macOS 14: no scroll geometry to tell the end from a place; a switch lands at the end, as before.
+                        ScrollView { LazyVStack(alignment: .leading, spacing: sz(10)) { rows } .padding(sz(14)) }
+                            .defaultScrollAnchor(.bottom)
+                            .id(identity)
+                    }
                 } else {
                     VStack(alignment: .leading, spacing: sz(10)) { rows }.padding(sz(14))
                         .id(identity)
@@ -45,6 +56,31 @@ struct AgentTranscriptView: View {
         .onDisappear { if scrolls && ownsLifecycle { model.stop() } }
     }
 
+    /// QA #657 INFO-6: one ScrollView across a level switch (the level is in each row's id, not the ScrollView's), so the
+    /// reader's top turn stays on top. At the end the place is nil and the bottom anchor follows new lines, as before.
+    /// The binding and the geometry closures run on the main actor, in SwiftUI's update.
+    @available(macOS 15, *)
+    private var keepsPlace: some View {
+        let list = model.viewIdentity
+        let place = position ?? Binding(get: { kept?.list == list ? kept?.turn : nil },
+                                        set: { t in kept = t.map { (list, $0) } })
+        return ScrollViewReader { proxy in ScrollView { LazyVStack(alignment: .leading, spacing: sz(10)) { rows }.scrollTargetLayout().padding(sz(14)) }
+            // A new place SwiftUI reports at the end is no place: the end keeps following. Its echo of a place just set
+            // (it writes back the id it scrolled to, before the geometry leaves the end) is kept.
+            .scrollPosition(id: Binding(get: { place.wrappedValue },
+                                        set: { place.wrappedValue = atEnd && $0 != place.wrappedValue ? nil : $0 }), anchor: .top)
+            .defaultScrollAnchor(.bottom)
+            .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY >= $0.contentSize.height - 2 } action: { _, end in
+                atEnd = end
+                if end { place.wrappedValue = nil }
+            }
+            // SwiftUI keeps the place's id across a switch but not its offset (the turns above change height): the held
+            // turn is put back on top once the new level's rows are in the graph (main actor, in SwiftUI's update).
+            .onChange(of: level) { if let t = place.wrappedValue { proxy.scrollTo(t, anchor: .top) } }
+            .id(list)
+        }
+    }
+
     @ViewBuilder private var rows: some View {
         if model.olderAvailable && model.atHistoryCap {
             Text("Older history is in the terminal").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
@@ -54,10 +90,16 @@ struct AgentTranscriptView: View {
             }
             .buttonStyle(.plain).foregroundStyle(Neon.blue)
         }
-        ForEach(TranscriptVerbosity.project(model.blocks, level: level,
-                                            working: Self.turnWorking(state: model.source?.dchState, toolPending: model.toolPending,
-                                                                      ended: ended))) { r in
-            TranscriptRowView(row: r, level: level, expand: { await model.fullText($0) })
+        let working = Self.turnWorking(state: model.source?.dchState, toolPending: model.toolPending, ended: ended)
+        let turns = TranscriptVerbosity.turns(model.blocks)
+        // One stack per turn, keyed by its first block (the same at every level): the scroll target. A row's id holds
+        // the level, so a switch starts every fold as that level draws it.
+        ForEach(turns, id: \.[0].id) { t in
+            VStack(alignment: .leading, spacing: sz(10)) {
+                ForEach(TranscriptVerbosity.project(t, level: level, working: working && t[0].id == turns.last?[0].id)) { r in
+                    TranscriptRowView(row: r, level: level, expand: { await model.fullText($0) }).id(level)
+                }
+            }
         }
         if level == .verbose && model.hiddenCount > 0 {
             Text(plural(model.hiddenCount, "internal entry", "internal entries") + " hidden")

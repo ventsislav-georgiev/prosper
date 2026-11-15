@@ -356,6 +356,8 @@ struct TranscriptAssembler {
     private mutating func trim() {
         while blocks.count > maxBlocks {
             let gone = blocks.removeFirst()
+            // R1269-c-q1: the first line the flag described is gone; prepend() must not card the line now first.
+            leadsWithImageOnly = false
             dropped += 1
             account(gone)
             if case .thread(let agent, _) = gone.body { threads[agent] = nil }
@@ -716,8 +718,9 @@ final class AgentTranscriptModel: ObservableObject {
         return gen == generation ? text : nil
     }
 
-    /// The block bound is full: older history stays in the terminal.
-    var atHistoryCap: Bool { assembler.blocks.count >= maxBlocks }
+    /// The block bound is full: older history stays in the terminal. QA r1153 INFO: also once a block was dropped for
+    /// the bound, so a page is never joined above the hole the drop left (loadEarlier's guard and the view's line).
+    var atHistoryCap: Bool { assembler.blocks.count >= maxBlocks || assembler.dropped > 0 }
 
     /// Runs `f` on main: inline when already there (the inline test seam), else queued.
     nonisolated static func onMain(_ f: @escaping @MainActor @Sendable () -> Void) {
