@@ -880,11 +880,15 @@ struct AgentDetailView: View {
             let ended = model.focusedEnded
             let mode = model.paneMode
             VStack(spacing: 0) {
+                // #900 B2 step 6a: the "⋯" pane items act on this pane (the focused one); empty with the gate off.
+                let id = model.layout.focused
+                let panes = AgentWindowControls.paneMenu(model, pane: id)
                 Group {
                     if compact {
                         AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
                                               ask: { model.ask($0, s) }, open: { model.openSelected() },
-                                              mode: mode, setMode: { model.switchMode($0, for: s) })
+                                              mode: mode, setMode: { model.switchMode($0, for: s) }, panes: panes,
+                                              pane: { AgentWindowControls.runPane($0, pane: id, in: model) })
                     } else {
                         AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
                                            level: $model.verbosity, todos: transcript.todos,
@@ -892,7 +896,8 @@ struct AgentDetailView: View {
                                            store: model.store, ask: { model.ask($0, s) }, ended: ended,
                                            rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
                                            endRename: { model.endRename($0, $1) },
-                                           mode: mode, setMode: { model.switchMode($0, for: s) })
+                                           mode: mode, setMode: { model.switchMode($0, for: s) }, panes: panes,
+                                           pane: { AgentWindowControls.runPane($0, pane: id, in: model) })
                     }
                 }
                 .modifier(AgentPaneProbe(kind: "header"))
@@ -1371,7 +1376,10 @@ struct AgentUnfocusedPane: View {
                 let ended = runtime.ended != nil
                 AgentCompactHeader.of(p.row, p.session, cwd: transcript.cwd, ended: ended, store: model.store,
                                       ask: { model.ask($0, p.session) }, open: { model.openSession(p.session) },
-                                      mode: .transcript, setMode: { model.switchMode($0, for: p.session) })
+                                      mode: .transcript, setMode: { model.switchMode($0, for: p.session) },
+                                      // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.
+                                      panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),
+                                      pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) })
                     .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTranscriptView(model: transcript, scrolls: scrolls, ownsLifecycle: false, level: model.verbosity,
@@ -1457,10 +1465,12 @@ struct AgentCompactHeader: View {
 
     static func of(_ row: AgentSidebar.Row, _ s: AgentSession, cwd: String?, ended: Bool, store: AgentIslandStore?,
                    ask: @escaping (AgentWindowVerb) -> Void, open: @escaping () -> Void, mode: AgentPaneMode,
-                   setMode: @escaping (AgentPaneMode) -> Void) -> AgentCompactHeader {
+                   setMode: @escaping (AgentPaneMode) -> Void, panes: [AgentWindowMenuEntry] = [],
+                   pane: @escaping (AgentPaneVerb) -> Void = { _ in }) -> AgentCompactHeader {
         AgentCompactHeader(title: row.title, project: AgentSessionHeader.project(cwd: cwd, session: s),
                            chip: AgentStateChip(state: s.state, ended: ended), mode: mode, setMode: setMode, ended: ended,
-                           menu: AgentSessionMenuButton(store: ended ? nil : store, session: s, ask: ask, open: open, ended: ended))
+                           menu: AgentSessionMenuButton(store: ended ? nil : store, session: s, ask: ask, open: open, ended: ended,
+                                                        panes: panes, pane: pane))
     }
 
     var body: some View {
@@ -1572,6 +1582,9 @@ struct AgentSessionHeader: View {
     /// #822: Terminal | Transcript (the window passes `setMode`; without it there is no toggle).
     var mode = AgentPaneMode.transcript
     var setMode: ((AgentPaneMode) -> Void)?
+    /// #900 B2 step 6a: the "⋯" pane items (empty with the gate off) and their run.
+    var panes: [AgentWindowMenuEntry] = []
+    var pane: (AgentPaneVerb) -> Void = { _ in }
 
     /// #1191: the session's folder, no longer drawn in the header: the title's tooltip and accessibility value carry it
     /// (two sessions of one name stay apart for VoiceOver). Nil when there is no text at all.
@@ -1750,7 +1763,8 @@ struct AgentSessionHeader: View {
 
     /// #1103: Open in terminal is its first item, with the header's `open` and `ended`.
     var menuButton: AgentSessionMenuButton {
-        AgentSessionMenuButton(store: menuStore, session: session, ask: ask, open: open, ended: ended)
+        AgentSessionMenuButton(store: menuStore, session: session, ask: ask, open: open, ended: ended, panes: panes,
+                               pane: pane)
     }
 }
 

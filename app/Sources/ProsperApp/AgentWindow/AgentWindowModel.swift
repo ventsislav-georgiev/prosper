@@ -341,8 +341,7 @@ final class AgentWindowModel: ObservableObject {
         let next: Result<PaneLayout, PaneRefusal>
         switch a {
         case let .split(axis):
-            // The same minimum paneFrames tiles with, so a split that passes here is drawn tiled.
-            next = layout.split(axis: axis, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size))
+            next = splitting(axis)
         case .closePane:
             next = layout.close(layout.focused)
         case let .focus(d):
@@ -373,6 +372,14 @@ final class AgentWindowModel: ObservableObject {
             paneRefusal = r
             return true
         }
+    }
+
+    /// #900 B2 step 6a: what Split answers for the focused pane, or for `pane` once focused (the header "⋯" of an
+    /// unfocused pane focuses it first): perform's own call, so the menu and the key share one cap and one room rule.
+    func splitting(_ axis: PaneNode.Axis, pane: UUID? = nil) -> Result<PaneLayout, PaneRefusal> {
+        let l = pane.flatMap { try? layout.focus($0).get() } ?? layout
+        // The same minimum paneFrames tiles with, so a split that passes here is drawn tiled.
+        return l.split(axis: axis, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size))
     }
 
     /// 7.6: the first click on an unfocused pane focuses it; the panes take the keys (7.2).
