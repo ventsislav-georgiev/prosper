@@ -1212,6 +1212,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a session opened in Terminal mode now arrives with its recent history (up to 2,000
   lines) to scroll back through, and a session that draws nothing when it opens gets one refresh
   after a moment.
+- Agent Sessions transcript: a tool that was still running when you pressed Load earlier now
+  finishes properly when its result arrives, and an image sent without text starts its own turn
+  instead of joining the previous one.
 
 ## v2.174.0
 

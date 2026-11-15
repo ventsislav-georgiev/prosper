@@ -99,6 +99,12 @@ struct TranscriptAssembler {
         if v != "unknown", latestVersion.map({ !DchCommand.isAtLeast(ClaudeCodeCompat.parts($0), ClaudeCodeCompat.parts(v)) }) ?? true {
             latestVersion = v
         }
+        // An image-only prompt after a step opens its own turn: a "[image]" prompt card leads it (a turn
+        // starts only at a prompt). After a prompt or image already leading, it stays that lead's image.
+        if e.sidechain == nil, !e.items.isEmpty, let last = blocks.last, Self.endsLead(last),
+           e.items.allSatisfy({ if case .block(.image, _) = $0 { true } else { false } }) {
+            append(TranscriptBlock(id: take(), body: .user(Clip("[image]", cap: 16)), tier: .specific, version: v, source: source), sidechain: nil)
+        }
         for item in e.items {
             switch item {
             case .hidden:
@@ -144,6 +150,14 @@ struct TranscriptAssembler {
                     if orphans.count > maxPending { orphans.remove(at: orphans.startIndex) }
                 }
             }
+        }
+    }
+
+    /// A block that is a step: not a prompt, a command, a compaction or an image.
+    private static func endsLead(_ b: TranscriptBlock) -> Bool {
+        switch b.body {
+        case .user, .command, .compaction, .image: false
+        default: true
         }
     }
 
@@ -218,8 +232,9 @@ struct TranscriptAssembler {
             return b
         }
         var front = page.blocks.map(renumber)
+        var pairedIDs = Set<String>()
         for (id, p) in page.pending {
-            guard let o = orphans.removeValue(forKey: id) else { continue }
+            guard let o = orphans.removeValue(forKey: id) else { continue }   // no result here: still open, carried below
             let (body, tier) = ToolRenderer.render(name: p.name, input: p.input, result: o.result)
             if let i = front.firstIndex(where: { $0.id == (p.thread ?? p.block) + shift }) {
                 if p.thread != nil, let j = front[i].children.firstIndex(where: { $0.id == p.block + shift }) {
@@ -233,8 +248,18 @@ struct TranscriptAssembler {
                 }
             }
             remove(o.block, thread: o.thread)
+            pairedIDs.insert(id)
         }
         blocks = front + blocks
+        // The page's calls still open (no result on the page, none seen after it) take the live results.
+        // Bound: at most page.pending (<= maxPending); the oldest go first past maxPending, as in add().
+        let carried = page.pendingOrder.filter { id in page.pending[id] != nil && pending[id] == nil && !pairedIDs.contains(id) }
+        for id in carried {
+            guard let p = page.pending[id] else { continue }
+            pending[id] = Pending(block: p.block + shift, thread: p.thread.map { $0 + shift }, name: p.name, input: p.input)
+        }
+        pendingOrder = carried + pendingOrder
+        while pendingOrder.count > maxPending { pending[pendingOrder.removeFirst()] = nil }
         for (id, o) in page.orphans where orphans[id] == nil {
             orphans[id] = (o.block + shift, o.thread.map { $0 + shift }, o.result)
         }
