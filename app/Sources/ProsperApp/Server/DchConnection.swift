@@ -320,8 +320,9 @@ final class DchConnection: @unchecked Sendable {
     /// #838: the one gate 0x02 create and ctl's --spawn and --revive share, and "create" in ops. This Mac always
     /// allows create (no setting); a seam so tests can serve as a dch serve without --allow-create does.
     var createAllowed: @Sendable () -> Bool = { true }
-    /// #838: this connection's running ctl; closing kills its child. On `queue`.
-    private var ctlJob: DchCtlJob?
+    /// #838: this connection's running ctl; closing kills its child. On `queue`. #1013: held until its dch is
+    /// reaped, past a cut's early 0x33 (DchCtlJob.reaped).
+    private(set) var ctlJob: DchCtlJob?
     /// #841: a ctl ran on this connection (running or warm): it takes only ctl frames from then on. On `queue`.
     private var ctlConnection = false
     /// #838 amendment 4: a connection that ran a 0x30 closes after `ctlIdle` with no frame from the
@@ -336,6 +337,9 @@ final class DchConnection: @unchecked Sendable {
     private(set) var inFlight = false
     /// Test seam (#591): frames go here instead of the socket.
     var sendOverride: (@Sendable (Data) -> Void)?
+    /// #1013 test seam: a streamed frame goes here instead of the socket; it calls back (failed or not) once the
+    /// client took it, or never (untaken).
+    var streamSendOverride: (@Sendable (Data, @escaping @Sendable (Bool) -> Void) -> Void)?
 
     init(conn: NWConnection, queue: DispatchQueue, log: Logger,
          onClose: @escaping (ObjectIdentifier) -> Void,
@@ -464,7 +468,8 @@ final class DchConnection: @unchecked Sendable {
             self.upload = nil
             self.chatTask = nil
             self.commandTask = nil
-            self.ctlJob = nil
+            // #1013: a cut's 0x33 (timeout, cap) comes before the reap; the slot stays taken until it (startCtl).
+            if self.ctlJob?.reaped ?? true { self.ctlJob = nil }
             self.lastActive = self.clock()   // a warm connection's idle time starts at its reply
             if !self.closed { self.send(frame) }
         }
@@ -475,15 +480,21 @@ final class DchConnection: @unchecked Sendable {
     /// #617: a stream's non-final frame, from the stream's own thread (never `queue`):
     /// handed to the socket and waited on, as the pty pump does, so a big item never
     /// piles up in NWConnection's send queue. False once the connection is gone.
-    private func sendStreamed(_ frame: Data) -> Bool {
+    /// #1013: untaken `stall` seconds (or `stall` past `end`, a ctl's timeout, when that is later), it closes:
+    /// dch serve's #201 rule (serve.c:2262-2270@v1.73.0) for a ctl; 60 s for a 0x16 reply.
+    private func sendStreamed(_ frame: Data, stall: TimeInterval = 60, end: DispatchTime? = nil) -> Bool {
         guard !queue.sync(execute: { closed }) else { return false }
-        if let sendOverride { sendOverride(frame); return true }
+        if streamSendOverride == nil, let sendOverride { sendOverride(frame); return true }
         let sem = DispatchSemaphore(value: 0), result = SendResult()
-        conn.send(content: frame, completion: .contentProcessed { e in
-            result.failed = e != nil
+        let done: @Sendable (Bool) -> Void = { failed in
+            result.failed = failed
             sem.signal()
-        })
-        guard sem.wait(timeout: .now() + 60) == .success else {
+        }
+        if let streamSendOverride { streamSendOverride(frame, done) } else {
+            conn.send(content: frame, completion: .contentProcessed { e in done(e != nil) })
+        }
+        guard sem.wait(timeout: max(end ?? .now(), .now()) + stall) == .success else {
+            log.info("output not taken for \(stall, privacy: .public) s; closing")
             queue.async { self.close() }
             return false
         }
@@ -722,9 +733,14 @@ final class DchConnection: @unchecked Sendable {
         DispatchQueue.global(qos: .userInitiated).async {
             let (path, why) = vetted ?? vet()
             guard let path else { return self.ctlFinal(DchControlOps.error(why ?? "")) }
-            job.run(path: path, argv: argv, env: ctl.env(), cwd: cwd, follow: DchCtl.follows(argv), cap: ctl.cap,
-                    timeout: ctl.timeout(of: argv[0]), grace: ctl.grace(of: argv[0]), after: ctl.after,
-                    send: { self.sendStreamed($0) }, reply: { self.ctlFinal($0) })
+            let follow = DchCtl.follows(argv), timeout = ctl.timeout(of: argv[0])
+            // #1013: serve's ctl_end (serve.c:1512-1514@v1.73.0): none for a follow.
+            let end: DispatchTime? = follow ? nil : .now() + timeout
+            job.run(path: path, argv: argv, env: ctl.env(), cwd: cwd, follow: follow, cap: ctl.cap,
+                    timeout: timeout, grace: ctl.grace(of: argv[0]), after: ctl.after,
+                    send: { self.sendStreamed($0, stall: ctl.stall, end: end) }, reply: { self.ctlFinal($0) })
+            // #1013: reaped: the slot is free. Only this job's: a 0x33 that found it reaped freed it, and a newer one may hold it.
+            self.queue.async { if self.ctlJob === job { self.ctlJob = nil } }
         }
     }
 

@@ -885,6 +885,8 @@ final class DchCtlTests: XCTestCase {
             }
             XCTAssertTrue(wait(10) { finals(r).count == n + 1 }, "\(argv)")
             XCTAssertEqual(Self.object(finals(r).last) as NSDictionary, want as NSDictionary, "\(argv)")
+            // #1013: a timeout's 0x33 comes before the reap and the slot frees at it, as dch serve's: wait for it.
+            XCTAssertTrue(wait(10) { r.queue.sync { r.conn.ctlJob == nil } }, "\(argv): the slot is free")
         }
         XCTAssertTrue(dead(pid(f.dir, "pid")), "--status's sleep: recorded for teardown, ended by the fired timeout")
     }
@@ -1027,6 +1029,117 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(finals(r).count, 1)
         XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary)
         XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n", "a SIGTERM first")
+    }
+
+    // MARK: - #1013: the slot after a cut, unread output
+
+    /// #1013 (QA #729 INFO-3): a timeout's 0x33 still goes out at once (#856), but the connection's ctl slot stays
+    /// taken until that dch is reaped, as dch serve's (c->ctl > 0 until the reap, serve.c:1603, :1632@v1.73.0): a 0x30
+    /// meanwhile gets serve's busy 0x13 (ctl_action, serve.c:1383-1388), runs nothing and closes nothing; once
+    /// reaped the next 0x30 runs. The group SIGKILL is held at the signal seam, so "not yet reaped" is a state.
+    func testATimedOutCtlHoldsItsSlotUntilTheReap() throws {
+        let f = try fake("""
+            echo x >> "$D/runs"; [ -e "$D/pid" ] && { printf again; exit 0; }
+            echo $$ > "$D/pid"; trap 'echo term >> "$D/sig"' TERM
+            printf 'working\\n'; while :; do /bin/sleep 0.05; done
+            """)
+        let timers = Timers()
+        let r = rig(f.path, timers: timers)
+        send(r, Self.ctl(["--read", "alpha"]))
+        let script = try XCTUnwrap(pid(f.dir, "pid"))
+        XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty && timers.count == 1 })
+        let release = DispatchSemaphore(value: 0), saved = CodexHarness.sendSignal
+        defer { release.signal(); CodexHarness.sendSignal = saved }
+        CodexHarness.sendSignal = { pid, sig in
+            // The escalation's own thread (CodexHarness.escalate), never the connection queue: holding it blocks nothing else.
+            if pid == -script, sig == SIGKILL { _ = release.wait(timeout: .now() + 20) }
+            return Darwin.kill(pid, sig)
+        }
+        timers.fire(0)
+        XCTAssertTrue(wait(5) { finals(r).count == 1 })
+        XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary, "the 0x33 at once")
+        XCTAssertTrue(wait(10) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil }, "SIGTERM trapped")
+        XCTAssertEqual(Darwin.kill(script, 0), 0, "not reaped: its SIGKILL is held")
+        send(r, Self.ctl(["--status", "beta"]))
+        XCTAssertEqual(finals(r).count, 2)
+        XCTAssertEqual(finals(r).last, DchCtl.busy, "busy until the reap, as serve")
+        XCTAssertEqual(r.closes.count, 0, "busy closes nothing")
+        XCTAssertEqual(try String(contentsOf: f.dir.appendingPathComponent("runs"), encoding: .utf8), "x\n", "the 0x30 ran nothing")
+        release.signal()
+        XCTAssertTrue(dead(script), "SIGKILLed once released")
+        XCTAssertTrue(wait(10) { r.queue.sync { r.conn.ctlJob == nil } }, "the slot frees at the reap")
+        send(r, Self.ctl(["--status", "beta"]))
+        XCTAssertTrue(wait(10) { finals(r).count == 3 })
+        XCTAssertEqual(Self.object(finals(r).last) as NSDictionary, ["exit": 0] as NSDictionary, "the next 0x30 runs")
+        XCTAssertEqual(try String(contentsOf: f.dir.appendingPathComponent("runs"), encoding: .utf8), "x\nx\n")
+    }
+
+    /// When the stream seam's frames were handed over, for the unread-output rows.
+    private final class Handed: @unchecked Sendable {
+        private let lock = NSLock()
+        private var first: Date?
+        func add() { lock.withLock { if first == nil { first = Date() } } }
+        var at: Date? { lock.withLock { first } }
+    }
+
+    /// #1013 (dch #201): a 0x31 the socket has not taken for dch serve's STALL_MS (20 s; 0.5 s here, through
+    /// DchCtlOps.stall) closes the connection with no frame, and the running ctl is cut as on a close (SIGTERM
+    /// off the seam). A follow has no timeout, so the bound counts from the send (serve.c:2262-2270@v1.73.0, ctl_end 0).
+    func testUntakenCtlOutputClosesAfterTheStall() throws {
+        let f = try fake("echo $$ > \"$D/pid\"; printf 'line\\n'; exec /bin/sleep 30")
+        let r = rig(f.path)
+        r.conn.ctl.stall = 0.5
+        let handed = Handed()
+        r.conn.streamSendOverride = { _, _ in handed.add() }   // never taken
+        let sent = record()
+        send(r, Self.ctl(["--follow", "alpha"]))
+        let script = try XCTUnwrap(pid(f.dir, "pid"))
+        XCTAssertTrue(wait(10) { r.closes.count == 1 }, "closed: output not taken")
+        let at = try XCTUnwrap(handed.at, "the 0x31 was handed to the socket")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(at), 0.45, "not before the stall")
+        XCTAssertEqual(finals(r).count, 0, "no frame, as serve's break")
+        XCTAssertTrue(dead(script), "the ctl is cut as on a close")
+        XCTAssertEqual(sent.of(script).first?.sig, SIGTERM)
+    }
+
+    /// #1013 (dch #201): a ctl with a timeout may leave its output untaken until the stall past that timeout
+    /// (serve's max(ctl_end, last_write), serve.c:2264@v1.73.0): with a 3 s timeout (its timer never fired) and a
+    /// 0.5 s stall, the close comes no sooner than 3.5 s after the 0x30.
+    func testACtlWithATimeoutGetsTheStallPastIt() throws {
+        let f = try fake("echo $$ > \"$D/pid\"; printf 'line\\n'; exec /bin/sleep 30")
+        let timers = Timers()
+        let r = rig(f.path, timeout: 3, timers: timers)
+        r.conn.ctl.stall = 0.5
+        let handed = Handed()
+        r.conn.streamSendOverride = { _, _ in handed.add() }   // never taken
+        let start = Date()
+        send(r, Self.ctl(["--read", "alpha"]))
+        let script = try XCTUnwrap(pid(f.dir, "pid"))
+        XCTAssertTrue(wait(20) { r.closes.count == 1 }, "closed: output not taken")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 3.45, "not before the timeout plus the stall")
+        XCTAssertNotNil(handed.at, "the 0x31 was handed to the socket")
+        XCTAssertEqual(timers.delay(0), 3)
+        XCTAssertEqual(finals(r).count, 0, "no frame: the timeout never fired")
+        XCTAssertTrue(dead(script), "the ctl is cut as on a close")
+    }
+
+    /// #1013: output the socket takes in time never closes, however long the ctl streams past its timeout plus the
+    /// stall: the bound restarts at each send once the timeout has passed (serve's last_write, serve.c:838-839, :875).
+    func testCtlOutputTakenInTimeKeepsTheConnection() throws {
+        let f = try fake("i=0; while [ $i -lt 14 ]; do echo $i; /bin/sleep 0.15; i=$((i+1)); done")
+        let timers = Timers()
+        let r = rig(f.path, timeout: 0.2, timers: timers)   // never fired: dch runs on past it
+        r.conn.ctl.stall = 1
+        let frames = r.frames
+        r.conn.streamSendOverride = { frame, done in
+            frames.lock.withLock { frames.all.append(frame) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { done(false) }   // taken 0.05 s later
+        }
+        send(r, Self.ctl(["--read", "alpha"]))
+        XCTAssertTrue(wait(15) { finals(r).count == 1 })
+        XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 0] as NSDictionary)
+        XCTAssertEqual(bytes(r, DchFrame.ctlStdout), Data((0..<14).map { "\($0)\n" }.joined().utf8), "every line, in order")
+        XCTAssertEqual(r.closes.count, 0, "taken in time: no close")
     }
 
     /// #852: a server stop (DchSessionServer.stop, through DchConnection.serverStop) cuts with dch serve's

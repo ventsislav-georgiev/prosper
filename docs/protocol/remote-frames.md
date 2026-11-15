@@ -179,6 +179,11 @@ Every frame, in both directions:
   - when an attached session's output has not been taken by the socket for 20 s;
   - when a frame of a 0x16 reply (the 0x1a header or a 0x10 chunk) has not been taken by
     the socket for 60 s;
+  - when a ctl's output (0x31 or 0x32) has not been taken by the socket for 20 s, or until 20 s
+    past the ctl's timeout when that is later (`--follow` and `--xray --follow` have none: 20 s).
+    No frame; a running ctl is ended as on a close. `dch serve` 1.59.0+ the same (#201, `STALL_MS`,
+    serve.c:2262-2270@v1.73.0), counted from the socket's last progress on any unsent output; Prosper
+    counts from the hand-off of each 0x31 or 0x32 (#1013);
   - on a watch stream: when a fifth stream of the same device opens (the device's oldest
     stream is closed), when 32 frames are unsent, or when the server loses its list;
   - during a 0x23 clipboardUpload, when the Mac's user cancels the incoming item;
@@ -682,7 +687,10 @@ for an agent, and a client shows it as it comes.
 
 **Connections.** One ctl in flight per connection: another 0x30 while one runs gets the busy
 0x13 at once and runs nothing; the running one goes on, and a 0x34 still cancels it. After its
-0x33 the same connection takes the next 0x30 (warm reuse). A `--follow` (or `--xray --follow`)
+0x33 the same connection takes the next 0x30 (warm reuse). A cap's or a timeout's 0x33 comes from
+Prosper at the cut, before its dch is reaped (`dch serve` sends it at the reap, ctl_tick,
+serve.c:1603-1632@v1.73.0); until the reap the slot stays taken, and a 0x30 gets the busy 0x13 as
+on serve (#1013). A `--follow` (or `--xray --follow`)
 holds its slot until it ends. Since the amendment of 2026-11-10 a ctl connection stays one: once a
 ctl has run on it (running or warm) it takes only 0x08, 0x03, 0x30 and 0x34. Any other frame
 `dch serve` reads whole (0x01 attach, 0x02 create, 0x04 kill, 0x05 resize, 0x06 rename, 0x07

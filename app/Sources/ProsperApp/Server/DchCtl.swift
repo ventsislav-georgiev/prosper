@@ -21,6 +21,9 @@ struct DchCtlOps: Sendable {
     var after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after
     /// stdout + stderr of a non-follow verb.
     var cap = 8 << 20
+    /// #1013: dch serve's STALL_MS (#201, serve.c:85 and :2262-2270@v1.73.0): a 0x31/0x32 the socket has not taken
+    /// this long closes the connection, counted from the send or from the ctl's timeout when that is later.
+    var stall: TimeInterval = 20
 
     /// The timeout `verb` runs under (not --follow: it has none).
     func timeout(of verb: String) -> TimeInterval { DchCtl.longVerbs.contains(verb) ? agentTimeout : timeout }
@@ -367,6 +370,10 @@ final class DchCtlJob: @unchecked Sendable {
     }
 
     func cancel() { _ = end(.term) }
+
+    /// #1013: no dch of this job is left to reap (never spawned, or reaped). Until then a cut's early 0x33 leaves
+    /// the connection's ctl slot taken, as dch serve's ctl stays c->ctl > 0 until its reap (serve.c:1603, :1632@v1.73.0).
+    var reaped: Bool { lock.withLock { pid == 0 } }
 
     /// #852: a server stop, as dch serve's: an uncut ctl is cut with DchCtl.cancelGrace whatever the verb
     /// (ctl_grace, serve.c:1261-1267@v1.54.0). QA #729 F1: one already cut (a 0x34, a timeout, a cap) gets no
