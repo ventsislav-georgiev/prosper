@@ -260,9 +260,9 @@ final class TextViewerDocumentTests: XCTestCase {
         XCTAssertNotNil(d.identity)
     }
 
-    /// FACT: resolve's bound is 32 readlinks: 31 links get an identity, 32 links are refused by resolve (no identity). If the
-    /// plain open shows the file, it is shown; if the kernel's own limit refuses it, the refusal is .unreadable (as today).
-    func testAChainOfThirtyTwoLinksHasNoIdentity() throws {
+    /// FACT: resolve's bound is 32 readlinks: 31 links get an identity. macOS MAXSYMLINKS is 32, so the plain open of a 32-link
+    /// chain fails with ELOOP (resolve refused it first, so no retry): the load answers .unreadable, exactly.
+    func testAChainOfThirtyTwoLinksIsUnreadableAndThirtyOneLoad() throws {
         let dir = tempDir("tv-doc-r7d")
         _ = try file("real.txt", Array("rrr".utf8), in: dir)
         for n in [31, 32] {
@@ -272,35 +272,33 @@ final class TextViewerDocumentTests: XCTestCase {
                 XCTAssertEqual(symlink(prev, dir.appendingPathComponent(name).path), 0)
                 prev = name
             }
-            let head = dir.appendingPathComponent(prev)
-            switch TextViewerDocument.load(head) {
-            case .success(let d):
+            let result = TextViewerDocument.load(dir.appendingPathComponent(prev))
+            if n == 31 {
+                guard case .success(let d) = result else { return XCTFail("31 links must load") }
                 XCTAssertEqual(d.text, "rrr")
-                if n == 31 { XCTAssertNotNil(d.identity) } else { XCTAssertNil(d.identity, "resolve refused 32 links") }
-            case .failure(let r):
-                XCTAssertEqual(r, .unreadable, "only the kernel's own link limit may refuse it")
-                XCTAssertEqual(n, 32, "31 links must load")
+                XCTAssertNotNil(d.identity)
+            } else {
+                guard case .failure(let r) = result else { return XCTFail("32 links must be refused") }
+                XCTAssertEqual(r, .unreadable)
             }
         }
     }
 
     /// FACT: a link whose target bytes are not UTF-8 (78 FF 79, made with symlink(2) from a byte array, relative so inside
     /// tempDir()). The volume refuses a file with such a name (EILSEQ), so the target never exists: the link dangles and the
-    /// plain open answers missing, as before; no document, so no identity. If a volume did accept the name, the file is shown.
-    func testALinkWhoseTargetIsNotUTF8IsRefusedAsMissingOrShownWithNoIdentity() throws {
+    /// plain open answers missing, as before; no document, so no identity.
+    func testALinkWhoseTargetIsNotUTF8IsRefusedAsMissing() throws {
         let dir = tempDir("tv-doc-r7e")
         let name: [CChar] = ([0x78, 0xFF, 0x79, 0x00] as [UInt8]).map { CChar(bitPattern: $0) }
         let dfd = open(dir.path, O_RDONLY | O_DIRECTORY)
         XCTAssertGreaterThanOrEqual(dfd, 0)
         let fd = openat(dfd, name, O_WRONLY | O_CREAT | O_EXCL, 0o644)
-        let made = fd >= 0
-        if made { XCTAssertEqual(write(fd, "ok!", 3), 3); close(fd) }
+        if fd >= 0 { close(fd) }
+        XCTAssertLessThan(fd, 0, "this volume must refuse a non-UTF-8 file name (EILSEQ), so the link dangles")
         close(dfd)
         let link = dir.appendingPathComponent("link.txt")
         XCTAssertEqual(symlink(name, link.path), 0)
-        switch TextViewerDocument.load(link) {
-        case .success(let d): XCTAssertTrue(made); XCTAssertEqual(d.text, "ok!"); XCTAssertNil(d.identity)
-        case .failure(let r): XCTAssertFalse(made); XCTAssertEqual(r, .missing)
-        }
+        guard case .failure(let r) = TextViewerDocument.load(link) else { return XCTFail("a dangling link must be refused") }
+        XCTAssertEqual(r, .missing)
     }
 }

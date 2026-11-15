@@ -61,8 +61,8 @@ struct TextViewerDocument: Equatable {
         var (fd, resolved, err) = attempt()
         if fd < 0, resolved != nil, err == ELOOP { (fd, resolved, err) = attempt() }
         let path = fd >= 0 ? resolved : nil
-        if fd < 0 { fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC) }
-        guard fd >= 0 else { return .failure(errno == ENOENT || errno == ENOTDIR ? .missing : .unreadable) }
+        if fd < 0 { fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC); err = errno }
+        guard fd >= 0 else { return .failure(err == ENOENT || err == ENOTDIR ? .missing : .unreadable) }
         defer { close(fd) }
         var st = stat()
         guard fstat(fd, &st) == 0 else { return .failure(.unreadable) }
