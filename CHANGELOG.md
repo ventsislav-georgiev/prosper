@@ -1288,6 +1288,9 @@ tag from the now-released section and put it on the new top draft.
 - In the config-change approval sheet, numbers and punctuation right after a Hebrew or Arabic word
   now show in the order they will be written to the file, and a phrase of several Hebrew or Arabic
   words shows its words left to right in the order they are written.
+- App Updates: if Prosper quits or is updated while "Upgrade Homebrew Packages" is running, the
+  upgrade's result is now reported after the relaunch and its temporary folder is cleaned up,
+  instead of being lost.
 
 ## v2.174.0
 

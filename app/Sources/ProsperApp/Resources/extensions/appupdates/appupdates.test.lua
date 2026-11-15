@@ -47,9 +47,11 @@ Software Update found the following new or updated software:
 local shellLog = {}
 local brewOut, suOut, upgradeOut, catOut = BREW_OUTDATED_0, SU_NONE, "0", ""
 local onUpgrade   -- runs inside the `brew upgrade` call, when set
+local onCleanup   -- runs inside a bare folder cleanup call, when set
 
 local function router(cmd)
     shellLog[#shellLog + 1] = cmd
+    if onCleanup and cmd:find("^%[ ! %-L ") then onCleanup() end
     if cmd:find("^/bin/cat ") then return catOut end   -- the watch reading a status file
     if cmd:find("outdated", 1, true) then return brewOut end
     if cmd:find("softwareupdate", 1, true) then return suOut end
@@ -407,6 +409,8 @@ local function c1()
     h.eq(pollEnded(rec(',"before":1e999'), "0"), "brew upgrade finished", "C1: before infinite")
     h.eq(pollEnded(rec(',"before":100001'), "0"), "brew upgrade finished", "C1: before past 100000")
     h.eq(pollEnded(rec(',"before":{}'), "1"), "brew upgrade failed (exit 1)", "C1: bad before, a failure says the status only")
+    h.eq(pollEnded(rec(',"before":0'), "0"), "Nothing was upgraded", "C1: before 0 is a count")
+    h.eq(pollEnded(rec(',"before":100000'), "0"), "100000 packages upgraded", "C1: before 100000 is a count")
     settle()
 end
 
@@ -440,7 +444,7 @@ end
 -- by a foreign lock is reported as the lock.
 local function c4()
     upgrade(BREW_OUTDATED_2, BREW_OUTDATED_2)
-    h.eq(upgradeCmd():find("{ echo $s >> '" .. DIR .. "/status.part' && /bin/mv -f '" .. DIR .. "/status.part' '"
+    h.eq(upgradeCmd():find("{ printf '\\n%s\\n' $s >> '" .. DIR .. "/status.part' && /bin/mv -f '" .. DIR .. "/status.part' '"
          .. DIR .. "/status' && /bin/cat '" .. DIR .. "/status'; }", 1, true) ~= nil, true,
          "C4: the status is appended after brew's output, and that whole file is the result")
     local rec = '{"file":"' .. DIR .. '/status","at":' .. AT .. ',"before":2}'
@@ -492,13 +496,17 @@ end
 -- C7: a refused mkdir means brew never ran: said so, no re-check, nothing removed.
 local function c7()
     h.eq(upgrade(BREW_OUTDATED_2, BREW_OUTDATED_2, "mkdir: " .. DIR .. ": File exists\nbrew upgrade did not start"),
-         "brew upgrade did not start: mkdir: " .. DIR .. ": File exists", "C7: names mkdir's refusal")
+         "brew upgrade did not start: File exists", "C7: names mkdir's refusal, not its path")
     h.eq(#env.notifications, 1, "C7: one notice")
     h.eq(count("outdated"), 1, "C7: only the list read before; no re-check")
     h.eq(ran("/bin/rm"), false, "C7: a folder Prosper did not make is not removed")
     h.eq(env.prefs[PENDING], "", "C7: no watch record")
     h.eq(upgradeCmd():find("/bin/mkdir -m 700 '" .. DIR .. "' 2>&1 || { echo 'brew upgrade did not start'; exit; }; ", 1, true)
          ~= nil, true, "C7: the shell says brew did not start when mkdir refuses")
+    -- A login shell's own line first (QA static INFO-2): the reason is still mkdir's, with no path.
+    h.eq(upgrade(BREW_OUTDATED_2, BREW_OUTDATED_2, "Hello from /Users/example/.zprofile\nmkdir: " .. DIR
+                 .. ": Permission denied\nbrew upgrade did not start"),
+         "brew upgrade did not start: Permission denied", "C7: the line before ours is mkdir's")
     settle()
 end
 
@@ -514,12 +522,21 @@ local function c8()
     h.eq(#env.notifications, 0, "C8: silently")
     h.eq(env.prefs[PENDING], "", "C8: the record is dropped")
     h.eq(env.timers[WATCH], nil, "C8: the watch is cancelled")
-    -- A relaunch drops the watch and its folder.
+    -- A relaunch (or a replayed launch handler, #1038) while brew still runs keeps the watch (#1019).
     settle()
     reset()
-    host.prefs.set(PENDING, '{"file":"' .. OLD .. '/status","at":' .. (AT - 60) .. ',"before":2}')
+    local LIVE = '{"file":"' .. OLD .. '/status","at":' .. (AT - 60) .. ',"before":2}'
+    host.prefs.set(PENDING, LIVE)
     G.on_launch()
-    h.eq(shellLog[1], OLD_CLEANUP, "C8: a relaunch removes the dropped watch's folder")
+    h.eq(#shellLog, 0, "C8: a relaunch while brew runs removes nothing")
+    h.eq(env.prefs[PENDING], LIVE, "C8: the record is kept at launch")
+    h.eq(env.timers[WATCH] and env.timers[WATCH].handler, "on_upgrade_poll", "C8: and watched again")
+    -- Past the cap, a relaunch drops it with its folder, as the watch does.
+    settle()
+    reset()
+    host.prefs.set(PENDING, '{"file":"' .. OLD .. '/status","at":' .. (AT - 2 * 3600) .. ',"before":2}')
+    G.on_launch()
+    h.eq(shellLog[1], OLD_CLEANUP, "C8: a relaunch past the cap removes the folder")
     h.eq(#shellLog, 1, "C8: one shell call at launch")
     h.eq(env.prefs[PENDING], "", "C8: the record is dropped at launch")
     -- No record: launch runs no shell at all.
@@ -527,8 +544,11 @@ local function c8()
     G.on_launch()
     h.eq(#shellLog, 0, "C8: no record, no shell at launch")
     -- A record naming a file Prosper never makes: nothing read, nothing removed, record dropped.
+    -- #1019 INFO-1: the same name in any folder but the one Prosper makes them in is not ours either.
     for _, file in ipairs({ "/Users/example/notes.txt", "/fake-tmp/prosper-appupdates-1/notes",
-                            "/fake-tmp/prosper-appupdates-x/status", "/Users/example/prosper-appupdates-1/status.part" }) do
+                            "/fake-tmp/prosper-appupdates-x/status", "/Users/example/prosper-appupdates-1/status.part",
+                            "/Users/example/prosper-appupdates-1/status", "/fake-tmp/sub/prosper-appupdates-1/status",
+                            "/fake-tmp/../Users/example/prosper-appupdates-1/status" }) do
         settle()
         reset()
         env.fsExists[file] = true
@@ -604,7 +624,7 @@ local function wholeCommand()
     upgrade(BREW_OUTDATED_2, BREW_OUTDATED_2)
     h.eq(upgradeCmd(), "/bin/mkdir -m 700 '" .. DIR .. "' 2>&1 || { echo 'brew upgrade did not start'; exit; }; "
          .. "/opt/homebrew/bin/brew upgrade > '" .. DIR .. "/status.part' 2>&1; s=$?; "
-         .. "[ ! -L '" .. DIR .. "' ] && [ -O '" .. DIR .. "' ] && { echo $s >> '" .. DIR .. "/status.part' && "
+         .. "[ ! -L '" .. DIR .. "' ] && [ -O '" .. DIR .. "' ] && { printf '\\n%s\\n' $s >> '" .. DIR .. "/status.part' && "
          .. "/bin/mv -f '" .. DIR .. "/status.part' '" .. DIR .. "/status' && /bin/cat '" .. DIR .. "/status'; } || echo $s",
          "the upgrade command")
     settle()
@@ -622,6 +642,88 @@ local function bareStatus()
     settle()
 end
 
+-- MARK: - 7d. A quit inside the foreground call, and the folder's riders (#1019)
+
+local DIR_CLEANUP = "[ ! -L '" .. DIR .. "' ] && [ -O '" .. DIR .. "' ] && { /bin/rm -f '" .. DIR
+                 .. "/status' '" .. DIR .. "/status.part'; /bin/rmdir '" .. DIR .. "'; }"
+
+-- Q1: Prosper quits while brew runs in the foreground: the host's shell call never returns.
+-- The record is there before brew starts, and the relaunch reports the result and removes the folder.
+local function field(rec, k)
+    local ok, t = pcall(host.json.decode, rec or "")
+    return ok and type(t) == "table" and t[k] or nil
+end
+
+local function quit()
+    settle()
+    reset()
+    brewOut = BREW_OUTDATED_2
+    G.appupdates_refresh()
+    reset()
+    local seen
+    onUpgrade = function() seen = env.prefs[PENDING]; error("quit") end
+    pcall(G.appupdates_upgrade)
+    onUpgrade = nil
+    h.eq(field(seen, "file"), DIR .. "/status", "Q1: the record names this run before brew starts")
+    h.eq(field(seen, "before"), 2, "Q1: with the count read before")
+    h.eq(field(env.prefs[PENDING], "file"), DIR .. "/status", "Q1: the record outlives the quit")
+    -- Relaunch after brew ended (its output had no final newline; the status is on its own line).
+    reset()
+    env.timers = {}
+    env.fsExists[DIR .. "/status"] = true
+    catOut, brewOut = "==> Upgrading lua\n0", BREW_OUTDATED_0
+    G.on_launch()
+    h.eq(env.notifications[1] and env.notifications[1].body, "2 packages upgraded", "Q1: the relaunch reports the result")
+    h.eq(shellLog[1], "/bin/cat '" .. DIR .. "/status'; " .. DIR_CLEANUP, "Q1: reads the status and removes the folder")
+    settle()
+end
+
+-- Q2: the foreground run removes its folder.
+local function foregroundCleanup()
+    upgrade(BREW_OUTDATED_2, BREW_OUTDATED_0)
+    h.eq(count(DIR_CLEANUP), 1, "Q2: removes its folder")
+    settle()
+end
+
+-- Q3: a fractional host.time() still names a whole-millisecond folder (%d refuses a fraction).
+local function fractionalTime()
+    settle()
+    reset()
+    env.now = AT + 0.0005
+    h.eq(pcall(G.appupdates_upgrade), true, "Q3: a fractional time upgrades")
+    h.eq(count("/bin/mkdir -m 700 '" .. DIR .. "' "), 1, "Q3: in the folder of the whole millisecond")
+    settle()
+end
+
+-- Q4: the status on a line of its own after brew's newline: the lock line is still brew's last.
+local function ownLine()
+    h.eq(upgrade(BREW_OUTDATED_2, BREW_OUTDATED_2,
+                 "Error: A `brew upgrade` process has already locked /opt/homebrew/var/homebrew/locks/lua.formula.lock.\n"
+                 .. "Please wait for it to finish or terminate it to continue.\n\n1"),
+         "brew upgrade stopped: another Homebrew process holds its lock (exit 1)", "Q4: lock, then an empty line, then the status")
+    settle()
+end
+
+-- Q5 (INFO-3): brew ends between the cap's rm and rmdir: its status is reported and removed, not left.
+local function capRace()
+    settle()
+    reset()
+    host.prefs.set(PENDING, '{"file":"' .. DIR .. '/status","at":' .. (AT - 2 * 3600) .. ',"before":2}')
+    env.timers[WATCH] = { id = WATCH }
+    onCleanup = function() env.fsExists[DIR .. "/status"] = true end
+    catOut, brewOut = "0", BREW_OUTDATED_0
+    G.on_upgrade_poll()
+    onCleanup = nil
+    h.eq(shellLog[2], "/bin/cat '" .. DIR .. "/status'; " .. DIR_CLEANUP, "Q5: then reads and removes what brew left")
+    h.eq(env.notifications[1] and env.notifications[1].body, "2 packages upgraded", "Q5: and reports it")
+    settle()
+end
+
+quit()
+foregroundCleanup()
+fractionalTime()
+ownLine()
+capRace()
 c1()
 status()
 c3()
