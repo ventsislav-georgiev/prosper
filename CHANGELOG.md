@@ -1278,6 +1278,9 @@ tag from the now-released section and put it on the new top draft.
   sends links back to itself.
 - Live Activity: when a Mac goes offline or stops reporting, a card that Apple failed to close is
   now closed again on the next minute (up to 3 tries), instead of staying on the lock screen.
+- Ships dch 1.73.0 (was 1.72.0). X-ray's references now find a mention in the middle of a very
+  large transcript, the reference card keeps the newest mentions when the machine is busy, and a
+  slow Tailscale lookup no longer locks a phone out of the Mac for 30 s. (#1282)
 
 ## v2.174.0
 
