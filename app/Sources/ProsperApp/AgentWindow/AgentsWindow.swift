@@ -140,6 +140,10 @@ final class AgentsNSWindow: NSWindow {
     private(set) var focusClick = FocusClick()
     /// R6.9 (tests): every first-responder change asked of this window, AppKit's own included.
     private(set) var responderAsks = 0
+    /// #900 B2 step 6b2b (R1196-1): what super.sendEvent does for a mouse-down in a window that is not key (key and
+    /// front), asked for the focusing down that never reaches it. Runs on the main actor, inside sendEvent. Rows put a
+    /// recorder here first: the default is never run by a row.
+    var raise: (NSWindow) -> Void = { $0.makeKeyAndOrderFront(nil) }
 
     /// R900-5a-1: the window stops being key while a divider drag is under way (its up may never come): the drag ends,
     /// saved once. No drag (always with the gate off): nothing.
@@ -158,6 +162,10 @@ final class AgentsNSWindow: NSWindow {
         guard p.x.isFinite, p.y.isFinite else { return nil }
         return frames.first { $0.key != focused && $0.value.contains(p) }?.key
     }
+
+    /// #900 B2 step 6b2b (R1196-1), pure: the focusing down (swallowed, so super.sendEvent never sees it) asks for key and
+    /// front only while the window is not key; `isKey` is the window's isKeyWindow (rows pass a built value).
+    static func asksKey(focusing: Bool, isKey: Bool) -> Bool { focusing && !isKey }
 
     /// #900 B2 step 3 (7.4): a left mouse-down at `p` in the content of `size` (top-left origin; outside data): the
     /// model's rule, the zoom included (step 4b, N900-f: AgentWindowModel.mouseDown, after its finiteness guard).
@@ -374,6 +382,8 @@ final class AgentsNSWindow: NSWindow {
             if inSidebar, responderKind == .terminal || firstResponder is AgentComposerTextView { makeFirstResponder(nil) }
             if inSidebar { model.dropPendingFocus() }   // QA #694 INFO-2: a row's click asks again, on mouse-up
         }
+        // R1196-1: `focusing` is true only for a down on an unfocused pane, which needs two panes shown: the gate on.
+        if Self.asksKey(focusing: focusing, isKey: isKeyWindow) { raise(self) }
         if focusClick.take(event.type, focusing: focusing) { return }   // 7.6: the first click only focuses
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,

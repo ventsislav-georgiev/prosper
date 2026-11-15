@@ -223,6 +223,9 @@ final class AgentWindowModel: ObservableObject {
             // #900 B2 step 4b (7.2): a new value settle() did not already tell (a zoom, a split, a close or focus move that
             // keeps the row) is published once, so the sidebar's "in view" glyphs redraw. Gate on only: nothing changes off.
             if !settle(), layout != oldValue, AgentPaneLayout.splitsEnabled { objectWillChange.send() }
+            // #900 B2 step 6b2b (7.2): the focused pane moved, so its input box is built anew in the new pane (AgentPaneArea
+            // draws the old one's as inert): forget the old box, so a focus asked for waits for the new one (pending).
+            if AgentPaneLayout.splitsEnabled, layout.focused != oldValue.focused { interaction.composer = nil }
             if dividerDrag == nil { autosave() }   // #900 B2 step 5a (8.1): a divider drag saves once, at its end
         }
     }
@@ -317,16 +320,16 @@ final class AgentWindowModel: ObservableObject {
 
     /// 4.2 "Pick Another": focuses the pane and gives the sidebar the keys; starts nothing.
     func pickAnother(_ pane: UUID) {
+        keyFocus = .sidebar   // before adopt: the sidebar keeps the keys (adopt's rule asks the pane's input only for .pane)
         if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
         if !sidebarShown { toggleSidebar() }   // #900 B2 step 4: the pick is made in the sidebar, so it shows again
-        keyFocus = .sidebar
         focusSidebar()
     }
 
     /// 4.2 "Close Pane": the last pane is refused (7.3), so a one-pane window draws no Close Pane. 7.2: a close moves the
     /// keys to the panes.
     func closePane(_ pane: UUID) {
-        if case let .success(l) = layout.close(pane) { adopt(l); keyFocus = .pane }
+        if case let .success(l) = layout.close(pane) { keyFocus = .pane; adopt(l) }
     }
 
     /// #900 B2 step 1 (12.1, 7.3, 7.4): a tree key's action on the active layout; the window calls it only for
@@ -387,8 +390,8 @@ final class AgentWindowModel: ObservableObject {
 
     /// 7.6: the first click on an unfocused pane focuses it; the panes take the keys (7.2).
     func focusPane(_ pane: UUID) {
-        if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
         keyFocus = .pane
+        if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
     }
 
     /// 7.2: the sidebar's frame in the root view's content of `size` (top-left origin; AgentWindowRootView.split: the
@@ -706,8 +709,12 @@ final class AgentWindowModel: ObservableObject {
     /// before B2/B3 route verbs, with multi-pane layouts built under the split gate (15.0).
     func adopt(_ l: PaneLayout) {
         guard !closed else { return }
+        let moved = l.focused != layout.focused
         layout = l
         follow()
+        // #900 B2 step 6b2b (7.2, R1196-1): the keys follow the focused pane: every pane focus action (a click, the pane
+        // keys and menu, close pane) sets keyFocus .pane first. After follow(): the terminal's attach drops older asks.
+        if moved, AgentPaneLayout.splitsEnabled, keyFocus == .pane { focusSelection() }
     }
 
     /// 8.1 Delete (B3 routes it): refused on the last layout, or with no store. R899-3: the deleted layout's sights go

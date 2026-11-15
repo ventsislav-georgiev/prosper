@@ -170,6 +170,8 @@ extension AgentWindowD1Tests {
         win.isReleasedWhenClosed = false
         defer { win.close() }
         win.model = m
+        var raised = 0
+        win.raise = { _ in raised += 1 }   // #900 B2 step 6b2b (R1196-1): a recorder first, never the real key and front
         func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ yFromTop: CGFloat) -> NSEvent {
             NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: size.height - yFromTop), modifierFlags: [],
                                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: win.windowNumber, context: nil,
@@ -181,6 +183,7 @@ extension AgentWindowD1Tests {
         win.sendEvent(mouse(.leftMouseDown, area.minX + f.midX, 40))
         XCTAssertEqual(m.layout.focused, second, "the first click focused the pane")
         XCTAssertTrue(win.focusClick.swallowing, "its down was swallowed")
+        XCTAssertEqual(raised, 1, "R1196-1: the swallowed down asked for key and front once (the window is not key)")
         XCTAssertFalse(win.sidebarFocused)
         win.sendEvent(mouse(.leftMouseUp, area.minX + f.midX, 40))
         XCTAssertFalse(win.focusClick.swallowing, "its up ended the swallow")
