@@ -772,15 +772,13 @@ tag from the now-released section and put it on the new top draft.
   in front of a suspended Claude when that program is the end of a pipeline whose first command has
   finished. With 1.70.0 Enter on a Search hit opens the right one when the same text comes again
   past the clipped part. With 1.71.0 a Search hit opens the entry it came from when the same text
-  sits in several entries of one prompt. With 1.72.0 X-ray lists a Claude Code or Codex session's
-  task list (`dch --xray <session> --tasks --json`), tells prompts another agent sent apart from the
-  ones you typed, and keeps following a session across quick restarts; a remote attach with the
-  X-ray view open answers a starting program as a local one does; a config line holding a stray NUL
-  byte no longer hides or damages the line after it; and revive and respawn wait for the session's
-  MCP servers before the first prompt. With 1.73.0 X-ray's references now find a mention in the
-  middle of a very large transcript, the reference card keeps the newest mentions when the machine
-  is busy, and a slow Tailscale lookup no longer locks a phone out of the Mac for 30 s. (#1167,
-  #1178, #1282)
+  sits in several entries of one prompt. With 1.72.0 X-ray tells prompts another agent sent apart
+  from the ones you typed; a remote attach with the X-ray view open answers a starting program as a
+  local one does; a config line holding a stray NUL byte no longer hides or damages the line after
+  it; and revive and respawn wait for the session's MCP servers before the first prompt. With 1.73.0
+  X-ray's references now find a mention in the middle of a very large transcript, the reference card
+  keeps the newest mentions when the machine is busy, and a slow Tailscale lookup no longer locks a
+  phone out of the Mac for 30 s. (#1167, #1178, #1282)
 - Agent Sessions: Command-1 to Command-9 jump to the session at that place in the sidebar and put
   the keyboard in it (its terminal or its message box), from anywhere in the window; each of the
   first nine live sessions shows its ⌘ number as a chip, as in Clipboard History. (#1110)
