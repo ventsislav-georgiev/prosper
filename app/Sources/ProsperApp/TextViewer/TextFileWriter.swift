@@ -4,8 +4,9 @@ import Foundation
 
 // #1108 P3a (design #1105 D11 steps 1-4, D12 Deleted): the editor's save. A person's file is their data:
 // encode back to the file's own bytes, write only the resolved target and its sibling temp, refuse a
-// concurrent write, keep mode, xattrs, ACL, owner and links. No state and no actor isolation: every
-// value here is a plain Sendable value, so the caller may run it off the main actor. Nothing calls it yet.
+// concurrent write, keep mode, xattrs, ACL, owner, group, creation date and links; refuse a read-only file.
+// No state and no actor isolation: every value here is a plain Sendable value, so the caller may run it off
+// the main actor. Nothing calls it yet.
 
 enum TextFileWriter {
     typealias Fingerprint = [UInt8]
@@ -80,12 +81,24 @@ enum TextFileWriter {
         if code == ENOENT { return create(bytes, at: path) }
         guard code == 0 else { return .failure(.failed(.stat, code)) }
         guard st.st_mode & S_IFMT == S_IFREG else { return .failure(.notRegular) }
+        // Marked read-only by its owner: never written, by either branch (a rename would replace it anyway).
+        guard st.st_mode & S_IWUSR != 0 else { return .failure(.failed(.open, EACCES)) }
 
-        if st.st_uid == geteuid() && st.st_nlink == 1 {
+        // A new sibling takes the folder's group ("/." stats the folder itself, not a link to it); no chown, so a
+        // file of another group is written in place, as for another owner.
+        let (folderCode, folder) = statAt((path as NSString).deletingLastPathComponent + "/.")
+        atomic: if st.st_uid == geteuid() && st.st_nlink == 1 && folderCode == 0 && folder.st_gid == st.st_gid {
             // Atomic: a temp with the final mode, the xattrs and ACL copied onto it, the comparison, the rename.
             let target = URL(fileURLWithPath: path)
             let temp: URL
             do { temp = try writer.writeTemp(bytes, besides: target, mode: st.st_mode & 0o7777) } catch { return .failure(.failed(.temp, errnoOf(error))) }
+            // Belt: a temp that did not get the file's group after all (an odd file system) is dropped: in place instead.
+            var made = stat()
+            guard lstat(temp.path, &made) == 0, made.st_gid == st.st_gid else { _ = unlink(temp.path); break atomic }
+            // The rename brings the temp's creation date: carry the file's. A failure here does not fail the save.
+            var crtime = st.st_birthtimespec
+            var crAttr = attrlist(bitmapcount: u_short(ATTR_BIT_MAP_COUNT), reserved: 0, commonattr: attrgroup_t(ATTR_CMN_CRTIME), volattr: 0, dirattr: 0, fileattr: 0, forkattr: 0)
+            _ = setattrlist(temp.path, &crAttr, &crtime, MemoryLayout<timespec>.size, UInt32(FSOPT_NOFOLLOW))
             let failure: Failure
             if copyfile(path, temp.path, nil, copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL | COPYFILE_NOFOLLOW_SRC | COPYFILE_NOFOLLOW_DST)) != 0 {
                 failure = .failed(.copyAttributes, errno)
@@ -98,7 +111,7 @@ enum TextFileWriter {
             return .failure(failure)
         }
 
-        // In place (another owner, or hard links): keeps the owner, the inode and the links; not atomic.
+        // In place (another owner or group, or hard links): keeps the owner, the group, the inode and the links; not atomic.
         if !overwrite, let changed = compare(path, expected) { return .failure(changed) }
         // No O_TRUNC at the open: a file swapped in after the stat must not be emptied before the check.
         let fd = open(path, O_WRONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
