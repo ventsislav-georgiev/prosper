@@ -388,13 +388,26 @@ final class CCPoolConnection: @unchecked Sendable {
         // #1259: a keyed request follows (and pins) its session; no usable key = `pick` as before, nothing changed.
         let key = head.flatMap(Self.pinKey)
         let picked: String?
+        // #1278: a refused token is skipped (pins too). Nothing else left and not the move: a last resort routes once
+        // more ignoring refusal only (cooldowns still count), so the result can only be a refused account.
+        var anyway = false
         if key == nil {
-            picked = store.read { CCPoolCore.pick($0, model: model, exclude: tried, now: now) }
+            picked = store.read { st -> String? in
+                if let n = CCPoolCore.pick(st, model: model, exclude: tried.union(st.refusedLabels), now: now) { return n }
+                guard last == nil else { return nil }
+                anyway = true
+                return CCPoolCore.pick(st, model: model, exclude: tried, now: now)
+            }
             followedPin = false
         } else {
             var followed = false
             picked = store.mutate { st -> String? in
-                let (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: tried, now: now)
+                var (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model,
+                                                       exclude: tried.union(st.refusedLabels), now: now)
+                if name == nil, last == nil {
+                    anyway = true
+                    (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: tried, now: now)
+                }
                 st = next
                 followed = f
                 return name
@@ -403,6 +416,7 @@ final class CCPoolConnection: @unchecked Sendable {
             followedPin = followed || last != nil
         }
         guard let label = picked else { return last.map { pinBack($0, answer: $0) } ?? noAccounts() }
+        if anyway { log.note(label, "every routable account's token is rejected; trying it anyway") }
         tried.insert(label)
         guard let id = store.read({ $0.accounts[label]?.id }) else { return last.map { pinBack($0, answer: $0) } ?? attempt() }
         send(label: label, accountID: id, retried: false)
@@ -455,8 +469,25 @@ final class CCPoolConnection: @unchecked Sendable {
         if !unknown.isEmpty { log.note(label, "unknown claim window \(unknown.joined(separator: ",")); not benching on it") }
         // #1190 INFO-2: what this answer says belongs to the account that sent it, by its Keychain id: the
         // label may have moved to another account (rename, remove and add, a Replace) while it was in flight.
-        let id = ex.accountID
-        if !ex.followedPin { store.mutate { st in if let owner = st.label(ofID: id) { st.remember(owner) } } }
+        let id = ex.accountID, code = response.statusCode
+        // #1278: a 401 to /v1/messages* takes the account out of routing (the first stamp kept: a second 401 writes
+        // nothing) and never makes it `current`; a 2xx puts it back. One write with `current`; the reply is unchanged.
+        let marks = code == 401 && head?.path.hasPrefix("/v1/messages") == true
+        let refusal = store.mutate { st -> Bool? in
+            guard let owner = st.label(ofID: id) else { return nil }
+            if !ex.followedPin, code != 401 { st.remember(owner) }
+            if marks, st.accounts[owner]?.refused == nil, now.isFinite, (0..<1e12).contains(now) {
+                st.accounts[owner]?.refused = Int(now)
+                return true
+            }
+            if (200...299).contains(code), st.accounts[owner]?.refused != nil {
+                st.accounts[owner]?.refused = nil
+                return false
+            }
+            return nil   // no change to refusal
+        }
+        if refusal == true { log.note(label, "token rejected (401); not routed until a reply succeeds, Refresh, Release or a new token") }
+        if refusal == false { log.note(label, "token accepted again; back in routing") }
         // #1219: the usage sample (display only) goes to that account, its label resolved under the lock of the write.
         store.recordUsage(id: id, limits: limits)
 

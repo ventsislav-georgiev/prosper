@@ -17,12 +17,16 @@ struct CCPoolState: Codable, Equatable, Sendable {
         /// P2a: epoch a hand hold ends (Settings "Hold for…"). The hold itself is the five_hour bench;
         /// this only lets Settings say "held" instead of "limited". Absent in the Python shape.
         var held: Int?
+        /// #1278: epoch of the first 401 this token got on /v1/messages; while set the account is not routed. Cleared by
+        /// a 2xx reply, Release or a new token (a fresh Account). Absent from the file when nil.
+        var refused: Int?
 
-        init(id: String, cooldown: [String: Int] = [:], reset: [String: Int] = [:], held: Int? = nil) {
+        init(id: String, cooldown: [String: Int] = [:], reset: [String: Int] = [:], held: Int? = nil, refused: Int? = nil) {
             self.id = id
             self.cooldown = cooldown
             self.reset = reset
             self.held = held
+            self.refused = refused
         }
 
         init(from decoder: Decoder) throws {
@@ -31,6 +35,7 @@ struct CCPoolState: Codable, Equatable, Sendable {
             cooldown = try c.decodeIfPresent([String: Int].self, forKey: .cooldown) ?? [:]
             reset = try c.decodeIfPresent([String: Int].self, forKey: .reset) ?? [:]
             held = try c.decodeIfPresent(Int.self, forKey: .held)
+            refused = try c.decodeIfPresent(Int.self, forKey: .refused)
         }
     }
 
@@ -62,6 +67,9 @@ struct CCPoolState: Codable, Equatable, Sendable {
 
     /// The capacity rows the file holds: accounts in the pool, sampled, and accepted by the row check (#1261 R1260-g:
     /// a non-finite or out-of-range number is never handed to the encoder, so it cannot fail the whole save).
+    /// #1278: the accounts whose token got a 401; routing skips them (CCPoolConnection.attempt).
+    var refusedLabels: Set<String> { Set(accounts.filter { $0.value.refused != nil }.keys) }
+
     var savedCapacity: [String: CCPoolCapacityState] {
         let ids = Set(accounts.values.map(\.id))
         return capacity.filter { ids.contains($0.key) && $0.value.written != nil && $0.value.isValid }
@@ -500,10 +508,12 @@ extension CCPoolState {
         pins = pins.filter { $0.value.account != account }
     }
 
-    /// Undo benches: one account or all (`label == nil`), one claim or every claim.
+    /// Undo benches: one account or all (`label == nil`), one claim or every claim. #1278: every claim (Release) also
+    /// puts a refused token back in routing.
     mutating func clear(_ label: String?, claim: String? = nil) {
         for name in label.map({ [$0] }) ?? Array(accounts.keys) where accounts[name] != nil {
             if let claim { accounts[name]?.cooldown.removeValue(forKey: claim) } else { accounts[name]?.cooldown = [:] }
+            if claim == nil { accounts[name]?.refused = nil }
             if claim == nil || claim == CCPoolCore.fiveHour { accounts[name]?.held = nil }
         }
     }
