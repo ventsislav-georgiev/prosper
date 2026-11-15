@@ -375,6 +375,13 @@ function appupdates_upgrade()
     return render(finish_upgrade(out, before))
 end
 
+-- True when the system booted after `at` (kern.boottime: `{ sec = N, usec = M } ...`). An
+-- unreadable answer is false: the watch then runs to its cap, as before.
+local function booted_after(at)
+    local sec = tonumber(tostring(host.shell.run("/usr/sbin/sysctl -n kern.boottime") or ""):match("sec%s*=%s*(%d+)"))
+    return sec ~= nil and at < sec
+end
+
 -- Every 60 s while a backgrounded upgrade runs: once its status file exists, refresh
 -- and notify like the synchronous path, then stop. Gives up silently at UPGRADE_CAP.
 function on_upgrade_poll()
@@ -389,7 +396,9 @@ function on_upgrade_poll()
     local ended = host.fs.exists(p.file)
     local at, now = tonumber(p.at), host.time()
     -- An `at` in the future (clock set back, a hand edit) counts as expired, like a missing one.
-    if not ended and at and at <= now and now - at < UPGRADE_CAP then return end
+    -- A reboot since `at` ended brew with it: the status file never comes, so give up at once
+    -- (asked last, only for a record that would otherwise be kept).
+    if not ended and at and at <= now and now - at < UPGRADE_CAP and not booted_after(at) then return end
     if not ended then
         -- Given up: its folder goes too. A brew still running writes into a removed file,
         -- and the upgrade command writes its status only into a folder that is still ours.

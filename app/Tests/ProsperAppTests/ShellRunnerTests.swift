@@ -389,6 +389,21 @@ final class ShellRunnerTests: XCTestCase {
         XCTAssertEqual(fake.pref("upgrade_pending"), pending)
     }
 
+    /// #1284: the same, but the system booted after the first run began: the watch is given up
+    /// at once (its folder removed, no refusal) and the second upgrade starts.
+    func testUpgradeAfterARebootIsNotRefused() throws {
+        let fake = BrewFakeServices(upgradeSeconds: 2, outdatedAfter: 0, bootReply: "{ sec = 1700000050, usec = 0 } Tue Nov 14 22:14:10 2023")
+        try appupdates(fake)
+        fake.now += 90
+        try appupdates(fake)
+        XCTAssertEqual(fake.notifications, ["brew upgrade is still running in the background",
+                                            "brew upgrade is still running in the background"])
+        XCTAssertEqual(fake.upgradeRuns, 2, "the second upgrade started")
+        XCTAssertEqual(fake.bootReads, 1)
+        XCTAssertEqual(fake.cleanups.count, 1, "the first run's folder was removed")
+        XCTAssertTrue(fake.cleanups.first?.contains("prosper-appupdates-1700000000000") == true, "\(fake.cleanups)")
+    }
+
     /// QA #730 r2 F1: Upgrade goes to the background, then Upgrade again while it runs: refused
     /// by name, no second mkdir or brew, the record and the watch exactly as the first left them.
     func testSecondUpgradeWhileOursRunsIsRefused() throws {
@@ -401,6 +416,7 @@ final class ShellRunnerTests: XCTestCase {
                                             "brew upgrade refused: an upgrade Prosper started is still running"])
         XCTAssertEqual(fake.upgradeRuns, 1, "no second mkdir + brew upgrade line")
         XCTAssertEqual(fake.commands, [brewOutdated], "only the first call's read before its upgrade")
+        XCTAssertEqual(fake.bootReads, 1, "#1284: the boot time is read once, unreadable here, so the watch goes on")
         XCTAssertEqual(fake.cleanups, [])
         XCTAssertEqual(fake.pref("upgrade_pending"), pending)
         XCTAssertEqual(fake.timers, ["appupdates.upgrade_poll": "60.0:on_upgrade_poll"])
@@ -671,6 +687,10 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
     /// When set, the upgrade's whole output and the status file's text (no trailing number).
     let statusText: String?
     let suReply: String
+    /// What `sysctl -n kern.boottime` prints ("" = unreadable); the call is counted, never listed in `commands`.
+    let bootReply: String
+    private var bootAsks = 0
+    var bootReads: Int { lock.lock(); defer { lock.unlock() }; return bootAsks }
     private let lock = NSLock()
     private var prefs = ["cache": #"{"brew":[{"name":"jq","from":"1.6","to":"1.7"}],"macos":[]}"#]
     private var bodies: [String] = []
@@ -713,7 +733,8 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
 
     init(upgradeSeconds: Double, outdatedBefore: Int = 1, outdatedAfter: Int, upgradeStatus: Int = 0, locked: Bool = false,
          outdatedReply: String? = nil, outdatedBeforeReply: String? = nil, folderLost: Bool = false,
-         statusFileExists: Bool = false, statusText: String? = nil, suReply: String = "", mkdirRefused: Bool = false) {
+         statusFileExists: Bool = false, statusText: String? = nil, suReply: String = "", mkdirRefused: Bool = false, bootReply: String = "") {
+        self.bootReply = bootReply
         self.mkdirRefused = mkdirRefused
         self.statusText = statusText
         self.suReply = suReply
@@ -747,6 +768,7 @@ private final class BrewFakeServices: ExtensionHostServices, @unchecked Sendable
                 : "Error: jq: post-install step failed\n\(upgradeStatus)"
         }
         if command.hasPrefix("[ ! -L ") { noteCleanup(command); return "" }
+        if command == "/usr/sbin/sysctl -n kern.boottime" { lock.withLock { bootAsks += 1 }; return bootReply }
         record(command)
         if command.hasPrefix("/bin/cat ") { return statusFileExists ? (statusText ?? "\(upgradeStatus)") : "" }
         if command.hasPrefix("softwareupdate ") { return suReply }

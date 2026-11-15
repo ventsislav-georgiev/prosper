@@ -1311,6 +1311,8 @@ tag from the now-released section and put it on the new top draft.
   Mac's device key cannot be read; they are skipped instead.
 - Clear All while history is not being saved now also clears the saved history once it is readable
   again.
+- After a restart in the middle of a Homebrew upgrade, Upgrade is available again at once instead of
+  after two hours.
 
 ## v2.174.0
 

@@ -48,10 +48,13 @@ local shellLog = {}
 local brewOut, suOut, upgradeOut, catOut = BREW_OUTDATED_0, SU_NONE, "0", ""
 local onUpgrade   -- runs inside the `brew upgrade` call, when set
 local onCleanup   -- runs inside a bare folder cleanup call, when set
+local sysctlOut = ""   -- what the fake `sysctl -n kern.boottime` prints ("" = unreadable)
+local SYSCTL = "/usr/sbin/sysctl -n kern.boottime"
 
 local function router(cmd)
     shellLog[#shellLog + 1] = cmd
     if onCleanup and cmd:find("^%[ ! %-L ") then onCleanup() end
+    if cmd == SYSCTL then return sysctlOut end
     if cmd:find("^/bin/cat ") then return catOut end   -- the watch reading a status file
     if cmd:find("outdated", 1, true) then return brewOut end
     if cmd:find("softwareupdate", 1, true) then return suOut end
@@ -280,7 +283,8 @@ reset()
 env.now = 100000 + 20
 h.resetCalls(env)
 G.appupdates_upgrade()
-h.eq(#shellLog, 0, "t1: no shell call at all")
+h.eq(#shellLog, 1, "t1: one shell call, the boot time read (was: no shell call at all)")
+h.eq(shellLog[1], SYSCTL, "t1: and it is the boot time read")
 h.eq(count("mkdir"), 0, "t1: no second mkdir")
 h.eq(count("brew upgrade"), 0, "t1: no second brew upgrade")
 h.eq(#env.notifications, 1, "t1: one notice")
@@ -528,7 +532,8 @@ local function c8()
     local LIVE = '{"file":"' .. OLD .. '/status","at":' .. (AT - 60) .. ',"before":2}'
     host.prefs.set(PENDING, LIVE)
     G.on_launch()
-    h.eq(#shellLog, 0, "C8: a relaunch while brew runs removes nothing")
+    h.eq(ran("/bin/rm"), false, "C8: a relaunch while brew runs removes nothing (was: no shell call; now the boot time is read)")
+    h.eq(#shellLog, 1, "C8: a relaunch while brew runs reads only the boot time")
     h.eq(env.prefs[PENDING], LIVE, "C8: the record is kept at launch")
     h.eq(env.timers[WATCH] and env.timers[WATCH].handler, "on_upgrade_poll", "C8: and watched again")
     -- Past the cap, a relaunch drops it with its folder, as the watch does.
@@ -586,7 +591,7 @@ local function c9()
     host.prefs.set(PENDING, '{"file":"' .. OLD .. '/status","at":' .. (AT - 1) .. ',"before":2}')
     G.appupdates_upgrade()
     h.eq(env.notifications[1].body, REFUSED, "C9: a record started a second ago refuses")
-    h.eq(#shellLog, 0, "C9: and runs nothing")
+    h.eq(#shellLog, 1, "C9: and runs only the boot time read (was: nothing)")
     -- A record started at this very second is fresh too: refused, and a poll keeps it and its timer.
     settle()
     reset()
@@ -594,12 +599,12 @@ local function c9()
     host.prefs.set(PENDING, NOW_REC)
     G.appupdates_upgrade()
     h.eq(env.notifications[1].body, REFUSED, "C9: a record started this second refuses")
-    h.eq(#shellLog, 0, "C9: this second: runs nothing")
+    h.eq(#shellLog, 1, "C9: this second: runs only the boot time read (was: nothing)")
     env.timers[WATCH] = { id = WATCH, handler = "on_upgrade_poll" }
     G.on_upgrade_poll()
     h.eq(env.prefs[PENDING], NOW_REC, "C9: this second: the poll keeps the record")
     h.eq(env.timers[WATCH] ~= nil, true, "C9: this second: the poll keeps the timer")
-    h.eq(#shellLog, 0, "C9: this second: the poll runs nothing")
+    h.eq(#shellLog, 2, "C9: this second: the poll reads the boot time again and runs nothing else (was: nothing)")
     settle()
 end
 
@@ -719,11 +724,92 @@ local function capRace()
     settle()
 end
 
+-- MARK: - 7e. A reboot mid-upgrade gives the watch up at once (#1284)
+
+-- A record 10 minutes old whose status file is absent; the fake kern.boottime says `boot`.
+local function bootRec() return '{"file":"' .. DIR .. '/status","at":' .. (AT - 600) .. ',"before":2}' end
+local function bootAt(sec) return "{ sec = " .. sec .. ", usec = 123456 } Sat Jan  1 00:00:00 2000" end
+local function withRecord(boot)
+    settle()
+    reset()
+    sysctlOut = boot
+    host.prefs.set(PENDING, bootRec())
+    env.timers[WATCH] = { id = WATCH, handler = "on_upgrade_poll" }
+    brewOut = BREW_OUTDATED_2
+end
+
+local function reboot()
+    -- Booted after `at`: the poll gives up at once, silently, folder and record and timer gone.
+    withRecord(bootAt(AT - 100))
+    G.on_upgrade_poll()
+    h.eq(shellLog[1], SYSCTL, "boot: the boot time is read first")
+    h.eq(shellLog[2], DIR_CLEANUP, "boot: then the folder goes")
+    h.eq(#shellLog, 2, "boot: and nothing else runs")
+    h.eq(#env.notifications, 0, "boot: no notice")
+    h.eq(env.prefs[PENDING], "", "boot: the record is gone")
+    h.eq(env.timers[WATCH], nil, "boot: the watch timer is cancelled")
+    -- A relaunch after a reboot does the same.
+    withRecord(bootAt(AT - 100))
+    G.on_launch()
+    h.eq(shellLog[2], DIR_CLEANUP, "boot: a relaunch removes the folder")
+    h.eq(env.prefs[PENDING], "", "boot: a relaunch drops the record")
+    h.eq(env.timers[WATCH], nil, "boot: a relaunch does not watch")
+    h.eq(#env.notifications, 0, "boot: a relaunch says nothing")
+    -- Upgrade runs at once, with no refusal.
+    withRecord(bootAt(AT - 100))
+    G.appupdates_upgrade()
+    h.eq(count("brew upgrade"), 1, "boot: Upgrade runs")
+    h.eq(count(DIR_CLEANUP), 2, "boot: the old folder and (same name, same second) the new one are removed")
+    h.eq(#env.notifications, 1, "boot: one notice")
+    h.eq(env.notifications[1].body, "Nothing was upgraded", "boot: it is the upgrade's own, not a refusal")
+    h.eq(env.prefs[PENDING], "", "boot: no record left")
+
+    -- Booted before `at` (a plain relaunch): brew outlives Prosper, so keep watching.
+    withRecord(bootAt(AT - 3600))
+    G.on_launch()
+    h.eq(ran("/bin/rm"), false, "relaunch: nothing is removed")
+    h.eq(env.prefs[PENDING], bootRec(), "relaunch: the record is kept")
+    h.eq(env.timers[WATCH] and env.timers[WATCH].handler, "on_upgrade_poll", "relaunch: still watched")
+    G.appupdates_upgrade()
+    h.eq(env.notifications[1] and env.notifications[1].body, REFUSED, "relaunch: Upgrade is refused")
+    h.eq(count("brew upgrade"), 0, "relaunch: no second brew")
+    -- Booted in the very second of `at` is not after it.
+    withRecord(bootAt(AT - 600))
+    G.on_upgrade_poll()
+    h.eq(env.prefs[PENDING], bootRec(), "same second: the record is kept")
+
+    -- No readable boot time: today's rule, watched to the cap.
+    for _, bad in ipairs({ "", "garbage", "error: spawn failed", "{ sec = , usec = 1 }", "{ usec = 5 }" }) do
+        withRecord(bad)
+        G.on_upgrade_poll()
+        h.eq(env.prefs[PENDING], bootRec(), "unreadable '" .. bad .. "': the record is kept")
+        h.eq(env.timers[WATCH] ~= nil, true, "unreadable '" .. bad .. "': the timer is kept")
+        h.eq(ran("/bin/rm"), false, "unreadable '" .. bad .. "': nothing is removed")
+        G.appupdates_upgrade()
+        h.eq(env.notifications[1] and env.notifications[1].body, REFUSED, "unreadable '" .. bad .. "': Upgrade is refused")
+    end
+    withRecord("")
+    env.now = AT + 2 * 3600
+    G.on_upgrade_poll()
+    h.eq(env.prefs[PENDING], "", "unreadable: past the cap the record is dropped")
+    h.eq(ran(SYSCTL), false, "past the cap the boot time is not asked")
+
+    -- A record with its status file: reported as today, the boot time never asked.
+    settle()
+    reset()
+    sysctlOut = bootAt(AT - 100)
+    h.eq(pollEnded(bootRec(), "0"), "2 packages upgraded", "ended: reported as today")
+    h.eq(ran("sysctl"), false, "ended: the boot time is never asked")
+    sysctlOut = ""
+    settle()
+end
+
 quit()
 foregroundCleanup()
 fractionalTime()
 ownLine()
 capRace()
+reboot()
 c1()
 status()
 c3()
