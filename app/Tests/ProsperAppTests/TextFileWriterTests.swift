@@ -174,14 +174,22 @@ final class TextFileWriterTests: XCTestCase {
         XCTAssertEqual(names(dir), ["a.txt"], "the temp file is removed")
     }
 
-    func testReadOnlyFolderFailsAndLeavesNothing() throws {
+    /// Round 7 item 5: the row's own file in a subfolder of its tempDir() chmod'ed 0o555 (restored first thing in the defer, the
+    /// restore asserted): the temp's EACCES falls back to the in-place branch: same inode and mode, the new bytes, no temp left.
+    func testAnOwnedFileInAReadOnlyFolderIsWrittenInPlace() throws {
         let sub = tempDir("tfw-ro").appendingPathComponent("ro")
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
         let url = try file("a.txt", Array("old".utf8), in: sub)
+        let before = info(url)
         XCTAssertEqual(chmod(sub.path, 0o555), 0)
-        defer { _ = chmod(sub.path, 0o755) }
-        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8))), .failure(.failed(.temp, EACCES)))
-        XCTAssertEqual(bytes(url), Array("old".utf8))
+        defer { XCTAssertEqual(chmod(sub.path, 0o755), 0, "the row's own folder is writable again") }
+        let calls = Calls()
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: calls)),
+                       .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(calls.all, ["writeTemp"], "a temp tried, no replace")
+        XCTAssertEqual(info(url).st_ino, before.st_ino, "same inode: written in place")
+        XCTAssertEqual(info(url).st_mode, before.st_mode)
+        XCTAssertEqual(bytes(url), Array("new".utf8))
         XCTAssertEqual(names(sub), ["a.txt"])
     }
 
@@ -757,5 +765,163 @@ final class TextFileWriterTests: XCTestCase {
                 XCTAssertEqual(names(dir), ["a.txt"], label)
             }
         }
+    }
+
+    // MARK: round 7, writer half (R1108-q2 the folder fsync, the mode mask, the flags, the copy step, a read-only folder)
+
+    /// The folder seam: records "sync <folder>" in `calls` and answers `code`.
+    private func syncing(_ calls: Calls, _ code: Int32) -> (String) -> Int32 { { calls.add("sync \($0)"); return code } }
+
+    /// R1108-q2: the folder is fsync'd once after a create and once after the rename (after "replace"), never in place; a failed
+    /// folder fsync is not a failed save. The default opens a folder only (O_DIRECTORY).
+    func testTheFolderIsSyncedAfterACreateAndAfterTheRenameNeverInPlace() throws {
+        let dir = tempDir("tfw-fsync")
+        let sync = "sync \(dir.path)"
+        for code: Int32 in [0, EIO] {
+            let url = dir.appendingPathComponent("a\(code).txt")
+            let created = Calls()
+            XCTAssertEqual(W.save("one", encoding: .utf8, to: url, expected: [], writer: RecordingWriter(calls: created),
+                                  syncFolder: syncing(created, code)), .success(W.digest(Array("one".utf8))))
+            XCTAssertEqual(created.all, [sync], "once per create")
+            XCTAssertEqual(bytes(url), Array("one".utf8))
+
+            let atomic = Calls()
+            XCTAssertEqual(W.save("two", encoding: .utf8, to: url, expected: W.digest(Array("one".utf8)), writer: RecordingWriter(calls: atomic),
+                                  syncFolder: syncing(atomic, code)), .success(W.digest(Array("two".utf8))))
+            XCTAssertEqual(atomic.all, ["writeTemp", "replace", sync], "once per atomic save, after the rename")
+            XCTAssertEqual(bytes(url), Array("two".utf8))
+
+            let inPlace = Calls()
+            XCTAssertEqual(W.save("three", encoding: .utf8, to: url, expected: W.digest(Array("two".utf8)), writer: RecordingWriter(calls: inPlace),
+                                  stat: seam { $0.st_uid = geteuid() &+ 1 }, syncFolder: syncing(inPlace, code)), .success(W.digest(Array("three".utf8))))
+            XCTAssertEqual(inPlace.all, [], "never in place")
+            XCTAssertEqual(bytes(url), Array("three".utf8))
+        }
+        XCTAssertEqual(names(dir), ["a0.txt", "a5.txt"])
+        XCTAssertEqual(W.syncFolder(dir.path), 0)
+        XCTAssertEqual(W.syncFolder(dir.appendingPathComponent("a0.txt").path), ENOTDIR)
+    }
+
+    /// Records the mode asked for (octal) and makes the real temp with the permission bits only: no row ever sets a real setuid,
+    /// setgid or sticky bit, whatever the code asks.
+    private struct ModeWriter: ManagedConfigFileWriter {
+        let real = ManagedConfigPOSIXWriter()
+        let calls: Calls
+        func writeTemp(_ data: [UInt8], besides target: URL, mode: mode_t) throws -> URL {
+            calls.add(String(mode, radix: 8))
+            return try real.writeTemp(data, besides: target, mode: mode & 0o777)
+        }
+        func replace(_ target: URL, with temp: URL) throws { try real.replace(target, with: temp) }
+    }
+
+    /// The mode mask: setuid, setgid and sticky reach the code through the stat seam only; the temp is asked for the file's
+    /// permission bits and the sticky bit (st_mode & 0o1777), never 0o4000 or 0o2000.
+    func testTheSetuidAndSetgidBitsAreNeverAskedForAgain() throws {
+        let dir = tempDir("tfw-setid")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        let perms = info(url).st_mode & 0o777
+        let calls = Calls()
+        let setid = seam { if $0.st_mode & S_IFMT == S_IFREG { $0.st_mode |= S_ISUID | S_ISGID | S_ISVTX } }
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), writer: ModeWriter(calls: calls), stat: setid),
+                       .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(calls.all, [String(perms | 0o1000, radix: 8)])
+        XCTAssertEqual(info(url).st_mode & 0o7777, perms)
+        XCTAssertEqual(bytes(url), Array("new".utf8))
+        XCTAssertEqual(names(dir), ["a.txt"])
+    }
+
+    /// The flags: UF_HIDDEN set with chflags(2) on the row's own file (cleared in the defer, the clear asserted) is kept: in place,
+    /// same inode. UF_NODUMP through the stat seam on another file with no real flag: in place too, no temp.
+    func testAHiddenOrNoDumpFileIsWrittenInPlaceAndKeepsItsFlags() throws {
+        let dir = tempDir("tfw-flags")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        let before = info(url)
+        XCTAssertEqual(chflags(url.path, before.st_flags | UInt32(UF_HIDDEN)), 0)
+        defer { XCTAssertEqual(chflags(url.path, before.st_flags), 0, "the row's own flag is cleared") }
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8))), .success(W.digest(Array("new".utf8))))
+        XCTAssertNotEqual(info(url).st_flags & UInt32(UF_HIDDEN), 0, "the hidden flag is kept")
+        XCTAssertEqual(info(url).st_ino, before.st_ino, "same inode: written in place")
+        XCTAssertEqual(bytes(url), Array("new".utf8))
+
+        let other = try file("b.txt", Array("old".utf8), in: dir)
+        let ino = info(other).st_ino
+        let calls = Calls()
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: other, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: calls),
+                              stat: seam { $0.st_flags |= UInt32(UF_NODUMP) }), .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(calls.all, [], "no temp, no replace")
+        XCTAssertEqual(info(other).st_ino, ino, "same inode: written in place")
+        XCTAssertEqual(bytes(other), Array("new".utf8))
+        XCTAssertEqual(names(dir), ["a.txt", "b.txt"])
+    }
+
+    /// An allow-read entry for uid 1 (a system account) set in process on the row's own file. 0 or an errno.
+    private func allowRead(_ url: URL) -> Int32 {
+        var acl: acl_t? = acl_init(1)
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        var entry: acl_entry_t?
+        var perms: acl_permset_t?
+        let who = UUID(uuidString: "FFFFEEEE-DDDD-CCCC-BBBB-AAAA00000001")!.uuid
+        guard acl_create_entry(&acl, &entry) == 0, acl_set_tag_type(entry, ACL_EXTENDED_ALLOW) == 0,
+              withUnsafeBytes(of: who, { acl_set_qualifier(entry, $0.baseAddress) }) == 0, acl_get_permset(entry, &perms) == 0,
+              acl_add_perm(perms, ACL_READ_DATA) == 0, acl_set_permset(entry, perms) == 0,
+              acl_set_file(url.path, ACL_TYPE_EXTENDED, acl) == 0 else { return errno }
+        return 0
+    }
+
+    /// The copy step through its seam (no other volume): ENOTSUP or EOPNOTSUPP (a volume without access lists or xattrs) is not
+    /// a failed save: in place, which keeps an access list the file has; any other errno fails as before, nothing written.
+    func testACopyStepTheVolumeCannotDoIsWrittenInPlace() throws {
+        let dir = tempDir("tfw-copy")
+        let plain = try file("plain.txt", Array("old".utf8), in: dir)
+        let listed = try file("listed.txt", Array("old".utf8), in: dir)
+        XCTAssertEqual(allowRead(listed), 0)
+        let want = aclText(listed)
+        XCTAssertFalse(want.isEmpty)
+        for (url, code) in [(plain, ENOTSUP), (listed, EOPNOTSUPP)] {
+            let ino = info(url).st_ino
+            let calls = Calls()
+            XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: calls),
+                                  copyAttributes: { _, _ in code }), .success(W.digest(Array("new".utf8))), "\(code)")
+            XCTAssertEqual(calls.all, ["writeTemp"], "a temp, no replace")
+            XCTAssertEqual(info(url).st_ino, ino, "same inode: written in place")
+            XCTAssertEqual(bytes(url), Array("new".utf8))
+        }
+        XCTAssertEqual(aclText(listed), want, "the access list is kept")
+        XCTAssertEqual(W.save("newer", encoding: .utf8, to: plain, expected: W.digest(Array("new".utf8)), copyAttributes: { _, _ in ENOSPC }),
+                       .failure(.failed(.copyAttributes, ENOSPC)))
+        XCTAssertEqual(bytes(plain), Array("new".utf8))
+        XCTAssertEqual(names(dir), ["listed.txt", "plain.txt"], "no temp left")
+    }
+
+    /// Fails writeTemp with `code` (no file made); replace is only recorded.
+    private struct FailingTempWriter: ManagedConfigFileWriter {
+        let code: Int32
+        let calls: Calls
+        func writeTemp(_ data: [UInt8], besides target: URL, mode: mode_t) throws -> URL {
+            calls.add("writeTemp")
+            throw ManagedConfigPOSIXWriter.WriteError(step: "create temp", code: code)
+        }
+        func replace(_ target: URL, with temp: URL) throws { calls.add("replace") }
+    }
+
+    /// Item 5 through the writer seam: the temp's EROFS falls back to in place like EACCES (with or without overwrite); no
+    /// other errno does (ENOSPC: failed, nothing written).
+    func testOnlyEACCESOrEROFSFromTheTempFallsBackToInPlace() throws {
+        let dir = tempDir("tfw-temp-errno")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        let ino = info(url).st_ino
+        let calls = Calls()
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), writer: FailingTempWriter(code: ENOSPC, calls: calls)),
+                       .failure(.failed(.temp, ENOSPC)))
+        XCTAssertEqual(bytes(url), Array("old".utf8))
+        for overwrite in [false, true] {
+            let text = overwrite ? "newer" : "new"
+            XCTAssertEqual(W.save(text, encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), overwrite: overwrite,
+                                  writer: FailingTempWriter(code: EROFS, calls: calls)), .success(W.digest(Array(text.utf8))))
+            XCTAssertEqual(bytes(url), Array(text.utf8))
+        }
+        XCTAssertEqual(calls.all, ["writeTemp", "writeTemp", "writeTemp"], "never a replace")
+        XCTAssertEqual(info(url).st_ino, ino, "same inode: written in place")
+        XCTAssertEqual(names(dir), ["a.txt"])
     }
 }

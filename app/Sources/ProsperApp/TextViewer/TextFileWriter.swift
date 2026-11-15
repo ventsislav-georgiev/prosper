@@ -82,10 +82,13 @@ enum TextFileWriter {
     /// branch, on the opened and checked descriptor, right before the comparison. `beforeRead` is a test seam too: called once
     /// inside the comparison (either branch), between its fstat and its read. `identity` is what the load opened (nil: not
     /// checked): only its path is compared with the one resolved now; it is never opened, created or removed.
+    /// `copyAttributes` (file, temp) and `syncFolder` (folder) are seams over the copy step and the folder fsync: 0 or an errno.
     static func save(_ text: String, encoding: TextViewerDocument.Encoding, to url: URL, expected: Fingerprint,
                      overwrite: Bool = false, identity: TextViewerDocument.Identity? = nil,
                      writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(),
                      stat statAt: Stat = { p in var s = stat(); return (lstat(p, &s) == 0 ? 0 : errno, s) },
+                     copyAttributes: (String, String) -> Int32 = TextFileWriter.copyAttributes,
+                     syncFolder: (String) -> Int32 = TextFileWriter.syncFolder,
                      beforeCompare: () -> Void = {}, beforeRead: () -> Void = {}) -> Result<Fingerprint, Failure> {
         guard let bytes = encode(text, encoding: encoding) else { return .failure(.lossy) }
         let path: String
@@ -97,7 +100,7 @@ enum TextFileWriter {
         // overwrite. The same path with another inode (replaced there) stays the byte comparison's question.
         if let identity, identity.path != path { return .failure(.retargeted) }
         let (code, st) = statAt(path)
-        if code == ENOENT { return create(bytes, at: path) }
+        if code == ENOENT { return create(bytes, at: path, syncFolder) }
         guard code == 0 else { return .failure(.failed(.stat, code)) }
         guard st.st_mode & S_IFMT == S_IFREG else { return .failure(.notRegular) }
         // Locked: its own answer, before any temp (the rename would fail with EPERM after the temp was written).
@@ -110,12 +113,21 @@ enum TextFileWriter {
 
         // A new sibling takes the folder's group ("/." stats the folder itself, not a link to it); no chown, so a
         // file of another group is written in place, as for another owner.
-        let (folderCode, folder) = statAt((path as NSString).deletingLastPathComponent + "/.")
-        atomic: if st.st_uid == geteuid() && st.st_nlink == 1 && folderCode == 0 && folder.st_gid == st.st_gid {
+        let folderPath = (path as NSString).deletingLastPathComponent
+        let (folderCode, folder) = statAt(folderPath + "/.")
+        // A file with any flag (hidden, no-dump, ...) is written in place: the rename's new inode would have none (no chflags here).
+        atomic: if st.st_uid == geteuid() && st.st_nlink == 1 && st.st_flags == 0 && folderCode == 0 && folder.st_gid == st.st_gid {
             // Atomic: a temp with the final mode, the xattrs and ACL copied onto it, the comparison, the rename.
             let target = URL(fileURLWithPath: path)
             let temp: URL
-            do { temp = try writer.writeTemp(bytes, besides: target, mode: st.st_mode & 0o7777) } catch { return .failure(.failed(.temp, errnoOf(error))) }
+            // 0o1777: the setuid and setgid bits are never set again on new contents.
+            do { temp = try writer.writeTemp(bytes, besides: target, mode: st.st_mode & 0o1777) } catch {
+                // A folder the person cannot write (EROFS through the seam only: faccessat above refuses a read-only volume):
+                // the file itself is writable, so in place, with that branch's checks. No other errno falls back.
+                let e = errnoOf(error)
+                if e == EACCES || e == EROFS { break atomic }
+                return .failure(.failed(.temp, e))
+            }
             // Belt: a temp that did not get the file's group after all (an odd file system) is dropped: in place instead.
             var made = stat()
             guard lstat(temp.path, &made) == 0, made.st_gid == st.st_gid else { _ = unlink(temp.path); break atomic }
@@ -124,18 +136,29 @@ enum TextFileWriter {
             var crAttr = attrlist(bitmapcount: u_short(ATTR_BIT_MAP_COUNT), reserved: 0, commonattr: attrgroup_t(ATTR_CMN_CRTIME), volattr: 0, dirattr: 0, fileattr: 0, forkattr: 0)
             _ = setattrlist(temp.path, &crAttr, &crtime, MemoryLayout<timespec>.size, UInt32(FSOPT_NOFOLLOW))
             let failure: Failure
-            if copyfile(path, temp.path, nil, copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL | COPYFILE_NOFOLLOW_SRC | COPYFILE_NOFOLLOW_DST)) != 0 {
-                failure = .failed(.copyAttributes, errno)
+            let copied = copyAttributes(path, temp.path)
+            if copied != 0 {
+                failure = .failed(.copyAttributes, copied)
             } else if !overwrite, let changed = compare(path, expected, beforeRead) {
                 failure = changed
             } else {
-                do { try writer.replace(target, with: temp); return .success(digest(bytes)) } catch { failure = .failed(.replace, errnoOf(error)) }
+                do {
+                    try writer.replace(target, with: temp)
+                    // R1108-q2, after the rename only. Not a failed save: the bytes are written and named; the result has no
+                    // warning slot. The default writer's replace fsyncs the folder too: twice is cheap, and a writer passed in may not.
+                    _ = syncFolder(folderPath)
+                    return .success(digest(bytes))
+                } catch { failure = .failed(.replace, errnoOf(error)) }
             }
             _ = unlink(temp.path)
+            // A volume that cannot hold the access list or the xattrs: in place keeps them, and saves a file that has none.
+            // Only these two: on ENOSPC and the like in place could truncate and then fail.
+            if copied == ENOTSUP || copied == EOPNOTSUPP { break atomic }
             return .failure(failure)
         }
 
-        // In place (another owner or group, or hard links): keeps the owner, the group, the inode and the links; not atomic.
+        // In place (another owner or group, hard links, flags, a folder the person cannot write, a volume without access lists):
+        // keeps the owner, the group, the inode, its flags and the links; not atomic.
         // ONE descriptor (R1108-q1): the identity, the comparison, the truncate and the write all see the opened file.
         // No O_TRUNC at the open: a file swapped in after the stat must not be emptied before the check.
         let fd = open(path, O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
@@ -160,12 +183,28 @@ enum TextFileWriter {
 
     /// D12 Deleted: written anew with 0o666 minus the umask. O_EXCL: a file that appeared meanwhile is a
     /// concurrent write, never overwritten.
-    private static func create(_ bytes: [UInt8], at path: String) -> Result<Fingerprint, Failure> {
+    private static func create(_ bytes: [UInt8], at path: String, _ syncFolder: (String) -> Int32) -> Result<Fingerprint, Failure> {
         let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o666)
         guard fd >= 0 else { return .failure(errno == EEXIST ? .changedOnDisk : .failed(.open, errno)) }
         defer { close(fd) }
         if let f = writeAll(fd, bytes) { return .failure(f) }
+        // R1108-q2: the new name survives a power loss. A failure is not a failed save (see the atomic branch).
+        _ = syncFolder((path as NSString).deletingLastPathComponent)
         return .success(digest(bytes))
+    }
+
+    /// The copy step's default: xattrs and the access list from the file onto the temp, no link followed. 0 or an errno.
+    static func copyAttributes(_ file: String, _ temp: String) -> Int32 {
+        guard copyfile(file, temp, nil, copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL | COPYFILE_NOFOLLOW_SRC | COPYFILE_NOFOLLOW_DST)) != 0 else { return 0 }
+        return errno != 0 ? errno : EIO
+    }
+
+    /// The folder fsync's default: opened read-only as a folder, fsync'd, closed. 0 or an errno.
+    static func syncFolder(_ folder: String) -> Int32 {
+        let fd = open(folder, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard fd >= 0 else { return errno }
+        defer { close(fd) }
+        return fsync(fd) == 0 ? 0 : errno
     }
 
     /// The file's current bytes against `expected`, read by TextViewerDocument.load's rule (non-blocking,
