@@ -50,27 +50,32 @@ enum DatabaseKey {
     /// On-disk format tag — bump if the masking scheme ever changes.
     private static let fileMagic = "pdk1:"
 
-    enum KeyError: Error { case randomFailed, persistFailed }
+    enum KeyError: Error { case randomFailed, persistFailed, unreadable }
 
-    /// `~/.config/prosper/device.key`
-    private static var keyFileURL: URL {
+    /// `~/.config/prosper/device.key`. #1285: a seam, tests pass a file in a tempDir().
+    static var keyFileURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/prosper/device.key")
     }
 
-    /// Returns the existing key, or creates+stores one on first call. Hex string.
-    static func fetchOrCreate() throws -> String {
-        if let existing = try fetch() { return existing }
+    /// Returns the existing key, or creates+stores one when no file exists yet. Hex string.
+    /// #1285: an existing file that cannot be read or parsed throws; it is never replaced.
+    static func fetchOrCreate(at url: URL = keyFileURL) throws -> String {
+        if let existing = try fetch(at: url) { return existing }
         let key = try makeRandomHexKey()
-        try persist(key)
+        do { try persist(key, to: url) } catch {
+            // Another process created the file first: use its key.
+            if let theirs = try fetch(at: url) { return theirs }
+            throw error
+        }
         return key
     }
 
-    /// Reads the stored key, or nil if none exists yet (or the file was written
-    /// on another machine / with another scheme — treated as absent; a fresh key
-    /// is generated and old encrypted data is simply unreadable).
-    static func fetch() throws -> String? {
-        readKeyFile()
+    /// Reads the stored key, or nil only when the file does not exist. #1285: any other read
+    /// failure or a malformed file throws, so fetchOrCreate never overwrites it. (A file copied
+    /// from another machine still unmasks to a different key: that is not detectable here.)
+    static func fetch(at url: URL = keyFileURL) throws -> String? {
+        try readKeyFile(url)
     }
 
     /// Removes the stored key (used by privacy "Delete All" if a re-key is wanted).
@@ -80,17 +85,20 @@ enum DatabaseKey {
 
     // MARK: - Private
 
-    private static func readKeyFile() -> String? {
-        guard let raw = try? String(contentsOf: keyFileURL, encoding: .utf8) else { return nil }
+    private static func readKeyFile(_ url: URL) throws -> String? {
+        let raw: String
+        do { raw = try String(contentsOf: url, encoding: .utf8) } catch CocoaError.fileReadNoSuchFile { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix(fileMagic),
               let masked = Data(base64Encoded: String(trimmed.dropFirst(fileMagic.count))),
-              masked.count == keyByteCount else { return nil }
+              masked.count == keyByteCount else { throw KeyError.unreadable }
         let keyBytes = xor(Array(masked), mask())
         return keyBytes.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func persist(_ hexKey: String) throws {
+    /// #1285: written 0600 under a temp name, then link(2)ed into place, which fails when the
+    /// file exists: an existing key file is never replaced.
+    private static func persist(_ hexKey: String, to keyFileURL: URL) throws {
         guard let keyBytes = bytes(fromHex: hexKey), keyBytes.count == keyByteCount else {
             throw KeyError.persistFailed
         }
@@ -101,9 +109,11 @@ enum DatabaseKey {
         try FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
-        try payload.data(using: .utf8)?.write(to: keyFileURL, options: [.atomic])
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600], ofItemAtPath: keyFileURL.path)
+        let tmp = dir.appendingPathComponent(".device.key.\(UUID().uuidString)")
+        defer { unlink(tmp.path) }
+        try Data(payload.utf8).write(to: tmp, options: [.withoutOverwriting])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmp.path)
+        guard link(tmp.path, keyFileURL.path) == 0 else { throw KeyError.persistFailed }
     }
 
     /// 32-byte XOR mask: SHA-256(pepper ‖ host UUID). The host UUID

@@ -1,0 +1,147 @@
+import CryptoKit
+import Foundation
+import os
+import XCTest
+@testable import ProsperApp
+
+/// #1285: the clipboard store's key source and the device key file. Every store and key file
+/// lives in a tempDir(); keys come from the keySource seam or DatabaseKey.fetchOrCreate(at:) on a
+/// tempDir path, never the operator's key or store. No key or clip bytes go into a message.
+@MainActor
+final class ClipboardKeyTests: XCTestCase {
+
+    private struct NoKey: Error {}
+
+    /// Every file in `dir`, name to bytes.
+    private func snapshot(_ dir: URL) -> [String: Data] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var out: [String: Data] = [:]
+        for name in names { out[name] = try? Data(contentsOf: dir.appending(path: name)) }
+        return out
+    }
+
+    /// A history of two clips sealed under `key` in `dir`, every file aged past the sweep's minimum.
+    private func sealedHistory(_ dir: URL, _ key: SymmetricKey) throws -> [String: Data] {
+        let s = ClipboardStore(dir: dir, keySource: { key })
+        s.addText("alpha")
+        s.addText("beta")
+        XCTAssertEqual(s.items.count, 2)
+        let old = Date(timeIntervalSinceNow: -Double(ClipboardStore.sweepMinAge * 6))
+        for name in try FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: dir.appending(path: name).path)
+        }
+        let files = snapshot(dir)
+        XCTAssertEqual(files.count, 3, "an index and two blobs")
+        return files
+    }
+
+    /// A key source that throws until `open` is set.
+    private func gatedSource(_ key: SymmetricKey, _ open: OSAllocatedUnfairLock<Bool>) -> ClipboardCrypto.KeySource {
+        { if open.withLock({ $0 }) { return key }; throw NoKey() }
+    }
+
+    func testNoKeyWritesNothingAndLeavesTheSealedIndexByteIdentical() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        let before = try sealedHistory(d, key)
+        let source = gatedSource(key, OSAllocatedUnfairLock(initialState: false))
+
+        let s = ClipboardStore(dir: d, keySource: source)
+        XCTAssertTrue(s.items.isEmpty, "the unread history is not shown as empty-and-saved")
+        XCTAssertEqual(s.notice, ClipboardStore.keyNotice)
+        s.addText("gamma")
+        XCTAssertEqual(s.items.count, 1)
+        XCTAssertTrue(s.items.first.flatMap { s.text(for: $0) } == "gamma", "the clip is kept in memory")
+        if let g = s.items.first { s.togglePin(g) }
+        XCTAssertTrue(snapshot(d) == before, "no file written or replaced while the key is missing")
+
+        _ = ClipboardStore(dir: d, keySource: source)  // a relaunch: load and the sweep's path
+        XCTAssertTrue(snapshot(d) == before, "no blob swept while the key is missing")
+    }
+
+    func testKeyBackPersistsTheHeldClipsAndTheOldIndexStillOpens() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        _ = try sealedHistory(d, key)
+        let open = OSAllocatedUnfairLock(initialState: false)
+        let s = ClipboardStore(dir: d, keySource: gatedSource(key, open))
+        s.addText("gamma")
+        open.withLock { $0 = true }
+        s.addText("delta")
+        XCTAssertTrue(s.notice == nil)
+        XCTAssertEqual(s.items.count, 4, "the history on disk joins the clips captured meanwhile")
+
+        let again = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(Set(again.items.compactMap { again.text(for: $0) }) == ["alpha", "beta", "gamma", "delta"], "every clip reads back")
+    }
+
+    func testFailedFetchIsAskedAgainOnTheNextPersist() {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        // Fails the first call only (the blob write), then succeeds (the persist right after).
+        let s = ClipboardStore(dir: d, keySource: {
+            if calls.withLock({ $0 += 1; return $0 }) == 1 { throw NoKey() }
+            return key
+        })
+        s.addText("one")
+        XCTAssertGreaterThanOrEqual(calls.withLock { $0 }, 2)
+        XCTAssertTrue(s.notice == nil)
+
+        let again = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(again.items.compactMap { again.text(for: $0) } == ["one"], "the clip reads back under the key")
+    }
+
+    func testNoFileIsEverSealedUnderTheEmptySecretKey() throws {
+        let root = tempDir()
+        let blocker = root.appending(path: "blocker")
+        try Data().write(to: blocker)
+        // The key file's folder cannot be created (its parent is a file): the fetch throws.
+        let keyURL = blocker.appending(path: "prosper/device.key")
+        XCTAssertThrowsError(try DatabaseKey.fetchOrCreate(at: keyURL))
+
+        let d = root.appending(path: "store")
+        let s = ClipboardStore(dir: d, keySource: { try ClipboardCrypto.fileKey(keyURL) })
+        s.addText("secret-like")
+        s.addRemote(id: UUID(), date: Date(), source: "phone", sha256: "00", .text("from the phone"))
+        if let g = s.items.first { s.togglePin(g) }
+        XCTAssertEqual(s.notice, ClipboardStore.keyNotice)
+        let files = snapshot(d)
+        let weak = SymmetricKey(data: SHA256.hash(data: Data()))
+        let opened = files.values.filter { data in
+            (try? AES.GCM.SealedBox(combined: data)).flatMap { try? AES.GCM.open($0, using: weak) } != nil
+        }
+        XCTAssertEqual(opened.count, 0, "nothing sealed under the empty-secret key")
+        XCTAssertEqual(files.count, 0, "nothing written without a key")
+    }
+
+    func testMissingKeyFileIsCreated0600AndReadBack() throws {
+        let url = tempDir().appending(path: "prosper/device.key")
+        let first = try DatabaseKey.fetchOrCreate(at: url)
+        XCTAssertEqual(first.count, 64)
+        XCTAssertTrue(try DatabaseKey.fetchOrCreate(at: url) == first, "the stored key is read back")
+        let perms = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        XCTAssertEqual(perms, 0o600)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path),
+                       ["device.key"], "no temp file left")
+    }
+
+    func testMalformedKeyFileIsNeverReplaced() throws {
+        let url = tempDir().appending(path: "device.key")
+        let junk = Data("pdk1:not-a-key\n".utf8)
+        try junk.write(to: url)
+        XCTAssertThrowsError(try DatabaseKey.fetchOrCreate(at: url))
+        XCTAssertTrue(try Data(contentsOf: url) == junk, "the file is byte-identical")
+    }
+
+    func testUnreadableKeyFileIsNeverReplaced() throws {
+        let url = tempDir().appending(path: "device.key")
+        let original = try DatabaseKey.fetchOrCreate(at: url)
+        let bytes = try Data(contentsOf: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        XCTAssertThrowsError(try DatabaseKey.fetchOrCreate(at: url))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        XCTAssertTrue(try Data(contentsOf: url) == bytes, "the file is byte-identical")
+        XCTAssertTrue(try DatabaseKey.fetchOrCreate(at: url) == original, "the same key once readable")
+    }
+}

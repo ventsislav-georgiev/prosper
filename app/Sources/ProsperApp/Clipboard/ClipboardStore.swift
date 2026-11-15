@@ -31,6 +31,19 @@ final class ClipboardStore: ObservableObject {
     /// #1100 test seam: told each phone item's id once sealRemote has written its blob, on the sealing thread.
     nonisolated let onSeal: (@Sendable (UUID) -> Void)?
 
+    /// #1285: where the sealing key comes from (tests inject one). While it throws the store
+    /// writes nothing: no blob, no index, no sweep; clips are held in memory and the next
+    /// persist asks again. The key is kept only once a call succeeded.
+    nonisolated let keySource: ClipboardCrypto.KeySource
+    nonisolated private let cachedKey = OSAllocatedUnfairLock<SymmetricKey?>(initialState: nil)
+    /// #1285: blob bytes captured while the key is unavailable, by blob name; written by persist.
+    nonisolated private let held = OSAllocatedUnfairLock(initialState: [String: Data]())
+    /// #1285: index.json exists but was not read for want of the key; merged in before it is written.
+    private var unreadIndex = false
+    /// #1285: a plain line for the panel while history is not being saved; nil otherwise.
+    @Published private(set) var notice: String?
+    static let keyNotice = "Clipboard history is not being saved: Prosper cannot read its device key. New clips are kept until Prosper quits."
+
     /// #617: under XCTest a fixed throwaway dir, never the operator's store: ClipboardCrypto's
     /// test key is random per process, so a stray write to `shared` would re-seal the real index.
     static var defaultDir: URL {
@@ -45,8 +58,9 @@ final class ClipboardStore: ObservableObject {
 
     /// `dir` is a seam: tests pass a tempDir(), never the real store.
     init(dir base: URL = ClipboardStore.defaultDir, onBlobRead: (@Sendable (String) -> Void)? = nil,
-         onSeal: (@Sendable (UUID) -> Void)? = nil) {
+         onSeal: (@Sendable (UUID) -> Void)? = nil, keySource: @escaping ClipboardCrypto.KeySource = ClipboardCrypto.deviceKey) {
         dir = base
+        self.keySource = keySource
         indexURL = base.appending(path: "index.json")
         self.onBlobRead = onBlobRead
         self.onSeal = onSeal
@@ -167,7 +181,7 @@ final class ClipboardStore: ObservableObject {
     }
 
     func delete(_ item: ClipboardItem) {
-        if let blob = item.blobFile { try? FileManager.default.removeItem(at: dir.appending(path: blob)) }
+        if let blob = item.blobFile { removeBlobFile(blob) }
         items.removeAll { $0.id == item.id }
         persist()
     }
@@ -192,7 +206,7 @@ final class ClipboardStore: ObservableObject {
         // Pinned entries are protected from "clear all" too.
         let removed = items.filter { !$0.pinned }
         for item in removed where item.blobFile != nil {
-            try? FileManager.default.removeItem(at: dir.appending(path: item.blobFile!))
+            removeBlobFile(item.blobFile!)
         }
         items.removeAll { !$0.pinned }
         persist()
@@ -278,7 +292,7 @@ final class ClipboardStore: ObservableObject {
 
     /// A sealed item's blob, off main, once its insert lost.
     nonisolated func removeBlob(_ item: ClipboardItem) {
-        if let blob = item.blobFile { try? FileManager.default.removeItem(at: dir.appending(path: blob)) }
+        if let blob = item.blobFile { removeBlobFile(blob) }
         unseal(item)
     }
 
@@ -352,15 +366,31 @@ final class ClipboardStore: ObservableObject {
         let victims = unpinned.suffix(unpinned.count - maxItems)
         let victimIDs = Set(victims.map(\.id))
         for item in victims where item.blobFile != nil {
-            try? FileManager.default.removeItem(at: dir.appending(path: item.blobFile!))
+            removeBlobFile(item.blobFile!)
         }
         items.removeAll { victimIDs.contains($0.id) }
     }
 
     private func persist() {
+        // #1285: no key, no write: the index on disk and its blobs stay as they are.
+        guard let key = self.key() else { return refuse() }
+        if unreadIndex {
+            // The key is back: the history on disk joins the clips captured meanwhile.
+            if let disk = readIndex(key) {
+                let mine = Set(items.map(\.id))
+                items += disk.filter { !mine.contains($0.id) }
+                sort()
+                evictIfNeeded()
+            }
+            unreadIndex = false
+        }
+        for (name, data) in held.withLock({ $0 }) where writeBlob(data, to: name, encrypt: true) {
+            held.withLock { _ = $0.removeValue(forKey: name) }
+        }
+        notice = nil
         do {
             let json = try JSONEncoder().encode(items)
-            let sealed = try ClipboardCrypto.encrypt(json)
+            let sealed = try ClipboardCrypto.encrypt(json, key: key)
             try sealed.write(to: indexURL, options: .atomic)
             protect(indexURL)
         } catch {
@@ -370,15 +400,41 @@ final class ClipboardStore: ObservableObject {
 
     /// True only when index.json was read and decoded: the sweep runs only then.
     private func load() -> Bool {
-        guard let raw = try? Data(contentsOf: indexURL) else { return false }
-        // Encrypted index (current) → fall back to legacy plaintext JSON written
-        // by pre-encryption builds; either way decode, then re-persist so the
-        // index lands back encrypted on the next write.
-        let json = ClipboardCrypto.decryptOrPlaintext(raw)
-        guard let decoded = try? JSONDecoder().decode([ClipboardItem].self, from: json) else { return false }
+        guard FileManager.default.fileExists(atPath: indexURL.path) else { return false }
+        // #1285: without the key the index is left unread and untouched, and no sweep runs.
+        guard let key = self.key() else { unreadIndex = true; refuse(); return false }
+        guard let decoded = readIndex(key) else { return false }
         items = decoded
         sort()
         return true
+    }
+
+    /// Encrypted index (current), or legacy plaintext JSON written by pre-encryption builds;
+    /// either way decoded, and the next persist writes it back encrypted. Nil when unreadable.
+    private func readIndex(_ key: SymmetricKey) -> [ClipboardItem]? {
+        guard let raw = try? Data(contentsOf: indexURL) else { return nil }
+        return try? JSONDecoder().decode([ClipboardItem].self, from: ClipboardCrypto.decryptOrPlaintext(raw, key: key))
+    }
+
+    /// #1285: the key, asking keySource again until one call succeeds; nil while it throws.
+    nonisolated private func key() -> SymmetricKey? {
+        if let k = cachedKey.withLock({ $0 }) { return k }
+        guard let k = try? keySource() else { return nil }
+        cachedKey.withLock { $0 = k }
+        return k
+    }
+
+    /// #1285: the one notice (and one log line) while history is not being saved.
+    private func refuse() {
+        guard notice == nil else { return }
+        notice = Self.keyNotice
+        NSLog("prosper: clipboard history not saved: the device key is unavailable")
+    }
+
+    /// A blob's file, or its bytes held in memory while the key was unavailable.
+    nonisolated private func removeBlobFile(_ name: String) {
+        held.withLock { _ = $0.removeValue(forKey: name) }
+        try? FileManager.default.removeItem(at: dir.appending(path: name))
     }
 
     /// #1067: removes the blobs no row references, as a quit between a phone item's seal and its
@@ -422,8 +478,13 @@ final class ClipboardStore: ObservableObject {
     /// handles either form transparently, so both still restore. Returns false on
     /// failure.
     nonisolated private func writeBlob(_ data: Data, to name: String, encrypt: Bool) -> Bool {
+        // #1285: no key, no file (sealed or not): held in memory until persist has the key.
+        guard let key = self.key() else {
+            held.withLock { $0[name] = data }
+            return true
+        }
         do {
-            let payload = encrypt ? try ClipboardCrypto.encrypt(data) : data
+            let payload = encrypt ? try ClipboardCrypto.encrypt(data, key: key) : data
             let url = dir.appending(path: name)
             try payload.write(to: url, options: .atomic)
             protect(url)
@@ -437,8 +498,9 @@ final class ClipboardStore: ObservableObject {
     /// written by a pre-encryption build are returned as-is (legacy migration).
     nonisolated func readBlob(_ name: String) -> Data? {
         onBlobRead?(name)
-        guard let raw = try? Data(contentsOf: dir.appending(path: name)) else { return nil }
-        return ClipboardCrypto.decryptOrPlaintext(raw)
+        if let data = held.withLock({ $0[name] }) { return data }
+        guard let raw = try? Data(contentsOf: dir.appending(path: name)), let key = self.key() else { return nil }
+        return ClipboardCrypto.decryptOrPlaintext(raw, key: key)
     }
 
     /// Best-effort OS-level file protection (encrypted at rest while locked),

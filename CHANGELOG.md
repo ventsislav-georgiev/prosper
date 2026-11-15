@@ -1298,6 +1298,9 @@ tag from the now-released section and put it on the new top draft.
   button, instead of silently not saving your changes to the file; the line goes away as soon as the
   file reads again. Importing an MCP server you already have no longer re-enables it or resets its
   approval mode and bearer token variable unless the imported file sets them.
+- Clipboard history is no longer saved under a weak key or replaced when Prosper cannot read its
+  device key: new clips are kept in memory until the key is readable again, the saved history is
+  left untouched, and an unreadable key file is never overwritten.
 
 ## v2.174.0
 
