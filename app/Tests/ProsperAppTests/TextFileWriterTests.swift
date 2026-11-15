@@ -1097,4 +1097,214 @@ final class TextFileWriterTests: XCTestCase {
         XCTAssertEqual(aclText(listed), want, "the access list is kept in every case")
         XCTAssertEqual(names(dir), ["listed.txt", "plain.txt"], "no temp left")
     }
+
+    // MARK: round 7c (the stale temp sweep, the second check before the rename, the second check before the truncate)
+
+    /// The sweep's clock: 130 s after the stale date below, so a temp dated 1_700_000_000 is stale and one dated 100 s later is
+    /// fresh. No sleep and no wall clock: the dates are set with utimes on the row's own files.
+    private let sweepNow: TimeInterval = 1_700_000_130
+
+    /// A fresh subfolder of the row's tempDir(): the sweep lists the target's own folder, which then holds only the row's files.
+    private func sweepFolder(_ label: String) throws -> URL {
+        let sub = tempDir(label).appendingPathComponent("sweep")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: false)
+        return sub
+    }
+
+    /// A temp-shaped regular file of the row's own, dated `t` (seconds since 1970) with utimes.
+    private func temp(_ name: String, in dir: URL, at t: time_t = 1_700_000_000) throws -> URL {
+        let url = try file(name, Array("left".utf8), in: dir)
+        XCTAssertEqual(utimes(url.path, [timeval(tv_sec: t, tv_usec: 0), timeval(tv_sec: t, tv_usec: 0)]), 0)
+        return url
+    }
+
+    /// lstat, not FileManager: FileManager hides "._" names.
+    private func exists(_ url: URL) -> Bool { var s = stat(); return lstat(url.path, &s) == 0 }
+
+    /// The real lstat with `url` shown as another owner's: the save takes the in-place branch.
+    private func otherOwner(_ url: URL) -> W.Stat {
+        { p in var s = stat(); guard lstat(p, &s) == 0 else { return (errno, s) }; if p == url.path { s.st_uid = geteuid() &+ 1 }; return (0, s) }
+    }
+
+    /// Appends through a second descriptor of the row's own file.
+    private func append(_ more: [UInt8], to url: URL) {
+        let fd = open(url.path, O_WRONLY | O_APPEND | O_CLOEXEC)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        guard fd >= 0 else { return }
+        XCTAssertEqual(more.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }, more.count)
+        _ = close(fd)
+    }
+
+    /// Item 1: a stale temp of this file is removed by the next save, atomic or in place (another owner through the stat seam),
+    /// and the save's own answer is unchanged.
+    func testAStaleTempOfThisFileIsRemovedByTheNextSaveInEitherBranch() throws {
+        let dir = try sweepFolder("tfw-sweep")
+        let old = Array("old".utf8)
+        for inPlace in [false, true] {
+            let url = try file(inPlace ? "b.txt" : "a.txt", old, in: dir)
+            let ino = info(url).st_ino
+            let left = try temp(".\(url.lastPathComponent).prosper-\(UUID().uuidString)", in: dir)
+            XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(old), stat: inPlace ? otherOwner(url) : seam({ _ in }),
+                                  now: sweepNow), .success(W.digest(Array("new".utf8))), "\(inPlace)")
+            XCTAssertFalse(exists(left), "the stale temp is removed, \(inPlace)")
+            XCTAssertEqual(info(url).st_ino == ino, inPlace, "the branch")
+            XCTAssertEqual(bytes(url), Array("new".utf8))
+        }
+        XCTAssertEqual(names(dir), ["a.txt", "b.txt"])
+    }
+
+    /// Item 1: kept are a fresh temp, another file's, a tail that is not a UUID (35, 37, a word, 36 non-hex), a folder and a link
+    /// with a temp-shaped name (the link dated with lutimes, its target inside tempDir() untouched), another owner's and a
+    /// two-link one (both through the stat seam).
+    func testTheSweepKeepsEveryNameThatIsNotAStaleTempOfThisFile() throws {
+        let root = tempDir("tfw-sweep-keep")
+        let dir = root.appendingPathComponent("sweep")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        let prefix = ".a.txt.prosper-", id = UUID().uuidString
+        var kept = try [temp(prefix + UUID().uuidString, in: dir, at: 1_700_000_100),
+                        temp(".b.txt.prosper-" + UUID().uuidString, in: dir),
+                        temp(prefix + String(id.dropLast()), in: dir),
+                        temp(prefix + id + "0", in: dir),
+                        temp(prefix + "word", in: dir),
+                        temp(prefix + String(repeating: "Z", count: 36), in: dir)]
+        let other = try temp(prefix + UUID().uuidString, in: dir), twoLinks = try temp(prefix + UUID().uuidString, in: dir)
+        let folder = dir.appendingPathComponent(prefix + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let target = try temp("target.txt", in: root)
+        let link = dir.appendingPathComponent(prefix + UUID().uuidString)
+        XCTAssertEqual(symlink(target.path, link.path), 0)
+        XCTAssertEqual(lutimes(link.path, [timeval(tv_sec: 1_700_000_000, tv_usec: 0), timeval(tv_sec: 1_700_000_000, tv_usec: 0)]), 0)
+        kept += [other, twoLinks, folder, link]
+        let st: W.Stat = { p in
+            var s = stat()
+            guard lstat(p, &s) == 0 else { return (errno, s) }
+            if p == other.path { s.st_uid = geteuid() &+ 1 }
+            if p == twoLinks.path { s.st_nlink = 2 }
+            return (0, s)
+        }
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), stat: st, now: sweepNow),
+                       .success(W.digest(Array("new".utf8))))
+        for k in kept { XCTAssertTrue(exists(k), k.lastPathComponent) }
+        XCTAssertEqual(bytes(target), Array("left".utf8), "the link's target is untouched")
+        XCTAssertEqual(names(dir).count, kept.count + 1, "nothing else left or removed")
+    }
+
+    /// Item 1: a refused save (a wrong `expected`, either branch) removes nothing.
+    func testARefusedSaveRemovesNoTemp() throws {
+        let dir = try sweepFolder("tfw-sweep-refused")
+        for inPlace in [false, true] {
+            let url = try file(inPlace ? "b.txt" : "a.txt", Array("theirs".utf8), in: dir)
+            let left = try temp(".\(url.lastPathComponent).prosper-\(UUID().uuidString)", in: dir)
+            XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("mine".utf8)), stat: inPlace ? otherOwner(url) : seam({ _ in }),
+                                  now: sweepNow), .failure(.changedOnDisk), "\(inPlace)")
+            XCTAssertTrue(exists(left), "\(inPlace)")
+            XCTAssertEqual(bytes(url), Array("theirs".utf8))
+        }
+        XCTAssertEqual(names(dir).count, 4)
+    }
+
+    /// Item 1, the readdir fact: the temp of "_x.txt" starts with "._", which FileManager does not list; the sweep sees it.
+    func testASaveOfAnUnderscoreNameRemovesItsStaleTemp() throws {
+        let dir = try sweepFolder("tfw-sweep-underscore")
+        let url = try file("_x.txt", Array("old".utf8), in: dir)
+        let left = try temp("._x.txt.prosper-\(UUID().uuidString)", in: dir)
+        XCTAssertTrue(exists(left))
+        XCTAssertEqual(names(dir), ["_x.txt"], "fact: FileManager hides it")
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), now: sweepNow), .success(W.digest(Array("new".utf8))))
+        XCTAssertFalse(exists(left))
+        XCTAssertEqual(bytes(url), Array("new".utf8))
+    }
+
+    /// Item 1: the sweep reads at most sweepLimit entries. sweepLimit + 5 empty stale temps (a `now` in 2096, no dates set): the
+    /// entries read include ".", "..", the file and the save's own temp, so 5 to 9 are left, never 0.
+    func testTheSweepReadsAtMostTheLimit() throws {
+        let dir = try sweepFolder("tfw-sweep-limit")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        for _ in 0..<(W.sweepLimit + 5) {
+            let fd = open(dir.appendingPathComponent(".a.txt.prosper-\(UUID().uuidString)").path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+            XCTAssertGreaterThanOrEqual(fd, 0)
+            if fd >= 0 { _ = close(fd) }
+        }
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), now: 4_000_000_000),
+                       .success(W.digest(Array("new".utf8))))
+        let left = names(dir).filter { $0.hasPrefix(".a.txt.prosper-") }.count
+        XCTAssertTrue((5...9).contains(left), "\(left) left")
+        XCTAssertEqual(bytes(url), Array("new".utf8))
+    }
+
+    /// Item 2: the row's own file appended to, or replaced by the row's own file of the same bytes, right before the rename: changed
+    /// on disk, their bytes kept, the temp removed. With overwrite there is no second check: the append is overwritten.
+    func testAWriteRightBeforeTheRenameIsChangedOnDisk() throws {
+        let dir = tempDir("tfw-recheck-rename")
+        let old = Array("old".utf8), more = Array("more".utf8)
+        let url = try file("a.txt", old, in: dir)
+        var calls = 0
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(old), beforeReplace: { calls += 1; append(more, to: url) }),
+                       .failure(.changedOnDisk))
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(bytes(url), old + more, "their bytes are kept")
+        XCTAssertEqual(names(dir), ["a.txt"], "the temp is removed")
+        let theirs = try file("b.txt", old + more, in: dir)
+        let ino = info(theirs).st_ino
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(old + more), beforeReplace: { XCTAssertEqual(rename(theirs.path, url.path), 0) }),
+                       .failure(.changedOnDisk))
+        XCTAssertEqual(info(url).st_ino, ino, "the replacing file stays")
+        XCTAssertEqual(bytes(url), old + more)
+        XCTAssertEqual(names(dir), ["a.txt"])
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: [], overwrite: true, beforeReplace: { append(more, to: url) }),
+                       .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(bytes(url), Array("new".utf8))
+        XCTAssertEqual(names(dir), ["a.txt"])
+    }
+
+    /// Item 2: none of our own steps between the two stats changes the target: an ordinary atomic save passes the second check on
+    /// a file with an xattr, a UF_HIDDEN file (cleared in the defer, the clear asserted) and a dot file.
+    func testAnOrdinaryAtomicSavePassesTheSecondCheck() throws {
+        let dir = tempDir("tfw-recheck-plain")
+        let old = Array("old".utf8), new = Array("new".utf8)
+        let tagged = try file("tagged.txt", old, in: dir)
+        let value = Array("example".utf8)
+        XCTAssertEqual(setxattr(tagged.path, "com.example.tag", value, value.count, 0, 0), 0)
+        let flagged = try file("flagged.txt", old, in: dir)
+        let before = info(flagged).st_flags
+        XCTAssertEqual(chflags(flagged.path, before | UInt32(UF_HIDDEN)), 0)
+        defer { XCTAssertEqual(chflags(flagged.path, before), 0, "the row's own flag is cleared") }
+        let dot = try file(".dot.txt", old, in: dir)
+        for url in [tagged, flagged, dot] {
+            let ino = info(url).st_ino
+            var calls = 0
+            XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(old), beforeReplace: { calls += 1 }), .success(W.digest(new)),
+                           url.lastPathComponent)
+            XCTAssertEqual(calls, 1)
+            XCTAssertNotEqual(info(url).st_ino, ino, "atomic")
+            XCTAssertEqual(bytes(url), new)
+        }
+        XCTAssertEqual(getxattr(tagged.path, "com.example.tag", nil, 0, 0, 0), value.count)
+        XCTAssertNotEqual(info(flagged).st_flags & UInt32(UF_HIDDEN), 0)
+        XCTAssertEqual(names(dir), [".dot.txt", "flagged.txt", "tagged.txt"])
+    }
+
+    /// Item 3: bytes appended through a second descriptor right before the truncate (in place, another owner through the seam):
+    /// changed on disk and nothing truncated. With overwrite there is no second check. A plain in-place save passes it.
+    func testBytesAppendedRightBeforeTheTruncateAreNeverTruncated() throws {
+        let dir = tempDir("tfw-recheck-truncate")
+        let old = Array("old".utf8), more = Array("more".utf8), new = Array("new".utf8)
+        let url = try file("a.txt", old, in: dir)
+        let ino = info(url).st_ino
+        var calls = 0
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(old), stat: otherOwner(url),
+                              beforeTruncate: { calls += 1; append(more, to: url) }), .failure(.changedOnDisk))
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(bytes(url), old + more, "nothing is truncated")
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(old + more), stat: otherOwner(url), beforeTruncate: { calls += 1 }),
+                       .success(W.digest(new)))
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(bytes(url), new)
+        XCTAssertEqual(W.save("newer", encoding: .utf8, to: url, expected: [], overwrite: true, stat: otherOwner(url),
+                              beforeTruncate: { append(more, to: url) }), .success(W.digest(Array("newer".utf8))))
+        XCTAssertEqual(bytes(url), Array("newer".utf8))
+        XCTAssertEqual(info(url).st_ino, ino, "same inode: in place")
+        XCTAssertEqual(names(dir), ["a.txt"])
+    }
 }
