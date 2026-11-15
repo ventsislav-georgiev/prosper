@@ -144,7 +144,7 @@ enum ManagedConfigPaths {
         guard file.path.hasPrefix(realDir.path + "/") else { return .failure(.outsideRoot) }
         // #1025: String(data:encoding:) may drop a leading BOM; the round trip keeps the copy byte for byte
         // and still refuses bytes that are not UTF-8 (they decode to U+FFFD and differ).
-        guard let data = FileManager.default.contents(atPath: file.path) else {
+        guard let data = try? BoundedFileRead.data(file, maxBytes: BoundedFileRead.kitSeedMaxBytes) else {
             return .failure(.invalidPiece("seed source is missing or not UTF-8 text"))
         }
         let text = String(decoding: data, as: UTF8.self)
@@ -159,7 +159,7 @@ enum ManagedConfigPaths {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir) else { return .absent }
         guard isDir.boolValue,
-              let data = FileManager.default.contents(atPath: dir.appendingPathComponent(kitMarkerFile).path),
+              let data = try? BoundedFileRead.data(dir.appendingPathComponent(kitMarkerFile), maxBytes: BoundedFileRead.kitMarkerMaxBytes),
               String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == owner else { return .foreign }
         return .ours
     }

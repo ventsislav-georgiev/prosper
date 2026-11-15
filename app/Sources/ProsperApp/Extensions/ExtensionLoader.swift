@@ -129,6 +129,11 @@ enum BoundedFileRead {
     static let fsReadMaxBytes = 1 << 20
     /// A snippets JSON the user picks to import.
     static let snippetImportMaxBytes = 16 << 20
+    /// An Agent Kit seed source (the kit seed reader, ext: root): hand-written markdown or config a kit author ships and
+    /// Prosper copies once. No seed ships in the repo and a few KB is usual; 1 MiB is 100x that and as large as host.fs.read.
+    static let kitSeedMaxBytes = 1 << 20
+    /// The `.prosper-kit` owner marker: the owner id and a newline (tens of bytes); 1 KiB leaves room for any slug.
+    static let kitMarkerMaxBytes = 1 << 10
 
     enum Failure: Error, Equatable, CustomStringConvertible {
         case unreadable(String)
