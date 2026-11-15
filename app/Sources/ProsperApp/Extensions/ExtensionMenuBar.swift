@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 
 /// Host-owned UI primitives an extension reaches through `host.menubar`,
@@ -54,14 +55,24 @@ final class ExtensionMenuBar: NSObject, NSMenuDelegate {
 
     private static func key(_ extID: String, _ id: String) -> String { "\(extID)\u{1}\(id)" }
 
-    /// Stable status-item autosave name per (extension, item), each part cleaned to [A-Za-z0-9._-]
-    /// and joined with ":" (outside that set, so "com.x"+"ext.main" and "com.x.ext"+"main" differ).
+    /// Stable status-item autosave name per (extension, item), parts joined with ":". QA #178: one-to-one.
+    /// A part of only [A-Za-z0-9._-] stays as it is (its saved position survives); any other scalar becomes
+    /// %XX per UTF-8 byte ("%" and ":" included, so neither "a_b"/"a:b" nor the split can collide). A part
+    /// over 256 escaped characters becomes "%%" + its SHA-256 in hex, a form escaping never makes (bound).
     nonisolated static func autosaveName(extensionID: String, id: String) -> String {
         func clean(_ s: String) -> String {
-            String(s.unicodeScalars.map { c in
-                (c.isASCII && (CharacterSet.alphanumerics.contains(c) || "._-".unicodeScalars.contains(c)))
-                    ? Character(c) : "_"
-            })
+            var out = ""
+            for c in s.unicodeScalars {
+                if c.isASCII && (CharacterSet.alphanumerics.contains(c) || "._-".unicodeScalars.contains(c)) {
+                    out.unicodeScalars.append(c)
+                } else {
+                    for b in c.utf8 { out += String(format: "%%%02X", b) }
+                }
+                if out.utf8.count > 256 {
+                    return "%%" + SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
+                }
+            }
+            return out
         }
         return "ProsperExt:\(clean(extensionID)):\(clean(id))"
     }

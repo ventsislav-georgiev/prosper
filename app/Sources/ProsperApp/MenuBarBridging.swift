@@ -58,6 +58,7 @@ enum ProsperStatusItems {
     struct Live { let minX: CGFloat; let role: MenuBarItemRole; let name: String?; let item: NSStatusItem }
     private struct Entry { let provider: () -> NSStatusItem?; let role: MenuBarItemRole; let name: String? }
     private static var entries: [Entry] = []
+    private static var contentSerial = 0
 
     /// Register a Prosper-owned status item. `role` defaults to `.control` (chrome);
     /// pass `.content` + a human `name` for Stats/extension icons. Held weakly so
@@ -65,7 +66,11 @@ enum ProsperStatusItems {
     static func register(_ item: NSStatusItem, role: MenuBarItemRole = .control, name: String? = nil) {
         // #203: content items carry an AX identifier so the hosted read names them without
         // the client minX (stale on 27). Own prefix: `MenuBarAX.identifierPrefix` means chrome.
-        if role == .content { item.button?.setAccessibilityIdentifier(contentPrefix + (name ?? "item")) }
+        // QA #39: one serial per registration, no outside text (a title cannot forge another item's identifier).
+        if role == .content {
+            contentSerial += 1
+            item.button?.setAccessibilityIdentifier(contentPrefix + String(contentSerial))
+        }
         entries.append(Entry(provider: { [weak item] in item }, role: role, name: name))
     }
 

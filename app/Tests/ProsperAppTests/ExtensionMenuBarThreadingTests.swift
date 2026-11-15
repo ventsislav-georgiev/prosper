@@ -54,7 +54,7 @@ final class ExtensionMenuBarThreadingTests: XCTestCase {
     func testAutosaveNameSeparatorIsUnambiguousAndCleans() {
         XCTAssertNotEqual(ExtensionMenuBar.autosaveName(extensionID: "com.x", id: "ext.main"),
                           ExtensionMenuBar.autosaveName(extensionID: "com.x.ext", id: "main"))
-        XCTAssertEqual(ExtensionMenuBar.autosaveName(extensionID: "com.x", id: "a b/c"), "ProsperExt:com.x:a_b_c")
+        XCTAssertEqual(ExtensionMenuBar.autosaveName(extensionID: "com.x", id: "a b/c"), "ProsperExt:com.x:a%20b%2Fc")
     }
 
     /// #295: a scalar payload passes isValidJSONObject([value]) and must serialize as a
