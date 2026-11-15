@@ -87,7 +87,8 @@ final class ExtensionMarketVersionBindTests: XCTestCase {
                        .marketVersionMismatch(id: "com.example.kit", listed: "1.9.9", got: "2.0.0"))
     }
 
-    /// SemanticVersion's equality decides; text that is not a plain number version is never refused.
+    /// SemanticVersion's equality decides whenever the listing is plain (R1182-l: the archive's text need not be);
+    /// a listing that is not plain is never refused.
     func testSpellingsAndUnreadableVersions() throws {
         let table: [(archive: String, listed: String, refused: Bool)] = [
             ("1.2", "1.2.0", false),
@@ -101,15 +102,18 @@ final class ExtensionMarketVersionBindTests: XCTestCase {
             ("1.2", "1.2.1", true),
             ("2.0.0-beta", "2.0.1", true),
             ("0.9.0", "1.0.0", true),
-            ("v1.2.0", "1.3.0", false),
-            ("abc", "1.0.0", false),
-            ("", "1.0.0", false),
+            ("v1.2.0", "1.3.0", true),
+            ("abc", "1.0.0", true),
+            ("", "1.0.0", true),
             ("1.0.0", "latest", false),
-            ("1.2.0.9", "1.3.0", false),
-            ("1.0.1\\n", "1.0.1", false),   // a TOML escape: the archive's version ends in a line feed
+            ("1.2.0.9", "1.3.0", true),
+            ("1.0.1\\n", "1.0.1", true),    // a TOML escape: the archive's version ends in a line feed
+            (" 1.2.0", "1.2.0", true),      // reads 0.2.0: the server lists it trimmed, so it would be fetched again
+            ("1.2.0.9", "1.2.0", false),    // not plain, but read as the listing's version
+            ("v1.2.0", "0.2.0", false),
         ]
-        XCTAssertEqual(table.count, 17)
-        XCTAssertEqual(table.filter(\.refused).count, 4)
+        XCTAssertEqual(table.count, 20)
+        XCTAssertEqual(table.filter(\.refused).count, 10)
         for row in table {
             let (reg, ext) = try rig(version: row.archive)
             let error = versionError(reg, ext, listed: row.listed)
@@ -160,5 +164,29 @@ final class ExtensionMarketVersionBindTests: XCTestCase {
         XCTAssertEqual(versionError(reg, ext, listed: "1.1.0"),
                        .marketVersionMismatch(id: "com.example.kit", listed: "1.1.0", got: "1.0.0"))
         XCTAssertEqual(try listing(), before)
+    }
+
+    /// R1182-m: an id mismatch reads as a sentence, not the enum text; the case's values stay as they were.
+    func testIdMismatchReadsAsASentence() throws {
+        let (reg, ext) = try rig(version: "1.0.0")
+        let error = versionError(reg, ext, listed: "1.0.0", expected: "com.example.other")
+        XCTAssertEqual(error, .marketIdMismatch(expected: "com.example.other", got: "com.example.kit"))
+        XCTAssertEqual(error?.errorDescription,
+                       "Not installed: the package's files declare the id \"com.example.kit\", but the Marketplace lists it as "
+                       + "\"com.example.other\". Nothing was changed.")
+    }
+
+    /// R1182-m: both ids are outside data: the sentence drops a direction override and a zero-width space and cuts each id at 128.
+    func testIdMismatchTextIsCleanedAndBounded() throws {
+        let got = "com.example.\u{202E}kit\u{200B}" + String(repeating: "a", count: 200)
+        let (reg, ext) = try rig(version: "1.0.0", id: got)
+        let error = versionError(reg, ext, listed: "1.0.0", expected: "com.example.\u{202E}other\u{200B}")
+        XCTAssertEqual(error, .marketIdMismatch(expected: "com.example.\u{202E}other\u{200B}", got: got))
+        let shownGot = "com.example.kit" + String(repeating: "a", count: 112) + "\u{2026}"
+        XCTAssertEqual(error?.errorDescription,
+                       "Not installed: the package's files declare the id \"\(shownGot)\", but the Marketplace lists it as "
+                       + "\"com.example.other\". Nothing was changed.")
+        let text = error?.errorDescription ?? ""
+        XCTAssertFalse(text.unicodeScalars.contains { $0 == "\u{202E}" || $0 == "\u{200B}" }, text)
     }
 }

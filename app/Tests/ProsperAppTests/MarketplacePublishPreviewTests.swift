@@ -683,6 +683,65 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: tmp.path), [])
     }
 
+    // MARK: - R1182-l: a version the Marketplace would not list as written is refused before anything is packed
+
+    private static func versionRefusal(_ shown: String) -> String {
+        "Can't publish version \"\(shown)\": the Marketplace takes a version written like 1.2.0 (three numbers "
+            + "joined by dots, then optionally - or + and a label), with nothing before or after it."
+    }
+
+    /// The pure rule and the plan's refusal, on literal versions: nothing is read, packed or sent.
+    func testAVersionNotInTheListedFormIsRefused() {
+        let refused: [(version: String, shown: String)] = [(" 1.2.0", " 1.2.0"), ("v1.2.0", "v1.2.0"), ("1.2", "1.2"), ("", ""),
+                                                            ("1.2.0\n", "1.2.0"), ("1.2.0 ", "1.2.0 "), ("1.2.0.9", "1.2.0.9")]
+        XCTAssertEqual(refused.count, 7)
+        for row in refused {
+            let bad = RemoteInstaller.badPublishVersion(row.version)
+            XCTAssertEqual(bad, row.shown, row.version)
+            XCTAssertEqual(RemoteInstaller.PublishPlan(members: ["./extension.toml"], badVersion: bad).refusal,
+                           Self.versionRefusal(row.shown), row.version)
+        }
+        for version in ["1.2.0", "0.0.1", "10.20.30", "2.0.0-beta.1", "2.0.0+build.7"] {
+            XCTAssertTrue(RemoteInstaller.badPublishVersion(version) == nil, version)
+        }
+        XCTAssertTrue(RemoteInstaller.PublishPlan(members: ["./extension.toml"]).refusal == nil)
+    }
+
+    /// The version a refusal shows is outside text: a direction override and a zero-width space are dropped, the rest cut at 32.
+    func testARefusedVersionIsShownCleanedAndBounded() {
+        let bad = RemoteInstaller.badPublishVersion("v1.2.0-\u{202E}x\u{200B}" + String(repeating: "a", count: 100))
+        XCTAssertEqual(bad, "v1.2.0-x" + String(repeating: "a", count: 23) + "\u{2026}")
+        let why = RemoteInstaller.PublishPlan(members: ["./extension.toml"], badVersion: bad).refusal ?? ""
+        XCTAssertFalse(why.unicodeScalars.contains { $0 == "\u{202E}" || $0 == "\u{200B}" }, why)
+    }
+
+    /// The plan reads extension.toml's version from the folder it walks (inside this row's tempDir()); nothing is packed.
+    func testThePlanReadsTheFoldersVersion() throws {
+        for (version, refused) in [(" 1.2.0", true), ("1.2.0", false)] {
+            let ext = try fixture(["init.lua"])
+            try """
+            [extension]
+            id = "com.example.kit"
+            name = "kit"
+            title = "Kit"
+            description = "A test extension"
+            version = "\(version)"
+            author = "Example Author"
+
+            [extension.host]
+            min_version = "2.0.0"
+            api_level = 1
+
+            [extension.entry]
+            main = "init.lua"
+            """.write(to: ext.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+            let plan = RemoteInstaller.publishPlan(ext)
+            XCTAssertEqual(plan.members, ["./extension.toml", "./init.lua"])
+            XCTAssertEqual(plan.badVersion, refused ? " 1.2.0" : nil, version)
+            XCTAssertEqual(plan.refusal, refused ? Self.versionRefusal(" 1.2.0") : nil, version)
+        }
+    }
+
     // MARK: - Helpers
 
     /// An extension folder in the row's own tempDir() holding a one-byte file at each relative path.

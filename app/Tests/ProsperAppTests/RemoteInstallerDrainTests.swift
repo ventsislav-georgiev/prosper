@@ -209,7 +209,7 @@ final class RemoteInstallerDrainTests: XCTestCase {
     private func packed(_ script: String) throws -> String {
         let r = try ran(script)
         let error = RemoteInstaller.tarFailed(["-czf"], r, packing: true)
-        guard case .extractFailed(let text) = error else { XCTFail("not extractFailed"); return "" }
+        guard case .cannotPublish(let text) = error else { XCTFail("not cannotPublish: \(error)"); return "" }
         return text
     }
 
@@ -246,5 +246,16 @@ final class RemoteInstallerDrainTests: XCTestCase {
         XCTAssertEqual(r.err, "tar: alpha\u{FFFD}beta: Cannot open\n")
         XCTAssertEqual(try packed("printf 'tar: alpha\\377beta: Cannot open\\n' >&2; exit 1"),
                        "tar could not pack the folder: tar: alpha\u{FFFD}beta: Cannot open")
+    }
+
+    /// R1182-k: the full sentence a person reads. A pack failure reads as a pack failure, with nothing of a download;
+    /// a download failure reads exactly as before. A literal tar result: nothing is run.
+    func testPackAndDownloadFailuresReadAsThemselves() {
+        let r = (out: Data(), err: "tar: kit/init.lua: Cannot open\n", status: Int32(1))
+        let pack = RemoteInstaller.tarFailed(["-czf"], r, packing: true)
+        XCTAssertEqual(pack.errorDescription, "tar could not pack the folder: tar: kit/init.lua: Cannot open")
+        XCTAssertFalse((pack.errorDescription ?? "").contains("download"))
+        XCTAssertEqual(RemoteInstaller.tarFailed(["-xzf"], r, packing: false).errorDescription,
+                       "Could not unpack the download: tar could not unpack the archive")
     }
 }

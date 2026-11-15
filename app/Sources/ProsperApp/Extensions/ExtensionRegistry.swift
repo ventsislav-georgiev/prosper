@@ -58,11 +58,19 @@ enum ExtensionError: Error, Equatable {
 }
 
 extension ExtensionError: LocalizedError {
-    /// Plain words for the new refusal only; every other case keeps nil, so it is shown as before.
+    /// Plain words for the two market refusals; every other case keeps nil, so it is shown as before.
     var errorDescription: String? {
-        guard case let .marketVersionMismatch(id, listed, got) = self else { return nil }
-        return "Not installed: the package's files declare version \"\(got)\", but the Marketplace lists version "
-            + "\"\(listed)\" for \(id). Nothing was changed."
+        switch self {
+        case let .marketVersionMismatch(id, listed, got):
+            return "Not installed: the package's files declare version \"\(got)\", but the Marketplace lists version "
+                + "\"\(listed)\" for \(id). Nothing was changed."
+        case let .marketIdMismatch(expected, got):
+            // R1182-m: both ids are outside data (the listing's and the archive's own), cleaned and bounded here.
+            return "Not installed: the package's files declare the id \"\(OutsideText.shown(got, max: 128))\", but the Marketplace "
+                + "lists it as \"\(OutsideText.shown(expected, max: 128))\". Nothing was changed."
+        default:
+            return nil
+        }
     }
 }
 
@@ -1231,13 +1239,13 @@ final class ExtensionRegistry: ObservableObject {
         guard loaded.id == expected else {
             throw ExtensionError.marketIdMismatch(expected: expected, got: loaded.id)
         }
-        // Refused only when both read as plain number versions and differ as SemanticVersion, the file's compare:
-        // other text reads as 0 there, so it is never refused, and 1.2 and 1.2.0 (or 1.2.0-beta) pass as one version.
+        // R1182-l: refused when the listing reads as a plain number version and differs from the archive's as SemanticVersion,
+        // the update check's compare, so what passes is never fetched again; the archive's text need not be plain (other text
+        // reads as 0 parts there). 1.2 and 1.2.0 (or 1.2.0-beta) pass as one version; a listing that is not plain never refuses.
         let plain = #"\A[0-9]{1,18}(\.[0-9]{1,18}){0,2}([-+].*)?\z"#
         let got = loaded.manifest.extension.version
         if let listed = expectedVersion,
            listed.range(of: plain, options: .regularExpression) != nil,
-           got.range(of: plain, options: .regularExpression) != nil,
            SemanticVersion(got) != SemanticVersion(listed) {
             throw ExtensionError.marketVersionMismatch(id: OutsideText.shown(expected), listed: OutsideText.shown(listed, max: 32),
                                                        got: OutsideText.shown(got, max: 32))
@@ -1300,7 +1308,9 @@ final class ExtensionRegistry: ObservableObject {
                 updated += 1
                 log.info("auto-updated extension \(cand.id, privacy: .public) to a newer version")
             } catch {
-                log.error("update check failed for \(cand.id, privacy: .public): \(String(describing: error), privacy: .public)")
+                // R1182-m: through the description, so an id mismatch logs the cleaned sentence, not the archive's raw id.
+                let why = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                log.error("update check failed for \(cand.id, privacy: .public): \(why, privacy: .public)")
             }
         }
         if force || updated > 0 {

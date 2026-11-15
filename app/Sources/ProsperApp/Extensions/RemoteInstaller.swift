@@ -478,6 +478,7 @@ enum RemoteInstaller {
         var unreadable: [String] = []  // folders the walk could not list: their files would go missing
         var notUTF8: [String] = []     // names that are not valid UTF-8 (U+FFFD per bad byte): no path made from them reaches the file
         var notFiles: [String] = []    // #1168: neither a file, a folder nor a link (a pipe, socket or device): never opened
+        var badVersion: String?        // R1182-l: extension.toml's version as shown, when the Marketplace would not list it as written
 
         /// Why this folder cannot be published, naming the files; nil when it can.
         var refusal: String? {
@@ -496,6 +497,10 @@ enum RemoteInstaller {
                 let one = unreadable.count == 1
                 return "Can't read the folder\(one ? "" : "s") " + unreadable.joined(separator: ", ")
                     + ", so \(one ? "its" : "their") files would be left out."
+            }
+            if let v = badVersion {
+                return "Can't publish version \"\(v)\": the Marketplace takes a version written like 1.2.0 (three numbers "
+                    + "joined by dots, then optionally - or + and a label), with nothing before or after it."
             }
             return members.isEmpty ? "There are no files to publish." : nil
         }
@@ -535,12 +540,25 @@ enum RemoteInstaller {
             }
         }
         walk(dir, "")
+        // R1182-l: read only when the walk saw a regular extension.toml at the top; an unreadable manifest is no version refusal.
+        // The host version "0.0.0" is the loader's development host, so no host floor stops the read of the version text.
+        if plan.members.contains("./extension.toml"),
+           let version = try? ExtensionLoader.load(directory: dir, isSystem: false, hostVersion: "0.0.0").manifest.extension.version {
+            plan.badVersion = badPublishVersion(version)
+        }
         plan.members.sort()
         plan.links.sort()
         plan.unreadable.sort()
         plan.notUTF8.sort()
         plan.notFiles.sort()
         return plan
+    }
+
+    /// R1182-l: nil when `version`, untrimmed, has the form the Marketplace server lists (SEMVER_RE in server/src/market.ts,
+    /// with ASCII digits and the end of the text); else the text as a refusal shows it, cleaned and cut at 32.
+    static func badPublishVersion(_ version: String) -> String? {
+        let listed = #"\A[0-9]+\.[0-9]+\.[0-9]+([-+].+)?\z"#
+        return version.range(of: listed, options: .regularExpression) != nil ? nil : OutsideText.shown(version, max: 32)
     }
 
     /// Hidden files and folders at any depth, plus the dev-only test files
@@ -622,6 +640,7 @@ enum RemoteInstaller {
         log.error("tar \(args.first ?? "", privacy: .public) exited \(r.status, privacy: .public): \(line, privacy: .private)")
         guard packing else { return .extractFailed(tarFailedText) }
         let shown = first.map { OutsideText.shown($0, max: 160) } ?? ""
-        return .extractFailed(shown.isEmpty ? tarPackFailedText : "\(tarPackFailedText): \(shown)")
+        // R1182-k: a pack failure is a publish that failed, shown as its own text (no "unpack the download" prefix).
+        return .cannotPublish(shown.isEmpty ? tarPackFailedText : "\(tarPackFailedText): \(shown)")
     }
 }
