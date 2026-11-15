@@ -5,34 +5,29 @@ import XCTest
 /// #988 R988c-1: runCapturingBoth drains stderr while it drains stdout and keeps only stderr's first 4096 bytes.
 /// Each row runs /bin/sh through runCapturingBoth (as AgentIslandTests' B14 row does) with a literal command whose
 /// builtins (printf, [, exit) write bytes to its own stdout and stderr: no other program, no file, no network.
-/// Every byte comes from sh itself, so killing the pid onPid reported closes both pipes.
-/// Where things run: the call, onPid and onOutput on one global-queue thread; the wait, the asserts and the
-/// ceiling's kill on the test's thread. The 20 s is a ceiling only: a green call returns at once.
+/// Where things run: the call and onOutput on one global-queue thread; the wait and the asserts on the test's
+/// thread. The 20 s is a ceiling only: a green call returns at once. R988d-f: at the ceiling the row fails and
+/// leaves the child alone (no row signals any process); the pipes close when xctest exits.
 final class DchCaptureDrainTests: XCTestCase {
     private final class Call: @unchecked Sendable {
         let lock = NSLock()
-        var pid: pid_t?
         var result: (out: Data, err: String, status: Int32, chunks: [Data])?
     }
 
     private static let zeros4096 = String(repeating: "0", count: 4096)
 
-    /// nil (and a failure) when the call did not return within the ceiling; then the child onPid reported is
-    /// killed by that pid, so the blocked thread ends.
+    /// nil (and a failure) when the call did not return within the ceiling.
     private func run(_ script: String, merge: Bool = false, path: String = "/bin/sh")
         -> (out: Data, err: String, status: Int32, chunks: [Data])? {
         let call = Call(), done = XCTestExpectation(description: "runCapturingBoth returned")
         DispatchQueue.global().async {
             var chunks: [Data] = []
             let r = DchCommand.runCapturingBoth(args: ["-c", script], env: [:], path: path, merge: merge,
-                                                onPid: { pid in call.lock.withLock { call.pid = pid } },
                                                 onOutput: { chunks.append($0) })
             call.lock.withLock { call.result = (r.out, r.err, r.status, chunks) }
             done.fulfill()
         }
         guard XCTWaiter().wait(for: [done], timeout: 20) == .completed else {
-            // Only this row's own child, and only while the call has not returned (a returned call reaped it).
-            if let pid = call.lock.withLock({ call.result == nil ? call.pid : nil }) { _ = Darwin.kill(pid, SIGKILL) }
             XCTFail("runCapturingBoth did not return within the 20 s ceiling")
             return nil
         }

@@ -1155,6 +1155,9 @@ tag from the now-released section and put it on the new top draft.
   output; a tar failure now shows one plain message and tar's own details go to the log (#1182)
 - Changing the agent model while the agent is answering no longer garbles that answer: it is read
   with the format of the model that is actually loaded (#1181)
+- Remote Terminal: a phone's request to list, show, rename or close a session now gives up after 10
+  seconds when dch on the Mac does not answer, so one stuck request no longer stalls every phone
+  (#988)
 
 ## v2.174.0
 

@@ -2224,9 +2224,10 @@ enum DchCommand {
     /// against an older binary it prints nothing and we fall back to `-lj`'s
     /// `name\talias\tactivityEpoch` lines (state empty).
     static func listSessions() -> [DchListRow] {
-        let rows = parseListJSON(runCapturingData(args: ["--ls-json"]))
+        guard let json = runCapturingData(args: ["--ls-json"]) else { return [] }   // #988: timed out, no -lj wait
+        let rows = parseListJSON(json)
         if !rows.isEmpty { return rows }
-        return parseListTSV(runCapturing(args: ["-lj"]))
+        return parseListTSV(runCapturing(args: ["-lj"]) ?? "")
     }
 
     /// `[{"name","alias","harness","activity_epoch","state","agents"}]` — dch 1.4+
@@ -2279,10 +2280,10 @@ enum DchCommand {
     /// screen bytes. Older dch rejects the flag and older masters report nothing —
     /// both fall back to the screen alone.
     static func readScreen(_ name: String) -> Data {
-        let (screen, err, _) = runCapturingBoth(args: ["--read", name, "--ansi", "--cursor"])
-        guard !screen.isEmpty else { return runCapturingData(args: ["--read", name, "--ansi"]) }
-        guard let cup = cursorCUP(err) else { return screen }
-        return screen + Data(cup.utf8)
+        guard let r = runCapturingBoth(args: ["--read", name, "--ansi", "--cursor"]) else { return Data() }   // #988: timed out
+        guard !r.out.isEmpty else { return runCapturingData(args: ["--read", name, "--ansi"]) ?? Data() }
+        guard let cup = cursorCUP(r.err) else { return r.out }
+        return r.out + Data(cup.utf8)
     }
 
     /// `cursor 7 12 1 0` (1-based, on stderr) → `ESC[7;12H`.
@@ -2397,7 +2398,7 @@ enum DchCommand {
     /// Set (or clear, when empty) a session's display alias. #811: nil on exit 0, else one
     /// line for the phone (renameFailure).
     static func setAlias(_ name: String, alias: String) -> String? {
-        let r = runCapturingBoth(args: ["-m", name, alias])
+        guard let r = runCapturingBoth(args: ["-m", name, alias]) else { return renameTimedOut(name) }
         guard r.status != 0 else { return nil }
         return renameFailure(name, err: r.err, status: r.status)
     }
@@ -2413,7 +2414,7 @@ enum DchCommand {
     static func renameFailure(_ name: String, err: String, status: Int32) -> String {
         let first = err.split(whereSeparator: \.isNewline).first
         let line = first.map { String($0.prefix(120)) }
-        let shown = name.count > 64 ? String(name.prefix(64)) + "\u{2026}" : name
+        let shown = renameShown(name)
         if let line { log.error("dch server: dch -m refused: \(line, privacy: .private)") }
         let remote = name.unicodeScalars.firstIndex(of: ":").map { String(name.unicodeScalars[name.unicodeScalars.index(after: $0)...]) }
         if let first, first == "no session: \(name)" || remote.map({ first == "no session: \($0)" }) == true {
@@ -2425,22 +2426,44 @@ enum DchCommand {
         }
     }
 
-    private static func runCapturing(args: [String]) -> String {
-        String(data: runCapturingData(args: args), encoding: .utf8) ?? ""
+    /// The phone's own name as a rename answer shows it: cut at 64 characters.
+    static func renameShown(_ name: String) -> String { name.count > 64 ? String(name.prefix(64)) + "\u{2026}" : name }
+
+    /// #988: the phone's text when dch -m gave no answer within `remoteTimeout`: our words only.
+    static func renameTimedOut(_ name: String) -> String { "Couldn't rename \(renameShown(name)): dch didn't answer in time" }
+
+    /// nil when the call timed out (#988).
+    private static func runCapturing(args: [String]) -> String? {
+        runCapturingData(args: args).map { String(data: $0, encoding: .utf8) ?? "" }
     }
 
     /// Run dch for a short control command and capture stdout. Not used for attach
     /// (that needs a pty) — only for `--ls-json` / `-k` / `--read`, whose output is
-    /// raw bytes (escape sequences), hence Data rather than String.
-    private static func runCapturingData(args: [String]) -> Data {
-        runCapturingBoth(args: args).out
+    /// raw bytes (escape sequences), hence Data rather than String. nil when it timed out.
+    private static func runCapturingData(args: [String]) -> Data? {
+        runCapturingBoth(args: args)?.out
     }
 
     /// Same as `runCapturingData`, plus stderr as text — `--read --cursor` reports the
     /// caret there so it can't corrupt the screen on stdout.
-    private static func runCapturingBoth(args: [String]) -> (out: Data, err: String, status: Int32) {
-        runCapturingBoth(args: args, env: remoteEnv())
+    /// #988: bounded at `remoteTimeout`; on expiry the child is killed by its recorded pid and nil comes back.
+    /// path, args and env are read on the caller's thread (#486 r2).
+    private static func runCapturingBoth(args: [String]) -> (out: Data, err: String, status: Int32)? {
+        let standIn = remoteStandIn, path = standIn?.path ?? dchPath, argv = standIn?.args ?? args, env = remoteEnv()
+        return bounded(remoteTimeout, terminate: standIn?.terminate ?? sigkill) { onPid in
+            runCapturingBoth(args: argv, env: env, path: path, onPid: onPid)
+        }
     }
+
+    /// #988: Remote Terminal's own dch calls for the phone (list, read, rename, kill) give up after this, so a
+    /// dch or a relayed host that never closes its output no longer holds the server queue every phone shares.
+    /// 10 s, not the island's 4: a "host:name" call is relayed by dch to another machine over the network, and a
+    /// slow first connection must still answer; 15 s at most. A var only so tests can shorten it; a test pins the 10.
+    nonisolated(unsafe) static var remoteTimeout: TimeInterval = 10
+
+    /// Test seam (#988): stands in for the program, its arguments and the kill of every Remote Terminal call
+    /// above (rows: /bin/sleep or /bin/sh, and a recorder); nil runs dch with the call's own arguments.
+    nonisolated(unsafe) static var remoteStandIn: (path: String, args: [String], terminate: @Sendable (pid_t) -> Void)?
 
     /// Remote Terminal's one-shot dch env (list, kill, rename, --read; #838's ctl): its one dir, no DCH_SESSION.
     static func remoteEnv() -> [String: String] {
@@ -2501,7 +2524,7 @@ enum DchCommand {
 
     /// #477: every Agent Island dch call (--ls-json, -lj, --read, --status, --send)
     /// gives up after this, so a wedged dch never parks the island queue, which
-    /// also carries the poll. Remote Terminal's calls stay unbounded. A var only
+    /// also carries the poll. Remote Terminal's calls have their own, `remoteTimeout` (#988). A var only
     /// so tests can shorten it (#486); a test pins the 4.
     nonisolated(unsafe) static var islandTimeout: TimeInterval = 4
 
@@ -2512,25 +2535,28 @@ enum DchCommand {
         return bounded(islandTimeout) { onPid in runCapturingBoth(args: args, env: env, path: path, onPid: onPid).out }
     }
 
-    private final class BoundedCall: @unchecked Sendable {
+    private final class BoundedCall<T>: @unchecked Sendable {
         let lock = NSLock(), done = DispatchSemaphore(value: 0)
-        var pid: pid_t?, out: Data?
+        var pid: pid_t?, out: T?
     }
+
+    /// `bounded`'s kill: SIGKILL to the one pid the body recorded.
+    static let sigkill: @Sendable (pid_t) -> Void = { _ = Darwin.kill($0, SIGKILL) }
 
     /// Runs `body` on its own thread and waits at most `timeout`. On expiry the
     /// child `body` reported through `onPid` is killed by that pid and nil
     /// comes back at once; a body that still never returns strands only its own
-    /// thread, never the caller.
-    static func bounded(_ timeout: TimeInterval,
-                        terminate: @escaping @Sendable (pid_t) -> Void = { _ = Darwin.kill($0, SIGKILL) },
-                        _ body: @escaping @Sendable (_ onPid: (pid_t) -> Void) -> Data) -> Data? {
-        let call = BoundedCall()
+    /// thread, never the caller. #988: generic, so a Remote Terminal call keeps stderr and the status.
+    static func bounded<T>(_ timeout: TimeInterval,
+                           terminate: @escaping @Sendable (pid_t) -> Void = DchCommand.sigkill,
+                           _ body: @escaping @Sendable (_ onPid: (pid_t) -> Void) -> T) -> T? {
+        let call = BoundedCall<T>()
         DispatchQueue.global(qos: .utility).async {
             let out = body { pid in call.lock.withLock { call.pid = pid } }
             call.lock.withLock { call.out = out }
             call.done.signal()
         }
-        if call.done.wait(timeout: .now() + timeout) == .success { return call.lock.withLock { call.out ?? Data() } }
+        if call.done.wait(timeout: .now() + timeout) == .success { return call.lock.withLock { call.out } }
         // A body that has returned has reaped its child: never signal a pid that may be reused.
         if let pid = call.lock.withLock({ call.out == nil ? call.pid : nil }) { terminate(pid) }
         return nil
