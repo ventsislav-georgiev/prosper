@@ -710,13 +710,30 @@ struct AgentSidebarRowView: View {
 let agentSidebarRowSpace = "agentSidebarRow"
 
 /// Tests: a row part's frame in the row, through `AgentSidebarRowView.probe` (nil in the product). Main actor.
+/// R900-4b-2: the observer is attached only while the probe is set (read at body time), so the product has none.
 struct AgentSidebarRowProbe: ViewModifier {
     let kind: String, title: String
-    func body(content: Content) -> some View {
-        content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentSidebarRowSpace)) }) { r in
-            AgentSidebarRowView.probe?(kind, title, r)
+    @ViewBuilder func body(content: Content) -> some View {
+        if AgentSidebarRowView.probe != nil {
+            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentSidebarRowSpace)) }) { r in
+                agentProbeCalled()
+                AgentSidebarRowView.probe?(kind, title, r)
+            }
+        } else {
+            content
         }
     }
+}
+
+#if DEBUG
+/// Tests (R900-4b-2): geometry callbacks run by the three probe modifiers; with every probe nil it stays 0. Main actor.
+@MainActor var agentProbeCallbacks = 0
+#endif
+/// Counts one probe callback in DEBUG builds; nothing in release. Main actor (SwiftUI runs the actions from layout).
+@MainActor @inline(__always) func agentProbeCalled() {
+    #if DEBUG
+    agentProbeCallbacks += 1
+    #endif
 }
 
 /// #1110: the bounds of the ⌘<n> chip's slot on the row's detail line.
@@ -1166,9 +1183,14 @@ struct AgentWindowBand: View {
 /// Tests: a band part's frame in the band, through `AgentWindowBand.probe` (nil in the product). Main actor.
 struct AgentBandProbe: ViewModifier {
     let kind: String
-    func body(content: Content) -> some View {
-        content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentBandSpace)) }) { r in
-            AgentWindowBand.probe?(kind, r)
+    @ViewBuilder func body(content: Content) -> some View {
+        if AgentWindowBand.probe != nil {   // R900-4b-2: no observer while the probe is nil
+            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentBandSpace)) }) { r in
+                agentProbeCalled()
+                AgentWindowBand.probe?(kind, r)
+            }
+        } else {
+            content
         }
     }
 }
@@ -1199,9 +1221,14 @@ extension EnvironmentValues {
 struct AgentPaneProbe: ViewModifier {
     let kind: String
     @Environment(\.agentPaneID) private var pane
-    func body(content: Content) -> some View {
-        content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentPaneAreaSpace)) }) { r in
-            if let pane { AgentPaneArea.probe?(kind, pane, r) }
+    @ViewBuilder func body(content: Content) -> some View {
+        if AgentPaneArea.probe != nil {   // R900-4b-2: no observer while the probe is nil
+            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentPaneAreaSpace)) }) { r in
+                agentProbeCalled()
+                if let pane { AgentPaneArea.probe?(kind, pane, r) }
+            }
+        } else {
+            content
         }
     }
 }

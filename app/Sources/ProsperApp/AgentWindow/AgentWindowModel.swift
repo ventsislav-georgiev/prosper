@@ -223,6 +223,7 @@ final class AgentWindowModel: ObservableObject {
             // #900 B2 step 4b (7.2): a new value settle() did not already tell (a zoom, a split, a close or focus move that
             // keeps the row) is published once, so the sidebar's "in view" glyphs redraw. Gate on only: nothing changes off.
             if !settle(), layout != oldValue, AgentPaneLayout.splitsEnabled { objectWillChange.send() }
+            syncTier()   // R900-4b-1: a split or close moves the line too, so the stored tier never goes stale
             // #900 B2 step 6b2b (7.2): the focused pane moved, so its input box is built anew in the new pane (AgentPaneArea
             // draws the old one's as inert): forget the old box, so a focus asked for waits for the new one (pending).
             if AgentPaneLayout.splitsEnabled, layout.focused != oldValue.focused { interaction.composer = nil }
@@ -291,7 +292,16 @@ final class AgentWindowModel: ObservableObject {
     /// The pane area's size: written by the view (AgentPaneArea, R1193-4) and by tests. `.zero`: the focused pane alone.
     /// Not @Published (the view draws from its own size); the same size again follows nothing.
     var paneArea: CGRect = .zero {
-        didSet { if paneArea != oldValue { paneAreaChanges += 1; follow() } }
+        didSet { if paneArea != oldValue { paneAreaChanges += 1; follow(); syncTier() } }
+    }
+    /// #900 B2 step 6b2e (R900-4b-1, 3.4): the too-small tier of `paneArea` for the active layout, published so a resize
+    /// that only crosses the line redraws the sidebar's glyphs and the band's chip. Gate on only; written only on a
+    /// change, from paneArea's didSet (the view's onAppear/onChange actions, after the body pass) and the layout's.
+    @Published private(set) var paneTooSmall = false
+    private func syncTier() {
+        guard AgentPaneLayout.splitsEnabled else { return }   // gate off: nothing read, nothing written
+        let t = if case .tooSmall = layout.frames(in: paneArea, minimum: paneMinimum, splitsEnabled: true) { true } else { false }
+        if t != paneTooSmall { paneTooSmall = t }
     }
     /// Counts `paneArea` changes (tests: the same size twice is one change).
     private(set) var paneAreaChanges = 0
@@ -383,9 +393,20 @@ final class AgentWindowModel: ObservableObject {
     /// #900 B2 step 6a: what Split answers for the focused pane, or for `pane` once focused (the header "⋯" of an
     /// unfocused pane focuses it first): perform's own call, so the menu and the key share one cap and one room rule.
     func splitting(_ axis: PaneNode.Axis, pane: UUID? = nil) -> Result<PaneLayout, PaneRefusal> {
+        countDryRun()
         let l = pane.flatMap { try? layout.focus($0).get() } ?? layout
         // The same minimum paneFrames tiles with, so a split that passes here is drawn tiled.
         return l.split(axis: axis, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size))
+    }
+
+    #if DEBUG
+    /// Tests (R900-6b1-3): calls of `showing` and `splitting` (the menus' dry runs), read around one body pass.
+    private(set) var dryRuns = 0
+    #endif
+    private func countDryRun() {
+        #if DEBUG
+        dryRuns += 1
+        #endif
     }
 
     /// 7.6: the first click on an unfocused pane focuses it; the panes take the keys (7.2).
@@ -1027,7 +1048,8 @@ final class AgentWindowModel: ObservableObject {
     /// #900 B2 step 6b1: the browse rule's answer for row `id` (select's own call; the row menu reads it). `.side` splits
     /// in the pane area at the minimum paneFrames tiles with; `.focused` never reads the area.
     func showing(_ id: AgentSidebar.RowID, placement: PaneLayout.Placement = .focused) -> Result<PaneLayout, PaneRefusal> {
-        layout.show(target(id), placement: placement, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size),
+        countDryRun()
+        return layout.show(target(id), placement: placement, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size),
                     splitsEnabled: AgentPaneLayout.splitsEnabled)
     }
 
