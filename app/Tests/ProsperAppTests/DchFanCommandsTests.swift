@@ -114,6 +114,15 @@ final class DchFanCommandsTests: XCTestCase {
         return fake
     }
 
+    /// Entry 1249: end a row only after its last reset's resetAll ended (its tail asks the helper identity, which would
+    /// otherwise run in a later class). The fake's late reply queued resetAll's resume on main before `replied`; the
+    /// marker, a main-actor job queued after that, runs after the rest of resetAll (the same drain as burst rows use).
+    private func endAfterRelease(_ fake: FakeConnection, _ replied: XCTestExpectation) async {
+        await fulfillment(of: [replied], timeout: 2)
+        fake.proxy.onReplied = nil
+        await Task { @MainActor in }.value
+    }
+
     private func awaitRelease(_ fake: FakeConnection, line: UInt = #line) async {
         for _ in 0..<300 where FanControlHelper.connection != nil { try? await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertEqual(fake.proxy.resets, 1, "the release reset the fans", line: line)
@@ -530,11 +539,15 @@ final class DchFanCommandsTests: XCTestCase {
             let handBack = expectation(description: "the landed pin went back to macOS")
             handBack.assertForOverFulfill = false   // the count below says it
             fake.proxy.onReset = { handBack.fulfill() }
+            let replied = expectation(description: "the last reset was answered")
+            replied.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReplied = { replied.fulfill() }
             FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // the first engage's call returned
             open.yield(); open.finish()
             let (saved, reply) = await popup.value
             await fulfillment(of: [handBack], timeout: 2)
             fake.proxy.onReset = nil
+            await endAfterRelease(fake, replied)
             XCTAssertFalse(saved, "the older Manual click overwrote Automatic")
             XCTAssertEqual(reply, .engaged)
             XCTAssertFalse(Preferences.fanManualEnabled, "the older Manual click overwrote Automatic")
@@ -562,11 +575,15 @@ final class DchFanCommandsTests: XCTestCase {
             let handBack = expectation(description: "the landed pin went back to macOS")
             handBack.assertForOverFulfill = false   // the count below says it
             fake.proxy.onReset = { handBack.fulfill() }
+            let replied = expectation(description: "the last reset was answered")
+            replied.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReplied = { replied.fulfill() }
             FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // the first engage's call returned
             open.yield(); open.finish()
             let f = await phone.value
             await fulfillment(of: [handBack], timeout: 2)
             fake.proxy.onReset = nil
+            await endAfterRelease(fake, replied)
             XCTAssertEqual(Self.message(f), "fans stayed automatic")
             XCTAssertFalse(Preferences.fanManualEnabled, "the older Manual request overwrote Automatic")
             XCTAssertEqual(Preferences.fanTargets, [:])
@@ -591,11 +608,15 @@ final class DchFanCommandsTests: XCTestCase {
             let handBack = expectation(description: "the failure release reset the fans")
             handBack.assertForOverFulfill = false   // the count below says it
             fake.proxy.onReset = { handBack.fulfill() }
+            let replied = expectation(description: "the last reset was answered")
+            replied.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReplied = { replied.fulfill() }
             FanControlHelper.inject(connection: fake, engagesInFlight: 0)
             open.yield(); open.finish()
             let (saved, _) = await popup.value
             await fulfillment(of: [handBack], timeout: 2)
             fake.proxy.onReset = nil
+            await endAfterRelease(fake, replied)
             XCTAssertFalse(saved, "a pending preset was saved over Automatic")
             XCTAssertFalse(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, [:])
@@ -641,11 +662,15 @@ final class DchFanCommandsTests: XCTestCase {
             let handBack = expectation(description: "the first click's pin went back to macOS")
             handBack.assertForOverFulfill = false   // the count below says it
             fake.proxy.onReset = { handBack.fulfill() }
+            let replied = expectation(description: "the last reset was answered")
+            replied.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReplied = { replied.fulfill() }
             FanControlHelper.inject(connection: fake, engagesInFlight: 0)
             open.yield(); open.finish()
             let (firstSaved, _) = await first.value
             await fulfillment(of: [handBack], timeout: 2)
             fake.proxy.onReset = nil
+            await endAfterRelease(fake, replied)
             XCTAssertFalse(firstSaved, "the click before the Automatic saved over the later one")
             XCTAssertTrue(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, [0: 4000, 1: 3500])
@@ -676,11 +701,15 @@ final class DchFanCommandsTests: XCTestCase {
             let handBack = expectation(description: "the landed pin went back to macOS")
             handBack.assertForOverFulfill = false   // the count below says it
             fake.proxy.onReset = { handBack.fulfill() }
+            let replied = expectation(description: "the last reset was answered")
+            replied.assertForOverFulfill = false   // the count below says it
+            fake.proxy.onReplied = { replied.fulfill() }
             FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // the first engage's call returned
             open.yield(); open.finish()
             let (saved, _) = await popup.value
             await fulfillment(of: [handBack], timeout: 2)
             fake.proxy.onReset = nil
+            await endAfterRelease(fake, replied)
             XCTAssertFalse(saved, "the engage saved over the refusal")
             XCTAssertFalse(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, [9: 1], "the refusal and the engage both save nothing")
@@ -724,11 +753,15 @@ final class DchFanCommandsTests: XCTestCase {
         let handBack = expectation(description: "the burst's pins went back to macOS")
         handBack.assertForOverFulfill = false   // the queue below says it
         fake.proxy.onReset = { log.add("reset"); handBack.fulfill() }
+        let replied = expectation(description: "the last reset was answered")
+        replied.assertForOverFulfill = false   // the count below says it
+        fake.proxy.onReplied = { replied.fulfill() }
         FanControlHelper.inject(connection: fake, engagesInFlight: 0)   // the burst's call returned
         open.yield(); open.finish()
         let replies = await burst.value
         await fulfillment(of: [handBack], timeout: 2)
         fake.proxy.onReset = nil
+        await endAfterRelease(fake, replied)
         return (replies, log.calls)
     }
 

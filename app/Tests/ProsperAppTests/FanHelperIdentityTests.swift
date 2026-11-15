@@ -106,7 +106,38 @@ final class FanHelperIdentityTests: XCTestCase {
     }
 
     private func use(_ conn: FakeConn) {
-        FanControlHelper.makeIdentityConnection = { [unowned self] in made += 1; return conn }
+        // The factory runs on the main actor (askHelperIdentityIfIdle is main-actor; so is this class), so `inOwnAsk`
+        // is plain main-actor state: no lock. It hands out the fake only while the row is inside its own ask.
+        FanControlHelper.makeIdentityConnection = { [unowned self] in
+            guard inOwnAsk else {
+                XCTFail("an identity ask the row did not make")
+                return nil
+            }
+            made += 1
+            return conn
+        }
+    }
+
+    /// True only while the row itself makes an identity ask (the synchronous calls below, and the awaited
+    /// `resetAll` whose tail asks). A foreign ask (an earlier class's release in flight) gets nil and a failure.
+    private var inOwnAsk = false
+
+    /// The row's own ask, as a sync call.
+    private func askOwn() {
+        inOwnAsk = true; defer { inOwnAsk = false }
+        FanControlHelper.askHelperIdentityIfIdle()
+    }
+
+    /// The row's own kept retry, fired.
+    private func fireOwn(_ retry: @MainActor () -> Void) {
+        inOwnAsk = true; defer { inOwnAsk = false }
+        retry()
+    }
+
+    /// The row's own reset (its tail asks).
+    private func resetAllOwn() async -> Bool {
+        inOwnAsk = true; defer { inOwnAsk = false }
+        return await FanControlHelper.resetAll()
     }
 
     private func finish() {
@@ -123,7 +154,7 @@ final class FanHelperIdentityTests: XCTestCase {
     private func askAndAwaitClose(_ conn: FakeConn) async {
         let closed = expectation(description: "throwaway invalidated")
         conn.onInvalidate = { closed.fulfill() }
-        FanControlHelper.askHelperIdentityIfIdle()
+        askOwn()
         await fulfillment(of: [closed], timeout: 5)
         conn.onInvalidate = nil
     }
@@ -135,7 +166,7 @@ final class FanHelperIdentityTests: XCTestCase {
         use(conn)
         let closed = expectation(description: "second throwaway invalidated")
         conn.onInvalidate = { closed.fulfill() }
-        retry()
+        fireOwn(retry)
         await fulfillment(of: [closed], timeout: 5)
         conn.onInvalidate = nil
     }
@@ -191,7 +222,7 @@ final class FanHelperIdentityTests: XCTestCase {
         start(t); defer { finish() }
         let (lid, _, _) = helperSide()
         t.lid = lid
-        FanControlHelper.askHelperIdentityIfIdle()
+        askOwn()
         XCTAssertEqual(made, 1)
         XCTAssertEqual(lid.connections, 1, "the ask is open on the helper")
         XCTAssertTrue(FanControlHelper.helperIdentity == nil, "no answer before the ceiling")
@@ -208,7 +239,7 @@ final class FanHelperIdentityTests: XCTestCase {
         t2.mode = .silent
         t2.lid = lid
         use(t2)
-        FanControlHelper.askHelperIdentityIfIdle()
+        askOwn()
         XCTAssertEqual(made, 2, "a later idle trigger asks again")
         XCTAssertEqual(ceilings.count, 2)
         ceilings.last?()
@@ -251,11 +282,11 @@ final class FanHelperIdentityTests: XCTestCase {
         t.mode = .answers(1, 1)
         start(t); defer { finish() }
         Preferences.fanManualEnabled = true
-        FanControlHelper.askHelperIdentityIfIdle()
+        askOwn()
         XCTAssertEqual(made, 0, "manual on")
         Preferences.fanManualEnabled = false
         FanControlHelper.inject(connection: nil, engagesInFlight: 1)
-        FanControlHelper.askHelperIdentityIfIdle()
+        askOwn()
         XCTAssertEqual(made, 0, "an engage in flight")
         FanControlHelper.inject(connection: nil, engagesInFlight: 0)
         await askAndAwaitClose(t)
@@ -270,13 +301,13 @@ final class FanHelperIdentityTests: XCTestCase {
         use(second)
         FanControlHelper.inject(connection: fanFake, engagesInFlight: 0)
         Preferences.fanManualEnabled = true
-        let resetOn = await FanControlHelper.resetAll()
+        let resetOn = await resetAllOwn()
         XCTAssertTrue(resetOn)
         XCTAssertEqual(made, 1, "a reset with manual on does not ask")
         Preferences.fanManualEnabled = false
         let closed = expectation(description: "throwaway invalidated")
         second.onInvalidate = { closed.fulfill() }
-        let resetOff = await FanControlHelper.resetAll()
+        let resetOff = await resetAllOwn()
         XCTAssertTrue(resetOff)
         await fulfillment(of: [closed], timeout: 5)
         XCTAssertEqual(made, 2, "the reset's hook asked")
@@ -291,8 +322,8 @@ final class FanHelperIdentityTests: XCTestCase {
         let t = FakeConn()
         t.mode = .silent
         start(t); defer { finish() }
-        FanControlHelper.askHelperIdentityIfIdle()
-        FanControlHelper.askHelperIdentityIfIdle()
+        askOwn()
+        askOwn()
         XCTAssertEqual(made, 1, "an open ask is not doubled")
         ceilings.last?()
         XCTAssertTrue(FanControlHelper.helperIdentity == nil, "the ceiling is no answer")
@@ -305,7 +336,7 @@ final class FanHelperIdentityTests: XCTestCase {
         await askAndAwaitClose(next)
         XCTAssertEqual(made, 2)
         XCTAssertTrue(FanControlHelper.helperIdentity == .current)
-        FanControlHelper.askHelperIdentityIfIdle()
+        askOwn()
         XCTAssertEqual(made, 2, "an answer (current) is kept")
 
         // A reply to an ask the hook dropped changes nothing; the hook closed that ask.
@@ -313,7 +344,7 @@ final class FanHelperIdentityTests: XCTestCase {
         dropped.mode = .silent
         use(dropped)
         FanControlHelper.helperMayHaveChanged()
-        FanControlHelper.askHelperIdentityIfIdle()
+        askOwn()
         XCTAssertEqual(made, 3)
         FanControlHelper.helperMayHaveChanged()
         XCTAssertEqual(dropped.invalidations, 1, "the hook closes an open ask")
@@ -336,7 +367,7 @@ final class FanHelperIdentityTests: XCTestCase {
             conn.lid = lid
             use(conn)
             if case .silent = mode {
-                FanControlHelper.askHelperIdentityIfIdle()
+                askOwn()
                 XCTAssertEqual(lid.connections, 2, "open while the ask is")
                 ceilings.last?()
             } else {
@@ -550,11 +581,11 @@ final class FanHelperIdentityTests: XCTestCase {
         second.mode = .old
         use(second)
         Preferences.fanManualEnabled = true
-        retry?()
+        if let retry { fireOwn(retry) }
         XCTAssertEqual(made, 1, "manual on")
         Preferences.fanManualEnabled = false
         FanControlHelper.inject(connection: nil, engagesInFlight: 1)
-        retry?()
+        if let retry { fireOwn(retry) }
         XCTAssertEqual(made, 1, "an engage in flight")
         FanControlHelper.inject(connection: nil, engagesInFlight: 0)
         XCTAssertTrue(FanControlHelper.helperIdentity == nil)

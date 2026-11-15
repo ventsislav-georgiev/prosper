@@ -486,4 +486,36 @@ final class FanDaemonSeamTests: XCTestCase {
             XCTAssertEqual(smc.writes, ["F0Tg \(SMCDecode.encodeFPE2(want))"], "fpe2 \(rpm)")
         }
     }
+
+    // MARK: - The helper's queue (R1041-c), a source scan: text against text, nothing is run
+
+    /// main.swift (the helper's source, read as text; the helper itself is never run): one serial `fanQ`, and the
+    /// engage handler and the resetAllFans handler each hold exactly one `fanQ.async {` with the call the fan
+    /// state change goes through (`engageCode`, `releaseAll`) inside it. A second queue, a concurrent `fanQ`, or a
+    /// handler that calls the core outside the block reads red.
+    func testTheHelperRunsEveryFanChangeInOneFanQBlockOnASerialQueue() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperHelper/main.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let queueLines = source.components(separatedBy: "\n").filter { $0.contains("fanQ = Dispatch" + "Queue(") }
+        XCTAssertEqual(queueLines.count, 1, "exactly one fanQ declaration")
+        XCTAssertFalse(queueLines.contains { $0.contains("attributes:") }, "fanQ is serial: no attributes")
+
+        // A handler's text: from its func line to the first line that closes it (a lone four-space brace).
+        func body(of header: String) -> String? {
+            guard let start = source.range(of: header)?.lowerBound else { return nil }
+            let rest = source[start...]
+            guard let end = rest.range(of: "\n    }\n")?.lowerBound else { return nil }
+            return String(rest[..<end])
+        }
+        let block = "fanQ.as" + "ync {"
+        for (header, call) in [("private func engageFan(", "engage" + "Code("), ("func resetAllFans(", "release" + "All(")] {
+            guard let text = body(of: header) else { XCTFail("\(header) not found"); continue }
+            XCTAssertEqual(text.components(separatedBy: block).count - 1, 1, "\(header): exactly one fanQ block")
+            let parts = text.components(separatedBy: block)
+            XCTAssertFalse(parts[0].contains(call), "\(header): \(call) before the block")
+            XCTAssertEqual(parts.dropFirst().joined().components(separatedBy: call).count - 1, 1, "\(header): \(call) once, inside the block")
+        }
+    }
 }
