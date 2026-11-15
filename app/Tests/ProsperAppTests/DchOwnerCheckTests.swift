@@ -452,9 +452,9 @@ final class DchOwnerCheckTests: XCTestCase {
         let rows = [
             Row(name: "owner", status: Self.running, whois: Self.phoneWhois, want: .owner, cached: true),
             Row(name: "status exits 1", status: Self.fail(Self.refusedToConnect),
-                want: .unavailable("Tailscale isn't answering (\(Self.refusedToConnect))"), cached: false),
+                want: .unavailable("Tailscale isn't answering"), cached: false),
             Row(name: "status exits 1, no message", status: Self.fail(""),
-                want: .unavailable("Tailscale isn't answering (no message)"), cached: false),
+                want: .unavailable("Tailscale isn't answering"), cached: false),
             Row(name: "Stopped", status: Self.status("Stopped"), want: .unusable("Tailscale on this Mac is turned off"), cached: false),
             Row(name: "NeedsLogin", status: Self.status("NeedsLogin"), want: .unusable("Tailscale on this Mac needs a login"), cached: false),
             Row(name: "Starting", status: Self.status("Starting"), want: .unusable("Tailscale on this Mac is still starting"), cached: false),
@@ -467,7 +467,7 @@ final class DchOwnerCheckTests: XCTestCase {
             Row(name: "whois peer not found", status: Self.running, whois: Self.fail("peer not found\n"),
                 want: .unknownPeer, cached: true),
             Row(name: "whois other error", status: Self.running, whois: Self.fail("boom: LocalAPI said no\nmore"),
-                want: .unusable("tailscale whois failed (boom: LocalAPI said no)"), cached: true),
+                want: .unusable("tailscale whois failed"), cached: true),
             Row(name: "whois unreadable", status: Self.running, whois: Self.json("{}"),
                 want: .unusable("Tailscale's whois answer couldn't be read"), cached: true),
             // A host with no node id, so the answer without a Node would otherwise pass as the owner.
@@ -565,7 +565,7 @@ final class DchOwnerCheckTests: XCTestCase {
         relax.value = true
         let noneUp = FakeCLI(["\(app) status": Self.fail("first"), "\(brew) status": .out(TailscaleCLIOutput(exit: -1))],
                              installed: [app, brew])
-        XCTAssertEqual(verdict(gate(whois: noneUp.whois(all))), .unavailable("Tailscale isn't answering (first)"))
+        XCTAssertEqual(verdict(gate(whois: noneUp.whois(all))), .unavailable("Tailscale isn't answering"))
         let oneAnswered = FakeCLI(["\(app) status": Self.status("NeedsLogin"), "\(brew) status": Self.fail("down")],
                                   installed: [app, brew])
         XCTAssertEqual(verdict(gate(whois: oneAnswered.whois(all), relax: relax)), .unusable("Tailscale on this Mac needs a login"),

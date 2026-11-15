@@ -1135,6 +1135,9 @@ tag from the now-released section and put it on the new top draft.
 - Outside names that Prosper cleans before showing them (a linked old vault's path in the ccpool
   settings, an item named in a refused extension install) now also keep at most two accent marks per
   letter, so they cannot draw over nearby lines (#1251)
+- The Remote Terminal status in Settings no longer quotes Tailscale's own error output; a rename
+  from the phone of a session that has just ended now says "no session" for a very long name or a
+  session on another Mac too (#988)
 
 ## v2.174.0
 

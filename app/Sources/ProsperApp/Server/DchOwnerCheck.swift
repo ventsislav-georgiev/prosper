@@ -384,7 +384,10 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
     static func host(fromStatus r: TailscaleCLIOutput?, bound: TimeInterval = timeout) throws -> TailscaleNode {
         guard let r else { throw WhoisUnavailable(cause: timeoutCause(bound)) }
         guard r.exit != -1 else { throw WhoisUnavailable(cause: "the Tailscale command couldn't start") }
-        guard r.exit == 0 else { throw WhoisUnavailable(cause: "Tailscale isn't answering (\(firstLine(r.err)))") }
+        guard r.exit == 0 else {
+            logCLI("status", r.err)
+            throw WhoisUnavailable(cause: "Tailscale isn't answering")
+        }
         return try parseHost(r.out)
     }
 
@@ -395,7 +398,15 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         guard r.exit != -1 else { throw WhoisUnusable(cause: "tailscale whois couldn't start", askAgain: true) }
         if r.exit == 0 { return try parsePeer(r.out) }
         if r.err.contains("peer not found") { return nil }
-        throw WhoisUnusable(cause: "tailscale whois failed (\(firstLine(r.err)))")
+        logCLI("whois", r.err)
+        throw WhoisUnusable(cause: "tailscale whois failed")
+    }
+
+    /// #988: tailscale's stderr can carry anything (a socket path): its first line goes only to the log, private,
+    /// cut to 120 as before; the cause is a fixed sentence.
+    private static func logCLI(_ verb: String, _ err: String) {
+        Logger(subsystem: "com.prosper.app", category: "DchServer")
+            .error("dch server: tailscale \(verb, privacy: .public) failed: \(firstLine(err), privacy: .private)")
     }
 
     private struct Status: Decodable {

@@ -2407,12 +2407,19 @@ enum DchCommand {
     /// #988: the phone's text for a refused `dch -m`: a sentence of ours for each of dch -m's own refusal lines
     /// (dch.c A_SETALIAS at v1.69.0), else its exit status; never dch's line itself (a remote route or another
     /// binary could print a path or a host). The name is the phone's own, echoed cut as before. dch's line goes to the log.
+    /// R988b-1: "no session" is compared on the whole first line (the 120 cut is the log's only); a Substring, no
+    /// copy, and == stops within the phone's own name's length. R988b-2: a remote dch prints the name after the
+    /// first ":" (dch_remote_ctl strips "host:", remote.c v1.69.0), compared exactly too.
     static func renameFailure(_ name: String, err: String, status: Int32) -> String {
-        let line = err.split(whereSeparator: \.isNewline).first.map { String($0.prefix(120)) }
+        let first = err.split(whereSeparator: \.isNewline).first
+        let line = first.map { String($0.prefix(120)) }
         let shown = name.count > 64 ? String(name.prefix(64)) + "\u{2026}" : name
         if let line { log.error("dch server: dch -m refused: \(line, privacy: .private)") }
+        let remote = name.unicodeScalars.firstIndex(of: ":").map { String(name.unicodeScalars[name.unicodeScalars.index(after: $0)...]) }
+        if let first, first == "no session: \(name)" || remote.map({ first == "no session: \($0)" }) == true {
+            return "Couldn't rename \(shown): no session: \(shown)"
+        }
         switch line {
-        case "no session: \(name)"?: return "Couldn't rename \(shown): no session: \(shown)"
         case "dch: name looks like a session_id"?: return "Couldn't rename \(shown): the new name looks like a session id"
         default: return "Couldn't rename \(shown): \(status < 0 ? "dch could not be run" : "dch exited \(status)")"
         }

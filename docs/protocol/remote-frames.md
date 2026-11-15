@@ -493,8 +493,10 @@ The connection then carries one session:
   kill; Prosper answers 0x14, since it runs `dch -m <name> <alias>` and `-m` takes the next two
   arguments verbatim, so such a name is harmless there; with an id-shaped `alias`, which both
   servers refuse, Prosper answers `dch serve`'s `-` message (#863). Prosper (#811) answers 0x13 when
-  `dch -m` exits non-zero or cannot run (`Couldn't rename <name>: <dch's first stderr line>`,
-  for example an unknown or just-exited session); a malformed payload still answers 0x14. A `name`
+  `dch -m` exits non-zero or cannot run: `Couldn't rename <name>: no session: <name>` for dch's own
+  no-session line (a remote `host:name` too), a sentence for an id-shaped new name, else
+  `Couldn't rename <name>: dch exited <N>`; dch's own stderr line is never sent (#988). A malformed
+  payload still answers 0x14. A `name`
   `name_ok` refuses that does not start with `-` (a `/`, a control, the code points listed under
   0x01, more than 255 bytes) runs no `dch -m` on either server: `dch serve` answers the empty 0x14
   (v1.57.0 serve.c:1174-1184), Prosper 0x13 `invalid session name` (#879, as it reports any rename it
@@ -1047,7 +1049,7 @@ gap above or the item says so.
     handshake, watch and attach); `dch serve` asks again per connection.
 
   Prosper logs one line per cause (not per connection) and shows the last refusal in Remote
-  Terminal's settings ("Couldn't verify 100.64.0.1: Tailscale isn't answering (...). Turning on
+  Terminal's settings ("Couldn't verify 100.64.0.1: Tailscale isn't answering. Turning on
   "Allow when Tailscale isn't answering" would let it in."), cleared when an owner's device next
   connects. `dch serve --check-peer <ip>` prints the decision for one address; Prosper has no
   such dry run.
