@@ -1053,6 +1053,9 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal: a phone's session list stream to this Mac now refuses kill and rename with "watch
   connections cannot kill or rename", as dch serve 1.66.0 does; kill and rename on their own
   connection work as before (#1178)
+- Agent Sessions: sessions Prosper starts or restarts now tell programs the terminal draws 24-bit
+  colour, so Claude Code colours match Ghostty. Sessions already running keep their colours until
+  restarted (#1266)
 
 ## v2.174.0
 
