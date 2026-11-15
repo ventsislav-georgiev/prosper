@@ -524,11 +524,13 @@ actor LlamaAgentEngine: AgentChatEngine {
         var generated = 0
         var pos = Int32(promptTokens.count)
         let budget = min(maxTokens, nCtx - promptTokens.count - 1)
+        func sample(_ c: UnsafeMutablePointer<llama_sampler>?) -> llama_token {
+            llama_sampler_sample(c ?? chain, ctx, -1)
+        }
 
         decode: while generated < budget {
             if Task.isCancelled { break }
-            let token = llama_sampler_sample(gate?.pick(grammar: chain, plain: thinkChain) ?? chain, ctx, -1)
-            gate?.feed(token)
+            let token = gate?.next(grammar: chain, plain: thinkChain, sample: sample) ?? sample(chain)
             Perf.end("model.ttft", &ttft)
             if llama_vocab_is_eog(vocab, token) { break }
 
@@ -604,6 +606,14 @@ struct ThinkGate {
 
     /// The chain that samples the next token: the grammar one only outside the think block.
     func pick<T>(grammar: T, plain: T) -> T { inThink ? plain : grammar }
+
+    /// #1181: one decode step: `sample` draws the next token with the chain `pick` chooses, then
+    /// the token is fed. Rows pass fake chains and ids; the engine passes its sampler call.
+    mutating func next<T>(grammar: T, plain: T, sample: (T) -> Int32) -> Int32 {
+        let token = sample(pick(grammar: grammar, plain: plain))
+        feed(token)
+        return token
+    }
 }
 
 /// Incremental UTF-8 assembly for per-token byte pieces: emits the longest
