@@ -158,7 +158,8 @@ enum AgentWindowControls {
         case let .action(a): m.perform(a, pane: pane)
         case .equalize:
             let l = (try? m.layout.focus(pane).get()) ?? m.layout
-            if case let .success(e) = l.equalize(path: [], deep: true), e != m.layout { m.adopt(e) }
+            let e = (try? l.equalize(path: [], deep: true).get()) ?? l   // R900-6b1-5: refused, the pane is still focused
+            if e != m.layout { m.adopt(e) }
         }
     }
 
@@ -370,13 +371,32 @@ struct AgentSessionMenuButton: View {
         // A borderless Menu's own minimum is 20 pt at every UI scale; framed, it scales with the
         // header and leaves the narrowest title line its room (#822's pill included).
         .frame(width: sz(18), height: sz(18))
-        .disabled(ended)
+        .disabled(Self.disabled(ended: ended, entries: panes))
         .help(help)
         .accessibilityLabel("Session actions")
     }
 
+    /// R900-6a-2: an ended session's "⋯" is off, unless the split gate is on and it holds pane items: then it opens, its
+    /// Open in terminal stays off by its own entry (sessionMenu(ended: true)) and each pane item by its own rule.
+    static func disabled(ended: Bool, entries: [AgentWindowMenuEntry],
+                         splits: Bool = AgentPaneLayout.splitsEnabled) -> Bool {
+        ended && !(splits && entries.contains { if case .pane = $0 { true } else { false } })
+    }
+
     /// QA #672 #4 (the button's, before #1103): an ended session's says why.
-    var help: String { ended ? AgentPaneModeToggle.endedReason : Self.help(session) }
+    var help: String { Self.help(session, ended: ended, panes: panes) }
+
+    /// R900-6a-3: today's text, and with the split gate on and pane items present the pane verbs after it (an ended
+    /// session's too, whose menu then opens for them). Gate off or no pane items: today's three texts exactly.
+    static func help(_ s: AgentSession, ended: Bool, panes: [AgentWindowMenuEntry],
+                     splits: Bool = AgentPaneLayout.splitsEnabled) -> String {
+        let today = ended ? AgentPaneModeToggle.endedReason : help(s)
+        let verbs = panes.compactMap { (e: AgentWindowMenuEntry) -> AgentPaneVerb? in
+            if case let .pane(_, _, v) = e { v } else { nil }
+        }
+        guard splits, !verbs.isEmpty else { return today }
+        return today + (verbs.contains(.equalize) ? "; split, zoom, equalize or close this pane" : "; split this pane")
+    }
 
     /// The list the menu is built from (AgentSessionMenuItems re-reads it as the store changes).
     var entries: [AgentWindowMenuEntry] { AgentWindowControls.sessionMenu(session, store: store, ended: ended) + panes }

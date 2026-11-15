@@ -440,6 +440,8 @@ final class AgentWindowModel: ObservableObject {
         let axis: PaneNode.Axis
         let line: CGRect
         let split: CGRect
+        /// R900-5b-q1: the split's identity: the pane ids of its first and of its second side, in tree order.
+        let sides: [[UUID]]
         /// The line widened to 6·s across its axis, centred on it, clipped to the split's rect. Frames abut, so it overlaps
         /// both neighbours' edges: inside it the divider wins over the panes (checked before the first-click rule).
         @MainActor var hitArea: CGRect {
@@ -460,7 +462,7 @@ final class AgentWindowModel: ObservableObject {
             let (x, y) = PaneNode.divide(r, axis, ratio)
             out.append(Divider(path: path, axis: axis, line: axis == .columns
                 ? CGRect(x: y.minX, y: r.minY, width: 1, height: r.height) : CGRect(x: r.minX, y: y.minY, width: r.width, height: 1),
-                               split: r))
+                               split: r, sides: [a.panes.map(\.id), b.panes.map(\.id)]))
             walk(a, x, path + [0])
             walk(b, y, path + [1])
         }
@@ -532,8 +534,10 @@ final class AgentWindowModel: ObservableObject {
     /// at the minimum and [0.1, 0.9] as a drag is), adopted only when the layout differs, so saved once by the didSet
     /// (a drag under way is ended first by the willSet). Nothing for a path with no divider: the gate off, zoomed, too
     /// small, one pane or a size that is not finite (dividers(in:) is empty); nothing at the clamp (no save, no publish).
-    func nudge(_ path: [Int], up: Bool, in size: CGSize) {
-        guard dividers(in: size).contains(where: { $0.path == path }),
+    /// R900-5b-q1: `sides`, the drawn divider's identity (Divider.sides): nothing when the split now at `path` is another
+    /// one (a tree change not yet drawn); nil compares none.
+    func nudge(_ path: [Int], up: Bool, in size: CGSize, sides: [[UUID]]? = nil) {
+        guard dividers(in: size).contains(where: { $0.path == path && (sides == nil || $0.sides == sides) }),
               case let .split(_, r, _, _)? = layout.tree.locate(path[...], in: .zero)?.node,
               case let .success(l) = layout.setRatio(path: path, r + (up ? 0.05 : -0.05), minimum: paneMinimum,
                                                      in: CGRect(origin: .zero, size: size)), l != layout else { return }
@@ -1026,6 +1030,14 @@ final class AgentWindowModel: ObservableObject {
         }
         select(id)
         focusSelection()
+    }
+
+    /// R900-6b1-a: the flags a row Button's action may read: a plain SwiftUI Button runs its action on the left mouse up
+    /// of the click it tracked (the down is the same click's), so only those two give their flags; a key (Full Keyboard
+    /// Access), a flagsChanged, any other event or none (an accessibility press has no event of its own) gives [].
+    static func clickFlags(_ e: NSEvent?) -> NSEvent.ModifierFlags {
+        guard let e, e.type == .leftMouseUp || e.type == .leftMouseDown else { return [] }
+        return e.modifierFlags
     }
 
     /// #900 B2 step 6b1 (7.1 rule 3, 3.3, 15.0): Option-click and the row menu's "Open to the Side". Gate off, a History

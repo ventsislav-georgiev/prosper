@@ -499,7 +499,7 @@ struct AgentSidebarView: View {
                                                        ? { model.toggleCollapsed(section.title) } : nil)
                                 if !folded {
                                     ForEach(section.rows) { row in
-                                        Button { model.click(row.id, flags: NSApp.currentEvent?.modifierFlags ?? []) } label: {   // #900 B2 step 6b1: read with the gate on only
+                                        Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
                                             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                                                 number: model.number(row.id), inView: inView.contains(row.id))
                                         }
@@ -1233,8 +1233,8 @@ struct AgentPaneArea: View {
                         .background {
                             AgentDividerAXElement(label: d.axis == .columns ? "Vertical divider" : "Horizontal divider",
                                                   value: model.dividerPercent(d.path).map { "\($0) percent" },
-                                                  increment: { model.nudge(d.path, up: true, in: proxy.size) },
-                                                  decrement: { model.nudge(d.path, up: false, in: proxy.size) })
+                                                  increment: { model.nudge(d.path, up: true, in: proxy.size, sides: d.sides) },
+                                                  decrement: { model.nudge(d.path, up: false, in: proxy.size, sides: d.sides) })
                                 .accessibilitySortPriority(-1)
                         }
                         .position(x: d.hitArea.midX, y: d.hitArea.midY)
