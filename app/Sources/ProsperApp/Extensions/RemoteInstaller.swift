@@ -27,7 +27,7 @@ enum RemoteInstaller {
             case .extractFailed(let m):
                 return "Could not unpack the download: \(m)"
             case .manifestNotFound(let sub):
-                return "No extension.toml found\(sub.isEmpty ? " in the repo root" : " under \(sub)")."
+                return "No extension.toml found\(sub.isEmpty ? " in the repo root" : " under \(RemoteInstaller.shownName(sub))")."
             case .integrityFailed(let m):
                 return "Integrity check failed: \(m)"
             case .unsafeArchive(let m):
@@ -296,7 +296,7 @@ enum RemoteInstaller {
         }
         let r = root.resolvingSymlinksInPath().path, e = extDir.resolvingSymlinksInPath().path
         guard e == r || e.hasPrefix(r + "/") else {
-            throw InstallError.unsafeArchive("extension folder leads outside the download: \(subdir)")
+            throw InstallError.unsafeArchive("extension folder leads outside the download: \(shownName(subdir))")
         }
         return extDir
     }
@@ -371,10 +371,13 @@ enum RemoteInstaller {
         let listing = try runTarCapture(["-tzf", tarball.path])
         for raw in listing.split(whereSeparator: \.isNewline) {
             let entry = String(raw)
-            if let reason = unsafeEntryReason(entry) {
-                throw InstallError.unsafeArchive("\(reason): \(entry)")
-            }
+            if let why = unsafeEntryRefusal(entry) { throw InstallError.unsafeArchive(why) }
         }
+    }
+
+    /// #1182: an unsafe entry's refusal, its name as shown; nil for a safe entry.
+    static func unsafeEntryRefusal(_ entry: String) -> String? {
+        unsafeEntryReason(entry).map { "\($0): \(shownName(entry))" }
     }
 
     /// Pure zip-slip predicate (no I/O, unit-testable): an entry that would escape

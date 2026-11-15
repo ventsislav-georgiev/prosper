@@ -87,7 +87,192 @@ final class ExtensionRowCloseWiringTests: XCTestCase {
         }
     }
 
+    // MARK: - The publish guard (second dispatch)
+
+    /// The list is held open over a row that stopped offering: the record object the row was pressed with turns
+    /// untrusted without a redraw, so no close wiring runs; the list's own Publish then uploads nothing.
+    @MainActor
+    func testListPublishOverAnUntrustedRowUploadsNothing() throws {
+        let calls = PublishCalls()
+        let after = try pressListPublish(calls) { $0.trusted = false }
+        XCTAssertEqual(calls.all, [], "an untrusted row published")
+        XCTAssertFalse(after.contains { $0.role == "AXProgressIndicator" }, "the row shows a publish running")
+    }
+
+    /// Control: the same press over a row that still offers uploads once, with the manifest's id and version.
+    @MainActor
+    func testListPublishOverARowThatStillOffersUploadsOnce() throws {
+        let calls = PublishCalls()
+        _ = try pressListPublish(calls) { _ in }
+        XCTAssertEqual(calls.all, ["com.example.kit 1.0.0"])
+    }
+
+    /// A system record: publish(_:) on the row value uploads nothing; the same call on a trusted user record uploads
+    /// once (so this row can fail). The row is not hosted: its state reads its first values (not publishing, no
+    /// live version).
+    @MainActor
+    func testPublishOnASystemRowUploadsNothing() throws {
+        let (registry, installed) = try installedKit("system")
+        let l = installed.loaded
+        let system = ExtensionRecord(loaded: LoadedExtension(manifest: l.manifest, directory: l.directory, isSystem: true),
+                                     enabled: false, trusted: true)
+        let user = ExtensionRecord(loaded: l, enabled: false, trusted: true)
+        let plan = RemoteInstaller.publishPlan(l.directory)
+        for (record, want) in [(system, [String]()), (user, ["com.example.kit 1.0.0"])] {
+            let calls = PublishCalls()
+            ExtensionRow(registry: registry, record: record, fetchVersion: { _ in nil }, publishCall: calls.fake).publish(plan)
+            _ = waitForCall(calls)
+            XCTAssertEqual(calls.all, want, "system \(record.isSystem)")
+        }
+    }
+
+    /// The registry's current record for the id is a system one while the row value still holds a trusted user
+    /// record of the same folder: no upload. Direct call: a hosted row would need the registry to swap its record
+    /// after the list opened (a rescan that seeds and redraws); here the registry answers the system record from the
+    /// start. The registry seeds the kit from a system folder into its user folder, both in the row's tempDir().
+    @MainActor
+    func testPublishWhenTheRegistryNowHoldsASystemRecordUploadsNothing() throws {
+        let root = tempDir()
+        let system = root.appendingPathComponent("system/com.example.kit")
+        try FileManager.default.createDirectory(at: system, withIntermediateDirectories: true)
+        try kitManifest.write(to: system.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+        try "function noop() end".write(to: system.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+        let registry = ExtensionRegistry(systemDir: root.appendingPathComponent("system"),
+                                         userDir: root.appendingPathComponent("user"), hostVersion: "2.0.0",
+                                         defaults: scratchDefaults("publishguard-system"), services: InertServices())
+        registry.discover()
+        let now = try XCTUnwrap(registry.record(id: "com.example.kit"), "the registry holds no kit")
+        XCTAssertTrue(now.isSystem, "the registry's record is not a system one")
+        let held = ExtensionRecord(loaded: LoadedExtension(manifest: now.manifest, directory: now.loaded.directory,
+                                                           isSystem: false), enabled: false, trusted: true)
+        let calls = PublishCalls()
+        ExtensionRow(registry: registry, record: held, fetchVersion: { _ in nil }, publishCall: calls.fake)
+            .publish(RemoteInstaller.publishPlan(now.loaded.directory))
+        _ = waitForCall(calls)
+        XCTAssertEqual(calls.all, [], "published over a record the registry now holds as a system extension")
+    }
+
+    /// The record is gone from the registry (uninstalled meanwhile): the row value's publish uploads nothing.
+    @MainActor
+    func testPublishWhenTheRecordIsGoneUploadsNothing() throws {
+        let (_, installed) = try installedKit("publishguard-gone")
+        let empty = ExtensionRegistry(systemDir: nil, userDir: tempDir().appendingPathComponent("empty"),
+                                      hostVersion: "2.0.0", defaults: scratchDefaults("publishguard-empty"),
+                                      services: InertServices())
+        XCTAssertTrue(empty.record(id: "com.example.kit") == nil)
+        let calls = PublishCalls()
+        ExtensionRow(registry: empty, record: installed, fetchVersion: { _ in nil }, publishCall: calls.fake)
+            .publish(RemoteInstaller.publishPlan(installed.loaded.directory))
+        _ = waitForCall(calls)
+        XCTAssertEqual(calls.all, [], "published a record the registry no longer holds")
+    }
+
+    // MARK: - Names in the archive and link refusals (second dispatch)
+
+    /// An archive entry's refusal drops the bidi override, the control character and the line break; a plain entry
+    /// is unchanged; a safe one is not refused. An unsafe entry always keeps "/", "~" or "..", so it never cleans to
+    /// nothing; the empty case is shownName's.
+    @MainActor
+    func testUnsafeEntryRefusalShowsTheEntryWithoutUnseenCharacters() {
+        XCTAssertEqual(RemoteInstaller.unsafeEntryRefusal("../a\u{202E}b\u{7}c\nd.lua"), "path traversal: ../abcd.lua")
+        XCTAssertEqual(RemoteInstaller.unsafeEntryRefusal("/\u{202E}\u{7}\n"), "absolute path: /")
+        XCTAssertEqual(RemoteInstaller.unsafeEntryRefusal("../plain.lua"), "path traversal: ../plain.lua")
+        XCTAssertTrue(RemoteInstaller.unsafeEntryRefusal("kit/init.lua") == nil)
+        XCTAssertEqual(RemoteInstaller.shownName("\u{202E}\u{7}\n"), "an item")
+    }
+
+    /// The link's folder part in both refusals: no manifest there, and a folder leading outside the download (a
+    /// link inside the row's tempDir() to a folder beside the root). The error case keeps the raw value.
+    @MainActor
+    func testSubdirRefusalsShowTheFolderWithoutUnseenCharacters() throws {
+        let root = tempDir().appendingPathComponent("root")
+        let outside = root.deletingLastPathComponent().appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: outside.appendingPathComponent("extension.toml"))
+        func refusal(_ sub: String) -> String? {
+            do { _ = try RemoteInstaller.extensionDir(in: root, subdir: sub); return nil }
+            catch { return (error as? LocalizedError)?.errorDescription }
+        }
+        let names = ["a\u{202E}b\u{7}c\nd", "\u{202E}\u{7}\n", "plain"]
+        XCTAssertEqual(names.map(refusal), ["No extension.toml found under abcd.", "No extension.toml found under an item.",
+                                            "No extension.toml found under plain."])
+        XCTAssertThrowsError(try RemoteInstaller.extensionDir(in: root, subdir: names[0])) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError, .manifestNotFound(subdir: "a\u{202E}b\u{7}c\nd"))
+        }
+        for name in names {
+            try FileManager.default.createSymbolicLink(atPath: root.appendingPathComponent(name).path,
+                                                       withDestinationPath: "../outside")
+        }
+        let lead = "Refused to extract an unsafe archive: extension folder leads outside the download: "
+        XCTAssertEqual(names.map(refusal), [lead + "abcd", lead + "an item", lead + "plain"])
+    }
+
     // MARK: - Helpers
+
+    /// A registry in the row's tempDir() with com.example.kit 1.0.0 installed from a folder beside it, then trusted.
+    @MainActor
+    private func installedKit(_ name: String) throws -> (ExtensionRegistry, ExtensionRecord) {
+        let user = tempDir().appendingPathComponent("user")
+        let source = user.deletingLastPathComponent().appendingPathComponent("source")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try kitManifest.write(to: source.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+        try "function noop() end".write(to: source.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+        let registry = ExtensionRegistry(systemDir: nil, userDir: user, hostVersion: "2.0.0",
+                                         defaults: scratchDefaults(name), services: InertServices())
+        let installed = try registry.installLocal(from: source)
+        try registry.trust(id: installed.id)
+        return (registry, installed)
+    }
+
+    /// Hosts ExtensionRow over the registry's trusted record of the kit (no live version), opens its list with the row's own Publish,
+    /// runs `change` on the record object with no redraw, presses the list's Publish, waits for an upload (a ceiling:
+    /// none must come in the guarded rows) and returns the tree.
+    @MainActor
+    private func pressListPublish(_ calls: PublishCalls, change: (ExtensionRecord) -> Void) throws -> [CloseWiringAXItem] {
+        let (registry, record) = try installedKit("publishguard")   // the registry's own record object
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let (window, host) = AXTreeSupport.hosted(
+            ExtensionRow(registry: registry, record: record, fetchVersion: { _ in nil }, publishCall: calls.fake)
+                .frame(width: 760, alignment: .leading),
+            CGSize(width: 760, height: 400))
+        defer { window.close() }
+
+        let publish = try XCTUnwrap(wait(host) { $0.first { $0.isButton("Publish") } }, "no Publish button")
+        XCTAssertTrue(press(publish.object))
+        let list = try XCTUnwrap(wait(host) { $0.first { $0.isButton("Publish 2 files") } }, "the list did not open")
+        change(record)
+        XCTAssertTrue(press(list.object))
+        _ = waitForCall(calls)
+        XCTAssertFalse(window.isVisible, "never shown")
+        return items(host)
+    }
+
+    private let kitManifest = """
+        [extension]
+        id = "com.example.kit"
+        name = "kit"
+        title = "Kit"
+        description = "A test extension"
+        version = "1.0.0"
+        author = "Example Author"
+
+        [extension.host]
+        min_version = "2.0.0"
+        api_level = 1
+
+        [extension.entry]
+        main = "init.lua"
+        """
+
+    /// Runs the main run loop until `calls` holds an upload, or 5 s (a ceiling, not a wait).
+    @MainActor
+    private func waitForCall(_ calls: PublishCalls) -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while calls.all.isEmpty && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        return !calls.all.isEmpty
+    }
 
     /// Hosts ExtensionRow for a trusted user extension (local 1.0.0, never fetched yet), opens its list with the
     /// row's own Publish button, runs `change`, waits until `waitFor` is drawn, and checks the list closed or not.
@@ -208,6 +393,17 @@ private struct CloseWiringAXItem {
 private final class RecordBox: ObservableObject {
     @Published var record: ExtensionRecord
     init(_ record: ExtensionRecord) { self.record = record }
+}
+
+/// The fake upload: records "<id> <version>" of each manifest; no session, no network. Called from the row's publish
+/// task (off the main actor), hence the lock.
+private final class PublishCalls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [String] = []
+    var all: [String] { lock.withLock { seen } }
+    var fake: @Sendable (MarketClient.PublishManifest, String, String, MarketClient.ThemePreview?) async throws -> Void {
+        { [self] m, _, _, _ in lock.withLock { seen.append("\(m.id) \(m.version)") } }
+    }
 }
 
 /// The real ExtensionRow, its record from `box`, its live version from the fake `fetch`.

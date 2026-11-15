@@ -122,12 +122,17 @@ struct ExtensionRow: View {
     let record: ExtensionRecord
     /// #1182: the live Marketplace version for an id; a row passes a fake. Sendable, run from the row's task.
     let fetchVersion: @Sendable (String) async -> String?
+    /// #1182: the Marketplace upload (manifest, blob, kind, preview); a row passes a fake. Sendable, run from publish's task.
+    let publishCall: @Sendable (MarketClient.PublishManifest, String, String, MarketClient.ThemePreview?) async throws -> Void
 
     init(registry: ExtensionRegistry, record: ExtensionRecord,
-         fetchVersion: @escaping @Sendable (String) async -> String? = { await MarketClient.publishedVersion(id: $0) }) {
+         fetchVersion: @escaping @Sendable (String) async -> String? = { await MarketClient.publishedVersion(id: $0) },
+         publishCall: @escaping @Sendable (MarketClient.PublishManifest, String, String, MarketClient.ThemePreview?) async throws -> Void
+             = { try await MarketClient.publish(manifest: $0, blobBase64: $1, kind: $2, preview: $3) }) {
         self.registry = registry
         self.record = record
         self.fetchVersion = fetchVersion
+        self.publishCall = publishCall
     }
 
     @State private var publishing = false
@@ -142,9 +147,12 @@ struct ExtensionRow: View {
 
     private var meta: ExtensionMeta { record.manifest.extension }
     /// #1174: the row shows the Publish button; the open list closes when this turns false.
-    private var offered: Bool {
+    private var offered: Bool { Self.offers(record, publishing: publishing, published: publishedVersion) }
+
+    /// #1182: whether a row over `record` offers Publish (the body's `offered`, and publish's guard on the current record).
+    static func offers(_ record: ExtensionRecord, publishing: Bool, published: String?) -> Bool {
         PublishActions.offers(system: record.isSystem, trusted: record.trusted, publishing: publishing,
-                              published: publishedVersion, version: meta.version)
+                              published: published, version: record.manifest.extension.version)
     }
 
     var body: some View {
@@ -318,7 +326,12 @@ struct ExtensionRow: View {
     }
 
     /// The confirmation's action (main actor) with the plan the person confirmed: exactly its members are packed.
-    private func publish(_ plan: RemoteInstaller.PublishPlan) {
+    /// Internal so a row can call it on a row value whose record no longer offers Publish.
+    func publish(_ plan: RemoteInstaller.PublishPlan) {
+        // #1182: a list still open over a row that stopped offering (untrusted, system, publishing, live) publishes
+        // nothing; judged on this row and on the registry's current record (the closure holds the row of the press).
+        guard offered, let now = registry.record(id: record.id),
+              Self.offers(now, publishing: publishing, published: publishedVersion) else { return }
         guard let dir = registry.directory(id: record.id) else { return }
         rowError = nil
         publishing = true
@@ -331,8 +344,7 @@ struct ExtensionRow: View {
                     id: m.id, name: m.name, title: m.title, description: m.description,
                     version: m.version, author: m.author, icon: m.icon, license: m.license)
                 let (kind, preview) = Self.themePreview(themes: themes, dir: dir)
-                try await MarketClient.publish(manifest: manifest, blobBase64: blob,
-                                               kind: kind, preview: preview)
+                try await publishCall(manifest, blob, kind, preview)
                 await MainActor.run { publishing = false; publishedVersion = m.version }
             } catch {
                 await MainActor.run {
