@@ -1975,6 +1975,24 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(f.lock.withLock { f.log }, [])
     }
 
+    /// #1291: the session as listed with a null transcript_path and a false foreground: the window types nothing.
+    @MainActor
+    func testAgentWindowNotInFrontNoTranscriptAnswerTypesNothing() {
+        let row = Data(#"[{"name":"s","alias":"","activity_epoch":1,"state":"blocked","version":"1.63.0","agents":0,"claude_session_id":"0b7c2f3e-aaaa-bbbb-cccc-0123456789ab","transcript_path":null,"claude_foreground":false}]"#.utf8)
+        guard let s = AgentIsland.list(dirs: [Self.key.dir], run: { _, _ in row }).first else { return XCTFail("no row") }
+        XCTAssertTrue(s.claudeForeground == false && s.transcriptPath == nil)
+        let f = FormSim(.plain(Self.modeSwitch))
+        let c = controller(f.io, autoAllow: false)
+        c.store?.sessions = [s]
+        let i = interaction(c)
+        i.follow(s)
+        guard case .prompt(let w) = i.panel, w.buttons.count > 2 else { return XCTFail("\(i.panel)") }
+        i.answer(w.buttons[2])
+        XCTAssertFalse(i.busy)
+        XCTAssertEqual(i.notice, AgentWindowText.notForeground)
+        XCTAssertEqual(f.lock.withLock { f.log }, [])
+    }
+
     /// dch 1.63's --say failing not_foreground: its own plain words.
     func testAgentWindowNotInFrontSayReplyHasItsOwnWords() {
         let f = MessageFake(statuses: ["idle", "working"],

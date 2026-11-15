@@ -1330,6 +1330,8 @@ tag from the now-released section and put it on the new top draft.
   is now a link that opens the Paste from Other Apps setting, like the blocked warning.
 - The clipboard panel now says so when history is not being saved (Prosper cannot read its device
   key), while your new clips stay listed until Prosper quits.
+- Agent Sessions: a click on a session whose Claude is suspended or in the background no longer
+  types into it when dch has no transcript for that session (island card and Agents window).
 
 ## v2.174.0
 

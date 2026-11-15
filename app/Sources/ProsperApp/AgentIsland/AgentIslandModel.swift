@@ -686,6 +686,7 @@ enum AgentIsland {
             let json = run(["--ls-json"], env) ?? Data()
             var rows = DchCommand.parseListJSON(json)
             let mapping = AgentTranscriptMapping.parse(json)   // #797: the same bytes, no second fork
+            let foreground = AgentTranscriptMapping.foregrounds(json)   // #1291: also for a row with no transcript
             if rows.isEmpty {
                 guard let tsv = run(["-lj"], env) else {
                     return previous.filter { $0.key.dir == dir }.map { var s = $0; s.fresh = false; return s }
@@ -698,7 +699,7 @@ enum AgentIsland {
                              agents: row.agents, meta: row.meta, version: row.version, metaEpoch: row.metaEpoch,
                              autoAllowed: row.autoAllowed,
                              claudeSessionID: mapping[row.name]?.sessionID, transcriptPath: mapping[row.name]?.path,
-                             claudeForeground: mapping[row.name]?.foreground, cwd: row.cwd, harness: row.harness)
+                             claudeForeground: foreground[row.name], cwd: row.cwd, harness: row.harness)
                 return AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO)
             }
         }

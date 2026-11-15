@@ -12,8 +12,20 @@ enum AgentTranscriptMapping {
     struct Entry: Equatable {
         let sessionID: String
         let path: String
-        /// #1135: dch 1.63's `claude_foreground`; nil when absent or not a JSON boolean.
-        var foreground: Bool? = nil
+    }
+
+    /// #1135/#1291: dch 1.63's `claude_foreground` by row name, read outside `parse` because dch writes it for a
+    /// row whose `transcript_path` is null. Only a real JSON boolean counts (a 1/0 number bridges to Bool through
+    /// NSNumber); anything else, or the key left out, has no entry.
+    static func foregrounds(_ data: Data) -> [String: Bool] {
+        guard !data.isEmpty, let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [:] }
+        var out: [String: Bool] = [:]
+        for o in rows {
+            guard let name = o["name"] as? String, !name.isEmpty, let n = o["claude_foreground"] as? NSNumber,
+                  CFGetTypeID(n) == CFBooleanGetTypeID() else { continue }
+            out[name] = n.boolValue
+        }
+        return out
     }
 
     /// name → mapping. Tolerant (rule 2): a row without both, a non-UUID-shaped id or
@@ -32,9 +44,7 @@ enum AgentTranscriptMapping {
                   // QA #626 INFO-5: dch names `<config>/projects/<dir>/<sessionId>.jsonl`, so the file is that id's.
                   (path as NSString).lastPathComponent == "\(sid).jsonl"
             else { continue }
-            // A JSON number bridges to Bool too (1 as true): only a real boolean counts.
-            let fg = (o["claude_foreground"] as? NSNumber).flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil }
-            out[name] = Entry(sessionID: sid, path: path, foreground: fg)
+            out[name] = Entry(sessionID: sid, path: path)
         }
         return out
     }

@@ -83,6 +83,13 @@ final class AgentIslandForegroundTests: XCTestCase {
         }
     }
 
+    /// #1291: a Claude row whose transcript_path is null (dch writes claude_foreground all the same), as given.
+    private static func nullTranscriptRow(_ fg: String?) -> Data {
+        Data((#"[{"name":"api","alias":"","activity_epoch":1,"state":"blocked","version":"1.63.0","agents":0,"#
+            + #""claude_session_id":"\#(sid)","transcript_path":null"#
+            + (fg.map { #","claude_foreground":\#($0)"# } ?? "") + "}]").utf8)
+    }
+
     private static func listRow(_ fg: String?) -> Data {
         Data((#"[{"name":"api","alias":"","activity_epoch":1,"state":"blocked","version":"1.63.0","agents":0,"#
             + #""claude_session_id":"\#(sid)","transcript_path":"/Users/example/.claude/projects/p/\#(sid).jsonl""#
@@ -92,8 +99,8 @@ final class AgentIslandForegroundTests: XCTestCase {
     // MARK: - The parser
 
     func testParserReadsForegroundTrueAndFalse() {
-        XCTAssertEqual(AgentTranscriptMapping.parse(Self.listRow("true"))["api"]?.foreground, true)
-        XCTAssertEqual(AgentTranscriptMapping.parse(Self.listRow("false"))["api"]?.foreground, false)
+        XCTAssertEqual(AgentTranscriptMapping.foregrounds(Self.listRow("true"))["api"], true)
+        XCTAssertEqual(AgentTranscriptMapping.foregrounds(Self.listRow("false"))["api"], false)
         XCTAssertEqual(AgentIsland.list(dirs: [Self.dir]) { _, _ in Self.listRow("false") }.first?.claudeForeground, false,
                        "the list carries it to the session")
     }
@@ -101,7 +108,7 @@ final class AgentIslandForegroundTests: XCTestCase {
     func testParserLeavesAnAbsentForegroundAbsent() {
         let m = AgentTranscriptMapping.parse(Self.listRow(nil))
         XCTAssertEqual(m["api"]?.sessionID, Self.sid, "the row still maps")
-        XCTAssertTrue(m["api"]?.foreground == nil)
+        XCTAssertTrue(AgentTranscriptMapping.foregrounds(Self.listRow(nil))["api"] == nil)
     }
 
     /// A JSON number bridges to Bool through NSNumber (1 would read true): only a JSON boolean counts.
@@ -109,7 +116,22 @@ final class AgentIslandForegroundTests: XCTestCase {
         for v in ["1", "0", "\"true\"", "null", "{}", "[true]"] {
             let m = AgentTranscriptMapping.parse(Self.listRow(v))
             XCTAssertEqual(m["api"]?.sessionID, Self.sid, "\(v): the row still maps")
-            XCTAssertTrue(m["api"]?.foreground == nil, "\(v): absent")
+            XCTAssertTrue(AgentTranscriptMapping.foregrounds(Self.listRow(v))["api"] == nil, "\(v): absent")
+        }
+    }
+
+    /// #1291: no transcript_path on the row: no mapping, but the foreground is still read (boolean only).
+    func testForegroundIsReadForARowWithNoTranscriptPath() {
+        let d = Self.nullTranscriptRow("false")
+        XCTAssertTrue(AgentTranscriptMapping.parse(d)["api"] == nil, "no mapping, as before")
+        XCTAssertEqual(AgentTranscriptMapping.foregrounds(d)["api"], false)
+        let s = AgentIsland.list(dirs: [Self.dir]) { _, _ in d }.first
+        XCTAssertEqual(s?.claudeForeground, false)
+        XCTAssertTrue(s?.transcriptPath == nil, "the transcript stays nil")
+        XCTAssertEqual(AgentIsland.list(dirs: [Self.dir]) { _, _ in Self.nullTranscriptRow("true") }.first?.claudeForeground, true)
+        for v in ["1", "0", "\"false\"", "null"] {
+            let n = AgentIsland.list(dirs: [Self.dir]) { _, _ in Self.nullTranscriptRow(v) }.first
+            XCTAssertTrue(n != nil && n?.claudeForeground == nil, "\(v): nil, as before")
         }
     }
 
@@ -251,6 +273,22 @@ final class AgentIslandForegroundTests: XCTestCase {
     }
 
     // MARK: - A card click (the human's)
+
+    /// #1291: the session as listed with a null transcript_path and a false foreground: a click types nothing.
+    @MainActor func testACardClickOnAListedRowWithNoTranscriptAndNotInFrontTypesNothing() throws {
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.screen))
+        for (fg, sent) in [("false", []), ("true", ["1"]), ("1", ["1"])] as [(String, [String])] {
+            let f = FakeIO(Self.screen), (c, _) = controller(f, autoAllow: false)
+            guard let s = AgentIsland.list(dirs: [Self.dir], run: { _, _ in Self.nullTranscriptRow(fg) }).first else {
+                return XCTFail("no row")
+            }
+            c.store?.sessions = [s]
+            c.answer(s, p, p.options[0])
+            drain(c)
+            XCTAssertEqual(f.sent, sent, "claude_foreground \(fg)")
+            if fg == "false" { XCTAssertEqual(c.store?.actions[key], AgentIsland.notInFrontText) }
+        }
+    }
 
     /// The digit would go to the shell in front: nothing is typed and the row says why. Absent and true: sent.
     @MainActor func testACardClickOnARowNotInFrontTypesNothing() throws {
