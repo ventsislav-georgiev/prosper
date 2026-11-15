@@ -89,8 +89,11 @@ final class AppIndexTests: XCTestCase {
 
     @MainActor
     func testLiveIndexFindsSystemSettings() throws {
+        let root = fakeAppsDir(["System Settings", "Safari", "Calculator"])
+        AppIndex.shared.install(apps: AppIndex.scan(dirs: [root.path], nested: [], extraPaths: []))
+        defer { AppIndex.shared.install(apps: nil) }
         let apps = AppIndex.shared.search("system preferences", limit: 3)
-        try XCTSkipIf(AppIndex.shared.apps.isEmpty, "no apps scanned in this environment")
+        XCTAssertFalse(AppIndex.shared.apps.isEmpty, "the fake tree was not indexed")
         XCTAssertEqual(apps.first?.name, "System Settings")
     }
 

@@ -138,6 +138,32 @@ final class AppIndex {
     /// output order. Search is unaffected too: `rank` / `SearchScore.before` sort by
     /// score with their own tie-breaks, so this only makes equal-score ties
     /// deterministic instead of dependent on directory enumeration.
+    /// CFBundleIdentifier read straight from `<app>/Contents/Info.plist`. Never
+    /// `Bundle(url:)`: that registers every scanned app in `Bundle.allBundles` for the
+    /// life of the process. A missing, oversized or malformed plist gives nil, which is
+    /// what `Bundle(url:)?.bundleIdentifier` gave for such an app.
+    nonisolated static func bundleIdentifier(ofApp path: String) -> String? {
+        let plist = (path as NSString).appendingPathComponent("Contents/Info.plist")
+        // stat follows symlinks like Bundle did; the regular-file test keeps a FIFO from blocking the read.
+        var st = stat()
+        guard stat(plist, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG,
+              st.st_size >= 0, st.st_size <= off_t(maxInfoPlistBytes),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: plist)),
+              let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let id = (obj as? [String: Any])?["CFBundleIdentifier"] as? String else { return nil }
+        return id
+    }
+    nonisolated static let maxInfoPlistBytes = 1_048_576
+
+    /// Test seam: install a prebuilt list (e.g. a scan of a fake tree) so the shared
+    /// index never walks the real application folders; nil forgets it.
+    func install(apps list: [AppEntry]?) {
+        apps = list ?? []
+        appsLower = apps.map { $0.name.lowercased() }
+        built = list != nil
+        lastBuild = list != nil ? Date() : .distantPast
+    }
+
     nonisolated static func scan(dirs: [String] = searchDirs,
                                  nested: [String] = nestedRoots,
                                  extraPaths: [String] = extraAppPaths) -> [AppEntry] {
@@ -150,7 +176,7 @@ final class AppIndex {
             let name = String((path as NSString).lastPathComponent.dropLast(4)) // strip ".app"
             let key = name.lowercased()
             guard byName[key] == nil else { return }
-            let bundleId = Bundle(url: url)?.bundleIdentifier
+            let bundleId = bundleIdentifier(ofApp: path)
             byName[key] = AppEntry(name: name, url: url, bundleId: bundleId)
         }
 

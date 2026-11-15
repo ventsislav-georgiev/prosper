@@ -37,10 +37,12 @@ final class AppPickerMenuTests: XCTestCase {
     }
 
     func testPopoverBodyBuildsAndListsRealApps() throws {
-        // At least one app must exist on this machine for the list to be
-        // non-trivial — true of any real Mac (Finder alone guarantees it).
+        // A fake tree keeps the list non-trivial without walking the real app folders.
+        let root = fakeAppsDir(["Alpha", "Beta", "Gamma"])
+        AppIndex.shared.install(apps: AppIndex.scan(dirs: [root.path], nested: [], extraPaths: []))
+        defer { AppIndex.shared.install(apps: nil) }
         XCTAssertFalse(AppIndex.shared.ensureBuilt().isEmpty,
-                       "no installed apps found — can't prove the row list actually builds")
+                       "fake apps not indexed — can't prove the row list actually builds")
 
         let menu = AppPickerMenu(label: "Launch an app", help: "") { _, _ in }
         let host = NSHostingView(rootView: menu.popoverBody)

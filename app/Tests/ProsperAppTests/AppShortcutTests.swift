@@ -238,9 +238,9 @@ final class AppShortcutTests: XCTestCase {
     /// "settings" (an AppIndex alias, score 1000).
     @MainActor
     func testSystemSettingsAppStillOutranksProsperSettings() async throws {
-        let apps = AppIndex.shared.ensureBuilt()
-        try XCTSkipUnless(apps.contains { $0.name.localizedCaseInsensitiveContains("System Settings") },
-                          "no System Settings.app in this environment")
+        let root = fakeAppsDir(["System Settings"])
+        AppIndex.shared.install(apps: AppIndex.scan(dirs: [root.path], nested: [], extraPaths: []))
+        defer { AppIndex.shared.install(apps: nil) }
         guard case .search(let hits) = await CommandRouter.run("settings") else {
             return XCTFail("no search outcome for \u{201C}settings\u{201D}")
         }
