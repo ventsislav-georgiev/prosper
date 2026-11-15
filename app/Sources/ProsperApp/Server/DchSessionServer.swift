@@ -104,8 +104,9 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
     static let port: UInt16 = 8771
 
     private let log = Logger(subsystem: "com.prosper.app", category: "DchServer")
-    /// Connections, keep-awake and everything they touch. It runs dch forks with no
-    /// timeout, so main must never wait on it.
+    /// Connections, keep-awake and everything they touch. It runs Remote Terminal's list,
+    /// rename and kill dch calls in line, each request bounded by DchCommand.remoteTimeout
+    /// (#988), so it can be busy for seconds: main must never wait on it.
     let queue = DispatchQueue(label: "com.prosper.dchserver")
     /// Owns `listener`, `wanted`, `retry` and `retryAttempt`, and runs the listener's
     /// handlers. Only short work runs here, so start()/stop()/isRunning may sync on it

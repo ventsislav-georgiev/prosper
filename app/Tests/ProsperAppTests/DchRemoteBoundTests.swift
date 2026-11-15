@@ -143,4 +143,68 @@ final class DchRemoteBoundTests: XCTestCase {
         try XCTUnwrap(run(("/bin/sh", ["-c", "printf ''"]), rec) { DchCommand.kill("api") })
         XCTAssertEqual(rec.recorded, [])
     }
+
+    // MARK: - R988e-b: a fallback call gets only what is left of its request's one bound
+
+    /// As `run`, with `first` for the first call, `fallback` for the second (remoteFallbackStandIn) and the timeout at
+    /// `bound`; all restored in a defer (after the ceiling both stand-ins answer nothing at once).
+    private func runWithFallback<T>(_ first: (path: String, args: [String]), then fallback: (path: String, args: [String]),
+                                    bound: TimeInterval, _ recorder: Recorder,
+                                    _ body: @escaping @Sendable () -> T) -> T? {
+        let saved = DchCommand.remoteFallbackStandIn
+        var late = false
+        defer { DchCommand.remoteFallbackStandIn = late ? (Self.answersNothing.path, Self.answersNothing.args) : saved }
+        DchCommand.remoteFallbackStandIn = fallback
+        let out = run(first, recorder) { () -> T in   // run sets 2 s and restores the timeout; the call reads `bound`
+            DchCommand.remoteTimeout = bound
+            return body()
+        }
+        late = out == nil
+        return out
+    }
+
+    /// The first child answers empty after 8 s (/bin/sleep 8 prints nothing) and the fallback never answers. One 13 s
+    /// bound for the request ends the call near 13 s, inside the 20 s ceiling; a fresh 13 s bound for the fallback
+    /// would end it near 21 s, past the ceiling. The one kill goes to the fallback's child (the first was reaped).
+    func testAListWhoseFallbackNeverAnswersEndsWithinOneBound() throws {
+        let rec = Recorder()
+        let rows = try XCTUnwrap(runWithFallback(("/bin/sleep", ["8"]), then: Self.sleeps, bound: 13, rec) {
+            DchCommand.listSessions()
+        })
+        XCTAssertEqual(rows, [], "the failure answer it already had")
+        assertKilledTheChild(rec)
+    }
+
+    func testAReadWhoseFallbackNeverAnswersEndsWithinOneBound() throws {
+        let rec = Recorder()
+        let screen = try XCTUnwrap(runWithFallback(("/bin/sleep", ["8"]), then: Self.sleeps, bound: 13, rec) {
+            DchCommand.readScreen("api")
+        })
+        XCTAssertEqual(screen, Data(), "the failure answer it already had")
+        assertKilledTheChild(rec)
+    }
+
+    /// A first call that answers empty at once and a fallback that answers: today's answers, nothing killed.
+    func testAnAnsweringFallbackIsTakenAsBefore() throws {
+        let rec = Recorder(), empty = (path: "/bin/sh", args: ["-c", "printf ''"])
+        let rows = try XCTUnwrap(runWithFallback(empty, then: ("/bin/sh", ["-c", "printf 'api\\tweb\\t1\\n'"]), bound: 2, rec) {
+            DchCommand.listSessions()
+        })
+        XCTAssertEqual(rows, DchCommand.parseListTSV("api\tweb\t1\n"))
+        XCTAssertEqual(rows.map(\.alias), ["web"])
+        let screen = try XCTUnwrap(runWithFallback(empty, then: ("/bin/sh", ["-c", "printf 'screen'"]), bound: 2, rec) {
+            DchCommand.readScreen("api")
+        })
+        XCTAssertEqual(screen, Data("screen".utf8))
+        XCTAssertEqual(rec.recorded, [])
+    }
+
+    /// Nothing left of the bound: no time for a fallback, so it is never started.
+    func testNothingLeftOfTheBoundStartsNoFallback() {
+        let now = ProcessInfo.processInfo.systemUptime
+        XCTAssertTrue(DchCommand.remoteLeft(until: now - 1) == nil, "past the deadline")
+        XCTAssertTrue(DchCommand.remoteLeft(until: now) == nil, "at the deadline")
+        let left = DchCommand.remoteLeft(until: now + 100) ?? 0
+        XCTAssertTrue(left > 0 && left <= 100, "\(left)")
+    }
 }

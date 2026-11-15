@@ -2224,10 +2224,11 @@ enum DchCommand {
     /// against an older binary it prints nothing and we fall back to `-lj`'s
     /// `name\talias\tactivityEpoch` lines (state empty).
     static func listSessions() -> [DchListRow] {
+        let end = ProcessInfo.processInfo.systemUptime + remoteTimeout   // R988e-b: one bound for both calls
         guard let json = runCapturingData(args: ["--ls-json"]) else { return [] }   // #988: timed out, no -lj wait
         let rows = parseListJSON(json)
         if !rows.isEmpty { return rows }
-        return parseListTSV(runCapturing(args: ["-lj"]) ?? "")
+        return parseListTSV(runCapturing(args: ["-lj"], until: end) ?? "")
     }
 
     /// `[{"name","alias","harness","activity_epoch","state","agents"}]` — dch 1.4+
@@ -2280,8 +2281,9 @@ enum DchCommand {
     /// screen bytes. Older dch rejects the flag and older masters report nothing —
     /// both fall back to the screen alone.
     static func readScreen(_ name: String) -> Data {
+        let end = ProcessInfo.processInfo.systemUptime + remoteTimeout   // R988e-b: one bound for both reads
         guard let r = runCapturingBoth(args: ["--read", name, "--ansi", "--cursor"]) else { return Data() }   // #988: timed out
-        guard !r.out.isEmpty else { return runCapturingData(args: ["--read", name, "--ansi"]) ?? Data() }
+        guard !r.out.isEmpty else { return runCapturingData(args: ["--read", name, "--ansi"], until: end) ?? Data() }
         guard let cup = cursorCUP(r.err) else { return r.out }
         return r.out + Data(cup.utf8)
     }
@@ -2433,24 +2435,28 @@ enum DchCommand {
     static func renameTimedOut(_ name: String) -> String { "Couldn't rename \(renameShown(name)): dch didn't answer in time" }
 
     /// nil when the call timed out (#988).
-    private static func runCapturing(args: [String]) -> String? {
-        runCapturingData(args: args).map { String(data: $0, encoding: .utf8) ?? "" }
+    private static func runCapturing(args: [String], until end: TimeInterval? = nil) -> String? {
+        runCapturingData(args: args, until: end).map { String(data: $0, encoding: .utf8) ?? "" }
     }
 
     /// Run dch for a short control command and capture stdout. Not used for attach
     /// (that needs a pty) — only for `--ls-json` / `-k` / `--read`, whose output is
     /// raw bytes (escape sequences), hence Data rather than String. nil when it timed out.
-    private static func runCapturingData(args: [String]) -> Data? {
-        runCapturingBoth(args: args)?.out
+    private static func runCapturingData(args: [String], until end: TimeInterval? = nil) -> Data? {
+        runCapturingBoth(args: args, until: end)?.out
     }
 
     /// Same as `runCapturingData`, plus stderr as text — `--read --cursor` reports the
     /// caret there so it can't corrupt the screen on stdout.
     /// #988: bounded at `remoteTimeout`; on expiry the child is killed by its recorded pid and nil comes back.
     /// path, args and env are read on the caller's thread (#486 r2).
-    private static func runCapturingBoth(args: [String]) -> (out: Data, err: String, status: Int32)? {
-        let standIn = remoteStandIn, path = standIn?.path ?? dchPath, argv = standIn?.args ?? args, env = remoteEnv()
-        return bounded(remoteTimeout, terminate: standIn?.terminate ?? sigkill) { onPid in
+    /// R988e-b: `end` (systemUptime) is set for a fallback call: it gets only what is left of its request's bound.
+    private static func runCapturingBoth(args: [String], until end: TimeInterval? = nil) -> (out: Data, err: String, status: Int32)? {
+        let left: TimeInterval? = if let end { remoteLeft(until: end) } else { remoteTimeout }
+        guard let left else { return nil }   // nothing left: the fallback is not started; the request's failure answer
+        let standIn = remoteStandIn, fallback = end == nil ? nil : remoteFallbackStandIn
+        let path = fallback?.path ?? standIn?.path ?? dchPath, argv = fallback?.args ?? standIn?.args ?? args, env = remoteEnv()
+        return bounded(left, terminate: standIn?.terminate ?? sigkill) { onPid in
             runCapturingBoth(args: argv, env: env, path: path, onPid: onPid)
         }
     }
@@ -2464,6 +2470,16 @@ enum DchCommand {
     /// Test seam (#988): stands in for the program, its arguments and the kill of every Remote Terminal call
     /// above (rows: /bin/sleep or /bin/sh, and a recorder); nil runs dch with the call's own arguments.
     nonisolated(unsafe) static var remoteStandIn: (path: String, args: [String], terminate: @Sendable (pid_t) -> Void)?
+
+    /// Test seam (R988e-b): a fallback call (list's -lj, read's plain --read) runs this instead of `remoteStandIn`'s
+    /// program and arguments (the kill stays remoteStandIn's); nil is the call it is today.
+    nonisolated(unsafe) static var remoteFallbackStandIn: (path: String, args: [String])?
+
+    /// R988e-b: the seconds left until `end` (systemUptime, monotonic); nil when none are left.
+    static func remoteLeft(until end: TimeInterval) -> TimeInterval? {
+        let left = end - ProcessInfo.processInfo.systemUptime
+        return left > 0 ? left : nil
+    }
 
     /// Remote Terminal's one-shot dch env (list, kill, rename, --read; #838's ctl): its one dir, no DCH_SESSION.
     static func remoteEnv() -> [String: String] {

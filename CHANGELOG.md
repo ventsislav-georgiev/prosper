@@ -1185,6 +1185,8 @@ tag from the now-released section and put it on the new top draft.
   and such a prompt can only be declined from the card (approve it in the terminal) (#1251)
 - Agent: the phone chat and a run that reuses a started coding agent stay on the model that is
   loaded when the model setting changes in between (#1181)
+- Remote Terminal: a phone's session list or screen read that needs a second dch call waits at most
+  10 s in all, not 10 s per call (#988)
 
 ## v2.174.0
 
