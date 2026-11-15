@@ -255,6 +255,20 @@ final class AgentWindowModel: ObservableObject {
         guard AgentPaneLayout.splitsEnabled, let z = layout.zoomed, tiled.contains(z) else { return tiled }
         return [z]
     }
+    /// #900 B2 step 4b (7.2): the rows of the sessions shown in the active layout other than the focused pane's (the
+    /// sidebar's "in view" glyph). From `shownPanes`, so a zoom or the too-small fallback (the focused pane alone) gives
+    /// none. O(panes): one tiling walk and one resolved row per pane. Empty with the split gate off; the sidebar reads
+    /// it once per section. shortcut: `paneArea` is not published, so a resize across the too-small line alone shows
+    /// at the next model publish (as the band's chip, AgentWindowBand); publish it if that ever shows.
+    var inViewRows: Set<AgentSidebar.RowID> {
+        guard AgentPaneLayout.splitsEnabled else { return [] }
+        let shown = shownPanes
+        var rows = Set(layout.panes.compactMap { p in
+            shown.contains(p.id) && p.id != layout.focused ? Self.resolvedRow(runtimes[p.id]?.content) : nil
+        })
+        if let selection { rows.remove(selection) }   // the focused pane's session keeps the selection bar alone
+        return rows
+    }
     /// 3.3 (#900 B2 step 2): the minimum pane, 300x200·s: the one value paneFrames tiles with and perform's split
     /// checks, so a split that passes its room check is always drawn tiled.
     var paneMinimum: CGSize { CGSize(width: sz(PaneLayout.minimumPane.width), height: sz(PaneLayout.minimumPane.height)) }
@@ -382,12 +396,19 @@ final class AgentWindowModel: ObservableObject {
     /// is not finite changes nothing. In the sidebar: the sidebar takes the keys. In a pane frame: the panes do, and an
     /// unfocused pane is focused (`AgentsNSWindow.firstClick`). Elsewhere (the 1 pt line, the band): nothing changes.
     /// True: the click only focused a pane, so the window swallows it with its drags and its up.
+    /// #900 B2 step 4b (7.4, N900-f): zoomed, the view draws the zoomed pane over the whole pane area and no other
+    /// (AgentPaneArea.drawn), so a down anywhere in the area is that pane's: the panes take the keys and the click
+    /// passes (never a hidden pane's tile). Checked after the finiteness guard, so it never reads a non-finite frame.
     func mouseDown(at p: CGPoint, in size: CGSize) -> Bool {
         guard p.x.isFinite, p.y.isFinite, size.width.isFinite, size.height.isFinite else { return false }
         if sidebarFrame(in: size)?.contains(p) == true { keyFocus = .sidebar; return false }
         guard let a = paneAreaFrame(in: size), a.contains(p) else { return false }
-        let local = CGPoint(x: p.x - a.minX, y: p.y - a.minY)
-        let frames = paneFrames(in: CGRect(origin: .zero, size: a.size))
+        let local = CGPoint(x: p.x - a.minX, y: p.y - a.minY), area = CGRect(origin: .zero, size: a.size)
+        let frames = paneFrames(in: area), drawn = AgentPaneArea.drawn(self, in: area)
+        if drawn.count < frames.count, let z = drawn.keys.first {
+            focusPane(z)   // the focused pane: the layout stays as it is
+            return false
+        }
         guard frames.values.contains(where: { $0.contains(local) }) else { return false }
         keyFocus = .pane
         guard let id = AgentsNSWindow.firstClick(at: local, frames: frames, focused: layout.focused) else { return false }

@@ -154,20 +154,11 @@ final class AgentsNSWindow: NSWindow {
         return frames.first { $0.key != focused && $0.value.contains(p) }?.key
     }
 
-    /// #900 B2 step 3 (7.4): a left mouse-down at `p` in the content of `size` (top-left origin; outside data). Zoomed,
-    /// the view draws the zoomed pane over the whole pane area and no other (AgentPaneArea.drawn), so a down anywhere in
-    /// the area is that pane's: it is the focused one, the panes take the keys and the click passes (never a hidden
-    /// pane's tile). Otherwise the model's rule, unchanged. True: the down only focused a pane (swallowed).
-    /// shortcut: AgentWindowModel.mouseDown hit-tests the tiling and that file was closed to this step; fold it in there.
+    /// #900 B2 step 3 (7.4): a left mouse-down at `p` in the content of `size` (top-left origin; outside data): the
+    /// model's rule, the zoom included (step 4b, N900-f: AgentWindowModel.mouseDown, after its finiteness guard).
+    /// True: the down only focused a pane (swallowed).
     @MainActor static func mouseDown(_ m: AgentWindowModel, at p: CGPoint, in size: CGSize) -> Bool {
-        if let a = m.paneAreaFrame(in: size), a.contains(p) {
-            let local = CGRect(origin: .zero, size: a.size), drawn = AgentPaneArea.drawn(m, in: local)
-            if drawn.count < m.paneFrames(in: local).count, let z = drawn.keys.first {
-                m.focusPane(z)   // the focused pane: the layout stays as it is
-                return false
-            }
-        }
-        return m.mouseDown(at: p, in: size)
+        m.mouseDown(at: p, in: size)
     }
 
     /// 7.6: a small state machine over the left button. A mouse-down that only focused a pane is swallowed, and so are
@@ -465,7 +456,7 @@ struct AgentSidebarView: View {
                             ForEach(model.sections) { section in
                                 // #828: Sessions, Sidekicks and History fold on a header click
                                 // (remembered per Mac); a folded section keeps its selection.
-                                let folded = model.isCollapsed(section.title)
+                                let folded = model.isCollapsed(section.title), inView = model.inViewRows
                                 AgentSectionHeader(title: section.title, count: section.rows.count, collapsed: folded,
                                                    toggle: AgentSidebar.collapsible.contains(section.title)
                                                        ? { model.toggleCollapsed(section.title) } : nil)
@@ -473,7 +464,7 @@ struct AgentSidebarView: View {
                                     ForEach(section.rows) { row in
                                         Button { model.click(row.id) } label: {
                                             AgentSidebarRowView(row: row, selected: model.selection == row.id,
-                                                                number: model.number(row.id))
+                                                                number: model.number(row.id), inView: inView.contains(row.id))
                                         }
                                         .buttonStyle(.plain)
                                         .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
@@ -587,6 +578,10 @@ struct AgentSidebarRowView: View {
     let selected: Bool
     /// #1110: the row's ⌘<n> (1…9), nil for no chip.
     var number: Int?
+    /// #900 B2 step 4b (7.2): the session is shown in another pane of the active layout (AgentWindowModel.inViewRows).
+    var inView = false
+    /// Tests: a row part's frame in the row, by kind and row title (nil in the product). Main actor.
+    static var probe: ((String, String, CGRect) -> Void)?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
@@ -605,6 +600,7 @@ struct AgentSidebarRowView: View {
                     Text(row.title).font(Neon.font(12.5, weight: .medium))
                         .foregroundStyle(row.state == nil ? Neon.textSecondary : Neon.textPrimary)
                         .lineLimit(1).truncationMode(.middle)
+                        .modifier(AgentSidebarRowProbe(kind: "title", title: row.title))
                     Spacer(minLength: sz(4))
                     if !row.age.isEmpty || row.state != nil {
                         // #828: a fixed slot, so "now" -> "1m" never re-truncates the title; #829 (QA #660
@@ -617,19 +613,28 @@ struct AgentSidebarRowView: View {
                         .font(Neon.font(10).monospacedDigit())
                         .fixedSize()
                     }
+                    if AgentPaneLayout.splitsEnabled {
+                        // #900 B2 step 4b (7.2, #828 slot rule): the "in view" glyph's slot is always laid out with
+                        // the gate on (hidden by opacity, never removed), so the title never moves; gate off: no slot.
+                        Image(systemName: "eye").font(Neon.font(9, weight: .semibold)).foregroundStyle(Neon.textSecondary)
+                            .frame(width: sz(14)).opacity(inView ? 1 : 0)
+                            .modifier(AgentSidebarRowProbe(kind: inView ? "glyph" : "slot", title: row.title))
+                    }
                 }
                 detailVariants
             }
         }
         .padding(.horizontal, sz(10)).padding(.vertical, sz(7))
         .frame(maxWidth: .infinity, alignment: .leading)
+        .coordinateSpace(.named(agentSidebarRowSpace))
         // #860: Settings' selected row (accent fill and edge, the glowing accent bar), drawn behind and
         // over the row's padding so nothing in it moves.
         .background(NeonSelectedRowFill(selected: selected))
         .overlay(alignment: .leading) { NeonSelectionBar().opacity(selected ? 1 : 0) }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(([row.title, row.record?.pinned == true ? "pinned" : nil, row.detail, row.modelWords] + row.countWords
+        .accessibilityLabel(([row.title, row.record?.pinned == true ? "pinned" : nil,
+                              AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, row.detail, row.modelWords] + row.countWords
                              + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? .isSelected : [])
         // #1110: drawn over the slot the detail line kept (outside the row's element, so it is read with its own name
@@ -645,6 +650,19 @@ struct AgentSidebarRowView: View {
                         .position(x: r.midX, y: r.midY)
                 }
             }
+        }
+    }
+}
+
+/// The sidebar row's coordinate space (AgentSidebarRowProbe's frames are in it).
+let agentSidebarRowSpace = "agentSidebarRow"
+
+/// Tests: a row part's frame in the row, through `AgentSidebarRowView.probe` (nil in the product). Main actor.
+struct AgentSidebarRowProbe: ViewModifier {
+    let kind: String, title: String
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentSidebarRowSpace)) }) { r in
+            AgentSidebarRowView.probe?(kind, title, r)
         }
     }
 }
