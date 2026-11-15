@@ -771,7 +771,7 @@ test("publish body: a body stream that is already locked reads as an empty body,
   const req = new Request("http://localhost/publish", {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN[PUB]}`, "Content-Type": "application/json" },
-    body: "{}",
+    body: okBody(),
   });
   Object.defineProperty(req, "body", { value: body });
   // called directly: the harness's req() passes an init, which makes Hono rebuild the Request and drop the lock
