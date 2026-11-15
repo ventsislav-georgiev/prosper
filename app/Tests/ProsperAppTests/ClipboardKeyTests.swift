@@ -115,19 +115,85 @@ final class ClipboardKeyTests: XCTestCase {
         XCTAssertEqual(blobs.count, 3, "alpha, delta, epsilon")
     }
 
-    func testClearAllWithoutKeyThenQuitLeavesTheDiskAsItWas() throws {
+    private func age(_ dir: URL) throws {
+        let old = Date(timeIntervalSinceNow: -Double(ClipboardStore.sweepMinAge * 6))
+        for name in try FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: dir.appending(path: name).path)
+        }
+    }
+
+    /// #1294: the clear is written down without the key (an empty 0600 marker), so it survives a quit.
+    func testClearAllWithoutKeyThenQuitLeavesOnlyTheMarkerAndTheNextLaunchKeepsThePinnedRows() throws {
         let d = tempDir()
         let key = SymmetricKey(size: .bits256)
-        _ = pinnedAndPlain(d, key)
+        let names = pinnedAndPlain(d, key)
+        try age(d)
         let before = snapshot(d)
         do {
             let s = ClipboardStore(dir: d, keySource: gatedSource(key, OSAllocatedUnfairLock(initialState: false)))
             s.addText("gamma")
             s.clearAll()
         }
-        XCTAssertTrue(snapshot(d) == before, "nothing on disk changed: the record lives in memory only")
+        var after = snapshot(d)
+        let marker = after.removeValue(forKey: "index.cleared")
+        XCTAssertTrue(marker == Data(), "an empty marker beside the index")
+        XCTAssertTrue(after == before, "every other file is byte-identical: no key, no write")
+        let perms = try FileManager.default.attributesOfItem(atPath: d.appending(path: "index.cleared").path)[.posixPermissions] as? Int
+        XCTAssertEqual(perms, 0o600)
+
         let again = ClipboardStore(dir: d, keySource: { key })
-        XCTAssertTrue(Set(again.items.compactMap { again.text(for: $0) }) == ["alpha", "beta"], "the next launch sees every saved row")
+        XCTAssertTrue(again.items.compactMap { again.text(for: $0) } == ["alpha"], "only the pinned row is back")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: d.appending(path: "index.cleared").path),
+                      "the marker stays until a persist has written the index")
+        XCTAssertTrue(blobNames(d) == [names.pinned, "index.cleared"], "the sweep removed the cleared row's blob")
+
+        again.addText("zeta")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: d.appending(path: "index.cleared").path), "gone after the persist")
+        let third = ClipboardStore(dir: d, keySource: { key })
+        XCTAssertTrue(Set(third.items.compactMap { third.text(for: $0) }) == ["alpha", "zeta"])
+    }
+
+    /// #1294: a relaunch that still has no key keeps the clear: the marker feeds the in-process path.
+    func testMarkerSurvivesARelaunchWithoutTheKeyAndClearsOnceItReturns() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        let names = pinnedAndPlain(d, key)
+        do {
+            let s = ClipboardStore(dir: d, keySource: gatedSource(key, OSAllocatedUnfairLock(initialState: false)))
+            s.clearAll()
+        }
+        let open = OSAllocatedUnfairLock(initialState: false)
+        let s = ClipboardStore(dir: d, keySource: gatedSource(key, open))
+        open.withLock { $0 = true }
+        s.addText("delta")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: d.appending(path: "index.cleared").path))
+        XCTAssertTrue(Set(s.items.compactMap { s.text(for: $0) }) == ["alpha", "delta"], "the unpinned disk row stays cleared")
+        XCTAssertFalse(blobNames(d).contains(names.plain))
+    }
+
+    /// #1294: a marker with no index.json has nothing to clear: ignored and removed, nothing else made.
+    func testMarkerWithNoIndexIsIgnoredAndRemoved() throws {
+        let d = tempDir()
+        let marker = d.appending(path: "index.cleared")
+        XCTAssertTrue(FileManager.default.createFile(atPath: marker.path, contents: nil))
+        let s = ClipboardStore(dir: d, keySource: { SymmetricKey(size: .bits256) })
+        XCTAssertTrue(s.items.isEmpty)
+        XCTAssertTrue(snapshot(d).isEmpty, "the marker is gone and no index was written")
+    }
+
+    /// #1294: a marker that cannot be made (a folder holds its name) is logged, never fatal; the in-process clear works.
+    func testMarkerThatCannotBeWrittenIsNotFatal() throws {
+        let d = tempDir()
+        let key = SymmetricKey(size: .bits256)
+        let names = pinnedAndPlain(d, key)
+        try FileManager.default.createDirectory(at: d.appending(path: "index.cleared"), withIntermediateDirectories: false)
+        let open = OSAllocatedUnfairLock(initialState: false)
+        let s = ClipboardStore(dir: d, keySource: gatedSource(key, open))
+        s.clearAll()
+        open.withLock { $0 = true }
+        s.addText("delta")
+        XCTAssertTrue(Set(s.items.compactMap { s.text(for: $0) }) == ["alpha", "delta"])
+        XCTAssertFalse(blobNames(d).contains(names.plain))
     }
 
     func testClearAllWithTheKeyPresentIsUnchanged() throws {
@@ -206,6 +272,17 @@ final class ClipboardKeyTests: XCTestCase {
         XCTAssertEqual(perms, 0o600)
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["device.key"], "no temp left")
         XCTAssertTrue(try DatabaseKey.fetchOrCreate(at: url) == key)
+    }
+
+    /// #1294 n1: a umask that strips the owner's write bit would leave the open(2) mode 0400; fchmod makes it 0600.
+    func testKeyFileIsExactly0600UnderAUmaskThatStripsTheOwnerBit() throws {
+        let url = tempDir().appending(path: "device.key")
+        let old = umask(0o277)
+        defer { umask(old) }
+        let key = try DatabaseKey.fetchOrCreate(at: url)
+        XCTAssertEqual(key.count, 64)
+        let perms = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        XCTAssertEqual(perms, 0o600)
     }
 
     func testMalformedKeyFileIsNeverReplaced() throws {

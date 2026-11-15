@@ -42,6 +42,9 @@ final class ClipboardStore: ObservableObject {
     private var unreadIndex = false
     /// #1288: Clear All ran while unreadIndex was set; the merge then keeps only the pinned disk rows.
     private var clearedWhileUnread = false
+    /// #1294: an empty file beside index.json, made by Clear All while unreadIndex (no key needed): the
+    /// clear survives a quit. load() then keeps only the pinned rows; the next successful persist removes it.
+    private let clearedURL: URL
     /// #1285: a plain line for the panel while history is not being saved; nil otherwise.
     @Published private(set) var notice: String?
     static let keyNotice = "Clipboard history is not being saved: Prosper cannot read its device key. New clips are kept until Prosper quits."
@@ -64,6 +67,7 @@ final class ClipboardStore: ObservableObject {
         dir = base
         self.keySource = keySource
         indexURL = base.appending(path: "index.json")
+        clearedURL = base.appending(path: "index.cleared")
         self.onBlobRead = onBlobRead
         self.onSeal = onSeal
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -211,7 +215,7 @@ final class ClipboardStore: ObservableObject {
             removeBlobFile(item.blobFile!)
         }
         items.removeAll { !$0.pinned }
-        if unreadIndex { clearedWhileUnread = true }
+        if unreadIndex { clearedWhileUnread = true; markCleared() }
         persist()
     }
 
@@ -403,6 +407,7 @@ final class ClipboardStore: ObservableObject {
             let sealed = try ClipboardCrypto.encrypt(json, key: key)
             try sealed.write(to: indexURL, options: .atomic)
             protect(indexURL)
+            unlink(clearedURL.path)  // only now: the index no longer holds the cleared rows
         } catch {
             NSLog("prosper: clipboard index write failed: \(error.localizedDescription)")
         }
@@ -410,11 +415,14 @@ final class ClipboardStore: ObservableObject {
 
     /// True only when index.json was read and decoded: the sweep runs only then.
     private func load() -> Bool {
-        guard FileManager.default.fileExists(atPath: indexURL.path) else { return false }
+        // #1294: a marker with no index has nothing to clear: ignored and removed.
+        guard FileManager.default.fileExists(atPath: indexURL.path) else { unlink(clearedURL.path); return false }
+        let marked = FileManager.default.fileExists(atPath: clearedURL.path)
         // #1285: without the key the index is left unread and untouched, and no sweep runs.
-        guard let key = self.key() else { unreadIndex = true; refuse(); return false }
+        guard let key = self.key() else { unreadIndex = true; clearedWhileUnread = marked; refuse(); return false }
         guard let decoded = readIndex(key) else { return false }
-        items = decoded
+        // #1294: the sweep removes the dropped rows' blobs (once aged); the marker stays until a persist.
+        items = marked ? decoded.filter(\.pinned) : decoded
         sort()
         return true
     }
@@ -424,6 +432,12 @@ final class ClipboardStore: ObservableObject {
     private func readIndex(_ key: SymmetricKey) -> [ClipboardItem]? {
         guard let raw = try? Data(contentsOf: indexURL) else { return nil }
         return try? JSONDecoder().decode([ClipboardItem].self, from: ClipboardCrypto.decryptOrPlaintext(raw, key: key))
+    }
+
+    /// #1294: the empty marker (0600, no content); a failure is logged, never fatal.
+    private func markCleared() {
+        let fd = open(clearedURL.path, O_CREAT | O_WRONLY | O_NOFOLLOW, 0o600)
+        if fd < 0 || close(fd) != 0 { NSLog("prosper: clipboard clear marker not written (errno \(errno))") }
     }
 
     /// #1285: the key, asking keySource again until one call succeeds; nil while it throws.

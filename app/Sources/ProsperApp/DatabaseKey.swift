@@ -114,6 +114,8 @@ enum DatabaseKey {
         // #1288: created 0600 by open(2), so the temp is never group/other readable.
         let fd = open(tmp.path, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { throw KeyError.persistFailed }
+        // #1294: the mode is exact whatever the umask (open(2) applies it).
+        guard fchmod(fd, 0o600) == 0 else { close(fd); throw KeyError.persistFailed }
         var wrote = true
         Array(payload.utf8).withUnsafeBytes { buf in
             var off = 0
