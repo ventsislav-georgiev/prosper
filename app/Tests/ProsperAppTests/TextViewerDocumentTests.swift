@@ -207,4 +207,100 @@ final class TextViewerDocumentTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: a), Data("aaa".utf8))
         XCTAssertEqual(try Data(contentsOf: b), Data("bbb".utf8))
     }
+
+    // R1108-r6-a rows. No main actor, no task: nothing crosses to another task. Links live and point only inside the row's tempDir().
+    private func lstatOf(_ url: URL) -> stat { var st = stat(); XCTAssertEqual(lstat(url.path, &st), 0); return st }
+
+    /// The seam replaces the resolved end (a.txt) with a link to b.txt on its FIRST call only: the second resolve follows it.
+    func testAnEndThatBecameALinkOnceIsResolvedAgainAndTheIdentityNamesTheNewTarget() throws {
+        let dir = tempDir("tv-doc-r7a")
+        let a = try file("a.txt", Array("aaa".utf8), in: dir)
+        let b = try file("b.txt", Array("bbb".utf8), in: dir)
+        var calls = 0
+        let result = TextViewerDocument.load(a, beforeOpen: {
+            calls += 1
+            if calls == 1 { XCTAssertEqual(unlink(a.path), 0); XCTAssertEqual(symlink("b.txt", a.path), 0) }
+        })
+        XCTAssertEqual(calls, 2, "one retry, no third try")
+        guard case .success(let d) = result else { return XCTFail("refused: \(result)") }
+        XCTAssertEqual(d.text, "bbb")
+        let st = lstatOf(b)
+        XCTAssertEqual(d.identity, TextViewerDocument.Identity(path: b.path, device: st.st_dev, inode: st.st_ino))
+        XCTAssertNotEqual(d.identity?.path, a.path)
+        XCTAssertEqual(try Data(contentsOf: b), Data("bbb".utf8))
+    }
+
+    /// The seam swaps the resolved end on EVERY call (a.txt, then b.txt, each becomes a link to the next file): both resolved
+    /// opens end in ELOOP, the plain open of a.txt follows a -> b -> c, no identity.
+    func testAnEndThatBecomesALinkOnEveryTryShowsTheFileWithNoIdentity() throws {
+        let dir = tempDir("tv-doc-r7b")
+        let a = try file("a.txt", Array("aaa".utf8), in: dir)
+        _ = try file("b.txt", Array("bbb".utf8), in: dir)
+        _ = try file("c.txt", Array("ccc".utf8), in: dir)
+        var calls = 0
+        let result = TextViewerDocument.load(a, beforeOpen: {
+            calls += 1
+            guard calls <= 2 else { return }
+            let end = dir.appendingPathComponent(calls == 1 ? "a.txt" : "b.txt").path
+            XCTAssertEqual(unlink(end), 0); XCTAssertEqual(symlink(calls == 1 ? "b.txt" : "c.txt", end), 0)
+        })
+        XCTAssertEqual(calls, 2, "exactly two tries")
+        guard case .success(let d) = result else { return XCTFail("refused: \(result)") }
+        XCTAssertEqual(d.text, "ccc")
+        XCTAssertNil(d.identity)
+    }
+
+    /// A plain file calls the seam once.
+    func testAPlainFileCallsTheSeamOnce() throws {
+        let dir = tempDir("tv-doc-r7c")
+        let a = try file("a.txt", Array("aaa".utf8), in: dir)
+        var calls = 0
+        guard case .success(let d) = TextViewerDocument.load(a, beforeOpen: { calls += 1 }) else { return XCTFail("refused") }
+        XCTAssertEqual(calls, 1)
+        XCTAssertNotNil(d.identity)
+    }
+
+    /// FACT: resolve's bound is 32 readlinks: 31 links get an identity, 32 links are refused by resolve (no identity). If the
+    /// plain open shows the file, it is shown; if the kernel's own limit refuses it, the refusal is .unreadable (as today).
+    func testAChainOfThirtyTwoLinksHasNoIdentity() throws {
+        let dir = tempDir("tv-doc-r7d")
+        _ = try file("real.txt", Array("rrr".utf8), in: dir)
+        for n in [31, 32] {
+            var prev = "real.txt"
+            for i in 0..<n {
+                let name = "c\(n)-\(i).txt"
+                XCTAssertEqual(symlink(prev, dir.appendingPathComponent(name).path), 0)
+                prev = name
+            }
+            let head = dir.appendingPathComponent(prev)
+            switch TextViewerDocument.load(head) {
+            case .success(let d):
+                XCTAssertEqual(d.text, "rrr")
+                if n == 31 { XCTAssertNotNil(d.identity) } else { XCTAssertNil(d.identity, "resolve refused 32 links") }
+            case .failure(let r):
+                XCTAssertEqual(r, .unreadable, "only the kernel's own link limit may refuse it")
+                XCTAssertEqual(n, 32, "31 links must load")
+            }
+        }
+    }
+
+    /// FACT: a link whose target bytes are not UTF-8 (78 FF 79, made with symlink(2) from a byte array, relative so inside
+    /// tempDir()). The volume refuses a file with such a name (EILSEQ), so the target never exists: the link dangles and the
+    /// plain open answers missing, as before; no document, so no identity. If a volume did accept the name, the file is shown.
+    func testALinkWhoseTargetIsNotUTF8IsRefusedAsMissingOrShownWithNoIdentity() throws {
+        let dir = tempDir("tv-doc-r7e")
+        let name: [CChar] = ([0x78, 0xFF, 0x79, 0x00] as [UInt8]).map { CChar(bitPattern: $0) }
+        let dfd = open(dir.path, O_RDONLY | O_DIRECTORY)
+        XCTAssertGreaterThanOrEqual(dfd, 0)
+        let fd = openat(dfd, name, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+        let made = fd >= 0
+        if made { XCTAssertEqual(write(fd, "ok!", 3), 3); close(fd) }
+        close(dfd)
+        let link = dir.appendingPathComponent("link.txt")
+        XCTAssertEqual(symlink(name, link.path), 0)
+        switch TextViewerDocument.load(link) {
+        case .success(let d): XCTAssertTrue(made); XCTAssertEqual(d.text, "ok!"); XCTAssertNil(d.identity)
+        case .failure(let r): XCTAssertFalse(made); XCTAssertEqual(r, .missing)
+        }
+    }
 }

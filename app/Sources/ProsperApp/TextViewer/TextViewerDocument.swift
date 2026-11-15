@@ -48,11 +48,18 @@ struct TextViewerDocument: Equatable {
     /// R1108-r5-b: resolve first, then open that path without following its end, so the identity names the file read: no
     /// window between what is read and what is recorded. Where resolve refuses a path open accepts (a relative path, a link
     /// target that is not UTF-8, a 32-link chain) or the end became a link meanwhile, today's open runs with no identity (a
-    /// save is then unchecked). `beforeOpen` is a test seam: called once, between the resolve and the open.
+    /// save is then unchecked). `beforeOpen` is a test seam: called between a resolve and the open that follows it: once, twice when the first open failed with ELOOP.
     static func load(_ url: URL, beforeOpen: () -> Void) -> Result<TextViewerDocument, Refusal> {
-        let resolved = try? TextFileWriter.resolve(url.path).get()
-        beforeOpen()
-        var fd = resolved.map { open($0, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW) } ?? -1
+        func attempt() -> (fd: Int32, resolved: String?, err: Int32) {
+            let resolved = try? TextFileWriter.resolve(url.path).get()
+            beforeOpen()
+            let fd = resolved.map { open($0, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW) } ?? -1
+            return (fd, resolved, errno)
+        }
+        // R1108-r6-a: ELOOP from the resolved open means the end became a link after the resolve: one more resolve-then-open
+        // (the seam runs again), never a third; any other failure, or a second one, takes the plain open below.
+        var (fd, resolved, err) = attempt()
+        if fd < 0, resolved != nil, err == ELOOP { (fd, resolved, err) = attempt() }
         let path = fd >= 0 ? resolved : nil
         if fd < 0 { fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC) }
         guard fd >= 0 else { return .failure(errno == ENOENT || errno == ENOTDIR ? .missing : .unreadable) }
