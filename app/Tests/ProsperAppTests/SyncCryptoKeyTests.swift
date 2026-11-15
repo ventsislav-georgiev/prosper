@@ -11,18 +11,21 @@ final class SyncCryptoKeyTests: XCTestCase {
     private var savedIcloud: SyncCrypto.KeyLookup!
     private var savedDevice: SyncCrypto.KeyLookup!
     private var savedAbsent: (@Sendable () -> Bool)!
+    private var savedStoreURL: URL!
 
     override func setUp() {
         super.setUp()
         savedIcloud = SyncCrypto.icloudKey
         savedDevice = SyncCrypto.deviceKey
         savedAbsent = SyncCrypto.deviceKeyAbsent
+        savedStoreURL = SupporterStore.fileURL
     }
 
     override func tearDown() {
         SyncCrypto.icloudKey = savedIcloud
         SyncCrypto.deviceKey = savedDevice
         SyncCrypto.deviceKeyAbsent = savedAbsent
+        SupporterStore.fileURL = savedStoreURL
         super.tearDown()
     }
 
@@ -182,6 +185,30 @@ final class SyncCryptoKeyTests: XCTestCase {
     @MainActor
     func testSupporterStoreSaveReportsASkippedSaveAndWritesNothing() {
         noKeys()
+        let file = tempDir().appending(path: "supporter.dat")
+        SupporterStore.fileURL = file
         XCTAssertEqual(SupporterStore.save(StoredCredentials(email: "a@example.com", session: "s", token: "t")), false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// #1297: compares path strings only; never calls load, save or clear and touches no file.
+    func testSupporterStoreDefaultFileIsNotUnderTheRealHomeConfig() {
+        let real = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config").path
+        let path = SupporterStore.defaultFileURL.path
+        XCTAssertFalse(path.hasPrefix(real), "the default must not be under the real ~/.config")
+        XCTAssertTrue(path.hasPrefix(FileManager.default.temporaryDirectory.path))
+    }
+
+    @MainActor
+    func testSupporterStoreSavesLoadsAndClearsOnlyThroughTheSeam() {
+        let file = tempDir().appending(path: "sub/supporter.dat")
+        SupporterStore.fileURL = file
+        let creds = StoredCredentials(email: "a@example.com", session: "s", token: "t")
+        XCTAssertTrue(SupporterStore.save(creds))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(SupporterStore.load()?.session, "s")
+        SupporterStore.clear()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertTrue(SupporterStore.load() == nil)
     }
 }

@@ -19,10 +19,21 @@ struct StoredCredentials: Codable, Sendable {
 }
 
 enum SupporterStore {
-    private static var fileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+    private static var underTest: Bool { NSClassFromString("XCTestCase") != nil }
+
+    /// #1297: where the credentials live. Under XCTest a per-process temporary path (never the
+    /// real home; nothing is created until a row saves); a row points this at its own tempDir().
+    nonisolated(unsafe) static var fileURL: URL = defaultFileURL
+
+    /// The default location, kept apart from the seam so a row can compare it without any file access.
+    static let defaultFileURL: URL = {
+        if underTest {
+            return FileManager.default.temporaryDirectory
+                .appending(path: "prosper-supporter-\(UUID().uuidString)/supporter.dat")
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appending(path: ".config/prosper/supporter.dat")
-    }
+    }()
 
     static func load() -> StoredCredentials? {
         guard
