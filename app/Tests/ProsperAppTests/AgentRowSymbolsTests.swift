@@ -376,4 +376,55 @@ extension AgentWindowD1Tests {
             }
         }
     }
+
+    /// #1268d: a row WITH a model and an effort, the PRs never fitting, at scale 1.0: the ladder's `count` step (open count,
+    /// no badges) shows where count+badges overflows the column and count alone fits, and not `none` (the mutant that puts
+    /// none before count passes the table above: its rows have no model, so count+badges draws as count). In the wider
+    /// column count+badges fits and shows, so the row cannot pass with the badges always off. Columns are literals, measured
+    /// (BADGE1268D-FIT): at 1.0 count 174, count+badges 275, none 145, chips+badges 797; narrow 232 (the sidebar's own text column: 290 - 16 - 20 - 14 - 8) leaves 58 over count and 43 under count+badges; wide 300 leaves 25 over count+badges.
+    @MainActor
+    func testRowSymbolsLadderWithBadgesKeepsTheCountBeforeNone() throws {
+        _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1.0
+        func differ(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Int {
+            guard a.pixelsWide == b.pixelsWide, a.pixelsHigh == b.pixelsHigh else { return -1 }
+            var n = 0
+            for y in 0..<a.pixelsHigh {
+                for x in 0..<a.pixelsWide {
+                    guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                          let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent)
+                        + abs(p.blueComponent - q.blueComponent) > 0.02 { n += 1 }
+                }
+            }
+            return n
+        }
+        func ideal<V: View>(_ v: V) -> CGFloat { NSHostingView(rootView: v.fixedSize()).fittingSize.width }
+        let long = String(repeating: "w", count: 40)
+        var r = AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: "Working", age: "",
+                                 prs: [long + "#1", long + "#2", "+48"], prCount: DchSessionMeta.maxOpenPRs, agents: 3, merged: 192)
+        r.modelSlot = true
+        r.model = "Fable 9"
+        r.effort = "high"
+        let v = AgentSidebarRowView(row: r, selected: false)
+        let count = v.detailLine([], open: r.prCount), badges = v.detailLine([], open: r.prCount, modelSlot: true)
+        let none = v.detailLine([])
+        print("BADGE1268D-FIT count \(ideal(count)) count+badges \(ideal(badges)) none \(ideal(none)) chips+badges \(ideal(v.detailLine(r.prs, modelSlot: true)))")
+        let narrow: CGFloat = 232, wide: CGFloat = 300
+        XCTAssertGreaterThan(ideal(badges), narrow, "premise: count+badges overflows the narrow column")
+        XCTAssertLessThanOrEqual(ideal(count), narrow, "premise: count fits the narrow column")
+        XCTAssertLessThanOrEqual(ideal(badges), wide, "premise: count+badges fits the wide column")
+        XCTAssertGreaterThan(ideal(v.detailLine(r.prs, modelSlot: true)), wide, "premise: the chips still never fit")
+        func shows(_ column: CGFloat, _ want: some View, _ other: some View, _ tag: String) throws {
+            let size = CGSize(width: column, height: NSHostingView(rootView: v.detailVariants.frame(width: column)).fittingSize.height)
+            let shown = try render(v.detailVariants.frame(width: column), size: size, dark: true)
+            XCTAssertEqual(differ(shown, try render(want.frame(width: column), size: size, dark: true)), 0, "\(tag): the step shows")
+            XCTAssertGreaterThan(differ(shown, try render(other.frame(width: column), size: size, dark: true)), 0, "\(tag): and not the other")
+        }
+        try shows(narrow, count, none, "narrow: the open count, not none")
+        try shows(narrow, count, badges, "narrow: the open count, not the badges")
+        try shows(wide, badges, count, "wide: the badges")
+    }
 }
