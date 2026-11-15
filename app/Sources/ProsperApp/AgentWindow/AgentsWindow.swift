@@ -397,12 +397,30 @@ final class AgentsNSWindow: NSWindow {
         // R1196-1: `focusing` is true only for a down on an unfocused pane, which needs two panes shown: the gate on.
         if Self.asksKey(focusing: focusing, isKey: isKeyWindow) { raise(self) }
         if focusClick.take(event.type, focusing: focusing) { return }   // 7.6: the first click only focuses
+        if AgentPaneLayout.splitsEnabled, let model, Self.layoutKey(event, model, responder: responderKind) { return }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
                                  terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil,
                                  form: model.newSession != nil) == .sidebar,
            Self.handle(event, model) { return }
         super.sendEvent(event)
+    }
+
+    /// #901 B3 step 3 (8.1, 12.1): ⌃1…⌃9 switch to layout N and ⌃Tab to the previous one (the MRU pair), from every
+    /// responder, the terminal too (12.2: window-level); sendEvent runs before the responder's keyDown. True: consumed,
+    /// a refusal (no layout N, a lone MRU) too: a silent no-op, no beep, nothing written. The rename field and the New
+    /// session form keep the key, as for the tree keys. Gate off: PaneKeys is nil, false, the key travels as before.
+    /// Runs on the main actor, inside sendEvent; rows pass a built event.
+    @MainActor static func layoutKey(_ event: NSEvent, _ m: AgentWindowModel, responder: ResponderKind) -> Bool {
+        guard m.renaming == nil, m.newSession == nil else { return false }
+        let c = PaneKeys.Context(responder: responder, keyFocus: m.keyFocus, panes: m.layout.panes.count,
+                                 splitsEnabled: AgentPaneLayout.splitsEnabled)
+        switch PaneKeys.action(for: event, context: c) {
+        case .layout(let n)?: m.switchLayout(number: n)
+        case .previousLayout?: m.previousLayout()
+        default: return false
+        }
+        return true
     }
 
     /// #845: the keyboard into `view` (the terminal, the input box): first responder within its window only,

@@ -817,7 +817,16 @@ struct PaneLayoutStore: Hashable {
             scalars.append(s)
         }
         // capped after the drop, as OutsideText.shown does: a dropped scalar between two groups of marks joins them
-        let name = String(OutsideText.capMarks(String(scalars)).prefix(maxNameLength)).trimmingCharacters(in: .whitespaces)
+        // R901-s2-q1: one Character (a ZWJ chain, a jamo run) keeps at most Theme's per-Character scalar cap; a cut
+        // chain keeps no dangling joiner. The second cap stops at a Character the cut pieces could still re-join into.
+        var cut = String.UnicodeScalarView()
+        for ch in OutsideText.capMarks(String(scalars)) {
+            var s = ch.unicodeScalars.prefix(ThemeVariant.labelCharScalarMax)
+            while s.last == "\u{200D}" { s = s.dropLast() }
+            cut.append(contentsOf: s)
+        }
+        let capped = String(cut).prefix { $0.unicodeScalars.count <= ThemeVariant.labelCharScalarMax }
+        let name = String(capped.prefix(maxNameLength)).trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? nil : name
     }
 
@@ -966,7 +975,7 @@ enum PaneAction: Equatable {
     case closePane
     /// ⇧⌘Return.
     case zoom
-    /// ⌘1…⌘9: layout N.
+    /// ⌃1…⌃9: layout N.
     case layout(Int)
     /// ⌃Tab: the MRU pair.
     case previousLayout
@@ -1006,7 +1015,6 @@ enum PaneKeys {
         let many = c.panes > 1
         switch mods {
         case [.command]:
-            if let n = AgentsNSWindow.digit(event.keyCode) { return .layout(n) }
             switch key {
             case "d": return c.splitsEnabled ? .split(.columns) : nil
             case "w": return many ? .closePane : nil
@@ -1026,6 +1034,9 @@ enum PaneKeys {
             let d: [UInt16: PaneLayout.Direction] = [123: .left, 124: .right, 125: .down, 126: .up]
             return many ? d[event.keyCode].map(PaneAction.focus) : nil
         case [.control]:
+            // #901 B3 step 3 (OQ-128 default): ⌃1…⌃9 and ⌃Tab; ⌘1…⌘9 stay #1110's row jump. Gate off: nil, as today.
+            guard c.splitsEnabled else { return nil }
+            if let n = AgentsNSWindow.digit(event.keyCode) { return .layout(n) }
             return event.keyCode == 48 ? .previousLayout : nil
         case [.control, .command]:
             // R900-1: ⌃ turns `characters` into a control character, so on a Cyrillic or Greek layout the letter rule
@@ -1044,7 +1055,7 @@ enum PaneKeys {
     /// #900 B2 step 1: the tree keys the window acts on (split, close, focus by direction and by order, zoom). 15.0: with
     /// the split gate off nil before the event is read, so every chord stays what it was before #831. The rename field
     /// (#829 G4) and the New session form (#887) keep today's routes too: ⌘W there closes the window, as before.
-    /// Step 4: ⌃⌘S (the sidebar) joins, behind the same gate; ⌘1…9, ⌃Tab and ⌘J in B3; ⇧⌘T in C.
+    /// Step 4: ⌃⌘S (the sidebar) joins, behind the same gate; ⌃1…9 and ⌃Tab (sendEvent), ⌘J in B3; ⇧⌘T in C.
     @MainActor
     static func treeAction(for event: NSEvent, context c: Context, renaming: Bool, form: Bool) -> PaneAction? {
         guard c.splitsEnabled, !renaming, !form else { return nil }

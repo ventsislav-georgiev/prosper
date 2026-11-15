@@ -570,10 +570,10 @@ final class AgentPaneLayoutTests: XCTestCase {
         (13, [.command], "w", "w", .closePane),
         (36, [.command, .shift], "\r", "\r", .zoom),
         (76, [.command, .shift], "\u{3}", "\u{3}", .zoom),
-        (18, [.command], "1", "1", .layout(1)),
-        (21, [.command], "4", "4", .layout(4)),
-        (25, [.command], "9", "9", .layout(9)),
-        (83, [.command], "1", "1", .layout(1)),
+        (18, [.control], "1", "1", .layout(1)),
+        (21, [.control], "4", "4", .layout(4)),
+        (25, [.control], "9", "9", .layout(9)),
+        (83, [.control], "1", "1", .layout(1)),
         (48, [.control], "\t", "\t", .previousLayout),
         (17, [.command, .shift], "T", "t", .allModes),
         (38, [.command], "j", "j", .nextNeedsYou),
@@ -602,12 +602,12 @@ final class AgentPaneLayoutTests: XCTestCase {
         }
         for (code, n) in [(UInt16(18), 1), (19, 2), (20, 3)] {
             XCTAssertTrue(act(ev(code, [.command, .option], "\(n)", "\(n)")) == nil, "⌥⌘\(n) is not ⌘\(n)")
-            XCTAssertEqual(act(ev(code, [.command], "\(n)", "\(n)")), .layout(n))
+            XCTAssertEqual(act(ev(code, [.control], "\(n)", "\(n)")), .layout(n))
         }
         let optionOne = ev(18, [.command, .option], "1", "1")
         XCTAssertTrue(act(optionOne) == nil, "⌥⌘1 is not ⌘1")
         XCTAssertTrue(optionOne.flatMap { AgentsNSWindow.verbosity(for: $0) } != nil, "it stays #821's verbosity key")
-        XCTAssertTrue(act(ev(18, [.command, .capsLock, .numericPad], "1", "1")) == .layout(1), "other flags are ignored")
+        XCTAssertTrue(act(ev(18, [.control, .capsLock, .numericPad], "1", "1")) == .layout(1), "other flags are ignored")
     }
 
     /// 15.0: with the split gate off ⌘D and ⇧⌘D are not pane keys (they stay whatever they were before #831).
