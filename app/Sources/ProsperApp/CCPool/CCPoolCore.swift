@@ -49,6 +49,14 @@ struct CCPoolState: Codable, Equatable, Sendable {
     var accounts: [String: Account] = [:]
     /// Conversation key ("<session id>/<agent id>") -> pin. Saved as "pins": {key: account}, Python's shape.
     var pins: [String: Pin] = [:]
+    /// #1260 step A: capacity learned from relayed replies, by Keychain id. In memory only: not in `Keys` and not
+    /// part of ==, so a learn never rewrites the file or fires onChange (step B persists it).
+    var capacity: [String: CCPoolCapacityState] = [:]
+
+    /// Equal = the same file content (CCPoolStore.mutate writes only on a change); `capacity` is not in the file.
+    static func == (a: CCPoolState, b: CCPoolState) -> Bool {
+        a.current == b.current && a.order == b.order && a.accounts == b.accounts && a.pins == b.pins
+    }
 
     /// Not named CodingKeys: both coders are written by hand, and Account keeps its own synthesized keys.
     private enum Keys: String, CodingKey { case current, order, accounts, pins }

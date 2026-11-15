@@ -65,6 +65,9 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     /// The upstream Retry-After of a pass-through 429, handed on to the client (P2a follow-up a).
     var retryAfter: String?
     var suspended = false
+    /// #1260: reads the usage off a 200 reply that is not a quota check; with the reply's five-hour limit.
+    var tap: CCPoolUsageTap?
+    var fiveHour: CCPoolLimit?
 
     init(connection: CCPoolConnection, label: String, accountID: String, retried: Bool, followedPin: Bool) {
         self.connection = connection
@@ -498,6 +501,11 @@ final class CCPoolConnection: @unchecked Sendable {
             }
         }
         writeHead(response.statusCode, headers)
+        // #1260: Python learns from every streamed reply; this step learns only from a 200 that is real work.
+        if response.statusCode == 200, !quotaCheck {
+            ex.tap = CCPoolUsageTap(contentType: headers["content-type"])
+            ex.fiveHour = limits[CCPoolCore.fiveHour]
+        }
         ex.mode = .streaming
         decide(.allow)
     }
@@ -523,6 +531,8 @@ final class CCPoolConnection: @unchecked Sendable {
                 if error != nil { return self.close() }
                 if ex.suspended, self.outstanding < Self.lowWater { ex.suspended = false; ex.task?.resume() }
             })
+            // #1260: the tap reads its own copy after the frame is handed to the client; it cannot fail the relay.
+            ex.tap?.feed(data)
         }
     }
 
@@ -551,6 +561,24 @@ final class CCPoolConnection: @unchecked Sendable {
             exchange = nil
             guard error == nil else { return close() }
             conn.send(content: Data("0\r\n\r\n".utf8), completion: .contentProcessed { [weak self] _ in self?.close() })
+            learn(ex)
+        }
+    }
+
+    /// #1260: the normal end of a tapped reply feeds the pure learn step (CCPoolCapacity.learn), in memory only.
+    /// Nothing is learned without usage, a five-hour utilization and its reset stamp, or once the account is gone.
+    private func learn(_ ex: CCPoolExchange) {
+        guard let usage = ex.tap?.result(), let row = ex.fiveHour.map({ [CCPoolCore.fiveHour: $0] }),
+              let util = CCPoolCore.utils(row)[CCPoolCore.fiveHour],
+              let reset = CCPoolCore.resets(row)[CCPoolCore.fiveHour] else { return }
+        let id = ex.accountID, m = model.map(Self.capped)
+        store.mutate { st in
+            guard st.label(ofID: id) != nil else { return }
+            st.capacity[id] = CCPoolCapacity.learn(st.capacity[id] ?? CCPoolCapacityState(), model: m, usage: usage,
+                                                   utilization: util, reset: Double(reset))
+            // Bounded by the account set: a removed account's numbers go.
+            let ids = Set(st.accounts.values.map(\.id))
+            st.capacity = st.capacity.filter { ids.contains($0.key) }
         }
     }
 
