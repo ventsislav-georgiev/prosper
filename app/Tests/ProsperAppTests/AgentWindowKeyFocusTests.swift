@@ -217,17 +217,6 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(win.isVisible, "never shown")
     }
 
-    /// 13: every element's label in an AX client's walk of `host` (accessibilityChildren), depth first.
-    @MainActor
-    func paneAXLabels(_ e: Any, _ out: inout [String], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        if o.responds(to: Selector(("accessibilityLabel"))) {
-            let v = o.value(forKey: "accessibilityLabel")
-            if let s = (v as? String) ?? (v as? NSAttributedString)?.string { out.append(s) }
-        }
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { paneAXLabels(k, &out, depth: depth + 1) }
-    }
-
     /// 13: with two panes shown each pane is a container "<title>, pane i of n" in tree order, read from the real
     /// accessibility tree of the root view in a never-shown window (the tree is built once this process asks, as an AX
     /// client's attribute write would; both attributes are put back as read, the R1137-1 rule). One pane: no such name.
@@ -236,14 +225,8 @@ extension AgentWindowD1Tests {
         let gate = AgentPaneLayout.splitsEnabled
         let restoreModes = transcriptMode(["api", "web"])
         defer { AgentPaneLayout.splitsEnabled = gate; restoreModes() }
-        let attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"], app = NSApplication.shared
-        let get = Selector(("accessibilityAttributeValue:")), set = Selector(("accessibilitySetValue:forAttribute:"))
-        XCTAssertTrue(app.responds(to: set))
-        let prior: [Bool?] = attrs.map {
-            app.responds(to: get) ? (app.perform(get, with: $0)?.takeUnretainedValue() as? NSNumber)?.boolValue : nil
-        }
-        defer { for (a, f) in zip(attrs, prior) { app.perform(set, with: NSNumber(value: f ?? false), with: a) } }
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
+        let restoreAX = AXTreeSupport.axOn()
+        defer { restoreAX() }
 
         let st = store([session("api", .idle), session("web", .idle)])
         let m = windowModel(st)
@@ -262,7 +245,9 @@ extension AgentWindowD1Tests {
             repeat {
                 settle(host)
                 out = []
-                paneAXLabels(host, &out)
+                var nodes: [AXTreeNode] = []
+                AXTreeSupport.walk(host, &nodes)   // every node's label, depth first, as before (main actor)
+                out = nodes.map(\.label).filter { !$0.isEmpty }
             } while !done(out) && Date() < ceiling
             XCTAssertFalse(win.isVisible, "never shown")
             return out

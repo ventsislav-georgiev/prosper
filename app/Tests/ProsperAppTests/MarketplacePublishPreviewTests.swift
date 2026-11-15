@@ -1075,13 +1075,12 @@ private struct PublishAXItem {
 }
 
 /// A view in a never-shown borderless window, its accessibility tree built for this process only (as
-/// an AX client's attribute write would ask); both attributes are put back on close. Main actor.
+/// an AX client's attribute write would ask); both attributes are put back as found on close. Main actor.
 @MainActor
 private final class Hosted {
     let window: NSWindow
     let host: NSView
-    private let set = Selector(("accessibilitySetValue:forAttribute:"))
-    private let attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
+    private let restoreAX: @MainActor () -> Void   // AXTreeSupport.axOn's: the flags go back as found
 
     init<V: View>(_ view: V, width: CGFloat, height: CGFloat? = nil) {
         let host = NSHostingView(rootView: view.frame(width: width, alignment: .leading))
@@ -1091,11 +1090,11 @@ private final class Hosted {
         window.isReleasedWhenClosed = false
         window.contentView = host
         self.host = host
-        for a in attrs { NSApplication.shared.perform(set, with: NSNumber(value: true), with: a) }
+        restoreAX = AXTreeSupport.axOn()
     }
 
     func close() {
-        for a in attrs { NSApplication.shared.perform(set, with: NSNumber(value: false), with: a) }
+        restoreAX()
         window.close()
     }
 

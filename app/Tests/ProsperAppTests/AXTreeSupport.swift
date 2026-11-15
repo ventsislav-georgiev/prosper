@@ -14,6 +14,10 @@ struct AXTreeNode {
     var enabled = true
     /// #1120: where `enabled` came from (the node's class, the legacy attribute, isAccessibilityEnabled).
     var enabledFacts = ""
+    /// N1097-a: AXSelected as served to an AX client (false where the node reports none), by both routes AppKit serves it:
+    /// the legacy attribute (an NSView's) and isAccessibilitySelected (an accessibility element's; KVC key "accessibilitySelected").
+    /// The SwiftUI `.isSelected` trait arrives here.
+    var selected = false
     /// What an AX client is shown, by any of its names (not an ignored node).
     func reads(_ n: String) -> Bool { !ignored && names.contains { $0.caseInsensitiveCompare(n) == .orderedSame } }
     var names: [String] { [label, title, value].filter { !$0.isEmpty } }
@@ -78,10 +82,13 @@ enum AXTreeSupport {
         // (an accessibility element's; KVC finds it under the key "accessibilityEnabled"). Off when either says off.
         let legacy = (o.accessibilityAttributeValue(.enabled) as? NSNumber)?.boolValue
         let modern = o.responds(to: Selector(("isAccessibilityEnabled"))) ? (o.value(forKey: "accessibilityEnabled") as? NSNumber)?.boolValue : nil
+        let legacySel = (o.accessibilityAttributeValue(.selected) as? NSNumber)?.boolValue
+        let modernSel = o.responds(to: Selector(("isAccessibilitySelected"))) ? (o.value(forKey: "accessibilitySelected") as? NSNumber)?.boolValue : nil
         out.append(AXTreeNode(role: text("accessibilityRole"), label: text("accessibilityLabel"), title: text("accessibilityTitle"),
                               value: text("accessibilityValue"), help: text("accessibilityHelp"), frame: frame, ignored: ignored,
                               enabled: legacy != false && modern != false,
-                              enabledFacts: "\(type(of: o)) legacy \(legacy.map { "\($0)" } ?? "nil") modern \(modern.map { "\($0)" } ?? "nil")"))
+                              enabledFacts: "\(type(of: o)) legacy \(legacy.map { "\($0)" } ?? "nil") modern \(modern.map { "\($0)" } ?? "nil")",
+                              selected: legacySel == true || modernSel == true))
         for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { walk(k, &out, depth: depth + 1) }
     }
 

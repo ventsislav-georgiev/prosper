@@ -151,16 +151,7 @@ extension AgentWindowD1Tests {
     /// Turns this process's accessibility tree on, as an AX client's attribute write would; the closure puts both
     /// attributes back as read (the R1137-1 rule). Main actor, called from a row's defer.
     @MainActor
-    func bandAXOn() -> @MainActor () -> Void {
-        let attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"], app = NSApplication.shared
-        let get = Selector(("accessibilityAttributeValue:")), set = Selector(("accessibilitySetValue:forAttribute:"))
-        XCTAssertTrue(app.responds(to: set))
-        let prior: [Bool?] = attrs.map {
-            app.responds(to: get) ? (app.perform(get, with: $0)?.takeUnretainedValue() as? NSNumber)?.boolValue : nil
-        }
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        return { for (a, f) in zip(attrs, prior) { app.perform(set, with: NSNumber(value: f ?? false), with: a) } }
-    }
+    func bandAXOn() -> @MainActor () -> Void { AXTreeSupport.axOn() }
 
     /// The accessibility tree of `view` hosted at `size` in a never-shown borderless window, read until every name in
     /// `until` is there (bounded at 5 s, no fixed wait), and the window's frame on the screen (bottom-left origin).

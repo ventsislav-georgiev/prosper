@@ -597,8 +597,8 @@ final class ThemeVariantTests: XCTestCase {
     }
 
     /// The dump of `v`'s outermost modifier: the lines from its top-level "modifier" child on.
-    /// Only the selected trait is read this way: the tree is real for a never-shown window (AXTreeSupport), but its
-    /// AXTreeNode carries no selected flag, so the trait is compared on the view value, built with and without it.
+    /// The selected trait is also compared this way (on the view value, built with and without it), beside the real-tree
+    /// reads of AXTreeNode.selected (N1097-a) in the dots row and in testTheActiveThemeRowIsSelectedInTheRealTree.
     private static func outerModifier<V: View>(_ v: V) -> String {
         var out = ""
         dump(v, to: &out)
@@ -643,6 +643,8 @@ final class ThemeVariantTests: XCTestCase {
                 XCTAssertFalse(nodes.isEmpty, "\(name) is read")
                 XCTAssertEqual(nodes.contains { $0.reads("remembered") }, tint == c.remembered, "\(name): remembered only on the ringed dot of an inactive theme")
                 XCTAssertTrue(nodes.contains { $0.help == tint }, "\(name): the tint is its tooltip")
+                // N1097-a: AXSelected on the real tree: only the ringed dot of the active theme.
+                XCTAssertEqual(nodes.contains { $0.selected }, c.id == Self.hcDarkID && tint == "Cyan", "\(name): selected only on the active theme's ringed dot")
             }
         }
     }
@@ -685,6 +687,28 @@ final class ThemeVariantTests: XCTestCase {
             }
         }
         XCTAssertEqual(selectedDots, 1, "one selected tint in the whole list")
+    }
+
+    /// N1097-a: the same check on the real tree (AXTreeSupport, AXTreeNode.selected): a row hosted alone is selected, in the
+    /// tree an AX client walks, exactly when it is the active one. Runs on the main actor, the poll closure too.
+    @MainActor
+    func testTheActiveThemeRowIsSelectedInTheRealTree() throws {
+        ThemeRuntime.scale = 1
+        let s = try listStore()
+        let list = ThemeList(theme: s, paneID: "appearance")
+        let dark = try XCTUnwrap(s.available.first { $0.id == Self.hcDarkID })
+        let plain = try XCTUnwrap(s.available.first { $0.id == "t.plain" })
+        let size = CGSize(width: 300, height: 60)
+        for selected in [true, false] {
+            for (kind, view) in [("tinted", AnyView(list.tintedRowButton(dark, selected: selected, palette: .default))),
+                                 ("plain", AnyView(list.plainRow(plain, selected: selected, palette: .default)))] {
+                let tree = AXTreeSupport.tree(view.frame(width: size.width, height: size.height), size) { t in
+                    t.contains { $0.selected } || (!selected && t.contains { !$0.ignored && !$0.names.isEmpty })
+                }
+                XCTAssertTrue(tree.contains { !$0.ignored && !$0.names.isEmpty }, "\(kind) row, selected \(selected): the tree was built")
+                XCTAssertEqual(tree.contains { $0.selected }, selected, "\(kind) row, selected \(selected): AXSelected")
+            }
+        }
     }
 
     /// INFO-3: a theme row says it is the active theme (the checkmark beside it is hidden from

@@ -93,29 +93,19 @@ final class ApprovalBoxSourceTests: XCTestCase {
         win.isReleasedWhenClosed = false
         win.contentView = h
         defer { win.close() }
-        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
-        let app = NSApplication.shared
-        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
-        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
+        let restoreAX = AXTreeSupport.axOn()   // put back as found, not to false
+        defer { restoreAX() }
         var labels: [String] = []
         for _ in 0..<20 {
             h.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             labels = []
-            walk(h, &labels)
+            var nodes: [AXTreeNode] = []
+            AXTreeSupport.walk(h, &nodes)   // label then title of each node, depth first, as before (main actor)
+            labels = nodes.flatMap { [$0.label, $0.title] }.filter { !$0.isEmpty }
             if labels.contains("Approve") { break }
         }
         return (h.fittingSize, labels)
-    }
-
-    @MainActor
-    private func walk(_ e: Any, _ out: inout [String], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        for k in ["accessibilityLabel", "accessibilityTitle"] {
-            let v = o.value(forKey: k)
-            if let t = (v as? String) ?? (v as? NSAttributedString)?.string, !t.isEmpty { out.append(t) }
-        }
-        for c in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { walk(c, &out, depth: depth + 1) }
     }
 
     func testSplitTakesTheLabelLineOnly() {

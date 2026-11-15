@@ -111,48 +111,19 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
 
     private struct AXItem { let text: String; let frame: CGRect }
 
-    private func axCollect(_ e: Any, _ out: inout [AXItem], depth: Int = 0) {
-        guard depth < 40, let o = e as? NSObject else { return }
-        func text(_ key: String) -> String {
-            guard o.responds(to: Selector(key)) else { return "" }
-            let v = o.value(forKey: key)
-            return (v as? String) ?? (v as? NSAttributedString)?.string ?? ""
-        }
-        let frame = o.responds(to: Selector("accessibilityFrame")) ? ((o.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue ?? .zero) : .zero
-        let shown = [text("accessibilityLabel"), text("accessibilityTitle"), text("accessibilityValue")].first { !$0.isEmpty } ?? ""
-        out.append(AXItem(text: shown, frame: frame))
-        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axCollect(k, &out, depth: depth + 1) }
-    }
-
-    private func axFlags(_ set: [Bool]?) -> [Bool] {
-        let attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"], app = NSApplication.shared
-        let get = Selector(("accessibilityAttributeValue:")), put = Selector(("accessibilitySetValue:forAttribute:"))
-        let prior = attrs.map { app.responds(to: get) ? ((app.perform(get, with: $0)?.takeUnretainedValue() as? NSNumber)?.boolValue ?? false) : false }
-        if let set, app.responds(to: put) { for (a, f) in zip(attrs, set) { app.perform(put, with: NSNumber(value: f), with: a) } }
-        return prior
-    }
-
     /// The sheet's view, top-aligned as the panel's scroll view holds it, in a never-shown window of `size`; its AX
     /// tree walked until `done` holds, to a 5 s ceiling (polled, no fixed wait). Runs on main (the class is @MainActor).
     private func axTree(_ model: ManagedConfigConsentModel, _ size: CGSize, until done: ([AXItem]) -> Bool) -> [AXItem] {
-        let prior = axFlags(nil)
-        defer { _ = axFlags(prior) }
-        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
-        win.isReleasedWhenClosed = false
-        defer { win.close() }
         let root = ManagedConfigConsentView(model: model).frame(width: size.width).frame(maxHeight: .infinity, alignment: .top)
-        let host = NSHostingView(rootView: root)
-        host.frame = CGRect(origin: .zero, size: size)
-        win.contentView = host
-        _ = axFlags([true, true])
-        var tree: [AXItem] = []
-        let deadline = Date().addingTimeInterval(5)
-        repeat {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            tree = []
-            axCollect(host, &tree)
-        } while !done(tree) && Date() < deadline
+        let (win, host) = AXTreeSupport.hosted(root, size)
+        defer { win.close() }
+        let restore = AXTreeSupport.axOn()   // after hosting, as before; puts the flags back as found
+        defer { restore() }
+        // The first of label, title, value that is not empty; the poll loop is the shared one (layout, one 0.05 s pump, walk, 5 s ceiling).
+        func items(_ t: [AXTreeNode]) -> [AXItem] {
+            t.map { AXItem(text: [$0.label, $0.title, $0.value].first { !$0.isEmpty } ?? "", frame: $0.frame) }
+        }
+        let tree = items(AXTreeSupport.poll(host) { done(items($0)) })
         XCTAssertFalse(win.isVisible, "never shown")
         return tree
     }

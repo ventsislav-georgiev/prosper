@@ -45,7 +45,7 @@ final class AgentWindowHeaderRenameTreeTests: XCTestCase {
     /// The words that must never be read: the separators (their own hidden) and the width chips (hidden()).
     @MainActor
     var neverRead: [String] {
-        ["\u{00B7}", AgentStateChip.endedLabel] + AgentState.allCases.filter { $0 != .idle }.map(\.label)
+        ["\u{00B7}", "3", AgentStateChip.endedLabel] + AgentState.allCases.filter { $0 != .idle }.map(\.label)
     }
 
     /// The belt's own half, alone, on a plain fully opaque Text: present with renaming false, absent with renaming true.
@@ -120,6 +120,8 @@ final class AgentWindowHeaderRenameTreeTests: XCTestCase {
             }
             let tag = "step \(step) renaming \(renaming)"
             for w in words { XCTAssertEqual(tree.contains { $0.reads(w) }, !renaming, "\(w) (\(tag))") }
+            // R1239-1: not renaming, each word is read by exactly one node (a second copy under a part's hidden(false) would show).
+            if !renaming { for w in words { XCTAssertEqual(tree.filter { $0.reads(w) }.count, 1, "\(w) is read exactly once (\(tag))") } }
             for w in neverRead { XCTAssertFalse(tree.contains { $0.reads(w) }, "\(w) is never read (\(tag))") }
             let fields = tree.filter { $0.role == "AXTextField" && !$0.ignored }
             XCTAssertEqual(fields.count, renaming ? 1 : 0, "the field (\(tag))")
