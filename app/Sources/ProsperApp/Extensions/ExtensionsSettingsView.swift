@@ -492,7 +492,7 @@ extension View {
 
 /// Not named `badge`: inside a view body that name is SwiftUI's View.badge modifier on `self`, which recurses.
 /// #1251: an extension's own texts (manifest or Marketplace package) as the extension list and the Marketplace rows draw
-/// them: through OutsideText.shown (unseen scalars dropped, at most two marks per base scalar) with a bound per field, drawn
+/// them: through OutsideText.shown (unseen scalars dropped, at most three marks per base scalar, OutsideText.maxMarks) with a bound per field, drawn
 /// verbatim (no Markdown, no localization lookup). Display only: ids and versions used in logic stay the decoded values.
 enum ExtensionRowText {
     static let titleMax = 80, versionMax = 24, authorMax = 80, descriptionMax = 300, helpMax = 160

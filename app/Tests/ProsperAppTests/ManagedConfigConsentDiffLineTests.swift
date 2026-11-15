@@ -58,12 +58,14 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         // R1252-q1: a text whose first letter is not an ASCII letter is shown after U+200E (left to right), as written
         for line in [
             "\u{039A}\u{03B1}\u{03BB}\u{03B7}\u{03BC}\u{03AD}\u{03C1}\u{03B1}",   // Greek
-            "\u{05E9}\u{05DC}\u{05D5}\u{05DD} \u{05E2}\u{05D5}\u{05DC}\u{05DD}",   // Hebrew, no direction controls
             "\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}",                           // Japanese
             "\u{2022}\u{2022}\u{2022}\u{2022} \u{2026}",                           // the sheet's own mask and elision
         ] {
             check(line, "\u{200E}" + line, "as written \(Self.scalars(line))")
         }
+        // R1252-q4: two Hebrew words (no direction controls): a mark after the first, whose run a space follows
+        check("\u{05E9}\u{05DC}\u{05D5}\u{05DD} \u{05E2}\u{05D5}\u{05DC}\u{05DD}",
+              "\u{200E}\u{05E9}\u{05DC}\u{05D5}\u{05DD}\u{200E} \u{05E2}\u{05D5}\u{05DC}\u{05DD}", "Hebrew")
         check("Vi\u{0065}\u{0323}\u{0302}t", "Vi\u{0065}\u{0323}\u{0302}t", "two marks on one letter, unchanged")
         // the joiner (a format scalar) and the emoji variation selector (default-ignorable) are shown as escapes
         check("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", "\u{200E}\u{1F468}\\u{200D}\u{1F469}\\u{200D}\u{1F467}", "family")
@@ -95,11 +97,11 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
     }
 
     /// The display read back to what is written: each escape of ours becomes its scalar, a doubled backslash one backslash
-    /// and a leading U+200E (added by the display) goes. A run of backslashes, with the marks on them, is doubled only
-    /// before "u{", so only there is it halved; an odd run there ends in an escape of ours.
+    /// and every U+200E goes (each is the display's own: a written one is shown as its escape). A run of backslashes, with
+    /// the marks on them, is doubled only before "u{", so only there is it halved; an odd run there ends in an escape of ours.
     private static func readBack(_ shown: String) -> [UInt32] {
         var s = Array(shown.unicodeScalars)
-        if s.first == "\u{200E}" { s.removeFirst() }
+        s.removeAll { $0 == "\u{200E}" }
         func isMark(_ u: Unicode.Scalar) -> Bool {
             let g = u.properties.generalCategory
             return g == .nonspacingMark || g == .enclosingMark
@@ -338,21 +340,21 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
     /// The displayed form starts with U+200E and then holds the line's own scalars in the written order; a text whose first
     /// letter is an ASCII letter, or one that is ASCII only, is shown as before.
     func testATextWhoseFirstLetterIsRightToLeftIsShownLeftToRight() {
-        let shown = ManagedConfigConsentDisplay.displayed(Self.rtlFirst)
-        XCTAssertEqual(Self.scalars(shown).first, 0x200E, shown.debugDescription)
-        XCTAssertEqual(Array(Self.scalars(shown).dropFirst()), Self.scalars(Self.rtlFirst), "the line's own scalars, in the written order")
-        check("\u{0627}\u{0628} x", Self.lrm + "\u{0627}\u{0628} x", "Arabic first")
-        check("  \"\u{05D0}\": 1", Self.lrm + "  \"\u{05D0}\": 1", "ASCII neutrals, then Hebrew")
+        // R1252-q4: and a mark after each right-to-left run that anything follows
+        check(Self.rtlFirst, Self.lrm + "\u{05D0}\u{05D1}" + Self.lrm + " ab \u{05D2}" + Self.lrm + " yz", "the line's own scalars, in the written order")
+        check("\u{0627}\u{0628} x", Self.lrm + "\u{0627}\u{0628}" + Self.lrm + " x", "Arabic first")
+        check("  \"\u{05D0}\": 1", Self.lrm + "  \"\u{05D0}" + Self.lrm + "\": 1", "ASCII neutrals, then Hebrew")
         check("1 \u{05D0}", Self.lrm + "1 \u{05D0}", "a digit is not a letter")
-        check("ab \u{05D0} yz", "ab \u{05D0} yz", "an ASCII letter first: left to right already")
+        check("ab \u{05D0} yz", "ab \u{05D0}" + Self.lrm + " yz", "an ASCII letter first: left to right already")
         for plain in ["{", "  },", "", "   ", "x = 1"] { check(plain, plain, "ASCII only \(plain.debugDescription)") }
         // an escape of ours is drawn text: its letter u comes first
         check("\u{202E}\u{05D0}", "\\u{202E}\u{05D0}", "an escape first")
         // the diff line: our sign, then the mark, then the line; the mark does not count toward the cut
         let line = ManagedConfigChangeSet.Line(sign: .added, text: Self.rtlFirst)
-        XCTAssertEqual(Self.scalars(ManagedConfigConsentModel.text(line)), Self.scalars("+ " + Self.lrm + Self.rtlFirst))
+        XCTAssertEqual(Self.scalars(ManagedConfigConsentModel.text(line)),
+                       Self.scalars("+ " + Self.lrm + "\u{05D0}\u{05D1}" + Self.lrm + " ab \u{05D2}" + Self.lrm + " yz"))
         check("\u{05D0}" + String(repeating: "a", count: 2000),
-              Self.lrm + "\u{05D0}" + String(repeating: "a", count: 1999) + "\u{2026} (+1 more characters, not shown)", "cut")
+              Self.lrm + "\u{05D0}" + Self.lrm + String(repeating: "a", count: 1999) + "\u{2026} (+1 more characters, not shown)", "cut")
     }
 
     /// The path, a note and the backup line get the mark through the same display function as a diff line, and the sheet's
@@ -362,9 +364,10 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         let file = ManagedConfigChangeSet.File(target: "claude:x.md", path: heb + "/x.md", backupDirectory: heb + "/backups",
                                                lines: [.init(sign: .added, text: heb + " x")], notes: [heb + " note"])
         let m = ManagedConfigConsentModel(changes: Self.set([file])) { _ in }
-        XCTAssertEqual(Self.scalars(m.backupLine(file)), Self.scalars("Backup: " + Self.lrm + heb + "/backups"))
+        XCTAssertEqual(Self.scalars(m.backupLine(file)), Self.scalars("Backup: " + Self.lrm + heb + Self.lrm + "/backups"))
         let strings = m.renderedStrings.map { Self.scalars($0) }
-        for s in [Self.lrm + heb + "/x.md", "+ " + Self.lrm + heb + " x", Self.lrm + heb + " note", "Backup: " + Self.lrm + heb + "/backups"] {
+        for s in [Self.lrm + heb + Self.lrm + "/x.md", "+ " + Self.lrm + heb + Self.lrm + " x", Self.lrm + heb + Self.lrm + " note",
+                  "Backup: " + Self.lrm + heb + Self.lrm + "/backups"] {
             XCTAssertTrue(strings.contains(Self.scalars(s)), "\(s.debugDescription) in \(m.renderedStrings)")
         }
         let bad = model(first: Self.rtlFirst)
@@ -382,39 +385,44 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
     /// two strings in a plain Text without the display (the parent's drawing), must differ there, or the method proves nothing.
     func testARightToLeftWordLeavesTheSignAndTheWordsInWrittenOrder() throws {
         let head = "\u{05D0}\u{05D1} ab"
-        // main actor (ImageRenderer); called only from this row
-        @MainActor func pixels<V: View>(_ v: V, _ tag: String) throws -> (width: Int, height: Int, row: Int, bytes: [UInt8]) {
-            let r = ImageRenderer(content: v.fixedSize().background(Color.black))
-            r.scale = 1
-            let cg = try XCTUnwrap(r.cgImage, tag)
-            XCTAssertLessThanOrEqual(cg.width, 800, tag)
-            XCTAssertLessThanOrEqual(cg.height, 200, tag)
-            XCTAssertEqual(cg.bitsPerPixel, 32, tag)
-            return (cg.width, cg.height, cg.bytesPerRow, [UInt8](try XCTUnwrap(cg.dataProvider?.data as Data?, tag)))
-        }
-        // nil when the two images cannot be compared; the head's last two columns are left out (its last glyph's edge)
-        @MainActor func headLeads<L: View, H: View>(_ line: L, _ first: H, _ tag: String) throws -> Bool? {
-            let l = try pixels(line, tag + " line"), h = try pixels(first, tag + " head")
-            guard l.height == h.height, h.width > 4, l.width > h.width, l.row >= l.width * 4, h.row >= h.width * 4,
-                  l.bytes.count >= l.row * l.height, h.bytes.count >= h.row * h.height else {
-                XCTFail("\(tag): line \(l.width)x\(l.height), head \(h.width)x\(h.height)")
-                return nil
-            }
-            let n = (h.width - 2) * 4
-            let same = (0..<h.height).allSatisfy { y in l.bytes[(y * l.row)..<(y * l.row + n)].elementsEqual(h.bytes[(y * h.row)..<(y * h.row + n)]) }
-            fputs("mc1252b fact \(tag): line \(l.width)x\(l.height), head \(h.width)x\(h.height), left \(h.width - 2) columns equal \(same)\n", stderr)
-            return same
-        }
         let font = Neon.font(11, design: .monospaced)
         let control = try headLeads(Text(verbatim: "+ " + Self.rtlFirst).font(font).foregroundStyle(Neon.terminal),
                                     Text(verbatim: "+ " + head).font(font).foregroundStyle(Neon.terminal), "control")
         XCTAssertEqual(control, false, "control: the plain line must not start like its head, or the method cannot see the order")
         guard control == false else { return }
-        @MainActor func drawn(_ text: String) -> ManagedConfigConsentDiffLine {
-            ManagedConfigConsentDiffLine(text: ManagedConfigConsentModel.text(.init(sign: .added, text: text)), color: Neon.terminal)
-        }
         let line = try headLeads(drawn(Self.rtlFirst), drawn(head), "line")
         XCTAssertEqual(line, true, "line: the sign and the first words are not where they are written")
+    }
+
+    /// The diff line view drawing `text` as the sheet does (sign, then the display). Main actor, like the class.
+    private func drawn(_ text: String) -> ManagedConfigConsentDiffLine {
+        ManagedConfigConsentDiffLine(text: ManagedConfigConsentModel.text(.init(sign: .added, text: text)), color: Neon.terminal)
+    }
+
+    /// `v` drawn offscreen by ImageRenderer at scale 1 on black (no window, no file). Main actor, like the class.
+    private func pixels<V: View>(_ v: V, _ tag: String) throws -> (width: Int, height: Int, row: Int, bytes: [UInt8]) {
+        let r = ImageRenderer(content: v.fixedSize().background(Color.black))
+        r.scale = 1
+        let cg = try XCTUnwrap(r.cgImage, tag)
+        XCTAssertLessThanOrEqual(cg.width, 800, tag)
+        XCTAssertLessThanOrEqual(cg.height, 200, tag)
+        XCTAssertEqual(cg.bitsPerPixel, 32, tag)
+        return (cg.width, cg.height, cg.bytesPerRow, [UInt8](try XCTUnwrap(cg.dataProvider?.data as Data?, tag)))
+    }
+
+    /// nil when the two images cannot be compared; the head's last two columns are left out (its last glyph's edge). True
+    /// when the head's pixels are the line's leftmost pixels.
+    private func headLeads<L: View, H: View>(_ line: L, _ first: H, _ tag: String) throws -> Bool? {
+        let l = try pixels(line, tag + " line"), h = try pixels(first, tag + " head")
+        guard l.height == h.height, h.width > 4, l.width > h.width, l.row >= l.width * 4, h.row >= h.width * 4,
+              l.bytes.count >= l.row * l.height, h.bytes.count >= h.row * h.height else {
+            XCTFail("\(tag): line \(l.width)x\(l.height), head \(h.width)x\(h.height)")
+            return nil
+        }
+        let n = (h.width - 2) * 4
+        let same = (0..<h.height).allSatisfy { y in l.bytes[(y * l.row)..<(y * l.row + n)].elementsEqual(h.bytes[(y * h.row)..<(y * h.row + n)]) }
+        fputs("mc1252b fact \(tag): line \(l.width)x\(l.height), head \(h.width)x\(h.height), left \(h.width - 2) columns equal \(same)\n", stderr)
+        return same
     }
 
     // MARK: R1252-q3, a cut line
@@ -450,5 +458,98 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
             let node = try XCTUnwrap(b.first { $0.named(label) && $0.frame.height > 0 }, "\(label): \(b.map(\.names))")
             XCTAssertFalse(node.frame.intersects(frame), "\(label) \(node.frame) meets the note \(frame)")
         }
+    }
+
+    // MARK: R1252-q4, digits after a right-to-left word; q5, the accessibility value; q6, the path drawn; r1106 nit 1
+
+    /// A Hebrew word (two letters) and two numbers after it.
+    private static let rtlDigits = "\u{05D0}\u{05D1} 12 34"
+
+    /// U+200E after each right-to-left run that anything follows: none inside a run, none at the end; a run's marks (and a
+    /// dropped mark's escape) stay inside its character, the mark comes after the whole character.
+    func testAMarkFollowsEachRightToLeftRunThatSomethingFollows() {
+        check(Self.rtlDigits, Self.lrm + "\u{05D0}\u{05D1}" + Self.lrm + " 12 34", "two numbers after a Hebrew word")
+        check("x \u{05D0}\u{05D1}", "x \u{05D0}\u{05D1}", "a run at the very end: no mark after it")
+        check("\u{05D0}\u{05D1}\u{05D2}", Self.lrm + "\u{05D0}\u{05D1}\u{05D2}", "one run, the whole text: only the leading mark")
+        // bet with dagesh and qamats (kept marks), then a digit: the mark after the marks, not between them
+        check("\u{05D1}\u{05BC}\u{05B8}1", Self.lrm + "\u{05D1}\u{05BC}\u{05B8}" + Self.lrm + "1", "marks stay in the run")
+        // four marks on bet: the fourth shown as its escape in place, still inside the character, then the mark
+        check("\u{05D1}\u{05BC}\u{05B8}\u{05BD}\u{05B0} \u{05E9}",
+              Self.lrm + "\u{05D1}\u{05BC}\u{05B8}\u{05BD}\\u{05B0}" + Self.lrm + " \u{05E9}", "an escaped mark stays in the run")
+        // Arabic letters and Arabic-Indic digits are each their own right-to-left run: a mark after each
+        check("\u{0627}\u{0628} \u{0661}\u{0662} \u{0663}\u{0664}",
+              Self.lrm + "\u{0627}\u{0628}" + Self.lrm + " \u{0661}\u{0662}" + Self.lrm + " \u{0663}\u{0664}", "Arabic-Indic digits")
+        // a direction mark the text holds is shown as its escape, not taken for ours
+        check("\u{05D0}\u{200E}1", Self.lrm + "\u{05D0}" + Self.lrm + "\\u{200E}1", "a written U+200E")
+        // a run the cut follows: the mark before the cut's text
+        check(String(repeating: "a", count: 1999) + "\u{05D0}\u{05D1}", String(repeating: "a", count: 1999) + "\u{05D0}" + Self.lrm
+              + "\u{2026} (+1 more characters, not shown)", "a run the cut follows")
+        for (ch, rtl) in [("\u{05D0}", true), ("\u{0627}", true), ("\u{0661}", true), ("a", false), ("1", false), ("\u{05BC}", false),
+                          ("\u{FEFF}", false), ("\u{200F}", false), ("\u{039A}", false)] as [(Character, Bool)] {
+            XCTAssertEqual(ManagedConfigConsentDisplay.isRightToLeft(ch), rtl, "\(ch.unicodeScalars.map(\.value))")
+        }
+        // nothing written changes: the change set's line keeps its own scalars
+        let line = ManagedConfigChangeSet.Line(sign: .added, text: Self.rtlDigits)
+        XCTAssertEqual(Self.scalars(line.text), Self.scalars(Self.rtlDigits))
+        XCTAssertEqual(Self.readBack(ManagedConfigConsentDisplay.displayed(Self.rtlDigits)), Self.scalars(Self.rtlDigits))
+    }
+
+    /// Offscreen (ImageRenderer, scale 1, no window, no file): "+ " and the Hebrew word with "12 34" after it, and its head
+    /// "+ " and the word with "12": the head's pixels must be the line's leftmost pixels, so "12" is drawn left of "34", in
+    /// the order written. CONTROL: the second dispatch's form of the same two strings (one leading mark only), in a plain
+    /// Text: there the digits join the word's run and "34" is drawn first, so its left columns are not its head's.
+    func testTwoNumbersAfterARightToLeftWordAreDrawnInWrittenOrder() throws {
+        let head = "\u{05D0}\u{05D1} 12"
+        let font = Neon.font(11, design: .monospaced)
+        let control = try headLeads(Text(verbatim: "+ " + Self.lrm + Self.rtlDigits).font(font).foregroundStyle(Neon.terminal),
+                                    Text(verbatim: "+ " + Self.lrm + head).font(font).foregroundStyle(Neon.terminal), "q4 control")
+        XCTAssertEqual(control, false, "control: on the old rule the numbers must show swapped, or the method cannot see the order")
+        guard control == false else { return }
+        let line = try headLeads(drawn(Self.rtlDigits), drawn(head), "q4 line")
+        XCTAssertEqual(line, true, "line: the two numbers are not drawn in the order they are written")
+    }
+
+    /// R1252-q6: the path drawn as the card draws it (S fileCard: Text(verbatim: displayed(path)) in the path's font), with a
+    /// Hebrew folder name and "12 34" after it: drawn in written order; the control, the raw path in a plain Text, is not.
+    func testAPathWithARightToLeftNameIsDrawnInWrittenOrder() throws {
+        let path = "/Users/example/\u{05D0}\u{05D1}/12 34.md", head = "/Users/example/\u{05D0}\u{05D1}/12"
+        let font = Neon.font(12, weight: .semibold, design: .monospaced)
+        // main actor (a view for ImageRenderer); called only from this row
+        @MainActor func card(_ s: String) -> some View { Text(verbatim: s).font(font).foregroundStyle(Neon.textPrimary) }
+        XCTAssertEqual(Self.scalars(ManagedConfigConsentDisplay.displayed(path)),
+                       Self.scalars("/Users/example/\u{05D0}\u{05D1}" + Self.lrm + "/12 34.md"))
+        let control = try headLeads(card(path), card(head), "q6 control")
+        XCTAssertEqual(control, false, "control: the raw path must not start like its head")
+        guard control == false else { return }
+        let shown = try headLeads(card(ManagedConfigConsentDisplay.displayed(path)), card(ManagedConfigConsentDisplay.displayed(head)), "q6 path")
+        XCTAssertEqual(shown, true, "path: the numbers are not drawn in the order they are written")
+    }
+
+    /// R1252-q5: what an AX client (VoiceOver included) reads for a diff line with a Hebrew word: the AXValue is the drawn
+    /// string, the marks included; no name on the tree is the line without them.
+    func testTheAccessibilityValueOfARightToLeftLineIsTheDrawnString() {
+        let m = model(first: Self.rtlDigits)
+        let b = tree(m, fitting(m))
+        let expected = Self.scalars("+ \u{200E}\u{05D0}\u{05D1}\u{200E} 12 34")
+        let node = b.first { Self.scalars($0.value) == expected }
+        XCTAssertTrue(node != nil, "the line's AXValue: \(b.map { $0.names.map { Self.scalars($0) } })")
+        XCTAssertFalse(b.contains { $0.names.contains { Self.scalars($0) == Self.scalars("+ " + Self.rtlDigits) } }, "a name without the marks")
+        fputs("mc1252c fact accessibility: value \(Self.scalars(node?.value)), label \(Self.scalars(node?.label))\n", stderr)
+    }
+
+    /// QA r1106 nit 1: a new file has no backup line, so a long backup directory there shows no cut note; the same
+    /// directory on an existing file (backup line shown, cut) does.
+    func testANewFilesBackupDirectoryShowsNoCutNote() {
+        var file = ManagedConfigChangeSet.File(target: "claude:x.md", path: "/Users/example/x.md",
+                                               backupDirectory: "/" + String(repeating: "b", count: 2001),
+                                               lines: [.init(sign: .added, text: "x")], notes: [])
+        file.newFile = true
+        let fresh = ManagedConfigConsentModel(changes: Self.set([file])) { _ in }
+        XCTAssertFalse(fresh.showsCutNote)
+        XCTAssertEqual(Array(fresh.renderedStrings.suffix(5)), ["/Users/example/x.md", "new file", "+ x", "Cancel", "Apply"])
+        file.newFile = false
+        let old = ManagedConfigConsentModel(changes: Self.set([file])) { _ in }
+        XCTAssertTrue(old.showsCutNote)
+        XCTAssertEqual(Array(old.renderedStrings.suffix(3)), [ManagedConfigConsentModel.cutNote, "Cancel", "Apply"])
     }
 }

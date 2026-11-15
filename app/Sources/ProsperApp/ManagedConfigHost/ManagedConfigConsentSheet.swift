@@ -157,7 +157,9 @@ final class ManagedConfigConsentModel: ObservableObject {
     static let cutNote = "A line is too long to show here in full: read the whole file before you approve."
 
     var showsCutNote: Bool {
-        changes.files.contains { f in ([f.path, f.backupDirectory] + notes(f) + f.lines.map(\.text)).contains(where: ManagedConfigConsentDisplay.isCut) }
+        // QA r1106: the backup directory only where its line is shown (a new file has none)
+        changes.files.contains { f in ([f.path] + (backupLine(f) == nil ? [] : [f.backupDirectory]) + notes(f) + f.lines.map(\.text))
+            .contains(where: ManagedConfigConsentDisplay.isCut) }
     }
 }
 
@@ -175,7 +177,11 @@ final class ManagedConfigConsentModel: ObservableObject {
 ///   exactly as before any other escape;
 /// - past `ceiling` scalars the rest is counted, not shown, and the line says so;
 /// - a text whose first letter is not an ASCII letter gets U+200E in front, so it is drawn left to right in the order it is
-///   written (a right-to-left word still reads right to left inside its own run); an ASCII-only text is drawn as before.
+///   written (a right-to-left word still reads right to left inside its own run); an ASCII-only text is drawn as before;
+/// - each right-to-left run that anything follows gets U+200E after it (R1252-q4), so digits and signs after a
+///   right-to-left word are drawn after it in the order they are written, not inside its run.
+/// The marks are drawn only: never written, compared, hashed or counted for the cut. The path and backup line are
+/// selectable, so copying one whose text gets a mark copies the U+200E with it (QA r1106).
 /// Pure and linear in its input; no isolation.
 enum ManagedConfigConsentDisplay {
     static let ceiling = 2000
@@ -189,7 +195,8 @@ enum ManagedConfigConsentDisplay {
         head.append(contentsOf: s.unicodeScalars.prefix(ceiling))
         // every scalar of the head in display order, with whether it is shown as its escape
         var pieces: [(scalar: Unicode.Scalar, escaped: Bool)] = []
-        for ch in String(head) {
+        let chars = Array(String(head))
+        for (c, ch) in chars.enumerated() {
             let kept = Array(OutsideText.capMarks(String(ch)).unicodeScalars)
             var k = 0
             // capMarks only drops marks, and the FIRST scalar it keeps after a dropped one is not a mark (the count per base
@@ -202,6 +209,11 @@ enum ManagedConfigConsentDisplay {
                     // a dropped mark: its escape in place, in the written order
                     pieces.append((u, true))
                 }
+            }
+            // R1252-q4: U+200E after the last character of each right-to-left run that anything follows (the next character
+            // or the cut's own text), never inside a run: the whole character goes first, so its marks stay with it
+            if isRightToLeft(ch), (c + 1 < chars.count ? !isRightToLeft(chars[c + 1]) : rest > 0) {
+                pieces.append(("\u{200E}", false))
             }
         }
         var out = String.UnicodeScalarView(), run: [Unicode.Scalar] = []
@@ -231,6 +243,20 @@ enum ManagedConfigConsentDisplay {
         let ltr = out.first(where: { !$0.isASCII || $0.properties.isAlphabetic })?.isASCII ?? true
         let shown = (ltr ? "" : "\u{200E}") + String(out)
         return rest > 0 ? shown + "\u{2026} (+\(rest) more characters, not shown)" : shown
+    }
+
+    /// A character whose base is a right-to-left letter, digit or sign: drawn inside a right-to-left run.
+    /// shortcut: Swift has no bidi class per scalar, so the blocks whose scalars are right to left (bidi class R, AL or AN:
+    /// Hebrew to Arabic Extended-A, the Hebrew and Arabic presentation forms, the supplementary right-to-left blocks) stand
+    /// in for it, minus marks and unseen scalars; upgrade if the standard library gains a bidi class.
+    static func isRightToLeft(_ ch: Character) -> Bool {
+        guard let u = ch.unicodeScalars.first, !OutsideText.isUnseen(u) else { return false }
+        let g = u.properties.generalCategory
+        guard g != .nonspacingMark, g != .enclosingMark, g != .spacingMark else { return false }
+        switch u.value {
+        case 0x0590...0x08FF, 0xFB1D...0xFDFF, 0xFE70...0xFEFF, 0x10800...0x10FFF, 0x1E800...0x1EFFF: return true
+        default: return false
+        }
     }
 
     /// True when `displayed` cuts the text at the ceiling.

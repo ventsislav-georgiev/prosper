@@ -1285,6 +1285,8 @@ tag from the now-released section and put it on the new top draft.
   action it sets ("Open Runner, Command R"), announces "Waiting for keys" when you start recording
   and reads out the new shortcut once you press it, and no longer lets VoiceOver stop on the key
   symbols inside it.
+- In the config-change approval sheet, numbers and punctuation right after a Hebrew or Arabic word
+  now show in the order they will be written to the file.
 
 ## v2.174.0
 
