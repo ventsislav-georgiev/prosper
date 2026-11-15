@@ -58,29 +58,38 @@ enum MenuBarAX {
 
     /// Every item MenuBarAgent currently lays out on any display's bar, left→right.
     /// Absent = overflowed/dropped.
-    static func layout() -> [Laid] {
-        guard trusted, let agent = agentPID else { return [] }
+    static func layout() -> [Laid] { layoutRead(deadline: .infinity)?.laid ?? [] }
+
+    /// #1032: `layout()` plus whether every read answered. A failed read (the 0.25 s timeout)
+    /// gives no value, so a container's items or a wrapper's owner go missing while the rest is
+    /// found: `complete` is false then, and when the whole read runs past `deadline` seconds (the
+    /// rest is left unread). nil without the permission or the agent: nothing was read.
+    static func layoutRead(deadline: TimeInterval) -> (laid: [Laid], complete: Bool)? {
+        guard trusted, let agent = agentPID else { return nil }
+        let end = ProcessInfo.processInfo.systemUptime + deadline
+        var failed = false
         let root = bounded(AXUIElementCreateApplication(agent))   // per element (#224)
         let displays = displayBounds()
         var found: [Laid] = []
         func visit(_ e: AXUIElement, depth: Int) {
             guard depth <= 3 else { return }
+            guard ProcessInfo.processInfo.systemUptime < end else { failed = true; return }
             bounded(e)
-            if let f = frame(of: e), isBarItem(f, displays: displays) {
-                let child = children(of: e).first
+            if let f = frame(of: e, failed: &failed), isBarItem(f, displays: displays) {
+                let child = children(of: e, failed: &failed).first
                 let ownerPID = child.map(pid) ?? agent
                 found.append(Laid(frame: f, pid: ownerPID == 0 ? agent : ownerPID))
                 return
             }
-            for c in children(of: e) { visit(c, depth: depth + 1) }
+            for c in children(of: e, failed: &failed) { visit(c, depth: depth + 1) }
         }
-        for c in children(of: root) { visit(c, depth: 1) }
+        for c in children(of: root, failed: &failed) { visit(c, depth: 1) }
         // The agent nests containers (Apple's item group, the overflow region) around
         // real items; drop anything that strictly contains another hit.
         let items = found.filter { a in
             !found.contains { b in a.frame != b.frame && a.frame.contains(b.frame) }
         }
-        return items.sorted { $0.frame.minX < $1.frame.minX }
+        return (items.sorted { $0.frame.minX < $1.frame.minX }, !failed)
     }
 
     /// #202: is `f` an item slot on some display's menu bar? Every display has its own
@@ -233,12 +242,32 @@ enum MenuBarAX {
     }
 
     private static func attribute(_ e: AXUIElement, _ name: String) -> AnyObject? {
+        var failed = false
+        return attribute(e, name, failed: &failed)
+    }
+
+    /// #1032: sets `failed` when the read itself failed, not when the element has no such value.
+    private static func attribute(_ e: AXUIElement, _ name: String, failed: inout Bool) -> AnyObject? {
         var v: AnyObject?
-        return AXUIElementCopyAttributeValue(e, name as CFString, &v) == .success ? v : nil
+        let err = AXUIElementCopyAttributeValue(e, name as CFString, &v)
+        if readFailed(err) { failed = true }
+        return err == .success ? v : nil
+    }
+
+    /// #1032: a read that did not answer: every error but .noValue / .attributeUnsupported (an
+    /// element without the attribute, a real answer). The messaging timeout's .cannotComplete,
+    /// an element gone between two reads (.invalidUIElement) and the rest leave the layout partial.
+    nonisolated static func readFailed(_ err: AXError) -> Bool {
+        !(err == .success || err == .noValue || err == .attributeUnsupported)
     }
 
     private static func children(of e: AXUIElement) -> [AXUIElement] {
-        (attribute(e, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+        var failed = false
+        return children(of: e, failed: &failed)
+    }
+
+    private static func children(of e: AXUIElement, failed: inout Bool) -> [AXUIElement] {
+        (attribute(e, kAXChildrenAttribute, failed: &failed) as? [AXUIElement]) ?? []
     }
 
     private static func pid(_ e: AXUIElement) -> pid_t {
@@ -259,7 +288,13 @@ enum MenuBarAX {
 
     /// Top-left-origin screen frame (same space as CGWindow bounds).
     private static func frame(of e: AXUIElement) -> CGRect? {
-        guard let p = attribute(e, kAXPositionAttribute), let s = attribute(e, kAXSizeAttribute),
+        var failed = false
+        return frame(of: e, failed: &failed)
+    }
+
+    private static func frame(of e: AXUIElement, failed: inout Bool) -> CGRect? {
+        guard let p = attribute(e, kAXPositionAttribute, failed: &failed),
+              let s = attribute(e, kAXSizeAttribute, failed: &failed),
               CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
         var pt = CGPoint.zero, sz = CGSize.zero
         guard AXValueGetValue(p as! AXValue, .cgPoint, &pt), AXValueGetValue(s as! AXValue, .cgSize, &sz) else {

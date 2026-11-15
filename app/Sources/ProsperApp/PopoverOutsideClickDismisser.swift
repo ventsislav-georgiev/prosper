@@ -199,27 +199,76 @@ enum ExpandedInterfacePolicy {
     /// dismisser closes the popover; a begin the same click sends after that is
     /// dropped by AppKit's dismiss timestamp or refused by `isReopenOfSameClick`.
     ///
-    /// #978: the frames are the buttons' client window frames, which hold the item's
-    /// last laid-out position while the host keeps it in the overflow or drops it, and
-    /// another app's item may sit there now. `hostSlots` are the slots the host lays our
-    /// items out in (nil when unreadable); a frame with no slot at its x is dropped, so
-    /// a click there stays the dismisser's. Unreadable keeps every frame, as before.
-    /// With `click`, the host is read only when the click is inside a frame: outside
-    /// all of them the answer for that click is the same without it.
+    /// #978: the client frames are the buttons' window frames: one per item, on one display,
+    /// holding the last laid-out position while the host overflows or drops the item.
+    /// #1032: so when the host is readable and complete (`hostSlots`: our slots in the AX
+    /// top-left space, nil when unreadable or partial), the frames are the host's slots of
+    /// THIS bridge's non-live items (`sameItem`) on every display, converted to the click's
+    /// Cocoa space with `screens` (Cocoa frames, primary first). Every other slot of ours (the
+    /// main icon, extensions, another owner's items, the live item) stays the dismisser's.
+    /// Otherwise every client frame, as before #978. With `click`, the host is read only for
+    /// a click inside a client frame or on a menu bar: elsewhere the answer is the same without it.
+    @MainActor
     static func systemOwnedFrames(_ items: [(frame: NSRect, sessionLive: Bool)], click: NSPoint? = nil,
-                                  hostSlots: () -> [CGRect]? = { nil }) -> [NSRect] {
+                                  screens: [CGRect] = [], hostSlots: () -> [CGRect]? = { nil }) -> [NSRect] {
         let frames = items.filter { !$0.sessionLive }.map(\.frame)
-        guard !frames.isEmpty, click.map({ systemOwnsClick($0, itemFrames: frames) }) ?? true,
-              let slots = hostSlots() else { return frames }
-        // x only, as MenuBarAX.place matches: AX slots are top-left, client frames bottom-left.
-        return frames.filter { f in slots.contains { abs($0.minX - f.minX) < 3 } }
+        guard !frames.isEmpty,
+              click.map({ systemOwnsClick($0, itemFrames: frames) || onMenuBar($0, screens: screens) }) ?? true,
+              let slots = hostSlots(), let laid = cocoaSlots(slots, screens: screens) else { return frames }
+        return laid.filter { s in frames.contains { sameItem($0, s, screens: screens) } }
+    }
+
+    /// #1032: AX slots in the Cocoa space, nil when there is no primary screen to flip
+    /// against. Host values are outside data: a non-finite or empty slot, or one not
+    /// wholly on a screen, is skipped.
+    @MainActor
+    static func cocoaSlots(_ slots: [CGRect], screens: [CGRect]) -> [CGRect]? {
+        guard let h = screens.first?.height, h.isFinite, h > 0 else { return nil }
+        return slots.compactMap { s in
+            guard [s.minX, s.minY, s.width, s.height].allSatisfy(\.isFinite), s.width > 0, s.height > 0 else { return nil }
+            let c = WindowManager.toAX(s, primaryHeight: h)   // the flip is its own inverse: AX -> Cocoa
+            return screens.contains { $0.contains(c) } ? c : nil
+        }
+    }
+
+    /// The screen holding `r`'s center (closed rect). Comparisons, not ranges: a NaN edge
+    /// would trap a range.
+    static func screen(of r: CGRect, in screens: [CGRect]) -> CGRect? {
+        screens.first { $0.minX <= r.midX && r.midX <= $0.maxX && $0.minY <= r.midY && r.midY <= $0.maxY }
+    }
+
+    /// #1032: is `p` on a screen's menu bar (its top 48 pt, isBarItem's tallest slot)?
+    static func onMenuBar(_ p: NSPoint, screens: [CGRect]) -> Bool {
+        screens.contains { $0.minX <= p.x && p.x <= $0.maxX && p.y <= $0.maxY && p.y >= $0.maxY - 48 }
+    }
+
+    /// #1032: is host `slot` the item whose client frame is `client`? On the client frame's
+    /// own display: within 3 pt of its x (#978). The host lays the same items right-aligned
+    /// on every bar, so on another display: the same distance from that display's right edge
+    /// (on the own display that distance is the x test). A frame on no screen: x alone.
+    // shortcut: unverified on a live two-display bar (no identifier the tree shows the host carries);
+    // if the bars differ, match our slots by order per display (left.txt).
+    static func sameItem(_ client: CGRect, _ slot: CGRect, screens: [CGRect]) -> Bool {
+        guard let cs = screen(of: client, in: screens), let ss = screen(of: slot, in: screens) else {
+            return abs(client.minX - slot.minX) < 3
+        }
+        return abs((cs.maxX - client.minX) - (ss.maxX - slot.minX)) < 3
+    }
+
+    /// #1032: the log line for a host read that came back partial or ran past `deadline`
+    /// (its slots are then not used, or used late), nil for a whole read in time. Counts only.
+    static func hostReadNote(complete: Bool, elapsed: TimeInterval, deadline: TimeInterval, count: Int) -> String? {
+        let late = !(elapsed < deadline)
+        guard !complete || late else { return nil }
+        return "host read \(late ? "past the deadline" : "partial") after \(String(format: "%.3f", elapsed)) s, \(count) items read"
     }
 
     /// #978: `pid`'s slots in a host layout (MenuBarAX.layout). nil for an empty one:
     /// the bar always holds the agent's own items (clock, Control Center), so empty is
-    /// a failed read, not "none of ours laid out".
-    static func ownSlots(in laid: [MenuBarAX.Laid], pid: pid_t) -> [CGRect]? {
-        laid.isEmpty ? nil : laid.filter { $0.pid == pid }.map(\.frame)
+    /// a failed read, not "none of ours laid out". #1032: nil for a partial read too.
+    static func ownSlots(in laid: [MenuBarAX.Laid], pid: pid_t, complete: Bool) -> [CGRect]? {
+        guard complete, !laid.isEmpty else { return nil }
+        return laid.filter { $0.pid == pid }.map(\.frame)
     }
 
     /// #414/#415: how soon after a close a new open counts as the click that closed
@@ -265,16 +314,20 @@ final class ExpandedInterfaceBridge: NSObject {
     /// Test seam: client frames and live flags fed instead of the installed items'
     /// (nil reads the items), so no test needs a real status item.
     private let clientFrames: (() -> [(frame: NSRect, sessionLive: Bool)])?
+    /// #1032: the screens' Cocoa frames, primary first; read on main at each click.
+    private let screens: @MainActor () -> [CGRect]
 
     init(begin: @escaping (NSStatusItem) -> Void, end: @escaping (NSStatusItem) -> Void,
          now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          hostSlots: @escaping () -> [CGRect]? = { nil },
-         clientFrames: (() -> [(frame: NSRect, sessionLive: Bool)])? = nil) {
+         clientFrames: (() -> [(frame: NSRect, sessionLive: Bool)])? = nil,
+         screens: @escaping @MainActor () -> [CGRect] = { NSScreen.screens.map(\.frame) }) {
         self.begin = begin
         self.end = end
         self.now = now
         self.hostSlots = hostSlots
         self.clientFrames = clientFrames
+        self.screens = screens
     }
 
     /// true on macOS 27: the system now opens/closes, so the caller must NOT also
@@ -321,6 +374,7 @@ final class ExpandedInterfaceBridge: NSObject {
             return
         }
         popoverLog.debug("session begin forwarded")
+        Self.hostReadNoted = false
         begin(item)
     }
 
@@ -339,13 +393,27 @@ final class ExpandedInterfaceBridge: NSObject {
     func itemFrames(at click: NSPoint?) -> [NSRect] {
         ExpandedInterfacePolicy.systemOwnedFrames(clientFrames?() ?? items.allObjects.compactMap { i in
             i.button?.window.map { (frame: $0.frame, sessionLive: Self.hasLiveSession(i)) }
-        }, click: click, hostSlots: hostSlots)
+        }, click: click, screens: screens(), hostSlots: hostSlots)
     }
 
+    /// #1032: the host read's total budget. It runs on main inside the click handler, and
+    /// each element read may take 0.25 s. Unmeasured against a healthy read (left.txt).
+    static let hostReadDeadline: TimeInterval = 0.25
+    /// #1032: the partial/late note was logged since the last forwarded begin (one per open).
+    private static var hostReadNoted = false
+
     /// #978: our slots in MenuBarAgent's live layout; nil without Accessibility, without
-    /// the agent (below 27) or on a failed read (layout() is [] for all three).
+    /// the agent (below 27), on a failed or partial read (#1032), or past `hostReadDeadline`.
     static func liveHostSlots() -> [CGRect]? {
-        ExpandedInterfacePolicy.ownSlots(in: MenuBarAX.layout(), pid: getpid())
+        let start = ProcessInfo.processInfo.systemUptime
+        guard let read = MenuBarAX.layoutRead(deadline: hostReadDeadline) else { return nil }
+        if !hostReadNoted, let note = ExpandedInterfacePolicy.hostReadNote(
+            complete: read.complete, elapsed: ProcessInfo.processInfo.systemUptime - start,
+            deadline: hostReadDeadline, count: read.laid.count) {
+            hostReadNoted = true
+            popoverLog.notice("\(note, privacy: .public)")
+        }
+        return ExpandedInterfacePolicy.ownSlots(in: read.laid, pid: getpid(), complete: read.complete)
     }
 
     private static func hasLiveSession(_ item: NSStatusItem) -> Bool {

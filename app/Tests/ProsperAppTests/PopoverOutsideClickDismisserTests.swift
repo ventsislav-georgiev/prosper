@@ -352,16 +352,23 @@ final class OpenItemPopoverOutsideClickDismisserTests: XCTestCase {
 @MainActor
 final class StaleFramePopoverOutsideClickDismisserTests: XCTestCase {
     private typealias Frames = [(frame: NSRect, sessionLive: Bool)]
-    // Off every screen: no window there and the popover not shown, so the dismisser
+    // Off every real screen: no window there and the popover not shown, so the dismisser
     // closes unless an item frame takes the click.
     private let p = NSPoint(x: -100_000, y: -100_000)
-    /// The client frame around `p` (Cocoa, bottom-left).
+    /// The client frame around `p` (Cocoa, bottom-left), on the far display's bar.
     private var client: NSRect { NSRect(x: p.x - 10, y: p.y - 10, width: 40, height: 24) }
-    /// A host slot (AX, top-left: only x is comparable) `dx` right of the client frame.
-    private func slot(_ dx: CGFloat) -> CGRect { CGRect(x: client.minX + dx, y: 0, width: 40, height: 24) }
+    /// #1032 round 2: literal screens (Cocoa, primary first), never the machine's. The primary
+    /// only sets the flip (height 900); the far display's top edge is the client frame's top
+    /// (maxY -99 986), so `p` is on its bar and off every real screen.
+    private let screens = [CGRect(x: 0, y: 0, width: 1440, height: 900),
+                           CGRect(x: -101_000, y: -100_886, width: 1440, height: 900)]
+    /// A host slot (AX, top-left: y 900 - (-100 010) - 24 = 100 886 is the client frame's row)
+    /// `dx` right of the client frame.
+    private func slot(_ dx: CGFloat) -> CGRect { CGRect(x: client.minX + dx, y: 100_886, width: 40, height: 24) }
 
     private func bridge(_ frames: Frames, slots: [CGRect]?) -> ExpandedInterfaceBridge {
-        ExpandedInterfaceBridge(begin: { _ in }, end: { _ in }, hostSlots: { slots }, clientFrames: { frames })
+        ExpandedInterfaceBridge(begin: { _ in }, end: { _ in }, hostSlots: { slots }, clientFrames: { frames },
+                                screens: { self.screens })
     }
 
     /// true when the dismisser took a click at `at` (closed and stamped it).
@@ -383,7 +390,8 @@ final class StaleFramePopoverOutsideClickDismisserTests: XCTestCase {
     // A laid-out item keeps its frame: its click still begins its session (Stats B while A is open).
     func testLaidOutOwnItemStaysTheSystems() {
         XCTAssertFalse(closes(bridge([(client, false)], slots: [slot(200), slot(2)])))
-        XCTAssertEqual(bridge([(client, false)], slots: [slot(-2)]).itemFrames, [client], "the client frame is kept")
+        XCTAssertEqual(bridge([(client, false)], slots: [slot(-2)]).itemFrames,
+                       [NSRect(x: -100_012, y: -100_010, width: 40, height: 24)], "#1032: the host's slot, in Cocoa, stands for it")
     }
 
     // No Accessibility or no agent: nothing says a frame is stale, the parent's rule stands.
@@ -398,10 +406,11 @@ final class StaleFramePopoverOutsideClickDismisserTests: XCTestCase {
         let cases: [Frames] = [[], [(client, true)]]
         for frames in cases {
             let b = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in },
-                                            hostSlots: { reads += 1; return [] }, clientFrames: { frames })
+                                            hostSlots: { reads += 1; return [] }, clientFrames: { frames }, screens: { self.screens })
             XCTAssertTrue(b.itemFrames.isEmpty)
         }
-        let noItems = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in }, hostSlots: { reads += 1; return [] })
+        let noItems = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in }, hostSlots: { reads += 1; return [] },
+                                              screens: { self.screens })
         XCTAssertTrue(noItems.itemFrames.isEmpty, "no installed item, as below 27")
         XCTAssertEqual(reads, 0)
     }
@@ -421,18 +430,18 @@ final class StaleFramePopoverOutsideClickDismisserTests: XCTestCase {
         XCTAssertEqual(reads, 1, "a pinned popover reads nothing")
     }
 
-    // r2: the host is read only for a click inside a client frame, once.
+    // r2: the host is read only for a click inside a client frame, once (#1032: or on a bar).
     func testHostIsReadOnlyForAClickInsideAClientFrame() {
         var reads = 0
         let stale = slot(200), laid = slot(0)
-        let b = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in },
-                                        hostSlots: { reads += 1; return [stale] }, clientFrames: { [(self.client, false)] })
-        XCTAssertTrue(closes(b, at: NSPoint(x: p.x - 500, y: p.y)), "outside every client frame: the dismisser's")
-        XCTAssertEqual(reads, 0, "outside every client frame: no host read")
+        let b = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in }, hostSlots: { reads += 1; return [stale] },
+                                        clientFrames: { [(self.client, false)] }, screens: { self.screens })
+        XCTAssertTrue(closes(b, at: NSPoint(x: p.x - 500, y: p.y - 500)), "outside every client frame and bar: the dismisser's")
+        XCTAssertEqual(reads, 0, "outside every client frame and bar: no host read")
         XCTAssertTrue(closes(b, at: p), "inside a stale frame: the dismisser's")
         XCTAssertEqual(reads, 1)
-        let c = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in },
-                                        hostSlots: { reads += 1; return [laid] }, clientFrames: { [(self.client, false)] })
+        let c = ExpandedInterfaceBridge(begin: { _ in }, end: { _ in }, hostSlots: { reads += 1; return [laid] },
+                                        clientFrames: { [(self.client, false)] }, screens: { self.screens })
         XCTAssertFalse(closes(c, at: p), "inside a laid-out frame: the system's")
         XCTAssertEqual(reads, 2)
     }
@@ -443,11 +452,12 @@ final class StaleFramePopoverOutsideClickDismisserTests: XCTestCase {
         let me: pid_t = 100, agent: pid_t = 50, other: pid_t = 200
         let a = CGRect(x: 10, y: 0, width: 30, height: 24), b = CGRect(x: 50, y: 0, width: 30, height: 24)
         let c = CGRect(x: 90, y: 0, width: 30, height: 24), d = CGRect(x: 130, y: 0, width: 30, height: 24)
-        XCTAssertTrue(ExpandedInterfacePolicy.ownSlots(in: [], pid: me) == nil, "empty: a failed read")
-        XCTAssertEqual(ExpandedInterfacePolicy.ownSlots(in: [L(frame: a, pid: agent), L(frame: b, pid: other)], pid: me), [],
+        XCTAssertTrue(ExpandedInterfacePolicy.ownSlots(in: [], pid: me, complete: true) == nil, "empty: a failed read")
+        XCTAssertEqual(ExpandedInterfacePolicy.ownSlots(in: [L(frame: a, pid: agent), L(frame: b, pid: other)], pid: me, complete: true), [],
                        "ours all overflowed or dropped")
         XCTAssertEqual(ExpandedInterfacePolicy.ownSlots(in: [L(frame: a, pid: agent), L(frame: b, pid: me),
-                                                             L(frame: c, pid: other), L(frame: d, pid: me)], pid: me),
+                                                             L(frame: c, pid: other), L(frame: d, pid: me)], pid: me,
+                                                       complete: true),
                        [b, d])
     }
 }

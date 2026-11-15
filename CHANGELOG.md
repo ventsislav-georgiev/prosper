@@ -1088,6 +1088,9 @@ tag from the now-released section and put it on the new top draft.
   keycaps) and are never cut in the middle of a character, while hidden and direction-changing
   characters are still removed; a theme's name read aloud by VoiceOver is cleaned the same way
   (#928)
+- Menu bar popovers (Stats, Calendar, Mixer) on macOS 27 with a second display: clicking another
+  icon of the same popover on the other display's menu bar now switches to it instead of only
+  closing the open one; a click on any other Prosper icon still closes it (#1032)
 
 ## v2.174.0
 
