@@ -10,7 +10,8 @@ import AppKit
 final class ClipboardMonitor {
     static let shared = ClipboardMonitor()
 
-    private var timer: Timer?
+    /// Read by the wiring tests (#1292); only `applyPause` writes it.
+    private(set) var timer: Timer?
     private var lastChangeCount: Int = Pasteboard.general.changeCount
     private let pollInterval: TimeInterval = 1.0
 
@@ -18,7 +19,7 @@ final class ClipboardMonitor {
     /// torn down until both clear (same pattern as `StatsController`, #186).
     /// The monitor is a process-lifetime singleton, so the observers are never removed.
     private var sleepObservers: [NSObjectProtocol] = []
-    private var screen = ScreenGate()
+    private(set) var screen = ScreenGate()
 
     private(set) var isRunning = false
 
@@ -76,10 +77,11 @@ final class ClipboardMonitor {
     private static let softImageBytes = 8 * 1024 * 1024        // ≤8 MB PNG → encrypt
     nonisolated static let maxImagePixels = 50_000_000             // >50 MP → metadata only (no decode)
 
-    init() {
+    /// #1292: the two centers are the seam; a test passes private ones and posts on them.
+    init(workspaceCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+         distributedCenter: NotificationCenter = DistributedNotificationCenter.default()) {
         for (name, event) in ScreenGate.notifications {
-            let center = ScreenGate.center(for: event) == .distributed
-                ? DistributedNotificationCenter.default() : NSWorkspace.shared.notificationCenter
+            let center = ScreenGate.center(for: event) == .distributed ? distributedCenter : workspaceCenter
             sleepObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.screen.apply(event); self?.applyPause() }
             })
@@ -110,7 +112,7 @@ final class ClipboardMonitor {
         return timerActive ? .none : .resume
     }
 
-    private func applyPause() {
+    func applyPause() {
         switch Self.pauseAction(isRunning: isRunning, hidden: screen.hidden, timerActive: timer != nil) {
         case .none: return
         case .pause:

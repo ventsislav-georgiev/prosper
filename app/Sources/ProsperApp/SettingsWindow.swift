@@ -1377,6 +1377,8 @@ private struct GeneralPane: View {
 struct ClipboardSettingsSection: View {
     @ObservedObject var model: SettingsModel
     var readAccess: () -> ClipboardAccess = Pasteboard.access
+    /// #1292: the center the return-to-Prosper notification is read from; tests pass a private one.
+    var activationCenter: NotificationCenter = .default
     @State private var access = ClipboardAccess.unknown
 
     var body: some View {
@@ -1406,7 +1408,7 @@ struct ClipboardSettingsSection: View {
         }
         // No change notification exists for the setting (#210): re-read on appear and on every return to Prosper.
         .onAppear { access = readAccess() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+        .onReceive(activationCenter.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             access = readAccess()
         }
     }
@@ -1420,12 +1422,15 @@ private struct ClipboardAccessNote: View {
         if let note = access.settingsNote {
             if access.warns {
                 PermissionWarningRow(title: "macOS blocks clipboard reading", message: note) {
-                    NSWorkspace.shared.open(ClipboardAccess.settingsURL)
+                    ClipboardAccess.openSettings()
                 }
             } else {
-                Text(note)
-                    .font(Neon.font(12))
-                    .foregroundStyle(Neon.textSecondary)
+                Button(action: { ClipboardAccess.openSettings() }) {
+                    Text(note)
+                        .font(Neon.font(12))
+                        .foregroundStyle(Neon.textSecondary)
+                }
+                .buttonStyle(.plain)
             }
             NeonDivider()
         }

@@ -1326,6 +1326,8 @@ tag from the now-released section and put it on the new top draft.
   session, Restart stale or all agents, Stop all, Kill all, Resume interrupted, Clear unpinned,
   Sort, Row details, Always allow permission prompts and Agent Island Settings. Its questions ("Kill
   2 sessions?") show at the top of the sidebar, the same ones the island asks.
+- Settings > General > Clipboard: when macOS asks before Prosper reads other apps' copies, the line
+  is now a link that opens the Paste from Other Apps setting, like the blocked warning.
 
 ## v2.174.0
 

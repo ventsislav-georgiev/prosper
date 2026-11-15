@@ -25,6 +25,9 @@ enum ClipboardAccess: Equatable {
     static let paneName = "System Settings › Privacy & Security › Paste from Other Apps"
     static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Pasteboard")!
 
+    /// What both Clipboard settings lines (denied and asks) do on a click; `open` is the seam tests replace.
+    static func openSettings(using open: (URL) -> Bool = { NSWorkspace.shared.open($0) }) { _ = open(settingsURL) }
+
     /// Only denied is the warning row (with the System Settings link); asks is a quiet line.
     var warns: Bool {
         switch self {

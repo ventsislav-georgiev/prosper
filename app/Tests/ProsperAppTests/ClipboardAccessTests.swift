@@ -14,6 +14,10 @@ final class ClipboardAccessTests: XCTestCase {
         var value = ClipboardAccess.unknown
     }
 
+    /// #1292: the return-to-Prosper notification is read from this private center, so posting it
+    /// reaches only the section under test (not the real center's observers).
+    private let activation = NotificationCenter()
+
     private var windows: [NSWindow] = []
 
     override func tearDown() {
@@ -33,7 +37,7 @@ final class ClipboardAccessTests: XCTestCase {
         let host = NSHostingView(rootView: ClipboardSettingsSection(model: SettingsModel(), readAccess: {
             reader.count += 1
             return reader.value
-        }))
+        }, activationCenter: activation))
         host.frame = CGRect(x: 0, y: 0, width: 520, height: 600)
         let w = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
         w.isReleasedWhenClosed = false
@@ -113,9 +117,39 @@ final class ClipboardAccessTests: XCTestCase {
         XCTAssertEqual(reader.count, afterAppear, "no re-read without a trigger")
 
         reader.value = .denied
-        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+        activation.post(name: NSApplication.didBecomeActiveNotification, object: nil)
         flush(view)
         XCTAssertEqual(reader.count, afterAppear + 1, "re-read on becoming active")
         XCTAssertGreaterThan(view.fittingSize.height, allowed, "the new state is shown")
+    }
+
+    /// #1292: both lines (denied and asks) open the one URL through the one helper.
+    func testOpenSettingsOpensTheSettingsURL() {
+        var opened: [URL] = []
+        ClipboardAccess.openSettings(using: { opened.append($0); return true })
+        XCTAssertEqual(opened, [ClipboardAccess.settingsURL])
+    }
+
+    /// #1292: the asks line is a button, like the denied row; allowed shows neither. Read from the AX
+    /// tree of a view that is never shown, with a denied control so a tree that shows no buttons at all fails here.
+    func testAsksLineIsAButtonLikeTheDeniedRow() {
+        func buttons(_ state: ClipboardAccess) -> [String] {
+            let reader = Reader()
+            reader.value = state
+            let restore = AXTreeSupport.axOn()
+            defer { restore() }
+            let (win, view) = AXTreeSupport.hosted(ClipboardSettingsSection(model: SettingsModel(), readAccess: { reader.value },
+                                                                            activationCenter: activation), CGSize(width: 520, height: 600))
+            defer { win.close() }
+            let want = state == .allowed ? "" : (state == .denied ? "macOS blocks clipboard reading" : "macOS asks before Prosper reads")
+            let tree = AXTreeSupport.poll(view) { t in
+                want.isEmpty || t.contains { $0.role == "AXButton" && $0.names.contains { $0.contains(want) } }
+            }
+            XCTAssertFalse(win.isVisible, "never shown")
+            return tree.filter { $0.role == "AXButton" }.flatMap(\.names)
+        }
+        XCTAssertTrue(buttons(.denied).contains { $0.contains("macOS blocks clipboard reading") }, "control: the denied row is a button")
+        XCTAssertTrue(buttons(.asks).contains { $0.contains("macOS asks before Prosper reads") }, "the asks line is a button")
+        XCTAssertFalse(buttons(.allowed).contains { $0.contains("macOS asks before Prosper reads") || $0.contains("macOS blocks") })
     }
 }
