@@ -282,10 +282,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 extensionID: extID, handler: handler, payloadJSON: payload)
         }
         // A filesystem watch (§Q) re-invokes its named handler the same way.
-        ExtensionFSWatch.shared.invoke = { [weak self] extID, handler, payload in
+        ExtensionFSWatch.shared.invoke = { [weak self] extID, handler, payload, run in
             Task { @MainActor in
                 await self?.extensions.deliverEvent(
-                    extensionID: extID, handler: handler, payloadJSON: payload)
+                    extensionID: extID, handler: handler, payloadJSON: payload, fsWatch: run)
             }
         }
         // #870 managed config: host.config, the uninstall hook, and the status refresh. Resolving

@@ -23,7 +23,7 @@ final class ExtensionFSWatchTests: XCTestCase {
         let fired = expectation(description: "fs watch handler invoked")
         fired.assertForOverFulfill = false
         var got: (ext: String, handler: String, payload: String, onMain: Bool)?
-        watcher.invoke = { ext, handler, payload in
+        watcher.invoke = { ext, handler, payload, _ in
             // Several batches may arrive (dir creation, coalescing): keep the first one
             // that names our file.
             guard got == nil, payload.contains(fileName) else { return }
@@ -53,7 +53,9 @@ final class ExtensionFSWatchTests: XCTestCase {
         let watcher = ExtensionFSWatch.shared
         var works: [@MainActor @Sendable () -> Void] = []
         var runs: [(ext: String, handler: String, payload: String)] = []
-        private let savedInvoke: ((String, String, String) -> Void)?
+        /// The watch each run came from, as the invoke hook hands it on (#983 step 2).
+        var tickets: [FSWatchRun] = []
+        private let savedInvoke: ((String, String, String, FSWatchRun) -> Void)?
         private let savedSchedule: ((TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void)?
         var scheduled = 0
 
@@ -64,7 +66,10 @@ final class ExtensionFSWatchTests: XCTestCase {
                 self?.scheduled += 1
                 self?.works.append(work)
             }
-            watcher.invoke = { [weak self] ext, handler, payload in self?.runs.append((ext, handler, payload)) }
+            watcher.invoke = { [weak self] ext, handler, payload, run in
+                self?.runs.append((ext, handler, payload))
+                self?.tickets.append(run)
+            }
         }
 
         func drain() {
@@ -235,7 +240,7 @@ final class ExtensionFSWatchTests: XCTestCase {
         let dir = tempDir("fsw983n").path, watcher = ExtensionFSWatch.shared
         let savedInvoke = watcher.invoke
         var runs = 0, listed = 0, more = 0
-        watcher.invoke = { _, _, payload in
+        watcher.invoke = { _, _, payload, _ in
             let d = self.decode(payload)
             runs += 1; listed += d.paths.count; more += d.more ?? 0
         }
@@ -271,6 +276,77 @@ final class ExtensionFSWatchTests: XCTestCase {
         print("FSW983 MEASURE: 5000 files -> \(counter.callbacks) FSEvents callbacks, \(counter.paths) event paths;"
               + " coalesced watch: \(runs) handler runs, \(listed) listed paths, more=\(more);"
               + " case variant resolves to \(SecretPaths.canonical(upper) == SecretPaths.canonical(dir) ? "the same" : "a different") key")
+    }
+
+    // MARK: #983 step 2
+
+    /// A run the flush handed to the invoke hook before host.fs.unwatch returned never starts on the extension's
+    /// lane (the real AsyncExtensionRuntimes lane, an in-process VM from a tempDir entry); a watch re-made right
+    /// after runs its own event, and the old run stays dropped. Red on the mutant lane-starts-a-run-after-unwatch.
+    func testRunHandedToTheLaneBeforeUnwatchNeverStarts() async throws {
+        let dir = tempDir("fsw983l").path, h = Harness()
+        defer { h.watcher.unwatch(extensionID: "test.fsw983", path: dir); h.restore() }
+        let entry = tempDir("fsw983e").appendingPathComponent("init.lua")
+        try #"function onChange(payload) return "ran" end"#.write(to: entry, atomically: true, encoding: .utf8)
+        let lanes = AsyncExtensionRuntimes(services: MCHostServices(makeMCEnv().mc))
+        func spec(_ run: FSWatchRun?) -> AsyncExtensionRuntimes.Spec {
+            AsyncExtensionRuntimes.Spec(extensionID: "test.fsw983", entryURL: entry, handler: "onChange", callTimeout: 5,
+                                        privileged: false, trusted: true, fsWatch: run)
+        }
+
+        h.watcher.watch(extensionID: "test.fsw983", path: dir, handler: "onChange")
+        XCTAssertTrue(h.watcher.deliver([dir + "/a.txt"], extensionID: "test.fsw983", path: dir))
+        h.drain()
+        let old = try XCTUnwrap(h.tickets.last, "the flush handed no run to the invoke hook")
+        let key = ExtensionFSWatch.markUnwatch(extensionID: "test.fsw983", path: dir) // host.fs.unwatch returned
+        let late = await lanes.invoke(spec(old), args: ["{}"])
+        XCTAssertTrue(late == nil, "a run started on the lane after host.fs.unwatch returned")
+        h.watcher.finishUnwatch(key: key)
+
+        h.watcher.watch(extensionID: "test.fsw983", path: dir, handler: "onChange")
+        XCTAssertTrue(h.watcher.deliver([dir + "/b.txt"], extensionID: "test.fsw983", path: dir))
+        h.drain()
+        XCTAssertEqual(h.tickets.count, 2)
+        let fresh = try XCTUnwrap(h.tickets.last)
+        XCTAssertNotEqual(fresh, old)
+        let ran = await lanes.invoke(spec(fresh), args: ["{}"])
+        XCTAssertEqual(ran, "ran")
+        let stale = await lanes.invoke(spec(old), args: ["{}"])
+        XCTAssertTrue(stale == nil, "the unwatched watch's run started under the re-made watch")
+        let plain = await lanes.invoke(spec(nil), args: ["{}"])
+        XCTAssertEqual(plain, "ran", "a call that is not a watch run is not checked")
+    }
+
+    /// R983-1-q1: watch via a symlink, retarget it, unwatch by the same text: the watch made at watch time is
+    /// found (the queued run is dropped, watchCount is back), and the text leaves the map with the watch.
+    /// Red on the mutant unwatch-resolves-again.
+    func testUnwatchByTheWatchedTextFindsTheWatchAfterASymlinkRetarget() throws {
+        let base = tempDir("fsw983q").path, h = Harness(), fm = FileManager.default
+        let a = base + "/a", b = base + "/b", link = base + "/link"
+        for d in [a, b] { try fm.createDirectory(atPath: d, withIntermediateDirectories: true) }
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: a)
+        defer { h.watcher.removeAll(extensionID: "test.fsw983"); h.restore() }
+        let before = h.watcher.watchCount
+        h.watcher.watch(extensionID: "test.fsw983", path: link, handler: "onChange")
+        XCTAssertTrue(h.watcher.deliver([a + "/x.txt"], extensionID: "test.fsw983", path: link))
+        try fm.removeItem(atPath: link)
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: b)
+        XCTAssertNotEqual(ExtensionFSWatch.key("test.fsw983", link), ExtensionFSWatch.key("test.fsw983", a))
+
+        let key = ExtensionFSWatch.markUnwatch(extensionID: "test.fsw983", path: link)
+        h.drain()
+        XCTAssertEqual(h.runs.count, 0, "the watch's queued run started after host.fs.unwatch by its text")
+        h.watcher.finishUnwatch(key: key)
+        XCTAssertEqual(h.watcher.watchCount, before)
+        XCTAssertEqual(ExtensionFSWatch.watchedKey("test.fsw983", link), ExtensionFSWatch.key("test.fsw983", link),
+                       "the text outlived its watch")
+
+        // The main-actor unwatch (ManagedConfigRefresh's) takes the same lookup.
+        h.watcher.watch(extensionID: "test.fsw983", path: link, handler: "onChange")
+        try fm.removeItem(atPath: link)
+        try fm.createSymbolicLink(atPath: link, withDestinationPath: a)
+        h.watcher.unwatch(extensionID: "test.fsw983", path: link)
+        XCTAssertEqual(h.watcher.watchCount, before)
     }
 }
 

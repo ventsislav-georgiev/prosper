@@ -148,6 +148,8 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         let trusted: Bool
         /// #870: owner of the extension's managed-config pieces (`host.config`).
         var configOwner: ManagedConfigOwner? = nil
+        /// #983: set only by deliverEvent for a host.fs.watch run; callOnLane drops the run once that watch is gone.
+        var fsWatch: FSWatchRun? = nil
     }
 
     private let lock = NSLock()
@@ -224,6 +226,8 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         // #930: torn down after this was queued: never run (it would take resources
         // nobody releases). Torn down while it ran: release again what it took late.
         guard self.epoch(spec.extensionID) == epoch else { return nil }
+        // #983: a watch run handed off before host.fs.unwatch returned never starts after it (nil for every other call).
+        if let run = spec.fsWatch, !ExtensionFSWatch.isCurrent(run) { return nil }
         lock.lock(); running[spec.extensionID] = epoch; lock.unlock()
         defer {
             // #1238: only while the extension is still off (or off again); once back, the id's resources are the
@@ -943,12 +947,12 @@ final class ExtensionRegistry: ObservableObject {
     /// serialized (host-enforced single-flight — the one invariant the stateless
     /// model needs so per-event load-modify-write on `host.prefs` can't race).
     /// `payloadJSON` is the event arg the handler decodes via `host.json`.
-    func deliverEvent(extensionID: String, handler: String, payloadJSON: String) async {
+    func deliverEvent(extensionID: String, handler: String, payloadJSON: String, fsWatch: FSWatchRun? = nil) async {
         guard let record = record(id: extensionID), record.isLive else { return }
         let spec = AsyncExtensionRuntimes.Spec(
             extensionID: record.id, entryURL: record.loaded.entryURL,
             handler: handler, callTimeout: callTimeout, privileged: record.privileged, trusted: record.trusted,
-            configOwner: record.loaded.managedConfigOwner)
+            configOwner: record.loaded.managedConfigOwner, fsWatch: fsWatch)
         _ = await asyncRuntimes.invoke(spec, args: [payloadJSON])
     }
 

@@ -224,6 +224,22 @@ enum SecretPaths {
     }
 }
 
+/// #983: which watch a handler run came from: its key and the generation of the watch under that key. It rides
+/// with the run to the extension's lane, which drops the run unless `ExtensionFSWatch.isCurrent` holds.
+struct FSWatchRun: Sendable, Equatable {
+    let key: String
+    let generation: UInt64
+}
+
+/// #983: what the lanes read off the main actor. `generation`: each live watch's generation by key (dropped
+/// by host.fs.unwatch on the lane and by the teardown); `keyOfText`: the key `watch` made for each watched text
+/// (R983-1-q1), so an unwatch by that text never resolves again. Both hold at most one item per watch.
+private struct FSWatchLive {
+    var generation: [String: UInt64] = [:]
+    var keyOfText: [String: String] = [:]
+    var next: UInt64 = 0
+}
+
 /// Live registry of extension path watchers. A watch fires the named handler with
 /// payload `{ paths = [changed...] }` (plus `more = n` when a burst had more changed paths than one run lists).
 /// MainActor-bound; streams delivered on the main queue. The `invoke` hook is wired by the app to
@@ -232,8 +248,8 @@ enum SecretPaths {
 final class ExtensionFSWatch {
     static let shared = ExtensionFSWatch()
 
-    /// (extensionID, handler, payloadJSON) — set by the app.
-    var invoke: ((String, String, String) -> Void)?
+    /// (extensionID, handler, payloadJSON, the watch it came from); set by the app.
+    var invoke: ((String, String, String, FSWatchRun) -> Void)?
 
     /// #983: the stream's latency, and the window a burst is coalesced over: the first callback of a burst
     /// schedules one run this long after it, callbacks inside the window only add paths.
@@ -250,6 +266,9 @@ final class ExtensionFSWatch {
     @MainActor
     private final class Entry {
         let key: String
+        /// #983: the text it was watched under (`textKey`) and its generation (`FSWatchRun`).
+        var text = ""
+        var generation: UInt64 = 0
         let extensionID: String
         let handler: String
         /// A host-side watch (#870 managed-config refresh): called instead of a Lua handler.
@@ -287,11 +306,33 @@ final class ExtensionFSWatch {
     /// #983: keys a host.fs.unwatch marked on the extension's lane and the main actor has not torn down yet.
     private nonisolated static let unwatching = OSAllocatedUnfairLock<[String: Int]>(initialState: [:])
 
+    private nonisolated static let live = OSAllocatedUnfairLock(initialState: FSWatchLive())
+
+    /// #983 R983-1-q1: the watched text as `keyOfText` holds it (tilde expanded, not resolved).
+    private nonisolated static func textKey(_ extID: String, _ path: String) -> String {
+        "\(extID)\u{1}\((path as NSString).expandingTildeInPath)"
+    }
+
+    /// #983 R983-1-q1: the key `watch` made for this text; resolved now only when the text was never watched,
+    /// so a symlink retargeted since the watch cannot make unwatch miss.
+    nonisolated static func watchedKey(_ extID: String, _ path: String) -> String {
+        let t = textKey(extID, path)
+        return live.withLock { $0.keyOfText[t] } ?? key(extID, path)
+    }
+
+    /// #983: read at lane start (AsyncExtensionRuntimes.callOnLane) on the extension's lane: one lock read, no
+    /// wait on the main actor. False once the watch was unwatched (marked on the lane), replaced or removed.
+    nonisolated static func isCurrent(_ run: FSWatchRun) -> Bool {
+        live.withLock { $0.generation[run.key] == run.generation }
+    }
+
     /// #983: called by host.fs.unwatch on the extension's lane BEFORE it returns: from here no run of that
-    /// watch starts. Returns the key for `finishUnwatch`, which the caller runs on the main actor.
+    /// watch starts, neither a flush (the mark) nor a run already on its way to the lane (the generation).
+    /// Returns the key for `finishUnwatch`, which the caller runs on the main actor.
     nonisolated static func markUnwatch(extensionID: String, path: String) -> String {
-        let k = key(extensionID, path)
+        let k = watchedKey(extensionID, path)
         unwatching.withLock { $0[k, default: 0] += 1 }
+        live.withLock { _ = $0.generation.removeValue(forKey: k) }
         return k
     }
 
@@ -306,7 +347,9 @@ final class ExtensionFSWatch {
     /// Start (or replace) a watch on `path` for `extensionID`, firing `handler`.
     func watch(extensionID: String, path: String, handler: String, onChange: (@MainActor () -> Void)? = nil,
                hideSecrets: Bool = false) {
-        let p = Self.resolved(path), k = "\(extensionID)\u{1}\(p)"
+        let p = Self.resolved(path), k = "\(extensionID)\u{1}\(p)", t = Self.textKey(extensionID, path)
+        // The same text watched before a symlink in it was retargeted is replaced too (R983-1-q1).
+        if let old = Self.live.withLock({ $0.keyOfText[t] }) { remove(old) }
         remove(k) // replace any existing watch on this path, under any spelling
 
         let entry = Entry(key: k, extensionID: extensionID, handler: handler, onChange: onChange, hideSecrets: hideSecrets)
@@ -329,22 +372,40 @@ final class ExtensionFSWatch {
         FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)
         entry.stream = stream
+        entry.text = t
+        entry.generation = Self.live.withLock { s in
+            s.next &+= 1
+            s.generation[k] = s.next
+            s.keyOfText[t] = k
+            return s.next
+        }
         entries[k] = entry
     }
 
     func unwatch(extensionID: String, path: String) {
-        remove(Self.key(extensionID, path))
+        remove(Self.watchedKey(extensionID, path))
     }
 
     private func remove(_ k: String) {
         guard let entry = entries.removeValue(forKey: k) else { return }
+        forget(entry)
         stop(entry)
     }
 
     func removeAll(extensionID: String) {
         for (k, entry) in entries where entry.extensionID == extensionID {
+            forget(entry)
             stop(entry)
             entries.removeValue(forKey: k)
+        }
+    }
+
+    /// #983: the lanes' copy of a watch leaves with it, so `live` never outgrows `entries`.
+    private func forget(_ entry: Entry) {
+        let k = entry.key, t = entry.text
+        Self.live.withLock { s in
+            s.generation[k] = nil
+            if s.keyOfText[t] == k { s.keyOfText[t] = nil }
         }
     }
 
@@ -396,7 +457,10 @@ final class ExtensionFSWatch {
         entry.more = 0
         let k = entry.key
         guard entries[k] === entry, !Self.unwatching.withLock({ $0[k] != nil }) else { return }
-        if let onChange = entry.onChange { onChange() } else { invoke?(entry.extensionID, entry.handler, Self.payloadJSON(paths, more: more)) }
+        if let onChange = entry.onChange { onChange() } else {
+            invoke?(entry.extensionID, entry.handler, Self.payloadJSON(paths, more: more),
+                    FSWatchRun(key: k, generation: entry.generation))
+        }
     }
 
     /// #921: the changed paths a watcher may see; nil (no event at all) when every one of them was

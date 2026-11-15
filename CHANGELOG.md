@@ -1246,6 +1246,9 @@ tag from the now-released section and put it on the new top draft.
 - Account pool: importing from the Python ccpool now also keeps each session's account (its pins),
   alongside the account order and the accounts resting until a limit resets; an import file larger
   than 4 MiB is refused.
+- Extensions: after host.fs.unwatch returns, a file-watch handler no longer runs even when its event
+  was already on its way, and unwatching a path through a symlink that was retargeted since the
+  watch now stops the watch instead of leaving it running.
 
 ## v2.174.0
 
