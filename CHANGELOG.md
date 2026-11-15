@@ -1160,6 +1160,8 @@ tag from the now-released section and put it on the new top draft.
   (#988)
 - Marketplace: when packing a folder for publishing fails, the message now shows tar's first line; a
   failed unpack of a download shows one short sentence (#1182)
+- Marketplace: an install or update is refused when the package's own files declare another version
+  than the Marketplace lists; nothing is changed and the message names both versions (#1182)
 
 ## v2.174.0
 

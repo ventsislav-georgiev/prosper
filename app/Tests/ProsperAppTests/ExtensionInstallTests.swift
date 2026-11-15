@@ -342,10 +342,10 @@ final class ExtensionInstallTests: XCTestCase {
         let registry = makeRegistry(userDir: tmp.appendingPathComponent("user"))
 
         // Match (signed id == manifest id): accepted.
-        XCTAssertNoThrow(try registry.bindMarketIdentity(extDir: source, expected: "com.test.hello"))
+        XCTAssertNoThrow(try registry.bindMarketIdentity(extDir: source, expected: "com.test.hello", expectedVersion: nil))
 
         // Spoof (published as another id): rejected before any install/overwrite.
-        XCTAssertThrowsError(try registry.bindMarketIdentity(extDir: source, expected: "com.trusted.victim")) {
+        XCTAssertThrowsError(try registry.bindMarketIdentity(extDir: source, expected: "com.trusted.victim", expectedVersion: nil)) {
             XCTAssertEqual($0 as? ExtensionError,
                            .marketIdMismatch(expected: "com.trusted.victim", got: "com.test.hello"))
         }
@@ -636,10 +636,10 @@ final class ExtensionManifestCapTests: XCTestCase {
                                                              (header(20_000), nil, nestedReason), (header(400_000), nil, nestedReason)]
         for (body, size, expected) in cases {
             try writeExt(ext, body, size: size)
-            assertRefused(try reg.bindMarketIdentity(extDir: ext, expected: "com.test.capped"), expected, "market")
+            assertRefused(try reg.bindMarketIdentity(extDir: ext, expected: "com.test.capped", expectedVersion: nil), expected, "market")
         }
         try writeExt(ext, tables(d))
-        XCTAssertNoThrow(try reg.bindMarketIdentity(extDir: ext, expected: "com.test.capped"))
+        XCTAssertNoThrow(try reg.bindMarketIdentity(extDir: ext, expected: "com.test.capped", expectedVersion: nil))
     }
 
     /// Built-in: discover seeds the system dir and loads it; an over-limit one is skipped, its sibling loads.

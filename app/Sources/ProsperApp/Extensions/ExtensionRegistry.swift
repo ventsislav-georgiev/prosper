@@ -52,6 +52,18 @@ enum ExtensionError: Error, Equatable {
     /// #870: the extension still has managed-config pieces and they were not removed (Remove
     /// cancelled, refused or failed): the uninstall stops and the dir stays.
     case managedConfigKept(id: String, reason: String)
+    /// R1182-g: a market artifact's own manifest declares another version than the listing it was asked for.
+    /// The values are stored as shown (OutsideText), so the log's String(describing:) holds them cleaned too.
+    case marketVersionMismatch(id: String, listed: String, got: String)
+}
+
+extension ExtensionError: LocalizedError {
+    /// Plain words for the new refusal only; every other case keeps nil, so it is shown as before.
+    var errorDescription: String? {
+        guard case let .marketVersionMismatch(id, listed, got) = self else { return nil }
+        return "Not installed: the package's files declare version \"\(got)\", but the Marketplace lists version "
+            + "\"\(listed)\" for \(id). Nothing was changed."
+    }
 }
 
 /// #1246: which manifest ids an extension may be installed under. The id becomes the folder name in the
@@ -1202,7 +1214,7 @@ final class ExtensionRegistry: ObservableObject {
     func installFromMarket(id: String, version: String) async throws -> ExtensionRecord {
         let extDir = try await RemoteInstaller.fetchFromMarket(id: id, version: version)
         defer { RemoteInstaller.removeWorkFolder(holding: extDir) }
-        try bindMarketIdentity(extDir: extDir, expected: id)
+        try bindMarketIdentity(extDir: extDir, expected: id, expectedVersion: version)
         injectUpdateURL("prosper://market/\(id)", intoManifestAt: extDir, force: true)
         return try installLocal(from: extDir)
     }
@@ -1213,10 +1225,22 @@ final class ExtensionRegistry: ObservableObject {
     /// could ship a tarball declaring id B and clobber/impersonate B — and if B was
     /// already trusted, the replacement would inherit trust. The Ed25519 sig binds
     /// the claim's id, NOT the bytes' internal manifest, so this is the binding.
-    func bindMarketIdentity(extDir: URL, expected: String) throws {
+    /// R1182-g: `expectedVersion` is the listing version the download was asked for (nil: no listing, no check).
+    func bindMarketIdentity(extDir: URL, expected: String, expectedVersion: String?) throws {
         let loaded = try ExtensionLoader.load(directory: extDir, isSystem: false, hostVersion: hostVersion)
         guard loaded.id == expected else {
             throw ExtensionError.marketIdMismatch(expected: expected, got: loaded.id)
+        }
+        // Refused only when both read as plain number versions and differ as SemanticVersion, the file's compare:
+        // other text reads as 0 there, so it is never refused, and 1.2 and 1.2.0 (or 1.2.0-beta) pass as one version.
+        let plain = #"\A[0-9]{1,18}(\.[0-9]{1,18}){0,2}([-+].*)?\z"#
+        let got = loaded.manifest.extension.version
+        if let listed = expectedVersion,
+           listed.range(of: plain, options: .regularExpression) != nil,
+           got.range(of: plain, options: .regularExpression) != nil,
+           SemanticVersion(got) != SemanticVersion(listed) {
+            throw ExtensionError.marketVersionMismatch(id: OutsideText.shown(expected), listed: OutsideText.shown(listed, max: 32),
+                                                       got: OutsideText.shown(got, max: 32))
         }
     }
 
@@ -1270,7 +1294,7 @@ final class ExtensionRegistry: ObservableObject {
                 // tarball's OWN manifest id, so a (compromised) update feed for A that ships
                 // a tarball declaring id B would overwrite userDir/B and inherit B's trust.
                 // GitHub has no signature, so this id-binding is the only defense.
-                try bindMarketIdentity(extDir: remoteDir, expected: cand.id)
+                try bindMarketIdentity(extDir: remoteDir, expected: cand.id, expectedVersion: nil)
                 injectUpdateURL(cand.url, intoManifestAt: remoteDir)   // keep origin sticky
                 try installLocal(from: remoteDir)
                 updated += 1
