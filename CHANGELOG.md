@@ -1074,6 +1074,10 @@ tag from the now-released section and put it on the new top draft.
   (#938)
 - Switching themes no longer closes an open event in a pinned Calendar popup, and the model setup
   window's text now changes colour with the theme (#928)
+- Agent Island: clicking an answer on a card while Always allow is still checking that session now
+  says "Answer not sent: another job is running" instead of doing nothing, and switching Always
+  allow off and on during its follow-up check no longer sends a stray Needs input for a prompt that
+  was already answered (#927)
 
 ## v2.174.0
 

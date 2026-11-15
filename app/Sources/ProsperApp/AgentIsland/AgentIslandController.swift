@@ -1339,7 +1339,11 @@ final class AgentIslandController {
     /// The buttons go at once, so a second click can never queue a second key;
     /// the guard re-reads and sends at most the one digit; a key in flight sends nothing.
     func answer(_ s: AgentSession, _ p: AgentPrompt, _ o: AgentPromptOption) {
-        guard let gen = beginHuman(s, p) else { return }
+        guard let gen = beginHuman(s, p) else {
+            // #927 (QA #755 INFO-4): a check or another action holds the session: nothing is sent, the row says so.
+            if inFlight.contains(s.key) { refuseBusy(s.key, Self.answerBusyText) }
+            return
+        }
         let key = s.key, io = io, at = clickAt(key)
         queue.async { [weak self] in
             let r = AgentPrompt.answer(key, digit: o.digit, expected: p, io: io)
@@ -1445,6 +1449,8 @@ final class AgentIslandController {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { fire() } }
     }
     static let autoAllowedText = "Allowed automatically"
+    /// #927: a card click refused while the session is held, worded like AgentIsland.messageBusyText.
+    static let answerBusyText = "Answer not sent: another job is running"
     /// The same prompt back this soon after its answer is the human's (the loop guard).
     static let loopWindow: TimeInterval = 30
     /// An answered session still listed blocked has its screen read again this soon.
@@ -1474,6 +1480,8 @@ final class AgentIslandController {
     private var allowed: [AgentSessionKey: (prompt: AgentPrompt, at: Date)] = [:]
     /// QA #581 INFO-3: the live re-read timer per session; an older one is a no-op.
     private var rereadGen: [AgentSessionKey: Int] = [:]
+    /// #927: the last gen handed out, controller-wide, so a pruned key's next gen never matches an old timer.
+    private var rereadSeq = 0
     /// #755: the keys whose inFlight is an Always allow check, not an island click;
     /// true once an off-toggle orphaned it and an on-toggle took it back.
     private var checks: [AgentSessionKey: Bool] = [:]
@@ -1589,6 +1597,11 @@ final class AgentIslandController {
         showDchAnswers(store.sessions)
         let blocked = Set(store.sessions.filter { $0.state == .blocked }.map(\.key))
         autoAllow = autoAllow.filter { blocked.contains($0.key) }
+        // #927 (QA #755 INFO-5): a timer with no hold is a no-op (gens are never reused); the loop guard keeps
+        // a listed row's entry and any still inside its window.
+        rereadGen = rereadGen.filter { autoAllow[$0.key] != nil }
+        let listed = Set(store.sessions.map(\.key)), t = now()
+        allowed = allowed.filter { listed.contains($0.key) || t.timeIntervalSince($0.value.at) < Self.loopWindow }
         for key in blocked where autoAllow[key] == nil { startAutoAllow(key, answered: false) }   // #935: it asks claudeKeys
         recheckHuman()
     }
@@ -1657,7 +1670,10 @@ final class AgentIslandController {
     }
 
     /// `screen`: #791's re-read, the screen this check decides on and the row's activity then.
-    private func startAutoAllow(_ key: AgentSessionKey, answered: Bool, screen: (text: String, act: TimeInterval)? = nil) {
+    /// `retaken` (#927): the re-check of a taken-back verify: sends behind a fresh check's gates, but tells a
+    /// prompt that went (no prompt, dch not blocked) from the human's, as the verify does.
+    private func startAutoAllow(_ key: AgentSessionKey, answered: Bool, screen: (text: String, act: TimeInterval)? = nil,
+                                retaken: Bool = false) {
         guard autoAllowOn() else { return autoAllowChanged() }   // QA #581 F3: switched off meanwhile
         // #935 (QA #849 INFO-2): every way in asks first. A session the newest list names no Claude Code in is
         // never checked or held: its card and Needs input, as with the setting off; one held until now
@@ -1701,8 +1717,8 @@ final class AgentIslandController {
                                                config: { bin in run(bin.path, ["--config"], env).map { String(decoding: $0, as: UTF8.self) } },
                                                timedOut: { DchConfigWriter.mayAllow(path: path) })
             let s = dch ? nil : screen?.text ?? io.read(key), read = s.flatMap(AgentPrompt.parse)
-            let r = s.map { AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered, isOn: isOn, screen: $0) } ?? .dch
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r, read, act, t) } }
+            let r = s.map { AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered || retaken, isOn: isOn, screen: $0) } ?? .dch
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r, read, act, t, answered: answered, retaken: retaken) } }
         }
     }
 
@@ -1711,11 +1727,11 @@ final class AgentIslandController {
     /// input goes out now. `read`, `act`, `t`: the prompt it read, the row's activity and the
     /// time when it began (#791: what a later re-read compares against).
     private func autoAllowed(_ key: AgentSessionKey, _ r: AgentAutoAllow, _ read: AgentPrompt?,
-                             _ act: TimeInterval, _ t: Date) {
+                             _ act: TimeInterval, _ t: Date, answered: Bool, retaken: Bool) {
         inFlight.remove(key)
         // #755 INFO-1: a taken-back check may have read the setting while it was off: check again.
         if checks.removeValue(forKey: key) == true, r == .human, autoAllow[key] == .checking {
-            return startAutoAllow(key, answered: false)
+            return startAutoAllow(key, answered: false, retaken: answered || retaken)
         }
         if case .allowed(let p) = r {
             allowed[key] = (p, now())
@@ -1736,11 +1752,19 @@ final class AgentIslandController {
             standDown(key)
         } else {
             autoAllow[key] = .answered
-            rereadGen[key, default: 0] += 1
-            let gen = rereadGen[key]
+            rereadSeq += 1
+            let gen = rereadSeq
+            rereadGen[key] = gen
+            // #927 (QA #755 INFO-2): a re-check that found the answer taken is held as the verify holds it, then, still
+            // listed blocked, left to the human (its Needs input); it is never read or answered again here.
+            let human = retaken && r == .gone
             after(Self.verifyDelay) { [weak self] in
                 guard let self, self.rereadGen[key] == gen, self.autoAllow[key] == .answered else { return }
-                self.startAutoAllow(key, answered: true)
+                guard human else { return self.startAutoAllow(key, answered: true) }
+                self.autoAllow[key] = .human(left: nil, seen: self.activity(key), at: self.now())
+                self.publish()
+                self.refreshCards()
+                self.layout()
             }
         }
         layout()
@@ -1753,8 +1777,9 @@ final class AgentIslandController {
     private func standDown(_ key: AgentSessionKey) {
         let seen = store?.sessions.first { $0.key == key }?.autoAllowed
         autoAllow[key] = .dch(seen)
-        rereadGen[key, default: 0] += 1
-        let gen = rereadGen[key]
+        rereadSeq += 1
+        let gen = rereadSeq
+        rereadGen[key] = gen
         after(Self.standDownWait) { [weak self] in
             guard let self, self.rereadGen[key] == gen, self.autoAllow[key] == .dch(seen) else { return }
             if self.store?.sessions.first(where: { $0.key == key })?.autoAllowed != seen {
