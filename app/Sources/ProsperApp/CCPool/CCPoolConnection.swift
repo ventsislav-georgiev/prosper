@@ -125,6 +125,14 @@ final class CCPoolConnection: @unchecked Sendable {
         return n.int64Value == 1
     }
 
+    /// #1259: the conversation key "<session id>/<agent id>" as Python conversation() builds it (ccpool_proxy.py 83-85),
+    /// header names case-insensitive; outside data, so nil unless the whole key passes validPinKey. Never logged.
+    static func pinKey(_ head: CCPoolRequestHead) -> String? {
+        guard let sid = head.header("x-claude-code-session-id"), !sid.isEmpty else { return nil }
+        let key = sid + "/" + (head.header("x-claude-code-agent-id") ?? "")
+        return CCPoolState.validPinKey(key) ? key : nil
+    }
+
     let queue = DispatchQueue(label: "com.prosper.ccpool.conn")
     private let conn: NWConnection
     // X16: the dependencies are held strongly, never the service: a callback that outlives the
@@ -359,7 +367,14 @@ final class CCPoolConnection: @unchecked Sendable {
         guard attempts < maxAttempts else { return noAccounts() }
         attempts += 1
         let now = store.now
-        guard let label = store.read({ CCPoolCore.pick($0, model: model, exclude: tried, now: now) }) else { return noAccounts() }
+        // #1259: a keyed request follows (and pins) its session; no usable key = `pick` as before, nothing changed.
+        let key = head.flatMap(Self.pinKey)
+        let picked = store.mutate { st -> String? in
+            let (name, next) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: tried, now: now)
+            st = next
+            return name
+        }
+        guard let label = picked else { return noAccounts() }
         tried.insert(label)
         guard let id = store.read({ $0.accounts[label]?.id }) else { return attempt() }
         send(label: label, accountID: id, retried: false)

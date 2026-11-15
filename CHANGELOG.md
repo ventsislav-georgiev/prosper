@@ -1205,6 +1205,9 @@ tag from the now-released section and put it on the new top draft.
   (#1256)
 - Coding agent: the status says "Using <model> (already loaded)" instead of "Loading <your pick>"
   when the run uses a model that was already loaded (#1181)
+- Account pool: each Claude Code session now stays on one account and its subagents follow it, so
+  its prompt cache is kept; a session moves only when its account runs out, is held or is removed
+  (#1259)
 
 ## v2.174.0
 

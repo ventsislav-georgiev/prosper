@@ -39,6 +39,9 @@ struct CCPoolState: Codable, Equatable, Sendable {
         var account: String
         /// Epoch of the last request; never written to the file (Python keeps the mapping only).
         var seen: Double
+
+        /// #1259 (R1258-a): the stamp is not written, so it is not part of ==: a touch never rewrites the file.
+        static func == (a: Pin, b: Pin) -> Bool { a.account == b.account }
     }
 
     var current: String?
@@ -197,6 +200,35 @@ enum CCPoolCore {
         }?.element
     }
 
+    /// #1259: the account for a request and the state after (Python choose(), ccpool_proxy.py 114-147, without
+    /// the placement score). No usable key: `pick` as today, state untouched. A key: its own pin, then its session's
+    /// main conversation, then the session's latest; each only while in `order`, not excluded and eligible. None of
+    /// them: `pick`. A request pins (or moves) its key to the account; a quota check only touches a pin it follows.
+    static func route(_ state: CCPoolState, key: String?, quotaCheck: Bool, model: String?,
+                      exclude: Set<String>, now: Double) -> (account: String?, state: CCPoolState) {
+        guard let key, CCPoolState.validPinKey(key) else { return (pick(state, model: model, exclude: exclude, now: now), state) }
+        // Lookups read an expired copy: a lookup alone never changes what the file holds (expired pins leave it
+        // with the next pin or move, which expires first).
+        var live = state
+        live.expirePins(now: now)
+        let sid = (key.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? key) + "/"
+        let siblings = live.pins.filter { $0.key.hasPrefix(sid) && $0.key != key }
+            .sorted { ($0.key == sid ? 1 : 0, $0.value.seen, $0.value.account) > ($1.key == sid ? 1 : 0, $1.value.seen, $1.value.account) }
+            .map(\.value.account)
+        let usable = { (n: String) in state.order.contains(n) && state.accounts[n] != nil && !exclude.contains(n)
+            && eligible(state.accounts[n], model: model, now: now) }
+        guard let name = ([live.pins[key]?.account].compactMap { $0 } + siblings).first(where: usable)
+                ?? pick(state, model: model, exclude: exclude, now: now) else { return (nil, state) }
+        var st = state
+        if st.pins[key]?.account == name {
+            st.touchPin(key, now: now)   // stamp only: kept in memory, never written (Pin == ignores it)
+        } else if !quotaCheck {
+            st.expirePins(now: now)
+            st.pin(key, to: name, now: now)
+        }
+        return (name, st)
+    }
+
     /// The recorded rollover for `claim`, or +inf when never seen (an unseen window is a full one).
     static func resetAt(_ account: CCPoolState.Account?, _ claim: String, now: Double) -> Double {
         guard let r = account?.reset[claim], Double(r) > now else { return .infinity }
@@ -349,7 +381,7 @@ extension CCPoolState {
         return true
     }
 
-    // MARK: Pins (#1258; nothing routes by them yet)
+    // MARK: Pins (#1258; CCPoolCore.route routes by them, #1259)
 
     /// Python `PIN_IDLE`: a pin idle longer than this is dropped (the longest prompt-cache TTL).
     static let pinIdle: Double = 3600

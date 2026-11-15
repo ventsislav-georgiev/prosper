@@ -154,7 +154,8 @@ final class CCPoolStore: @unchecked Sendable {
         let (out, hook) = lock.withLock { () -> (T, (@Sendable () -> Void)?) in
             var next = state
             let out = body(&next)
-            guard next != state else { return (out, nil) }
+            // #1259: equal = the same file content; a pin stamp (a touch) is kept in memory, never written.
+            guard next != state else { state = next; return (out, nil) }
             state = next
             if !persist(next), !unreadable { logger.note(nil, "state write failed") }
             return (out, _onChange)
@@ -265,6 +266,7 @@ final class CCPoolStore: @unchecked Sendable {
             st.accounts.removeValue(forKey: label)
             st.order.removeAll { $0 == label }
             if st.current == label { st.current = nil }
+            st.unpin(account: label)   // #1259 (R1258-b)
             return true
         }
         guard removed else { throw CCPoolStoreError.noSuchAccount }
@@ -292,6 +294,7 @@ final class CCPoolStore: @unchecked Sendable {
             st.accounts[to] = acct
             st.order = st.order.map { $0 == label ? to : $0 }
             if st.current == label { st.current = to }
+            for (key, pin) in st.pins where pin.account == label { st.pins[key]?.account = to }   // #1259 (R1258-q1)
             return nil
         }, usage: { u in if let s = u.removeValue(forKey: label) { u[to] = s } })
         if let outcome { throw outcome }
