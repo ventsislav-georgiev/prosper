@@ -65,11 +65,11 @@ struct CCPoolState: Codable, Equatable, Sendable {
             && a.savedCapacity.compactMapValues(\.written) == b.savedCapacity.compactMapValues(\.written)
     }
 
-    /// The capacity rows the file holds: accounts in the pool, sampled, and accepted by the row check (#1261 R1260-g:
-    /// a non-finite or out-of-range number is never handed to the encoder, so it cannot fail the whole save).
     /// #1278: the accounts whose token got a 401; routing skips them (CCPoolConnection.attempt).
     var refusedLabels: Set<String> { Set(accounts.filter { $0.value.refused != nil }.keys) }
 
+    /// The capacity rows the file holds: accounts in the pool, sampled, and accepted by the row check (#1261 R1260-g:
+    /// a non-finite or out-of-range number is never handed to the encoder, so it cannot fail the whole save).
     var savedCapacity: [String: CCPoolCapacityState] {
         let ids = Set(accounts.values.map(\.id))
         return capacity.filter { ids.contains($0.key) && $0.value.written != nil && $0.value.isValid }
