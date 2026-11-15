@@ -748,7 +748,7 @@ tag from the now-released section and put it on the new top draft.
   config is applied and from hotkeys, timers and other callbacks. (#1158)
 - Hammerspoon Compat: an app object kept by a hotkey, timer, URL or app-watcher callback that was
   stopped for running too long can no longer hide an app from a later run of the config (#1158)
-- Ships dch 1.67.0 (was 1.62.0). In the X-ray view the reader reads on into the next and the
+- Ships dch 1.68.0 (was 1.62.0). In the X-ray view the reader reads on into the next and the
   previous prompt, and `]` and `[` step between prompts. The tabs are Prompts (Commands for a shell
   session), Responses (what the agent answered at the end of each turn, newest first), Refs (the
   refs on the screen right now come first) and Search (type a word or phrase to find where the
@@ -764,7 +764,9 @@ tag from the now-released section and put it on the new top draft.
   `--run` leaves nothing typed, and Claude started under a wrapper no longer gets text typed where a
   shell would read it. With 1.67.0 `dch --xray <session> --follow --json` goes on when the session
   is restarted, and `--run` is refused with the code `not_foreground` when Claude sits under a
-  wrapper that does not pass the keyboard on. (#1167, #1178)
+  wrapper that does not pass the keyboard on. With 1.68.0 a Search hit in the X-ray view opens at
+  its own place when the same text appears more than once, and `--tasks` and `--memory` answer a
+  warning and run nothing when their configured command line is over 1023 bytes. (#1167, #1178)
 - Agent Sessions: Command-1 to Command-9 jump to the session at that place in the sidebar and put
   the keyboard in it (its terminal or its message box), from anywhere in the window; each of the
   first nine live sessions shows its ⌘ number as a chip, as in Clipboard History. (#1110)
