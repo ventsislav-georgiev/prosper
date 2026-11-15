@@ -342,4 +342,71 @@ final class CCPoolLeftoverTests: XCTestCase {
         XCTAssertEqual(text.components(separatedBy: "CCPoolRuntime.").count - 1, 3, "no other ccpool hook")
         XCTAssertTrue(text.contains(#"record(id: "com.prosper.ccpool")?.isLive ?? false"#), "live = enabled and trusted")
     }
+
+    /// R1205-q939: one request through account A (picked first: `current` is nil, A leads the order) of a fake
+    /// upstream that, while answering A's token, runs `move` on the store. Then the pick and the reset times are
+    /// read back by account id. Runs on the test's thread; the upstream's closure runs on the fake server's queue
+    /// and only touches the lock-guarded store and counter.
+    nonisolated private func answerWhileRelabelling(_ move: @escaping @Sendable (CCPoolStore) -> Void,
+                                                    _ check: (_ labelOf: (String) -> String?, _ a: String, _ b: String, _ store: CCPoolStore) -> Void) throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = CCPoolMemorySecrets()
+        let a = try store.addAccount(label: "Example Org A", token: "tok-a", secrets: secrets)
+        let b = try store.addAccount(label: "Example Org B", token: "tok-b", secrets: secrets)
+        let anthropic = CCPoolFakeAnthropic()
+        let moved = LeftoverCounter()
+        let up = try CCPoolFakeServer { h, body in
+            if moved.count == 0, h.header("authorization")?.contains("tok-a") == true {
+                moved.bump()
+                move(store)
+            }
+            return anthropic.reply(h, body)
+        }
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:\(up.port)")!
+        let service = CCPoolService(config: cfg, store: store, secrets: secrets, logger: CCPoolCapturingLogger())
+        defer { service.stop(); up.stop() }
+        guard case .running(let port) = service.start(), port != 0 else { return XCTFail("\(service.status)") }
+        store.mutate { $0.current = nil }
+        XCTAssertEqual(CCPoolTestClient.request(port: port)?.status, 200)
+        XCTAssertEqual(moved.count, 1, "the labels moved while the request was in flight")
+        XCTAssertEqual(anthropic.get { $0.seen }, ["Bearer tok-a"], "only account A was asked")
+        check({ id in store.snapshot.accounts.first { $0.value.id == id }?.key }, a, b, store)
+    }
+
+    nonisolated private func assertFollowsIDs(_ labelOf: (String) -> String?, _ a: String, _ b: String, _ store: CCPoolStore,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        let snap = store.snapshot
+        let aLabel = labelOf(a), bLabel = labelOf(b)
+        XCTAssertTrue(aLabel != nil && snap.current == aLabel, "the remembered pick is account A, by its id", file: file, line: line)
+        XCTAssertTrue(aLabel.flatMap { snap.accounts[$0]?.reset[CCPoolCore.fiveHour] } != nil, "A has the reset times of its answer", file: file, line: line)
+        XCTAssertEqual(bLabel.flatMap { snap.accounts[$0]?.reset }, [:], "B has none", file: file, line: line)
+    }
+
+    // R1205-q939, mutants q939-remember-by-label and q939-retire-resets-by-label: A is renamed while its request is in
+    // flight (nobody takes the old label). Pick: `current` is nil before, so only remember(owner by id) sets it, to A's
+    // new label (by label it finds no account). Resets: recordResets by the old label finds no account and A gets none.
+    nonisolated func testCCPoolPickAndResetsFollowTheAccountWhenItIsRenamedInFlight() throws {
+        try answerWhileRelabelling({ store in
+            try? store.renameAccount("Example Org A", to: "Example Org A (old)")
+        }, { labelOf, a, b, store in
+            assertFollowsIDs(labelOf, a, b, store)
+            XCTAssertEqual(labelOf(a), "Example Org A (old)")
+        })
+    }
+
+    // R1205-q939: the two accounts' labels are swapped while A's request is in flight. By label, the old label "Example
+    // Org A" now names B: the pick and the reset times would land on B. By id they stay on A (now "Example Org B").
+    nonisolated func testCCPoolPickAndResetsFollowTheAccountWhenLabelsAreSwappedInFlight() throws {
+        try answerWhileRelabelling({ store in
+            try? store.renameAccount("Example Org A", to: "swap-temp")
+            try? store.renameAccount("Example Org B", to: "Example Org A")
+            try? store.renameAccount("swap-temp", to: "Example Org B")
+        }, { labelOf, a, b, store in
+            assertFollowsIDs(labelOf, a, b, store)
+            XCTAssertEqual(labelOf(a), "Example Org B")
+            XCTAssertEqual(labelOf(b), "Example Org A")
+        })
+    }
 }
