@@ -772,6 +772,8 @@ final class DchConnection: @unchecked Sendable {
                              close: { [weak self] in self?.close() }) ?? false
         guard ok else {
             watching = false
+            // #987: a list but no slot is the global ceiling; refused as serve's per-peer one, then closed.
+            if watch?.available() == true { return close(after: DchWatchHub.busy) }
             return send(DchControlOps.error("watch needs Agent Island listing Remote Terminal's sessions"))
         }
     }
@@ -1136,6 +1138,12 @@ struct DchSidekickOps: Sendable {
 /// All on the server queue; tests drive it directly with their own clock and timers.
 final class DchWatchHub: @unchecked Sendable {
     static let maxPerDevice = 4
+    /// #987: live streams across every connection (dch serve has no global watch cap, only 16 per
+    /// peer, serve.c:2680; 32 is two peers' worth). `streams` is the count: appended in `open`,
+    /// removed only in `remove`, all on the server queue; no client value is added to anything.
+    static let maxStreams = 32
+    /// #987: the refusal past `maxStreams`, coded as dch serve's per-peer one (WATCH_BUSY_JSON, v1.73.0 serve.c:77).
+    static let busy = DchFrame.encode(DchFrame.error, Array(#"{"code":"busy","message":"this Mac has 32 session list streams open already"}"#.utf8))
     static let minGap: TimeInterval = 1
     static let heartbeat: TimeInterval = 25
     /// Frames the socket has not taken yet: past this the phone is not reading (a
@@ -1244,13 +1252,15 @@ final class DchWatchHub: @unchecked Sendable {
         for s in streams { offer(s, payload) }
     }
 
-    /// A 5th stream of a device closes its oldest first. False (nothing sent): no list.
+    /// A 5th stream of a device closes its oldest first. False (nothing sent): no list, or (#987)
+    /// `maxStreams` live already (`available()` tells the two apart).
     func open(_ id: ObjectIdentifier, device: String, send: @escaping Send, close: @escaping () -> Void) -> Bool {
         guard let payload = cachedList() else { return false }
         while streams.filter({ $0.device == device }).count >= Self.maxPerDevice,
               let oldest = streams.first(where: { $0.device == device }) {
             drop(oldest)
         }
+        guard streams.count < Self.maxStreams else { return false }
         let s = Stream(id: id, device: device, send: send, close: close)
         streams.append(s)
         (s.sent, s.listAt) = (payload, now())

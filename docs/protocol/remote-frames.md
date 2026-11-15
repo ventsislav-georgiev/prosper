@@ -352,6 +352,11 @@ Errors, each a 0x13 and the stream does not open:
   `watch needs its own connection`;
 - the server has no list to stream (Prosper: Agent Island does not list Remote Terminal's dir;
   the client falls back to polling 0x03).
+- the server already has 32 live streams across all its connections (#987; `dch serve` has no global
+  cap, only 16 per peer, serve.c:2680@v1.73.0): `0x13 {"code": "busy", "message": "this Mac has 32 session
+  list streams open already"}` as `dch serve`'s per-peer refusal (WATCH_BUSY_JSON, serve.c:77), then the
+  connection closes; the client falls back to polling 0x03. A device at its own 4-stream cap is not refused
+  at the ceiling: its oldest is closed and the new one takes that slot.
 
 A second 0x2e on a connection that is already a stream is ignored: no reply, the stream goes on.
 
@@ -363,7 +368,7 @@ Stream, all server to client, until either side closes:
    most one per second; the trailing change is always sent. A change back to what the client
    has sends nothing.
 4. **Heartbeat**: `0x14 {}` after 25 s with nothing else sent. A client calls 60 s of silence dead.
-5. At most 4 streams per device: a fifth closes that device's oldest. A client that stops
+5. At most 4 streams per device: a fifth closes that device's oldest. At most 32 streams in all (above). A client that stops
    reading (32 frames unsent) is closed rather than buffered. A server that loses its list
    closes every stream; the client reconnects, is refused and polls.
 
