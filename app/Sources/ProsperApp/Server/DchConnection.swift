@@ -2473,16 +2473,30 @@ enum DchCommand {
         p.standardError = merge ? pipe : errPipe
         do { try p.run() } catch { return (Data(), "", -1) }
         onPid(p.processIdentifier)
-        // Screen first (it can be tens of KB), then stderr (one line at most, so it
-        // fits the pipe buffer while we drain stdout — no deadlock).
+        // R988c-1: stderr is read to its end on another thread while this one drains stdout (the screen), so
+        // a child writing more than a pipe holds to stderr never blocks; only its first 4096 bytes are kept.
+        // Written by the reader only, read only after group.wait(): the group orders the two.
+        final class Err: @unchecked Sendable { var kept = Data(), cut = false }
+        let err = Err(), group = DispatchGroup(), errRead = errPipe.fileHandleForReading
+        if !merge {
+            DispatchQueue.global().async(group: group) {
+                while case let chunk = errRead.availableData, !chunk.isEmpty {
+                    let room = 4096 - err.kept.count
+                    err.kept.append(chunk.prefix(room))
+                    err.cut = err.cut || chunk.count > room
+                }
+            }
+        }
         var data = Data()
         while case let chunk = pipe.fileHandleForReading.availableData, !chunk.isEmpty {
             data.append(chunk)
             onOutput(chunk)
         }
-        let err = merge ? Data() : errPipe.fileHandleForReading.readDataToEndOfFile()
+        group.wait()
         p.waitUntilExit()
-        return (data, String(data: err, encoding: .utf8) ?? "", p.terminationStatus)
+        // A cut can end inside a UTF-8 sequence: decode what is valid (U+FFFD for the cut end), never "" for all of it.
+        let text = String(data: err.kept, encoding: .utf8) ?? (err.cut ? String(decoding: err.kept, as: UTF8.self) : "")
+        return (data, text, p.terminationStatus)
     }
 
     /// #477: every Agent Island dch call (--ls-json, -lj, --read, --status, --send)

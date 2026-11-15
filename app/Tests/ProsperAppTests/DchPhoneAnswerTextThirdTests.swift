@@ -44,13 +44,13 @@ final class DchPhoneAnswerTextThirdTests: XCTestCase {
             XCTAssertEqual($0 as? WhoisUnavailable, WhoisUnavailable(cause: "Tailscale isn't answering"))
         }
         XCTAssertThrowsError(try DchOwnerCheck.peer(fromWhois: TailscaleCLIOutput(exit: 1, err: err))) {
-            XCTAssertEqual($0 as? WhoisUnusable, WhoisUnusable(cause: "tailscale whois failed"))
+            XCTAssertEqual($0 as? WhoisUnusable, WhoisUnusable(cause: "tailscale whois failed; run tailscale whois with this address in Terminal to see why"))
         }
         XCTAssertEqual(DchOwnerCheck.statusText(ip: "100.64.0.1", .unavailable("Tailscale isn't answering")),
                        "Couldn't verify 100.64.0.1: Tailscale isn't answering. "
                        + "Turning on \"Allow when Tailscale isn't answering\" would let it in.")
-        XCTAssertEqual(DchOwnerCheck.statusText(ip: "100.64.0.1", .unusable("tailscale whois failed")),
-                       "Couldn't verify 100.64.0.1: tailscale whois failed. "
+        XCTAssertEqual(DchOwnerCheck.statusText(ip: "100.64.0.1", .unusable("tailscale whois failed; run tailscale whois with this address in Terminal to see why")),
+                       "Couldn't verify 100.64.0.1: tailscale whois failed; run tailscale whois with this address in Terminal to see why. "
                        + "Refused; \"Allow when Tailscale isn't answering\" doesn't cover this.")
     }
 }

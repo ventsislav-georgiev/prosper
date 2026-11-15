@@ -1138,6 +1138,11 @@ tag from the now-released section and put it on the new top draft.
 - The Remote Terminal status in Settings no longer quotes Tailscale's own error output; a rename
   from the phone of a session that has just ended now says "no session" for a very long name or a
   session on another Mac too (#988)
+- Remote Terminal: a phone request no longer waits for ever when dch, or a remote Mac it relays,
+  writes a lot of error output; the error output is read alongside the answer and its first 4 KB is
+  kept (#988)
+- Remote Terminal: when the Tailscale whois check fails, the status line in Settings says to run
+  tailscale whois with that address in Terminal to see why (#988)
 
 ## v2.174.0
 

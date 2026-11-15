@@ -467,7 +467,7 @@ final class DchOwnerCheckTests: XCTestCase {
             Row(name: "whois peer not found", status: Self.running, whois: Self.fail("peer not found\n"),
                 want: .unknownPeer, cached: true),
             Row(name: "whois other error", status: Self.running, whois: Self.fail("boom: LocalAPI said no\nmore"),
-                want: .unusable("tailscale whois failed"), cached: true),
+                want: .unusable("tailscale whois failed; run tailscale whois with this address in Terminal to see why"), cached: true),
             Row(name: "whois unreadable", status: Self.running, whois: Self.json("{}"),
                 want: .unusable("Tailscale's whois answer couldn't be read"), cached: true),
             // A host with no node id, so the answer without a Node would otherwise pass as the owner.

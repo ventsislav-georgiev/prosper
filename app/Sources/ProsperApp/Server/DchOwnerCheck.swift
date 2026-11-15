@@ -399,7 +399,7 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         if r.exit == 0 { return try parsePeer(r.out) }
         if r.err.contains("peer not found") { return nil }
         logCLI("whois", r.err)
-        throw WhoisUnusable(cause: "tailscale whois failed")
+        throw WhoisUnusable(cause: "tailscale whois failed; run tailscale whois with this address in Terminal to see why")
     }
 
     /// #988: tailscale's stderr can carry anything (a socket path): its first line goes only to the log, private,
