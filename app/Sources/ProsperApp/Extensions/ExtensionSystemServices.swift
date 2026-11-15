@@ -550,7 +550,8 @@ enum URLServices {
         },
         selfIDs: Set<String> = OpenedLinkRouter.selfBundleIDs
     ) -> URL? {
-        if let bundleID, let app = appFor(bundleID) { return app }
+        // A self id is never a target (a rule or fallback naming this app, e.g. a fork's own id, would loop).
+        if let bundleID, !selfIDs.contains(bundleID), let app = appFor(bundleID) { return app }
         guard let id = defaultAppID(url), selfIDs.contains(id) else { return nil }
         return appFor(OpenedLinkRouter.safeFallback)
     }
@@ -593,20 +594,24 @@ enum URLServices {
 
 /// Every link Prosper receives as the default browser goes through here: a GURL
 /// event, an opened .html file (odoc -> application(_:open:), as a file:// URL), or
-/// either one arriving at a cold launch. Never drops a link: with no enabled
-/// `url.open` subscriber (the url-dispatcher is opt-in) Prosper opens it itself in
-/// the dispatcher's saved fallback browser, else Safari, never Prosper (that would
-/// bounce the link straight back here forever).
+/// either one arriving at a cold launch. Never drops a link: every `url.open`
+/// listener is asked in turn, and when none answers "handled" (no listener, a
+/// listener that declined, returned nothing, threw or ran out of budget) Prosper
+/// opens it itself, once, in the dispatcher's saved fallback browser, else Safari,
+/// never Prosper (that would bounce the link straight back here forever).
 @MainActor
 final class OpenedLinkRouter {
-    /// Every id that is Prosper: the shipped one, plus the running bundle's (a dev
-    /// build or a fork signs under another id and must hit the same loop guards).
-    nonisolated static let selfBundleIDs: Set<String> =
-        Set(["eu.illegible.prosper", Bundle.main.bundleIdentifier].compactMap { $0 })
+    /// The id that is this app: the running bundle's (a dev build or a fork signs
+    /// under another id), the shipped one only when the bundle has none.
+    nonisolated static let selfBundleIDs = selfIDs(running: Bundle.main.bundleIdentifier)
+    nonisolated static func selfIDs(running: String?) -> Set<String> { [running ?? "eu.illegible.prosper"] }
     nonisolated static let safeFallback = "com.apple.Safari"
+    /// The one answer that keeps the fallback closed; anything else, nil or a throw is "not handled".
+    nonisolated static let handledAnswer = "handled"
 
-    private let hasHandler: () -> Bool
-    private let broadcast: (_ payloadJSON: String) -> Void
+    /// One `url.open` listener: asked with the payload JSON, answers its handler's result.
+    typealias Listener = @MainActor (_ payloadJSON: String) async throws -> String?
+    private let listeners: () -> [Listener]
     private let fallbackBrowser: () -> String?
     /// Native open seam; tests replace it so nothing is ever opened.
     private let open: (_ url: String, _ bundleID: String) -> Void
@@ -615,36 +620,54 @@ final class OpenedLinkRouter {
     /// file arrives before applicationDidFinishLaunching). nil once `ready()` ran.
     private var pending: [String]? = []
 
-    init(hasHandler: @escaping () -> Bool,
-         broadcast: @escaping (_ payloadJSON: String) -> Void,
+    init(listeners: @escaping () -> [Listener],
          fallbackBrowser: @escaping () -> String?,
          open: @escaping (_ url: String, _ bundleID: String) -> Void = { URLServices.open($0, bundleID: $1) },
          selfIDs: Set<String> = OpenedLinkRouter.selfBundleIDs) {
-        self.hasHandler = hasHandler
+        self.listeners = listeners
         self.selfIDs = selfIDs
-        self.broadcast = broadcast
         self.fallbackBrowser = fallbackBrowser
         self.open = open
     }
 
-    func receive(_ urlString: String) {
-        if pending != nil { pending?.append(urlString); return }
-        guard hasHandler() else {
-            var browser = fallbackBrowser() ?? ""
-            if browser.isEmpty || selfIDs.contains(browser) { browser = Self.safeFallback }
-            open(urlString, browser)
-            return
+    /// Returns the delivery task (nil while queued or with no listener: then it is
+    /// already done); the app ignores it, tests await it.
+    @discardableResult
+    func receive(_ urlString: String) -> Task<Void, Never>? {
+        if pending != nil { pending?.append(urlString); return nil }
+        let asked = listeners()
+        guard !asked.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: ["url": urlString]),
+              let payload = String(data: data, encoding: .utf8) else {
+            openFallback(urlString)
+            return nil
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: ["url": urlString]),
-              let payload = String(data: data, encoding: .utf8) else { return }
-        broadcast(payload)
+        return Task { @MainActor in
+            var handled = false
+            // In order, each one asked even after an earlier one erred or handled (the event stays a broadcast).
+            for listener in asked {
+                do {
+                    if try await listener(payload) == Self.handledAnswer { handled = true }
+                } catch {
+                    continue // an error is not handled: the fallback below still opens
+                }
+            }
+            if !handled { openFallback(urlString) }
+        }
+    }
+
+    private func openFallback(_ urlString: String) {
+        var browser = fallbackBrowser() ?? ""
+        if browser.isEmpty || selfIDs.contains(browser) { browser = Self.safeFallback }
+        open(urlString, browser)
     }
 
     /// Extensions are loaded: deliver anything that arrived before, in order.
-    func ready() {
+    @discardableResult
+    func ready() -> [Task<Void, Never>] {
         let queued = pending ?? []
         pending = nil
-        queued.forEach(receive)
+        return queued.compactMap { receive($0) }
     }
 }
 

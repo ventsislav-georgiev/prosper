@@ -338,6 +338,8 @@ local function pick(url)
     return nil
 end
 
+-- Answers "handled" only once the link was opened; anything else (nothing, an
+-- error) makes Prosper open it itself in the fallback browser, so no link is lost.
 function on_url(payload)
     -- Event payloads arrive as a JSON STRING (callGlobal pushes a Lua string), not
     -- a table — decode before reading. The old `payload.url` indexed a string and
@@ -355,7 +357,7 @@ function on_url(payload)
     if not browser or #browser == 0 or browser == PROSPER then
         browser = SAFE_FALLBACK
     end
-    host.url.open(url, browser)
+    if host.url.open(url, browser) then return "handled" end
 end
 
 -- MARK: clean copied links ------------------------------------------------------

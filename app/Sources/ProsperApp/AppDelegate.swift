@@ -684,7 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Forward a link to extensions as `url.open` (a url-dispatcher rewrites/re-opens
-    /// it in the real browser); with no handler, OpenedLinkRouter opens it natively.
+    /// it in the real browser); unless one answers "handled", OpenedLinkRouter opens it natively.
     private func handleOpenedLink(_ urlString: String) {
         // prosper:// is our own control scheme (e.g. `prosper://sleep`, the remote
         // sleep command). Handle it here, never broadcast it to extensions as a link.
@@ -699,8 +699,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private lazy var openedLinks = OpenedLinkRouter(
-        hasHandler: { [weak self] in self?.extensions.hasSubscribers("url.open") ?? false },
-        broadcast: { [weak self] in self?.extensions.broadcastEvent("url.open", payloadJSON: $0) },
+        listeners: { [weak self] in
+            guard let extensions = self?.extensions else { return [] }
+            return extensions.eventSubscribers("url.open").map { sub -> OpenedLinkRouter.Listener in
+                { await extensions.callExtensionStringAsync(extensionID: sub.extensionID,
+                                                            function: sub.handler, args: [$0]) }
+            }
+        },
         fallbackBrowser: { [weak self] in
             self?.extensions.prefValue(extensionID: "com.prosper.url-dispatcher", key: "fallback")
         })

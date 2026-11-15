@@ -61,7 +61,7 @@ local PANES = {
     { "Lock Screen",           "com.apple.Lock-Screen-Settings.extension",                   "require password idle screensaver",   "lock.display" },
     { "Touch ID & Password",   "com.apple.Touch-ID-Settings.extension",                      "fingerprint biometric",               "touchid" },
     { "Users & Groups",        "com.apple.Users-Groups-Settings.extension",                  "accounts admin guest",                "person.2" },
-    -- Passwords left Settings for its own app; the pane id no longer exists.
+    -- Passwords is its own app on macOS 15+; before that row() keeps this pane id.
     { "Passwords",             "com.apple.Passwords-Settings.extension",                     "keychain autofill 2fa otp",           "key",
       "/System/Applications/Passwords.app" },
     { "Internet Accounts",     "com.apple.Internet-Accounts-Settings.extension",             "mail icloud google exchange",         "at" },

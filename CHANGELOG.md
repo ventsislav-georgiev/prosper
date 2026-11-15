@@ -1273,6 +1273,9 @@ tag from the now-released section and put it on the new top draft.
   time instead of trying a rejected token.
 - A popover that sets its own light or dark look now keeps it, closed popovers stop being re-themed,
   and switching a theme's colour variant no longer reloads its images.
+- Links: when the URL Dispatcher fails or does not open a clicked link, Prosper now opens it in your
+  saved fallback browser instead of losing it, and a developer build or fork of Prosper no longer
+  sends links back to itself.
 
 ## v2.174.0
 

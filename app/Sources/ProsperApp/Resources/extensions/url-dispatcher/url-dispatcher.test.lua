@@ -584,4 +584,27 @@ h.eq(writes(), 0, "nil/garbage clipboard payloads -> no crash, no write")
 host.prefs.set("clean_copied", "false")
 host.prefs.set("clean_tracking", "false")
 
+-- 24. #1070 the url.open answer: "handled" only once host.url.open opened the link;
+-- otherwise nothing, so the host opens the link in the fallback browser itself.
+local realOpen = host.url.open
+local openOK = true
+host.url.open = function(u, b) realOpen(u, b); return openOK end
+host.prefs.set("routes", J{})
+host.prefs.set("fallback", "org.mozilla.firefox")
+reset()
+h.eq(on_url(payload("https://answer.example/a")), "handled", "opened link -> handled")
+h.eq(#env.urlOpens, 1, "handled: one open")
+openOK = false
+reset()
+h.eq(on_url(payload("https://answer.example/b")), nil, "open refused -> not handled (host falls back)")
+reset()
+h.eq(on_url(J{ noturl = 1 }), nil, "declined payload -> not handled")
+h.eq(on_url(nil), nil, "nil payload -> not handled")
+h.eq(#env.urlOpens, 0, "declined: nothing opened")
+openOK = true
+host.url.open = function() error("boom") end
+h.eq(pcall(on_url, payload("https://answer.example/c")), false, "an open that errors -> error, never handled")
+host.url.open = realOpen
+host.prefs.set("fallback", "com.apple.Safari")
+
 print("url-dispatcher: ALL PASS")
