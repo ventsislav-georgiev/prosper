@@ -1155,7 +1155,8 @@ final class TextFileWriterTests: XCTestCase {
 
     /// Item 1: kept are a fresh temp, another file's, a tail that is not a UUID (35, 37, a word, 36 non-hex), a folder and a link
     /// with a temp-shaped name (the link dated with lutimes, its target inside tempDir() untouched), another owner's and a
-    /// two-link one (both through the stat seam).
+    /// two-link one (both through the sweep's own (folder, name) seam, round 7d: the sweep called directly, as save calls it).
+    /// Then a save: the same names kept, except the two the seam alone kept (really ours and one link here), which go.
     func testTheSweepKeepsEveryNameThatIsNotAStaleTempOfThisFile() throws {
         let root = tempDir("tfw-sweep-keep")
         let dir = root.appendingPathComponent("sweep")
@@ -1176,18 +1177,24 @@ final class TextFileWriterTests: XCTestCase {
         XCTAssertEqual(symlink(target.path, link.path), 0)
         XCTAssertEqual(lutimes(link.path, [timeval(tv_sec: 1_700_000_000, tv_usec: 0), timeval(tv_sec: 1_700_000_000, tv_usec: 0)]), 0)
         kept += [other, twoLinks, folder, link]
-        let st: W.Stat = { p in
-            var s = stat()
-            guard lstat(p, &s) == 0 else { return (errno, s) }
-            if p == other.path { s.st_uid = geteuid() &+ 1 }
-            if p == twoLinks.path { s.st_nlink = 2 }
-            return (0, s)
+        let st: W.StatIn = { fd, n in
+            var r = W.statIn(fd, n)
+            guard r.0 == 0 else { return r }
+            if n == other.lastPathComponent { r.1.st_uid = geteuid() &+ 1 }
+            if n == twoLinks.lastPathComponent { r.1.st_nlink = 2 }
+            return r
         }
-        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), stat: st, now: sweepNow),
-                       .success(W.digest(Array("new".utf8))))
+        W.sweepStaleTemps(in: dir.path, of: url.lastPathComponent, keep: nil, now: sweepNow, statAt: st)
         for k in kept { XCTAssertTrue(exists(k), k.lastPathComponent) }
         XCTAssertEqual(bytes(target), Array("left".utf8), "the link's target is untouched")
         XCTAssertEqual(names(dir).count, kept.count + 1, "nothing else left or removed")
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), now: sweepNow),
+                       .success(W.digest(Array("new".utf8))))
+        XCTAssertFalse(exists(other), "really ours: the save's sweep takes it")
+        XCTAssertFalse(exists(twoLinks), "really one link: the save's sweep takes it")
+        for k in kept where k != other && k != twoLinks { XCTAssertTrue(exists(k), k.lastPathComponent) }
+        XCTAssertEqual(bytes(target), Array("left".utf8), "the link's target is untouched")
+        XCTAssertEqual(names(dir).count, kept.count - 1, "nothing else left or removed")
     }
 
     /// Item 1: a refused save (a wrong `expected`, either branch) removes nothing.
@@ -1306,5 +1313,40 @@ final class TextFileWriterTests: XCTestCase {
         XCTAssertEqual(bytes(url), Array("newer".utf8))
         XCTAssertEqual(info(url).st_ino, ino, "same inode: in place")
         XCTAssertEqual(names(dir), ["a.txt"])
+    }
+
+    // MARK: round 7d (the sweep bound to the folder it opened)
+
+    /// R1108-r7c-a: two own subfolders of the row's tempDir(), each holding a stale temp-shaped file of the same name. The sweep is
+    /// called on the first folder's path; right after its open the hook renames the first folder aside and the second into its
+    /// place. The file in the folder that was OPENED is removed; the one in the folder now AT THE PATH stays. That one has a real
+    /// second link inside its own folder during the swap (so a stat by path would refuse it while the opened folder's passes);
+    /// with that link gone and no swap, the sweep removes it as before.
+    func testTheSweepActsOnTheFolderItOpenedNotTheOneAtThePath() throws {
+        let root = tempDir("tfw-sweep-swap")
+        let first = root.appendingPathComponent("first"), second = root.appendingPathComponent("second")
+        let aside = root.appendingPathComponent("aside")
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: second, withIntermediateDirectories: false)
+        let name = ".a.txt.prosper-\(UUID().uuidString)"
+        _ = try temp(name, in: first)
+        _ = try temp(name, in: second)
+        let twin = second.appendingPathComponent("twin")
+        XCTAssertEqual(link(second.appendingPathComponent(name).path, twin.path), 0)
+        var calls = 0
+        W.sweepStaleTemps(in: first.path, of: "a.txt", keep: nil, now: sweepNow, opened: {
+            calls += 1
+            XCTAssertEqual(rename(first.path, aside.path), 0)
+            XCTAssertEqual(rename(second.path, first.path), 0)
+        })
+        XCTAssertEqual(calls, 1)
+        XCTAssertFalse(exists(aside.appendingPathComponent(name)), "the opened folder's stale temp is removed")
+        XCTAssertTrue(exists(first.appendingPathComponent(name)), "the file now at the path stays")
+        XCTAssertEqual(names(aside), [])
+        XCTAssertEqual(names(first), [name, "twin"])
+        XCTAssertEqual(unlink(first.appendingPathComponent("twin").path), 0)
+        W.sweepStaleTemps(in: first.path, of: "a.txt", keep: nil, now: sweepNow)
+        XCTAssertFalse(exists(first.appendingPathComponent(name)), "no swap: removed as before")
+        XCTAssertEqual(names(first), [])
     }
 }

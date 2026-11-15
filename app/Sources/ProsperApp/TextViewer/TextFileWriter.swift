@@ -12,6 +12,8 @@ enum TextFileWriter {
     typealias Fingerprint = [UInt8]
     /// The seam over the one stat of the resolved target: 0 or an errno, and the stat.
     typealias Stat = (String) -> (Int32, stat)
+    /// The sweep's stat seam: a candidate's name in the folder the sweep opened (its descriptor): 0 or an errno, and the stat.
+    typealias StatIn = (Int32, String) -> (Int32, stat)
 
     enum Step: Equatable { case resolve, stat, read, open, temp, copyAttributes, replace, truncate, write, fsync }
     enum Failure: Error, Equatable {
@@ -156,7 +158,7 @@ enum TextFileWriter {
             } else if !overwrite, let changed = compare(path, expected, beforeRead, &seen) {
                 failure = changed
             } else {
-                sweepStaleTemps(in: folderPath, of: (path as NSString).lastPathComponent, keep: temp.lastPathComponent, now: clock, statAt)
+                sweepStaleTemps(in: folderPath, of: (path as NSString).lastPathComponent, keep: temp.lastPathComponent, now: clock)
                 // Right before the rename. Never UF_TRACKED: a tracked temp would give the file a new document id. A failure drops
                 // the flags and stays atomic, as saves before round 7 did: the bytes matter more than a hint.
                 let carry = st.st_flags & UInt32(UF_NODUMP | UF_HIDDEN)
@@ -164,6 +166,8 @@ enum TextFileWriter {
                 beforeReplace()
                 // Round 7c: the comparison's second half (so none with overwrite): the path still names the file it read, unchanged.
                 // Left open: a write between this lstat and rename(2); closing it needs a lock other programs do not honour.
+                // UNTESTED on network volumes: this lstat and the comparison's fstat may be answered from different attribute
+                // caches there, so an unchanged file may answer changedOnDisk (overwrite still saves).
                 let again = overwrite ? nil : statAt(path)
                 if let again, again.0 != 0 || !unchanged(again.1, seen) {
                     failure = .changedOnDisk
@@ -199,7 +203,7 @@ enum TextFileWriter {
         beforeCompare()
         var seen = stat()
         if !overwrite, let changed = compare(fd, expected, beforeRead, &seen) { return .failure(changed) }
-        sweepStaleTemps(in: folderPath, of: (path as NSString).lastPathComponent, keep: nil, now: clock, statAt)
+        sweepStaleTemps(in: folderPath, of: (path as NSString).lastPathComponent, keep: nil, now: clock)
         // The comparison read to the end: back to the start, or the write would leave a hole of zeros.
         guard lseek(fd, 0, SEEK_SET) == 0 else { return .failure(.failed(.write, errno)) }
         beforeTruncate()
@@ -300,11 +304,16 @@ enum TextFileWriter {
     static let sweepLimit = 10000
 
     /// Round 7c: removes `.<name>.prosper-<UUID>` temps a save that died left in the target's own folder (never another folder,
-    /// never recursive): a regular file of ours (lstat through the seam, never followed), one link, its mtime more than
+    /// never recursive): a regular file of ours (fstatat through `statAt`, never followed), one link, its mtime more than
     /// staleTempAge before `now`. `keep` is this save's own temp. Never fails a save. readdir, not FileManager (it hides "._x").
-    private static func sweepStaleTemps(in folder: String, of name: String, keep: String?, now: TimeInterval, _ statAt: Stat) {
+    /// Round 7d (R1108-r7c-a): every stat and the unlink act by name on the folder it opened, never on the path again.
+    /// `opened` is a test seam called once right after the open.
+    static func sweepStaleTemps(in folder: String, of name: String, keep: String?, now: TimeInterval,
+                                statAt: StatIn = TextFileWriter.statIn, opened: () -> Void = {}) {
         guard let d = opendir(folder) else { return }
         defer { closedir(d) }
+        opened()
+        let fd = dirfd(d)
         let prefix = "." + name + ".prosper-"
         var read = 0
         while read < sweepLimit, let e = readdir(d) {
@@ -315,13 +324,18 @@ enum TextFileWriter {
             guard entry.utf8.elementsEqual(raw), entry != keep,
                   raw.starts(with: prefix.utf8), raw.count == prefix.utf8.count + 36,
                   UUID(uuidString: String(decoding: raw.suffix(36), as: UTF8.self)) != nil else { continue }
-            let full = folder + "/" + entry
-            let (code, st) = statAt(full)
+            let (code, st) = statAt(fd, entry)
             guard code == 0, st.st_mode & S_IFMT == S_IFREG, st.st_uid == geteuid(), st.st_nlink == 1 else { continue }
             let mtime = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
             guard now - mtime > staleTempAge else { continue }
-            _ = unlink(full)
+            _ = unlinkat(fd, entry, 0)
         }
+    }
+
+    /// The sweep's stat default: fstatat on the opened folder, the name never followed.
+    static func statIn(_ folder: Int32, _ name: String) -> (Int32, stat) {
+        var s = stat()
+        return (fstatat(folder, name, &s, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : errno, s)
     }
 
     /// A write loop (EINTR retried) and fsync; a failure here leaves the file incomplete.
