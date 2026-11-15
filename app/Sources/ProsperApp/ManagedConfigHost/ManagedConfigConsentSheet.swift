@@ -150,7 +150,14 @@ final class ManagedConfigConsentModel: ObservableObject {
             if let s = status(f) { out.append(s) }
             out += f.lines.map(Self.text) + notes(f).map(ManagedConfigConsentDisplay.displayed) + (backupLine(f).map { [$0] } ?? [])
         }
-        return out + ["Cancel", verb]
+        return out + (showsCutNote ? [Self.cutNote] : []) + ["Cancel", verb]
+    }
+
+    /// R1252-q3: said once under the files when any text the cards show is cut at the display's ceiling.
+    static let cutNote = "A line is too long to show here in full: read the whole file before you approve."
+
+    var showsCutNote: Bool {
+        changes.files.contains { f in ([f.path, f.backupDirectory] + notes(f) + f.lines.map(\.text)).contains(where: ManagedConfigConsentDisplay.isCut) }
     }
 }
 
@@ -162,13 +169,18 @@ final class ManagedConfigConsentModel: ObservableObject {
 ///   escape right after it;
 /// - a run of backslashes (with the marks on them) shown just before an escape or before a literal "u{" is doubled: before
 ///   "u{", an odd run of backslashes ends in an escape of ours, an even run is the line's own backslashes, each shown twice;
-/// - past `ceiling` scalars the rest is counted, not shown.
+/// - past `ceiling` scalars the rest is counted, not shown, and the line says so;
+/// - a text whose first letter is not an ASCII letter gets U+200E in front, so it is drawn left to right in the order it is
+///   written (a right-to-left word still reads right to left inside its own run); an ASCII-only text is drawn as before.
 /// Pure and linear in its input; no isolation.
 enum ManagedConfigConsentDisplay {
     static let ceiling = 2000
 
     static func displayed(_ s: String) -> String {
-        let rest = s.unicodeScalars.dropFirst(ceiling).count
+        // what is cut, in characters as a person counts them
+        var tail = String.UnicodeScalarView()
+        tail.append(contentsOf: s.unicodeScalars.dropFirst(ceiling))
+        let rest = String(tail).count
         var head = String.UnicodeScalarView()
         head.append(contentsOf: s.unicodeScalars.prefix(ceiling))
         // every scalar of the head in display order, with whether it is shown as its escape
@@ -208,8 +220,16 @@ enum ManagedConfigConsentDisplay {
             if p.escaped { out.append(contentsOf: escape(p.scalar).unicodeScalars) } else { out.append(p.scalar) }
         }
         flush(doubled: false)
-        return rest > 0 ? String(out) + "\u{2026} (+\(rest) more characters)" : String(out)
+        // R1252-q1: the first strong letter sets the direction a text is laid out in. No ASCII scalar but a letter is
+        // strong, so a text whose first letter or non-ASCII scalar is an ASCII letter is left to right already, and so is an
+        // ASCII-only one; any other gets U+200E in front (drawn only: never written, compared or counted for the cut).
+        let ltr = out.first(where: { !$0.isASCII || $0.properties.isAlphabetic })?.isASCII ?? true
+        let shown = (ltr ? "" : "\u{200E}") + String(out)
+        return rest > 0 ? shown + "\u{2026} (+\(rest) more characters, not shown)" : shown
     }
+
+    /// True when `displayed` cuts the text at the ceiling.
+    static func isCut(_ s: String) -> Bool { !s.unicodeScalars.dropFirst(ceiling).isEmpty }
 
     /// The visible form of one scalar: \u{XXXX}, uppercase hex, padded to four digits, never more.
     static func escape(_ u: Unicode.Scalar) -> String {
@@ -278,6 +298,13 @@ struct ManagedConfigConsentView: View {
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(Array(model.changes.files.enumerated()), id: \.offset) { _, file in
                 fileCard(file)
+            }
+            // R1252-q3: its own slot in the stack, under the cards and above the buttons: it covers nothing
+            if model.showsCutNote {
+                Text(verbatim: ManagedConfigConsentModel.cutNote)
+                    .font(Neon.font(12))
+                    .foregroundStyle(Neon.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: sz(10)) {
                 Spacer(minLength: 0)

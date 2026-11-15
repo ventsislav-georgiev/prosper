@@ -55,18 +55,19 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
     }
 
     func testOtherScriptsShowAsWritten() {
+        // R1252-q1: a text whose first letter is not an ASCII letter is shown after U+200E (left to right), as written
         for line in [
             "\u{039A}\u{03B1}\u{03BB}\u{03B7}\u{03BC}\u{03AD}\u{03C1}\u{03B1}",   // Greek
             "\u{05E9}\u{05DC}\u{05D5}\u{05DD} \u{05E2}\u{05D5}\u{05DC}\u{05DD}",   // Hebrew, no direction controls
             "\u{3053}\u{3093}\u{306B}\u{3061}\u{306F}",                           // Japanese
-            "Vi\u{0065}\u{0323}\u{0302}t",                                         // two marks on one letter
             "\u{2022}\u{2022}\u{2022}\u{2022} \u{2026}",                           // the sheet's own mask and elision
         ] {
-            check(line, line, "unchanged \(Self.scalars(line))")
+            check(line, "\u{200E}" + line, "as written \(Self.scalars(line))")
         }
+        check("Vi\u{0065}\u{0323}\u{0302}t", "Vi\u{0065}\u{0323}\u{0302}t", "two marks on one letter, unchanged")
         // the joiner (a format scalar) and the emoji variation selector (default-ignorable) are shown as escapes
-        check("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", "\u{1F468}\\u{200D}\u{1F469}\\u{200D}\u{1F467}", "family")
-        check("\u{2764}\u{FE0F}", "\u{2764}\\u{FE0F}", "heart")
+        check("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", "\u{200E}\u{1F468}\\u{200D}\u{1F469}\\u{200D}\u{1F467}", "family")
+        check("\u{2764}\u{FE0F}", "\u{200E}\u{2764}\\u{FE0F}", "heart")
     }
 
     func testMarksPastTwoShowAsEscapesAfterTheirCharacter() {
@@ -84,18 +85,20 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         check("x\\\\u{41}", "x\\\\\\\\u{41}", "two literal backslashes then u{")
         check("\\\u{202E}", "\\\\\\u{202E}", "a backslash then a real override")
         check("\\\\\u{202E}", "\\\\\\\\\\u{202E}", "two backslashes then a real override")
-        check("\\\u{0301}\u{202E}", "\\\\\u{0301}\\u{202E}", "a backslash with a mark then a real override")
-        check("\\" + String(repeating: "\u{0323}", count: 3), "\\\\\u{0323}\u{0323}\\u{0323}", "a backslash with three marks")
+        // R1252-q1: a mark is the first non-ASCII scalar here: U+200E in front
+        check("\\\u{0301}\u{202E}", "\u{200E}\\\\\u{0301}\\u{202E}", "a backslash with a mark then a real override")
+        check("\\" + String(repeating: "\u{0323}", count: 3), "\u{200E}\\\\\u{0323}\u{0323}\\u{0323}", "a backslash with three marks")
         check("a\\b\\", "a\\b\\", "other backslashes stay single")
     }
 
     func testALongLineIsCutWithItsRestCounted() {
-        check(String(repeating: "a", count: 5000), String(repeating: "a", count: 2000) + "\u{2026} (+3000 more characters)", "5000")
+        check(String(repeating: "a", count: 5000), String(repeating: "a", count: 2000) + "\u{2026} (+3000 more characters, not shown)", "5000")
         check(String(repeating: "a", count: 2000), String(repeating: "a", count: 2000), "2000 is whole")
-        check(String(repeating: "a", count: 2001), String(repeating: "a", count: 2000) + "\u{2026} (+1 more characters)", "2001")
-        // the ceiling counts scalars: 1000 letters with 4 marks each are 5000 scalars, 400 letters shown
+        check(String(repeating: "a", count: 2001), String(repeating: "a", count: 2000) + "\u{2026} (+1 more characters, not shown)", "2001")
+        // the ceiling counts scalars: 1000 letters with 4 marks each are 5000 scalars, 400 letters shown; the rest is
+        // counted in characters (R1252-q3): 600 letters with their marks
         let stacked = String(repeating: "a\u{0323}\u{0323}\u{0323}\u{0323}", count: 1000)
-        let shown = String(repeating: "a\u{0323}\u{0323}\\u{0323}\\u{0323}", count: 400) + "\u{2026} (+3000 more characters)"
+        let shown = String(repeating: "a\u{0323}\u{0323}\\u{0323}\\u{0323}", count: 400) + "\u{2026} (+600 more characters, not shown)"
         check(stacked, shown, "stacked 5000")
     }
 
@@ -245,5 +248,128 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         func holds(_ needle: [UInt8]) -> Bool { written.indices.contains { written[$0...].starts(with: needle) } }
         XCTAssertTrue(holds(raw), "the kit's block, byte for byte")
         XCTAssertFalse(holds(escaped), "no escape of the display reaches the file")
+    }
+
+    // MARK: R1252-q1, a text whose first letter is right-to-left
+
+    private static let lrm = "\u{200E}"
+    /// A Hebrew word, a left-to-right word, a Hebrew letter, a left-to-right word: no control character at all.
+    private static let rtlFirst = "\u{05D0}\u{05D1} ab \u{05D2} yz"
+
+    /// The displayed form starts with U+200E and then holds the line's own scalars in the written order; a text whose first
+    /// letter is an ASCII letter, or one that is ASCII only, is shown as before.
+    func testATextWhoseFirstLetterIsRightToLeftIsShownLeftToRight() {
+        let shown = ManagedConfigConsentDisplay.displayed(Self.rtlFirst)
+        XCTAssertEqual(Self.scalars(shown).first, 0x200E, shown.debugDescription)
+        XCTAssertEqual(Array(Self.scalars(shown).dropFirst()), Self.scalars(Self.rtlFirst), "the line's own scalars, in the written order")
+        check("\u{0627}\u{0628} x", Self.lrm + "\u{0627}\u{0628} x", "Arabic first")
+        check("  \"\u{05D0}\": 1", Self.lrm + "  \"\u{05D0}\": 1", "ASCII neutrals, then Hebrew")
+        check("1 \u{05D0}", Self.lrm + "1 \u{05D0}", "a digit is not a letter")
+        check("ab \u{05D0} yz", "ab \u{05D0} yz", "an ASCII letter first: left to right already")
+        for plain in ["{", "  },", "", "   ", "x = 1"] { check(plain, plain, "ASCII only \(plain.debugDescription)") }
+        // an escape of ours is drawn text: its letter u comes first
+        check("\u{202E}\u{05D0}", "\\u{202E}\u{05D0}", "an escape first")
+        // the diff line: our sign, then the mark, then the line; the mark does not count toward the cut
+        let line = ManagedConfigChangeSet.Line(sign: .added, text: Self.rtlFirst)
+        XCTAssertEqual(Self.scalars(ManagedConfigConsentModel.text(line)), Self.scalars("+ " + Self.lrm + Self.rtlFirst))
+        check("\u{05D0}" + String(repeating: "a", count: 2000),
+              Self.lrm + "\u{05D0}" + String(repeating: "a", count: 1999) + "\u{2026} (+1 more characters, not shown)", "cut")
+    }
+
+    /// The path, a note and the backup line get the mark through the same display function as a diff line, and the sheet's
+    /// tree reads the line's words (the fact line says whether the mark is in the value an AX client gets).
+    func testThePathNotesAndBackupLineGetTheMarkThroughTheDisplay() throws {
+        let heb = "\u{05D0}\u{05D1}"
+        let file = ManagedConfigChangeSet.File(target: "claude:x.md", path: heb + "/x.md", backupDirectory: heb + "/backups",
+                                               lines: [.init(sign: .added, text: heb + " x")], notes: [heb + " note"])
+        let m = ManagedConfigConsentModel(changes: Self.set([file])) { _ in }
+        XCTAssertEqual(Self.scalars(m.backupLine(file)), Self.scalars("Backup: " + Self.lrm + heb + "/backups"))
+        let strings = m.renderedStrings.map { Self.scalars($0) }
+        for s in [Self.lrm + heb + "/x.md", "+ " + Self.lrm + heb + " x", Self.lrm + heb + " note", "Backup: " + Self.lrm + heb + "/backups"] {
+            XCTAssertTrue(strings.contains(Self.scalars(s)), "\(s.debugDescription) in \(m.renderedStrings)")
+        }
+        let bad = model(first: Self.rtlFirst)
+        let b = tree(bad, fitting(bad))
+        let words = Self.scalars("+ " + Self.rtlFirst)
+        let node = b.first { $0.names.contains { Self.scalars($0).filter { $0 != 0x200E } == words } }
+        XCTAssertTrue(node != nil, "the line on the tree: \(b.map(\.names))")
+        let marked = node?.names.contains { $0.unicodeScalars.contains("\u{200E}") } ?? false
+        fputs("mc1252b fact accessibility: the line's names \((node?.names ?? []).map { Self.scalars($0).prefix(4) }), mark in them \(marked)\n", stderr)
+    }
+
+    /// Offscreen: "+ " and the right-to-left-first line, and "+ " and the line's own head (up to its first left-to-right word),
+    /// each drawn by the diff line view at scale 1. The head's pixels must be the line's leftmost pixels: the sign at the left
+    /// edge, then the Hebrew word, then "ab" where it is written, so "yz" can only lie further right. The control, the same
+    /// two strings in a plain Text without the display (the parent's drawing), must differ there, or the method proves nothing.
+    func testARightToLeftWordLeavesTheSignAndTheWordsInWrittenOrder() throws {
+        let head = "\u{05D0}\u{05D1} ab"
+        // main actor (ImageRenderer); called only from this row
+        @MainActor func pixels<V: View>(_ v: V, _ tag: String) throws -> (width: Int, height: Int, row: Int, bytes: [UInt8]) {
+            let r = ImageRenderer(content: v.fixedSize().background(Color.black))
+            r.scale = 1
+            let cg = try XCTUnwrap(r.cgImage, tag)
+            XCTAssertLessThanOrEqual(cg.width, 800, tag)
+            XCTAssertLessThanOrEqual(cg.height, 200, tag)
+            XCTAssertEqual(cg.bitsPerPixel, 32, tag)
+            return (cg.width, cg.height, cg.bytesPerRow, [UInt8](try XCTUnwrap(cg.dataProvider?.data as Data?, tag)))
+        }
+        // nil when the two images cannot be compared; the head's last two columns are left out (its last glyph's edge)
+        @MainActor func headLeads<L: View, H: View>(_ line: L, _ first: H, _ tag: String) throws -> Bool? {
+            let l = try pixels(line, tag + " line"), h = try pixels(first, tag + " head")
+            guard l.height == h.height, h.width > 4, l.width > h.width, l.row >= l.width * 4, h.row >= h.width * 4,
+                  l.bytes.count >= l.row * l.height, h.bytes.count >= h.row * h.height else {
+                XCTFail("\(tag): line \(l.width)x\(l.height), head \(h.width)x\(h.height)")
+                return nil
+            }
+            let n = (h.width - 2) * 4
+            let same = (0..<h.height).allSatisfy { y in l.bytes[(y * l.row)..<(y * l.row + n)].elementsEqual(h.bytes[(y * h.row)..<(y * h.row + n)]) }
+            fputs("mc1252b fact \(tag): line \(l.width)x\(l.height), head \(h.width)x\(h.height), left \(h.width - 2) columns equal \(same)\n", stderr)
+            return same
+        }
+        let font = Neon.font(11, design: .monospaced)
+        let control = try headLeads(Text(verbatim: "+ " + Self.rtlFirst).font(font).foregroundStyle(Neon.terminal),
+                                    Text(verbatim: "+ " + head).font(font).foregroundStyle(Neon.terminal), "control")
+        XCTAssertEqual(control, false, "control: the plain line must not start like its head, or the method cannot see the order")
+        guard control == false else { return }
+        @MainActor func drawn(_ text: String) -> ManagedConfigConsentDiffLine {
+            ManagedConfigConsentDiffLine(text: ManagedConfigConsentModel.text(.init(sign: .added, text: text)), color: Neon.terminal)
+        }
+        let line = try headLeads(drawn(Self.rtlFirst), drawn(head), "line")
+        XCTAssertEqual(line, true, "line: the sign and the first words are not where they are written")
+    }
+
+    // MARK: R1252-q3, a cut line
+
+    func testACutLineSaysHowManyCharactersAreNotShown() {
+        // 2500 letters with one mark each are 5000 scalars: the first 2000 are 1000 letters, the rest 1500 characters
+        check(String(repeating: "e\u{0301}", count: 2500),
+              String(repeating: "e\u{0301}", count: 1000) + "\u{2026} (+1500 more characters, not shown)", "marks")
+        XCTAssertTrue(ManagedConfigConsentDisplay.isCut(String(repeating: "a", count: 2001)))
+        XCTAssertFalse(ManagedConfigConsentDisplay.isCut(String(repeating: "a", count: 2000)))
+    }
+
+    /// One note under the cards when any line is cut (two cut lines: still one), none without; on the tree the note is
+    /// there once and meets none of the title, the id line and the buttons.
+    func testOneNoteSaysWhenALineIsCut() throws {
+        let note = ManagedConfigConsentModel.cutNote
+        XCTAssertEqual(note, "A line is too long to show here in full: read the whole file before you approve.")
+        let long = String(repeating: "a", count: 2001)
+        let cut = model(first: long), plain = model(first: "abcd")
+        let two = ManagedConfigConsentModel(changes: Self.set([Self.file(lines: [.init(sign: .added, text: long)]),
+                                                               Self.file(lines: [.init(sign: .removed, text: long)])])) { _ in }
+        XCTAssertEqual(cut.renderedStrings.filter { $0 == note }.count, 1, "\(cut.renderedStrings.suffix(4))")
+        XCTAssertEqual(two.renderedStrings.filter { $0 == note }.count, 1, "two cut lines, one note")
+        XCTAssertEqual(plain.renderedStrings.filter { $0 == note }.count, 0, "nothing cut, no note")
+        XCTAssertEqual(Array(cut.renderedStrings.suffix(3)), [note, "Cancel", "Apply"], "under the cards, above the buttons")
+        let a = tree(plain, fitting(plain)), size = fitting(cut), b = tree(cut, size)
+        fputs("mc1252b fact cut note: fitted height plain \(fitting(plain).height), with a cut line \(size.height)\n", stderr)
+        XCTAssertFalse(a.contains { $0.named(note) }, "no note on the plain sheet")
+        let shown = b.filter { $0.named(note) && $0.frame.height > 0 }
+        XCTAssertEqual(Set(shown.map { $0.frame.minY.rounded() }).count, 1, "the note once: \(shown.map(\.frame))")
+        let frame = try XCTUnwrap(shown.first, "\(b.map(\.names))").frame
+        for label in ["Fake Kit", Self.owner, "Cancel", "Apply"] {
+            let node = try XCTUnwrap(b.first { $0.named(label) && $0.frame.height > 0 }, "\(label): \(b.map(\.names))")
+            XCTAssertFalse(node.frame.intersects(frame), "\(label) \(node.frame) meets the note \(frame)")
+        }
     }
 }

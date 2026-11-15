@@ -1192,6 +1192,8 @@ tag from the now-released section and put it on the new top draft.
   blank line keeps its last characters in the agent window (#1181)
 - Publishing an extension stops before any upload when its extension.toml changed after it was
   listed; a refused version with a character that cannot be shown says so (#1182)
+- The config change sheet shows each line left to right in the order it is written, also when it
+  starts with a Hebrew or Arabic word, and says when a line is cut (#1252)
 
 ## v2.174.0
 
