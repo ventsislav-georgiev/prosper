@@ -83,6 +83,11 @@ struct AgentSession: Equatable, Identifiable {
     /// session ↔ transcript mapping (design rule 6); nil from older dch or no confident match.
     var claudeSessionID: String? = nil
     var transcriptPath: String? = nil
+    /// #1135: dch 1.63's `claude_foreground` for that Claude: false while it is suspended or in the background
+    /// (a shell reads what is typed); nil when dch does not say (no Claude, an older client).
+    var claudeForeground: Bool? = nil
+    /// #935/#1133/#1135: Always allow's test of a row: fresh, naming one Claude Code, and not out of front (nil: today's rule).
+    var claudeReading: Bool { fresh && claudeSessionID?.isEmpty == false && claudeForeground != false }
     /// #877: dch 1.52's `cwd`, carried for Remote Terminal's list (DchWatchHub.cache); "" when unknown.
     var cwd: String = ""
     /// #1133 (QA #849 INFO-3): false on a row kept from an earlier list because both list forms failed
@@ -693,7 +698,7 @@ enum AgentIsland {
                              agents: row.agents, meta: row.meta, version: row.version, metaEpoch: row.metaEpoch,
                              autoAllowed: row.autoAllowed,
                              claudeSessionID: mapping[row.name]?.sessionID, transcriptPath: mapping[row.name]?.path,
-                             cwd: row.cwd, harness: row.harness)
+                             claudeForeground: mapping[row.name]?.foreground, cwd: row.cwd, harness: row.harness)
                 return AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO)
             }
         }

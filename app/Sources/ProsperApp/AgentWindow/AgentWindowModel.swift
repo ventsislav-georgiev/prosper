@@ -12,6 +12,8 @@ enum AgentTranscriptMapping {
     struct Entry: Equatable {
         let sessionID: String
         let path: String
+        /// #1135: dch 1.63's `claude_foreground`; nil when absent or not a JSON boolean.
+        var foreground: Bool? = nil
     }
 
     /// name → mapping. Tolerant (rule 2): a row without both, a non-UUID-shaped id or
@@ -30,7 +32,9 @@ enum AgentTranscriptMapping {
                   // QA #626 INFO-5: dch names `<config>/projects/<dir>/<sessionId>.jsonl`, so the file is that id's.
                   (path as NSString).lastPathComponent == "\(sid).jsonl"
             else { continue }
-            out[name] = Entry(sessionID: sid, path: path)
+            // A JSON number bridges to Bool too (1 as true): only a real boolean counts.
+            let fg = (o["claude_foreground"] as? NSNumber).flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil }
+            out[name] = Entry(sessionID: sid, path: path, foreground: fg)
         }
         return out
     }

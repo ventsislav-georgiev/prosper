@@ -141,13 +141,14 @@ final class AgentWindowD1Tests: XCTestCase {
         var calls: [[String]] = []
         let json = #"""
         [{"name":"x","alias":"","activity_epoch":42,"state":"working","agents":0,"version":"1.30.0",
-          "claude_session_id":"abcd-12","transcript_path":"/u/p/abcd-12.jsonl"},
+          "claude_session_id":"abcd-12","transcript_path":"/u/p/abcd-12.jsonl","claude_foreground":true},
          {"name":"y","alias":"","activity_epoch":43,"state":"idle","agents":0}]
         """#
         let rows = AgentIsland.list(dirs: ["/tmp/dch-501"]) { args, _ in calls.append(args); return Data(json.utf8) }
         XCTAssertEqual(calls, [["--ls-json"]], "the window adds no dch fork")
         XCTAssertEqual(rows.map(\.claudeSessionID), ["abcd-12", nil])
         XCTAssertEqual(rows.map(\.transcriptPath), ["/u/p/abcd-12.jsonl", nil])
+        XCTAssertEqual(rows.map(\.claudeForeground), [true, nil], "#1135: dch 1.63's claude_foreground, after transcript_path")
         XCTAssertEqual(AgentSidebar.source(rows[0]).transcriptPath, "/u/p/abcd-12.jsonl")
         XCTAssertEqual(AgentSidebar.source(rows[0]).dchState, "working")
     }

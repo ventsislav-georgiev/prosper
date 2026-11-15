@@ -526,6 +526,8 @@ extension AgentIsland {
             // #950 (QA 816): dch's detail says "claude resumed" here, but with running false its agent does not
             // run and the tally counts a failure: the row says the same.
             return "Not resumed: its Claude is not running; the resume message wasn't sent"
+        case "not_foreground":
+            return notInFrontText
         case "claude_unreadable":
             return "Not stopped: its Claude session record can't be read; left running"
         case "signal" where o.result == "interrupted":
@@ -679,6 +681,9 @@ extension AgentIsland {
     static func messageAllLabel(tab: String) -> String { "Message all in \(tab)…" }
     static let sendingText = "Sending…"
     static let messageBusyText = "Message not sent: another job is running"
+    /// #1135: dch 1.63's not_foreground (--say, --stop) and a click refused on claude_foreground false: Claude is
+    /// suspended or in the background, so a shell would read the keys.
+    static let notInFrontText = "Claude is not in front in that session; nothing was typed"
     /// #792: a row whose prompt Always allow (or dch) answered; refuseBusy writes a refusal over it (#927).
     static let autoAllowedText = "Allowed automatically"
 

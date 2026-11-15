@@ -1925,4 +1925,61 @@ final class AgentWindowInteractionTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - #1135: dch lists the session's Claude as not in front (claude_foreground false)
+
+    /// The window's Send and Esc: nothing reaches dch, the notice says why, the draft stays. Absent: today's path.
+    @MainActor
+    func testAgentWindowNotInFrontSendAndInterruptTypeNothing() {
+        let f = MessageFake(statuses: ["idle", "working"])
+        let i = interaction(controller(f.io, autoAllow: false))
+        var idle = claudeSession(.idle)
+        idle.claudeForeground = false
+        i.follow(idle)
+        i.draft = "hi"
+        i.send()
+        XCTAssertFalse(i.busy)
+        XCTAssertEqual(i.notice, AgentWindowText.notForeground)
+        XCTAssertEqual(i.draft, "hi")
+        var working = claudeSession(.working)
+        working.claudeForeground = false
+        i.follow(working)
+        i.interrupt()
+        XCTAssertFalse(i.busy)
+        XCTAssertEqual(i.notice, AgentWindowText.notForeground)
+        XCTAssertEqual(f.lock.withLock { f.says }, [], "no --say")
+        XCTAssertEqual(f.lock.withLock { f.keys }, [], "no Esc")
+        // The control: the same message with the key left out goes to dch.
+        i.follow(claudeSession(.idle))
+        i.draft = "hi"
+        i.send()
+        until("sent") { !i.busy }
+        XCTAssertEqual(f.lock.withLock { f.says }, ["hi"])
+    }
+
+    /// The window's answer to a prompt: no digit while dch lists its Claude as not in front.
+    @MainActor
+    func testAgentWindowNotInFrontAnswerTypesNothing() {
+        let f = FormSim(.plain(Self.modeSwitch))
+        let c = controller(f.io, autoAllow: false)
+        var s = claudeSession(.blocked)
+        s.claudeForeground = false
+        c.store?.sessions = [s]
+        let i = interaction(c)
+        i.follow(s)
+        guard case .prompt(let w) = i.panel, w.buttons.count > 2 else { return XCTFail("\(i.panel)") }
+        i.answer(w.buttons[2])
+        XCTAssertFalse(i.busy)
+        XCTAssertFalse(c.heldByAutoAllow(Self.key), "nothing in flight")
+        XCTAssertEqual(i.notice, AgentWindowText.notForeground)
+        XCTAssertEqual(f.lock.withLock { f.log }, [])
+    }
+
+    /// dch 1.63's --say failing not_foreground: its own plain words.
+    func testAgentWindowNotInFrontSayReplyHasItsOwnWords() {
+        let f = MessageFake(statuses: ["idle", "working"],
+                            reply: #"{"name":"s","result":"failed","reason":"not_foreground","detail":"s: claude is not in front"}"#)
+        XCTAssertEqual(driver(f.io).send("hi"), .failed(AgentWindowText.notForeground))
+        XCTAssertEqual(AgentWindowText.notForeground, "Claude is not in front in that session; nothing was typed. Open in terminal")
+    }
 }

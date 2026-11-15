@@ -280,6 +280,8 @@ enum AgentWindowText {
     /// QA #651 INFO-2: no terminal mirror (dch-lite), so no screen to check before the Esc.
     static let noScreenInterrupt = "This dch can't confirm an interrupt. Open in terminal"
     static let notClaude = "Claude isn't running in this session. Open in terminal"
+    /// #1135: dch 1.63's not_foreground (and claude_foreground false): Claude is suspended or in the background.
+    static let notForeground = AgentIsland.notInFrontText + ". Open in terminal"
     static let notSubmitted = "The message is in Claude's input but wasn't sent. Open in terminal"
     /// #854: dch 1.46's draft_left: a signal came once the message was typed, and it may still be in the composer.
     static let draftLeft = "The message may still be in Claude's input, but it wasn't sent. Open in terminal"
@@ -417,6 +419,7 @@ struct AgentWindowDriver: Sendable {
         case ("skipped"?, "draft"?): return .failed(AgentWindowText.draft)
         case ("skipped"?, "no_screen"?): return .failed(AgentWindowText.noScreen)
         case ("skipped"?, "not_claude"?): return .failed(AgentWindowText.notClaude)
+        case ("failed"?, "not_foreground"?): return .failed(AgentWindowText.notForeground)
         case ("failed"?, "not_submitted"?): return .failed(AgentWindowText.notSubmitted)
         case ("failed"?, "draft_left"?): return .failed(AgentWindowText.draftLeft)
         case ("failed"?, "withdrawn"?), ("failed"?, "interrupted"?): return .failed(AgentWindowText.notSent)
@@ -1056,6 +1059,11 @@ final class AgentWindowInteraction: ObservableObject {
             return
         }
         guard let controller, !busy else { return }
+        // #1135: dch lists its Claude as not in front: every key or message would go to a shell.
+        if s.claudeForeground == false {
+            notice = AgentWindowText.notForeground
+            return
+        }
         notice = nil
         busy = true
         let key = s.key

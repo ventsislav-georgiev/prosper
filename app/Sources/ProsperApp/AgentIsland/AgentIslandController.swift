@@ -630,7 +630,7 @@ final class AgentIslandController {
     private func refuseBusy(_ key: AgentSessionKey, _ text: String) {
         if let now = store?.actions[key], ![AgentIsland.restartBusyText, AgentIsland.stopBusyText, AgentIsland.killBusyText,
                                             AgentIsland.renameBusyText, AgentIsland.messageBusyText,
-                                            AgentIsland.autoAllowedText].contains(now) {
+                                            AgentIsland.autoAllowedText, AgentIsland.notInFrontText].contains(now) {
             return
         }
         store?.actions[key] = text
@@ -1340,6 +1340,8 @@ final class AgentIslandController {
     /// The buttons go at once, so a second click can never queue a second key;
     /// the guard re-reads and sends at most the one digit; a key in flight sends nothing.
     func answer(_ s: AgentSession, _ p: AgentPrompt, _ o: AgentPromptOption) {
+        // #1135: dch lists its Claude as not in front (suspended, in the background): the digit would go to a shell.
+        if notInFront(s.key) { return refuseBusy(s.key, AgentIsland.notInFrontText) }
         guard let gen = beginHuman(s, p) else {
             // #927 (QA #755 INFO-4): a check or another action holds the session: nothing is sent, the row says so.
             if inFlight.contains(s.key) { refuseBusy(s.key, Self.answerBusyText) }
@@ -1451,6 +1453,10 @@ final class AgentIslandController {
     }
     /// #927: a card click refused while the session is held, worded like AgentIsland.messageBusyText.
     static let answerBusyText = "Answer not sent: another job is running"
+    /// #1135: the newest list says the session's Claude is not the foreground job (false; nil keeps today's rule).
+    func notInFront(_ key: AgentSessionKey) -> Bool {
+        store?.sessions.first { $0.key == key }?.claudeForeground == false
+    }
     /// The same prompt back this soon after its answer is the human's (the loop guard).
     static let loopWindow: TimeInterval = 30
     /// An answered session still listed blocked has its screen read again this soon.
@@ -1514,12 +1520,12 @@ final class AgentIslandController {
         }
     }
 
-    /// #781 rider seam: whether a list of the session's dir read now still names one Claude Code in its row.
+    /// #781 rider seam: whether a list of the session's dir read now still names one Claude Code in its row. (#1135: and in front).
     /// Called on `queue` right before an automatic send (a fork, bounded by DchCommand.islandTimeout; a timeout
     /// lists nothing, so nothing is typed). Under XCTest true, so no row runs a real dch; rows swap it.
     var claudeNow: @Sendable (AgentSessionKey) -> Bool = { key in
         NSClassFromString("XCTestCase") != nil || AgentIsland.list(dirs: [key.dir]).contains {
-            $0.key == key && $0.fresh && $0.claudeSessionID?.isEmpty == false
+            $0.key == key && $0.claudeReading
         }
     }
 
@@ -1585,7 +1591,8 @@ final class AgentIslandController {
         guard let store else { return }
         // #935: no id (another program, two Claudes, an older dch, no list yet) is not Claude Code.
         // #1133: nor is a row kept from an earlier list while both list forms fail (not fresh).
-        let claude = Set(store.sessions.filter { $0.fresh && $0.claudeSessionID?.isEmpty == false }.map(\.key))
+        // #1135: nor is one dch lists as not in front (claude_foreground false: a shell reads the keys).
+        let claude = Set(store.sessions.filter(\.claudeReading).map(\.key))
         // QA #849 INFO-5: before the setting's guard, so a check an off-toggle orphaned reads a fresh set at its
         // send when the setting is back on before autoAllowChanged runs here.
         claudeKeys.withLock { $0 = claude }
@@ -1807,6 +1814,7 @@ final class AgentIslandController {
         AgentSession(key: s.key, alias: s.alias, activity: s.activity, state: .working,
                      agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch,
                      autoAllowed: s.autoAllowed, claudeSessionID: s.claudeSessionID, transcriptPath: s.transcriptPath,
+                     claudeForeground: s.claudeForeground,
                      cwd: s.cwd, harness: s.harness)   // #1220: the phone's list frame carries it
     }
 
