@@ -450,10 +450,10 @@ async function gunzipCapped(bytes: Uint8Array, cap: number): Promise<Uint8Array 
  *  gunzipCapped): at most `cap` bytes plus one chunk are held. A missing body reads as "". */
 async function readCapped(stream: ReadableStream<Uint8Array> | null, cap: number): Promise<string | "too_large"> {
   if (!stream) return "";
-  const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
+    const reader = stream.getReader(); // inside the try: a locked stream reads as empty, not a 500
     for (let r = await reader.read(); !r.done; r = await reader.read()) {
       total += r.value.length;
       if (total > cap) {

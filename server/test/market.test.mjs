@@ -749,10 +749,8 @@ test("publish body: the largest acceptable publish (exactly the bound) is accept
 test("publish body: a malformed Content-Length reads as absent and a small valid body is accepted", async () => {
   for (const cl of ["abc", "-1", "1e3", "", "12 ", "0x10"]) {
     const t = setup();
-    const r = await post(t, okBody(), { "Content-Length": cl }).catch((e) => e);
-    // the runtime may itself reject a header it cannot frame; whatever answers, it is never a 500
-    assert.ok(r.status === 200 || r.status === 400 || r instanceof Error, `${cl}: ${r.status}`);
-    if (r.status) assert.equal(r.status, 200, `${cl}: ${r.text}`);
+    const r = await post(t, okBody(), { "Content-Length": cl });
+    assert.equal(r.status, 200, `${cl}: ${r.text}`);
   }
   const t = setup();
   const bad = await post(t, "{not json");
@@ -762,6 +760,26 @@ test("publish body: a malformed Content-Length reads as absent and a small valid
 
 test("publish body: a declared Content-Length of exactly the bound is not refused by the header check", async () => {
   const t = setup();
-  const r = await post(t, okBody(), { "Content-Length": "550246" }).catch((e) => e);
-  assert.ok(r instanceof Error || r.status === 200, `${r.status}`); // the runtime may reject a header that does not match the body
+  const r = await post(t, okBody(), { "Content-Length": "550246" });
+  assert.equal(r.status, 200, r.text);
+});
+
+test("publish body: a body stream that is already locked reads as an empty body, 400 invalid_body, nothing spent", async () => {
+  const t = setup();
+  const body = new ReadableStream({ pull: (ctl) => ctl.close() });
+  body.getReader(); // an earlier reader holds the lock
+  const req = new Request("http://localhost/publish", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN[PUB]}`, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  Object.defineProperty(req, "body", { value: body });
+  // called directly: the harness's req() passes an init, which makes Hono rebuild the Request and drop the lock
+  const res = await market.request(req, undefined, t.env, { waitUntil() {}, passThroughOnException() {}, props: {} });
+  assert.equal(body.locked, true, "the lock reached the app");
+  const r = { status: res.status, text: await res.text() };
+  assert.equal(r.status, 400, r.text);
+  assert.deepEqual(JSON.parse(r.text), { error: "invalid_body" });
+  assert.deepEqual(marketSql(t), [], "no market D1 statement");
+  assert.equal(t.kv.size, 0, "no KV write");
 });
