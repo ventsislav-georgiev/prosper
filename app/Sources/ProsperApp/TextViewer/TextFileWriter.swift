@@ -82,12 +82,14 @@ enum TextFileWriter {
     /// branch, on the opened and checked descriptor, right before the comparison. `beforeRead` is a test seam too: called once
     /// inside the comparison (either branch), between its fstat and its read. `identity` is what the load opened (nil: not
     /// checked): only its path is compared with the one resolved now; it is never opened, created or removed.
-    /// `copyAttributes` (file, temp) and `syncFolder` (folder) are seams over the copy step and the folder fsync: 0 or an errno.
+    /// `copyAttributes` (file, temp, copyfile flags), `setFlags` (temp, flags) and `syncFolder` (folder) are seams over the copy
+    /// step, the temp's flags and the folder fsync: 0 or an errno.
     static func save(_ text: String, encoding: TextViewerDocument.Encoding, to url: URL, expected: Fingerprint,
                      overwrite: Bool = false, identity: TextViewerDocument.Identity? = nil,
                      writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(),
                      stat statAt: Stat = { p in var s = stat(); return (lstat(p, &s) == 0 ? 0 : errno, s) },
-                     copyAttributes: (String, String) -> Int32 = TextFileWriter.copyAttributes,
+                     copyAttributes: (String, String, copyfile_flags_t) -> Int32 = TextFileWriter.copyAttributes,
+                     setFlags: (String, UInt32) -> Int32 = TextFileWriter.setFlags,
                      syncFolder: (String) -> Int32 = TextFileWriter.syncFolder,
                      beforeCompare: () -> Void = {}, beforeRead: () -> Void = {}) -> Result<Fingerprint, Failure> {
         guard let bytes = encode(text, encoding: encoding) else { return .failure(.lossy) }
@@ -115,8 +117,10 @@ enum TextFileWriter {
         // file of another group is written in place, as for another owner.
         let folderPath = (path as NSString).deletingLastPathComponent
         let (folderCode, folder) = statAt(folderPath + "/.")
-        // A file with any flag (hidden, no-dump, ...) is written in place: the rename's new inode would have none (no chflags here).
-        atomic: if st.st_uid == geteuid() && st.st_nlink == 1 && st.st_flags == 0 && folderCode == 0 && folder.st_gid == st.st_gid {
+        // R1108-r7-a: only the flags the owner sets stay atomic (hidden and no-dump set on the temp below; the kernel carries
+        // UF_TRACKED and the document id over the rename itself). Any other flag (system, compressed, dataless, unknown): in place.
+        let ownerFlags = UInt32(UF_NODUMP | UF_HIDDEN | UF_TRACKED)
+        atomic: if st.st_uid == geteuid() && st.st_nlink == 1 && st.st_flags & ~ownerFlags == 0 && folderCode == 0 && folder.st_gid == st.st_gid {
             // Atomic: a temp with the final mode, the xattrs and ACL copied onto it, the comparison, the rename.
             let target = URL(fileURLWithPath: path)
             let temp: URL
@@ -136,12 +140,22 @@ enum TextFileWriter {
             var crAttr = attrlist(bitmapcount: u_short(ATTR_BIT_MAP_COUNT), reserved: 0, commonattr: attrgroup_t(ATTR_CMN_CRTIME), volattr: 0, dirattr: 0, fileattr: 0, forkattr: 0)
             _ = setattrlist(temp.path, &crAttr, &crtime, MemoryLayout<timespec>.size, UInt32(FSOPT_NOFOLLOW))
             let failure: Failure
-            let copied = copyAttributes(path, temp.path)
+            let all = copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL | COPYFILE_NOFOLLOW_SRC | COPYFILE_NOFOLLOW_DST)
+            var copied = copyAttributes(path, temp.path, all)
+            // R1108-r7-b: a volume without access lists (exFAT, FAT, some SMB) refuses the ACL step: once more with the xattrs
+            // alone, only when the file has no access list that this would drop.
+            if copied == ENOTSUP || copied == EOPNOTSUPP, !hasAccessList(path) {
+                copied = copyAttributes(path, temp.path, all & ~copyfile_flags_t(COPYFILE_ACL))
+            }
             if copied != 0 {
                 failure = .failed(.copyAttributes, copied)
             } else if !overwrite, let changed = compare(path, expected, beforeRead) {
                 failure = changed
             } else {
+                // Right before the rename. Never UF_TRACKED: a tracked temp would give the file a new document id. A failure drops
+                // the flags and stays atomic, as saves before round 7 did: the bytes matter more than a hint.
+                let carry = st.st_flags & UInt32(UF_NODUMP | UF_HIDDEN)
+                if carry != 0 { _ = setFlags(temp.path, carry) }
                 do {
                     try writer.replace(target, with: temp)
                     // R1108-q2, after the rename only. Not a failed save: the bytes are written and named; the result has no
@@ -151,13 +165,14 @@ enum TextFileWriter {
                 } catch { failure = .failed(.replace, errnoOf(error)) }
             }
             _ = unlink(temp.path)
-            // A volume that cannot hold the access list or the xattrs: in place keeps them, and saves a file that has none.
+            // A volume that cannot hold the xattrs, or the access list the file has: in place keeps them.
             // Only these two: on ENOSPC and the like in place could truncate and then fail.
             if copied == ENOTSUP || copied == EOPNOTSUPP { break atomic }
             return .failure(failure)
         }
 
-        // In place (another owner or group, hard links, flags, a folder the person cannot write, a volume without access lists):
+        // In place (another owner or group, hard links, a flag the owner cannot set, a folder the person cannot write, a volume
+        // without the xattrs or the access list the file has):
         // keeps the owner, the group, the inode, its flags and the links; not atomic.
         // ONE descriptor (R1108-q1): the identity, the comparison, the truncate and the write all see the opened file.
         // No O_TRUNC at the open: a file swapped in after the stat must not be emptied before the check.
@@ -193,10 +208,23 @@ enum TextFileWriter {
         return .success(digest(bytes))
     }
 
-    /// The copy step's default: xattrs and the access list from the file onto the temp, no link followed. 0 or an errno.
-    static func copyAttributes(_ file: String, _ temp: String) -> Int32 {
-        guard copyfile(file, temp, nil, copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL | COPYFILE_NOFOLLOW_SRC | COPYFILE_NOFOLLOW_DST)) != 0 else { return 0 }
+    /// The copy step's default: copyfile from the file onto the temp with `flags` (save passes the no-follow ones). 0 or an errno.
+    static func copyAttributes(_ file: String, _ temp: String, _ flags: copyfile_flags_t) -> Int32 {
+        guard copyfile(file, temp, nil, flags) != 0 else { return 0 }
         return errno != 0 ? errno : EIO
+    }
+
+    /// The temp's flags default: the one lchflags of this file, on the product's own sibling temp, masked to hidden and no-dump
+    /// (a belt: never a system flag, never UF_TRACKED). 0 or an errno.
+    static func setFlags(_ temp: String, _ flags: UInt32) -> Int32 {
+        lchflags(temp, flags & UInt32(UF_NODUMP | UF_HIDDEN)) == 0 ? 0 : errno
+    }
+
+    /// A read only: false when the file surely has no extended access list (none, or a volume that holds none).
+    private static func hasAccessList(_ path: String) -> Bool {
+        guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return errno != ENOENT && errno != ENOTSUP && errno != EOPNOTSUPP }
+        acl_free(UnsafeMutableRawPointer(acl))
+        return true
     }
 
     /// The folder fsync's default: opened read-only as a folder, fsync'd, closed. 0 or an errno.

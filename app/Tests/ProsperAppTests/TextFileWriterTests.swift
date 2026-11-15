@@ -830,28 +830,48 @@ final class TextFileWriterTests: XCTestCase {
         XCTAssertEqual(names(dir), ["a.txt"])
     }
 
-    /// The flags: UF_HIDDEN set with chflags(2) on the row's own file (cleared in the defer, the clear asserted) is kept: in place,
-    /// same inode. UF_NODUMP through the stat seam on another file with no real flag: in place too, no temp.
-    func testAHiddenOrNoDumpFileIsWrittenInPlaceAndKeepsItsFlags() throws {
+    /// The flags the owner sets (R1108-r7-a, round 7b): UF_HIDDEN set with chflags(2) on the row's own file (cleared in the defer,
+    /// the clear asserted) is saved ATOMICALLY with the flag on the new inode; a write failure through the writer leaves the old
+    /// bytes whole and no temp. UF_NODUMP (and UF_TRACKED) through the stat seam: atomic, the flags seam asked for UF_NODUMP only,
+    /// on the sibling temp, after the copy step and the comparison, right before the rename.
+    func testAHiddenOrNoDumpFileIsSavedAtomicallyAndKeepsItsFlags() throws {
         let dir = tempDir("tfw-flags")
         let url = try file("a.txt", Array("old".utf8), in: dir)
         let before = info(url)
         XCTAssertEqual(chflags(url.path, before.st_flags | UInt32(UF_HIDDEN)), 0)
         defer { XCTAssertEqual(chflags(url.path, before.st_flags), 0, "the row's own flag is cleared") }
-        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8))), .success(W.digest(Array("new".utf8))))
-        XCTAssertNotEqual(info(url).st_flags & UInt32(UF_HIDDEN), 0, "the hidden flag is kept")
-        XCTAssertEqual(info(url).st_ino, before.st_ino, "same inode: written in place")
-        XCTAssertEqual(bytes(url), Array("new".utf8))
-
-        let other = try file("b.txt", Array("old".utf8), in: dir)
-        let ino = info(other).st_ino
         let calls = Calls()
-        XCTAssertEqual(W.save("new", encoding: .utf8, to: other, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: calls),
-                              stat: seam { $0.st_flags |= UInt32(UF_NODUMP) }), .success(W.digest(Array("new".utf8))))
-        XCTAssertEqual(calls.all, [], "no temp, no replace")
-        XCTAssertEqual(info(other).st_ino, ino, "same inode: written in place")
-        XCTAssertEqual(bytes(other), Array("new".utf8))
-        XCTAssertEqual(names(dir), ["a.txt", "b.txt"])
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: calls)),
+                       .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(calls.all, ["writeTemp", "replace"], "atomic")
+        XCTAssertNotEqual(info(url).st_ino, before.st_ino, "a new inode")
+        XCTAssertNotEqual(info(url).st_flags & UInt32(UF_HIDDEN), 0, "the hidden flag is on the new file")
+        XCTAssertEqual(bytes(url), Array("new".utf8))
+        let failing = Calls()
+        XCTAssertEqual(W.save("newer", encoding: .utf8, to: url, expected: W.digest(Array("new".utf8)), writer: FailingTempWriter(code: ENOSPC, calls: failing)),
+                       .failure(.failed(.temp, ENOSPC)))
+        XCTAssertEqual(failing.all, ["writeTemp"], "never a replace")
+        XCTAssertEqual(bytes(url), Array("new".utf8), "the old bytes are whole")
+        XCTAssertNotEqual(info(url).st_flags & UInt32(UF_HIDDEN), 0)
+
+        let all = copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL | COPYFILE_NOFOLLOW_SRC | COPYFILE_NOFOLLOW_DST)
+        for flags in [UInt32(UF_NODUMP), UInt32(UF_NODUMP | UF_TRACKED)] {
+            let other = try file("b\(flags).txt", Array("old".utf8), in: dir)
+            let ino = info(other).st_ino
+            let asked = Calls()
+            XCTAssertEqual(W.save("new", encoding: .utf8, to: other, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: asked),
+                                  stat: seam { $0.st_flags |= flags }, copyAttributes: copying(asked), setFlags: flagging(asked, other, 0),
+                                  beforeRead: { asked.add("compare") }), .success(W.digest(Array("new".utf8))))
+            XCTAssertEqual(asked.all, ["writeTemp", "copy \(all)", "compare", "flags \(UF_NODUMP)", "replace"], "\(flags)")
+            XCTAssertNotEqual(info(other).st_ino, ino, "a new inode: atomic")
+            XCTAssertEqual(bytes(other), Array("new".utf8))
+        }
+        let plain = try file("c.txt", Array("old".utf8), in: dir)
+        let none = Calls()
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: plain, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: none),
+                              setFlags: flagging(none, plain, 0)), .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(none.all, ["writeTemp", "replace"], "no flag: the flags seam is never asked")
+        XCTAssertEqual(names(dir), ["a.txt", "b1.txt", "b65.txt", "c.txt"], "no temp left")
     }
 
     /// An allow-read entry for uid 1 (a system account) set in process on the row's own file. 0 or an errno.
@@ -881,13 +901,13 @@ final class TextFileWriterTests: XCTestCase {
             let ino = info(url).st_ino
             let calls = Calls()
             XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: calls),
-                                  copyAttributes: { _, _ in code }), .success(W.digest(Array("new".utf8))), "\(code)")
+                                  copyAttributes: { _, _, _ in code }), .success(W.digest(Array("new".utf8))), "\(code)")
             XCTAssertEqual(calls.all, ["writeTemp"], "a temp, no replace")
             XCTAssertEqual(info(url).st_ino, ino, "same inode: written in place")
             XCTAssertEqual(bytes(url), Array("new".utf8))
         }
         XCTAssertEqual(aclText(listed), want, "the access list is kept")
-        XCTAssertEqual(W.save("newer", encoding: .utf8, to: plain, expected: W.digest(Array("new".utf8)), copyAttributes: { _, _ in ENOSPC }),
+        XCTAssertEqual(W.save("newer", encoding: .utf8, to: plain, expected: W.digest(Array("new".utf8)), copyAttributes: { _, _, _ in ENOSPC }),
                        .failure(.failed(.copyAttributes, ENOSPC)))
         XCTAssertEqual(bytes(plain), Array("new".utf8))
         XCTAssertEqual(names(dir), ["listed.txt", "plain.txt"], "no temp left")
@@ -923,5 +943,158 @@ final class TextFileWriterTests: XCTestCase {
         XCTAssertEqual(calls.all, ["writeTemp", "writeTemp", "writeTemp"], "never a replace")
         XCTAssertEqual(info(url).st_ino, ino, "same inode: written in place")
         XCTAssertEqual(names(dir), ["a.txt"])
+    }
+
+    // MARK: round 7b (R1108-r7-a the flags the owner sets stay atomic, R1108-r7-b the copy retried with the xattrs alone)
+
+    /// The flags seam: records "flags <value>" when asked for a sibling temp of `file` ("flags on <path>" for anything else, the
+    /// file itself included) and answers `code`; no real call.
+    private func flagging(_ calls: Calls, _ file: URL, _ code: Int32) -> (String, UInt32) -> Int32 {
+        let folder = file.deletingLastPathComponent().path, prefix = ".\(file.lastPathComponent).prosper-"
+        return { p, v in
+            let temp = (p as NSString).deletingLastPathComponent == folder && (p as NSString).lastPathComponent.hasPrefix(prefix)
+            calls.add(temp ? "flags \(v)" : "flags on \(p)")
+            return code
+        }
+    }
+
+    /// The copy seam: records "copy <flags>" and answers `answer(flags)`, or the real copy with those flags when that is nil.
+    private func copying(_ calls: Calls, _ answer: @escaping (copyfile_flags_t) -> Int32? = { _ in nil }) -> (String, String, copyfile_flags_t) -> Int32 {
+        { f, t, flags in calls.add("copy \(flags)"); return answer(flags) ?? W.copyAttributes(f, t, flags) }
+    }
+
+    /// The document id (ATTR_CMN_DOCUMENT_ID, a read with getattrlist; it needs FSOPT_ATTR_CMN_EXTENDED). 0: none or unreadable.
+    private func documentID(_ url: URL) -> UInt32 {
+        var list = attrlist(bitmapcount: u_short(ATTR_BIT_MAP_COUNT), reserved: 0, commonattr: attrgroup_t(ATTR_CMN_DOCUMENT_ID), volattr: 0,
+                            dirattr: 0, fileattr: 0, forkattr: 0)
+        var buf: (UInt32, UInt32) = (0, 0)
+        guard getattrlist(url.path, &list, &buf, MemoryLayout<(UInt32, UInt32)>.size, UInt32(FSOPT_NOFOLLOW | FSOPT_ATTR_CMN_EXTENDED)) == 0 else { return 0 }
+        return buf.1
+    }
+
+    /// Any other flag (system, compressed, dataless, an unknown bit; through the stat seam only, no real flag is set) goes in
+    /// place as round 7 did: no temp, the flags seam never asked, same inode.
+    func testAFlagTheOwnerCannotSetIsWrittenInPlace() throws {
+        let dir = tempDir("tfw-flags-rest")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        let ino = info(url).st_ino
+        var last = Array("old".utf8)
+        for flags in [UInt32(SF_ARCHIVED), UInt32(UF_COMPRESSED), UInt32(SF_DATALESS), UInt32(UF_HIDDEN | SF_ARCHIVED), UInt32(UF_TRACKED | 0x100)] {
+            let calls = Calls()
+            let text = "new \(flags)"
+            XCTAssertEqual(W.save(text, encoding: .utf8, to: url, expected: W.digest(last), writer: RecordingWriter(calls: calls),
+                                  stat: seam { $0.st_flags |= flags }, setFlags: flagging(calls, url, 0)), .success(W.digest(Array(text.utf8))), "\(flags)")
+            XCTAssertEqual(calls.all, [], "no temp, no flags: in place, \(flags)")
+            XCTAssertEqual(bytes(url), Array(text.utf8))
+            last = Array(text.utf8)
+        }
+        XCTAssertEqual(info(url).st_ino, ino, "same inode: written in place")
+        XCTAssertEqual(names(dir), ["a.txt"])
+    }
+
+    /// A flags step that fails (EPERM through the seam, no real call) drops the flag and stays ATOMIC (the coordinator's ruling):
+    /// the new bytes on a new inode without the hidden flag, no temp left.
+    func testAFailedFlagStepDropsTheFlagAndStaysAtomic() throws {
+        let dir = tempDir("tfw-flags-eperm")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        let before = info(url)
+        XCTAssertEqual(chflags(url.path, before.st_flags | UInt32(UF_HIDDEN)), 0)
+        defer { XCTAssertEqual(chflags(url.path, before.st_flags), 0, "the row's own flag is cleared") }
+        let calls = Calls()
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: calls),
+                              setFlags: flagging(calls, url, EPERM)), .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(calls.all, ["writeTemp", "flags \(UF_HIDDEN)", "replace"])
+        XCTAssertNotEqual(info(url).st_ino, before.st_ino, "a new inode: atomic")
+        XCTAssertEqual(info(url).st_flags & UInt32(UF_HIDDEN), 0, "the flag is dropped")
+        XCTAssertEqual(bytes(url), Array("new".utf8))
+        XCTAssertEqual(names(dir), ["a.txt"], "no temp left")
+    }
+
+    /// The measurement on the row's own file: the owner sets UF_HIDDEN, UF_NODUMP and UF_TRACKED (each cleared, the clear
+    /// asserted). A tracked file, and a tracked and hidden one, is saved atomically and keeps UF_TRACKED and its document id (the
+    /// kernel carries both over the rename); the real flags call is asked for the hidden flag only, never the tracked one.
+    func testTheOwnerSetsHiddenNoDumpAndTrackedAndATrackedFileKeepsItsDocumentID() throws {
+        let dir = tempDir("tfw-tracked")
+        let probe = try file("probe.txt", Array("old".utf8), in: dir)
+        let clean = info(probe).st_flags
+        for flag in [UF_HIDDEN, UF_NODUMP, UF_TRACKED] {
+            XCTAssertEqual(chflags(probe.path, clean | UInt32(flag)), 0, "the owner sets \(flag)")
+            XCTAssertNotEqual(info(probe).st_flags & UInt32(flag), 0)
+            XCTAssertEqual(chflags(probe.path, clean), 0, "the row's own flag is cleared")
+        }
+        let mask = UInt32(UF_NODUMP | UF_HIDDEN | UF_TRACKED)
+        for flags in [UInt32(UF_TRACKED), UInt32(UF_TRACKED | UF_HIDDEN)] {
+            let url = try file("t\(flags).txt", Array("old".utf8), in: dir)
+            let before = info(url).st_flags
+            XCTAssertEqual(chflags(url.path, before | flags), 0)
+            defer { XCTAssertEqual(chflags(url.path, before), 0, "the row's own flag is cleared") }
+            let id = documentID(url)
+            XCTAssertNotEqual(id, 0, "a tracked file has a document id")
+            let ino = info(url).st_ino
+            let calls = Calls()
+            XCTAssertEqual(W.save("new", encoding: .utf8, to: url, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: calls),
+                                  setFlags: { p, v in calls.add("flags \(v)"); return W.setFlags(p, v) }), .success(W.digest(Array("new".utf8))))
+            XCTAssertEqual(calls.all, flags == UInt32(UF_TRACKED) ? ["writeTemp", "replace"] : ["writeTemp", "flags \(UF_HIDDEN)", "replace"])
+            XCTAssertNotEqual(info(url).st_ino, ino, "a new inode: atomic")
+            XCTAssertEqual(info(url).st_flags & mask, flags, "the flags are on the new file")
+            XCTAssertEqual(documentID(url), id, "the document id is kept")
+            XCTAssertEqual(bytes(url), Array("new".utf8))
+        }
+        XCTAssertEqual(names(dir), ["probe.txt", "t32832.txt", "t64.txt"], "no temp left")
+    }
+
+    /// R1108-r7-b through the copy seam (no other volume): the first try (xattrs and access list) answers ENOTSUP or EOPNOTSUPP and
+    /// the second (the xattrs alone, the same no-follow flags) succeeds: atomic, a new inode, the xattr copied. A file with an
+    /// access list (set in process) is never retried: in place, the list kept. Another errno from either try fails, nothing written.
+    func testACopyStepRetriedWithTheXattrsAloneStaysAtomic() throws {
+        let dir = tempDir("tfw-copy-retry")
+        let all = copyfile_flags_t(COPYFILE_XATTR | COPYFILE_ACL | COPYFILE_NOFOLLOW_SRC | COPYFILE_NOFOLLOW_DST)
+        let xattrs = all & ~copyfile_flags_t(COPYFILE_ACL)
+        let plain = try file("plain.txt", Array("old".utf8), in: dir)
+        let value: [UInt8] = Array("example".utf8)
+        XCTAssertEqual(setxattr(plain.path, "com.example.tag", value, value.count, 0, 0), 0)
+        let listed = try file("listed.txt", Array("old".utf8), in: dir)
+        XCTAssertEqual(allowRead(listed), 0)
+        let want = aclText(listed)
+        XCTAssertFalse(want.isEmpty)
+        var last = Array("old".utf8)
+        for code in [ENOTSUP, EOPNOTSUPP] {
+            let ino = info(plain).st_ino
+            let calls = Calls()
+            let text = "new \(code)"
+            XCTAssertEqual(W.save(text, encoding: .utf8, to: plain, expected: W.digest(last), writer: RecordingWriter(calls: calls),
+                                  copyAttributes: copying(calls) { $0 & copyfile_flags_t(COPYFILE_ACL) != 0 ? code : nil }),
+                           .success(W.digest(Array(text.utf8))), "\(code)")
+            XCTAssertEqual(calls.all, ["writeTemp", "copy \(all)", "copy \(xattrs)", "replace"], "\(code)")
+            XCTAssertNotEqual(info(plain).st_ino, ino, "a new inode: atomic")
+            XCTAssertEqual(getxattr(plain.path, "com.example.tag", nil, 0, 0, 0), value.count, "the xattr is copied by the retry")
+            XCTAssertEqual(bytes(plain), Array(text.utf8))
+            last = Array(text.utf8)
+        }
+        let ino = info(listed).st_ino
+        let kept = Calls()
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: listed, expected: W.digest(Array("old".utf8)), writer: RecordingWriter(calls: kept),
+                              copyAttributes: copying(kept) { $0 & copyfile_flags_t(COPYFILE_ACL) != 0 ? ENOTSUP : nil }),
+                       .success(W.digest(Array("new".utf8))))
+        XCTAssertEqual(kept.all, ["writeTemp", "copy \(all)"], "no retry (it would drop the list), no replace")
+        XCTAssertEqual(info(listed).st_ino, ino, "same inode: written in place")
+        XCTAssertEqual(aclText(listed), want, "the access list is kept")
+
+        let first = Calls()
+        XCTAssertEqual(W.save("newer", encoding: .utf8, to: plain, expected: W.digest(last), writer: RecordingWriter(calls: first),
+                              copyAttributes: copying(first) { _ in ENOSPC }), .failure(.failed(.copyAttributes, ENOSPC)))
+        XCTAssertEqual(first.all, ["writeTemp", "copy \(all)"], "one try")
+        let second = Calls()
+        XCTAssertEqual(W.save("newer", encoding: .utf8, to: plain, expected: W.digest(last), writer: RecordingWriter(calls: second),
+                              copyAttributes: copying(second) { $0 & copyfile_flags_t(COPYFILE_ACL) != 0 ? ENOTSUP : ENOSPC }),
+                       .failure(.failed(.copyAttributes, ENOSPC)))
+        XCTAssertEqual(second.all, ["writeTemp", "copy \(all)", "copy \(xattrs)"], "the retry's errno fails, no replace")
+        XCTAssertEqual(bytes(plain), last, "the old bytes are whole")
+        XCTAssertEqual(W.save("newer", encoding: .utf8, to: listed, expected: W.digest(Array("new".utf8)), copyAttributes: { _, _, _ in ENOSPC }),
+                       .failure(.failed(.copyAttributes, ENOSPC)))
+        XCTAssertEqual(bytes(listed), Array("new".utf8))
+        XCTAssertEqual(W.save("newest", encoding: .utf8, to: listed, expected: W.digest(Array("new".utf8))), .success(W.digest(Array("newest".utf8))))
+        XCTAssertEqual(aclText(listed), want, "the access list is kept in every case")
+        XCTAssertEqual(names(dir), ["listed.txt", "plain.txt"], "no temp left")
     }
 }
