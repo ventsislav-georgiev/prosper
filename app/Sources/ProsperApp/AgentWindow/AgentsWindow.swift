@@ -368,7 +368,11 @@ final class AgentsNSWindow: NSWindow {
         // #900 B2 step 5a (7.5): a divider's down, drags and up go to the model before the first-click rule (gate on only).
         if AgentPaneLayout.splitsEnabled, let model, [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown].contains(event.type) {
             let r = contentLayoutRect, at = event.type == .keyDown ? CGPoint.zero : event.locationInWindow
-            if Self.divider(event, model, at: CGPoint(x: at.x - r.minX, y: r.maxY - at.y), in: r.size) { return }
+            if Self.divider(event, model, at: CGPoint(x: at.x - r.minX, y: r.maxY - at.y), in: r.size) {
+                // #900 B2 step 6b2c: the swallowed down asks for key and front as the focusing down does (its drags and up never).
+                if Self.asksKey(focusing: event.type == .leftMouseDown, isKey: isKeyWindow) { raise(self) }
+                return
+            }
         }
         var focusing = false
         if event.type == .leftMouseDown, let model {
@@ -923,7 +927,7 @@ struct AgentDetailView: View {
             titled(row.title) {
                 AgentHistoryDetail(row: row, record: r, store: model.store, refusal: model.refusalText(row.id),
                                    act: { model.act($0, r) })
-                    .overlay(alignment: .top) { confirmStrip }   // #829 G8: Remove asks, over the pane's top
+                    .overlay(alignment: .top) { VStack(spacing: 0) { paneRefusalLine; confirmStrip } }   // #829 G8: Remove asks, over the pane's top
             }
         } else if let title = AgentPanePlaceholder.title(model.content) {
             // 4.2 (QA 956 R1217-a): a pane that holds a target whose session is gone says so by name; the list (and Pick
@@ -932,9 +936,10 @@ struct AgentDetailView: View {
             titled(title) {
                 AgentPanePlaceholder(title: title, close: model.layout.panes.count > 1 ? { model.closePane(pane) } : nil,
                                      pick: { model.pickAnother(pane) })
+                    .overlay(alignment: .top) { paneRefusalLine }
             }
         } else {
-            titled("") { emptyPane }
+            titled("") { emptyPane.overlay(alignment: .top) { paneRefusalLine } }
         }
     }
 
@@ -998,10 +1003,23 @@ struct AgentDetailView: View {
             }
     }
 
+    /// #900 B2 step 6b2c (R900-6b1-4, 3.3, 224): a refused split's notice (a fixed product string) belongs to the focused
+    /// pane, the one this view draws; it wins over the window's refusal and the store's notice in the same slot. Gate on
+    /// only: a refusal left from before the gate went off draws nothing. Gone when the model clears it (no timer).
+    var paneRefusalText: String? { AgentPaneLayout.splitsEnabled ? model.paneRefusal?.notice : nil }
+
+    /// The notice slot of a pane content with no session (History, the 4.2 placeholder, the empty pane): a top overlay,
+    /// so nothing moves. The key is never read (the refusal is set, so the store's notice is not asked).
+    @ViewBuilder var paneRefusalLine: some View {
+        if let store = model.store, let text = paneRefusalText {
+            AgentNoticeLine(store: store, key: AgentSessionKey(dir: "", name: ""), refusal: text)
+        }
+    }
+
     func overTop(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
         VStack(spacing: 0) {
             if let store = model.store {
-                AgentNoticeLine(store: store, key: s.key, refusal: model.refusalText(row.id),
+                AgentNoticeLine(store: store, key: s.key, refusal: paneRefusalText ?? model.refusalText(row.id),
                                 open: { model.openSelected() }, ended: model.focusedEnded)
             }
             confirmStrip
