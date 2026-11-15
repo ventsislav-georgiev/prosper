@@ -253,7 +253,11 @@ struct TranscriptAssembler {
         blocks = front + blocks
         // The page's calls still open (no result on the page, none seen after it) take the live results.
         // Bound: at most page.pending (<= maxPending); the oldest go first past maxPending, as in add().
-        let carried = page.pendingOrder.filter { id in page.pending[id] != nil && pending[id] == nil && !pairedIDs.contains(id) }
+        // R1269-b: an id the page's order holds twice (one call id used twice) is carried once, the first slot kept.
+        var seen = Set<String>()
+        let carried = page.pendingOrder.filter { id in
+            page.pending[id] != nil && pending[id] == nil && !pairedIDs.contains(id) && seen.insert(id).inserted
+        }
         for id in carried {
             guard let p = page.pending[id] else { continue }
             pending[id] = Pending(block: p.block + shift, thread: p.thread.map { $0 + shift }, name: p.name, input: p.input)

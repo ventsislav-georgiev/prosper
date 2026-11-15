@@ -1218,6 +1218,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: in Terminal mode, Command-plus and Command-minus make the terminal's text bigger
   or smaller (8 to 32 points) and Command-0 puts it back to the usual size; this Mac remembers the
   size.
+- Agent Sessions window, Focused view: the last turn's summary now keeps reading "Working" for as
+  long as the session is working, instead of flipping to "N steps" between two tool calls.
 
 ## v2.174.0
 
