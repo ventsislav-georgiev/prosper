@@ -31,6 +31,8 @@ final class DchFanCommandsTests: XCTestCase {
             var autos: [Int] = []
             /// Called on each reset: the release seam a row waits on with an expectation, never a poll.
             var onReset: (@Sendable () -> Void)?
+            /// Called right after each reset's late reply: a row that must end after its release's resetAll waits on it.
+            var onReplied: (@Sendable () -> Void)?
             func setLidSleepDisabled(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func setRemoteWake(_ json: String, withReply reply: @escaping (Bool) -> Void) { reply(true) }
             func setRemoteSessionActive(_ on: Bool, withReply reply: @escaping (Bool) -> Void) { reply(true) }
@@ -46,7 +48,7 @@ final class DchFanCommandsTests: XCTestCase {
                 resets += 1
                 onReset?()
                 nonisolated(unsafe) let reply = reply
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { reply(true) }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { [self] in reply(true); onReplied?() }
             }
         }
         let proxy = Proxy()
@@ -302,10 +304,17 @@ final class DchFanCommandsTests: XCTestCase {
             let reset = expectation(description: "the failed engage handed the fans back")
             reset.assertForOverFulfill = false   // the count below says it
             fake.proxy.onReset = { reset.fulfill() }
+            let replied = expectation(description: "the release's reset was answered")
+            fake.proxy.onReplied = { replied.fulfill() }
             let f = await run(ops(log: log, first: .unavailable), "fans.manual", "60%")
             XCTAssertEqual(Self.message(f), try XCTUnwrap(FanManualReply.unavailable.errorText))
             await fulfillment(of: [reset], timeout: 2)
             fake.proxy.onReset = nil
+            // Entry 1234: end only after the release's resetAll ended (its tail asks the helper identity), or that tail
+            // runs in a later class. The reply queued resetAll's resume on main before `replied`; the marker runs after it.
+            await fulfillment(of: [replied], timeout: 2)
+            fake.proxy.onReplied = nil
+            await Task { @MainActor in }.value
             XCTAssertEqual(fake.proxy.resets, 1, "the failed engage did not hand the fans back")
             XCTAssertTrue(FanControlHelper.connection === fake, "a manual-on release tore the connection down")
             XCTAssertTrue(Preferences.fanManualEnabled)

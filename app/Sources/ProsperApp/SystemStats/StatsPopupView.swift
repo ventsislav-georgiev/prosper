@@ -980,8 +980,7 @@ struct StatsPopupView: View {
         guard let targets = Self.manualSeed(saved: Preferences.fanTargets, fans: fansAdjustable) else {
             // #1223: nothing pinned; with manual on, Automatic (R1223-1) so the text stays true.
             fanError = Self.unreadFanText
-            if Preferences.fanManualEnabled { selectAutoAll() }
-            else { FanControlHelper.automaticGeneration &+= 1 }   // R1230-1, as refuseUnreadFans
+            Self.refuseUnreadInline { selectAutoAll() }   // R1230-1, as refuseUnreadFans
             return
         }
         fanError = nil
@@ -1143,6 +1142,21 @@ struct StatsPopupView: View {
         return unreadFanText
     }
 
+    /// R1233-1: the save of commitAll's work item, on main. Returns the targets saved before it (the last ASKED
+    /// targets, not the last landed, R1215-2). An Automatic since the commit (`automatic`, captured there) saves
+    /// nothing: manual is off, and commitBurst sends no pin.
+    @MainActor static func saveCommit(_ targets: [Int: Double], since automatic: Int) -> [Int: Double] {
+        let previous = Preferences.fanTargets
+        if automatic == FanControlHelper.automaticGeneration { Preferences.fanTargets = targets }
+        return previous
+    }
+
+    /// R1233-2: the popup's inline unread-fan refusal (confirmManualAll), as refuseUnreadFans: with manual on it
+    /// ends in Automatic (the view's `selectAutoAll`); with manual off only the Automatic counter moves (R1230-1).
+    @MainActor static func refuseUnreadInline(manualEnabled: Bool = Preferences.fanManualEnabled, selectAutoAll: () -> Void) {
+        if manualEnabled { selectAutoAll() } else { FanControlHelper.automaticGeneration &+= 1 }
+    }
+
     /// Debounce BOTH the slow root SMC writes and the UserDefaults persist: a slider
     /// drag emits a value per frame, and neither the daemon nor defaults should see
     /// that stream — one burst on settle sets all fans and persists the final targets.
@@ -1151,8 +1165,7 @@ struct StatsPopupView: View {
         FanControlHelper.userAdjusting = true
         let automatic = FanControlHelper.automaticGeneration   // F1230-a: at the commit, before the burst's first pin
         let work = DispatchWorkItem {
-            let previous = Preferences.fanTargets   // the last ASKED targets, not the last landed (R1215-2)
-            Preferences.fanTargets = targets
+            let previous = MainActor.assumeIsolated { Self.saveCommit(targets, since: automatic) }   // run on the main queue
             // The gesture is settled (0.4 s since the last frame); let reclaim
             // recovery arm again. A still-live drag re-raises it on its next frame.
             Task { @MainActor in FanControlHelper.userAdjusting = false }

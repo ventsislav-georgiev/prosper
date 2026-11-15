@@ -1092,6 +1092,8 @@ tag from the now-released section and put it on the new top draft.
   allowed for Prosper: clicking another icon of the same popover on the other display's menu bar
   now switches to it instead of only closing the open one; a click on any other Prosper icon still
   closes it (#1032)
+- Choosing Automatic for the fans right after moving the fan slider no longer leaves the slider's
+  speeds saved in the background (#1234)
 
 ## v2.174.0
 

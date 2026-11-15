@@ -308,7 +308,8 @@ enum FanControlHelper {
     /// R1223-a: bumped by every Automatic the user chooses, all through `StatsPopupView.selectAuto` (the popup's,
     /// the phone's "Fans: Auto", a refusal ending in Automatic). An engage started before a bump saves nothing
     /// and hands its pins back: the last word "Automatic" wins over an older Manual click.
-    static var automaticGeneration = 0
+    /// N1234-d: a run of late pins ends at an Automatic (manual goes off there, nothing re-applies).
+    static var automaticGeneration = 0 { didSet { lateLandings = 0 } }
     private static var reclaimRetryNotBefore = Date.distantPast
 
     /// Set by the popup while a slider drag / quick-button commit is in flight, so
@@ -372,9 +373,11 @@ enum FanControlHelper {
     }
 
     /// `setManual` keeping the helper's refusal apart from an unreachable helper.
-    /// `macOSRPM` (the test seam) is read off-main, and only on a refusal.
+    /// `macOSRPM` (the test seam) is read off-main, and only on a refusal. `arm` (R1234b-1, the test seam) arms the
+    /// recovery lifecycle, on main before the call; a row passes a no-op so no real timer or observer is installed.
     static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12, presentModal: Bool = true,
-                               macOSRPM: @escaping @Sendable (Int) -> Double? = { FanInfo.macOSRPM($0) }) async -> FanManualReply {
+                               macOSRPM: @escaping @Sendable (Int) -> Double? = { FanInfo.macOSRPM($0) },
+                               arm: () -> Void = { armRecoveryLifecycle() }) async -> FanManualReply {
         // R1218-1: never send an unusable speed; a failure every caller hands back on (not the latch).
         guard FanRPM.usable(rpm) else { return .writeFailed }
         // In flight from before the registration await: a willSleep while this engage
@@ -385,7 +388,7 @@ enum FanControlHelper {
         guard let c = opened else { return outcome == .needsApproval ? .needsApproval : .unavailable }
         // A manual write is manual intent, even before the popup saves the pref (it
         // saves it only after the first engage lands), so this arms unconditionally.
-        armRecoveryLifecycle()
+        arm()
         // Entry 1234: the method is chosen once, here on main, before the call: the reason method only while the
         // helper said it answers it. A verdict that changes while this engage is in flight does not re-send it.
         let reason: OSAllocatedUnfairLock<Int?>? = helperIdentity == .current ? OSAllocatedUnfairLock(initialState: nil) : nil
