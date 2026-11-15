@@ -65,6 +65,8 @@ struct TranscriptAssembler {
     var fromStart = true
     private var lastVersion = "unknown"
     private(set) var nextID = 0
+    /// R1269-a: the first line here is an image-only entry (add()'s test): prepend() gives it the "[image]" card.
+    private var leadsWithImageOnly = false
 
     private struct Pending { var block: Int; var thread: Int?; var name: String; var input: [String: Any] }
     private var pending: [String: Pending] = [:]
@@ -101,8 +103,10 @@ struct TranscriptAssembler {
         }
         // An image-only prompt after a step opens its own turn: a "[image]" prompt card leads it (a turn
         // starts only at a prompt). After a prompt or image already leading, it stays that lead's image.
-        if e.sidechain == nil, !e.items.isEmpty, let last = blocks.last, Self.endsLead(last),
-           e.items.allSatisfy({ if case .block(.image, _) = $0 { true } else { false } }) {
+        let imageOnly = e.sidechain == nil && !e.items.isEmpty
+            && e.items.allSatisfy({ if case .block(.image, _) = $0 { true } else { false } })
+        if blocks.isEmpty { leadsWithImageOnly = imageOnly }
+        if imageOnly, let last = blocks.last, Self.endsLead(last) {
             append(TranscriptBlock(id: take(), body: .user(Clip("[image]", cap: 16)), tier: .specific, version: v, source: source), sidechain: nil)
         }
         for item in e.items {
@@ -223,7 +227,10 @@ struct TranscriptAssembler {
     mutating func prepend(_ page: TranscriptAssembler) {
         // Below every id here, children included (a thread's first child takes its id before the thread).
         let floor = blocks.first.map { min($0.id, $0.children.first?.id ?? $0.id) } ?? nextID
-        let shift = floor - page.nextID
+        // R1269-a: a first line that is an image-only entry gets its card once the page above ends a lead; the page
+        // then ends one lower and the card takes the id just below the floor.
+        let lead = leadsWithImageOnly && page.blocks.last.map(Self.endsLead) == true ? blocks.first : nil
+        let shift = floor - page.nextID - (lead == nil ? 0 : 1)
         func renumber(_ b: TranscriptBlock) -> TranscriptBlock {
             var b = TranscriptBlock(id: b.id + shift, body: b.body, tier: b.tier, version: b.version,
                                     source: b.source, children: b.children, droppedChildren: b.droppedChildren, pending: b.pending,
@@ -232,6 +239,10 @@ struct TranscriptAssembler {
             return b
         }
         var front = page.blocks.map(renumber)
+        if let l = lead {
+            front.append(TranscriptBlock(id: floor - 1, body: .user(Clip("[image]", cap: 16)), tier: .specific, version: l.version, source: l.source))
+        }
+        if !page.blocks.isEmpty { leadsWithImageOnly = page.leadsWithImageOnly }
         var pairedIDs = Set<String>()
         for (id, p) in page.pending {
             guard let o = orphans.removeValue(forKey: id) else { continue }   // no result here: still open, carried below

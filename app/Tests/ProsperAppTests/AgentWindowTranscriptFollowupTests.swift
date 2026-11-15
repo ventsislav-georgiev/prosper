@@ -144,4 +144,57 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(inside.map(kind), ["user", "bash", "assistant"])
         XCTAssertEqual(TranscriptVerbosity.turns(inside).map(\.count), [3])
     }
+
+    // MARK: step C, R1269-a: the "[image]" card on a page loaded later
+
+    private func tfImageLed() -> TranscriptAssembler { asm([tfUser([tfImage]), say("Seen.")]) }
+
+    private func tfCard(_ b: TranscriptBlock?) -> Bool {
+        if case .user(let c)? = b?.body { c.text == "[image]" } else { false }
+    }
+
+    /// Red before: prepend() added no card, so the image-only first line folded into the page's turn (one turn of 5).
+    func testTranscriptFollowupAPageLoadedLaterGivesTheImageItsCard() {
+        var live = tfImageLed()
+        live.prepend(asm([tfPrompt("go"), toolUse("b", "Bash", ["command": "ls"]), toolResult("b", "f"), say("Done.")]))
+        XCTAssertEqual(live.blocks.map(kind), ["user", "bash", "assistant", "user", "image", "assistant"])
+        XCTAssertEqual(live.blocks.map(\.id), [-4, -3, -2, -1, 0, 1], "the page ends one lower; the card is just below the floor")
+        XCTAssertTrue(tfCard(live.blocks.first { $0.id == -1 }))
+        XCTAssertEqual(TranscriptVerbosity.turns(live.blocks).map(\.count), [3, 3])
+    }
+
+    /// Pins: a page whose last block is a prompt (no step) inserts nothing; ids as before.
+    func testTranscriptFollowupAPageEndingInAPromptAddsNoCard() {
+        var live = tfImageLed()
+        live.prepend(asm([tfPrompt("look")]))
+        XCTAssertEqual(live.blocks.map(kind), ["user", "image", "assistant"])
+        XCTAssertEqual(live.blocks.map(\.id), [-1, 0, 1])
+        XCTAssertEqual(TranscriptVerbosity.turns(live.blocks).map(\.count), [3])
+    }
+
+    /// Two prepends in a row: each image-only first line gets its card once a step is above it; ids unique, in order.
+    /// Red before: no card on either prepend ([-4, -3, -2, -1, 0, 1]).
+    func testTranscriptFollowupTwoPrependsKeepIdsUniqueAndOrdered() {
+        var live = tfImageLed()
+        live.prepend(asm([tfUser([tfImage]), say("a")]))
+        XCTAssertEqual(live.blocks.map(\.id), [-3, -2, -1, 0, 1])
+        live.prepend(asm([tfPrompt("go"), say("Done.")]))
+        XCTAssertEqual(live.blocks.map(\.id), [-6, -5, -4, -3, -2, -1, 0, 1])
+        XCTAssertEqual(live.blocks.map(kind), ["user", "assistant", "user", "image", "assistant", "user", "image", "assistant"])
+        XCTAssertEqual(live.blocks.filter { tfCard($0) }.map(\.id), [-4, -1])
+        XCTAssertEqual(TranscriptVerbosity.turns(live.blocks).map(\.count), [2, 3, 3])
+    }
+
+    /// Step A's carried open call keeps its shifted id with the card in: its live result closes it in place.
+    /// Red before: no card (4 blocks, ids [-2, -1, 0, 1]).
+    func testTranscriptFollowupACarriedCallKeepsItsShiftedIdWithTheCard() {
+        var live = tfImageLed()
+        live.prepend(asm([tfPrompt("go"), toolUse("t1", "Bash", ["command": "ls"])]))
+        XCTAssertEqual(live.blocks.map(\.id), [-3, -2, -1, 0, 1])
+        XCTAssertEqual(live.blocks.map(\.pending), [false, true, false, false, false])
+        live.add(TranscriptDecoder.decode(line: line(toolResult("t1", "out"))), source: nil)
+        XCTAssertEqual(live.blocks.map(\.id), [-3, -2, -1, 0, 1], "no orphan card: \(live.blocks.map(\.body))")
+        XCTAssertEqual(live.blocks.map(\.pending), [false, false, false, false, false])
+        XCTAssertTrue(live.orphans.isEmpty)
+    }
 }

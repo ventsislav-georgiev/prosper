@@ -55,7 +55,8 @@ struct AgentTranscriptView: View {
             .buttonStyle(.plain).foregroundStyle(Neon.blue)
         }
         ForEach(TranscriptVerbosity.project(model.blocks, level: level,
-                                            working: Self.turnWorking(state: model.source?.dchState, toolPending: model.toolPending))) { r in
+                                            working: Self.turnWorking(state: model.source?.dchState, toolPending: model.toolPending,
+                                                                      ended: ended))) { r in
             TranscriptRowView(row: r, level: level, expand: { await model.fullText($0) })
         }
         if level == .verbose && model.hiddenCount > 0 {
@@ -66,7 +67,10 @@ struct AgentTranscriptView: View {
 
     /// QA #657 INFO-3a: Focused's last turn reads "Working" while dch says the session works (the state the window
     /// already handed the model) or a tool call is open; an unknown state (nil, "") is the tool call alone.
-    static func turnWorking(state: String?, toolPending: Bool) -> Bool { toolPending || state == "working" }
+    /// R1269-q1: never on an ended pane (its model gets no update() again: the state and the open call are the last seen).
+    static func turnWorking(state: String?, toolPending: Bool, ended: Bool = false) -> Bool {
+        !ended && (toolPending || state == "working")
+    }
 }
 
 struct TranscriptBanner: View {

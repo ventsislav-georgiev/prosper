@@ -88,4 +88,57 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(live.blocks.count, 3, "x is still tracked too")
         XCTAssertEqual(live.blocks.filter(\.pending).count, 1, "only the page's first t1 call, which no id tracks, reads running")
     }
+
+    // MARK: step C, R1269-q1: an ended pane never reads Working
+
+    /// Red before: turnWorking had no ended column; an ended pane's last state ("working", a call open at the kill)
+    /// read Working for as long as the pane was kept.
+    @MainActor
+    func testTranscriptViewFollowupEndedPaneTurnWorkingTable() {
+        let table: [(state: String?, tool: Bool, ended: Bool, working: Bool)] = [
+            ("working", true, true, false), ("working", false, true, false), ("idle", true, true, false),
+            (nil, true, true, false), (nil, false, true, false),
+            ("working", true, false, true), ("working", false, false, true), ("idle", true, false, true),
+            ("idle", false, false, false),
+        ]
+        for r in table {
+            XCTAssertEqual(AgentTranscriptView.turnWorking(state: r.state, toolPending: r.tool, ended: r.ended), r.working,
+                           "\(r.state ?? "nil") tool \(r.tool) ended \(r.ended)")
+        }
+        let blocks = asm([entry("user", ["message": ["role": "user", "content": "go"]]),
+                          toolUse("b1", "Bash", ["command": "make"])]).blocks
+        let label = TranscriptVerbosity.project(blocks, level: .focused,
+                                                working: AgentTranscriptView.turnWorking(state: "working", toolPending: true, ended: true))
+            .compactMap { r -> String? in if case .summary(let s, _, _) = r.kind { return s.label } else { return nil } }
+        XCTAssertEqual(label, ["1 step"], "ended, working, a call open: the label reads N steps")
+    }
+
+    /// Red before (AgentTranscriptView.swift: the view did not pass `ended`): a session that ended while dch last said
+    /// working, with a call open at the kill, read "Working \u{B7} 1 step" under its Ended header.
+    @MainActor
+    func testTranscriptViewFollowupHostedEndedPaneReadsSteps() throws {
+        let url = tempDir().appendingPathComponent("e.jsonl")
+        try write(url, [entry("user", ["message": ["role": "user", "content": "Fix the build"]]),
+                        toolUse("b1", "Bash", ["command": "make"])])
+        let m = windowModel(store([session("api", .working, ago: 1, path: url.path)]))
+        m.setVisible(true)
+        defer { m.close() }
+        let t = m.transcript
+        XCTAssertEqual(t.source?.dchState, "working", "the last state the window handed the model")
+        XCTAssertTrue(t.toolPending, "the call open at the kill")
+        func summary(ended: Bool) -> [String] {
+            let v = AgentTranscriptView(model: t, scrolls: false, ownsLifecycle: false, level: .focused, ended: ended)
+                .frame(width: 560).environment(\.colorScheme, .dark)
+            let tree = AXTreeSupport.tree(v, CGSize(width: 560, height: 400)) { tr in
+                tr.contains { n in n.names.contains { $0.hasSuffix("1 step") } }
+            }
+            return tree.flatMap(\.names).filter { $0.hasSuffix("1 step") }
+        }
+        let live = summary(ended: false)
+        XCTAssertFalse(live.isEmpty, "the summary is read")
+        XCTAssertTrue(live.allSatisfy { $0.hasSuffix("Working \u{B7} 1 step") }, "live: \(live)")
+        let ended = summary(ended: true)
+        XCTAssertFalse(ended.isEmpty, "the summary is read")
+        XCTAssertFalse(ended.contains { $0.contains("Working") }, "ended: \(ended)")
+    }
 }
