@@ -147,7 +147,8 @@ final class DchRemoteBoundTests: XCTestCase {
     // MARK: - R988e-b: a fallback call gets only what is left of its request's one bound
 
     /// As `run`, with `first` for the first call, `fallback` for the second (remoteFallbackStandIn) and the timeout at
-    /// `bound`; all restored in a defer (after the ceiling both stand-ins answer nothing at once).
+    /// `bound`; all restored in a defer. After the ceiling both stand-ins are left answering nothing: the helper has no way to
+    /// know when the straggler is reaped without a new wait, so the safe value stays (a later row sets its own stand-ins).
     private func runWithFallback<T>(_ first: (path: String, args: [String]), then fallback: (path: String, args: [String]),
                                     bound: TimeInterval, _ recorder: Recorder,
                                     _ body: @escaping @Sendable () -> T) -> T? {
@@ -163,24 +164,32 @@ final class DchRemoteBoundTests: XCTestCase {
         return out
     }
 
-    /// The first child answers empty after 8 s (/bin/sleep 8 prints nothing) and the fallback never answers. One 13 s
-    /// bound for the request ends the call near 13 s, inside the 20 s ceiling; a fresh 13 s bound for the fallback
-    /// would end it near 21 s, past the ceiling. The one kill goes to the fallback's child (the first was reaped).
+    /// The first child answers empty after 1.8 s (/bin/sleep 1.8 prints nothing) and the fallback never answers. One 3 s
+    /// bound for the request ends the call near 3.0 s; a fresh 3 s bound for the fallback would end it near 4.8 s. The
+    /// elapsed time (monotonic, taken in the body right around the call) must be under 4.0 s, and at least 2.5 s: the
+    /// first child really ran its 1.8 s and the fallback really waited out the rest (a call that skipped either would
+    /// end near 1.8 s or at once). The one kill goes to the fallback's child (the first was reaped).
     func testAListWhoseFallbackNeverAnswersEndsWithinOneBound() throws {
         let rec = Recorder()
-        let rows = try XCTUnwrap(runWithFallback(("/bin/sleep", ["8"]), then: Self.sleeps, bound: 13, rec) {
-            DchCommand.listSessions()
+        let (rows, elapsed) = try XCTUnwrap(runWithFallback(("/bin/sleep", ["1.8"]), then: Self.sleeps, bound: 3, rec) {
+            let t0 = ProcessInfo.processInfo.systemUptime
+            let rows = DchCommand.listSessions()
+            return (rows, ProcessInfo.processInfo.systemUptime - t0)
         })
         XCTAssertEqual(rows, [], "the failure answer it already had")
+        XCTAssertTrue(elapsed >= 2.5 && elapsed < 4.0, "elapsed \(elapsed) s")
         assertKilledTheChild(rec)
     }
 
     func testAReadWhoseFallbackNeverAnswersEndsWithinOneBound() throws {
         let rec = Recorder()
-        let screen = try XCTUnwrap(runWithFallback(("/bin/sleep", ["8"]), then: Self.sleeps, bound: 13, rec) {
-            DchCommand.readScreen("api")
+        let (screen, elapsed) = try XCTUnwrap(runWithFallback(("/bin/sleep", ["1.8"]), then: Self.sleeps, bound: 3, rec) {
+            let t0 = ProcessInfo.processInfo.systemUptime
+            let screen = DchCommand.readScreen("api")
+            return (screen, ProcessInfo.processInfo.systemUptime - t0)
         })
         XCTAssertEqual(screen, Data(), "the failure answer it already had")
+        XCTAssertTrue(elapsed >= 2.5 && elapsed < 4.0, "elapsed \(elapsed) s")
         assertKilledTheChild(rec)
     }
 
