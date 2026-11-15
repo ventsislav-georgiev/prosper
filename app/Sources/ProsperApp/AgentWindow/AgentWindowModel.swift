@@ -758,6 +758,56 @@ final class AgentWindowModel: ObservableObject {
         }
     }
 
+    /// #901 B3 step 1, 8.1 New (B3 step 4 draws it): one empty pane, name nil (automatic), appended and made active.
+    /// Refused as a value, nothing made or written: with the split gate off (.layoutsOff), at 9 layouts (.layoutCap,
+    /// N1217-b: never made and dropped later), with no store loaded or the window closed (.noSuchLayout).
+    @discardableResult
+    func newLayout() -> PaneRefusal? { addLayout { _ in .single() } }
+
+    /// 8.1 Duplicate: a copy of `id` with fresh layout and pane ids (`duplicated`), named by `duplicateName`, appended and
+    /// made active. Refused as `newLayout`, and .noSuchLayout for an id the store does not hold.
+    @discardableResult
+    func duplicateLayout(_ id: UUID) -> PaneRefusal? {
+        addLayout { s in s.layouts.first { $0.id == id }.map { $0.duplicated(name: s.duplicateName(of: $0.name)) } }
+    }
+
+    /// New and Duplicate: the whole store is written once (explicitly, so a layout made while the island is off is saved
+    /// and the re-adopt in bind(store) keeps it), then the new layout is adopted (a switch: the old runtimes stop before
+    /// the new pane's starts, 11.2); adopt's own autosave finds the store equal and writes nothing. Main actor; `make`
+    /// runs synchronously here.
+    private func addLayout(_ make: (PaneLayoutStore) -> PaneLayout?) -> PaneRefusal? {
+        guard AgentPaneLayout.splitsEnabled else { return .layoutsOff }
+        dragEnded()   // R900-5a-1: the drag's save lands before the store is read and replaced
+        guard !closed, let s = layouts, let l = make(s) else { return .noSuchLayout }
+        switch s.adding(l).flatMap({ $0.activate(l.id) }) {
+        case let .failure(r):
+            return r
+        case let .success(out):
+            autosave(out)
+            adopt(l)
+            return nil
+        }
+    }
+
+    /// 8.1 Rename: the name cleaned and bounded (`PaneLayoutStore.cleanName`); empty returns to automatic. One write when
+    /// the cleaned name differs, none when it does not. The active layout keeps its panes in memory (only the name
+    /// changes there), so a rename while the island is off never brings back what bind(nil) emptied.
+    @discardableResult
+    func renameLayout(_ id: UUID, to raw: String?) -> PaneRefusal? {
+        guard AgentPaneLayout.splitsEnabled else { return .layoutsOff }
+        dragEnded()
+        guard !closed, var s = layouts, let i = s.layouts.firstIndex(where: { $0.id == id }) else { return .noSuchLayout }
+        let name = PaneLayoutStore.cleanName(raw)
+        s.layouts[i].name = name
+        autosave(s)
+        if id == layout.id {
+            var l = layout
+            l.name = name
+            adopt(l)
+        }
+        return nil
+    }
+
     /// 8.1: a change of the active layout (or `next`, a whole store) is written once; a call that changes nothing
     /// writes nothing. Runs on the main actor (the layout's didSet, deleteLayout). Causes of the early returns: no
     /// store loaded (`layoutDefaults` nil), the window closed; for a layout change also the island off (`store` nil:

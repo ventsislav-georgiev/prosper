@@ -89,6 +89,26 @@ struct PaneLayout: Hashable, Codable, Identifiable {
         let pane = Pane(id: UUID(), target: target)
         return PaneLayout(id: id, name: nil, tree: .leaf(pane), focused: pane.id, zoomed: nil)
     }
+
+    /// 8.1 Duplicate: the same tree, targets, ratios, focus and zoom under a fresh layout id and fresh pane ids (sights
+    /// and runtimes are keyed by pane id: a copy never shares one with its source).
+    func duplicated(name: String?) -> PaneLayout {
+        var fresh: [UUID: UUID] = [:]
+        func copy(_ n: PaneNode) -> PaneNode {
+            switch n {
+            case let .leaf(p):
+                let id = UUID()
+                fresh[p.id] = id
+                return .leaf(Pane(id: id, target: p.target))
+            case let .split(axis, ratio, a, b):
+                return .split(axis, ratio: ratio, copy(a), copy(b))
+            }
+        }
+        var out = PaneLayout(id: UUID(), name: name, tree: copy(tree), focused: focused, zoomed: nil)
+        out.focused = fresh[focused] ?? out.order.first ?? out.focused
+        out.zoomed = zoomed.flatMap { fresh[$0] }
+        return out
+    }
 }
 
 /// A refused operation. `notice` is the pane notice line's text (3.3), returned as data: nothing is drawn here.
@@ -110,6 +130,8 @@ enum PaneRefusal: Error, Equatable {
     case noSuchLayout
     /// A layout whose id the store already holds (QA 794 rider 2).
     case layoutExists
+    /// #901 B3 step 1: New, Rename or Duplicate with the split gate off (15.0): nothing made, renamed or written.
+    case layoutsOff
 
     var notice: String? {
         switch self {
@@ -771,6 +793,50 @@ struct PaneLayoutStore: Hashable {
 
     /// The active layout (decode() and every operation keep `active` among `layouts`; the first as a fallback).
     var activeLayout: PaneLayout? { layouts.first { $0.id == active } ?? layouts.first }
+
+    /// #901 B3 step 1: the longest layout name, in characters (8.1 is silent; a Layouts row and the band show it).
+    static let maxNameLength = 64
+
+    /// 8.1 Rename: a name is outside data. Whitespace runs (line breaks included) become one space, control and format
+    /// characters go (a ZWJ inside an emoji stays), the ends are trimmed, at most `maxNameLength` characters; empty is
+    /// nil (automatic). Bounded work on any input: at most 16 scalars per kept character are read.
+    static func cleanName(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        var scalars = String.UnicodeScalarView(), space = false
+        for s in raw.unicodeScalars.prefix(maxNameLength * 16) {
+            if s.properties.isWhitespace { space = !scalars.isEmpty; continue }
+            switch s.properties.generalCategory {
+            case .control: continue
+            case .format where s.value != 0x200D: continue
+            default: break
+            }
+            if space { scalars.append(" "); space = false }
+            scalars.append(s)
+        }
+        let name = String(String(scalars).prefix(maxNameLength)).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? nil : name
+    }
+
+    /// 8.1: a nil name is automatic: the pane titles joined with " + ", middle-truncated to `maxNameLength`.
+    static func automaticName(_ titles: [String]) -> String {
+        let joined = titles.compactMap(cleanName).joined(separator: " + ")
+        guard joined.count > maxNameLength else { return joined }
+        let head = (maxNameLength - 1) / 2
+        return String(joined.prefix(head)) + "…" + String(joined.suffix(maxNameLength - 1 - head))
+    }
+
+    /// Duplicate's name (8.1 is silent; B3 step 1's choice): automatic stays automatic; a set name gets " 2", or the
+    /// first free number, so two layouts never share a set name. 9 layouts hold at most 8 others: 2...10 has a free one.
+    func duplicateName(of name: String?) -> String? {
+        guard let name else { return nil }
+        let taken = Set(layouts.compactMap(\.name))
+        for n in 2...(Self.maxLayouts + 1) {
+            let suffix = " \(n)"
+            let c = String(name.prefix(Self.maxNameLength - suffix.count)).trimmingCharacters(in: .whitespaces) + suffix
+            if !taken.contains(c) { return c }
+        }
+        return nil
+    }
 
     private struct Blob: Codable {
         var v: Int?
