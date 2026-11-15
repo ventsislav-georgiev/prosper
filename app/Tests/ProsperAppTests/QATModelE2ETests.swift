@@ -32,6 +32,7 @@ final class QATModelE2ETests: XCTestCase {
         guard ProcessInfo.processInfo.environment["PROSPER_QAT_E2E"] == "1" else {
             throw XCTSkip("Set PROSPER_QAT_E2E=1 to run the on-device QAT load+generate e2e.")
         }
+        try requireMLXMetallib()   // #1279
     }
 
     func testQATModelLoadsAndGenerates() async throws {

@@ -26,6 +26,7 @@ final class LoRATrainE2ETests: XCTestCase {
         guard ProcessInfo.processInfo.environment["PROSPER_LORA_E2E"] == "1" else {
             throw XCTSkip("Set PROSPER_LORA_E2E=1 to run the on-device LoRA e2e (loads the model + trains on GPU).")
         }
+        try requireMLXMetallib()   // #1279
     }
 
     // MARK: - phys_footprint sampler

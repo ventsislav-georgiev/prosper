@@ -117,7 +117,8 @@ final class ModelIdleUnloaderTests: XCTestCase {
     /// singletons, is safe with nothing loaded and is idempotent (a second call must not
     /// double-free). The load → unload → reload round-trip needs the real GGUF and lives
     /// in `LlamaInlineEngineTests.testUnloadReloadRoundTrip` (PROSPER_LLAMA_SMOKE=1).
-    func testUnloadIdleEnginesIsSafeAndIdempotentWithNothingLoaded() async {
+    func testUnloadIdleEnginesIsSafeAndIdempotentWithNothingLoaded() async throws {
+        try requireMLXMetallib()   // #1279: MLXEngine.unload clears the MLX cache, which loads the metallib
         await ModelIdleUnloader.unloadIdleEngines()
         await ModelIdleUnloader.unloadIdleEngines()
         XCTAssertFalse(LlamaInlineEngine.isLoadedSnapshot)
@@ -130,7 +131,8 @@ final class ModelIdleUnloaderTests: XCTestCase {
     /// `fire()` with the SHIPPING `unloadAction` (not an injected fake) must drive the
     /// real teardown without crashing — locks the default closure's wiring, which the
     /// injected-seam tests above deliberately bypass.
-    func testFireWithDefaultUnloadActionDrivesRealTeardown() async {
+    func testFireWithDefaultUnloadActionDrivesRealTeardown() async throws {
+        try requireMLXMetallib()   // #1279: the default unloadAction reaches MLXEngine.unload
         let u = ModelIdleUnloader()
         u.isAutocompleteEnabled = { false }
         u.fire()                                   // spawns the unload Task

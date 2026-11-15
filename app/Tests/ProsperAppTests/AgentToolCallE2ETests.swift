@@ -33,6 +33,7 @@ final class AgentToolCallE2ETests: XCTestCase {
         guard ProcessInfo.processInfo.environment["PROSPER_AGENT_E2E"] == "1" else {
             throw XCTSkip("Set PROSPER_AGENT_E2E=1 to run the on-device agent tool-call e2e.")
         }
+        try requireMLXMetallib()   // #1279
     }
 
     /// Minimal OpenAI-style `shell` tool schema — the same shape the codex harness

@@ -9,6 +9,9 @@ import XCTest
 /// and the composite's ordering contract.
 final class LogitProcessorTests: XCTestCase {
 
+    /// #1279: every row here runs MLX kernels; no metallib beside the test binary = skip, not a process abort.
+    override func setUpWithError() throws { try requireMLXMetallib() }
+
     // MARK: - NgramBiasLogitProcessor (B5)
 
     func testNgramBiasAddsSparseDeltaOnlyAtBiasedToken() {
