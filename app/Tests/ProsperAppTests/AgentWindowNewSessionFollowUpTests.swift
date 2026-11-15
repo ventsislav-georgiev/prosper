@@ -285,13 +285,13 @@ extension AgentWindowD1Tests {
             defer { win.close() }
             m.openNewSession()
             XCTAssertFalse(m.newSessionRecents.isEmpty, "the menu is enabled")
-            // The tree fills in on the run loop: poll for the form's four controls, with a deadline.
+            // The tree fills in on the run loop: poll for the form's three fields and its recents menu (the sidebar's own menu button is no signal), with a deadline.
             let tree = AXTreeSupport.poll(host) { t in
-                t.filter { $0.role == "AXTextField" }.count >= 3 && t.contains { $0.role == "AXMenuButton" }
+                t.filter { $0.role == "AXTextField" }.count >= 3 && t.contains { $0.role == "AXMenuButton" && $0.title == "Recent folders" }
             }
             print("#887 a11y tree:\n" + tree.map { "  \($0.role) label=\($0.label) title=\($0.title)" }.joined(separator: "\n"))
             XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.map(\.label), ["Folder", "Name", "Command"])
-            XCTAssertEqual(tree.filter { $0.role == "AXMenuButton" }.map(\.title), ["Recent folders"])
+            XCTAssertEqual(tree.filter { $0.role == "AXMenuButton" }.map(\.title), ["Session list actions", "Recent folders"])
         }
     }
 
