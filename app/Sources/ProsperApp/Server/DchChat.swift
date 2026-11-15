@@ -140,14 +140,14 @@ final class DchChat: @unchecked Sendable {
             lock.withLock { running = false }
             return reply(Self.error("busy: the Mac's agent is running"))
         }
-        let final = await generate(req, send: send)
+        let final = await generate(req, model: id, send: send)
         // Free before the reply, so the phone's next chat is never refused as busy.
         lock.withLock { running = false }
         armIdleTimer()
         reply(final)
     }
 
-    private func generate(_ req: Request, send: Reply) async -> Data {
+    private func generate(_ req: Request, model: String, send: Reply) async -> Data {
         let pending = lock.withLock { releasing }
         await pending?.value
         let engine: any AgentChatEngine
@@ -168,9 +168,19 @@ final class DchChat: @unchecked Sendable {
             // Closing the connection cancels this Task; the stream ends its generation.
             let stream = engine.generateChat(messages: req.turns, tools: [], maxTokens: req.maxTokens,
                                              temperature: 0.7, topP: 0.95, stop: [])
-            for try await chunk in stream where !chunk.isEmpty {
-                send(DchFrame.encode(DchFrame.chatDelta, json: ["text": chunk]))
+            // #1181: a leading think block is never sent (the server's StreamSplitter, its format gate). No tool
+            // markers: the phone chat has no tools, so every other turn goes out in today's chunks.
+            let format = AgentModelRegistry.toolFormat(for: model)
+            var splitter = StreamSplitter(markers: [], leadingThink: format == .qwenXML || format == .hermesJSON)
+            for try await chunk in stream {
+                let text = splitter.ingest(chunk)
+                if !text.isEmpty { send(DchFrame.encode(DchFrame.chatDelta, json: ["text": text])) }
             }
+            guard !Task.isCancelled else { return DchFrame.encode(DchFrame.chatDone, json: ["stop": "stop"]) }
+            let tail = splitter.finish()
+            if !tail.isEmpty { send(DchFrame.encode(DchFrame.chatDelta, json: ["text": tail])) }
+            // Ended inside the block: nothing was sent; the fixed line is the whole answer, once.
+            if splitter.endedInThink { send(DchFrame.encode(DchFrame.chatDelta, json: ["text": StreamSplitter.unclosedThinkNotice])) }
         } catch {
             return Self.error(Self.inferenceFailureText(error))
         }

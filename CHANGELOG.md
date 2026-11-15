@@ -1174,6 +1174,10 @@ tag from the now-released section and put it on the new top draft.
   like 1.2.0, and says so (#1182)
 - Marketplace: a package whose files declare another id is explained in a plain sentence, and a
   folder that cannot be packed no longer reads as a failed download (#1182)
+- Agent: codex is told the model that is actually loaded, also when the agent model changes in
+  Settings while it loads or another model is already in memory (#1181)
+- Phone chat: a thinking model's private reasoning is no longer shown; a reply that ends while still
+  thinking shows a short notice instead (#1181)
 
 ## v2.174.0
 

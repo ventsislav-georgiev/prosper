@@ -512,7 +512,11 @@ final class AgentController {
         model = loading
         phase = .loadingModel(progress: 0, status: "Loading \(loading)…")
         let harness: CodingHarness
-        if let makeHarness { harness = try await makeHarness() } else { harness = try await spawnCodexHarness(executable, model: loading) }
+        if let makeHarness { harness = try await makeHarness() } else {
+            let spawned = try await spawnCodexHarness(executable, model: loading)
+            harness = spawned.harness
+            model = spawned.loaded   // #1181: the session and the history row name the model codex is configured for
+        }
         // Stop during the model load / spawn / handshake ran end() while `self.harness`
         // was still nil: don't start or keep a codex nobody owns.
         guard !abandoned(generation) else { throw CancellationError() }
@@ -525,24 +529,27 @@ final class AgentController {
 
     /// The model load + codex spawn, once `ensureHarness` resolved the executable.
     /// `model` is the run's one read of the setting (#1181): the load takes it, never a second read.
-    private func spawnCodexHarness(_ executable: URL, model: String) async throws -> CodingHarness {
+    /// Returns the id the engine holds (another model may be resident, or a joined load another id's):
+    /// codex's config takes that one. `residency`: rows pass a coordinator with a fake engine.
+    func spawnCodexHarness(_ executable: URL, model: String, residency: ModelResidencyCoordinator = .shared)
+        async throws -> (harness: CodexHarness, loaded: String) {
         // 1. Local inference endpoint.
         let (port, token) = try ProsperLLMServer.shared.start()
         let baseURL = "http://127.0.0.1:\(port)/v1"
 
         // 2. Residency swap: unload inline model, load the coding model.
-        _ = try await ModelResidencyCoordinator.shared.acquireAgent(modelId: model) { [weak self] p, status in
+        let loaded = try await residency.acquireLoadedAgent(modelId: model) { [weak self] p, status in
             Task { @MainActor in
                 // A late progress tick must not stomp a phase that already moved on
                 // (running / error after the load finished or the run was stopped).
                 guard let self, case .loadingModel = self.phase else { return }
                 self.phase = .loadingModel(progress: p, status: status)
             }
-        }
+        }.modelId
 
         // 3. The harness (started by `ensureHarness`).
-        return CodexHarness(executableURL: executable, codexHome: Self.codexHomeURL(),
-                            llmBaseURL: baseURL, llmToken: token)
+        return (CodexHarness(executableURL: executable, codexHome: Self.codexHomeURL(),
+                             llmBaseURL: baseURL, llmToken: token, model: loaded), loaded)
     }
 
     private func ensureSession(_ harness: CodingHarness, model: String) async throws -> SessionID {

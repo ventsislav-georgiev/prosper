@@ -24,6 +24,8 @@ actor CodexHarness: CodingHarness {
     /// The local OpenAI-compatible endpoint Codex calls for inference.
     private let llmBaseURL: String
     private let llmToken: String
+    /// #1181: the id of the model the run LOADED; codex's config names it and sizes the context window by it.
+    private let model: String
 
     private var process: Process?
     private var stdinHandle: FileHandle?
@@ -101,11 +103,13 @@ actor CodexHarness: CodingHarness {
 
     nonisolated var events: AsyncStream<HarnessEvent> { eventStream }
 
-    init(executableURL: URL, codexHome: URL, llmBaseURL: String, llmToken: String) {
+    /// `model`: the id the load returned (AgentController passes it); the default reads the setting for other callers.
+    init(executableURL: URL, codexHome: URL, llmBaseURL: String, llmToken: String, model: String = Preferences.agentModel) {
         self.executableURL = executableURL
         self.codexHome = codexHome
         self.llmBaseURL = llmBaseURL
         self.llmToken = llmToken
+        self.model = model
         var cont: AsyncStream<HarnessEvent>.Continuation!
         self.eventStream = AsyncStream { cont = $0 }
         self.eventContinuation = cont
@@ -701,6 +705,11 @@ actor CodexHarness: CodingHarness {
 
     private func writeConfig() throws {
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try configText().write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+    }
+
+    /// The config.toml text, a value so a row reads it without starting codex (#1181).
+    func configText() -> String {
         // MCP servers are appended as `[mcp_servers.*]` blocks. codex reads them at
         // app-server launch only, so they apply to the next run, not a live session.
         let mcp = MCPServer.tomlBlocks(for: Preferences.mcpServers)
@@ -715,12 +724,12 @@ actor CodexHarness: CodingHarness {
         // n_ctx overflows. A served `model_catalog_url` would also have to carry codex's
         // whole base prompt (#185), so only the context window is set; MLX custom models
         // have no known ceiling and keep codex's default.
-        let contextWindow = AgentModelRegistry.gguf(for: Preferences.agentModel) == nil
+        let contextWindow = AgentModelRegistry.gguf(for: model) == nil
             ? "" : "model_context_window = \(LlamaAgentEngine.contextTokens)\n"
         // Quote interpolated values (model id is registry-controlled today, but
         // TOML injection via a future settable path is a one-character mistake).
-        let config = """
-        model = \(MCPServer.q(Preferences.agentModel))
+        return """
+        model = \(MCPServer.q(model))
         model_provider = "prosper"
         \(contextWindow)developer_instructions = \(Self.developerInstructions())
 
@@ -735,7 +744,6 @@ actor CodexHarness: CodingHarness {
         request_max_retries = 1
         stream_idle_timeout_ms = 120000
         """ + mcp + hooks + bridge
-        try config.write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
     }
 
     // MARK: - Static mapping helpers
