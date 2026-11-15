@@ -564,3 +564,83 @@ extension ToolCallParserTests {
         }
     }
 }
+
+// MARK: #1181 seventh dispatch: every format's markers by Unicode scalars (R1181-r5-a, R1181-k)
+
+extension ToolCallParserTests {
+    /// The `format` stream of `text` (with `finish`, as the no-tools paths call it) cut once at every scalar,
+    /// then one scalar per chunk.
+    private func streams(_ text: String, _ format: ToolCallFormat) -> [String] {
+        let scalars = Array(text.unicodeScalars)
+        var out = (0...scalars.count).map { i -> String in
+            var s = StreamSplitter(format: format)
+            return s.ingest(String(String.UnicodeScalarView(scalars[..<i])))
+                + s.ingest(String(String.UnicodeScalarView(scalars[i...]))) + s.finish()
+        }
+        var each = StreamSplitter(format: format)
+        out.append(scalars.map { each.ingest(String($0)) }.joined() + each.finish())
+        return out
+    }
+
+    /// #1181 (QA R1181-r5-a): for nemotron, glm, kimi and minimax "<think>" is a stream marker compared by scalars;
+    /// stripThink now compares its tags by scalars too. Before: a combining mark (U+0301) after "<think>" kept the
+    /// whole block in the content (the codex tail delta then sent the think text); after "</think>" the block was
+    /// taken as unterminated and the answer dropped. The content never holds the think text; the stream stops at
+    /// "<think>" for these formats (no leading-think phase), so it sends "" at every cut, a prefix of the content.
+    func testStripThinkComparesTagsByScalarsForEveryThinkFormat() {
+        let cases: [(format: ToolCallFormat, text: String, content: String)] = [
+            (.nemotron, "<think>\u{0301}plan</think>answer", "answer"),
+            (.nemotron, "<think>plan</think>\u{0301}answer", "\u{0301}answer"),
+            (.nemotron, "<think>plan</think>answer", "answer"),
+            (.glm, "<think>\u{0301}plan</think>answer", "answer"),
+            (.glm, "<think>plan</think>\u{0301}answer", "\u{0301}answer"),
+            (.glm, "<think>plan</think>answer", "answer"),
+            (.kimi, "<think>\u{0301}plan</think>answer", "answer"),
+            (.kimi, "<think>plan</think>\u{0301}answer", "\u{0301}answer"),
+            (.kimi, "<think>plan</think>answer", "answer"),
+            (.minimax, "<think>\u{0301}plan</think>answer", "answer"),
+            (.minimax, "<think>plan</think>\u{0301}answer", "\u{0301}answer"),
+            (.minimax, "<think>plan</think>answer", "answer"),
+        ]
+        for c in cases {
+            let parsed = ToolCallParser.parse(c.text, format: c.format)
+            XCTAssertEqual(parsed.content, c.content, "\(c.format) \(c.text.debugDescription)")
+            XCTAssertFalse(parsed.content.contains("plan"), "\(c.format) \(c.text.debugDescription): think text")
+            XCTAssertEqual(parsed.toolCalls.count, 0, "\(c.format) \(c.text.debugDescription)")
+            for s in streams(c.text, c.format) { XCTAssertEqual(s, "", "\(c.format) \(c.text.debugDescription)") }
+        }
+    }
+
+    /// #1181 (R1181-k): each format's marker followed by a combining mark (U+0301). The stream stops at the marker by
+    /// scalars at every cut; the parse (mistral, GLM, kimi, minimax now by scalars; harmony's regex already matches code
+    /// points; nemotron's parseTagged since e32706e2) gives a content the stream's text is a scalar prefix of. The
+    /// Qwen3-Coder back-off is not converted (left.txt): its row pins today's answer.
+    func testEveryFormatMarkerThenCombiningMarkStreamIsAPrefixOfTheParse() {
+        let json = #"{"name": "shell", "arguments": {"command": "ls"}}"#
+        let harmony = "ok<|channel|>\u{0301}final<|message|>hi<|end|>"
+        let bare = "ok<function=\u{0301}shell>\n<parameter=command>\nls\n</parameter>\n</function>"
+        let cases: [(format: ToolCallFormat, text: String, stream: String, content: String, calls: Int)] = [
+            // Before: the whole text, 0 calls. The body starts with the mark: not JSON: no call.
+            (.mistral, "ok[TOOL_CALLS]\u{0301}[" + json + "]", "ok", "ok", 0),
+            // Unchanged: the final channel needs "<|channel|>final" whole; no channel matched: all text.
+            (.harmony, harmony, "ok", harmony, 0),
+            (.nemotron, "ok<toolcall>\u{0301}" + json + "</toolcall>", "ok", "ok", 0),
+            // Before: the whole text, 0 calls. The same text without the mark is a call too.
+            (.glm, "ok<tool_call>\u{0301}shell<arg_key>command</arg_key><arg_value>ls</arg_value></tool_call>", "ok", "ok", 1),
+            (.kimi, "ok<|tool_calls_section_begin|>\u{0301}<|tool_call_begin|>functions.shell:0<|tool_call_argument_begin|>"
+                + #"{"command": "ls"}<|tool_call_end|><|tool_calls_section_end|>"#, "ok", "ok", 1),
+            // Before: "ok<minimax:tool_call>" + mark (the wrapper tag was kept), 1 call.
+            (.minimax, "ok<minimax:tool_call>\u{0301}<invoke name=\"shell\"><parameter name=\"command\">ls</parameter></invoke>"
+                + "</minimax:tool_call>", "ok", "ok\u{0301}", 1),
+            // The back-off is not converted: the stream's defensive stop; the parse sees no "<function=": all text.
+            (.qwenXML, bare, "ok", bare, 0),
+        ]
+        for c in cases {
+            let parsed = ToolCallParser.parse(c.text, format: c.format)
+            XCTAssertEqual(parsed.content, c.content, "\(c.format) \(c.text.debugDescription)")
+            XCTAssertEqual(parsed.toolCalls.count, c.calls, "\(c.format) \(c.text.debugDescription)")
+            XCTAssertTrue(parsed.content.unicodeScalars.starts(with: c.stream.unicodeScalars), "\(c.format) \(c.text.debugDescription)")
+            for s in streams(c.text, c.format) { XCTAssertEqual(s, c.stream, "\(c.format) \(c.text.debugDescription)") }
+        }
+    }
+}

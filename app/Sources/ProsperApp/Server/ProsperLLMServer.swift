@@ -488,7 +488,9 @@ private final class HTTPConnection: @unchecked Sendable {
                 }
                 // #1181: the agent window shows text from deltas only: the unsent suffix of the validated text, by
                 // scalars, goes as one delta, all of it when nothing streamed (an answer within the 10-character guard).
-                let sent = streamed.unicodeScalars, all = final.unicodeScalars
+                // R1181-j: compared past leading whitespace: the stream sends it, every parse trims it.
+                let sent = streamed.unicodeScalars.drop(while: { CharacterSet.whitespacesAndNewlines.contains($0) })
+                let all = final.unicodeScalars.drop(while: { CharacterSet.whitespacesAndNewlines.contains($0) })
                 if all.starts(with: sent), all.count > sent.count {
                     emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
                         sequence: seq, itemID: itemID, index: outputIndex,

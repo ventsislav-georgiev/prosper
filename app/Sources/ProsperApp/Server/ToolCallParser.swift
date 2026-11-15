@@ -191,12 +191,13 @@ enum ToolCallParser {
 
     /// `[TOOL_CALLS][ {"name":…, "arguments":{…}}, … ]`
     private static func parseMistral(_ text: String) -> ToolCallParseResult {
-        guard let tagR = text.range(of: "[TOOL_CALLS]") else {
+        let u = text.unicodeScalars   // #1181: the marker by scalars, as the splitter
+        guard let tagR = scalarRange(of: "[TOOL_CALLS]", in: u) else {
             return ToolCallParseResult(content: text.trimmingCharacters(in: .whitespacesAndNewlines), toolCalls: [])
         }
-        let content = String(text[text.startIndex..<tagR.lowerBound])
+        let content = String(u[..<tagR.lowerBound])
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let rest = String(text[tagR.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let rest = String(u[tagR.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         var calls: [ParsedToolCall] = []
         if let data = rest.data(using: .utf8),
            let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
@@ -263,26 +264,27 @@ enum ToolCallParser {
     /// Also accepts a Qwen-compat `{json}` body. Reasoning in `<think>…</think>`.
     private static func parseGLM(_ text: String) -> ToolCallParseResult {
         let stripped = stripThink(text)
+        let u = stripped.unicodeScalars   // #1181: the tags by scalars, as the splitter
         var calls: [ParsedToolCall] = []
         var content = ""
         var idx = stripped.startIndex
         var n = 0
-        while let openR = stripped.range(of: "<tool_call>", range: idx..<stripped.endIndex) {
-            content += stripped[idx..<openR.lowerBound]
+        while let openR = scalarRange(of: "<tool_call>", in: u[idx...]) {
+            content += String(u[idx..<openR.lowerBound])
             let bodyStart = openR.upperBound
             let bodyEnd: String.Index, nextIdx: String.Index
-            if let closeR = stripped.range(of: "</tool_call>", range: bodyStart..<stripped.endIndex) {
+            if let closeR = scalarRange(of: "</tool_call>", in: u[bodyStart...]) {
                 bodyEnd = closeR.lowerBound; nextIdx = closeR.upperBound
             } else {
                 bodyEnd = stripped.endIndex; nextIdx = stripped.endIndex
             }
-            let body = String(stripped[bodyStart..<bodyEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = String(u[bodyStart..<bodyEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
             if let call = callFromNameArgsJSON(body, index: n) ?? callFromGLMArgs(body, index: n) {
                 calls.append(call); n += 1
             }
             idx = nextIdx
         }
-        content += stripped[idx..<stripped.endIndex]
+        content += String(u[idx...])
         return ToolCallParseResult(
             content: content.trimmingCharacters(in: .whitespacesAndNewlines), toolCalls: calls
         )
@@ -315,23 +317,24 @@ enum ToolCallParser {
     /// `<|tool_call_begin|>functions.NAME:idx<|tool_call_argument_begin|>{json}<|tool_call_end|>`.
     private static func parseKimi(_ text: String) -> ToolCallParseResult {
         let stripped = stripThink(text)
-        guard let secR = stripped.range(of: "<|tool_calls_section_begin|>") else {
+        let u = stripped.unicodeScalars   // #1181: the markers by scalars, as the splitter
+        guard let secR = scalarRange(of: "<|tool_calls_section_begin|>", in: u) else {
             return ToolCallParseResult(
                 content: stripped.trimmingCharacters(in: .whitespacesAndNewlines), toolCalls: []
             )
         }
-        let content = String(stripped[stripped.startIndex..<secR.lowerBound])
+        let content = String(u[..<secR.lowerBound])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         var calls: [ParsedToolCall] = []
         var idx = secR.upperBound
         var n = 0
-        while let bs = stripped.range(of: "<|tool_call_begin|>", range: idx..<stripped.endIndex) {
-            let beEnd = stripped.range(of: "<|tool_call_end|>", range: bs.upperBound..<stripped.endIndex)
+        while let bs = scalarRange(of: "<|tool_call_begin|>", in: u[idx...]) {
+            let beEnd = scalarRange(of: "<|tool_call_end|>", in: u[bs.upperBound...])
             let blockEnd = beEnd?.lowerBound ?? stripped.endIndex
-            let block = stripped[bs.upperBound..<blockEnd]
-            if let argR = block.range(of: "<|tool_call_argument_begin|>") {
-                let idPart = String(block[block.startIndex..<argR.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-                let argsRaw = String(block[argR.upperBound..<block.endIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let block = u[bs.upperBound..<blockEnd]
+            if let argR = scalarRange(of: "<|tool_call_argument_begin|>", in: block) {
+                let idPart = String(block[..<argR.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let argsRaw = String(block[argR.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
                 let name = kimiName(idPart)
                 if !name.isEmpty {
                     let norm = normalizedArgs(argsRaw)
@@ -358,23 +361,22 @@ enum ToolCallParser {
     /// Scans `<invoke …>` blocks directly so a missing wrapper still parses.
     private static func parseMiniMax(_ text: String) -> ToolCallParseResult {
         let stripped = stripThink(text)
+        let u = stripped.unicodeScalars   // #1181: the markers by scalars, as the splitter
         var calls: [ParsedToolCall] = []
         var content = ""
         var idx = stripped.startIndex
         var n = 0
-        while let openR = stripped.range(of: "<invoke name=", range: idx..<stripped.endIndex) {
-            content += stripped[idx..<openR.lowerBound]
-            let invEnd = stripped.range(of: "</invoke>", range: openR.upperBound..<stripped.endIndex)
+        while let openR = scalarRange(of: "<invoke name=", in: u[idx...]) {
+            content += String(u[idx..<openR.lowerBound])
+            let invEnd = scalarRange(of: "</invoke>", in: u[openR.upperBound...])
             let blockEnd = invEnd?.upperBound ?? stripped.endIndex
-            if let call = callFromInvoke(String(stripped[openR.lowerBound..<blockEnd]), index: n) {
+            if let call = callFromInvoke(String(u[openR.lowerBound..<blockEnd]), index: n) {
                 calls.append(call); n += 1
             }
             idx = blockEnd
         }
-        content += stripped[idx..<stripped.endIndex]
-        content = content
-            .replacingOccurrences(of: "<minimax:tool_call>", with: "")
-            .replacingOccurrences(of: "</minimax:tool_call>", with: "")
+        content += String(u[idx...])
+        content = removingScalars("</minimax:tool_call>", from: removingScalars("<minimax:tool_call>", from: content))
         return ToolCallParseResult(
             content: content.trimmingCharacters(in: .whitespacesAndNewlines), toolCalls: calls
         )
@@ -415,13 +417,15 @@ enum ToolCallParser {
 
     /// Drop `<think>…</think>` reasoning blocks (Nemotron/GLM/Kimi). Keeps prose
     /// before/after; an unterminated `<think>` drops everything from the opener.
+    /// #1181: the tags by Unicode scalars, as the splitter's `<think>` marker: a tag followed by a combining mark is a tag.
     private static func stripThink(_ text: String) -> String {
         var out = text
-        while let openR = out.range(of: "<think>") {
-            if let closeR = out.range(of: "</think>", range: openR.upperBound..<out.endIndex) {
-                out = String(out[out.startIndex..<openR.lowerBound]) + String(out[closeR.upperBound...])
+        while let openR = scalarRange(of: thinkOpen, in: out.unicodeScalars) {
+            let u = out.unicodeScalars
+            if let closeR = scalarRange(of: thinkClose, in: u[openR.upperBound...]) {
+                out = String(u[..<openR.lowerBound]) + String(u[closeR.upperBound...])
             } else {
-                out = String(out[out.startIndex..<openR.lowerBound])
+                out = String(u[..<openR.lowerBound])
                 break
             }
         }
@@ -459,6 +463,16 @@ enum ToolCallParser {
             from = scalars.index(after: hit)
         }
         return nil
+    }
+
+    /// `text` without any `needle`, compared by scalars (#1181), left to right, one forward scan each.
+    private static func removingScalars(_ needle: String, from text: String) -> String {
+        var out = "", rest = text.unicodeScalars[...]
+        while let r = scalarRange(of: needle, in: rest) {
+            out += String(rest[..<r.lowerBound])
+            rest = rest[r.upperBound...]
+        }
+        return out + String(rest)
     }
 
     /// `{json}` → `<arg_key>k</arg_key>\n<arg_value>v</arg_value>` pairs (GLM replay).

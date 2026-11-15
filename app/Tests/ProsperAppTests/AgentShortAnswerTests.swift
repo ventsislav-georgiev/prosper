@@ -263,3 +263,83 @@ final class AgentShortAnswerTests: XCTestCase {
         }
     }
 }
+
+// MARK: #1181 seventh dispatch: no think text in the tail delta for the other think formats (QA R1181-r5-a); a long
+// answer with leading whitespace keeps its last characters on the codex path (R1181-j)
+
+extension AgentShortAnswerTests {
+    /// Made-up custom model id (no catalog row has a non-Qwen format); its format is set per case in the scratch
+    /// XCTestDefaults store (Preferences.defaults under XCTest), every key it writes saved and restored.
+    private static let customId = "example-model-b"
+
+    /// QA R1181-r5-a on the wire: nemotron, glm, kimi, minimax (a made-up custom row of each format; the catalog has
+    /// none). A combining mark (U+0301) after "<think>" or after "</think>": before, the parse kept the think block (the
+    /// codex tail delta sent it) or dropped the answer. Now no think text in any delta or final text, on the six paths,
+    /// at every scalar cut on the codex path. The stream stops at "<think>" for these formats (a stream marker), so the
+    /// two no-tools stream paths send no delta (as before); the codex path sends the parsed answer as its one delta.
+    func testThinkFormatsSendNoThinkTextInTheTailDelta() async throws {
+        let d = Preferences.defaults, keys = ["customAgentModelsV1", "modelLabelOverridesV1"]
+        let saved = keys.map { d.object(forKey: $0) }
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer {
+            for (k, v) in zip(keys, saved) { d.set(v, forKey: k) }
+            AgentModelRegistry.physicalMemoryGB = savedGB
+        }
+        AgentModelRegistry.physicalMemoryGB = 64
+        let cases: [(text: String, answer: String)] = [
+            ("<think>\u{0301}plan</think>answer", "answer"),
+            ("<think>plan</think>\u{0301}answer", "\u{0301}answer"),
+            ("<think>plan</think>answer", "answer"),
+        ]
+        try await withServer { ask in
+            // The fake engine as withServer set it, reported as the custom model (withServer restores the seam).
+            let server = ProsperLLMServer.shared, inner = server.acquireAgent, id = Self.customId
+            server.acquireAgent = { let r = try await inner(); return (engine: r.engine, modelId: id) }
+            for format in [ToolCallFormat.nemotron, .glm, .kimi, .minimax] {
+                CustomModelStore.upsert(CustomAgentModel(id: Self.customId, label: "B", sizeBytes: 0, note: "", toolFormat: format))
+                XCTAssertEqual(AgentModelRegistry.toolFormat(for: Self.customId), format)
+                for c in cases {
+                    for p in paths {
+                        for chunks in [[c.text]] + (p.isCodex ? Self.cuts(c.text) : []) {
+                            let (a, text) = try await ask(p, chunks)
+                            let where_ = "\(format) \(p) \(chunks): \(text)"
+                            XCTAssertFalse(text.contains("plan"), "think text is never sent. \(where_)")
+                            XCTAssertEqual(a.calls, 0, where_)
+                            // The no-tools stream paths stop at "<think>": no delta; the chat stream has no final.
+                            let streamsNothing = p.stream && !p.tools
+                            if p.stream { XCTAssertEqual(a.deltas, streamsNothing ? "" : c.answer, where_) }
+                            XCTAssertEqual(a.final, p.wire == "chat/completions" && streamsNothing ? "" : c.answer, where_)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// R1181-j: an answer over 10 characters that starts with whitespace, no think block. Before, on the codex path
+    /// (responses, stream, tools) the stream sent the whitespace and all but the last 10 characters, the parse trimmed
+    /// the whitespace, the tail compare failed and the last 10 characters never went out ("\nThe files are listed").
+    /// Now the tail compares past leading whitespace: the deltas joined are the whitespace then the whole answer; only
+    /// that cell changes. The other cells, as before: the chat stream with tools sends the trimmed parse; the no-tools
+    /// stream paths send the whitespace too (their final texts are trimmed, as every parse is).
+    func testLeadingWhitespaceAnswerKeepsItsTailOnEveryPath() async throws {
+        try await withServer { ask in
+            for lead in ["\n", "  ", "\n\n"] {
+                for answer in ["Done, yes!!", "The files are listed above now"] {
+                    let text = lead + answer
+                    for p in paths {
+                        for chunks in [[text]] + (p.stream ? Self.cuts(text) : []) {
+                            let (a, body) = try await ask(p, chunks)
+                            let where_ = "\(p) \(chunks): \(body)"
+                            let raw = p.stream && !(p.wire == "chat/completions" && p.tools)
+                            if p.stream { XCTAssertEqual(a.deltas, raw ? text : answer, where_) }
+                            XCTAssertEqual(a.final, p.wire == "chat/completions" && raw ? text : answer, where_)
+                            XCTAssertEqual(a.calls, 0, where_)
+                            if p.wire == "responses" { XCTAssertEqual(a.messageItems, 1, where_) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

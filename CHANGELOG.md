@@ -1187,6 +1187,9 @@ tag from the now-released section and put it on the new top draft.
   loaded when the model setting changes in between (#1181)
 - Remote Terminal: a phone's session list or screen read that needs a second dch call waits at most
   10 s in all, not 10 s per call (#988)
+- Agent: with Nemotron, GLM, Kimi or MiniMax models an unusual character right after the thinking
+  tag no longer shows the model's reasoning as its answer, and a long answer that starts with a
+  blank line keeps its last characters in the agent window (#1181)
 
 ## v2.174.0
 
