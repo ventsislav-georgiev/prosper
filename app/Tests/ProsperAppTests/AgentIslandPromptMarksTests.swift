@@ -3,7 +3,7 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1251: on the island's permission card a character with more than two combining marks (Mn, Me) makes the prompt
+/// #1251: on the island's permission card a base with more than three combining marks (Mn, Me, R1251-s1a) makes the prompt
 /// hidden (only a deny answers, the hidden caption shows) and the card shows the further marks escaped after the
 /// character; every prompt row is clipped to its fixed slot. Rows build prompts and the card model and read them;
 /// nothing is sent. Renders are offscreen (ImageRenderer, scale 1, no window, no file). Prompt texts are made up.
@@ -29,26 +29,28 @@ final class AgentIslandPromptMarksTests: XCTestCase {
 
     // MARK: visible
 
-    func testVisibleKeepsTwoMarksAndEscapesTheRestAfterTheCharacter() {
-        // the short case written out: two marks kept, two tokens
-        XCTAssertEqual(Self.scalars(AgentPrompt.visible("a\u{0323}\u{0323}\u{0323}\u{0323}")),
-                       Self.scalars("a\u{0323}\u{0323}\u{27E8}U+0323\u{27E9}\u{27E8}U+0323\u{27E9}"))
+    func testVisibleKeepsThreeMarksAndEscapesTheRestAfterTheCharacter() {
+        // the short case written out: three marks kept, two tokens
+        XCTAssertEqual(Self.scalars(AgentPrompt.visible("a\u{0323}\u{0323}\u{0323}\u{0323}\u{0323}")),
+                       Self.scalars("a\u{0323}\u{0323}\u{0323}\u{27E8}U+0323\u{27E9}\u{27E8}U+0323\u{27E9}"))
         for (mark, hex) in [("\u{0323}", "0323"), ("\u{0301}", "0301"), ("\u{20DD}", "20DD")] {
             let shown = AgentPrompt.visible("x" + Self.stack("a", mark, 24) + "y")
-            let expected = "x" + Self.stack("a", mark, 2) + String(repeating: Self.token(hex), count: 22) + "y"
+            let expected = "x" + Self.stack("a", mark, 3) + String(repeating: Self.token(hex), count: 21) + "y"
             XCTAssertEqual(Self.scalars(shown), Self.scalars(expected), hex)
-            XCTAssertTrue(shown.allSatisfy { $0.unicodeScalars.lazy.filter(AgentPrompt.isMark).count <= 2 }, hex)
+            XCTAssertTrue(shown.allSatisfy { $0.unicodeScalars.lazy.filter(AgentPrompt.isMark).count <= 3 }, hex)
         }
-        // two marks on a character: unchanged
-        for word in ["Vi\u{0065}\u{0323}\u{0302}t", "Caf\u{0065}\u{0301}"] {
+        // two or three marks on a character: unchanged
+        // the last: two marks, a spacing mark (Mc), two marks, one character with two bases
+        for word in ["Vi\u{0065}\u{0323}\u{0302}t", "Caf\u{0065}\u{0301}", "a\u{0323}\u{0301}\u{0302}",
+                     "\u{0915}\u{0951}\u{0952}\u{0903}\u{0951}\u{0952}"] {
             XCTAssertEqual(Self.scalars(AgentPrompt.visible(word)), Self.scalars(word), word)
         }
         // a spacing mark (Mc) is not counted
         let spacing = Self.stack("\u{0915}", "\u{0903}", 4)
         XCTAssertEqual(Self.scalars(AgentPrompt.visible(spacing)), Self.scalars(spacing))
         // a direction override and a mark stack: both escaped, in order
-        XCTAssertEqual(Self.scalars(AgentPrompt.visible("\u{202E}a\u{0301}\u{0301}\u{0301}b")),
-                       Self.scalars("\u{27E8}U+202E\u{27E9}a\u{0301}\u{0301}\u{27E8}U+0301\u{27E9}b"))
+        XCTAssertEqual(Self.scalars(AgentPrompt.visible("\u{202E}a\u{0301}\u{0301}\u{0301}\u{0301}b")),
+                       Self.scalars("\u{27E8}U+202E\u{27E9}a\u{0301}\u{0301}\u{0301}\u{27E8}U+0301\u{27E9}b"))
     }
 
     /// Plain ASCII takes the fast path: the very same string comes back (same UTF-8 storage), nothing rebuilt.
@@ -65,8 +67,9 @@ final class AgentIslandPromptMarksTests: XCTestCase {
 
     // MARK: hasHiddenCharacters
 
-    func testAMarkStackInEachFieldIsHiddenAndTwoMarksAreNot() {
-        for (s, hidden) in [(Self.stack("a", "\u{0323}", 3), true), ("Vi\u{0065}\u{0323}\u{0302}t Caf\u{0065}\u{0301}", false)] {
+    func testAMarkStackInEachFieldIsHiddenAndThreeMarksAreNot() {
+        for (s, hidden) in [(Self.stack("a", "\u{0323}", 4), true), ("Vi\u{0065}\u{0323}\u{0302}t Caf\u{0065}\u{0301}", false),
+                            (Self.stack("a", "\u{0323}", 3), false)] {
             let cases: [(String, AgentPrompt)] = [
                 ("question", Self.prompt(question: s)), ("context", Self.prompt(context: Self.context + [s])),
                 ("preview", Self.prompt(preview: ["plain", s])), ("notes", Self.prompt(notes: [s])),
@@ -97,7 +100,7 @@ final class AgentIslandPromptMarksTests: XCTestCase {
 
     @MainActor
     func testAStackedQuestionOrContextLineIsDenyOnlyAndDrawnEscaped() throws {
-        let stacked = "a\u{0323}\u{0323}\u{0323}\u{0323}", escaped = "a\u{0323}\u{0323}\u{27E8}U+0323\u{27E9}\u{27E8}U+0323\u{27E9}"
+        let stacked = "a\u{0323}\u{0323}\u{0323}\u{0323}\u{0323}", escaped = "a\u{0323}\u{0323}\u{0323}\u{27E8}U+0323\u{27E9}\u{27E8}U+0323\u{27E9}"
         let cases: [(String, AgentPrompt, String)] = [
             ("question", Self.prompt(question: "Proceed with \(stacked)?"), "Proceed with \(escaped)?"),
             ("context", Self.prompt(context: ["Bash command", "ls /Users/example/\(stacked)"]), "ls /Users/example/\(escaped)"),
@@ -112,17 +115,17 @@ final class AgentIslandPromptMarksTests: XCTestCase {
             let texts = try drawn(p)
             XCTAssertTrue(texts.contains { Self.scalars($0) == Self.scalars(row) }, "\(what): drawn \(texts)")
             XCTAssertTrue(texts.contains("Hidden characters in this prompt, open the terminal to approve"), what)
-            XCTAssertFalse(texts.contains { $0.contains { $0.unicodeScalars.lazy.filter(AgentPrompt.isMark).count > 2 } },
-                           "\(what): no drawn character carries more than two marks")
+            XCTAssertFalse(texts.contains { $0.contains { $0.unicodeScalars.lazy.filter(AgentPrompt.isMark).count > 3 } },
+                           "\(what): no drawn character carries more than three marks")
         }
     }
 
-    /// The control of the rule: the same prompts with two marks per character are not hidden and every answer is on.
+    /// The control of the rule: the same prompts with three marks on a base (R1251-s1a) are not hidden and every answer is on.
     @MainActor
-    func testTwoMarksPerCharacterStayApprovable() throws {
-        let two = "a\u{0323}\u{0302}"
-        let cases: [(AgentPrompt, String)] = [(Self.prompt(question: "Proceed with \(two)?"), "Proceed with \(two)?"),
-                                              (Self.prompt(context: ["Bash command", "ls /Users/example/\(two)"]), "ls /Users/example/\(two)")]
+    func testThreeMarksPerBaseStayApprovable() throws {
+        let three = "a\u{0323}\u{0301}\u{0302}"
+        let cases: [(AgentPrompt, String)] = [(Self.prompt(question: "Proceed with \(three)?"), "Proceed with \(three)?"),
+                                              (Self.prompt(context: ["Bash command", "ls /Users/example/\(three)"]), "ls /Users/example/\(three)")]
         for (p, row) in cases {
             XCTAssertFalse(p.hasHiddenCharacters, row)
             XCTAssertEqual(p.layout.caption, [], row)
@@ -213,12 +216,13 @@ final class AgentIslandPromptMarksTests: XCTestCase {
     }
 
     @MainActor
-    func testAThirdMarkOnOneBaseIsHiddenAndEscaped() {
+    func testAFourthMarkOnOneBaseIsHiddenAndEscaped() {
         let cases = [
-            // a Latin letter with three marks
-            ("a\u{0323}\u{0301}\u{0302}", "a\u{0323}\u{0301}" + Self.token("0302")),
-            // a Hindi conjunct whose second consonant carries three marks (vowel sign u, anusvara, stress sign)
-            ("\u{0938}\u{094D}\u{0924}\u{0941}\u{0902}\u{0951}", "\u{0938}\u{094D}\u{0924}\u{0941}\u{0902}" + Self.token("0951")),
+            // a Latin letter with four marks
+            ("a\u{0323}\u{0301}\u{0302}\u{0304}", "a\u{0323}\u{0301}\u{0302}" + Self.token("0304")),
+            // a Hindi conjunct whose second consonant carries four marks (vowel sign u, anusvara, two stress signs)
+            ("\u{0938}\u{094D}\u{0924}\u{0941}\u{0902}\u{0951}\u{0952}",
+             "\u{0938}\u{094D}\u{0924}\u{0941}\u{0902}\u{0951}" + Self.token("0952")),
         ]
         for (s, shown) in cases {
             let p = Self.prompt(question: "Proceed with \(s)?")
@@ -235,12 +239,16 @@ final class AgentIslandPromptMarksTests: XCTestCase {
         let texts = [
             "ls /Users/example",                                   // plain
             "Caf\u{0065}\u{0301}", "Vi\u{0065}\u{0323}\u{0302}t", // at most two marks on a letter
-            "a\u{0323}\u{0323}\u{0323}",                          // three marks on one letter
-            "a\u{0323}\u{0323}b\u{0301}\u{0301}",                 // two marks on each of two letters
-            "a\u{0323}\u{0323}\u{0323}b\u{0301}\u{0301}\u{0301}", // three marks on each of two letters
-            "\u{0938}\u{094D}\u{0924}\u{0941}\u{0902}\u{0951}",   // a Hindi conjunct, three marks on its second consonant
-            "\u{0938}\u{093C}\u{094D}\u{0951}\u{0924}",           // a Hindi conjunct, three marks on its first consonant
+            "a\u{0323}\u{0323}\u{0323}",                          // three marks on one letter: kept
+            "a\u{0323}\u{0323}\u{0323}\u{0323}",                  // four marks on one letter
+            "a\u{0323}\u{0323}\u{0323}b\u{0301}\u{0301}\u{0301}", // three marks on each of two letters: kept
+            "a\u{0323}\u{0323}\u{0323}\u{0323}b\u{0301}\u{0301}\u{0301}\u{0301}", // four marks on each of two letters
+            "\u{0938}\u{094D}\u{0924}\u{0941}\u{0902}\u{0951}",   // a Hindi conjunct, three marks on its second consonant: kept
+            "\u{0938}\u{094D}\u{0924}\u{0941}\u{0902}\u{0951}\u{0952}", // the same, four marks on its second consonant
+            "\u{0938}\u{093C}\u{094D}\u{0951}\u{0924}",           // a Hindi conjunct, three marks on its first consonant: kept
+            "\u{0938}\u{093C}\u{094D}\u{0951}\u{0952}\u{0924}",   // the same, four marks on its first consonant
             "\u{0915}\u{0903}\u{0903}\u{0903}",                   // spacing marks (Mc), not counted
+            "\u{0915}\u{0951}\u{0952}\u{0903}\u{0951}\u{0952}", // two marks, a spacing mark, two marks: one character, two bases
         ] + OutsideTextTests.words + [OutsideTextTests.bengali]
         for s in texts {
             let changed = Self.scalars(OutsideText.capMarks(s)) != Self.scalars(s)

@@ -73,8 +73,8 @@ final class ManagedConfigConsentModel: ObservableObject {
     }
 
     /// #1235 (B-INFO-6): the manifest's display name as shown: outside data, so every control, format (direction),
-    /// separator and other unseen scalar is dropped by the tree's rule for shown outside strings, then each character keeps
-    /// at most 2 combining marks (B1235-1), then the 120 cut. nil when none is known, and nil for a title shaped like an
+    /// separator and other unseen scalar is dropped by the tree's rule for shown outside strings, then each base keeps
+    /// at most three combining marks (B1235-1, OutsideText.maxMarks), then the 120 cut. nil when none is known, and nil for a title shaped like an
     /// id (R1235-d: id characters with a dot) or equal to this owner's id: the id is then shown alone.
     var displayName: String? {
         let cleaned = OutsideText.shown(changes.displayName ?? "", max: .max)
@@ -165,10 +165,14 @@ final class ManagedConfigConsentModel: ObservableObject {
 /// bytes written keep every scalar, so the display drops none of them:
 /// - a scalar OutsideText.isUnseen names is shown as the escape \u{XXXX} (its code point, uppercase hex, at least four
 ///   digits), except a tab, which draws as blank space inside its own line and stays;
-/// - a character keeps its first two combining marks as marks (OutsideText.capMarks) and shows each further one as its
-///   escape right after it;
+/// - each base keeps its first three combining marks as marks (OutsideText.capMarks, OutsideText.maxMarks) and shows each
+///   further one as its escape IN PLACE, where it is written (#1251 F1251-s1-b): what follows a dropped mark is another
+///   dropped mark, a scalar that is not a mark, or the end, so an escape never parts a kept mark from its base and the
+///   scalars are shown in the order they are written;
 /// - a run of backslashes (with the marks on them) shown just before an escape or before a literal "u{" is doubled: before
-///   "u{", an odd run of backslashes ends in an escape of ours, an even run is the line's own backslashes, each shown twice;
+///   "u{", an odd run of backslashes ends in an escape of ours, an even run is the line's own backslashes, each shown twice.
+///   A dropped mark's escape comes right after the kept marks of its base, so a backslash base's run is doubled before it
+///   exactly as before any other escape;
 /// - past `ceiling` scalars the rest is counted, not shown, and the line says so;
 /// - a text whose first letter is not an ASCII letter gets U+200E in front, so it is drawn left to right in the order it is
 ///   written (a right-to-left word still reads right to left inside its own run); an ASCII-only text is drawn as before.
@@ -187,17 +191,18 @@ enum ManagedConfigConsentDisplay {
         var pieces: [(scalar: Unicode.Scalar, escaped: Bool)] = []
         for ch in String(head) {
             let kept = Array(OutsideText.capMarks(String(ch)).unicodeScalars)
-            var further: [Unicode.Scalar] = [], k = 0
-            // capMarks only drops marks, and every scalar it keeps after a dropped one is not a mark: this walk is exact
+            var k = 0
+            // capMarks only drops marks, and the FIRST scalar it keeps after a dropped one is not a mark (the count per base
+            // runs on until a non-mark): a dropped mark never equals the next kept scalar, so this walk is exact
             for u in ch.unicodeScalars {
                 if k < kept.count, kept[k] == u {
                     pieces.append((u, u != "\t" && OutsideText.isUnseen(u)))
                     k += 1
                 } else {
-                    further.append(u)
+                    // a dropped mark: its escape in place, in the written order
+                    pieces.append((u, true))
                 }
             }
-            for u in further { pieces.append((u, true)) }
         }
         var out = String.UnicodeScalarView(), run: [Unicode.Scalar] = []
         func flush(doubled: Bool) {

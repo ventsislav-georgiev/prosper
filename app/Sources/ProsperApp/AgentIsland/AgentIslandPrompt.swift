@@ -106,9 +106,10 @@ struct AgentPrompt: Hashable {
             }
     }
 
-    /// #1251: the marks one base may carry and still be drawn as it is (OutsideText.capMarks' count, per base: each
-    /// consonant of a conjunct is its own base); the card shows the further ones escaped, after the character.
-    static let maxMarks = 2
+    /// #1251: the marks one base may carry and still be drawn as it is: OutsideText's one number, three (R1251-s1a),
+    /// counted per base (each consonant of a conjunct is its own base); the card shows the further ones escaped, after
+    /// the character.
+    static let maxMarks = OutsideText.maxMarks
 
     /// #1251 B1251-2: the one rule of both `hasHiddenCharacters` and `visible`: `marks` counts the marks on the current
     /// base and starts again at every scalar that is not a mark; true for a mark past `maxMarks`.

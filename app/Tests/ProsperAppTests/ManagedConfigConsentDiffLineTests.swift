@@ -4,8 +4,8 @@ import XCTest
 @testable import ProsperApp
 
 /// #1252 (QA F1054-1): the consent sheet's diff lines, path, notes and backup line are outside text. Each is shown through
-/// ManagedConfigConsentDisplay (an unseen scalar as its visible escape, at most two marks per character drawn as marks and
-/// the rest as escapes, backslashes before "u{" doubled, a 2000-scalar ceiling with a counted rest) and each diff line is
+/// ManagedConfigConsentDisplay (an unseen scalar as its visible escape, at most three marks per base drawn as marks and
+/// each further one as its escape in place, backslashes before "u{" doubled, a 2000-scalar ceiling with a counted rest) and each diff line is
 /// clipped to its own bounds. The bytes written are not touched. Hand-built change sets (com.example.kit, /Users/example
 /// paths: nothing read or written) except the written-bytes row, which works in its own tempDir() (makeMCEnv). The render
 /// row draws with ImageRenderer only (no window, no file); the sheet row hosts the view in a never-shown window through
@@ -70,13 +70,88 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         check("\u{2764}\u{FE0F}", "\u{200E}\u{2764}\\u{FE0F}", "heart")
     }
 
-    func testMarksPastTwoShowAsEscapesAfterTheirCharacter() {
+    /// #1251 step 2 (F1251-s1-b): three marks per base (OutsideText.maxMarks); each further one is shown as its escape
+    /// where it is written, so the display keeps the written order even when the character goes on after it.
+    func testMarksPastThreeShowAsEscapesInPlace() {
         let a24 = "a" + String(repeating: "\u{0323}", count: 24)
-        check(a24, "a\u{0323}\u{0323}" + String(repeating: "\\u{0323}", count: 22), "24 marks")
-        check(a24 + "b", "a\u{0323}\u{0323}" + String(repeating: "\\u{0323}", count: 22) + "b", "24 marks then b")
-        check("a\u{0323}\u{0301}\u{0302}b", "a\u{0323}\u{0301}\\u{0302}b", "three kinds")
-        // a joiner inside one character: escaped in place; the marks after it count on the same character
-        check("a\u{0323}\u{200D}\u{0301}\u{0302}", "a\u{0323}\\u{200D}\u{0301}\\u{0302}", "joiner")
+        check(a24, "a\u{0323}\u{0323}\u{0323}" + String(repeating: "\\u{0323}", count: 21), "24 marks")
+        check(a24 + "b", "a\u{0323}\u{0323}\u{0323}" + String(repeating: "\\u{0323}", count: 21) + "b", "24 marks then b")
+        check("a\u{0323}\u{0301}\u{0302}b", "a\u{0323}\u{0301}\u{0302}b", "three kinds, kept")
+        check("a\u{0323}\u{0301}\u{0302}\u{0304}b", "a\u{0323}\u{0301}\u{0302}\\u{0304}b", "four kinds")
+        // the old joiner row (was: the last mark escaped, counted over the whole character). The count is per base and the
+        // joiner is not a mark, so it starts a new count: one mark before it, two after it, nothing past three, all kept
+        check("a\u{0323}\u{200D}\u{0301}\u{0302}", "a\u{0323}\\u{200D}\u{0301}\u{0302}", "joiner, nothing dropped")
+        // a joiner between two groups of four marks: the fourth of each group escaped where it is written, the joiner after
+        // the first group's escape (the rule before step 2 showed both escapes after the whole character)
+        check("a\u{0323}\u{0323}\u{0323}\u{0323}\u{200D}\u{0301}\u{0301}\u{0301}\u{0301}",
+              "a\u{0323}\u{0323}\u{0323}\\u{0323}\\u{200D}\u{0301}\u{0301}\u{0301}\\u{0301}", "joiner between two groups")
+        // a conjunct whose fourth mark on its first consonant is the virama: escaped before the last consonant
+        // (ka, nukta, two stress signs, virama, ssa)
+        check("\u{0915}\u{093C}\u{0951}\u{0952}\u{094D}\u{0937}",
+              "\u{200E}\u{0915}\u{093C}\u{0951}\u{0952}\\u{094D}\u{0937}", "fourth mark a virama")
+        // a spacing mark (Mc, visarga) after four marks: not counted, kept after the fourth mark's escape
+        check("\u{0915}\u{093C}\u{0951}\u{0952}\u{0953}\u{0903}",
+              "\u{200E}\u{0915}\u{093C}\u{0951}\u{0952}\\u{0953}\u{0903}", "spacing mark after four")
+    }
+
+    /// The display read back to what is written: each escape of ours becomes its scalar, a doubled backslash one backslash
+    /// and a leading U+200E (added by the display) goes. A run of backslashes, with the marks on them, is doubled only
+    /// before "u{", so only there is it halved; an odd run there ends in an escape of ours.
+    private static func readBack(_ shown: String) -> [UInt32] {
+        var s = Array(shown.unicodeScalars)
+        if s.first == "\u{200E}" { s.removeFirst() }
+        func isMark(_ u: Unicode.Scalar) -> Bool {
+            let g = u.properties.generalCategory
+            return g == .nonspacingMark || g == .enclosingMark
+        }
+        var out: [UInt32] = [], i = 0
+        while i < s.count {
+            guard s[i] == "\\" else { out.append(s[i].value); i += 1; continue }
+            var j = i
+            while j < s.count, s[j] == "\\" || isMark(s[j]) { j += 1 }
+            let run = s[i..<j]
+            guard j + 1 < s.count, s[j] == "u", s[j + 1] == "{" else { out += run.map(\.value); i = j; continue }
+            let slashes = run.filter { $0 == "\\" }.count
+            var seen = 0
+            for u in run {
+                if u != "\\" { out.append(u.value); continue }
+                seen += 1
+                // the first of each doubled pair; an odd run's last backslash opens an escape
+                if seen % 2 == 1, seen < slashes || slashes % 2 == 0 { out.append(u.value) }
+            }
+            guard slashes % 2 == 1 else { i = j; continue }
+            var k = j + 2, hex = ""
+            while k < s.count, s[k] != "}" { hex.unicodeScalars.append(s[k]); k += 1 }
+            guard k < s.count, let v = UInt32(hex, radix: 16) else {
+                XCTFail("not an escape of ours at \(j) in \(shown.debugDescription)")
+                return out
+            }
+            out.append(v)
+            i = k + 1
+        }
+        return out
+    }
+
+    /// ORDER (#1251 step 2): over a literal table, the displayed line read back gives the written scalars in the written
+    /// order. The read-back is proved first on two plain lines, one with the line's own escape-shaped text.
+    func testTheDisplayReadsBackToTheWrittenScalarsInOrder() {
+        for plain in ["ls -la /Users/example", "path\\u{41} = \"\\\\n\""] {
+            XCTAssertEqual(Self.readBack(ManagedConfigConsentDisplay.displayed(plain)), Self.scalars(plain), plain)
+        }
+        let lines: [String] = [
+            "a\u{0323}\u{0323}\u{0323}\u{0323}\u{200D}\u{0301}\u{0301}\u{0301}\u{0301}", // a joiner between two groups of four marks
+            "\u{0915}\u{093C}\u{0951}\u{0952}\u{094D}\u{0937}",                       // a fourth mark (virama) before the last consonant
+            "\u{0915}\u{093C}\u{0951}\u{0952}\u{0953}\u{0903}",                       // a spacing mark after four marks
+            "\\" + String(repeating: "\u{0323}", count: 4) + "x",                    // a backslash base with four marks, then x
+            "a" + String(repeating: "\u{0301}", count: 24) + "b\u{202E}c",            // 24 marks, then an override
+            "\u{05D1}\u{05BC}\u{05B8}\u{05BD}\u{05B0} \u{05E9}",                      // Hebrew: four marks on bet, then a word
+            "\\\\u{41} e\u{0301}\u{0301}\u{0301}\u{0301}\u{0302}",                     // escape-shaped text, then five marks
+            "\tk = 1\u{2028}x",                                                      // a tab kept, a line separator escaped
+        ]
+        for line in lines {
+            let shown = ManagedConfigConsentDisplay.displayed(line)
+            XCTAssertEqual(Self.readBack(shown), Self.scalars(line), "\(Self.scalars(line)) shown \(shown.debugDescription)")
+        }
     }
 
     /// A backslash run shown just before "u{" or before an escape is doubled: an escape of ours always follows an even run.
@@ -87,7 +162,11 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         check("\\\\\u{202E}", "\\\\\\\\\\u{202E}", "two backslashes then a real override")
         // R1252-q1: a mark is the first non-ASCII scalar here: U+200E in front
         check("\\\u{0301}\u{202E}", "\u{200E}\\\\\u{0301}\\u{202E}", "a backslash with a mark then a real override")
-        check("\\" + String(repeating: "\u{0323}", count: 3), "\u{200E}\\\\\u{0323}\u{0323}\\u{0323}", "a backslash with three marks")
+        check("\\" + String(repeating: "\u{0323}", count: 3), "\u{200E}\\\u{0323}\u{0323}\u{0323}", "a backslash with three marks, kept")
+        // QA r1104: a backslash base with four marks, then a kept letter: the fourth mark's escape comes in place, right
+        // after the kept marks, so the run (the backslash with its marks) is doubled before it
+        check("\\" + String(repeating: "\u{0323}", count: 4) + "x", "\u{200E}\\\\\u{0323}\u{0323}\u{0323}\\u{0323}x",
+              "a backslash with four marks, then x")
         check("a\\b\\", "a\\b\\", "other backslashes stay single")
     }
 
@@ -98,7 +177,7 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         // the ceiling counts scalars: 1000 letters with 4 marks each are 5000 scalars, 400 letters shown; the rest is
         // counted in characters (R1252-q3): 600 letters with their marks
         let stacked = String(repeating: "a\u{0323}\u{0323}\u{0323}\u{0323}", count: 1000)
-        let shown = String(repeating: "a\u{0323}\u{0323}\\u{0323}\\u{0323}", count: 400) + "\u{2026} (+600 more characters, not shown)"
+        let shown = String(repeating: "a\u{0323}\u{0323}\u{0323}\\u{0323}", count: 400) + "\u{2026} (+600 more characters, not shown)"
         check(stacked, shown, "stacked 5000")
     }
 
@@ -176,9 +255,9 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
     private static let shownPath = "/Users/example/.claude/no\\u{202E}tes.md"
     private static let note = "Claude Code will run `kit\u{202E}run` as the status line in every session."
     private static let shownNote = "Claude Code will run `kit\\u{202E}run` as the status line in every session."
-    /// Three marks on two letters, then an override: one short line once displayed.
-    private static let hostile = "a\u{0323}\u{0323}\u{0323}b\u{0323}\u{0323}\u{0323}\u{202E}cd"
-    private static let shownHostile = "+ a\u{0323}\u{0323}\\u{0323}b\u{0323}\u{0323}\\u{0323}\\u{202E}cd"
+    /// Four marks on two letters, then an override: one short line once displayed.
+    private static let hostile = "a\u{0323}\u{0323}\u{0323}\u{0323}b\u{0323}\u{0323}\u{0323}\u{0323}\u{202E}cd"
+    private static let shownHostile = "+ a\u{0323}\u{0323}\u{0323}\\u{0323}b\u{0323}\u{0323}\u{0323}\\u{0323}\\u{202E}cd"
     private static let ordinary = "+ Always ask first."
 
     private static func file(lines: [ManagedConfigChangeSet.Line]) -> ManagedConfigChangeSet.File {

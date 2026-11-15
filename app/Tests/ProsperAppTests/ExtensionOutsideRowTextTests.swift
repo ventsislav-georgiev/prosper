@@ -48,10 +48,10 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
     func testTheFunctionCleansAndBoundsEachField() throws {
         let t = ExtensionRowText.title(Self.stacked(Self.letters, ["\u{0301}"]), id: "com.example.kit")
         XCTAssertEqual(t.count, Self.letters.count)
-        XCTAssertTrue(t.allSatisfy { Self.marks($0) <= 2 }, "\(Self.scalars(t).count) scalars")
+        XCTAssertTrue(t.allSatisfy { Self.marks($0) <= 3 }, "\(Self.scalars(t).count) scalars")
         XCTAssertEqual(String(t.compactMap { $0.unicodeScalars.first.map(Character.init) }), Self.letters, "every letter, in order")
         XCTAssertEqual(Self.scalars(ExtensionRowText.title(Self.stacked("ab", ["\u{0301}"]), id: "com.example.kit")),
-                       Self.scalars("a\u{0301}\u{0301}b\u{0301}\u{0301}"))
+                       Self.scalars("a\u{0301}\u{0301}\u{0301}b\u{0301}\u{0301}\u{0301}"))
         // a direction override and a zero-width character are dropped
         XCTAssertEqual(Self.scalars(ExtensionRowText.title("Ki\u{202E}t\u{200B}", id: "com.example.kit")), Self.scalars("Kit"))
         // a 500-character description is cut at 300
@@ -146,7 +146,7 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
     }
 
     /// An UNTRUSTED record with a hostile title, description and author: the tree holds the cleaned texts, no raw
-    /// override or zero-width character, no character with more than two marks, the UNTRUSTED badge and the warning.
+    /// override or zero-width character, no character with more than three marks, the UNTRUSTED badge and the warning.
     func testAnUntrustedRowWithHostileTextsShowsThemCleaned() throws {
         let title = "a" + String(repeating: "\u{0301}", count: 24) + "\u{202E}b\u{200B}c" + String(repeating: "\u{0301}", count: 24)
         let description = "d\u{202E}" + String(repeating: "x", count: 500)
@@ -154,7 +154,7 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
                                                      author: "Example\u{200B} Author\u{202E}")
         XCTAssertEqual(record.manifest.extension.title, title, "the decoded title is the raw value")
         let tree = rowTree(registry, record)
-        let wantTitle = "a\u{0301}\u{0301}bc\u{0301}\u{0301}"
+        let wantTitle = "a\u{0301}\u{0301}\u{0301}bc\u{0301}\u{0301}\u{0301}"
         let titleNode = try XCTUnwrap(tree.first { $0.named(wantTitle) }, "\(tree.map(\.names))")
         XCTAssertTrue(titleNode.names.contains { Self.scalars($0) == Self.scalars(wantTitle) }, "\(titleNode.names.map(Self.scalars))")
         XCTAssertTrue(tree.contains { $0.named("d" + String(repeating: "x", count: 298) + "\u{2026}") }, "the description, cut at 300")
@@ -163,7 +163,7 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
         for node in tree {
             for n in node.names {
                 XCTAssertFalse(n.unicodeScalars.contains { $0 == "\u{202E}" || $0 == "\u{200B}" }, "raw unseen scalar in \(Self.scalars(n))")
-                XCTAssertTrue(n.allSatisfy { Self.marks($0) <= 2 }, "more than two marks in \(Self.scalars(n).count) scalars")
+                XCTAssertTrue(n.allSatisfy { Self.marks($0) <= 3 }, "more than three marks in \(Self.scalars(n).count) scalars")
             }
         }
         XCTAssertTrue(tree.contains { $0.named("UNTRUSTED") && $0.frame.width > 0 }, "the badge")
@@ -256,7 +256,7 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
             icon: nil, license: nil, latest_version: "1.0.0\u{202E}", downloads: 3, updated_at: 0, kind: "theme", preview: nil)
         let tree = AXTreeSupport.tree(MarketplacePackageTexts(pkg: pkg).frame(width: 600, alignment: .leading),
                                       CGSize(width: 600, height: 200)) { $0.contains { $0.named("THEME") } }
-        let wantTitle = "a\u{0301}\u{0301}b\u{0301}\u{0301}c"
+        let wantTitle = "a\u{0301}\u{0301}\u{0301}b\u{0301}\u{0301}\u{0301}c"
         let titleNode = try XCTUnwrap(tree.first { $0.named(wantTitle) }, "\(tree.map(\.names))")
         XCTAssertTrue(titleNode.names.contains { Self.scalars($0) == Self.scalars(wantTitle) }, "\(titleNode.names.map(Self.scalars))")
         XCTAssertTrue(tree.contains { $0.named("d" + String(repeating: "x", count: 298) + "\u{2026}") }, "the description, cut at 300")
@@ -266,7 +266,7 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
         for node in tree {
             for n in node.names {
                 XCTAssertFalse(n.unicodeScalars.contains { $0 == "\u{202E}" || $0 == "\u{200B}" }, "raw unseen scalar in \(Self.scalars(n))")
-                XCTAssertTrue(n.allSatisfy { Self.marks($0) <= 2 }, "more than two marks in \(Self.scalars(n).count) scalars")
+                XCTAssertTrue(n.allSatisfy { Self.marks($0) <= 3 }, "more than three marks in \(Self.scalars(n).count) scalars")
             }
         }
     }

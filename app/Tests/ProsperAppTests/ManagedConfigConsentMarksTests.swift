@@ -3,8 +3,8 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1235 round 3 (QA 1047, B1235-1 and R1235-d): the consent sheet's title is outside data. Each character keeps at most
-/// two combining marks, the title line is clipped to its own bounds, and a title shaped like an id never stands over the
+/// #1235 round 3 (QA 1047, B1235-1 and R1235-d): the consent sheet's title is outside data. Each base keeps at most
+/// three combining marks (#1251 R1251-s1a), the title line is clipped to its own bounds, and a title shaped like an id never stands over the
 /// real id. Hand-built change sets (com.example.kit, /Users/example paths): nothing is read or written. The render row
 /// draws with ImageRenderer only (no window, no file); the sheet row hosts the view in a never-shown window through
 /// AXTreeSupport (flags on this process only, put back). Every row runs on main (the class is @MainActor).
@@ -36,31 +36,31 @@ final class ManagedConfigConsentMarksTests: XCTestCase {
 
     // MARK: the cap (b), on the model
 
-    func testEachCharacterOfTheTitleKeepsAtMostTwoMarks() throws {
+    func testEachBaseOfTheTitleKeepsAtMostThreeMarks() throws {
         for marks in [["\u{0323}"], ["\u{0301}"], ["\u{20DD}"], ["\u{0323}", "\u{0301}"]] {
             let tag = "marks \(Self.scalars(marks.joined()))"
             let m = model(Self.stacked(Self.letters, marks))
             let name = try XCTUnwrap(m.displayName, tag)
             XCTAssertEqual(name.count, Self.letters.count, tag)
-            XCTAssertTrue(name.allSatisfy { $0.unicodeScalars.count <= 3 && Self.marks($0) <= 2 }, "\(tag): \(Self.scalars(name).count) scalars")
+            XCTAssertTrue(name.allSatisfy { $0.unicodeScalars.count <= 4 && Self.marks($0) <= 3 }, "\(tag): \(Self.scalars(name).count) scalars")
             XCTAssertEqual(String(name.compactMap { $0.unicodeScalars.first.map(Character.init) }), Self.letters, "\(tag): every letter, in order")
             XCTAssertEqual(m.idLine, Self.owner, tag)
         }
         // the literal result for a short case, from 24 marks per letter
-        XCTAssertEqual(Self.scalars(model(Self.stacked("ab", ["\u{0323}"])).displayName), Self.scalars("a\u{0323}\u{0323}b\u{0323}\u{0323}"))
-        XCTAssertEqual(Self.scalars(model(Self.stacked("ab", ["\u{0301}"])).displayName), Self.scalars("a\u{0301}\u{0301}b\u{0301}\u{0301}"))
-        XCTAssertEqual(Self.scalars(model(Self.stacked("ab", ["\u{20DD}"])).displayName), Self.scalars("a\u{20DD}\u{20DD}b\u{20DD}\u{20DD}"))
-        // marks with no base: one character, bounded the same way (two marks kept, not empty), the id under it
+        XCTAssertEqual(Self.scalars(model(Self.stacked("ab", ["\u{0323}"])).displayName), Self.scalars("a\u{0323}\u{0323}\u{0323}b\u{0323}\u{0323}\u{0323}"))
+        XCTAssertEqual(Self.scalars(model(Self.stacked("ab", ["\u{0301}"])).displayName), Self.scalars("a\u{0301}\u{0301}\u{0301}b\u{0301}\u{0301}\u{0301}"))
+        XCTAssertEqual(Self.scalars(model(Self.stacked("ab", ["\u{20DD}"])).displayName), Self.scalars("a\u{20DD}\u{20DD}\u{20DD}b\u{20DD}\u{20DD}\u{20DD}"))
+        // marks with no base: one character, bounded the same way (three marks kept, not empty), the id under it
         let only = model(String(repeating: "\u{0323}", count: 24))
-        XCTAssertEqual(Self.scalars(only.displayName), Self.scalars("\u{0323}\u{0323}"))
+        XCTAssertEqual(Self.scalars(only.displayName), Self.scalars("\u{0323}\u{0323}\u{0323}"))
         XCTAssertEqual(only.idLine, Self.owner)
         // the cap counts after the cleaning: a dropped scalar between two groups of marks joins them on one letter
-        XCTAssertEqual(Self.scalars(model("a\u{0323}\u{0323}\u{0007}\u{0323}\u{0323}\u{0323}b").displayName), Self.scalars("a\u{0323}\u{0323}b"))
+        XCTAssertEqual(Self.scalars(model("a\u{0323}\u{0323}\u{0007}\u{0323}\u{0323}\u{0323}b").displayName), Self.scalars("a\u{0323}\u{0323}\u{0323}b"))
         // before the 120 cut: 200 stacked letters give 120 characters, each still bounded
         let long = try XCTUnwrap(model(Self.stacked(String(String(repeating: Self.letters, count: 8).prefix(200)), ["\u{0323}"])).displayName)
         XCTAssertEqual(long.count, 120)
         XCTAssertTrue(long.hasSuffix("\u{2026}"))
-        XCTAssertTrue(long.allSatisfy { $0.unicodeScalars.count <= 3 })
+        XCTAssertTrue(long.allSatisfy { $0.unicodeScalars.count <= 4 })
         // legitimate titles are unchanged
         XCTAssertEqual(Self.scalars(model("Fake Kit").displayName), Self.scalars("Fake Kit"))
         XCTAssertEqual(Self.scalars(model("Caf\u{0065}\u{0301}").displayName), Self.scalars("Caf\u{0065}\u{0301}"))
@@ -163,12 +163,12 @@ final class ManagedConfigConsentMarksTests: XCTestCase {
         return AXTreeSupport.tree(view, size) { t in t.contains { $0.named("Apply") } && t.contains { $0.named("Cancel") } && t.contains { $0.named(Self.owner) } }
     }
 
-    /// The sheet with a hostile manifest title: the id line holds the whole id, the title holds at most two marks per
+    /// The sheet with a hostile manifest title: the id line holds the whole id, the title holds at most three marks per
     /// character, and the id line and the buttons have the frames they have under "Fake Kit".
     func testAHostileTitleLeavesTheIdLineAndTheButtonsWhereTheyAre() throws {
         let plain = model("Fake Kit"), bad = model(Self.stacked(Self.letters, ["\u{0323}", "\u{0301}"]))
         XCTAssertEqual(bad.idLine, Self.owner)
-        XCTAssertTrue(bad.title.allSatisfy { $0.unicodeScalars.count <= 3 }, "the sheet's title is bounded")
+        XCTAssertTrue(bad.title.allSatisfy { $0.unicodeScalars.count <= 4 }, "the sheet's title is bounded")
         let size = fitting(plain)
         fputs("mc1235d fact sheet: fitted height plain \(size.height), hostile \(fitting(bad).height)\n", stderr)
         let a = tree(plain, size), b = tree(bad, size)
@@ -176,7 +176,7 @@ final class ManagedConfigConsentMarksTests: XCTestCase {
             abs(p.minX - q.minX) <= 0.5 && abs(p.minY - q.minY) <= 0.5 && abs(p.width - q.width) <= 0.5 && abs(p.height - q.height) <= 0.5
         }
         let titleNode = try XCTUnwrap(b.first { $0.named(bad.title) }, "\(b.map(\.name))")
-        XCTAssertTrue(titleNode.names.allSatisfy { $0.allSatisfy { $0.unicodeScalars.count <= 3 } }, "the title on the tree is bounded")
+        XCTAssertTrue(titleNode.names.allSatisfy { $0.allSatisfy { $0.unicodeScalars.count <= 4 } }, "the title on the tree is bounded")
         for label in [Self.owner, "Cancel", "Apply"] {
             let before = try XCTUnwrap(a.first { $0.named(label) && $0.frame.height > 0 }, "plain: \(label)")
             let after = try XCTUnwrap(b.first { $0.named(label) && $0.frame.height > 0 }, "hostile: \(label): \(b.map(\.name))")

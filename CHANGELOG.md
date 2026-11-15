@@ -1255,6 +1255,10 @@ tag from the now-released section and put it on the new top draft.
   now shows the reply's status and says "answered" instead of "served" for an error reply; importing
   from the Python ccpool no longer pushes out the pool's own conversation pins when the pin list is
   full.
+- Names, permission prompts and config change lines from extensions and agents now keep up to three
+  accent or vowel marks on each letter (so ordinary Hindi, Tibetan and pointed Hebrew words show
+  whole and stay approvable), and on the config consent sheet any further mark is shown as a visible
+  code right where it is written, in the original order.
 
 ## v2.174.0
 
