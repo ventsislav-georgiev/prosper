@@ -1556,6 +1556,14 @@ struct AgentInertComposer: View {
     }
 }
 
+/// #1239: the belt under the Rename field: a title-slot part (one with no accessibilityHidden of its own) leaves the
+/// accessibility tree while renaming by the flag itself, whatever the slot's opacity 0 does on a given macOS. Always
+/// applied, only its value changes: nothing is rebuilt, nothing moves. Per part, never on the slot (#1120).
+struct AgentHeaderRenameHidden: ViewModifier {
+    let renaming: Bool
+    func body(content: Content) -> some View { content.accessibilityHidden(renaming) }
+}
+
 struct AgentSessionHeader: View {
     let row: AgentSidebar.Row
     let session: AgentSession
@@ -1574,7 +1582,7 @@ struct AgentSessionHeader: View {
     /// The "⋯" menu's store: none for an ended session, so it offers only Open in terminal, off, and is disabled.
     var menuStore: AgentIslandStore? { ended ? nil : store }
     /// QA #668 INFO-4: the state chip reads "Ended" for an ended session, in the same slot.
-    var stateChip: AgentStateChip { AgentStateChip(state: session.state, ended: ended) }
+    var stateChip: AgentStateChip { AgentStateChip(state: session.state, ended: ended, renaming: renaming) }
     /// #829 G4: the title is a text field (Rename…) while `rename` is set; `endRename` gets the text on Return,
     /// nil on Esc or focus loss (true: the edit goes on).
     var rename: AgentRenameEdit?
@@ -1647,10 +1655,12 @@ struct AgentSessionHeader: View {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: sz(6)) {
                             if mode == .terminal { Text("·").accessibilityHidden(true) }   // after the chip; nothing leads Transcript's line
+                            // #1239: under the field only in Terminal mode (Transcript's second line is not in the slot).
                             AgentCountGroups(counts: row.counts, size: 11)
+                                .modifier(AgentHeaderRenameHidden(renaming: renaming && mode == .terminal))
                             if let ago {
                                 if !row.counts.isEmpty { Text("·").accessibilityHidden(true) }   // a count never runs into "4m ago"
-                                Text(ago)
+                                Text(ago).modifier(AgentHeaderRenameHidden(renaming: renaming && mode == .terminal))
                             }
                         }
                         .font(Neon.font(11)).foregroundStyle(Neon.textSecondary).lineLimit(1)
@@ -1666,9 +1676,10 @@ struct AgentSessionHeader: View {
     /// renaming, the field lies over the whole slot and its parts only go transparent, so nothing moves. The title, which
     /// names the session, takes the room and cuts at its tail.
     var titleSlot: some View {
-        // #1120: no accessibilityHidden here or on its parts: hidden(false) on the slot overrode the folder icon's own
-        // hidden when the header still drew a folder glyph (read "Move"). While renaming, the opacity 0 leaves the parts out of the tree (SwiftUI
-        // drops a fully transparent view; testRenameHidesTheTitleChipAndPathUnderTheFieldInTheTree reads it).
+        // #1120: no accessibilityHidden on the slot: hidden(false) on the slot overrode the folder icon's own hidden when
+        // the header still drew a folder glyph (read "Move"). While renaming, the opacity 0 leaves the parts out of the tree
+        // on macOS 27 (testRenameHidesTheTitleChipAndPathUnderTheFieldInTheTree); #1239: each part that has no hidden of its
+        // own carries AgentHeaderRenameHidden too, so no macOS depends on the opacity (the separators keep their own).
         Group { slotParts }
         .opacity(renaming ? 0 : 1)
         .overlay(alignment: .leading) {
@@ -1701,6 +1712,7 @@ struct AgentSessionHeader: View {
         HStack(alignment: .center, spacing: sz(8)) {
             let title = AgentProjectTitle(text: Text(row.title).font(Neon.font(15, weight: .semibold))
                 .foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail), label: row.title, project: project)
+                .modifier(AgentHeaderRenameHidden(renaming: renaming))
             if withFolder {
                 AgentWidthFloor(floor: Self.titleFloor) { title }.layoutPriority(1)
             } else {
@@ -1948,6 +1960,9 @@ struct AgentStateChip: View {
     /// QA #668 INFO-4: the session ended (the window's held row): "Ended", not its last live state.
     var ended = false
     static let endedLabel = "Ended"
+    /// #1239: the header's Rename field lies over the chip: the drawn chip leaves the tree (AgentHeaderRenameHidden). On the
+    /// drawn chip only: the width chips keep their own hidden(), which a hidden(false) above them could override (#1120).
+    var renaming = false
     /// QA #672 #3: Ended's own glyph (History rows' hollow dot), not Idle's filled one.
     static let endedGlyph = "○"
     /// The chip's words (and VoiceOver's).
@@ -1958,7 +1973,11 @@ struct AgentStateChip: View {
         ZStack(alignment: .leading) {
             ForEach(AgentState.allCases, id: \.self) { chip($0.glyph, $0.label, agentStateColor($0)).hidden() }
             chip(Self.endedGlyph, Self.endedLabel, Neon.textSecondary).hidden()
-            if ended { chip(Self.endedGlyph, label, Neon.textSecondary) } else { chip(state.glyph, label, agentStateColor(state)) }
+            if ended {
+                chip(Self.endedGlyph, label, Neon.textSecondary).modifier(AgentHeaderRenameHidden(renaming: renaming))
+            } else {
+                chip(state.glyph, label, agentStateColor(state)).modifier(AgentHeaderRenameHidden(renaming: renaming))
+            }
         }
         .fixedSize()
     }

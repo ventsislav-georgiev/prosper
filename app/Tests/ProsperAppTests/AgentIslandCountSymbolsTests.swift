@@ -257,6 +257,7 @@ final class AgentIslandCountSymbolsTests: XCTestCase {
             XCTAssertEqual(named.count, 1, "\(words): one element with any words, not a stray one: \(tree)")
             XCTAssertEqual(named.first?.label, words, "\(words): it carries the group's words")
             XCTAssertEqual(named.first?.help, words, "\(words): and has them as help")
+            XCTAssertEqual(named.first?.ignored, false, "\(words): the worded node is not ignored (an AX client is served it)")
         }
     }
 }

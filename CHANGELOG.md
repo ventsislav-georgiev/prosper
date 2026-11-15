@@ -1143,6 +1143,8 @@ tag from the now-released section and put it on the new top draft.
   kept (#988)
 - Remote Terminal: when the Tailscale whois check fails, the status line in Settings says to run
   tailscale whois with that address in Terminal to see why (#988)
+- Agent Sessions: while you rename a session, the title, state and counts under the Rename field are
+  hidden from VoiceOver by their own flag, not only by being transparent (#1239)
 
 ## v2.174.0
 
