@@ -415,7 +415,7 @@ private final class HTTPConnection: @unchecked Sendable {
         let promptTokens = Self.estimateTokens(chat.messages.map(\.content))
         let completionTokens = Self.estimateTokens(result.rawText)
         let body = ResponsesPayload.nonStreaming(
-            id: responseID, model: model, content: result.parsed.content,
+            id: responseID, model: model, content: Self.answer(result, format: format),
             toolCalls: result.parsed.toolCalls,
             promptTokens: promptTokens, completionTokens: completionTokens
         )
@@ -473,15 +473,22 @@ private final class HTTPConnection: @unchecked Sendable {
             }
             rawText = result.rawText
             self.log.info("responses: gen done — rawLen=\(result.rawText.count, privacy: .public) contentLen=\(result.parsed.content.count, privacy: .public) toolCalls=\(result.parsed.toolCalls.count, privacy: .public) rawHead=\(result.rawText.prefix(120), privacy: .public)")
-            if !result.parsed.content.isEmpty || addedItem {
+            // #1181: ended inside the think block with nothing streamed (a repair that streamed prose keeps it).
+            let notice = streamed.isEmpty && StreamSplitter.endsInThink(result.rawText, format: format)
+            if !result.parsed.content.isEmpty || addedItem || notice {
                 // Final text: the validated parse (falls back to what was streamed
                 // when a repair pass produced no prose). Emit only the unsent
                 // suffix as a delta; the done item carries the full text.
-                let final = result.parsed.content.isEmpty ? streamed : result.parsed.content
+                let final = notice ? StreamSplitter.unclosedThinkNotice
+                    : result.parsed.content.isEmpty ? streamed : result.parsed.content
                 if !addedItem {
                     emit("response.output_item.added", ResponsesPayload.outputItemAdded(
                         sequence: seq, index: outputIndex,
                         item: ResponsesPayload.messageItem(id: itemID, text: "", status: "in_progress")))
+                    if notice {   // the agent window shows text from deltas only
+                        emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
+                            sequence: seq, itemID: itemID, index: outputIndex, delta: final))
+                    }
                 } else if final.hasPrefix(streamed), final.count > streamed.count {
                     emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
                         sequence: seq, itemID: itemID, index: outputIndex,
@@ -523,8 +530,13 @@ private final class HTTPConnection: @unchecked Sendable {
                 emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
                     sequence: seq, itemID: itemID, index: outputIndex, delta: tail))
             }
+            let notice = StreamSplitter.endsInThink(rawText, format: format)
+            if notice {   // #1181: nothing was streamed; the line is the whole answer
+                emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
+                    sequence: seq, itemID: itemID, index: outputIndex, delta: StreamSplitter.unclosedThinkNotice))
+            }
             let parsed = ToolCallParser.parse(rawText, format: format)
-            let item = ResponsesPayload.messageItem(id: itemID, text: parsed.content)
+            let item = ResponsesPayload.messageItem(id: itemID, text: notice ? StreamSplitter.unclosedThinkNotice : parsed.content)
             emit("response.output_item.done", ResponsesPayload.outputItemDone(sequence: seq, index: outputIndex, item: item))
             output.append(item); outputIndex += 1
         }
@@ -550,7 +562,7 @@ private final class HTTPConnection: @unchecked Sendable {
         let promptTokens = Self.estimateTokens(request.messages.map(\.content))
         let completionTokens = Self.estimateTokens(result.rawText)
         let body = OpenAIChatResponse.nonStreaming(
-            id: responseID, model: model, content: result.parsed.content,
+            id: responseID, model: model, content: Self.answer(result, format: format),
             toolCalls: result.parsed.toolCalls,
             promptTokens: promptTokens, completionTokens: completionTokens
         )
@@ -570,8 +582,9 @@ private final class HTTPConnection: @unchecked Sendable {
             // Tool-capable turn: must buffer fully to validate/repair tool args
             // before emitting (cannot un-send a streamed tool call).
             let result = try await generateValidated(engine: engine, request: request, format: format)
-            if !result.parsed.content.isEmpty {
-                sendSSEChunk(OpenAIChatResponse.contentChunk(id: responseID, model: model, delta: result.parsed.content))
+            let content = Self.answer(result, format: format)
+            if !content.isEmpty {
+                sendSSEChunk(OpenAIChatResponse.contentChunk(id: responseID, model: model, delta: content))
             }
             if !result.parsed.toolCalls.isEmpty {
                 sendSSEChunk(OpenAIChatResponse.toolCallsChunk(id: responseID, model: model, toolCalls: result.parsed.toolCalls))
@@ -600,6 +613,9 @@ private final class HTTPConnection: @unchecked Sendable {
         let tail = splitter.finish()
         if !tail.isEmpty {
             sendSSEChunk(OpenAIChatResponse.contentChunk(id: responseID, model: model, delta: tail))
+        }
+        if splitter.endedInThink {   // #1181: nothing was streamed; the line is the whole answer
+            sendSSEChunk(OpenAIChatResponse.contentChunk(id: responseID, model: model, delta: StreamSplitter.unclosedThinkNotice))
         }
         sendSSEChunk(OpenAIChatResponse.finishChunk(id: responseID, model: model, reason: "stop"))
         sendSSEDone()
@@ -675,6 +691,11 @@ private final class HTTPConnection: @unchecked Sendable {
         // on a truncated generation.
         try Task.checkCancellation()
         return out
+    }
+
+    /// #1181: the buffered paths' answer text: the parse, or the fixed line when the output ended inside the think block.
+    private static func answer(_ result: GenerationResult, format: ToolCallFormat) -> String {
+        StreamSplitter.endsInThink(result.rawText, format: format) ? StreamSplitter.unclosedThinkNotice : result.parsed.content
     }
 
     private static func estimateTokens(_ s: String) -> Int { max(1, s.count / 4) }
@@ -895,6 +916,21 @@ struct StreamSplitter {
 
     /// UTF-8 bytes held back between calls (#893: rows pin the bound).
     var heldCount: Int { pending.utf8.count }
+
+    /// #1181: the one line a turn answers when its output ended inside the leading think block (token budget
+    /// reached, or never closed): no answer and no call, so a person saw nothing. A constant: think text is never shown.
+    static let unclosedThinkNotice = "The model stopped while still thinking and gave no answer. Try again, or ask for a smaller step."
+
+    /// After `finish()`: the output ended inside its leading think block (`endsInThink` on the streamed text).
+    var endedInThink: Bool { phase == .think }
+
+    /// The whole output opens a think block that never closes: `dropLeadingThink`'s unclosed case, by scalars.
+    static func endsInThink(_ text: String, format: ToolCallFormat) -> Bool {
+        guard format == .qwenXML || format == .hermesJSON else { return false }
+        let scalars = text.unicodeScalars
+        return scalars.starts(with: ToolCallParser.thinkOpen.unicodeScalars)
+            && ToolCallParser.scalarRange(of: ToolCallParser.thinkClose, in: scalars) == nil
+    }
 
     private mutating func advance(atEnd: Bool) -> String {
         // #1181: tags compared by Unicode scalars, as in `ToolCallParser.dropLeadingThink`.

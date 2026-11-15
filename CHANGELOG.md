@@ -1162,6 +1162,8 @@ tag from the now-released section and put it on the new top draft.
   failed unpack of a download shows one short sentence (#1182)
 - Marketplace: an install or update is refused when the package's own files declare another version
   than the Marketplace lists; nothing is changed and the message names both versions (#1182)
+- Local agent: a turn that ends while the model is still thinking now says so in one line instead of
+  finishing with no answer (#1181)
 
 ## v2.174.0
 
