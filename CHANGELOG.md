@@ -1082,6 +1082,9 @@ tag from the now-released section and put it on the new top draft.
   while their extension is turned off; a shortcut you already saved on one keeps its row and says
   its extension is off. The Quicklinks and Quickdirs runner modes also stop listing once their
   extension is off (#985)
+- Theme names and tint names from an extension now keep their emoji (families, flags, keycaps) and
+  are never cut in the middle of a character, while hidden and direction-changing characters are
+  still removed; a theme's name read aloud by VoiceOver is cleaned the same way (#928)
 
 ## v2.174.0
 

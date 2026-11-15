@@ -408,10 +408,16 @@ final class ThemeContrastTests: XCTestCase {
             .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
         XCTAssertGreaterThan(files.count, 50)
         let pins = [".preferredColorScheme(.dark)", ".preferredColorScheme(.light)",
-                    "NSAppearance(named: .darkAqua)", "NSAppearance(named: .aqua)"]
+                    "NSAppearance(named: .darkAqua)", "NSAppearance(named: .aqua)",
+                    ".environment(\\.colorScheme, .dark)", ".darkAqua", ".vibrantDark"]
+        // #928: file and pin allowed, each not a themed surface.
+        let allowed: Set<String> = [
+            "Theme.swift .darkAqua",   // ThemeAppearance.nsAppearanceName: the theme's own appearance, the source every surface reads
+            "AgentIslandView.swift .environment(\\.colorScheme, .dark)",   // the island is a black notch shape (Color.black) on every theme, no palette token
+        ]
         for f in files {
             let text = try String(contentsOf: f, encoding: .utf8)
-            for pin in pins where text.contains(pin) {
+            for pin in pins where text.contains(pin) && !allowed.contains("\(f.lastPathComponent) \(pin)") {
                 XCTFail("\(f.lastPathComponent) pins \(pin); use the theme's appearance")
             }
         }

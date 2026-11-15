@@ -509,8 +509,8 @@ final class ThemeVariantTests: XCTestCase {
     }
 
     /// INFO-4: a label loses control, format and invisible characters, is trimmed, and is cut
-    /// at 32 Unicode scalars: 32 kept whole, 33 cut to 32. Combining marks count one each.
-    func testTintLabelIsCleanedAndCappedAt32Scalars() throws {
+    /// at a Character edge: 32 Characters and at most 128 scalars (#928). 32 kept whole, 33 cut to 32.
+    func testTintLabelIsCleanedAndCappedAt32Characters() throws {
         func labels(_ base: String, _ variant: String) throws -> [String] {
             let enc = { (v: String) in String(data: try JSONSerialization.data(withJSONObject: [v], options: [.fragmentsAllowed]), encoding: .utf8)!.dropFirst().dropLast() }
             let b = try enc(base), v = try enc(variant)
@@ -522,7 +522,7 @@ final class ThemeVariantTests: XCTestCase {
         XCTAssertEqual(try labels(x32, x32), [x32, x32], "32 scalars: kept whole")
         XCTAssertEqual(try labels(x33, x33), [x32, x32], "33 scalars: cut to 32")
         let marks = "a" + String(repeating: "\u{0301}", count: 200)
-        XCTAssertEqual(try labels(marks, "Amber")[0].unicodeScalars.count, 32, "one Character of 201 scalars is cut by scalars")
+        XCTAssertEqual(try labels(marks, "Amber"), ["Default", "Amber"], "one Character over the scalar ceiling leaves nothing, so the default applies")
         XCTAssertEqual(try labels("Two words", "  Amber  "), ["Two words", "Amber"], "inner spaces stay")
         XCTAssertEqual(ThemeVariant.cleanLabel(String(repeating: "\u{200B}", count: 40) + "Lime"), "Lime", "the cap counts what is kept")
     }

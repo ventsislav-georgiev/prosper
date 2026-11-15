@@ -284,27 +284,53 @@ struct ThemeVariant: Sendable, Equatable {
         return out
     }
 
-    /// QA #744 INFO-4: a label reaches VoiceOver and a tooltip only, so 32 is room for a two-word
-    /// name in any script. Counted in Unicode scalars, which bound the bytes (one Character can
-    /// carry any number of combining marks).
+    /// QA #744 INFO-4: a label reaches VoiceOver and a tooltip only, so 32 characters is room for
+    /// a two-word name in any script. #928: counted in Characters (a cut never splits one), and
+    /// `labelScalarMax` bounds the bytes (one Character can carry any number of combining marks).
     static let labelMax = 32
+    static let labelScalarMax = 128
 
-    /// A label from a theme file (`tintLabel`, a variant's `label`): control, format and other
-    /// invisible characters dropped, ends trimmed, at most `labelMax` scalars. nil when it is not
-    /// a string or nothing visible is left, so the caller's default applies (the key, "Default").
+    /// A label from a theme file (`tintLabel`, a variant's `label`, a theme's title): every scalar
+    /// `OutsideText.isUnseen` refuses is dropped, except a ZWJ or VS16 inside an emoji sequence
+    /// (`keeps`); ends trimmed; then whole Characters up to `labelMax` and `labelScalarMax`. nil when
+    /// it is not a string or nothing visible is left, so the caller's default applies.
+    /// Linear in the label's length: one scalar pass, one trim, one Character pass that stops at the cap.
     static func cleanLabel(_ raw: Any?) -> String? {
         guard let s = raw as? String else { return nil }
-        let hidden: Set<Unicode.GeneralCategory> = [.control, .format, .lineSeparator, .paragraphSeparator,
-                                                    .privateUse, .surrogate, .unassigned]
         var kept = String.UnicodeScalarView()
-        kept.append(contentsOf: s.unicodeScalars.filter {
-            !$0.properties.isDefaultIgnorableCodePoint && !hidden.contains($0.properties.generalCategory)
-        })
-        let trimmed = String(kept).trimmingCharacters(in: .whitespaces)
-        var capped = String.UnicodeScalarView()
-        capped.append(contentsOf: trimmed.unicodeScalars.prefix(labelMax))
-        let out = String(capped).trimmingCharacters(in: .whitespaces)
+        var it = s.unicodeScalars.makeIterator()
+        var next = it.next()
+        while let c = next {
+            next = it.next()
+            if keeps(c, after: kept.last, before: next) { kept.append(c) }
+        }
+        var out = "", chars = 0, scalars = 0
+        for ch in String(kept).trimmingCharacters(in: .whitespaces) {
+            let n = ch.unicodeScalars.count
+            guard chars < labelMax, scalars + n <= labelScalarMax else { break }
+            out.append(ch)
+            chars += 1
+            scalars += n
+        }
+        out = out.trimmingCharacters(in: .whitespaces)
         return out.isEmpty ? nil : out
+    }
+
+    /// #928: ZWJ only between two emoji (a family), VS16 only where it changes the look (after a
+    /// text-style emoji, or a keycap base before U+20E3); ZWNJ joins no emoji and stays dropped.
+    /// Elsewhere both are invisible and would let two labels look alike while differing.
+    private static func keeps(_ c: Unicode.Scalar, after prev: Unicode.Scalar?, before next: Unicode.Scalar?) -> Bool {
+        // isEmoji also covers the ASCII digits, "#" and "*" (keycap bases), which a joiner never joins.
+        func pictograph(_ s: Unicode.Scalar?) -> Bool { s.map { $0.properties.isEmoji && !$0.isASCII } ?? false }
+        switch c {
+        case "\u{200D}":
+            return (pictograph(prev) || prev == "\u{FE0F}") && pictograph(next)
+        case "\u{FE0F}":
+            guard let p = prev, p.properties.isEmoji else { return false }
+            return p.isASCII ? next == "\u{20E3}" : !p.properties.isEmojiPresentation
+        default:
+            return !OutsideText.isUnseen(c)
+        }
     }
 
     /// a-z, 0-9 and "-", 1 to 24 bytes.
@@ -377,6 +403,16 @@ struct ThemeDescriptor: Identifiable, Equatable, Sendable {
     let jsonPath: URL?        // nil = built-in default (uses ThemePalette.default)
 
     var isBuiltIn: Bool { extensionID == nil }
+
+    /// #928: the title comes from an extension's manifest and is shown and read aloud, so it is
+    /// cleaned like a tint label here, where every descriptor is made.
+    init(id: String, title: String, appearance: ThemeAppearance, extensionID: String?, jsonPath: URL?) {
+        self.id = id
+        self.title = ThemeVariant.cleanLabel(title) ?? "Untitled theme"
+        self.appearance = appearance
+        self.extensionID = extensionID
+        self.jsonPath = jsonPath
+    }
 
     static let builtInID = "com.prosper.theme.default"
 
