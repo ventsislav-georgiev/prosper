@@ -1,4 +1,5 @@
 import Carbon
+import TOMLDecoder
 import XCTest
 @testable import ProsperApp
 
@@ -232,5 +233,76 @@ final class ShortcutTargetLiveTests: XCTestCase {
         XCTAssertFalse(isNative(o7), "off: no picker")
         let o8 = await CommandRouter.run("", mode: browse)
         XCTAssertFalse(isNative(o8), "off: no quickdir listing")
+    }
+
+    // MARK: - Round 2: liveness before the folder listing, owners declare their prefix
+
+    /// A quickdir whose root is a folder inside this row's tempDir() (one subfolder, "alpha").
+    private func quickdirInTempDir() throws {
+        let root = tempDir("qd985b")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("alpha"), withIntermediateDirectories: true)
+        setPref(#"[{"name":"gatedir985","path":"\#(root.path)","prefix":"zq","action":"","actionLabel":""}]"#,
+                "ext.com.prosper.quickdirs.dirs")
+    }
+
+    private func hitNames(_ o: RunnerOutcome) -> [String]? {
+        if case .quickdirs(let hits) = o { return hits.map(\.name) }
+        return nil
+    }
+
+    /// Off: no folder listing is asked for on the locked entry or the universal `qd` entry.
+    /// Runs on the main actor (the test class is @MainActor); the router hops itself.
+    func testQuickdirsOffAsksForNoFolderListing() async throws {
+        let reg = try gateFixture([(CommandRouter.quickdirsID, ["quickdirs.run"])]).registry()
+        install(reg)
+        try quickdirInTempDir()
+        try reg.setEnabled(false, id: CommandRouter.quickdirsID)
+        let browse = RunnerMode.ext(id: "quickdirs.run", title: "gatedir985", icon: "folder", arg: "gatedir985")
+        let before = QuickdirStore.listingCalls.withLock { $0 }
+        let locked = await CommandRouter.run("", mode: browse)
+        let universal = await CommandRouter.run("qd zq", mode: .universal)
+        XCTAssertEqual(QuickdirStore.listingCalls.withLock { $0 }, before, "off: the folder was not listed")
+        XCTAssertNil(hitNames(locked))
+        XCTAssertNil(hitNames(universal))
+    }
+
+    /// On: the same listing as before, for the locked entry and the universal entry.
+    func testQuickdirsOnListsTheTempFolderLockedAndUniversal() async throws {
+        let reg = try gateFixture([(CommandRouter.quickdirsID, ["quickdirs.run"])]).registry()
+        install(reg)
+        try quickdirInTempDir()
+        let browse = RunnerMode.ext(id: "quickdirs.run", title: "gatedir985", icon: "folder", arg: "gatedir985")
+        let before = QuickdirStore.listingCalls.withLock { $0 }
+        let locked = await CommandRouter.run("", mode: browse)
+        let universal = await CommandRouter.run("qd zq", mode: .universal)
+        XCTAssertEqual(hitNames(locked), ["alpha"])
+        XCTAssertEqual(hitNames(universal), ["alpha"])
+        XCTAssertEqual(QuickdirStore.listingCalls.withLock { $0 }, before + 2, "on: one listing per entry")
+    }
+
+    /// Literal ids and prefixes (not a loop over the set under test), read from the bundled
+    /// manifests only: an owner that stops declaring its prefix leaves the row offered for a dead one.
+    private func declared(_ dir: String) throws -> (id: String, prefixes: Set<String>) {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Resources/extensions/\(dir)/extension.toml")
+        let m = try TOMLDecoder().decodeGuarded(ExtensionManifest.self, from: try ExtensionLoader.readManifest(url))
+        let all = (m.contributes?.allCommands ?? []).flatMap(\.allPrefixes)
+        return (m.extension.id, Set(all))
+    }
+
+    func testEachBundledOwnerDeclaresItsPrefix() throws {
+        let open = try declared("open")
+        XCTAssertEqual(open.id, "com.prosper.open")
+        XCTAssertTrue(open.prefixes.contains("o "))
+        let shell = try declared("shell")
+        XCTAssertEqual(shell.id, "com.prosper.shell")
+        XCTAssertTrue(shell.prefixes.contains("> "))
+        let links = try declared("quicklinks")
+        XCTAssertEqual(links.id, "com.prosper.quicklinks")
+        XCTAssertTrue(links.prefixes.contains("ql "))
+        let dirs = try declared("quickdirs")
+        XCTAssertEqual(dirs.id, "com.prosper.quickdirs")
+        XCTAssertTrue(dirs.prefixes.contains("qd "))
     }
 }

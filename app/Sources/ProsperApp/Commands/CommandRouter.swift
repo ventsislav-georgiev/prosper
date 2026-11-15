@@ -390,16 +390,19 @@ enum CommandRouter {
             // proper palette. Management verbs (add/rm/...) still fall through to
             // the Lua handler below. This is rendering-only special-casing; the
             // mode/label mechanism itself is fully manifest-driven.
-            if id == "quicklinks.run", let ql = quicklinksLockedListing(trimmed),
-               await MainActor.run(body: { extensionLive(quicklinksID) }) {
+            if id == "quicklinks.run",
+               await MainActor.run(body: { extensionLive(quicklinksID) }),
+               let ql = quicklinksLockedListing(trimmed) {
                 return ql
             }
             // Quickdirs locked-mode: a dynamic per-quickdir prefix (`arg` = the
             // quickdir name) browses just that directory; the generic `qd ` prefix
             // (arg = nil) shows the picker / token-selects a quickdir. Management
             // verbs fall through to the Lua handler.
-            if id == "quickdirs.run", let qd = quickdirsOutcome(arg: arg, rest: trimmed),
-               await MainActor.run(body: { extensionLive(quickdirsID) }) {
+            // #985: liveness first: the listing reads a folder, so it is not asked for while off.
+            if id == "quickdirs.run",
+               await MainActor.run(body: { extensionLive(quickdirsID) }),
+               let qd = quickdirsOutcome(arg: arg, rest: trimmed) {
                 return qd
             }
             // Native coding agent (`g `): surface a launcher row that opens the agent
@@ -438,14 +441,14 @@ enum CommandRouter {
         // 0a3. Quicklinks listing. `ql` alone lists all; `ql <text>` filters by
         //      name/description. Management verbs (add/rm/...) are NOT handled here
         //      — they fall through to the Lua extension (step 3.5) / meta (`ql new`).
-        if let ql = quicklinksListing(trimmed), await MainActor.run(body: { extensionLive(quicklinksID) }) {
+        if await MainActor.run(body: { extensionLive(quicklinksID) }), let ql = quicklinksListing(trimmed) {
             return await attachLaunchers(ql, query: trimmed)
         }
 
         // 0a4. Quickdirs. `qd` alone shows the picker; `qd <name|prefix> <filter>`
         //      browses that quickdir's subdirectories. Management verbs (add/rm/...)
         //      fall through to the Lua extension (step 3.5).
-        if let qd = quickdirsUniversal(trimmed), await MainActor.run(body: { extensionLive(quickdirsID) }) {
+        if await MainActor.run(body: { extensionLive(quickdirsID) }), let qd = quickdirsUniversal(trimmed) {
             return await attachLaunchers(qd, query: trimmed)
         }
 
