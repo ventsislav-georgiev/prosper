@@ -1148,6 +1148,9 @@ tag from the now-released section and put it on the new top draft.
 - The extension list in Settings and the Marketplace show an extension's name, version, description
   and author without invisible characters or piled-up accent marks, and a long name is cut to one
   line, so these texts cannot cover the UNTRUSTED badge or the lines around it (#1251)
+- Extensions: installing one whose id differs only by letter case from an installed one is refused
+  and no longer replaces it; an id that starts with a dot is refused too. Nothing on disk changes in
+  either case (#1246)
 
 ## v2.174.0
 

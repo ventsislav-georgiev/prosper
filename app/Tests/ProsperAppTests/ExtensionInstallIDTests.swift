@@ -86,7 +86,7 @@ final class ExtensionInstallIDTests: XCTestCase {
             ("com.prosper.filesx", nil),
             ("com.prosper.theme", nil),
             ("files.example", nil),
-            ("..kit", nil),
+            ("..kit", "starts with a dot"),
             (String(repeating: "a", count: 128), nil),
             (String(repeating: "a", count: 129), form),
             ("", form),

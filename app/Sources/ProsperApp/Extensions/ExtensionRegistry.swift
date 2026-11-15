@@ -71,9 +71,32 @@ enum ExtensionInstallID {
             return "Not installed: its id is not a single name of letters, digits, dots, dashes and underscores "
                 + "(at most 128 characters). Nothing was changed."
         }
+        // A leading dot makes a folder hidden in Finder.
+        if id.hasPrefix(".") {
+            return "Not installed: its id starts with a dot, which would make a hidden folder. Nothing was changed."
+        }
         let builtIn = Set(bundledFolders.union(bundledIDs).map { $0.lowercased() })
         if builtIn.contains(id.lowercased()) {
             return "Not installed: its id \(id) belongs to an extension built into Prosper. Nothing was changed."
+        }
+        return nil
+    }
+
+    /// nil when `id` may be installed next to the names listed in the extensions folder (nil: it could not be read).
+    /// The disk ignores case, so a name that differs from `id` only by case would be replaced as if it were `id`:
+    /// refused. An exact match is an update. `id` has passed refusal(), so it is a plain single name.
+    /// `occupied`: the disk says the destination exists. Its fold table is wider than lowercased(), so with no exact
+    /// name that is another extension's folder: refused, naming no folder.
+    static func caseRefusal(_ id: String, installed names: [String]?, occupied: Bool) -> String? {
+        guard let names else { return "Not installed: the extensions folder could not be read. Nothing was changed." }
+        if names.contains(id) { return nil }
+        if let other = names.first(where: { $0.lowercased() == id.lowercased() }) {
+            return "Not installed: its id \(id) differs only by letter case from the installed extension \(other). "
+                + "Nothing was changed."
+        }
+        if occupied {
+            return "Not installed: a folder of another installed extension already answers to the name \(id) on this "
+                + "disk. Nothing was changed."
         }
         return nil
     }
@@ -1131,6 +1154,15 @@ final class ExtensionRegistry: ObservableObject {
         // #1246: the id names the destination folder: an unsafe or built-in id is refused before anything on disk changes.
         if let why = ExtensionInstallID.refusal(loaded.id, bundledFolders: systemFolderNames(),
                                                 bundledIDs: Set(bundledIDsByFolder().values)) {
+            throw ExtensionInstallID.Refused(reason: why)
+        }
+        // R1246-b: an installed folder whose name differs only by case is not this id's: refused before any disk change.
+        // No extensions folder yet: nothing to replace. One that exists but cannot be listed: refused.
+        let installedNames = (try? FileManager.default.contentsOfDirectory(atPath: userDir.path))
+            ?? (FileManager.default.fileExists(atPath: userDir.path) ? nil : [])
+        let occupied = FileManager.default.fileExists(
+            atPath: userDir.appendingPathComponent(loaded.id, isDirectory: true).path)
+        if let why = ExtensionInstallID.caseRefusal(loaded.id, installed: installedNames, occupied: occupied) {
             throw ExtensionInstallID.Refused(reason: why)
         }
         let fm = FileManager.default
