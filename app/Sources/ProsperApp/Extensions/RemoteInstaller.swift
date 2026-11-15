@@ -395,7 +395,7 @@ enum RemoteInstaller {
     static func assertNoSymlinks(_ root: URL) throws {
         // Every name, "._*" included (a FileManager walk missed those).
         for (name, type) in try entries(root) {
-            if type == S_IFLNK { throw InstallError.unsafeArchive("symlink: \(name)") }
+            if type == S_IFLNK { throw InstallError.unsafeArchive("symlink: \(shownName(name))") }
             if type == S_IFDIR { try assertNoSymlinks(root.appendingPathComponent(name)) }
             else if let why = notFileReason(name, type: type) { throw InstallError.unsafeArchive(why) }
         }
@@ -412,7 +412,13 @@ enum RemoteInstaller {
         case S_IFCHR, S_IFBLK: what = "a device"
         default: what = "a special item"
         }
-        return "\(what), not a file or folder: \(name)"
+        return "\(what), not a file or folder: \(shownName(name))"
+    }
+
+    /// #1182: an archive entry's name as a refusal shows it (OutsideText's rule); a name with nothing seen left reads "an item".
+    static func shownName(_ name: String) -> String {
+        let s = OutsideText.shown(name)
+        return s.isEmpty ? "an item" : s
     }
 
     /// Package an extension directory's CONTENTS (extension.toml at the archive

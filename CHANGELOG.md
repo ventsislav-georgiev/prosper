@@ -1130,6 +1130,8 @@ tag from the now-released section and put it on the new top draft.
 - When a rename from the phone fails, the phone gets a short sentence from Prosper instead of dch's
   raw output; the Remote Terminal status in Settings no longer shows raw error text for a listen or
   Tailscale check failure (#988)
+- When an extension install is refused for an unsafe item, the message names that item without
+  invisible or control characters (#1182)
 
 ## v2.174.0
 

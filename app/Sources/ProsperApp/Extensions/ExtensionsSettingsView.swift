@@ -117,9 +117,18 @@ struct ExtensionsPane: View {
 /// One row in the installed-extensions list. Handles enable/reset/uninstall, the
 /// trust gate (untrusted rows are inert and show Trust + a review prompt), and
 /// publishing a user extension to the marketplace.
-private struct ExtensionRow: View {
+struct ExtensionRow: View {
     @ObservedObject var registry: ExtensionRegistry
     let record: ExtensionRecord
+    /// #1182: the live Marketplace version for an id; a row passes a fake. Sendable, run from the row's task.
+    let fetchVersion: @Sendable (String) async -> String?
+
+    init(registry: ExtensionRegistry, record: ExtensionRecord,
+         fetchVersion: @escaping @Sendable (String) async -> String? = { await MarketClient.publishedVersion(id: $0) }) {
+        self.registry = registry
+        self.record = record
+        self.fetchVersion = fetchVersion
+    }
 
     @State private var publishing = false
     /// Latest version live on the marketplace for this id (nil = never published /
@@ -238,7 +247,7 @@ private struct ExtensionRow: View {
 
     private func refreshPublishedVersion() async {
         guard !record.isSystem else { return }
-        let v = await MarketClient.publishedVersion(id: record.id)
+        let v = await fetchVersion(record.id)
         await MainActor.run { publishedVersion = v }
     }
 
