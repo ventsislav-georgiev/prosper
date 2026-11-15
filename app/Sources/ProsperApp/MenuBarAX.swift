@@ -171,14 +171,34 @@ enum MenuBarAX {
     /// (`isLaidOut` tells which). Our own chrome (chevron, dividers) is filtered out;
     /// our own content items (Stats, extensions) are flagged `isOwn`.
     static func items(onDisplay display: CGDirectDisplayID) -> [MenuBarItem] {
-        guard trusted, let agent = agentPID else { return [] }
+        readBar().map { items(in: $0, onDisplay: display) } ?? []
+    }
+
+    /// QA #43: everything `items(onDisplay:)` reads, none of it per display (the layout covers every
+    /// display's bar), so one read can be placed on each display. nil without the permission or the agent.
+    struct BarRead {
+        var agent: pid_t
+        var laid: [Laid]
+        var controlX: [CGFloat]
+        var apps: [(app: NSRunningApplication, extras: [Extra])]
+    }
+
+    static func readBar() -> BarRead? {
+        guard trusted, let agent = agentPID else { return nil }
         let laid = layout()
-        let me = getpid()
         let controlX = ProsperStatusItems.controlMinX()
+        return BarRead(agent: agent, laid: laid, controlX: controlX,
+                       apps: NSWorkspace.shared.runningApplications.map { (app: $0, extras: extras(of: $0.processIdentifier)) })
+    }
+
+    /// One read placed on `display` (no read of its own besides our registry's titles).
+    static func items(in read: BarRead, onDisplay display: CGDirectDisplayID) -> [MenuBarItem] {
+        let (agent, laid, controlX) = (read.agent, read.laid, read.controlX)
+        let me = getpid()
         var out: [MenuBarItem] = []
-        for app in NSWorkspace.shared.runningApplications {
+        for (app, appExtras) in read.apps {
             let pid = app.processIdentifier
-            for (index, e) in extras(of: pid).enumerated() {
+            for (index, e) in appExtras.enumerated() {
                 if pid == agent, e.role == kAXButtonRole as String { continue }   // the OS overflow « button
                 if pid == me {
                     if e.identifier?.hasPrefix(identifierPrefix) == true { continue }

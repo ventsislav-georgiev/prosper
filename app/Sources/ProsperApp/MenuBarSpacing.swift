@@ -49,14 +49,30 @@ enum MenuBarSpacing {
         let skip: Set<String> = ["com.apple.controlcenter", "com.apple.Spotlight", "com.apple.MenuBarAgent"]
         // #234: every active display, not just the main one — with the hosted bar on an
         // external display, its items' owners would otherwise be missed.
+        let ids = activeDisplays()
+        let owners = readOwners()   // QA #43: one read of the bar, placed on each display
+        let pids = union(ids.map { owners($0) })
+        return pids.filter { $0 != 0 && $0 != selfPID }
+            .compactMap { runningApp($0) }
+            .filter { !skip.contains($0.bundleIdentifier ?? "") }
+    }
+
+    /// #980 (QA #57) seams, swapped by tests only; the defaults are the live reads.
+    /// The displays to visit (`displays(_:count:main:)` over the live list).
+    static var activeDisplays: @MainActor () -> [CGDirectDisplayID] = {
         var ids = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
         if CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) != .success { count = 0 }
-        let pids = union(displays(ids, count: count, main: CGMainDisplayID()).map { MenuBarBridge.items(onDisplay: $0).map(\.pid) })
-        return pids.filter { $0 != 0 && $0 != selfPID }
-            .compactMap { NSRunningApplication(processIdentifier: $0) }
-            .filter { !skip.contains($0.bundleIdentifier ?? "") }
+        return MenuBarSpacing.displays(ids, count: count, main: CGMainDisplayID())
     }
+    /// One read of the bar, then the owner pids per display. Hosted: one AX walk (QA #43); windowed:
+    /// the CGS read stays per display inside `MenuBarBridge.items(onDisplay:)`, as before.
+    static var readOwners: @MainActor () -> @MainActor (CGDirectDisplayID) -> [pid_t] = {
+        guard MenuBarHost.isHosted, MenuBarBridge.available else { return { MenuBarBridge.items(onDisplay: $0).map(\.pid) } }
+        let read = MenuBarAX.readBar()
+        return { display in read.map { MenuBarAX.items(in: $0, onDisplay: display).map(\.pid) } ?? [] }
+    }
+    static var runningApp: @MainActor (pid_t) -> NSRunningApplication? = { NSRunningApplication(processIdentifier: $0) }
 
     /// Displays to visit: every active one, or the main display when enumeration found none/failed.
     nonisolated static func displays(_ ids: [CGDirectDisplayID], count: UInt32, main: CGDirectDisplayID) -> [CGDirectDisplayID] {
