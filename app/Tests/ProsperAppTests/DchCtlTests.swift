@@ -47,6 +47,37 @@ final class DchCtlTests: XCTestCase {
         var all: [(sig: Int32, at: Date, finals: Int)] { lock.withLock { log } }
     }
 
+    /// #1024: every signal CodexHarness.sendSignal sends (probes left out), with its pid and send time, forwarded so
+    /// the fake is really signalled. No queue.sync in it: term's SIGTERM is sent on the connection queue.
+    private final class Sent: @unchecked Sendable {
+        private let lock = NSLock()
+        private var log: [(pid: pid_t, sig: Int32, at: Date)] = []
+        func add(_ pid: pid_t, _ sig: Int32) { lock.withLock { log.append((pid, sig, Date())) } }
+        /// The ones to `pid` or its group.
+        func of(_ pid: pid_t) -> [(pid: pid_t, sig: Int32, at: Date)] { lock.withLock { log.filter { $0.pid == pid || $0.pid == -pid } } }
+    }
+
+    private func record() -> Sent {
+        let sent = Sent(), saved = CodexHarness.sendSignal
+        CodexHarness.sendSignal = { pid, sig in
+            if sig != 0 { sent.add(pid, sig) }
+            return Darwin.kill(pid, sig)
+        }
+        addTeardownBlock { CodexHarness.sendSignal = saved }
+        return sent
+    }
+
+    /// #1024: a close's or 0x34's signals off the seam: a SIGTERM to dch, then a SIGKILL to its group at least
+    /// `grace` (less 0.1 s) after it. Load only delays the SIGKILL's send, so this cannot fail falsely.
+    private func termThenKill(_ sent: Sent, _ dch: pid_t, grace: TimeInterval, _ what: String) {
+        let s = sent.of(dch)
+        XCTAssertEqual(s.map { $0.pid }, [dch, -dch], "dch, then its group: \(what)")
+        XCTAssertEqual(s.map { $0.sig }, [SIGTERM, SIGKILL], "a SIGTERM, then a SIGKILL: \(what)")
+        if s.count == 2, let term = s.first, let kill = s.last {
+            XCTAssertGreaterThanOrEqual(kill.at.timeIntervalSince(term.at), grace - 0.1, "the SIGKILL the grace after the SIGTERM: \(what)")
+        }
+    }
+
     private func rig(_ script: String? = nil, timeout: TimeInterval = 60, agentTimeout: TimeInterval = 660,
                      cap: Int = 8 << 20, reached: Recorder? = nil, timers: Timers? = nil) -> Rig {
         let queue = DispatchQueue(label: "test.dchconn.ctl")
@@ -642,6 +673,7 @@ final class DchCtlTests: XCTestCase {
             printf '{"stopping":"alpha"}\\n'; while :; do /bin/sleep 0.05; done
             """)
         let r = rig(f.path)
+        let sent = record()
         send(r, Self.ctl(["--stop", "alpha", "--json"]))
         let script = pid(f.dir, "pid")
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
@@ -649,6 +681,7 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(wait(20) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) == "term\nresumed\n" },
                       "one SIGTERM, then dch's own time to finish: no SIGKILL at 2 s for --stop")
         XCTAssertTrue(dead(script))
+        XCTAssertEqual(sent.of(try XCTUnwrap(script)).map { $0.sig }, [SIGTERM], "#1024: one SIGTERM sent, no SIGKILL for --stop")
         XCTAssertEqual(finals(r).count, 0, "nothing after the close")
         // A --read that outlives the SIGTERM: its group is SIGKILLed 2 s after it, not sooner.
         let g = try fake("""
@@ -668,6 +701,7 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(dead(stuck), "SIGKILLed")
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9, "not inside the 2 s grace")
         XCTAssertTrue(dead(kid), "its group too")
+        termThenKill(sent, try XCTUnwrap(stuck), grace: DchCtl.cancelGrace, "--read close")   // #1024: off the seam
         usleep(300_000)
         XCTAssertEqual(finals(s).count, 0, "nothing after the close")
     }
@@ -685,7 +719,7 @@ final class DchCtlTests: XCTestCase {
     /// A dch that ignores SIGTERM, with a kid in its group, runs `argv`; then a close or a 0x34.
     /// fake()'s teardown SIGKILLs both by their recorded pids.
     private func stuck(_ argv: [String], cancel: Bool, agentGrace: TimeInterval? = nil) throws
-        -> (r: Rig, dch: pid_t, kid: pid_t, at: Date) {
+        -> (r: Rig, dch: pid_t, kid: pid_t, at: Date, sent: Sent) {
         let f = try fake("""
             echo $$ > "$D/pid"; /bin/sleep 30 & echo $! > "$D/kid"
             trap 'echo term >> "$D/sig"' TERM
@@ -696,11 +730,11 @@ final class DchCtlTests: XCTestCase {
         send(r, Self.ctl(argv))
         let dch = try XCTUnwrap(pid(f.dir, "pid")), kid = try XCTUnwrap(pid(f.dir, "kid"))
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
-        let at = Date()
+        let sent = record(), at = Date()
         if cancel { send(r, DchFrame.encode(DchFrame.ctlCancel, [])) } else { r.queue.sync { r.conn.close() } }
         XCTAssertTrue(wait(10) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil },
                       "the SIGTERM: \(argv[0])")
-        return (r, dch, kid, at)
+        return (r, dch, kid, at, sent)
     }
 
     /// #841 r4: an agent verb whose dch outlives the SIGTERM is not SIGKILLed at 2 s, after a close or a
@@ -715,6 +749,7 @@ final class DchCtlTests: XCTestCase {
             XCTAssertEqual(Darwin.kill(s.dch, 0), 0, "alive past 2 s: \(argv[0])")
             XCTAssertEqual(Darwin.kill(s.kid, 0), 0, "its group too: \(argv[0])")
             XCTAssertEqual(finals(s.r).count, 0, "no 0x33 while it runs: \(argv[0])")
+            XCTAssertEqual(s.sent.of(s.dch).map { $0.sig }, [SIGTERM], "#1024: a SIGTERM sent and no SIGKILL by 2.5 s: \(argv[0])")
         }
         let backstop: [([String], Bool)] = [(["--stop", "alpha", "--json"], false), (["--revive", "alpha", "--json"], true)]
         for (argv, cancel) in backstop {
@@ -724,6 +759,7 @@ final class DchCtlTests: XCTestCase {
             XCTAssertTrue(dead(s.dch, 15), "SIGKILLed at the backstop: \(argv[0])")
             XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(s.at), 3.4, "alive past 2 s, to the backstop: \(argv[0])")
             XCTAssertTrue(dead(s.kid), "its group too: \(argv[0])")
+            termThenKill(s.sent, s.dch, grace: 3.5, "backstop \(argv[0])")   // #1024: off the seam
             if cancel {
                 XCTAssertTrue(wait(5) { finals(s.r).count == 1 })
                 XCTAssertEqual(Self.object(finals(s.r).first) as NSDictionary, ["exit": 2, "why": "cancel"] as NSDictionary)
@@ -924,7 +960,7 @@ final class DchCtlTests: XCTestCase {
         send(r, Self.ctl(["--read", "alpha"]))
         let script = pid(f.dir, "pid"), kid = pid(f.dir, "kid")
         XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
-        let start = Date()
+        let sent = record(), start = Date()
         send(r, DchFrame.encode(DchFrame.ctlCancel, []))
         XCTAssertTrue(wait(10) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil })
         // After the trap ran: two SIGTERMs sent back to back coalesce into one pending signal.
@@ -940,6 +976,8 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(dead(script), "SIGKILLed")
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9, "not inside the 2 s grace")
         XCTAssertTrue(dead(kid), "its group too")
+        // #1024: off the seam; the second 0x34's SIGTERM would count here even where the trap coalesces it.
+        termThenKill(sent, try XCTUnwrap(script), grace: DchCtl.cancelGrace, "0x34")
         // #1012: read once dch is gone, so the whole grace counts, not 0.3 s of it.
         XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n", "one SIGTERM")
         XCTAssertTrue(wait(10) { finals(r).count == 1 })
@@ -966,6 +1004,7 @@ final class DchCtlTests: XCTestCase {
         let saved = CodexHarness.sendSignal
         defer { CodexHarness.sendSignal = saved }
         CodexHarness.sendSignal = { pid, sig in
+            // #1024: only group sends match, and none is sent on the connection queue (term's to +pid is): no deadlock.
             if pid == -script, sig != 0 {
                 queue.sync {}   // a 0x33 already replied is queued: out before the count
                 signals.add(sig, finals: frames.lock.withLock {

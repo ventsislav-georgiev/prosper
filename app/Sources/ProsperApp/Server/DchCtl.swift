@@ -383,7 +383,8 @@ final class DchCtlJob: @unchecked Sendable {
 
     /// The one SIGTERM path, a 0x34's and a close's: SIGTERM to dch, then SIGKILL to its group `grace` later.
     private func term(_ pid: pid_t) {
-        Darwin.kill(pid, SIGTERM)
+        // #1024: through the seam, on the caller's queue (a close's, 0x34's and stop's: the connection queue); only -pid sends stay off it.
+        _ = CodexHarness.sendSignal(pid, SIGTERM)
         killGroup(pid, after: lock.withLock { grace })
     }
 
@@ -392,7 +393,7 @@ final class DchCtlJob: @unchecked Sendable {
     private func killGroup(_ pid: pid_t, after delay: TimeInterval) {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }   // run() returned: dch was reaped
-            self.lock.withLock { if self.pid == pid, CodexHarness.mayKillGroup(pid) { Darwin.kill(-pid, SIGKILL) } }
+            self.lock.withLock { if self.pid == pid, CodexHarness.mayKillGroup(pid) { _ = CodexHarness.sendSignal(-pid, SIGKILL) } }
         }
     }
 
