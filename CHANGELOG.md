@@ -1348,6 +1348,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions sidebar: a session's model and effort now show as two small badges at the end of
   the second line (the effort badge tinted by level, low to max), with the age after them; the
   Command-digit shortcut chip moved up to the end of the session name's line.
+- The Sync pane now says when sync is paused because Prosper cannot read this Mac's device key,
+  instead of showing LOCAL.
+- Signing in on a Mac that cannot save the sign-in now says so ("Signed in for this session; the
+  sign-in can't be saved on this Mac.") instead of reporting plain success.
 
 ## v2.174.0
 

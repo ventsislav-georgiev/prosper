@@ -33,18 +33,21 @@ enum SupporterStore {
         return creds
     }
 
-    static func save(_ creds: StoredCredentials) {
+    /// False when nothing was written: no key to seal under, or the write failed.
+    @discardableResult
+    static func save(_ creds: StoredCredentials) -> Bool {
         guard
             let plain = try? JSONEncoder().encode(creds),
             let blob = SyncCrypto.encrypt(plain)
-        else { return }
+        else { return false }
         let dir = fileURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
-        try? blob.write(to: fileURL, options: [.atomic])
+        guard (try? blob.write(to: fileURL, options: [.atomic])) != nil else { return false }
         try? FileManager.default.setAttributes(
             [.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        return true
     }
 
     static func clear() {

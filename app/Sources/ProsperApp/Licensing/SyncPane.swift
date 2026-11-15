@@ -27,9 +27,9 @@ struct SyncPane: View {
 
                 NeonDivider()
                 NeonRow("Encryption key", subtitle: keyDetail) {
-                    Text(coordinator.keyMode == .icloud ? "iCLOUD" : "LOCAL")
+                    Text(Self.keyLabel(coordinator.keyMode))
                         .font(Neon.font(10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(coordinator.keyMode == .icloud ? Neon.terminal : Neon.textSecondary)
+                        .foregroundStyle(Self.keyColor(coordinator.keyMode))
                 }
 
                 NeonDivider()
@@ -89,16 +89,45 @@ struct SyncPane: View {
         }
     }
 
-    private var footer: String {
-        coordinator.keyMode == .icloud
-            ? "Settings are encrypted with a key stored in your iCloud Keychain, so only your devices can read them — the server never sees plaintext."
-            : "Encrypting with this Mac's local key. Settings won't sync across devices until iCloud Keychain is available (after the Developer ID / entitlement setup)."
+    private var footer: String { Self.footer(coordinator.keyMode) }
+    private var keyDetail: String { Self.keyDetail(coordinator.keyMode) }
+
+    /// #1293: one label per KeyMode; .unavailable never reads as LOCAL (nothing is sealed or sent).
+    static func keyLabel(_ mode: SyncCrypto.KeyMode) -> String {
+        switch mode {
+        case .icloud: return "iCLOUD"
+        case .deviceFallback: return "LOCAL"
+        case .unavailable: return "NO KEY"
+        }
     }
 
-    private var keyDetail: String {
-        coordinator.keyMode == .icloud
-            ? "Synced via iCloud Keychain — end-to-end encrypted"
-            : "Local device key — single-device only for now"
+    static func keyColor(_ mode: SyncCrypto.KeyMode) -> Color {
+        switch mode {
+        case .icloud: return Neon.terminal
+        case .deviceFallback: return Neon.textSecondary
+        case .unavailable: return Neon.magenta
+        }
+    }
+
+    static let pausedLine = "Sync is paused: Prosper cannot read this Mac's device key"
+
+    static func keyDetail(_ mode: SyncCrypto.KeyMode) -> String {
+        switch mode {
+        case .icloud: return "Synced via iCloud Keychain \u{2014} end-to-end encrypted"
+        case .deviceFallback: return "Local device key \u{2014} single-device only for now"
+        case .unavailable: return pausedLine
+        }
+    }
+
+    static func footer(_ mode: SyncCrypto.KeyMode) -> String {
+        switch mode {
+        case .icloud:
+            return "Settings are encrypted with a key stored in your iCloud Keychain, so only your devices can read them \u{2014} the server never sees plaintext."
+        case .deviceFallback:
+            return "Encrypting with this Mac's local key. Settings won't sync across devices until iCloud Keychain is available (after the Developer ID / entitlement setup)."
+        case .unavailable:
+            return "Nothing is encrypted or sent until the device key can be read."
+        }
     }
 
     /// The settings categories that sync, shown so it's clear what carries across

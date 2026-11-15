@@ -10,16 +10,19 @@ final class SyncCryptoKeyTests: XCTestCase {
 
     private var savedIcloud: SyncCrypto.KeyLookup!
     private var savedDevice: SyncCrypto.KeyLookup!
+    private var savedAbsent: (@Sendable () -> Bool)!
 
     override func setUp() {
         super.setUp()
         savedIcloud = SyncCrypto.icloudKey
         savedDevice = SyncCrypto.deviceKey
+        savedAbsent = SyncCrypto.deviceKeyAbsent
     }
 
     override func tearDown() {
         SyncCrypto.icloudKey = savedIcloud
         SyncCrypto.deviceKey = savedDevice
+        SyncCrypto.deviceKeyAbsent = savedAbsent
         super.tearDown()
     }
 
@@ -111,5 +114,74 @@ final class SyncCryptoKeyTests: XCTestCase {
         SyncCrypto.icloudKey = { _ in nil }
         SyncCrypto.deviceKey = { _ in try? ClipboardCrypto.fileKey(file) }
         XCTAssertEqual(SyncCrypto.encrypt(payload).flatMap(SyncCrypto.decrypt), payload)
+    }
+
+    // MARK: - #1293
+
+    /// Points both device-key seams at a file in a tempDir (the production bodies, not the operator's file).
+    private func deviceFile(_ name: String = "device.key") -> URL {
+        let file = tempDir().appending(path: name)
+        SyncCrypto.icloudKey = { _ in nil }
+        SyncCrypto.deviceKey = { create in SyncCrypto.deviceKey(at: file, create: create) }
+        SyncCrypto.deviceKeyAbsent = { SyncCrypto.deviceKeyAbsent(at: file) }
+        return file
+    }
+
+    @MainActor
+    func testPaneLabelsEveryKeyModeAndUnavailableIsNotLocal() {
+        XCTAssertEqual(SyncPane.keyLabel(.icloud), "iCLOUD")
+        XCTAssertEqual(SyncPane.keyLabel(.deviceFallback), "LOCAL")
+        XCTAssertEqual(SyncPane.keyLabel(.unavailable), "NO KEY")
+        XCTAssertEqual(SyncPane.keyDetail(.unavailable), "Sync is paused: Prosper cannot read this Mac's device key")
+        XCTAssertFalse(SyncPane.footer(.unavailable).contains("local key"))
+        XCTAssertTrue(SyncPane.keyDetail(.deviceFallback).hasPrefix("Local device key"))
+    }
+
+    func testModeWithNoDeviceKeyFileIsDeviceFallbackAndCreatesNoFile() {
+        let file = deviceFile()
+        XCTAssertEqual(SyncCrypto.mode, .deviceFallback)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        // The first seal creates it.
+        XCTAssertTrue(SyncCrypto.encrypt(payload) != nil)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(SyncCrypto.mode, .deviceFallback)
+    }
+
+    func testModeWithAMalformedDeviceKeyFileIsUnavailableAndTheFileIsUntouched() throws {
+        let file = deviceFile()
+        let junk = Data("not a key file".utf8)
+        try junk.write(to: file)
+        XCTAssertEqual(SyncCrypto.mode, .unavailable)
+        XCTAssertEqual(try Data(contentsOf: file), junk)
+    }
+
+    func testDeviceKeyOpenPathWithNoFileCreatesNothing() {
+        let file = tempDir().appending(path: "device.key")
+        XCTAssertTrue(SyncCrypto.deviceKey(at: file, create: false) == nil)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertTrue(SyncCrypto.deviceKey(at: file, create: true) != nil)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testDeviceKeyOfAMalformedFileIsNilAndByteIdentical() throws {
+        let file = tempDir().appending(path: "device.key")
+        let junk = Data("not a key file".utf8)
+        try junk.write(to: file)
+        XCTAssertTrue(SyncCrypto.deviceKey(at: file, create: false) == nil)
+        XCTAssertTrue(SyncCrypto.deviceKey(at: file, create: true) == nil)
+        XCTAssertEqual(try Data(contentsOf: file), junk)
+    }
+
+    @MainActor
+    func testFinishLoginOutcomeSaysWhenTheSaveWasSkipped() {
+        XCTAssertEqual(SupporterClient.loginOutcome(saved: true), .success)
+        XCTAssertEqual(SupporterClient.loginOutcome(saved: false),
+                       .failed("Signed in for this session; the sign-in can't be saved on this Mac."))
+    }
+
+    @MainActor
+    func testSupporterStoreSaveReportsASkippedSaveAndWritesNothing() {
+        noKeys()
+        XCTAssertEqual(SupporterStore.save(StoredCredentials(email: "a@example.com", session: "s", token: "t")), false)
     }
 }

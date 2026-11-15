@@ -80,11 +80,16 @@ final class SupporterClient: ObservableObject {
         if !Task.isCancelled { loginState = .failed("Timed out waiting for the email link.") }
     }
 
+    /// #1293: a skipped save is not plain success. AccountPane shows `.failed` text in the signed-out
+    /// view, which is where the user is (isSignedIn reads the store).
+    static let unsavedMessage = "Signed in for this session; the sign-in can't be saved on this Mac."
+    static func loginOutcome(saved: Bool) -> LoginState { saved ? .success : .failed(unsavedMessage) }
+
     private func finishLogin(_ creds: StoredCredentials) async {
-        SupporterStore.save(creds)
+        let saved = SupporterStore.save(creds)
         Entitlements.shared.email = creds.email
         Entitlements.shared.apply(SupporterToken.verify(creds.token))
-        loginState = .success
+        loginState = Self.loginOutcome(saved: saved)
         await activateDevice()
         await refreshStatus()
     }

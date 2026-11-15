@@ -41,16 +41,33 @@ enum SyncCrypto {
     /// random per-process key (never the operator's key file).
     nonisolated(unsafe) static var deviceKey: KeyLookup = { create in
         if underTest { return testKey }
-        let url = DatabaseKey.keyFileURL
-        // A missing file stays missing on the open path; a malformed one reads as no key.
+        return deviceKey(at: DatabaseKey.keyFileURL, create: create)
+    }
+
+    /// #1293: the production body of `deviceKey`. A missing file stays missing on the open path
+    /// (create false); a malformed one reads as no key and is never rewritten.
+    static func deviceKey(at url: URL, create: Bool) -> SymmetricKey? {
         if !create, ((try? DatabaseKey.fetch(at: url)) ?? nil) == nil { return nil }
         return try? ClipboardCrypto.fileKey(url)
     }
 
-    /// Which key the next `encrypt` will use, given current availability.
+    /// True only when the key file does not exist (a read that throws is not "absent"), so the
+    /// first seal will create it. Under XCTest false (never the operator's file).
+    nonisolated(unsafe) static var deviceKeyAbsent: @Sendable () -> Bool = {
+        if underTest { return false }
+        return deviceKeyAbsent(at: DatabaseKey.keyFileURL)
+    }
+
+    static func deviceKeyAbsent(at url: URL) -> Bool {
+        do { return try DatabaseKey.fetch(at: url) == nil } catch { return false }
+    }
+
+    /// Which key the next `encrypt` will use, given current availability. #1293: looks, never
+    /// creates (startup reads it before sync is on): an absent device file is .deviceFallback
+    /// (encrypt creates it at the first seal); a malformed or unreadable one is .unavailable.
     static var mode: KeyMode {
         if icloudKey(true) != nil { return .icloud }
-        return deviceKey(true) != nil ? .deviceFallback : .unavailable
+        return deviceKey(false) != nil || deviceKeyAbsent() ? .deviceFallback : .unavailable
     }
 
     /// nil when no key is available: nothing is sealed.
