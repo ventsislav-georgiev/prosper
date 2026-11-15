@@ -316,4 +316,106 @@ final class KitRenderTests: XCTestCase {
                                           home: URL(fileURLWithPath: "/Users/example"), configHome: URL(fileURLWithPath: "/Users/example/.config"))
         XCTAssertEqual(KitRender.substitute("{{kit_dir}}/x {{home}}", c), "/Users/example/{{home}}/kit/x /Users/example")
     }
+
+    // MARK: #917 S2b partial install (G1, ruling E-13)
+
+    /// The fixture plus needs (guard needs tools, hud needs guard) and a second claude-md piece "extra" without the line.
+    private func neededFixture(line: UInt = #line) throws -> KitValidated {
+        let f = try makeKitDir(label: "needs\(line)")
+        try f.write("EXTRA.md", "# extra rules\n")
+        let kit = KitFixture.kit(replacing: #"id      = "guard""#, with: "id      = \"guard\"\nneeds   = [\"tools\"]")
+            .replacingOccurrences(of: #"id          = "hud""#, with: "id          = \"hud\"\nneeds       = [\"guard\"]")
+            .replacingOccurrences(of: "\n[[contributes.kit.settings]]",
+                                  with: "\n[[contributes.kit.pieces]]\nid     = \"extra\"\nkind   = \"claude-md\"\nsource = \"EXTRA.md\"\n\n[[contributes.kit.settings]]")
+        let v = try f.validate(kit)
+        guard case .ok(let k) = v else { XCTFail("\(v)", line: line); throw CancellationError() }
+        XCTAssertEqual(k.kit.pieces.map(\.needs), [[], [], ["tools"], ["guard"], [], [], []], line: line)
+        XCTAssertEqual(k.localPiece, "rules", line: line)
+        return k
+    }
+
+    func testOffSwitchesDependentsOff() throws {
+        let s = KitPieceSelection(try neededFixture())
+        XCTAssertEqual(s.closure(off: ["tools"]), .closed(off: ["tools", "guard", "hud"], unknown: []))
+        XCTAssertEqual(s.closure(off: ["guard"]), .closed(off: ["guard", "hud"], unknown: []))
+        XCTAssertEqual(s.closure(off: ["hud"]), .closed(off: ["hud"], unknown: []))
+        XCTAssertEqual(s.closure(off: ["extra", "perms"]), .closed(off: ["extra", "perms"], unknown: []))
+        XCTAssertEqual(s.closure(off: []), .closed(off: [], unknown: []))
+    }
+
+    func testLocalPieceCannotGoOffWhileSiblingOn() throws {
+        let v = try neededFixture()
+        let s = KitPieceSelection(v)
+        let refusal = KitRefusal(subject: "rules", reason: .localPieceStaysOn)
+        XCTAssertEqual(s.closure(off: ["rules"]), .refused(refusal))
+        XCTAssertEqual(s.closure(off: ["rules", "extra"]), .closed(off: ["rules", "extra"], unknown: []))
+        let plan = KitRender.plan(v, ctx, off: ["rules"])
+        XCTAssertEqual(plan.refusals, [refusal])
+        XCTAssertEqual(plan.pieces, [])
+        XCTAssertEqual(plan.shims, [])
+        // with one claude-md piece the local piece may go off; then nothing imports local.md and it is not seeded
+        let one = try validatedFixture()
+        XCTAssertEqual(KitPieceSelection(one).closure(off: ["rules"]), .closed(off: ["rules"], unknown: []))
+        XCTAssertFalse(KitRender.plan(one, ctx, off: ["rules"]).pieces.contains { $0.id == "rules" || $0.id == KitRender.localSeedID })
+    }
+
+    /// A saved off set can be stale: an id the kit does not have is reported and changes nothing.
+    func testStaleOffIDChangesNothing() throws {
+        let v = try neededFixture()
+        XCTAssertEqual(KitPieceSelection(v).closure(off: ["gone", "-x"]), .closed(off: [], unknown: ["gone", "-x"]))
+        XCTAssertEqual(KitPieceSelection(v).closure(off: ["gone", "hud"]), .closed(off: ["hud"], unknown: ["gone"]))
+        XCTAssertEqual(KitRender.plan(v, ctx, off: ["gone"], offTools: ["gone": ["calm-note"], "tools": ["gone"]]), KitRender.plan(v, ctx))
+        XCTAssertEqual(KitRender.summary(v, ctx, off: ["gone"]), KitRender.summary(v, ctx))
+    }
+
+    func testPlanWithEmptyOffIsToday() throws {
+        for v in [try validatedFixture(), try neededFixture()] {
+            XCTAssertEqual(KitRender.plan(v, ctx), KitRender.plan(v, ctx, off: [], offTools: [:]))
+            XCTAssertEqual(KitRender.summary(v, ctx), KitRender.summary(v, ctx, off: []))
+        }
+        XCTAssertEqual(KitRender.plan(try validatedFixture(), ctx, off: []).pieces.map(\.id),
+                       ["config.notes.toml", KitRender.localSeedID, "rules", "guard", "hud", "perms.allow", "perms.deny"])
+    }
+
+    func testOffPieceAndOffToolAreAbsentFromPlan() throws {
+        let v = try validatedFixture()
+        let full = KitRender.plan(v, ctx)
+        // an off tool of an on piece: no shim, nothing else changes
+        let noTool = KitRender.plan(v, ctx, offTools: ["tools": ["calm-note"]])
+        XCTAssertEqual(noTool.shims, [])
+        XCTAssertEqual(noTool.pieces, full.pieces)
+        XCTAssertEqual(noTool.refusals, [])
+        // off pieces of every kind: no piece id, shim, seed or import line of theirs anywhere
+        let plan = KitRender.plan(v, ctx, off: ["rules", "tools", "guard", "hud", "perms", "config"])
+        XCTAssertEqual(plan, KitPlan())
+        let some = KitRender.plan(v, ctx, off: ["config", "perms", "guard"])
+        XCTAssertEqual(some.pieces.map(\.id), [KitRender.localSeedID, "rules", "hud"])
+        XCTAssertEqual(some.shims.map(\.name), ["calm-note"])
+        let text = String(describing: some)
+        for gone in ["notes.toml", "perms", "Bash(", "hooks/guard.sh", "PreToolUse"] { XCTAssertFalse(text.contains(gone), gone) }
+        let noRules = KitRender.plan(v, ctx, off: ["rules"])
+        XCTAssertFalse(String(describing: noRules).contains("CLAUDE.md"))
+        XCTAssertEqual(noRules.pieces.map(\.id), ["config.notes.toml", "guard", "hud", "perms.allow", "perms.deny"])
+    }
+
+    /// plan takes the closure itself: a caller passing only "tools" never gets guard or hud wired.
+    func testUnclosedOffSetNeverWiresADependent() throws {
+        let v = try neededFixture()
+        let plan = KitRender.plan(v, ctx, off: ["tools"])
+        XCTAssertEqual(plan.pieces.map(\.id), ["config.notes.toml", KitRender.localSeedID, "rules", "perms.allow", "perms.deny", "extra"])
+        XCTAssertEqual(plan.shims, [])
+        XCTAssertEqual(plan.refusals, [])
+    }
+
+    func testSummaryNamesOffPieces() throws {
+        let v = try neededFixture()
+        let lines = KitRender.summary(v, ctx, off: ["tools"])
+        XCTAssertEqual(lines.filter { $0.hasSuffix(" (off)") }, [
+            "tools: commands calm-note in \(ctx.kitBin) (off)",
+            "guard: Claude Code runs hooks/guard.sh on PreToolUse (Bash) in every session, timeout 10 s (off)",
+            "hud: Claude Code runs statusline/hud.mjs with node as the status line; Remove puts your own status line back (off)",
+        ])
+        XCTAssertEqual(lines.count, KitRender.summary(v, ctx).count)
+        XCTAssertEqual(KitRender.summary(v, ctx, off: ["rules"]).first, "rules: " + KitReason.localPieceStaysOn.rawValue)
+    }
 }

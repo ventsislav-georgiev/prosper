@@ -272,6 +272,33 @@ final class KitValidatorTests: XCTestCase {
         _ = try validated(f.validate())
     }
 
+    /// #917 ruling E-13: the local.md line on exactly one claude-md piece (0, 1 and 2 pieces carrying it).
+    func testLocalImportOnExactlyOneClaudeMD() throws {
+        let f = try makeKitDir()
+        let extra = "\n[[contributes.kit.pieces]]\nid     = \"extra\"\nkind   = \"claude-md\"\nsource = \"EXTRA.md\"\n\n[[contributes.kit.settings]]"
+        let two = KitFixture.kit(replacing: "\n[[contributes.kit.settings]]", with: extra)
+        let line = "@{{kit_config}}/local.md\n"
+        // one carrier: passes (before E-13 EXTRA.md was refused for not ending with the line)
+        try f.write("EXTRA.md", "# extra rules\n")
+        XCTAssertEqual(try validated(f.validate(two)).localPiece, "rules")
+        XCTAssertEqual(try validated(f.validate()).localPiece, "rules")
+        try f.write("CLAUDE.md", "# rules\n")
+        try f.write("EXTRA.md", "# extra rules\n" + line)
+        XCTAssertEqual(try validated(f.validate(two)).localPiece, "extra")
+        // two carriers: both named
+        try f.write("CLAUDE.md", KitDirFixture.claudeMD)
+        let both = refusals(try f.validate(two)).filter { $0.reason == .localImportTwice }
+        XCTAssertEqual(both, [KitRefusal(subject: "CLAUDE.md", reason: .localImportTwice), KitRefusal(subject: "EXTRA.md", reason: .localImportTwice)])
+        // none: refused for the kit; a line inside a fence or a code span is not an import
+        try f.write("CLAUDE.md", "# rules\n```\n" + line + "```\n")
+        try f.write("EXTRA.md", "# extra `@{{kit_config}}/local.md`\n")
+        assertRefused(try f.validate(two), "kit", .localImportMissing)
+        assertRefused(try f.validate(), "kit", .localImportMissing)
+        // one piece carrying it twice
+        try f.write("CLAUDE.md", "# rules\n" + line + line)
+        assertRefused(try f.validate(), "CLAUDE.md", .localImportTwice)
+    }
+
     func testImportChainDeeperThanTwoRefused() throws {
         let f = try makeKitDir()
         // CLAUDE.md -> a.md (1) -> b.md (2): fits. Mentions, code spans and fences are not imports.

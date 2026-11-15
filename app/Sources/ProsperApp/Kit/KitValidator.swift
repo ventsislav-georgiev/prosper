@@ -82,6 +82,8 @@ struct KitValidated: Equatable, Sendable {
     /// seed piece id -> its files, by path under `from`
     var seeds: [String: [KitFileRef]] = [:]
     var warnings: [KitRefusal] = []
+    /// #917 E-13: the claude-md piece that imports local.md (nil when the kit has no claude-md piece)
+    var localPiece: String? = nil
 }
 
 enum KitValidation: Equatable, Sendable {
@@ -131,6 +133,8 @@ enum KitValidator {
         var out = KitValidated(extensionID: meta.id, slug: meta.name, version: meta.version, kit: kit ?? KitManifest())
         if let kit {
             for p in kit.pieces { run.check(p, into: &out) }
+            run.checkLocalImport()
+            if run.localCarriers.count == 1 { out.localPiece = run.localCarriers.first?.id }
         }
         run.checkExecutables()
         out.warnings = run.warnings
@@ -204,6 +208,17 @@ enum KitValidator {
         /// symlink entries an import ran through: each is decided (one realPath) and refused once
         var importSymlinks: Set<String> = []
         var seedTargets: Set<String> = [] // kitconfig: names across every seed piece, case-folded (A-INFO-5)
+        /// claude-md pieces whose source was read, and those importing local.md with how often
+        var claudeMDPieces = 0
+        var localCarriers: [(id: String, rel: String, count: Int)] = []
+
+        /// ruling E-13: exactly one claude-md piece imports local.md, exactly once.
+        mutating func checkLocalImport() {
+            if claudeMDPieces > 0, localCarriers.isEmpty { refuse("kit", .localImportMissing) }
+            if localCarriers.count > 1 || localCarriers.contains(where: { $0.count > 1 }) {
+                for c in localCarriers { refuse(c.rel, .localImportTwice) }
+            }
+        }
 
         /// A symlink entry: pathSymlink when it resolves inside the kit, pathLeaves otherwise.
         func symlinkReason(_ rel: String) -> KitReason {
@@ -301,9 +316,15 @@ enum KitValidator {
                 guard let rel = resolve(p.source ?? "", "\(p.id).source", .file) else { return }
                 guard rel.lowercased().hasSuffix(".md") else { return refuse("\(p.id).source", .needsMarkdown) }
                 guard let text = readText(rel) else { return refuse(rel, .notText) }
-                let last = text.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n")
-                    .map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
-                if last != KitValidator.localImportLine { refuse(rel, .localImportLast) }
+                claudeMDPieces += 1
+                // ruling E-13: the line on exactly one claude-md piece, as that piece's last line
+                let count = KitValidator.imports(in: text).filter { "@" + $0 == KitValidator.localImportLine }.count
+                if count > 0 {
+                    localCarriers.append((p.id, rel, count))
+                    let last = text.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty }
+                    if last != KitValidator.localImportLine { refuse(rel, .localImportLast) }
+                }
                 if !importsFit(rel, text, level: 0) { refuse(rel, .importTooDeep) }
 
             case .tools:

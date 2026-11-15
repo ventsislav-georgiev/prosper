@@ -435,14 +435,84 @@ final class KitManifestTests: XCTestCase {
         }
     }
 
-    /// Display text keeps the emoji sequences: a ZWJ family and a heart with U+FE0F pass in a title and in a default.
+    /// Display text keeps the emoji sequences: a ZWJ family and a heart with U+FE0F pass in a title.
+    /// #917 S2b (QA r1144): a default is strict now, so the same text is refused there.
     func testTitleKeepsEmojiSequences() throws {
         let family = #"\U0001F468\u200D\U0001F469\u200D\U0001F467"#
         let heart = #"\u2764\uFE0F"#
         for text in [family, heart] {
             XCTAssertEqual(try parse(KitFixture.kit(replacing: #"title   = "Default repo (owner/name)""#, with: "title   = \"A \(text)\"")).refusals, [], text)
-            XCTAssertEqual(try parse(KitFixture.kit(replacing: #"default = """#, with: "default = \"\(text)\"")).refusals, [], text)
+            try assertRefused(KitFixture.kit(replacing: #"default = """#, with: "default = \"\(text)\""), "settings[0].default", .controlCharacter)
         }
+    }
+
+    // MARK: #917 S2b (R917-s2a-q1, QA ruling r1144: display text is titles only)
+
+    /// A choice value, a default and the homepage are strict: an invisible scalar there makes a look-alike value or link.
+    func testValuesDefaultsAndHomepageAreStrict() throws {
+        let setting = "kind    = \"string\"\ndefault = \"\""
+        let choice = #"kind    = "choice"\#nvalues  = ["fast", "fa\u200Dst"]\#ndefault = "fast""#
+        try assertRefused(KitFixture.kit(replacing: setting, with: choice), "settings[0].values[1]", .controlCharacter)
+        let plain = #"kind    = "choice"\#nvalues  = ["fast", "slow"]\#ndefault = "fast""#
+        XCTAssertEqual(try parse(KitFixture.kit(replacing: setting, with: plain)).refusals, [])
+        try assertRefused(KitFixture.kit(replacing: #"default = """#, with: #"default = "on\uFE0F""#), "settings[0].default", .controlCharacter)
+        try assertRefused(KitFixture.kit(replacing: #"homepage = "https://example.com/calm-agent""#, with: #"homepage = "https://example.com\uFE0F/""#),
+                          "homepage", .controlCharacter)
+        XCTAssertFalse(KitManifest.isDisplayPath("homepage"))
+        XCTAssertFalse(KitManifest.isDisplayPath("settings[0].default"))
+        XCTAssertFalse(KitManifest.isDisplayPath("settings[0].values[1]"))
+        XCTAssertTrue(KitManifest.isDisplayPath("settings[0].title"))
+    }
+
+    // MARK: #917 S2b needs (G1)
+
+    private static let guardID = #"id      = "guard""#
+
+    func testNeedsUnknownIDRefused() throws {
+        func guardNeeds(_ list: String) -> String { KitFixture.kit(replacing: Self.guardID, with: Self.guardID + "\nneeds   = " + list) }
+        let ok = try parse(guardNeeds(#"["tools", "rules"]"#))
+        XCTAssertEqual(ok.refusals, [])
+        XCTAssertEqual(ok.kit.pieces.first { $0.id == "guard" }?.needs, ["tools", "rules"])
+        XCTAssertEqual(ok.kit.pieces.first { $0.id == "tools" }?.needs, [])
+        try assertRefused(guardNeeds(#"["nope"]"#), "guard.needs", .unknownNeed)
+        try assertRefused(guardNeeds(#"["tools", "tools"]"#), "pieces[2].needs", .duplicateNeed)
+        try assertRefused(guardNeeds(#"["-rules"]"#), "pieces[2].needs", .badID)
+        try assertRefused(guardNeeds(#"["Rules"]"#), "pieces[2].needs", .badID)
+        try assertRefused(guardNeeds(#""tools""#), "pieces[2].needs", .wrongType)
+        // strict text: an invisible scalar in a need is refused by the text rule too
+        try assertRefused(guardNeeds(#"["to\u200Dols"]"#), "pieces[2].needs[0]", .controlCharacter)
+        let many = "[" + (0...64).map { "\"n\($0)\"" }.joined(separator: ", ") + "]"
+        try assertRefused(guardNeeds(many), "pieces[2].needs", .tooManyNeeds)
+        XCTAssertEqual(KitReason.unknownNeed.rawValue, "needs names a piece id this kit does not have")
+        XCTAssertEqual(KitReason.needsCycle.rawValue, "needs form a cycle: a piece needs itself, directly or through other pieces")
+        XCTAssertEqual(KitReason.localImportMissing.rawValue, "one claude-md piece must import @{{kit_config}}/local.md as its last line")
+        XCTAssertEqual(KitReason.localImportTwice.rawValue, "only one claude-md piece may import @{{kit_config}}/local.md, and only once")
+        XCTAssertEqual(KitReason.localPieceStaysOn.rawValue, "the piece that imports local.md stays on while another claude-md piece is on")
+    }
+
+    /// a needs b needs a; a needs a; a chain as long as the piece cap passes, closed into a ring it is refused, no trap.
+    func testNeedsCycleRefused() throws {
+        let hudID = #"id          = "hud""#
+        let pair = KitFixture.kit(replacing: Self.guardID, with: Self.guardID + #"\#nneeds   = ["hud"]"#)
+            .replacingOccurrences(of: hudID, with: hudID + #"\#nneeds       = ["guard"]"#)
+        XCTAssertEqual(Set(try parse(pair).refusals),
+                       [KitRefusal(subject: "guard.needs", reason: .needsCycle), KitRefusal(subject: "hud.needs", reason: .needsCycle)])
+        XCTAssertEqual(try parse(KitFixture.kit(replacing: Self.guardID, with: Self.guardID + #"\#nneeds   = ["guard"]"#)).refusals,
+                       [KitRefusal(subject: "guard.needs", reason: .needsCycle)])
+        func chain(ring: Bool) -> String {
+            let n = KitManifest.maxPieces
+            return "[contributes.kit]\nschema = 1\n" + (0..<n).map { i in
+                let next = i + 1 < n ? "p\(i + 1)" : (ring ? "p0" : "")
+                return "\n[[contributes.kit.pieces]]\nid = \"p\(i)\"\nkind = \"permissions\"\nallow = [\"Read(*)\"]\n"
+                    + (next.isEmpty ? "" : "needs = [\"\(next)\"]\n")
+            }.joined()
+        }
+        let line = try parse(chain(ring: false))
+        XCTAssertEqual(line.refusals, [])
+        XCTAssertEqual(line.kit.pieces.count, KitManifest.maxPieces)
+        let ring = try parse(chain(ring: true)).refusals
+        XCTAssertEqual(ring.count, KitManifest.maxPieces)
+        XCTAssertTrue(ring.allSatisfy { $0.reason == .needsCycle }, "\(ring)")
     }
 
     /// Permission rules and matchers: strict, U+00A0 and U+FE0F refused, no allow-list (not even the display one).

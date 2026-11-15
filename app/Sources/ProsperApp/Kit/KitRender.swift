@@ -128,12 +128,19 @@ enum KitRender {
     /// spec 4.2 piece table. Seeds come first, so local.md exists before the block importing it.
     /// The only settings.json paths written: hooks.<event> (append), statusLine (set) and
     /// permissions.allow / deny / ask (union); KitRenderTests walks every kind to prove it.
-    static func plan(_ v: KitValidated, _ c: KitRenderContext) -> KitPlan {
+    /// #917 G1: an off piece emits nothing; an off tool of an on piece emits no shim. The closure is taken HERE, not
+    /// required of the caller, so an unclosed off set can never leave a dependent wired; a refused one plans nothing.
+    static func plan(_ v: KitValidated, _ c: KitRenderContext, off asked: Set<String> = [], offTools: [String: Set<String>] = [:]) -> KitPlan {
         var plan = KitPlan()
+        let off: Set<String>
+        switch KitPieceSelection(v).closure(off: asked) {
+        case .refused(let r): plan.refusals.append(r); return plan
+        case .closed(let o, _): off = o
+        }
         var seeds: [ManagedConfigPiece] = []
         var wiring: [ManagedConfigPiece] = []
         func missing(_ p: KitManifest.Piece) { plan.refusals.append(.init(subject: p.id, reason: .missingKey)) }
-        for p in v.kit.pieces {
+        for p in v.kit.pieces where !off.contains(p.id) {
             switch p.kind {
             case .claudeMD:
                 guard let source = p.source else { missing(p); continue }
@@ -142,7 +149,7 @@ enum KitRender {
                 }
                 wiring.append(ManagedConfigPiece(id: p.id, kind: .block, target: "claude:CLAUDE.md", text: line, position: p.position))
             case .tools:
-                for t in v.tools[p.id] ?? [] {
+                for t in v.tools[p.id] ?? [] where !(offTools[p.id]?.contains(t.name) ?? false) {
                     plan.shims.append(KitShimPlan(pieceID: p.id, name: t.name, target: c.kitBin + "/" + t.name,
                                                   text: shimText(c, pieceID: p.id, name: t.name, target: c.kitDir + "/" + t.path)))
                 }
@@ -169,24 +176,33 @@ enum KitRender {
                 }
             }
         }
-        if needsLocalSeed(v) {
+        if needsLocalSeed(v, off: off) {
             seeds.append(ManagedConfigPiece(id: localSeedID, kind: .seed, target: "kitconfig:local.md", text: localTemplate))
         }
         plan.pieces = seeds + wiring
         return plan
     }
 
-    /// A kit with a claude-md piece imports local.md; Prosper seeds it unless a seed ships one.
-    static func needsLocalSeed(_ v: KitValidated) -> Bool {
-        v.kit.pieces.contains { $0.kind == .claudeMD } && !v.seeds.values.joined().contains { $0.name.lowercased() == "local.md" }
+    /// A kit with a claude-md piece on imports local.md; Prosper seeds it unless a seed piece that is on ships one.
+    static func needsLocalSeed(_ v: KitValidated, off: Set<String> = []) -> Bool {
+        v.kit.pieces.contains { $0.kind == .claudeMD && !off.contains($0.id) }
+            && !v.seeds.filter { !off.contains($0.key) }.values.joined().contains { $0.name.lowercased() == "local.md" }
     }
 
     // MARK: (e) "What will change"
 
     /// spec 4.3: generated from the manifest; the authoritative description (errata A1 wording).
-    static func summary(_ v: KitValidated, _ c: KitRenderContext) -> [String] {
+    /// #917 G1: every line of an off piece (the closure, as plan takes it) ends in " (off)".
+    static func summary(_ v: KitValidated, _ c: KitRenderContext, off asked: Set<String> = []) -> [String] {
         var lines: [String] = []
+        let off: Set<String>
+        switch KitPieceSelection(v).closure(off: asked) {
+        case .refused(let r): lines.append(r.description); off = []
+        case .closed(let o, _): off = o
+        }
         for p in v.kit.pieces {
+            let first = lines.count
+            defer { if off.contains(p.id) { for i in first..<lines.count { lines[i] += " (off)" } } }
             let via = p.interpreter.map { " with \($0)" } ?? ""
             switch p.kind {
             case .claudeMD:
@@ -209,7 +225,7 @@ enum KitRender {
                 lines.append("\(p.id): copies \(names.isEmpty ? "(none)" : names) into \(c.kitConfig) when missing; never overwritten")
             }
         }
-        if needsLocalSeed(v) {
+        if needsLocalSeed(v, off: off) {
             lines.append("\(localSeedID): \(c.kitConfig)/local.md is created for your own lines; Claude Code reads it last")
         }
         if !v.kit.requires.isEmpty { lines.append("requires on PATH: \(v.kit.requires.joined(separator: ", "))") }

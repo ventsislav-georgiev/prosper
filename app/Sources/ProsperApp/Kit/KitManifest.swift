@@ -106,6 +106,10 @@ enum KitReason: String, Sendable, CaseIterable {
     case tooManyValues = "a choice setting has at most 32 values"
     case tooManyRules = "a permissions piece lists at most 64 rules in each of allow, deny and ask"
     case badHomepage = "homepage must be an https:// link"
+    case unknownNeed = "needs names a piece id this kit does not have"
+    case needsCycle = "needs form a cycle: a piece needs itself, directly or through other pieces"
+    case duplicateNeed = "needs lists the same piece id twice"
+    case tooManyNeeds = "a piece lists at most 64 needs"
     // kit dir (KitValidator)
     case badExtensionID = "the extension id must be [A-Za-z0-9._-]+, at most 128 characters, not starting with '-' and not only dots"
     case badSlug = "the extension name (the kit slug) must be [a-z0-9-]+, at most 64 characters, not starting with '-'"
@@ -122,6 +126,10 @@ enum KitReason: String, Sendable, CaseIterable {
     case needsMarkdown = "a claude-md source is a .md file"
     case notText = "file is not UTF-8 text"
     case localImportLast = "the kit CLAUDE.md must end with the line @{{kit_config}}/local.md"
+    case localImportMissing = "one claude-md piece must import @{{kit_config}}/local.md as its last line"
+    case localImportTwice = "only one claude-md piece may import @{{kit_config}}/local.md, and only once"
+    // selection (KitPieceSelection)
+    case localPieceStaysOn = "the piece that imports local.md stays on while another claude-md piece is on"
     case importTooDeep = "the kit's import chain is deeper than 2 below its CLAUDE.md"
     case tooManyImports = "a file imports more than 64 distinct kit files"
     case binaryExecutable = "executable is a Mach-O or other non-text file"
@@ -166,6 +174,8 @@ struct KitManifest: Sendable, Equatable {
         var deny: [String] = []
         var ask: [String] = []
         var from: String? = nil // seed
+        /// #917 G1: piece ids this piece needs (every kind); switching one of them off switches this one off
+        var needs: [String] = []
     }
 
     struct Setting: Sendable, Equatable {
@@ -185,6 +195,9 @@ struct KitManifest: Sendable, Equatable {
     static let maxChoiceValues = 32
     /// rules in each of allow, deny and ask (the summary prints one line per rule)
     static let maxRules = 64
+    /// needs of one piece: the piece cap, since a list with no repeat and no self names at most 63 other pieces;
+    /// it also bounds the cycle walk at maxPieces * maxNeeds edges
+    static let maxNeeds = maxPieces
     /// caps in Unicode scalars
     static let maxMatcher = 256, maxTitle = 128, maxHomepage = 512, maxRule = 512, maxValue = 256
 
@@ -205,14 +218,15 @@ struct KitManifest: Sendable, Equatable {
     /// #917 S2a (QA ruling r1135): the S1 list stays, and OutsideText.isUnseen is added on top. A permission rule, a
     /// matcher and every key not placed as display text is STRICT: no scalar isUnseen refuses (U+00A0 stands in for a space).
     static func isStrictText(_ s: String) -> Bool { !s.unicodeScalars.contains { isControlScalar($0) || OutsideText.isUnseen($0) } }
-    /// Display text (title, choice values and defaults, homepage): the same, except U+200C, U+200D and U+FE0F (emoji sequences).
+    /// Display text (a setting title): the same, except U+200C, U+200D and U+FE0F (emoji sequences).
     static let displayAllowed: Set<UInt32> = [0x200C, 0x200D, 0xFE0F]
     static func isDisplayText(_ s: String) -> Bool {
         !s.unicodeScalars.contains { isControlScalar($0) || (OutsideText.isUnseen($0) && !displayAllowed.contains($0.value)) }
     }
-    /// The display keys by path; any other path is strict.
+    /// The display keys by path: titles only (QA ruling r1144). A choice value or default is compared by a program and the
+    /// homepage is a link URL(string:) rewrites, so an invisible scalar there makes two look-alike texts: strict.
     static func isDisplayPath(_ at: String) -> Bool {
-        at == "homepage" || (at.hasPrefix("settings[") && (at.hasSuffix("].title") || at.hasSuffix("].default") || at.contains("].values[")))
+        at.hasPrefix("settings[") && at.hasSuffix("].title")
     }
 
     static let topKeys: Set<String> = ["schema", "homepage", "requires", "pieces", "settings"]
@@ -359,6 +373,7 @@ struct KitManifest: Sendable, Equatable {
                 kit.pieces.append(piece)
             }
             if kit.pieces.filter({ $0.kind == .statusline }).count > 1 { refuse("pieces", .twoStatuslines) }
+            checkNeeds(kit.pieces)
 
             let settingRows = tables(t, "settings")
             if settingRows.count > KitManifest.maxSettings { refuse("settings", .tooManySettings) }
@@ -371,6 +386,22 @@ struct KitManifest: Sendable, Equatable {
             return kit
         }
 
+        /// #917 G1: every need names a piece of this kit, and no piece needs itself, directly or through others.
+        /// Iterative: per piece one walk over a visited set, at most maxPieces nodes and maxPieces * maxNeeds pushes.
+        mutating func checkNeeds(_ pieces: [Piece]) {
+            // a duplicate id is already refused; keep the first, never trap on it
+            let needs = Dictionary(pieces.map { ($0.id, $0.needs) }, uniquingKeysWith: { a, _ in a })
+            for p in pieces {
+                if p.needs.contains(where: { needs[$0] == nil }) { refuse("\(p.id).needs", .unknownNeed) }
+                var stack = p.needs
+                var seen: Set<String> = []
+                while let n = stack.popLast() {
+                    if n == p.id { refuse("\(p.id).needs", .needsCycle); break }
+                    if seen.insert(n).inserted { stack += needs[n] ?? [] }
+                }
+            }
+        }
+
         mutating func piece(_ t: [String: KitTOML], index i: Int, requires: [String]) -> Piece? {
             let at = "pieces[\(i)]."
             let before = refusals.count
@@ -379,8 +410,13 @@ struct KitManifest: Sendable, Equatable {
             let kindText = string(t, "kind", at, required: true)
             guard let kindText else { return nil }
             guard let kind = Piece.Kind(rawValue: kindText) else { refuse("\(at)kind", .unknownKind); return nil }
-            unknownKeys(t, allowed: KitManifest.pieceKeys[kind, default: []].union(["id", "kind"]), at: at)
+            unknownKeys(t, allowed: KitManifest.pieceKeys[kind, default: []].union(["id", "kind", "needs"]), at: at)
             var p = Piece(id: id ?? "", kind: kind)
+            p.needs = strings(t, "needs", at)
+            if p.needs.count > KitManifest.maxNeeds { refuse("\(at)needs", .tooManyNeeds) }
+            if p.needs.prefix(KitManifest.maxNeeds).contains(where: { !KitManifest.isValidPieceID($0) }) { refuse("\(at)needs", .badID) }
+            // refused, not folded: a repeat is an author error and folding would hide it
+            if Set(p.needs).count != p.needs.count { refuse("\(at)needs", .duplicateNeed) }
             switch kind {
             case .claudeMD:
                 p.source = string(t, "source", at, required: true)
