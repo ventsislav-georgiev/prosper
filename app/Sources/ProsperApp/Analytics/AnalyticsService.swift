@@ -38,16 +38,22 @@ final class AnalyticsService {
         // elapsed (or when a prior send failed and never stamped). Survives
         // sleep/clock drift better than one 24h fire.
         timer?.invalidate()
-        let t = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
-            Task { @MainActor in self.maybeSend() }
-        }
-        t.tolerance = 360   // 10 %: an hourly poll for a 24 h send has no deadline
+        let t = Self.makeTimer { Task { @MainActor in self.maybeSend() } }
+        RunLoop.main.add(t, forMode: .common)
         timer = t
         // First check shortly after launch so a fresh install reports day one.
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             self.maybeSend()
         }
+    }
+
+    /// The hourly poll timer, built but not scheduled and not started (a test can
+    /// read its interval and tolerance without arming anything).
+    static func makeTimer(_ fire: @escaping @Sendable () -> Void) -> Timer {
+        let t = Timer(timeInterval: 3600, repeats: true) { _ in fire() }
+        t.tolerance = 360   // 10 %: an hourly poll for a 24 h send has no deadline
+        return t
     }
 
     /// Send the snapshot if enabled and ≥24h since the last *confirmed* send.

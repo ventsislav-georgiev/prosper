@@ -18,10 +18,16 @@ enum PermissionsManager {
     /// macOS 27 no longer exposes the user TCC.db, so we list `~/Library/Mail` and
     /// `~/Library/Safari` instead. Read-only and cheap; safe on any thread.
     static func hasFullDiskAccess() -> Bool {
-        let home = NSHomeDirectory() as NSString
-        let probes = ["Library/Mail", "Library/Safari"].map { path -> FDAProbeResult in
+        fullDiskAccessDecision(lazy: realFDAProbes)
+    }
+
+    /// The two real probes, unevaluated: each reads a TCC-protected directory only
+    /// when called. Tests never use these.
+    static var realFDAProbes: [() -> FDAProbeResult] { ["Library/Mail", "Library/Safari"].map { path in
+        { () -> FDAProbeResult in
+            let dir = (NSHomeDirectory() as NSString).appendingPathComponent(path)
             do {
-                _ = try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(path))
+                _ = try FileManager.default.contentsOfDirectory(atPath: dir)
                 return .readable
             } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
                 return .missing
@@ -29,15 +35,23 @@ enum PermissionsManager {
                 return .denied
             }
         }
-        return fullDiskAccessDecision(probes)
-    }
+    } }
 
     enum FDAProbeResult { case readable, denied, missing }
 
     /// A missing directory says nothing about the grant, so try the next probe;
     /// the first probe that exists decides. All probes missing reads as no FDA.
     static func fullDiskAccessDecision(_ probes: [FDAProbeResult]) -> Bool {
-        probes.first { $0 != .missing } == .readable
+        fullDiskAccessDecision(lazy: probes.map { r in { r } })
+    }
+
+    /// Same rule, but a probe runs only when every earlier one was missing.
+    static func fullDiskAccessDecision(lazy probes: [() -> FDAProbeResult]) -> Bool {
+        for probe in probes {
+            let r = probe()
+            if r != .missing { return r == .readable }
+        }
+        return false
     }
 
     /// Opens the Full Disk Access privacy pane in System Settings.
