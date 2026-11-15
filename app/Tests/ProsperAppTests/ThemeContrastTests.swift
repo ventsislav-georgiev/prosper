@@ -407,20 +407,39 @@ final class ThemeContrastTests: XCTestCase {
         let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
             .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
         XCTAssertGreaterThan(files.count, 50)
+        // R928-3: the scan reads text with ALL whitespace removed, so every pin is written without spaces.
         let pins = [".preferredColorScheme(.dark)", ".preferredColorScheme(.light)",
-                    "NSAppearance(named: .darkAqua)", "NSAppearance(named: .aqua)",
-                    ".environment(\\.colorScheme, .dark)", ".darkAqua", ".vibrantDark"]
-        // #928: file and pin allowed, each not a themed surface.
-        let allowed: Set<String> = [
-            "Theme.swift .darkAqua",   // ThemeAppearance.nsAppearanceName: the theme's own appearance, the source every surface reads
-            "AgentIslandView.swift .environment(\\.colorScheme, .dark)",   // the island is a black notch shape (Color.black) on every theme, no palette token
+                    "ColorScheme.dark", "ColorScheme.light", ".colorScheme(.dark)", ".colorScheme(.light)",
+                    "NSAppearance(named:.darkAqua)", "NSAppearance(named:.aqua)",
+                    ".init(named:.aqua)", ".init(named:.darkAqua)",
+                    ".environment(\\.colorScheme,.dark)", ".environment(\\.colorScheme,.light)",
+                    ".darkAqua", ".vibrantDark", ".vibrantLight",
+                    ".accessibilityHighContrastAqua", ".accessibilityHighContrastDarkAqua",
+                    ".accessibilityHighContrastVibrantLight", ".accessibilityHighContrastVibrantDark"]
+        // #928: file, pin and the exact whitespace-stripped line allowed; each must match exactly once.
+        let allowed: [(file: String, pin: String, line: String)] = [
+            // ThemeAppearance.nsAppearanceName: the theme's own appearance, the source every surface reads
+            ("Theme.swift", ".darkAqua", "self==.light?.aqua:.darkAqua"),
+            // the island is a black notch shape (Color.black) on every theme, no palette token
+            ("AgentIslandView.swift", ".environment(\\.colorScheme,.dark)", ".environment(\\.colorScheme,.dark)"),
         ]
+        func count(_ needle: String, in hay: String) -> Int { hay.components(separatedBy: needle).count - 1 }
+        var matched = [Int](repeating: 0, count: allowed.count)
         for f in files {
-            let text = try String(contentsOf: f, encoding: .utf8)
-            for pin in pins where text.contains(pin) && !allowed.contains("\(f.lastPathComponent) \(pin)") {
-                XCTFail("\(f.lastPathComponent) pins \(pin); use the theme's appearance")
+            let text = String(try String(contentsOf: f, encoding: .utf8).filter { !$0.isWhitespace })
+            for pin in pins {
+                let n = count(pin, in: text)
+                if n == 0 { continue }
+                if let k = allowed.firstIndex(where: { $0.file == f.lastPathComponent && $0.pin == pin }) {
+                    XCTAssertEqual(n, 1, "\(f.lastPathComponent) pins \(pin) \(n) times; one is allowed")
+                    XCTAssertEqual(count(allowed[k].line, in: text), 1, "\(f.lastPathComponent): the allowed line is not there exactly once")
+                    matched[k] += 1
+                } else {
+                    XCTFail("\(f.lastPathComponent) pins \(pin); use the theme's appearance")
+                }
             }
         }
+        for (k, a) in allowed.enumerated() { XCTAssertEqual(matched[k], 1, "allowed \(a.file) \(a.pin) matches nothing: drop it") }
     }
 
     /// A never-ordered window far off every screen (the harness never shows it).

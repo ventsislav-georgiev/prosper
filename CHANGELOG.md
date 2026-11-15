@@ -1094,6 +1094,9 @@ tag from the now-released section and put it on the new top draft.
   closes it (#1032)
 - Choosing Automatic for the fans right after moving the fan slider no longer leaves the slider's
   speeds saved in the background (#1234)
+- A theme name or label written with a no-break, thin or wide space now keeps the gap between its
+  words ("Sky Blue" no longer reads "SkyBlue"); line breaks and invisible characters are still
+  removed, and a label with one over-long character stops there (#928)
 
 ## v2.174.0
 

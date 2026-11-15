@@ -289,6 +289,8 @@ struct ThemeVariant: Sendable, Equatable {
     /// `labelScalarMax` bounds the bytes (one Character can carry any number of combining marks).
     static let labelMax = 32
     static let labelScalarMax = 128
+    /// One Character over this ends the label (every standard emoji sequence is at most 10 scalars).
+    static let labelCharScalarMax = 16
 
     /// A label from a theme file (`tintLabel`, a variant's `label`, a theme's title): every scalar
     /// `OutsideText.isUnseen` refuses is dropped, except a ZWJ or VS16 inside an emoji sequence
@@ -302,12 +304,15 @@ struct ThemeVariant: Sendable, Equatable {
         var next = it.next()
         while let c = next {
             next = it.next()
-            if keeps(c, after: kept.last, before: next) { kept.append(c) }
+            // A space separator (Zs: U+00A0, U+2009, U+202F, U+3000...) keeps the gap as U+0020; a tab,
+            // line or paragraph separator (Zl, Zp) and controls are not Zs and stay dropped.
+            if c.properties.generalCategory == .spaceSeparator { kept.append(" ") }
+            else if keeps(c, after: kept.last, before: next) { kept.append(c) }
         }
         var out = "", chars = 0, scalars = 0
         for ch in String(kept).trimmingCharacters(in: .whitespaces) {
             let n = ch.unicodeScalars.count
-            guard chars < labelMax, scalars + n <= labelScalarMax else { break }
+            guard chars < labelMax, n <= labelCharScalarMax, scalars + n <= labelScalarMax else { break }
             out.append(ch)
             chars += 1
             scalars += n
