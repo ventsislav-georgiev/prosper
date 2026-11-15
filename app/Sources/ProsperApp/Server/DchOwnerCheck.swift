@@ -430,6 +430,22 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
     /// The shared identity tagged nodes report as their user.
     private static let taggedDevices = "tagged-devices"
 
+    /// #988: BackendState is another program's text. A literal table of the states the tree names
+    /// (the cause is user copy and statusText adds the full stop); anything else, a missing state
+    /// included, is one generic sentence. The raw state goes only to the log, ASCII printable, at most 32 characters.
+    static func notRunningCause(_ state: String?) -> String {
+        let shown = String(String.UnicodeScalarView((state ?? "none").unicodeScalars.lazy
+            .filter { $0.value >= 0x20 && $0.value < 0x7f }.prefix(32)))
+        Logger(subsystem: "com.prosper.app", category: "DchServer")
+            .info("dch server: Tailscale backend state is not Running: \(shown, privacy: .private)")
+        switch state {
+        case "Stopped": return "Tailscale on this Mac is turned off"
+        case "NeedsLogin": return "Tailscale on this Mac needs a login"
+        case "Starting": return "Tailscale on this Mac is still starting"
+        default: return "Tailscale on this Mac is not connected"
+        }
+    }
+
     /// `tailscale status --json --peers=false`: the host must be Running with a user id. Not
     /// Running yet (Starting after wake, NeedsLogin, Stopped) is refused but not remembered, so
     /// the phone gets in as soon as Tailscale is up (QA #635 INFO 3).
@@ -438,7 +454,7 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
             throw WhoisUnusable(cause: "Tailscale's status couldn't be read")
         }
         guard s.BackendState == "Running" else {
-            throw WhoisUnusable(cause: "Tailscale on this Mac is \(s.BackendState ?? "in no state"), not connected", askAgain: true)
+            throw WhoisUnusable(cause: notRunningCause(s.BackendState), askAgain: true)
         }
         guard let me = s.me, let id = me.UserID else {
             throw WhoisUnusable(cause: "Tailscale's status has no user for this Mac")

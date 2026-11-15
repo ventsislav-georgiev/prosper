@@ -1124,6 +1124,9 @@ tag from the now-released section and put it on the new top draft.
   with plain ids of up to 256 characters keep their saved position (#980)
 - The sheet that asks before an extension changes your config now names the extension by its title,
   with its full id (wrapped, selectable) under it (#1235)
+- When the Mac cannot load the model or finish an answer for the phone, the phone now gets a plain
+  sentence instead of the Mac's internal error text; the Remote Terminal status in Settings says in
+  plain words why Tailscale on the Mac is not connected (#988)
 
 ## v2.174.0
 

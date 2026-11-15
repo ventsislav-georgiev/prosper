@@ -471,7 +471,7 @@ final class DchChatTests: XCTestCase {
         XCTAssertEqual(deltas(r), ["partial"])
         XCTAssertEqual(finals(r).count, 1)
         XCTAssertEqual(finals(r).first.map(Self.type), DchFrame.error)
-        XCTAssertTrue(Self.message(finals(r).first).hasPrefix("inference error: "), Self.message(finals(r).first))
+        XCTAssertEqual(Self.message(finals(r).first), "The Mac could not finish the answer.")
     }
 
     // MARK: Attached connections

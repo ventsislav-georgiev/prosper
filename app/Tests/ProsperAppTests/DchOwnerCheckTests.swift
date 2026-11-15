@@ -411,11 +411,11 @@ final class DchOwnerCheckTests: XCTestCase {
                 return nil
             } catch { return error as? WhoisUnusable }
         }
-        for state in ["Stopped", "NeedsLogin", "Starting"] {
-            XCTAssertEqual(error(#"{"BackendState":"\#(state)","Self":{"UserID":1}}"#),
-                           WhoisUnusable(cause: "Tailscale on this Mac is \(state), not connected", askAgain: true))
+        for (state, cause) in [("Stopped", "Tailscale on this Mac is turned off"), ("NeedsLogin", "Tailscale on this Mac needs a login"),
+                               ("Starting", "Tailscale on this Mac is still starting")] {
+            XCTAssertEqual(error(#"{"BackendState":"\#(state)","Self":{"UserID":1}}"#), WhoisUnusable(cause: cause, askAgain: true))
         }
-        XCTAssertEqual(error(#"{"Self":{"UserID":1}}"#), WhoisUnusable(cause: "Tailscale on this Mac is in no state, not connected", askAgain: true))
+        XCTAssertEqual(error(#"{"Self":{"UserID":1}}"#), WhoisUnusable(cause: "Tailscale on this Mac is not connected", askAgain: true))
         XCTAssertEqual(error(#"{"BackendState":"Running","Self":{}}"#), WhoisUnusable(cause: "Tailscale's status has no user for this Mac"))
         XCTAssertEqual(error("not json"), WhoisUnusable(cause: "Tailscale's status couldn't be read"))
         XCTAssertEqual(error(#"{"Node":{"Name":"x"},"UserProfile":{"LoginName":"me@example.com"}}"#, peer: true),
@@ -455,9 +455,9 @@ final class DchOwnerCheckTests: XCTestCase {
                 want: .unavailable("Tailscale isn't answering (\(Self.refusedToConnect))"), cached: false),
             Row(name: "status exits 1, no message", status: Self.fail(""),
                 want: .unavailable("Tailscale isn't answering (no message)"), cached: false),
-            Row(name: "Stopped", status: Self.status("Stopped"), want: .unusable("Tailscale on this Mac is Stopped, not connected"), cached: false),
-            Row(name: "NeedsLogin", status: Self.status("NeedsLogin"), want: .unusable("Tailscale on this Mac is NeedsLogin, not connected"), cached: false),
-            Row(name: "Starting", status: Self.status("Starting"), want: .unusable("Tailscale on this Mac is Starting, not connected"), cached: false),
+            Row(name: "Stopped", status: Self.status("Stopped"), want: .unusable("Tailscale on this Mac is turned off"), cached: false),
+            Row(name: "NeedsLogin", status: Self.status("NeedsLogin"), want: .unusable("Tailscale on this Mac needs a login"), cached: false),
+            Row(name: "Starting", status: Self.status("Starting"), want: .unusable("Tailscale on this Mac is still starting"), cached: false),
             Row(name: "status unreadable", status: Self.json("Warning: something\n{"),
                 want: .unusable("Tailscale's status couldn't be read"), cached: true),
             Row(name: "CLI can't start", status: .out(TailscaleCLIOutput(exit: -1)),
@@ -536,7 +536,7 @@ final class DchOwnerCheckTests: XCTestCase {
         relax.value = true
         let cli = FakeCLI(["/cli status": Self.status("Starting"), "/cli whois": Self.phoneWhois])
         let c = gate(whois: cli.whois(), relax: relax)
-        XCTAssertEqual(verdict(c), .unusable("Tailscale on this Mac is Starting, not connected"))
+        XCTAssertEqual(verdict(c), .unusable("Tailscale on this Mac is still starting"))
         cli.set("/cli status", Self.running)
         XCTAssertEqual(verdict(c), .owner, "no 30 s lockout once Tailscale is up")
         XCTAssertEqual(cli.calls, ["/cli status", "/cli status", "/cli whois"])
@@ -568,7 +568,7 @@ final class DchOwnerCheckTests: XCTestCase {
         XCTAssertEqual(verdict(gate(whois: noneUp.whois(all))), .unavailable("Tailscale isn't answering (first)"))
         let oneAnswered = FakeCLI(["\(app) status": Self.status("NeedsLogin"), "\(brew) status": Self.fail("down")],
                                   installed: [app, brew])
-        XCTAssertEqual(verdict(gate(whois: oneAnswered.whois(all), relax: relax)), .unusable("Tailscale on this Mac is NeedsLogin, not connected"),
+        XCTAssertEqual(verdict(gate(whois: oneAnswered.whois(all), relax: relax)), .unusable("Tailscale on this Mac needs a login"),
                        "one CLI answered: Tailscale is answering, never relaxed")
         let unreadable = FakeCLI(["\(app) status": Self.json("{"), "\(brew) status": Self.running], installed: [app, brew])
         XCTAssertEqual(verdict(gate(whois: unreadable.whois(all), relax: relax)), .unusable("Tailscale's status couldn't be read"))

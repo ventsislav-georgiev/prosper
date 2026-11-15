@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// #618: the phone chats with this Mac's local agent model over Remote Terminal (P3 of the
 /// phone-parity plan). DchConnection only dispatches 0x1e models and 0x1f chat here; one
@@ -66,6 +67,23 @@ final class DchChat: @unchecked Sendable {
     }
 
     static func error(_ message: String) -> Data { DchControlOps.error(message) }
+
+    private static let log = Logger(subsystem: "com.prosper.app", category: "DchServer")
+
+    /// #988: what the phone is told when the load or the generation throws. A fixed sentence per
+    /// cause, chosen by the error's TYPE only; the error's text (it can hold a path on this Mac)
+    /// goes to this Mac's log, private and cut to 300 characters, never to the phone.
+    static func loadFailureText(_ error: Error) -> String {
+        log.error("phone chat: model load failed: \(String(String(describing: error).prefix(300)), privacy: .private)")
+        if case .modelMissing = error as? LlamaAgentEngine.EngineError { return "The model file is missing on the Mac." }
+        return "The model could not be loaded on the Mac."
+    }
+
+    static func inferenceFailureText(_ error: Error) -> String {
+        log.error("phone chat: inference failed: \(String(String(describing: error).prefix(300)), privacy: .private)")
+        if case .promptTooLong = error as? LlamaAgentEngine.EngineError { return "The conversation is too long for the model on the Mac." }
+        return "The Mac could not finish the answer."
+    }
 
     /// `{model?, messages: [{role, content}], max_tokens?}`; nil for any other shape. Unknown
     /// keys are ignored. max_tokens is clamped to maxTokensRange.
@@ -141,7 +159,7 @@ final class DchChat: @unchecked Sendable {
             engine = try await acquire()
             if !before { lock.withLock { phoneLoaded = true } }
         } catch {
-            return Self.error("model load error: \(error)")
+            return Self.error(Self.loadFailureText(error))
         }
         // QA #500 INFO-5: the connection closed during the acquire. phoneLoaded stays as set,
         // so the idle timer still frees a model the phone loaded; the reply is dropped.
@@ -154,7 +172,7 @@ final class DchChat: @unchecked Sendable {
                 send(DchFrame.encode(DchFrame.chatDelta, json: ["text": chunk]))
             }
         } catch {
-            return Self.error("inference error: \(error)")
+            return Self.error(Self.inferenceFailureText(error))
         }
         // The engine can't tell a natural stop from the max_tokens limit, so this is always "stop".
         // A cancelled chat (connection closed) ends here too; its reply is dropped.
