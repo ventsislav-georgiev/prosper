@@ -54,6 +54,31 @@ enum ExtensionError: Error, Equatable {
     case managedConfigKept(id: String, reason: String)
 }
 
+/// #1246: which manifest ids an extension may be installed under. The id becomes the folder name in the
+/// extensions folder, and the built-ins own their folder names and their ids.
+enum ExtensionInstallID {
+    /// A refused install, with the reason in plain words (shown as is by the marketplace window).
+    struct Refused: LocalizedError, Equatable {
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+
+    /// nil when an install under `id` may go ahead, else why not. Pure: the bundled folder names and ids come in
+    /// as values. Names are compared ignoring case because the disk does.
+    static func refusal(_ id: String, bundledFolders: Set<String>, bundledIDs: Set<String>) -> String? {
+        // The kit id rule (KitValidator): one name of letters, digits, '.', '_' and '-', at most 128, not only dots.
+        guard ManagedConfigPaths.isValidID(id), !id.allSatisfy({ $0 == "." }) else {
+            return "Not installed: its id is not a single name of letters, digits, dots, dashes and underscores "
+                + "(at most 128 characters). Nothing was changed."
+        }
+        let builtIn = Set(bundledFolders.union(bundledIDs).map { $0.lowercased() })
+        if builtIn.contains(id.lowercased()) {
+            return "Not installed: its id \(id) belongs to an extension built into Prosper. Nothing was changed."
+        }
+        return nil
+    }
+}
+
 /// Off-main Lua VM cache for commands that call async host APIs (http / llm /
 /// shell). `LuaRuntime` is not thread-safe and `ExtensionHost.awaitSync` blocks
 /// its caller, so these VMs must live OFF the main thread and apart from the
@@ -359,11 +384,24 @@ final class ExtensionRegistry: ObservableObject {
         })
     }
 
+    /// #1246: bundled folder name -> the id its pristine copy declares. A pristine copy that does not load is left out.
+    private func bundledIDsByFolder() -> [String: String] {
+        guard let pristineRoot = systemPristineDir else { return [:] }
+        var ids: [String: String] = [:]
+        for name in systemFolderNames() {
+            let dir = pristineRoot.appendingPathComponent(name, isDirectory: true)
+            if let loaded = try? ExtensionLoader.load(directory: dir, isSystem: true, hostVersion: hostVersion) {
+                ids[name] = loaded.id
+            }
+        }
+        return ids
+    }
+
     /// (Re)scan the editable userDir (after seeding from pristine), parse +
     /// validate manifests, and rebuild the routing table. Safe to call repeatedly.
     func discover() {
         seedSystemExtensions()
-        let systemNames = systemFolderNames()
+        let bundledIDs = bundledIDsByFolder()
 
         var found: [ExtensionRecord] = []
         let disabled = disabledIDs()
@@ -377,34 +415,41 @@ final class ExtensionRegistry: ObservableObject {
         let entries = (try? FileManager.default.contentsOfDirectory(
             at: userDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
 
+        var loads: [LoadedExtension] = []
         for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
             else { continue }
-            let isSystem = systemNames.contains(entry.lastPathComponent)
             do {
                 let loaded = try ExtensionLoader.load(
-                    directory: entry, isSystem: isSystem, hostVersion: hostVersion)
-                guard !seen.contains(loaded.id) else {
-                    log.warning("duplicate extension id \(loaded.id, privacy: .public), skipping \(entry.path, privacy: .public)")
-                    continue
-                }
-                seen.insert(loaded.id)
-                if !isSystem {
-                    for w in loaded.manifest.contributes?.phoneWarnings ?? [] {
-                        log.warning("extension \(loaded.id, privacy: .public): \(w, privacy: .public)")
-                    }
-                }
-                // Opt-in extensions are off unless the user turned them on; everything
-                // else is on unless the user turned it off.
-                let isEnabled = loaded.manifest.extension.defaultDisabled
-                    ? optedIn.contains(loaded.id)
-                    : !disabled.contains(loaded.id)
-                found.append(ExtensionRecord(loaded: loaded,
-                                             enabled: isEnabled,
-                                             trusted: false))
+                    directory: entry, isSystem: false, hostVersion: hostVersion)
+                // #1246: a system record is a bundled folder holding the id its bundled copy declares, never a name alone.
+                let isSystem = bundledIDs[entry.lastPathComponent] == loaded.id
+                loads.append(isSystem ? LoadedExtension(manifest: loaded.manifest, directory: entry, isSystem: true) : loaded)
             } catch {
                 log.error("failed to load extension at \(entry.path, privacy: .public): \(String(describing: error), privacy: .public)")
             }
+        }
+        // #1246: a built-in's id stays the built-in's: a user folder declaring it is a duplicate whatever it sorts like.
+        let builtInIDs = Set(loads.filter(\.isSystem).map(\.id))
+        for loaded in loads {
+            guard !seen.contains(loaded.id), loaded.isSystem || !builtInIDs.contains(loaded.id) else {
+                log.warning("duplicate extension id \(loaded.id, privacy: .public), skipping \(loaded.directory.path, privacy: .public)")
+                continue
+            }
+            seen.insert(loaded.id)
+            if !loaded.isSystem {
+                for w in loaded.manifest.contributes?.phoneWarnings ?? [] {
+                    log.warning("extension \(loaded.id, privacy: .public): \(w, privacy: .public)")
+                }
+            }
+            // Opt-in extensions are off unless the user turned them on; everything
+            // else is on unless the user turned it off.
+            let isEnabled = loaded.manifest.extension.defaultDisabled
+                ? optedIn.contains(loaded.id)
+                : !disabled.contains(loaded.id)
+            found.append(ExtensionRecord(loaded: loaded,
+                                         enabled: isEnabled,
+                                         trusted: false))
         }
 
         // Grandfather migration: on the FIRST run after the trust gate ships, every
@@ -1075,6 +1120,11 @@ final class ExtensionRegistry: ObservableObject {
         // A remote extension cannot masquerade as a bundled system one.
         guard !loaded.manifest.extension.isSystem else {
             throw ExtensionError.cannotUninstallSystem(loaded.id)
+        }
+        // #1246: the id names the destination folder: an unsafe or built-in id is refused before anything on disk changes.
+        if let why = ExtensionInstallID.refusal(loaded.id, bundledFolders: systemFolderNames(),
+                                                bundledIDs: Set(bundledIDsByFolder().values)) {
+            throw ExtensionInstallID.Refused(reason: why)
         }
         let fm = FileManager.default
         try fm.createDirectory(at: userDir, withIntermediateDirectories: true)

@@ -1097,6 +1097,10 @@ tag from the now-released section and put it on the new top draft.
 - A theme name or label written with a no-break, thin or wide space now keeps the gap between its
   words ("Sky Blue" no longer reads "SkyBlue"); line breaks and invisible characters are still
   removed, and a label with one over-long character stops there (#928)
+- Extensions: an extension is no longer installed when its id is not a plain single name or is the
+  name or id of an extension built into Prosper; the install says why and changes nothing. A built-
+  in extension is now recognised by its own id as well as its folder, and an installed extension can
+  no longer take a built-in's place (#1246)
 
 ## v2.174.0
 
