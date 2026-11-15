@@ -1153,6 +1153,8 @@ tag from the now-released section and put it on the new top draft.
   either case (#1246)
 - Installing or publishing an extension no longer hangs when tar prints a very large amount of error
   output; a tar failure now shows one plain message and tar's own details go to the log (#1182)
+- Changing the agent model while the agent is answering no longer garbles that answer: it is read
+  with the format of the model that is actually loaded (#1181)
 
 ## v2.174.0
 

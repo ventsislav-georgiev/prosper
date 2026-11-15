@@ -37,6 +37,13 @@ final class ProsperLLMServer: @unchecked Sendable {
 
     private init() {}
 
+    /// #1181: the agent engine and the id of the model it holds. A request takes its tool format
+    /// and label from that id, never from a second read of the setting (a change during a run would
+    /// parse the loaded model's output with another model's format). Test seam: rows pass a fake engine.
+    var acquireAgent: @Sendable () async throws -> (engine: any AgentChatEngine, modelId: String) = {
+        try await ModelResidencyCoordinator.shared.acquireLoadedAgent { _, _ in }
+    }
+
     var baseURL: String { "http://127.0.0.1:\(port)/v1" }
     var isRunning: Bool { listener != nil }
 
@@ -286,8 +293,6 @@ private final class HTTPConnection: @unchecked Sendable {
             sendJSON(["error": ["message": "invalid JSON body", "type": "invalid_request_error"]], status: 400)
             return
         }
-        let format = AgentModelRegistry.toolFormat(for: Preferences.agentModel)
-        let modelLabel = parsed.model ?? Preferences.agentModel
         let responseID = "chatcmpl-" + UUID().uuidString.prefix(12)
 
         busy = true
@@ -303,7 +308,9 @@ private final class HTTPConnection: @unchecked Sendable {
                 }
             }
             do {
-                let engine = try await ModelResidencyCoordinator.shared.acquireAgent { _, _ in }
+                let (engine, loaded) = try await self.server.acquireAgent()
+                let format = AgentModelRegistry.toolFormat(for: loaded)
+                let modelLabel = parsed.model ?? loaded
                 if parsed.stream {
                     try await self.streamCompletion(
                         engine: engine, request: parsed, format: format,
@@ -349,8 +356,6 @@ private final class HTTPConnection: @unchecked Sendable {
             sendJSON(["error": ["message": "invalid JSON body", "type": "invalid_request_error"]], status: 400)
             return
         }
-        let format = AgentModelRegistry.toolFormat(for: Preferences.agentModel)
-        let modelLabel = parsed.model ?? Preferences.agentModel
         let responseID = "resp_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(24)
 
         busy = true
@@ -366,7 +371,9 @@ private final class HTTPConnection: @unchecked Sendable {
                 }
             }
             do {
-                let engine = try await ModelResidencyCoordinator.shared.acquireAgent { _, _ in }
+                let (engine, loaded) = try await self.server.acquireAgent()
+                let format = AgentModelRegistry.toolFormat(for: loaded)
+                let modelLabel = parsed.model ?? loaded
                 if parsed.stream {
                     try await self.streamResponses(
                         engine: engine, request: parsed, format: format,
@@ -840,7 +847,7 @@ private struct HTTPRequest {
 /// `ToolCallParser.dropLeadingThink`'s rule, applied incrementally, so a client never sees
 /// think text in a delta that the final message leaves out, or the reverse. Bounded:
 /// between calls it holds at most the guard tail (or, inside the think block, the last
-/// `</think>`.count - 1 characters); think text is dropped as it arrives.
+/// `</think>`.count - 1 scalars); think text is dropped as it arrives.
 struct StreamSplitter {
     private enum Phase { case start, think, afterThink, text, stopped }
     private let markers: [String]
@@ -890,23 +897,25 @@ struct StreamSplitter {
     var heldCount: Int { pending.utf8.count }
 
     private mutating func advance(atEnd: Bool) -> String {
+        // #1181: tags compared by Unicode scalars, as in `ToolCallParser.dropLeadingThink`.
         if phase == .start {
-            if pending.hasPrefix(ToolCallParser.thinkOpen) {
-                pending.removeFirst(ToolCallParser.thinkOpen.count)
+            let scalars = pending.unicodeScalars, open = ToolCallParser.thinkOpen.unicodeScalars
+            if scalars.starts(with: open) {
+                pending = String(scalars.dropFirst(open.count))
                 phase = .think
-            } else if !atEnd, ToolCallParser.thinkOpen.hasPrefix(pending) {
-                return ""   // may still open a think block: at most 6 characters held
+            } else if !atEnd, open.starts(with: scalars) {
+                return ""   // may still open a think block: at most 6 scalars held
             } else {
                 phase = .text
             }
         }
         if phase == .think {
-            guard let close = pending.range(of: ToolCallParser.thinkClose) else {
+            guard let close = ToolCallParser.scalarRange(of: ToolCallParser.thinkClose, in: pending.unicodeScalars) else {
                 // Think text is never shown: keep only what could begin `</think>`; unclosed at the end, all of it goes.
-                pending = atEnd ? "" : String(pending.suffix(ToolCallParser.thinkClose.count - 1))
+                pending = atEnd ? "" : String(pending.unicodeScalars.suffix(ToolCallParser.thinkClose.unicodeScalars.count - 1))
                 return ""
             }
-            pending = String(pending[close.upperBound...])
+            pending = String(pending.unicodeScalars[close.upperBound...])
             phase = .afterThink
         }
         if phase == .afterThink {

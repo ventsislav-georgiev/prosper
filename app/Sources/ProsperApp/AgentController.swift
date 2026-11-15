@@ -512,7 +512,7 @@ final class AgentController {
         model = loading
         phase = .loadingModel(progress: 0, status: "Loading \(loading)…")
         let harness: CodingHarness
-        if let makeHarness { harness = try await makeHarness() } else { harness = try await spawnCodexHarness(executable) }
+        if let makeHarness { harness = try await makeHarness() } else { harness = try await spawnCodexHarness(executable, model: loading) }
         // Stop during the model load / spawn / handshake ran end() while `self.harness`
         // was still nil: don't start or keep a codex nobody owns.
         guard !abandoned(generation) else { throw CancellationError() }
@@ -524,13 +524,14 @@ final class AgentController {
     }
 
     /// The model load + codex spawn, once `ensureHarness` resolved the executable.
-    private func spawnCodexHarness(_ executable: URL) async throws -> CodingHarness {
+    /// `model` is the run's one read of the setting (#1181): the load takes it, never a second read.
+    private func spawnCodexHarness(_ executable: URL, model: String) async throws -> CodingHarness {
         // 1. Local inference endpoint.
         let (port, token) = try ProsperLLMServer.shared.start()
         let baseURL = "http://127.0.0.1:\(port)/v1"
 
         // 2. Residency swap: unload inline model, load the coding model.
-        _ = try await ModelResidencyCoordinator.shared.acquireAgent { [weak self] p, status in
+        _ = try await ModelResidencyCoordinator.shared.acquireAgent(modelId: model) { [weak self] p, status in
             Task { @MainActor in
                 // A late progress tick must not stomp a phase that already moved on
                 // (running / error after the load finished or the run was stopped).

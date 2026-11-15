@@ -481,3 +481,49 @@ final class ToolCallParserTests: XCTestCase {
         ]
     }
 }
+
+// MARK: #1181 the stream and the final text agree at every chunk cut around a think tag
+
+extension ToolCallParserTests {
+    /// The qwenXML stream of `text` cut once at scalar `cut` (with `finish`, as the no-tools paths call
+    /// it), one scalar per chunk, and the parser's content on the whole text.
+    private func streamsAndFinal(_ text: String, cut: Int) -> (cutOnce: String, perScalar: String, final: String) {
+        let scalars = text.unicodeScalars
+        let at = scalars.index(scalars.startIndex, offsetBy: cut, limitedBy: scalars.endIndex) ?? scalars.endIndex
+        var once = StreamSplitter(format: .qwenXML)
+        let cutOnce = once.ingest(String(scalars[..<at])) + once.ingest(String(scalars[at...])) + once.finish()
+        var each = StreamSplitter(format: .qwenXML)
+        let perScalar = scalars.map { each.ingest(String($0)) }.joined() + each.finish()
+        return (cutOnce, perScalar, ToolCallParser.parse(text, format: .qwenXML).content)
+    }
+
+    /// #1181: a combining mark (U+0301) right after "<think>" or "</think>". Both sides compare the tags
+    /// by Unicode scalars: the tag is a tag, the mark is the first scalar of the text after it. Before,
+    /// the parser saw ">" + mark as one Character (no tag) while a stream cut after ">" took the tag.
+    func testThinkTagThenCombiningMarkStreamAgreesWithFinalAtEveryCut() {
+        let cases: [(text: String, stream: String, final: String)] = [
+            ("<think>\u{0301}plan</think>ok", "ok", "ok"),
+            ("<think>plan</think>\u{0301}ok", "\u{0301}ok", "\u{0301}ok"),
+        ]
+        for c in cases {
+            for cut in 0...c.text.unicodeScalars.count {
+                let got = streamsAndFinal(c.text, cut: cut)
+                XCTAssertEqual(got.cutOnce, c.stream, "stream cut at \(cut) of \(c.text.debugDescription)")
+                XCTAssertEqual(got.perScalar, c.stream, "stream per scalar of \(c.text.debugDescription)")
+                XCTAssertEqual(got.final, c.final, "final of \(c.text.debugDescription)")
+            }
+        }
+    }
+
+    /// #1181 (893's rule, unchanged): a think block after leading whitespace is text, in the stream and
+    /// the final text alike, at every cut.
+    func testThinkAfterLeadingWhitespaceIsTextAtEveryCut() {
+        let text = " \n<think>plan</think>ok"
+        for cut in 0...text.unicodeScalars.count {
+            let got = streamsAndFinal(text, cut: cut)
+            XCTAssertEqual(got.cutOnce, " \n<think>plan</think>ok", "stream cut at \(cut)")
+            XCTAssertEqual(got.perScalar, " \n<think>plan</think>ok")
+            XCTAssertEqual(got.final, "<think>plan</think>ok")
+        }
+    }
+}

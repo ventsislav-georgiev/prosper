@@ -434,10 +434,27 @@ enum ToolCallParser {
     /// `<think>` anywhere else is text, so prose about the tag or a call writing it stays whole.
     /// `StreamSplitter`'s leading-think phase applies this same rule to the live stream, and
     /// `ThinkGate` holds the tool-call grammar until the same block closes. One forward search, no regex.
+    /// #1181: the tags are compared by Unicode scalars, here and in `StreamSplitter`: a tag is a tag
+    /// whatever follows it (a combining mark after `>` is the first scalar of the next text), so a
+    /// stream cut between the tag and the mark decides as the full text does, and as `ThinkGate`'s token ids.
     static func dropLeadingThink(_ text: String) -> String {
-        guard text.hasPrefix(thinkOpen) else { return text }
-        guard let close = text.range(of: thinkClose) else { return "" }
-        return String(text[close.upperBound...])
+        let scalars = text.unicodeScalars
+        guard scalars.starts(with: thinkOpen.unicodeScalars) else { return text }
+        guard let close = scalarRange(of: thinkClose, in: scalars) else { return "" }
+        return String(scalars[close.upperBound...])
+    }
+
+    /// The first `needle` in `scalars`, compared scalar by scalar (#1181). Forward scan, no regex:
+    /// O(length x needle length); every index comes from the view itself.
+    static func scalarRange(of needle: String, in scalars: String.UnicodeScalarView) -> Range<String.Index>? {
+        let n = needle.unicodeScalars
+        guard let first = n.first else { return nil }
+        var from = scalars.startIndex
+        while let hit = scalars[from...].firstIndex(of: first) {
+            if scalars[hit...].starts(with: n) { return hit..<scalars.index(hit, offsetBy: n.count) }
+            from = scalars.index(after: hit)
+        }
+        return nil
     }
 
     /// `{json}` → `<arg_key>k</arg_key>\n<arg_value>v</arg_value>` pairs (GLM replay).

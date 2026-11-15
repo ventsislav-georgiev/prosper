@@ -36,6 +36,10 @@ actor ModelResidencyCoordinator {
     /// The agent engine, resident only in `.agent` mode. Either the llama.cpp
     /// engine (GGUF catalog rows) or a dedicated `MLXEngine` (HF snapshot rows).
     private var agent: (any AgentChatEngine)?
+    /// #1181: the id `agent` was loaded for, and the id the in-flight load is loading. The
+    /// server takes the tool format from what is loaded, never from a second read of the setting.
+    private var agentModelId = ""
+    private var acquireModelId = ""
 
     /// Cheap, lock-guarded snapshot of "is the agent model resident", readable from
     /// the inline hot path without an actor hop. `OSAllocatedUnfairLock` is the
@@ -74,9 +78,20 @@ actor ModelResidencyCoordinator {
     /// On load failure the inline model is restored to "available" (it reloads
     /// lazily) and the error is rethrown — the caller surfaces it in the chat UI.
     func acquireAgent(
+        modelId: String = Preferences.agentModel,
         progress: @escaping @Sendable (Double, String) -> Void
     ) async throws -> any AgentChatEngine {
-        if mode == .agent, let agent { return agent }
+        try await acquireLoadedAgent(modelId: modelId, progress: progress).engine
+    }
+
+    /// `acquireAgent` plus the id of the model the returned engine holds (#1181): `modelId` when
+    /// this call starts the load, else the id of the resident engine or of the load it joins.
+    /// `modelId` is the run's one read of the setting (the default reads it for other callers).
+    func acquireLoadedAgent(
+        modelId: String = Preferences.agentModel,
+        progress: @escaping @Sendable (Double, String) -> Void
+    ) async throws -> (engine: any AgentChatEngine, modelId: String) {
+        if mode == .agent, let agent { return (agent, agentModelId) }
         progressSinks.append(progress)
         let myEpoch = epoch
         let task: Task<any AgentChatEngine, Error>
@@ -84,7 +99,7 @@ actor ModelResidencyCoordinator {
             task = acquireTask
         } else {
             Self.activeFlag.withLock { $0 = true }
-            let modelId = Preferences.agentModel
+            acquireModelId = modelId
             let pending = releasing
             // Strong capture: the closure dies with the load.
             task = Task {
@@ -97,6 +112,7 @@ actor ModelResidencyCoordinator {
             }
             acquireTask = task
         }
+        let loadingId = acquireModelId   // before the await: the id of the load this call waits on
         do {
             let engine = try await task.value
             guard epoch == myEpoch else {
@@ -107,10 +123,11 @@ actor ModelResidencyCoordinator {
                 throw CancellationError()
             }
             agent = engine
+            agentModelId = loadingId
             mode = .agent
             acquireTask = nil
             progressSinks = []
-            return engine
+            return (engine, loadingId)
         } catch {
             if epoch == myEpoch {
                 Self.activeFlag.withLock { $0 = false }
