@@ -85,4 +85,14 @@ final class PasteboardScratchTests: XCTestCase {
         XCTAssertEqual(lines("x\nGet The Clipboard\nset the clipboard to \"x\""), [2, 3])
         XCTAssertEqual(lines("Let sessions set the clipboard while you're viewing them"), [])
     }
+
+    /// #1273 rider: each input holds exactly one prefilter needle (kPasteboardClipboard also holds "clipboard" in
+    /// another case), so dropping any one needle from the helper turns its line red.
+    func testOffendingLinesHelperEachNeedleAloneStillScans() {
+        let rule = Self.makeRule()
+        for text in ["f(name: .general)", "Apple CFPasteboard general", "kPasteboardClipboard",
+                     "typealias PB = AppKit.NSPasteboard", "pbcopy", "pbpaste", "get the clipboard"] {
+            XCTAssertEqual(Self.offendingLines(in: text, rule: rule), [1], text)
+        }
+    }
 }
