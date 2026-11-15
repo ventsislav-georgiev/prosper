@@ -660,3 +660,45 @@ extension AgentWindowD1Tests {
         }
     }
 }
+
+/// #1265: the Name field's text is what the person typed; the automatic name is the placeholder only.
+extension AgentWindowD1Tests {
+
+    @MainActor
+    func testAgentWindowNewSessionNameFieldIsEmptyOnAFreshForm() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            for folder in ["~", "/Users/example/api"] {
+                m.openNewSession(folder: folder)
+                XCTAssertEqual(m.newSession?.nameFieldText, "", "fresh form \(folder): no text")
+                XCTAssertFalse(m.newSessionAutoName.isEmpty, "the placeholder")
+                XCTAssertEqual(m.newSessionName, m.newSessionAutoName, "Start would use the automatic name")
+            }
+            XCTAssertTrue(spawns.calls.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testAgentWindowNewSessionNameFieldStaysEmptyWhenEmptiedAndShowsTypedAsTyped() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/api")
+            m.setNewSessionName("mine")
+            XCTAssertEqual(m.newSession?.nameFieldText, "mine")
+            m.setNewSessionName("")
+            XCTAssertEqual(m.newSession?.nameFieldText, "", "emptied: stays empty")
+            XCTAssertEqual(m.newSession?.nameEdited, false)
+            XCTAssertEqual(m.newSessionName, "api", "the automatic name again")
+            m.setNewSessionName("  ")
+            XCTAssertEqual(m.newSession?.nameFieldText, "  ", "the person's own spaces stay")
+            XCTAssertEqual(m.newSession?.nameEdited, false)
+            XCTAssertEqual(m.newSessionName, "api")
+            m.setNewSessionName(" spaced ")
+            XCTAssertEqual(m.newSession?.nameFieldText, " spaced ", "shown as typed")
+            XCTAssertEqual(m.newSessionName, "spaced", "spawned trimmed")
+            XCTAssertTrue(spawns.calls.isEmpty)
+        }
+    }
+}

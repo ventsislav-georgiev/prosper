@@ -1056,6 +1056,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: sessions Prosper starts or restarts now tell programs the terminal draws 24-bit
   colour, so Claude Code colours match Ghostty. Sessions already running keep their colours until
   restarted (#1266)
+- Agent Sessions: the New session form's Name field starts empty and stays empty when cleared; the
+  automatic name shows as the placeholder and is still used when nothing is typed (#1265)
 
 ## v2.174.0
 

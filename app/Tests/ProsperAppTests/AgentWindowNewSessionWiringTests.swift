@@ -189,7 +189,11 @@ extension AgentWindowD1Tests {
             let fields = formFields(host)
             XCTAssertEqual(fields.count, 3, "Folder, Name, Command in the detail pane")
             guard fields.count == 3 else { return }
-            XCTAssertEqual(fields[1].stringValue, "api", "the free name")
+            XCTAssertEqual(fields[1].stringValue, "", "#1265: the field text is what was typed: empty")
+            XCTAssertEqual(m.newSessionAutoName, "api", "the free name is the placeholder")
+            if let ph = fields[1].placeholderString ?? fields[1].placeholderAttributedString?.string {
+                XCTAssertEqual(ph, "api", "the placeholder as hosted")
+            }
             XCTAssertTrue(hasKeys(fields[1], win), "Name has the keys on open")
             XCTAssertTrue(win.makeFirstResponder(fields[2]))
             settle(host)
