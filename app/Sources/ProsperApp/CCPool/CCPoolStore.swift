@@ -119,7 +119,8 @@ final class CCPoolStore: @unchecked Sendable {
             logger.note(nil, "state file exists but could not be read; left untouched, account changes refused")
             return
         }
-        if let decoded = try? JSONDecoder().decode(CCPoolState.self, from: data) {
+        if var decoded = try? JSONDecoder().decode(CCPoolState.self, from: data) {
+            decoded.expirePins(now: clock())   // #1258: the file has no stamps; a loaded pin gets a fresh hour (Python load_pins)
             state = decoded
             unreadable = false
             return

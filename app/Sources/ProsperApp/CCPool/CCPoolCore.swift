@@ -34,24 +34,60 @@ struct CCPoolState: Codable, Equatable, Sendable {
         }
     }
 
+    /// #1258: a conversation pinned to an account (Python `PINS`: key -> (account, last seen)).
+    struct Pin: Equatable, Sendable {
+        var account: String
+        /// Epoch of the last request; never written to the file (Python keeps the mapping only).
+        var seen: Double
+    }
+
     var current: String?
     var order: [String] = []
     var accounts: [String: Account] = [:]
+    /// Conversation key ("<session id>/<agent id>") -> pin. Saved as "pins": {key: account}, Python's shape.
+    var pins: [String: Pin] = [:]
 
-    init(current: String? = nil, order: [String] = [], accounts: [String: Account] = [:]) {
+    /// Not named CodingKeys: both coders are written by hand, and Account keeps its own synthesized keys.
+    private enum Keys: String, CodingKey { case current, order, accounts, pins }
+
+    init(current: String? = nil, order: [String] = [], accounts: [String: Account] = [:], pins: [String: Pin] = [:]) {
         self.current = current
         self.order = order
         self.accounts = accounts
+        self.pins = pins
     }
 
     init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let c = try decoder.container(keyedBy: Keys.self)
         current = try c.decodeIfPresent(String.self, forKey: .current)
         accounts = try c.decodeIfPresent([String: Account].self, forKey: .accounts) ?? [:]
         let saved = try c.decodeIfPresent([String].self, forKey: .order) ?? []
         // Order names every account exactly once; a hand-edited or older file is repaired.
         order = saved.filter { accounts[$0] != nil }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         order += accounts.keys.sorted().filter { !order.contains($0) }
+        // Outside data: a bad "pins" value or entry is skipped, never a decode failure (the file is not corrupt).
+        // The file has no stamp: -1 is "unknown", stamped with the load time by expirePins (Python load_pins).
+        let raw = (try? c.decodeIfPresent([String: LenientString].self, forKey: .pins)) ?? nil
+        for (key, value) in raw ?? [:] {
+            guard let account = value.value, CCPoolState.validPinKey(key), accounts[account] != nil else { continue }
+            pins[key] = Pin(account: account, seen: -1)
+        }
+        capPins()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encodeIfPresent(current, forKey: .current)
+        try c.encode(order, forKey: .order)
+        try c.encode(accounts, forKey: .accounts)
+        // Absent when empty: a file without pins is written exactly as before this key existed.
+        if !pins.isEmpty { try c.encode(pins.mapValues(\.account), forKey: .pins) }
+    }
+
+    /// A string, or nil for any other JSON value, so one bad pin entry does not fail the map.
+    private struct LenientString: Decodable {
+        let value: String?
+        init(from decoder: Decoder) throws { value = try? decoder.singleValueContainer().decode(String.self) }
     }
 }
 
@@ -311,6 +347,66 @@ extension CCPoolState {
         let until = accounts[label]?.cooldown[CCPoolCore.fiveHour]
         accounts[label]?.held = until
         return true
+    }
+
+    // MARK: Pins (#1258; nothing routes by them yet)
+
+    /// Python `PIN_IDLE`: a pin idle longer than this is dropped (the longest prompt-cache TTL).
+    static let pinIdle: Double = 3600
+    /// At most this many pins; the oldest go first.
+    static let pinCap = 512
+    static let pinKeyMax = 128
+
+    /// A conversation key is outside data: 1...128 printable ASCII characters, no space.
+    static func validPinKey(_ key: String) -> Bool {
+        let scalars = key.unicodeScalars
+        return (1...pinKeyMax).contains(scalars.count) && scalars.allSatisfy { (0x21...0x7E).contains($0.value) }
+    }
+
+    /// Drop pins idle more than `pinIdle` (exactly `pinIdle` is kept, as Python's `now - seen > PIN_IDLE`).
+    /// A stamp that is not finite, negative (unknown: just loaded) or after `now` (the clock went back) is
+    /// set to `now` first: such a pin expires `pinIdle` after this call, never early and never forever.
+    mutating func expirePins(now: Double) {
+        guard now.isFinite else { return }
+        for (key, p) in pins {
+            if !p.seen.isFinite || p.seen < 0 || p.seen > now { pins[key]?.seen = now }
+        }
+        pins = pins.filter { now - $0.value.seen <= CCPoolState.pinIdle }
+    }
+
+    /// While over the cap, the oldest pin (ties: the smallest key) is dropped.
+    mutating func capPins() {
+        guard pins.count > CCPoolState.pinCap else { return }
+        let oldest = pins.sorted { ($0.value.seen, $0.key) < ($1.value.seen, $1.key) }.prefix(pins.count - CCPoolState.pinCap)
+        for (key, _) in oldest { pins.removeValue(forKey: key) }
+    }
+
+    /// Pin `key` to `account`, stamped `now`. False (no change) for a bad key or an account not in the pool.
+    @discardableResult
+    mutating func pin(_ key: String, to account: String, now: Double) -> Bool {
+        guard now.isFinite, now >= 0, CCPoolState.validPinKey(key), accounts[account] != nil else { return false }
+        pins[key] = Pin(account: account, seen: now)
+        capPins()
+        return true
+    }
+
+    /// The account `key` is pinned to, after expiry; nil when absent or expired. A pin whose account left the pool is dropped.
+    mutating func pinnedAccount(_ key: String, now: Double) -> String? {
+        expirePins(now: now)
+        guard let account = pins[key]?.account else { return nil }
+        guard accounts[account] != nil else { pins.removeValue(forKey: key); return nil }
+        return account
+    }
+
+    /// Re-stamp a live pin (Python re-pins on every request that follows it).
+    mutating func touchPin(_ key: String, now: Double) {
+        guard now.isFinite, now >= 0, pins[key] != nil else { return }
+        pins[key]?.seen = now
+    }
+
+    /// Every pin of a removed account goes with it.
+    mutating func unpin(account: String) {
+        pins = pins.filter { $0.value.account != account }
     }
 
     /// Undo benches: one account or all (`label == nil`), one claim or every claim.
