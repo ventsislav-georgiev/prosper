@@ -323,6 +323,135 @@ enum AgentWindowControls {
     static var stripHeight: CGFloat { sz(24) }
 }
 
+// MARK: - The sidebar "..." (#897, spec G9)
+
+/// What a sidebar "..." item runs: the island controller's own call (its gate re-checked there).
+enum AgentSidebarVerb: Equatable {
+    case newSession(String), chooseFolder
+    case restartAll(force: Bool), stopAll, killAll
+    case resumeInterrupted(noMessage: Bool), clearUnpinned
+    case sort(AgentIslandSort), rowDetail(WritableKeyPath<AgentIslandRowDetails, Bool>), autoAllow
+    case settings
+}
+
+/// One sidebar "..." entry, a value (rows read the list; no menu is popped).
+indirect enum AgentSidebarMenuEntry: Equatable {
+    case item(String, enabled: Bool, checked: Bool?, verb: AgentSidebarVerb)
+    case submenu(String, enabled: Bool, [AgentSidebarMenuEntry])
+    case divider
+    /// A disabled line: the gate's reason ("Controls <refusal>").
+    case note(String)
+}
+
+/// The island's list-wide question, drawn by the window too (spec G9: one question state, the store's).
+enum AgentStoreQuestion: Equatable { case restartAll, stopAll, killAll, clear }
+
+extension AgentWindowControls {
+    static let islandSettingsLabel = "Agent Island Settings\u{2026}"
+    static let autoAllowLabel = "Always allow permission prompts"
+    static let sortLabel = "Sort"
+    static let rowDetailsLabel = "Row details"
+    /// Agent Island's Settings pane (Resources/extensions/agentisland/extension.toml: id and its sidebar section).
+    static let islandExtensionID = "com.prosper.agentisland", islandSectionID = "agentisland"
+
+    /// Spec G9: the sidebar "..." in the spec's order, with the island's gates (AgentIslandController.controlGates, the
+    /// island menu's own rule) and titles. An item that asks carries an ellipsis while on; off, it reads the island's
+    /// title with its reason. Resume interrupted and Clear unpinned show only while the island's History header shows
+    /// their buttons. `autoAllow`: the setting now (Preferences.agentIslandAutoAllow).
+    @MainActor
+    static func sidebarMenu(store: AgentIslandStore, autoAllow: Bool) -> [AgentSidebarMenuEntry] {
+        let g = AgentIslandController.controlGates(store), m = store.controlsMenu, needs = g.needs
+        func ask(_ label: String, _ on: Bool, _ verb: AgentSidebarVerb) -> AgentSidebarMenuEntry {
+            let asks = label.hasSuffix("\u{2026}") ? label : label + "\u{2026}"
+            return .item(on ? asks : AgentIsland.label(label, needs: needs), enabled: on, checked: nil, verb: verb)
+        }
+        let recent: [AgentSidebarMenuEntry] = m.recent.map {
+            .item(($0 as NSString).abbreviatingWithTildeInPath, enabled: true, checked: nil, verb: .newSession($0))
+        }
+        var out: [AgentSidebarMenuEntry] = [
+            .submenu(AgentIsland.newSessionLabel, enabled: g.on, recent + (recent.isEmpty ? [] : [.divider])
+                     + [.item(AgentIsland.chooseFolderLabel, enabled: true, checked: nil, verb: .chooseFolder)]),
+            .divider,
+            ask(AgentIsland.restartAllLabel, g.restart, .restartAll(force: false)),
+            ask(AgentIsland.restartAllForceLabel, g.restart, .restartAll(force: true)),
+            ask(AgentIsland.stopAllGlobalLabel, g.stop(global: true), .stopAll),
+            .item(AgentIsland.killAllGlobalLabel, enabled: g.kill(global: true), checked: nil, verb: .killAll),
+        ]
+        var history: [AgentSidebarMenuEntry] = []
+        if let label = store.resumeAllButton {
+            history.append(.item(label, enabled: true, checked: nil, verb: .resumeInterrupted(noMessage: false)))
+            if store.reviveNoMessageGate.isOK {   // #669: the island's "(no message)" shows only then
+                history.append(.item(AgentIsland.resumeAllNoMessageAccessibility(store.resumableCount), enabled: true,
+                                     checked: nil, verb: .resumeInterrupted(noMessage: true)))
+            }
+        }
+        if store.clearUnpinnedButton != nil {
+            history.append(.item(AgentIsland.clearUnpinnedLabel + "\u{2026}", enabled: true, checked: nil, verb: .clearUnpinned))
+        }
+        if !history.isEmpty { out += [.divider] + history }
+        out += [
+            .divider,
+            .submenu(sortLabel, enabled: true, AgentIslandSort.allCases.map {
+                .item($0.label, enabled: true, checked: store.sort == $0, verb: .sort($0))
+            }),
+            .submenu(rowDetailsLabel, enabled: true, AgentIslandRowDetailsSection.toggles.map {
+                .item($0.label, enabled: true, checked: store.details[keyPath: $0.path], verb: .rowDetail($0.path))
+            }),
+            .item(autoAllowLabel, enabled: true, checked: autoAllow, verb: .autoAllow),
+            .item(islandSettingsLabel, enabled: true, checked: nil, verb: .settings),
+        ]
+        if let why = m.refused { out += [.divider, .note("Controls \(why)")] }
+        return out
+    }
+
+    /// The item's run: the island's own call. The list-wide verbs only ask (the store's question); the settings
+    /// items write the setting as Settings does and tell the island. `openSettings`: the Settings pane seam.
+    @MainActor
+    static func runSidebar(_ v: AgentSidebarVerb, island c: AgentIslandController, openSettings: () -> Void) {
+        switch v {
+        case .newSession(let folder): c.newSession(in: folder)
+        case .chooseFolder: c.chooseNewSessionFolder()
+        case .restartAll(let force): c.askRestartAll(force: force)
+        case .stopAll: c.askStopAll(global: true)
+        case .killAll: c.askKillAll(global: true)
+        case .resumeInterrupted(let noMessage): c.resumeCrashed(noMessage: noMessage)
+        case .clearUnpinned: c.askClearUnpinned()
+        case .sort(let s):
+            Preferences.agentIslandSort = s
+            c.rowDetailsChanged()
+        case .rowDetail(let path):
+            Preferences.agentIslandRowDetails[keyPath: path].toggle()
+            c.rowDetailsChanged()
+        case .autoAllow: AgentIslandPane.autoAllowToggled(!Preferences.agentIslandAutoAllow, c)
+        case .settings: openSettings()
+        }
+    }
+
+    /// The store's list-wide question up now (one at a time: store.dropQuestions), its line and its answer's verb.
+    @MainActor
+    static func storeQuestion(_ store: AgentIslandStore) -> (kind: AgentStoreQuestion, text: String, action: String)? {
+        if store.confirmingRestartAll {
+            return (.restartAll, store.restartAllForce ? AgentIsland.restartAllForceQuestion : AgentIsland.restartAllQuestion,
+                    "Restart")
+        }
+        if store.confirmingStopAll { return (.stopAll, store.stopAllQuestion, "Stop") }
+        if store.confirmingKillAll { return (.killAll, store.killAllQuestion, "Kill") }
+        if store.confirmingClear { return (.clear, AgentIsland.clearQuestion(store.unpinnedCount), "Clear") }
+        return nil
+    }
+
+    /// The strip's answer: the island's own confirm call, which re-checks that its question is still up.
+    @MainActor
+    static func answer(_ q: AgentStoreQuestion, _ yes: Bool, island c: AgentIslandController) {
+        switch q {
+        case .restartAll: c.confirmRestartAll(yes)
+        case .stopAll: c.confirmStopAll(yes)
+        case .killAll: c.confirmKillAll(yes)
+        case .clear: c.confirmClearUnpinned(yes)
+        }
+    }
+}
+
 // MARK: - Menus
 
 /// The menu's items, for a SwiftUI Menu or a context menu. Observes the store, so a gate
@@ -482,6 +611,64 @@ struct AgentConfirmStrip: View {
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(Neon.card)
         .overlay(alignment: .bottom) { Rectangle().fill(Neon.stroke).frame(height: 1) }
+    }
+}
+
+/// #897 (G9): the store's list-wide question (Restart all, Stop all, Kill all, Clear unpinned) at the top of the
+/// sidebar, the island's own line and verb; the answer goes through the island's confirm call. Nothing while none is up.
+struct AgentStoreQuestionStrip: View {
+    @ObservedObject var store: AgentIslandStore
+    let answer: (Bool) -> Void
+
+    var body: some View {
+        if let q = AgentWindowControls.storeQuestion(store) {
+            AgentConfirmStrip(text: q.text, action: q.action, confirm: { answer(true) }, cancel: { answer(false) })
+        }
+    }
+}
+
+/// #897 (G9): the sidebar title row's "...": AgentWindowControls.sidebarMenu, re-read as the store changes.
+struct AgentSidebarMenuButton: View {
+    @ObservedObject var store: AgentIslandStore
+    let run: (AgentSidebarVerb) -> Void
+
+    var body: some View {
+        Menu {
+            AgentSidebarMenuEntries(entries: AgentWindowControls.sidebarMenu(store: store,
+                                                                             autoAllow: Preferences.agentIslandAutoAllow),
+                                    run: run)
+        } label: {
+            Image(systemName: "ellipsis").font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(width: sz(18), height: sz(18))
+        .help("New session, restart, stop or kill all, History and Agent Island settings")
+        .accessibilityLabel("Session list actions")
+    }
+}
+
+struct AgentSidebarMenuEntries: View {
+    let entries: [AgentSidebarMenuEntry]
+    let run: (AgentSidebarVerb) -> Void
+
+    var body: some View {
+        ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
+            switch e {
+            case .item(let title, let enabled, let checked, let verb):
+                if let checked {
+                    Toggle(title, isOn: Binding(get: { checked }, set: { _ in run(verb) })).disabled(!enabled)
+                } else {
+                    Button(title) { run(verb) }.disabled(!enabled)
+                }
+            case .submenu(let title, let enabled, let items):
+                Menu(title) { AgentSidebarMenuEntries(entries: items, run: run) }.disabled(!enabled)
+            case .divider:
+                Divider()
+            case .note(let text):
+                Text(verbatim: text)
+            }
+        }
     }
 }
 

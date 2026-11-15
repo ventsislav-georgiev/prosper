@@ -1322,6 +1322,10 @@ tag from the now-released section and put it on the new top draft.
   automatically instead of bringing the approval bar back.
 - Coding agent: command output whose line ending or color code was split across two updates no
   longer shows a stray carriage return or escape code in the live tool card.
+- The Agent Sessions window's sidebar has a "..." menu with Agent Island's list-wide actions: New
+  session, Restart stale or all agents, Stop all, Kill all, Resume interrupted, Clear unpinned,
+  Sort, Row details, Always allow permission prompts and Agent Island Settings. Its questions ("Kill
+  2 sessions?") show at the top of the sidebar, the same ones the island asks.
 
 ## v2.174.0
 

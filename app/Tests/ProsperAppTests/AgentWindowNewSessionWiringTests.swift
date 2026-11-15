@@ -323,23 +323,25 @@ extension AgentWindowD1Tests {
                                      "nothing in the trailing padding \(tag)")
                     }
                     // The count's ink: none with 0 sessions, then wider for 999 than for 1.
-                    let gap = CGRect(x: sz(130), y: AgentSidebarTitleRow.padTop - sz(4), width: slot.minX - sz(2) - sz(130), height: sz(26))
+                    // #897: the sidebar "..." sits in the sz(18) + sz(4) left of the pair: the count's ink ends before it.
+                    let menu = sz(18) + sz(4)
+                    let gap = CGRect(x: sz(130), y: AgentSidebarTitleRow.padTop - sz(4), width: slot.minX - sz(2) - menu - sz(130), height: sz(26))
                     XCTAssertNil(ink(reps[0], gap), "no count with 0 sessions \(tag)")
                     let c1 = try XCTUnwrap(ink(reps[1], gap), tag), c999 = try XCTUnwrap(ink(reps[2], gap), tag)
                     XCTAssertGreaterThan(c999.width, c1.width, tag)
                     // A narrow sidebar: the title and the buttons as they were, the count cut.
-                    let narrow = CGSize(width: sz(205), height: sz(70))
+                    let narrow = CGSize(width: sz(205) + menu, height: sz(70))   // #897: the title's room as before the "..."
                     let n0 = try wiringRender(AgentSidebarTitleRow(model: models[0]), narrow, backing: backing)
                     let n999 = try wiringRender(AgentSidebarTitleRow(model: models[2]), narrow, backing: backing)
                     let nslot = CGRect(x: narrow.width - sz(14) - sz(40), y: AgentSidebarTitleRow.padTop, width: sz(40), height: sz(18)).insetBy(dx: -sz(3), dy: -sz(3))
                     // R2 F6a (r7): the overlay's frame is the width offered, whatever the cut count: the same pixels.
                     XCTAssertEqual(regionBytes(n999, nslot), regionBytes(n0, nslot), "the buttons stay \(tag)")
                     XCTAssertNotNil(ink(n0, nslot), "the buttons drawn \(tag)")
-                    let title = try XCTUnwrap(ink(n0, CGRect(x: 0, y: 0, width: nslot.minX, height: narrow.height)), "title \(tag)")
+                    let title = try XCTUnwrap(ink(n0, CGRect(x: 0, y: 0, width: nslot.minX - menu, height: narrow.height)), "title \(tag)")
                     let titleBox = CGRect(x: 0, y: 0, width: title.maxX + tol, height: narrow.height)
                     assertRect(ink(n999, titleBox), title, accuracy: tol, "the title stays whole \(tag)")
                     assertRect(ink(reps[0], titleBox), title, accuracy: tol, "and as wide as in the full row \(tag)")
-                    let cut = try XCTUnwrap(ink(n999, CGRect(x: titleBox.maxX + tol, y: 0, width: nslot.minX - titleBox.maxX - tol,
+                    let cut = try XCTUnwrap(ink(n999, CGRect(x: titleBox.maxX + tol, y: 0, width: nslot.minX - menu - titleBox.maxX - tol,
                                                              height: narrow.height)), "a cut count shows \(tag)")
                     XCTAssertLessThan(cut.width, c999.width - sz(6), "the count gave way \(tag)")
                 }

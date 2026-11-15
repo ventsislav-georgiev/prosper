@@ -526,6 +526,8 @@ struct AgentSidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             AgentSidebarTitleRow(model: model)
+            // #897 (G9): the store's own list-wide question (the island's line), answered through its confirm call.
+            if let store = model.store { AgentStoreQuestionStrip(store: store) { model.answerStoreQuestion($0) } }
             if !model.hasStore {
                 AgentEmptyState(icon: "rectangle.dashed", title: "Agent Island is off",
                                 detail: "Turn on Agent Island in Settings › Extensions to list your dch sessions here.")
@@ -604,11 +606,19 @@ struct AgentSidebarTitleRow: View {
         }
         // The buttons sit over a reserved trailing strip, inside the row's height: a cut count can never move them.
         .frame(minHeight: sz(18))
-        .padding(.trailing, AgentNewSessionButtons.width + sz(6))
+        .padding(.trailing, Self.buttonsWidth + sz(6))
         // minWidth 0: the frame is the width offered, never its child's (a cut count's rounding moved the overlay 1 pt).
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) {
-            if let store = model.store { AgentNewSessionButtons(model: model, store: store) }
+            if let store = model.store {
+                HStack(spacing: sz(4)) {
+                    // #897 (G9): the list-wide "..." in its own fixed sz(18) slot, beside the count; #847's pair keeps
+                    // the trailing edge.
+                    AgentSidebarMenuButton(store: store) { model.runSidebar($0) }
+                    AgentNewSessionButtons(model: model, store: store)
+                }
+                .fixedSize()
+            }
         }
         .padding(.horizontal, sz(14)).padding(.top, Self.padTop).padding(.bottom, sz(8))
     }
@@ -616,6 +626,8 @@ struct AgentSidebarTitleRow: View {
     /// #1103 F2: the content starts under the titlebar (no .fullSizeContentView), so the row's centre sits on the
     /// session header's title line: 14 + 18 / 2 = AgentSessionHeader's 10 + 26 / 2.
     static var padTop: CGFloat { sz(14) }
+    /// #897: the trailing strip the overlay holds: the "..." slot, the gap, #847's pair.
+    static var buttonsWidth: CGFloat { AgentNewSessionButtons.width + sz(4) + sz(18) }
 }
 
 /// #901 B3 step 4a (8.1 :625-631): the Layouts section, built only from `model.layoutRows` (gate on and the show rule).

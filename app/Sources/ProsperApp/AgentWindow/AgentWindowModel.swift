@@ -622,6 +622,22 @@ final class AgentWindowModel: ObservableObject {
     lazy var resumeNoMessage: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resume($0, noMessage: true) }
     lazy var pinRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().pin($0) }
     lazy var removeRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().remove($0) }
+    /// #897 (G9): "Agent Island Settings...": Settings on Agent Island's pane, through the extension host's one opener.
+    var openIslandSettings: () -> Void = {
+        LiveExtensionHostServices.shared.openSettings(extensionID: AgentWindowControls.islandExtensionID,
+                                                      sectionID: AgentWindowControls.islandSectionID, anchor: nil)
+    }
+
+    /// #897 (G9): a sidebar "..." item: the island's own call on `island()`.
+    func runSidebar(_ v: AgentSidebarVerb) {
+        AgentWindowControls.runSidebar(v, island: island(), openSettings: openIslandSettings)
+    }
+
+    /// #897 (G9): the sidebar strip's answer to the store's question up now, through the island's confirm call.
+    func answerStoreQuestion(_ yes: Bool) {
+        guard let store, let q = AgentWindowControls.storeQuestion(store) else { return }
+        AgentWindowControls.answer(q.kind, yes, island: island())
+    }
     /// Told when the window shows or hides, so the island keeps the store current
     /// (it holds activity-only lists back while nothing shows them).
     var onVisible: (Bool) -> Void = { AgentIslandController.shared.windowWatching = $0 }

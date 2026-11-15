@@ -997,8 +997,29 @@ final class AgentIslandController {
     /// New session ▸ recent folders, Choose folder…; Restart stale agents, Restart all agents (force);
     /// Stop all in <tab>, Stop all, Kill all in <tab>, Kill all (#744). Off,
     /// with the gate's reason under them, while the gate refuses.
+    /// #897: the "..." items' gates, shared by the island's menu and the window's sidebar "..." (one rule, two menus).
+    /// `on`: the base gate (resumeGate); `needs`: Restart's and Stop's dch hint; no store: no live session.
+    struct ControlGates: Equatable {
+        let on: Bool
+        let needs: String?
+        let live: Bool
+        let stopTab: Bool, stopAll: Bool, killTab: Bool, killAll: Bool
+        /// Restart stale agents and Restart all agents (force): off with history only (#580 addendum 2: and below 1.24.1).
+        var restart: Bool { on && needs == nil && live }
+        func stop(global: Bool) -> Bool { on && needs == nil && (global ? stopAll : stopTab) }
+        func kill(global: Bool) -> Bool { on && (global ? killAll : killTab) }
+    }
+
+    static func controlGates(_ store: AgentIslandStore?) -> ControlGates {
+        ControlGates(on: store?.controlsMenu.refused == nil, needs: store?.restartNeeds, live: !(store?.sessions.isEmpty ?? true),
+                     stopTab: !(store?.stopTargets(global: false).stop.isEmpty ?? true),
+                     stopAll: !(store?.stopTargets(global: true).stop.isEmpty ?? true),
+                     killTab: !(store?.killTargets(global: false).kill.isEmpty ?? true),
+                     killAll: !(store?.killTargets(global: true).kill.isEmpty ?? true))
+    }
+
     func makeControlsMenu() -> NSMenu {
-        let store = self.store, m = store?.controlsMenu ?? .init(recent: [], refused: nil), on = m.refused == nil
+        let store = self.store, m = store?.controlsMenu ?? .init(recent: [], refused: nil), g = Self.controlGates(store), on = g.on
         let menu = NSMenu(), sub = NSMenu()
         menu.autoenablesItems = false
         sub.autoenablesItems = false
@@ -1012,26 +1033,24 @@ final class AgentIslandController {
         menu.addItem(new)
         // Restart all only reaches live sessions: off with history only.
         // #580 addendum 2: both off under a 1.24.0 control dch, reading "(needs dch 1.24.1)".
-        let live = !(store?.sessions.isEmpty ?? true), needs = store?.restartNeeds, risky = on && needs == nil
-        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.restartAllLabel, needs: needs), enabled: risky && live) {
+        let needs = g.needs
+        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.restartAllLabel, needs: needs), enabled: g.restart) {
             [weak self] in self?.askRestartAll()
         })
-        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.restartAllForceLabel, needs: needs), enabled: risky && live) {
+        menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.restartAllForceLabel, needs: needs), enabled: g.restart) {
             [weak self] in self?.askRestartAll(force: true)
         })
         // #580: the shown tab's sessions; off when none of them can stop.
         let tab = store?.sessionTab.label ?? "Sessions"
-        let stoppable = { (global: Bool) in !(store?.stopTargets(global: global).stop.isEmpty ?? true) }
         menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.stopAllLabel(tab: tab), needs: needs),
-                                         enabled: risky && stoppable(false)) { [weak self] in self?.askStopAll() })
+                                         enabled: g.stop(global: false)) { [weak self] in self?.askStopAll() })
         // #744: every tab's; then the non-graceful Kill all, per tab and every tab (base gate only).
         menu.addItem(AgentIslandMenuItem(AgentIsland.label(AgentIsland.stopAllGlobalLabel, needs: needs),
-                                         enabled: risky && stoppable(true)) { [weak self] in self?.askStopAll(global: true) })
-        let killable = { (global: Bool) in !(store?.killTargets(global: global).kill.isEmpty ?? true) }
-        menu.addItem(AgentIslandMenuItem(AgentIsland.killAllLabel(tab: tab), enabled: on && killable(false)) {
+                                         enabled: g.stop(global: true)) { [weak self] in self?.askStopAll(global: true) })
+        menu.addItem(AgentIslandMenuItem(AgentIsland.killAllLabel(tab: tab), enabled: g.kill(global: false)) {
             [weak self] in self?.askKillAll()
         })
-        menu.addItem(AgentIslandMenuItem(AgentIsland.killAllGlobalLabel, enabled: on && killable(true)) {
+        menu.addItem(AgentIslandMenuItem(AgentIsland.killAllGlobalLabel, enabled: g.kill(global: true)) {
             [weak self] in self?.askKillAll(global: true)
         })
         // #584: the shown tab's live sessions, by name; the base gate only (dch answers an old master itself).
