@@ -1058,6 +1058,9 @@ tag from the now-released section and put it on the new top draft.
   restarted (#1266)
 - Agent Sessions: the New session form's Name field starts empty and stays empty when cleared; the
   automatic name shows as the placeholder and is still used when nothing is typed (#1265)
+- Agent Sessions sidebar: the model and effort label ends at the same place on every row, stays
+  through a short gap in what dch reports, and shows on a session that has been working since a new
+  conversation began (#1267)
 
 ## v2.174.0
 

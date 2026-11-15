@@ -343,3 +343,115 @@ final class AgentRowModelEffortTests: XCTestCase {
                         "api-old, Ended · exited, 2h ago"])
     }
 }
+
+// MARK: - #1267: the model text's trailing edge with and without a Command-digit chip, and the carried slot
+
+extension AgentRowModelEffortTests {
+    /// A label carried over a list answer with no mapping keeps the slot and the text; no carry, no path: no slot.
+    func testCarriedLabelKeepsTheSlot() {
+        var carried = session("api", model: "claude-fable-9-2", effort: "high", path: nil)
+        carried.modelCarried = 1
+        let r = row(carried)
+        XCTAssertTrue(r.modelSlot)
+        XCTAssertEqual(r.modelText, "Fable 9.2 · high")
+        XCTAssertEqual(r.modelWords, "model Fable 9.2, effort high")
+        XCTAssertFalse(row(session("api", model: "claude-fable-9-2", effort: "high", path: nil)).modelSlot)
+    }
+
+    /// The widest ⌘<digit> chip (proportional digits): the one a chipless row's hidden room is as wide as.
+    @MainActor
+    func widestDigit() -> Int {
+        (1...9).max { ideal(AgentDigitChip(number: $0)).width < ideal(AgentDigitChip(number: $1)).width } ?? 1
+    }
+
+    /// `tree` in a never-shown window whose backing scale is pinned (1x, 2x), so the frames snap to that grid.
+    @MainActor
+    func tree1267<V: View>(_ view: V, _ size: CGSize, backing: CGFloat, until done: ([AX]) -> Bool) -> [AX] {
+        let set = Selector(("accessibilitySetValue:forAttribute:")), attrs = ["AXEnhancedUserInterface", "AXManualAccessibility"]
+        let app = NSApplication.shared
+        XCTAssertTrue(app.responds(to: set))
+        defer { for a in attrs { app.perform(set, with: NSNumber(value: false), with: a) } }
+        let win = ModelRowFixedBackingWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless],
+                                             backing: .buffered, defer: true)
+        win.fixedBacking = backing
+        win.isReleasedWhenClosed = false
+        defer { win.contentView = nil; win.close() }
+        let host = NSHostingView(rootView: view)
+        host.frame = CGRect(origin: .zero, size: size)
+        win.contentView = host
+        for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
+        var out: [AX] = []
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            out = []
+            axWalk(host, &out)
+        } while !done(out) && Date() < deadline
+        XCTAssertFalse(win.isVisible, "never shown")
+        XCTAssertEqual(win.backingScaleFactor, backing)
+        return out
+    }
+
+    /// At the sidebar's width, every scale, 1x and 2x: the model text of a row with no number ends where the same row's
+    /// ends with the widest digit's chip (and never right of any numbered row's), the state text starts at the same x.
+    @MainActor
+    func testModelTextEndsAtTheSameEdgeWithAndWithoutAChip() {
+        let r = row(session("api", model: "claude-fable-9-2-20991231", effort: "high"))
+        atScales { scale in
+            let wide = widestDigit()
+            for px: CGFloat in [1, 2] {
+                let width = column(sz(274))
+                var ends: [CGFloat] = [], starts: [CGFloat] = []
+                for number in [nil, wide, 1] as [Int?] {
+                    let t = tree1267(AgentSidebarRowView(row: r, selected: false, number: number).detailVariants
+                        .frame(width: width, alignment: .leading), CGSize(width: width, height: sz(30)), backing: px) { t in
+                        t.contains { $0.label == "Idle" } && t.contains { $0.label == r.modelText }
+                    }
+                    let tag = "number \(number.map(String.init) ?? "none") (\(scale), \(Int(px))x)"
+                    guard let value = t.first(where: { $0.label == r.modelText }), let state = t.first(where: { $0.label == "Idle" })
+                    else { XCTFail("model and state text drawn: \(tag)"); continue }
+                    ends.append(value.frame.maxX); starts.append(state.frame.minX)
+                }
+                let tag = "\(scale), \(Int(px))x: ends \(ends)"
+                XCTAssertEqual(ends.count, 3, tag)
+                XCTAssertEqual(ends.first ?? -1, ends.dropFirst().first ?? -2, accuracy: 0.5 / px + 0.01, "same trailing edge: \(tag)")
+                XCTAssertLessThanOrEqual(ends.first ?? 1e9, (ends.last ?? -1) + 0.5 / px + 0.01, "never right of ⌘1's: \(tag)")
+                for x in starts { XCTAssertEqual(x, starts.first ?? -1, accuracy: 0.5 / px + 0.01, "state text x: \(tag)") }
+            }
+        }
+    }
+
+    /// The line widths: a chipless Claude row's slot variant is as wide as the widest-digit row's; a row with no slot
+    /// (Codex or shell, History) and every variant without the slot are today's (no room added).
+    @MainActor
+    func testChiplessRoomOnlyBesideTheModelSlot() {
+        let claude = row(session("api", model: "claude-fable-9-2", effort: "high"))
+        let none = [row(session("api", model: "claude-fable-9-2", effort: "high", path: nil)), history("api")]
+        atScales { scale in
+            let wide = widestDigit()
+            let chipless = AgentSidebarRowView(row: claude, selected: false)
+            let numbered = AgentSidebarRowView(row: claude, selected: false, number: wide)
+            XCTAssertEqual(ideal(chipless.detailLine([], chipSlot: true, modelSlot: true)).width,
+                           ideal(numbered.detailLine([], chipSlot: true, modelSlot: true)).width, accuracy: 0.01, "slot line (\(scale))")
+            // Without the slot a chipless row keeps no chip room, as today.
+            XCTAssertEqual(ideal(chipless.detailLine([], chipSlot: true)).width, ideal(chipless.detailLine([])).width,
+                           accuracy: 0.01, "no slot, no room (\(scale))")
+            for r in none {
+                let v = AgentSidebarRowView(row: r, selected: false)
+                let today = ideal(v.detailLine([])).width
+                for (tag, w) in [("chip+slot", ideal(v.detailLine([], chipSlot: true, modelSlot: true)).width),
+                                 ("chip", ideal(v.detailLine([], chipSlot: true)).width),
+                                 ("variants", ideal(v.detailVariants).width)] {
+                    XCTAssertEqual(w, today, accuracy: 0.01, "\(r.title) \(tag): unchanged (\(scale))")
+                }
+            }
+        }
+    }
+}
+
+/// A window whose backing scale is pinned (as AgentWindowBandTests' and KeyMappingRowLayoutTests'): SwiftUI snaps to it.
+private final class ModelRowFixedBackingWindow: NSWindow {
+    var fixedBacking: CGFloat?
+    override var backingScaleFactor: CGFloat { fixedBacking ?? super.backingScaleFactor }
+}

@@ -94,6 +94,9 @@ struct AgentSession: Equatable, Identifiable {
     var effort: String? = nil
     /// The transcript size `model`/`effort` were read at (the cache key with the path); nil = never read.
     var modelReadSize: UInt64? = nil
+    /// #1267: consecutive list answers with no transcript mapping that kept the last model, effort and slot (display
+    /// only: transcriptPath and claudeSessionID stay nil); 0 = not carried. At most `AgentModelEffort.carryAnswers`.
+    var modelCarried = 0
     /// #1210: dch's harness title (DchListRow.harness), "" when none. Only the Sidekicks split matches it;
     /// `title` never reads it (an empty alias already holds it, as dch's label does).
     var harness: String = ""
@@ -687,7 +690,8 @@ enum AgentIsland {
                              autoAllowed: row.autoAllowed,
                              claudeSessionID: mapping[row.name]?.sessionID, transcriptPath: mapping[row.name]?.path,
                              cwd: row.cwd, harness: row.harness)
-                return AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO)
+                return AgentModelEffort.carry(AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO),
+                                              previous: before[s.key])
             }
         }
     }

@@ -695,6 +695,7 @@ extension AgentSidebarRowView {
     /// it by the row and overhangs into the row's padding, so the row's height never changes.
     /// #1203: `modelSlot` puts the model slot after the Spacer, before the chip slot (a Claude row only): trailing, so
     /// it never moves the state text, and it is never a zero-width child (it always has the widest text's width).
+    /// #1267: a row with the slot and no number keeps a hidden chip's room after it too (no anchor: nothing is drawn).
     func detailLine(_ chips: [String], open: Int = 0, chipSlot: Bool = false, modelSlot: Bool = false) -> some View {
         HStack(spacing: sz(5)) {
             Text(row.detail).font(Neon.font(10.5))
@@ -712,6 +713,9 @@ extension AgentSidebarRowView {
             if chipSlot, let number {
                 AgentDigitChip(number: number).hidden().frame(height: 0)
                     .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { $0 }
+            } else if chipSlot, modelSlot, row.modelSlot {
+                // #1267: no number, the same room after the model slot (the widest digit's chip), so its edge lines up.
+                ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
             }
         }
     }

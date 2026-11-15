@@ -148,7 +148,8 @@ enum AgentSidebar {
         let prs = chips.prefix(2).map(\.label) + (chips.count + more > 2 ? ["+\(chips.count + more - 2)"] : [])
         // dch's agents is an unclamped Int (DchCommand.parseListJSON); merged is clamped by DchSessionMeta.count.
         // #1203: only a Claude session has a transcript (dch sets the path with a Claude only); the effort only with a model.
-        let claude = s.transcriptPath != nil, model = claude ? s.model.map(AgentModelEffort.shortName) : nil
+        // #1267: or a label carried over an answer with no mapping (display only).
+        let claude = s.transcriptPath != nil || s.modelCarried > 0, model = claude ? s.model.map(AgentModelEffort.shortName) : nil
         return Row(id: .live(s.key), title: s.title, state: s.state, detail: AgentWindowControls.lock(action) ?? s.state.label,
                    age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more,
                    agents: details.agents ? max(0, s.agents) : 0, merged: details.merged ? max(0, s.meta?.merged ?? 0) : 0,

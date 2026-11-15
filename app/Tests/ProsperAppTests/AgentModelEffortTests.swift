@@ -421,3 +421,151 @@ final class AgentModelEffortTests: XCTestCase {
         XCTAssertTrue(second.first { $0.name == "api" }?.model == "claude-list-4-6")
     }
 }
+
+// MARK: - #1267: the label kept over list answers with no mapping, and a nil read again under a working row
+
+extension AgentModelEffortTests {
+    private static let carrySID = "0b7c2f3e-aaaa-bbbb-cccc-0123456789ab"   // the file name of `path`
+    private static let carryDir = "/Users/example/dch"
+
+    /// One list answer for "api" (working), mapped to `path` or with dch's nulls (no mapping), plus a shell row "sh".
+    private func answer(_ mapped: String?, sid: String = AgentModelEffortTests.carrySID) -> AgentIsland.Runner {
+        let map = mapped.map { #""claude_session_id":"\#(sid)","transcript_path":"\#($0)""# }
+            ?? #""claude_session_id":null,"transcript_path":null"#
+        let json = Data((#"[{"name":"api","alias":"","activity_epoch":1,"state":"working","version":"1.65.0","agents":0,"#
+            + map + "},"
+            + #"{"name":"sh","alias":"","activity_epoch":1,"state":"idle","version":"1.65.0","agents":0}]"#).utf8)
+        return { _, _ in json }
+    }
+
+    private func list(_ run: @escaping AgentIsland.Runner, _ previous: [AgentSession], _ c: Counting) -> [AgentSession] {
+        AgentIsland.list(dirs: [Self.carryDir], keeping: previous, run: run, modelIO: c.io)
+    }
+
+    private func sidebar(_ l: [AgentSession], _ name: String) -> AgentSidebar.Row? {
+        l.first { $0.name == name }.map { AgentSidebar.row($0, details: .all, now: 1) }
+    }
+
+    func testCarryKeepsTheLabelForThreeAnswersWithoutAMappingThenDrops() {
+        XCTAssertEqual(AgentModelEffort.carryAnswers, 3)
+        let c = Counting(files: [path: assistant("claude-list-4-6", effort: "xhigh")])
+        var l = list(answer(path), [], c)
+        XCTAssertTrue(l.first { $0.name == "api" }?.model == "claude-list-4-6")
+        for n in 1...3 {
+            c.reset()
+            l = list(answer(nil), l, c)
+            let api = l.first { $0.name == "api" }
+            XCTAssertTrue(api?.model == "claude-list-4-6" && api?.effort == "xhigh", "answer \(n) without a mapping keeps it")
+            XCTAssertEqual(api?.modelCarried, n)
+            // Display only: no path, no Claude id, no read size (the pane and auto-allow keep today's rule).
+            XCTAssertTrue(api?.transcriptPath == nil && api?.claudeSessionID == nil && api?.modelReadSize == nil, "\(n)")
+            XCTAssertEqual(c.stats, 0, "nothing stat'd without a path (\(n))"); XCTAssertEqual(c.reads, 0)
+            let row = sidebar(l, "api")
+            XCTAssertEqual(row?.modelSlot, true, "the slot stays (\(n))")
+            XCTAssertEqual(row?.modelText, "List 4.6 · xhigh", "\(n)")
+            XCTAssertEqual(sidebar(l, "sh")?.modelSlot, false, "a shell row never gets a slot (\(n))")
+            // The transcript pane's input keeps today's nil.
+            XCTAssertTrue(api.map { AgentSidebar.source($0).transcriptPath == nil && AgentSidebar.source($0).sessionId == nil } == true)
+        }
+        for n in 4...5 {
+            l = list(answer(nil), l, c)
+            let api = l.first { $0.name == "api" }
+            XCTAssertTrue(api?.model == nil && api?.effort == nil && api?.modelCarried == 0, "answer \(n): dropped as before")
+            XCTAssertEqual(sidebar(l, "api")?.modelSlot, false, "\(n)")
+            XCTAssertEqual(sidebar(l, "api")?.modelText, "", "\(n)")
+        }
+    }
+
+    func testCarryEndsWhenTheMappingReturnsAndIsCountedAfresh() {
+        let c = Counting(files: [path: assistant("claude-list-4-6", effort: "high")])
+        var l = list(answer(path), [], c)
+        l = list(answer(nil), l, c)
+        l = list(answer(nil), l, c)
+        XCTAssertEqual(l.first { $0.name == "api" }?.modelCarried, 2)
+        c.reset()
+        l = list(answer(path), l, c)
+        let api = l.first { $0.name == "api" }
+        XCTAssertTrue(api?.modelCarried == 0 && api?.transcriptPath == path && api?.model == "claude-list-4-6")
+        XCTAssertGreaterThan(c.reads, 0, "a returning mapping is read afresh (one bounded read)")
+        for n in 1...3 { l = list(answer(nil), l, c); XCTAssertTrue(l.first { $0.name == "api" }?.model == "claude-list-4-6", "\(n)") }
+        l = list(answer(nil), l, c)
+        XCTAssertTrue(l.first { $0.name == "api" }?.model == nil)
+    }
+
+    func testCarryNeverShowsTheOldValueAfterANewPath() {
+        let other = "/Users/example/.claude/projects/p/00000000-0000-4000-8000-000000000002.jsonl"
+        let c = Counting(files: [path: assistant("claude-old-1-0", effort: "low"),
+                                 other: assistant("claude-new-2-0", effort: "max")])
+        var l = list(answer(path), [], c)
+        l = list(answer(nil), l, c)
+        XCTAssertTrue(l.first { $0.name == "api" }?.model == "claude-old-1-0")
+        c.reset()
+        let moved = list(answer(other, sid: "00000000-0000-4000-8000-000000000002"), l, c)
+        XCTAssertTrue(moved.first { $0.name == "api" }?.model == "claude-new-2-0", "the new path's file")
+        XCTAssertTrue(moved.first { $0.name == "api" }?.effort == "max")
+        XCTAssertGreaterThan(c.reads, 0)
+        // A new path whose file holds no answer yet shows nothing, never the old value.
+        c.set(other, line(["type": "user"]))
+        let empty = list(answer(other, sid: "00000000-0000-4000-8000-000000000002"), l, c)
+        let api = empty.first { $0.name == "api" }
+        XCTAssertTrue(api?.model == nil && api?.effort == nil && api?.modelCarried == 0)
+        // And a carry after it carries nothing.
+        let after = list(answer(nil), empty, c)
+        XCTAssertTrue(after.first { $0.name == "api" }?.model == nil)
+    }
+
+    func testCarryNeverCrossesToAnotherKeyAndNeedsAnEarlierClaudeRow() {
+        let c = Counting(files: [path: assistant("claude-list-4-6", effort: "high")])
+        let l = list(answer(path), [], c)
+        guard let api = l.first(where: { $0.name == "api" }) else { return XCTFail("api listed") }
+        // Same name in another dir, and another name: nothing inherited.
+        for key in [AgentSessionKey(dir: "/Users/example/other", name: "api"), AgentSessionKey(dir: Self.carryDir, name: "web")] {
+            let fresh = AgentSession(key: key, alias: "", activity: 1, state: .working, agents: 0)
+            let got = AgentModelEffort.carry(fresh, previous: api)
+            XCTAssertTrue(got.model == nil && got.effort == nil && got.modelCarried == 0, "\(key)")
+        }
+        // A list whose earlier answer had "api" mapped: the shell row "sh" (never mapped) gets nothing.
+        let next = list(answer(nil), l, c)
+        XCTAssertTrue(next.first { $0.name == "sh" }.map { $0.model == nil && $0.modelCarried == 0 } == true)
+        // An earlier Claude row with no model (nothing found yet): the slot is kept, the text is empty.
+        let none = Counting(files: [path: line(["type": "user"])])
+        var e = list(answer(path), [], none)
+        e = list(answer(nil), e, none)
+        XCTAssertTrue(e.first { $0.name == "api" }?.model == nil)
+        XCTAssertEqual(sidebar(e, "api")?.modelText, "")
+        // No earlier list at all (the first answer has no mapping): nothing.
+        let first = list(answer(nil), [], none)
+        XCTAssertTrue(first.first { $0.name == "api" }.map { $0.model == nil && $0.modelCarried == 0 } == true)
+        XCTAssertEqual(sidebar(first, "api")?.modelSlot, false)
+    }
+
+    /// 3a: a nil cached under a working row (read before the stretch's first answer) is read again on the next answer
+    /// that grew, once per answer; once found, the working carry holds it as before.
+    func testWorkingRowWithNothingCachedIsReadAgainOncePerAnswer() {
+        let user = line(["type": "user"])
+        let c = Counting(files: [path: user])
+        var s = AgentModelEffort.resolve(session(.working, path: path), previous: nil, io: c.io)
+        XCTAssertTrue(s.model == nil && s.modelReadSize == UInt64(user.count))
+        // Same size: no read (the empty result stays cached).
+        c.reset()
+        s = AgentModelEffort.resolve(session(.working, path: path), previous: s, io: c.io)
+        XCTAssertEqual(c.reads, 0)
+        // Grew, still nothing: one bounded pass, still nil, the new size kept.
+        let more = user + user
+        c.set(path, more); c.reset()
+        s = AgentModelEffort.resolve(session(.working, path: path), previous: s, io: c.io)
+        XCTAssertTrue(c.reads > 0 && c.bytes == more.count)
+        XCTAssertTrue(s.model == nil && s.modelReadSize == UInt64(more.count))
+        // Grew with an answer: read, found.
+        let answered = more + assistant("claude-work-3-1", effort: "high")
+        c.set(path, answered); c.reset()
+        s = AgentModelEffort.resolve(session(.working, path: path), previous: s, io: c.io)
+        XCTAssertGreaterThan(c.reads, 0)
+        XCTAssertTrue(s.model == "claude-work-3-1" && s.effort == "high")
+        // Found: growth under working is carried again, no read.
+        c.set(path, answered + assistant("claude-work-3-2")); c.reset()
+        let held = AgentModelEffort.resolve(session(.working, path: path), previous: s, io: c.io)
+        XCTAssertEqual(c.reads, 0)
+        XCTAssertTrue(held.model == "claude-work-3-1")
+    }
+}
