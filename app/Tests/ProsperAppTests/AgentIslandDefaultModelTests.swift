@@ -165,6 +165,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
     @MainActor
     func testSettingsRowAtThreeScalesOnTheAccessibilityTree() {
         withSavedModel {
+            _ = ThemeStore.shared   // its first use (NeonRow's) seeds ThemeRuntime.scale from the prefs: before the scale is set here
             let savedScale = ThemeRuntime.scale
             defer { ThemeRuntime.scale = savedScale }
             // The hint first, then each refusal as a saved value written from outside shows it (literals).
@@ -242,6 +243,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
     @MainActor
     func testAliasesMenuFollowsTheScaleAndTheRowKeepsOneFrameInEveryState() {
         withSavedModel {
+            _ = ThemeStore.shared   // its first use (NeonRow's) seeds ThemeRuntime.scale from the prefs: before the scale is set here
             let savedScale = ThemeRuntime.scale
             defer { ThemeRuntime.scale = savedScale }
             let states: [(stored: String, line: String)] = [
