@@ -40,7 +40,7 @@ struct MixerOutputDevice: Identifiable, Equatable {
     let isHeadphones: Bool
     let canBeDefaultOutput: Bool
     let canBeDefaultSystemOutput: Bool
-    fileprivate let audioObjectID: AudioObjectID
+    let audioObjectID: AudioObjectID
 }
 
 /// One row: an app, with every audio process object it owns folded into a
@@ -85,7 +85,7 @@ private struct RefreshRequest {
 
 /// Everything one refresh read from the HAL, handed back for the main thread
 /// to turn into published state.
-private struct RefreshSnapshot {
+struct RefreshSnapshot {
     let defaultUID: String?
     let systemSoundUID: String?
     let outputDevices: [MixerOutputDevice]
@@ -102,6 +102,34 @@ private struct RefreshSnapshot {
     let processObjects: [AudioObjectID]
 }
 
+/// The three CoreAudio listener calls an apply pass makes (has property, add,
+/// remove), as closures so a test can record them. `coreAudio` is what
+/// production runs. `followUpRefresh` is what runs when a pass asks for another
+/// one; nil means a real refreshApps().
+struct MixerListenerCalls {
+    var hasProperty: (AudioObjectID, AudioObjectPropertyAddress) -> Bool
+    var add: (AudioObjectID, AudioObjectPropertyAddress,
+              AudioObjectPropertyListenerProc, UnsafeMutableRawPointer?) -> OSStatus
+    var remove: (AudioObjectID, AudioObjectPropertyAddress,
+                 AudioObjectPropertyListenerProc, UnsafeMutableRawPointer?) -> OSStatus
+    var followUpRefresh: (() -> Void)?
+
+    // Computed, not stored: the closures are not Sendable.
+    static var coreAudio: MixerListenerCalls { MixerListenerCalls(
+        hasProperty: { object, address in
+            var address = address
+            return AudioObjectHasProperty(object, &address)
+        },
+        add: { object, address, proc, client in
+            var address = address
+            return AudioObjectAddPropertyListener(object, &address, proc, client)
+        },
+        remove: { object, address, proc, client in
+            var address = address
+            return AudioObjectRemovePropertyListener(object, &address, proc, client)
+        }) }
+}
+
 /// Carries one freshly built engine from the build queue back to the main
 /// thread. The engine is only ever touched on the main thread once it lands,
 /// so the hop is safe even though the engine itself is not `Sendable`.
@@ -112,7 +140,7 @@ private final class EngineBox: @unchecked Sendable {
 
 @MainActor
 final class AppVolumeMixer: ObservableObject {
-    static let shared = AppVolumeMixer()
+    static let shared = AppVolumeMixer(listeners: .coreAudio)
 
     @Published private(set) var apps: [MixerApp] = []
     @Published private(set) var outputDevices: [MixerOutputDevice] = []
@@ -170,7 +198,28 @@ final class AppVolumeMixer: ObservableObject {
     /// as long as the daemon holds that lock, so no read happens on main.
     private let halQueue = DispatchQueue(label: "com.prosper.mixer.hal", qos: .userInitiated)
 
-    private init() {}
+    private let listeners: MixerListenerCalls
+
+    /// Internal only so a test can hand in a recording fake; production has the one
+    /// singleton above.
+    init(listeners: MixerListenerCalls) { self.listeners = listeners }
+
+    /// Test seam: one apply pass over a built snapshot, starting from the given
+    /// listener records. Returns the records after the pass.
+    func applyPassForTests(_ snapshot: RefreshSnapshot,
+                           listeningToDevice device: AudioObjectID?,
+                           listeningToProcessObjects objects: Set<AudioObjectID>)
+        -> (device: AudioObjectID?, processObjects: Set<AudioObjectID>) {
+        listenerInstalled = true
+        outputControlListenerDevice = device
+        outputControlListenerAddresses = device == nil ? [] : [AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)]
+        runningListeners = objects
+        if let generation = refresh.begin() { apply(snapshot, generation: generation) }
+        return (outputControlListenerDevice, runningListeners)
+    }
 
     // MARK: - Lifecycle
 
@@ -330,14 +379,13 @@ final class AppVolumeMixer: ObservableObject {
         removeOutputControlListeners()
         let selectors = Self.outputVolumeSelectors + [kAudioDevicePropertyMute]
         for selector in selectors {
-            var address = AudioObjectPropertyAddress(mSelector: selector,
+            let address = AudioObjectPropertyAddress(mSelector: selector,
                                                      mScope: kAudioObjectPropertyScopeOutput,
                                                      mElement: kAudioObjectPropertyElementMain)
-            guard AudioObjectHasProperty(device, &address) else { continue }
-            if AudioObjectAddPropertyListener(device,
-                                              &address,
-                                              Self.outputControlListenerCallback,
-                                              listenerClient) == noErr {
+            guard listeners.hasProperty(device, address) else { continue }
+            if listeners.add(device, address,
+                             Self.outputControlListenerCallback,
+                             listenerClient) == noErr {
                 outputControlListenerAddresses.append(address)
             }
         }
@@ -348,11 +396,11 @@ final class AppVolumeMixer: ObservableObject {
 
     private func removeOutputControlListeners(deviceIsGone: Bool = false) {
         if let device = outputControlListenerDevice, !deviceIsGone {
-            for var address in outputControlListenerAddresses {
-                AudioObjectRemovePropertyListener(device,
-                                                  &address,
-                                                  Self.outputControlListenerCallback,
-                                                  listenerClient)
+            for address in outputControlListenerAddresses {
+                _ = listeners.remove(device,
+                                     address,
+                                     Self.outputControlListenerCallback,
+                                     listenerClient)
             }
         }
         outputControlListenerDevice = nil
@@ -390,8 +438,8 @@ final class AppVolumeMixer: ObservableObject {
 
     private func subscribeToRunningChanges(of object: AudioObjectID) {
         guard !runningListeners.contains(object) else { return }
-        var address = MixerRoutingSupport.processObjectListenerAddress
-        if AudioObjectAddPropertyListener(object, &address, Self.listenerCallback, listenerClient) == noErr {
+        let address = MixerRoutingSupport.processObjectListenerAddress
+        if listeners.add(object, address, Self.listenerCallback, listenerClient) == noErr {
             runningListeners.insert(object)
         }
     }
@@ -404,8 +452,8 @@ final class AppVolumeMixer: ObservableObject {
     private func pruneRunningListeners(keeping current: Set<AudioObjectID>, missingAreGone: Bool = false) {
         for object in runningListeners where !current.contains(object) {
             if !missingAreGone {
-                var address = MixerRoutingSupport.processObjectListenerAddress
-                AudioObjectRemovePropertyListener(object, &address, Self.listenerCallback, listenerClient)
+                _ = listeners.remove(object, MixerRoutingSupport.processObjectListenerAddress,
+                                     Self.listenerCallback, listenerClient)
             }
             runningListeners.remove(object)
         }
@@ -826,7 +874,7 @@ final class AppVolumeMixer: ObservableObject {
         guard refresh.finish(generation) else { return }
         var refreshAgain = refresh.takeRepeatRequest()
         guard listenerInstalled else { return }
-        defer { if refreshAgain { refreshApps() } }
+        defer { if refreshAgain { (listeners.followUpRefresh ?? refreshApps)() } }
 
         if (snapshot.defaultUID != currentOutputDeviceUID
             || snapshot.systemSoundUID != currentSystemSoundOutputDeviceUID),

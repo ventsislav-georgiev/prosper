@@ -572,3 +572,111 @@ final class MixerRoutingTests: XCTestCase {
         XCTAssertEqual(result.attempts, 2)
     }
 }
+
+/// #1031: one apply pass with a built snapshot and a recording fake for the
+/// three listener calls (has property, add, remove). No CoreAudio call is made.
+@MainActor
+final class MixerApplySeamTests: XCTestCase {
+    private final class Recorder {
+        var log: [String] = []
+        var followUps = 0
+
+        var calls: MixerListenerCalls {
+            MixerListenerCalls(
+                hasProperty: { [self] object, _ in log.append("has \(object)"); return true },
+                add: { [self] object, _, _, _ in log.append("add \(object)"); return noErr },
+                remove: { [self] object, _, _, _ in log.append("remove \(object)"); return noErr },
+                followUpRefresh: { [self] in followUps += 1 })
+        }
+
+        var removes: [String] { log.filter { $0.hasPrefix("remove") } }
+        var adds: [String] { log.filter { $0.hasPrefix("add") } }
+    }
+
+    private func row(_ object: AudioObjectID) -> MixerOutputDevice {
+        MixerOutputDevice(id: "dev\(object)", uid: "dev\(object)", name: "Fake \(object)",
+                          isDefault: false, isHeadphones: false,
+                          canBeDefaultOutput: true, canBeDefaultSystemOutput: true,
+                          audioObjectID: object)
+    }
+
+    private func snapshot(rows: [MixerOutputDevice] = [], deviceIDs: [AudioObjectID] = [],
+                          defaultDevice: AudioObjectID? = nil,
+                          apps: [MixerApp]? = nil,
+                          processObjects: [AudioObjectID] = []) -> RefreshSnapshot {
+        RefreshSnapshot(defaultUID: nil, systemSoundUID: nil, outputDevices: rows,
+                        deviceIDs: deviceIDs, defaultDeviceID: defaultDevice,
+                        systemOutputVolume: nil, systemOutputMuted: nil,
+                        apps: apps, processObjects: processObjects)
+    }
+
+    /// Listened device 42, new default device 99: a device pass.
+    private func devicePass(rows: [MixerOutputDevice], deviceIDs: [AudioObjectID])
+        -> (recorder: Recorder, device: AudioObjectID?) {
+        let recorder = Recorder()
+        let mixer = AppVolumeMixer(listeners: recorder.calls)
+        let after = mixer.applyPassForTests(
+            snapshot(rows: rows, deviceIDs: deviceIDs, defaultDevice: 99),
+            listeningToDevice: 42, listeningToProcessObjects: [])
+        return (recorder, after.device)
+    }
+
+    private func processPass(listened: Set<AudioObjectID>, raw: [AudioObjectID])
+        -> (recorder: Recorder, objects: Set<AudioObjectID>) {
+        let recorder = Recorder()
+        let mixer = AppVolumeMixer(listeners: recorder.calls)
+        let after = mixer.applyPassForTests(snapshot(apps: [], processObjects: raw),
+                                            listeningToDevice: nil,
+                                            listeningToProcessObjects: listened)
+        return (recorder, after.processObjects)
+    }
+
+    func testDeviceMissingFromTheRawListIsForgottenWithNoRemove() {
+        let pass = devicePass(rows: [row(7)], deviceIDs: [7, 99])
+        XCTAssertEqual(pass.recorder.removes, [])
+        XCTAssertTrue(pass.recorder.adds.contains("add 99"))
+        XCTAssertEqual(pass.device, 99)
+    }
+
+    func testDeviceListedButFilteredOutOfTheRowsGetsARealRemoveBeforeTheNewSubscription() {
+        let pass = devicePass(rows: [row(7)], deviceIDs: [42, 7, 99])
+        XCTAssertEqual(pass.recorder.removes, ["remove 42"])
+        let remove = pass.recorder.log.firstIndex(of: "remove 42")
+        let add = pass.recorder.log.firstIndex(of: "add 99")
+        XCTAssertTrue(remove != nil && add != nil && remove! < add!)
+        XCTAssertEqual(pass.device, 99)
+    }
+
+    func testEmptyRawDeviceListForgetsNothingAndStillRemoves() {
+        let pass = devicePass(rows: [row(7)], deviceIDs: [])
+        XCTAssertEqual(pass.recorder.removes, ["remove 42"])
+        XCTAssertTrue(pass.recorder.adds.contains("add 99"))
+        XCTAssertEqual(pass.device, 99)
+    }
+
+    func testProcessObjectMissingFromTheRawListIsForgottenWithNoRemove() {
+        let pass = processPass(listened: [5], raw: [6])
+        XCTAssertEqual(pass.recorder.log, ["add 6"])
+        XCTAssertEqual(pass.objects, [6])
+    }
+
+    func testProcessObjectListedButFilteredOutOfTheRowsKeepsItsListenerUntouched() {
+        // The rows are empty, the raw list still holds 5: no remove, and no
+        // second subscription for 5 either.
+        let pass = processPass(listened: [5], raw: [5, 6])
+        XCTAssertEqual(pass.recorder.log, ["add 6"])
+        XCTAssertEqual(pass.objects, [5, 6])
+    }
+
+    func testEmptyRawProcessListForgetsNothingAndStillRemoves() {
+        let pass = processPass(listened: [5], raw: [])
+        XCTAssertEqual(pass.recorder.log, ["remove 5"])
+        XCTAssertEqual(pass.objects, [])
+        XCTAssertEqual(pass.recorder.followUps, 0)
+    }
+
+    func testANewSubscriptionAsksForOneFollowUpRefreshThroughTheSeam() {
+        let pass = processPass(listened: [5], raw: [5, 6])
+        XCTAssertEqual(pass.recorder.followUps, 1)
+    }
+}
