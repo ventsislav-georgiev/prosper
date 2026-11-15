@@ -210,6 +210,11 @@ final class AppVolumeMixer: ObservableObject {
                            listeningToDevice device: AudioObjectID?,
                            listeningToProcessObjects objects: Set<AudioObjectID>)
         -> (device: AudioObjectID?, processObjects: Set<AudioObjectID>) {
+        // A snapshot with apps reaches reconcileEngines (real process taps) and a nil
+        // followUpRefresh runs a real refreshApps(): refuse both, records unchanged.
+        guard snapshot.apps?.isEmpty ?? true, listeners.followUpRefresh != nil else {
+            return (device, objects)
+        }
         listenerInstalled = true
         outputControlListenerDevice = device
         outputControlListenerAddresses = device == nil ? [] : [AudioObjectPropertyAddress(

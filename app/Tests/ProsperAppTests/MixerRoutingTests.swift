@@ -675,6 +675,38 @@ final class MixerApplySeamTests: XCTestCase {
         XCTAssertEqual(pass.recorder.followUps, 0)
     }
 
+    /// R1031-q1: a snapshot with an app is refused. The app is inert (no audio
+    /// object, unity, no route) so even without the guard no tap would be built.
+    func testPassWithAnAppIsRefusedAndTouchesNothing() {
+        let recorder = Recorder()
+        let mixer = AppVolumeMixer(listeners: recorder.calls)
+        let fake = MixerApp(id: "fake", persistenceID: nil, ownerPid: 1, name: "Fake",
+                            audioObjects: [], isPlaying: false, volume: 1)
+        let after = mixer.applyPassForTests(
+            snapshot(defaultDevice: 99, apps: [fake]),
+            listeningToDevice: 42, listeningToProcessObjects: [5])
+        XCTAssertEqual(recorder.log, [])
+        XCTAssertEqual(recorder.followUps, 0)
+        XCTAssertEqual(after.device, 42)
+        XCTAssertEqual(after.processObjects, [5])
+        XCTAssertTrue(mixer.apps.isEmpty)
+    }
+
+    /// R1031-q1: a nil followUpRefresh is refused. A device pass with no process
+    /// object asks for no follow-up, so even without the guard no real refresh runs.
+    func testPassWithNoFollowUpRefreshIsRefusedAndTouchesNothing() {
+        let recorder = Recorder()
+        var calls = recorder.calls
+        calls.followUpRefresh = nil
+        let mixer = AppVolumeMixer(listeners: calls)
+        let after = mixer.applyPassForTests(
+            snapshot(rows: [row(7)], deviceIDs: [42, 7, 99], defaultDevice: 99),
+            listeningToDevice: 42, listeningToProcessObjects: [])
+        XCTAssertEqual(recorder.log, [])
+        XCTAssertEqual(after.device, 42)
+        XCTAssertEqual(after.processObjects, [])
+    }
+
     func testANewSubscriptionAsksForOneFollowUpRefreshThroughTheSeam() {
         let pass = processPass(listened: [5], raw: [5, 6])
         XCTAssertEqual(pass.recorder.followUps, 1)
