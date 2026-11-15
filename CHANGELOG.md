@@ -1122,6 +1122,8 @@ tag from the now-released section and put it on the new top draft.
 - Two extension menu bar icons whose ids differed only by a space, a slash, a colon or another
   unusual character (for example "a b" and "a_b") no longer share one saved menu bar position; icons
   with plain ids of up to 256 characters keep their saved position (#980)
+- The sheet that asks before an extension changes your config now names the extension by its title,
+  with its full id (wrapped, selectable) under it (#1235)
 
 ## v2.174.0
 

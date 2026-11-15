@@ -156,11 +156,17 @@ struct ManagedConfigConsentView: View {
                 .truncationMode(.middle)
                 .help(model.title)
             if let id = model.idLine {
+                // N1235-a: the line that says WHO asks is drawn whole: an owner id is at most 128 characters with no
+                // space (ManagedConfig.prepare refuses others), so it wraps by character over two lines at every scale;
+                // three at most, cut in the middle only past that. Selectable, the whole id as help.
                 Text(verbatim: id)
                     .font(Neon.font(11, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(3)
                     .truncationMode(.middle)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .help(id)
             }
             Text(verbatim: model.lead)
                 .font(Neon.font(12))

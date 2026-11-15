@@ -238,8 +238,10 @@ final class ManagedConfigProvider: @unchecked Sendable {
 
 extension LoadedExtension {
     /// The owner every managed piece of this extension carries (spec 2.7): its id, manifest version,
-    /// its `name` as the `kitconfig:` slug, its dir as the `ext:` root.
+    /// its `name` as the `kitconfig:` slug, its dir as the `ext:` root, its `title` as the consent sheet's display name
+    /// (#1235: outside data, cleaned where the sheet shows it, the id always under it).
     var managedConfigOwner: ManagedConfigOwner {
-        ManagedConfigOwner(id: id, version: manifest.extension.version, kitSlug: manifest.extension.name, extensionDir: directory)
+        ManagedConfigOwner(id: id, version: manifest.extension.version, kitSlug: manifest.extension.name, extensionDir: directory,
+                           displayName: manifest.extension.title)
     }
 }
