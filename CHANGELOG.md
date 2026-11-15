@@ -1151,6 +1151,8 @@ tag from the now-released section and put it on the new top draft.
 - Extensions: installing one whose id differs only by letter case from an installed one is refused
   and no longer replaces it; an id that starts with a dot is refused too. Nothing on disk changes in
   either case (#1246)
+- Installing or publishing an extension no longer hangs when tar prints a very large amount of error
+  output; a tar failure now shows one plain message and tar's own details go to the log (#1182)
 
 ## v2.174.0
 

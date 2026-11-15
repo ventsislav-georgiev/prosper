@@ -313,8 +313,8 @@ enum RemoteInstaller {
     /// A name that is not valid UTF-8 goes to `notUTF8` (shown with U+FFFD, called synchronously on the
     /// caller's thread) and is left out; without it, such a name throws "cannot stat" as before.
     /// `names` lists the raw names (readNames; a row adds names APFS cannot hold, #1168).
-    private static func entries(_ dir: URL, notUTF8: ((String) -> Void)? = nil,
-                                names: (URL) throws -> [[UInt8]] = RemoteInstaller.readNames) throws -> [(name: String, type: mode_t)] {
+    static func entries(_ dir: URL, notUTF8: ((String) -> Void)? = nil,
+                        names: (URL) throws -> [[UInt8]] = RemoteInstaller.readNames) throws -> [(name: String, type: mode_t)] {
         var out: [(name: String, type: mode_t)] = []
         for bytes in try names(dir) {
             let (name, exact) = listedName(bytes)
@@ -322,7 +322,7 @@ enum RemoteInstaller {
             if !exact, let notUTF8 { notUTF8(name); continue }
             var st = stat()
             guard lstat(dir.appendingPathComponent(name).path, &st) == 0 else {
-                throw InstallError.extractFailed("cannot stat \(name)")
+                throw InstallError.extractFailed("cannot stat \(shownName(name))")
             }
             out.append((name, st.st_mode & S_IFMT))
         }
@@ -332,7 +332,7 @@ enum RemoteInstaller {
     /// The names in `dir` as readdir lists them, as bytes ("." and ".." included). Nothing is opened but the folder.
     static func readNames(_ dir: URL) throws -> [[UInt8]] {
         guard let d = opendir(dir.path) else {
-            throw InstallError.extractFailed("cannot read \(dir.lastPathComponent)")
+            throw InstallError.extractFailed("cannot read \(shownName(dir.lastPathComponent))")
         }
         defer { closedir(d) }
         var out: [[UInt8]] = []
@@ -551,69 +551,70 @@ enum RemoteInstaller {
 
     /// Run `tar` and return its raw stdout bytes (binary-safe, for packaging).
     private static func runTarData(_ args: [String]) throws -> Data {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        process.arguments = args
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        do {
-            try process.run()
-        } catch {
-            throw InstallError.extractFailed(error.localizedDescription)
-        }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-                ?? "tar exited \(process.terminationStatus)"
-            throw InstallError.extractFailed(msg.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        return data
+        let r = try runDraining(args, captureOut: true)
+        guard r.status == 0 else { throw tarFailed(args, r) }
+        return r.out
     }
 
     /// Run `tar` and return its stdout (used for listing entries).
     private static func runTarCapture(_ args: [String]) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        process.arguments = args
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        do {
-            try process.run()
-        } catch {
-            throw InstallError.extractFailed(error.localizedDescription)
-        }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-                ?? "tar exited \(process.terminationStatus)"
-            throw InstallError.extractFailed(msg.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
+        let r = try runDraining(args, captureOut: true)
+        guard r.status == 0 else { throw tarFailed(args, r) }
         // Lossy, never "": one non-UTF-8 name used to blank the whole listing and
         // let every entry past assertSafeArchive.
-        return String(decoding: data, as: UTF8.self)
+        return String(decoding: r.out, as: UTF8.self)
     }
 
     private static func runTar(_ args: [String]) throws {
+        let r = try runDraining(args, captureOut: false)
+        guard r.status == 0 else { throw tarFailed(args, r) }
+    }
+
+    /// R1182-h: runs `path` with stderr read to its end on another thread while this one reads stdout, so a child
+    /// writing more than a pipe holds to stderr never blocks; only stderr's first 4096 bytes are kept.
+    /// The form of DchCommand.runCapturingBoth (R988c-1), repeated here because that one's defaults name dch.
+    /// `captureOut` false leaves stdout where it was (runTar's shape) and `out` empty. Throws only when the
+    /// program cannot start, as the three helpers did; the caller judges `status`. Runs on the caller's thread.
+    static func runDraining(_ args: [String], path: String = "/usr/bin/tar", captureOut: Bool) throws
+        -> (out: Data, err: String, status: Int32) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
-        let err = Pipe()
-        process.standardError = err
+        let out = Pipe(), errPipe = Pipe()
+        if captureOut { process.standardOutput = out }
+        process.standardError = errPipe
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             throw InstallError.extractFailed(error.localizedDescription)
         }
-        if process.terminationStatus != 0 {
-            let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "tar exited \(process.terminationStatus)"
-            throw InstallError.extractFailed(msg.trimmingCharacters(in: .whitespacesAndNewlines))
+        // Written by the reader only, read only after group.wait(): the group orders the two.
+        final class Err: @unchecked Sendable { var kept = Data(), cut = false }
+        let err = Err(), group = DispatchGroup(), errRead = errPipe.fileHandleForReading
+        // On a global-queue thread: read to the end, keep the first 4096 bytes, drop the rest.
+        DispatchQueue.global().async(group: group) {
+            while case let chunk = errRead.availableData, !chunk.isEmpty {
+                let room = 4096 - err.kept.count
+                err.kept.append(chunk.prefix(room))
+                err.cut = err.cut || chunk.count > room
+            }
         }
+        let data = captureOut ? out.fileHandleForReading.readDataToEndOfFile() : Data()
+        group.wait()
+        process.waitUntilExit()
+        // A cut can end inside a UTF-8 sequence: decode what is valid (U+FFFD for the cut end), never "" for all of it.
+        let text = String(data: err.kept, encoding: .utf8) ?? (err.cut ? String(decoding: err.kept, as: UTF8.self) : "")
+        return (data, text, process.terminationStatus)
+    }
+
+    /// R1182-f: what a person reads when tar fails; tar's own text can quote entry names over many lines.
+    static let tarFailedText = "tar could not process the archive; its message is in the log"
+
+    /// The error for a failed tar run: a fixed sentence; tar's first line, cut to 120, goes to the log only, private
+    /// (DchOwnerCheck.logCLI's form).
+    static func tarFailed(_ args: [String], _ r: (out: Data, err: String, status: Int32)) -> InstallError {
+        let line = r.err.split(whereSeparator: \.isNewline).first.map { String($0.prefix(120)) } ?? "no message"
+        log.error("tar \(args.first ?? "", privacy: .public) exited \(r.status, privacy: .public): \(line, privacy: .private)")
+        return .extractFailed(tarFailedText)
     }
 }
