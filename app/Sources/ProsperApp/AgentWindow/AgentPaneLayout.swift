@@ -525,6 +525,8 @@ enum PaneRepair: Equatable {
     /// The zoom is a leaf but not the focused one (keys would go to a hidden pane).
     case zoomNotFocused
     case corruptBlob, noLayouts, tooManyLayouts, duplicateLayoutID, danglingActive, mru
+    /// #901 B3 step 2 (R901-s1-a): a stored layout name that `PaneLayoutStore.cleanName` changes.
+    case layoutName
 }
 
 extension PaneLayout {
@@ -797,24 +799,41 @@ struct PaneLayoutStore: Hashable {
     /// #901 B3 step 1: the longest layout name, in characters (8.1 is silent; a Layouts row and the band show it).
     static let maxNameLength = 64
 
-    /// 8.1 Rename: a name is outside data. Whitespace runs (line breaks included) become one space, control and format
-    /// characters go (a ZWJ inside an emoji stays), the ends are trimmed, at most `maxNameLength` characters; empty is
-    /// nil (automatic). Bounded work on any input: at most 16 scalars per kept character are read.
+    /// 8.1 Rename: a name is outside data. Whitespace runs (line breaks included) become one space; every scalar
+    /// `OutsideText.isUnseen` refuses goes (fillers such as U+3164 and U+2800 too), except a ZWJ or VS16 inside an
+    /// emoji (`keepsJoiner`, Theme.cleanLabel's rule); combining marks are capped per base (`OutsideText.capMarks`); the
+    /// ends are trimmed, at most `maxNameLength` characters; empty is nil (automatic). Bounded work on any input: at
+    /// most 16 scalars per kept character are read. decode() cleans every stored name with it (R901-s1-a).
     static func cleanName(_ raw: String?) -> String? {
         guard let raw else { return nil }
         var scalars = String.UnicodeScalarView(), space = false
-        for s in raw.unicodeScalars.prefix(maxNameLength * 16) {
+        var it = raw.unicodeScalars.prefix(maxNameLength * 16).makeIterator()
+        var next = it.next()
+        while let s = next {
+            next = it.next()
             if s.properties.isWhitespace { space = !scalars.isEmpty; continue }
-            switch s.properties.generalCategory {
-            case .control: continue
-            case .format where s.value != 0x200D: continue
-            default: break
-            }
+            guard keepsJoiner(s, after: space ? " " : scalars.last, before: next) else { continue }
             if space { scalars.append(" "); space = false }
             scalars.append(s)
         }
-        let name = String(String(scalars).prefix(maxNameLength)).trimmingCharacters(in: .whitespaces)
+        // capped after the drop, as OutsideText.shown does: a dropped scalar between two groups of marks joins them
+        let name = String(OutsideText.capMarks(String(scalars)).prefix(maxNameLength)).trimmingCharacters(in: .whitespaces)
         return name.isEmpty ? nil : name
+    }
+
+    /// R901-s1-q1: Theme.keeps (private there) in the same form: a ZWJ only between two emoji, a VS16 only where it
+    /// changes the look; every other scalar kept unless `OutsideText.isUnseen`. Two names never differ by an unseen joiner.
+    private static func keepsJoiner(_ c: Unicode.Scalar, after prev: Unicode.Scalar?, before next: Unicode.Scalar?) -> Bool {
+        func pictograph(_ s: Unicode.Scalar?) -> Bool { s.map { $0.properties.isEmoji && !$0.isASCII } ?? false }
+        switch c {
+        case "\u{200D}":
+            return (pictograph(prev) || prev == "\u{FE0F}") && pictograph(next)
+        case "\u{FE0F}":
+            guard let p = prev, p.properties.isEmoji else { return false }
+            return p.isASCII ? next == "\u{20E3}" : !p.properties.isEmojiPresentation
+        default:
+            return !OutsideText.isUnseen(c)
+        }
     }
 
     /// 8.1: a nil name is automatic: the pane titles joined with " + ", middle-truncated to `maxNameLength`.
@@ -903,6 +922,12 @@ struct PaneLayoutStore: Hashable {
             let fixed = decoded.repaired()
             var l = fixed.layout
             repairs += fixed.repairs
+            // R901-s1-a: a stored name is outside data (a hand-edited or older blob): cleaned like a Rename.
+            let name = cleanName(l.name)
+            if name != l.name {
+                l.name = name
+                repairs.append(.layoutName)
+            }
             if !ids.insert(l.id).inserted {
                 l = PaneLayout(id: UUID(), name: l.name, tree: l.tree, focused: l.focused, zoomed: l.zoomed)
                 ids.insert(l.id)

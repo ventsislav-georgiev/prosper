@@ -237,6 +237,8 @@ final class AgentWindowModel: ObservableObject {
     private(set) var layouts: PaneLayoutStore?
     /// Counts blob writes (tests: a change writes once, a publish that changes nothing writes nothing).
     private(set) var layoutWrites = 0
+    /// #901 B3 step 2 (decision c): the pane bind(nil) emptied in memory and the target it had; nil while the island is on.
+    private var offEmptied: (layout: UUID, pane: UUID, target: PaneTarget?)?
     /// R899-2: the browse rule's refusal of the last pick (select() kept the layout as it was); the next pick that
     /// lands drops it. The pane notice line (3.3) draws its `notice`.
     @Published private(set) var paneRefusal: PaneRefusal?
@@ -808,6 +810,51 @@ final class AgentWindowModel: ObservableObject {
         return nil
     }
 
+    /// #901 B3 step 2 (8.1, 11.2): a switch to layout `id` (step 3 routes the keys, step 4 the rows). Refused as a value
+    /// before anything is read or written with the split gate off (.layoutsOff); .noSuchLayout with no store loaded, the
+    /// window closed or an id the store does not hold. The active layout: nothing changes, nothing is written. Else the
+    /// store from `activate` (the MRU updated) is written once, explicitly, so a switch while the island is off is saved
+    /// and bind(store)'s re-adopt keeps it; then the saved layout is adopted with its focus and zoom: syncRuntimes stops
+    /// every old runtime before a new one is made, follow() starts the focused pane first; adopt's autosave finds the
+    /// store equal. Only the window's pane runtimes: no session is started, resumed, revived or attached (8.1 :619-621).
+    @discardableResult
+    func switchLayout(_ id: UUID) -> PaneRefusal? {
+        guard AgentPaneLayout.splitsEnabled else { return .layoutsOff }
+        guard !closed, layouts != nil else { return .noSuchLayout }
+        guard id != layout.id else { return nil }
+        dragEnded()   // R900-5a-1: the drag's save lands before the store is read
+        guard let s = layouts, case let .success(out) = s.activate(id), let l = out.activeLayout else { return .noSuchLayout }
+        autosave(out)
+        adopt(l)
+        return nil
+    }
+
+    /// 8.1: the layout numbered `n`, 1 to 9 in the list's order. `n` is outside data (a key): compared, never trapped on;
+    /// a number with no layout is a no-op (.noSuchLayout): nothing made, switched or written.
+    @discardableResult
+    func switchLayout(number n: Int) -> PaneRefusal? {
+        guard AgentPaneLayout.splitsEnabled else { return .layoutsOff }
+        guard !closed, let s = layouts, n >= 1, n <= s.layouts.count else { return .noSuchLayout }
+        return switchLayout(s.layouts[n - 1].id)
+    }
+
+    /// 8.1 ⌃Tab: the MRU pair, the layout active before this one. One layout: a no-op (.noSuchLayout), nothing written.
+    @discardableResult
+    func previousLayout() -> PaneRefusal? {
+        guard AgentPaneLayout.splitsEnabled else { return .layoutsOff }
+        guard !closed, let p = layouts?.previous else { return .noSuchLayout }
+        return switchLayout(p)
+    }
+
+    /// #901 B3 step 2 (decision c): with the island off, the active layout as the person left it: the pane bind(nil)
+    /// emptied (memory only, not their change) is saved with its target. nil, so skipped as before: the gate off, or
+    /// nothing recorded, or a target the tree refuses back.
+    private func islandOffLayout() -> PaneLayout? {
+        guard AgentPaneLayout.splitsEnabled, let e = offEmptied else { return nil }
+        guard e.layout == layout.id, layout.panes.contains(where: { $0.id == e.pane && $0.target == nil }) else { return layout }
+        return try? layout.replace(e.pane, target: e.target).get()
+    }
+
     /// 8.1: a change of the active layout (or `next`, a whole store) is written once; a call that changes nothing
     /// writes nothing. Runs on the main actor (the layout's didSet, deleteLayout). Causes of the early returns: no
     /// store loaded (`layoutDefaults` nil), the window closed; for a layout change also the island off (`store` nil:
@@ -817,7 +864,7 @@ final class AgentWindowModel: ObservableObject {
     /// and B3's chained verbs are where coalescing pays.
     private func autosave(_ next: PaneLayoutStore? = nil) {
         guard let d = layoutDefaults, !closed, let s = layouts else { return }
-        guard let n = next ?? (store == nil ? nil : s.storing(layout)), n != s else { return }
+        guard let n = next ?? (store == nil ? islandOffLayout().flatMap(s.storing) : s.storing(layout)), n != s else { return }
         layouts = n
         layoutWrites += 1
         Preferences.setAgentWindowLayouts(n, in: d)
@@ -841,12 +888,17 @@ final class AgentWindowModel: ObservableObject {
             }
             claimed = [:]
             sections = []
+            // #901 B3 step 2 (decision c): the pane about to be emptied and its target, once per island-off spell.
+            if offEmptied == nil, AgentPaneLayout.splitsEnabled {
+                offEmptied = (layout.id, layout.focused, layout.panes.first { $0.id == layout.focused }?.target)
+            }
             select(nil, manual: false)
             return
         }
         // R1194-2: the island back: the saved layout again (bind(nil) emptied its pane in memory only), before the first
         // refresh, so no first-row pick lands over the saved target and the autosave finds the store equal (no write).
         if let saved = layouts?.activeLayout, saved != layout { adopt(saved) }
+        offEmptied = nil
         // @Published sends on willSet with the new value, so the values are used as given.
         subscription = store.$sessions.combineLatest(store.$history, store.$sort, store.$sidekickPattern)
             .combineLatest(store.$details, store.$actions)
