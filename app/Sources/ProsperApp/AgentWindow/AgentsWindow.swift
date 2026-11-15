@@ -927,7 +927,9 @@ struct AgentDetailView: View {
             titled(row.title) {
                 AgentHistoryDetail(row: row, record: r, store: model.store, refusal: model.refusalText(row.id),
                                    act: { model.act($0, r) })
-                    .overlay(alignment: .top) { VStack(spacing: 0) { paneRefusalLine; confirmStrip } }   // #829 G8: Remove asks, over the pane's top
+                    // #829 G8: Remove asks, over the pane's top. #900 6b2d (fixed slots): one slot, the question wins it, so
+                    // the strip never moves; the refusal line takes it once the question is gone.
+                    .overlay(alignment: .top) { VStack(spacing: 0) { if model.confirming == nil { paneRefusalLine }; confirmStrip } }
             }
         } else if let title = AgentPanePlaceholder.title(model.content) {
             // 4.2 (QA 956 R1217-a): a pane that holds a target whose session is gone says so by name; the list (and Pick

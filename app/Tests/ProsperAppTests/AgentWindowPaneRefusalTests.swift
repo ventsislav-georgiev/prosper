@@ -268,6 +268,301 @@ extension AgentWindowD1Tests {
         }
     }
 
+    // MARK: Step 6b2d, R900-6b2c-1: a focus change drops the refusal (spec 3.1 :224)
+
+    /// A refused split on `m` with no view: the model's own pane area `width` wide (700: two panes of 350 whose halves
+    /// are under 300; 400: one pane of 400, halves of 200), so `.noRoom`.
+    @MainActor
+    func paneRefusalRefuse(_ m: AgentWindowModel, width: CGFloat = 700, line: UInt = #line) {
+        m.paneArea = CGRect(x: 0, y: 0, width: width, height: 600)
+        XCTAssertTrue(m.perform(.split(.columns)), "refused: swallowed", line: line)
+        XCTAssertEqual(m.paneRefusal, .noRoom, line: line)
+    }
+
+    /// Gate on, two Transcript panes at 1000 x 680: the refusal is drawn in the focused pane; a focusing click on the
+    /// other pane (a BUILT left mouse-down and up handed to an unshown window's sendEvent, the raise recorder installed
+    /// first) moves the focus, the model drops the refusal and the line is gone from the tree.
+    @MainActor
+    func testPaneRefusalFocusingClickDropsIt() throws {
+        let restoreModes = transcriptMode(["api", "web"])
+        defer { restoreModes() }
+        try withPaneMenu(true) {
+            let size = CGSize(width: 1000, height: 680)
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            let other = try XCTUnwrap(m.layout.order.last)
+            let text = try XCTUnwrap(PaneRefusal.noRoom.notice)
+            let restoreAX = AXTreeSupport.axOn()
+            defer { restoreAX() }
+            let (shown, host) = AXTreeSupport.hosted(AgentWindowRootView(model: m, scrolls: false), size)
+            defer { shown.contentView = nil; shown.close() }
+            _ = AXTreeSupport.poll(host) { $0.contains { $0.label.hasSuffix(", pane 2 of 2") } }
+            XCTAssertTrue(m.perform(.split(.columns)), "refused: swallowed")
+            XCTAssertEqual(m.paneRefusal, .noRoom)
+            paneRefusalOnlyIn(AXTreeSupport.poll(host) { $0.contains { $0.reads(text) } }, text, index: 1, of: 2)
+            let win = AgentsNSWindow(contentRect: CGRect(x: 0, y: 0, width: 1600, height: 900), styleMask: [.titled],
+                                     backing: .buffered, defer: false)
+            win.isReleasedWhenClosed = false
+            defer { win.close() }
+            win.model = m
+            var raised = 0
+            win.raise = { _ in raised += 1 }   // the recorder first: the real call never runs
+            let p = try paneFocusCentre(m, other, in: win.contentLayoutRect.size)
+            win.sendEvent(try paneFocusMouse(.leftMouseDown, p, win))
+            win.sendEvent(try paneFocusMouse(.leftMouseUp, p, win))
+            XCTAssertEqual(m.layout.focused, other, "the click focused the other pane")
+            XCTAssertEqual(raised, 1, "asked through the recorder only")
+            XCTAssertTrue(m.paneRefusal == nil, "a focus change drops the refusal")
+            let gone = AXTreeSupport.poll(host) { !$0.contains { $0.reads(text) } }
+            XCTAssertFalse(gone.contains { $0.reads(text) }, "the line is gone with it")
+            XCTAssertFalse(win.isVisible || shown.isVisible, "never shown")
+        }
+    }
+
+    /// Gate on, model calls (no view, no event): Close Pane (the focused one: the sibling takes the focus; the other one:
+    /// the panes change, the focus stays), Pick Another on the other pane and a layout switch each drop the refusal;
+    /// Pick Another and focusPane on the pane already focused change neither the focus nor the panes and keep it.
+    @MainActor
+    func testPaneRefusalCloseAndPickAnotherAndLayoutSwitchDropIt() throws {
+        let cases: [(why: String, drops: Bool, act: @MainActor (AgentWindowModel, UUID) -> Void)] = [
+            ("Close Pane, the focused one", true, { m, _ in m.closePane(m.layout.focused) }),
+            ("Close Pane, the other one", true, { m, other in m.closePane(other) }),
+            ("Pick Another, the other pane", true, { m, other in m.pickAnother(other) }),
+            ("a layout switch", true, { m, _ in m.adopt(self.paneLayout([self.paneTarget("api")])) }),
+            ("Pick Another, the focused pane", false, { m, _ in m.pickAnother(m.layout.focused) }),
+            ("focusPane, the focused pane", false, { m, _ in m.focusPane(m.layout.focused) }),
+        ]
+        try withPaneMenu(true) {
+            for c in cases {
+                let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+                m.setVisible(true)
+                defer { m.close() }
+                m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+                let other = try XCTUnwrap(m.layout.order.last)
+                paneRefusalRefuse(m)
+                c.act(m, other)
+                XCTAssertEqual(m.paneRefusal, c.drops ? nil : PaneRefusal.noRoom, c.why)
+            }
+        }
+    }
+
+    /// Gate on: a divider drag (BUILT down, move and up handed to an unshown window's sendEvent, the recorder first)
+    /// changes the ratios only, neither the focus nor the panes; spec 3.1 moves the focus on a click, the keys, a split,
+    /// a close or a layout switch, never on a drag: the refusal is kept.
+    @MainActor
+    func testPaneRefusalDividerDragKeepsIt() throws {
+        try withPaneMenu(true) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            paneRefusalRefuse(m)
+            let win = AgentsNSWindow(contentRect: CGRect(x: 0, y: 0, width: 1600, height: 900), styleMask: [.titled],
+                                     backing: .buffered, defer: false)
+            win.isReleasedWhenClosed = false
+            defer { win.close() }
+            win.model = m
+            var raised = 0
+            win.raise = { _ in raised += 1 }   // the recorder first: the real call never runs
+            let a = try XCTUnwrap(m.paneAreaFrame(in: win.contentLayoutRect.size))
+            let line = try XCTUnwrap(m.dividers(in: a.size).first).line
+            let p = CGPoint(x: a.minX + line.midX, y: a.minY + 300)
+            let before = m.layout
+            win.sendEvent(try paneFocusMouse(.leftMouseDown, p, win))
+            win.sendEvent(try paneFocusMouse(.leftMouseDragged, CGPoint(x: p.x + 50, y: p.y), win))
+            win.sendEvent(try paneFocusMouse(.leftMouseUp, CGPoint(x: p.x + 50, y: p.y), win))
+            XCTAssertNotEqual(m.layout, before, "the drag moved the divider")
+            XCTAssertEqual(m.layout.focused, before.focused, "the focus stayed")
+            XCTAssertEqual(m.layout.order, before.order, "the panes stayed")
+            XCTAssertEqual(m.paneRefusal, .noRoom, "a drag keeps the refusal")
+            XCTAssertEqual(raised, 1, "the divider's down asked through the recorder only")
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// GATE OFF: a refusal left from before the gate went off. The same click (where the other pane is with the gate on)
+    /// focuses nothing (one pane shown) and asks nothing; Pick Another, Close Pane and a layout switch move the focus or
+    /// the panes and leave the value untouched (the clear is gate-on only: no write, no publish); nothing is drawn.
+    @MainActor
+    func testPaneRefusalGateOffFocusChangesLeaveTheValue() throws {
+        let restoreModes = transcriptMode(["api", "web"])
+        defer { restoreModes() }
+        let size = CGSize(width: 1600, height: 900)
+        let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+        m.setVisible(true)
+        defer { m.close() }
+        var p = CGPoint.zero, other = UUID()
+        try withPaneMenu(true) {
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            other = try XCTUnwrap(m.layout.order.last)
+            p = try paneFocusCentre(m, other, in: size)
+            paneRefusalRefuse(m)
+        }
+        try withPaneMenu(false) {
+            let focused = m.layout.focused
+            let win = AgentsNSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled],
+                                     backing: .buffered, defer: false)
+            win.isReleasedWhenClosed = false
+            defer { win.close() }
+            win.model = m
+            var raised = 0
+            win.raise = { _ in raised += 1 }
+            XCTAssertEqual(win.contentLayoutRect.size, size)
+            win.sendEvent(try paneFocusMouse(.leftMouseDown, p, win))
+            win.sendEvent(try paneFocusMouse(.leftMouseUp, p, win))
+            XCTAssertEqual(m.layout.focused, focused, "gate off: one pane shown, the click focuses nothing")
+            XCTAssertEqual(raised, 0, "gate off: never asked")
+            XCTAssertTrue(m.paneRefusal == .noRoom, "after the click: untouched")
+            m.pickAnother(other)
+            XCTAssertEqual(m.layout.focused, other, "Pick Another moved the focus")
+            XCTAssertTrue(m.paneRefusal == .noRoom, "after Pick Another: untouched")
+            m.closePane(focused)
+            XCTAssertEqual(m.layout.panes.count, 1, "Close Pane changed the panes")
+            XCTAssertTrue(m.paneRefusal == .noRoom, "after Close Pane: untouched")
+            m.adopt(paneLayout([paneTarget("api")]))
+            XCTAssertTrue(m.paneRefusal == .noRoom, "after a layout switch: untouched")
+            let title = try XCTUnwrap(m.row(live("api"))?.title)
+            let text = try XCTUnwrap(PaneRefusal.noRoom.notice)
+            let restoreAX = AXTreeSupport.axOn()
+            defer { restoreAX() }
+            let (shown, host) = AXTreeSupport.hosted(AgentWindowRootView(model: m, scrolls: false), CGSize(width: 1000, height: 680))
+            defer { shown.contentView = nil; shown.close() }
+            let tree = AXTreeSupport.poll(host) { t in t.contains { $0.reads(title) } }
+            XCTAssertTrue(tree.contains { $0.reads(title) }, "the tree was read")
+            XCTAssertFalse(tree.contains { $0.reads(text) }, "gate off: nothing drawn")
+            XCTAssertFalse(win.isVisible || shown.isVisible, "never shown")
+        }
+    }
+
+    // MARK: Step 6b2d, R900-6b2c-2: History, the 4.2 placeholder and Terminal mode; the History question's slot
+
+    /// Gate on, two panes at 1000 x 680, the focused (first) one a History record, a 4.2 placeholder (a session that is
+    /// not running) or a Terminal-mode session: a refused split's notice is drawn in that pane only (a top overlay), and
+    /// every pane part and band slot is where it was.
+    @MainActor
+    func testPaneRefusalIsDrawnInHistoryPlaceholderAndTerminalPanes() throws {
+        let restoreModes = transcriptMode(["web"])   // "api" opens in Terminal
+        defer { restoreModes() }
+        let h = record("h")
+        let cases: [(why: String, first: PaneTarget?)] = [
+            ("History", nil), ("4.2 placeholder", paneTarget("gone")), ("Terminal mode", paneTarget("api")),
+        ]
+        try withPaneMenu(true) {
+            let size = CGSize(width: 1000, height: 680)
+            let text = try XCTUnwrap(PaneRefusal.noRoom.notice)
+            for c in cases {
+                let m = windowModel(store([session("api", .idle), session("web", .idle)], history: [h]), layouts: layoutSuite())
+                m.setVisible(true)
+                defer { m.close() }
+                m.adopt(paneLayout([c.first, paneTarget("web")]))
+                if c.first == nil { m.select(.history(h.id)) }
+                XCTAssertEqual(m.layout.order.first, m.layout.focused, c.why)
+                let kind = m.selectedRow?.record != nil ? "History"
+                    : AgentPanePlaceholder.title(m.content) != nil ? "4.2 placeholder" : "Terminal mode"
+                XCTAssertEqual(kind, c.why, "the focused pane holds that content")
+                let panesBefore = paneSnapshot(m, size), bandBefore = bandSnapshot(m, size)
+                let restoreAX = AXTreeSupport.axOn()
+                defer { restoreAX() }
+                let (win, host) = AXTreeSupport.hosted(AgentWindowRootView(model: m, scrolls: false), size)
+                defer { win.contentView = nil; win.close() }
+                let before = AXTreeSupport.poll(host) { $0.contains { $0.label.hasSuffix(", pane 2 of 2") } }
+                XCTAssertFalse(before.contains { $0.reads(text) }, "\(c.why): nothing refused yet")
+                XCTAssertTrue(m.perform(.split(.columns)), "\(c.why): refused, swallowed")
+                XCTAssertEqual(m.paneRefusal, .noRoom, c.why)
+                let tree = AXTreeSupport.poll(host) { $0.contains { $0.reads(text) } }
+                paneRefusalOnlyIn(tree, text, index: 1, of: 2)
+                paneRefusalSame(panesBefore, paneSnapshot(m, size), "\(c.why): pane parts")
+                paneRefusalSame(bandBefore, bandSnapshot(m, size), "\(c.why): band slots")
+                XCTAssertFalse(win.isVisible, "never shown")
+            }
+        }
+    }
+
+    /// Gate on, two panes at 1000 x 680, the focused one a History record with its Remove question open (asked through
+    /// the model; only ever cancelled): a refused split leaves the strip at its frame and draws no refusal (the question
+    /// holds the slot); the question cancelled, the refusal is drawn in that pane's slot.
+    @MainActor
+    func testPaneRefusalHistoryQuestionKeepsItsSlot() throws {
+        let restoreModes = transcriptMode(["web"])
+        defer { restoreModes() }
+        try withPaneMenu(true) {
+            let size = CGSize(width: 1000, height: 680)
+            let h = record("h")
+            let st = store([session("web", .idle)], history: [h])
+            let m = windowModel(st, layouts: layoutSuite())
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(paneLayout([nil, paneTarget("web")]))
+            m.select(.history(h.id))
+            m.act(.remove, h)
+            XCTAssertEqual(m.confirming, AgentWindowConfirm(verb: .remove, key: h.id), "the question is open")
+            let question = AgentWindowControls.removeQuestion(h, in: st.history)
+            let text = try XCTUnwrap(PaneRefusal.noRoom.notice)
+            let restoreAX = AXTreeSupport.axOn()
+            defer { restoreAX() }
+            let (win, host) = AXTreeSupport.hosted(AgentWindowRootView(model: m, scrolls: false), size)
+            defer { win.contentView = nil; win.close() }
+            let before = AXTreeSupport.poll(host) { $0.contains { $0.reads(question) } }
+            let strip = try XCTUnwrap(before.first { $0.reads(question) }?.frame, "the strip is drawn")
+            XCTAssertTrue(m.perform(.split(.columns)), "refused: swallowed")
+            XCTAssertEqual(m.paneRefusal, .noRoom)
+            XCTAssertTrue(m.confirming != nil, "the question stays open")
+            let tree = AXTreeSupport.poll(host) { $0.contains { $0.reads(question) } }   // one pass pumps the run loop first
+            assertSame(tree.first { $0.reads(question) }?.frame, strip, "the strip did not move")
+            XCTAssertFalse(tree.contains { $0.reads(text) }, "the question holds the slot: no refusal drawn")
+            m.confirm(false)   // Cancel: runs nothing
+            XCTAssertTrue(m.confirming == nil, "the question is closed")
+            XCTAssertEqual(m.paneRefusal, .noRoom, "cancel keeps the refusal")
+            let after = AXTreeSupport.poll(host) { $0.contains { $0.reads(text) } }
+            XCTAssertFalse(after.contains { $0.reads(question) }, "the strip is gone")
+            paneRefusalOnlyIn(after, text, index: 1, of: 2)
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// GATE OFF: one History pane with its Remove question open and a refusal left from before the gate went off: the
+    /// strip's frame is its frame on a twin with no refusal, and no refusal text is drawn.
+    @MainActor
+    func testPaneRefusalGateOffHistoryStripIsWhereItWas() throws {
+        let size = CGSize(width: 1000, height: 680)
+        let h = record("h")
+        var models: [AgentWindowModel] = []
+        defer { models.forEach { $0.close() } }
+        try withPaneMenu(true) {
+            for refused in [true, false] {
+                let m = windowModel(store([session("web", .idle)], history: [h]), layouts: layoutSuite())
+                m.setVisible(true)
+                models.append(m)
+                m.select(.history(h.id))
+                m.act(.remove, h)
+                if refused { paneRefusalRefuse(m, width: 400) }
+                XCTAssertTrue(m.confirming != nil, "the question is open (refused \(refused))")
+            }
+        }
+        let m = try XCTUnwrap(models.first), twin = try XCTUnwrap(models.last)
+        XCTAssertTrue(twin.paneRefusal == nil, "the twin has no refusal")
+        let question = AgentWindowControls.removeQuestion(h, in: [h])
+        let text = try XCTUnwrap(PaneRefusal.noRoom.notice)
+        try withTreeGate(false) {
+            let restoreAX = AXTreeSupport.axOn()
+            defer { restoreAX() }
+            var frames: [CGRect] = []
+            for model in [m, twin] {
+                let (win, host) = AXTreeSupport.hosted(AgentWindowRootView(model: model, scrolls: false), size)
+                defer { win.contentView = nil; win.close() }
+                let tree = AXTreeSupport.poll(host) { $0.contains { $0.reads(question) } }
+                XCTAssertFalse(tree.contains { $0.reads(text) }, "gate off: nothing drawn")
+                frames.append(try XCTUnwrap(tree.first { $0.reads(question) }?.frame, "the strip is drawn"))
+                XCTAssertFalse(win.isVisible, "never shown")
+            }
+            XCTAssertEqual(frames.count, 2)
+            assertSame(frames.first, frames.last, "gate off: the strip where a model with no refusal has it")
+            XCTAssertTrue(m.paneRefusal == .noRoom, "the model's value is untouched")
+        }
+    }
+
     // MARK: Item 3, QA 1092's belt
 
     /// Every test file under app/Tests that turns the split gate on AND hands a window an event through sendEvent also
@@ -284,7 +579,10 @@ extension AgentWindowD1Tests {
             let s = try String(contentsOf: url, encoding: .utf8)
             read += 1
             raises[url.lastPathComponent] = s.contains(".raise =")
-            if s.contains("splitsEnabled = true") || s.contains("withPaneMenu(true"), s.contains(".sendEvent(") {
+            // 6b2d (QA r1107): every way a file turns the gate on, the helpers that take it as a parameter included.
+            let on = ["splitsEnabled = true", "withPaneMenu(true", "withTreeGate(true", "gate(true", "withSidebarRow(gate: true",
+                      "splitsOn()", "splitsEnabled = row.gate"]
+            if on.contains(where: { s.contains($0) }), s.contains(".sendEvent(") {
                 found.insert(url.lastPathComponent)
             }
         }

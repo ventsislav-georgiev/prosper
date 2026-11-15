@@ -710,6 +710,9 @@ final class AgentWindowModel: ObservableObject {
     func adopt(_ l: PaneLayout) {
         guard !closed else { return }
         let moved = l.focused != layout.focused
+        // #900 B2 step 6b2d (3.1 :224): a focus change or another set of panes drops the pane refusal. Gate on only, and a
+        // write only when one is set: a gate-off person never sees a publish from here.
+        if AgentPaneLayout.splitsEnabled, paneRefusal != nil, moved || l.order != layout.order { paneRefusal = nil }
         layout = l
         follow()
         // #900 B2 step 6b2b (7.2, R1196-1): the keys follow the focused pane: every pane focus action (a click, the pane
