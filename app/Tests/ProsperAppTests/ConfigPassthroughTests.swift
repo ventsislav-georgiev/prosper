@@ -353,7 +353,7 @@ final class MCPPassthroughTests: XCTestCase {
         for disk in [mark + plain, plain] {
             try withFile(Data(disk)) { url in
                 var seen: [UInt8] = []
-                let tree = MCPConfigStore.readableTree(url, key: "mcpServers") { seen = Array($0.utf8); return MCPConfigStore.decode($0) != nil }
+                let tree = try? MCPConfigStore.readableTree(url, key: "mcpServers") { seen = Array($0.utf8); if MCPConfigStore.decode($0) == nil { throw CocoaError(.fileReadCorruptFile) } }
                 XCTAssertTrue(tree != nil, "readable")
                 XCTAssertEqual(seen, plain, "the decoder gets the text without the mark")
                 MCPConfigStore.writeFile([MCPServer(id: "api", command: "npx")])
@@ -846,7 +846,7 @@ final class HookPassthroughTests: XCTestCase {
         for disk in [mark + plain, plain] {
             try withFile(Data(disk)) { url in
                 var seen: [UInt8] = []
-                let tree = MCPConfigStore.readableTree(url, key: "hooks") { seen = Array($0.utf8); return HooksConfigStore.decode($0) != nil }
+                let tree = try? MCPConfigStore.readableTree(url, key: "hooks") { seen = Array($0.utf8); if HooksConfigStore.decode($0) == nil { throw CocoaError(.fileReadCorruptFile) } }
                 XCTAssertTrue(tree != nil, "readable")
                 XCTAssertEqual(seen, plain, "the decoder gets the text without the mark")
                 HooksConfigStore.writeFile([HookRule(event: .stop, command: "echo a")])

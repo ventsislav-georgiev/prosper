@@ -136,6 +136,7 @@ struct MCPServersPane: View {
     @State private var editing: MCPServer?
     @State private var editingOriginalID: String?
     @State private var discovered: [ExternalConfigScanner.FoundServer] = []
+    @State private var fileProblem: String?
 
     /// Discovered servers not already in our list.
     private var freshDiscovered: [ExternalConfigScanner.FoundServer] {
@@ -150,6 +151,7 @@ struct MCPServersPane: View {
 
             NeonSection("Configured",
                         footer: "Stored in ~/.config/prosper/mcp.json (Claude Code schema) — changes apply to the next agent run.") {
+                ConfigFileNotice(fileName: "mcp.json", problem: fileProblem, onReveal: revealConfigFile)
                 if model.mcpServers.isEmpty {
                     Text("No MCP servers configured.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 }
@@ -193,7 +195,10 @@ struct MCPServersPane: View {
                 }
             }
         }
-        .onAppear { discovered = ExternalConfigScanner.servers() }
+        .onAppear { discovered = ExternalConfigScanner.servers(); fileProblem = MCPConfigStore.checkFile() }
+        .onReceive(NotificationCenter.default.publisher(for: .agentConfigFileProblemChanged)) { _ in
+            fileProblem = MCPConfigStore.fileProblem
+        }
         .sheet(item: $editing) { server in
             MCPServerEditor(server: server, isNew: editingOriginalID == nil,
                             onSave: { save($0) },
@@ -221,7 +226,7 @@ struct MCPServersPane: View {
         panel.message = "Import MCP servers from a Claude Code, codex, or opencode config"
         guard panel.runModal() == .OK, let url = panel.url,
               let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        let imported = MCPConfigStore.importServers(from: text)
+        let imported = MCPConfigStore.importServers(from: text, over: model.mcpServers)
         guard !imported.isEmpty else {
             notify("No MCP servers found", "Couldn't find any MCP server definitions in \(url.lastPathComponent).")
             return
@@ -275,6 +280,28 @@ struct MCPServersPane: View {
     }
 }
 
+/// One plain line while a config file cannot be read, so in-app edits are not saved to it (#1052).
+struct ConfigFileNotice: View {
+    let fileName: String
+    let problem: String?
+    let onReveal: @MainActor () -> Void
+
+    nonisolated static func line(_ fileName: String, _ problem: String?) -> String? {
+        problem.map { "\(fileName) could not be read; changes are not saved to the file: \($0)" }
+    }
+
+    var body: some View {
+        if let line = Self.line(fileName, problem) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(line).font(Neon.font(.callout)).foregroundStyle(Neon.magenta)
+                Spacer(minLength: sz(12))
+                Button("Reveal in Finder", action: onReveal).buttonStyle(.neon)
+            }
+            NeonDivider()
+        }
+    }
+}
+
 // MARK: - Plugins & Hooks pane
 
 /// opencode JS/TS plugins (run via the Bun bridge) plus lifecycle hooks. Both are
@@ -284,6 +311,7 @@ struct PluginsHooksPane: View {
     @State private var plugins: [String] = []           // plugin filenames in our dir
     @State private var discovered: [ExternalConfigScanner.FoundPlugin] = []
     @State private var installedCommands: Set<String> = []   // command slugs already in the store
+    @State private var fileProblem: String?
 
     private var freshDiscovered: [ExternalConfigScanner.FoundPlugin] {
         let have = Set(plugins)
@@ -351,6 +379,7 @@ struct PluginsHooksPane: View {
 
             NeonSection("Hooks",
                         footer: "Shell commands the agent runs on lifecycle events (the Claude Code hooks contract). Stored in ~/.config/prosper/hooks.json. Applies on the next agent run.") {
+                ConfigFileNotice(fileName: "hooks.json", problem: fileProblem, onReveal: revealHooksConfigFile)
                 if model.hooks.isEmpty {
                     Text("No hooks configured.").font(Neon.font(.callout)).foregroundStyle(Neon.textSecondary)
                 }
@@ -365,7 +394,13 @@ struct PluginsHooksPane: View {
                 }
             }
         }
-        .onAppear { reloadPlugins(); discovered = ExternalConfigScanner.plugins(); reloadInstalledCommands() }
+        .onAppear {
+            reloadPlugins(); discovered = ExternalConfigScanner.plugins(); reloadInstalledCommands()
+            fileProblem = HooksConfigStore.checkFile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .agentConfigFileProblemChanged)) { _ in
+            fileProblem = HooksConfigStore.fileProblem
+        }
     }
 
     // MARK: Plugins

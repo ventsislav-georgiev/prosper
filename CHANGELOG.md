@@ -1293,6 +1293,11 @@ tag from the now-released section and put it on the new top draft.
   instead of being lost.
 - Clipboard sync: a text copied on your iPhone is no longer dropped as a duplicate of a file or
   image on the Mac that happens to have the same bytes; each kind is kept as its own history entry.
+- Agent settings: when mcp.json or hooks.json cannot be read (broken JSON, a wrong value type and
+  the like), the MCP Servers and Hooks sections now say so, with the reason and a Reveal in Finder
+  button, instead of silently not saving your changes to the file; the line goes away as soon as the
+  file reads again. Importing an MCP server you already have no longer re-enables it or resets its
+  approval mode and bearer token variable unless the imported file sets them.
 
 ## v2.174.0
 

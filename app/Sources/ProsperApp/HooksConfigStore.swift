@@ -27,6 +27,31 @@ enum HooksConfigStore {
 
     private static let mirrorKey = "agentHooksDiskMirror"
 
+    /// Why in-app edits are not saved to the file, nil while it reads or is absent (#1052); as
+    /// `MCPConfigStore.fileProblem`.
+    nonisolated(unsafe) static var fileProblem: String? {
+        didSet { if fileProblem != oldValue { NotificationCenter.default.post(name: .agentConfigFileProblemChanged, object: nil) } }
+    }
+
+    /// The file a write lands on and its tree (nil: absent), or nil when it cannot be read; records `fileProblem`.
+    private static func current() -> (url: URL, tree: OrderedJSON.Value?)? {
+        do throws(MCPConfigStore.Unreadable) {
+            let read = try MCPConfigStore.readCurrent(fileURL, key: "hooks") { _ = try JSONDecoder().decode(Document.self, from: Data($0.utf8)) }
+            fileProblem = nil
+            return read
+        } catch {
+            fileProblem = error.reason
+            return nil
+        }
+    }
+
+    /// Looks at the file as it stands (the Settings pane on open) and returns `fileProblem`.
+    @discardableResult
+    static func checkFile() -> String? {
+        _ = current()
+        return fileProblem
+    }
+
     // MARK: - Canonical on-disk schema (Claude Code `hooks`)
 
     /// A `settings.json`-shaped document. We read the `hooks` map whether the file is a
@@ -208,17 +233,13 @@ enum HooksConfigStore {
     /// Mirror the loaded hooks out to the file. Skips the write (and the watcher reload
     /// it would cause) when the content is unchanged.
     static func writeFile(_ hooks: [HookRule]) {
-        guard let url = MCPConfigStore.symlinkTarget(fileURL) else { return }
-        var disk: OrderedJSON.Value?
-        if MCPConfigStore.entryExists(url) {
-            // A file the app cannot read is the user's, as in bootstrap: never replaced (#1045).
-            guard let tree = MCPConfigStore.readableTree(url, key: "hooks", decodes: { decode($0) != nil }) else {
-                Logger(subsystem: "eu.illegible.prosper", category: "hooks")
-                    .error("\(url.path, privacy: .public) cannot be read as a hooks config; write skipped, file left untouched")
-                return
-            }
-            disk = tree
+        // A file the app cannot read is the user's, as in bootstrap: never replaced (#1045); the pane says so (#1052).
+        guard let read = current() else {
+            Logger(subsystem: "eu.illegible.prosper", category: "hooks")
+                .error("\(fileURL.path, privacy: .public) cannot be read as a hooks config; write skipped, file left untouched")
+            return
         }
+        let (url, disk) = read
         guard let json = encode(hooks, over: disk) else { return }
         if json == Preferences.defaults.string(forKey: mirrorKey) { return }
         try? FileManager.default.createDirectory(
@@ -269,6 +290,7 @@ enum HooksConfigStore {
     /// config stays live).
     @discardableResult
     static func reloadIfChanged() -> [HookRule]? {
+        checkFile()
         guard let onDisk = readFileRaw() else { return nil }
         if onDisk == Preferences.defaults.string(forKey: mirrorKey) { return nil }
         guard let hooks = decode(onDisk) else {

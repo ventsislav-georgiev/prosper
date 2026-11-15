@@ -6,6 +6,8 @@ extension Notification.Name {
     /// Posted (object = `[MCPServer]`) when an external edit to `mcp.json` parsed
     /// cleanly and replaced the loaded servers, so a live Settings window can refresh.
     static let mcpServersReloadedExternally = Notification.Name("mcpServersReloadedExternally")
+    /// Posted when `MCPConfigStore.fileProblem` or `HooksConfigStore.fileProblem` changes (#1052).
+    static let agentConfigFileProblemChanged = Notification.Name("agentConfigFileProblemChanged")
 }
 
 /// Plain-text mirror of the coding agent's MCP servers at
@@ -35,6 +37,32 @@ enum MCPConfigStore {
     /// The last JSON we wrote, so the watcher can tell our own writes from an external
     /// edit and skip the reload our write would otherwise trigger.
     private static let mirrorKey = "agentMCPDiskMirror"
+
+    /// Why in-app edits are not saved to the file: the reason the file as it stands cannot be read; nil
+    /// while it reads or is absent (#1052). Set on every write and every look at the file (the Settings
+    /// pane opening, the watcher), so it clears as soon as the file reads again.
+    nonisolated(unsafe) static var fileProblem: String? {
+        didSet { if fileProblem != oldValue { NotificationCenter.default.post(name: .agentConfigFileProblemChanged, object: nil) } }
+    }
+
+    /// The file a write lands on and its tree (nil: absent), or nil when it cannot be read; records `fileProblem`.
+    private static func current() -> (url: URL, tree: OrderedJSON.Value?)? {
+        do throws(Unreadable) {
+            let read = try readCurrent(fileURL, key: "mcpServers") { _ = try JSONDecoder().decode(Document.self, from: Data($0.utf8)) }
+            fileProblem = nil
+            return read
+        } catch {
+            fileProblem = error.reason
+            return nil
+        }
+    }
+
+    /// Looks at the file as it stands (the Settings pane on open) and returns `fileProblem`.
+    @discardableResult
+    static func checkFile() -> String? {
+        _ = current()
+        return fileProblem
+    }
 
     // MARK: - Canonical on-disk schema (Claude Code `mcpServers`)
 
@@ -132,17 +160,13 @@ enum MCPConfigStore {
     /// Mirror the loaded servers out to the file. Skips the write (and the watcher
     /// reload it would cause) when the content is unchanged.
     static func writeFile(_ servers: [MCPServer]) {
-        guard let url = symlinkTarget(fileURL) else { return }
-        var disk: OrderedJSON.Value?
-        if entryExists(url) {
-            // A file the app cannot read is the user's, as in bootstrap: never replaced (#1045).
-            guard let tree = readableTree(url, key: "mcpServers", decodes: { decode($0) != nil }) else {
-                Logger(subsystem: "eu.illegible.prosper", category: "mcp")
-                    .error("\(url.path, privacy: .public) cannot be read as an MCP config; write skipped, file left untouched")
-                return
-            }
-            disk = tree
+        // A file the app cannot read is the user's, as in bootstrap: never replaced (#1045); the pane says so (#1052).
+        guard let read = current() else {
+            Logger(subsystem: "eu.illegible.prosper", category: "mcp")
+                .error("\(fileURL.path, privacy: .public) cannot be read as an MCP config; write skipped, file left untouched")
+            return
         }
+        let (url, disk) = read
         guard let json = encode(servers, over: disk) else { return }
         if json == Preferences.defaults.string(forKey: mirrorKey) { return }
         try? FileManager.default.createDirectory(
@@ -179,18 +203,42 @@ enum MCPConfigStore {
 
     // MARK: - Keys the app does not model (#1045), shared with `HooksConfigStore`
 
+    /// Why a config file cannot be read, in words for the Settings pane (#1052).
+    struct Unreadable: Error { let reason: String }
+
+    /// Where a write of `file` lands (symlinks followed) and the tree there, nil when nothing is there.
+    static func readCurrent(_ file: URL, key: String, check: (String) throws -> Void) throws(Unreadable) -> (url: URL, tree: OrderedJSON.Value?) {
+        guard let url = symlinkTarget(file) else { throw Unreadable(reason: "the symlink chain is a cycle or longer than 8 links") }
+        return try (url, entryExists(url) ? readableTree(url, key: key, check: check) : nil)
+    }
+
     /// The file at `url` as a JSON tree when the app can read it: UTF-8 strict JSON (OrderedJSON
     /// keeps each number as written) with an object at the top, which the store's decoder accepts
-    /// or which has no `key` at all (`{}`, a settings.json with no hooks). nil otherwise.
+    /// (`check` does not throw) or which has no `key` at all (`{}`, a settings.json with no hooks).
+    /// Otherwise throws the reason OrderedJSON or the decoder gave (#1052).
     /// #1231: read as bytes, so a leading UTF-8 mark is skipped by OrderedJSON on every system (whether
-    /// String(contentsOf:) drops it is Foundation's call); `decodes` gets the text after the mark, as
+    /// String(contentsOf:) drops it is Foundation's call); `check` gets the text after the mark, as
     /// String(contentsOf:) gives it on macOS 27. OrderedJSON(bytes:) has already refused non-UTF-8.
-    static func readableTree(_ url: URL, key: String, decodes: (String) -> Bool) -> OrderedJSON.Value? {
-        guard let data = try? Data(contentsOf: url),
-              let doc = try? OrderedJSON(bytes: Array(data)), let top = members(doc.root.value),
-              top[key] == nil || decodes(String(decoding: doc.bytes.dropFirst(OrderedJSON.markLength(doc.bytes)), as: UTF8.self))
-        else { return nil }
+    static func readableTree(_ url: URL, key: String, check: (String) throws -> Void) throws(Unreadable) -> OrderedJSON.Value {
+        guard let data = try? Data(contentsOf: url) else { throw Unreadable(reason: "the file cannot be opened") }
+        let doc: OrderedJSON
+        do { doc = try OrderedJSON(bytes: Array(data)) } catch { throw Unreadable(reason: "\(error)") }
+        guard let top = members(doc.root.value) else { throw Unreadable(reason: "the top level is not a JSON object") }
+        if top[key] != nil {
+            do { try check(String(decoding: doc.bytes.dropFirst(OrderedJSON.markLength(doc.bytes)), as: UTF8.self)) }
+            catch { throw Unreadable(reason: decodingReason(error)) }
+        }
         return doc.root.value
+    }
+
+    /// The decoder's complaint as a path and the type it wanted, e.g. "mcpServers.api.enabled has the wrong type (expected Bool)".
+    static func decodingReason(_ error: Error) -> String {
+        switch error as? DecodingError {
+        case .typeMismatch(let type, let c)?, .valueNotFound(let type, let c)?:
+            return "\(c.codingPath.map(\.stringValue).joined(separator: ".")) has the wrong type (expected \(type))"
+        default:
+            return "the file does not have the expected shape"
+        }
     }
 
     /// An object's members by key; nil when `value` is not an object (OrderedJSON refuses
@@ -260,6 +308,7 @@ enum MCPConfigStore {
     /// (last good config stays live).
     @discardableResult
     static func reloadIfChanged() -> [MCPServer]? {
+        checkFile()
         guard let onDisk = readFileRaw() else { return nil }
         if onDisk == Preferences.defaults.string(forKey: mirrorKey) { return nil }
         guard let servers = decode(onDisk) else {
@@ -276,21 +325,37 @@ enum MCPConfigStore {
     /// Parse a config blob from another coding tool into our model. Autodetects codex
     /// `config.toml` (`[mcp_servers.*]`), then JSON in either Claude Code shape
     /// (`mcpServers`) or opencode shape (`mcp`). Returns [] if nothing recognizable.
-    static func importServers(from text: String) -> [MCPServer] {
-        if let toml = importCodexTOML(text), !toml.isEmpty { return sortedByID(toml) }
-        if let json = importJSON(text), !json.isEmpty { return sortedByID(json) }
+    /// A server whose id is in `existing` keeps its enabled state, approval mode and bearer token
+    /// variable unless the text states them (#1052); the rest is the import's.
+    static func importServers(from text: String, over existing: [MCPServer] = []) -> [MCPServer] {
+        let old = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        if let toml = importCodexTOML(text, over: old), !toml.isEmpty { return sortedByID(toml) }
+        if let json = importJSON(text, over: old), !json.isEmpty { return sortedByID(json) }
         return []
+    }
+
+    /// `s` as parsed, with the fields the text did not state (nil here) taken from `old`.
+    private static func carry(_ s: MCPServer, enabled: Bool?, approval: String?, token: String?,
+                              from old: MCPServer?) -> MCPServer {
+        guard let old else { return s }
+        var s = s
+        if enabled == nil { s.enabled = old.enabled }
+        if approval.flatMap(MCPServer.ApprovalMode.init) == nil { s.approvalMode = old.approvalMode }
+        if token == nil { s.bearerTokenEnvVar = old.bearerTokenEnvVar }
+        return s
     }
 
     private static func sortedByID(_ s: [MCPServer]) -> [MCPServer] {
         s.sorted { $0.id.lowercased() < $1.id.lowercased() }
     }
 
-    private static func importJSON(_ text: String) -> [MCPServer]? {
+    private static func importJSON(_ text: String, over old: [String: MCPServer]) -> [MCPServer]? {
         guard let data = text.data(using: .utf8) else { return nil }
         // Claude Code / our own canonical file.
         if let doc = try? JSONDecoder().decode(Document.self, from: data), !doc.mcpServers.isEmpty {
-            return doc.mcpServers.map { server(id: $0.key, from: $0.value) }
+            return doc.mcpServers.map { id, e in
+                carry(server(id: id, from: e), enabled: e.enabled, approval: e.approvalMode, token: e.bearerTokenEnvVar, from: old[id])
+            }
         }
         // opencode `mcp` (command is an argv array; `environment` not `env`).
         struct OcDoc: Codable { var mcp: [String: OcEntry] }
@@ -311,13 +376,13 @@ enum MCPConfigStore {
                 }
                 s.env = e.environment ?? [:]
                 s.url = e.url ?? ""
-                return s
+                return carry(s, enabled: e.enabled, approval: nil, token: nil, from: old[id])
             }
         }
         return nil
     }
 
-    private static func importCodexTOML(_ text: String) -> [MCPServer]? {
+    private static func importCodexTOML(_ text: String, over old: [String: MCPServer]) -> [MCPServer]? {
         struct Doc: Codable { var mcp_servers: [String: CodexEntry]? }
         struct CodexEntry: Codable {
             var command: String?
@@ -341,7 +406,8 @@ enum MCPConfigStore {
             if let m = e.default_tools_approval_mode.flatMap(MCPServer.ApprovalMode.init) {
                 s.approvalMode = m
             }
-            return s
+            return carry(s, enabled: e.enabled, approval: e.default_tools_approval_mode,
+                         token: e.bearer_token_env_var, from: old[id])
         }
     }
 }
