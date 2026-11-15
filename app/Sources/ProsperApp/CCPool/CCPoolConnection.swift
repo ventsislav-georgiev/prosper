@@ -60,6 +60,9 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     var mode = Mode.deciding
     var snippet = Data()
     var pendingNote = ""
+    /// #1263: the reason words and the response header names (already through the name rule) of that note.
+    var pendingReason = ""
+    var responseHeaders = ""
     /// The private part of that note: the model and the upstream body (QA #733 INFO-3).
     var pendingPrivate = ""
     /// The upstream Retry-After of a pass-through 429, handed on to the client (P2a follow-up a).
@@ -169,6 +172,8 @@ final class CCPoolConnection: @unchecked Sendable {
     private var aborted = false
 
     private var model: String?
+    /// #1263: "bytes=N; max_tokens=X; effort=E; speed=S" of the request, public words and counts only (CCPoolThrottleShape).
+    private var shape = "bytes=0; max_tokens=none; effort=none; speed=none"
     private var tried: Set<String> = []
     private var attempts = 0
     private var maxAttempts = 1
@@ -302,11 +307,13 @@ final class CCPoolConnection: @unchecked Sendable {
             let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
             model = obj?["model"] as? String
             quotaCheck = Self.isQuotaCheck(obj)
+            shape = CCPoolThrottleShape.request(bytes: body.count, obj)
             startRelay()
             return true
         }
         guard body.count >= min(Self.modelScan, expected) else { return true }
         model = Self.scanModel(body)
+        shape = CCPoolThrottleShape.request(bytes: expected, nil)
         var input: InputStream?
         var output: OutputStream?
         Stream.getBoundStreams(withBufferSize: 1 << 16, inputStream: &input, outputStream: &output)
@@ -468,13 +475,17 @@ final class CCPoolConnection: @unchecked Sendable {
             }
             // QA #733 INFO-3: the model and the upstream body go to the private part of the log line;
             // what is printed of the model and Retry-After is capped at 64 bytes.
-            let line = "429 quota=\(detail); retry-after=\(Self.capped(retry ?? "?")); "
-                + "cooldown=\(spent.isEmpty ? "none" : spent.keys.sorted().joined(separator: ",")); reason=\(reason)"
+            let lead = "429 quota=\(detail); retry-after=\(Self.capped(retry ?? "?")); "
+                + "cooldown=\(spent.isEmpty ? "none" : spent.keys.sorted().joined(separator: ",")); "
+            let line = lead + "reason=\(reason)"
             let privateDetail = "; model=\(Self.capped(model ?? "none"))"
             if spent.isEmpty {
                 // Upstream load, not quota: rotating would not help and benching would be a lie (B14).
                 ex.mode = .snippet
-                ex.pendingNote = line
+                // #1263: the shape and the attempts go between the cooldown and the reason; finishSnippet adds them.
+                ex.pendingNote = lead
+                ex.pendingReason = "reason=\(reason)"
+                ex.responseHeaders = CCPoolThrottleShape.headers(response.allHeaderFields.keys.compactMap { $0 as? String })
                 ex.pendingPrivate = privateDetail
                 // Header-safe: one line, printable ASCII only.
                 ex.retryAfter = retry.map { String($0.unicodeScalars.filter { $0.value >= 0x20 && $0.value < 0x7f }) }
@@ -495,6 +506,12 @@ final class CCPoolConnection: @unchecked Sendable {
             // Errata C1: the body went upstream as a stream and cannot be sent again.
             log.note(label, "out on \(claims); request body above the replay cap, passing the 429 through")
         } else {
+            // #1263: a reply after throttles (retries, plus the move that the last 429 caused): a count and fixed words.
+            if throttleRetries > 0 || movedFrom != nil {
+                let moved = movedFrom != nil
+                log.note(label, "served after \(throttleRetries + (moved ? 1 : 0)) throttled attempt(s); attempt=\(attempts); "
+                    + "retry=\(throttleRetries); outcome=\(moved ? "moved-served" : "served")")
+            }
             // Retire before streaming: the body can take a minute to drain (B15).
             let spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
             store.mutate { st in
@@ -593,7 +610,12 @@ final class CCPoolConnection: @unchecked Sendable {
         guard ex === exchange else { return }
         exchange = nil
         ex.task?.cancel()
-        log.note(ex.label, ex.pendingNote,
+        // #1263: what this 429 leads to, decided here from the same conditions as the branches below.
+        let retries = replayable && !quotaCheck && throttleRetries < CCPoolCore.throttleBackoff.count && attempts < maxAttempts
+        let moves = movedFrom == nil && replayable && !quotaCheck && attempts < maxAttempts && head.flatMap(Self.pinKey) != nil
+        let outcome = retries ? "retry" : movedFrom != nil ? "pinned-back" : moves ? "move" : "returned"
+        log.note(ex.label, ex.pendingNote + shape + "; resp-headers=" + ex.responseHeaders
+                 + "; attempt=\(attempts); retry=\(throttleRetries); outcome=\(outcome); " + ex.pendingReason,
                  private: ex.pendingPrivate + "; body=" + String(decoding: ex.snippet.prefix(Self.snippetCap), as: UTF8.self))
         // #1256: a throughput 429 is retried on the SAME account, up to 3 times, unless the body is the
         // client's quota check or could not be sent again (above the replay cap). Python relay() 478-485.
@@ -701,4 +723,61 @@ final class CCPoolConnection: @unchecked Sendable {
 extension CCPoolState {
     /// #1190 INFO-2: the label the account with Keychain id `id` carries now; nil once it is gone.
     func label(ofID id: String) -> String? { accounts.first { $0.value.id == id }?.key }
+}
+
+/// #1263: the public part of a throughput 429 line. Every piece of outside data is a count, a fixed word, or a header
+/// name that passed the fixed rule; a header value, a model name, a body byte and a session id never get here.
+enum CCPoolThrottleShape {
+    /// ccpool v1.9.0 ccpool_proxy.py ROUTINE (602-606): the response headers every reply carries.
+    static let routine: Set<String> = ["date", "content-type", "content-length", "connection", "server", "request-id", "cf-ray",
+                                       "via", "cf-cache-status", "x-robots-tag", "strict-transport-security",
+                                       "anthropic-organization-id", "x-envoy-upstream-service-time", "retry-after"]
+    /// ccpool_proxy.py PREFIX (59): the rate-limit headers the pool reads.
+    static let routinePrefix = "anthropic-ratelimit-unified-"
+    /// Request values chosen from a small set (the public API values; the reference prints them raw): else "other".
+    static let efforts: Set<String> = ["low", "medium", "high", "xhigh", "max"]
+    static let speeds: Set<String> = ["standard", "fast"]
+    static let maxTokensLimit: Int64 = 1 << 20
+    static let nameMax = 40
+    static let namesShown = 8
+
+    /// An integer (not a bool, not a float) in 1...maxTokensLimit, else "none". NSNumber: no Int() of outside text.
+    static func maxTokens(_ obj: [String: Any]?) -> String {
+        guard let n = obj?["max_tokens"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
+              !["f", "d"].contains(String(cString: n.objCType)) else { return "none" }
+        let v = n.int64Value
+        return v >= 1 && v <= maxTokensLimit ? String(v) : "none"
+    }
+
+    private static func word(_ v: Any?, _ allowed: Set<String>) -> String {
+        guard let v else { return "none" }
+        guard let s = v as? String, allowed.contains(s) else { return "other" }
+        return s
+    }
+
+    /// "bytes=N; max_tokens=X; effort=E; speed=S"; `obj` nil (a body above the replay cap, never parsed) reads "none".
+    static func request(bytes: Int, _ obj: [String: Any]?) -> String {
+        let effort = (obj?["output_config"] as? [String: Any])?["effort"]
+        return "bytes=\(max(0, bytes)); max_tokens=\(maxTokens(obj)); effort=\(word(effort, efforts)); speed=\(word(obj?["speed"], speeds))"
+    }
+
+    /// The unusual response header names (not ROUTINE, no rate-limit prefix) that pass the name rule: ASCII letters,
+    /// digits and "-", 1...40 characters, lowercased, sorted, at most 8 printed then " +N more"; names that fail the
+    /// rule are only counted ("; odd-headers=K"). "-" when none.
+    static func headers(_ names: [String]) -> String {
+        var good = Set<String>(), odd = 0
+        for raw in names {
+            let ok = !raw.isEmpty && raw.utf8.count <= nameMax && raw.utf8.allSatisfy {
+                ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x5a) || ($0 >= 0x61 && $0 <= 0x7a) || $0 == 0x2d
+            }
+            guard ok else { odd += 1; continue }
+            let n = raw.lowercased()
+            if !routine.contains(n), !n.hasPrefix(routinePrefix) { good.insert(n) }
+        }
+        let sorted = good.sorted()
+        var text = sorted.isEmpty ? "-" : sorted.prefix(namesShown).joined(separator: ",")
+        if sorted.count > namesShown { text += " +\(sorted.count - namesShown) more" }
+        if odd > 0 { text += "; odd-headers=\(odd)" }
+        return text
+    }
 }

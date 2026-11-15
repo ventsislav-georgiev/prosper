@@ -1232,6 +1232,9 @@ tag from the now-released section and put it on the new top draft.
 - The Check for Updates button no longer says "All extensions up to date" when an update was skipped
   or failed: it says how many could not be installed, and a manifest that could not be read (not the
   package's fault) is tried again at the next check.
+- Account pool: the log line of a throttled (rate-limited, not out of quota) request now says its
+  size, max_tokens, effort, speed, unusual response header names and how many tries it took and what
+  came of it, without ever logging a header value, a model name, a body byte or a session id.
 
 ## v2.174.0
 
