@@ -41,10 +41,10 @@ final class DchClipboardFramesTests: XCTestCase {
     /// `reads` (#1067) records the thread of every blob read, "main" or "off".
     private func rig(on: Bool = true, free: Int64? = nil, memoryMax: Int? = nil, maxPixels: Int? = nil,
                      reads: Lines? = nil, onRead read: (@Sendable (String) -> Void)? = nil,
-                     label: String = #function) -> Rig {
+                     onSeal: (@Sendable (UUID) -> Void)? = nil, label: String = #function) -> Rig {
         var onRead = read
         if let reads { onRead = { @Sendable _ in reads.lock.withLock { reads.all.append(Thread.isMainThread ? "main" : "off") } } }
-        let store = ClipboardStore(dir: tempDir(label + "-store"), onBlobRead: onRead)
+        let store = ClipboardStore(dir: tempDir(label + "-store"), onBlobRead: onRead, onSeal: onSeal)
         let received = tempDir(label + "-recv")
         var o = DchClipboardOps()
         o.enabled = { on }
@@ -387,8 +387,8 @@ final class DchClipboardFramesTests: XCTestCase {
         let s = ClipboardStore(dir: tempDir())
         s.addText("same words")
         XCTAssertEqual(s.items.first?.sha256, ClipboardStore.sha256(Data("same words".utf8)))
-        XCTAssertTrue(s.dedupe(sha256: ClipboardStore.sha256(Data("same words".utf8)), date: .distantPast))
-        XCTAssertFalse(s.dedupe(sha256: ClipboardStore.sha256(Data("other".utf8)), date: .distantPast))
+        XCTAssertTrue(s.dedupe(sha256: ClipboardStore.sha256(Data("same words".utf8)), kind: .text, date: .distantPast) != nil)
+        XCTAssertTrue(s.dedupe(sha256: ClipboardStore.sha256(Data("other".utf8)), kind: .text, date: .distantPast) == nil)
     }
 
     /// #1067 item 3: opening a store whose index reads removes only the blobs no row references -
@@ -1166,6 +1166,7 @@ final class DchClipboardFramesTests: XCTestCase {
         let text = "same words \(UUID())", body = Data(text.utf8), kept = UUID(), t = Date(timeIntervalSince1970: 1_700_000_000)
         r.store.addRemote(id: kept, date: t, source: "iPhone", sha256: ClipboardStore.sha256(body), .text(text))
         let fm = FileManager.default
+        try XCTSkipIf(geteuid() == 0, "running as root: 0o555 permissions do not deny the write")
         try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: r.store.dir.path)
         defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: r.store.dir.path) }
         let fresh = Self.bytes(9, seed: 4)
@@ -1248,6 +1249,7 @@ final class DchClipboardFramesTests: XCTestCase {
         let batch = ids.enumerated().map { item($1, $0) }
         XCTAssertEqual(added(request(r, DchFrame.addClipboardHistory, ["items": batch])).count, 3)
         let fm = FileManager.default
+        try XCTSkipIf(geteuid() == 0, "running as root: 0o555 permissions do not deny the write")
         try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: r.store.dir.path)
         defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: r.store.dir.path) }
         let again = request(r, DchFrame.addClipboardHistory, ["items": batch + [item(UUID(), 1, date: t - 60), item(UUID(), 9)]])
@@ -1715,15 +1717,124 @@ final class DchClipboardFramesTests: XCTestCase {
             XCTAssertTrue(r.store.receiving.isEmpty, label)
         }
     }
+
+    // MARK: - #1100 (QA 829 riders)
+
+    /// #1100 rider 2: content dedupe keys on the kind as well as the bytes. A text and a file of the
+    /// same bytes are two rows (0x22 and an upload, which then goes live as the text); every textual
+    /// kind is one (a kept link dedupes a text), and the same kind still dedupes (a file).
+    func testDedupeKeysOnTheKindAsWellAsTheBytes() throws {
+        defer { Pasteboard.general.clearContents() }
+        let text = "https://example.com/a", body = Data(text.utf8), sha = ClipboardStore.sha256(body)
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        func entry(_ id: UUID, _ date: Date) -> [String: Any] {
+            ["id": id.uuidString, "date": DchClipboardOps.wireDate(date), "kind": "text", "text": text]
+        }
+        let r = rig()
+        let file = r.received.appendingPathComponent("a.txt"), fid = UUID()
+        try body.write(to: file)
+        r.store.addRemote(id: fid, date: t, source: "iPhone", sha256: sha, .file(file))
+        let tid = UUID()
+        XCTAssertEqual(added(request(r, DchFrame.addClipboardHistory, ["items": [entry(tid, t + 60)]])), [tid.uuidString],
+                       "a text is not the file of the same bytes")
+        XCTAssertEqual(r.store.items.map(\.id), [tid, fid])
+        XCTAssertEqual(r.store.item(tid)?.kind, .link)
+        XCTAssertEqual(r.store.item(fid)?.createdAt, t, "the file is not re-dated")
+        let again = UUID()
+        XCTAssertEqual(skipped(request(r, DchFrame.addClipboardHistory, ["items": [entry(again, t + 120)]])),
+                       [["id": again.uuidString, "reason": "duplicate"]], "a text dedupes against the kept link")
+        XCTAssertEqual(r.store.item(tid)?.createdAt, t + 120)
+        XCTAssertEqual(r.store.item(fid)?.createdAt, t)
+
+        let u = rig(label: "upload")
+        let kept = u.received.appendingPathComponent("kept.txt"), kid = UUID()
+        try body.write(to: kept)
+        u.store.addRemote(id: kid, date: t, source: "iPhone", sha256: sha, .file(kept))
+        Pasteboard.general.clearContents()
+        let uid = UUID()
+        handle(u, DchFrame.clipboardUpload, header(body, id: uid, date: t + 60, live: true))
+        feed(u, body)
+        XCTAssertEqual(added(final(u)), [uid.uuidString], "a text upload is not the kept file")
+        XCTAssertEqual(u.store.items.map(\.id), [uid, kid])
+        XCTAssertEqual(Pasteboard.general.string(forType: .string), text, "the text goes live, not the kept file")
+        let fid2 = UUID()
+        handle(u, DchFrame.clipboardUpload, header(body, id: fid2, kind: "file", date: t + 120, name: "b.txt"))
+        feed(u, body)
+        XCTAssertEqual(skipped(final(u, 2)), [["id": fid2.uuidString, "reason": "duplicate"]], "a file still dedupes a file")
+        XCTAssertEqual(u.store.items.map(\.id), [kid, uid])
+        XCTAssertEqual(dir(u.received), ["kept.txt"])
+        XCTAssertTrue(u.store.receiving.isEmpty)
+    }
+
+    /// #1100 rider 8: addHistory's insert hop decides again. A row with the same id, or the same
+    /// content, landing between the first check and the insert (the store's seal seam) makes the item
+    /// "duplicate": one history row, and the losing item's sealed blob is removed.
+    func testAddHistoryRechecksTheIdAndTheContentAfterItsSeal() {
+        let t = Date(timeIntervalSince1970: 1_700_000_000)
+        for sameID in [true, false] {
+            let label = sameID ? "same id" : "same content"
+            let box = StoreBox(), text = "sealed meanwhile \(UUID())", sha = ClipboardStore.sha256(Data(text.utf8)), id = UUID()
+            let r = rig(onSeal: { @Sendable _ in
+                let land: @Sendable () -> Void = {
+                    MainActor.assumeIsolated {
+                        guard let s = box.store, !box.fired else { return }
+                        box.fired = true   // once: the landing row's own seal calls back here too
+                        s.addRemote(id: sameID ? id : UUID(), date: t, source: "iPhone", sha256: sameID ? "other" : sha,
+                                    .text(sameID ? "other words" : text))
+                    }
+                }
+                if Thread.isMainThread { land() } else { DispatchQueue.main.sync(execute: land) }
+            }, label: sameID ? "sameid" : "samecontent")
+            box.store = r.store
+            let f = request(r, DchFrame.addClipboardHistory, ["items": [["id": id.uuidString, "date": DchClipboardOps.wireDate(t + 60),
+                                                                        "kind": "text", "text": text]]])
+            XCTAssertTrue(box.fired, "\(label): the seam ran between the checks")
+            XCTAssertEqual(added(f), [], label)
+            XCTAssertEqual(skipped(f), [["id": id.uuidString, "reason": "duplicate"]], label)
+            XCTAssertEqual(r.store.items.count, 1, label)
+            XCTAssertEqual(blobs(r), r.store.items.compactMap(\.blobFile), "\(label): the losing blob is removed")
+        }
+    }
+
+    /// #1100 rider 4: insertRemote and removeBlob take a sealed name out of `sealing`: a later store's
+    /// sweep removes an unreferenced old file of that name, and keeps one whose name is still sealing.
+    func testInsertAndRemoveUnsealTheirBlobName() throws {
+        let fm = FileManager.default, d = tempDir("store")
+        let s = ClipboardStore(dir: d)
+        let inserted = try XCTUnwrap(s.sealRemote(id: UUID(), date: Date(), source: "iPhone", sha256: "a", .text("inserted")))
+        s.insertRemote(inserted)
+        s.delete(inserted)
+        let removed = try XCTUnwrap(s.sealRemote(id: UUID(), date: Date(), source: "iPhone", sha256: "b", .text("removed")))
+        s.removeBlob(removed)
+        let held = try XCTUnwrap(s.sealRemote(id: UUID(), date: Date(), source: "iPhone", sha256: "c", .text("held")))
+        defer { s.removeBlob(held) }
+        let a = try XCTUnwrap(inserted.blobFile), b = try XCTUnwrap(removed.blobFile), c = try XCTUnwrap(held.blobFile)
+        let old = Date(timeIntervalSinceNow: -Double(ClipboardStore.sweepMinAge) - 60)
+        for n in [a, b, c] {
+            let path = d.appendingPathComponent(n).path
+            if !fm.fileExists(atPath: path) { XCTAssertTrue(fm.createFile(atPath: path, contents: Data("x".utf8)), n) }
+            try fm.setAttributes([.modificationDate: old], ofItemAtPath: path)
+        }
+        XCTAssertTrue(fm.fileExists(atPath: d.appendingPathComponent("index.json").path), "control: the index reads, so the sweep runs")
+        _ = ClipboardStore(dir: d)
+        let left = Set(dir(d))
+        XCTAssertFalse(left.contains(a), "an inserted item's name is unsealed")
+        XCTAssertFalse(left.contains(b), "a removed blob's name is unsealed")
+        XCTAssertTrue(left.contains(c), "control: a name still sealing is kept")
+    }
 }
 
-/// #1067: Characters handed to DchClipboardOps.fit, counted as they are taken. File scope, so
-/// nonisolated: Sequence's requirements are nonisolated.
 /// #1067 r2: the store, handed to an onBlobRead seam made before the rig exists.
-private final class StoreBox: @unchecked Sendable { var store: ClipboardStore? }
+/// #1100: and whether a seam's one-shot action already ran.
+private final class StoreBox: @unchecked Sendable {
+    var store: ClipboardStore?
+    var fired = false
+}
 
 private final class NamePulls { var n = 0 }
 
+/// #1067: Characters handed to DchClipboardOps.fit, counted as they are taken. File scope, so
+/// nonisolated: Sequence's requirements are nonisolated.
 private struct CountingCharacters: Sequence {
     let chars: [Character], pulls: NamePulls
     func makeIterator() -> AnyIterator<Character> {

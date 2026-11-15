@@ -1291,6 +1291,8 @@ tag from the now-released section and put it on the new top draft.
 - App Updates: if Prosper quits or is updated while "Upgrade Homebrew Packages" is running, the
   upgrade's result is now reported after the relaunch and its temporary folder is cleaned up,
   instead of being lost.
+- Clipboard sync: a text copied on your iPhone is no longer dropped as a duplicate of a file or
+  image on the Mac that happens to have the same bytes; each kind is kept as its own history entry.
 
 ## v2.174.0
 

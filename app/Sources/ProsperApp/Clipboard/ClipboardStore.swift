@@ -28,6 +28,8 @@ final class ClipboardStore: ObservableObject {
     /// #1067 test seam: told each blob name readBlob opens, on the reading thread. @Sendable, so
     /// a closure made in MainActor code is not MainActor-isolated and may run on any queue.
     nonisolated let onBlobRead: (@Sendable (String) -> Void)?
+    /// #1100 test seam: told each phone item's id once sealRemote has written its blob, on the sealing thread.
+    nonisolated let onSeal: (@Sendable (UUID) -> Void)?
 
     /// #617: under XCTest a fixed throwaway dir, never the operator's store: ClipboardCrypto's
     /// test key is random per process, so a stray write to `shared` would re-seal the real index.
@@ -42,10 +44,12 @@ final class ClipboardStore: ObservableObject {
     }
 
     /// `dir` is a seam: tests pass a tempDir(), never the real store.
-    init(dir base: URL = ClipboardStore.defaultDir, onBlobRead: (@Sendable (String) -> Void)? = nil) {
+    init(dir base: URL = ClipboardStore.defaultDir, onBlobRead: (@Sendable (String) -> Void)? = nil,
+         onSeal: (@Sendable (UUID) -> Void)? = nil) {
         dir = base
         indexURL = base.appending(path: "index.json")
         self.onBlobRead = onBlobRead
+        self.onSeal = onSeal
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         if load() { sweep() }
     }
@@ -198,16 +202,19 @@ final class ClipboardStore: ObservableObject {
 
     func item(_ id: UUID) -> ClipboardItem? { items.first { $0.id == id } }
 
-    /// Content dedupe: an entry with this sha256 is kept as the one entry, moved to
-    /// `date` when that is newer. True when there was one (the caller skips its item).
-    func dedupe(sha256: String, date: Date) -> Bool {
-        guard let i = items.firstIndex(where: { $0.sha256 == sha256 }) else { return false }
-        if date > items[i].createdAt {
-            items[i].createdAt = date
-            sort()
-            persist()
-        }
-        return true
+    /// Content dedupe: an entry with this sha256 and of this kind (#1100: every textual kind is one,
+    /// so a text and a file of the same bytes are two entries) is kept as the one entry, moved to
+    /// `date` when that is newer. The kept entry when there was one (the caller skips its item).
+    @discardableResult
+    func dedupe(sha256: String, kind: ClipboardKind, date: Date) -> ClipboardItem? {
+        guard let i = items.firstIndex(where: { $0.sha256 == sha256 && ($0.kind.isTextual ? kind.isTextual : $0.kind == kind) })
+        else { return nil }
+        guard date > items[i].createdAt else { return items[i] }
+        items[i].createdAt = date
+        let kept = items[i]
+        sort()
+        persist()
+        return kept
     }
 
     enum RemotePayload {
@@ -216,6 +223,15 @@ final class ClipboardStore: ObservableObject {
         case image(Data, width: Int, height: Int)
         /// A received file under the received-files folder, referenced like a copied Mac file.
         case file(URL)
+
+        /// The kind dedupe compares (sealRemote classifies a text further; all textual kinds match).
+        nonisolated var kind: ClipboardKind {
+            switch self {
+            case .text: .text
+            case .image: .image
+            case .file: .file
+            }
+        }
     }
 
     /// Inserts a phone item at its own date. Text and image are sealed through writeBlob,
@@ -251,6 +267,7 @@ final class ClipboardStore: ObservableObject {
                                  byteCount: size, blobFile: nil, sourcePath: url.path, fileName: url.lastPathComponent,
                                  source: source, sha256: sha256)
         }
+        onSeal?(id)
         return item
     }
 
