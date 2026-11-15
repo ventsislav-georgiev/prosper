@@ -109,13 +109,20 @@ async function publish(c: Ctx) {
   }
 
   const m = body.manifest;
-  const id = (m.id ?? "").trim();
-  const version = (m.version ?? "").trim();
+  // A non-string id or version reads as empty, so it is refused below as invalid_id / invalid_version.
+  const id = typeof m.id === "string" ? m.id.trim() : "";
+  const version = typeof m.version === "string" ? m.version.trim() : "";
   if (id.length > MAX_ID_LEN || !ID_RE.test(id)) return c.json({ error: "invalid_id" }, 400);
   // ID_RE allows ASCII only, so toLowerCase is the plain ASCII fold. Refused for every publisher.
-  if (id.toLowerCase().startsWith(RESERVED_PREFIX)) return c.json({ error: "reserved_id" }, 400);
+  // The exact id "com.prosper" is reserved too (the appended dot makes it match the prefix).
+  if ((id.toLowerCase() + ".").startsWith(RESERVED_PREFIX)) return c.json({ error: "reserved_id" }, 400);
   if (!SEMVER_RE.test(version)) return c.json({ error: "invalid_version" }, 400);
-  if (!m.title || !m.name || !m.author) return c.json({ error: "missing_fields" }, 400);
+  // Required fields are non-empty strings; the optional ones are strings or absent. Anything else cannot be bound to the row.
+  const str = (v: unknown) => typeof v === "string" && v !== "";
+  if (!str(m.title) || !str(m.name) || !str(m.author)) return c.json({ error: "missing_fields" }, 400);
+  for (const v of [m.description, m.icon, m.license]) {
+    if (v != null && typeof v !== "string") return c.json({ error: "invalid_fields" }, 400);
+  }
   // A published extension can never claim to be a bundled system one.
   if (m.system === true) return c.json({ error: "system_not_allowed" }, 400);
 

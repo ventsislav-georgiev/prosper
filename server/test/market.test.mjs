@@ -535,6 +535,9 @@ test("publish id rules: reserved namespace and the 128 cap, row by row", async (
     ["COM.PROSPER.FILES", false, "reserved_id"],
     ["Com.Prosper.Theme.Amber", false, "reserved_id"],
     ["com.prosper.x", false, "reserved_id"],
+    ["com.prosper", false, "reserved_id"],
+    ["COM.PROSPER", false, "reserved_id"],
+    ["Com.Prosper", false, "reserved_id"],
     ["com.prosperity.kit", true],
     ["org.example.com.prosper.kit", true],
     ["com.prosper-kit.example", true],
@@ -563,4 +566,77 @@ test("an accepted publish under the new rules spends the same D1 statements and 
   assert.equal((await t.publish(PUB, "com.prosperity.kit")).status, 200);
   assert.equal(t.log.length, 5, "session pair, owner SELECT, dupe SELECT, one batch");
   assert.deepEqual([...t.kv.keys()].sort(), ["pkg:com.prosperity.kit:1.0.0", `rl:publish:${PUB}`]);
+});
+
+// #1248 round 2: a manifest id or version that is not a string is a 400, never a 500; no D1, no KV.
+test("publish: a non-string manifest id or version is refused as invalid_id / invalid_version; a title, name or author that is not a non-empty string as missing_fields; a non-string description, icon or license as invalid_fields", async () => {
+  const rows = [
+    // [field, value, error code]
+    ["id", 5, "invalid_id"],
+    ["id", {}, "invalid_id"],
+    ["id", [], "invalid_id"],
+    ["id", true, "invalid_id"],
+    ["id", null, "invalid_id"],
+    ["version", 5, "invalid_version"],
+    ["version", {}, "invalid_version"],
+    ["version", [], "invalid_version"],
+    ["version", true, "invalid_version"],
+    ["version", null, "invalid_version"],
+    ["title", 5, "missing_fields"],
+    ["title", {}, "missing_fields"],
+    ["title", [], "missing_fields"],
+    ["title", true, "missing_fields"],
+    ["title", null, "missing_fields"],
+    ["title", "", "missing_fields"],
+    ["name", 5, "missing_fields"],
+    ["name", {}, "missing_fields"],
+    ["name", [], "missing_fields"],
+    ["name", true, "missing_fields"],
+    ["name", null, "missing_fields"],
+    ["name", "", "missing_fields"],
+    ["author", 5, "missing_fields"],
+    ["author", {}, "missing_fields"],
+    ["author", [], "missing_fields"],
+    ["author", true, "missing_fields"],
+    ["author", null, "missing_fields"],
+    ["author", "", "missing_fields"],
+    ["description", 5, "invalid_fields"],
+    ["description", {}, "invalid_fields"],
+    ["description", [], "invalid_fields"],
+    ["description", true, "invalid_fields"],
+    ["icon", 5, "invalid_fields"],
+    ["icon", {}, "invalid_fields"],
+    ["icon", [], "invalid_fields"],
+    ["icon", true, "invalid_fields"],
+    ["license", 5, "invalid_fields"],
+    ["license", {}, "invalid_fields"],
+    ["license", [], "invalid_fields"],
+    ["license", true, "invalid_fields"],
+  ];
+  for (const [field, value, code] of rows) {
+    const t = setup();
+    const manifest = { id: "org.example.kit", version: "1.0.0", name: "n", title: "T", author: "A", [field]: value };
+    const r = await t.req("/publish", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN[PUB]}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ manifest, blob: Buffer.from(gzipSync(cleanTar("org.example.kit", "1.0.0"))).toString("base64") }),
+    });
+    const name = `${field}=${JSON.stringify(value)}`;
+    assert.equal(r.status, 400, `${name}: ${r.text}`);
+    assert.deepEqual(r.json, { error: code }, name);
+    assert.deepEqual(marketSql(t), [], `${name}: no D1 statement`);
+    assert.equal(t.kv.size, 0, `${name}: no KV write`);
+  }
+});
+
+test("publish: optional manifest fields absent or plain strings are accepted", async () => {
+  for (const extra of [{}, { description: "d", icon: "i.png", license: "MIT" }, { icon: null, license: null }]) {
+    const t = setup();
+    const r = await t.req("/publish", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN[PUB]}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ manifest: { id: "org.example.kit", version: "1.0.0", name: "n", title: "T", author: "A", ...extra }, blob: Buffer.from(gzipSync(cleanTar("org.example.kit", "1.0.0"))).toString("base64") }),
+    });
+    assert.equal(r.status, 200, `${JSON.stringify(extra)}: ${r.text}`);
+  }
 });
