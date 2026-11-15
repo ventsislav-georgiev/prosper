@@ -493,7 +493,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(f.sends, ["1"])
         XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .working, "held after the answer")
         XCTAssertFalse(r.everBlocked, "no Needs input published")
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
         XCTAssertEqual(r.timers.count, 1, "a re-read is armed")
         XCTAssertEqual(tick(c, .working), .working)
         XCTAssertEqual(tick(c, .blocked), .working, "a new blocked stretch is checked again")
@@ -521,7 +521,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         drain(c)
         XCTAssertEqual(f.sends, ["1"])
         XCTAssertFalse(r.everBlocked)
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
     }
 
     @MainActor func testAFailedAnswerFallsBackToNeedsInput() {
@@ -849,7 +849,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(f.sends, ["1"])
         XCTAssertEqual(r.lastState, .working)
         XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .working)
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
         XCTAssertEqual(r.timers.count, 1, "its re-read is armed")
     }
 
@@ -872,7 +872,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         drain(c)
         XCTAssertEqual(f.sends, ["1"], "checked again while on")
         XCTAssertEqual(r.lastState, .working)
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
     }
 
     /// INFO-2: switched off after the Yes, which did not take: the card shows at once,
@@ -1114,7 +1114,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(r.timers.count, 1, "the bounded wait is armed")
         // dch answers: the row leaves blocked with its auto_allowed.
         XCTAssertEqual(list(c, row(.working, allowed: Self.dchAnswer)), [.working])
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
         fire(c, r)
         XCTAssertFalse(r.everBlocked, "the wait's end is a no-op once the row left blocked")
         XCTAssertEqual(f.sends, [])
@@ -1170,7 +1170,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         list(c, row(.blocked))
         drain(c)
         XCTAssertEqual(list(c, row(.blocked, allowed: Self.dchAnswer)), [.working])
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
         fire(c, r)
         XCTAssertEqual(d.calls, [["--build"], ["--config"], ["--config"]], "checked again")
         XCTAssertFalse(r.everBlocked)
@@ -1203,7 +1203,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
             XCTAssertEqual(list(c, row(.blocked, master: master)), [.working], name)
             drain(c)
             XCTAssertEqual(f.sends, ["1"], "\(name): Prosper answers")
-            XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText, name)
+            XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText, name)
             XCTAssertEqual(d.calls, calls, name)
             XCTAssertFalse(r.everBlocked, name)
             fire(c, r)   // the re-read after Prosper's own answer
@@ -1245,7 +1245,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         list(c, row(.working, allowed: DchAutoAllowed(at: 1_000_009, title: "Bash command")))
         XCTAssertNil(c.store?.actions[key], "seen again after off: first seen")
         list(c, row(.working, allowed: DchAutoAllowed(at: 1_000_012, title: "Bash command")))
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
     }
 
     /// #792 review: a 1.29.0 or 1.29.1 master auto-allows, so it is dch's too; an installed
@@ -1284,7 +1284,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         drain(c)
         XCTAssertEqual(sentTo.withLock { $0 }, ["old"], "Prosper answers the old master's row only")
         XCTAssertEqual(d.calls.filter { $0 == ["--config"] }.count, 1, "the new row's check only")
-        XCTAssertEqual(c.store?.actions[old.key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[old.key], AgentIsland.autoAllowedText)
         XCTAssertNil(c.store?.actions[new.key])
         XCTAssertEqual(c.published([old, new]).map(\.state), [.working, .working], "both held")
         _ = r
@@ -1394,7 +1394,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         drain(c)     // its check, on that screen
         XCTAssertEqual(f.sends, ["1"])
         XCTAssertEqual(f.reads, 3, "the re-read, then the #475 identity re-read")
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
         XCTAssertEqual(c.published(c.store?.sessions ?? []).first?.state, .working, "answered: held")
     }
 
@@ -2014,7 +2014,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         store.sessions = [AgentSession(key: key, alias: "prosper-751", activity: now - 3, state: .working, agents: 0),
                           AgentSession(key: AgentSessionKey(dir: "/d", name: "qa"), alias: "", activity: now - 60,
                                        state: .blocked, agents: 0)]
-        store.actions[key] = AgentIslandController.autoAllowedText
+        store.actions[key] = AgentIsland.autoAllowedText
         store.expanded = true
         let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
         r.scale = 2

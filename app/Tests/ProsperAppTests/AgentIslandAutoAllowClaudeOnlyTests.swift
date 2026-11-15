@@ -110,7 +110,7 @@ final class AgentIslandAutoAllowClaudeOnlyTests: XCTestCase {
         XCTAssertEqual(tick(c, row(Self.sid)), .working, "held while it is checked")
         drain(c)
         XCTAssertEqual(f.sent, ["1"])
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
         XCTAssertTrue(c.store?.cards[key] == nil, "answered: no card")
     }
 

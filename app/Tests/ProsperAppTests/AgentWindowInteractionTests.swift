@@ -1247,7 +1247,7 @@ final class AgentWindowInteractionTests: XCTestCase {
 
         // answered: the check sent its Yes and is off the session; the verify re-read is pending.
         gate.signal()
-        until("Always allow answered") { ca.store?.actions[Self.key] == AgentIslandController.autoAllowedText }
+        until("Always allow answered") { ca.store?.actions[Self.key] == AgentIsland.autoAllowedText }
         settle(ca)
         XCTAssertEqual(a.log, ["send 1"])
         XCTAssertTrue(ca.heldByAutoAllow(Self.key), "answered holds")

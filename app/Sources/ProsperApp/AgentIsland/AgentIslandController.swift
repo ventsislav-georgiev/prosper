@@ -625,11 +625,12 @@ final class AgentIslandController {
     }
 
     /// #829: a Restart or Stop a busy row refused: the row says so, but only over nothing or
-    /// another refusal. A running text says what runs (and the window's input lock reads it);
+    /// another refusal, or over "Allowed automatically" (#927: the click is the newer fact). A running text says what runs (and the window's input lock reads it);
     /// an outcome ("Killed") outlives the refusal. Goes once the job that refused it ends.
     private func refuseBusy(_ key: AgentSessionKey, _ text: String) {
         if let now = store?.actions[key], ![AgentIsland.restartBusyText, AgentIsland.stopBusyText, AgentIsland.killBusyText,
-                                            AgentIsland.renameBusyText, AgentIsland.messageBusyText].contains(now) {
+                                            AgentIsland.renameBusyText, AgentIsland.messageBusyText,
+                                            AgentIsland.autoAllowedText].contains(now) {
             return
         }
         store?.actions[key] = text
@@ -1448,7 +1449,6 @@ final class AgentIslandController {
     var after: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, fire in
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { fire() } }
     }
-    static let autoAllowedText = "Allowed automatically"
     /// #927: a card click refused while the session is held, worded like AgentIsland.messageBusyText.
     static let answerBusyText = "Answer not sent: another job is running"
     /// The same prompt back this soon after its answer is the human's (the loop guard).
@@ -1648,7 +1648,7 @@ final class AgentIslandController {
         for s in sessions {
             guard let a = s.autoAllowed, let was = dchSeen[s.key], was != a else { continue }
             Self.log.info("dch auto-allow answered in \(s.key.name, privacy: .public): \(a.title, privacy: .private)")
-            if !runner.isBusy(s.key) { store?.actions[s.key] = Self.autoAllowedText }
+            if !runner.isBusy(s.key) { store?.actions[s.key] = AgentIsland.autoAllowedText }
         }
         dchSeen = Dictionary(sessions.map { ($0.key, $0.autoAllowed) }, uniquingKeysWith: { a, _ in a })
     }
@@ -1737,7 +1737,7 @@ final class AgentIslandController {
             allowed[key] = (p, now())
             // QA #581 INFO-1: with the head off the screen the title is a command line.
             Self.log.info("Always allow answered Yes in \(key.name, privacy: .public): \(p.title, privacy: .private)")
-            if !runner.isBusy(key) { store?.actions[key] = Self.autoAllowedText }
+            if !runner.isBusy(key) { store?.actions[key] = AgentIsland.autoAllowedText }
         }
         // QA #581 F2: the check held the key, so refreshCards skipped it; read the card now.
         // #754 INFO-R2: also when the hold is already gone (switched off meanwhile).

@@ -256,7 +256,7 @@ final class AgentIslandKeptRowsTests: XCTestCase {
         XCTAssertEqual(tick(c, row(activity: 2)), .working, "fresh: checked")
         drain(c)
         XCTAssertEqual(f.sent, ["1"])
-        XCTAssertEqual(c.store?.actions[key], AgentIslandController.autoAllowedText)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
     }
 
     /// Rider R1133-1 (QA #857 INFO-1): Way 3 (#755) — a check orphaned by an off-toggle and taken back by an

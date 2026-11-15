@@ -679,6 +679,8 @@ extension AgentIsland {
     static func messageAllLabel(tab: String) -> String { "Message all in \(tab)…" }
     static let sendingText = "Sending…"
     static let messageBusyText = "Message not sent: another job is running"
+    /// #792: a row whose prompt Always allow (or dch) answered; refuseBusy writes a refusal over it (#927).
+    static let autoAllowedText = "Allowed automatically"
 
     /// The composer's text as sent: the window's sanitizer (AgentWindowDriver.message: controls but LF
     /// and tab dropped, CR to LF, trimmed), then its line breaks as spaces: one line, one argv element.

@@ -1112,6 +1112,9 @@ tag from the now-released section and put it on the new top draft.
   "applies when the Mac cools down", which was wrong after a short settle; it now says what the
   Mac's fan popup says: "Waiting for macOS to hand back the fans. Prosper sets 60% as soon as it
   can." (#1041)
+- Agent island: a click that is refused because the session is busy, on a row that shows "Allowed
+  automatically", now says why (for example "Restart not run: another job is running") instead of
+  looking ignored (#927)
 
 ## v2.174.0
 
