@@ -82,7 +82,7 @@ enum KitReason: String, Sendable, CaseIterable {
     case wrongType = "wrong value type for this key"
     case missingKey = "a required key is missing"
     case unknownKind = "unknown piece kind: use claude-md, tools, hook, statusline, permissions or seed"
-    case badID = "piece id must be [a-z0-9-]+, at most 64 characters"
+    case badID = "piece id must be [a-z0-9-]+, at most 64 characters, not starting with '-'"
     case duplicateID = "piece id is used twice"
     case tooManyPieces = "a kit has at most 64 pieces"
     case tooManySettings = "a kit has at most 32 settings"
@@ -101,12 +101,13 @@ enum KitReason: String, Sendable, CaseIterable {
     case duplicateSettingKey = "setting key is used twice"
     case badDefault = "setting default does not match its kind"
     case choiceNeedsValues = "a choice setting lists its values, and its default is one of them"
-    case controlCharacter = "text holds a control, line-separator or bidi-control character"
+    case controlCharacter = "text holds a control, line-separator, bidi-control or invisible character"
     case tooLong = "text is too long: matcher and choice values or defaults 256, title 128, homepage and rules 512"
     case tooManyValues = "a choice setting has at most 32 values"
     case tooManyRules = "a permissions piece lists at most 64 rules in each of allow, deny and ask"
+    case badHomepage = "homepage must be an https:// link"
     // kit dir (KitValidator)
-    case badExtensionID = "the extension id must be [A-Za-z0-9._-]+, at most 128 characters, and not only dots"
+    case badExtensionID = "the extension id must be [A-Za-z0-9._-]+, at most 128 characters, not starting with '-' and not only dots"
     case badSlug = "the extension name (the kit slug) must be [a-z0-9-]+, at most 64 characters"
     case slugTaken = "another installed kit already uses this slug"
     case slugReserved = "this slug is reserved for Prosper's own files"
@@ -129,13 +130,16 @@ enum KitReason: String, Sendable, CaseIterable {
     case badFileName = "file name must be [A-Za-z0-9][A-Za-z0-9._-]*"
     case duplicateTool = "two tools pieces ship the same tool name"
     case seedClash = "two seed files map to one managed piece id or one kitconfig file"
-    case tooManyFiles = "the kit has more than 4096 entries or dirs nested deeper than 16"
+    case seedUnderHooks = "a seed file may not land in the kit config's hooks/ folder: that folder is the user's"
+    case unreadableDir = "a folder in the kit cannot be listed"
+    case tooLargeToCheck = "executable is over 1 MiB, too large to check as text"
+    case tooManyFiles = "the kit has more than 4096 entries or a dir 16 levels deep (15 is the most)"
     case dotfileSkipped = "dotfile skipped"
     // render (KitRender)
     case notImportable = "the path holds a newline, carriage return or NUL and cannot be imported"
 }
 
-struct KitRefusal: Equatable, Sendable, CustomStringConvertible {
+struct KitRefusal: Hashable, Sendable, CustomStringConvertible {
     /// where: a piece id, a key path ("pieces[2].colour"), a kit-relative path, or "kit".
     var subject: String
     var reason: KitReason
@@ -184,12 +188,16 @@ struct KitManifest: Sendable, Equatable {
     /// caps in Unicode scalars
     static let maxMatcher = 256, maxTitle = 128, maxHomepage = 512, maxRule = 512, maxValue = 256
 
-    /// No C0 control, DEL, C1 control, U+2028/U+2029 or bidi control. Scalars, never Characters:
-    /// U+200E after a letter joins that letter's Character.
+    /// No C0 control, DEL, C1 control, U+2028/U+2029, bidi control or invisible scalar. Scalars, never
+    /// Characters: U+200E after a letter joins that letter's Character.
+    /// #917 (ruling E-6): the invisible half is a literal list, not OutsideText.isUnseen: that rule also
+    /// refuses U+FE0F (emoji presentation), U+00A0 and unassigned scalars, which a title may carry.
+    /// U+200C/U+200D stay allowed (emoji sequences, some scripts).
     static func isPlainText(_ s: String) -> Bool { !s.unicodeScalars.contains(where: isControlScalar) }
     static func isControlScalar(_ u: Unicode.Scalar) -> Bool {
         switch u.value {
         case 0x00...0x1F, 0x7F...0x9F, 0x2028, 0x2029, 0x061C, 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069: return true
+        case 0x00AD, 0x180E, 0x200B, 0x2060...0x2064, 0xFEFF, 0xE0000...0xE007F: return true
         default: return false
         }
     }
@@ -215,7 +223,15 @@ struct KitManifest: Sendable, Equatable {
     private static let commandChars = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-")
     private static let settingChars = Set("abcdefghijklmnopqrstuvwxyz0123456789_")
 
-    static func isValidPieceID(_ s: String) -> Bool { !s.isEmpty && s.count <= 64 && s.allSatisfy { idChars.contains($0) } }
+    /// No leading "-": a piece id may reach a runner argument list (#917 ruling E-10).
+    static func isValidPieceID(_ s: String) -> Bool {
+        !s.isEmpty && s.count <= 64 && s.first != "-" && s.allSatisfy { idChars.contains($0) }
+    }
+    /// A pure check on the string; nothing is opened or fetched.
+    static func isHTTPSLink(_ s: String) -> Bool {
+        guard let u = URL(string: s), u.scheme?.lowercased() == "https", let host = u.host, !host.isEmpty else { return false }
+        return true
+    }
     static func isValidCommand(_ s: String) -> Bool {
         !s.isEmpty && s.count <= 64 && s.first != "-" && s.allSatisfy { commandChars.contains($0) }
     }
@@ -304,6 +320,7 @@ struct KitManifest: Sendable, Equatable {
             if case .integer(let n)? = t["schema"], n == KitManifest.schemaVersion { kit.schema = n } else { refuse("schema", .badSchema) }
             kit.homepage = string(t, "homepage", "")
             cap(kit.homepage, KitManifest.maxHomepage, "homepage")
+            if let h = kit.homepage, !KitManifest.isHTTPSLink(h) { refuse("homepage", .badHomepage) }
             kit.requires = strings(t, "requires", "")
             if kit.requires.count > KitManifest.maxRequires { refuse("requires", .tooManyRequires) }
             for r in kit.requires where !KitManifest.isValidCommand(r) { refuse("requires", .badCommandName) }
@@ -370,14 +387,14 @@ struct KitManifest: Sendable, Equatable {
                 p.allow = strings(t, "allow", at)
                 p.deny = strings(t, "deny", at)
                 p.ask = strings(t, "ask", at)
-                let all = p.allow + p.deny + p.ask
-                if all.isEmpty { refuse("\(at)allow", .emptyPermissions) }
-                for r in all where r.trimmingCharacters(in: .whitespaces).isEmpty || r.contains(where: \.isNewline) || r.contains("\0") {
-                    refuse("\(at)allow", .badRule)
-                }
-                for r in all { cap(r, KitManifest.maxRule, "\(at)allow") }
-                for (k, list) in [("allow", p.allow), ("deny", p.deny), ("ask", p.ask)] where list.count > KitManifest.maxRules {
-                    refuse("\(at)\(k)", .tooManyRules)
+                if (p.allow + p.deny + p.ask).isEmpty { refuse("\(at)allow", .emptyPermissions) }
+                // each rule is reported under its own list key
+                for (k, list) in [("allow", p.allow), ("deny", p.deny), ("ask", p.ask)] {
+                    for r in list where r.trimmingCharacters(in: .whitespaces).isEmpty || r.contains(where: \.isNewline) || r.contains("\0") {
+                        refuse("\(at)\(k)", .badRule)
+                    }
+                    for r in list { cap(r, KitManifest.maxRule, "\(at)\(k)") }
+                    if list.count > KitManifest.maxRules { refuse("\(at)\(k)", .tooManyRules) }
                 }
             case .seed:
                 p.from = string(t, "from", at, required: true)

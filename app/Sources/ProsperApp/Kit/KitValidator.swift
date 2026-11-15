@@ -18,6 +18,7 @@ protocol KitFileReader: Sendable {
     func kind(_ path: String) -> KitFileKind
     func contents(_ path: String) -> Data?
     /// Every name in a dir, dotfiles and AppleDouble `._*` names included; nil when unreadable.
+    /// A name whose bytes are not UTF-8 comes back as `KitValidator.undecodableName`, never repaired.
     func names(_ dir: String) -> [String]?
     /// realpath(3); nil when the path does not resolve.
     func realPath(_ path: String) -> String?
@@ -43,12 +44,15 @@ struct KitPOSIXFileReader: KitFileReader {
         defer { closedir(d) }
         var out: [String] = []
         while let e = readdir(d) {
-            let name = withUnsafeBytes(of: e.pointee.d_name) { raw in
-                String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
-            }
+            let name = withUnsafeBytes(of: e.pointee.d_name) { raw in Self.name(raw.prefix { $0 != 0 }) }
             if name != ".", name != ".." { out.append(name) }
         }
         return out.sorted()
+    }
+
+    /// Strict UTF-8: a lossy decode would name a different file than the one on disk.
+    static func name<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
+        String(bytes: Array(bytes), encoding: .utf8) ?? KitValidator.undecodableName
     }
 
     func realPath(_ path: String) -> String? {
@@ -95,13 +99,18 @@ enum KitValidator {
     static let reservedSlugs: Set<String> = ["prosper"]
     static let readmeHeadings = ["What it changes", "Requirements", "Customise", "Remove"]
     static let localImportLine = "@{{kit_config}}/local.md"
+    /// what a reader returns for a name that is not UTF-8: readdir never yields a name holding "/"
+    static let undecodableName = "/"
 
     static func validate(kitDir: URL, manifest: ExtensionManifest, source: KitInstallSource, otherKitSlugs: Set<String>,
                          reader: any KitFileReader = KitPOSIXFileReader()) -> KitValidation {
         let dir = kitDir.standardizedFileURL.path
         var run = Run(dir: dir, realDir: reader.realPath(dir) ?? dir, reader: reader, source: source)
         let meta = manifest.extension
-        if !ManagedConfigPaths.isValidID(meta.id) || meta.id.allSatisfy({ $0 == "." }) { run.refuse("extension.id", .badExtensionID) }
+        // #917 E-10: no leading "-", the id may reach a runner argument list
+        if !ManagedConfigPaths.isValidID(meta.id) || meta.id.allSatisfy({ $0 == "." }) || meta.id.hasPrefix("-") {
+            run.refuse("extension.id", .badExtensionID)
+        }
         if !ManagedConfigPaths.isValidSlug(meta.name) { run.refuse("extension.name", .badSlug) }
         else if KitValidator.reservedSlugs.contains(meta.name) { run.refuse("extension.name", .slugReserved) }
         else if otherKitSlugs.contains(meta.name) { run.refuse("extension.name", .slugTaken) }
@@ -199,20 +208,29 @@ enum KitValidator {
             return inside ? .pathSymlink : .pathLeaves
         }
 
-        mutating func refuse(_ subject: String, _ reason: KitReason) { refusals.append(.init(subject: subject, reason: reason)) }
+        /// (subject, reason) pairs already refused: one path reached by two walks is listed once
+        var refused: Set<KitRefusal> = []
+
+        mutating func refuse(_ subject: String, _ reason: KitReason) {
+            let r = KitRefusal(subject: subject, reason: reason)
+            if refused.insert(r).inserted { refusals.append(r) }
+        }
         mutating func warn(_ subject: String, _ reason: KitReason) { warnings.append(.init(subject: subject, reason: reason)) }
         func path(_ rel: String) -> String { rel.isEmpty ? dir : dir + "/" + rel }
 
-        /// Every entry, without following a symlink. Bounded: 4096 entries, 16 levels.
+        /// Every entry, without following a symlink. Bounded: 4096 entries; a dir 16 levels deep is refused.
+        /// A dir that cannot be listed is refused, never read as empty; so is a name that is not UTF-8.
         mutating func walk() {
             var stack: [(rel: String, depth: Int)] = [("", 0)]
             var count = 0
             while let top = stack.popLast() {
                 let (rel, depth) = top
-                for name in reader.names(path(rel)) ?? [] {
+                guard let names = reader.names(path(rel)) else { refuse(rel.isEmpty ? "kit" : rel, .unreadableDir); continue }
+                for name in names {
                     count += 1
-                    let r = rel.isEmpty ? name : rel + "/" + name
                     guard count <= KitValidator.maxEntries else { refuse("kit", .tooManyFiles); return }
+                    guard !name.isEmpty, !name.contains("/"), !name.contains("\0") else { refuse(rel.isEmpty ? "kit" : rel, .badFileName); continue }
+                    let r = rel.isEmpty ? name : rel + "/" + name
                     let kind = reader.kind(path(r))
                     entries[r] = kind
                     switch kind {
@@ -288,7 +306,8 @@ enum KitValidator {
             case .tools:
                 guard let rel = resolve(p.dir ?? "", "\(p.id).dir", .dir) else { return }
                 var refs: [KitFileRef] = []
-                for name in (reader.names(path(rel)) ?? []) {
+                guard let names = reader.names(path(rel)) else { return refuse(rel, .unreadableDir) }
+                for name in names {
                     let r = rel + "/" + name
                     if name.hasPrefix(".") { warn(r, .dotfileSkipped); continue }
                     guard case .file = reader.kind(path(r)) else { refuse(r, .toolsNotFile); continue }
@@ -323,6 +342,8 @@ enum KitValidator {
                     case .file: break
                     default: refuse(r, .needsFile); continue
                     }
+                    // #917 E-5: kitconfig:hooks/ is the user's layer and the runner runs what is there
+                    if parts.first?.lowercased() == "hooks" { refuse(r, .seedUnderHooks); continue }
                     guard ManagedConfigPaths.checkRelative(under) == nil, ManagedConfigPaths.checkRelative(r) == nil else {
                         refuse(r, .badPath); continue
                     }
@@ -363,7 +384,7 @@ enum KitValidator {
             var outside = false
             if let text = given ?? readText(rel) {
                 let base = (rel as NSString).deletingLastPathComponent
-                tokens: for token in Set(KitValidator.imports(in: text)) {
+                tokens: for token in Set(KitValidator.imports(in: text)).sorted() { // sorted: a stable refusal order
                     guard let r = kitRelative(token, from: base) else { outside = true; continue }
                     guard seen.insert(r).inserted else { continue }
                     var prefix = ""
@@ -398,12 +419,13 @@ enum KitValidator {
         mutating func checkExecutables() {
             for rel in executables.sorted() {
                 var text = false
-                if case .file(_, let size) = reader.kind(path(rel)), size <= Int64(KitValidator.maxTextBytes),
-                   let data = reader.contents(path(rel)) {
-                    text = KitValidator.isText(data)
+                var reason = KitReason.binaryExecutable
+                if case .file(_, let size) = reader.kind(path(rel)) {
+                    if size > Int64(KitValidator.maxTextBytes) { reason = .tooLargeToCheck }
+                    else if let data = reader.contents(path(rel)) { text = KitValidator.isText(data) }
                 }
                 if !text {
-                    if source == .market { refuse(rel, .binaryExecutable) } else { warn(rel, .binaryExecutable) }
+                    if source == .market { refuse(rel, reason) } else { warn(rel, reason) }
                 }
             }
         }

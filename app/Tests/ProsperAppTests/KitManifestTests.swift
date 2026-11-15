@@ -323,4 +323,104 @@ final class KitManifestTests: XCTestCase {
         XCTAssertEqual(KitRefusal(subject: "guard", reason: .duplicateID).description, "guard: piece id is used twice")
         XCTAssertEqual(Set(KitReason.allCases.map(\.rawValue)).count, KitReason.allCases.count, "every reason text is distinct")
     }
+
+    // MARK: #917 S1 validator riders
+
+    /// The invisible scalars ruling E-6 lists, written as TOML escapes.
+    private static let invisible: [UInt32] = [0x00AD, 0x200B, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0xFEFF, 0x180E,
+                                              0xE0000, 0xE0001, 0xE0020, 0xE007F]
+
+    /// B1 (ruling E-6): each listed invisible scalar is refused in every string key, keys included.
+    func testInvisibleScalarsAreRefusedInEveryStringKey() throws {
+        let choice = #"kind    = "choice"\#nvalues  = ["a@Ib", "c"]\#ndefault = "c""#
+        let cases: [(old: String, new: String, subject: String)] = [
+            (#"matcher = "Bash""#, #"matcher = "Ba@Ish""#, "pieces[2].matcher"),
+            (#"run     = "hooks/guard.sh""#, #"run     = "hooks/g@Iuard.sh""#, "pieces[2].run"),
+            (#"source   = "CLAUDE.md""#, #"source   = "CLAUDE.m@Id""#, "pieces[0].source"),
+            (#"dir  = "tools""#, #"dir  = "to@Iols""#, "pieces[1].dir"),
+            (#"from = "seed/""#, #"from = "se@Ied/""#, "pieces[5].from"),
+            (#"homepage = "https://example.com/calm-agent""#, #"homepage = "https://example.com/ca@Ilm-agent""#, "homepage"),
+            (#"title   = "Default repo (owner/name)""#, #"title   = "Default@I repo""#, "settings[0].title"),
+            (#"default = """#, #"default = "@I""#, "settings[0].default"),
+            (#"allow = ["Bash(calm-note:*)"]"#, #"allow = ["Bash(calm-@Inote:*)"]"#, "pieces[4].allow[0]"),
+            (#"deny  = ["Bash(rm -rf:*)"]"#, #"deny  = ["Bash(rm @I-rf:*)"]"#, "pieces[4].deny[0]"),
+            (#"kind    = "string"\#ndefault = """#, choice, "settings[0].values[0]"),
+            (#"position = "bottom""#, #"position = "bottom"\#n"x@Iy" = 1"#, "pieces[0]"),
+            (#"schema   = 1"#, #"schema   = 1\#n"home@Ipage" = "x""#, "kit"),
+            (#"interpreter = "node""#, #"interpreter = "no@Ide""#, "pieces[3].interpreter"),
+            (#"requires = ["node"]"#, #"requires = ["node", "j@Iq"]"#, "requires[1]"),
+            (#"id       = "rules""#, #"id       = "ru@Iles""#, "pieces[0].id"),
+            (#"kind = "seed""#, #"kind = "se@Ied""#, "pieces[5].kind"),
+            (#"event   = "PreToolUse""#, #"event   = "Pre@IToolUse""#, "pieces[2].event"),
+            (#"position = "bottom""#, #"position = "bot@Itom""#, "pieces[0].position"),
+            (#"key     = "default_repo""#, #"key     = "default_@Irepo""#, "settings[0].key"),
+            (#"kind    = "string""#, #"kind    = "str@Iing""#, "settings[0].kind"),
+        ]
+        for u in Self.invisible {
+            let esc = u > 0xFFFF ? String(format: "\\U%08X", u) : String(format: "\\u%04X", u)
+            for c in cases {
+                try assertRefused(KitFixture.kit(replacing: c.old, with: c.new.replacingOccurrences(of: "@I", with: esc)), c.subject, .controlCharacter)
+            }
+        }
+        // the scalars added to the rule are exactly the listed ones (ranges expanded)
+        let before: (UInt32) -> Bool = {
+            switch $0 {
+            case 0x00...0x1F, 0x7F...0x9F, 0x2028, 0x2029, 0x061C, 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069: return true
+            default: return false
+            }
+        }
+        var added: Set<UInt32> = []
+        for v in UInt32(0)...0x10FFFF {
+            if let u = Unicode.Scalar(v), KitManifest.isControlScalar(u), !before(v) { added.insert(v) }
+        }
+        let listed: [UInt32] = [0x00AD, 0x180E, 0x200B, 0xFEFF] + Array(UInt32(0x2060)...0x2064) + Array(UInt32(0xE0000)...0xE007F)
+        XCTAssertEqual(added, Set(listed))
+    }
+
+    /// Ruling E-6: ZWJ and ZWNJ still pass; so do U+FE0F and U+00A0, which OutsideText.isUnseen refuses: why
+    /// the rule is a literal list and not isUnseen.
+    func testZeroWidthJoinerAndEmojiSelectorStillPass() throws {
+        for u: UInt32 in [0xFE0F, 0x00A0, 0x200C, 0x200D] {
+            XCTAssertTrue(OutsideText.isUnseen(try XCTUnwrap(Unicode.Scalar(u))), String(u, radix: 16))
+        }
+        let title = #"title   = "Theme \u2764\uFE0F\u00A0: a\u200Db a\u200Cb""#
+        XCTAssertEqual(try parse(KitFixture.kit(replacing: #"title   = "Default repo (owner/name)""#, with: title)).refusals, [])
+        XCTAssertEqual(try parse(KitFixture.kit(replacing: #"matcher = "Bash""#, with: #"matcher = "a\u200Db""#)).refusals, [])
+    }
+
+    /// Ruling E-10: a piece id may not start with "-".
+    func testLeadingDashPieceIDRefused() throws {
+        for bad in ["-p", "-", "--rules"] {
+            try assertRefused(KitFixture.kit(replacing: "id       = \"rules\"", with: "id       = \"\(bad)\""), "pieces[0].id", .badID)
+        }
+        XCTAssertEqual(try parse(KitFixture.kit(replacing: "id       = \"rules\"", with: "id       = \"rules-2\"")).refusals, [])
+    }
+
+    /// INFO-4: the homepage is an https link; a pure check on the string.
+    func testHomepageMustBeHTTPS() throws {
+        let old = #"homepage = "https://example.com/calm-agent""#
+        for bad in ["http://example.com/kit", "ftp://example.com/kit", "example.com/kit", "https://", "file:///Users/example/kit", ""] {
+            try assertRefused(KitFixture.kit(replacing: old, with: "homepage = \"\(bad)\""), "homepage", .badHomepage)
+        }
+        for ok in ["https://example.com/calm-agent", "HTTPS://example.com/x"] {
+            XCTAssertEqual(try parse(KitFixture.kit(replacing: old, with: "homepage = \"\(ok)\"")).refusals, [], ok)
+        }
+    }
+
+    /// INFO-5: a bad deny or ask rule is reported under its own key, not under allow.
+    func testDenyAndAskRulesReportedUnderTheirKey() throws {
+        let deny = #"deny  = ["Bash(rm -rf:*)"]"#
+        try assertRefused(KitFixture.kit(replacing: deny, with: #"deny  = ["  "]"#), "pieces[4].deny", .badRule)
+        try assertRefused(KitFixture.kit(replacing: "ask   = []", with: #"ask   = ["  "]"#), "pieces[4].ask", .badRule)
+        try assertRefused(KitFixture.kit(replacing: deny, with: "deny  = [\"\(String(repeating: "x", count: 513))\"]"), "pieces[4].deny", .tooLong)
+        let bad = try parse(KitFixture.kit(replacing: deny, with: #"deny  = ["  "]"#)).refusals
+        XCTAssertFalse(bad.contains { $0.subject == "pieces[4].allow" }, "\(bad)")
+    }
+
+    func testRiderReasonTextsAreFixed() {
+        XCTAssertEqual(KitReason.tooManyFiles.rawValue, "the kit has more than 4096 entries or a dir 16 levels deep (15 is the most)")
+        XCTAssertEqual(KitReason.controlCharacter.rawValue, "text holds a control, line-separator, bidi-control or invisible character")
+        XCTAssertEqual(KitReason.seedUnderHooks.rawValue, "a seed file may not land in the kit config's hooks/ folder: that folder is the user's")
+        XCTAssertEqual(KitReason.tooLargeToCheck.rawValue, "executable is over 1 MiB, too large to check as text")
+    }
 }

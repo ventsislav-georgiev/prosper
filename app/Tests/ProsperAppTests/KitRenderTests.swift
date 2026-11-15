@@ -306,4 +306,14 @@ final class KitRenderTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: kitConfig.appendingPathComponent("local.md").path))
         XCTAssertEqual(env.consent.seen.count, 2)
     }
+
+    // MARK: #917 S1
+
+    /// A substituted value is not scanned again: a kit dir whose path holds a placeholder stays literal.
+    func testSubstitutedValueIsNotRescanned() {
+        let c = KitRenderContext.standard(extensionID: "com.example.kit", slug: "calm-agent",
+                                          kitDir: URL(fileURLWithPath: "/Users/example/{{home}}/kit"),
+                                          home: URL(fileURLWithPath: "/Users/example"), configHome: URL(fileURLWithPath: "/Users/example/.config"))
+        XCTAssertEqual(KitRender.substitute("{{kit_dir}}/x {{home}}", c), "/Users/example/{{home}}/kit/x /Users/example")
+    }
 }

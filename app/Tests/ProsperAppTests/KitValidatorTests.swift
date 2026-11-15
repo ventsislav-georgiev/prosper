@@ -81,6 +81,10 @@ final class KitMemoryReader: KitFileReader, @unchecked Sendable {
     private var _realPaths: [String: Int] = [:]
     /// realPath() calls per absolute path
     var realPaths: [String: Int] { lock.withLock { _realPaths } }
+    /// #917: dirs whose names() answers nil (set before validating)
+    var unlistable: Set<String> = []
+    /// #917: extra raw names per dir, as a reader hands them over (KitValidator.undecodableName for bytes that are not UTF-8)
+    var rawNames: [String: [String]] = [:]
 
     /// modes: rel path -> mode, over the hooks/ and tools/ 0o755, else 0o644 default
     init(root: String, files: [String: String], symlinks: [String: String] = [:], modes: [String: UInt16] = [:]) {
@@ -111,9 +115,10 @@ final class KitMemoryReader: KitFileReader, @unchecked Sendable {
     }
     func names(_ dir: String) -> [String]? {
         touch(dir)
-        guard dirs.contains(dir) else { return nil }
+        guard dirs.contains(dir), !unlistable.contains(dir) else { return nil }
         let all = Array(files.keys) + Array(dirs) + Array(symlinks.keys)
         return Set(all.filter { ($0 as NSString).deletingLastPathComponent == dir }.map { ($0 as NSString).lastPathComponent }).sorted()
+            + (rawNames[dir] ?? [])
     }
     func realPath(_ path: String) -> String? {
         touch(path)
@@ -442,15 +447,15 @@ final class KitValidatorTests: XCTestCase {
 
     func testSeedFilesNestedAndClashing() throws {
         let f = try makeKitDir()
-        try f.write("seed/hooks/start.pre", "#!/bin/sh\n")
+        try f.write("seed/docs/start.pre", "#!/bin/sh\n")
         try f.write("seed/.hidden/x", "x")
         let v = try validated(f.validate())
-        XCTAssertEqual(v.seeds["config"]?.map(\.name), ["hooks/start.pre", "notes.toml"])
+        XCTAssertEqual(v.seeds["config"]?.map(\.name), ["docs/start.pre", "notes.toml"])
         XCTAssertEqual(v.warnings, [KitRefusal(subject: "seed/.hidden", reason: .dotfileSkipped)])
-        try f.write("seed/hooks.start.pre", "x")
-        assertRefused(try f.validate(), "seed/hooks/start.pre", .seedClash)
+        try f.write("seed/docs.start.pre", "x")
+        assertRefused(try f.validate(), "seed/docs/start.pre", .seedClash)
         // two seed pieces naming one kitconfig file, case-folded
-        try f.remove("seed/hooks.start.pre")
+        try f.remove("seed/docs.start.pre")
         try f.write("more/NOTES.toml", "x")
         let two = KitFixture.kit(replacing: "\n[[contributes.kit.settings]]",
                                  with: "\n[[contributes.kit.pieces]]\nid   = \"more\"\nkind = \"seed\"\nfrom = \"more\"\n\n[[contributes.kit.settings]]")
@@ -478,5 +483,113 @@ final class KitValidatorTests: XCTestCase {
         let f = try makeKitDir()
         let v = KitValidator.validate(kitDir: f.kit, manifest: try KitFixture.manifest(""), source: .local, otherKitSlugs: [])
         XCTAssertEqual(refusals(v), [KitRefusal(subject: "kit", reason: .notATable)])
+    }
+
+    // MARK: #917 S1 validator riders
+
+    /// Ruling E-5: kitconfig:hooks/ is the user's layer; its first component is compared case-folded.
+    func testSeedUnderHooksIsRefused() throws {
+        let r = refusals(try validate(memoryKit(["CLAUDE.md": KitDirFixture.claudeMD, "seed/hooks/guard.pre": "# x\n",
+                                                 "seed/HOOKS/b.post": "# x\n"])))
+        XCTAssertTrue(r.contains(KitRefusal(subject: "seed/hooks/guard.pre", reason: .seedUnderHooks)), "\(r)")
+        XCTAssertTrue(r.contains(KitRefusal(subject: "seed/HOOKS/b.post", reason: .seedUnderHooks)), "\(r)")
+        let ok = try validated(validate(memoryKit(["CLAUDE.md": KitDirFixture.claudeMD, "seed/hooksx/a": "# x\n", "seed/notes/hooks": "# x\n"])))
+        XCTAssertEqual(ok.seeds["config"]?.map(\.name), ["hooksx/a", "notes.toml", "notes/hooks"])
+    }
+
+    /// INFO-3: a folder that cannot be listed is refused, never read as empty.
+    func testUnlistableDirIsRefused() throws {
+        for (dir, subject) in [("/seed", "seed"), ("/bin", "bin"), ("", "kit")] {
+            let reader = memoryKit(["CLAUDE.md": KitDirFixture.claudeMD, "bin/helper": "#!/bin/sh\n"])
+            reader.unlistable = [memRoot + dir]
+            let r = refusals(try validate(reader))
+            XCTAssertTrue(r.contains(KitRefusal(subject: subject, reason: .unreadableDir)), "\(subject): \(r)")
+        }
+        // a tools dir is listed twice (walk, tools piece): one refusal
+        let reader = memoryKit(["CLAUDE.md": KitDirFixture.claudeMD])
+        reader.unlistable = [memRoot + "/tools"]
+        XCTAssertEqual(refusals(try validate(reader)).filter { $0.reason == .unreadableDir }, [KitRefusal(subject: "tools", reason: .unreadableDir)])
+    }
+
+    /// INFO-3: a name whose bytes are not UTF-8 is refused at the walk, never decoded lossily.
+    func testUndecodableNameIsRefused() throws {
+        XCTAssertEqual(KitPOSIXFileReader.name([0x61, 0xFF, 0x62]), KitValidator.undecodableName)
+        XCTAssertEqual(KitPOSIXFileReader.name([0x63, 0xC3]), KitValidator.undecodableName)
+        XCTAssertEqual(KitPOSIXFileReader.name(Array("calm-note".utf8)), "calm-note")
+        XCTAssertEqual(KitPOSIXFileReader.name([0xC3, 0xBC]), "\u{FC}")
+        for (dir, subject) in [("/seed", "seed"), ("", "kit")] {
+            let reader = memoryKit(["CLAUDE.md": KitDirFixture.claudeMD])
+            reader.rawNames = [memRoot + dir: [KitValidator.undecodableName]]
+            let r = refusals(try validate(reader))
+            XCTAssertTrue(r.contains(KitRefusal(subject: subject, reason: .badFileName)), "\(subject): \(r)")
+        }
+    }
+
+    /// Ruling E-10: an extension id may not start with "-".
+    func testLeadingDashExtensionIDRefused() throws {
+        for id in ["-x.example", "-"] {
+            let head = KitFixture.head.replacingOccurrences(of: "\"dev.example.kit.calm-agent\"", with: "\"\(id)\"")
+            let v = KitValidator.validate(kitDir: URL(fileURLWithPath: memRoot), manifest: try KitFixture.manifest(head: head), source: .market,
+                                          otherKitSlugs: [], reader: memoryKit(["CLAUDE.md": KitDirFixture.claudeMD]))
+            assertRefused(v, "extension.id", .badExtensionID)
+        }
+    }
+
+    /// INFO-5: a script over 1 MiB is not read and is reported as too large, not as Mach-O.
+    func testOversizeTextScriptReason() throws {
+        let reader = memoryKit(["CLAUDE.md": KitDirFixture.claudeMD,
+                                "tools/big": "#!/bin/sh\n" + String(repeating: "x", count: KitValidator.maxTextBytes)])
+        let r = refusals(try validate(reader))
+        XCTAssertEqual(r.filter { $0.subject == "tools/big" }, [KitRefusal(subject: "tools/big", reason: .tooLargeToCheck)], "\(r)")
+        XCTAssertTrue(reader.reads[memRoot + "/tools/big"] == nil, "an oversize file is never read")
+    }
+
+    /// INFO-5: refusals from imports come in path order, the same on every run.
+    func testRefusalOrderIsStable() throws {
+        func run() throws -> [String] {
+            var links: [String: String] = [:]
+            for i in 0..<8 { links["l\(i).md"] = "/elsewhere/l\(i).md" }
+            let md = (0..<8).reversed().map { "@l\($0).md" }.joined(separator: " ") + "\n@{{kit_config}}/local.md\n"
+            return refusals(try validate(memoryKit(["CLAUDE.md": md], symlinks: links))).filter { $0.reason == .pathLeaves }.map(\.subject)
+        }
+        let first = try run()
+        XCTAssertEqual(first, (0..<8).map { "l\($0).md" })
+        XCTAssertEqual(try run(), first)
+    }
+
+    /// B4: a symlink under a seed dir that CLAUDE.md also imports is refused once.
+    func testSymlinkUnderImportedSeedIsRefusedOnce() throws {
+        let reader = memoryKit(["CLAUDE.md": "@seed/link.md\n@{{kit_config}}/local.md\n"], symlinks: ["seed/link.md": memRoot + "/seed/notes.toml"])
+        let r = refusals(try validate(reader))
+        XCTAssertEqual(r.filter { $0.subject == "seed/link.md" }, [KitRefusal(subject: "seed/link.md", reason: .pathSymlink)], "\(r)")
+    }
+
+    /// The entry bound: 4096 entries pass, 4097 are refused.
+    func testEntryCap4096Passes4097Refused() throws {
+        func kit(_ total: Int) -> KitMemoryReader {
+            var files = ["CLAUDE.md": KitDirFixture.claudeMD]
+            for i in 0..<(total - 11) { files["f/x\(i)"] = "x\n" } // 10 fixture entries and the f dir
+            let reader = memoryKit(files)
+            XCTAssertEqual(reader.files.count + reader.dirs.count - 1, total, "entries without the root")
+            return reader
+        }
+        _ = try validated(validate(kit(4096)))
+        XCTAssertTrue(refusals(try validate(kit(4097))).contains(KitRefusal(subject: "kit", reason: .tooManyFiles)))
+    }
+
+    /// The depth bound: a dir 15 levels deep passes, 16 is refused.
+    func testDepth15Passes16Refused() throws {
+        func kit(_ depth: Int) -> KitMemoryReader {
+            memoryKit(["CLAUDE.md": KitDirFixture.claudeMD, (1...depth).map { "d\($0)" }.joined(separator: "/") + "/x": "x\n"])
+        }
+        _ = try validated(validate(kit(15)))
+        XCTAssertTrue(refusals(try validate(kit(16))).contains(KitRefusal(subject: "kit", reason: .tooManyFiles)))
+    }
+
+    /// The disk reader lists AppleDouble names (FileManager would hide them): a binary there is seen.
+    func testAppleDoubleBinaryIsSeen() throws {
+        let f = try makeKitDir()
+        try f.write("bin/._helper", Data([0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x01]), mode: 0o755)
+        assertRefused(try f.validate(source: .market), "bin/._helper", .binaryExecutable)
     }
 }
