@@ -275,8 +275,9 @@ extension AgentShortAnswerTests {
     /// QA R1181-r5-a on the wire: nemotron, glm, kimi, minimax (a made-up custom row of each format; the catalog has
     /// none). A combining mark (U+0301) after "<think>" or after "</think>": before, the parse kept the think block (the
     /// codex tail delta sent it) or dropped the answer. Now no think text in any delta or final text, on the six paths,
-    /// at every scalar cut on the codex path. The stream stops at "<think>" for these formats (a stream marker), so the
-    /// two no-tools stream paths send no delta (as before); the codex path sends the parsed answer as its one delta.
+    /// at every scalar cut on the codex path. The stream stops at "<think>" for these formats (a stream marker); the
+    /// codex path sends the parsed answer as its one delta. R1181-o (eighth): the two no-tools stream paths now do
+    /// the same (before: no delta, and the chat stream no text at all): the answer, no think text, on every path.
     func testThinkFormatsSendNoThinkTextInTheTailDelta() async throws {
         let d = Preferences.defaults, keys = ["customAgentModelsV1", "modelLabelOverridesV1"]
         let saved = keys.map { d.object(forKey: $0) }
@@ -295,7 +296,7 @@ extension AgentShortAnswerTests {
             // The fake engine as withServer set it, reported as the custom model (withServer restores the seam).
             let server = ProsperLLMServer.shared, inner = server.acquireAgent, id = Self.customId
             server.acquireAgent = { let r = try await inner(); return (engine: r.engine, modelId: id) }
-            for format in [ToolCallFormat.nemotron, .glm, .kimi, .minimax] {
+            for format in [ProsperApp.ToolCallFormat.nemotron, .glm, .kimi, .minimax] {
                 CustomModelStore.upsert(CustomAgentModel(id: Self.customId, label: "B", sizeBytes: 0, note: "", toolFormat: format))
                 XCTAssertEqual(AgentModelRegistry.toolFormat(for: Self.customId), format)
                 for c in cases {
@@ -305,10 +306,9 @@ extension AgentShortAnswerTests {
                             let where_ = "\(format) \(p) \(chunks): \(text)"
                             XCTAssertFalse(text.contains("plan"), "think text is never sent. \(where_)")
                             XCTAssertEqual(a.calls, 0, where_)
-                            // The no-tools stream paths stop at "<think>": no delta; the chat stream has no final.
-                            let streamsNothing = p.stream && !p.tools
-                            if p.stream { XCTAssertEqual(a.deltas, streamsNothing ? "" : c.answer, where_) }
-                            XCTAssertEqual(a.final, p.wire == "chat/completions" && streamsNothing ? "" : c.answer, where_)
+                            // R1181-o: every path the answer (before: the no-tools stream paths sent no delta).
+                            if p.stream { XCTAssertEqual(a.deltas, c.answer, where_) }
+                            XCTAssertEqual(a.final, c.answer, where_)
                         }
                     }
                 }
@@ -338,6 +338,85 @@ extension AgentShortAnswerTests {
                             if p.wire == "responses" { XCTAssertEqual(a.messageItems, 1, where_) }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// MARK: #1181 eighth dispatch: R1181-o (a leading think block on the no-tools stream paths) and R1181-n on the wire
+
+extension AgentShortAnswerTests {
+    /// R1181-o, one no-tools stream path: (text, the answer), per think format (nemotron, glm, kimi, minimax: the
+    /// made-up custom id example-model-b of that format, in the scratch XCTestDefaults store, Preferences.defaults under
+    /// XCTest; every key written saved and restored, as testThinkFormatsSendNoThinkTextInTheTailDelta does). Before, for
+    /// every row the path sent NO text delta (the stream stops at "<think>"; the chat stream then had no text at all, the
+    /// responses done item had the answer). Now the parsed answer's unsent suffix goes as one delta: the deltas joined
+    /// are the answer, at every scalar cut and per scalar; never the think text; never the notice (these formats have
+    /// none); an unclosed block, nothing.
+    private func assertNoToolsPathSendsTheAnswer(_ p: Path) async throws {
+        let d = Preferences.defaults, keys = ["customAgentModelsV1", "modelLabelOverridesV1"]
+        let saved = keys.map { d.object(forKey: $0) }
+        let savedGB = AgentModelRegistry.physicalMemoryGB
+        defer {
+            for (k, v) in zip(keys, saved) { d.set(v, forKey: k) }
+            AgentModelRegistry.physicalMemoryGB = savedGB
+        }
+        AgentModelRegistry.physicalMemoryGB = 64
+        let cases: [(text: String, answer: String)] = [
+            ("<think>plan</think>answer", "answer"),
+            ("<think>plan</think>\n\nanswer", "answer"),
+            ("intro <think>plan</think>answer", "intro answer"),
+            ("<think>plan</think><think>plan</think>answer", "answer"),
+            ("<think>plan", ""),
+        ]
+        try await withServer { ask in
+            let server = ProsperLLMServer.shared, inner = server.acquireAgent, id = Self.customId
+            server.acquireAgent = { let r = try await inner(); return (engine: r.engine, modelId: id) }
+            for format in [ProsperApp.ToolCallFormat.nemotron, .glm, .kimi, .minimax] {
+                CustomModelStore.upsert(CustomAgentModel(id: id, label: "B", sizeBytes: 0, note: "", toolFormat: format))
+                XCTAssertEqual(AgentModelRegistry.toolFormat(for: id), format)
+                for c in cases {
+                    for chunks in Self.cuts(c.text) {
+                        let (a, text) = try await ask(p, chunks)
+                        let where_ = "\(format) \(p) \(chunks): \(text)"
+                        XCTAssertEqual(a.deltas, c.answer, where_)
+                        XCTAssertEqual(a.final, c.answer, where_)
+                        XCTAssertFalse(text.contains("plan"), "think text is never sent. \(where_)")
+                        XCTAssertFalse(text.contains(StreamSplitter.unclosedThinkNotice), where_)
+                        XCTAssertEqual(a.calls, 0, where_)
+                        if p.wire == "responses" { XCTAssertEqual(a.messageItems, 1, where_) }
+                    }
+                }
+            }
+        }
+    }
+
+    func testChatStreamWithoutToolsSendsTheAnswerAfterALeadingThinkBlock() async throws {
+        try await assertNoToolsPathSendsTheAnswer(Path(wire: "chat/completions", stream: true, tools: false))
+    }
+
+    func testResponsesStreamWithoutToolsSendsTheAnswerAfterALeadingThinkBlock() async throws {
+        try await assertNoToolsPathSendsTheAnswer(Path(wire: "responses", stream: true, tools: false))
+    }
+
+    /// R1181-n on the wire (the catalog's qwenXML model, the fake engine): "<function=" + a combining mark (U+0301).
+    /// Before, the stream stopped at the marker by scalars while the parse kept the content whole, so the codex tail
+    /// delta sent the raw function markup as prose. Now no delta and no final text holds the markup, on every stream
+    /// path at every scalar cut. With tools the parsed call (name "\u{0301}shell") fails the schema check, the repair
+    /// replays the same fake chunks, and the last attempt's call goes on the wire as a value: no row runs it.
+    func testMarkedFunctionMarkerSendsNoRawMarkupInAnyDelta() async throws {
+        let text = "ok<function=\u{0301}shell></function>"
+        try await withServer { ask in
+            for p in paths where p.stream {
+                for chunks in Self.cuts(text) {
+                    let (a, body) = try await ask(p, chunks)
+                    let where_ = "\(p) \(chunks): \(body)"
+                    XCTAssertEqual(a.deltas, "ok", where_)
+                    XCTAssertEqual(a.final, "ok", where_)
+                    XCTAssertFalse(body.contains("<function="), where_)
+                    XCTAssertFalse(body.contains("</function>"), where_)
+                    XCTAssertEqual(a.calls, p.tools ? 1 : 0, where_)
                 }
             }
         }

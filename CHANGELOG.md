@@ -1194,6 +1194,9 @@ tag from the now-released section and put it on the new top draft.
   listed; a refused version with a character that cannot be shown says so (#1182)
 - The config change sheet shows each line left to right in the order it is written, also when it
   starts with a Hebrew or Arabic word, and says when a line is cut (#1252)
+- Agent: with Nemotron, GLM, Kimi or MiniMax models, a reply that starts with a thinking block now
+  shows its answer on streamed requests without tools; a Qwen3-Coder function call written with a
+  stray accent mark is read as a call, not shown as raw text (#1181)
 
 ## v2.174.0
 

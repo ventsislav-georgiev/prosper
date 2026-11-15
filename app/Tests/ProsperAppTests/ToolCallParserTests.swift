@@ -548,8 +548,10 @@ extension ToolCallParserTests {
              "ok<tool_call\u{0301}>" + json + "</tool_call>", 0),
             // No mark: today's call.
             ("ok<tool_call>" + json + "</tool_call>", "ok", "ok", 1),
-            // The splitter's defensive "<function=" stop; the parse needs call structure (as for any bare mention).
-            ("ok<function=\u{0301}shell></function>", "ok", "ok<function=\u{0301}shell></function>", 0),
+            // R1181-n: the back-off compares "<function=" and "</function>" by scalars too, as the splitter: one call
+            // whose name carries the mark (the schema check rejects it: the eighth's row below). Before: content the
+            // whole text, 0 calls, and the codex tail sent the raw markup as prose.
+            ("ok<function=\u{0301}shell></function>", "ok", "ok", 1),
         ]
         for c in cases {
             let parsed = ToolCallParser.parse(c.text, format: .qwenXML)
@@ -614,7 +616,7 @@ extension ToolCallParserTests {
     /// #1181 (R1181-k): each format's marker followed by a combining mark (U+0301). The stream stops at the marker by
     /// scalars at every cut; the parse (mistral, GLM, kimi, minimax now by scalars; harmony's regex already matches code
     /// points; nemotron's parseTagged since e32706e2) gives a content the stream's text is a scalar prefix of. The
-    /// Qwen3-Coder back-off is not converted (left.txt): its row pins today's answer.
+    /// Qwen3-Coder back-off by scalars since the eighth dispatch (R1181-n).
     func testEveryFormatMarkerThenCombiningMarkStreamIsAPrefixOfTheParse() {
         let json = #"{"name": "shell", "arguments": {"command": "ls"}}"#
         let harmony = "ok<|channel|>\u{0301}final<|message|>hi<|end|>"
@@ -632,8 +634,8 @@ extension ToolCallParserTests {
             // Before: "ok<minimax:tool_call>" + mark (the wrapper tag was kept), 1 call.
             (.minimax, "ok<minimax:tool_call>\u{0301}<invoke name=\"shell\"><parameter name=\"command\">ls</parameter></invoke>"
                 + "</minimax:tool_call>", "ok", "ok\u{0301}", 1),
-            // The back-off is not converted: the stream's defensive stop; the parse sees no "<function=": all text.
-            (.qwenXML, bare, "ok", bare, 0),
+            // R1181-n (eighth): the back-off by scalars: one call named "\u{0301}shell". Before: all text, 0 calls.
+            (.qwenXML, bare, "ok", "ok", 1),
         ]
         for c in cases {
             let parsed = ToolCallParser.parse(c.text, format: c.format)
@@ -641,6 +643,51 @@ extension ToolCallParserTests {
             XCTAssertEqual(parsed.toolCalls.count, c.calls, "\(c.format) \(c.text.debugDescription)")
             XCTAssertTrue(parsed.content.unicodeScalars.starts(with: c.stream.unicodeScalars), "\(c.format) \(c.text.debugDescription)")
             for s in streams(c.text, c.format) { XCTAssertEqual(s, c.stream, "\(c.format) \(c.text.debugDescription)") }
+        }
+    }
+}
+
+// MARK: #1181 eighth dispatch: the Qwen3-Coder back-off by Unicode scalars (R1181-n)
+
+extension ToolCallParserTests {
+    /// R1181-n: "<function=", "</function>" and "<parameter=" are compared by scalars in the back-off, as the splitter's
+    /// "<function=" stop. Per marker, a combining mark (U+0301) right after it, and the same text without the mark: a
+    /// call is recognised with the mark only where the same text without it is a call (the markers are ASCII: a scalar
+    /// match in the marked text is a match once the mark is removed). Before, by Characters: the "<function=" and
+    /// "<parameter=" rows gave 0 calls and the whole text as content; the "</function>" row gave content "ok" (the block
+    /// ran to the end). A mark INSIDE the marker matches neither way. A parsed call is a value: the schema check is
+    /// called as a function and rejects the marked name as an unknown tool, or the marked key as a missing argument.
+    func testBackOffMarkersByScalarsRecogniseOnlyWhatTheUnmarkedTextDoes() {
+        let tools = [tool(name: "shell", required: ["command"], props: ["command": "string"])]
+        // (marked text, its content, its call name or nil, the schema error or "" when valid, the unmarked text)
+        let cases: [(text: String, content: String, name: String?, error: String, unmarked: String)] = [
+            ("ok<function=\u{0301}shell></function>", "ok", "\u{0301}shell", "unknown tool",
+             "ok<function=shell></function>"),
+            ("ok<function=shell>\n<parameter=command>\nls\n</parameter>\n</function>\u{0301}", "ok\u{0301}", "shell", "",
+             "ok<function=shell>\n<parameter=command>\nls\n</parameter>\n</function>"),
+            ("ok<function=shell><parameter=\u{0301}command>ls</parameter>", "ok", "shell", "missing required",
+             "ok<function=shell><parameter=command>ls</parameter>"),
+            ("ok<function\u{0301}=shell></function>", "ok<function\u{0301}=shell></function>", nil, "",
+             "ok<function=shell></function>"),
+        ]
+        for c in cases {
+            let parsed = ToolCallParser.parse(c.text, format: .qwenXML)
+            let unmarked = ToolCallParser.parse(c.unmarked, format: .qwenXML)
+            XCTAssertEqual(parsed.content, c.content, c.text.debugDescription)
+            XCTAssertEqual(parsed.toolCalls.map(\.name), c.name.map { [$0] } ?? [], c.text.debugDescription)
+            XCTAssertEqual(unmarked.toolCalls.map(\.name), ["shell"], c.unmarked.debugDescription)
+            XCTAssertLessThanOrEqual(parsed.toolCalls.count, unmarked.toolCalls.count, c.text.debugDescription)
+            let errors = SchemaValidator.validate(toolCalls: parsed.toolCalls, against: tools)
+            if c.error.isEmpty {
+                XCTAssertEqual(errors, [], c.text.debugDescription)
+            } else {
+                XCTAssertEqual(errors.count, 1, c.text.debugDescription)
+                XCTAssertTrue(errors.first?.contains(c.error) ?? false, "\(c.text.debugDescription): \(errors)")
+            }
+            // The stream never shows text the parse took as a call: it is a scalar prefix of the content.
+            for s in streams(c.text, .qwenXML) {
+                XCTAssertTrue(parsed.content.unicodeScalars.starts(with: s.unicodeScalars), "\(c.text.debugDescription): \(s)")
+            }
         }
     }
 }

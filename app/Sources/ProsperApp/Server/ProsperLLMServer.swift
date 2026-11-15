@@ -513,6 +513,7 @@ private final class HTTPConnection: @unchecked Sendable {
                 sequence: seq, index: outputIndex,
                 item: ResponsesPayload.messageItem(id: itemID, text: "", status: "in_progress")))
             var splitter = StreamSplitter(format: format)
+            var streamed = ""
             let stream = engine.generateChat(
                 messages: chat.chatTurns(format: format), tools: [],
                 maxTokens: chat.maxTokens, temperature: chat.temperature,
@@ -524,6 +525,7 @@ private final class HTTPConnection: @unchecked Sendable {
                 if !delta.isEmpty {
                     emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
                         sequence: seq, itemID: itemID, index: outputIndex, delta: delta))
+                    streamed += delta
                 }
             }
             try Task.checkCancellation()
@@ -531,6 +533,7 @@ private final class HTTPConnection: @unchecked Sendable {
             if !tail.isEmpty {
                 emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
                     sequence: seq, itemID: itemID, index: outputIndex, delta: tail))
+                streamed += tail
             }
             let notice = StreamSplitter.endsInThink(rawText, format: format)
             if notice {   // #1181: nothing was streamed; the line is the whole answer
@@ -538,6 +541,10 @@ private final class HTTPConnection: @unchecked Sendable {
                     sequence: seq, itemID: itemID, index: outputIndex, delta: StreamSplitter.unclosedThinkNotice))
             }
             let parsed = ToolCallParser.parse(rawText, format: format)
+            if let rest = Self.unsentAnswer(parsed.content, streamed: streamed, format: format) {
+                emit("response.output_text.delta", ResponsesPayload.outputTextDelta(
+                    sequence: seq, itemID: itemID, index: outputIndex, delta: rest))
+            }
             let item = ResponsesPayload.messageItem(id: itemID, text: notice ? StreamSplitter.unclosedThinkNotice : parsed.content)
             emit("response.output_item.done", ResponsesPayload.outputItemDone(sequence: seq, index: outputIndex, item: item))
             output.append(item); outputIndex += 1
@@ -600,24 +607,31 @@ private final class HTTPConnection: @unchecked Sendable {
         // No tools requested → pure content; stream live with a tail-guard so we
         // never split a (defensively watched) marker across a delta.
         var splitter = StreamSplitter(format: format)
+        var rawText = "", streamed = ""   // R1181-o: the output (as the responses path keeps it) and what was sent
         let stream = engine.generateChat(
             messages: request.chatTurns(format: format), tools: [],
             maxTokens: request.maxTokens, temperature: request.temperature,
             topP: request.topP, stop: request.stop
         )
         for try await chunk in stream {
+            rawText += chunk
             let delta = splitter.ingest(chunk)
             if !delta.isEmpty {
                 sendSSEChunk(OpenAIChatResponse.contentChunk(id: responseID, model: model, delta: delta))
+                streamed += delta
             }
         }
         try Task.checkCancellation()
         let tail = splitter.finish()
         if !tail.isEmpty {
             sendSSEChunk(OpenAIChatResponse.contentChunk(id: responseID, model: model, delta: tail))
+            streamed += tail
         }
         if splitter.endedInThink {   // #1181: nothing was streamed; the line is the whole answer
             sendSSEChunk(OpenAIChatResponse.contentChunk(id: responseID, model: model, delta: StreamSplitter.unclosedThinkNotice))
+        }
+        if let rest = Self.unsentAnswer(ToolCallParser.parse(rawText, format: format).content, streamed: streamed, format: format) {
+            sendSSEChunk(OpenAIChatResponse.contentChunk(id: responseID, model: model, delta: rest))
         }
         sendSSEChunk(OpenAIChatResponse.finishChunk(id: responseID, model: model, reason: "stop"))
         sendSSEDone()
@@ -698,6 +712,18 @@ private final class HTTPConnection: @unchecked Sendable {
     /// #1181: the buffered paths' answer text: the parse, or the fixed line when the output ended inside the think block.
     private static func answer(_ result: GenerationResult, format: ToolCallFormat) -> String {
         StreamSplitter.endsInThink(result.rawText, format: format) ? StreamSplitter.unclosedThinkNotice : result.parsed.content
+    }
+
+    /// R1181-o: the no-tools stream paths' last delta. For the formats whose stream STOPS at "<think>" (nemotron, glm,
+    /// kimi, minimax: a stop marker, no leading-think phase) a leading think block left the turn with no text: send the
+    /// PARSED answer's unsent suffix (the parse has stripped the think text) as one delta, compared as the codex path's
+    /// tail: by scalars, past leading whitespace. nil for every other format (harmony's parse can hold its analysis text).
+    private static func unsentAnswer(_ final: String, streamed: String, format: ToolCallFormat) -> String? {
+        guard StreamSplitter.markers(for: format).contains(ToolCallParser.thinkOpen) else { return nil }
+        let sent = streamed.unicodeScalars.drop(while: { CharacterSet.whitespacesAndNewlines.contains($0) })
+        let all = final.unicodeScalars.drop(while: { CharacterSet.whitespacesAndNewlines.contains($0) })
+        guard all.starts(with: sent), all.count > sent.count else { return nil }
+        return String(all.dropFirst(sent.count))
     }
 
     private static func estimateTokens(_ s: String) -> Int { max(1, s.count / 4) }

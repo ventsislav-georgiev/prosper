@@ -49,8 +49,10 @@ enum ToolCallParser {
             // `<function=…></function>` blocks from the whole output).
             // Require call-structure evidence beyond the bare opener so prose that
             // merely MENTIONS `<function=` is not eaten as a tool call.
-            if tagged.toolCalls.isEmpty, visible.contains("<function="),
-               visible.contains("</function>") || visible.contains("<parameter=") {
+            // R1181-n: the three markers by scalars, as the splitter's "<function=" stop.
+            let u = visible.unicodeScalars
+            if tagged.toolCalls.isEmpty, scalarRange(of: "<function=", in: u) != nil,
+               scalarRange(of: "</function>", in: u) != nil || scalarRange(of: "<parameter=", in: u) != nil {
                 return parseBareXMLFunctions(visible)
             }
             return tagged
@@ -159,25 +161,22 @@ enum ToolCallParser {
     /// extract `<function=…></function>` blocks (last one may be unterminated on a
     /// truncated stream) and drop stray `<tool_call>`/`</tool_call>` tags from the
     /// surrounding content.
+    /// R1181-n: the markers by Unicode scalars (scalarRange), every index from the one scalar view.
     private static func parseBareXMLFunctions(_ text: String) -> ToolCallParseResult {
+        let u = text.unicodeScalars
         var calls: [ParsedToolCall] = []
         var content = ""
         var idx = text.startIndex
         var n = 0
-        while let openR = text.range(of: "<function=", range: idx..<text.endIndex) {
-            content += text[idx..<openR.lowerBound]
-            let blockEnd: String.Index
-            if let closeR = text.range(of: "</function>", range: openR.upperBound..<text.endIndex) {
-                blockEnd = closeR.upperBound
-            } else {
-                blockEnd = text.endIndex
-            }
-            if let call = callFromXMLFunction(String(text[openR.lowerBound..<blockEnd]), index: n) {
+        while let openR = scalarRange(of: "<function=", in: u[idx...]) {
+            content += String(u[idx..<openR.lowerBound])
+            let blockEnd = scalarRange(of: "</function>", in: u[openR.upperBound...])?.upperBound ?? text.endIndex
+            if let call = callFromXMLFunction(String(u[openR.lowerBound..<blockEnd]), index: n) {
                 calls.append(call); n += 1
             }
             idx = blockEnd
         }
-        content += text[idx..<text.endIndex]
+        content += String(u[idx...])
         content = content
             .replacingOccurrences(of: "<tool_call>", with: "")
             .replacingOccurrences(of: "</tool_call>", with: "")
@@ -508,25 +507,28 @@ enum ToolCallParser {
     /// `<function=NAME><parameter=KEY>\nVALUE\n</parameter>…</function>`. Each value
     /// is typed by JSON if it parses (so `["ls","-la"]` becomes a real array), else
     /// kept as a string. Ref: mlx_lm tool_parsers/qwen3_coder.py.
+    /// R1181-n: every search by Unicode scalars (scalarRange) on the one scalar view, so an index found after a marker
+    /// that a combining mark follows is never used on the Character view.
     private static func callFromXMLFunction(_ body: String, index: Int) -> ParsedToolCall? {
-        guard let nameR = body.range(of: "<function="),
-              let gt = body.range(of: ">", range: nameR.upperBound..<body.endIndex)
+        let u = body.unicodeScalars
+        guard let nameR = scalarRange(of: "<function=", in: u),
+              let gt = scalarRange(of: ">", in: u[nameR.upperBound...])
         else { return nil }
-        let name = String(body[nameR.upperBound..<gt.lowerBound])
+        let name = String(u[nameR.upperBound..<gt.lowerBound])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return nil }
 
         var args: [String: Any] = [:]
         var search = gt.upperBound
-        while let ps = body.range(of: "<parameter=", range: search..<body.endIndex) {
+        while let ps = scalarRange(of: "<parameter=", in: u[search...]) {
             // A truncated final parameter (model cut off mid-call) is kept best-effort
             // with whatever args parsed so far — the name + partial args are still
             // actionable and the schema-validate/repair ladder handles bad args. ponytail.
-            guard let pgt = body.range(of: ">", range: ps.upperBound..<body.endIndex),
-                  let pe = body.range(of: "</parameter>", range: pgt.upperBound..<body.endIndex)
+            guard let pgt = scalarRange(of: ">", in: u[ps.upperBound...]),
+                  let pe = scalarRange(of: "</parameter>", in: u[pgt.upperBound...])
             else { break }
-            let key = String(body[ps.upperBound..<pgt.lowerBound])
-            var val = String(body[pgt.upperBound..<pe.lowerBound])
+            let key = String(u[ps.upperBound..<pgt.lowerBound])
+            var val = String(u[pgt.upperBound..<pe.lowerBound])
             if val.hasPrefix("\n") { val.removeFirst() }
             if val.hasSuffix("\n") { val.removeLast() }
             args[key] = jsonScalar(val)
