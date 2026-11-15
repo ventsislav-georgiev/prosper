@@ -1197,6 +1197,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent: with Nemotron, GLM, Kimi or MiniMax models, a reply that starts with a thinking block now
   shows its answer on streamed requests without tools; a Qwen3-Coder function call written with a
   stray accent mark is read as a call, not shown as raw text (#1181)
+- Extensions: a publish whose tar cannot start now says it could not pack the folder, not that it
+  could not unpack a download (#1182)
 
 ## v2.174.0
 

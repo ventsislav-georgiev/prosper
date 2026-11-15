@@ -208,6 +208,35 @@ final class ExtensionRowCloseWiringTests: XCTestCase {
         XCTAssertEqual(names.map(refusal), [lead + "abcd", lead + "an item", lead + "plain"])
     }
 
+    // MARK: - The upload check at the publish call site (R1182-g1)
+
+    /// The record was loaded before the folder's extension.toml was edited; the plan is read after the edit, as the
+    /// confirmation would read it. publish(_:) must stop before the pack: the fake is never called. The row value is
+    /// not hosted, so its rowError (a State) cannot be read: the fake's count is what is read, after the main run loop
+    /// ran to the 5 s ceiling of waitForCall (a green run waits it out; a call returns at once). The refusal sentence is
+    /// pinned by MarketplacePublishPreviewTests; here the plan's refusal is asserted non-nil so no case is vacuous.
+    /// The control (an unchanged folder reaches the fake once with the record's id and version) is
+    /// testPublishOnASystemRowUploadsNothing, whose trusted user record goes through the same call and waitForCall.
+    @MainActor
+    func testPublishAfterTheFoldersManifestChangedOrStoppedLoadingCallsNothing() throws {
+        let (registry, record) = try installedKit("publishedit")
+        let calls = PublishCalls()
+        let toml = record.loaded.directory.appendingPathComponent("extension.toml")
+        let original = try String(contentsOf: toml, encoding: .utf8)
+        let edits = [original.replacingOccurrences(of: "version = \"1.0.0\"", with: "version = \"1.0.1\""),
+                     original.replacingOccurrences(of: "id = \"com.example.kit\"", with: "id = \"com.example.other\""),
+                     "x", "[extension]\n"]
+        for text in edits {
+            XCTAssertNotEqual(text, original)
+            try text.write(to: toml, atomically: true, encoding: .utf8)
+            let plan = RemoteInstaller.publishPlan(record.loaded.directory)
+            XCTAssertTrue(plan.uploadRefusal(record.manifest) != nil, text)
+            ExtensionRow(registry: registry, record: record, fetchVersion: { _ in nil }, publishCall: calls.fake).publish(plan)
+        }
+        _ = waitForCall(calls)
+        XCTAssertEqual(calls.all, [], "published over a folder whose extension.toml no longer matched the record")
+    }
+
     // MARK: - Helpers
 
     /// A registry in the row's tempDir() with com.example.kit 1.0.0 installed from a folder beside it, then trusted.

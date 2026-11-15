@@ -594,7 +594,7 @@ enum RemoteInstaller {
 
     /// Run `tar` and return its raw stdout bytes (binary-safe, for packaging).
     private static func runTarData(_ args: [String]) throws -> Data {
-        let r = try runDraining(args, captureOut: true)
+        let r = try runDraining(args, captureOut: true, packing: true)
         guard r.status == 0 else { throw tarFailed(args, r, packing: true) }
         return r.out
     }
@@ -618,7 +618,7 @@ enum RemoteInstaller {
     /// The form of DchCommand.runCapturingBoth (R988c-1), repeated here because that one's defaults name dch.
     /// `captureOut` false leaves stdout where it was (runTar's shape) and `out` empty. Throws only when the
     /// program cannot start, as the three helpers did; the caller judges `status`. Runs on the caller's thread.
-    static func runDraining(_ args: [String], path: String = "/usr/bin/tar", captureOut: Bool) throws
+    static func runDraining(_ args: [String], path: String = "/usr/bin/tar", captureOut: Bool, packing: Bool = false) throws
         -> (out: Data, err: String, status: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
@@ -629,7 +629,11 @@ enum RemoteInstaller {
         do {
             try process.run()
         } catch {
-            throw InstallError.extractFailed(error.localizedDescription)
+            guard packing else { throw InstallError.extractFailed(error.localizedDescription) }
+            // R1182-o: a pack that could not start says so (tarFailed's lead and cleaning), not "unpack the download".
+            let first = error.localizedDescription.split(whereSeparator: \.isNewline).first.map(String.init)
+            let shown = first.map { OutsideText.shown($0, max: 160) } ?? ""
+            throw InstallError.cannotPublish(shown.isEmpty ? tarPackFailedText : "\(tarPackFailedText): \(shown)")
         }
         // Written by the reader only, read only after group.wait(): the group orders the two.
         final class Err: @unchecked Sendable { var kept = Data(), cut = false }

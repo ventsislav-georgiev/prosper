@@ -690,7 +690,8 @@ final class MarketplacePublishPreviewTests: XCTestCase {
             + "joined by dots, then optionally - or + and a label), with nothing before or after it."
     }
 
-    /// The pure rule and the plan's refusal, on literal versions: nothing is read, packed or sent.
+    /// The pure rule and the plan's refusal, on literal versions: nothing is read, packed or sent. The literal plan leaves
+    /// versionUnshown false (the flag is set only by the folder path: testARefusedVersionWithAnUnshownCharacterSaysSo).
     func testAVersionNotInTheListedFormIsRefused() {
         let refused: [(version: String, shown: String)] = [(" 1.2.0", " 1.2.0"), ("v1.2.0", "v1.2.0"), ("1.2", "1.2"), ("", ""),
                                                             ("1.2.0\n", "1.2.0"), ("1.2.0 ", "1.2.0 "), ("1.2.0.9", "1.2.0.9")]
@@ -830,6 +831,25 @@ final class MarketplacePublishPreviewTests: XCTestCase {
         }
         XCTAssertEqual(RemoteInstaller.PublishPlan(members: ["./extension.toml"], badVersion: "1.2.0", versionUnshown: true).refusal,
                        Self.unshownRefusal)
+    }
+
+    // MARK: - R1182-o: tar that cannot start says pack for a publish and unpack for a download
+
+    /// A program path that does not exist inside this row's tempDir(): nothing runs. The unpack keeps its text byte for
+    /// byte; the pack says it could not pack, then Foundation's launch error (one line, cleaned, at most 160).
+    func testALaunchFailureSaysPackForAPublishAndUnpackForADownload() throws {
+        let missing = tempDir().appendingPathComponent("no-such-tar").path
+        var launch = ""
+        XCTAssertThrowsError(try RemoteInstaller.runDraining(["-tf", "x"], path: missing, captureOut: true)) {
+            guard case .extractFailed(let m)? = $0 as? RemoteInstaller.InstallError else { return XCTFail("got \($0)") }
+            launch = m
+            XCTAssertEqual(($0 as? LocalizedError)?.errorDescription, "Could not unpack the download: " + m)
+        }
+        XCTAssertTrue(launch.contains("no-such-tar") && !launch.contains("\n"), launch)
+        XCTAssertThrowsError(try RemoteInstaller.runDraining(["-cf", "-", "."], path: missing, captureOut: true, packing: true)) {
+            XCTAssertEqual($0 as? RemoteInstaller.InstallError, .cannotPublish("tar could not pack the folder: " + launch))
+            XCTAssertEqual(($0 as? LocalizedError)?.errorDescription, "tar could not pack the folder: " + launch)
+        }
     }
 
     // MARK: - Helpers
