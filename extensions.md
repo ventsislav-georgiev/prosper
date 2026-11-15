@@ -223,7 +223,7 @@ handler = "install_rules"
 | `network.changed` | — | reachability change |
 | `app.activated` | `{ bundleID, name, pid }` | frontmost app change |
 | `lid.changed` | — | clamshell open/close |
-| `url.open` | `{ url }` | a link opened while Prosper is the default browser |
+| `url.open` | `{ url }` | a link opened while Prosper is the default browser. Every listener is asked in turn; a handler that opened the link returns the string `"handled"`. If none does (it returns nothing, declines, errors or runs out of time), Prosper opens the link in the saved fallback browser, so a handler that opens the link must return `"handled"` or the link opens twice |
 | `timer.fired` | `{ id }` | a scheduled `host.timer` fired |
 
 A `system.launch` handler must be safe to run more than once: schedule timers by id, set key rules and menu items as a whole, and rebuild state from `host.prefs` rather than counting runs.
@@ -416,7 +416,7 @@ For an **untrusted, non-system** extension every side-effecting call is an inert
 - `host.osascript.run(source)` → `{ ok, output, error }` — AppleScript / JXA bridge
 - `host.keyboard.current_source()` → input-source id · `host.keyboard.layouts()` → `{ { id=, name= }, … }` · `host.keyboard.set_source(id)` → bool (Carbon TIS)
 - `host.keys.set_rules{ … }` — install the per-extension **key-rule** set (replaces the prior set; see § Key rules). `host.keys.stroke(spec)` injects a chord; `host.keys.system(name)` injects a media/aux key (`PLAY NEXT PREVIOUS FAST REWIND MUTE SOUND_UP SOUND_DOWN BRIGHTNESS_UP BRIGHTNESS_DOWN ILLUMINATION_UP ILLUMINATION_DOWN`). Injected events are tagged so they never re-enter the tap (no loops).
-- `host.url.open(url [, bundleID])` — open a URL (optionally in a specific browser) · `host.url.default_browser()` → bundle id of the current http handler · `host.url.set_default_browser(id)` → bool
+- `host.url.open(url [, bundleID])` → bool — open a URL (optionally in a specific browser); true when macOS accepted it (a `url.open` handler returns `"handled"` only then) · `host.url.default_browser()` → bundle id of the current http handler · `host.url.set_default_browser(id)` → bool
 - `host.fs.watch(path, "handler")` — fire a named handler with `{ paths = {…} }` on change · `host.fs.unwatch(path)` ([`ExtensionFSWatch.swift`](app/Sources/ProsperApp/Extensions/ExtensionFSWatch.swift))
 - `host.fs.read(path)` → string | nil — read a UTF-8 text file (up to 1 MiB) at any path except the secret paths above; nil when it is missing, too big, not text, or (below the system tier) a secret path
 - `host.caffeinate.prevent_idle_sleep(kind, on)` (`kind` = `"display"`|`"system"`) · `host.caffeinate.set_disable_lid_sleep(on)` · `host.caffeinate.set_remote_wake{ enabled=, interval_ac=, interval_batt=, battery_floor=, device_id= }` · `host.caffeinate.lock_screen()` · `host.caffeinate.start_screensaver()` · `host.caffeinate.sleep_now()` (release every keep-awake hold and sleep). Worked example: [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/).
