@@ -1220,6 +1220,9 @@ tag from the now-released section and put it on the new top draft.
   size.
 - Agent Sessions window, Focused view: the last turn's summary now keeps reading "Working" for as
   long as the session is working, instead of flipping to "N steps" between two tool calls.
+- Extension updates: an update from the Marketplace that was refused for its content is not
+  downloaded again until the Marketplace lists a new version (until the app restarts), and a
+  published theme's preview is read only from the theme files you confirmed in the publish list.
 
 ## v2.174.0
 

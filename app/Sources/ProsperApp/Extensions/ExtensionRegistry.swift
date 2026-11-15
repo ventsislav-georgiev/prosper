@@ -1259,6 +1259,43 @@ final class ExtensionRegistry: ObservableObject {
     /// Surfaced to the UI after a check: e.g. "Updated 2 extensions". nil = idle.
     @Published private(set) var updateStatus: String?
 
+    /// R1182-q1: market updates whose download was refused for its content, as (id, listed version), so the check does not
+    /// download the same refused package again. One pair per id, replaced when the listing shows another version.
+    /// shortcut: in memory, one more download per app launch; persist it if that matters
+    struct RefusedUpdates: Sendable {
+        static let maxCount = 256          // ids are outside data: at most this many are remembered
+        private(set) var listed: [String: String] = [:]   // id -> the listed version that was refused
+
+        /// True only for the exact pair noted (both texts compared whole): another listed version is downloaded.
+        func skips(id: String, listed version: String) -> Bool { listed[id] == version }
+
+        /// Remembers the pair when `error` refused the package's content; a transient failure is not remembered.
+        mutating func note(_ error: Error, id: String, listed version: String) {
+            guard Self.isRefusal(error), listed[id] != nil || listed.count < Self.maxCount else { return }
+            listed[id] = version
+        }
+
+        /// A refusal of what was downloaded (its manifest, id, version or archive entries), never a failure that a later
+        /// try could pass (no network, a timeout, a server answer, a cut or undecodable body, a local unpack or install failure).
+        static func isRefusal(_ error: Error) -> Bool {
+            switch error {
+            case ExtensionError.marketIdMismatch, ExtensionError.marketVersionMismatch: return true
+            case is ExtensionLoadError: return true
+            case RemoteInstaller.InstallError.unsafeArchive, RemoteInstaller.InstallError.manifestNotFound: return true
+            default: return false
+            }
+        }
+    }
+
+    private var refusedUpdates = RefusedUpdates()
+
+    /// R1182-p: the update failure log line, "update check failed for <id>: <why>". `shown` (the id, as logged before) is
+    /// its only public part; `why` (the error text, which can hold a folder name or a path) is logged private.
+    nonisolated static func updateFailureLog(id: String, error: Error) -> (shown: String, why: String) {
+        // R1182-m: through the description, so an id mismatch logs the cleaned sentence, not the archive's raw id.
+        ("update check failed for \(id)", (error as? LocalizedError)?.errorDescription ?? String(describing: error))
+    }
+
     /// Poll each user extension's `update_url` for a newer version and auto-apply
     /// it. Throttled to once per day unless `force` (the "Check for Updates"
     /// button passes force). System extensions update via the bundle, not here.
@@ -1285,11 +1322,14 @@ final class ExtensionRegistry: ObservableObject {
 
         var updated = 0
         for cand in candidates {
+            var tried: (id: String, listed: String)?   // R1182-q1: the market pair this pass downloads
             do {
                 if cand.url.hasPrefix(marketPrefix) {
                     let pkgID = String(cand.url.dropFirst(marketPrefix.count))
                     guard let latest = marketIndex[pkgID],
                           cand.version < SemanticVersion(latest) else { continue }
+                    if refusedUpdates.skips(id: pkgID, listed: latest) { continue }
+                    tried = (pkgID, latest)
                     try await installFromMarket(id: pkgID, version: latest)
                     updated += 1
                     log.info("auto-updated market extension \(cand.id, privacy: .public) to \(latest, privacy: .public)")
@@ -1308,9 +1348,9 @@ final class ExtensionRegistry: ObservableObject {
                 updated += 1
                 log.info("auto-updated extension \(cand.id, privacy: .public) to a newer version")
             } catch {
-                // R1182-m: through the description, so an id mismatch logs the cleaned sentence, not the archive's raw id.
-                let why = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
-                log.error("update check failed for \(cand.id, privacy: .public): \(why, privacy: .public)")
+                if let tried { refusedUpdates.note(error, id: tried.id, listed: tried.listed) }
+                let line = Self.updateFailureLog(id: cand.id, error: error)
+                log.error("\(line.shown, privacy: .public): \(line.why, privacy: .private)")
             }
         }
         if force || updated > 0 {

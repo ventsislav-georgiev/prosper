@@ -1135,3 +1135,61 @@ private final class Hosted {
         for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { walk(k, &out, depth: depth + 1) }
     }
 }
+
+/// R1182-q3: the theme preview a publish sends is read only from a regular-file member of the confirmed plan. Every file
+/// and link here is made inside the row's own tempDir(); the extension folder is tempDir()/ext.
+extension MarketplacePublishPreviewTests {
+    private static let themeJSON = Data(##"{"appearance":"light","colors":{"bg":"#101010","fg":"#f0f0f0"}}"##.utf8)
+    private static let swatch = MarketClient.ThemePreview.Swatch(title: "Example", appearance: "light",
+                                                                  colors: ["bg": "#101010", "fg": "#f0f0f0"])
+
+    private func theme(_ path: String) -> ThemeContribution {
+        ThemeContribution(id: "com.example.kit.theme", title: "Example", path: path, appearance: nil)
+    }
+
+    /// A regular theme file among the plan's members gives the preview it gave before, value for value.
+    @MainActor
+    func testThemePreviewFromARegularMember() throws {
+        let ext = try fixture(["extension.toml"])
+        try Self.themeJSON.write(to: ext.appendingPathComponent("theme.json"))
+        let plan = RemoteInstaller.publishPlan(ext)
+        XCTAssertEqual(plan.members, ["./extension.toml", "./theme.json"])
+        let got = ExtensionRow.themePreview(themes: [theme("theme.json")], dir: ext, members: plan.members)
+        XCTAssertEqual(got.kind, "theme")
+        XCTAssertEqual(got.preview, MarketClient.ThemePreview(themes: [Self.swatch]))
+    }
+
+    /// A theme path that is a symbolic link gives no preview, even when the list names it (link and target in tempDir()).
+    @MainActor
+    func testThemePreviewNeverFollowsALink() throws {
+        let ext = try fixture(["extension.toml"])
+        let target = ext.deletingLastPathComponent().appendingPathComponent("target.json")
+        try Self.themeJSON.write(to: target)
+        try FileManager.default.createSymbolicLink(at: ext.appendingPathComponent("theme.json"), withDestinationURL: target)
+        let got = ExtensionRow.themePreview(themes: [theme("theme.json")], dir: ext,
+                                            members: ["./extension.toml", "./theme.json"])
+        XCTAssertEqual(got.kind, "theme")
+        XCTAssertNil(got.preview)
+    }
+
+    /// A theme path with a ".." part gives no preview, even when the list names it (the file above is in tempDir()).
+    @MainActor
+    func testThemePreviewNeverLeavesTheFolder() throws {
+        let ext = try fixture(["extension.toml"])
+        try Self.themeJSON.write(to: ext.deletingLastPathComponent().appendingPathComponent("outside.json"))
+        let got = ExtensionRow.themePreview(themes: [theme("../outside.json")], dir: ext,
+                                            members: ["./extension.toml", "./../outside.json"])
+        XCTAssertEqual(got.kind, "theme")
+        XCTAssertNil(got.preview)
+    }
+
+    /// A regular theme file that is not among the confirmed members gives no preview.
+    @MainActor
+    func testThemePreviewOnlyFromTheConfirmedMembers() throws {
+        let ext = try fixture(["extension.toml"])
+        try Self.themeJSON.write(to: ext.appendingPathComponent("theme.json"))
+        let got = ExtensionRow.themePreview(themes: [theme("theme.json")], dir: ext, members: ["./extension.toml"])
+        XCTAssertEqual(got.kind, "theme")
+        XCTAssertNil(got.preview)
+    }
+}

@@ -262,12 +262,18 @@ struct ExtensionRow: View {
     /// Derive the marketplace category + look-and-feel preview from an extension's
     /// contributed themes. No themes → ("extension", nil). Reads each theme.json's
     /// flat color map straight off disk (declarative data, no VM).
-    static func themePreview(themes: [ThemeContribution], dir: URL)
+    /// R1182-q3: only a theme file among `members` (the confirmed plan's), still a regular file reached through real
+    /// folders, with no "." or ".." part, is read; any other gives no swatch (the publish goes on without it).
+    static func themePreview(themes: [ThemeContribution], dir: URL, members: [String])
         -> (kind: String, preview: MarketClient.ThemePreview?) {
         guard !themes.isEmpty else { return ("extension", nil) }
         var swatches: [MarketClient.ThemePreview.Swatch] = []
         for t in themes {
-            guard let data = try? Data(contentsOf: dir.appendingPathComponent(t.path)),
+            let parts = t.path.split(separator: "/", omittingEmptySubsequences: false)
+            guard members.contains("./" + t.path),
+                  !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }),
+                  RemoteInstaller.changedMembers(["./" + t.path], in: dir) == nil,
+                  let data = try? Data(contentsOf: dir.appendingPathComponent(t.path)),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let colors = obj["colors"] as? [String: String] else { continue }
             swatches.append(.init(
@@ -345,7 +351,7 @@ struct ExtensionRow: View {
                 let manifest = MarketClient.PublishManifest(
                     id: m.id, name: m.name, title: m.title, description: m.description,
                     version: m.version, author: m.author, icon: m.icon, license: m.license)
-                let (kind, preview) = Self.themePreview(themes: themes, dir: dir)
+                let (kind, preview) = Self.themePreview(themes: themes, dir: dir, members: plan.members)
                 try await publishCall(manifest, blob, kind, preview)
                 await MainActor.run { publishing = false; publishedVersion = m.version }
             } catch {
@@ -486,7 +492,7 @@ extension View {
 
 /// Not named `badge`: inside a view body that name is SwiftUI's View.badge modifier on `self`, which recurses.
 /// #1251: an extension's own texts (manifest or Marketplace package) as the extension list and the Marketplace rows draw
-/// them: through OutsideText.shown (unseen scalars dropped, at most two marks per character) with a bound per field, drawn
+/// them: through OutsideText.shown (unseen scalars dropped, at most two marks per base scalar) with a bound per field, drawn
 /// verbatim (no Markdown, no localization lookup). Display only: ids and versions used in logic stay the decoded values.
 enum ExtensionRowText {
     static let titleMax = 80, versionMax = 24, authorMax = 80, descriptionMax = 300, helpMax = 160
