@@ -114,9 +114,9 @@ final class ManagedConfigConsentModel: ObservableObject {
         }
     }
 
-    /// A new file has nothing to back up: no backup line for it.
+    /// A new file has nothing to back up: no backup line for it. #1252: the directory can hold a kit's own names: displayed.
     func backupLine(_ file: ManagedConfigChangeSet.File) -> String? {
-        file.newFile ? nil : "Backup: \(file.backupDirectory)"
+        file.newFile ? nil : "Backup: " + ManagedConfigConsentDisplay.displayed(file.backupDirectory)
     }
 
     /// The planner's sentences, plus the live note for settings.json whatever the planner said.
@@ -139,18 +139,97 @@ final class ManagedConfigConsentModel: ObservableObject {
         case .removed: sign = "- "
         case .context: sign = "  "
         }
-        return sign + line.text + (line.noFinalNewline ? "   (no newline at end of file)" : "")
+        return sign + ManagedConfigConsentDisplay.displayed(line.text) + (line.noFinalNewline ? "   (no newline at end of file)" : "")
     }
 
-    /// Every string the view renders, in order: what the C11 test greps.
+    /// Every string the view renders, in order, in the form it is drawn: what the C11 test greps.
     var renderedStrings: [String] {
         var out = [title] + (idLine.map { [$0] } ?? []) + [lead]
         for f in changes.files {
-            out.append(f.path)
+            out.append(ManagedConfigConsentDisplay.displayed(f.path))
             if let s = status(f) { out.append(s) }
-            out += f.lines.map(Self.text) + notes(f) + (backupLine(f).map { [$0] } ?? [])
+            out += f.lines.map(Self.text) + notes(f).map(ManagedConfigConsentDisplay.displayed) + (backupLine(f).map { [$0] } ?? [])
         }
         return out + ["Cancel", verb]
+    }
+}
+
+/// #1252 (F1054-1): how the sheet shows outside text it draws whole (a diff line, the path, a note, the backup line). The
+/// bytes written keep every scalar, so the display drops none of them:
+/// - a scalar OutsideText.isUnseen names is shown as the escape \u{XXXX} (its code point, uppercase hex, at least four
+///   digits), except a tab, which draws as blank space inside its own line and stays;
+/// - a character keeps its first two combining marks as marks (OutsideText.capMarks) and shows each further one as its
+///   escape right after it;
+/// - a run of backslashes (with the marks on them) shown just before an escape or before a literal "u{" is doubled: before
+///   "u{", an odd run of backslashes ends in an escape of ours, an even run is the line's own backslashes, each shown twice;
+/// - past `ceiling` scalars the rest is counted, not shown.
+/// Pure and linear in its input; no isolation.
+enum ManagedConfigConsentDisplay {
+    static let ceiling = 2000
+
+    static func displayed(_ s: String) -> String {
+        let rest = s.unicodeScalars.dropFirst(ceiling).count
+        var head = String.UnicodeScalarView()
+        head.append(contentsOf: s.unicodeScalars.prefix(ceiling))
+        // every scalar of the head in display order, with whether it is shown as its escape
+        var pieces: [(scalar: Unicode.Scalar, escaped: Bool)] = []
+        for ch in String(head) {
+            let kept = Array(OutsideText.capMarks(String(ch)).unicodeScalars)
+            var further: [Unicode.Scalar] = [], k = 0
+            // capMarks only drops marks, and every scalar it keeps after a dropped one is not a mark: this walk is exact
+            for u in ch.unicodeScalars {
+                if k < kept.count, kept[k] == u {
+                    pieces.append((u, u != "\t" && OutsideText.isUnseen(u)))
+                    k += 1
+                } else {
+                    further.append(u)
+                }
+            }
+            for u in further { pieces.append((u, true)) }
+        }
+        var out = String.UnicodeScalarView(), run: [Unicode.Scalar] = []
+        func flush(doubled: Bool) {
+            for u in run {
+                out.append(u)
+                if doubled, u == "\\" { out.append(u) }
+            }
+            run = []
+        }
+        for (i, p) in pieces.enumerated() {
+            let mark = p.scalar.properties.generalCategory == .nonspacingMark || p.scalar.properties.generalCategory == .enclosingMark
+            if !p.escaped, p.scalar == "\\" || (mark && !run.isEmpty) {
+                run.append(p.scalar)
+                continue
+            }
+            if !run.isEmpty {
+                let next: (scalar: Unicode.Scalar, escaped: Bool)? = i + 1 < pieces.count ? pieces[i + 1] : nil
+                flush(doubled: p.escaped || (p.scalar == "u" && next?.escaped == false && next?.scalar == "{"))
+            }
+            if p.escaped { out.append(contentsOf: escape(p.scalar).unicodeScalars) } else { out.append(p.scalar) }
+        }
+        flush(doubled: false)
+        return rest > 0 ? String(out) + "\u{2026} (+\(rest) more characters)" : String(out)
+    }
+
+    /// The visible form of one scalar: \u{XXXX}, uppercase hex, padded to four digits, never more.
+    static func escape(_ u: Unicode.Scalar) -> String {
+        let hex = String(u.value, radix: 16, uppercase: true)
+        return "\\u{" + String(repeating: "0", count: max(0, 4 - hex.count)) + hex + "}"
+    }
+}
+
+/// #1252: one diff line of the sheet, already displayed (ManagedConfigConsentDisplay). It wraps as before and is clipped
+/// to its own bounds, so nothing it draws reaches the line above or below it.
+struct ManagedConfigConsentDiffLine: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(verbatim: text)
+            .font(Neon.font(11, design: .monospaced))
+            .foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+            .clipped()
     }
 }
 
@@ -216,34 +295,35 @@ struct ManagedConfigConsentView: View {
 
     private func fileCard(_ file: ManagedConfigChangeSet.File) -> some View {
         VStack(alignment: .leading, spacing: sz(6)) {
-            Text(file.path)
+            // #1252: the path, the notes and the backup line can hold a kit's own text: displayed and clipped like a line
+            Text(verbatim: ManagedConfigConsentDisplay.displayed(file.path))
                 .font(Neon.font(12, weight: .semibold, design: .monospaced))
                 .foregroundStyle(Neon.textPrimary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                .clipped()
             if let status = model.status(file) {
                 Text(status).font(Neon.font(11)).foregroundStyle(Neon.blueBright)
             }
             VStack(alignment: .leading, spacing: sz(1)) {
                 ForEach(Array(file.lines.enumerated()), id: \.offset) { _, line in
-                    Text(ManagedConfigConsentModel.text(line))
-                        .font(Neon.font(11, design: .monospaced))
-                        .foregroundStyle(color(line.sign))
-                        .fixedSize(horizontal: false, vertical: true)
+                    ManagedConfigConsentDiffLine(text: ManagedConfigConsentModel.text(line), color: color(line.sign))
                 }
             }
             ForEach(model.notes(file), id: \.self) { note in
-                Text(note)
+                Text(verbatim: ManagedConfigConsentDisplay.displayed(note))
                     .font(Neon.font(12))
                     .foregroundStyle(Neon.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .clipped()
             }
             if let backup = model.backupLine(file) {
-                Text(backup)
+                Text(verbatim: backup)
                     .font(Neon.font(11))
                     .foregroundStyle(Neon.textSecondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .clipped()
             }
         }
         .padding(sz(10))

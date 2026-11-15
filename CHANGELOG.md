@@ -1164,6 +1164,9 @@ tag from the now-released section and put it on the new top draft.
   than the Marketplace lists; nothing is changed and the message names both versions (#1182)
 - Local agent: a turn that ends while the model is still thinking now says so in one line instead of
   finishing with no answer (#1181)
+- Config-change consent sheet: hidden characters in the lines, the path and the notes are shown as
+  visible codes such as \u{202E}, and a line stays in its own row; what is written is unchanged
+  (#1252)
 
 ## v2.174.0
 
