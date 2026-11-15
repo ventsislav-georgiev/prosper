@@ -193,11 +193,13 @@ enum KitRender {
 
     /// spec 4.3: generated from the manifest; the authoritative description (errata A1 wording).
     /// #917 G1: every line of an off piece (the closure, as plan takes it) ends in " (off)".
-    static func summary(_ v: KitValidated, _ c: KitRenderContext, off asked: Set<String> = []) -> [String] {
+    /// A refused selection prints the refusal only: plan writes nothing for it. `offTools` as in plan: " (off)" follows
+    /// the name of a switched-off tool.
+    static func summary(_ v: KitValidated, _ c: KitRenderContext, off asked: Set<String> = [], offTools: [String: Set<String>] = [:]) -> [String] {
         var lines: [String] = []
         let off: Set<String>
         switch KitPieceSelection(v).closure(off: asked) {
-        case .refused(let r): lines.append(r.description); off = []
+        case .refused(let r): return [r.description]
         case .closed(let o, _): off = o
         }
         for p in v.kit.pieces {
@@ -208,7 +210,8 @@ enum KitRender {
             case .claudeMD:
                 lines.append("\(p.id): a block at the \(p.position.rawValue) of CLAUDE.md imports \(c.kitDir)/\(p.source ?? "")")
             case .tools:
-                let names = (v.tools[p.id] ?? []).map(\.name).joined(separator: ", ")
+                let names = (v.tools[p.id] ?? []).map { (offTools[p.id]?.contains($0.name) ?? false) ? $0.name + " (off)" : $0.name }
+                    .joined(separator: ", ")
                 lines.append("\(p.id): commands \(names.isEmpty ? "(none)" : names) in \(c.kitBin)")
             case .hook:
                 let timeout = p.timeout.map { "timeout \($0) s" } ?? "Claude Code's default timeout"
@@ -226,7 +229,10 @@ enum KitRender {
             }
         }
         if needsLocalSeed(v, off: off) {
-            lines.append("\(localSeedID): \(c.kitConfig)/local.md is created for your own lines; Claude Code reads it last")
+            // the carrier is not always the last claude-md block (pieces keep their order): name it when a sibling is on
+            let sibling = v.kit.pieces.contains { $0.kind == .claudeMD && !off.contains($0.id) && $0.id != v.localPiece }
+            let reads = v.localPiece.flatMap { sibling ? "after \($0)'s lines" : nil } ?? "last"
+            lines.append("\(localSeedID): \(c.kitConfig)/local.md is created for your own lines; Claude Code reads it \(reads)")
         }
         if !v.kit.requires.isEmpty { lines.append("requires on PATH: \(v.kit.requires.joined(separator: ", "))") }
         return lines

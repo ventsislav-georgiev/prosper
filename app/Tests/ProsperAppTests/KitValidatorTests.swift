@@ -299,6 +299,53 @@ final class KitValidatorTests: XCTestCase {
         assertRefused(try f.validate(), "CLAUDE.md", .localImportTwice)
     }
 
+    /// #917 S2c: every spelling of the local.md target counts, in a sibling piece and in a file the chain reaches.
+    func testLocalImportCountsEverySpelling() throws {
+        let f = try makeKitDir()
+        let extra = "\n[[contributes.kit.pieces]]\nid     = \"extra\"\nkind   = \"claude-md\"\nsource = \"EXTRA.md\"\n\n[[contributes.kit.settings]]"
+        let two = KitFixture.kit(replacing: "\n[[contributes.kit.settings]]", with: extra)
+        let line = "@{{kit_config}}/local.md\n"
+        XCTAssertEqual(KitValidator.localImportLine + "\n", line)
+        for s in ["/./local.md", "//local.md", "/LOCAL.md", "/sub/../local.md"] {
+            let spelled = "@{{kit_config}}" + s + "\n"
+            // a sibling claude-md piece
+            try f.write("CLAUDE.md", "# rules\n" + line)
+            try f.write("EXTRA.md", "# extra\n" + spelled)
+            let sibling = refusals(try f.validate(two))
+            XCTAssertTrue(sibling.contains(KitRefusal(subject: "EXTRA.md", reason: .localImportTwice)), "\(s) \(sibling)")
+            XCTAssertTrue(sibling.contains(KitRefusal(subject: "CLAUDE.md", reason: .localImportTwice)), "\(s) \(sibling)")
+            // a file the carrier's chain reaches
+            try f.write("EXTRA.md", "# extra\n")
+            try f.write("CLAUDE.md", "See @a.md\n" + line)
+            try f.write("a.md", spelled)
+            let nested = refusals(try f.validate())
+            XCTAssertTrue(nested.contains(KitRefusal(subject: "a.md", reason: .localImportTwice)), "\(s) \(nested)")
+            XCTAssertTrue(nested.contains(KitRefusal(subject: "CLAUDE.md", reason: .localImportTwice)), "\(s) \(nested)")
+            // the only import, not the exact last line: refused
+            try f.write("CLAUDE.md", "# rules\n" + spelled)
+            let lone = refusals(try f.validate())
+            XCTAssertTrue(lone.contains(KitRefusal(subject: "CLAUDE.md", reason: .localImportLast)), "\(s) \(lone)")
+            // the same spelling inside a fence is not an import
+            try f.write("CLAUDE.md", "# rules\n```\n" + spelled + "```\n" + line)
+            try f.write("a.md", "```\n" + spelled + "```\n")
+            _ = try validated(f.validate())
+        }
+        // the exact line once, last: passes; an import inside a reached file that names the exact line is a second one
+        try f.write("CLAUDE.md", "See @a.md\n" + line)
+        try f.write("a.md", line)
+        assertRefused(try f.validate(), "a.md", .localImportTwice)
+        // a target that climbs above {{kit_config}} is not local.md: today's verdict (none -> missing; beside the line -> passes)
+        try f.write("CLAUDE.md", "# rules\n@{{kit_config}}/../local.md\n")
+        assertRefused(try f.validate(), "kit", .localImportMissing)
+        try f.write("CLAUDE.md", "See @a.md\n" + line)
+        try f.write("a.md", "@{{kit_config}}/../local.md\n")
+        _ = try validated(f.validate())
+        XCTAssertTrue(KitValidator.isLocalImport("{{kit_config}}/x/../LOCAL.md"))
+        XCTAssertFalse(KitValidator.isLocalImport("{{kit_config}}/../local.md"))
+        XCTAssertFalse(KitValidator.isLocalImport("{{kit_config}}/sub/local.md"))
+        XCTAssertFalse(KitValidator.isLocalImport("{{kit_config}}"))
+    }
+
     func testImportChainDeeperThanTwoRefused() throws {
         let f = try makeKitDir()
         // CLAUDE.md -> a.md (1) -> b.md (2): fits. Mentions, code spans and fences are not imports.

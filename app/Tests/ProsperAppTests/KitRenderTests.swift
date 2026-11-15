@@ -418,4 +418,26 @@ final class KitRenderTests: XCTestCase {
         XCTAssertEqual(lines.count, KitRender.summary(v, ctx).count)
         XCTAssertEqual(KitRender.summary(v, ctx, off: ["rules"]).first, "rules: " + KitReason.localPieceStaysOn.rawValue)
     }
+
+    /// #917 S2c: a refused selection prints the refusal only; a tool that is off is marked inside the tools line;
+    /// the seed sentence names the carrier when a sibling claude-md piece is on.
+    func testSummaryRefusalOffToolAndCarrierSentence() throws {
+        let v = try neededFixture()
+        XCTAssertEqual(KitRender.summary(v, ctx, off: ["rules"]), ["rules: the piece that imports local.md stays on while another claude-md piece is on"])
+        XCTAssertEqual(KitRender.summary(v, ctx).last { $0.hasPrefix("_local:") },
+                       "_local: \(ctx.kitConfig)/local.md is created for your own lines; Claude Code reads it after rules's lines")
+        XCTAssertEqual(KitRender.summary(v, ctx, off: ["extra"]).last { $0.hasPrefix("_local:") },
+                       "_local: \(ctx.kitConfig)/local.md is created for your own lines; Claude Code reads it last")
+        let f = try makeKitDir()
+        try f.write("tools/calm-two", "#!/bin/sh\necho two\n", mode: 0o755)
+        guard case .ok(let two) = try f.validate() else { return XCTFail("refused") }
+        let off = ["tools": Set(["calm-two"])]
+        XCTAssertEqual(KitRender.plan(two, ctx, offTools: off).shims.map(\.name), ["calm-note"])
+        let lines = KitRender.summary(two, ctx, offTools: off)
+        XCTAssertTrue(lines.contains("tools: commands calm-note, calm-two (off) in \(ctx.kitBin)"), "\(lines)")
+        XCTAssertEqual(lines.count, KitRender.summary(two, ctx).count)
+        XCTAssertTrue(KitRender.summary(two, ctx).contains("tools: commands calm-note, calm-two in \(ctx.kitBin)"))
+        // a piece that is off as a whole keeps the whole-line mark
+        XCTAssertTrue(KitRender.summary(two, ctx, off: ["tools"], offTools: off).contains("tools: commands calm-note, calm-two (off) in \(ctx.kitBin) (off)"))
+    }
 }

@@ -104,6 +104,19 @@ enum KitValidator {
     static let reservedSlugs: Set<String> = ["prosper"]
     static let readmeHeadings = ["What it changes", "Requirements", "Customise", "Remove"]
     static let localImportLine = "@{{kit_config}}/local.md"
+    /// #917 S2c: true when an import target (no "@") names the kit config's local.md in any spelling: the part after
+    /// "{{kit_config}}/" is split on "/", "" and "." dropped, ".." resolved (above the root: not local.md), case-folded.
+    /// Pure text; the target is never opened.
+    static func isLocalImport(_ target: String) -> Bool {
+        let head = "{{kit_config}}/"
+        guard target.hasPrefix(head) else { return false }
+        var parts: [Substring] = []
+        for part in target.dropFirst(head.count).split(separator: "/") where part != "." {
+            if part == ".." { if parts.popLast() == nil { return false } } else { parts.append(part) }
+        }
+        return parts.count == 1 && parts[0].lowercased() == "local.md"
+    }
+
     /// what a reader returns for a name that is not UTF-8: readdir never yields a name holding "/"
     static let undecodableName = "/"
 
@@ -211,12 +224,18 @@ enum KitValidator {
         /// claude-md pieces whose source was read, and those importing local.md with how often
         var claudeMDPieces = 0
         var localCarriers: [(id: String, rel: String, count: Int)] = []
+        /// every claude-md source, and the local.md import count of each file the import walk read
+        var claudeSources: Set<String> = []
+        var localByFile: [String: Int] = [:]
 
         /// ruling E-13: exactly one claude-md piece imports local.md, exactly once.
         mutating func checkLocalImport() {
             if claudeMDPieces > 0, localCarriers.isEmpty { refuse("kit", .localImportMissing) }
-            if localCarriers.count > 1 || localCarriers.contains(where: { $0.count > 1 }) {
+            // an import inside a file the chain reaches (not a claude-md source) is one more import
+            let nested = localByFile.filter { $0.value > 0 && !claudeSources.contains($0.key) }.keys.sorted()
+            if localCarriers.count > 1 || localCarriers.contains(where: { $0.count > 1 }) || !nested.isEmpty {
                 for c in localCarriers { refuse(c.rel, .localImportTwice) }
+                for n in nested { refuse(n, .localImportTwice) }
             }
         }
 
@@ -317,8 +336,9 @@ enum KitValidator {
                 guard rel.lowercased().hasSuffix(".md") else { return refuse("\(p.id).source", .needsMarkdown) }
                 guard let text = readText(rel) else { return refuse(rel, .notText) }
                 claudeMDPieces += 1
+                claudeSources.insert(rel)
                 // ruling E-13: the line on exactly one claude-md piece, as that piece's last line
-                let count = KitValidator.imports(in: text).filter { "@" + $0 == KitValidator.localImportLine }.count
+                let count = KitValidator.imports(in: text).filter(KitValidator.isLocalImport).count
                 if count > 0 {
                     localCarriers.append((p.id, rel, count))
                     let last = text.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n")
@@ -407,6 +427,7 @@ enum KitValidator {
             var seen: Set<String> = []
             var outside = false
             if let text = given ?? readText(rel) {
+                localByFile[rel] = KitValidator.imports(in: text).filter(KitValidator.isLocalImport).count
                 let base = (rel as NSString).deletingLastPathComponent
                 tokens: for token in Set(KitValidator.imports(in: text)).sorted() { // sorted: a stable refusal order
                     guard let r = kitRelative(token, from: base) else { outside = true; continue }
