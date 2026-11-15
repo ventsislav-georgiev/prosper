@@ -88,6 +88,9 @@ final class TextViewerModel: ObservableObject {
         name.unicodeScalars.map { LinkPolicy.bidiControls.contains($0.value) ? "\\u{" + String($0.value, radix: 16, uppercase: true) + "}" : String($0) }.joined()
     }
     var document: TextViewerDocument? { try? state?.get() }
+    /// What the latest load opened (R1108-q3): the one a save passes, never `document?.identity` (kept from an older load when
+    /// that load's bytes were the same). Nil for a refusal or a load with no identity. Not published: nothing is redrawn.
+    private(set) var identity: TextViewerDocument.Identity?
 
     /// The first load found a regular file (shown, or refused for its size or bytes) or nothing
     /// (#1147: the window fills in when the file is created): worth watching. A folder or a FIFO
@@ -132,7 +135,9 @@ final class TextViewerModel: ObservableObject {
                        generation gen: Int) {
         guard gen == generation else { return }   // a newer load is on its way
         let first = state == nil
-        // The same bytes in the same theme keep the shown text (and so the selection and scroll).
+        // R1108-r5-a: what a save will check against: the latest load's, also when the shown text is kept (not published).
+        identity = (try? next.get())?.identity
+        // The same bytes in the same theme keep the shown text (and so the selection and scroll); == ignores the identity.
         if next != state || out?.style != output?.style || out?.note != output?.note {
             state = next
             output = out

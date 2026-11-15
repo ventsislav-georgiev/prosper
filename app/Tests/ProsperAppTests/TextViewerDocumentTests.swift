@@ -179,4 +179,32 @@ final class TextViewerDocumentTests: XCTestCase {
         XCTAssertNotEqual(viaLink?.inode, linkStat.st_ino, "not the link's")
         XCTAssertTrue(((try? TextViewerDocument.decode(Data("x".utf8)).get())?.identity) == nil)
     }
+
+    /// R1108-r5-b: the row retargets its own link from its a.txt to its b.txt between the load's resolve and its open (the seam,
+    /// called once): the identity names the file whose text was read (path, device and inode), never b.txt beside a.txt's text.
+    func testALinkRetargetedDuringTheLoadNeverRecordsTheOtherFile() throws {
+        let dir = tempDir("tv-doc-r5b")
+        let a = try file("a.txt", Array("aaa".utf8), in: dir)
+        let b = try file("b.txt", Array("bbb".utf8), in: dir)
+        let link = dir.appendingPathComponent("link.txt")
+        XCTAssertEqual(symlink("a.txt", link.path), 0)
+        var calls = 0
+        let result = TextViewerDocument.load(link, beforeOpen: {
+            calls += 1
+            XCTAssertEqual(unlink(link.path), 0)
+            XCTAssertEqual(symlink("b.txt", link.path), 0)
+        })
+        XCTAssertEqual(calls, 1, "the seam runs once")
+        guard case .success(let d) = result else { return XCTFail("refused: \(result)") }
+        XCTAssertEqual(d.text, "aaa", "the file resolved before the retarget is the one read")
+        let id = try XCTUnwrap(d.identity, "a link that resolves gets an identity")
+        let read = d.text == "aaa" ? a : b
+        var st = stat()
+        XCTAssertEqual(lstat(read.path, &st), 0)
+        XCTAssertEqual(id, TextViewerDocument.Identity(path: read.path, device: st.st_dev, inode: st.st_ino),
+                       "the identity names the file whose text was read")
+        XCTAssertNotEqual(id.path, (d.text == "aaa" ? b : a).path, "never the other file's path beside this text")
+        XCTAssertEqual(try Data(contentsOf: a), Data("aaa".utf8))
+        XCTAssertEqual(try Data(contentsOf: b), Data("bbb".utf8))
+    }
 }

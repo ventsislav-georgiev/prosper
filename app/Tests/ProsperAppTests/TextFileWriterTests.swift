@@ -713,4 +713,49 @@ final class TextFileWriterTests: XCTestCase {
             XCTAssertEqual(names(dir), ["a.txt"])
         }
     }
+
+    // MARK: round 6 (R1108-r5-b the load's identity names what it read; the append-only flag, a fact)
+
+    /// R1108-r5-b: the row's own link is retargeted from its a.txt to its b.txt inside the load (the load's seam, between its resolve
+    /// and its open); a save with overwrite and that document's identity never writes b.txt: retargeted, both files unchanged.
+    func testALinkRetargetedDuringTheLoadIsNeverWrittenWithOverwrite() throws {
+        let dir = tempDir("tfw-r5b")
+        let aaa = Array("aaa".utf8), bbb = Array("bbb".utf8)
+        let a = try file("a.txt", aaa, in: dir)
+        let b = try file("b.txt", bbb, in: dir)
+        let link = dir.appendingPathComponent("link.txt")
+        XCTAssertEqual(symlink("a.txt", link.path), 0)
+        let loaded = TextViewerDocument.load(link, beforeOpen: {
+            XCTAssertEqual(unlink(link.path), 0)
+            XCTAssertEqual(symlink("b.txt", link.path), 0)
+        })
+        guard case .success(let doc) = loaded, let id = doc.identity else { return XCTFail("no identity: \(loaded)") }
+        XCTAssertEqual(W.save("new", encoding: .utf8, to: link, expected: W.digest(Array(doc.text.utf8)), overwrite: true, identity: id),
+                       .failure(.retargeted))
+        XCTAssertEqual(bytes(a), aaa)
+        XCTAssertEqual(bytes(b), bbb, "the other file is never written")
+        XCTAssertEqual(names(dir), ["a.txt", "b.txt", "link.txt"], "nothing created")
+    }
+
+    /// Round 6 item 3, a fact (no product change): the user append-only flag, set with chflags(2) on the row's own file and cleared
+    /// in the defer, is refused by the access check before either branch, even with overwrite: EPERM, no temp, the bytes kept.
+    func testAnAppendOnlyFileIsRefusedBeforeAnyTemp() throws {
+        let dir = tempDir("tfw-append")
+        let url = try file("a.txt", Array("old".utf8), in: dir)
+        let before = info(url).st_flags
+        XCTAssertEqual(chflags(url.path, before | UInt32(UF_APPEND)), 0)
+        defer { XCTAssertEqual(chflags(url.path, before), 0, "the row's own flag is cleared") }
+        XCTAssertNotEqual(info(url).st_flags & UInt32(UF_APPEND), 0)
+        for inPlace in [false, true] {
+            for overwrite in [false, true] {
+                let label = "inPlace \(inPlace) overwrite \(overwrite)"
+                let calls = Calls()
+                XCTAssertEqual(save("new", to: url, expected: Array("old".utf8), overwrite: overwrite, inPlace: inPlace, writer: RecordingWriter(calls: calls)),
+                               .failure(.failed(.open, EPERM)), label)
+                XCTAssertEqual(calls.all, [], label)
+                XCTAssertEqual(bytes(url), Array("old".utf8), label)
+                XCTAssertEqual(names(dir), ["a.txt"], label)
+            }
+        }
+    }
 }

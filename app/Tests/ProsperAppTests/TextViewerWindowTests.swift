@@ -1074,3 +1074,72 @@ extension TextViewerWindowTests {
         }
     }
 }
+
+/// R1108-r5-a: a reload of the same bytes from a new inode keeps the shown text (and so the selection and scroll) and the model
+/// takes the new identity; other bytes replace the text as before. Offscreen: no window; the row's own files in a tempDir().
+extension TextViewerWindowTests {
+
+    private func fileIdentity(_ url: URL) -> TextViewerDocument.Identity? {
+        var s = stat()
+        guard lstat(url.path, &s) == 0 else { return nil }
+        return TextViewerDocument.Identity(path: url.path, device: s.st_dev, inode: s.st_ino)
+    }
+
+    func testTheSameBytesFromANewInodeKeepTheShownTextAndTakeTheNewIdentity() throws {
+        let dir = tempDir("tv-r5a")
+        let url = dir.appendingPathComponent("a.txt")
+        try write("same\n", url)
+        let model = TextViewerModel(url: url, resolved: url, actions: fakeActions())
+        loaded(model)
+        XCTAssertEqual(model.output?.text.string, "same\n")
+        let before = try XCTUnwrap(fileIdentity(url))
+        XCTAssertEqual(model.identity, before)
+        let first = try XCTUnwrap(model.output?.text)
+        // Another program's atomic save: the row renames its own sibling over the file.
+        func replace(_ text: String) throws {
+            let side = dir.appendingPathComponent("side.txt")
+            try write(text, side)
+            XCTAssertEqual(rename(side.path, url.path), 0)
+        }
+        try replace("same\n")
+        let after = try XCTUnwrap(fileIdentity(url))
+        XCTAssertNotEqual(after.inode, before.inode, "a new inode")
+        var n = model.loads
+        model.reload()
+        waitUntil("the same bytes reloaded", { model.loads > n })
+        XCTAssertTrue(model.output?.text === first, "the same bytes from a new inode keep the shown text")
+        XCTAssertEqual(model.identity, after, "the model holds the new inode's identity")
+        try replace("other\n")
+        let other = try XCTUnwrap(fileIdentity(url))
+        n = model.loads
+        model.reload()
+        waitUntil("the other bytes reloaded", { model.loads > n })
+        XCTAssertFalse(model.output?.text === first, "other bytes replace the shown text")
+        XCTAssertEqual(model.output?.text.string, "other\n")
+        XCTAssertEqual(model.document?.text, "other\n")
+        XCTAssertEqual(model.identity, other)
+    }
+
+    /// The row reads through its own link (resolved: the link, so the retarget reaches the load) and retargets it at its other
+    /// file with the same bytes: the shown text kept, the identity the new target's.
+    func testALinkRetargetedAtTheSameBytesKeepsTheShownTextAndTakesTheNewTarget() throws {
+        let dir = tempDir("tv-r5a-link")
+        let a = dir.appendingPathComponent("a.txt"), b = dir.appendingPathComponent("b.txt")
+        try write("same\n", a)
+        try write("same\n", b)
+        let link = dir.appendingPathComponent("link.txt")
+        XCTAssertEqual(symlink("a.txt", link.path), 0)
+        let model = TextViewerModel(url: link, resolved: link, actions: fakeActions())
+        loaded(model)
+        XCTAssertEqual(model.identity, fileIdentity(a))
+        let first = try XCTUnwrap(model.output?.text)
+        XCTAssertEqual(unlink(link.path), 0)
+        XCTAssertEqual(symlink("b.txt", link.path), 0)
+        let n = model.loads
+        model.reload()
+        waitUntil("reloaded through the retargeted link", { model.loads > n })
+        XCTAssertTrue(model.output?.text === first, "the same bytes keep the shown text")
+        XCTAssertEqual(model.identity?.path, b.path, "the identity's path is the new target's")
+        XCTAssertEqual(model.identity, fileIdentity(b))
+    }
+}

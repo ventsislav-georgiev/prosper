@@ -33,6 +33,9 @@ struct TextViewerDocument: Equatable {
     /// resolves by), the device and inode from the fstat of the descriptor read. Nil from decode alone.
     struct Identity: Equatable, Sendable { let path: String; let device: dev_t; let inode: ino_t }
     var identity: Identity? = nil
+    /// What is shown, not where it came from (R1108-r5-a): the same bytes from a new inode are the same document, so a reload
+    /// keeps the shown text; the window keeps the latest identity apart (TextViewerModel.identity).
+    static func == (a: Self, b: Self) -> Bool { a.text == b.text && a.encoding == b.encoding && a.lineEnding == b.lineEnding }
     /// Invalid UTF-8, shown through a lossy decode: read-only (D1).
     var readOnly: Bool { encoding == .lossy }
 
@@ -40,8 +43,18 @@ struct TextViewerDocument: Equatable {
     /// open, then the type and size from fstat on that same descriptor, before any read.
     /// R1162-2: links are followed on purpose (the person chose this path, and a resolved path can keep a
     /// system link such as /var); what is protected is the opened file's type and size, not its name.
-    static func load(_ url: URL) -> Result<TextViewerDocument, Refusal> {
-        let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+    static func load(_ url: URL) -> Result<TextViewerDocument, Refusal> { load(url, beforeOpen: {}) }
+
+    /// R1108-r5-b: resolve first, then open that path without following its end, so the identity names the file read: no
+    /// window between what is read and what is recorded. Where resolve refuses a path open accepts (a relative path, a link
+    /// target that is not UTF-8, a 32-link chain) or the end became a link meanwhile, today's open runs with no identity (a
+    /// save is then unchecked). `beforeOpen` is a test seam: called once, between the resolve and the open.
+    static func load(_ url: URL, beforeOpen: () -> Void) -> Result<TextViewerDocument, Refusal> {
+        let resolved = try? TextFileWriter.resolve(url.path).get()
+        beforeOpen()
+        var fd = resolved.map { open($0, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW) } ?? -1
+        let path = fd >= 0 ? resolved : nil
+        if fd < 0 { fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC) }
         guard fd >= 0 else { return .failure(errno == ENOENT || errno == ENOTDIR ? .missing : .unreadable) }
         defer { close(fd) }
         var st = stat()
@@ -49,7 +62,7 @@ struct TextViewerDocument: Equatable {
         guard st.st_mode & S_IFMT == S_IFREG else { return .failure(.notRegular) }
         guard st.st_size >= 0, st.st_size <= Int64(maxBytes) else { return .failure(.tooLarge) }
         guard let data = readAll(fd, size: Int(st.st_size)) else { return .failure(.unreadable) }
-        let opened = (try? TextFileWriter.resolve(url.path).get()).map { Identity(path: $0, device: st.st_dev, inode: st.st_ino) }
+        let opened = path.map { Identity(path: $0, device: st.st_dev, inode: st.st_ino) }
         return decode(data).map { var d = $0; d.identity = opened; return d }
     }
 
