@@ -839,16 +839,47 @@ final class AgentWindowModel: ObservableObject {
     /// and bind(store)'s re-adopt keeps it; then the saved layout is adopted with its focus and zoom: syncRuntimes stops
     /// every old runtime before a new one is made, follow() starts the focused pane first; adopt's autosave finds the
     /// store equal. Only the window's pane runtimes: no session is started, resumed, revived or attached (8.1 :619-621).
+    /// #901 B3 step 6 (⌘J, 7.4): `pane` of that layout focused in the same write and adopt; zoomed, the zoom moves to it.
     @discardableResult
-    func switchLayout(_ id: UUID) -> PaneRefusal? {
+    func switchLayout(_ id: UUID, focus pane: UUID? = nil) -> PaneRefusal? {
         guard AgentPaneLayout.splitsEnabled else { return .layoutsOff }
         guard !closed, layouts != nil else { return .noSuchLayout }
         guard id != layout.id else { return nil }
         dragEnded()   // R900-5a-1: the drag's save lands before the store is read
-        guard let s = layouts, case let .success(out) = s.activate(id), let l = out.activeLayout else { return .noSuchLayout }
-        autosave(out)
+        guard let s = layouts, case let .success(out) = s.activate(id), let saved = out.activeLayout else { return .noSuchLayout }
+        let l = pane.flatMap { try? saved.focus($0).get() } ?? saved
+        autosave(l == saved ? out : out.storing(l) ?? out)
         adopt(l)
         return nil
+    }
+
+    /// #901 B3 step 6 (section 10 :754-757, 7.1, 7.4): ⌘J. The Needs you rows (the sidebar's order: blocked before done,
+    /// newest first) after the focused pane's session, wrapping, the focused one left out; the first blocked one, else
+    /// the first done one. Shown in a pane of the active layout: that pane is focused. Else shown in a stored layout (the
+    /// first in the stored order, the ⌃N numbers): switchLayout's own path, that pane focused. Else into the focused pane
+    /// (7.1 rule 2: a row's click). Zoomed, the zoom moves with the focus (PaneLayout.focus). False, nothing read: the
+    /// gate off or the window closed; false, nothing changed: no other session needs you. Never a session verb: only the
+    /// window's pane runtimes stop and start. Main actor (the window's key route).
+    @discardableResult
+    func nextNeedsYou() -> Bool {
+        guard AgentPaneLayout.splitsEnabled, !closed else { return false }
+        let rows = sections.first { $0.title == AgentSidebar.needsYouTitle }?.rows ?? []
+        let mine = layout.panes.first { $0.id == layout.focused }?.target
+        let after = rows.firstIndex { target($0.id) == mine }.map { Array(rows[($0 + 1)...] + rows[..<$0]) } ?? rows
+        guard let next = after.first(where: { $0.state == .blocked }) ?? after.first, case .live = next.id else { return false }
+        let t = target(next.id)
+        func shown(_ l: PaneLayout) -> UUID? { l.panes.first { $0.target == t }?.id }   // a session, never a History pane
+        if let p = shown(layout) {
+            focusPane(p)
+        } else if let other = layouts?.layouts.first(where: { $0.id != layout.id && shown($0) != nil }), let p = shown(other) {
+            keyFocus = .pane
+            switchLayout(other.id, focus: p)
+        } else {
+            keyFocus = .pane
+            select(next.id)
+            focusSelection()
+        }
+        return true
     }
 
     /// 8.1: the layout numbered `n`, 1 to 9 in the list's order. `n` is outside data (a key): compared, never trapped on;

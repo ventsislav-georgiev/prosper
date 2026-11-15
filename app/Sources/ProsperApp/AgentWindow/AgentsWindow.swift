@@ -317,6 +317,10 @@ final class AgentsNSWindow: NSWindow {
                                     splitsEnabled: AgentPaneLayout.splitsEnabled)
         if let a = PaneKeys.treeAction(for: event, context: pane, renaming: model.renaming != nil || model.layoutRenaming != nil,
                                        form: model.newSession != nil), model.perform(a) { return true }
+        // #901 B3 step 6 (section 10): ⌘J, gate on only (read first) and never under the rename field or the New session
+        // form; nothing to jump to: today's route below. Gate off: the line is skipped, ⌘J travels as before.
+        if AgentPaneLayout.splitsEnabled, model.renaming == nil, model.layoutRenaming == nil, model.newSession == nil,
+           PaneKeys.action(for: event, context: pane) == .nextNeedsYou, model.nextNeedsYou() { return true }
         switch Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
                           terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
                           form: model.newSession != nil) {
