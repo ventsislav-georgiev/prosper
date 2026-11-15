@@ -547,6 +547,7 @@ final class RunnerPanel {
         // re-record falls back to it rather than to "Unset").
         let recorder = RecorderView(frame: NSRect(x: 0, y: 0, width: 160, height: 24))
         recorder.combo = binding.existingCombo ?? unsetKeyCombo
+        recorder.actionName = binding.name
         var recorded: KeyCombo?
         recorder.onChange = { combo in recorded = combo }
         recorder.refreshTitle()

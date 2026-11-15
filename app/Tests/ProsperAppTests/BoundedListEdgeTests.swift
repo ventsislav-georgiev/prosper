@@ -17,6 +17,21 @@ import XCTest
 /// Hosted offscreen: the window is never ordered front or made key.
 @MainActor
 final class BoundedListEdgeTests: XCTestCase {
+    /// #1093: every offscreen window a row makes is closed in tearDown, as #1064 did for KeyMappingRowLayoutTests.
+    /// Closed only: never ordered front or made key.
+    private var windows: [NSWindow] = []
+
+    override func tearDown() {
+        let open = NSApplication.shared.windows.count
+        windows.forEach { $0.close() }
+        let closed = NSApplication.shared.windows.count
+        windows = []
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        // Measured for #1093 item 4 (does NSApp.windows shrink once the closed windows are released?).
+        print("#1093 NSApp.windows: \(open) before close, \(closed) after close, \(NSApplication.shared.windows.count) once released")
+        super.tearDown()
+    }
+
     /// 10 bound rows, so "Bound" scrolls on its own too, plus 3 unbound ones.
     private func rows() -> [BindableAction] {
         let set = KeyCombo(keyCode: 0, carbonModifiers: UInt32(cmdKey), display: "")
@@ -69,7 +84,9 @@ final class BoundedListEdgeTests: XCTestCase {
         })
         host.frame = CGRect(origin: .zero, size: side)
         let win = FixedBackingWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
         win.fixedBacking = backing
+        windows.append(win)
         win.contentView = host
         defer { win.contentView = NSView() }
         flush(host)

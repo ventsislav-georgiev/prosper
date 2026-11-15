@@ -7,18 +7,22 @@ import SwiftUI
 /// `KeyCombo` via `onChange`.
 struct ShortcutRecorder: NSViewRepresentable {
     let combo: KeyCombo
+    /// #1093: what the shortcut is for, spoken before the combination ("Open Runner, Command R"). nil: the combination alone.
+    var actionName: String? = nil
     let onChange: (KeyCombo) -> Void
 
     func makeNSView(context: Context) -> RecorderView {
         let view = RecorderView()
         view.onChange = onChange
         view.combo = combo
+        view.actionName = actionName
         return view
     }
 
     func updateNSView(_ nsView: RecorderView, context: Context) {
         nsView.combo = combo
         nsView.onChange = onChange
+        nsView.actionName = actionName
         nsView.refreshTitle()
     }
 
@@ -35,11 +39,22 @@ struct ShortcutRecorder: NSViewRepresentable {
 final class RecorderView: NSView {
     var combo: KeyCombo = ShortcutAction.runner.defaultCombo
     var onChange: ((KeyCombo) -> Void)?
+    /// #1093: see ShortcutRecorder.actionName.
+    var actionName: String?
+    /// #1093: how VoiceOver is told; rows swap it for a recorder. The default posts a high-priority announcement,
+    /// heard wherever the VoiceOver cursor is (a value change is re-read only on the focused element, and the
+    /// combination lives in the label, which no notification re-reads).
+    static var announce: @MainActor (String) -> Void = { text in
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
 
     private let label = NSTextField(labelWithString: "")
     /// Today's label size, fixed at init like the font always was.
     private let fullFontSize = 12 * ThemeRuntime.scale
-    private var monitor: Any?
+    /// Internal, not private, only so a row can arm beginRecording without installing a monitor (a non-nil one
+    /// stops the install); the row puts it back to nil before anything removes it.
+    var monitor: Any?
     /// Internal, not private, only so KeyMappingRowLayoutTests can show "Press keys…"
     /// without arming the event monitor; set it through beginRecording / stopRecording.
     var recording = false {
@@ -53,8 +68,9 @@ final class RecorderView: NSView {
         layer?.borderWidth = 1
         label.alignment = .center
         label.font = .systemFont(ofSize: fullFontSize, weight: .medium)
-        // #890: the view speaks for the field; the glyph label underneath stays silent.
-        label.setAccessibilityElement(false)
+        // #1093: the element under a labelWithString field is its cell, not the field; marked off, the recorder has no
+        // AX child and VoiceOver cannot stop on the glyph text under the button that already speaks it in words.
+        label.cell?.setAccessibilityElement(false)
         addSubview(label)
         refreshTitle()
     }
@@ -97,7 +113,7 @@ final class RecorderView: NSView {
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
     /// The combo in words ("Shift Command K"), not the glyph string "⇧⌘K".
-    override func accessibilityLabel() -> String? { combo.spokenLabel }
+    override func accessibilityLabel() -> String? { actionName.map { "\($0), \(combo.spokenLabel)" } ?? combo.spokenLabel }
     override func accessibilityValue() -> Any? { recording ? "Waiting for keys" : nil }
     /// VoiceOver's press is the click: arms the field like `mouseDown`.
     override func accessibilityPerformPress() -> Bool {
@@ -125,35 +141,43 @@ final class RecorderView: NSView {
     func beginRecording() {
         window?.makeFirstResponder(self)
         recording = true
+        Self.announce("Waiting for keys")
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
-            guard let self, self.recording else { return event }
-            // Escape cancels recording without changing the binding, then goes on to
-            // the host: in the runner's "Assign Shortcut…" alert the whole point of
-            // Escape is to dismiss it, and swallowing the key left the dialog up with
-            // a disarmed field — looking hung. Settings has no Escape handler, so
-            // passing it through there is a no-op.
-            if event.type == .keyDown && event.keyCode == UInt16(kVK_Escape) {
-                self.stopRecording()
-                return event
-            }
-            // Only act on keyDown with an actual (non-modifier) key.
-            if event.type == .keyDown {
-                let carbon = Self.carbonModifiers(from: event.modifierFlags)
-                // Require at least one non-shift modifier so combos don't collide
-                // with ordinary typing.
-                guard carbon != 0, carbon != UInt32(shiftKey) else {
-                    NSSound.beep()
-                    return nil
-                }
-                let newCombo = KeyCombo(keyCode: UInt32(event.keyCode), carbonModifiers: carbon, display: "")
-                self.combo = newCombo
-                self.stopRecording()
-                self.onChange?(newCombo)
-                return nil  // swallow so it doesn't type
-            }
-            return nil  // swallow flagsChanged while recording
+            guard let self else { return event }
+            return self.handle(event)
         }
+    }
+
+    /// The key monitor's body: a row hands it a built event as a value, never a posted one.
+    func handle(_ event: NSEvent) -> NSEvent? {
+        guard recording else { return event }
+        // Escape cancels recording without changing the binding, then goes on to
+        // the host: in the runner's "Assign Shortcut…" alert the whole point of
+        // Escape is to dismiss it, and swallowing the key left the dialog up with
+        // a disarmed field — looking hung. Settings has no Escape handler, so
+        // passing it through there is a no-op.
+        if event.type == .keyDown && event.keyCode == UInt16(kVK_Escape) {
+            self.stopRecording()
+            return event
+        }
+        // Only act on keyDown with an actual (non-modifier) key.
+        if event.type == .keyDown {
+            let carbon = Self.carbonModifiers(from: event.modifierFlags)
+            // Require at least one non-shift modifier so combos don't collide
+            // with ordinary typing.
+            guard carbon != 0, carbon != UInt32(shiftKey) else {
+                NSSound.beep()
+                return nil
+            }
+            let newCombo = KeyCombo(keyCode: UInt32(event.keyCode), carbonModifiers: carbon, display: "")
+            self.combo = newCombo
+            self.stopRecording()
+            Self.announce(newCombo.spokenLabel)
+            self.onChange?(newCombo)
+            return nil  // swallow so it doesn't type
+        }
+        return nil  // swallow flagsChanged while recording
     }
 
     private func stopRecording() {

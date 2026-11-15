@@ -1281,6 +1281,10 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.73.0 (was 1.72.0). X-ray's references now find a mention in the middle of a very
   large transcript, the reference card keeps the newest mentions when the machine is busy, and a
   slow Tailscale lookup no longer locks a phone out of the Mac for 30 s. (#1282)
+- VoiceOver: the shortcut recorder in Settings and in the Assign Shortcut dialog now says which
+  action it sets ("Open Runner, Command R"), announces "Waiting for keys" when you start recording
+  and reads out the new shortcut once you press it, and no longer lets VoiceOver stop on the key
+  symbols inside it.
 
 ## v2.174.0
 

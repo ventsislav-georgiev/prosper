@@ -2572,7 +2572,7 @@ struct ShortcutCatalogRow: View {
                 // Wide enough for a five-modifier chord in #123's compact glyph
                 // form (⌃⌥⇧⌘⇪ + key) and NOT `fixedSize()` — the recorder must be
                 // the same width on every row whatever it is showing.
-                ShortcutRecorder(combo: action.combo, onChange: onRecord)
+                ShortcutRecorder(combo: action.combo, actionName: action.title, onChange: onRecord)
                     .frame(width: Self.recorderWidth, height: sz(24))
 
                 // Same slot whether or not this kind of row offers a reset.
@@ -2882,7 +2882,7 @@ struct KeyMappingRow: View {
                 Text(String(rule.trigger.dropFirst("media:".count)))
                     .foregroundStyle(Neon.textPrimary).frame(width: sz(96), alignment: .leading)
             } else {
-                ShortcutRecorder(combo: triggerCombo) { combo in
+                ShortcutRecorder(combo: triggerCombo, actionName: "Key to remap") { combo in
                     if let s = combo.specString { update { $0.trigger = s } }
                 }
                 .frame(width: sz(96), height: sz(24)).fixedSize()
@@ -2933,7 +2933,7 @@ struct KeyMappingRow: View {
                 label: rule.target.isEmpty ? "Choose App\u{2026}" : AppPickerMenu.displayName(for: rule.target)
             ) { target, _ in update { $0.target = target } }
         case .remap:
-            ShortcutRecorder(combo: KeyCombo.parse(rule.target) ?? unsetKeyCombo) { combo in
+            ShortcutRecorder(combo: KeyCombo.parse(rule.target) ?? unsetKeyCombo, actionName: "Remap to") { combo in
                 if let s = combo.specString { update { $0.target = s } }
             }
             .frame(width: sz(96), height: sz(24)).fixedSize()
