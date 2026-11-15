@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 @testable import ProsperApp
@@ -278,5 +279,75 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(on["glyph web"] != nil && on["slot web"] == nil, "the other pane's row: the glyph")
         let off = drawn(false)
         XCTAssertTrue(off.keys.allSatisfy { !$0.hasPrefix("slot") && !$0.hasPrefix("glyph") }, "gate off: \(off.keys.sorted())")
+    }
+
+    /// 7.2 / 7.4: a zoom toggle (the focused pane, so the selection, unchanged) publishes a change of the model, so the
+    /// sidebar, which reads `inViewRows` under its observer, redraws: zoomed none is in view; unzoomed the other is back.
+    @MainActor
+    func testInViewZoomTogglePublishesAndEmptiesTheRowsWhileZoomed() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1.0
+        try withTreeGate(true) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]))
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            let web = AgentSidebar.RowID.live(paneKey("web"))
+            XCTAssertEqual(m.inViewRows, [web])
+            var sends = 0
+            let sink = m.objectWillChange.sink { _ in sends += 1 }
+            defer { sink.cancel() }
+            XCTAssertTrue(m.perform(.zoom))
+            XCTAssertTrue(try XCTUnwrap(m.layout.zoomed) == m.layout.focused)
+            XCTAssertGreaterThan(sends, 0, "a zoom publishes")
+            XCTAssertEqual(m.inViewRows, [], "zoomed: none in view")
+            let zoomSends = sends
+            XCTAssertTrue(m.perform(.zoom))
+            XCTAssertTrue(m.layout.zoomed == nil)
+            XCTAssertGreaterThan(sends, zoomSends, "an unzoom publishes")
+            XCTAssertEqual(m.inViewRows, [web], "unzoomed: back")
+        }
+    }
+
+    /// 7.2: an EQUAL layout adopted (gate on, A | B) publishes nothing: the layout's publish is on a change of value only.
+    @MainActor
+    func testInViewEqualLayoutPublishesNothing() {
+        withTreeGate(true) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]))
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            var sends = 0
+            let sink = m.objectWillChange.sink { _ in sends += 1 }
+            defer { sink.cancel() }
+            let same = m.layout
+            m.adopt(same)
+            XCTAssertEqual(m.layout, same)
+            XCTAssertEqual(sends, 0, "an equal layout publishes nothing")
+        }
+    }
+
+    /// 15.0: with the gate off the layout's publish adds nothing. Counts by reading the step 4b model: a manual pick of
+    /// another session publishes 5 times (newSession nil; then settle(): selection, confirming, refusal, renameEdit),
+    /// each sidebar toggle once (sidebarHidden). Gate off a person reaches the pick; the toggle only through the model.
+    @MainActor
+    func testInViewGateOffPickAndSidebarTogglePublishAsBefore() {
+        withSidebarRow(gate: false) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]))
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api")]))
+            XCTAssertEqual(m.selection, .live(paneKey("api")))
+            var sends = 0
+            let sink = m.objectWillChange.sink { _ in sends += 1 }
+            defer { sink.cancel() }
+            m.select(.live(paneKey("web")))
+            XCTAssertEqual(m.selection, .live(paneKey("web")))
+            XCTAssertEqual(sends, 5, "a pick: as on the base")
+            m.toggleSidebar()
+            XCTAssertEqual(sends, 6, "a toggle: once")
+            m.toggleSidebar()
+            XCTAssertEqual(sends, 7, "and back: once")
+        }
     }
 }

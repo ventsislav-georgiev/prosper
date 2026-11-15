@@ -217,7 +217,9 @@ final class AgentWindowModel: ObservableObject {
             // 4.1a: a retarget or a closed pane loses its sight; a layout switch (another id) keeps every layout's.
             if oldValue.id == layout.id { lastLive = AgentPaneLayout.retargeted(lastLive, from: oldValue, to: layout) }
             syncRuntimes(switched: oldValue.id != layout.id)
-            settle()
+            // #900 B2 step 4b (7.2): a new value settle() did not already tell (a zoom, a split, a close or focus move that
+            // keeps the row) is published once, so the sidebar's "in view" glyphs redraw. Gate on only: nothing changes off.
+            if !settle(), layout != oldValue, AgentPaneLayout.splitsEnabled { objectWillChange.send() }
             autosave()
         }
     }
@@ -763,7 +765,9 @@ final class AgentWindowModel: ObservableObject {
     /// blocks (`drop()`), so a name reuse never runs `start()` on them (4.4 (b)). No store: the raw mapping (3.5 A).
     /// B1 step 2: every pane of the active layout is settled (its own content and Ended state); `selection` stays the
     /// focused pane's.
-    private func settle() {
+    /// True when it published (a change of row, or of focusedEnded).
+    @discardableResult
+    private func settle() -> Bool {
         let wasEnded = focusedEnded
         for p in layout.panes { if let r = runtimes[p.id] { settle(r, target: p.target) } }
         let s = store == nil ? Self.rowID(focusedTarget) : Self.resolvedRow(content)
@@ -776,7 +780,10 @@ final class AgentWindowModel: ObservableObject {
             renameEdit = nil
         } else if focusedEnded != wasEnded {
             objectWillChange.send()   // the view reads focusedEnded: told even when the row stays (an emptied pane)
+        } else {
+            return false
         }
+        return true
     }
 
     /// One pane's runtime. Ended entry: a `.live` -> `.notRunning` edge of the same target while this pane's
