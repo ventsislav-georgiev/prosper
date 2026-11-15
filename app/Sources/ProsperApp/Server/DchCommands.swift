@@ -195,12 +195,13 @@ struct DchCommandOps: Sendable {
         }
         let each = rpms.map { String(Int($0.1.rounded())) }
         let shown = Set(each).count == 1 ? each[0] : each.joined(separator: " / ")
-        let target = "target at \(String(format: "%g", pct))%"
-        // #737: the helper's latch refused it; saved as the preset, applied by the Mac's recovery.
+        let shownPercent = "\(String(format: "%g", pct))%"
+        // #737: the helper's latch refused it; saved as the preset, applied by the Mac's recovery. Entry 1041: in the
+        // popup's own pending sentence (a settle ends when the helper's window passes, not when the Mac cools down).
         guard !reply.isLatchRefusal else {
-            return Self.shape("Manual pending · \(shown) rpm\t\(target), applies when the Mac cools down")
+            return Self.shape("Manual pending · \(shown) rpm\t" + FanReclaimRecovery.pendingSentence(shownPercent))
         }
-        return Self.shape("Manual · \(shown) rpm\t\(target)")
+        return Self.shape("Manual · \(shown) rpm\ttarget at \(shownPercent)")
     }
 
     @MainActor static func engage(_ targets: [Int: Double], _ fans: FanOps) async -> (saved: Bool, reply: FanManualReply) {

@@ -256,8 +256,8 @@ final class DchFanCommandsTests: XCTestCase {
     }
 
     /// #737: the helper's latch refusing is a pending preset, as in the popup: intent and the
-    /// targets saved (over any earlier ones), recovery armed, and the reply says it applies when
-    /// the Mac cools down. No other fan engaged.
+    /// targets saved (over any earlier ones), recovery armed, and the reply is the popup's pending
+    /// sentence (entry 1041; it said "applies when the Mac cools down"). No other fan engaged.
     func testLatchRefusalRepliesPendingAndSavesThePreset() async {
         await withFanState {
             for (manual, reply) in [(false, FanManualReply.refused), (false, .settling), (true, .refused)] {
@@ -266,7 +266,7 @@ final class DchFanCommandsTests: XCTestCase {
                 let log = Log()
                 let f = await run(ops(log: log, first: reply), "fans.manual", "60%")
                 XCTAssertEqual(Self.result(f), ["text": "Manual pending · 4080 / 3400 rpm",
-                                                "detail": "target at 60%, applies when the Mac cools down"], "\(reply)")
+                                                "detail": "Waiting for macOS to hand back the fans. Prosper sets 60% as soon as it can."], "\(reply)")
                 XCTAssertTrue(Preferences.fanManualEnabled, "\(reply)")
                 XCTAssertEqual(Preferences.fanTargets, [0: 4080, 1: 3400], "\(reply)")
                 XCTAssertTrue(FanControlHelper.presetPending)
@@ -334,7 +334,7 @@ final class DchFanCommandsTests: XCTestCase {
             FanControlHelper.inject(connection: fake, engagesInFlight: 0)
             let f = await run(ops(log: log, later: .refused), "fans.manual", "60%")
             XCTAssertEqual(Self.result(f), ["text": "Manual pending · 4080 / 3400 rpm",
-                                            "detail": "target at 60%, applies when the Mac cools down"])
+                                            "detail": "Waiting for macOS to hand back the fans. Prosper sets 60% as soon as it can."])
             XCTAssertEqual(log.calls.filter { $0 != "read" }, ["first 0 4080", "engage 1 3400"])
             XCTAssertTrue(Preferences.fanManualEnabled)
             XCTAssertEqual(Preferences.fanTargets, [0: 4080, 1: 3400])

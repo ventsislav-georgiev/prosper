@@ -52,8 +52,13 @@ enum FanReclaimRecovery {
     static func pendingText(manualIntent: Bool, readings: [FanReading], targets: [Int: Double]) -> String? {
         guard manualIntent, reclaimDetected(readings),
               let fraction = manualFraction(targets: targets, readings: readings) else { return nil }
-        return "Waiting for macOS to hand back the fans. "   // #1223: clamped, percent() does Int()
-            + "Prosper sets \(StatsFormat.percent(Swift.min(1, Swift.max(0, fraction)))) as soon as it can."
+        return pendingSentence(StatsFormat.percent(Swift.min(1, Swift.max(0, fraction))))   // #1223: clamped, percent() does Int()
+    }
+
+    /// Entry 1041: the one sentence for a preset the helper's latch refused (refused, settling, settlingReported), on the
+    /// popup's pending line and in the phone's "Manual pending" answer. The recovery applies it, not the person.
+    static func pendingSentence(_ percent: String) -> String {
+        "Waiting for macOS to hand back the fans. Prosper sets \(percent) as soon as it can."
     }
 
     /// `userAdjusting` = a slider drag / quick-button commit is in flight. The saved

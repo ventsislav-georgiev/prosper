@@ -1108,6 +1108,10 @@ tag from the now-released section and put it on the new top draft.
   event gets a new identifier (it closes, as before, if two events look the same) (#928)
 - A theme or tint name with a long run of spaces now shows a single space, so the rest of the name
   is no longer pushed out of view (#928)
+- Fans from iPhone: when a Manual speed cannot be set yet and is saved for later, the phone answered
+  "applies when the Mac cools down", which was wrong after a short settle; it now says what the
+  Mac's fan popup says: "Waiting for macOS to hand back the fans. Prosper sets 60% as soon as it
+  can." (#1041)
 
 ## v2.174.0
 
