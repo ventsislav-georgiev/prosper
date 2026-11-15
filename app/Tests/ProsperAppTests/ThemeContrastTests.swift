@@ -295,22 +295,20 @@ final class ThemeContrastTests: XCTestCase {
             XCTAssertEqual(ThemeStore.shared.activeID, d.id)
             let p = ThemePalette.load(for: d)
             let backdrop = NSColor(p.bgTop)
-            for system in [NSAppearance.Name.aqua, .darkAqua] {
-                let popover = NSPopover()
-                popover.appearance = NSAppearance(named: system)
-                NotificationCenter.default.post(name: NSPopover.willShowNotification, object: popover)
-                let got = try XCTUnwrap(popover.appearance, "\(d.title) under \(system.rawValue)")
-                XCTAssertEqual(got.name, d.appearance.nsAppearanceName,
-                               "\(d.title) under \(system.rawValue): popover kept the menu bar's appearance")
-                for (fn, fill) in fills {
-                    var resolved = NSColor.clear
-                    got.performAsCurrentDrawingAppearance { resolved = Self.srgbColor(fill) }
-                    // A translucent fill (dark controlColor) is seen over the theme backdrop.
-                    let control = Self.flatten(resolved, over: backdrop)
-                    let r = Self.contrast(NSColor(p.textPrimary), on: control)
-                    XCTAssertGreaterThanOrEqual(r, Self.minimum,
-                        "\(d.title) under system \(system.rawValue): textPrimary on \(fn) is \(r):1")
-                }
+            let popover = NSPopover()
+            // AppKit leaves a status-item popover's appearance nil: the menu bar's applies unless the observer sets one.
+            NotificationCenter.default.post(name: NSPopover.willShowNotification, object: popover)
+            let got = try XCTUnwrap(popover.appearance, "\(d.title)")
+            XCTAssertEqual(got.name, d.appearance.nsAppearanceName,
+                           "\(d.title): popover kept the menu bar's appearance")
+            for (fn, fill) in fills {
+                var resolved = NSColor.clear
+                got.performAsCurrentDrawingAppearance { resolved = Self.srgbColor(fill) }
+                // A translucent fill (dark controlColor) is seen over the theme backdrop.
+                let control = Self.flatten(resolved, over: backdrop)
+                let r = Self.contrast(NSColor(p.textPrimary), on: control)
+                XCTAssertGreaterThanOrEqual(r, Self.minimum,
+                    "\(d.title): textPrimary on \(fn) is \(r):1")
             }
         }
     }
@@ -332,15 +330,20 @@ final class ThemeContrastTests: XCTestCase {
         XCTAssertEqual(popover.appearance?.name, .darkAqua)
     }
 
-    /// #753 / QA #582 INFO-4: the observer runs on main (queue .main), so a willShow
-    /// posted off the main thread is applied there instead of trapping in assumeIsolated.
+    /// #753 / QA #582 INFO-4 / QA #587 INFO-1, INFO-5: the observer runs on main (queue .main), so a
+    /// willShow posted off the main thread is applied there instead of trapping in assumeIsolated,
+    /// and the off-main poster blocks until main has run it (synchronous). The queue is checked
+    /// FIRST and the row stops there when it regressed: a queue-nil observer would trap xctest
+    /// (signal 5) on the global-queue post instead of failing this one test.
     func testPopoverObserverIsSafeOffTheMainThread() throws {
+        guard ThemeStore.popoverObserverQueue === OperationQueue.main else {
+            return XCTFail("the popover observers must be registered on OperationQueue.main (a nil queue traps off main)")
+        }
         let all = try themes()
         ThemeStore.shared.setAvailable(Array(all.dropFirst()))
         let light = try XCTUnwrap(all.first { $0.appearance == .light })
         ThemeStore.shared.select(id: light.id)
         let popover = NSPopover()
-        popover.appearance = NSAppearance(named: .darkAqua)
         nonisolated(unsafe) let sent = popover
         let posted = expectation(description: "posted off main")
         DispatchQueue.global().async {
@@ -349,6 +352,53 @@ final class ThemeContrastTests: XCTestCase {
         }
         wait(for: [posted], timeout: 5)
         XCTAssertEqual(popover.appearance?.name, .aqua)
+    }
+
+    /// QA #582 INFO-3: a popover whose appearance the caller set keeps it, on show and on a live
+    /// theme switch; a popover we skinned still follows the theme.
+    func testExplicitPopoverAppearanceSurvivesShowAndThemeApply() throws {
+        let all = try themes()
+        ThemeStore.shared.setAvailable(Array(all.dropFirst()))
+        let light = try XCTUnwrap(all.first { $0.appearance == .light })
+        let dark = try XCTUnwrap(all.dropFirst().first { $0.appearance == .dark })
+        ThemeStore.shared.select(id: light.id)
+        let explicit = NSPopover()
+        explicit.appearance = NSAppearance(named: .darkAqua)
+        let themed = NSPopover()
+        for p in [explicit, themed] { NotificationCenter.default.post(name: NSPopover.willShowNotification, object: p) }
+        XCTAssertEqual(explicit.appearance?.name, .darkAqua, "the caller's appearance was overwritten on show")
+        XCTAssertEqual(themed.appearance?.name, .aqua)
+        ThemeStore.shared.select(id: dark.id)
+        XCTAssertEqual(explicit.appearance?.name, .darkAqua)
+        XCTAssertEqual(themed.appearance?.name, .darkAqua, "a popover the observer skinned follows the theme")
+        ThemeStore.shared.select(id: light.id)
+        NotificationCenter.default.post(name: NSPopover.willShowNotification, object: themed)
+        XCTAssertEqual(themed.appearance?.name, .aqua, "a re-show of a skinned popover is re-skinned")
+    }
+
+    /// QA #587 INFO-2: a closed popover is pruned, so a theme apply no longer re-skins it;
+    /// showing it again takes the current theme and puts it back (a closed popover is unset again).
+    func testClosedPopoverIsNotReSkinnedUntilShownAgain() throws {
+        let all = try themes()
+        ThemeStore.shared.setAvailable(Array(all.dropFirst()))
+        let light = try XCTUnwrap(all.first { $0.appearance == .light })
+        let dark = try XCTUnwrap(all.dropFirst().first { $0.appearance == .dark })
+        ThemeStore.shared.select(id: dark.id)
+        let popover = NSPopover()
+        NotificationCenter.default.post(name: NSPopover.willShowNotification, object: popover)
+        NotificationCenter.default.post(name: NSPopover.didCloseNotification, object: popover)
+        ThemeStore.shared.select(id: light.id)
+        XCTAssertTrue(popover.appearance == nil, "a closed popover was re-skinned")
+        NotificationCenter.default.post(name: NSPopover.willShowNotification, object: popover)
+        XCTAssertEqual(popover.appearance?.name, .aqua, "shown again: the current theme")
+        ThemeStore.shared.select(id: dark.id)
+        XCTAssertEqual(popover.appearance?.name, .darkAqua, "shown again: followed live again")
+    }
+
+    /// #881 rider: the pure opacity decision, both values (the live overload reads the Mac's flag).
+    func testEffectiveOpacityDecisionBothValues() {
+        XCTAssertEqual(ThemeStore.effectiveOpacity(0.8, reduceTransparency: true), 1.0)
+        XCTAssertEqual(ThemeStore.effectiveOpacity(0.8, reduceTransparency: false), 0.8)
     }
 
     /// #753: under a LIGHT theme the in-window popovers (Settings app picker, Chat

@@ -110,6 +110,7 @@ final class ThemeStore: ObservableObject {
         ThemeRuntime.opacity = Self.effectiveOpacity(o)
         ThemeRuntime.frost = Self.effectiveFrost(f)
         _ = Self.popoverAppearanceObserver
+        _ = Self.popoverCloseObserver
         // Re-evaluate transparency live when the user toggles the system "Reduce
         // transparency" accessibility setting while Prosper is running (otherwise the
         // downgrade only applies on next setOpacity/launch).
@@ -139,20 +140,41 @@ final class ThemeStore: ObservableObject {
     /// One observer for every popover — status item, SwiftUI `.popover`, future
     /// ones — instead of an appearance line per controller. queue .main (#753): a
     /// post on the main thread still runs the block before `post` returns, so the
-    /// appearance is set before the popover draws, and a post from any other
-    /// thread hops to main instead of trapping in `assumeIsolated`.
+    /// appearance is set before the popover draws. A post from any other thread is
+    /// SYNCHRONOUS too: the poster blocks until main has run the block (it does not
+    /// trap in `assumeIsolated`, and it would deadlock a poster main is waiting on).
+    /// A popover whose `appearance` the caller set (non-nil and not one we skinned)
+    /// keeps it: AppKit leaves a status-item popover's nil, so nil means "ours to set".
+    static let popoverObserverQueue: OperationQueue? = .main
     private static let popoverAppearanceObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
-        forName: NSPopover.willShowNotification, object: nil, queue: .main
+        forName: NSPopover.willShowNotification, object: nil, queue: popoverObserverQueue
     ) { note in
         guard let popover = note.object as? NSPopover else { return }
         MainActor.assumeIsolated {
+            // shortcut: "ours" is membership in shownPopovers, so a caller that re-sets the
+            // appearance of a popover we already skinned is overwritten; upgrade if one does.
+            guard popover.appearance == nil || shownPopovers.contains(popover) else { return }
             shownPopovers.add(popover)
             adoptThemeAppearance(popover)
         }
     }
 
-    /// #753: every popover that has shown, held weakly, so `apply` can re-skin the
-    /// ones still on screen (a pinned Calendar popover) on a live theme switch.
+    /// QA #587 INFO-2: a closed popover is dropped from `shownPopovers`, so a theme
+    /// apply stops re-skinning it (its appearance goes back to unset); showing it again re-adds it.
+    private static let popoverCloseObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: NSPopover.didCloseNotification, object: nil, queue: popoverObserverQueue
+    ) { note in
+        guard let popover = note.object as? NSPopover else { return }
+        MainActor.assumeIsolated {
+            // Back to unset: the next show must see a skinned popover as ours, not as caller-set.
+            guard shownPopovers.contains(popover) else { return }
+            shownPopovers.remove(popover)
+            popover.appearance = nil
+        }
+    }
+
+    /// #753: every popover WE skinned that has not closed, held weakly, so `apply` can
+    /// re-skin the ones still on screen (a pinned Calendar popover) on a live theme switch.
     private static let shownPopovers = NSHashTable<NSPopover>.weakObjects()
 
     /// The appearance a surface showing `Neon.*` colours must render in: the
@@ -165,8 +187,11 @@ final class ThemeStore: ObservableObject {
     /// regardless of the user's stored preference (the preference is kept so it
     /// takes effect again if the accessibility setting is turned off). Mirrors
     /// FootprintWindow's downgrade.
+    static func effectiveOpacity(_ stored: CGFloat, reduceTransparency: Bool) -> CGFloat {
+        reduceTransparency ? 1.0 : stored
+    }
     static func effectiveOpacity(_ stored: CGFloat) -> CGFloat {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1.0 : stored
+        effectiveOpacity(stored, reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
     }
 
     /// Same precedence for Frost: system "Reduce transparency" forces it off (the
@@ -358,6 +383,7 @@ final class ThemeStore: ObservableObject {
         // state. We still re-apply when the *resolved* palette, appearance, or
         // assets change — so editing the active theme.json (hot-reload) still
         // takes effect.
+        let sameAssets = activeID == d.id && lastAssets == spec.assets
         let unchanged = activeID == d.id
             && activeTint == tint
             && appearance == spec.appearance
@@ -373,8 +399,9 @@ final class ThemeStore: ObservableObject {
         lastAssets = spec.assets
 
         // Drop the previous theme's images immediately; the new ones stream in.
-        // Built-in/asset-less themes leave AppKit to use its bundled icons.
-        images = [:]
+        // Built-in/asset-less themes leave AppKit to use its bundled icons. A tint
+        // switch of the same theme with the same assets keeps them (no flash).
+        if !sameAssets { images = [:] }
         generation &+= 1
         onChange?()
 

@@ -6,7 +6,7 @@ import XCTest
 /// #862: theme tint variants. Parsing and refusal, the merge, per-theme memory, the one-step
 /// live apply and the tint dots on a theme's row. Every store is a scratch store over scratch
 /// defaults; views are hosted in windows that are never shown, ordered or made key, and a dot
-/// is pressed through its own accessibility element (no event is posted).
+/// is pressed by calling the list's pickTint directly (no event is posted).
 @MainActor
 final class ThemeVariantTests: XCTestCase {
     private var saved: (ThemePalette, CGFloat, NSAppearance?)!
@@ -189,6 +189,25 @@ final class ThemeVariantTests: XCTestCase {
           { "key": "\(a)", "label": "\(a.capitalized)", "colors": { "blue": "#00E5FF" } },
           { "key": "\(b)", "label": "\(b.capitalized)", "colors": { "blue": "#FFB000" } } ] }
         """
+    }
+
+    /// 862 rider: a tint switch of the same theme with the same assets keeps its images; a switch
+    /// to a theme with other assets drops them first.
+    func testTintSwitchKeepsImagesOfTheSameAssets() async throws {
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+        let assets = ##""assets": { "k": "\##(png)" }, "##
+        let a = descriptor("t.a", Self.twoTints("cyan", "amber").replacingOccurrences(of: "{ \"colors\"", with: "{ \(assets)\"colors\""))
+        let b = descriptor("t.b", Self.twoTints("b1", "b2"))
+        let s = store()
+        s.setAvailable([a, b])
+        s.select(id: "t.a", tint: "cyan")
+        for _ in 0..<100 where s.image("k") == nil { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertTrue(s.image("k") != nil, "fixture: the asset loads")
+        s.select(id: "t.a", tint: "amber")
+        XCTAssertEqual(s.activeTint, "amber")
+        XCTAssertTrue(s.image("k") != nil, "a tint switch dropped the images of unchanged assets")
+        s.select(id: "t.b")
+        XCTAssertTrue(s.image("k") == nil, "another theme's apply drops them")
     }
 
     func testTintIsRememberedPerTheme() throws {

@@ -1271,6 +1271,8 @@ tag from the now-released section and put it on the new top draft.
   routing on a 401 and puts it back when its token answers again (a 403 still only shows "token
   rejected"); and when every other account is only rate limited, the pool answers with the reset
   time instead of trying a rejected token.
+- A popover that sets its own light or dark look now keeps it, closed popovers stop being re-themed,
+  and switching a theme's colour variant no longer reloads its images.
 
 ## v2.174.0
 
