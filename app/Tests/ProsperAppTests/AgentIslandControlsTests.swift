@@ -734,6 +734,29 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.sent, [], "nothing was cancelled")
     }
 
+    /// #1311 (QA #462 L-B): an alias key is held beside the job's key: a start on either refuses, a Kill on
+    /// the alias refuses as on the key, a cancel by the alias signals the one job; the reap frees both.
+    func testRunnerHoldsAnAliasKeyForTheJobsLifeAndFreesItAtTheReap() {
+        let f = FakeProc(), runner = f.runner(), res = Results()
+        let a = AgentSessionKey(dir: "/d", name: "a"), a2 = AgentSessionKey(dir: "/d", name: "a-2")
+        XCTAssertTrue(runner.start(a, alias: a2, path: "/fake/dch", args: ["r"], env: { [:] }, done: res.add))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertTrue(runner.isBusy(a), "the key")
+        XCTAssertTrue(runner.isBusy(a2), "the alias")
+        XCTAssertTrue(runner.isKillBusy(a2), "a Kill on the alias refuses")
+        XCTAssertFalse(runner.start(a2, path: "/fake/dch", args: ["x"], env: { [:] }, done: res.add), "a start on the alias refuses")
+        XCTAssertFalse(runner.start(AgentSessionKey(dir: "/d", name: "b"), alias: a2, path: "/fake/dch", args: ["y"],
+                                    env: { [:] }, done: res.add), "a job whose alias is held refuses")
+        runner.cancel(a2)
+        XCTAssertEqual(f.sent, [4242], "the cancel by the alias reaches the job, once")
+        f.release.signal()
+        XCTAssertEqual(res.done.wait(timeout: .now() + 5), .success)
+        XCTAssertFalse(runner.isBusy(a), "the reap frees the key")
+        XCTAssertFalse(runner.isBusy(a2), "and the alias")
+        XCTAssertEqual(res.lock.withLock { res.all.last?.stopped }, true)
+        XCTAssertEqual(f.args, [["r"]], "refused requests never launched")
+    }
+
     /// #744 (QA #572 INFO-1): a Kill runs beside its row's or its dir's Stop or Restart
     /// (`yields`), never beside another job or a second Kill; while it runs no other job
     /// starts on its row or its dir.
@@ -1570,6 +1593,38 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.args, [["--revive", "a", "--as", "a-2", "--json"]])
         f.release.signal()
         settle(c) { c.store?.historyActions[x.key] != AgentIsland.resumingText }
+    }
+
+    /// #1311 (QA #462 L-B): a Resume under a new name holds the record's key and the new name's while it
+    /// runs: a Restart of the live new row refuses (the window's call says so); the reap frees both.
+    @MainActor
+    func testResumeAsHoldsTheNewNameBusyUntilTheReap() {
+        let f = FakeProc(), reads = Reads()
+        let x = record("a", dir: "/d")
+        reads.records = [x]
+        let c = controller(f, reads)
+        c.store?.controlDch = Self.v1241
+        c.store?.sessions = [session("a", dir: "/d")]
+        c.store?.history = [x]
+        let a = x.id, a2 = AgentSessionKey(dir: "/d", name: "a-2")
+        c.resume(x)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--revive", "a", "--as", "a-2", "--json"]])
+        XCTAssertTrue(c.runner.isBusy(a), "the record's key")
+        XCTAssertTrue(c.runner.isBusy(a2), "the new name's key")
+        XCTAssertTrue(c.runner.isKillBusy(a2), "a Kill on the new row refuses, as on the record's")
+        c.store?.sessions = [session("a", dir: "/d"), session("a-2", dir: "/d")]   // dch has a-2 up meanwhile
+        XCTAssertFalse(c.restart(session("a-2", dir: "/d"), sayBusy: true), "busy: refused, never queued")
+        XCTAssertEqual(c.store?.actions[a2], AgentIsland.restartBusyText)
+        c.resume(x)
+        XCTAssertEqual(f.args.count, 1, "neither the Restart nor a second Resume launched")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(a) && !c.runner.isBusy(a2) }
+        XCTAssertTrue(c.restart(session("a-2", dir: "/d")), "free after the reap")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, ["--restart", "a-2", "--include-agents", "-f", "--json"])
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(a2) }
     }
 
     // MARK: - #579: Restart agent, Restart all agents, New session

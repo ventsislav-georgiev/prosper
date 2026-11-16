@@ -1411,6 +1411,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: a line of dashes inside a command, a description or a question no longer cuts the
   prompt card short; the card now shows the dialog's title, description and question start that it
   used to hide.
+- While a session resumes under a new name (because its old name is still running), the new name's
+  row is busy too: its Restart, Stop, Message and Kill wait until the resume finishes, on the island
+  and from the phone.
 
 ## v2.174.0
 

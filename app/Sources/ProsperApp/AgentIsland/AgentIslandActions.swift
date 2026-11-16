@@ -307,9 +307,14 @@ extension AgentIsland {
     static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>,
                            noMessage: Bool = false, exact: Bool = false) -> [String]? {
         let tail = (noMessage ? ["--no-message"] : []) + ["--json"], arg = r.editTarget(exact: exact)
+        guard let new = reviveAs(r, live: live, records: records) else { return named("--revive", [arg], tail) }
+        return named("--revive", [arg], ["--as", new] + tail)
+    }
+
+    /// reviveArgs's `--as` name, nil when the name is free. #1311: the Resume's runner job holds it busy too.
+    static func reviveAs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>) -> String? {
         // QA #713 INFO-2: dch folds case, as freeName does: a live "Proj" holds a record "proj"'s name.
-        guard live.contains(where: { $0.lowercased() == r.name.lowercased() }) else { return named("--revive", [arg], tail) }
-        return named("--revive", [arg], ["--as", freeName(r.name, taken: live.union(records))] + tail)
+        live.contains(where: { $0.lowercased() == r.name.lowercased() }) ? freeName(r.name, taken: live.union(records)) : nil
     }
 
     /// #627: dch takes a session name that starts with '-' and its argv has no
@@ -1526,17 +1531,19 @@ final class DchActionRunner: @unchecked Sendable {
     /// #744: `yields` marks a Stop or Restart, which a `kill` job may run beside.
     /// #584 r2: `prepare` runs on the job's thread, under its hold, before the launch: the argv to run
     /// (nil: nothing runs) and lines of its own, read as if dch had printed them first (a guard's skips).
+    /// #1311 (QA #462 L-B): `alias`, a Resume --as's new name, is held beside `key` for the job's life: a start
+    /// on either is refused, isBusy and cancel reach the job by either, the reap frees both. Not for a Kill.
     @discardableResult
-    func start(_ key: AgentSessionKey, path: String, args: [String], cwd: String? = nil, bound: TimeInterval? = nil,
-               yields: Bool = false, kill: Bool = false,
+    func start(_ key: AgentSessionKey, alias: AgentSessionKey? = nil, path: String, args: [String], cwd: String? = nil,
+               bound: TimeInterval? = nil, yields: Bool = false, kill: Bool = false,
                env: @escaping @Sendable () -> [String: String], onLine: (@Sendable (String) -> Void)? = nil,
                prepare: (@Sendable () -> (args: [String]?, out: Data))? = nil,
                done: @escaping @Sendable (DchActionResult) -> Void) -> Bool {
-        let job = Job()
+        let job = Job(), keys: Set<AgentSessionKey> = kill ? [key] : Set([key] + [alias].compactMap { $0 })
         guard lock.withLock({ () -> Bool in
-            guard !(kill ? killConflicts(key) : conflicts(key)) else { return false }
+            guard !(kill ? killConflicts(key) : keys.contains { conflicts($0) }) else { return false }
             job.yields = yields
-            if kill { kills[key] = job } else { jobs[key] = job }
+            if kill { kills[key] = job } else { for k in keys { jobs[k] = job } }
             return true
         }) else { return false }
         let launch = launch, lines = LineSplitter(onLine)
@@ -1558,7 +1565,7 @@ final class DchActionRunner: @unchecked Sendable {
             lines.flush()
             var result = AgentIsland.actionResult(status: r.status, output: pre + r.out)
             lock.withLock {
-                if kill { kills[key] = nil } else { jobs[key] = nil }
+                if kill { kills[key] = nil } else { for k in keys { jobs[k] = nil } }
                 job.pid = nil   // reaped: never signalled again (the pid may be reused)
                 result.stopped = job.cancelled
                 result.killed = job.killed

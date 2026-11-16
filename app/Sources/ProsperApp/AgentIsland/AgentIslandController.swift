@@ -404,7 +404,9 @@ final class AgentIslandController {
         let key = r.id, name = r.name, verb: AgentIsland.Verb = noMessage ? .resumeNoMessage : .resume
         // #719: `<file>.json` from dch 1.28.2.
         let exact = store.reviveFileGate.isOK, arg = r.editTarget(exact: exact)
-        run(key, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact),
+        // #1311: the --as name's row is busy too while the job runs.
+        let alias = AgentIsland.reviveAs(r, live: live, records: records).map { AgentSessionKey(dir: r.key.dir, name: $0) }
+        run(key, alias: alias, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact),
             running: AgentIsland.resumingText,
             history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) }) { [weak self] res in
             // #716 L-3: dch names a no_history line after the argument (an aside file; #719 `<file>.json`).
@@ -495,7 +497,7 @@ final class AgentIslandController {
     /// #744: `yields` (a Stop or Restart) lets a `kill` run beside it; any other job
     /// starting hands its rows' text back from an earlier Kill.
     @discardableResult
-    private func run(_ key: AgentSessionKey, dch: String, args: [String]?, running: String?, cwd: String? = nil,
+    private func run(_ key: AgentSessionKey, alias: AgentSessionKey? = nil, dch: String, args: [String]?, running: String?, cwd: String? = nil,
                      bound: TimeInterval? = nil, spawn: [String]? = nil, history: Bool = false,
                      yields: Bool = false, kill: Bool = false,
                      onLine: (@MainActor @Sendable (String) -> Void)? = nil,
@@ -506,7 +508,7 @@ final class AgentIslandController {
         let env = controlEnv, contributors = spawn == nil ? [] : sessionEnvContributors()
         var hook: (@Sendable (String) -> Void)?
         if let onLine { hook = { line in DispatchQueue.main.async { MainActor.assumeIsolated { onLine(line) } } } }
-        let started = runner.start(key, path: dch, args: args, cwd: cwd, bound: bound, yields: yields, kill: kill,
+        let started = runner.start(key, alias: alias, path: dch, args: args, cwd: cwd, bound: bound, yields: yields, kill: kill,
                                    env: { spawn.map { Self.spawnEnv(env(key.dir), argv: $0, contributors) } ?? env(key.dir) },
                                    onLine: hook, prepare: prepare) { [weak self] r in
             DispatchQueue.main.async {

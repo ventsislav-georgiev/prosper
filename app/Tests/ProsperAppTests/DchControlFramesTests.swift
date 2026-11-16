@@ -280,6 +280,36 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(names(r), ["a-4"], "the name the session runs under now")
     }
 
+    /// #1311 (QA #462 L-B): the phone's resume under a new name holds the record's key and the new name's
+    /// while it runs (a Restart of the live new name is busy), and frees both by the reply.
+    func testReviveAsHoldsTheNewNameBusyUntilTheReply() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1")])
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])
+        let revive = ["--revive", "a", "--as", "a-2", "--json"]
+        f.out[revive.joined(separator: " ")] = Self.ok("a", as: "a-2")
+        let o = ops(f), frames = Frames()
+        let held = expectation(description: "revive running"), replied = expectation(description: "reply")
+        f.lock.withLock { f.holdArgs = revive; f.held = held }
+        o.handle(DchFrame.revive, try! JSONSerialization.data(withJSONObject: ["name": "a"])) { frame in
+            frames.lock.withLock { frames.all.append(frame) }
+            replied.fulfill()
+        }
+        wait(for: [held], timeout: 5)
+        let a = AgentSessionKey(dir: "/d", name: "a"), a2 = AgentSessionKey(dir: "/d", name: "a-2")
+        XCTAssertTrue(o.runner.isBusy(a), "the record's key")
+        XCTAssertTrue(o.runner.isBusy(a2), "the new name's key")
+        f.lock.withLock { f.ls["/d"] = Self.ls([("a", "1.24.1"), ("a-2", "1.24.1")]) }   // dch has a-2 up meanwhile
+        XCTAssertEqual(message(call(o, DchFrame.restart, ["names": ["a-2"]])), "a-2: Restart failed: dch: busy with an earlier request")
+        f.hold.signal()
+        wait(for: [replied], timeout: 5)
+        XCTAssertEqual(frames.lock.withLock { frames.all }.first.map { names(Self.decode($0)) } ?? nil, ["a-2"])
+        XCTAssertFalse(o.runner.isBusy(a), "the reap frees the record's key")
+        XCTAssertFalse(o.runner.isBusy(a2), "and the new name's")
+        XCTAssertEqual(names(call(o, DchFrame.restart, ["names": ["a-2"]])), ["a-2"], "free after the reply")
+        XCTAssertEqual(f.launchedArgs, [revive, AgentIsland.restartArgs("a-2")!])
+    }
+
     func testReviveAllRunsReviveAllArgsPerHistoryDir() {
         let f = Fake()
         f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])

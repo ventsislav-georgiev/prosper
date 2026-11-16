@@ -1595,8 +1595,10 @@ struct DchControlOps: Sendable {
             let others = Set(history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
             // #719: `<file>.json` from dch 1.28.2; the by-hand hint under the record's config dir.
             let exact = Self.reviveExact(binary(), live), arg = r.editTarget(exact: exact)
+            // #1311: the --as name's row is busy too while the job runs.
+            let alias = AgentIsland.reviveAs(r, live: liveNames, records: others).map { AgentSessionKey(dir: r.key.dir, name: $0) }
             run([(r.id, AgentIsland.reviveArgs(r, live: liveNames, records: others, noMessage: noMessage, exact: exact))],
-                path: path, bound: nil, reply) {
+                path: path, bound: nil, alias: alias, reply) {
                 Self.answer(named: [(name, Self.renamed($0[0], arg, to: name))], .resume, record: r)   // #716 L-3
             }
         }
@@ -1770,15 +1772,16 @@ struct DchControlOps: Sendable {
     /// pokes the island and replies once with `answer` over the results in job order.
     /// #627: any job with nil args (a name dch would read as a flag) refuses the whole request.
     /// #749 (QA #572 INFO-R1): `yields` for a Stop or Restart, as the island's: an island Kill may cut through it.
+    /// #1311: `alias` (a one-job request: the revive by name) is held busy beside the job's key.
     private func run(_ jobs: [(AgentSessionKey, [String]?)], path: String, bound: TimeInterval?, yields: Bool = false,
-                     _ reply: @escaping Reply,
+                     alias: AgentSessionKey? = nil, _ reply: @escaping Reply,
                      answer: @escaping @Sendable ([DchActionResult]) -> Data) {
         let ready = jobs.compactMap { key, args in args.map { (key, $0) } }
         guard ready.count == jobs.count else { return reply(Self.error(Self.dashNameRefusal)) }
         let group = DispatchGroup(), results = Results(jobs.count), env = env
         for (i, (key, args)) in ready.enumerated() {
             group.enter()
-            let started = runner.start(key, path: path, args: args, bound: bound, yields: yields, env: { env(key.dir) }) { r in
+            let started = runner.start(key, alias: alias, path: path, args: args, bound: bound, yields: yields, env: { env(key.dir) }) { r in
                 results.lock.withLock { results.all[i] = r }
                 group.leave()
             }
