@@ -9,15 +9,19 @@ import XCTest
 @MainActor
 final class IncreaseContrastIslandTests: XCTestCase {
     private static var savedPalette = ThemePalette.default
+    private static var savedIncreaseContrast = false
 
     override func setUp() {
         super.setUp()
-        MainActor.assumeIsolated { IncreaseContrastIslandTests.savedPalette = ThemeRuntime.palette }
+        MainActor.assumeIsolated {
+            IncreaseContrastIslandTests.savedPalette = ThemeRuntime.palette
+            IncreaseContrastIslandTests.savedIncreaseContrast = ThemeRuntime.increaseContrast
+        }
     }
 
     override func tearDown() {
         MainActor.assumeIsolated {
-            ThemeRuntime.increaseContrast = false
+            ThemeRuntime.increaseContrast = IncreaseContrastIslandTests.savedIncreaseContrast
             ThemeRuntime.palette = IncreaseContrastIslandTests.savedPalette
         }
         super.tearDown()
@@ -90,9 +94,9 @@ final class IncreaseContrastIslandTests: XCTestCase {
         ]
         for line in islandOnce { XCTAssertEqual(Self.count(line, in: view), 1, line) }
         XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.75))", in: view), 2, "two 0.75 sites")
-        XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.8))", in: view), 5, "three bare + killQuestion + clearQuestion")
-        XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.9))", in: view), 2, "two 0.9 sites")
-        XCTAssertEqual(Self.count("Neon.faded(", in: view), 11, "the ear count plus the ten text sites")
+        XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.8))", in: view), 6, "three bare + killQuestion + clearQuestion + #1316 history row")
+        XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.9))", in: view), 4, "two 0.9 sites + #1316 header and draft field")
+        XCTAssertEqual(Self.count("Neon.faded(", in: view), 27, "the ear count, the ten text sites and #1316's sixteen")
         XCTAssertEqual(Self.count("Color.white.opacity(0.75)", in: view), 0)
         XCTAssertEqual(Self.count("case .idle: Color.white.opacity(0.4)", in: model), 1, "idle colour unchanged")
         XCTAssertEqual(Self.count("p.backgroundColor = .clear", in: controller), 1, "the panel stays clear for the notch corners")
@@ -113,5 +117,35 @@ final class IncreaseContrastIslandTests: XCTestCase {
         for (name, text) in [("view", view), ("model", model), ("controller", controller), ("window", win)] {
             XCTAssertEqual(Self.count("accessibilityDisplayShould", in: text), 0, name)
         }
+    }
+
+    /// #1316: no island text site is left as a raw Color.white.opacity except the dim cues kept on
+    /// purpose (0.35 to 0.5: told apart from primary text, at least 3:1 on the black shape; the
+    /// icon-button glyph alpha is a state cue). Fills (".fill(") are tints, not text.
+    func testNoIslandTextSiteIsLeftRawExceptTheKeptDimCues() throws {
+        let view = try Self.source("AgentIsland/AgentIslandView.swift")
+        let left = Set(view.components(separatedBy: "\n")
+            .filter { $0.contains("Color.white.opacity(") && !$0.contains("fill(") }
+            .map { $0.trimmingCharacters(in: .whitespaces) })
+        let kept: Set<String> = [
+            ".foregroundStyle(ear.state == .blocked ? ear.state.color : (s.total == 0 ? Color.white.opacity(0.35) : Neon.faded(.white, 0.9)))",
+            "Text(verbatim: \"Resume \\(why)\").foregroundStyle(Color.white.opacity(0.45))",
+            ".foregroundStyle(on ? Neon.faded(.white, 0.9) : Color.white.opacity(0.45))",
+            ".foregroundStyle(Color.white.opacity(0.35))",
+            ".foregroundStyle(Color.white.opacity(0.4))",
+            ".foregroundStyle(end.hasPrefix(\"crashed\") ? AgentState.blocked.color : Color.white.opacity(0.5))",
+            ".foregroundStyle(Color.white.opacity(opacity))",
+            ".foregroundStyle(Color.white.opacity(0.5))",
+            "chipText(chip.label, Color.white.opacity(0.4))",
+            "if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), Color.white.opacity(0.5)) }",
+            "AgentIslandCount(kind: .merged, n: n).foregroundStyle(Color.white.opacity(0.5))",
+            "button(action: onJump, fill: Color.white.opacity(0.08)) {",   // a fill
+            "case .plain: (Color.white.opacity(0.08), Neon.faded(.white, 0.9))",   // fill, then the faded label
+        ]
+        XCTAssertEqual(left, kept)
+        XCTAssertEqual(Self.count(".opacity(0.7)", in: view), 0, "no raw 0.7 left")
+        XCTAssertEqual(Self.count("text.opacity(", in: view), 0, "the answer buttons fade through the token")
+        XCTAssertEqual(Self.count("Neon.faded(text, ", in: view), 3, "digit, hint, detail")
+        XCTAssertEqual(Self.count("(Color.white.opacity(0.08), Neon.faded(.white, 0.9))", in: view), 1, "plain answer button")
     }
 }

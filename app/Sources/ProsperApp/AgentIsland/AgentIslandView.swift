@@ -916,7 +916,7 @@ struct AgentIslandView: View {
                         Button(action: onResumeAllNoMessage) {
                             Text(verbatim: AgentIsland.resumeAllNoMessageLabel)
                                 .font(.system(size: 11))
-                                .foregroundStyle(Color.white.opacity(0.6))
+                                .foregroundStyle(Neon.faded(.white, 0.6))
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -925,7 +925,7 @@ struct AgentIslandView: View {
                     }
                 }
                 if let label = store.clearUnpinnedButton { lineButton(label, action: onClearUnpinned) }
-                Text(verbatim: store.historyStatus).foregroundStyle(Color.white.opacity(0.6))
+                Text(verbatim: store.historyStatus).foregroundStyle(Neon.faded(.white, 0.6))
                 Spacer(minLength: 0)
             }
         }
@@ -953,7 +953,7 @@ struct AgentIslandView: View {
         return HStack(spacing: 8) {
             Text(total == 1 ? "1 session" : "\(total) sessions")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.white.opacity(0.9))
+                .foregroundStyle(Neon.faded(.white, 0.9))
             agentsWindowButton   // #797
         }
     }
@@ -968,7 +968,7 @@ struct AgentIslandView: View {
                     HStack(spacing: 3) {
                         Text(st.glyph).font(.system(size: 10, weight: .bold)).foregroundStyle(st.color)
                         Text("\(n)").font(.system(size: 11, weight: .medium).monospacedDigit())
-                            .foregroundStyle(Color.white.opacity(0.7))
+                            .foregroundStyle(Neon.faded(.white, 0.7))
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(n) \(st.label.lowercased())")
@@ -1000,7 +1000,7 @@ struct AgentIslandView: View {
         Button(action: action) {
             Text(verbatim: title)
                 .font(.system(size: 11, weight: on ? .semibold : .regular))
-                .foregroundStyle(Color.white.opacity(on ? 0.9 : 0.45))
+                .foregroundStyle(on ? Neon.faded(.white, 0.9) : Color.white.opacity(0.45))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1048,7 +1048,7 @@ struct AgentIslandHistoryRow: View {
                     HStack(spacing: 6) {
                         Text(verbatim: record.title)
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.8))
+                            .foregroundStyle(Neon.faded(.white, 0.8))
                             .lineLimit(1)
                         Spacer(minLength: 6)
                         Text(verbatim: age)
@@ -1065,7 +1065,7 @@ struct AgentIslandHistoryRow: View {
                     }
                     HStack(spacing: 6) {
                         if let status {
-                            Text(verbatim: status).foregroundStyle(Color.white.opacity(0.7))
+                            Text(verbatim: status).foregroundStyle(Neon.faded(.white, 0.7))
                         } else {
                             Text(verbatim: end)
                                 // #585: only a crash is colored; "ended (signal 15)" stays neutral.
@@ -1178,7 +1178,7 @@ struct AgentIslandRow: View {
                     }
                     HStack(spacing: 6) {
                         if let notice {
-                            Text(notice).foregroundStyle(Color.white.opacity(0.7))
+                            Text(notice).foregroundStyle(Neon.faded(.white, 0.7))
                         } else {
                             Text(session.state.label).foregroundStyle(session.state.color)
                         }
@@ -1218,7 +1218,7 @@ struct AgentIslandRow: View {
             HStack(spacing: AgentIsland.chipSpacing) {
                 ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
                     if chip.url != nil {
-                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, Color.white.opacity(0.8)) }
+                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, Neon.faded(.white, 0.8)) }
                             .buttonStyle(.plain)
                             .help(Text(verbatim: chip.help))
                     } else {
@@ -1518,7 +1518,7 @@ struct AgentPromptCardView: View {
             VStack(alignment: .leading, spacing: 0) {
                 rows(lines) { l in
                     cardText(l, f)
-                        .foregroundStyle(Color.white.opacity(0.6))
+                        .foregroundStyle(Neon.faded(.white, 0.6))
                         .lineLimit(1)
                         .agentCardSlot(height: height, alignment: .leading)
                 }
@@ -1536,14 +1536,14 @@ struct AgentPromptCardView: View {
         let (fill, text): (Color, Color) = switch style {
         case .accent: (Self.accent, Color.white)
         case .deny: (Self.deny.opacity(0.18), Self.deny)
-        case .plain: (Color.white.opacity(0.08), Color.white.opacity(0.9))
+        case .plain: (Color.white.opacity(0.08), Neon.faded(.white, 0.9))
         }
         let row = G.cardButton - 4
         return button(action: { onOption(p, o) }, fill: fill,
                       height: row + CGFloat(label.count - 1) * G.cardLabelLine + CGFloat(detail.count) * G.cardDetailLine) {
             HStack(alignment: .top, spacing: G.cardSpacing) {
                 cardText("\(o.digit)", G.digitFont)
-                    .foregroundStyle(text.opacity(0.7))
+                    .foregroundStyle(Neon.faded(text, 0.7))
                     .frame(height: row)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: G.cardSpacing) {
@@ -1553,7 +1553,7 @@ struct AgentPromptCardView: View {
                         Spacer(minLength: G.cardSpacerMin)
                         if let hint = o.hint {
                             cardText(hint, G.hintFont)
-                                .foregroundStyle(text.opacity(0.6))
+                                .foregroundStyle(Neon.faded(text, 0.6))
                                 .padding(.horizontal, G.hintInset).padding(.vertical, 1)
                                 .background(Capsule().fill(Color.white.opacity(0.1)))
                                 .fixedSize()
@@ -1570,7 +1570,7 @@ struct AgentPromptCardView: View {
                     // Continuation or description: dim, under the label.
                     rows(detail) { d in
                         cardText(d, G.detailFont)
-                            .foregroundStyle(text.opacity(0.55))
+                            .foregroundStyle(Neon.faded(text, 0.55))
                             .lineLimit(1)
                             .agentCardSlot(height: G.cardDetailLine, alignment: .top)
                     }
@@ -1589,7 +1589,7 @@ struct AgentPromptCardView: View {
             cardText(Self.jumpText, G.labelFont)
             Spacer(minLength: 0)
         }
-        .foregroundStyle(Color.white.opacity(0.7))
+        .foregroundStyle(Neon.faded(.white, 0.7))
     }
 
     private func button<L: View>(action: @escaping () -> Void, fill: Color, height: CGFloat = G.cardButton - 4,
@@ -1628,7 +1628,7 @@ struct AgentIslandComposer: View {
             TextField(text: Binding(get: { store.messageDraft ?? "" }, set: { store.typeMessage($0) }),
                       prompt: Text(verbatim: prompt)) { Text(verbatim: prompt) }
                 .textFieldStyle(.plain)
-                .foregroundStyle(Color.white.opacity(0.9))
+                .foregroundStyle(Neon.faded(.white, 0.9))
                 .focused($focused)
                 .onSubmit(onSend)
                 .onExitCommand(perform: onCancel)
