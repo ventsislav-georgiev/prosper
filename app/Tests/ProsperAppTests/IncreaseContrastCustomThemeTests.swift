@@ -187,4 +187,114 @@ final class IncreaseContrastCustomThemeTests: XCTestCase {
         XCTAssertEqual(count("Divider().overlay(Neon.stroke)", in: runner), 0)
         XCTAssertEqual(count("Divider().overlay(Neon.stroke)", in: clip), 0)
     }
+
+    // MARK: #1317 Neon.faded
+
+    private static let faintAllJSON = """
+    {"appearance":"dark","colors":{"card":"#101820","cardHi":"#18222C","blue":"#1A2430","blueBright":"#1C2634",
+    "indigo":"#20303C","magenta":"#1E2A36","terminal":"#22303A","textSecondary":"#2A3A48","textPrimary":"#E8F2FC"}}
+    """
+    private static let goodAllJSON = """
+    {"appearance":"dark","colors":{"card":"#101820","cardHi":"#18222C","blue":"#3FD0FF","blueBright":"#7FE0FF",
+    "indigo":"#8FA8FF","magenta":"#FF6FC0","terminal":"#5CFFB5","textSecondary":"#9FB0C4","textPrimary":"#E8F2FC"}}
+    """
+    private static let lowTextDarkJSON = """
+    {"appearance":"dark","colors":{"card":"#101820","cardHi":"#18222C","blue":"#1A2430","textSecondary":"#2A3A48","textPrimary":"#1F2C38"}}
+    """
+    private static let lowTextLightJSON = """
+    {"appearance":"light","colors":{"card":"#F2F4F8","cardHi":"#FFFFFF","blue":"#E6EAF0","textSecondary":"#D8DEE8","textPrimary":"#E0E6EE"}}
+    """
+
+    private static func ratio(_ c: Color, _ s: Color) -> Double { ThemeContrastTests.contrast(NSColor(c), on: NSColor(s)) }
+
+    /// Every (file, first argument) of a Neon.faded call under Sources, read from the source text.
+    private static func fadedSites() throws -> Set<String> {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp", isDirectory: true)
+        var out = Set<String>()
+        let files = (FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.allObjects ?? []).compactMap { $0 as? URL }
+        XCTAssertGreaterThan(files.count, 50)
+        for u in files where u.pathExtension == "swift" {
+            let text = try String(contentsOf: u, encoding: .utf8)
+            for part in text.components(separatedBy: "Neon.faded(").dropFirst() {
+                let arg = part.prefix { $0 != "," }
+                out.insert("\(u.lastPathComponent)|\(arg)")
+            }
+        }
+        return out
+    }
+
+    /// The palette-colour sites (a custom theme can make these faint) are exactly the ones the table covers.
+    func testFadedSitesAreTheKnownOnes() throws {
+        let palette: Set<String> = ["ClipboardPanel.swift|Neon.blue", "SettingsTheme.swift|accent", "SettingsTheme.swift|Neon.blue",
+                                    "AgentsWindow.swift|Neon.blue", "AgentsWindow.swift|tint", "RunnerPanel.swift|Neon.blue"]
+        let fixed: Set<String> = ["StatsPopupView.swift|Neon.textSecondary", "SettingsTheme.swift|Neon.textSecondary",
+                                  "AgentsWindow.swift|Neon.textSecondary", "AgentIslandView.swift|.white"]
+        XCTAssertEqual(try Self.fadedSites(), palette.union(fixed))
+    }
+
+    /// Faint accents: under Increase Contrast every palette colour faded is drawn at 3:1 on card and cardHi.
+    func testFadedPaletteColoursReachThreeToOneForAFaintTheme() throws {
+        let (store, _, _) = try applied(Self.faintAllJSON, ic: true, label: "faintfade")
+        defer { withExtendedLifetime(store) {} }
+        let p = ThemeRuntime.palette
+        let tokens: [(String, Color)] = [("blue", Neon.blue), ("blueBright", Neon.blueBright), ("indigo", Neon.indigo),
+                                         ("magenta", Neon.magenta), ("terminal", Neon.terminal)]
+        for (name, c) in tokens {
+            let f = Neon.faded(c, 0.15)
+            XCTAssertTrue(Self.same(f, p.textPrimary), "\(name) did not fall back")
+            for s in [p.card, p.cardHi] { XCTAssertGreaterThanOrEqual(Self.ratio(f, s), 3, "\(name)") }
+        }
+        XCTAssertEqual(Self.comps(Neon.faded(Neon.blue, 0.2)).last, 1)
+        XCTAssertEqual(Self.comps(Neon.faded(Neon.blue, 0)).last, 0, "an off edge stays off")
+    }
+
+    func testFadedKeepsAWellContrastedAccent() throws {
+        let (store, _, _) = try applied(Self.goodAllJSON, ic: true, label: "goodfade")
+        defer { withExtendedLifetime(store) {} }
+        for c in [Neon.blue, Neon.blueBright, Neon.indigo, Neon.magenta, Neon.terminal] {
+            XCTAssertTrue(Self.same(Neon.faded(c, 0.5), c))
+        }
+    }
+
+    /// A fixed colour (the Agent Island's white) is drawn opaque unchanged, even on a faint theme; off, it keeps its alpha.
+    func testFadedLeavesWhiteUnchanged() throws {
+        let (store, center, box) = try applied(Self.faintAllJSON, ic: true, label: "whitefade")
+        defer { withExtendedLifetime(store) {} }
+        XCTAssertTrue(Self.same(Neon.faded(.white, 0.75), .white))
+        Self.flip(box, false, center)
+        XCTAssertEqual(Self.comps(Neon.faded(.white, 0.75)).last.map { abs($0 - 0.75) < 0.001 }, true)
+    }
+
+    /// L1308-l1: a theme whose own text is under 4.5:1 on its card gets black or white, whichever reads higher.
+    func testLastResortTextColourWhenTheThemeTextIsUnreadable() throws {
+        for (json, expect, label) in [(Self.lowTextDarkJSON, Color.white, "lastdark"), (Self.lowTextLightJSON, Color.black, "lastlight")] {
+            let (store, _, _) = try applied(json, ic: true, label: label)
+            let p = ThemeRuntime.palette
+            XCTAssertLessThan(Self.ratio(p.textPrimary, p.card), 4.5)
+            for c in [Neon.textSecondary, Neon.stroke, Neon.faded(Neon.blue, 0.2)] {
+                XCTAssertTrue(Self.same(c, expect), label)
+                for s in [p.card, p.cardHi] { XCTAssertGreaterThanOrEqual(Self.ratio(c, s), 4.5, label) }
+            }
+            withExtendedLifetime(store) {}
+        }
+    }
+
+    /// Off, Neon.faded is the colour at its own alpha, and the 22 built-ins keep their accents on.
+    func testFadedOffIsUnchangedAndBuiltInsKeepTheirAccents() throws {
+        let dir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
+        let bundled = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("theme-") }
+            .map { try ThemePalette.resolve(ThemeSpec.decode(Data(contentsOf: $0.appendingPathComponent("theme.json")))) }
+        for p in [ThemePalette.default] + bundled {
+            ThemeRuntime.palette = p
+            ThemeRuntime.increaseContrast = false
+            XCTAssertTrue(Self.same(Neon.faded(Neon.blue, 0.3), p.blue.opacity(0.3)), "off")
+            ThemeRuntime.increaseContrast = true
+            XCTAssertTrue(Self.same(Neon.faded(Neon.blue, 0.3), p.blue), "on keeps the accent")
+        }
+    }
 }

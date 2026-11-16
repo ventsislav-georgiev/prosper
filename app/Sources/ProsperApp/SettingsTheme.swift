@@ -38,7 +38,7 @@ enum Neon {
     private static var hc: Bool { ThemeRuntime.increaseContrast }
     static var stroke: Color { hc ? ThemeRuntime.contrastLines.stroke : p.blue.opacity(0.16) }
     static var textPrimary: Color { p.textPrimary }
-    static var textSecondary: Color { hc ? p.textPrimary : p.textSecondary }
+    static var textSecondary: Color { hc ? ThemeRuntime.contrastLines.text : p.textSecondary }
 
     /// The two ends of `cardStroke`, top-leading first.
     static var cardStrokeColors: [Color] {
@@ -50,7 +50,10 @@ enum Neon {
 
     /// #1303: a line or label a view fades with its own alpha; under Increase Contrast it is
     /// drawn opaque instead (an alpha of 0, an edge that is off, stays off).
-    static func faded(_ c: Color, _ alpha: Double) -> Color { c.opacity(hc && alpha > 0 ? 1 : alpha) }
+    static func faded(_ c: Color, _ alpha: Double) -> Color {
+        // #1317: a palette colour under 3:1 on the card falls back (table resolved per apply); .white and text colours pass through.
+        hc && alpha > 0 ? (ThemeRuntime.contrastLines.faded[c] ?? c).opacity(1) : c.opacity(alpha)
+    }
 
     static var barFill: LinearGradient {
         LinearGradient(colors: [p.blueBright, p.blue, p.indigo],

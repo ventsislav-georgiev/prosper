@@ -163,6 +163,11 @@ enum ThemeRuntime {
     struct ContrastLines {
         var stroke: Color
         var cardEnds: [Color]
+        /// #1317: the text colour every fallback uses (the theme's own textPrimary when it reads 4.5:1 on
+        /// card and cardHi, else black or white, whichever reads higher: the floor of last resort).
+        var text: Color
+        /// #1317: each palette colour `Neon.faded` is called with, mapped to what it draws opaque.
+        var faded: [Color: Color]
     }
     nonisolated(unsafe) private(set) static var contrastLines = resolveContrastLines(.default)
 
@@ -171,10 +176,15 @@ enum ThemeRuntime {
     }
 
     static func resolveContrastLines(_ p: ThemePalette) -> ContrastLines {
-        func line(_ c: Color) -> Color {
-            [p.card, p.cardHi].allSatisfy { contrastRatio(c, $0) >= 3 } ? c : p.textPrimary
-        }
-        return ContrastLines(stroke: line(p.blue), cardEnds: [line(p.blue), line(p.indigo)])
+        let surfaces = [p.card, p.cardHi]
+        func floor(_ c: Color, _ r: Double) -> Bool { surfaces.allSatisfy { contrastRatio(c, $0) >= r } }
+        func worst(_ c: Color) -> Double { surfaces.map { contrastRatio(c, $0) }.min() ?? 0 }
+        let text = floor(p.textPrimary, 4.5) ? p.textPrimary
+            : (worst(.black) >= worst(.white) ? Color.black : Color.white)
+        func line(_ c: Color) -> Color { floor(c, 3) ? c : text }
+        let faded = Dictionary([p.blue, p.blueBright, p.indigo, p.magenta, p.terminal].map { ($0, line($0)) },
+                               uniquingKeysWith: { a, _ in a })
+        return ContrastLines(stroke: line(p.blue), cardEnds: [line(p.blue), line(p.indigo)], text: text, faded: faded)
     }
 
     /// WCAG 2 ratio of two opaque colours (alpha ignored).

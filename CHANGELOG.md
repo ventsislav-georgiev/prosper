@@ -1426,6 +1426,9 @@ tag from the now-released section and put it on the new top draft.
   session and says so, and Restart all leaves its folder alone and says so.
 - A session started with its own Claude config folder (CLAUDE_CONFIG_DIR) can now have its plan
   approved from the Agent Sessions window.
+- With Increase Contrast, a custom theme's faint accent on buttons, search fields and borders falls
+  back to a readable colour, and a theme whose own text is too faint on its cards falls back to
+  black or white.
 
 ## v2.174.0
 
