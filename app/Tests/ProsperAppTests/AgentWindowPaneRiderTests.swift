@@ -195,15 +195,15 @@ extension AgentWindowD1Tests {
             let split = AgentWindowControls.paneMenu(one, pane: one.layout.focused)
             let all = AgentWindowControls.paneMenu(three, pane: three.layout.focused)
             XCTAssertEqual(AgentSessionMenuButton.help(a, ended: false, panes: split),
-                           "Open in terminal, rename, restart, stop or kill this session; split this pane")
+                           "Open in terminal, rename, restart, stop or end this session; split this pane")
             XCTAssertEqual(AgentSessionMenuButton.help(a, ended: false, panes: all),
-                           "Open in terminal, rename, restart, stop or kill this session; split, zoom, equalize or close this pane")
+                           "Open in terminal, rename, restart, stop or end this session; split, zoom, equalize or close this pane")
             XCTAssertEqual(AgentSessionMenuButton.help(dash, ended: false, panes: all),
                            "Open in terminal or rename this session; split, zoom, equalize or close this pane")
             XCTAssertEqual(AgentSessionMenuButton(store: nil, session: a, ask: { _ in }, ended: true, panes: all).help,
                            "This session ended: there is no terminal to attach to; split, zoom, equalize or close this pane")
             XCTAssertEqual(AgentSessionMenuButton.help(a, ended: false, panes: []),
-                           "Open in terminal, rename, restart, stop or kill this session")
+                           "Open in terminal, rename, restart, stop or end this session")
         }
     }
 
@@ -216,7 +216,7 @@ extension AgentWindowD1Tests {
                                                  .pane("Equalize", enabled: true, verb: .equalize)]
             for panes in [[], items] {
                 XCTAssertEqual(AgentSessionMenuButton.help(a, ended: false, panes: panes),
-                               "Open in terminal, rename, restart, stop or kill this session")
+                               "Open in terminal, rename, restart, stop or end this session")
                 XCTAssertEqual(AgentSessionMenuButton.help(dash, ended: false, panes: panes), "Open in terminal or rename this session")
                 XCTAssertEqual(AgentSessionMenuButton.help(a, ended: true, panes: panes),
                                "This session ended: there is no terminal to attach to")
@@ -261,7 +261,7 @@ extension AgentWindowD1Tests {
             let header = try XCTUnwrap(paneRiderFind(detail.body, AgentSessionHeader.self))
             // #1319: Jump to Chapter is in the "\u{22EF}" menu with the gate off too (disabled here: a terminal pane); no pane split item.
             XCTAssertEqual(header.menuButton.panes, [.divider, .chapters(enabled: false, pane: m.layout.focused)])
-            XCTAssertEqual(header.menuButton.help, "Open in terminal, rename, restart, stop or kill this session")
+            XCTAssertEqual(header.menuButton.help, "Open in terminal, rename, restart, stop or end this session")
         }
     }
 

@@ -230,8 +230,7 @@ final class IncreaseContrastCustomThemeTests: XCTestCase {
         let palette: Set<String> = ["ClipboardPanel.swift|Neon.blue", "SettingsTheme.swift|accent", "SettingsTheme.swift|Neon.blue",
                                     "AgentsWindow.swift|Neon.blue", "AgentsWindow.swift|tint", "RunnerPanel.swift|Neon.blue"]
         let fixed: Set<String> = ["StatsPopupView.swift|Neon.textSecondary", "SettingsTheme.swift|Neon.textSecondary",
-                                  "AgentsWindow.swift|Neon.textSecondary", "AgentIslandView.swift|.white",
-                                  "AgentIslandView.swift|text"]  // #1316: island chip text (3 sites)
+                                  "AgentsWindow.swift|Neon.textSecondary", "AgentIslandView.swift|.white"]  // #1375: the island chip text sites (Neon.faded(text, ...)) are gone
         XCTAssertEqual(try Self.fadedSites(), palette.union(fixed))
     }
 

@@ -78,7 +78,7 @@ extension AgentWindowD1Tests {
                 let button = AgentSessionMenuButton(store: st, session: a, ask: { _ in }, open: {},
                                                     panes: AgentWindowControls.paneMenu(m, pane: m.layout.focused))
                 XCTAssertEqual(button.entries, AgentWindowControls.sessionMenu(a, store: st, ended: false), why)
-                XCTAssertEqual(button.help, "Open in terminal, rename, restart, stop or kill this session", why)
+                XCTAssertEqual(button.help, "Open in terminal, rename, restart, stop or end this session", why)
             }
             // The pure builder: the gate first, whatever else it is given.
             XCTAssertEqual(AgentWindowControls.paneMenu(splits: false, panes: 6, right: .cap, down: nil), [])

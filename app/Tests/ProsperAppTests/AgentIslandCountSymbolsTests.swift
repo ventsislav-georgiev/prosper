@@ -214,7 +214,7 @@ final class AgentIslandCountSymbolsTests: XCTestCase {
         // (session, details, the row's label)
         let rows: [(AgentSession, AgentIslandRowDetails, String)] = [
             (session("api", .idle, agents: 3, meta: DchSessionMeta(openPRs: [pr(1)], merged: 192)), .all,
-             "api, Idle, 4m ago, 3 agents, 192 merged pull requests, open pull requests acme/web#1"),
+             "api, Idle, 4m ago, 3 agents, 192 merged pull requests, open pull requests acme/web#1, 1 open pull request"),
             (session("api-qa", .done, ago: 12, agents: 1, meta: DchSessionMeta(merged: 1)), .all,
              "api-qa, Done, just now, 1 agent, 1 merged pull request"),
             (session("api-big", .idle, agents: Int.max, meta: DchSessionMeta(merged: 100_000)), .all,
