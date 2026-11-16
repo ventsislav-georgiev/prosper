@@ -656,6 +656,250 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(try bare.sweepStaleTemps(now: now), [])
         XCTAssertEqual(KitPOSIXFS().kind(bare.layout.prosper), .missing)
     }
+
+    // MARK: S5b-2b: shims, the runner, kit.env, .settings.env, the wider sweep
+
+    private func context(_ home: URL, _ store: KitStore) -> KitRenderContext {
+        KitRenderContext.standard(extensionID: Self.ext, slug: "example-kit", kitDir: URL(fileURLWithPath: store.layout.live),
+                                  home: URL(fileURLWithPath: "/Users/example"), configHome: home)
+    }
+
+    private func shim(_ c: KitRenderContext, _ name: String, script: String = "tool.sh") -> KitShimPlan {
+        KitShimPlan(pieceID: "tools", name: name, target: c.kitBin + "/" + name,
+                    text: KitRender.shimText(c, pieceID: "tools", name: name, target: c.kitDir + "/bin/" + script))
+    }
+
+    private func text(_ path: String) -> String? { try? String(contentsOfFile: path, encoding: .utf8) }
+
+    private func inode(_ path: String) -> (ino: UInt64, sec: Int, nsec: Int)? {
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return nil }
+        return (UInt64(st.st_ino), st.st_mtimespec.tv_sec, st.st_mtimespec.tv_nsec)
+    }
+
+    /// any extended ACL entry on the path itself (no follow)
+    private func hasACL(_ path: String) -> Bool {
+        guard let a = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return false }
+        defer { acl_free(UnsafeMutableRawPointer(a)) }
+        var e: acl_entry_t?
+        return acl_get_entry(a, 0, &e) == 0 // 0 = ACL_FIRST_ENTRY
+    }
+
+    /// An inheritable read-only ACL entry (uid 1, a system account), set in process on the row's own dir, as
+    /// TextFileWriterTests does: everything made below it inherits it, unless dropped. The precondition is asserted (a
+    /// probe dir made by FileManager carries it), so the row never passes vacuously.
+    private func inheritableACL(on dir: URL) throws {
+        var acl: acl_t? = acl_init(1)
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        var entry: acl_entry_t?
+        var perms: acl_permset_t?
+        var flags: acl_flagset_t?
+        let who = UUID(uuidString: "FFFFEEEE-DDDD-CCCC-BBBB-AAAA00000001")!.uuid
+        XCTAssertEqual(acl_create_entry(&acl, &entry), 0)
+        XCTAssertEqual(acl_set_tag_type(entry, ACL_EXTENDED_ALLOW), 0)
+        XCTAssertEqual(withUnsafeBytes(of: who) { acl_set_qualifier(entry, $0.baseAddress) }, 0)
+        XCTAssertEqual(acl_get_permset(entry, &perms), 0)
+        XCTAssertEqual(acl_add_perm(perms, ACL_READ_DATA), 0)
+        XCTAssertEqual(acl_set_permset(entry, perms), 0)
+        XCTAssertEqual(acl_get_flagset_np(UnsafeMutableRawPointer(entry), &flags), 0)
+        XCTAssertEqual(acl_add_flag_np(flags, ACL_ENTRY_FILE_INHERIT), 0)
+        XCTAssertEqual(acl_add_flag_np(flags, ACL_ENTRY_DIRECTORY_INHERIT), 0)
+        XCTAssertEqual(acl_set_flagset_np(UnsafeMutableRawPointer(entry), flags), 0)
+        guard acl_set_file(dir.path, ACL_TYPE_EXTENDED, acl) == 0 else { throw XCTSkip("acl_set_file refused on this file system: errno \(errno)") }
+        let probe = dir.appendingPathComponent("acl-probe", isDirectory: true)
+        try FileManager.default.createDirectory(at: probe, withIntermediateDirectories: false)
+        XCTAssertTrue(hasACL(probe.path), "the probe dir inherits the ACL")
+    }
+
+    func testShimsWrittenAndStaleOnesRemovedOnlyFromRecord() throws {
+        let (_, home, store) = try scene()
+        let c = context(home, store)
+        let bin = store.layout.bin
+        XCTAssertEqual(try store.writeShims([shim(c, "alpha"), shim(c, "beta")]), [])
+        XCTAssertEqual(list(bin), [".prosper-shims", "alpha", "beta"])
+        XCTAssertEqual(text(bin + "/alpha"), shim(c, "alpha").text)
+        XCTAssertEqual(mode(bin + "/alpha"), 0o755)
+        XCTAssertEqual(mode(bin + "/beta"), 0o755)
+        XCTAssertEqual(text(bin + "/.prosper-shims"), "alpha\nbeta\n")
+        XCTAssertEqual(mode(bin + "/.prosper-shims"), 0o600)
+        // a file of the user's own in bin/: never in the record
+        try Data("mine".utf8).write(to: URL(fileURLWithPath: bin + "/mine"))
+        // the plan drops beta: beta is in the record and goes by its literal name; mine stays
+        XCTAssertEqual(try store.writeShims([shim(c, "alpha", script: "other.sh")]), ["beta"])
+        XCTAssertEqual(list(bin), [".prosper-shims", "alpha", "mine"])
+        XCTAssertEqual(text(bin + "/alpha"), shim(c, "alpha", script: "other.sh").text)
+        XCTAssertEqual(text(bin + "/mine"), "mine")
+        XCTAssertEqual(text(bin + "/.prosper-shims"), "alpha\n")
+        // a planned name that exists and is not in the record is refused: nothing written, nothing removed
+        XCTAssertThrowsError(try store.writeShims([shim(c, "gamma"), shim(c, "mine")])) {
+            XCTAssertEqual($0 as? KitStoreError, .shimsNotOurs(["mine"]))
+        }
+        XCTAssertEqual(list(bin), [".prosper-shims", "alpha", "mine"])
+        XCTAssertEqual(text(bin + "/mine"), "mine")
+        XCTAssertEqual(text(bin + "/.prosper-shims"), "alpha\n")
+        // an empty plan removes every recorded shim and nothing else
+        XCTAssertEqual(try store.writeShims([]), ["alpha"])
+        XCTAssertEqual(list(bin), [".prosper-shims", "mine"])
+        XCTAssertEqual(text(bin + "/mine"), "mine")
+    }
+
+    func testRunnerWrittenOnlyOnChange() throws {
+        let (_, _, store) = try scene()
+        let path = store.layout.runner
+        let script = Data(KitRunner.script.utf8)
+        XCTAssertTrue(try store.installRunner())
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), script)
+        XCTAssertEqual(mode(path), 0o755)
+        XCTAssertEqual(mode(store.layout.kitRuntime), 0o700)
+        let first = inode(path)
+        XCTAssertTrue(first != nil)
+        // the same bytes and mode: nothing written, the same file (inode and mtime)
+        XCTAssertFalse(try store.installRunner())
+        let second = inode(path)
+        XCTAssertTrue(first?.ino == second?.ino && first?.sec == second?.sec && first?.nsec == second?.nsec)
+        // changed bytes are rewritten
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: URL(fileURLWithPath: path))
+        XCTAssertTrue(try store.installRunner())
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), script)
+        XCTAssertEqual(mode(path), 0o755)
+        // a changed mode alone is put back too
+        XCTAssertEqual(chmod(path, 0o700), 0)
+        XCTAssertTrue(try store.installRunner())
+        XCTAssertEqual(mode(path), 0o755)
+        XCTAssertEqual(list(store.layout.kitRuntime), ["prosper-kit-run"], "no temp is left behind")
+    }
+
+    func testKitEnvIs0600() throws {
+        let (_, home, store) = try scene()
+        try inheritableACL(on: home)
+        let c = context(home, store)
+        // no recorded slug yet: nothing written
+        XCTAssertThrowsError(try store.writeKitEnv(c)) { XCTAssertEqual($0 as? KitStoreError, .noSlug) }
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.prosper), .missing)
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        try store.writeKitEnv(c)
+        let env = store.layout.kitEnv
+        XCTAssertEqual(text(env), "KIT_SLUG='example-kit'\n" + (KitRunner.kitEnvText(c, stateDir: store.layout.state) ?? "nil"))
+        XCTAssertEqual(mode(env), 0o600)
+        XCTAssertEqual(store.recordedSlug(), "example-kit")
+        // every parent the store made is 0700 and carries no ACL, though the config home's ACL is inheritable
+        for d in [store.layout.prosper, store.layout.kits, store.layout.root] + store.layout.dirs {
+            XCTAssertEqual(mode(d), 0o700, d)
+            XCTAssertFalse(hasACL(d), d)
+        }
+        XCTAssertFalse(hasACL(env))
+        // a nil text (a path that cannot be one line) writes nothing and says which file
+        var bad = c
+        bad.kitDir = "/Users/example/kit\nX"
+        XCTAssertThrowsError(try store.writeKitEnv(bad)) { XCTAssertEqual($0 as? KitStoreError, .envText("kit.env")) }
+        XCTAssertEqual(text(env), "KIT_SLUG='example-kit'\n" + (KitRunner.kitEnvText(c, stateDir: store.layout.state) ?? "nil"))
+        XCTAssertEqual(list(store.layout.root).filter { $0.hasPrefix(".") }, [], "no temp is left behind")
+    }
+
+    func testSettingsEnvIs0600InA0700ParentWithNoACL() throws {
+        let (_, home, store) = try scene()
+        try inheritableACL(on: home)
+        XCTAssertThrowsError(try store.writeSettingsEnv(["theme": "dark"])) { XCTAssertEqual($0 as? KitStoreError, .noSlug) }
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        try store.writeSettingsEnv(["theme": "dark", "level": "2"])
+        let dir = home.path + "/example-kit"
+        let se = dir + "/.settings.env"
+        XCTAssertEqual(text(se), KitRunner.settingsEnvText(["theme": "dark", "level": "2"]) ?? "nil")
+        XCTAssertEqual(mode(se), 0o600)
+        XCTAssertEqual(mode(dir), 0o700)
+        XCTAssertFalse(hasACL(dir))
+        XCTAssertFalse(hasACL(se))
+        // a nil text (a key that cannot be a variable) writes nothing and says which file
+        XCTAssertThrowsError(try store.writeSettingsEnv(["bad key": "x"])) { XCTAssertEqual($0 as? KitStoreError, .envText(".settings.env")) }
+        XCTAssertEqual(text(se), KitRunner.settingsEnvText(["theme": "dark", "level": "2"]) ?? "nil")
+        XCTAssertEqual(list(dir), [".settings.env"])
+        // the slug dir is the user's: an inheritable ACL put on it later is kept there, never on the file written in it
+        try inheritableACL(on: URL(fileURLWithPath: dir))
+        try store.writeSettingsEnv(["theme": "light"])
+        XCTAssertEqual(text(se), KitRunner.settingsEnvText(["theme": "light"]) ?? "nil")
+        XCTAssertEqual(mode(se), 0o600)
+        XCTAssertFalse(hasACL(se))
+        XCTAssertTrue(hasACL(dir))
+    }
+
+    func testReplaceRefusedWhenNotWritable() throws {
+        let (_, home, store) = try scene()
+        let c = context(home, store)
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        try store.writeKitEnv(c)
+        let env = store.layout.kitEnv
+        let before = text(env)
+        XCTAssertEqual(chmod(env, 0o400), 0)
+        var other = c
+        other.kitDir = "/Users/example/other-kit"
+        XCTAssertThrowsError(try store.writeKitEnv(other)) { XCTAssertEqual($0 as? KitStoreError, .notWritable(env)) }
+        XCTAssertEqual(text(env), before)
+        XCTAssertEqual(mode(env), 0o400)
+        // the runner: a read-only one with the wrong mode is not replaced
+        XCTAssertTrue(try store.installRunner())
+        XCTAssertEqual(chmod(store.layout.runner, 0o500), 0)
+        XCTAssertThrowsError(try store.installRunner()) { XCTAssertEqual($0 as? KitStoreError, .notWritable(store.layout.runner)) }
+        XCTAssertEqual(mode(store.layout.runner), 0o500)
+        // a shim
+        try store.writeShims([shim(c, "alpha")])
+        XCTAssertEqual(chmod(store.layout.bin + "/alpha", 0o500), 0)
+        XCTAssertThrowsError(try store.writeShims([shim(c, "alpha", script: "other.sh")])) {
+            XCTAssertEqual($0 as? KitStoreError, .notWritable(store.layout.bin + "/alpha"))
+        }
+        XCTAssertEqual(text(store.layout.bin + "/alpha"), shim(c, "alpha").text)
+        let temps = (list(store.layout.root) + list(store.layout.bin)).filter { $0.contains(".prosper-") && $0 != ".prosper-shims" }
+        XCTAssertEqual(temps, [], "no temp is left behind")
+    }
+
+    private func aged(_ path: String, _ date: Date) throws {
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: path)
+    }
+
+    func testSweepRemovesStaleStdinTemps() throws {
+        let (_, _, store) = try scene()
+        try store.ensureLayout()
+        let fm = FileManager.default
+        let now = Date()
+        let old = now.addingTimeInterval(-3600)
+        let tmp = store.layout.tmp + "/"
+        for n in ["stdin.Ab3dE9", "stdin.Zz9yX1", "stdin.short", "stdin.Ab3dE9x"] { try Data("{}".utf8).write(to: URL(fileURLWithPath: tmp + n)) }
+        try fm.createDirectory(atPath: tmp + "stdin.Qq1wE2", withIntermediateDirectories: false)
+        try fm.createSymbolicLink(atPath: tmp + "stdin.Lk1nK2", withDestinationPath: store.layout.state)
+        for n in ["stdin.Ab3dE9", "stdin.short", "stdin.Ab3dE9x", "stdin.Qq1wE2"] { try aged(tmp + n, old) }
+        // old stdin.XXXXXX (a SIGKILL skipped the runner's trap) goes; a fresh one, a dir or link named like one and
+        // a name off the pattern stay
+        XCTAssertEqual(try store.sweepStaleTemps(now: now), ["stdin.Ab3dE9"])
+        XCTAssertEqual(list(store.layout.tmp), ["stdin.Ab3dE9x", "stdin.Lk1nK2", "stdin.Qq1wE2", "stdin.Zz9yX1", "stdin.short"])
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.state), .directory, "the link's target is untouched")
+        XCTAssertEqual(try store.sweepStaleTemps(now: now.addingTimeInterval(KitStore.staleTempAge + 5)), ["stdin.Zz9yX1"])
+    }
+
+    func testSweepRemovesStaleWriterTemps() throws {
+        let (_, home, store) = try scene()
+        try store.installRunner()
+        try store.writeShims([shim(context(home, store), "alpha")])
+        let fm = FileManager.default
+        let now = Date()
+        let old = now.addingTimeInterval(-3600)
+        let id = { UUID().uuidString }
+        let inRoot = ".kit.env.prosper-" + id(), inBin = ".alpha.prosper-" + id(), inRuntime = ".prosper-kit-run.prosper-" + id()
+        let fresh = ".beta.prosper-" + id(), bare = ".prosper-" + id(), lower = ".alpha.prosper-" + id().lowercased()
+        let asDir = ".gamma.prosper-" + id(), noDot = "alpha.prosper-" + id()
+        for p in [store.layout.root + "/" + inRoot, store.layout.bin + "/" + inBin, store.layout.kitRuntime + "/" + inRuntime,
+                  store.layout.bin + "/" + fresh, store.layout.bin + "/" + bare, store.layout.bin + "/" + lower, store.layout.bin + "/" + noDot] {
+            try Data("x".utf8).write(to: URL(fileURLWithPath: p))
+        }
+        try fm.createDirectory(atPath: store.layout.bin + "/" + asDir, withIntermediateDirectories: false)
+        for p in [store.layout.root + "/" + inRoot, store.layout.bin + "/" + inBin, store.layout.kitRuntime + "/" + inRuntime,
+                  store.layout.bin + "/" + bare, store.layout.bin + "/" + lower, store.layout.bin + "/" + asDir,
+                  store.layout.bin + "/" + noDot, store.layout.bin + "/alpha", store.layout.bin + "/.prosper-shims", store.layout.runner] {
+            try aged(p, old)
+        }
+        XCTAssertEqual(try store.sweepStaleTemps(now: now).sorted(), [inRoot, inBin, inRuntime].sorted())
+        XCTAssertEqual(list(store.layout.bin), [".prosper-shims", asDir, bare, fresh, lower, "alpha", noDot].sorted())
+        XCTAssertEqual(list(store.layout.kitRuntime), ["prosper-kit-run"])
+        XCTAssertEqual(list(store.layout.root).filter { $0.hasPrefix(".") }, [])
+    }
 }
 
 /// The stream seam's swap fake: when readdir of `label` reaches the end of the list, `action` runs once (it swaps
@@ -797,6 +1041,8 @@ final class KitStoreMemorySourceFS: KitFS, @unchecked Sendable {
         func read(_ name: String, limit: Int) -> Data? { fs.read(path + "/" + name, limit: limit) }
         func remove(_ name: String, dir: Bool) throws { throw KitStoreError.io("remove", EPERM) }
         func rename(_ name: String, to other: any KitDir, _ newName: String, swap: Bool) throws { throw KitStoreError.io("rename", EPERM) }
+        func writable(_ name: String) -> Bool { false }
+        func write(_ name: String, _ data: Data, mode: mode_t) throws { throw KitStoreError.io("create", EPERM) }
     }
 
     func names(_ dir: String) -> [String]? {
@@ -876,5 +1122,7 @@ final class KitFailNthRename: KitFS, @unchecked Sendable {
             if fs.failsNow() { throw KitStoreError.io("rename", EIO) }
             try inner.rename(name, to: (other as? Dir)?.inner ?? other, newName, swap: swap)
         }
+        func writable(_ name: String) -> Bool { inner.writable(name) }
+        func write(_ name: String, _ data: Data, mode: mode_t) throws { try inner.write(name, data, mode: mode) }
     }
 }

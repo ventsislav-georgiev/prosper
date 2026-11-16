@@ -13,7 +13,9 @@ import Foundation
 // (AT_SYMLINK_NOFOLLOW) / unlinkat on it, never by a joined path, so a dir swapped for a link part-way cannot redirect
 // it. The swap into live goes through `incoming` and keeps the older previous as `retiring` (ruling r-917s5b1a);
 // the sweep removes only the store's own stale temps.
-// Shims, the runner placement and the effect runner are S5b-2's.
+// S5b-2b: the shims in bin/ (only names in bin/.prosper-shims are ever Prosper's), the runner in kit-runtime/, kit.env and
+// <KIT_CONFIG>/.settings.env: each an atomic dir-relative write (temp + renameat) after faccessat says the target is writable.
+// A dir or file the store creates carries no extended ACL. The effect runner is S5b-2c's.
 
 enum KitStoreError: Error, Equatable, Sendable {
     case badID, badVersion, badTree, badSlug
@@ -30,6 +32,14 @@ enum KitStoreError: Error, Equatable, Sendable {
     case outsideStore
     /// kit.env exists but does not hold a recorded slug: never overwritten
     case kitEnvUnreadable
+    /// faccessat(W_OK) refused the existing target (a mode, an ACL deny, the Locked flag): never replaced
+    case notWritable(String)
+    /// planned shim names that exist in bin/ but are not in the record: nothing written, nothing removed
+    case shimsNotOurs([String])
+    /// KitRunner gave no text for the file ("kit.env" or ".settings.env"): nothing written
+    case envText(String)
+    /// no slug recorded yet (recordSlug comes first): kit.env and .settings.env need it
+    case noSlug
     case io(String, Int32)
 }
 
@@ -83,6 +93,10 @@ protocol KitDir: AnyObject {
     func remove(_ name: String, dir: Bool) throws
     /// renameatx_np: RENAME_SWAP when `swap`, else RENAME_EXCL (never replaces what is at `newName`)
     func rename(_ name: String, to other: any KitDir, _ newName: String, swap: Bool) throws
+    /// faccessat(W_OK, effective ids) on the child
+    func writable(_ name: String) -> Bool
+    /// atomic: a new `.<name>.prosper-<UUID>` (O_EXCL | O_NOFOLLOW, exactly `mode`, no ACL, fsync'd), then renameat over `name`
+    func write(_ name: String, _ data: Data, mode: mode_t) throws
 }
 
 final class KitPOSIXDir: KitDir {
@@ -150,6 +164,27 @@ final class KitPOSIXDir: KitDir {
         let flag = UInt32(swap ? RENAME_SWAP : RENAME_EXCL)
         guard renameatx_np(fd, name, to.fd, newName, flag) == 0 else { throw KitStoreError.io("rename", errno) }
     }
+
+    func writable(_ name: String) -> Bool { Self.isName(name) && faccessat(fd, name, W_OK, AT_EACCESS) == 0 }
+
+    func write(_ name: String, _ data: Data, mode: mode_t) throws {
+        guard Self.isName(name) else { throw KitStoreError.badName(path) }
+        let temp = "." + name + ".prosper-" + UUID().uuidString
+        let f = openat(fd, temp, O_WRONLY | O_CREAT | O_EXCL | KitStore.noFollow, mode)
+        guard f >= 0 else { throw KitStoreError.io("create", errno) }
+        do {
+            defer { _ = close(f) }
+            guard fchmod(f, mode) == 0 else { throw KitStoreError.io("chmod", errno) }
+            try KitStore.dropACL(f)
+            try KitPOSIXFS.writeAll(f, data) { Darwin.write($0, $1, $2) }
+            guard fsync(f) == 0 else { throw KitStoreError.io("fsync", errno) }
+            guard renameat(fd, temp, fd, name) == 0 else { throw KitStoreError.io("rename", errno) }
+        } catch {
+            _ = unlinkat(fd, temp, 0)
+            throw error
+        }
+        _ = fsync(fd)
+    }
 }
 
 /// The store's only way to the disk. Paths are absolute.
@@ -162,8 +197,8 @@ protocol KitFS: Sendable {
     func names(_ dir: String) -> [String]?
     /// a regular file's bytes, opened O_NOFOLLOW | O_NONBLOCK; nil for anything else or for more than `limit` bytes
     func read(_ path: String, limit: Int) -> Data?
-    /// mkdir 0700 when missing; then the dir is opened O_NOFOLLOW (a link or a file in its place is refused)
-    /// and, when `narrow`, set to exactly 0700
+    /// mkdir 0700 when missing (a dir it makes has any inherited ACL dropped); then the dir is opened O_NOFOLLOW (a link
+    /// or a file in its place is refused) and, when `narrow`, set to exactly 0700
     func ensureDir(_ path: String, narrow: Bool) throws
     /// a NEW file (O_CREAT | O_EXCL | O_NOFOLLOW) with exactly `mode`
     func create(_ path: String, _ data: Data, mode: mode_t) throws
@@ -221,13 +256,15 @@ struct KitPOSIXFS: KitFS {
     }
 
     func ensureDir(_ path: String, narrow: Bool) throws {
-        if mkdir(path, KitStore.dirMode) != 0, errno != EEXIST { throw KitStoreError.io("mkdir", errno) }
+        let made = mkdir(path, KitStore.dirMode) == 0
+        if !made, errno != EEXIST { throw KitStoreError.io("mkdir", errno) }
         let fd = open(path, O_RDONLY | O_DIRECTORY | KitStore.noFollow)
         guard fd >= 0 else {
             let e = errno
             throw e == ELOOP ? KitStoreError.link(path) : e == ENOTDIR ? KitStoreError.notADirectory(path) : KitStoreError.io("open", e)
         }
         defer { _ = close(fd) }
+        if made { try KitStore.dropACL(fd) }
         if narrow, fchmod(fd, KitStore.dirMode) != 0 { throw KitStoreError.io("chmod", errno) }
     }
 
@@ -236,6 +273,10 @@ struct KitPOSIXFS: KitFS {
         guard fd >= 0 else { throw KitStoreError.io("create", errno) }
         defer { _ = close(fd) }
         guard fchmod(fd, mode) == 0 else { throw KitStoreError.io("chmod", errno) }
+        try Self.writeAll(fd, data, writeBytes)
+    }
+
+    static func writeAll(_ fd: Int32, _ data: Data, _ writeBytes: (Int32, UnsafeRawPointer, Int) -> Int) throws {
         var off = 0
         while off < data.count {
             let n = data.withUnsafeBytes { writeBytes(fd, $0.baseAddress! + off, data.count - off) }
@@ -250,10 +291,11 @@ struct KitPOSIXFS: KitFS {
     }
 }
 
-/// <configHome>/prosper/kits/<ext-id>/ and what is in it (plan C S5). S5a fills staged/, tmp/ and kit.env;
-/// bin, fired and state are created here and filled by later steps. live and previous are never created empty:
+/// <configHome>/prosper/kits/<ext-id>/ and what is in it (plan C S5). S5a fills staged/, tmp/ and kit.env; S5b-2b bin/
+/// and <configHome>/prosper/kit-runtime/prosper-kit-run; fired and state are created here and filled by the runner. live and previous are never created empty:
 /// they come into being only by the swap's rename of a staged copy (so a first apply finds no live).
 struct KitStoreLayout: Equatable, Sendable {
+    var configHome: String
     var prosper: String
     var kits: String
     var root: String
@@ -266,6 +308,8 @@ struct KitStoreLayout: Equatable, Sendable {
     var state: String
     var kitEnv: String
     var piecesJSON: String
+    var kitRuntime: String
+    var runner: String
     var dirs: [String] { [staged, bin, fired, tmp, state] }
 }
 
@@ -301,11 +345,13 @@ struct KitStore: Sendable {
         guard ManagedConfigPaths.isValidID(extID), !extID.allSatisfy({ $0 == "." }), !extID.hasPrefix("-") else {
             throw KitStoreError.badID
         }
-        let prosper = configHome.standardizedFileURL.path + "/prosper"
+        let home = configHome.standardizedFileURL.path
+        let prosper = home + "/prosper"
         let root = prosper + "/kits/" + extID
-        return KitStoreLayout(prosper: prosper, kits: prosper + "/kits", root: root, live: root + "/live", staged: root + "/staged",
+        return KitStoreLayout(configHome: home, prosper: prosper, kits: prosper + "/kits", root: root, live: root + "/live", staged: root + "/staged",
                               previous: root + "/previous", bin: root + "/bin", fired: root + "/fired", tmp: root + "/tmp",
-                              state: root + "/state", kitEnv: root + "/kit.env", piecesJSON: root + "/pieces.json")
+                              state: root + "/state", kitEnv: root + "/kit.env", piecesJSON: root + "/pieces.json",
+                              kitRuntime: prosper + "/kit-runtime", runner: prosper + "/kit-runtime/prosper-kit-run")
     }
 
     /// A version is a path component: 1 to 64 of [A-Za-z0-9._-], starting with a letter or digit ("+" never: it keys the tree).
@@ -605,26 +651,168 @@ struct KitStore: Sendable {
         try root.rename("previous", to: root, "live", swap: true)
     }
 
-    /// Plan A7 for the store's own temps: in kits/<ext-id>/tmp only, an entry named as stageCopy names its temp (a
-    /// UUID string), a dir or a regular file (fstatat no-follow: a link is kept, never followed), older than
-    /// `staleTempAge` by the injected clock `now`. Returns the names removed.
+    /// Plan A7 for the store's own temps, older than `staleTempAge` by the injected clock `now`, kind by fstatat no-follow
+    /// (a link is kept, never followed), never recursive except into stageCopy's own UUID dir. Only these dirs, each
+    /// opened O_NOFOLLOW: kits/<ext-id>/tmp: stageCopy's temp (a UUID string, a dir or a regular file) and the runner's
+    /// stdin temp (`stdin.` + 6 of [A-Za-z0-9], mktemp's XXXXXX; a regular file); kits/<ext-id>, its bin/ and
+    /// kit-runtime/: a writer temp (`.<name>.prosper-<UUID>`, a regular file). Returns the names removed (bare names).
     @discardableResult
     func sweepStaleTemps(now: Date) throws -> [String] {
-        guard fs.kind(layout.root) != .missing else { return [] }
-        let root = try fs.openDir(layout.root)
-        guard root.kind("tmp") != .missing else { return [] }
-        let tmp = try root.dir("tmp")
-        guard let names = tmp.names() else { throw KitStoreError.unreadableDir(tmp.path) }
         var removed: [String] = []
-        for n in names where UUID(uuidString: n)?.uuidString == n {
-            switch tmp.kind(n) {
-            case .directory, .file: break
-            default: continue
+        if fs.kind(layout.root) != .missing {
+            let root = try fs.openDir(layout.root)
+            removed += try sweep(root, now: now, Self.isWriterTemp)
+            if root.kind("bin") != .missing { removed += try sweep(try root.dir("bin"), now: now, Self.isWriterTemp) }
+            if root.kind("tmp") != .missing {
+                removed += try sweep(try root.dir("tmp"), now: now) { n, kind in
+                    switch kind {
+                    case .directory, .file: if UUID(uuidString: n)?.uuidString == n { return true }
+                    default: return false
+                    }
+                    return Self.isStdinTemp(n, kind)
+                }
             }
-            guard let m = tmp.modified(n), now.timeIntervalSince(m) > Self.staleTempAge else { continue }
-            try removeEntry(tmp, n)
+        }
+        if fs.kind(layout.kitRuntime) != .missing { removed += try sweep(try fs.openDir(layout.kitRuntime), now: now, Self.isWriterTemp) }
+        return removed
+    }
+
+    private func sweep(_ dir: any KitDir, now: Date, _ match: (String, KitFileKind) -> Bool) throws -> [String] {
+        guard let names = dir.names() else { throw KitStoreError.unreadableDir(dir.path) }
+        var removed: [String] = []
+        for n in names where match(n, dir.kind(n)) {
+            guard let m = dir.modified(n), now.timeIntervalSince(m) > Self.staleTempAge else { continue }
+            try removeEntry(dir, n)
             removed.append(n)
         }
         return removed
+    }
+
+    /// KitRunner.swift's `mktemp "$kd/tmp/stdin.XXXXXX"`: a regular file only
+    static func isStdinTemp(_ n: String, _ kind: KitFileKind) -> Bool {
+        guard case .file = kind, n.hasPrefix("stdin.") else { return false }
+        let tail = n.utf8.dropFirst(6)
+        return tail.count == 6 && tail.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }
+    }
+
+    /// `.<name>.prosper-<UUID>` (KitPOSIXDir.write and ManagedConfigPOSIXWriter name their temps so): a regular file only
+    static func isWriterTemp(_ n: String, _ kind: KitFileKind) -> Bool {
+        let mark = ".prosper-"
+        guard case .file = kind, n.hasPrefix("."), let r = n.range(of: mark, options: .backwards),
+              r.lowerBound > n.index(after: n.startIndex) else { return false }
+        let id = String(n[r.upperBound...])
+        return UUID(uuidString: id)?.uuidString == id
+    }
+
+    /// Drops every extended ACL entry (an inherited one included) from a dir or file the store just made (R917-s3-q3).
+    /// None there (acl_get_fd_np: NULL), or a file system without ACLs: nothing to drop.
+    static func dropACL(_ fd: Int32) throws {
+        guard let old = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) else { return }
+        acl_free(UnsafeMutableRawPointer(old))
+        guard let acl = acl_init(0) else { throw KitStoreError.io("acl", errno) }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        if acl_set_fd_np(fd, acl, ACL_TYPE_EXTENDED) != 0, errno != ENOTSUP, errno != EOPNOTSUPP { throw KitStoreError.io("acl", errno) }
+    }
+
+    /// The one replace every S5b-2b write goes through: a link in the target's place is refused, an existing file is
+    /// replaced only when faccessat(W_OK) says it is writable (an atomic rename would bypass its mode, an ACL deny or
+    /// the Locked flag), anything else is refused. `label` names the target in the error.
+    private func replace(in dir: any KitDir, _ name: String, _ data: Data, mode: mode_t, label: String) throws {
+        switch dir.kind(name) {
+        case .missing: break
+        case .file: guard dir.writable(name) else { throw KitStoreError.notWritable(label) }
+        case .symlink: throw KitStoreError.link(label)
+        case .directory, .other: throw KitStoreError.special(label)
+        }
+        try dir.write(name, data, mode: mode)
+    }
+
+    static let shimRecord = ".prosper-shims"
+    static let shimMode: mode_t = 0o755
+
+    /// The names bin/.prosper-shims records (one per line); [] when there is no record. A record that is not a regular
+    /// file of at most 64 KiB is refused: without it no stale shim can be told from a user's file.
+    func recordedShims(_ bin: any KitDir) throws -> [String] {
+        switch bin.kind(Self.shimRecord) {
+        case .missing: return []
+        case .file: break
+        default: throw KitStoreError.special(layout.bin + "/" + Self.shimRecord)
+        }
+        guard let d = bin.read(Self.shimRecord, limit: 64 << 10), let text = String(data: d, encoding: .utf8) else {
+            throw KitStoreError.special(layout.bin + "/" + Self.shimRecord)
+        }
+        return text.split(separator: "\n").map(String.init).filter(Self.isShimName)
+    }
+
+    static func isShimName(_ n: String) -> Bool { KitPOSIXDir.isName(n) && !n.hasPrefix(".") }
+
+    /// Plan C S5: the planned shims written into kits/<ext-id>/bin (0755, KitRender's text), and bin/.prosper-shims (0600)
+    /// records the names Prosper wrote; the record is the only reason to remove a shim (one picked over pieces.json: it
+    /// sits beside the shims, under the same dir handle, and pieces.json is S6's file). A stale shim is a recorded name the
+    /// plan no longer has: it is removed by its literal name (a file or link only). A planned name that is in bin/ but
+    /// not in the record is a file Prosper did not write: the whole call throws .shimsNotOurs(names) before any write.
+    /// Names compare case-folded (APFS): "Tool" recorded and "tool" planned is the same file, never stale.
+    /// Returns the stale names removed.
+    @discardableResult
+    func writeShims(_ shims: [KitShimPlan]) throws -> [String] {
+        let names = shims.map(\.name)
+        for n in names where !Self.isShimName(n) { throw KitStoreError.badName(n) }
+        let planned = Set(names.map { $0.lowercased() })
+        guard planned.count == names.count else { throw KitStoreError.badName(layout.bin) }
+        try ensureLayout()
+        let bin = try fs.openDir(layout.root).dir("bin")
+        let recorded = try recordedShims(bin)
+        let ours = Set(recorded.map { $0.lowercased() })
+        let foreign = names.filter { bin.kind($0) != .missing && !ours.contains($0.lowercased()) }
+        guard foreign.isEmpty else { throw KitStoreError.shimsNotOurs(foreign) }
+        func record(_ r: [String]) throws {
+            try replace(in: bin, Self.shimRecord, Data(Set(r).sorted().map { $0 + "\n" }.joined().utf8), mode: Self.envMode,
+                        label: layout.bin + "/" + Self.shimRecord)
+        }
+        try record(recorded + names) // first: a crash part-way still knows every shim it may have written
+        for s in shims { try replace(in: bin, s.name, Data(s.text.utf8), mode: Self.shimMode, label: layout.bin + "/" + s.name) }
+        var removed: [String] = []
+        for n in recorded where !planned.contains(n.lowercased()) {
+            switch bin.kind(n) {
+            case .file, .symlink: try bin.remove(n, dir: false); removed.append(n)
+            default: continue
+            }
+        }
+        try record(names)
+        return removed
+    }
+
+    /// <configHome>/prosper/kit-runtime/prosper-kit-run from KitRunner.script, 0755: written only when the bytes or the
+    /// mode differ. kit-runtime/ is made 0700. Returns whether it wrote.
+    @discardableResult
+    func installRunner() throws -> Bool {
+        try fs.ensureDir(layout.prosper, narrow: false)
+        try fs.ensureDir(layout.kitRuntime, narrow: true)
+        let dir = try fs.openDir(layout.kitRuntime)
+        let bytes = Data(KitRunner.script.utf8)
+        if case .file(let m, _) = dir.kind("prosper-kit-run"), mode_t(m) == Self.shimMode,
+           dir.read("prosper-kit-run", limit: bytes.count) == bytes { return false }
+        try replace(in: dir, "prosper-kit-run", bytes, mode: Self.shimMode, label: layout.runner)
+        return true
+    }
+
+    /// kits/<ext-id>/kit.env (0600): the recorded KIT_SLUG line (E-2, kept) and KitRunner.kitEnvText's variables
+    /// (the runner skips KIT_SLUG). No recorded slug: .noSlug; nil text: .envText("kit.env"); nothing written either way.
+    func writeKitEnv(_ c: KitRenderContext) throws {
+        guard let slug = recordedSlug() else { throw KitStoreError.noSlug }
+        guard let text = KitRunner.kitEnvText(c, stateDir: layout.state) else { throw KitStoreError.envText("kit.env") }
+        try ensureLayout()
+        try replace(in: try fs.openDir(layout.root), "kit.env", Data(("KIT_SLUG='\(slug)'\n" + text).utf8), mode: Self.envMode,
+                    label: layout.kitEnv)
+    }
+
+    /// <configHome>/<recorded slug>/.settings.env (0600) from KitRunner.settingsEnvText; the slug dir is made 0700 when
+    /// missing (an existing one is the user's: never re-moded). No recorded slug: .noSlug; nil text: .envText(".settings.env").
+    func writeSettingsEnv(_ settings: [String: String]) throws {
+        guard let slug = recordedSlug() else { throw KitStoreError.noSlug }
+        guard let text = KitRunner.settingsEnvText(settings) else { throw KitStoreError.envText(".settings.env") }
+        let kitConfig = layout.configHome + "/" + slug
+        try fs.ensureDir(kitConfig, narrow: false)
+        try replace(in: try fs.openDir(kitConfig), ".settings.env", Data(text.utf8), mode: Self.envMode, label: kitConfig + "/.settings.env")
     }
 }
