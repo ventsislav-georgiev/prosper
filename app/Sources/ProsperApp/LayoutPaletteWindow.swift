@@ -42,6 +42,11 @@ final class LayoutPaletteWindow {
     private static let thumbInset: CGFloat = 3
     private static let corner: CGFloat = 8
 
+    /// The strip's backdrop: black at 0.82, opaque black under Increase Contrast (#1307).
+    static func backgroundColor(increaseContrast: Bool = ThemeRuntime.increaseContrast) -> NSColor {
+        NSColor.black.withAlphaComponent(FootprintWindow.contrastAlpha(0.82, increaseContrast: increaseContrast))
+    }
+
     init() {
         let initial = NSRect(x: 0, y: 0, width: 1, height: 1)
         panel = NSPanel(contentRect: initial,
@@ -63,7 +68,7 @@ final class LayoutPaletteWindow {
         container.wantsLayer = true
         background.wantsLayer = true
         background.layer?.cornerRadius = 14
-        background.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.82).cgColor
+        background.layer?.backgroundColor = Self.backgroundColor().cgColor
         container.addSubview(background)
         label.font = .systemFont(ofSize: 11, weight: .medium)
         label.textColor = .white
@@ -83,6 +88,7 @@ final class LayoutPaletteWindow {
         let firstShow = !isShowing
         isShowing = true
         self.accent = accent
+        background.layer?.backgroundColor = Self.backgroundColor().cgColor
 
         let sig = "\(WindowManager.displayID(of: screen)):"
             + layouts.map { l in l.id.uuidString + "#" + l.zones.map { $0.id.uuidString }.joined(separator: ".") }

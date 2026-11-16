@@ -48,7 +48,7 @@ final class SuggestionWindow {
 
         label = NSTextField(labelWithString: "")
         label.font = .systemFont(ofSize: NSFont.systemFontSize)
-        label.textColor = NSColor.secondaryLabelColor.withAlphaComponent(0.6)
+        label.textColor = NSColor.secondaryLabelColor.withAlphaComponent(Self.ghostAlpha(0.6))
         label.backgroundColor = .clear
         label.isBezeled = false
         label.isEditable = false
@@ -204,6 +204,7 @@ final class SuggestionWindow {
     private func applyGhostColors() {
         let display = String(ghostFull.dropFirst(ghostStrippedLeading))
         guard !display.isEmpty else { return }
+        label.textColor = ghostColor // read at show time, not only at init / adaptColor
         let clearLen = max(0, min(ghostConsumed - ghostStrippedLeading, display.count))
         let attr = NSMutableAttributedString(string: display, attributes: [
             .font: label.font ?? defaultFont,
@@ -312,7 +313,7 @@ final class SuggestionWindow {
         // Green corrected letters, then the ordinary gray ghost continuing the
         // sentence after the fixed word (recall buffer or chained model).
         let attr = NSMutableAttributedString(string: replacement, attributes: [
-            .foregroundColor: NSColor.systemGreen.withAlphaComponent(0.85),
+            .foregroundColor: NSColor.systemGreen.withAlphaComponent(FootprintWindow.contrastAlpha(0.85)),
             .font: font,
         ])
         if !continuation.isEmpty {
@@ -358,7 +359,7 @@ final class SuggestionWindow {
             // Resolve the dynamic color at show time so a light↔dark appearance
             // switch between fixes doesn't render a stale cgColor.
             strikeBar.layer?.backgroundColor =
-                NSColor.systemRed.withAlphaComponent(0.75).cgColor
+                NSColor.systemRed.withAlphaComponent(FootprintWindow.contrastAlpha(0.75)).cgColor
             strikeBar.isHidden = false
         } else {
             strikeBar.isHidden = true
@@ -368,7 +369,15 @@ final class SuggestionWindow {
 
     /// Current ghost text color (adaptive — see `adaptColor`). Attributed renders
     /// (the anchored ghost) read this; plain-label renders use `label.textColor`.
-    private var ghostColor: NSColor = NSColor.secondaryLabelColor.withAlphaComponent(0.6)
+    private var ghostColor: NSColor { ghostBase.withAlphaComponent(Self.ghostAlpha(ghostAlphaOwn)) }
+    /// #1307: the ghost's hue and its own alpha apart, so Increase Contrast reads at draw time.
+    private var ghostBase: NSColor = .secondaryLabelColor
+    private var ghostAlphaOwn: CGFloat = 0.6
+    /// #1307: ghost text keeps a floor of 0.75 under Increase Contrast and never reaches 1, so a
+    /// suggestion still reads as different from typed text.
+    static func ghostAlpha(_ a: CGFloat, increaseContrast: Bool = ThemeRuntime.increaseContrast) -> CGFloat {
+        increaseContrast ? max(a, 0.75) : a
+    }
 
     /// Adapts the ghost text color to a sampled background luminance so it stays
     /// legible on dark or light surfaces.
@@ -376,7 +385,8 @@ final class SuggestionWindow {
         let rgb = bg.usingColorSpace(.deviceRGB) ?? bg
         let luminance = 0.299 * rgb.redComponent + 0.587 * rgb.greenComponent + 0.114 * rgb.blueComponent
         let base: NSColor = luminance < 0.5 ? .white : .black
-        ghostColor = base.withAlphaComponent(0.55)
+        ghostBase = base
+        ghostAlphaOwn = 0.55
         label.textColor = ghostColor
     }
 

@@ -47,6 +47,11 @@ final class AccessoryButton {
     /// `NSEvent.mouseLocation`).
     var screenFrame: CGRect { panel.frame }
 
+    /// The card's edge: the separator colour, the full label colour under Increase Contrast (#1307).
+    static func borderColor(increaseContrast: Bool = ThemeRuntime.increaseContrast) -> NSColor {
+        increaseContrast ? .labelColor : .separatorColor
+    }
+
     init() {
         let frame = NSRect(x: 0, y: 0, width: 20, height: 20)
         panel = NSPanel(
@@ -79,7 +84,7 @@ final class AccessoryButton {
         container.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         container.layer?.cornerRadius = 5
         container.layer?.borderWidth = 0.5
-        container.layer?.borderColor = NSColor.separatorColor.cgColor
+        container.layer?.borderColor = Self.borderColor().cgColor
         button.autoresizingMask = [.width, .height]
         container.addSubview(button)
         panel.contentView = container
@@ -93,6 +98,7 @@ final class AccessoryButton {
         let size: CGFloat = 20
         let origin = CGPoint(x: caretRect.minX - size - 6, y: caretRect.minY)
         panel.setFrame(NSRect(origin: origin, size: NSSize(width: size, height: size)), display: true)
+        panel.contentView?.layer?.borderColor = Self.borderColor().cgColor
         panel.orderFrontRegardless()
     }
 
@@ -134,6 +140,7 @@ final class AccessoryButton {
         }
         let y = lineCenterY - size / 2
         panel.setFrame(NSRect(x: x, y: y, width: size, height: size), display: true)
+        panel.contentView?.layer?.borderColor = Self.borderColor().cgColor
         panel.orderFrontRegardless()
     }
 

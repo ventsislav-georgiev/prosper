@@ -21,6 +21,17 @@ final class FootprintWindow {
         case flat
     }
 
+    /// #1307: an alpha a panel's own AppKit colour fades with; opaque under Increase Contrast
+    /// (the AppKit twin of `Neon.faded`; 0 stays 0). `Neon.faded` returns a SwiftUI Color.
+    static func contrastAlpha(_ alpha: CGFloat, increaseContrast: Bool = ThemeRuntime.increaseContrast) -> CGFloat {
+        increaseContrast && alpha > 0 ? 1 : alpha
+    }
+
+    /// Reduce Transparency or Increase Contrast forces the flat look (no blur of the desktop).
+    static func effectiveStyle(_ style: Style, reduceTransparency: Bool, increaseContrast: Bool) -> Style {
+        reduceTransparency || increaseContrast ? .flat : style
+    }
+
     private let panel: NSPanel
     private let container: NSView          // layer-backed; carries border + corner radius
     private let effect: NSVisualEffectView // shown only in vibrancy style
@@ -90,9 +101,9 @@ final class FootprintWindow {
     /// and the grow-in/morph animation. Honors Reduce Motion (no animation) and
     /// Reduce Transparency (forces the flat look).
     func show(frameAppKit: CGRect, style: Style, accent: NSColor, zoneChanged: Bool) {
-        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let effectiveStyle: Style = reduceTransparency ? .flat : style
+        let effectiveStyle = Self.effectiveStyle(style, reduceTransparency: ThemeStore.shared.reduceTransparencyReader(),
+                                                 increaseContrast: ThemeRuntime.increaseContrast)
         applyStyle(effectiveStyle, accent: accent)
 
         let firstShow = !isShowing
@@ -166,12 +177,12 @@ final class FootprintWindow {
             effect.isHidden = false
             tint.layer?.backgroundColor = accent.withAlphaComponent(0.32).cgColor
             container.layer?.backgroundColor = NSColor.clear.cgColor
-            container.layer?.borderColor = accent.withAlphaComponent(0.9).cgColor
+            container.layer?.borderColor = accent.withAlphaComponent(Self.contrastAlpha(0.9)).cgColor
         case .flat:
             effect.isHidden = true
             tint.layer?.backgroundColor = NSColor.clear.cgColor
             container.layer?.backgroundColor = accent.withAlphaComponent(0.28).cgColor
-            container.layer?.borderColor = accent.withAlphaComponent(0.85).cgColor
+            container.layer?.borderColor = accent.withAlphaComponent(Self.contrastAlpha(0.85)).cgColor
         }
     }
 }

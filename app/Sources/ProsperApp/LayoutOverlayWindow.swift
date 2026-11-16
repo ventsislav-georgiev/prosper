@@ -134,7 +134,7 @@ final class LayoutOverlayWindow {
         for (i, tile) in tiles.enumerated() {
             let on = i == highlight
             tile.layer?.backgroundColor = accent.withAlphaComponent(on ? 0.30 : 0.10).cgColor
-            tile.layer?.borderColor = accent.withAlphaComponent(on ? 0.95 : 0.45).cgColor
+            tile.layer?.borderColor = accent.withAlphaComponent(FootprintWindow.contrastAlpha(on ? 0.95 : 0.45)).cgColor
         }
     }
 }

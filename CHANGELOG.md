@@ -1405,6 +1405,9 @@ tag from the now-released section and put it on the new top draft.
   refused before anything is written, so the Apply sheet can no longer hide a command.
 - Agent Sessions window: two PR chips with the same number from different owners (for example
   acme/api#12 and fork/api#12) now each open their own pull request.
+- Increase Contrast now also reaches the window-snap footprint, the layout palette and overlay, and
+  the autocomplete suggestion and button: their edges and text turn opaque, the palette backdrop
+  turns solid, and the footprint drops its blur.
 
 ## v2.174.0
 
