@@ -72,7 +72,7 @@ extension AgentWindowD1Tests {
                 let f = { (k: String) in base[k].map { "\($0.minX)...\($0.maxX) w \($0.width)" } ?? "none" }
                 print("#1253 band \(tag): band.width \(band.width) picker \(f("picker")) all \(f("all")) layout \(f("layout"))"
                       + " chip \(f("chip")) chipText \(chipText) want picker.maxX \(band.width - sz(16)) all.maxX+sz(8) \((base["all"]?.maxX ?? 0) + sz(8))")
-                XCTAssertEqual(band.height, AgentWindowBand.height, accuracy: 0.5, "one row of 30·s (\(tag))")
+                XCTAssertEqual(band.height, AgentWindowBand.height, accuracy: 1 / px, "one row of 30·s (\(tag))")
                 XCTAssertEqual(band.width, size.width - sz(290) - 1, accuracy: 1 / px, "over the whole pane column (\(tag))")
                 XCTAssertEqual(m.paneArea.height, size.height - AgentWindowBand.height, accuracy: 0.5, "the area under it (\(tag))")
                 let all = try XCTUnwrap(base["all"], tag), picker = try XCTUnwrap(base["picker"], tag)

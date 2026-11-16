@@ -503,8 +503,8 @@ final class XrayPanelTasksTests: XCTestCase {
                     .frame(width: 700, height: 400, alignment: .topLeading)
                 let d = frames(host, size: CGSize(width: 700, height: 400), kinds: ["xray"])["xray"]
                 XCTAssertTrue(d != nil, "the drawer is drawn")
-                XCTAssertEqual(d?.width ?? 0, min(sz(340), paneWidth), accuracy: 0.5, "min(sz(340), the pane) at \(scale), pane \(paneWidth)")
-                XCTAssertLessThanOrEqual(d?.maxX ?? 1000, paneWidth + 0.5, "no drawer pixel past the pane at \(scale), pane \(paneWidth)")
+                XCTAssertEqual(d?.width ?? 0, min(sz(340), paneWidth), accuracy: AXTreeSupport.devicePixel, "min(sz(340), the pane) at \(scale), pane \(paneWidth)")
+                XCTAssertLessThanOrEqual(d?.maxX ?? 1000, paneWidth + AXTreeSupport.devicePixel, "no drawer pixel past the pane at \(scale), pane \(paneWidth)")
             }
         }
     }
