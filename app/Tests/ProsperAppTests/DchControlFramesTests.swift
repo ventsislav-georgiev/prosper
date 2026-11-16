@@ -1862,6 +1862,42 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(message(call(o, DchFrame.pin, ["name": "a", "pin": true])), "a: no history for this session")
     }
 
+    /// #1340: the phone's pin, unpin and forget of "work" beside a session named "work.json", recorded or live,
+    /// pass the plain "work" (dch refuses "work.json" there as ambiguous); a "work.JSON" one changes nothing.
+    func testPinAndForgetBesideASessionNamedWorkJsonPassThePlainTarget() {
+        let f = Fake(), work: [String: Any] = ["name": "work", "file": "work", "updated": Self.now - 60, "end": "stopped"]
+        f.hist["/d"] = Self.hist([work, ["name": "work.json", "file": "work.json", "updated": Self.now - 90, "end": "stopped"]])
+        for (verb, detail) in [("--pin", "pinned"), ("--unpin", "unpinned"), ("--forget", "forgotten")] {
+            f.out["\(verb) work --json"] = Self.line("work", "ok", detail: detail)
+        }
+        let o = ops(f, binary: Self.v1282)
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "work", "pin": true])), ["work"])
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "work", "pin": false])), ["work"])
+        XCTAssertEqual(names(call(o, DchFrame.forget, ["name": "work"])), ["work"])
+        f.hist["/d"] = Self.hist([work])
+        f.ls["/d"] = Self.ls([("work.json", "1.28.2")])   // a master newer than the binary would gate Pin
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "work", "pin": true])), ["work"], "a live \"work.json\" alike")
+        f.ls["/d"] = nil
+        f.hist["/d"] = Self.hist([work, ["name": "work.JSON", "file": "work.JSON", "updated": Self.now - 90, "end": "stopped"]])
+        f.out["--pin work.json --json"] = Self.line("work.json", "ok", detail: "pinned")
+        XCTAssertEqual(names(call(o, DchFrame.pin, ["name": "work", "pin": true])), ["work"])
+        XCTAssertEqual(f.launchedArgs, [["--pin", "work", "--json"], ["--unpin", "work", "--json"], ["--forget", "work", "--json"],
+                        ["--pin", "work", "--json"], ["--pin", "work.json", "--json"]])
+    }
+
+    /// #1340: a Resume that fell back to an aside record's plain file (#1320: `<file>.json` is another session's
+    /// name) reads dch's no_history line, named after that file, under the row's name.
+    func testAsideRecordsNoHistoryBesideASessionNamedAfterItsFileReadsUnderTheName() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "stopped", "file": "a.1762000000"],
+                                  ["name": "a.1762000000.json", "file": "a.1762000000.json", "updated": Self.now - 90, "end": "stopped"]])
+        f.out["--revive a.1762000000 --json"] = Self.line("a.1762000000", "failed", reason: "no_history",
+                                                          detail: "no history for this session")
+        f.status = 1
+        XCTAssertEqual(message(call(ops(f, binary: Self.v1282), DchFrame.revive, ["name": "a"])), "a: no history for this session")
+        XCTAssertEqual(f.launchedArgs.last, ["--revive", "a.1762000000", "--json"])
+    }
+
     // MARK: - #746: a folded name (QA #570 F1)
 
     private static let aside = "work.\(Int(now) - 30)"

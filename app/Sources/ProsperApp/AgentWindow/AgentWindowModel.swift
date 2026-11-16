@@ -2170,9 +2170,10 @@ final class AgentWindowModel: ObservableObject {
     /// "Other machines" on the next list, never attached or selected by this.
     func resumeRemote(_ r: DchHistoryRecord) {
         guard Self.isRemote(r), let store, case .ok(let dch) = store.resumeGate else { return }
-        let host = String(r.key.dir.dropFirst()), key = r.id, name = r.name, arg = r.editTarget(exact: true)
+        let host = String(r.key.dir.dropFirst()), key = r.id, name = r.name
         let live = Set(remoteSessions.filter { $0.host == host }.map(\.name))
         let records = Set(remoteHistory.filter { $0.host == host && $0.record.key != r.key }.map(\.record.name))
+        let arg = r.recordArg(exact: true, taken: live.union(records))   // #1340: the argument reviveArgs passes
         guard AgentSidebar.remoteOK(host), let args = AgentIsland.reviveArgs(r, live: live, records: records, exact: true)
         else { return }
         let started = remoteVerb(key, dch, ["--host", host] + args) { [weak self] res in

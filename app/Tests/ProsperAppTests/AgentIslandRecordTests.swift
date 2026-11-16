@@ -35,6 +35,29 @@ final class AgentIslandRecordTests: XCTestCase {
         XCTAssertEqual(AgentIsland.reviveArgs(wj, live: ["work"], records: [], exact: true), ["--revive", "work.json.json", "--json"])
     }
 
+    /// #1340: pin, unpin and X take the same argument (rec_arg serves --pin/--unpin/--forget too, dch.c:11541 at
+    /// v1.76.0): beside a session named "work.json" (`taken`, the dir's live and recorded names) the plain target.
+    func testPinUnpinAndForgetOfWorkBesideASessionNamedWorkJsonPassThePlainTarget() {
+        let work = rec("work", file: "work"), aside = rec("work", file: "work.1762000000")
+        var pinnedAside = aside
+        pinnedAside.pinned = true
+        func targets(_ older: [DchHistoryRecord], forget: Bool, _ taken: Set<String>) -> [String] {
+            AgentIsland.editTargets(work, older: older, exact: true, forget: forget, taken: taken)
+        }
+        XCTAssertEqual(targets([aside], forget: false, ["work", "work.json"]), ["work", "work.1762000000.json"], "pin and unpin")
+        XCTAssertEqual(targets([pinnedAside], forget: true, ["work", "work.json"]), ["work"], "X: the unpinned ones")
+        XCTAssertEqual(targets([aside], forget: false, ["work", "work.1762000000.json"]), ["work.json", "work.1762000000"],
+                       "an aside record by its plain file")
+        XCTAssertEqual(targets([aside], forget: false, ["work"]), ["work.json", "work.1762000000.json"], "no clash: the file form")
+        XCTAssertEqual(targets([aside], forget: true, ["work", "work.JSON", "api"]), ["work.json", "work.1762000000.json"],
+                       "dch compares the name exactly")
+        XCTAssertEqual(AgentIsland.editTargets(work, older: [], exact: false, forget: false, taken: ["work.json"]), ["work"],
+                       "below 1.28.1 the bare name, as before")
+        let wj = rec("work.json", file: "work.json")
+        XCTAssertEqual(AgentIsland.editTargets(wj, older: [], exact: true, forget: true, taken: ["work", "work.json"]),
+                       ["work.json.json"], "\"work.json\" itself keeps the file form")
+    }
+
     /// INFO b: dch's detail is "skipped \u{2014} claude <id> <where> (record <file>)" (dch.c:11316-11320), the file
     /// being the record's: its name or `<name>.<ended>`. A name that holds " (record " is read whole.
     func testRecordFileReadsAFileThatHoldsTheRecordTag() {

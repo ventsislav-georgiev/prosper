@@ -5689,7 +5689,8 @@ final class AgentIslandControlsTests: XCTestCase {
             let rows = AgentIsland.cappedHistory(Self.history743(Self.shapes743(fileOnOwn: fileOnOwn)[shape].1))
             let all = Self.history743(Self.shapes743(fileOnOwn: fileOnOwn)[shape].1)
             XCTAssertEqual(rows.count, 1)
-            return AgentIsland.editTargets(rows[0], older: AgentIsland.older(rows[0], in: all), exact: exact, forget: forget)
+            return AgentIsland.editTargets(rows[0], older: AgentIsland.older(rows[0], in: all), exact: exact, forget: forget,
+                                           taken: [])
         }
         for fileOnOwn in [false, true] {
             XCTAssertEqual(targets(fileOnOwn, 0, exact: false, forget: false), ["work"])

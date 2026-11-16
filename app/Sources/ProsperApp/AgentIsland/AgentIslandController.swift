@@ -418,8 +418,8 @@ final class AgentIslandController {
         let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
         // #714: the row's own id (an aside record's is its file); dch's lines carry the name.
         let key = r.id, name = r.name, verb: AgentIsland.Verb = noMessage ? .resumeNoMessage : .resume
-        // #719: `<file>.json` from dch 1.28.2.
-        let exact = store.reviveFileGate.isOK, arg = r.editTarget(exact: exact)
+        // #719: `<file>.json` from dch 1.28.2. #1340: the argument reviveArgs passes (#1320's plain target too).
+        let exact = store.reviveFileGate.isOK, arg = r.recordArg(exact: exact, taken: live.union(records))
         // #1311: the --as name's row is busy too while the job runs.
         let alias = AgentIsland.reviveAs(r, live: live, records: records).map { AgentSessionKey(dir: r.key.dir, name: $0) }
         return run(key, alias: alias, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact),
@@ -517,8 +517,10 @@ final class AgentIslandController {
     /// #714: `<file>.json` (one record each) once the control dch is 1.28.1.
     /// #743: the row's record and every older one of its name it folds.
     private func editTargets(_ r: DchHistoryRecord, forget: Bool) -> [String] {
-        AgentIsland.editTargets(r, older: AgentIsland.older(r, in: store?.history ?? []),
-                                exact: store?.recordFileGate.isOK == true, forget: forget)
+        let history = store?.history ?? [], dir = r.key.dir
+        let taken = Set(((store?.sessions ?? []).map(\.key) + history.map(\.key)).filter { $0.dir == dir }.map(\.name))
+        return AgentIsland.editTargets(r, older: AgentIsland.older(r, in: history),
+                                       exact: store?.recordFileGate.isOK == true, forget: forget, taken: taken)
     }
 
     /// One edit in the record's dir on the row's key (a busy row refuses); a

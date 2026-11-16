@@ -1490,6 +1490,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: "Diagnostics..." in the sidebar menu shows the Prosper, dch and Claude Code
   versions, the tested range, tier counts and the last parse errors for a bug report, with Copy.
   (#923)
+- Agent Island: Pin, Unpin and Remove of a History row (on the Mac and from the phone) no longer
+  fail as "ambiguous" when another session is named after the record plus ".json", and a Resume of
+  such a record that finds no history now shows that on the record's own row. (#1340)
 
 ## v2.174.0
 

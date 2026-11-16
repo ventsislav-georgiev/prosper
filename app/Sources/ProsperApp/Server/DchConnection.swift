@@ -1465,7 +1465,7 @@ struct DchControlOps: Sendable {
         if let s = AgentIsland.signalSender(r.end) {
             o["end"] = s.end
             if let from = s.from { o["end_from"] = from }
-            if let c = s.command { o["end_command"] = c }   // #937: additive, the whole cleaned command (at most 120 characters)
+            if let c = s.command { o["end_command"] = c }   // #937: additive, the whole cleaned command (at most 120 Unicode scalars)
         }
         return o
     }
@@ -1596,7 +1596,7 @@ struct DchControlOps: Sendable {
             let liveNames = Set(live.filter { $0.key.dir == r.key.dir }.map(\.name))
             let others = Set(history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
             // #719: `<file>.json` from dch 1.28.2; the by-hand hint under the record's config dir.
-            let exact = Self.reviveExact(binary(), live), arg = r.editTarget(exact: exact)
+            let exact = Self.reviveExact(binary(), live), arg = r.recordArg(exact: exact, taken: liveNames.union(others))   // #1340: reviveArgs's
             // #1311: the --as name's row is busy too while the job runs.
             let alias = AgentIsland.reviveAs(r, live: liveNames, records: others).map { AgentSessionKey(dir: r.key.dir, name: $0) }
             run([(r.id, AgentIsland.reviveArgs(r, live: liveNames, records: others, noMessage: noMessage, exact: exact))],
@@ -1663,7 +1663,7 @@ struct DchControlOps: Sendable {
             // #714: these records alone where dch can (1.28.1 `<file>.json`, an aside file).
             // #746: every record the row folds, as the Mac row's pin.
             let targets = AgentIsland.editTargets(r, older: AgentIsland.older(r, in: history),
-                                                  exact: Self.exact(binary(), live), forget: false)
+                                                  exact: Self.exact(binary(), live), forget: false, taken: Self.taken(r, live, history))
             run([(r.id, AgentIsland.pinArgs(targets, pin: verb == .pin))], path: path, bound: nil, reply) {
                 Self.answer(named: [(name, Self.edited($0[0], targets, to: name, verb))], verb)
             }
@@ -1684,11 +1684,16 @@ struct DchControlOps: Sendable {
         case .success(let r):
             // #746: the row's unpinned records, as the Mac row's X.
             let targets = AgentIsland.editTargets(r, older: AgentIsland.older(r, in: history),
-                                                  exact: Self.exact(binary(), live), forget: true)
+                                                  exact: Self.exact(binary(), live), forget: true, taken: Self.taken(r, live, history))
             run([(r.id, AgentIsland.forgetArgs(targets))], path: path, bound: nil, reply) {
                 Self.forgotten($0[0], targets, to: name)
             }
         }
+    }
+
+    /// #1340: the record's dir's live and recorded names (editTargets' `taken`).
+    static func taken(_ r: DchHistoryRecord, _ live: [AgentSession], _ history: [DchHistoryRecord]) -> Set<String> {
+        Set((live.map(\.key) + history.map(\.key)).filter { $0.dir == r.key.dir }.map(\.name))
     }
 
     /// #714: the island's recordFileGate: `<file>.json` pins and forgets one record (1.28.1).

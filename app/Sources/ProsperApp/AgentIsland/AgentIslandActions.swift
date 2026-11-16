@@ -49,6 +49,12 @@ struct DchHistoryRecord: Equatable, Identifiable {
     /// this one record file; else `target`, where the bare name matches every record
     /// of the name (1.28.0 cannot pick the name's own record alone).
     func editTarget(exact: Bool) -> String { exact && !file.isEmpty ? file + ".json" : target }
+    /// #1320, #1340: the argument --revive, --pin, --unpin and --forget get. dch refuses `<file>.json` as ambiguous
+    /// when that is a session's name (rec_arg, dch.c:11204-11207 at v1.76.0, exact compare); `taken`, the dir's live
+    /// and recorded names, holding it sends `target`, which names this record there too (the name's newest, or an aside file).
+    func recordArg(exact: Bool, taken: Set<String>) -> String {
+        exact && taken.contains(file + ".json") ? target : editTarget(exact: exact)
+    }
     /// #592: display only (revive, keys and sorting use `name`): the alias, else
     /// the agent's session name, else the dch name, like a Sessions row's title.
     var title: String {
@@ -181,10 +187,14 @@ extension AgentIsland {
     /// follows the name. 1.28.1 (`exact`): each `<file>.json`. Below it the bare name,
     /// which matches them all, while the name's own record is among them; else (it is
     /// live, or gone) each aside file. `forget`: the unpinned ones (dch refuses a pinned one).
-    static func editTargets(_ r: DchHistoryRecord, older: [DchHistoryRecord], exact: Bool, forget: Bool) -> [String] {
+    /// #1340: `taken`, the dir's live and recorded names: recordArg's plain target where `<file>.json` is one of them.
+    /// shortcut: that plain name of the name's own record matches every record of the name, so an X there also
+    /// reaches an older pinned one (dch refuses it, a "pinned" line); exact dch has no other one-record argument.
+    static func editTargets(_ r: DchHistoryRecord, older: [DchHistoryRecord], exact: Bool, forget: Bool,
+                            taken: Set<String>) -> [String] {
         let all = [r] + older
         if !exact, all.contains(where: { !$0.isAside }) { return [r.name] }
-        return (forget ? all.filter { !$0.pinned } : all).map { $0.editTarget(exact: exact) }
+        return (forget ? all.filter { !$0.pinned } : all).map { $0.recordArg(exact: exact, taken: taken) }
     }
 
     static func parseHistory(_ data: Data, dir: String) -> [DchHistoryRecord] {
@@ -218,7 +228,8 @@ extension AgentIsland {
     /// (signal N)" for TERM, HUP and INT (also logout and reboot), "crashed
     /// (signal N)" for any other signal, "vanished" ("" too); else as dch wrote it.
     /// #839: dch 1.40.1's "signal N from <pid>[ <cmd>]" reads as "signal N" plus
-    /// " from <basename of the cmd's program>"; the pid is never shown.
+    /// " from <the sender's whole command>" (#937: cleaned by senderCommand, cut to 48 characters
+    /// and an ellipsis by displayCommand); the pid is never shown.
     static func endLabel(_ end: String) -> String {
         if let s = signalSender(end) { return endLabel(s.end) + (s.command.map { " from " + displayCommand($0) } ?? "") }
         switch end {
@@ -314,10 +325,8 @@ extension AgentIsland {
     /// #719: `exact` (dch 1.28.2): `<file>.json`, this one record file.
     static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>,
                            noMessage: Bool = false, exact: Bool = false) -> [String]? {
-        // #1320 (QA #535 INFO a): dch refuses `<file>.json` as ambiguous when that is another session's name (rec_arg,
-        // dch.c:11204-11207 at v1.76.0); the plain target names this record there too (the name's newest, or an aside file).
-        let ambiguous = exact && live.union(records).contains(r.file + ".json")
-        let tail = (noMessage ? ["--no-message"] : []) + ["--json"], arg = ambiguous ? r.target : r.editTarget(exact: exact)
+        // #1320 (QA #535 INFO a): recordArg's plain target when `<file>.json` is another session's name.
+        let tail = (noMessage ? ["--no-message"] : []) + ["--json"], arg = r.recordArg(exact: exact, taken: live.union(records))
         guard let new = reviveAs(r, live: live, records: records) else { return named("--revive", [arg], tail) }
         return named("--revive", [arg], ["--as", new] + tail)
     }
