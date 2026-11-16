@@ -74,14 +74,14 @@ extension AgentWindowD1Tests {
                       + " chip \(f("chip")) chipText \(chipText) want picker.maxX \(band.width - sz(16)) all.maxX+sz(8) \((base["all"]?.maxX ?? 0) + sz(8))")
                 XCTAssertEqual(band.height, AgentWindowBand.height, accuracy: 1 / px, "one row of 30·s (\(tag))")
                 XCTAssertEqual(band.width, size.width - sz(290) - 1, accuracy: 1 / px, "over the whole pane column (\(tag))")
-                XCTAssertEqual(m.paneArea.height, size.height - AgentWindowBand.height, accuracy: 0.5, "the area under it (\(tag))")
+                XCTAssertEqual(m.paneArea.height, size.height - AgentWindowBand.height, accuracy: 1 / px, "the area under it (\(tag))")
                 let all = try XCTUnwrap(base["all"], tag), picker = try XCTUnwrap(base["picker"], tag)
-                XCTAssertEqual(all.width, AgentWindowBand.allWidth, accuracy: 0.5, "the All slot keeps its room (\(tag))")
+                XCTAssertEqual(all.width, AgentWindowBand.allWidth, accuracy: 1 / px, "the All slot keeps its room (\(tag))")
                 // #1253: one device pixel, the picker's edge snaps to the grid (1x, wide 0.85: 1338.4 for 1338.9).
                 XCTAssertEqual(picker.maxX, band.width - sz(16), accuracy: 1 / px, "the picker at the trailing edge (\(tag))")
                 XCTAssertEqual(all.maxX + sz(8), picker.minX, accuracy: 1 / px, "the All slot right before it (\(tag))")
                 XCTAssertLessThanOrEqual(picker.height, AgentWindowBand.height + 1 / px, "the picker fits the row (\(tag))")
-                if let l = base["layout"] { XCTAssertEqual(l.width, AgentWindowBand.layoutWidth, accuracy: 0.5, "layout slot (\(tag))") }
+                if let l = base["layout"] { XCTAssertEqual(l.width, AgentWindowBand.layoutWidth, accuracy: 1 / px, "layout slot (\(tag))") }
                 if let c = base["chip"] {
                     XCTAssertTrue(c.width <= chipText + 0.01 && c.width > chipText - 1, "the chip slot at its widest text (\(tag)): \(c.width) vs \(chipText)")
                 }
@@ -147,7 +147,7 @@ extension AgentWindowD1Tests {
                 XCTAssertTrue(hadLayout || !layout, "the layout slot does not come back narrower (\(tag))")
                 XCTAssertLessThanOrEqual(picker.width, lastPicker + pixel, "the picker only narrows (\(tag))")
                 if labels == nil { labels = picker.width }
-                if layout { XCTAssertEqual(picker.width, labels ?? -1, accuracy: 0.5, "labels while the layout slot holds (\(tag))") }
+                if layout { XCTAssertEqual(picker.width, labels ?? -1, accuracy: pixel, "labels while the layout slot holds (\(tag))") }
                 if layout && !chip { layoutAlone += 1 }
                 let step = "\(chip ? "chip+" : "")\(layout ? "layout+" : "")all+picker \(Int(picker.width.rounded()))"
                 if steps.last?.hasSuffix(step) != true { steps.append("\(Int(w)): \(step)") }

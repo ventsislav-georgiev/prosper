@@ -49,7 +49,7 @@ extension AgentRowModelEffortTests {
                           let m = h.frames["count.merged"], let rep = h.rep else {
                         XCTFail("probed and drawn: \(h.frames.keys.sorted()) \(tag)"); continue
                     }
-                    XCTAssertEqual(c.width, g.width, accuracy: 0.5, "the capsule is the group's frame: \(c) \(g) \(tag)")
+                    XCTAssertEqual(c.width, g.width, accuracy: 1 / px, "the capsule is the group's frame: \(c) \(g) \(tag)")
                     XCTAssertEqual(c.width, alone, accuracy: 1, "the capsule whole, not cut: \(c) vs \(alone) \(tag)")
                     XCTAssertGreaterThan(c.minY, t.maxY - 1, "on line two: \(c) under \(t) \(tag)")
                     XCTAssertLessThanOrEqual(c.maxX, m.minX, "before the merged group: \(c) \(m) \(tag)")

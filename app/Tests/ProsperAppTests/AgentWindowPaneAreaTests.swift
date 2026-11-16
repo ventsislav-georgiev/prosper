@@ -30,9 +30,10 @@ extension AgentWindowD1Tests {
     }
 
     func assertSame(_ a: CGRect?, _ b: CGRect?, _ why: String, line: UInt = #line) {
+        let pixel = MainActor.assumeIsolated { AXTreeSupport.devicePixel }   // callers are tests on main; CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         guard let a, let b else { return XCTFail("missing frame (\(why))", line: line) }
         for (x, y) in [(a.minX, b.minX), (a.minY, b.minY), (a.width, b.width), (a.height, b.height)] {
-            XCTAssertEqual(x, y, accuracy: 0.5, "\(why): \(a) vs \(b)", line: line)
+            XCTAssertEqual(x, y, accuracy: pixel, "\(why): \(a) vs \(b)", line: line)
         }
     }
 
@@ -90,6 +91,7 @@ extension AgentWindowD1Tests {
     /// states idle -> working -> blocked. Four panes in two rows: 44·s rows.
     @MainActor
     func testAgentWindowPaneAreaKeepsEverySlotAcrossFocusAndState() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale, gate = AgentPaneLayout.splitsEnabled
         let restoreModes = transcriptMode(["api", "web", "db", "ops"])
         defer { ThemeRuntime.scale = saved; AgentPaneLayout.splitsEnabled = gate; restoreModes() }
@@ -110,7 +112,7 @@ extension AgentWindowD1Tests {
             assertSame(one["pane 0"], area, "one pane: the whole area (\(scale))")
             let fullHeader = try XCTUnwrap(one["header 0"], "the header (\(scale))")
             XCTAssertGreaterThan(fullHeader.height, AgentCompactHeader.height + 1, "one pane: the full header (\(scale))")
-            XCTAssertEqual(one["composer 0"]?.height ?? -1, sz(60), accuracy: 0.5, "60·s (\(scale))")
+            XCTAssertEqual(one["composer 0"]?.height ?? -1, sz(60), accuracy: pixel, "60·s (\(scale))")
             // R1.3 (7.6): one pane: no focus border, no dim; the slots above are step 4's, unchanged.
             XCTAssertTrue(one["mark 0"] == nil, "one pane: neither the border nor the dim (\(scale))")
 
@@ -126,10 +128,10 @@ extension AgentWindowD1Tests {
                 // 7.6: the border (focused) or the dim (the other) is an overlay at the pane's own frame.
                 assertSame(base["mark \(i)"], frames[id], "the focus mark of pane \(i) covers its frame exactly (\(scale))")
                 let h = base["header \(i)"], p = base["pane \(i)"]
-                XCTAssertEqual(h?.minX ?? -1, p?.minX ?? -2, accuracy: 0.5, "header \(i) starts at the pane's edge (\(scale))")
-                XCTAssertEqual(h?.width ?? -1, p?.width ?? -2, accuracy: 0.5, "header \(i) spans the pane (\(scale))")
-                XCTAssertEqual(h?.height ?? -1, AgentCompactHeader.height, accuracy: 0.5, "compact 26·s (\(scale))")
-                XCTAssertEqual(base["composer \(i)"]?.height ?? -1, sz(60), accuracy: 0.5, "composer \(i), 60·s (\(scale))")
+                XCTAssertEqual(h?.minX ?? -1, p?.minX ?? -2, accuracy: pixel, "header \(i) starts at the pane's edge (\(scale))")
+                XCTAssertEqual(h?.width ?? -1, p?.width ?? -2, accuracy: pixel, "header \(i) spans the pane (\(scale))")
+                XCTAssertEqual(h?.height ?? -1, AgentCompactHeader.height, accuracy: pixel, "compact 26·s (\(scale))")
+                XCTAssertEqual(base["composer \(i)"]?.height ?? -1, sz(60), accuracy: pixel, "composer \(i), 60·s (\(scale))")
             }
             func same(_ why: String) {
                 let s = paneSnapshot(m, size)
@@ -151,7 +153,7 @@ extension AgentWindowD1Tests {
             m.adopt(paneLayout(names.map { paneTarget($0) }))
             let rows = paneSnapshot(m, size)
             for i in 0..<4 {
-                XCTAssertEqual(rows["composer \(i)"]?.height ?? -1, sz(44), accuracy: 0.5, "two rows: 44·s, pane \(i) (\(scale))")
+                XCTAssertEqual(rows["composer \(i)"]?.height ?? -1, sz(44), accuracy: pixel, "two rows: 44·s, pane \(i) (\(scale))")
             }
             AgentPaneLayout.splitsEnabled = false
         }

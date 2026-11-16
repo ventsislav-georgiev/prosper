@@ -46,6 +46,7 @@ extension AgentWindowD1Tests {
     /// the picker's room (no gap kept for it).
     @MainActor
     func testAccessibilityTreeReadsTheHeaderAndHidesThePickerInTerminalMode() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         ThemeRuntime.scale = 1.0
@@ -104,10 +105,10 @@ extension AgentWindowD1Tests {
                 XCTAssertFalse(win.isVisible, "never on screen")
             }
             XCTAssertEqual(toggleAt.count, 2)
-            XCTAssertEqual(toggleAt.first?.minX ?? -1, toggleAt.last?.minX ?? -2, accuracy: 0.5, "the toggle stays put at \(width)")
-            XCTAssertEqual(toggleAt.first?.maxX ?? -1, toggleAt.last?.maxX ?? -2, accuracy: 0.5, "the toggle keeps its width at \(width)")
-            XCTAssertEqual(menuAt.first?.minX ?? -1, menuAt.last?.minX ?? -2, accuracy: 0.5, "the \"⋯\" stays put at \(width)")
-            XCTAssertEqual(menuAt.first?.minY ?? -1, menuAt.last?.minY ?? -2, accuracy: 0.5, "the \"⋯\" stays on its line at \(width)")
+            XCTAssertEqual(toggleAt.first?.minX ?? -1, toggleAt.last?.minX ?? -2, accuracy: pixel, "the toggle stays put at \(width)")
+            XCTAssertEqual(toggleAt.first?.maxX ?? -1, toggleAt.last?.maxX ?? -2, accuracy: pixel, "the toggle keeps its width at \(width)")
+            XCTAssertEqual(menuAt.first?.minX ?? -1, menuAt.last?.minX ?? -2, accuracy: pixel, "the \"⋯\" stays put at \(width)")
+            XCTAssertEqual(menuAt.first?.minY ?? -1, menuAt.last?.minY ?? -2, accuracy: pixel, "the \"⋯\" stays on its line at \(width)")
             print("#1103 \(width): toggle \(toggleAt.map(\.minX)) menu \(menuAt.map(\.minX))")
         }
         XCTAssertEqual(tiers, ["segments", "menu"], "the sweep crosses the tiers")
@@ -126,6 +127,7 @@ extension AgentWindowD1Tests {
     /// the count and age slots' frames are equal with and without a path, at 0.7, 0.85 and 1.0, in both modes.
     @MainActor
     func testHeaderShowsNoPathAndCarriesItInTheTitleTooltipAndValue() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let a = session("api", .working, ago: 40, agents: 3)
@@ -170,13 +172,16 @@ extension AgentWindowD1Tests {
                     XCTAssertFalse(win.isVisible, "never on screen")
                 }
                 for s in slots.dropFirst() {
-                    XCTAssertEqual(s, slots.first ?? [], "every slot (the count and age too) stays put with and without a path (\(mode) \(scale))")
+                    XCTAssertEqual(s.count, slots.first?.count, "as many slots with and without a path (\(mode) \(scale))")
+                    for (a, b) in zip(s, slots.first ?? []) {
+                        assertRect(a, b, accuracy: pixel, "every slot (the count and age too) stays put with and without a path (\(mode) \(scale))")
+                    }
                 }
                 XCTAssertTrue(slots.first?.count ?? 0 >= 5, "the slots were found (\(mode) \(scale)): \(slots.first ?? [])")
             }
             // One height per mode, whatever the path: terminal rows first, transcript after (four cases each).
             for half in [heights.prefix(cases.count), heights.suffix(cases.count)] {
-                XCTAssertEqual(half.min() ?? -1, half.max() ?? -2, accuracy: 0.5, "the header's height with and without a path (\(scale))")
+                XCTAssertEqual(half.min() ?? -1, half.max() ?? -2, accuracy: pixel, "the header's height with and without a path (\(scale))")
             }
         }
     }
@@ -185,6 +190,7 @@ extension AgentWindowD1Tests {
     /// and 1.0, and as high as the row with counts measured before the slot existed (the slot did not grow).
     @MainActor
     func testTranscriptHeaderHeightIsTheSameWithAndWithoutCountsAndAge() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let a = session("api", .working, ago: 40, agents: 3)
@@ -210,7 +216,7 @@ extension AgentWindowD1Tests {
             }
             let full = h["counts and age"] ?? -1
             XCTAssertGreaterThan(full, AgentSessionHeader.height + sz(10), "two lines (\(scale))")
-            for (name, v) in h { XCTAssertEqual(v, full, accuracy: 0.5, "\(name) is as high as counts and age (\(scale))") }
+            for (name, v) in h { XCTAssertEqual(v, full, accuracy: pixel, "\(name) is as high as counts and age (\(scale))") }
             print("#1191 transcript heights \(scale): \(h)")
         }
     }
@@ -404,7 +410,7 @@ extension AgentWindowD1Tests {
             }
             for (mode, hs) in heights {
                 XCTAssertEqual(hs.count, 2)
-                XCTAssertEqual(hs.first ?? -1, hs.last ?? -2, accuracy: 0.5, "one height per mode, whatever the width (\(mode) \(scale))")
+                XCTAssertEqual(hs.first ?? -1, hs.last ?? -2, accuracy: pixel, "one height per mode, whatever the width (\(mode) \(scale))")
             }
             // Rename: the field lies over the one-line slot at the narrowest pane, in its line, tall enough for its text.
             let room = 640 * scale - sz(290) - 1

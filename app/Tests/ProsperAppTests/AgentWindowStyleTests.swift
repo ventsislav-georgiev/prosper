@@ -217,7 +217,9 @@ final class AgentWindowStyleTests: XCTestCase {
     /// The empty parts of the sidebar title row and of the header land on the drag view (it moves the window); the "+",
     /// ">_", the sidebar's and the header's "..." and the first control after the header's title (its state chip) do not.
     /// Every style, UI scale 0.7, 0.85 and 1.0.
+    @MainActor
     func testTheTitleRowAndTheHeaderDragAndTheirControlsDoNot() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withStyleRow {
             for style in AgentWindowStyle.allCases {
                 for scale: CGFloat in [0.7, 0.85, 1.0] {
@@ -247,7 +249,7 @@ final class AgentWindowStyleTests: XCTestCase {
                         }
                         XCTAssertFalse(hw.isVisible)
                         let header = try XCTUnwrap(dragFrames(try XCTUnwrap(hw.contentView)).first, "the header's \(at)")
-                        XCTAssertEqual(row.maxX, sz(290), accuracy: 0.5, "the row spans the sidebar \(at)")
+                        XCTAssertEqual(row.maxX, sz(290), accuracy: pixel, "the row spans the sidebar \(at)")
                         @MainActor func drags(_ p: CGPoint, _ what: String, in w: NSWindow? = nil) {
                             let v = hit(w ?? win, p)
                             XCTAssertTrue(v is AgentWindowDragView, "\(what) \(at): \(v.map { "\(type(of: $0))" } ?? "nil")")

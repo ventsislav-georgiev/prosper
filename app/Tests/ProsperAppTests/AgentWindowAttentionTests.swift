@@ -123,6 +123,7 @@ extension AgentWindowD1Tests {
     /// and composer slot are the same with the marks (blocked/done) as without (all idle). The chips' words are literal.
     @MainActor
     func testAgentWindowAttentionEdgeBarOnAnUnfocusedBlockedPaneAndFixedFrames() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         gate(true)
         _ = ThemeStore.shared   // seeds ThemeRuntime.scale from the prefs before it is set here
         let saved = ThemeRuntime.scale
@@ -142,9 +143,9 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(marked["attention 0"] == nil, "the focused pane never (\(scale))")
             XCTAssertTrue(marked["attention 2"] == nil, "done: the header chip only (\(scale))")
             if let bar = marked["attention 1"], let pane = marked["pane 1"] {
-                XCTAssertEqual(bar.height, sz(3), accuracy: 0.5, "3·s high (\(scale))")
-                XCTAssertEqual(bar.minY, pane.minY, accuracy: 0.5, "on the top edge (\(scale))")
-                XCTAssertEqual(bar.width, pane.width, accuracy: 0.5, "the pane's width (\(scale))")
+                XCTAssertEqual(bar.height, sz(3), accuracy: pixel, "3·s high (\(scale))")
+                XCTAssertEqual(bar.minY, pane.minY, accuracy: pixel, "on the top edge (\(scale))")
+                XCTAssertEqual(bar.width, pane.width, accuracy: pixel, "the pane's width (\(scale))")
             }
             st.sessions = [session("api", .blocked), session("docs", .done), session("web", .done)]
             let ended = paneSnapshot(m, size)

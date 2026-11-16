@@ -186,6 +186,7 @@ extension AgentWindowD1Tests {
 
     @MainActor
     func testAgentWindowSendAndInterruptAreOneFixedEqualColumn() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let savedScale = ThemeRuntime.scale
         defer { ThemeRuntime.scale = savedScale }
         for scale: CGFloat in [1.0, 0.85, 0.7] {
@@ -199,7 +200,7 @@ extension AgentWindowD1Tests {
                 let col = AgentSendColumn(canInterrupt: on.0, canSend: on.1, interrupt: {}, send: {})
                 let c = size(col)
                 widths.insert(Int((c.width * 2).rounded()))
-                XCTAssertEqual(c.width, size(stop).width, accuracy: 0.5, "the column is the wider button's width at \(scale)")
+                XCTAssertEqual(c.width, size(stop).width, accuracy: pixel, "the column is the wider button's width at \(scale)")
                 let rep = try render(col, size: c, dark: true)
                 try save(rep, "828-send-column-\(i)-\(scale)")
                 // Both capsules span the same pixels: one quarter down is Interrupt, three quarters Send.

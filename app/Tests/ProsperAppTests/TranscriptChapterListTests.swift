@@ -80,7 +80,9 @@ final class TranscriptChapterListTests: XCTestCase {
     // MARK: 8.3 surface: fixed 360x308*s
 
     /// 1, 3 and 30 matches (and the Load earlier row): always 360x308*s, at 1.0 and 0.85.
+    @MainActor
     func testListFrameStaysFixedWhateverMatches() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         for scale in [1.0, 0.85] as [CGFloat] {
@@ -89,8 +91,8 @@ final class TranscriptChapterListTests: XCTestCase {
                 let l = list(numbered(n), older: older)
                 let size = NSHostingView(rootView: TranscriptChapterList(list: l)).fittingSize
                 let tag = "\(n) matches, older \(older), scale \(scale)"
-                XCTAssertEqual(size.width, 360 * scale, accuracy: 0.5, tag)
-                XCTAssertEqual(size.height, 308 * scale, accuracy: 0.5, tag)
+                XCTAssertEqual(size.width, 360 * scale, accuracy: pixel, tag)
+                XCTAssertEqual(size.height, 308 * scale, accuracy: pixel, tag)
                 XCTAssertEqual(TranscriptChapterList.size.height, 308 * scale, accuracy: 0.01, tag)
             }
             // Typing narrows the matches; the surface keeps its size.

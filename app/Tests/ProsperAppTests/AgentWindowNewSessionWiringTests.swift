@@ -292,6 +292,7 @@ extension AgentWindowD1Tests {
     /// in a narrow sidebar it is cut while the buttons stay pixel-identical and the title keeps its ink box.
     @MainActor
     func testAgentWindowNewSessionTitleRowButtonsKeepTheirSlots() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         try withNewSessionPrefs {
@@ -304,7 +305,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(models.map { $0.sections.flatMap(\.rows).count }, [0, 1, 999])
                 let st0 = try XCTUnwrap(models[0].store)
                 let pair = NSHostingView(rootView: AgentNewSessionButtons(model: models[0], store: st0)).fittingSize
-                XCTAssertEqual(pair.width, 2 * sz(18) + sz(4), accuracy: 0.5, "two sz(18) slots at \(scale)")
+                XCTAssertEqual(pair.width, 2 * sz(18) + sz(4), accuracy: pixel, "two sz(18) slots at \(scale)")
                 // fittingSize comes back rounded to whole points (a hosting view outside a window lays out at backing 1).
                 XCTAssertEqual(pair.height, sz(18), accuracy: 1, "at \(scale)")
                 let heights = models.map { NSHostingView(rootView: AgentSidebarTitleRow(model: $0).frame(width: sz(290))).fittingSize.height }
@@ -430,6 +431,10 @@ extension AgentWindowD1Tests {
                 @MainActor func height() -> CGFloat {
                     NSHostingView(rootView: AgentNewSessionView(model: m, form: m.newSession!).frame(width: pane.width)).fittingSize.height
                 }
+                @MainActor func same(_ a: [CGRect], _ b: [CGRect], _ why: String) {
+                    XCTAssertEqual(a.count, b.count, why)
+                    for (x, y) in zip(a, b) { assertRect(x, y, accuracy: pixel, why) }
+                }
                 let base = frames("no error \(scale)"), h = height()
                 XCTAssertLessThanOrEqual(h, size.height, "the whole form fits the minimum height at \(scale)")
                 for backing: CGFloat in [1, 2] {
@@ -443,13 +448,13 @@ extension AgentWindowD1Tests {
                 m.setNewSessionName("a:b")
                 XCTAssertNotNil(m.newSessionErrors.name)
                 settle(host)
-                XCTAssertEqual(frames("name error \(scale)"), base, "a name error moves nothing at \(scale)")
+                same(frames("name error \(scale)"), base, "a name error moves nothing at \(scale)")
                 XCTAssertEqual(height(), h, accuracy: 0.01, "name error at \(scale)")
                 m.setNewSessionName("")
                 XCTAssertTrue(m.startNewSession())
                 XCTAssertEqual(m.newSessionStatus, "Starting api…")
                 settle(host)
-                XCTAssertEqual(frames("starting \(scale)"), base, "Starting… moves nothing at \(scale)")
+                same(frames("starting \(scale)"), base, "Starting… moves nothing at \(scale)")
                 XCTAssertEqual(height(), h, accuracy: 0.01, "the status slot is there with or without text at \(scale)")
             }
         }

@@ -170,6 +170,7 @@ extension AgentWindowD1Tests {
     /// back; the row is the same with or without `inView`.
     @MainActor
     func testInViewSlotIsFixedWithTheGateOnAndAbsentWithItOff() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let long = AgentSidebar.row(session("api-" + String(repeating: "w", count: 60), .idle), details: .all, now: Self.now)
@@ -195,16 +196,16 @@ extension AgentWindowD1Tests {
             }
             XCTAssertTrue(on["glyph"] == nil && onGlyph["slot"] == nil, "one slot kind per row (\(scale))")
             assertSame(on["slot"], onGlyph["glyph"], "the slot's frame with and without the glyph (\(scale))")
-            XCTAssertEqual(on["slot"]?.width ?? 0, sz(14), accuracy: 0.5, "a fixed-width slot (\(scale))")
+            XCTAssertEqual(on["slot"]?.width ?? 0, sz(14), accuracy: pixel, "a fixed-width slot (\(scale))")
             assertSame(on["title"], onGlyph["title"], "the title does not move (\(scale))")
             XCTAssertTrue(off["slot"] == nil && off["glyph"] == nil && offGlyph["slot"] == nil && offGlyph["glyph"] == nil,
                           "gate off: no slot (\(scale))")
             assertSame(off["title"], offGlyph["title"], "gate off: inView changes nothing (\(scale))")
             let t = try XCTUnwrap(off["title"])
-            XCTAssertEqual(t.minX, sz(10) + sz(14) + sz(8), accuracy: 0.5, "gate off: the title starts as before (\(scale))")
+            XCTAssertEqual(t.minX, sz(10) + sz(14) + sz(8), accuracy: pixel, "gate off: the title starts as before (\(scale))")
             XCTAssertGreaterThan(t.maxX, (on["title"]?.maxX ?? .infinity) + 1, "gate off: no width taken (\(scale))")
             XCTAssertEqual(heights.count, 3)
-            for h in heights { XCTAssertEqual(h, heights.first ?? 0, accuracy: 0.5, "one row height (\(scale))") }
+            for h in heights { XCTAssertEqual(h, heights.first ?? 0, accuracy: pixel, "one row height (\(scale))") }
         }
     }
 

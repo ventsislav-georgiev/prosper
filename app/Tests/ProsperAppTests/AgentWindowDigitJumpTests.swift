@@ -313,6 +313,7 @@ extension AgentWindowD1Tests {
     /// number does.
     @MainActor
     func testDigitJumpChipKeepsTheRowHeightAndTheTitleInPlace() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         _ = ThemeStore.shared
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
@@ -368,7 +369,7 @@ extension AgentWindowD1Tests {
                let wRow = wide.first(where: { $0.label.hasPrefix("web,") }), let wChip = wide.first(where: { $0.label == "Command-4" }) {
                 XCTAssertTrue(nRow.frame.contains(nChip.frame), "the chip whole inside the narrow row (\(scale))")
                 XCTAssertGreaterThan(nChip.frame.minX, nRow.frame.midX, "at the trailing end (\(scale))")
-                XCTAssertEqual(nChip.frame.midY - nRow.frame.minY, wChip.frame.midY - wRow.frame.minY, accuracy: 0.5,
+                XCTAssertEqual(nChip.frame.midY - nRow.frame.minY, wChip.frame.midY - wRow.frame.minY, accuracy: pixel,
                                "centred on the two lines, as at the sidebar's width (\(scale))")
             } else {
                 XCTFail("R1: the chip drawn in a narrow row too (\(scale)): \(narrow.map(\.label).filter { !$0.isEmpty })")

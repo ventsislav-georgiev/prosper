@@ -133,6 +133,7 @@ extension AgentWindowD1Tests {
     /// every cell. Widths print as BADGE1268C-FIT (fittingSizes, then the unrounded ideals).
     @MainActor
     func testRowSymbolsLadderStepByStateDigitsAndScaleFromALiteralTable() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
@@ -223,7 +224,7 @@ extension AgentWindowD1Tests {
                         let other = try render((keeps ? none : count).frame(width: rowColumn), size: size, dark: true)
                         XCTAssertGreaterThan(differ(shown, other), 0, "\(tag): and not the other step")
                     }
-                    XCTAssertEqual(height(r), plainHeight, accuracy: 0.5, "\(tag): the row's height")
+                    XCTAssertEqual(height(r), plainHeight, accuracy: pixel, "\(tag): the row's height")
                     cells += 1
                 }
             }

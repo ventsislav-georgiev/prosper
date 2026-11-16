@@ -233,7 +233,7 @@ final class AgentRowModelEffortTests: XCTestCase {
                 ends.append(value.frame.maxX)
             }
             XCTAssertEqual(starts.count, rows.count)
-            for x in starts { XCTAssertEqual(x, starts.first ?? -1, accuracy: 0.5, "the line starts at the same x: \(starts) (\(scale))") }
+            for x in starts { XCTAssertEqual(x, starts.first ?? -1, accuracy: pixel, "the line starts at the same x: \(starts) (\(scale))") }
             XCTAssertEqual(ends.count, 2)
             // #1268: the LAST badge's BACKGROUND ends at the slot's end on a model-and-effort row and on a model-only row,
             // so the badges' edge lines up down the sidebar (was: the texts' accessibility frames, which are the Text
@@ -381,6 +381,7 @@ final class AgentRowModelEffortTests: XCTestCase {
     /// sz(220) the busy row keeps its ⌘4 chip (today's chip-only variant).
     @MainActor
     func testModelEffortSlotNeverDisplacesWhatTheRowShowsToday() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let widths: [CGFloat] = [110, 180, 220, 274, 400]
         atScales { scale in
             for w in widths {
@@ -409,7 +410,7 @@ final class AgentRowModelEffortTests: XCTestCase {
                     XCTAssertFalse(slotShown && !claude.contains { $0.label == "high" }, "never the model's badge alone: \(tag)")
                     XCTAssertFalse(today.contains { $0.label.contains("Fable") }, "no slot without modelSlot: \(tag)")
                     let x = [claude, today].map { $0.first { $0.label == "Needs input" }?.frame.minX ?? -100 }
-                    XCTAssertEqual(x.first ?? -1, x.last ?? -2, accuracy: 0.5, "state text at the same x: \(tag)")
+                    XCTAssertEqual(x.first ?? -1, x.last ?? -2, accuracy: pixel, "state text at the same x: \(tag)")
                     print("MODEL1203-TAKEN \(tag) slot \(slotShown) labels \(labels(claude).sorted())")
                     if w == 274 && !withPRs { XCTAssertTrue(slotShown, "a plain row shows the badges at the sidebar's width: \(tag)") }
                     // #1268: the ⌘4 chip is on the first line at every width (was: only where line two had room).

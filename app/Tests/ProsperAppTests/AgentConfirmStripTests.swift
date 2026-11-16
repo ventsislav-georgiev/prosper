@@ -133,7 +133,10 @@ final class AgentConfirmStripTests: XCTestCase {
                 func same(_ name: String, _ real: [String: CGRect], _ bare: [String: CGRect]) {
                     XCTAssertEqual(Set(real.keys), ["text", "cancel", "verb"], "\(name) parts: \(tag)")
                     for p in ["text", "cancel", "verb"] {
-                        XCTAssertEqual(real[p] ?? .null, bare[p] ?? .zero, "\(name) \(p) frame: \(tag)")
+                        let a = real[p] ?? .null, c = bare[p] ?? .zero
+                        for (x, y) in [(a.minX, c.minX), (a.minY, c.minY), (a.width, c.width), (a.height, c.height)] {
+                            XCTAssertEqual(x, y, accuracy: 1 / b, "\(name) \(p) frame: \(a) vs \(c) \(tag)")
+                        }
                     }
                 }
                 same("store", lay(AgentStoreQuestionStrip(store: st) { _ in }, width: w, backing: b).parts,
@@ -142,7 +145,7 @@ final class AgentConfirmStripTests: XCTestCase {
                      lay(strip(AgentWindowControls.alwaysAllowQuestion, action: AgentWindowControls.alwaysAllowAction),
                          width: w, backing: b).parts)
                 let one = lay(strip(session, action: AgentWindowControls.confirmTitle(.kill)), width: w, backing: b).parts
-                XCTAssertEqual(one["cancel"]?.midY ?? 0, one["verb"]?.midY ?? -1, accuracy: 0.5, "session buttons share a row: \(tag)")
+                XCTAssertEqual(one["cancel"]?.midY ?? 0, one["verb"]?.midY ?? -1, accuracy: 1 / b, "session buttons share a row: \(tag)")
             }
         }
     }

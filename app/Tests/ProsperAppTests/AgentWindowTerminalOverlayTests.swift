@@ -156,11 +156,11 @@ extension AgentWindowD1Tests {
                 guard let term = rig.seen["terminal"], let pane = rig.seen["pane"], let header = rig.seen["header"] else {
                     return XCTFail("terminal, pane and header frames expected, got \(rig.seen.keys.sorted()) (\(tag))")
                 }
-                XCTAssertEqual(term.maxY, pane.maxY, accuracy: 0.5, "the terminal ends where the pane ends (\(tag))")
-                XCTAssertEqual(term.maxY, m.paneArea.height, accuracy: 0.5, "and the pane area ends at the window's bottom (\(tag))")
-                XCTAssertEqual(term.minX, pane.minX, accuracy: 0.5, "full width, left (\(tag))")
-                XCTAssertEqual(term.width, pane.width, accuracy: 0.5, "full width (\(tag))")
-                XCTAssertGreaterThanOrEqual(term.minY, header.maxY - 0.5, "the terminal sits under the header (\(tag))")
+                XCTAssertEqual(term.maxY, pane.maxY, accuracy: 1 / backing, "the terminal ends where the pane ends (\(tag))")
+                XCTAssertEqual(term.maxY, m.paneArea.height, accuracy: 1 / backing, "and the pane area ends at the window's bottom (\(tag))")
+                XCTAssertEqual(term.minX, pane.minX, accuracy: 1 / backing, "full width, left (\(tag))")
+                XCTAssertEqual(term.width, pane.width, accuracy: 1 / backing, "full width (\(tag))")
+                XCTAssertGreaterThanOrEqual(term.minY, header.maxY - 1 / backing, "the terminal sits under the header (\(tag))")
                 XCTAssertLessThanOrEqual(term.minY, header.maxY + 2.5, "the header and its line only above it, no band between (\(tag))")
             }
         }
