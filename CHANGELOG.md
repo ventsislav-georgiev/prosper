@@ -1515,7 +1515,7 @@ tag from the now-released section and put it on the new top draft.
   (#1345)
 - Agent Sessions: a session that is running again no longer also shows as an ended record under
   History (in the window, the island and the phone); the record comes back with its pin when the
-  session ends.. (#1364)
+  session ends. (#1364)
 
 ## v2.174.0
 
