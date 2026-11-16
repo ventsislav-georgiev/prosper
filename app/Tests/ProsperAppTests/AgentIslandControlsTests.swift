@@ -2259,7 +2259,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let store = try XCTUnwrap(c.store)
         let menu = c.makeControlsMenu()
         XCTAssertEqual(menu.items.map(\.title), ["New session", "Restart stale agents", "Restart all agents (force)", "Stop all in Sessions…",
-                                                 "Stop all…", "Kill all in Sessions…", "Kill all…", "Message all in Sessions…"])
+                                                 "Stop all\u{2026}", "End all in Sessions\u{2026}", "End all\u{2026}", "Message all in Sessions\u{2026}"])
         press(menu.items[1])
         XCTAssertTrue(store.confirmingRestartAll)
         XCTAssertFalse(store.restartAllForce, "the stale question")
@@ -2658,7 +2658,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIslandView(store: store).drawn.map(\.refused), ["needs dch 1.25.0"])
         let menu = c.makeControlsMenu()
         XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel, AgentIsland.restartAllForceLabel,
-                                                 "Stop all in Sessions…", "Stop all…", "Kill all in Sessions…", "Kill all…",
+                                                 "Stop all in Sessions\u{2026}", "Stop all\u{2026}", "End all in Sessions\u{2026}", "End all\u{2026}",
                                                  "Message all in Sessions…", "", "Controls needs dch 1.25.0"])
         XCTAssertEqual(menu.items.map(\.isEnabled), [false, false, false, false, false, false, false, false, false, false],
                        "off, with the reason under them")
@@ -2699,7 +2699,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, "Restart stale agents (needs dch 1.24.1)",
                                                  "Restart all agents (force) (needs dch 1.24.1)",
                                                  "Stop all in Sessions… (needs dch 1.24.1)", "Stop all… (needs dch 1.24.1)",
-                                                 "Kill all in Sessions…", "Kill all…", "Message all in Sessions…"])
+                                                 "End all in Sessions\u{2026}", "End all\u{2026}", "Message all in Sessions\u{2026}"])
         XCTAssertEqual(menu.items.map(\.isEnabled), [true, false, false, false, false, true, true, true],
                        "#744: Kill needs no newer dch: base gate only")
         XCTAssertEqual(drawn.map(\.killEnabled), [true, true], "#744: a row's Kill too, any master")
@@ -2725,7 +2725,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(on.map(\.restartEnabled) + on.map(\.stopEnabled), [true, true, true, false])
         XCTAssertEqual(c.makeControlsMenu().items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel,
                                                                  AgentIsland.restartAllForceLabel, "Stop all in Sessions…", "Stop all…",
-                                                                 "Kill all in Sessions…", "Kill all…", "Message all in Sessions…"])
+                                                                 "End all in Sessions\u{2026}", "End all\u{2026}", "Message all in Sessions\u{2026}"])
         XCTAssertEqual(c.makeControlsMenu().items.map(\.isEnabled), [true, true, true, true, true, true, true, true])
         on[0].restart()
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
@@ -2743,7 +2743,7 @@ final class AgentIslandControlsTests: XCTestCase {
         c.popUpMenu = { shown.append($0.items.map(\.title)) }
         c.showControlsMenu()
         XCTAssertEqual(shown, [["New session", "Restart stale agents", "Restart all agents (force)", "Stop all in Sessions…",
-                                "Stop all…", "Kill all in Sessions…", "Kill all…", "Message all in Sessions…"]])
+                                "Stop all\u{2026}", "End all in Sessions\u{2026}", "End all\u{2026}", "Message all in Sessions\u{2026}"]])
         XCTAssertEqual(f.args, [])
     }
 
@@ -2763,7 +2763,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let menu = c.makeControlsMenu()
         XCTAssertEqual(menu.items.map(\.title), [AgentIsland.newSessionLabel, AgentIsland.restartAllLabel,
                                                  AgentIsland.restartAllForceLabel, "Stop all in Sessions…", "Stop all…",
-                                                 "Kill all in Sessions…", "Kill all…", "Message all in Sessions…"])
+                                                 "End all in Sessions\u{2026}", "End all\u{2026}", "Message all in Sessions\u{2026}"])
         XCTAssertEqual(menu.items.map(\.isEnabled), [true, false, false, false, false, false, false, false],
                        "nothing live: nothing to stop or kill")
         c.askRestartAll()
@@ -3067,17 +3067,17 @@ final class AgentIslandControlsTests: XCTestCase {
             XCTAssertNil(AgentIsland.killArgs(bad), "never without a name dch takes as one: \(bad)")
         }
         XCTAssertEqual(AgentIsland.killArgs("a")?.count, 2, "no --json, no -f, nothing after the name")
-        XCTAssertEqual(AgentIsland.killQuestion("main"), "Kill main? No pause message first.")
+        XCTAssertEqual(AgentIsland.killQuestion("main"), "End main? No pause message first.")
         XCTAssertEqual(AgentIsland.killAllQuestion(1, skipped: 0, tab: "Sidekicks"),
-                       "Kill 1 session in Sidekicks? No pause message first.")
+                       "End 1 session in Sidekicks? No pause message first.")
         XCTAssertEqual(AgentIsland.killAllQuestion(3, skipped: 2, tab: nil),
-                       "Kill 3 sessions in every tab? No pause message first. 2 skipped: name starts with “-”.")
-        XCTAssertEqual(AgentIsland.killAllQuestion(3, skipped: 0, tab: nil, tabs: false), "Kill 3 sessions? No pause message first.")
+                       "End 3 sessions in every tab? No pause message first. 2 skipped: name starts with \u{201C}-\u{201D}.")
+        XCTAssertEqual(AgentIsland.killAllQuestion(3, skipped: 0, tab: nil, tabs: false), "End 3 sessions? No pause message first.")
         XCTAssertEqual(AgentIsland.killAllQuestion(3, skipped: 0, tab: "Sessions", tabs: false),
-                       "Kill 3 sessions in Sessions? No pause message first.", "a tab asked for is still named")
+                       "End 3 sessions in Sessions? No pause message first.", "a tab asked for is still named")
         XCTAssertEqual(AgentIsland.stopAllGlobalLabel, "Stop all…")
-        XCTAssertEqual(AgentIsland.killAllLabel(tab: "Sidekicks"), "Kill all in Sidekicks…")
-        XCTAssertEqual(AgentIsland.killAllGlobalLabel, "Kill all…")
+        XCTAssertEqual(AgentIsland.killAllLabel(tab: "Sidekicks"), "End all in Sidekicks\u{2026}")
+        XCTAssertEqual(AgentIsland.killAllGlobalLabel, "End all\u{2026}")
     }
 
     /// dch's two outcomes, read strictly: "killed: <name>" + exit 0 is killed (its name
@@ -3085,24 +3085,24 @@ final class AgentIslandControlsTests: XCTestCase {
     func testKillResultsReadDchsTwoOutcomes() {
         let r = { (status: Int32, out: String) in AgentIsland.actionResult(status: status, output: Data(out.utf8)) }
         XCTAssertTrue(AgentIsland.killed(r(0, "killed: a\n")))
-        XCTAssertEqual(AgentIsland.killText(r(0, "killed: a\n")), "Killed")
+        XCTAssertEqual(AgentIsland.killText(r(0, "killed: a\n")), "Ended")
         XCTAssertFalse(AgentIsland.killed(r(1, "no session: a\n")))
         XCTAssertTrue(AgentIsland.killGone(r(1, "no session: a\n")))
         XCTAssertEqual(AgentIsland.killText(r(1, "no session: a\n")), "Already ended", "QA #572 INFO-7: not a failure")
         XCTAssertFalse(AgentIsland.killGone(r(0, "killed: a\n")))
         XCTAssertFalse(AgentIsland.killGone(r(1, "dch: cannot connect\n")))
-        XCTAssertEqual(AgentIsland.killText(r(1, "dch: cannot connect\n")), "Kill failed: dch: cannot connect")
+        XCTAssertEqual(AgentIsland.killText(r(1, "dch: cannot connect\n")), "End failed: dch: cannot connect")
         XCTAssertFalse(AgentIsland.killed(r(0, "")), "exit 0 without dch's line is no kill")
-        XCTAssertEqual(AgentIsland.killText(r(0, "")), "Kill failed (exit 0)")
+        XCTAssertEqual(AgentIsland.killText(r(0, "")), "End failed (exit 0)")
         XCTAssertFalse(AgentIsland.killed(r(1, "killed: a\n")), "a non-zero exit is no kill")
         XCTAssertFalse(AgentIsland.killed(r(0, "not killed: a\n")))
         let cut = AgentIsland.actionResult(status: 143, output: Data("killed: a\n".utf8), stopped: true)
         XCTAssertFalse(AgentIsland.killed(cut))
-        XCTAssertEqual(AgentIsland.killText(cut), "Kill cancelled: no answer in 5m")
-        XCTAssertEqual(AgentIsland.killTally(killed: 2, gone: 1, failed: 1, busy: 1), "2 killed, 1 already ended, 1 failed, 1 busy")
-        XCTAssertEqual(AgentIsland.killTally(killed: 1, gone: 0, failed: 0, busy: 0), "1 killed")
+        XCTAssertEqual(AgentIsland.killText(cut), "End cancelled: no answer in 5m")
+        XCTAssertEqual(AgentIsland.killTally(killed: 2, gone: 1, failed: 1, busy: 1), "2 ended, 1 already ended, 1 failed, 1 busy")
+        XCTAssertEqual(AgentIsland.killTally(killed: 1, gone: 0, failed: 0, busy: 0), "1 ended")
         XCTAssertEqual(AgentIsland.killTally(killed: 0, gone: 0, failed: 0, busy: 2), "2 busy")
-        XCTAssertEqual(AgentIsland.killTally(killed: 0, gone: 0, failed: 0, busy: 0), "nothing killed")
+        XCTAssertEqual(AgentIsland.killTally(killed: 0, gone: 0, failed: 0, busy: 0), "nothing ended")
     }
 
     /// Stop all (global): every tab's sessions whose master can stop, by name, one
@@ -3190,11 +3190,11 @@ final class AgentIslandControlsTests: XCTestCase {
         drawn[0].kill()
         c.confirmKill(true)
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "a busy row refuses")
-        XCTAssertEqual(store.actions[a], AgentIsland.killingText, "#749 (QA #572 INFO-R7): a second Kill leaves \"Killing…\"")
+        XCTAssertEqual(store.actions[a], AgentIsland.killingText, "#749 (QA #572 INFO-R7): a second Kill leaves \"Ending\u{2026}\"")
         f.output = "killed: a\n"
         f.release.signal()
         settle(c) { store.actions[a] != AgentIsland.killingText && reads.count > before }
-        XCTAssertEqual(store.actions[a], "Killed")
+        XCTAssertEqual(store.actions[a], "Ended")
         XCTAssertEqual(reads.count, before + 1, "one History re-read after the kill")
         drawn[1].kill()
         XCTAssertEqual(store.confirmingKill, b)
@@ -3241,8 +3241,8 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.killTargets(global: false).skipped, 1, "-dash only: any master can be killed")
         XCTAssertEqual(store.killTargets(global: true).kill.count, 4)
         var menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items[5].title, "Kill all in Sessions…")
-        XCTAssertEqual(menu.items[6].title, "Kill all…")
+        XCTAssertEqual(menu.items[5].title, "End all in Sessions\u{2026}")
+        XCTAssertEqual(menu.items[6].title, "End all\u{2026}")
         XCTAssertTrue(menu.items[5].isEnabled && menu.items[6].isEnabled)
         press(menu.items[5])
         XCTAssertTrue(store.confirmingKillAll)
@@ -3251,7 +3251,7 @@ final class AgentIslandControlsTests: XCTestCase {
         c.showSidekicks(true)
         XCTAssertFalse(store.confirmingKillAll, "a tab switch drops the tab's Kill all")
         menu = c.makeControlsMenu()
-        XCTAssertEqual(menu.items[5].title, "Kill all in Sidekicks…")
+        XCTAssertEqual(menu.items[5].title, "End all in Sidekicks\u{2026}")
         press(menu.items[5])
         XCTAssertEqual(Set(store.killAllTargets.map(\.name)), ["x-qa", "z-qa"])
         c.confirmKillAll(false)
@@ -3284,11 +3284,11 @@ final class AgentIslandControlsTests: XCTestCase {
         let before = reads.count
         for _ in 0..<4 { f.release.signal() }
         let d = AgentSessionKey(dir: "/d", name: ""), e = AgentSessionKey(dir: "/e", name: "")
-        settle(c) { store.actions[d] != nil && store.actions[e] != nil && store.actions[xq] == "Killed" && reads.count >= before + 2 }
+        settle(c) { store.actions[d] != nil && store.actions[e] != nil && store.actions[xq] == "Ended" && reads.count >= before + 2 }
         settle(c)
-        XCTAssertEqual(store.actions[d], "1 killed, 1 busy")
-        XCTAssertEqual(store.actions[e], "2 killed")
-        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/e", name: "w")], "Killed")
+        XCTAssertEqual(store.actions[d], "1 ended, 1 busy")
+        XCTAssertEqual(store.actions[e], "2 ended")
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/e", name: "w")], "Ended")
         XCTAssertEqual(reads.count, before + 2, "QA #572 INFO-3: one History re-read for the row Kill, one for all of Kill all")
     }
 
@@ -3302,8 +3302,8 @@ final class AgentIslandControlsTests: XCTestCase {
         c.showSidekicks(true)
         press(c.makeControlsMenu().items[5])
         XCTAssertEqual(AgentIsland.killAllQuestion(store.asked.keys.count, skipped: store.asked.skipped, tab: store.asked.tab),
-                       "Kill 2 sessions in Sidekicks? No pause message first.")
-        XCTAssertEqual(store.killAllQuestion, "Kill 2 sessions in Sidekicks? No pause message first.")
+                       "End 2 sessions in Sidekicks? No pause message first.")
+        XCTAssertEqual(store.killAllQuestion, "End 2 sessions in Sidekicks? No pause message first.")
         c.confirmKillAll(true)
         for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
@@ -3350,7 +3350,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let store = try XCTUnwrap(c.store)
         store.sidekickPattern = "-qa"
         for kill in [true, false] {
-            let what = kill ? "Kill all" : "Stop all"
+            let what = kill ? "End all" : "Stop all"
             let ask = { kill ? c.askKillAll() : c.askStopAll() }
             let confirm = { kill ? c.confirmKillAll(true) : c.confirmStopAll(true) }
             let up = { kill ? store.confirmingKillAll : store.confirmingStopAll }
@@ -3535,7 +3535,7 @@ final class AgentIslandControlsTests: XCTestCase {
     }
 
     /// QA #572 INFO-1: Kill cuts through a row's Stop or Restart that hangs, and the
-    /// Stop's or Restart's late result never overwrites "Killed". Any other job on the
+    /// Stop's or Restart's late result never overwrites "Ended". Any other job on the
     /// row refuses the Kill, and the row says so. The next job on the row shows its own result.
     @MainActor
     func testKillCutsThroughAStopOrRestartAndKeepsItsOutcome() throws {
@@ -3552,7 +3552,7 @@ final class AgentIslandControlsTests: XCTestCase {
             c.askKill(s)
             c.confirmKill(true)
         }
-        settle(c) { store.actions[a.key] == "Killed" && store.actions[b.key] == "Killed" }
+        settle(c) { store.actions[a.key] == "Ended" && store.actions[b.key] == "Ended" }
         XCTAssertEqual(Set(h.kills), [["-k", "a"], ["-k", "b"]], "beside the Stop and the Restart")
         c.stop(a)
         XCTAssertEqual(h.lock.withLock { h.args.count }, 4, "the row's Stop still runs: no second one")
@@ -3560,8 +3560,8 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { !c.runner.isBusy(a.key) && !c.runner.isBusy(b.key) }
         let landed = Date().addingTimeInterval(0.3)
         settle(c) { Date() >= landed }   // their results' hop to main
-        XCTAssertEqual(store.actions[a.key], "Killed", "the Stop's late failure does not overwrite the kill")
-        XCTAssertEqual(store.actions[b.key], "Killed", "nor the Restart's")
+        XCTAssertEqual(store.actions[a.key], "Ended", "the Stop's late failure does not overwrite the kill")
+        XCTAssertEqual(store.actions[b.key], "Ended", "nor the Restart's")
         // A job a Kill may not cut through (a phone verb on the row): refused, visibly.
         XCTAssertTrue(c.runner.start(p.key, path: "/fake/dch", args: ["--send", "p", "hi"], env: { [:] }) { _ in })
         c.askKill(p)
@@ -3575,14 +3575,14 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.actions[a.key], AgentIsland.stoppingText)
         h.open.signal(); h.open.signal()
         settle(c) { store.actions[a.key] != AgentIsland.stoppingText && !c.runner.isBusy(p.key) }
-        XCTAssertNotEqual(store.actions[a.key], "Killed")
+        XCTAssertNotEqual(store.actions[a.key], "Ended")
         XCTAssertNotEqual(store.actions[a.key], AgentIsland.stoppingText, "the new Stop's result is shown")
         settle(c) { store.actions[p.key] == nil }
         XCTAssertNil(store.actions[p.key], "#749 (QA #572 INFO-R2): the refusal goes with the job")
     }
 
     /// QA #572 INFO-1, INFO-2: Kill all cuts through a running Stop all and leaves its
-    /// dir text (the rows say "Killed"); under a job it may not cut through it runs
+    /// dir text (the rows say "Ended"); under a job it may not cut through it runs
     /// nothing and leaves that job's text, never "N busy" over it.
     @MainActor
     func testKillAllBesideDirJobsLeavesTheirText() throws {
@@ -3599,14 +3599,14 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.actions[d], AgentIsland.stoppingText)
         c.askKillAll(global: true)
         c.confirmKillAll(true)
-        settle(c) { store.actions[a.key] == "Killed" && store.actions[b.key] == "Killed" }
+        settle(c) { store.actions[a.key] == "Ended" && store.actions[b.key] == "Ended" }
         XCTAssertEqual(Set(h.kills), [["-k", "a"], ["-k", "b"]])
         XCTAssertEqual(store.actions[d], AgentIsland.stoppingText, "Stop all's running text stays")
         h.open.signal()
         settle(c) { store.actions[d] != AgentIsland.stoppingText }
-        XCTAssertEqual(store.actions[a.key], "Killed", "Stop all's late lines do not overwrite the kills")
-        XCTAssertEqual(store.actions[b.key], "Killed")
-        XCTAssertEqual(store.actions[d], "2 killed", "#749 (QA #572 INFO-R5): Stop all counts the rows killed, not failed")
+        XCTAssertEqual(store.actions[a.key], "Ended", "Stop all's late lines do not overwrite the kills")
+        XCTAssertEqual(store.actions[b.key], "Ended")
+        XCTAssertEqual(store.actions[d], "2 ended", "#749 (QA #572 INFO-R5): Stop all counts the rows killed, not failed")
         XCTAssertTrue(c.runner.start(d, path: "/fake/dch", args: ["--forget", "--all"], env: { [:] }) { _ in })
         store.actions[d] = AgentIsland.clearingText
         c.askKillAll(global: true)
@@ -3626,12 +3626,12 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertTrue(c.runner.hasJob(d))
         c.askKill(a)
         c.confirmKill(true)
-        settle(c) { h.kills.count == 3 && store.actions[a.key] == "Killed" }
+        settle(c) { h.kills.count == 3 && store.actions[a.key] == "Ended" }
         XCTAssertEqual(h.kills.count, 3, "a Kill beside a Restart all")
-        XCTAssertEqual(store.actions[a.key], "Killed")
+        XCTAssertEqual(store.actions[a.key], "Ended")
         h.open.signal()
         settle(c) { !c.runner.isBusy(d) && store.actions[d] != AgentIsland.restartAllRunningText }
-        XCTAssertEqual(store.actions[d], "1 killed, 1 failed", "#750 (QA #576 INFO-3): Restart all counts the row killed too")
+        XCTAssertEqual(store.actions[d], "1 ended, 1 failed", "#750 (QA #576 INFO-3): Restart all counts the row killed too")
     }
 
     /// #749 (QA #572 INFO-R4): a Kill that fails hands the row back to the Stop or Restart it
@@ -3646,7 +3646,7 @@ final class AgentIslandControlsTests: XCTestCase {
         c.runner = h.runner()
         let store = try XCTUnwrap(c.store)
         let gone = AgentIsland.actionResult(status: 1, output: Data("dch: master gone\n".utf8))
-        let failed = "Kill failed: dch: permission denied"
+        let failed = "End failed: dch: permission denied"
         c.restart(b)
         c.askKill(b)
         c.confirmKill(true)
@@ -3685,7 +3685,7 @@ final class AgentIslandControlsTests: XCTestCase {
         h.killGate.signal()
         settle(c) { store.actions[b.key] != AgentIsland.killingText }
         XCTAssertEqual(store.actions[b.key], failed, "a stale phase is never shown")
-        // "no session" (already ended) keeps the row, as "Killed" does.
+        // "no session" (already ended) keeps the row, as "Ended" does.
         h.lock.withLock { h.holdKill = false; h.killFail = "no session: a"; h.output = "dch: master gone\n" }
         c.stop(a)
         c.askKill(a)
@@ -3734,7 +3734,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.sessions.count, 2)
         c.askKill(sb)
         c.confirmKill(true)
-        settle(c) { store.actions[sb.key] == "Killed" }
+        settle(c) { store.actions[sb.key] == "Ended" }
         XCTAssertEqual(c.killedRows[sb.key], "")
         try FileManager.default.removeItem(atPath: sock("b"))
         settle(c) { store.sessions.count == 1 }
@@ -3757,9 +3757,9 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.stopAllQuestion, "Stop 1 session in every tab?" + skips)
         store.sidekickPattern = ""
         c.askKillAll(global: true)
-        XCTAssertEqual(store.killAllQuestion, "Kill 2 sessions? No pause message first. 2 skipped: name starts with “-”.")
+        XCTAssertEqual(store.killAllQuestion, "End 2 sessions? No pause message first. 2 skipped: name starts with \u{201C}-\u{201D}.")
         c.askKillAll()
-        XCTAssertEqual(store.killAllQuestion, "Kill 2 sessions in Sessions? No pause message first. 2 skipped: name starts with “-”.")
+        XCTAssertEqual(store.killAllQuestion, "End 2 sessions in Sessions? No pause message first. 2 skipped: name starts with \u{201C}-\u{201D}.")
     }
 
     /// #749 (QA #572 INFO-R5): Stop all's failed lines for rows a Kill cut through count as killed.
@@ -3774,17 +3774,17 @@ final class AgentIslandControlsTests: XCTestCase {
         }
         let t = { (k: Set<String>) in AgentIsland.tally(r(k), .stop, title: "Stop all", empty: "nothing stopped") }
         XCTAssertEqual(t([]), "1 stopped, 2 failed")
-        XCTAssertEqual(t(["a"]), "1 stopped, 1 killed, 1 failed")
-        XCTAssertEqual(t(["a", "b"]), "1 stopped, 2 killed", "their failures explain the exit")
+        XCTAssertEqual(t(["a"]), "1 stopped, 1 ended, 1 failed")
+        XCTAssertEqual(t(["a", "b"]), "1 stopped, 2 ended", "their failures explain the exit")
         XCTAssertEqual(t(["c"]), "1 stopped, 2 failed", "only a failed row reads killed")
         let sum = { (k: Set<String>) in AgentIsland.restartAllSummary(r(k)) }
         XCTAssertEqual(sum([]), "1 agent restarted, 2 failed")
-        XCTAssertEqual(sum(["a"]), "1 agent restarted, 1 killed, 1 failed")
-        XCTAssertEqual(sum(["a", "b"]), "1 agent restarted, 2 killed", "their failures explain the exit")
+        XCTAssertEqual(sum(["a"]), "1 agent restarted, 1 ended, 1 failed")
+        XCTAssertEqual(sum(["a", "b"]), "1 agent restarted, 2 ended", "their failures explain the exit")
         XCTAssertEqual(sum(["c"]), "1 agent restarted, 2 failed")
         var killedOnly = AgentIsland.actionResult(status: 1, output: Data((line("a", "failed") + "\n").utf8))
         killedOnly.killed = ["a"]
-        XCTAssertEqual(AgentIsland.restartAllSummary(killedOnly), "1 killed", "not \"all agents current\"")
+        XCTAssertEqual(AgentIsland.restartAllSummary(killedOnly), "1 ended", "not \"all agents current\"")
         let master = #"{"name":"a","phase":"master","result":"failed","reason":"x","detail":"a: x"}"#
         var m = AgentIsland.actionResult(status: 1, output: Data((master + "\n").utf8))
         m.killed = ["a"]
@@ -3839,7 +3839,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.actions[d], AgentIsland.stoppingText, "#991 (QA #579 INFO-1): the tally waits for the Kill still out")
         h.killGate.signal()
         settle(c) { store.actions[a.key] != AgentIsland.killingText && store.actions[d] != AgentIsland.stoppingText }
-        XCTAssertEqual(store.actions[a.key], "master gone; Kill failed: dch: permission denied")
+        XCTAssertEqual(store.actions[a.key], "master gone; End failed: dch: permission denied")
         XCTAssertEqual(store.actions[d], "2 failed")
         // Already ended: the row says so, the dir counts it failed (dch's word on the Stop).
         h.lock.withLock { h.holdKill = false; h.killFail = "no session: a" }
@@ -3872,10 +3872,10 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.actions[de], AgentIsland.stoppingText)
         c.askKill(a)
         c.confirmKill(true)
-        settle(c) { store.actions[a.key] == "Killed" }
+        settle(c) { store.actions[a.key] == "Ended" }
         h.open.signal(); h.open.signal()
         settle(c) { store.actions[d] != AgentIsland.stoppingText && store.actions[de] != AgentIsland.stoppingText }
-        XCTAssertEqual(store.actions[d], "1 killed")
+        XCTAssertEqual(store.actions[d], "1 ended")
         XCTAssertEqual(store.actions[de], "1 failed", "the other dir's a was not killed")
         XCTAssertEqual(store.actions[e.key], "master gone")
     }
@@ -3908,7 +3908,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.actions[a.key], AgentIsland.killingText, "while the Kill runs")
         h.killGate.signal()
         settle(c) { store.actions[a.key] != AgentIsland.killingText }
-        XCTAssertEqual(store.actions[a.key], "\(restarted); Kill failed: dch: permission denied")
+        XCTAssertEqual(store.actions[a.key], "\(restarted); End failed: dch: permission denied")
     }
 
     /// Visual evidence: the inline Kill all and row Kill questions, a row
@@ -3928,8 +3928,8 @@ final class AgentIslandControlsTests: XCTestCase {
         try render(store, "agent-island-744-kill-confirm", to: out)
         store.confirmingKill = nil
         store.actions[AgentSessionKey(dir: "/d", name: "prosper-main")] = AgentIsland.killingText
-        store.actions[AgentSessionKey(dir: "/d", name: "ios")] = "Kill failed: no session: ios"
-        store.actions[AgentSessionKey(dir: "/d", name: "")] = "1 killed, 1 failed"
+        store.actions[AgentSessionKey(dir: "/d", name: "ios")] = "End failed: no session: ios"
+        store.actions[AgentSessionKey(dir: "/d", name: "")] = "1 ended, 1 failed"
         try render(store, "agent-island-744-kill-results", to: out)
     }
 
@@ -5822,8 +5822,8 @@ extension AgentIslandControlsTests {
         f.output = "killed: a\n"
         f.release.signal()
         f.release.signal()
-        settle(c) { store.actions[a.key] == "Killed" && !c.runner.isBusy(a.key) }
-        XCTAssertEqual(store.actions[a.key], "Killed")
+        settle(c) { store.actions[a.key] == "Ended" && !c.runner.isBusy(a.key) }
+        XCTAssertEqual(store.actions[a.key], "Ended")
         // A job a Kill may not cut through (a Resume of a record with the row's key): refused, said.
         f.progress = ""
         c.resume(record("a"))
@@ -6446,12 +6446,12 @@ extension AgentIslandControlsTests {
         XCTAssertTrue(c.runner.start(d, path: "/fake/dch", args: AgentIsland.stopArgs(["a", "b"])!, yields: true, env: { [:] }) { _ in })
         c.askKillAll(global: true)
         c.confirmKillAll(true)
-        settle(c) { store.actions[a.key] == "Killed" && store.actions[b.key] == "Killed" }
+        settle(c) { store.actions[a.key] == "Ended" && store.actions[b.key] == "Ended" }
         XCTAssertEqual(Set(h.kills), [["-k", "a"], ["-k", "b"]])
         XCTAssertTrue(store.actions[d] == nil, "no tally while the phone's job runs")
         h.open.signal()
         settle(c) { store.actions[d] != nil }
-        XCTAssertEqual(store.actions[d], "2 killed")
+        XCTAssertEqual(store.actions[d], "2 ended")
     }
 
     /// QA #576 INFO-6: a second Kill refusal on a row restarts its one 1 s clear: the first chain does not
@@ -6525,8 +6525,8 @@ extension AgentIslandControlsTests {
         XCTAssertEqual(store.actions[d], AgentIsland.stoppingText, "the tally waits for the Kill")
         h.killGate.signal()
         settle(c) { store.actions[d] != AgentIsland.stoppingText }
-        XCTAssertEqual(store.actions[a.key], "Killed")
-        XCTAssertEqual(store.actions[d], "1 killed, 1 failed")
+        XCTAssertEqual(store.actions[a.key], "Ended")
+        XCTAssertEqual(store.actions[d], "1 ended, 1 failed")
     }
 
     /// QA #579 INFO-3 (the row text): a session a Kill ended while the job ran reads killed.

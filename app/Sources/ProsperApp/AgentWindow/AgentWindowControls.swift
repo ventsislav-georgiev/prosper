@@ -66,6 +66,109 @@ struct AgentLayoutMenuEntry: Equatable, Identifiable {
     var id: AgentLayoutVerb { verb }
 }
 
+/// #1358: the leading SF Symbol of every item in the Agent Sessions menus (pane and row more-menus, History row, sidebar more-menu, Layouts
+/// row). One action, one symbol, wherever its menu draws it: every table below reads this one list. The title stays the
+/// item's own words (Label's title is its VoiceOver label).
+enum AgentMenuSymbol {
+    static let open = "terminal", rename = "pencil", restart = "arrow.clockwise", stop = "stop.circle"
+    /// The door with an arrow: prosper-ios's exit button (TerminalScreen.swift).
+    static let exit = "rectangle.portrait.and.arrow.right"
+    static let resume = AgentIsland.resumeWithMessageSymbol, resumeNoMessage = AgentIsland.resumeNoMessageSymbol
+    static let pin = "pin", unpin = "pin.slash", remove = "trash", duplicate = "plus.square.on.square"
+    static let side = "sidebar.right", chapters = "list.bullet", splitRight = "rectangle.split.2x1"
+    static let splitDown = "rectangle.split.1x2", zoom = "arrow.up.left.and.arrow.down.right"
+    static let equalize = "equal.square", closePane = "xmark.rectangle"
+    static let newSession = "plus", folder = "folder", chooseFolder = "folder.badge.plus"
+    static let sort = "arrow.up.arrow.down", sortActivity = "clock", sortName = "textformat"
+    static let rowDetails = "list.bullet.rectangle", rowDetail = "list.bullet", autoAllow = "checkmark.shield"
+    static let settings = "gearshape", diagnostics = "stethoscope"
+
+    /// Every name above, for the test that resolves each one (a typo draws no image).
+    static let all: Set<String> = [open, rename, restart, stop, exit, resume, resumeNoMessage, pin, unpin, remove, duplicate, side,
+                                   chapters, splitRight, splitDown, zoom, equalize, closePane, newSession, folder, chooseFolder,
+                                   sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics]
+}
+
+extension AgentWindowVerb {
+    /// `.pin` is Pin or Unpin by the item's title (AgentWindowMenuEntry.symbol).
+    var symbol: String {
+        switch self {
+        case .restart: AgentMenuSymbol.restart
+        case .stop, .stopGroup: AgentMenuSymbol.stop
+        case .kill: AgentMenuSymbol.exit
+        case .resume, .resumeGroup: AgentMenuSymbol.resume
+        case .resumeNoMessage: AgentMenuSymbol.resumeNoMessage
+        case .pin: AgentMenuSymbol.pin
+        case .remove: AgentMenuSymbol.remove
+        case .rename: AgentMenuSymbol.rename
+        }
+    }
+}
+
+extension AgentWindowMenuEntry {
+    /// nil for a divider or a note, else the item's leading symbol.
+    var symbol: String? {
+        switch self {
+        case .item(let title, _, let verb):
+            verb == .pin && title.hasPrefix(AgentIsland.unpinLabel) ? AgentMenuSymbol.unpin : verb.symbol
+        case .divider, .note: nil
+        case .open: AgentMenuSymbol.open
+        case .pane(_, _, let verb):
+            switch verb {
+            case .equalize: AgentMenuSymbol.equalize
+            case .action(.split(.columns)): AgentMenuSymbol.splitRight
+            case .action(.split(.rows)): AgentMenuSymbol.splitDown
+            case .action(.zoom): AgentMenuSymbol.zoom
+            case .action: AgentMenuSymbol.closePane   // the menu draws no other PaneAction
+            }
+        case .side: AgentMenuSymbol.side
+        case .chapters: AgentMenuSymbol.chapters
+        }
+    }
+}
+
+extension AgentSidebarVerb {
+    var symbol: String {
+        switch self {
+        case .newSession: AgentMenuSymbol.folder
+        case .chooseFolder: AgentMenuSymbol.chooseFolder
+        case .restartAll: AgentMenuSymbol.restart
+        case .stopAll: AgentMenuSymbol.stop
+        case .killAll: AgentMenuSymbol.exit
+        case .resumeInterrupted(let noMessage): noMessage ? AgentMenuSymbol.resumeNoMessage : AgentMenuSymbol.resume
+        case .clearUnpinned: AgentMenuSymbol.remove
+        case .sort(let s): s == .activity ? AgentMenuSymbol.sortActivity : AgentMenuSymbol.sortName
+        case .rowDetail: AgentMenuSymbol.rowDetail
+        case .autoAllow: AgentMenuSymbol.autoAllow
+        case .settings: AgentMenuSymbol.settings
+        case .diagnostics: AgentMenuSymbol.diagnostics
+        }
+    }
+}
+
+extension AgentSidebarMenuEntry {
+    /// nil for a divider or a note, else the item's or submenu's leading symbol.
+    var symbol: String? {
+        switch self {
+        case .item(_, _, _, let verb): verb.symbol
+        case .submenu(let title, _, _):
+            title == AgentIsland.newSessionLabel ? AgentMenuSymbol.newSession
+                : title == AgentWindowControls.sortLabel ? AgentMenuSymbol.sort : AgentMenuSymbol.rowDetails
+        case .divider, .note: nil
+        }
+    }
+}
+
+extension AgentLayoutMenuEntry {
+    var symbol: String {
+        switch verb {
+        case .rename: AgentMenuSymbol.rename
+        case .duplicate: AgentMenuSymbol.duplicate
+        case .delete: AgentMenuSymbol.remove
+        }
+    }
+}
+
 enum AgentWindowControls {
     /// #901 B3 step 4b: Delete's fixed words on the last layout, read as PaneRefusal.menuSuffix reads ("Delete (last
     /// layout)", as "Split Right (6 panes max)"); PaneRefusal has no words for .lastLayout.
@@ -340,7 +443,7 @@ enum AgentWindowControls {
         switch v {
         case .restart: "Restart"
         case .stop: "Stop"
-        case .kill: "Kill"
+        case .kill: "End"
         case .remove: "Remove"
         case .resume: AgentIsland.resumeLabel
         case .resumeNoMessage: AgentIsland.resumeNoMessageLabel
@@ -492,7 +595,7 @@ extension AgentWindowControls {
                     "Restart")
         }
         if store.confirmingStopAll { return (.stopAll, store.stopAllQuestion, "Stop") }
-        if store.confirmingKillAll { return (.killAll, store.killAllQuestion, "Kill") }
+        if store.confirmingKillAll { return (.killAll, store.killAllQuestion, "End") }
         if store.confirmingClear { return (.clear, AgentIsland.clearQuestion(store.unpinnedCount), "Clear") }
         return nil
     }
@@ -560,19 +663,21 @@ struct AgentMenuEntries: View {
         ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
             switch e {
             case .open(let enabled):
-                Button(AgentWindowControls.openLabel, action: open).disabled(!enabled)
+                Button(action: open) { Label(AgentWindowControls.openLabel, systemImage: e.symbol ?? "") }.disabled(!enabled)
             case .item(let title, let enabled, let verb):
-                Button(title) { act(verb) }.disabled(!enabled)
+                Button { act(verb) } label: { Label(title, systemImage: e.symbol ?? "") }.disabled(!enabled)
             case .divider:
                 Divider()
             case .note(let text):
                 Text(verbatim: text)
             case .pane(let title, let enabled, let verb):
-                Button(title) { pane(verb) }.disabled(!enabled)
+                Button { pane(verb) } label: { Label(title, systemImage: e.symbol ?? "") }.disabled(!enabled)
             case .side(let title, let enabled):
-                Button(title, action: side).disabled(!enabled)
+                Button(action: side) { Label(title, systemImage: e.symbol ?? "") }.disabled(!enabled)
             case .chapters(let enabled, let pane):
-                Button(AgentWindowControls.chaptersLabel) { AgentsNSWindow.chaptersChosen(pane: pane) }.disabled(!enabled)
+                Button { AgentsNSWindow.chaptersChosen(pane: pane) } label: {
+                    Label(AgentWindowControls.chaptersLabel, systemImage: e.symbol ?? "")
+                }.disabled(!enabled)
             }
         }
     }
@@ -638,7 +743,7 @@ struct AgentSessionMenuButton: View {
 
     /// QA #693 INFO-6: what the menu holds: Rename alone for a name dch would read as a flag (#627).
     static func help(_ s: AgentSession) -> String {
-        AgentIsland.passable(s.name) ? "Open in terminal, rename, restart, stop or kill this session"
+        AgentIsland.passable(s.name) ? "Open in terminal, rename, restart, stop or end this session"
             : "Open in terminal or rename this session"
     }
 }
@@ -720,7 +825,7 @@ struct AgentSidebarMenuButton: View {
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
         .frame(width: sz(18), height: sz(18))
-        .help("New session, restart, stop or kill all, History and Agent Island settings")
+        .help("New session, restart, stop or end all, History and Agent Island settings")
         .accessibilityLabel("Session list actions")
     }
 }
@@ -734,12 +839,14 @@ struct AgentSidebarMenuEntries: View {
             switch e {
             case .item(let title, let enabled, let checked, let verb):
                 if let checked {
-                    Toggle(title, isOn: Binding(get: { checked }, set: { _ in run(verb) })).disabled(!enabled)
+                    Toggle(isOn: Binding(get: { checked }, set: { _ in run(verb) })) { Label(title, systemImage: verb.symbol) }
+                        .disabled(!enabled)
                 } else {
-                    Button(title) { run(verb) }.disabled(!enabled)
+                    Button { run(verb) } label: { Label(title, systemImage: verb.symbol) }.disabled(!enabled)
                 }
             case .submenu(let title, let enabled, let items):
-                Menu(title) { AgentSidebarMenuEntries(entries: items, run: run) }.disabled(!enabled)
+                Menu { AgentSidebarMenuEntries(entries: items, run: run) } label: { Label(title, systemImage: e.symbol ?? "") }
+                    .disabled(!enabled)
             case .divider:
                 Divider()
             case .note(let text):

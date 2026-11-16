@@ -766,7 +766,9 @@ struct AgentLayoutsSection: View {
                     .accessibilityAddTraits(r.active ? .isSelected : [])
                     .contextMenu {
                         ForEach(AgentWindowControls.layoutMenu(model, r.id)) { e in
-                            Button(e.title) { AgentWindowControls.runLayout(e, model, r.id) }.disabled(!e.enabled)
+                            Button { AgentWindowControls.runLayout(e, model, r.id) } label: {
+                                Label(e.title, systemImage: e.symbol)   // #1358
+                            }.disabled(!e.enabled)
                         }
                     }
             }

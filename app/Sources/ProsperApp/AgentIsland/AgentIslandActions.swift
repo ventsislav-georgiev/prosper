@@ -640,7 +640,7 @@ extension AgentIsland {
         let dch = moved.last?.detail.flatMap { $0.isEmpty ? nil : $0 } ?? "restarted"
         return [moved.isEmpty ? nil : "\(moved.count) session\(moved.count == 1 ? "" : "s") \(dch)",
                 restarted > 0 ? "\(restarted) agent\(restarted == 1 ? "" : "s") restarted" : nil,
-                killed > 0 ? "\(killed) killed" : nil, failed > 0 ? "\(failed) failed" : nil, skipped > 0 ? "\(skipped) skipped" : nil, other]
+                killed > 0 ? "\(killed) ended" : nil, failed > 0 ? "\(failed) failed" : nil, skipped > 0 ? "\(skipped) skipped" : nil, other]
             .compactMap { $0 }.joined(separator: ", ")
     }
 
@@ -660,7 +660,7 @@ extension AgentIsland {
             + (left > 0 ? ["\(messages(left)) may still be in Claude's input, not sent"] : [])).joined(separator: "; ")
         let dashed = r.json.filter { dashRefused($0, verb) }.count
         let idShaped = r.json.filter { nameRefusal($0, verb) == .idShaped }.count
-        let parts = [(c.ok + unsent.count, verb.done.lowercased() + (notes.isEmpty ? "" : " (\(notes))")), (k, "killed"),
+        let parts = [(c.ok + unsent.count, verb.done.lowercased() + (notes.isEmpty ? "" : " (\(notes))")), (k, "ended"),
                      (c.failed - unsent.count - dashed - idShaped, "failed"), (c.skipped, "skipped")].filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
             + (dashed > 0 ? ["\(dashed) session\(dashed == 1 ? " has a name" : "s have names") dch can no longer start"] : [])
             + (idShaped > 0 ? ["\(idShaped) session\(idShaped == 1 ? " has a name shaped like a session id" : "s have names shaped like session ids"), which dch can no longer start"] : [])
@@ -869,20 +869,20 @@ extension AgentIsland {
 
     // MARK: - Kill (#744)
 
-    static let killLabel = "Kill…"
-    static let killingText = "Killing…"
-    static func killAllLabel(tab: String) -> String { "Kill all in \(tab)…" }
-    static let killAllGlobalLabel = "Kill all…"
+    static let killLabel = "End\u{2026}"
+    static let killingText = "Ending session\u{2026}"
+    static func killAllLabel(tab: String) -> String { "End all in \(tab)\u{2026}" }
+    static let killAllGlobalLabel = "End all\u{2026}"
     /// QA #572 INFO-5: what Stop does and Kill does not (Stop messages Claude to pause first).
     /// Short: the inline line is one line, ~350 pt. #749 (QA #572 INFO-R6): names no agent,
     /// as the session may run none, or another.
     static let killWarning = "No pause message first."
 
-    static func killQuestion(_ name: String) -> String { "Kill \(name)? \(killWarning)" }
+    static func killQuestion(_ name: String) -> String { "End \(name)? \(killWarning)" }
 
     /// QA #572 INFO-4/5: the scope, and why a row is skipped (killArgs refuses a "-" name).
     static func killAllQuestion(_ n: Int, skipped: Int, tab: String?, tabs: Bool = true) -> String {
-        "Kill \(n) session\(n == 1 ? "" : "s")\(scope(tab, tabs: tabs))? \(killWarning)" + dashSkipped(skipped)
+        "End \(n) session\(n == 1 ? "" : "s")\(scope(tab, tabs: tabs))? \(killWarning)" + dashSkipped(skipped)
     }
 
     /// `-k <name>`: one name per call, no --json (dch rejects it). Never `-kl` (every
@@ -904,23 +904,23 @@ extension AgentIsland {
 
     static let alreadyEndedText = "Already ended"
     /// QA #572 INFO-1: the row runs a job a Kill may not cut through (only a Stop or Restart).
-    static let killBusyText = "Kill not run: another job is running"
+    static let killBusyText = "End not run: another job is running"
 
     /// A Kill's row text: "Killed", "Already ended", else why not.
-    static let killedText = "Killed"
+    static let killedText = "Ended"
     static func killText(_ r: DchActionResult) -> String {
-        if r.stopped { return "Kill cancelled: no answer in \(Int(DchActionRunner.bound / 60))m" }
+        if r.stopped { return "End cancelled: no answer in \(Int(DchActionRunner.bound / 60))m" }
         if killed(r) { return killedText }
         if killGone(r) { return alreadyEndedText }
-        return r.line.isEmpty ? "Kill failed (exit \(r.status))" : "Kill failed: \(r.line)"
+        return r.line.isEmpty ? "End failed (exit \(r.status))" : "End failed: \(r.line)"
     }
 
     /// Kill all's dir line: "N killed, N already ended, N failed, N busy"; busy rows ran a job
     /// a Kill may not cut through (or a Kill already) and were not asked.
     static func killTally(killed: Int, gone: Int, failed: Int, busy: Int) -> String {
-        let parts = [(killed, "killed"), (gone, "already ended"), (failed, "failed"), (busy, "busy")]
+        let parts = [(killed, "ended"), (gone, "already ended"), (failed, "failed"), (busy, "busy")]
             .filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
-        return parts.isEmpty ? "nothing killed" : parts.joined(separator: ", ")
+        return parts.isEmpty ? "nothing ended" : parts.joined(separator: ", ")
     }
 
     // MARK: - New session (#579)

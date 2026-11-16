@@ -48,20 +48,20 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(AgentWindowControls.menu(a, store: st), [
             .item("Rename…", enabled: false, verb: .rename), .divider,
             .item("Restart agent", enabled: false, verb: .restart), .item("Stop", enabled: false, verb: .stop), .divider,
-            .item("Kill…", enabled: false, verb: .kill), .note("Controls \(why)"),
+            .item("End\u{2026}", enabled: false, verb: .kill), .note("Controls \(why)"),
         ], "no control dch: all off, the island's footer says why")
         st.controlDch = Self.v1240
         XCTAssertEqual(AgentWindowControls.menu(a, store: st), [
             rename, .divider,
             .item("Restart agent (needs dch 1.24.1)", enabled: false, verb: .restart),
             .item("Stop (needs dch 1.24.1)", enabled: false, verb: .stop), .divider,
-            .item("Kill…", enabled: true, verb: .kill),
+            .item("End\u{2026}", enabled: true, verb: .kill),
         ], "1.24.0: Restart and Stop name the version; Kill needs only the base gate")
         st.controlDch = Self.v1241
         XCTAssertEqual(AgentWindowControls.menu(a, store: st), [
             rename, .divider,
             .item("Restart agent…", enabled: true, verb: .restart), .item("Stop…", enabled: true, verb: .stop), .divider,
-            .item("Kill…", enabled: true, verb: .kill),
+            .item("End\u{2026}", enabled: true, verb: .kill),
         ], "items that ask carry an ellipsis")
         XCTAssertEqual(AgentWindowControls.menu(old, store: st)[3], .item(AgentIsland.stopOldMasterLabel, enabled: false, verb: .stop),
                        "an old master's Stop says why")
@@ -233,8 +233,8 @@ extension AgentWindowD1Tests {
             let size = CGSize(width: sz(290), height: AgentWindowControls.stripHeight)
             XCTAssertEqual(ink(try render(AgentDirStatusStrip(store: st), size: size, dark: true)), 0, "nothing to say: nothing drawn")
             st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")] = "Stop all: 2 stopped, 1 failed"
-            st.actions[AgentSessionKey(dir: "/tmp/other", name: "")] = "Kill all: 1 killed"
-            XCTAssertEqual(st.dirStatus, "Stop all: 2 stopped, 1 failed · Kill all: 1 killed")
+            st.actions[AgentSessionKey(dir: "/tmp/other", name: "")] = "End all: 1 ended"
+            XCTAssertEqual(st.dirStatus, "Stop all: 2 stopped, 1 failed \u{B7} End all: 1 ended")
             let rep = try render(AgentDirStatusStrip(store: st), size: size, dark: true)
             try save(rep, "829-dir-strip-\(scale)")
             XCTAssertGreaterThan(ink(rep), 10)
@@ -265,7 +265,7 @@ extension AgentWindowD1Tests {
         }
         XCTAssertEqual(AgentInteractionPane(model: i, session: idle, open: {}, lock: "Restarting…").placeholder,
                        "Restarting: wait for it to finish")
-        for t in [nil, "Restarted", "Stopped", AgentIsland.killingText, "Killed", AgentIsland.restartBusyText,
+        for t in [nil, "Restarted", "Stopped", AgentIsland.killingText, "Ended", AgentIsland.restartBusyText,
                   "NOT stopped — claude did not go idle; resume message typed"] {
             XCTAssertNil(AgentWindowControls.lock(t), "\(t ?? "nil") locks nothing")
         }

@@ -1505,6 +1505,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a session with sidekicks (Settings › Agent Island › Pairs) offers Stop both and
   Resume both, or Stop all N and Resume all N for a larger group, in its row and History menus. A
   pairs suffix now needs at least one letter. (#909)
+- Agent Sessions and Agent Island: Kill is now End (with the door symbol), and every item in the
+  session menus has a symbol. (#1358)
 
 ## v2.174.0
 

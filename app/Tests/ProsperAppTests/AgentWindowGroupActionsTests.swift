@@ -35,7 +35,7 @@ extension AgentWindowD1Tests {
         let live: [AgentWindowMenuEntry] = [
             .item("Rename\u{2026}", enabled: true, verb: .rename), .divider,
             .item("Restart agent\u{2026}", enabled: true, verb: .restart), .item("Stop\u{2026}", enabled: true, verb: .stop), .divider,
-            .item("Kill\u{2026}", enabled: true, verb: .kill),
+            .item("End\u{2026}", enabled: true, verb: .kill),
         ]
         let history: [AgentWindowMenuEntry] = [
             .item("Resume", enabled: true, verb: .resume), .item("Resume (no message)", enabled: true, verb: .resumeNoMessage),

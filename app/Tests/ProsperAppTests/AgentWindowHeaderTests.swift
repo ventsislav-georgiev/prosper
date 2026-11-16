@@ -82,7 +82,7 @@ extension AgentWindowD1Tests {
                 let menu = tree.filter { $0.named("Session actions") }
                 XCTAssertEqual(menu.count, 1, "one \"⋯\" (\(tag))")
                 for c in picker + toggle + menu { XCTAssertFalse(c.help.isEmpty, "\(c.name) has a help text (\(tag))") }
-                XCTAssertEqual(menu.first?.help, "Open in terminal, rename, restart, stop or kill this session")
+                XCTAssertEqual(menu.first?.help, "Open in terminal, rename, restart, stop or end this session")
                 XCTAssertFalse(tree.contains { $0.named(AgentWindowControls.openLabel) },
                                "no Open in terminal button in the header (\(tag))")
                 let t = toggle.reduce(CGRect.null) { $0.union($1.frame) }

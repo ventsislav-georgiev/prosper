@@ -672,7 +672,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(verbs(dash), [.rename])
         XCTAssertEqual(AgentSessionMenuButton.help(dash), "Open in terminal or rename this session")
         XCTAssertEqual(verbs(a), [.rename, .restart, .stop, .kill])
-        XCTAssertEqual(AgentSessionMenuButton.help(a), "Open in terminal, rename, restart, stop or kill this session")
+        XCTAssertEqual(AgentSessionMenuButton.help(a), "Open in terminal, rename, restart, stop or end this session")
     }
 
     // QA #693 INFO-5 (#2): the title, the chip and the path out of the tree under the Rename field is read from the real
@@ -698,7 +698,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(header(true).menuButton.entries, [.open(enabled: false)], "ended: Open in terminal, off, alone")
         XCTAssertFalse(header(false).menuButton.ended)
         XCTAssertEqual(header(false).menuButton.entries.first, .open(enabled: true), "live: Open in terminal, on, first")
-        XCTAssertEqual(header(false).menuButton.help, "Open in terminal, rename, restart, stop or kill this session")
+        XCTAssertEqual(header(false).menuButton.help, "Open in terminal, rename, restart, stop or end this session")
         XCTAssertEqual(header(true).menuButton.help, AgentPaneModeToggle.endedReason, "ended: the \"⋯\" says why, as the button did")
     }
 

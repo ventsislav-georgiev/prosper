@@ -825,17 +825,17 @@ struct AgentIslandView: View {
                 Text(verbatim: store.killAllQuestion)
                     .foregroundStyle(Neon.faded(.white, 0.8))
                 Spacer(minLength: 0)
-                lineButton("Kill") { onConfirmKillAll(true) }
-                    .accessibilityLabel(Text(verbatim: "Kill \(n) session\(n == 1 ? "" : "s")"))
+                lineButton("End") { onConfirmKillAll(true) }
+                    .accessibilityLabel(Text(verbatim: "End \(n) session\(n == 1 ? "" : "s")"))
                 lineButton("Cancel") { onConfirmKillAll(false) }
-                    .accessibilityLabel(Text(verbatim: "Cancel Kill all"))
+                    .accessibilityLabel(Text(verbatim: "Cancel End all"))
             } else if let s = store.killTarget {
                 Text(verbatim: AgentIsland.killQuestion(s.title)).foregroundStyle(Neon.faded(.white, 0.8))
                 Spacer(minLength: 0)
-                lineButton("Kill") { onConfirmKill(true) }
-                    .accessibilityLabel(Text(verbatim: "Kill \(s.title)"))
+                lineButton("End") { onConfirmKill(true) }
+                    .accessibilityLabel(Text(verbatim: "End \(s.title)"))
                 lineButton("Cancel") { onConfirmKill(false) }
-                    .accessibilityLabel(Text(verbatim: "Cancel Kill"))
+                    .accessibilityLabel(Text(verbatim: "Cancel End"))
             } else {
                 Text(verbatim: store.dirStatus).foregroundStyle(Neon.faded(.white, 0.6))
                 Spacer(minLength: 0)

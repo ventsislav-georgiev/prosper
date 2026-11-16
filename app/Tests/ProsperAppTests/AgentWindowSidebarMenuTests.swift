@@ -239,7 +239,7 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         let q = try XCTUnwrap(AgentWindowControls.storeQuestion(st))
         XCTAssertEqual(q.kind, .killAll)
         XCTAssertEqual(q.text, st.killAllQuestion)
-        XCTAssertEqual(q.action, "Kill")
+        XCTAssertEqual(q.action, "End")
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         XCTAssertEqual(rec.args.count, 0, "nothing runs before the answer")
         m.answerStoreQuestion(false)
@@ -350,15 +350,15 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertFalse(Preferences.agentIslandAutoAllow, "OFF writes at once")
     }
 
-    /// R897-n1: Kill all asks, so the item reads "Kill all..." (a literal, on and off), as the island's does.
+    /// R897-n1: Kill all asks, so the item reads "End all..." (a literal, on and off), as the island's does.
     @MainActor
     func testSidebarKillAllTitleHasTheEllipsis() throws {
         for dch in [bin([1, 38, 0]), nil] {
             let st = store([session("api")], dch: dch)
             let e = AgentWindowControls.sidebarMenu(store: st, autoAllow: false)
-            XCTAssertTrue(titles(e).contains("Kill all\u{2026}"), "titles: \(titles(e))")
-            XCTAssertEqual(entry(e, "Kill all\u{2026}"),
-                           .item("Kill all\u{2026}", enabled: dch != nil, checked: nil, verb: .killAll))
+            XCTAssertTrue(titles(e).contains("End all\u{2026}"), "titles: \(titles(e))")
+            XCTAssertEqual(entry(e, "End all\u{2026}"),
+                           .item("End all\u{2026}", enabled: dch != nil, checked: nil, verb: .killAll))
         }
     }
 

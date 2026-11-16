@@ -1067,7 +1067,7 @@ final class DchControlFramesTests: XCTestCase {
         wait(for: [replied], timeout: 5)
         let got = frames.lock.withLock { frames.all }
         XCTAssertEqual(got.count, 1)
-        XCTAssertEqual(got.first.map { message(Self.decode($0)) }, "1 killed, 1 failed")
+        XCTAssertEqual(got.first.map { message(Self.decode($0)) }, "1 ended, 1 failed")
     }
 
     /// #749 (QA #572 INFO-R1): an island Kill on a row cuts through the phone's Stop, Restart

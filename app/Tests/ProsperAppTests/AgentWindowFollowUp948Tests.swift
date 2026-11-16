@@ -112,11 +112,11 @@ extension AgentWindowD1Tests {
             // The island's line over the window's: not the window's to clear.
             st.controlDch = nil
             XCTAssertFalse(m.startShell())
-            st.actions[key] = "Kill all: 1 killed"
+            st.actions[key] = "End all: 1 ended"
             st.controlDch = open
             st.history = []
             m.openNewSession()
-            XCTAssertEqual(st.actions[key], "Kill all: 1 killed", "the island's line stays")
+            XCTAssertEqual(st.actions[key], "End all: 1 ended", "the island's line stays")
             XCTAssertEqual(NSHostingView(rootView: AgentDirStatusStrip(store: st).frame(width: 290)).fittingSize.height,
                            AgentWindowControls.stripHeight, accuracy: 1, "the same fixed slot")
         }
