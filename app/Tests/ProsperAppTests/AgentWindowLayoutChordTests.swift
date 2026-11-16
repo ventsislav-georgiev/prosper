@@ -137,9 +137,10 @@ final class AgentWindowLayoutChordTests: XCTestCase {
         XCTAssertEqual(route(ev(32, "u", "G", [.command, .shift])), .pass)
         XCTAssertEqual(route(ev(43, "<", "W", [.command, .shift])), .pass, "⇧⌘ on the Dvorak W key")
         // Option held: the #882 rule stays. Finnish/Norwegian Extended and the Sami layouts type an ASCII "," with ⌥⌘
-        // on the W key, which must still close; the same fields on this layout's Dvorak W key close too (not separable).
+        // on the W key, which must still close. #948 F1: the same fields on Dvorak - QWERTY Command's W key are told apart
+        // by the input source id (AgentWindowFollowUp948Tests); with any other id (here none) they close.
         XCTAssertEqual(route(ev(13, ",", "w", [.command, .option])), .close, "Finnish Extended ⌥⌘W")
-        XCTAssertEqual(route(ev(43, ",", "w", [.command, .option])), .close, "Dvorak - QWERTY ⌘'s ⌥⌘ on its W key")
+        XCTAssertEqual(route(ev(43, ",", "w", [.command, .option])), .close, "these fields on key 43, another layout's id")
         XCTAssertEqual(route(ev(13, "w", ",", [.command, .option])), .close, "its ⌥⌘ on the QWERTY W key")
         XCTAssertEqual(route(ev(45, "n", "b", [.command, .option])), .pass, "⌥⌘N is no chord")
         // The modelless window: ⌘, is not its ⌘W.

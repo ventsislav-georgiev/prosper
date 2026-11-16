@@ -356,16 +356,27 @@ final class AgentsNSWindow: NSWindow {
     /// Command held and Option not, a printable ASCII `characters` decides alone: ⌘, there is Settings, not ⌘W.
     /// With Option held the rule above stays (⌥⌘W types an ASCII character on the Finnish/Norwegian Extended and
     /// Sami layouts, and must still close).
+    /// #948 F1: the fields alone cannot tell "Dvorak - QWERTY Command"'s Option-Command on its W key (key 43, ",") from
+    /// those layouts' Option-Command-W, so on that input source (by id, read only when Option and Command are held) the
+    /// ASCII `characters` decides with Option too. Every other layout: the letter rule above, unchanged.
     static func chordLetter(_ event: NSEvent) -> String? {
         let typed = event.characters?.lowercased()
         let mods = event.modifierFlags
-        if mods.contains(.command), !mods.contains(.option), let typed, typed.unicodeScalars.count == 1,
+        if mods.contains(.command), !mods.contains(.option) || inputSourceID() == dvorakQwertyCommandID, let typed,
+           typed.unicodeScalars.count == 1,
            typed.unicodeScalars.allSatisfy({ (0x21...0x7e).contains($0.value) }) { return typed }
         if let typed, chordLetters.contains(typed) { return typed }
         return event.charactersIgnoringModifiers?.lowercased()
     }
 
     static let chordLetters: Set<String> = ["w", "t", "f", "g", "n"]
+
+    static let dvorakQwertyCommandID = "com.apple.keylayout.DVORAK-QWERTYCMD"
+    /// #948 F1 seam: the current keyboard input source's id, read only (never selected). Under XCTest "" unless a test
+    /// sets it, so no test reads the machine's layout.
+    static var inputSourceID: () -> String = {
+        NSClassFromString("XCTestCase") == nil ? KeyboardSource.currentSourceID() : ""
+    }
 
     /// #1110: the digit 1…9 of a key, by key code (any layout: a Cyrillic one, AZERTY's unshifted digit row): the top row
     /// (QuickSelect's table, its 0 left out: ⌘0 stays free) or the keypad.

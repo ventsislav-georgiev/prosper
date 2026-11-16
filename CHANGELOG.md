@@ -1389,6 +1389,13 @@ tag from the now-released section and put it on the new top draft.
 - The config-change sheet now warns, with a line per piece, when an extension's change will run a
   command (a hook or the status line), and its Apply button says how many, for example "Apply and
   allow 2 commands to run".
+- Agent Sessions window: on the "Dvorak - QWERTY Command" layout, Option-Command on the Dvorak W key
+  no longer closes the window (Option-Command-W still closes on Finnish and Norwegian Extended).
+- Agent Sessions window: the status line under the session list now clears itself once its reason is
+  gone: a "Controls needs dch ..." note when dch is ready, a "never started" note when that session
+  shows up, and either one when the New session form opens.
+- Agent Sessions window: when a new session ends at once, the "ended at once or never started"
+  message now says how it ended, for example "(exit 127)".
 
 ## v2.174.0
 

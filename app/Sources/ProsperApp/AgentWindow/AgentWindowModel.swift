@@ -1162,6 +1162,9 @@ final class AgentWindowModel: ObservableObject {
         // so the row's outcome ("Restarted", a failure, the Stop's result) shows. Other refusals keep theirs.
         if let r = refusal, r.text == AgentIsland.renameBusyText, case .live(let k) = r.id,
            AgentWindowControls.lock(actions[k]) == nil { refusal = nil }
+        // #948 F2, F3: before landSpawn, so no check here runs on this publish's values after a write it made.
+        expireDirLine(sessions: sessions, actions: actions)
+        endUnlisted(history)
         landSpawn()   // #847
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
@@ -1468,7 +1471,8 @@ final class AgentWindowModel: ObservableObject {
     @Published private(set) var newSessionFocus = 0
     /// A session the window started: on the refresh its row shows, it is selected in Terminal with the keys.
     /// Dropped by a manual pick, the form reopening and after `spawnSlack`.
-    private(set) var pendingSpawn: (key: AgentSessionKey, at: TimeInterval)? {
+    /// #948 F3: `asked`, the request's time (a record that landed since is this start's).
+    private(set) var pendingSpawn: (key: AgentSessionKey, at: TimeInterval, asked: TimeInterval)? {
         didSet {
             // #887 (QA #747 INFO-1): the slack has its own deadline, not the next refresh (the 30 s age clock).
             spawnDeadline?.invalidate()
@@ -1482,7 +1486,12 @@ final class AgentWindowModel: ObservableObject {
     /// Fires once just past `spawnSlack` after the answer; a hidden window lands or expires the spawn when shown again.
     private(set) var spawnDeadline: Timer?
     /// QA #747 INFO-1: dch --spawn answers 0 for a session whose program already exited, the same as for one that runs.
-    nonisolated static func notListedText(_ name: String) -> String { "\(name) ended at once or never started: check the command" }
+    /// #948 F3: with the end of a record of that name that landed after the start ("exit 127"), in brackets.
+    nonisolated static func notListedText(_ name: String, end: String = "") -> String {
+        "\(name) ended at once or never started: check the command" + (end.isEmpty ? "" : " (\(end))")
+    }
+    /// #948 F3: a start that never listed, waiting for the one History read after its deadline.
+    private(set) var unlisted: (key: AgentSessionKey, asked: TimeInterval)?
     /// QA #713 INFO-4: numbers every spawn; the form keeps its own (`request`), a quick shell has none.
     private var requests = 0
     /// QA #713 INFO-4 (d): the names this window spawned until the poll lists them: in flight (.infinity), then for
@@ -1503,10 +1512,11 @@ final class AgentWindowModel: ObservableObject {
         newSessionFocus += 1
         guard newSession == nil else { return }
         guard store?.resumeGate.isOK == true else {   // R2 F2: the one gate check for ⌘N, + and the pill
-            store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)") }   // #887: ⌘N says why too
+            store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)", until: .gate) }   // #887: Command-N says why too
             return
         }
         pendingSpawn = nil
+        clearDirLine()   // #948 F2: the form says its own status
         let typed = Preferences.agentIslandNewSessionCommand
         newSessionTookKeys = sessionHasKeys
         newSession = AgentNewSessionForm(folder: AgentNewSession.abbreviate(folder ?? newSessionDefaultFolder, home: home),
@@ -1630,7 +1640,7 @@ final class AgentWindowModel: ObservableObject {
             return spawn(AgentNewSession.expand(f.folder, home: home), argv, name: newSessionName, command: nil)
         }
         guard store?.resumeGate.isOK == true else {
-            store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)") }   // #887 (QA #747 INFO-3): ⇧⌘N says why
+            store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)", until: .gate) }   // #887 (QA #747 INFO-3): Shift-Command-N says why
             return false
         }
         let folder = newSessionDefaultFolder
@@ -1640,12 +1650,18 @@ final class AgentWindowModel: ObservableObject {
 
     private func spawn(_ folder: String, _ argv: [String], name: String, command: String?) -> Bool {
         requests += 1
-        let request = newSession == nil ? nil : requests   // nil: a quick shell, no form's
+        unlisted = nil
+        let request = newSession == nil ? nil : requests, asked = now()   // nil: a quick shell, no form's
         guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
-            self?.spawned(key, failure, name: name, folder: folder, command: command, request: request)
+            self?.spawned(key, failure, name: name, folder: folder, command: command, request: request, asked: asked)
         }) else {
             let why = spawnRefusal(name)
-            if newSession != nil { newSession?.status = why } else { sayOnDirLine(why) }   // never dropped silently
+            // never dropped silently; #948 F2: a gate refusal goes when the gate opens, a name or busy one with the form
+            if newSession != nil {
+                newSession?.status = why
+            } else {
+                sayOnDirLine(why, until: store?.resumeGate.isOK == false ? .gate : nil)
+            }
             return false
         }
         claimed[name] = .infinity
@@ -1663,14 +1679,62 @@ final class AgentWindowModel: ObservableObject {
 
     /// With no form open: the spawn dir's dir-wide line, which the window draws in its sidebar strip
     /// (AgentDirStatusStrip) and the island on its own line; the runner's failures land there too.
-    private func sayOnDirLine(_ text: String) { store?.actions[AgentSessionKey(dir: island().spawnDir(), name: "")] = text }
+    /// #948 F2: the one rule for a line this window wrote there: it goes when its cause is gone (`until`: the gate opens,
+    /// a session of that name lists; nil: never by itself) or the form opens, in the same fixed slot. A line the island
+    /// or a later action wrote over it is not the window's any more and is left alone.
+    private func sayOnDirLine(_ text: String, until cause: DirLineCause? = nil) {
+        guard let store else { return }
+        let key = AgentSessionKey(dir: island().spawnDir(), name: "")
+        dirLine = (key, text, cause)
+        store.actions[key] = text
+    }
+
+    enum DirLineCause: Equatable { case gate, listed(String) }
+    /// #948 F2: the window's own dir-wide line, while it is still the one up.
+    private(set) var dirLine: (key: AgentSessionKey, text: String, cause: DirLineCause?)?
+
+    private func clearDirLine() {
+        guard let l = dirLine else { return }
+        dirLine = nil
+        if store?.actions[l.key] == l.text { store?.actions[l.key] = nil }
+    }
+
+    /// #948 F2, on every visible refresh (the values as published): replaced or cleared, it is forgotten; its cause
+    /// gone, cleared. The gate is the store's (on a publish of `sessions` alone, one publish late).
+    private func expireDirLine(sessions: [AgentSession], actions: [AgentSessionKey: String]) {
+        guard let l = dirLine else { return }
+        guard actions[l.key] == l.text else { dirLine = nil; return }
+        let gone = switch l.cause {
+        case .gate?: store?.resumeGate.isOK == true
+        case .listed(let name)?: sessions.contains { $0.key == AgentSessionKey(dir: l.key.dir, name: name) }
+        case nil: false
+        }
+        // Never inside an `actions` publish (its value lands after this sink and would put the line back): the next one.
+        guard gone, let store, store.actions == actions else { return }
+        dirLine = nil
+        store.actions[l.key] = nil
+    }
+
+    /// #948 F3: the History read after the deadline answered: a record of that name that started since the request
+    /// (whole seconds: 1 s of slack) puts its end in the sentence, where the sentence still is.
+    private func endUnlisted(_ history: [DchHistoryRecord]) {
+        guard let u = unlisted,
+              let r = history.first(where: { $0.key == u.key && !$0.end.isEmpty && $0.started >= u.asked - 1 }) else { return }
+        unlisted = nil
+        let plain = Self.notListedText(u.key.name), said = Self.notListedText(u.key.name, end: r.end)
+        if newSession?.status == plain {
+            newSession?.status = said
+        } else if newSession == nil, let l = dirLine, l.text == plain, store?.actions[l.key] == plain {
+            sayOnDirLine(said, until: l.cause)
+        }
+    }
 
     /// The runner's answer. Success keeps the folder and (OQ-3) a typed command as the one shared setting,
     /// selects the session once its row shows (R2 F5: the form stays "Starting…" over the pane until then);
     /// failure re-enables the form with dch's line.
     /// QA #713 INFO-4: an answer touches the form only when it answers the open form's own request.
     private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String, command: String?,
-                         request: Int?) {
+                         request: Int?, asked: TimeInterval) {
         let mine = request != nil && newSession?.request == request && newSession?.starting != nil
         guard let key else {
             claimed[name] = nil
@@ -1690,7 +1754,7 @@ final class AgentWindowModel: ObservableObject {
         } else if newSession != nil {
             return   // a quick shell's answer under a form opened since: the form keeps the pane
         }
-        pendingSpawn = (key, now())
+        pendingSpawn = (key, now(), asked)
         refresh()
     }
 
@@ -1707,7 +1771,12 @@ final class AgentWindowModel: ObservableObject {
                 newSession?.starting = nil
                 newSession?.status = why
             } else if newSession == nil {
-                sayOnDirLine(why)
+                sayOnDirLine(why, until: .listed(p.key.name))
+            }
+            // #948 F3: one History read when the sentence is up; its records (a refresh) may name how the command ended.
+            if newSession?.status == why || dirLine?.text == why {
+                unlisted = (p.key, p.asked)
+                island().refreshHistory()
             }
             return
         }
