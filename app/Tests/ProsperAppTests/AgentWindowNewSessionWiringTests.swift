@@ -397,6 +397,7 @@ extension AgentWindowD1Tests {
     /// error, with a name error and while "Starting…" (every slot is there with or without text).
     @MainActor
     func testAgentWindowNewSessionFormFitsTheMinimumWindowWithFixedSlots() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         try withNewSessionPrefs {
@@ -420,7 +421,7 @@ extension AgentWindowD1Tests {
                     XCTAssertEqual(f.count, 3, tag)
                     for r in f {
                         XCTAssertGreaterThanOrEqual(r.minX, pane.minX + sz(20) + sz(64), "\(tag): right of the labels \(r)")
-                        XCTAssertLessThanOrEqual(r.maxX, pane.maxX - sz(20) + 0.5, "\(tag): inside the padding \(r)")
+                        XCTAssertLessThanOrEqual(r.maxX, pane.maxX - sz(20) + pixel, "\(tag): inside the padding \(r)")
                         XCTAssertGreaterThanOrEqual(r.width, sz(80), "\(tag): room to type \(r)")
                         XCTAssertTrue(host.bounds.contains(r), "\(tag): inside the window \(r)")
                     }

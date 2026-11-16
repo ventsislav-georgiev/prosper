@@ -335,6 +335,7 @@ final class MarketplacePublishPreviewTests: XCTestCase {
     /// natural width.
     @MainActor
     func testNothingClipsAtEveryScale() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let ext = try fixture(["extension.toml", "init.lua", "lib/a-long-file-name-for-a-narrow-pane.lua",
@@ -365,8 +366,8 @@ final class MarketplacePublishPreviewTests: XCTestCase {
                                + hosted.items().map { "\($0.role) \($0.text)" }.joined(separator: " | "))
                 let win = hosted.window.frame
                 func inside(_ f: CGRect) -> Bool {
-                    !f.isNull && f.minX >= win.minX - 0.5 && f.maxX <= win.maxX + 0.5
-                        && f.minY >= win.minY - 0.5 && f.maxY <= win.maxY + 0.5
+                    !f.isNull && f.minX >= win.minX - pixel && f.maxX <= win.maxX + pixel
+                        && f.minY >= win.minY - pixel && f.maxY <= win.maxY + pixel
                 }
                 for line in lines {
                     let f = items.first { $0.has(line) }?.frame ?? .null

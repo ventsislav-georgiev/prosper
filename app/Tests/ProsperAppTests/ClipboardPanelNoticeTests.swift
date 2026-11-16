@@ -56,6 +56,7 @@ final class ClipboardPanelNoticeTests: XCTestCase {
     }
 
     func testPanelGrowsWhenTheNoticeAppearsAndDisappears() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let open = OSAllocatedUnfairLock(initialState: false)
         let store = ClipboardStore(dir: tempDir(), keySource: gate(SymmetricKey(size: .bits256), open))
         let panel = ClipboardPanel(store: store)   // built, never ordered front
@@ -66,7 +67,7 @@ final class ClipboardPanelNoticeTests: XCTestCase {
         XCTAssertGreaterThan(panel.panel.frame.height, before, "the hosting view grows the panel for the notice line")
         open.withLock { $0 = true }
         store.addText("beta")
-        pump { panel.panel.frame.height <= before + 0.5 }
+        pump { panel.panel.frame.height <= before + pixel }
         XCTAssertEqual(panel.panel.frame.height, before, accuracy: 0.5, "back to its height once the line is gone")
         XCTAssertFalse(panel.panel.isVisible)
     }

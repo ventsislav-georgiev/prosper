@@ -289,6 +289,7 @@ extension AgentWindowD1Tests {
 
     @MainActor
     func testVerbosityTodosListIsCappedAndClosesOnSessionSwitch() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let savedScale = ThemeRuntime.scale
         defer { ThemeRuntime.scale = savedScale }
         for scale: CGFloat in [0.7, 1.0] {
@@ -300,7 +301,7 @@ extension AgentWindowD1Tests {
             let three = height(3), fifty = height(50)
             XCTAssertGreaterThan(three, sz(30), "a short list keeps its own height")
             XCTAssertLessThan(three, AgentTodosList.maxHeight)
-            XCTAssertLessThanOrEqual(fifty, AgentTodosList.maxHeight + 0.5, "50 items scroll inside about 8 rows at \(scale)")
+            XCTAssertLessThanOrEqual(fifty, AgentTodosList.maxHeight + pixel, "50 items scroll inside about 8 rows at \(scale)")
             XCTAssertGreaterThan(fifty, AgentTodosList.maxHeight - sz(16))
         }
         let t = AgentTranscriptModel()

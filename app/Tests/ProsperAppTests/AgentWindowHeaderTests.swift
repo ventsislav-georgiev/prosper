@@ -33,7 +33,8 @@ extension AgentWindowD1Tests {
     /// #1120: an image an AX client is shown on the switch's line, left of it (the title line's decoration).
     @MainActor
     private func imagesLeft(of t: CGRect, _ tree: [HeaderAX]) -> [HeaderAX] {
-        tree.filter { $0.role == "AXImage" && !$0.ignored && $0.frame.maxX <= t.minX + 0.5 && abs($0.frame.midY - t.midY) < sz(8) }
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
+        return tree.filter { $0.role == "AXImage" && !$0.ignored && $0.frame.maxX <= t.minX + pixel && abs($0.frame.midY - t.midY) < sz(8) }
     }
 
     static let pickerLabels: Set<String> = ["Focused view", "Default view", "Verbose view"]
@@ -360,6 +361,7 @@ extension AgentWindowD1Tests {
     /// at the narrowest pane; the Rename field fits the slot of the one-line form.
     @MainActor
     func testAgentSessionHeaderIsOneLineInTerminalModeAtEveryScale() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let a = session("prosper-ios", .blocked, ago: 200, alias: Self.headerTitle)
@@ -415,10 +417,10 @@ extension AgentWindowD1Tests {
             let field = try XCTUnwrap(headerViews(host, AgentRenameTextField.self).first, "the field is built at \(scale)")
             // The field's alignment rect: an NSTextField's frame runs about 2 pt past it on each side (its insets).
             let f = field.superview?.convert(field.alignmentRect(forFrame: field.frame), to: host) ?? .null
-            XCTAssertGreaterThanOrEqual(field.frame.height + 0.5, field.intrinsicContentSize.height, "its text fits at \(scale)")
-            XCTAssertLessThanOrEqual(field.intrinsicContentSize.height, AgentSessionHeader.lineHeight + 0.5, "the line holds it at \(scale)")
+            XCTAssertGreaterThanOrEqual(field.frame.height + pixel, field.intrinsicContentSize.height, "its text fits at \(scale)")
+            XCTAssertLessThanOrEqual(field.intrinsicContentSize.height, AgentSessionHeader.lineHeight + pixel, "the line holds it at \(scale)")
             XCTAssertGreaterThan(f.width, sz(60), "room to type at \(scale)")
-            XCTAssertGreaterThanOrEqual(f.minX, sz(16) - 0.5, "inside the padding at \(scale)")
+            XCTAssertGreaterThanOrEqual(f.minX, sz(16) - pixel, "inside the padding at \(scale)")
             XCTAssertLessThanOrEqual(f.maxX, room - sz(16), "left of the controls at \(scale)")
             XCTAssertFalse(win.isVisible, "never on screen")
         }
@@ -464,6 +466,7 @@ extension AgentWindowD1Tests {
     /// tree, never-shown window.
     @MainActor
     func testRenameHidesTheTitleChipAndPathUnderTheFieldInTheTree() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         ThemeRuntime.scale = 1.0
@@ -495,7 +498,7 @@ extension AgentWindowD1Tests {
                 let controls = tree.filter { e in e.named("Terminal") || e.named("Transcript") || Self.pickerLabels.contains { e.named($0) } }
                 let edge = controls.map(\.frame.minX).min() ?? t.minX
                 let line = tree.filter { !$0.ignored && !$0.names.isEmpty && $0.frame.width > 0
-                    && $0.frame.maxX <= edge + 0.5 && abs($0.frame.midY - t.midY) < sz(8) }
+                    && $0.frame.maxX <= edge + pixel && abs($0.frame.midY - t.midY) < sz(8) }
                 let field = line.filter { $0.role == "AXTextField" }
                 print("#1120 rename tree \(tag): " + line.map { "\($0.role) \($0.names)" }.joined(separator: ", "))
                 XCTAssertEqual(field.count, renaming ? 1 : 0, "the field is read while renaming (\(tag))")
@@ -615,6 +618,7 @@ extension AgentWindowD1Tests {
     /// size), the "⋯" read once. Real accessibility tree of a never-shown window.
     @MainActor
     func testCompactHeaderFitsThreeHundredPointsInEveryState() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let restoreAX = AXTreeSupport.axOn()
@@ -640,7 +644,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(menu.count, 1, "one \"⋯\" (\(tag))")
                 let edge = tree.first?.frame.maxX ?? 0
                 for e in tree where !e.ignored && e.frame.width > 0 {
-                    XCTAssertLessThanOrEqual(e.frame.maxX, edge + 0.5, "\(e.name) inside the header (\(tag))")
+                    XCTAssertLessThanOrEqual(e.frame.maxX, edge + pixel, "\(e.name) inside the header (\(tag))")
                 }
                 XCTAssertTrue(tree.contains { $0.named(row.title) }, "the title is read whole (\(tag))")
                 menus.append(menu.first?.frame ?? .null)

@@ -252,6 +252,7 @@ final class TextViewerDefaultAppTests: XCTestCase {
     /// sz(218), its rule and the scroll's 2 x sz(26)): the button keeps its natural width and every
     /// line stays inside the pane.
     func testNothingClipsAtEveryScale() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let fake = FakeDefaultApps()
@@ -268,10 +269,10 @@ final class TextViewerDefaultAppTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(button?.frame.width ?? 0, natural - 1, "scale \(scale): the button is not squeezed")
             for line in Self.lines {
                 let f = items.first { $0.label == line }?.frame ?? .null
-                XCTAssertTrue(!f.isNull && f.minX >= win.minX - 0.5 && f.maxX <= win.maxX + 0.5,
+                XCTAssertTrue(!f.isNull && f.minX >= win.minX - pixel && f.maxX <= win.maxX + pixel,
                               "scale \(scale): \(line) at \(f) inside \(win)")
             }
-            if let b = button { XCTAssertLessThanOrEqual(b.frame.maxX, win.maxX + 0.5, "scale \(scale)") }
+            if let b = button { XCTAssertLessThanOrEqual(b.frame.maxX, win.maxX + pixel, "scale \(scale)") }
         }
     }
 }

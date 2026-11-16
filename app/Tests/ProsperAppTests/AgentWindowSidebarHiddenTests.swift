@@ -284,6 +284,7 @@ extension AgentWindowD1Tests {
     /// hidden, "Show sidebar" is read in the band; pressing it (the button's action through the model) shows the sidebar.
     @MainActor
     func testSidebarHiddenGlyphIsReadOnlyWhileHidden() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withSidebarRow(gate: true) {
             let restoreModes = transcriptMode(["api"])
             defer { restoreModes() }
@@ -303,7 +304,7 @@ extension AgentWindowD1Tests {
             }
             let glyph = try XCTUnwrap(hidden.first { $0.reads("Show sidebar") }, "hidden: the glyph is read")
             XCTAssertFalse(hidden.contains { $0.reads(AgentsWindow.title) }, "hidden: the sidebar is not drawn")
-            XCTAssertLessThanOrEqual(glyph.frame.height, AgentWindowBand.height + 0.5, "in the band's row")
+            XCTAssertLessThanOrEqual(glyph.frame.height, AgentWindowBand.height + pixel, "in the band's row")
         }
     }
 

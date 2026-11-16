@@ -201,6 +201,7 @@ final class AgentRowModelEffortTests: XCTestCase {
     /// last badge's fill at the same trailing edge with and without an effort (#1268); at a narrow row the last variant keeps the state text whole, no slot.
     @MainActor
     func testModelEffortSecondLineKeepsItsStartAndTheNarrowVariant() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let rows = [row(session("api", model: "claude-fable-9-2-20991231", effort: "high")),
                     row(session("api", model: "claude-fable-9-2")),
                     row(session("api")),
@@ -226,7 +227,7 @@ final class AgentRowModelEffortTests: XCTestCase {
                 guard let value = t.first(where: { $0.label == last }) else {
                     XCTFail("\(last) drawn at the sidebar's width (\(scale))"); continue
                 }
-                XCTAssertGreaterThanOrEqual(value.frame.width + 0.5, ideal(Text(last).font(Neon.font(8.5, weight: .medium))).width - 0.5,
+                XCTAssertGreaterThanOrEqual(value.frame.width + pixel, ideal(Text(last).font(Neon.font(8.5, weight: .medium))).width - pixel,
                                             "\(last) whole (\(scale))")
                 XCTAssertGreaterThan(value.frame.minX, state.frame.maxX, "trailing (\(scale))")
                 ends.append(value.frame.maxX)

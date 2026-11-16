@@ -414,6 +414,7 @@ final class DisplayMetricsTests: XCTestCase {
     /// all scaled.
     @MainActor
     func testSettingsMinimumFitsWidestSegmentedRows() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         func minWidth<V: View>(_ v: V) -> CGFloat {
             NSHostingController(rootView: v).sizeThatFits(in: NSSize(width: 1, height: 10_000)).width
         }
@@ -435,9 +436,9 @@ final class DisplayMetricsTests: XCTestCase {
             if scale == 1.0 {
                 XCTAssertLessThanOrEqual(fit.height, pickerH + 2, "Activity controls stacked at room \(room), scale 1.0")
             } else {
-                XCTAssertGreaterThanOrEqual(fit.height, 2 * pickerH + sz(8) - 0.5, "Activity controls did not stack at room \(room), scale \(scale)")
+                XCTAssertGreaterThanOrEqual(fit.height, 2 * pickerH + sz(8) - pixel, "Activity controls did not stack at room \(room), scale \(scale)")
                 XCTAssertLessThanOrEqual(fit.width, room, "Stacked Activity controls overflow at room \(room), scale \(scale)")
-                XCTAssertGreaterThanOrEqual(activity, fit.width - 0.5, "Activity pickers compress below their natural width, scale \(scale)")
+                XCTAssertGreaterThanOrEqual(activity, fit.width - pixel, "Activity pickers compress below their natural width, scale \(scale)")
             }
         }
         XCTAssertEqual(pinned, 2, "the 1.0 and 0.85 presets must both be pinned")
@@ -448,6 +449,7 @@ final class DisplayMetricsTests: XCTestCase {
     /// control overflow the card.
     @MainActor
     func testDisplayPickerReservesItsSegmentedWidth() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         func segmented(in v: NSView) -> NSSegmentedControl? {
             v as? NSSegmentedControl ?? v.subviews.lazy.compactMap(segmented).first
         }
@@ -457,7 +459,7 @@ final class DisplayMetricsTests: XCTestCase {
             host.frame.size = host.fittingSize
             host.layoutSubtreeIfNeeded()
             guard let seg = segmented(in: host) else { return XCTFail("no NSSegmentedControl at scale \(scale)") }
-            XCTAssertGreaterThanOrEqual(host.fittingSize.width, seg.intrinsicContentSize.width - 0.5,
+            XCTAssertGreaterThanOrEqual(host.fittingSize.width, seg.intrinsicContentSize.width - pixel,
                                         "row reserves less than the control draws at scale \(scale)")
         }
     }

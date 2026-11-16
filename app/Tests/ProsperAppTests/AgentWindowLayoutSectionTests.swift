@@ -427,6 +427,7 @@ extension AgentWindowD1Tests {
     /// row and no band at all. GUARD band-slot-built-with-the-gate-off.
     @MainActor
     func testAgentWindowLayoutBandNameSlotAtThreeScales() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         _ = ThemeStore.shared   // seeds ThemeRuntime.scale first, before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
@@ -450,7 +451,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(base["layout"] != nil, "\(scale)")
             for k in base.keys.sorted() { XCTAssertEqual(shown[k], base[k], "\(k) unchanged (\(scale))") }
             let name = try XCTUnwrap(shown["layoutName"], "\(scale)"), room = try XCTUnwrap(shown["layout"])
-            XCTAssertTrue(name.minX >= room.minX - 0.5 && name.maxX <= room.maxX + 0.5, "in the slot (\(scale)): \(name) \(room)")
+            XCTAssertTrue(name.minX >= room.minX - pixel && name.maxX <= room.maxX + pixel, "in the slot (\(scale)): \(name) \(room)")
             XCTAssertTrue(name.width > 0)
             gate(false)
             let (off, _) = try sectionModel([a, b])

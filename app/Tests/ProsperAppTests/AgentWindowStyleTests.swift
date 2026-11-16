@@ -291,6 +291,7 @@ final class AgentWindowStyleTests: XCTestCase {
     /// Ticket 4: in No title bar at 0.7 the sidebar list's scroll view lay over the whole title row. The list never
     /// reaches into the title row, in every style at every scale.
     func testTheSidebarListStaysBelowTheTitleRow() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withStyleRow {
             for style in AgentWindowStyle.allCases {
                 for scale: CGFloat in [0.7, 0.85, 1.0] {
@@ -302,7 +303,7 @@ final class AgentWindowStyleTests: XCTestCase {
                         let lists = scrollFrames(cv, leftOf: row.maxX - 1)
                         XCTAssertFalse(lists.isEmpty, "the session list \(style) at \(scale)")
                         for l in lists {
-                            XCTAssertLessThanOrEqual(l.maxY, row.minY + 0.5, "the list \(l) under the row \(row), \(style) at \(scale)")
+                            XCTAssertLessThanOrEqual(l.maxY, row.minY + pixel, "the list \(l) under the row \(row), \(style) at \(scale)")
                         }
                     }
                 }

@@ -1860,6 +1860,7 @@ final class AgentWindowInteractionTests: XCTestCase {
 
     @MainActor
     func testAgentWindowRendersTheInputBoxAndEveryPromptKindWithoutClipping() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let savedScale = ThemeRuntime.scale, savedPalette = ThemeRuntime.palette
         defer { ThemeRuntime.scale = savedScale; ThemeRuntime.palette = savedPalette }
         // Each case: a session state, a screen behind dch (nil: not blocked), the transcript's ask, a draft, a notice.
@@ -1919,7 +1920,7 @@ final class AgentWindowInteractionTests: XCTestCase {
                     XCTAssertEqual(overflow(rep, content: size, canvas: CGSize(width: size.width + 24, height: size.height + 24)),
                                    0, "nothing drawn past the pane (\(name) \(tag))")
                     let fit = NSHostingView(rootView: AgentInteractionPane(model: i, session: s, open: {}).frame(width: width))
-                    XCTAssertLessThanOrEqual(fit.fittingSize.width, width + 0.5, "\(name) \(tag) fits its width")
+                    XCTAssertLessThanOrEqual(fit.fittingSize.width, width + pixel, "\(name) \(tag) fits its width")
                     XCTAssertLessThan(fit.fittingSize.height, size.height, "\(name) \(tag) fits the canvas")
                 }
             }

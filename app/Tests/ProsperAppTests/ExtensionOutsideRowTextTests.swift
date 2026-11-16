@@ -174,6 +174,7 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
     /// A title of 80 wide letters truncates first: the UNTRUSTED badge and the version keep the widths they have under
     /// "Kit", inside the row, and the warning line under them stays where it is.
     func testALongTitleLeavesTheBadgeAndTheVersionTheirSize() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let (r1, plain) = try untrustedRecord("outsiderow-plain", title: "Kit")
         let (r2, long) = try untrustedRecord("outsiderow-long", title: String(repeating: "W", count: 80))
         let a = rowTree(r1, plain), b = rowTree(r2, long)
@@ -185,11 +186,11 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
             XCTAssertEqual(after.frame.width, before.frame.width, accuracy: 0.5, "\(label) keeps its width")
             XCTAssertEqual(after.frame.height, before.frame.height, accuracy: 0.5, "\(label) keeps its height")
             XCTAssertEqual(after.frame.minY, before.frame.minY, accuracy: 0.5, "\(label) stays on its line")
-            XCTAssertLessThanOrEqual(after.frame.maxX, row.frame.maxX + 0.5, "\(label) inside the row")
+            XCTAssertLessThanOrEqual(after.frame.maxX, row.frame.maxX + pixel, "\(label) inside the row")
         }
         let titleNode = try XCTUnwrap(b.first { $0.named(String(repeating: "W", count: 80)) }, "the long title")
         let badge = try XCTUnwrap(b.first { $0.named("UNTRUSTED") })
-        XCTAssertLessThanOrEqual(titleNode.frame.maxX, badge.frame.minX + 0.5, "the title ends before the badge")
+        XCTAssertLessThanOrEqual(titleNode.frame.maxX, badge.frame.minX + pixel, "the title ends before the badge")
     }
 
     // MARK: the clip, rendered offscreen (the method of ManagedConfigConsentMarksTests)

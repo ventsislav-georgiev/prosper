@@ -960,6 +960,7 @@ extension AgentWindowD1Tests {
 
     @MainActor
     func testAgentWindowKeysKeepTheSelectedRowAboveTheDirStrip() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let pref = "agentWindowCollapsedSections"
         let saved = Preferences.defaults.object(forKey: pref)
         let savedScale = ThemeRuntime.scale
@@ -990,7 +991,7 @@ extension AgentWindowD1Tests {
             let sv = try XCTUnwrap(scrollViews(host).first, "the list scrolls")
             let r = sv.convert(sv.bounds, to: host)
             let bottom = host.isFlipped ? r.maxY : host.bounds.height - r.minY
-            XCTAssertLessThanOrEqual(bottom, size.height - AgentWindowControls.stripHeight + 0.5, "the list ends above the strip at \(scale)")
+            XCTAssertLessThanOrEqual(bottom, size.height - AgentWindowControls.stripHeight + pixel, "the list ends above the strip at \(scale)")
             for _ in m.rows { m.move(1) }   // the keys' path: down to the last row, scrolled to by the list
             XCTAssertEqual(m.selection, m.rows.last?.id)
             RunLoop.current.run(until: Date().addingTimeInterval(0.3))

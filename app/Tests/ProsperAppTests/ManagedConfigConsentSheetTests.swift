@@ -137,6 +137,7 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
     /// B-INFO-6 on the tree: the verb's button (never Apply on Remove or Repair), the display name drawn as written
     /// (Markdown marks stay: never interpreted) with the id below it, one backup line for one existing file and one new.
     func testSheetCopyOnTheAccessibilityTreeAtEveryScale() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let name = "*Fake* `kit` [docs](https://example.com)"
@@ -154,7 +155,7 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
                 // a selectable Text is on the tree twice (the text and its static text): distinct lines are counted
                 XCTAssertEqual(Set(texts.filter { $0.hasPrefix("Backup: ") }), ["Backup: \(Self.existing.backupDirectory)"], "\(tag): \(texts)")
                 if let title = tree.first(where: { $0.text == name }), let id = tree.first(where: { $0.text == Self.id }) {
-                    XCTAssertLessThanOrEqual(id.frame.maxY, title.frame.minY + 0.5, "\(tag): the id is below the title") // y up
+                    XCTAssertLessThanOrEqual(id.frame.maxY, title.frame.minY + pixel, "\(tag): the id is below the title") // y up
                 }
             }
         }
@@ -165,6 +166,7 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
     /// lead and everything above the note keep their frames; the buttons keep their size and x and move down only.
     /// The file card grows.
     func testLongNotesAreWholeAndFixedPartsStayAtEveryScale() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         for note in [ManagedConfigPlan.changedUnderSheetNote, Self.driftNote] {
@@ -201,7 +203,7 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
                     XCTAssertEqual(after.frame.width, before.frame.width, accuracy: 0.5, "\(tag): \(button) keeps its width")
                     XCTAssertEqual(after.frame.height, before.frame.height, accuracy: 0.5, "\(tag): \(button) keeps its height")
                     XCTAssertEqual(after.frame.minX, before.frame.minX, accuracy: 0.5, "\(tag): \(button) keeps its x")
-                    XCTAssertLessThanOrEqual(after.frame.maxY, item.frame.minY + 0.5, "\(tag): \(button) is below the whole note")
+                    XCTAssertLessThanOrEqual(after.frame.maxY, item.frame.minY + pixel, "\(tag): \(button) is below the whole note")
                 }
                 fputs("mc1235 fact \(tag): note frame \(item.frame), \(Int(lines)) lines at least, \(above.count) elements above unmoved\n", stderr)
             }

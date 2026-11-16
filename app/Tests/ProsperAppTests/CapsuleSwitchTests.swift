@@ -74,6 +74,7 @@ final class CapsuleSwitchTests: XCTestCase {
 
     @MainActor
     func testNoClippingAtEveryScaleAndFixedSlots() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
@@ -104,11 +105,11 @@ final class CapsuleSwitchTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(label, natural(title) - 1.0, "\(title) is not truncated (\(tag)): \(label)")
                 XCTAssertGreaterThanOrEqual(label, 1, tag)
                 XCTAssertGreaterThanOrEqual(seg.frame.minX, -0.5, "inside the switch (\(tag))")
-                XCTAssertLessThanOrEqual(seg.frame.maxX, r.fitting.width + 0.5, "inside the switch (\(tag))")
+                XCTAssertLessThanOrEqual(seg.frame.maxX, r.fitting.width + pixel, "inside the switch (\(tag))")
             }
             if let a = r.segs.first, let b = r.segs.last, r.segs.count == 2 {
-                XCTAssertLessThanOrEqual(a.frame.maxX, b.frame.minX + 0.5, "the capsules do not overlap (\(tag))")
-                XCTAssertGreaterThanOrEqual(r.fitting.width, a.frame.width + b.frame.width - 0.5, "the switch holds both (\(tag))")
+                XCTAssertLessThanOrEqual(a.frame.maxX, b.frame.minX + pixel, "the capsules do not overlap (\(tag))")
+                XCTAssertGreaterThanOrEqual(r.fitting.width, a.frame.width + b.frame.width - pixel, "the switch holds both (\(tag))")
             }
         }
     }

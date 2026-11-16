@@ -96,6 +96,7 @@ final class TextViewerNoteWidthTests: XCTestCase {
     /// banner keeps every frame it has with no banner. Each note's whole text is on the tree. Before #1180 round 3 both
     /// long notes wrapped there (the banner had no line limit).
     func testJoinedNoteIsOneLineAtTheMinimumWidth() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let model = try cutModel()
@@ -116,7 +117,7 @@ final class TextViewerNoteWidthTests: XCTestCase {
             XCTAssertGreaterThan(line.height, 0, tag)
             XCTAssertEqual(banner.height, line.height, accuracy: 0.5, "\(tag): the joined note is one line")
             XCTAssertEqual(cutBanner.height, line.height, accuracy: 0.5, "\(tag): the cut note in the real root is one line")
-            XCTAssertLessThanOrEqual(banner.width, size.width + 0.5, tag)
+            XCTAssertLessThanOrEqual(banner.width, size.width + pixel, tag)
             // AX frames are in screen points, y up: the header is what lies above the banner.
             let header = two.filter { $0.frame.height > 0 && $0.frame.minY >= banner.maxY && $0.text != joined }
             XCTAssertTrue(header.contains { $0.text == "notes.txt" }, "\(tag): \(header.map(\.text))")

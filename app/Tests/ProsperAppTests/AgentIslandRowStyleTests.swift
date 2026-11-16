@@ -65,17 +65,18 @@ final class AgentIslandRowStyleTests: XCTestCase {
     /// ends at the row's trailing inset; line 2 is below line 1. TIP: no badges at all (no "badges" probe), the age on
     /// line 1, and no mark probe.
     func testLineOneOrderAndTheAgeAtTheTrailingInsetAtEveryScale() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         XCTAssertEqual(AgentSidebarRowView.badges(model: "Opus 4.5", effort: "high").map(\.text), ["Opus 4.5", "high"],
                        "the model's badge, then the effort's")
         try onScales { scale in
             let f = frames(session())
             let mark = try XCTUnwrap(f["mark"], "mark at \(scale)"), title = try XCTUnwrap(f["title"], "title at \(scale)")
             let badges = try XCTUnwrap(f["badges"], "badges at \(scale)"), age = try XCTUnwrap(f["age"], "age at \(scale)")
-            XCTAssertLessThanOrEqual(mark.maxX, title.minX + 0.5, "mark before the title at \(scale)")
-            XCTAssertLessThanOrEqual(title.maxX, badges.minX + 0.5, "title before the badges at \(scale)")
+            XCTAssertLessThanOrEqual(mark.maxX, title.minX + pixel, "mark before the title at \(scale)")
+            XCTAssertLessThanOrEqual(title.maxX, badges.minX + pixel, "title before the badges at \(scale)")
             XCTAssertGreaterThan(badges.width, sz(20), "both badges' slot drawn at \(scale)")
             XCTAssertEqual(age.maxX, width - AgentIslandGeometry.rowTrail, accuracy: 0.5, "age at the trailing inset at \(scale)")
-            XCTAssertGreaterThanOrEqual(age.minY, title.maxY - 0.5, "the age is on line two at \(scale)")
+            XCTAssertGreaterThanOrEqual(age.minY, title.maxY - pixel, "the age is on line two at \(scale)")
             XCTAssertNotNil(f["count.agents"], "the outlined agents count is drawn at \(scale)")
             XCTAssertTrue(f["capsule.agents"] != nil, "with its outline at \(scale)")
         }
@@ -84,13 +85,14 @@ final class AgentIslandRowStyleTests: XCTestCase {
     /// The PR chips are the third line, below line two (where the merged count now is), and their links still fire through
     /// the row's accessibility actions on the fake opener. TIP: no "chips" probe (the chips had none).
     func testPRChipsStayBelowLineTwoAndTheirLinksFire() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let meta = DchSessionMeta(openPRs: [pr("acme/api", 12), pr("acme/web", 7)], merged: 3)
         try onScales { scale in
             let f = frames(session(meta: meta))
             let chips = try XCTUnwrap(f["chips"], "the chips are drawn at \(scale)")
             let age = try XCTUnwrap(f["age"]), merged = try XCTUnwrap(f["count.merged"], "merged on line two at \(scale)")
-            XCTAssertGreaterThanOrEqual(chips.minY, age.maxY - 0.5, "chips below line two at \(scale)")
-            XCTAssertLessThan(merged.maxY, chips.minY + 0.5, "the merged count is above the chips at \(scale)")
+            XCTAssertGreaterThanOrEqual(chips.minY, age.maxY - pixel, "chips below line two at \(scale)")
+            XCTAssertLessThan(merged.maxY, chips.minY + pixel, "the merged count is above the chips at \(scale)")
         }
         var opened: [URL] = []
         let saved = AgentIsland.openURL

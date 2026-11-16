@@ -73,14 +73,14 @@ extension AgentWindowD1Tests {
                 print("#1253 band \(tag): band.width \(band.width) picker \(f("picker")) all \(f("all")) layout \(f("layout"))"
                       + " chip \(f("chip")) chipText \(chipText) want picker.maxX \(band.width - sz(16)) all.maxX+sz(8) \((base["all"]?.maxX ?? 0) + sz(8))")
                 XCTAssertEqual(band.height, AgentWindowBand.height, accuracy: 0.5, "one row of 30·s (\(tag))")
-                XCTAssertEqual(band.width, size.width - sz(290) - 1, accuracy: 0.5, "over the whole pane column (\(tag))")
+                XCTAssertEqual(band.width, size.width - sz(290) - 1, accuracy: 1 / px, "over the whole pane column (\(tag))")
                 XCTAssertEqual(m.paneArea.height, size.height - AgentWindowBand.height, accuracy: 0.5, "the area under it (\(tag))")
                 let all = try XCTUnwrap(base["all"], tag), picker = try XCTUnwrap(base["picker"], tag)
                 XCTAssertEqual(all.width, AgentWindowBand.allWidth, accuracy: 0.5, "the All slot keeps its room (\(tag))")
                 // #1253: one device pixel, the picker's edge snaps to the grid (1x, wide 0.85: 1338.4 for 1338.9).
                 XCTAssertEqual(picker.maxX, band.width - sz(16), accuracy: 1 / px, "the picker at the trailing edge (\(tag))")
-                XCTAssertEqual(all.maxX + sz(8), picker.minX, accuracy: 0.5, "the All slot right before it (\(tag))")
-                XCTAssertLessThanOrEqual(picker.height, AgentWindowBand.height + 0.5, "the picker fits the row (\(tag))")
+                XCTAssertEqual(all.maxX + sz(8), picker.minX, accuracy: 1 / px, "the All slot right before it (\(tag))")
+                XCTAssertLessThanOrEqual(picker.height, AgentWindowBand.height + 1 / px, "the picker fits the row (\(tag))")
                 if let l = base["layout"] { XCTAssertEqual(l.width, AgentWindowBand.layoutWidth, accuracy: 0.5, "layout slot (\(tag))") }
                 if let c = base["chip"] {
                     XCTAssertTrue(c.width <= chipText + 0.01 && c.width > chipText - 1, "the chip slot at its widest text (\(tag)): \(c.width) vs \(chipText)")
@@ -122,6 +122,7 @@ extension AgentWindowD1Tests {
     /// stands without the chip (so the order is seen, not assumed).
     @MainActor
     func testAgentWindowBandGivesWayChipFirstThenLayoutNeverThePicker() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale, gate = AgentPaneLayout.splitsEnabled
         let restoreModes = transcriptMode(["api"])
         defer { ThemeRuntime.scale = saved; AgentPaneLayout.splitsEnabled = gate; restoreModes() }
@@ -144,7 +145,7 @@ extension AgentWindowD1Tests {
                 XCTAssertTrue(!chip || layout, "the chip slot gives way before the layout slot (\(tag)): \(s.keys)")
                 XCTAssertTrue(hadChip || !chip, "the chip slot does not come back narrower (\(tag))")
                 XCTAssertTrue(hadLayout || !layout, "the layout slot does not come back narrower (\(tag))")
-                XCTAssertLessThanOrEqual(picker.width, lastPicker + 0.5, "the picker only narrows (\(tag))")
+                XCTAssertLessThanOrEqual(picker.width, lastPicker + pixel, "the picker only narrows (\(tag))")
                 if labels == nil { labels = picker.width }
                 if layout { XCTAssertEqual(picker.width, labels ?? -1, accuracy: 0.5, "labels while the layout slot holds (\(tag))") }
                 if layout && !chip { layoutAlone += 1 }
@@ -275,6 +276,7 @@ extension AgentWindowD1Tests {
     /// header draws no picker in either mode (one picker in the window: the band's).
     @MainActor
     func testAgentWindowGateOnTheBandDrawsThePickerAndTheHeaderNone() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let restoreModes = transcriptMode(["api"]), restoreAX = bandAXOn()
         let saved = ThemeRuntime.scale, gate = AgentPaneLayout.splitsEnabled
         defer { ThemeRuntime.scale = saved; AgentPaneLayout.splitsEnabled = gate; restoreAX(); restoreModes() }
@@ -289,8 +291,8 @@ extension AgentWindowD1Tests {
         let size = CGSize(width: 1600, height: 900)
         let seen = bandSnapshot(m, size)
         let band = try XCTUnwrap(seen["band"], "the band is laid out")
-        XCTAssertEqual(band.width, 1309, accuracy: 0.5)
-        XCTAssertEqual(band.height, 30, accuracy: 0.5)
+        XCTAssertEqual(band.width, 1309, accuracy: pixel)
+        XCTAssertEqual(band.height, 30, accuracy: pixel)
         XCTAssertNotNil(seen["picker"], "the band draws the picker")
         XCTAssertEqual(m.paneAreaFrame(in: size), CGRect(x: 291, y: 30, width: 1309, height: 870), "the pane area under the band")
         XCTAssertEqual(m.paneArea.height, 870, accuracy: 0.5, "the view's pane area: the column less the band")
