@@ -124,6 +124,12 @@ struct TranscriptRail: Equatable {
         }
     }
 
+    /// The rail stopped being shown (below 340*s): no mouseExited comes, so drop the label and any pending timer now.
+    func hide() {
+        clock += 1
+        (under, shown) = (nil, nil)
+    }
+
     private func later(_ f: @escaping @MainActor @Sendable (TranscriptRailHover) -> Void) {
         clock += 1
         let n = clock
@@ -212,6 +218,7 @@ private struct RailStrip: NSViewRepresentable {
     let hover: TranscriptRailHover
     let click: @MainActor (CGPoint) -> Void
     func makeNSView(context: Context) -> TranscriptRailStrip { TranscriptRailStrip() }
+    static func dismantleNSView(_ v: TranscriptRailStrip, coordinator: ()) { v.hover?.hide() }
     func updateNSView(_ v: TranscriptRailStrip, context: Context) {
         v.rail = rail
         v.hover = hover

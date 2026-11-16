@@ -396,6 +396,33 @@ final class TranscriptRailTests: XCTestCase {
         }
     }
 
+    /// R1318-n1: a label up, the pane drops below 340*s (no mouseExited), comes back: no label until a new move. The timer
+    /// seam never fires here, so only an immediate clear when the rail hides can empty it.
+    func testHoverLabelIsClearedWhenTheRailHidesBelow340() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved; TranscriptRailView.probe = nil }
+        ThemeRuntime.scale = 1.0
+        var seen: [ObjectIdentifier: TranscriptRail] = [:]
+        TranscriptRailView.probe = { seen[ObjectIdentifier($0)] = $1 }
+        try scene(turns: 40, size: CGSize(width: sz(345), height: 400)) { m, hover, win, host in
+            let mine = ObjectIdentifier(m)
+            @MainActor func resize(_ w: CGFloat) {
+                let size = CGSize(width: sz(w), height: 400)
+                win.setContentSize(size)
+                host.frame = CGRect(origin: .zero, size: size)
+                _ = AXTreeSupport.poll(host) { _ in abs((seen[mine]?.size.width ?? 0) - sz(w)) < 1 && seen[mine]?.shown == (w >= 340) }
+            }
+            resize(345)
+            hover.move(.tick(0))   // the scene's clock fires at once: the label is up
+            XCTAssertEqual(hover.shown, .tick(0))
+            hover.after = { _, _ in }   // from here no timer fires
+            resize(335)
+            XCTAssertTrue(hover.shown == nil, "hidden below 340*s: the label goes with the rail")
+            resize(345)
+            XCTAssertTrue(hover.shown == nil, "back above: no old label until a new move")
+        }
+    }
+
     // MARK: The strip view (#1318 r2): wheel, hover, click
 
     /// The transcript (40 turns, 560x400) in a borderless window that is never shown but has a window number (a created
