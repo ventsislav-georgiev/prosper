@@ -115,7 +115,7 @@ struct XrayTasks: Equatable {
         return [plain, fractional]
     }()
 
-    private static func date(_ s: String?) -> Date? {   // a non-ISO value reads as null
+    static func date(_ s: String?) -> Date? {   // a non-ISO value reads as null
         guard let s else { return nil }
         for f in isoFormatters { if let d = f.date(from: s) { return d } }
         return nil

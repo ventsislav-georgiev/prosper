@@ -1528,6 +1528,8 @@ tag from the now-released section and put it on the new top draft.
   session, and more) while the window is in front; choosing an item does what its shortcut does.
   (#1359)
 - Agent Sessions: X-ray reads a session's task list from dch 1.78.0 (no UI yet). (#1349)
+- Agent Sessions: X-ray also reads the memories and instruction files a session has in force (no UI
+  yet). (#1350)
 
 ## v2.174.0
 
