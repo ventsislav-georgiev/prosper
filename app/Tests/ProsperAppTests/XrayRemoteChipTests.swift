@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import ProsperApp
 
@@ -122,6 +123,39 @@ final class XrayRemoteChipTests: XCTestCase {
             XrayCardAnchor.views[m.layout.focused] = XrayCardAnchor.WeakAnchor(anchor)
             defer { XrayCardAnchor.views = saved }
             XCTAssertTrue(AgentsNSWindow.window(of: m.layout.focused) === win, "the pane's header window is the window")
+        }
+    }
+
+    /// Lays `host` out, driven by the run loop (sync: RunLoop is unavailable from async code), until `done` or 10 s.
+    static func layOut(_ host: NSView, until done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(10)
+        while !done() && Date() < deadline {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+    }
+
+    /// Red at TIP (AgentsWindow.swift:1675-1690, AgentRemoteHeader draws no XrayCardAnchor): the real remote branch of
+    /// AgentDetailView, in the pane environment, registers an anchor, so window(of:) finds the window and the chip's tap opens Tasks.
+    func testRemoteHeaderRegistersTheAnchorSoTheChipFindsItsWindow() async throws {
+        let fake = FakeRun()
+        try await withSeams([1, 78, 0], fake) {
+            try await window { win, m in
+                let saved = XrayCardAnchor.views
+                XrayCardAnchor.views = [:]   // nothing registered by an earlier row
+                defer { XrayCardAnchor.views = saved }
+                let pane = m.layout.focused
+                let host = NSHostingView(rootView: AgentDetailView(model: m, transcript: m.transcript, scrolls: false)
+                    .environment(\.agentPaneID, pane).frame(width: 800, height: 500))
+                host.frame = CGRect(x: 0, y: 0, width: 800, height: 500)
+                win.contentView = host
+                Self.layOut(host, until: { AgentsNSWindow.window(of: pane) != nil })
+                XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "the remote header's anchor names the window")
+                AgentRemoteHeader.todosTapped(in: AgentsNSWindow.window(of: pane), clear: {}) { XCTFail("a Tasks tab: no reason") }
+                let p = try XCTUnwrap(XrayPanels.shared.open[pane])
+                await p.reading?.value
+                XCTAssertEqual(p.tab, .tasks)
+            }
         }
     }
 }

@@ -1691,6 +1691,7 @@ struct AgentRemoteHeader: View {
             }
             .buttonStyle(.plain).help(Self.todosHelp(noList: noList)).accessibilityLabel(Self.todosOpens)
             .accessibilityValue(noList ? Self.todosReason : "")
+            .background(XrayCardAnchor())   // #1401: window(of: pane) finds this window, and the X-ray card hangs from the chip
             if !AgentWindowBand.shown {
                 // The picker's own buttons carry their own help, which would win over a reason set around them.
                 Image(systemName: AgentVerbosity.default.icon).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
