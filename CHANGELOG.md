@@ -1493,6 +1493,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: Pin, Unpin and Remove of a History row (on the Mac and from the phone) no longer
   fail as "ambiguous" when another session is named after the record plus ".json", and a Resume of
   such a record that finds no history now shows that on the record's own row. (#1340)
+- Agent Sessions: a thin chapters rail along a transcript's left edge marks each prompt; hover shows
+  its title and a click jumps there (the rail is for the pointer: Command-L lists the same chapters
+  for the keyboard and VoiceOver). (#1318)
 
 ## v2.174.0
 

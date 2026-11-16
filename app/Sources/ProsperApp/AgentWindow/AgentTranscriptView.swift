@@ -29,6 +29,11 @@ struct AgentTranscriptView: View {
     @ObservedObject var jumper: TranscriptJumper = .idle
     /// Where the marked row's top sits in the viewport (its overlay reports it while drawn); nil while undrawn.
     @State var landedTop: CGFloat?
+    /// #1318 (spec 8.2): the chapters rail in the leading padding. Tests: false draws the transcript without it.
+    var rail = true
+    /// Test seam: the rail's hover state (the clock and the button read); nil: the view's own.
+    var railHover: TranscriptRailHover?
+    @StateObject var ownHover = TranscriptRailHover()
     /// The 1 pt sentinel at the bottom of the padded rows: "back to latest" scrolls to it with anchor .bottom (P0 run3: the last
     /// row's own id stops sz(14) short of the end, and from there new rows are not followed).
     static let bottomID = "bottom"
@@ -144,6 +149,8 @@ struct AgentTranscriptView: View {
     private func jumps(_ scroll: some View, _ proxy: ScrollViewProxy) -> some View {
         scroll.coordinateSpace(.named(Self.space))
             .onChange(of: jumper.request) { _, r in if let r { land(r, proxy) } }
+            // #1318: an overlay over the scroll area (its size, no frame of its own), so no row moves and no width changes.
+            .overlay(alignment: .topLeading) { if rail { TranscriptRailView(model: model, hover: railHover ?? ownHover, jumper: jumper) } }
     }
 
     /// The mark: a bar over the row's leading edge (an overlay: the row does not move). It reports the row's top.
