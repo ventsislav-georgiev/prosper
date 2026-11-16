@@ -875,6 +875,7 @@ struct AgentSidebarView: View {
                 ScrollViewReader { proxy in
                     // #909 (R909-1): the groups once per draw, never per row (every row's menu reads them).
                     let groups = model.store?.groups
+                    let drawn = AgentSidebar.items(model.sections) { groups ?? [] }   // #1342: a group is one row
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: sz(2)) {
                             // #901 B3 step 4a (8.1): the first section; nil (gate off, one layout of one pane): no view.
@@ -885,37 +886,33 @@ struct AgentSidebarView: View {
                                 // #828: Sessions, Sidekicks and History fold on a header click
                                 // (remembered per Mac); a folded section keeps its selection.
                                 let folded = !mini && model.isCollapsed(section.title), inView = model.inViewRows
-                                if !mini {
-                                    AgentSectionHeader(title: section.title, count: section.rows.count, collapsed: folded,
+                                // #1342: a section whose rows all joined a group drawn above draws nothing.
+                                let items = drawn[section.title] ?? []
+                                if !mini && !items.isEmpty {
+                                    AgentSectionHeader(title: section.title, count: items.reduce(0) { $0 + $1.rows.count },
+                                                       collapsed: folded,
                                                        toggle: AgentSidebar.collapsible.contains(section.title)
                                                            ? { model.toggleCollapsed(section.title) } : nil)
                                 }
                                 if !folded {
-                                    ForEach(section.rows) { row in
-                                        Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
-                                            AgentSidebarRowView(row: row, selected: model.selection == row.id,
-                                                                number: model.number(row.id), inView: inView.contains(row.id),
-                                                                openPR: model.openPR, mini: mini)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
-                                            if let s = row.session, let store = model.store {
-                                                // #1103: the header's list, Open in terminal first (selects the row, as ask does).
-                                                AgentSessionMenuItems(store: store, session: s, ask: { model.ask($0, s) },
-                                                                      open: { open(s) }, row: model,
-                                                                      side: { model.openToTheSide(row.id) }, groups: groups)
-                                            } else if let r = row.record, row.host == nil, let store = model.store {   // #1324: a remote record has none
-                                                AgentHistoryMenuItems(store: store, record: r, groups: groups) { model.act($0, r) }
+                                    ForEach(items) { item in
+                                        Group {
+                                            if let stem = item.stem {
+                                                AgentSidebarGroupRow(stem: stem, count: item.rows.count) {
+                                                    ForEach(item.rows) { line($0, mini: mini, inView: inView, groups: groups) }
+                                                }
+                                            } else if let row = item.rows.first {
+                                                line(row, mini: mini, inView: inView, groups: groups)
                                             }
                                         }
-                                        .id(ItemID(section: section.title, row: row.id))
+                                        .id(ItemID(section: section.title, row: item.id))
                                     }
                                 }
                             }
                         }
                         .padding(.horizontal, sz(8)).padding(.bottom, sz(12))
                     }
-                    .onChange(of: model.selection) { _, id in if let id, let item = item(id) { proxy.scrollTo(item) } }
+                    .onChange(of: model.selection) { _, id in if let id, let item = item(id, drawn) { proxy.scrollTo(item) } }
                 }
             }
             Spacer(minLength: 0)
@@ -933,9 +930,33 @@ struct AgentSidebarView: View {
         let row: AgentSidebar.RowID
     }
 
-    /// The selection's scroll target: its row in the section that holds it now (nil: not listed).
-    func item(_ id: AgentSidebar.RowID) -> ItemID? {
-        model.sections.first { $0.rows.contains { $0.id == id } }.map { ItemID(section: $0.title, row: id) }
+    /// The selection's scroll target: its row in the section that holds it now (nil: not listed). #1342: a group member's
+    /// is its group's row.
+    func item(_ id: AgentSidebar.RowID, _ drawn: [String: [AgentSidebar.Item]]) -> ItemID? {
+        for s in model.sections {
+            if let i = drawn[s.title]?.first(where: { $0.rows.contains { $0.id == id } }) { return ItemID(section: s.title, row: i.id) }
+        }
+        return nil
+    }
+
+    /// One session's row (#1342: a group's member line too): its click, its number and its context menu, as before.
+    func line(_ row: AgentSidebar.Row, mini: Bool, inView: Set<AgentSidebar.RowID>, groups: [AgentGroup]?) -> some View {
+        Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
+            AgentSidebarRowView(row: row, selected: model.selection == row.id,
+                                number: model.number(row.id), inView: inView.contains(row.id),
+                                openPR: model.openPR, mini: mini)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
+            if let s = row.session, let store = model.store {
+                // #1103: the header's list, Open in terminal first (selects the row, as ask does).
+                AgentSessionMenuItems(store: store, session: s, ask: { model.ask($0, s) },
+                                      open: { open(s) }, row: model,
+                                      side: { model.openToTheSide(row.id) }, groups: groups)
+            } else if let r = row.record, row.host == nil, let store = model.store {   // #1324: a remote record has none
+                AgentHistoryMenuItems(store: store, record: r, groups: groups) { model.act($0, r) }
+            }
+        }
     }
 
     /// #1103: a live row's Open in terminal: that row selected first (as ask does), then the header's action.
@@ -943,6 +964,33 @@ struct AgentSidebarView: View {
         model.select(.live(s.key))
         model.openSelected()
     }
+}
+
+/// #1342: a group's one sidebar row: its live members' lines, each today's row (its own button, number, selection and
+/// menu) stacked with no gap, framed together; VoiceOver reads "Group <stem>, N sessions" around the lines.
+struct AgentSidebarGroupRow<Lines: View>: View {
+    let stem: String
+    let count: Int
+    let lines: Lines
+
+    init(stem: String, count: Int, @ViewBuilder lines: () -> Lines) {
+        self.stem = stem
+        self.count = count
+        self.lines = lines()
+    }
+
+    static func words(stem: String, count: Int) -> String { "Group \(stem), \(count) sessions" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) { lines }
+            .padding(.vertical, Self.padding)
+            .background(RoundedRectangle(cornerRadius: sz(6)).strokeBorder(Neon.faded(Neon.textSecondary, 0.3), lineWidth: 1))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Self.words(stem: stem, count: count))
+    }
+
+    /// The row's own padding above the first line and below the last.
+    static var padding: CGFloat { sz(2) }
 }
 
 /// #1378: the Agent Sessions window's style (Settings > Agent Island > Agent Sessions).

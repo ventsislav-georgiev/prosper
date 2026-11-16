@@ -151,6 +151,46 @@ enum AgentSidebar {
         var id: String { title }
     }
 
+    /// #1342: one drawn sidebar row: a row alone, or a group's live members (two or more) in group order, drawn as one row.
+    struct Item: Identifiable, Equatable {
+        /// The row's id; a group's is its first live member's.
+        let id: RowID
+        let rows: [Row]
+        /// The group's (folded) stem; nil for a row alone.
+        var stem: String?
+    }
+
+    /// #1342 (S7, D5): the drawn rows of each section, by title. `compute` (the groups) is called once (R909-1: never per row). A group
+    /// with two live members or more is one item at its first member's place in the list (Needs you, Sessions, Sidekicks),
+    /// its live members in group order, each taken from its own place; a group with one live member, a row in no group,
+    /// History and other machines: each row its own item. No groups: one item per row, the rows `sections` holds. The
+    /// numbers, the selection and the arrow keys still walk `sections` (#1111 gives a group its one number).
+    static func items(_ sections: [Section], groups compute: () -> [AgentGroup]) -> [String: [Item]] {
+        let groups = compute()
+        var live: [AgentSessionKey: Row] = [:]   // by dir and folded name, the first one (liveGroup's fold limit)
+        for r in sections.flatMap(\.rows) where r.session != nil {
+            guard let k = r.session?.key ?? r.record?.key else { continue }
+            let folded = AgentSessionKey(dir: k.dir, name: k.name.lowercased())
+            if live[folded] == nil { live[folded] = r }
+        }
+        var at: [RowID: Int] = [:], members: [(stem: String, rows: [Row])] = []
+        for g in groups {
+            let rows = (g.mains + g.sidekicks).compactMap { live[AgentSessionKey(dir: g.dir, name: $0)] }
+            guard rows.count > 1 else { continue }   // one live member: its plain row
+            for r in rows { at[r.id] = members.count }
+            members.append((g.stem, rows))
+        }
+        var placed = Set<Int>(), out: [String: [Item]] = [:]
+        for s in sections {
+            out[s.title] = s.rows.compactMap { r in
+                guard let i = at[r.id] else { return Item(id: r.id, rows: [r]) }
+                guard placed.insert(i).inserted, let first = members[i].rows.first else { return nil }
+                return Item(id: first.id, rows: members[i].rows, stem: members[i].stem)
+            }
+        }
+        return out
+    }
+
     static let needsYouTitle = "Needs you"
     static let otherMachinesTitle = "Other machines"   // #836
     /// #828: the sections a header click folds away. Needs you never folds: it is the list of

@@ -1587,6 +1587,8 @@ tag from the now-released section and put it on the new top draft.
   name (for example "sec-2"); a new sidekick gets the sidekick prompt naming its main. (#1214)
 - Agent Island: when a sidekick pattern is too slow to try even on empty text, Settings now says
   "Too slow as a regex: matched as text" instead of naming a session that was never searched. (#995)
+- Agent Sessions shows a group of sessions (a main and its sidekicks) as one row in the sidebar,
+  each session on its own line. (#1342)
 
 ## v2.174.0
 
