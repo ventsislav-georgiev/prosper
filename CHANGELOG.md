@@ -1542,6 +1542,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island's session rows now match Agent Sessions: the same state mark, state word, outlined
   agents count, merged and open counts, model and effort badges, and tighter, even spacing, with the
   PR name chips and their links kept below. (#1371)
+- Agent Island follows the selected theme: its History rows, prompt cards and message field use the
+  theme's colours, and the shown tab takes the theme's accent where it reads on the black notch,
+  which stays black. (#1375)
 
 ## v2.174.0
 

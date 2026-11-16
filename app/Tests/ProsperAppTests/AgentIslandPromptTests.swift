@@ -2010,22 +2010,28 @@ final class AgentIslandPromptTests: XCTestCase {
     }
 
     /// The operator's screenshot content (the row-layout question) on the
-    /// island at UI scale 0.7, 0.85 and 1.0. The island is fixed-size, so the
-    /// three must come out the same.
+    /// island at UI scale 0.7, 0.85 and 1.0. R-prompt-scale (#1375): since #1371 the session rows follow the UI scale
+    /// (the Agent Sessions sidebar's rows), so each render is exactly its scale's island: the fixed width, and the bar,
+    /// list insets, card and three two-line rows of that scale's rowHeight (38, 38, 42 pt), 20 pt padding, at 2x.
     @MainActor
     func testRendersThePreviewFormAtEachUIScale() throws {
+        _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs (R-meta07): before the scale is set
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let out = tempDir()
-        var sizes: [CGSize] = []
-        for scale in [0.7, 0.85, 1.0] as [CGFloat] {
+        let card = AgentPrompt.card(screen: rowLayoutScreen)
+        for (scale, row) in [(0.7, 38), (0.85, 38), (1.0, 42)] as [(CGFloat, CGFloat)] {
             ThemeRuntime.scale = scale
+            XCTAssertEqual(AgentIslandGeometry.rowHeight, row, "scale \(scale): the two-line row")
             let name = "agent-island-card-preview-\(scale)"
-            try render(name, alias: "row layout", card: AgentPrompt.card(screen: rowLayoutScreen), to: out)
+            try render(name, alias: "row layout", card: card, to: out)
             let image = try XCTUnwrap(NSImage(contentsOf: out.appendingPathComponent("\(name).png")))
-            sizes.append(image.size)
+            let g = notched, cardH = AgentIslandGeometry.cardHeight(card)
+            XCTAssertFalse(g.listScrolls(rows: 3, cards: cardH), "scale \(scale): the list fits, no cap")
+            let height = g.barHeight + AgentIslandGeometry.listTop + 3 * row + cardH + AgentIslandGeometry.listBottom
+            XCTAssertEqual(image.size.width, (AgentIslandGeometry.expandedWidth + 40) * 2, "scale \(scale): fixed width")
+            XCTAssertEqual(image.size.height, (height + 40) * 2, "scale \(scale): bar, card and three rows of \(row) pt")
         }
-        XCTAssertEqual(Set(sizes.map { "\($0)" }).count, 1, "fixed-size island: \(sizes)")
         var wide = try prompt(rowLayoutScreen)
         wide.preview[2] += String(repeating: " [solution#20400]", count: 3)
         try render("agent-island-card-preview-clipped", alias: "wide preview", card: .prompt(wide), to: out)

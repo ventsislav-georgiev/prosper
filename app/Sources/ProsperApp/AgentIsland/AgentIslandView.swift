@@ -620,6 +620,8 @@ struct AgentIslandView: View {
     var onCancelMessage: () -> Void = {}
 
     private var g: AgentIslandGeometry { store.geometry }
+    /// #1375: a theme switch redraws the island (its inks read the palette), as NeonSelectedRowFill does.
+    @ObservedObject private var theme = ThemeStore.shared
 
     var body: some View {
         let radii = store.expanded ? AgentIslandGeometry.openRadii : AgentIslandGeometry.closedRadii
@@ -641,7 +643,7 @@ struct AgentIslandView: View {
             HStack(spacing: 0) {
                 Text(s.mostUrgent?.glyph ?? "")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(s.mostUrgent?.color ?? .clear)
+                    .foregroundStyle(s.mostUrgent.map { AgentIslandInk.glyph($0) } ?? .clear)
                     .frame(width: g.earWidth)
                 Color.clear.frame(width: g.notchWidth)
                 Text("\(ear.value)")
@@ -1012,7 +1014,7 @@ struct AgentIslandView: View {
             ForEach(AgentState.allCases, id: \.self) { st in
                 if st != .idle, let n = s.counts[st], n > 0 {
                     HStack(spacing: 3) {
-                        Text(st.glyph).font(.system(size: 10, weight: .bold)).foregroundStyle(st.color)
+                        Text(st.glyph).font(.system(size: 10, weight: .bold)).foregroundStyle(AgentIslandInk.glyph(st))
                         Text("\(n)").font(.system(size: 11, weight: .medium).monospacedDigit())
                             .foregroundStyle(Neon.faded(.white, 0.7))
                     }
@@ -1046,7 +1048,7 @@ struct AgentIslandView: View {
         Button(action: action) {
             Text(verbatim: title)
                 .font(.system(size: 11, weight: on ? .semibold : .regular))
-                .foregroundStyle(on ? Neon.faded(.white, 0.9) : Color.white.opacity(0.45))
+                .foregroundStyle(on ? AgentIslandInk.selectedTab : Color.white.opacity(0.45))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1074,6 +1076,7 @@ struct AgentIslandHistoryRow: View {
     /// #716 L-2: the unpinned ones of `older`, the ones its X removes.
     var olderUnpinned = 0
     @State private var hover = false
+    @ObservedObject private var theme = ThemeStore.shared   // #1375: a theme switch redraws the card
 
     /// QA #569 INFO-2: the row's tooltip and hint; "" on a refused row (the tooltip is then empty, never the Resume text).
     var helpText: String { enabled ? AgentIsland.resumeWithMessageHelp : "" }
@@ -1087,44 +1090,46 @@ struct AgentIslandHistoryRow: View {
         let age = record.lastSeen > 0 ? AgentIsland.age(now - record.lastSeen) : ""
         let end = AgentIsland.endLabel(record.end)
         let cwd = (record.cwd as NSString).abbreviatingWithTildeInPath
+        // #1375: the session row's card and the sidebar's inks (hover: its selected look and inks).
+        let sel = hover && enabled, quiet = AgentSidebarRowView.ink(.quiet, selected: sel)
         Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: AgentIslandGeometry.glyphGap) {
                 Text(verbatim: "○")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(0.35))
+                    .foregroundStyle(quiet)
                     .frame(width: AgentIslandGeometry.glyphWidth)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(verbatim: record.title)
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Neon.faded(.white, 0.8))
+                            .foregroundStyle(Neon.textPrimary)
                             .lineLimit(1)
                         Spacer(minLength: 6)
                         Text(verbatim: age)
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Color.white.opacity(0.4))
+                            .foregroundStyle(quiet)
                             .fixedSize()
                         if enabled {   // #742: the row click's Resume, with dch's message, made visible
-                            iconButton(AgentIsland.resumeWithMessageSymbol, opacity: 0.35, label: AgentIsland.resumeWithMessageHelp, action: action)
+                            iconButton(AgentIsland.resumeWithMessageSymbol, ink: quiet, label: AgentIsland.resumeWithMessageHelp, action: action)
                         }
                         if let resumeNoMessage {
-                            iconButton(AgentIsland.resumeNoMessageSymbol, opacity: 0.35, label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)
+                            iconButton(AgentIsland.resumeNoMessageSymbol, ink: quiet, label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)
                         }
-                        if let pin { editControls(pin) }
+                        if let pin { editControls(pin, quiet: quiet) }
                     }
                     HStack(spacing: 6) {
                         if let status {
-                            Text(verbatim: status).foregroundStyle(Neon.faded(.white, 0.7))
+                            Text(verbatim: status).foregroundStyle(quiet)
                         } else {
                             Text(verbatim: end)
                                 // #585: only a crash is colored; "ended (signal 15)" stays neutral.
-                                .foregroundStyle(end.hasPrefix("crashed") ? AgentState.blocked.color : Color.white.opacity(0.5))
+                                .foregroundStyle(end.hasPrefix("crashed") ? (sel ? Neon.textPrimary : AgentIslandInk.blockedOnCard) : quiet)
                                 // #839: a sender's program name can be long; the label truncates, cwd yields first.
                                 .lineLimit(1).layoutPriority(1)
                                 .help(Text(verbatim: endHelp))   // #1332 N937-c: the whole sender command
                             Text(verbatim: cwd)
                                 .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(Color.white.opacity(0.35))
+                                .foregroundStyle(quiet)
                                 .truncationMode(.middle)
                         }
                     }
@@ -1136,7 +1141,8 @@ struct AgentIslandHistoryRow: View {
             .padding(.leading, AgentIslandGeometry.rowLead)
             .padding(.trailing, AgentIslandGeometry.rowTrail)
             .frame(height: AgentIslandGeometry.rowHeight - AgentIslandGeometry.rowGap)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(hover && enabled ? 0.10 : 0.05)))
+            .background(NeonSelectedRowFill(selected: sel))
+            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(AgentIslandRow.cardFill))
             .contentShape(Rectangle())
             .padding(.vertical, AgentIslandGeometry.rowGap / 2)
         }
@@ -1155,12 +1161,12 @@ struct AgentIslandHistoryRow: View {
     }
 
     /// The pin (filled while pinned) and the X; a pinned row keeps the X's room
-    /// empty, so the pins line up. Static, dim like the age.
-    private func editControls(_ pin: @escaping () -> Void) -> some View {
+    /// empty, so the pins line up. Static, in the age's ink; #1375: a pinned pin in the title's.
+    private func editControls(_ pin: @escaping () -> Void, quiet: Color) -> some View {
         HStack(spacing: 4) {
-            iconButton(record.pinned ? "pin.fill" : "pin", opacity: record.pinned ? 0.8 : 0.35, label: pinLabel, action: pin)
+            iconButton(record.pinned ? "pin.fill" : "pin", ink: record.pinned ? Neon.textPrimary : quiet, label: pinLabel, action: pin)
             if let remove {
-                iconButton("xmark", opacity: 0.35, label: removeLabel, action: remove)
+                iconButton("xmark", ink: quiet, label: removeLabel, action: remove)
             } else {
                 Color.clear.frame(width: Self.iconSize, height: Self.iconSize)
             }
@@ -1169,11 +1175,11 @@ struct AgentIslandHistoryRow: View {
 
     static let iconSize: CGFloat = 14
 
-    private func iconButton(_ symbol: String, opacity: Double, label: String, action: @escaping () -> Void) -> some View {
+    private func iconButton(_ symbol: String, ink: Color, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(opacity))
+                .foregroundStyle(ink)
                 .frame(width: Self.iconSize, height: Self.iconSize)
                 .contentShape(Rectangle())
         }
@@ -1191,6 +1197,7 @@ struct AgentIslandRow: View {
     var show: AgentIslandRowDetails
     let action: () -> Void
     @State private var hover = false
+    @ObservedObject private var theme = ThemeStore.shared   // #1375 (R1371-i2): a theme switch redraws the card
 
     var body: some View {
         let prs = AgentIsland.prChips(session.meta, show: show)   // once per body
@@ -1227,7 +1234,7 @@ struct AgentIslandRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .accessibilityLabel(AgentIsland.rowAccessibilityLabel(session, now: now, show: show))
+        .accessibilityLabel(Self.accessibilityLabel(session, now: now, show: show))
         .accessibilityActions {
             ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
                 if chip.url != nil {
@@ -1240,6 +1247,14 @@ struct AgentIslandRow: View {
     /// #1371: the card is the theme's sidebar surface, the one the Agent Sessions rows sit on (TIP: white at 0.05 over the
     /// island's black, 0.10 on hover). The island's black notch shape stays (#474).
     static var cardFill: Color { Neon.sidebar }
+
+    /// R1371-s1: the island's words, then what the row draws from the sidebar's Row, in its words: the model and effort
+    /// (Row.modelWords) and the open count (Count.open, as Row.countWords; the agents and merged counts are spoken already).
+    static func accessibilityLabel(_ s: AgentSession, now: TimeInterval, show: AgentIslandRowDetails) -> String {
+        let row = AgentSidebar.row(s, details: show, now: now)
+        return ([AgentIsland.rowAccessibilityLabel(s, now: now, show: show), row.modelWords]
+                + [row.prCount > 0 ? AgentSidebar.Count.open.words(row.prCount) : nil]).compactMap { $0 }.joined(separator: ", ")
+    }
 
     /// #1371: the session as the Agent Sessions sidebar draws it; the island's notice ("Attach command copied", a
     /// running action) is the state word's text, as TIP drew it in place of the state.
@@ -1284,6 +1299,22 @@ struct AgentIslandRow: View {
             .background(Capsule().fill(Neon.blue.opacity(0.12)))   // #1371: the sidebar chips' wash
             .contentShape(Capsule())
     }
+}
+
+/// #1375: the island's inks follow the theme; its notch shape stays black (the operator's ruling, 2026-11-16). A theme
+/// or state ink is drawn only where it reads on its surface (4.5:1, 3:1 for a dim cue or a mark), else the fallback: TIP's
+/// white on the black shape, textPrimary on a themed card. AgentIslandThemeTests measures every ink on all 22 themes.
+@MainActor
+enum AgentIslandInk {
+    static func readable(_ ink: Color, on surface: Color, else fallback: Color, dim: Bool = false) -> Color {
+        ThemeRuntime.contrastRatio(ink, surface) >= (dim ? 3 : 4.5) ? ink : fallback
+    }
+    /// The shown tab on the black shape: the theme's accent, else TIP's white.
+    static var selectedTab: Color { readable(Neon.blue, on: .black, else: Neon.faded(.white, 0.9)) }
+    /// A state glyph on the black shape (a mark): the Agent Sessions state colour.
+    static func glyph(_ s: AgentState) -> Color { readable(agentStateColor(s), on: .black, else: .white, dim: true) }
+    /// The needs-input amber on a themed card (a crashed History row, the prompt's caption), else textPrimary.
+    static var blockedOnCard: Color { readable(agentStateColor(.blocked), on: AgentIslandRow.cardFill, else: Neon.textPrimary) }
 }
 
 /// #1137: a count as the Agent Sessions window draws it (AgentSidebar.Count's symbol plus the capped number), in the
@@ -1495,18 +1526,17 @@ struct AgentPromptCardView: View {
     var onJump: () -> Void = {}
 
     private typealias G = AgentIslandGeometry
-    private static let accent = AgentState.working.color
-    private static let deny = Color(red: 0.95, green: 0.4, blue: 0.4)
+    @ObservedObject private var theme = ThemeStore.shared   // #1375: a theme switch redraws the card
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             switch card {
             case .prompt(let p):
                 let l = p.layout
-                rows(l.question) { line($0, Color.white) }
+                rows(l.question) { line($0, Neon.textPrimary) }
                 context(l.context)
                 context(l.preview, l.previewFont, l.previewLine)
-                rows(l.caption) { line($0, AgentState.blocked.color) }
+                rows(l.caption) { line($0, AgentIslandInk.blockedOnCard) }
                 ForEach(Array(p.options.enumerated()), id: \.offset) { i, o in
                     option(p, o, label: l.labels[i], detail: l.details[i], enabled: l.isEnabled(o),
                            style: o.style(first: i == 0))
@@ -1516,16 +1546,30 @@ struct AgentPromptCardView: View {
                 context(AgentCardLayout.contextRows(lines, words: true).rows)
                 jump
             case .changed:
-                line(Self.changedText, AgentState.blocked.color)
+                line(Self.changedText, AgentIslandInk.blockedOnCard)
                 jump
             }
         }
         .padding(G.cardPad)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(height: G.cardHeight(card) - G.cardGap, alignment: .top)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.05)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Self.cardFill))   // #1375: the session row's card
         .padding(.bottom, G.cardGap)
     }
+
+    static var cardFill: Color { AgentIslandRow.cardFill }
+    /// #1375: the answer buttons' fill, label and dim ink (digit, hint, detail) by style, from the theme: the accent fill
+    /// with bgTop (the sidebar's digit chip pair), the danger tint with textPrimary, the plain wash with the sidebar inks.
+    static func look(_ style: AgentPromptOption.Style) -> (fill: Color, text: Color, dim: Color) {
+        switch style {
+        case .accent: (Neon.blue, Neon.bgTop, Neon.bgTop)
+        case .deny: (Neon.magenta.opacity(0.18), Neon.textPrimary, Neon.textSecondary)
+        case .plain: (Self.wash, Neon.textPrimary, Neon.textSecondary)
+        }
+    }
+    static var wash: Color { Neon.textPrimary.opacity(0.08) }
+    static var contextFill: Color { Neon.textPrimary.opacity(0.04) }
+    static var hintFill: Color { Neon.textPrimary.opacity(0.1) }
 
     static let changedText = "Prompt changed, open the terminal"
     static let jumpText = "Open terminal"
@@ -1557,7 +1601,7 @@ struct AgentPromptCardView: View {
             VStack(alignment: .leading, spacing: 0) {
                 rows(lines) { l in
                     cardText(l, f)
-                        .foregroundStyle(Neon.faded(.white, 0.6))
+                        .foregroundStyle(Neon.textSecondary)
                         .lineLimit(1)
                         .agentCardSlot(height: height, alignment: .leading)
                 }
@@ -1565,24 +1609,20 @@ struct AgentPromptCardView: View {
             .padding(.vertical, G.cardContextPad)
             .padding(.horizontal, G.contextInset)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.04)))
+            .background(RoundedRectangle(cornerRadius: 6).fill(Self.contextFill))
             .padding(.bottom, G.cardContextGap)
         }
     }
 
     private func option(_ p: AgentPrompt, _ o: AgentPromptOption, label: [String], detail: [String],
                         enabled: Bool, style: AgentPromptOption.Style) -> some View {
-        let (fill, text): (Color, Color) = switch style {
-        case .accent: (Self.accent, Color.white)
-        case .deny: (Self.deny.opacity(0.18), Self.deny)
-        case .plain: (Color.white.opacity(0.08), Neon.faded(.white, 0.9))
-        }
+        let (fill, text, dim) = Self.look(style)
         let row = G.cardButton - 4
         return button(action: { onOption(p, o) }, fill: fill,
                       height: row + CGFloat(label.count - 1) * G.cardLabelLine + CGFloat(detail.count) * G.cardDetailLine) {
             HStack(alignment: .top, spacing: G.cardSpacing) {
                 cardText("\(o.digit)", G.digitFont)
-                    .foregroundStyle(Neon.faded(text, 0.7))
+                    .foregroundStyle(dim)
                     .frame(height: row)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: G.cardSpacing) {
@@ -1592,9 +1632,9 @@ struct AgentPromptCardView: View {
                         Spacer(minLength: G.cardSpacerMin)
                         if let hint = o.hint {
                             cardText(hint, G.hintFont)
-                                .foregroundStyle(Neon.faded(text, 0.6))
+                                .foregroundStyle(dim)
                                 .padding(.horizontal, G.hintInset).padding(.vertical, 1)
-                                .background(Capsule().fill(Color.white.opacity(0.1)))
+                                .background(Capsule().fill(Self.hintFill))
                                 .fixedSize()
                         }
                     }
@@ -1609,7 +1649,7 @@ struct AgentPromptCardView: View {
                     // Continuation or description: dim, under the label.
                     rows(detail) { d in
                         cardText(d, G.detailFont)
-                            .foregroundStyle(Neon.faded(text, 0.55))
+                            .foregroundStyle(dim)
                             .lineLimit(1)
                             .agentCardSlot(height: G.cardDetailLine, alignment: .top)
                     }
@@ -1623,12 +1663,12 @@ struct AgentPromptCardView: View {
     }
 
     private var jump: some View {
-        button(action: onJump, fill: Color.white.opacity(0.08)) {
+        button(action: onJump, fill: Self.wash) {
             Image(systemName: "arrow.up.forward.app").font(.system(size: 11))
             cardText(Self.jumpText, G.labelFont)
             Spacer(minLength: 0)
         }
-        .foregroundStyle(Neon.faded(.white, 0.7))
+        .foregroundStyle(Neon.textPrimary)
     }
 
     private func button<L: View>(action: @escaping () -> Void, fill: Color, height: CGFloat = G.cardButton - 4,
@@ -1660,14 +1700,18 @@ struct AgentIslandComposer: View {
     var onSend: () -> Void
     var onCancel: () -> Void
     @FocusState private var focused: Bool
+    @ObservedObject private var theme = ThemeStore.shared   // #1375: a theme switch redraws the field
 
     var body: some View {
         let prompt = store.messagePrompt, empty = AgentIsland.messageText(store.messageDraft ?? "") == nil
         HStack(spacing: 10) {
             TextField(text: Binding(get: { store.messageDraft ?? "" }, set: { store.typeMessage($0) }),
-                      prompt: Text(verbatim: prompt)) { Text(verbatim: prompt) }
+                      prompt: Text(verbatim: prompt).foregroundStyle(Neon.textSecondary)) { Text(verbatim: prompt) }
                 .textFieldStyle(.plain)
-                .foregroundStyle(Neon.faded(.white, 0.9))
+                .foregroundStyle(Neon.textPrimary)
+                // #1375: the field is a themed card in the sidebar's inks; Send and Cancel stay on the black shape.
+                .padding(.horizontal, 6)
+                .background(RoundedRectangle(cornerRadius: 5).fill(AgentIslandRow.cardFill))
                 .focused($focused)
                 .onSubmit(onSend)
                 .onExitCommand(perform: onCancel)

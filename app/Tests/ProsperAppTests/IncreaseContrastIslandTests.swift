@@ -94,10 +94,12 @@ final class IncreaseContrastIslandTests: XCTestCase {
         ]
         for line in islandOnce { XCTAssertEqual(Self.count(line, in: view), 1, line) }
         XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.75))", in: view), 2, "two 0.75 sites")
-        XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.8))", in: view), 6, "three bare + killQuestion + clearQuestion + #1316 history row")
-        XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.9))", in: view), 4, "two 0.9 sites + #1316 header and draft field")
+        // #1375: the History row's title, the draft field and the prompt card take the theme's card inks (AgentIslandThemeTests).
+        XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.8))", in: view), 5, "three bare + killQuestion + clearQuestion")
+        XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.9))", in: view), 3, "two 0.9 sites + #1316 header")
         // #1371: 25, the session row's notice and PR chip inks are the Agent Sessions row's now (AgentIslandRowStyleTests).
-        XCTAssertEqual(Self.count("Neon.faded(", in: view), 25, "the ear count, the ten text sites and #1316's sixteen, less #1371's two")
+        // #1375: 16, the nine faded-white inks on the History row, the prompt card and the draft field are the theme's.
+        XCTAssertEqual(Self.count("Neon.faded(", in: view), 16, "the ear count, the text sites on the black shape and the shown tab's fallback")
         XCTAssertEqual(Self.count("Color.white.opacity(0.75)", in: view), 0)
         XCTAssertEqual(Self.count("case .idle: Color.white.opacity(0.4)", in: model), 1, "idle colour unchanged")
         XCTAssertEqual(Self.count("p.backgroundColor = .clear", in: controller), 1, "the panel stays clear for the notch corners")
@@ -129,21 +131,19 @@ final class IncreaseContrastIslandTests: XCTestCase {
             .filter { $0.contains("Color.white.opacity(") && !$0.contains("fill(") }
             .map { $0.trimmingCharacters(in: .whitespaces) })
         // #1371: the session row's age, agents and merged counts and PR chip inks left (the Agent Sessions row's inks now).
+        // #1375: only the dim cues drawn straight on the black shape are left; the History row (its glyph, age, end, cwd and
+        // icons), the prompt card and its buttons draw the theme's card inks (AgentIslandThemeTests).
         let kept: Set<String> = [
             ".foregroundStyle(ear.state == .blocked ? ear.state.color : (s.total == 0 ? Color.white.opacity(0.35) : Neon.faded(.white, 0.9)))",
             "Text(verbatim: \"Resume \\(why)\").foregroundStyle(Color.white.opacity(0.45))",
-            ".foregroundStyle(on ? Neon.faded(.white, 0.9) : Color.white.opacity(0.45))",
-            ".foregroundStyle(Color.white.opacity(0.35))",
-            ".foregroundStyle(Color.white.opacity(0.4))",   // the History row's age, not the session row's
-            ".foregroundStyle(end.hasPrefix(\"crashed\") ? AgentState.blocked.color : Color.white.opacity(0.5))",
-            ".foregroundStyle(Color.white.opacity(opacity))",
-            "button(action: onJump, fill: Color.white.opacity(0.08)) {",   // a fill
-            "case .plain: (Color.white.opacity(0.08), Neon.faded(.white, 0.9))",   // fill, then the faded label
+            ".foregroundStyle(on ? AgentIslandInk.selectedTab : Color.white.opacity(0.45))",
         ]
         XCTAssertEqual(left, kept)
         XCTAssertEqual(Self.count(".opacity(0.7)", in: view), 0, "no raw 0.7 left")
         XCTAssertEqual(Self.count("text.opacity(", in: view), 0, "the answer buttons fade through the token")
-        XCTAssertEqual(Self.count("Neon.faded(text, ", in: view), 3, "digit, hint, detail")
-        XCTAssertEqual(Self.count("(Color.white.opacity(0.08), Neon.faded(.white, 0.9))", in: view), 1, "plain answer button")
+        // #1375: the answer buttons' dim ink is a theme token (AgentPromptCardView.look), no fade of the label ink.
+        XCTAssertEqual(Self.count("Neon.faded(text, ", in: view), 0, "digit, hint, detail take the look's dim ink")
+        XCTAssertEqual(Self.count("fill(Color.white", in: view), 0, "no white wash on a card, a button or a hint")
+        XCTAssertEqual(Self.count("case .plain: (Self.wash, Neon.textPrimary, Neon.textSecondary)", in: view), 1, "plain answer button")
     }
 }

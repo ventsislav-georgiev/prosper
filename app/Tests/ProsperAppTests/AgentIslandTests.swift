@@ -2402,6 +2402,9 @@ final class AgentIslandTests: XCTestCase {
         store.expanded = true
         let out = tempDir()
         let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
+        // R-meta07 (#1375): ThemeStore's first use seeds ThemeRuntime.scale from the prefs; in a fresh process that came
+        // inside the first render (the row's NeonSelectedRowFill), after the scale was set, so "0.7" drew at two scales.
+        _ = ThemeStore.shared
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         var pixels: [CGFloat: [UInt8]] = [:]
