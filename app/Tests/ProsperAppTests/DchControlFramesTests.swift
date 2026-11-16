@@ -1885,6 +1885,24 @@ final class DchControlFramesTests: XCTestCase {
                         ["--pin", "work", "--json"], ["--pin", "work.json", "--json"]])
     }
 
+    /// #1069 (QA r1278 R1340-s1): beside "work.json", the phone's forget of "work" with older records passes the plain
+    /// "work" alone (it reaches them all): dch's "pinned" for the pinned older one reads as the kept-pinned note.
+    func testForgetBesideASessionNamedWorkJsonPassesThePlainNameAloneAndKeepsThePinned() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([["name": "work", "file": "work", "updated": Self.now - 60, "end": "stopped"],
+                                  ["name": "work.json", "file": "work.json", "updated": Self.now - 90, "end": "stopped"],
+                                  ["name": "work", "file": "work.1762000000", "updated": Self.now - 120, "end": "stopped", "pinned": true],
+                                  ["name": "work", "file": "work.1761000000", "updated": Self.now - 180, "end": "stopped"]])
+        f.out["--forget work --json"] = [Self.line("work", "ok", detail: "forgotten"),
+                                         Self.line("work", "failed", reason: "pinned", detail: "pinned (-f forgets it anyway)"),
+                                         Self.line("work", "ok", detail: "forgotten")].joined(separator: "\n")
+        f.status = 1
+        let r = call(ops(f, binary: Self.v1282), DchFrame.forget, ["name": "work"])
+        XCTAssertEqual(names(r), ["work"])
+        XCTAssertEqual((r.json as? [String: Any])?["message"] as? String, "work: removed the unpinned runs, kept the pinned ones")
+        XCTAssertEqual(f.launchedArgs, [["--forget", "work", "--json"]], "never the older files after it")
+    }
+
     /// #1340: a Resume that fell back to an aside record's plain file (#1320: `<file>.json` is another session's
     /// name) reads dch's no_history line, named after that file, under the row's name.
     func testAsideRecordsNoHistoryBesideASessionNamedAfterItsFileReadsUnderTheName() {

@@ -4796,8 +4796,9 @@ final class AgentIslandControlsTests: XCTestCase {
                                          older: d.older, olderUnpinned: d.olderUnpinned)
         }
         XCTAssertEqual(try row("work").pinLabel, "Pin (also 2 older records of this name)")
-        XCTAssertEqual(try row("work").removeLabel, "Remove from History (also 1 older record of this name)",
-                       "the pinned work.1762000000 stays")
+        XCTAssertEqual(try row("work").removeLabel,
+                       "Remove from History (also 1 older record of this name; 1 pinned older record stays)",
+                       "#1069: the pinned work.1762000000 stays, and the label says so")
         XCTAssertEqual(AgentIsland.editLabel("Unpin", older: 1), "Unpin (also 1 older record of this name)")
     }
 
@@ -5121,6 +5122,44 @@ final class AgentIslandControlsTests: XCTestCase {
         store.actions[dirKey] = nil
         remove([line("failed", "pinned", "pinned (-f forgets it anyway)", "")])
         XCTAssertEqual(store.actions[dirKey], "Remove work failed: \(AgentIsland.pinnedRefusal)", "no id: never taken for another record's")
+    }
+
+    /// #1069 (QA r1278 R1340-s1): under 1.28.1 beside a live "work.json", the own row's X falls back to the plain
+    /// "work", which reaches every record of the name: that alone, never the older files after it (each would answer
+    /// not_found). dch's "pinned" for the pinned older record is then no failure of this row, as below 1.28.1.
+    @MainActor
+    func testOwnRowsXBesideASessionNamedWorkJsonPassesThePlainNameAlone() throws {
+        let f = FakeProc(), reads = Reads()
+        let rows = Self.fileRecords
+        reads.records = rows
+        let c = controller(f, reads, dch: Self.v1281)
+        c.store?.sessions = [session("b", version: "1.28.1"), session("work.json", version: "1.28.1")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 3 }
+        let store = try XCTUnwrap(c.store)
+        let dirKey = AgentSessionKey(dir: "/d", name: "")
+        func line(_ result: String, _ reason: String, _ detail: String) -> String {
+            #"{"name":"work","result":"\#(result)","reason":"\#(reason)","detail":"\#(detail)"}"#
+        }
+        let before = reads.count
+        f.output = [line("ok", "", "forgotten"), line("failed", "pinned", "pinned (-f forgets it anyway)"),
+                    line("ok", "", "forgotten")].joined(separator: "\n") + "\n"
+        f.status = 1
+        c.remove(rows[0])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, ["--forget", "work", "--json"], "the plain name alone")
+        f.release.signal()
+        settle(c) { reads.count == before + 1 }
+        XCTAssertTrue(store.actions[dirKey] == nil, "everything meant to go went: \(store.actions[dirKey] ?? "")")
+        let pinBefore = reads.count
+        f.output = line("ok", "", "pinned") + "\n"
+        f.status = 0
+        c.pin(rows[0])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, ["--pin", "work", "--json"], "the plain name pins every record of the name")
+        f.release.signal()
+        settle(c) { reads.count == pinBefore + 1 }
+        XCTAssertEqual(f.args.count, 2)
     }
 
     /// L-3: a revive that matches nothing names its line after the argument (dch

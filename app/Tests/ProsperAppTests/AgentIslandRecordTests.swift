@@ -38,14 +38,19 @@ final class AgentIslandRecordTests: XCTestCase {
     /// #1340: pin, unpin and X take the same argument (rec_arg serves --pin/--unpin/--forget too, dch.c:11541 at
     /// v1.76.0): beside a session named "work.json" (`taken`, the dir's live and recorded names) the plain target.
     func testPinUnpinAndForgetOfWorkBesideASessionNamedWorkJsonPassThePlainTarget() {
-        let work = rec("work", file: "work"), aside = rec("work", file: "work.1762000000")
+        let work = rec("work", file: "work"), aside = rec("work", file: "work.1762000000"), old = rec("work", file: "work.1761000000")
         var pinnedAside = aside
         pinnedAside.pinned = true
         func targets(_ older: [DchHistoryRecord], forget: Bool, _ taken: Set<String>) -> [String] {
             AgentIsland.editTargets(work, older: older, exact: true, forget: forget, taken: taken)
         }
-        XCTAssertEqual(targets([aside], forget: false, ["work", "work.json"]), ["work", "work.1762000000.json"], "pin and unpin")
+        // #1069 (QA r1278 R1340-s1): the plain "work" reaches every record of the name: it alone, as below 1.28.1.
+        XCTAssertEqual(targets([aside], forget: false, ["work", "work.json"]), ["work"], "pin and unpin")
         XCTAssertEqual(targets([pinnedAside], forget: true, ["work", "work.json"]), ["work"], "X: the unpinned ones")
+        XCTAssertEqual(targets([pinnedAside, old], forget: true, ["work", "work.json"]), ["work"],
+                       "X: never the older files again (each would answer not_found)")
+        XCTAssertEqual(targets([pinnedAside, old], forget: true, ["work"]), ["work.json", "work.1761000000.json"],
+                       "no clash: the unpinned ones by file, as before")
         XCTAssertEqual(targets([aside], forget: false, ["work", "work.1762000000.json"]), ["work.json", "work.1762000000"],
                        "an aside record by its plain file")
         XCTAssertEqual(targets([aside], forget: false, ["work"]), ["work.json", "work.1762000000.json"], "no clash: the file form")

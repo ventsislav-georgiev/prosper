@@ -890,7 +890,7 @@ struct AgentIslandView: View {
              resumeNoMessage.map { MenuItem(title: AgentIsland.resumeNoMessageLabel, action: $0) },
              pin.map { MenuItem(title: AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel,
                                                               older: older), action: $0) },
-             remove.map { MenuItem(title: AgentIsland.editLabel(AgentIsland.removeLabel, older: olderUnpinned), action: $0) },
+             remove.map { MenuItem(title: AgentIsland.removeEditLabel(older: older, unpinned: olderUnpinned), action: $0) },
             ].compactMap { $0 }
         }
     }
@@ -1069,7 +1069,7 @@ struct AgentIslandHistoryRow: View {
     /// as outside text (OutsideText.shown); with no sender command the row's own tooltip, so the label's area keeps it.
     var endHelp: String { AgentIsland.signalSender(record.end)?.command.map { OutsideText.shown($0) } ?? helpText }
     var pinLabel: String { AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel, older: older) }
-    var removeLabel: String { AgentIsland.editLabel(AgentIsland.removeLabel, older: olderUnpinned) }
+    var removeLabel: String { AgentIsland.removeEditLabel(older: older, unpinned: olderUnpinned) }
 
     var body: some View {
         let age = record.lastSeen > 0 ? AgentIsland.age(now - record.lastSeen) : ""
@@ -1093,10 +1093,10 @@ struct AgentIslandHistoryRow: View {
                             .foregroundStyle(Color.white.opacity(0.4))
                             .fixedSize()
                         if enabled {   // #742: the row click's Resume, with dch's message, made visible
-                            iconButton("play.fill", opacity: 0.35, label: AgentIsland.resumeWithMessageHelp, action: action)
+                            iconButton(AgentIsland.resumeWithMessageSymbol, opacity: 0.35, label: AgentIsland.resumeWithMessageHelp, action: action)
                         }
                         if let resumeNoMessage {
-                            iconButton("play", opacity: 0.35, label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)
+                            iconButton(AgentIsland.resumeNoMessageSymbol, opacity: 0.35, label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)
                         }
                         if let pin { editControls(pin) }
                     }

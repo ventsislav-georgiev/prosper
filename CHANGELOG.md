@@ -1496,6 +1496,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a thin chapters rail along a transcript's left edge marks each prompt; hover shows
   its title and a click jumps there (the rail is for the pointer: Command-L lists the same chapters
   for the keyboard and VoiceOver). (#1318)
+- Agent Island History: the X now says when a pinned older run of the same session stays (for
+  example "Remove from History (1 pinned older record stays)"), the resume-without-message button
+  has its own skip icon instead of a second play triangle, and removing a session beside one named
+  "<name>.json" no longer reports a false failure. (#1069)
 
 ## v2.174.0
 

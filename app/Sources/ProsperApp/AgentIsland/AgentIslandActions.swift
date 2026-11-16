@@ -194,6 +194,9 @@ extension AgentIsland {
                             taken: Set<String>) -> [String] {
         let all = [r] + older
         if !exact, all.contains(where: { !$0.isAside }) { return [r.name] }
+        // #1069 (QA r1278 R1340-s1): the own record's plain name already reaches every record of the name; listed
+        // again, the older files answer not_found (or the pinned one "pinned") and read as this row's failure.
+        if !r.isAside, !r.file.isEmpty, r.recordArg(exact: exact, taken: taken) == r.name { return [r.name] }
         return (forget ? all.filter { !$0.pinned } : all).map { $0.recordArg(exact: exact, taken: taken) }
     }
 
@@ -782,6 +785,15 @@ extension AgentIsland {
     /// aside records under dch 1.28.0, which matches them all by the bare name.
     static func editLabel(_ label: String, older: Int) -> String {
         older == 0 ? label : "\(label) (also \(older) older record\(older == 1 ? "" : "s") of this name)"
+    }
+
+    /// #1069 (QA #743 INFO-2): the X's label; it removes the `unpinned` of the row's `older` records, and says
+    /// that a pinned older one stays (dch keeps it, and the row then shows it).
+    static func removeEditLabel(older: Int, unpinned: Int) -> String {
+        let kept = older - unpinned
+        guard kept > 0 else { return editLabel(removeLabel, older: unpinned) }
+        let also = unpinned == 0 ? "" : "also \(unpinned) older record\(unpinned == 1 ? "" : "s") of this name; "
+        return "\(removeLabel) (\(also)\(kept) pinned older record\(kept == 1 ? " stays" : "s stay"))"
     }
 
     /// `--pin|--unpin <name> --json`; `--forget <name> --json`, never -f (a pin protects).
@@ -1387,6 +1399,9 @@ extension AgentIsland {
     /// #669: a History row's icon and VoiceOver action, and the header's choice next to Resume interrupted.
     /// #747: also the row's right-click menu item (one action, one name).
     static let resumeNoMessageLabel = "Resume (no message)"
+    /// #1069 (QA #742 INFO-1): the row's two resume icons differ in shape, not only filled or hollow.
+    static let resumeWithMessageSymbol = "play.fill"
+    static let resumeNoMessageSymbol = "forward.end"
     /// #742: a row click is dch's own `--revive`, which types its carry-on message
     /// ("resume all work. This session ended … Re-read your ledger and task list, …").
     /// The row's menu items, its play.fill icon and its tooltip name both kinds.

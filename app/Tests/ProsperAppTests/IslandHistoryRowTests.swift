@@ -52,10 +52,11 @@ final class IslandHistoryRowTests: XCTestCase {
         XCTAssertTrue(tail[..<end.lowerBound].contains(attach), "each drawn History row carries its context menu")
         // QA #569 INFO-3: the two play icons (an inner button is not its own AX element, so pinned here): the filled
         // one runs the row's `action` (Resume with the message), the outline one `resumeNoMessage`.
-        XCTAssertTrue(src.contains("iconButton(\"play.fill\", opacity: 0.35, label: AgentIsland.resumeWithMessageHelp, action: action)"),
+        // #1069 (QA #742 INFO-1): each by its own symbol constant (AgentIslandWordingTests pins the two shapes).
+        XCTAssertTrue(src.contains("iconButton(AgentIsland.resumeWithMessageSymbol, opacity: 0.35, label: AgentIsland.resumeWithMessageHelp, action: action)"),
                       "the filled play runs Resume with the message")
-        XCTAssertTrue(src.contains("iconButton(\"play\", opacity: 0.35, label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)"),
-                      "the outline play runs Resume (no message)")
+        XCTAssertTrue(src.contains("iconButton(AgentIsland.resumeNoMessageSymbol, opacity: 0.35, label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)"),
+                      "the skip icon runs Resume (no message)")
     }
 
     /// The row's click (its filled play icon's action, drawn from the same closure) and the row's "Resume (no message)"
