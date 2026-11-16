@@ -194,15 +194,20 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
                 let above = b.filter { $0.frame.height > 0 && $0.frame.minY >= item.frame.maxY && $0.text != note && !$0.text.isEmpty }
                 XCTAssertTrue(above.contains { $0.text == "Fake Kit" } && above.contains { $0.text == Self.id }, "\(tag): \(above.map(\.text))")
                 for e in above {
-                    XCTAssertTrue(a.contains { $0.text == e.text && $0.frame == e.frame }, "\(tag): \(e.text) at \(e.frame) moved when the note appeared")
+                    // per dimension, one device pixel: two drawn frames are not exactly equal at a fractional scale on a 1x runner
+                    func same(_ f: CGRect) -> Bool {
+                        abs(f.minX - e.frame.minX) <= pixel && abs(f.minY - e.frame.minY) <= pixel
+                            && abs(f.width - e.frame.width) <= pixel && abs(f.height - e.frame.height) <= pixel
+                    }
+                    XCTAssertTrue(a.contains { $0.text == e.text && same($0.frame) }, "\(tag): \(e.text) at \(e.frame) moved when the note appeared")
                 }
                 for button in ["Cancel", "Remove"] {
                     let before = try XCTUnwrap(a.first { $0.text == button && $0.frame.height > 0 }, "\(tag): \(button)")
                     let after = try XCTUnwrap(b.first { $0.text == button && $0.frame.height > 0 }, "\(tag): \(button)")
-                    // half a point: a control moved to a fractional y is pixel-aligned again (seen at 0.7: 20.0 -> 19.5)
-                    XCTAssertEqual(after.frame.width, before.frame.width, accuracy: 0.5, "\(tag): \(button) keeps its width")
-                    XCTAssertEqual(after.frame.height, before.frame.height, accuracy: 0.5, "\(tag): \(button) keeps its height")
-                    XCTAssertEqual(after.frame.minX, before.frame.minX, accuracy: 0.5, "\(tag): \(button) keeps its x")
+                    // one device pixel: a control moved to a fractional y is pixel-aligned again (seen at 0.7: 20.0 -> 19.5 at 2x)
+                    XCTAssertEqual(after.frame.width, before.frame.width, accuracy: pixel, "\(tag): \(button) keeps its width")
+                    XCTAssertEqual(after.frame.height, before.frame.height, accuracy: pixel, "\(tag): \(button) keeps its height")
+                    XCTAssertEqual(after.frame.minX, before.frame.minX, accuracy: pixel, "\(tag): \(button) keeps its x")
                     XCTAssertLessThanOrEqual(after.frame.maxY, item.frame.minY + pixel, "\(tag): \(button) is below the whole note")
                 }
                 fputs("mc1235 fact \(tag): note frame \(item.frame), \(Int(lines)) lines at least, \(above.count) elements above unmoved\n", stderr)

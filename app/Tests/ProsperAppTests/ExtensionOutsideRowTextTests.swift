@@ -183,9 +183,9 @@ final class ExtensionOutsideRowTextTests: XCTestCase {
             let before = try XCTUnwrap(a.first { $0.named(label) && $0.frame.width > 0 }, "plain: \(label)")
             let after = try XCTUnwrap(b.first { $0.named(label) && $0.frame.width > 0 }, "long: \(label): \(b.map(\.names))")
             fputs("ort1251 fact \(label): plain \(before.frame), long \(after.frame), row \(row.frame)\n", stderr)
-            XCTAssertEqual(after.frame.width, before.frame.width, accuracy: 0.5, "\(label) keeps its width")
-            XCTAssertEqual(after.frame.height, before.frame.height, accuracy: 0.5, "\(label) keeps its height")
-            XCTAssertEqual(after.frame.minY, before.frame.minY, accuracy: 0.5, "\(label) stays on its line")
+            XCTAssertEqual(after.frame.width, before.frame.width, accuracy: pixel, "\(label) keeps its width")
+            XCTAssertEqual(after.frame.height, before.frame.height, accuracy: pixel, "\(label) keeps its height")
+            XCTAssertEqual(after.frame.minY, before.frame.minY, accuracy: pixel, "\(label) stays on its line")
             XCTAssertLessThanOrEqual(after.frame.maxX, row.frame.maxX + pixel, "\(label) inside the row")
         }
         let titleNode = try XCTUnwrap(b.first { $0.named(String(repeating: "W", count: 80)) }, "the long title")

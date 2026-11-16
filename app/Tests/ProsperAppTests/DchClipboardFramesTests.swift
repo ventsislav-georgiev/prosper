@@ -322,6 +322,7 @@ final class DchClipboardFramesTests: XCTestCase {
         let model = SettingsModel()
         XCTAssertFalse(model.clipboardSyncWithPhone)
         let out = tempDir(), saved = ThemeRuntime.scale
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let extra = ProcessInfo.processInfo.environment["PROSPER_RENDER_DIR"].map { URL(fileURLWithPath: $0) }
         defer { ThemeRuntime.scale = saved }
         for scale in [1.0, 0.85] as [CGFloat] {
@@ -331,7 +332,7 @@ final class DchClipboardFramesTests: XCTestCase {
             let natural = NSHostingView(rootView: ClipboardSyncToggle(model: model).fixedSize())
             XCTAssertLessThanOrEqual(natural.fittingSize.width, room, "label and switch fit at \(scale)")
             let fitted = NSHostingView(rootView: ClipboardSyncToggle(model: model).frame(width: room))
-            XCTAssertEqual(fitted.fittingSize.height, natural.fittingSize.height, accuracy: 0.5, "one line, no wrap at \(scale)")
+            XCTAssertEqual(fitted.fittingSize.height, natural.fittingSize.height, accuracy: pixel, "one line, no wrap at \(scale)")
             let card = NSHostingView(rootView: NeonSection("Remote Terminal") { ClipboardSyncToggle(model: model) }
                 .frame(width: room + 2 * sz(16)).padding(sz(16)).background(Color(white: 0.1)).preferredColorScheme(.dark))
             card.frame = CGRect(origin: .zero, size: card.fittingSize)

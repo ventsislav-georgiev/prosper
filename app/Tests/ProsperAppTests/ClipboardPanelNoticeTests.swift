@@ -68,7 +68,7 @@ final class ClipboardPanelNoticeTests: XCTestCase {
         open.withLock { $0 = true }
         store.addText("beta")
         pump { panel.panel.frame.height <= before + pixel }
-        XCTAssertEqual(panel.panel.frame.height, before, accuracy: 0.5, "back to its height once the line is gone")
+        XCTAssertEqual(panel.panel.frame.height, before, accuracy: pixel, "back to its height once the line is gone")
         XCTAssertFalse(panel.panel.isVisible)
     }
 

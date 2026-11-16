@@ -142,6 +142,7 @@ final class ApprovalBoxSourceTests: XCTestCase {
 
     @MainActor
     func testCardSizeAtEveryScale() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         for scale: CGFloat in [1.0, 0.85, 0.7] {
@@ -152,7 +153,7 @@ final class ApprovalBoxSourceTests: XCTestCase {
                 print("#1221 size scale \(scale) \(kind): plain \(plain) sub-agent \(sub) grows by \(sub.height - plain.height)")
                 XCTAssertGreaterThan(sub.height, plain.height, "scale \(scale) \(kind)")
                 XCTAssertLessThan(sub.height - plain.height, 40 * scale, "scale \(scale) \(kind): one line, not two")
-                XCTAssertEqual(sub.width, plain.width, accuracy: 0.5, "scale \(scale) \(kind)")
+                XCTAssertEqual(sub.width, plain.width, accuracy: pixel, "scale \(scale) \(kind)")
             }
         }
     }

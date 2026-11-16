@@ -174,6 +174,13 @@ final class SidekickPatternHintTests: XCTestCase {
         withSavedKeys {
             let savedScale = ThemeRuntime.scale
             defer { ThemeRuntime.scale = savedScale }
+            let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
+            func near(_ a: CGRect, _ b: CGRect, _ what: String) {   // per dimension, one device pixel: two drawn frames are not exactly equal
+                XCTAssertEqual(a.minX, b.minX, accuracy: pixel, "\(what) minX")
+                XCTAssertEqual(a.minY, b.minY, accuracy: pixel, "\(what) minY")
+                XCTAssertEqual(a.width, b.width, accuracy: pixel, "\(what) width")
+                XCTAssertEqual(a.height, b.height, accuracy: pixel, "\(what) height")
+            }
             Preferences.agentIslandSidekickTabs = true
             let button = "Match this text exactly"
             // Plain, regex (the hint and the button), regex again, already exact: the hint line and the button come and go.
@@ -222,9 +229,9 @@ final class SidekickPatternHintTests: XCTestCase {
                         // the hint line itself is one line at this scale, as in the plain row
                         XCTAssertLessThan(tree.first { $0.named(prefix: "Read as a regex") }?.frame.height ?? .infinity, 1.5 * (title?.frame.height ?? 0), "the hint is one line: \(pattern) at \(scale)")
                     } else if let f = first, let t = title?.frame, let fr = field(tree)?.frame {
-                        XCTAssertEqual(t, f.title, "the title's frame with \(pattern) at \(scale)")
-                        XCTAssertEqual(fr, f.field, "the field's frame with \(pattern) at \(scale)")
-                        XCTAssertEqual(h, f.height, accuracy: 0.5, "the section's height with \(pattern) at \(scale)")
+                        near(t, f.title, "the title's frame with \(pattern) at \(scale)")
+                        near(fr, f.field, "the field's frame with \(pattern) at \(scale)")
+                        XCTAssertEqual(h, f.height, accuracy: pixel, "the section's height with \(pattern) at \(scale)")
                     } else if let t = title?.frame, let fr = field(tree)?.frame {
                         first = (t, fr, h)
                     }

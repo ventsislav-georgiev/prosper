@@ -168,6 +168,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
             _ = ThemeStore.shared   // its first use (NeonRow's) seeds ThemeRuntime.scale from the prefs: before the scale is set here
             let savedScale = ThemeRuntime.scale
             defer { ThemeRuntime.scale = savedScale }
+            let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
             // The hint first, then each refusal as a saved value written from outside shows it (literals).
             let cases: [(stored: String, line: String)] = [
                 ("claude-example-1", "Empty: Claude Code's own default"),
@@ -221,17 +222,17 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                     XCTAssertLessThanOrEqual(f.maxX, m.minX + 1, "the field before the menu, no overlap at \(scale)")
                     // Fixed slots: a refusal in the subtitle moves and resizes nothing (one line, as the hint).
                     if let h = hint {
-                        func same(_ a: CGRect, _ b: CGRect, _ what: String) {   // 0.5 pt per component: a sub-ULP layout difference is not a move
-                            XCTAssertEqual(a.minX, b.minX, accuracy: 0.5, "\(what) minX with \(line) at \(scale)")
-                            XCTAssertEqual(a.minY, b.minY, accuracy: 0.5, "\(what) minY with \(line) at \(scale)")
-                            XCTAssertEqual(a.width, b.width, accuracy: 0.5, "\(what) width with \(line) at \(scale)")
-                            XCTAssertEqual(a.height, b.height, accuracy: 0.5, "\(what) height with \(line) at \(scale)")
+                        func same(_ a: CGRect, _ b: CGRect, _ what: String) {   // one device pixel per component: a sub-pixel layout difference is not a move
+                            XCTAssertEqual(a.minX, b.minX, accuracy: pixel, "\(what) minX with \(line) at \(scale)")
+                            XCTAssertEqual(a.minY, b.minY, accuracy: pixel, "\(what) minY with \(line) at \(scale)")
+                            XCTAssertEqual(a.width, b.width, accuracy: pixel, "\(what) width with \(line) at \(scale)")
+                            XCTAssertEqual(a.height, b.height, accuracy: pixel, "\(what) height with \(line) at \(scale)")
                         }
                         same(f, h.field, "the field's frame")
                         same(ti, h.title, "the row's title")
                         same(m, h.menu, "the menu")
-                        XCTAssertEqual(s.minY, h.sub.minY, accuracy: 0.5, "the subtitle's place with \(line) at \(scale)")
-                        XCTAssertEqual(s.height, h.sub.height, accuracy: 0.5, "one line, as the hint: \(line) at \(scale)")
+                        XCTAssertEqual(s.minY, h.sub.minY, accuracy: pixel, "the subtitle's place with \(line) at \(scale)")
+                        XCTAssertEqual(s.height, h.sub.height, accuracy: pixel, "one line, as the hint: \(line) at \(scale)")
                     } else {
                         hint = (f, ti, s, m)
                     }
@@ -259,6 +260,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
             _ = ThemeStore.shared   // its first use (NeonRow's) seeds ThemeRuntime.scale from the prefs: before the scale is set here
             let savedScale = ThemeRuntime.scale
             defer { ThemeRuntime.scale = savedScale }
+            let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
             let states: [(stored: String, line: String)] = [
                 ("claude-example-1", AgentIslandPane.modelHint),
                 ("op us", "Not used: Only A-Z a-z 0-9 ._:-[]"),
@@ -293,8 +295,8 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                     subHeights.append(s.height)
                 }
                 XCTAssertEqual(rowHeights.count, 4, "all four states read at \(scale)")
-                for h in rowHeights { XCTAssertEqual(h, rowHeights.first ?? 0, accuracy: 0.5, "the row's height is the same in every state at \(scale)") }
-                for h in subHeights { XCTAssertEqual(h, subHeights.first ?? 0, accuracy: 0.5, "one subtitle line in every state at \(scale)") }
+                for h in rowHeights { XCTAssertEqual(h, rowHeights.first ?? 0, accuracy: pixel, "the row's height is the same in every state at \(scale)") }
+                for h in subHeights { XCTAssertEqual(h, subHeights.first ?? 0, accuracy: pixel, "one subtitle line in every state at \(scale)") }
             }
         }
     }

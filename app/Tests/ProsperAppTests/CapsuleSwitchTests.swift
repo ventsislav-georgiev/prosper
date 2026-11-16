@@ -93,18 +93,18 @@ final class CapsuleSwitchTests: XCTestCase {
 
             let r = segments(sw(.read)), e = segments(sw(.edit))
             XCTAssertEqual(r.segs.count, 2, tag)
-            XCTAssertEqual(r.fitting.width, e.fitting.width, accuracy: 0.5, "same switch width with either selected (\(tag))")
-            XCTAssertEqual(r.fitting.height, e.fitting.height, accuracy: 0.5, "same switch height (\(tag))")
+            XCTAssertEqual(r.fitting.width, e.fitting.width, accuracy: pixel, "same switch width with either selected (\(tag))")
+            XCTAssertEqual(r.fitting.height, e.fitting.height, accuracy: pixel, "same switch height (\(tag))")
             for (a, b) in zip(r.segs, e.segs) {
-                XCTAssertEqual(a.frame.width, b.frame.width, accuracy: 0.5, "segment slots are fixed (\(tag))")
-                XCTAssertEqual(a.frame.minX, b.frame.minX, accuracy: 0.5, tag)
+                XCTAssertEqual(a.frame.width, b.frame.width, accuracy: pixel, "segment slots are fixed (\(tag))")
+                XCTAssertEqual(a.frame.minX, b.frame.minX, accuracy: pixel, tag)
             }
             for (seg, title) in zip(r.segs, ["Read", "Edit"]) {
                 let label = seg.frame.width - 2 * sz(8)
                 // 1.0: the accessibility frames are rounded to the pixel grid, which at a fractional UI scale costs up to half a point per edge.
                 XCTAssertGreaterThanOrEqual(label, natural(title) - 1.0, "\(title) is not truncated (\(tag)): \(label)")
                 XCTAssertGreaterThanOrEqual(label, 1, tag)
-                XCTAssertGreaterThanOrEqual(seg.frame.minX, -0.5, "inside the switch (\(tag))")
+                XCTAssertGreaterThanOrEqual(seg.frame.minX, -pixel, "inside the switch (\(tag))")
                 XCTAssertLessThanOrEqual(seg.frame.maxX, r.fitting.width + pixel, "inside the switch (\(tag))")
             }
             if let a = r.segs.first, let b = r.segs.last, r.segs.count == 2 {

@@ -115,14 +115,19 @@ final class TextViewerNoteWidthTests: XCTestCase {
             let banner = try XCTUnwrap(two.first { $0.text == joined }, "\(tag): the whole joined text: \(two.map(\.text))").frame
             let cutBanner = try XCTUnwrap(real.first { $0.text == cut }, "\(tag): the whole cut note: \(real.map(\.text))").frame
             XCTAssertGreaterThan(line.height, 0, tag)
-            XCTAssertEqual(banner.height, line.height, accuracy: 0.5, "\(tag): the joined note is one line")
-            XCTAssertEqual(cutBanner.height, line.height, accuracy: 0.5, "\(tag): the cut note in the real root is one line")
+            XCTAssertEqual(banner.height, line.height, accuracy: pixel, "\(tag): the joined note is one line")
+            XCTAssertEqual(cutBanner.height, line.height, accuracy: pixel, "\(tag): the cut note in the real root is one line")
             XCTAssertLessThanOrEqual(banner.width, size.width + pixel, tag)
             // AX frames are in screen points, y up: the header is what lies above the banner.
             let header = two.filter { $0.frame.height > 0 && $0.frame.minY >= banner.maxY && $0.text != joined }
             XCTAssertTrue(header.contains { $0.text == "notes.txt" }, "\(tag): \(header.map(\.text))")
             for item in header {
-                XCTAssertTrue(none.contains { $0.text == item.text && $0.frame == item.frame },
+                // per dimension, one device pixel: two drawn frames are not exactly equal at a fractional scale on a 1x runner
+                func same(_ f: CGRect) -> Bool {
+                    abs(f.minX - item.frame.minX) <= pixel && abs(f.minY - item.frame.minY) <= pixel
+                        && abs(f.width - item.frame.width) <= pixel && abs(f.height - item.frame.height) <= pixel
+                }
+                XCTAssertTrue(none.contains { $0.text == item.text && same($0.frame) },
                               "\(tag): \(item.text) at \(item.frame) moved when the banner appeared")
             }
             fputs("tv1180c fact \(tag): one line \(line.height) pt, joined \(banner), cut note \(cutBanner), \(header.count) header elements unmoved\n", stderr)

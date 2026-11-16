@@ -101,7 +101,7 @@ final class BoundedListEdgeTests: XCTestCase {
         XCTAssertEqual(lists.count, expectLists, "bounded lists at \(tag)", file: file, line: line)
         for (i, sv) in lists.enumerated() {
             XCTAssertEqual(sv.frame.height, NeonBoundedList<EmptyView>.height(paneHeight: side.height),
-                           accuracy: 0.5, "list \(i) height moved at \(tag)", file: file, line: line)
+                           accuracy: pixel, "list \(i) height moved at \(tag)", file: file, line: line)
             let clip = sv.contentView
             let top = recorderFrames(in: sv)
             let first = try XCTUnwrap(top.first, "no key field in list \(i) at \(tag)", file: file, line: line)

@@ -75,7 +75,7 @@ final class AgentIslandRowStyleTests: XCTestCase {
             XCTAssertLessThanOrEqual(mark.maxX, title.minX + pixel, "mark before the title at \(scale)")
             XCTAssertLessThanOrEqual(title.maxX, badges.minX + pixel, "title before the badges at \(scale)")
             XCTAssertGreaterThan(badges.width, sz(20), "both badges' slot drawn at \(scale)")
-            XCTAssertEqual(age.maxX, width - AgentIslandGeometry.rowTrail, accuracy: 0.5, "age at the trailing inset at \(scale)")
+            XCTAssertEqual(age.maxX, width - AgentIslandGeometry.rowTrail, accuracy: pixel, "age at the trailing inset at \(scale)")
             XCTAssertGreaterThanOrEqual(age.minY, title.maxY - pixel, "the age is on line two at \(scale)")
             XCTAssertNotNil(f["count.agents"], "the outlined agents count is drawn at \(scale)")
             XCTAssertTrue(f["capsule.agents"] != nil, "with its outline at \(scale)")
