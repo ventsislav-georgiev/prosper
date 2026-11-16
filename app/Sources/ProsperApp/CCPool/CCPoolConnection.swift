@@ -430,8 +430,11 @@ final class CCPoolConnection: @unchecked Sendable {
     private func send(label: String, accountID: String, retried: Bool) {
         guard let head else { return }
         // The token lives in this request only: read per attempt, never kept on the connection.
-        guard let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {
-            log.note(label, "token unavailable; skipping this account")
+        // #1326 (c): a retry (throttle wait, pooled resend) can outlive its account: a removed one is never sent, even
+        // when its Keychain item stayed behind.
+        let removed = store.read { $0.label(ofID: accountID) } == nil
+        guard !removed, let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {
+            log.note(label, removed ? "account removed; skipping this account" : "token unavailable; skipping this account")
             // #1256: a throttle retry never moves to another account: its last 429 goes back instead.
             if let last = retryingThrottle { retryingThrottle = nil; return answerThrottle(last) }
             // #1262: after the one move nothing walks on: the conversation goes back, the first account's 429 goes out.

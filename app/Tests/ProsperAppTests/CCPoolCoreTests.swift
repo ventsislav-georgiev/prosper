@@ -337,6 +337,7 @@ final class CCPoolCoreTests: XCTestCase {
             }
             func token(id: String) throws -> String? { try outer.token(id: id) }
             func remove(id: String) throws { try outer.remove(id: id) }
+            func relabel(id: String, label: String) throws { try outer.relabel(id: id, label: label) }
         }
         let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
         let racing = Racing()

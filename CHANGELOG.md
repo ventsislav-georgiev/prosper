@@ -1435,6 +1435,8 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.76.0 (was 1.74.0). X-ray's full reference search keeps the newest mentions on very
   large transcripts, a quick search's time budget also ends a slow folder lookup, and the X-ray view
   keeps more of a prompt's title on narrow terminals when an agent's name is long. (#1327)
+- Renaming an account in the account pool now renames its Keychain item too, so Keychain Access
+  shows the new name. (#1326)
 
 ## v2.174.0
 

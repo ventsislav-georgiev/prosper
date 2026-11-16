@@ -7,6 +7,8 @@ protocol CCPoolSecrets: Sendable {
     func store(token: String, id: String, label: String) throws
     func token(id: String) throws -> String?
     func remove(id: String) throws
+    /// #1326 (a): rename the item `id` to `label` (shown as `CCPoolKeychainSecrets.itemLabel`); the token is untouched.
+    func relabel(id: String, label: String) throws
 }
 
 enum CCPoolSecretsError: Error, Equatable, CustomStringConvertible {
@@ -26,7 +28,8 @@ enum CCPoolSecretsError: Error, Equatable, CustomStringConvertible {
 final class CCPoolMemorySecrets: CCPoolSecrets, @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String: String] = [:]
-    private var _refuseStore = false, _refuseRemove = false
+    private var labels: [String: String] = [:]
+    private var _refuseStore = false, _refuseRemove = false, _refuseRelabel = false
 
     /// Test switches: the next stores / removes throw like a Keychain error, and change nothing.
     var refuseStore: Bool {
@@ -37,11 +40,18 @@ final class CCPoolMemorySecrets: CCPoolSecrets, @unchecked Sendable {
         get { lock.withLock { _refuseRemove } }
         set { lock.withLock { _refuseRemove = newValue } }
     }
+    var refuseRelabel: Bool {
+        get { lock.withLock { _refuseRelabel } }
+        set { lock.withLock { _refuseRelabel = newValue } }
+    }
+    /// The label item `id` was last stored or relabelled with.
+    func label(id: String) -> String? { lock.withLock { labels[id] } }
 
     func store(token: String, id: String, label: String) throws {
         try lock.withLock {
             if _refuseStore { throw CCPoolSecretsError.failed(errSecIO) }
             items[id] = token
+            labels[id] = label
         }
     }
     func token(id: String) throws -> String? { lock.withLock { items[id] } }
@@ -49,6 +59,13 @@ final class CCPoolMemorySecrets: CCPoolSecrets, @unchecked Sendable {
         try lock.withLock {
             if _refuseRemove { throw CCPoolSecretsError.failed(errSecIO) }
             items.removeValue(forKey: id)
+            labels.removeValue(forKey: id)
+        }
+    }
+    func relabel(id: String, label: String) throws {
+        try lock.withLock {
+            if _refuseRelabel || items[id] == nil { throw CCPoolSecretsError.failed(errSecItemNotFound) }
+            labels[id] = label
         }
     }
     var count: Int { lock.withLock { items.count } }
@@ -72,11 +89,14 @@ struct CCPoolKeychainSecrets: CCPoolSecrets {
 
     static func addQuery(id: String, label: String, token: Data) -> [String: Any] {
         var q = baseQuery(id: id)
-        q[kSecAttrLabel as String] = "Prosper ccpool: \(label)"
+        q[kSecAttrLabel as String] = itemLabel(label)
         q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         q[kSecValueData as String] = token
         return q
     }
+
+    /// The name Keychain Access shows for an account's item.
+    static func itemLabel(_ label: String) -> String { "Prosper ccpool: \(label)" }
 
     static func readQuery(id: String) -> [String: Any] {
         var q = baseQuery(id: id)
@@ -98,7 +118,7 @@ struct CCPoolKeychainSecrets: CCPoolSecrets {
         var status = SecItemAdd(add as CFDictionary, nil)
         if status == errSecDuplicateItem {
             let update: [String: Any] = [kSecValueData as String: Data(token.utf8),
-                                         kSecAttrLabel as String: "Prosper ccpool: \(label)"]
+                                         kSecAttrLabel as String: Self.itemLabel(label)]
             status = SecItemUpdate(Self.baseQuery(id: id) as CFDictionary, update as CFDictionary)
         }
         if status == errSecItemNotFound { throw CCPoolSecretsError.failed(status) }
@@ -114,5 +134,12 @@ struct CCPoolKeychainSecrets: CCPoolSecrets {
 
     func remove(id: String) throws {
         try Self.check(SecItemDelete(Self.baseQuery(id: id) as CFDictionary))
+    }
+
+    func relabel(id: String, label: String) throws {
+        let update: [String: Any] = [kSecAttrLabel as String: Self.itemLabel(label)]
+        let status = SecItemUpdate(Self.baseQuery(id: id) as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound { throw CCPoolSecretsError.failed(status) }
+        try Self.check(status)
     }
 }

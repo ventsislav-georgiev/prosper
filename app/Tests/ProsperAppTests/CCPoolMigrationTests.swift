@@ -12,12 +12,14 @@ final class CCPoolMigrationTests: XCTestCase {
         func store(token: String, id: String, label: String) throws { try inner.store(token: String(token.dropLast()), id: id, label: label) }
         func token(id: String) throws -> String? { try inner.token(id: id) }
         func remove(id: String) throws { try inner.remove(id: id) }
+        func relabel(id: String, label: String) throws { try inner.relabel(id: id, label: label) }
     }
 
     private final class RefusingSecrets: CCPoolSecrets, @unchecked Sendable {
         func store(token: String, id: String, label: String) throws { throw CCPoolSecretsError.unavailable }
         func token(id: String) throws -> String? { nil }
         func remove(id: String) throws {}
+        func relabel(id: String, label: String) throws {}
     }
 
     private func write(_ dir: URL, _ name: String, _ text: String) throws -> URL {

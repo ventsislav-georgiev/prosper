@@ -280,8 +280,9 @@ final class CCPoolStore: @unchecked Sendable {
     }
 
     /// Rename in place: same Keychain id (the secret is never rewritten), same pick-order slot,
-    /// `current` and the usage sample follow.
-    func renameAccount(_ label: String, to newLabel: String) throws {
+    /// `current` and the usage sample follow. #1326 (a): with `secrets`, the Keychain item's label follows too; a failed
+    /// relabel leaves the rename standing and logs the stale label (never the token).
+    func renameAccount(_ label: String, to newLabel: String, secrets: CCPoolSecrets? = nil) throws {
         let to = newLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         if let problem = Self.labelProblem(to) { throw problem }
         guard to != label else { return }
@@ -299,6 +300,11 @@ final class CCPoolStore: @unchecked Sendable {
         }, usage: { u in if let s = u.removeValue(forKey: label) { u[to] = s } })
         if let outcome { throw outcome }
         guard saved else { throw writeFailure }
+        guard let secrets, let id = read({ $0.accounts[to]?.id }) else { return }
+        do { try secrets.relabel(id: id, label: to) } catch {
+            logger.note(to, "renamed; its Keychain item could not be relabelled and keeps its old name",
+                        private: " \(CCPoolKeychainSecrets.itemLabel(label))")
+        }
     }
 
     /// Move `label` by `offset` places in the pick order (negative = up), clamped. False when it
@@ -319,6 +325,10 @@ final class CCPoolStore: @unchecked Sendable {
 
     private func persist(_ st: CCPoolState) -> Bool {
         if unreadable { return false }   // never over a file that could not be read (QA #734 INFO-4)
+        // #1326 (b): the one place an ended hand hold leaves state: every write (and so the first after a load) drops it.
+        var st = st
+        let now = clock()
+        for (name, a) in st.accounts where a.held.map({ Double($0) <= now }) == true { st.accounts[name]?.held = nil }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? enc.encode(st) else { return false }

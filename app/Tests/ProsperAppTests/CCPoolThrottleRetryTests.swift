@@ -344,6 +344,25 @@ final class CCPoolThrottleRetryTests: XCTestCase {
         XCTAssertEqual(r.rec.waits, [4])
     }
 
+    // #1326 (c): an account removed during the wait is never sent, even when its Keychain item could not be deleted;
+    // the log says "account removed", not a missing token; the last 429 goes back.
+    func testAccountRemovedDuringTheWaitIsNeverSent() throws {
+        for itemLeft in [true, false] {
+            let r = try rig()
+            r.up.set("tok-a", [.throttle("4")])
+            let store = r.store, secrets = r.secrets
+            secrets.refuseRemove = itemLeft
+            r.rec.beforeContinue = { _ = try? store.removeAccount(label: "Example Org A", secrets: secrets) }
+            let resp = try XCTUnwrap(r.post())
+            XCTAssertEqual(resp.status, 429, "item left: \(itemLeft)")
+            XCTAssertEqual(resp.header("retry-after"), "4")
+            XCTAssertEqual(r.up.calls, ["tok-a": 1], "item left: \(itemLeft): no second call")
+            XCTAssertTrue(store.snapshot.accounts["Example Org A"] == nil)
+            XCTAssertEqual(r.log.lines.filter { $0 == "Example Org A: account removed; skipping this account" }.count, 1, "\(r.log.lines)")
+            XCTAssertFalse(r.log.lines.contains { $0.contains("token unavailable") }, "\(r.log.lines)")
+        }
+    }
+
     // A client that left during the wait gets no upstream call.
     func testClientGoneDuringTheWaitGetsNoUpstreamCall() throws {
         let r = try rig()

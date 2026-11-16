@@ -372,7 +372,7 @@ final class CCPoolPaneModel: ObservableObject {
 
     func rename(_ label: String, to newLabel: String) {
         do {
-            try store.renameAccount(label, to: newLabel)
+            try store.renameAccount(label, to: newLabel, secrets: secrets)
             let to = newLabel.trimmingCharacters(in: .whitespacesAndNewlines)
             if rejected.remove(label) != nil { rejected.insert(to) }
             if unverified.remove(label) != nil { unverified.insert(to) }
