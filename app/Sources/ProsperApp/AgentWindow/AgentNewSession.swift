@@ -141,12 +141,12 @@ enum AgentNewSession {
         return f.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f } ? "Use a path without control characters" : nil
     }
 
-    /// `host`'s folders: its live sessions' cwds, then its History records' newest first; absolute, deduped, at most 8.
+    /// `host`'s folders: its live sessions' cwds, then its History records' newest first; absolute, deduped, at most 8; one OutsideText.shown would change (bidi, zero-width) is dropped, not offered raw.
     static func remoteRecents(host: String, sessions: [AgentSidebar.Remote], history: [AgentSidebar.RemoteRecord]) -> [String] {
         let live = sessions.filter { $0.host == host }.compactMap(\.cwd)
         let ended = history.filter { $0.host == host }.sorted { $0.record.lastSeen > $1.record.lastSeen }.map(\.record.cwd)
         var seen = Set<String>()
-        return Array((live + ended).filter { remoteFolderError($0) == nil && seen.insert($0).inserted }
+        return Array((live + ended).filter { remoteFolderError($0) == nil && OutsideText.shown($0) == $0 && seen.insert($0).inserted }
             .prefix(AgentIsland.recentFoldersMax))
     }
 

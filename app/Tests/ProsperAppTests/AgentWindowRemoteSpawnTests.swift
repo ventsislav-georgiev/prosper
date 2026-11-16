@@ -3,7 +3,7 @@ import XCTest
 @testable import ProsperApp
 
 /// #1323 (step 2C): New session on another Mac: a host picker from the remote list, that host's recent folders or a
-/// typed absolute path, and `dch --spawn host:name --cwd <path> -- <command>` on the verb seam (the island's runner).
+/// typed absolute path, and `dch --host H --spawn name --cwd <path> -- <command>` on the verb seam (the island's runner).
 /// Fakes only: step A's remote list fixture, #1324's History fixture, a recording verb seam and a recording terminal;
 /// no dch, no host, no window shown, no chooser.
 final class AgentWindowRemoteSpawnTests: XCTestCase {
@@ -69,7 +69,7 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
             XCTAssertEqual(none.newSessionHosts, [], "no remote host: no picker")
             let (old, _, _) = model(version: [1, 40, 9])
             defer { old.close() }
-            XCTAssertEqual(old.newSessionHosts, [], "dch 1.40: no --spawn host:name --cwd")
+            XCTAssertEqual(old.newSessionHosts, [], "dch 1.40: no --host H --spawn name --cwd")
             let (m, _, _) = model(version: [1, 41, 0])
             defer { m.close() }
             XCTAssertEqual(m.newSessionHosts, ["host-a", "host-b"])
@@ -141,6 +141,24 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
             XCTAssertEqual(m.newSession?.folder, "~", "this Mac: the usual default again")
             let relative = AgentSidebar.Remote(host: "host-a", name: "x", alias: "", stale: false, cwd: "rel/x")
             XCTAssertEqual(AgentNewSession.remoteRecents(host: "host-a", sessions: [relative], history: []), [])
+        }
+    }
+
+    /// R1323-s1: another Mac's cwd with a bidi control or a zero-width scalar is neither offered nor prefilled raw.
+    @MainActor
+    func testRemoteFoldersWithOutsideTextScalarsAreNotOfferedOrPrefilled() throws {
+        try withPrefs {
+            let hist = #"""
+            [{"name":"p","alias":"","cwd":"/Users/example/plain","ended":1799990000,"end":"exit 0","file":"p","host":"host-a","stale":false},
+             {"name":"b","alias":"","cwd":"/Users/example/a\u202Eb","ended":1799999000,"end":"exit 0","file":"b","host":"host-a","stale":false},
+             {"name":"z","alias":"","cwd":"/Users/example/c\u200Bd","ended":1799999500,"end":"exit 0","file":"z","host":"host-a","stale":false}]
+            """#
+            let lister = Lister(#"[{"name":"api","alias":"","host":"host-a","state":"idle","stale":false,"cwd":null}]"#)
+            let (m, _, _) = model(lister, history: hist)
+            defer { m.close() }
+            m.setNewSessionHost("host-a")
+            XCTAssertEqual(m.newSessionRecents, ["/Users/example/plain"], "the two newer outside-text folders are dropped")
+            XCTAssertEqual(m.newSession?.folder, "/Users/example/plain")
         }
     }
 
