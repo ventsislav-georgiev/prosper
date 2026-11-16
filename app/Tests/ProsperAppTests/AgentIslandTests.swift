@@ -2990,6 +2990,143 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(AgentIsland.sidekickCaption("(x+x+)+y", tabs: true, names: []), "Too slow on a session name: matched as text" + "\n" + AgentIsland.sidekickDchNote)
     }
 
+    /// #1090: a fake clock that costs `tick` ns a read and jumps `burst` ns more on the reads numbered `reads`
+    /// (counted from the first read after it is installed): CPU the kernel charges to the thread mid-search.
+    private func burstCPU(tick: UInt64, burst: UInt64, reads: ClosedRange<Int>) -> @Sendable () -> UInt64 {
+        let st = OSAllocatedUnfairLock(initialState: (n: 0, now: UInt64(0)))
+        return { st.withLock { $0.n += 1; $0.now += tick + (reads.contains($0.n) ? burst : 0); return $0.now } }
+    }
+
+    /// #1090: runs `body` with the matcher's bars and clock put back after, and each of `ps` probed (the "" probe
+    /// is its own counted call: it runs here on a cheap clock, outside what the row is about).
+    private func withSidekickBars(probing ps: [String], _ body: () -> Void) {
+        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU)
+        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal, AgentIsland.sidekickCPU) = saved }
+        (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal) = (10_000_000, 1_000_000, 50_000_000)
+        AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
+        for p in ps { XCTAssertTrue(AgentIsland.sidekickMatch(p) == .regex, "probed: \(p)") }
+        body()
+    }
+
+    /// #1090: one burst inside one call does not turn a cheap pattern into text, on either bar: past the
+    /// call's deadline (20 ms jumps on reads 2 and 3, inside the first search only: it is stopped, the second is cheap)
+    /// and past the slow-call bar with a total of 0 (any call that counts flips). Before the second search both flipped.
+    func testSplitOneBurstOnACheapPatternDoesNotFlip() {
+        let long = String(repeating: "x", count: 40)
+        let list = [session("\(long)-bd1", .idle), session("api", .idle)]
+        let list2 = [session("\(long)-bd2", .idle), session("api", .idle)]
+        withSidekickBars(probing: ["-bd1$", "-bd2$"]) {
+            AgentIsland.sidekickCPU = burstCPU(tick: 1_000, burst: 20_000_000, reads: 2...3)
+            XCTAssertEqual(AgentIsland.split(list, pattern: "-bd1$").sidekicks.count, 1)
+            AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
+            XCTAssertTrue(AgentIsland.sidekickMatch("-bd1$") == .regex, "the deadline burst did not flip it")
+            AgentIsland.sidekickDeadline = .max
+            AgentIsland.sidekickSlowTotal = 0
+            AgentIsland.sidekickCPU = burstCPU(tick: 1_000, burst: 5_000_000, reads: 2...4)
+            XCTAssertEqual(AgentIsland.split(list2, pattern: "-bd2$").sidekicks.count, 1)
+            AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
+            XCTAssertTrue(AgentIsland.sidekickMatch("-bd2$") == .regex, "the counted burst did not flip it")
+        }
+    }
+
+    /// #1090: a pattern that is slow in both searches of one call still flips in that call, past the deadline
+    /// and on the tally (total 0), with every read costing 20 ms or 2 ms. A second search must not forgive it.
+    func testSplitSlowTwiceStillFlipsInTheSameCall() {
+        let long = String(repeating: "x", count: 40)
+        withSidekickBars(probing: ["-bd3$", "-bd4$"]) {
+            AgentIsland.sidekickCPU = countingCPU(tick: 20_000_000)
+            let r = AgentIsland.split([session("\(long)-bd3", .idle), session("z-bd3$Z", .idle)], pattern: "-bd3$")
+            XCTAssertEqual(names(r.sidekicks), ["z-bd3$Z"], "flipped at the deadline: matched as text")
+            AgentIsland.sidekickDeadline = .max
+            AgentIsland.sidekickSlowTotal = 0
+            AgentIsland.sidekickCPU = countingCPU(tick: 2_000_000)
+            let r2 = AgentIsland.split([session("\(long)-bd4", .idle), session("z-bd4$Z", .idle)], pattern: "-bd4$")
+            XCTAssertEqual(names(r2.sidekicks), ["z-bd4$Z"], "flipped on the tally: matched as text")
+        }
+    }
+
+    /// #1090: counted calls far apart do not add up. One counted call costs X (read off the clock: both searches
+    /// of a counted call read it the same, so X is half the reads less one, times the tick); the total is 1.5 X, so
+    /// two counted calls in a row flip (the control) and the same two with `sidekickForget` cheap calls
+    /// between them, five times over, never do. Without the forgetting the second counted call flips.
+    func testSplitCountedCallsFarApartDoNotAddUp() {
+        let list = [session("api-bd5", .idle)]
+        let tick: UInt64 = 2_000_000
+        withSidekickBars(probing: ["-bd5$", "-bd6$", "-bd7$"]) {
+            AgentIsland.sidekickDeadline = .max
+            AgentIsland.sidekickSlowTotal = .max
+            let reads = OSAllocatedUnfairLock(initialState: 0)
+            AgentIsland.sidekickCPU = { reads.withLock { $0 += 1; return UInt64($0) * tick } }
+            XCTAssertEqual(AgentIsland.split(list, pattern: "-bd5$").sidekicks.count, 1)
+            let x = UInt64(max(1, reads.withLock { $0 } / 2 - 1)) * tick
+            XCTAssertGreaterThan(x, AgentIsland.sidekickSlowCall, "a counted call costs more than the bar")
+            AgentIsland.sidekickSlowTotal = x + x / 2
+            for _ in 0..<5 {
+                AgentIsland.sidekickCPU = countingCPU(tick: tick)
+                _ = AgentIsland.split(list, pattern: "-bd6$")
+                AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
+                for _ in 0..<AgentIsland.sidekickForget { _ = AgentIsland.split(list, pattern: "-bd6$") }
+            }
+            XCTAssertTrue(AgentIsland.sidekickMatch("-bd6$") == .regex, "far apart: still a regex")
+            for _ in 0..<2 {
+                AgentIsland.sidekickCPU = countingCPU(tick: tick)
+                _ = AgentIsland.split(list, pattern: "-bd7$")
+            }
+            XCTAssertTrue(AgentIsland.sidekickMatch("-bd7$") == .slow, "back to back: the tally flips it")
+        }
+    }
+
+    /// R1090-1: the titles' tally, once over the bar, does not forget. A long title runs out a 100-read deadline on the
+    /// first call (late: counted), over a total of 1, so the titles are text from the second call on: the title only a
+    /// regex finds ("doc") is no hit, the one holding the pattern's text ("lit") is. Then `sidekickForget` + 1 more
+    /// quiet calls, and every one still matches titles as text. Round 1 reset the tally after 32 quiet calls: regex again.
+    func testSplitTitlesOverTheBarStayTextAfterQuietCalls() {
+        let p = ".*-bd8$"
+        func titled(_ name: String, alias: String, title: String) -> AgentSession {
+            AgentSession(key: AgentSessionKey(dir: "/d", name: name), alias: alias, activity: 0, state: .idle, agents: 0, harness: title)
+        }
+        let list = [titled("api", alias: "api-bd8", title: String(repeating: "a", count: 500) + "-bd8-x"),
+                    titled("doc", alias: "Agent C", title: "doc-bd8"),
+                    titled("lit", alias: "Agent D", title: "x.*-BD8$y")]
+        withSidekickBars(probing: [p]) {
+            (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal) = (100_000, .max, 1)
+            XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["api", "doc"], "first call: titles a regex")
+            for call in 0...AgentIsland.sidekickForget {
+                XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["api", "lit"], "quiet call \(call): titles as text")
+            }
+            XCTAssertTrue(AgentIsland.sidekickMatch(p) == .regex, "names and aliases stay a regex")
+        }
+    }
+
+    /// R1090-2: titles never decide which search stands. The first search stops on a 20 ms burst in a name (slow); the
+    /// second's names are cheap but a 30 ms burst lands on its title, so its names-plus-titles time is the larger. The
+    /// second (not slow) stands: no flip, no count (total 0: any count flips). Round 1 compared the totals and flipped.
+    /// The burst's read number comes from a dry call on the same names without the title (titles are skipped in a slow
+    /// first search, so both searches read the clock as the dry call does up to the second search's title).
+    func testSplitTitlesNeverDecideWhichSearchStands() {
+        let p = "-bd9$"
+        let bare = [session(String(repeating: "x", count: 40) + "-n", .idle), session("api-bd9", .idle)]
+        let titled = [AgentSession(key: AgentSessionKey(dir: "/d", name: bare[0].name), alias: "", activity: 0, state: .idle, agents: 0, harness: "doc title"),
+                      bare[1]]
+        withSidekickBars(probing: [p]) {
+            AgentIsland.sidekickSlowTotal = 0
+            let dry = burstCPU(tick: 1_000, burst: 20_000_000, reads: 2...2)
+            AgentIsland.sidekickCPU = dry
+            XCTAssertEqual(AgentIsland.split(bare, pattern: p).sidekicks.map(\.name), ["api-bd9"])
+            let n = Int((dry() - 20_000_000) / 1_000) - 1   // the dry call's reads (the read just made is n + 1)
+            AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
+            XCTAssertTrue(AgentIsland.sidekickMatch(p) == .regex, "dry call: the second search stood")
+            XCTAssertGreaterThan(n, 4, "two searches read the clock")
+            let reads = OSAllocatedUnfairLock(initialState: 0)
+            // read n + 1 is the titles' start, n + 2 the title's own start: the 30 ms lands inside the second search's title.
+            AgentIsland.sidekickCPU = { reads.withLock { $0 += 1; return UInt64($0) * 1_000 + ($0 >= 2 ? 20_000_000 : 0) + ($0 >= n + 2 ? 30_000_000 : 0) } }
+            XCTAssertEqual(AgentIsland.split(titled, pattern: p).sidekicks.map(\.name), ["api-bd9"], "still a regex: \"-bd9$\" as text is in no name")
+            XCTAssertGreaterThan(reads.withLock { $0 }, n + 2, "the second search reached the title")
+            AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
+            XCTAssertTrue(AgentIsland.sidekickMatch(p) == .regex, "the second search stood: no flip")
+        }
+    }
+
     /// INFO-4: ranges are UTF-16, so `$` finds the end of a Cyrillic + emoji name.
     func testSplitRegexNonASCIIName() {
         let r = AgentIsland.split([session("Проспер-😀-qa", .idle), session("Проспер-😀-qa-x", .idle),

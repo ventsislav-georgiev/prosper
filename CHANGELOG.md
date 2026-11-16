@@ -1376,6 +1376,9 @@ tag from the now-released section and put it on the new top draft.
   selected History entry; nothing happens until you confirm.
 - Agent Island History: two ended runs of one name that ended in the same second now always show the
   same one as the row (it was whichever dch listed first).
+- Sidekick tabs: one slow moment (a busy machine, memory pressure) no longer makes Prosper regroup
+  your sidekick tab and say "Too slow on a session name" for a pattern that is fine; the pattern is
+  searched once more before it is judged slow, and old slow moments are forgotten.
 
 ## v2.174.0
 

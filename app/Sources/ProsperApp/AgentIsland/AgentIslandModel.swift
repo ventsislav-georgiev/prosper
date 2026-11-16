@@ -251,13 +251,23 @@ enum AgentIsland {
     /// at `sidekickDeadline`, as does the "" probe; a call slower than
     /// `sidekickSlowCall` per 16 texts searched, or on any one text, adds to the
     /// pattern's tally, which may reach `sidekickSlowTotal`. Either flips the
-    /// pattern to text for the life of the process. Worst case: a call that never
-    /// counts costs min(10 ms, 1 ms per 16 texts) forever (10 ms from 160 texts);
-    /// a flip costs about 50 + 10 ms once per pattern, plus up to 10 ms of probe. Vars only so a test can make
-    /// the tally deterministic; nothing else writes them.
+    /// pattern to text for the life of the process. #1090: a burst of CPU the kernel charges to the thread (page
+    /// faults, decompression) is not the pattern's cost, so before a call counts or flips on its names, the search runs once
+    /// more (the "" probe too; the titles' own tally only forgets) and a search that is not slow stands, else the names' smaller time
+    /// (titles never decide it): a pathological text is slow again, a hiccup is not. And a tally forgets: `sidekickForget` calls in a
+    /// row that do not count reset it while it is at or under `sidekickSlowTotal`; once over, it stays over until relaunch.
+    /// Worst case: a call that never counts costs min(10 ms, 1 ms per 16 texts) forever (10 ms from 160 texts);
+    /// a call that would count or flip costs up to twice that (one more deadline, 10 ms); a flip costs about
+    /// 2 x 10 ms once per pattern (two deadlines), a pattern that is slow every call reaches the 50 ms tally in
+    /// as many counted calls, and one that counts less often than once per `sidekickForget` calls never flips. Titles cost at
+    /// most their tally (50 ms) plus a deadline once per pattern before they are text for the life of the process.
+    /// Vars only so a test can make the tally deterministic; nothing else writes them.
     nonisolated(unsafe) static var sidekickDeadline: UInt64 = 10_000_000
     nonisolated(unsafe) static var sidekickSlowCall: UInt64 = 1_000_000
     nonisolated(unsafe) static var sidekickSlowTotal: UInt64 = 50_000_000
+    /// #1090: this many consecutive calls that do not count reset a pattern's tally (a call count, not a wall clock,
+    /// so a test can drive it with the counted seam).
+    static let sidekickForget = 32
     /// This thread's CPU time in ns. A var only so a test can count clock reads instead of
     /// timing a runner (#1063); nothing else writes it.
     nonisolated(unsafe) static var sidekickCPU: @Sendable () -> UInt64 = { clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) }
@@ -268,7 +278,7 @@ enum AgentIsland {
     /// the paired phone (#760, one sync in flight per connection); a few hundred tiny entries at most per run.
     private static let sidekickLock = NSLock()
     /// #1220: `titleSpent` is the titles' own tally (R1210-a); past sidekickSlowTotal the titles are matched as text.
-    nonisolated(unsafe) private static var sidekickCache: [String: (re: NSRegularExpression?, how: SidekickMatch, spent: UInt64, titleSpent: UInt64)] = [:]
+    nonisolated(unsafe) private static var sidekickCache: [String: (re: NSRegularExpression?, how: SidekickMatch, spent: UInt64, titleSpent: UInt64, quiet: Int, titleQuiet: Int)] = [:]
 
     /// Which of `texts` the trimmed, non-empty `p` finds, and how it was matched.
     /// R1210-a: names and aliases first, accounted as before titles were searched; then the titles, shortest
@@ -287,15 +297,20 @@ enum AgentIsland {
                 // An empty match makes every session a sidekick (QA #592 INFO-2). The probe
                 // gets the same CPU deadline as a search: `(x?|y?){32}\b` backtracks for
                 // 0.35-1.3 s on "" alone before ICU's own limit stops it (QA #592 INFO-7, #594).
-                how = .regex
-                let start = cpu()
-                re.enumerateMatches(in: "", options: .reportProgress, range: NSRange()) { r, _, stop in
-                    if r != nil { how = .matchesEmpty; stop.pointee = true }
-                    else if cpu() - start > sidekickDeadline { how = .slow; stop.pointee = true }
-                }
+                // #1090: a probe that runs out of its deadline is repeated once, a hiccup is not slow twice.
+                var tries = 0
+                repeat {
+                    tries += 1
+                    how = .regex
+                    let start = cpu()
+                    re.enumerateMatches(in: "", options: .reportProgress, range: NSRange()) { r, _, stop in
+                        if r != nil { how = .matchesEmpty; stop.pointee = true }
+                        else if cpu() - start > sidekickDeadline { how = .slow; stop.pointee = true }
+                    }
+                } while how == .slow && tries < 2
             }
             (re, how) = sidekickLock.withLock {
-                if sidekickCache[p] == nil { sidekickCache[p] = (re, how, 0, 0) }
+                if sidekickCache[p] == nil { sidekickCache[p] = (re, how, 0, 0, 0, 0) }
                 entry = sidekickCache[p]
                 return (sidekickCache[p]!.re, sidekickCache[p]!.how)
             }
@@ -303,50 +318,70 @@ enum AgentIsland {
         let titlesAsText = (entry?.titleSpent ?? 0) > sidekickSlowTotal
         var hits = [Bool](repeating: false, count: texts.count)
         if let re, how == .regex {
-            let start = cpu()
-            var worst: UInt64 = 0
-            // One search, on this thread, inside the call; nil when it ran past the call's deadline.
-            func find(_ t: String) -> Bool? {
-                var hit: Bool? = false
-                // .reportProgress: ICU calls back inside a backtracking search, so the
-                // deadline ends one catastrophic search, not only the gaps between hits.
-                // A zero-width match (\b, ^, a lookahead) is no hit, or it would take every name.
-                re.enumerateMatches(in: t, options: .reportProgress, range: NSRange(t.startIndex..., in: t)) { r, _, stop in
-                    if let r, r.range.length > 0 { hit = true; stop.pointee = true }
-                    else if cpu() - start > sidekickDeadline { hit = nil; stop.pointee = true }
-                }
-                return hit
-            }
             let names = texts.indices.filter { !texts[$0].title }
-            for i in names where how == .regex {
-                let t0 = cpu()
-                if let hit = find(texts[i].text) { hits[i] = hit } else { how = .slow }
-                worst = max(worst, cpu() - t0)
-            }
-            let spent = cpu() - start   // names and aliases only
             let titles = texts.indices.filter { texts[$0].title && !texts[$0].text.isEmpty }.sorted { texts[$0].text.utf8.count < texts[$1].text.utf8.count }
-            var (titleWorst, titleSpent, late): (UInt64, UInt64, Bool) = (0, 0, false)
-            if titlesAsText {
-                for i in titles { hits[i] = texts[i].text.range(of: p, options: .caseInsensitive) != nil }
-            } else if how == .regex, !titles.isEmpty {
-                let t1 = cpu()
-                for i in titles {
-                    let t0 = cpu()
-                    guard let hit = find(texts[i].text) else { late = true; break }   // the deadline is spent: no hit, no flip
-                    hits[i] = hit
-                    titleWorst = max(titleWorst, cpu() - t0)
+            typealias Pass = (hits: [Bool], slow: Bool, worst: UInt64, spent: UInt64, titleWorst: UInt64, titleSpent: UInt64, late: Bool)
+            // One whole search of this call's texts, on this thread; `slow` when a name ran past the call's deadline.
+            func pass() -> Pass {
+                var hits = [Bool](repeating: false, count: texts.count)
+                let start = cpu()
+                var worst: UInt64 = 0
+                // One search, inside the pass; nil when it ran past the call's deadline.
+                func find(_ t: String) -> Bool? {
+                    var hit: Bool? = false
+                    // .reportProgress: ICU calls back inside a backtracking search, so the
+                    // deadline ends one catastrophic search, not only the gaps between hits.
+                    // A zero-width match (\b, ^, a lookahead) is no hit, or it would take every name.
+                    re.enumerateMatches(in: t, options: .reportProgress, range: NSRange(t.startIndex..., in: t)) { r, _, stop in
+                        if let r, r.range.length > 0 { hit = true; stop.pointee = true }
+                        else if cpu() - start > sidekickDeadline { hit = nil; stop.pointee = true }
+                    }
+                    return hit
                 }
-                titleSpent = cpu() - t1
+                var slow = false
+                for i in names where !slow {
+                    let t0 = cpu()
+                    if let hit = find(texts[i].text) { hits[i] = hit } else { slow = true }
+                    worst = max(worst, cpu() - t0)
+                }
+                let spent = cpu() - start   // names and aliases only
+                var (titleWorst, titleSpent, late): (UInt64, UInt64, Bool) = (0, 0, false)
+                if titlesAsText {
+                    for i in titles { hits[i] = texts[i].text.range(of: p, options: .caseInsensitive) != nil }
+                } else if !slow, !titles.isEmpty {
+                    let t1 = cpu()
+                    for i in titles {
+                        let t0 = cpu()
+                        guard let hit = find(texts[i].text) else { late = true; break }   // the deadline is spent: no hit, no flip
+                        hits[i] = hit
+                        titleWorst = max(titleWorst, cpu() - t0)
+                    }
+                    titleSpent = cpu() - t1
+                }
+                return (hits, slow, worst, spent, titleWorst, titleSpent, late)
             }
+            // Per 16 texts, so a cheap pattern over 100 sessions never counts (QA #592 INFO-8);
+            // one name over the whole budget still counts, however many cheap names dilute it.
+            func namesCount(_ r: Pass) -> Bool { r.worst > sidekickSlowCall || r.spent / UInt64(max(1, names.count / 16)) > sidekickSlowCall }
+            // The titles' tally, same bars; it only ever ends their regex search, never the pattern's.
+            func titlesCount(_ r: Pass) -> Bool { r.late || r.titleWorst > sidekickSlowCall || r.titleSpent / UInt64(max(1, titles.count / 16)) > sidekickSlowCall }
+            var r = pass()
+            // #1090: before a call counts or flips, search the names once more and keep the smaller time (cost: one more call's worth, at most a deadline).
+            // shortcut: titles are not searched twice (their tally only turns titles to text, and DchConfigWriterTests' #1220 rows pin their reads per call); they only forget.
+            if r.slow || namesCount(r) {
+                let r2 = pass()
+                // R1090-2: a pass that is not slow wins, then the names' smaller time; titles (own tally) never decide it.
+                if (r.slow && !r2.slow) || (r.slow == r2.slow && r2.spent < r.spent) { r = r2 }
+            }
+            hits = r.hits
+            if r.slow { how = .slow }
             how = sidekickLock.withLock {
                 guard var e = sidekickCache[p], e.how == .regex else { return sidekickCache[p]?.how ?? how }
-                // Per 16 texts, so a cheap pattern over 100 sessions never counts (QA #592 INFO-8);
-                // one name over the whole budget still counts, however many cheap names dilute it.
-                if worst > sidekickSlowCall || spent / UInt64(max(1, names.count / 16)) > sidekickSlowCall { e.spent += spent }
-                // The titles' tally, same bars; it only ever ends their regex search, never the pattern's.
-                if late || titleWorst > sidekickSlowCall || titleSpent / UInt64(max(1, titles.count / 16)) > sidekickSlowCall {
-                    e.titleSpent += titleSpent
-                }
+                if namesCount(r) { e.spent += r.spent; e.quiet = 0 } else { e.quiet += 1 }
+                if titlesCount(r) { e.titleSpent += r.titleSpent; e.titleQuiet = 0 } else { e.titleQuiet += 1 }
+                // R1090-1: a tally forgets only while at or under the bar; once over, it stays over until relaunch.
+                if e.quiet >= sidekickForget, e.spent <= sidekickSlowTotal { (e.spent, e.quiet) = (0, 0) }
+                if e.titleQuiet >= sidekickForget, e.titleSpent <= sidekickSlowTotal { (e.titleSpent, e.titleQuiet) = (0, 0) }
                 if how == .slow || e.spent > sidekickSlowTotal { e.how = .slow }
                 sidekickCache[p] = e
                 return e.how
