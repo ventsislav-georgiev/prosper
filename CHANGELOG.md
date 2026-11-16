@@ -1574,6 +1574,8 @@ tag from the now-released section and put it on the new top draft.
 - X-ray has Prompts and Responses tabs for a conversation shown as a transcript; automatic prompts
   are hidden until you show them, and messages from other agent sessions are marked with their
   sender and can be hidden. (#1354)
+- On a session on another Mac, the Todos chip opens X-ray's Tasks tab; when that Mac has no task
+  list it says "No task list on that host". (#1388)
 
 ## v2.174.0
 

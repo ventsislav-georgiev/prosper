@@ -1664,15 +1664,31 @@ struct AgentRemoteHeader: View {
 
     static let modeReason = "A session on another machine opens in Terminal only"
     static let levelReason = "No transcript for a session on another machine"
-    static let todosReason = "No todo list for a session on another machine"
+    static let todosReason = "No task list on that host"
+    static let todosOpens = "Open the task list in X-ray"
+    let pane: UUID
+    /// The row whose last chip click found no Tasks tab (a click on another session starts clean).
+    @State private var none: AgentSidebar.RowID? = nil
+
+    static func todosHelp(noList: Bool) -> String { noList ? todosReason : todosOpens }
+
+    /// The chip's click: X-ray on Tasks as the local chip does; no list to fall back to, so `none` runs when X-ray is off
+    /// or the read finds no Tasks tab.
+    @MainActor static func todosTapped(in win: AgentsNSWindow?, none: @escaping () -> Void) {
+        win?.todosChipTapped(listOpen: false, list: none)
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: sz(8)) {
             Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1).truncationMode(.middle)
             Text(AgentSidebarRowView.hostLabel(remote.host)).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
             Spacer(minLength: sz(4))
-            Image(systemName: "checklist").font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
-                .opacity(0.45).help(Self.todosReason).accessibilityLabel("Todo list").accessibilityValue(Self.todosReason)
+            let noList = none == row.id
+            Button { Self.todosTapped(in: AgentsNSWindow.window(of: pane)) { none = row.id } } label: {
+                Image(systemName: "checklist").font(Neon.font(11)).foregroundStyle(Neon.textSecondary).opacity(noList ? 0.45 : 1)
+            }
+            .buttonStyle(.plain).help(Self.todosHelp(noList: noList)).accessibilityLabel(Self.todosOpens)
+            .accessibilityValue(noList ? Self.todosReason : "")
             if !AgentWindowBand.shown {
                 // The picker's own buttons carry their own help, which would win over a reason set around them.
                 Image(systemName: AgentVerbosity.default.icon).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
@@ -1820,7 +1836,7 @@ struct AgentDetailView: View {
         } else if let row = model.selectedRow, let r = row.remote {
             // #836 (b): another machine's session: Terminal only, under a header whose transcript controls are off.
             VStack(spacing: 0) {
-                AgentRemoteHeader(row: row, remote: r).modifier(AgentPaneProbe(kind: "header"))
+                AgentRemoteHeader(row: row, remote: r, pane: model.layout.focused).modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTerminalPane(controller: model.terminal, open: {})
                     .frame(minHeight: 0, maxHeight: .infinity)
