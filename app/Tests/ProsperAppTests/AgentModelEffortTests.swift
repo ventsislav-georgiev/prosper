@@ -163,26 +163,28 @@ final class AgentModelEffortTests: XCTestCase {
 
     // MARK: - Bounds
 
-    func testTwoMiBFileWithNoAssistantInTheLastMiBReadsAtMostOneMiB() {
-        // An assistant line at the very start is outside the last 1 MiB and must not be found.
+    func testFileWithNoAssistantInTheBudgetReadsAtMostTheBudget() {
+        // #1372: an assistant line at the very start is outside the last 16 MiB (the budget) and must not be found.
         let filler = line(["type": "user", "message": ["content": String(repeating: "x", count: 1000)]])
         var data = assistant("claude-early-1-1")
-        while data.count < 2 << 20 { data += filler }
-        data = data.prefix(2 << 20) + Data()
-        XCTAssertEqual(data.count, 2 << 20)
+        while data.count < 17 << 20 { data += filler }
+        data = data.prefix(17 << 20) + Data()
+        XCTAssertEqual(data.count, 17 << 20)
         let c = Counting(files: ["/Users/example/big.jsonl": data])
         XCTAssertTrue(readPath("/Users/example/big.jsonl", c) == nil)
-        XCTAssertLessThanOrEqual(c.bytes, 1 << 20)
+        XCTAssertEqual(c.bytes, 16 << 20)
         XCTAssertLessThanOrEqual(c.longest, 1 << 16)
         XCTAssertGreaterThan(c.reads, 0)
     }
 
-    func testOneLineLongerThanTheWindowReadsAsNothing() {
+    func testOneLineLongerThanMaxLineReadsAsNothing() {
         let huge = Data("{\"type\":\"assistant\",\"pad\":\"".utf8) + Data(repeating: 0x78, count: 1_300_000)
             + Data("\",\"message\":{\"model\":\"claude-huge-1-1\"}}\n".utf8)
         let c = Counting(files: ["/Users/example/huge.jsonl": huge])
         XCTAssertTrue(readPath("/Users/example/huge.jsonl", c) == nil)
-        XCTAssertLessThanOrEqual(c.bytes, 1 << 20)
+        // #1372: stepped over to the file start (under the budget), never parsed.
+        XCTAssertEqual(c.bytes, huge.count)
+        XCTAssertLessThanOrEqual(c.longest, 1 << 16)
     }
 
     func testLineSpanningSeveralStepsIsFoundWhole() {

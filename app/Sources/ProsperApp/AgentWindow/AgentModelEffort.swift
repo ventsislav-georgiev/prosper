@@ -1,15 +1,18 @@
 import Foundation
 
 /// #1198 (P1a of #1192): the model and effort of a session's last answer, read from the tail of
-/// its transcript. The file is outside data: the read is bounded (64 KiB steps, 1 MiB in all),
-/// every offset is derived from the stat'd size, and a line that is too long, does not parse,
-/// holds a NUL or is not UTF-8 reads as nothing. No model id is spelled here.
+/// its transcript. The file is outside data: the read is bounded (64 KiB steps, `budget` in all),
+/// every offset is derived from the stat'd size, and a line that is too long (stepped over, #1372),
+/// does not parse, holds a NUL or is not UTF-8 reads as nothing. No model id is spelled here.
 struct AgentModelEffort: Equatable, Sendable {
     let model: String
     /// One of `levels`, or nil.
     let effort: String?
 
-    static let window: UInt64 = 1 << 20
+    /// #1372: bytes read per pass at most, back from the end; a line longer than `maxLine` is stepped over (its
+    /// bytes are dropped, not kept) and the scan goes on before it.
+    static let budget: UInt64 = 16 << 20
+    static let maxLine = 1 << 20
     static let step: UInt64 = 1 << 16
     static let levels: Set<String> = ["low", "medium", "high", "xhigh", "max"]
     static let maxModelLength = 128
@@ -50,28 +53,40 @@ struct AgentModelEffort: Equatable, Sendable {
 
     // MARK: - Reader
 
-    /// The newest main-thread assistant line with a string model in the last `window` bytes of a
-    /// file of `size` bytes; `read(offset, length)` returns those bytes.
+    /// The newest main-thread assistant line with a string model in the last `budget` bytes of a
+    /// file of `size` bytes; `read(offset, length)` returns those bytes. Held at once: one step plus at most
+    /// `maxLine` bytes of a line not yet whole.
     static func read(size: UInt64, read: (_ offset: UInt64, _ length: Int) -> Data?) -> AgentModelEffort? {
         guard size > 0 else { return nil }
-        let floor = size > window ? size - window : 0
+        let floor = size > budget ? size - budget : 0
         var end = size
-        var carry = Data()   // the bytes after the first newline of what is read so far
+        var carry = Data()   // the bytes after the first newline of what is read so far, at most maxLine
+        var skipping = false   // #1372: inside a line longer than maxLine, whose bytes are dropped up to its newline
         while end > floor {
-            // end > floor here, so the difference is positive and at most `window`.
+            // end > floor here, so the difference is positive and at most `budget`.
             let start = end - floor > step ? end - step : floor
             let length = Int(end - start)   // <= step
             guard let chunk = read(start, length), chunk.count == length else { return nil }
-            var lines = (chunk + carry).split(separator: 0x0A, maxSplits: Int.max, omittingEmptySubsequences: false)
+            let buffer: Data
+            if skipping {
+                // Still inside the long line: nothing of it is kept; the bytes before its start are lines again.
+                guard let newline = chunk.lastIndex(of: 0x0A) else { end = start; continue }
+                buffer = chunk.prefix(upTo: newline)
+                skipping = false
+            } else {
+                buffer = chunk + carry
+            }
+            var lines = buffer.split(separator: 0x0A, maxSplits: Int.max, omittingEmptySubsequences: false)
             guard let first = lines.first else { return nil }
             lines.removeFirst()
             for line in lines.reversed() {
                 if let found = parse(Data(line)) { return found }
             }
             // The first piece is a whole line only when the read reached the file start; at the
-            // bound it was cut (a line longer than the window reads as nothing).
+            // bound it was cut (a line longer than the budget reads as nothing).
             if start == 0 { return parse(Data(first)) }
             carry = Data(first)
+            if carry.count > maxLine { carry = Data(); skipping = true }
             end = start
         }
         return nil
@@ -116,7 +131,8 @@ struct AgentModelEffort: Equatable, Sendable {
     /// read last, read again for a new row, a new path, a file that shrank, or a file that grew under a
     /// row that is not working now (a growing file under a working row is not read: the answer is not
     /// over; an answer seen only as idle before and after is read, #1209). The
-    /// read size is kept even when nothing was found, so an empty result is cached too.
+    /// read size is kept even when nothing was found, so an empty result is cached too. #1372: a read that finds
+    /// nothing keeps the model already known for the same Claude session id; another id is never carried.
     static func resolve(_ row: AgentSession, previous: AgentSession?, io: IO) -> AgentSession {
         guard let path = row.transcriptPath, !path.isEmpty, let size = io.size(path) else { return row }
         var s = row
@@ -130,6 +146,9 @@ struct AgentModelEffort: Equatable, Sendable {
         }
         let found = read(size: size) { io.read(path, $0, $1) }
         s.model = found?.model; s.effort = found?.effort; s.modelReadSize = size
+        if found == nil, let p = previous, p.model != nil, let sid = row.claudeSessionID, p.claudeSessionID == sid {
+            s.model = p.model; s.effort = p.effort
+        }
         return s
     }
 

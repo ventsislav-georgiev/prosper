@@ -1537,6 +1537,8 @@ tag from the now-released section and put it on the new top draft.
 - Settings > Agent Island: the Pairs suffix refusal now says it needs at least one letter, and New
   session gains a Sidekick prompt field for the sidekick's first message (used once the New session
   form can start a sidekick). (#907)
+- Agent Sessions: the model and effort badges show on long-running sessions with very large
+  transcripts, and no longer vanish while the same Claude session runs. (#1372)
 
 ## v2.174.0
 
