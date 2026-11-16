@@ -552,14 +552,17 @@ struct KitStore: Sendable {
                               otherKitSlugs: otherKitSlugs, reader: reader)
     }
 
-    /// spec 4.2 / 4.12 test 2: `*.md` in the staged copy rendered in place through the atomic writer, mode kept;
+    /// spec 4.2 / 4.12 test 2: `*.md` in the staged copy rendered in place through replace(in:), mode kept;
     /// every other file is never rewritten.
     func render(_ s: KitStaged, _ c: KitRenderContext) throws {
         for e in try walk(s.path, byteCap: Self.localByteCap) where e.mode != nil && KitRender.isRendered(e.rel) {
             let out = KitRender.renderFile(e.rel, e.data, c)
             guard out != e.data, let mode = e.mode else { continue }
-            let target = URL(fileURLWithPath: s.path + "/" + e.rel)
-            try fs.writer.replace(target, with: fs.writer.writeTemp(Array(out), besides: target, mode: mode))
+            let parts = e.rel.split(separator: "/").map(String.init)
+            guard let name = parts.last else { continue }
+            var dir = try fs.openDir(s.path)
+            for p in parts.dropLast() { dir = try dir.dir(p) }
+            try replace(in: dir, name, Data(out), mode: mode, label: s.path + "/" + e.rel)
         }
     }
 
@@ -575,8 +578,7 @@ struct KitStore: Sendable {
         if let old = recordedSlug() { return old }
         guard fs.kind(layout.kitEnv) == .missing else { throw KitStoreError.kitEnvUnreadable }
         try ensureLayout()
-        let target = URL(fileURLWithPath: layout.kitEnv)
-        try fs.writer.replace(target, with: fs.writer.writeTemp(Array("KIT_SLUG='\(slug)'\n".utf8), besides: target, mode: Self.envMode))
+        try replace(in: try fs.openDir(layout.root), "kit.env", Data("KIT_SLUG='\(slug)'\n".utf8), mode: Self.envMode, label: layout.kitEnv)
         return slug
     }
 

@@ -852,6 +852,55 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(temps, [], "no temp is left behind")
     }
 
+    /// #1396: render writes through replace(in:). A link that takes the place of a rendered .md after the walk read it
+    /// is refused and its target (a file of the row's own) is untouched.
+    func testRenderRefusesALinkThatReplacesARenderedFile() throws {
+        let (f, home, store) = try scene()
+        let s = try stage(store, f.kit)
+        let ctx = context(home, store)
+        let victim = f.root.appendingPathComponent("victim.txt")
+        try Data("keep".utf8).write(to: victim)
+        let (sp, md) = (s.path, s.path + "/CLAUDE.md")
+        let hooked = try KitStore(configHome: home, extID: Self.ext, fs: KitHookFS(afterRead: { dir, name in
+            guard dir == sp, name == "CLAUDE.md" else { return }
+            _ = unlink(md)
+            _ = symlink(victim.path, md)
+        }))
+        XCTAssertThrowsError(try hooked.render(s, ctx)) { XCTAssertEqual($0 as? KitStoreError, .link(md)) }
+        XCTAssertEqual(text(victim.path), "keep")
+        var st = stat()
+        XCTAssertEqual(lstat(md, &st), 0)
+        XCTAssertEqual(st.st_mode & S_IFMT, S_IFLNK, "the link is still there")
+        XCTAssertEqual(list(s.path).filter { $0.contains(".prosper-") }, [], "no temp is left behind")
+    }
+
+    func testRenderRefusesAReadOnlyRenderedFile() throws {
+        let (f, home, store) = try scene()
+        let s = try stage(store, f.kit)
+        let md = s.path + "/CLAUDE.md"
+        let before = text(md)
+        XCTAssertEqual(chmod(md, 0o400), 0)
+        XCTAssertThrowsError(try store.render(s, context(home, store))) { XCTAssertEqual($0 as? KitStoreError, .notWritable(md)) }
+        XCTAssertEqual(text(md), before)
+        XCTAssertEqual(mode(md), 0o400)
+        XCTAssertEqual(list(s.path).filter { $0.contains(".prosper-") }, [], "no temp is left behind")
+    }
+
+    /// #1396: recordSlug writes through replace(in:). The existence check is made to see "missing" (a link that appears
+    /// after it), so the write itself must refuse the link.
+    func testRecordSlugRefusesALinkInPlaceOfKitEnv() throws {
+        let (f, home, _) = try scene()
+        let victim = f.root.appendingPathComponent("victim.txt")
+        try Data("keep".utf8).write(to: victim)
+        let layout = try KitStore.layout(configHome: home, extID: Self.ext)
+        let store = try KitStore(configHome: home, extID: Self.ext, fs: KitHookFS(missing: [layout.kitEnv]))
+        try store.ensureLayout()
+        XCTAssertEqual(symlink(victim.path, layout.kitEnv), 0)
+        XCTAssertThrowsError(try store.recordSlug("example-kit")) { XCTAssertEqual($0 as? KitStoreError, .link(layout.kitEnv)) }
+        XCTAssertEqual(text(victim.path), "keep")
+        XCTAssertEqual(list(layout.root).filter { $0.contains(".prosper-") }, [], "no temp is left behind")
+    }
+
     /// R1391-s1 (QA r1322): kit.env keeps mode 0600 but an access list (set in process on the row's own file, no chflags)
     /// denies writing its data to the current user: only faccessat(AT_EACCESS) sees that; a mode-bit check would not.
     func testReplaceRefusedByAnACLDenyWhileTheModeAllowsIt() throws {
@@ -1168,6 +1217,49 @@ final class KitFailNthRename: KitFS, @unchecked Sendable {
         func remove(_ name: String, dir: Bool) throws { try inner.remove(name, dir: dir) }
         func rename(_ name: String, to other: any KitDir, _ newName: String, swap: Bool) throws {
             if fs.failsNow() { throw KitStoreError.io("rename", EIO) }
+            try inner.rename(name, to: (other as? Dir)?.inner ?? other, newName, swap: swap)
+        }
+        func writable(_ name: String) -> Bool { inner.writable(name) }
+        func write(_ name: String, _ data: Data, mode: mode_t) throws { try inner.write(name, data, mode: mode) }
+    }
+}
+
+/// A KitFS over the real one: `afterRead(dirPath, name)` runs after a dir handle reads a file (a swap between the
+/// walk's read and the write), and `missing` paths report .missing from kind(path). Every path is the row's own.
+final class KitHookFS: KitFS, @unchecked Sendable {
+    private let base = KitPOSIXFS()
+    let afterRead: @Sendable (String, String) -> Void
+    let missing: Set<String>
+    init(afterRead: @escaping @Sendable (String, String) -> Void = { _, _ in }, missing: Set<String> = []) {
+        self.afterRead = afterRead
+        self.missing = missing
+    }
+
+    var writer: any ManagedConfigFileWriter { base.writer }
+    func openDir(_ path: String) throws -> any KitDir { Dir(self, try base.openDir(path)) }
+    func kind(_ path: String) -> KitFileKind { missing.contains(path) ? .missing : base.kind(path) }
+    func names(_ dir: String) -> [String]? { base.names(dir) }
+    func read(_ path: String, limit: Int) -> Data? { base.read(path, limit: limit) }
+    func ensureDir(_ path: String, narrow: Bool) throws { try base.ensureDir(path, narrow: narrow) }
+    func create(_ path: String, _ data: Data, mode: mode_t) throws { try base.create(path, data, mode: mode) }
+    func rename(_ from: String, _ to: String) throws { try base.rename(from, to) }
+
+    final class Dir: KitDir {
+        let fs: KitHookFS
+        let inner: any KitDir
+        init(_ fs: KitHookFS, _ inner: any KitDir) { self.fs = fs; self.inner = inner }
+        var path: String { inner.path }
+        func names() -> [String]? { inner.names() }
+        func kind(_ name: String) -> KitFileKind { inner.kind(name) }
+        func modified(_ name: String) -> Date? { inner.modified(name) }
+        func dir(_ name: String) throws -> any KitDir { Dir(fs, try inner.dir(name)) }
+        func read(_ name: String, limit: Int) -> Data? {
+            let d = inner.read(name, limit: limit)
+            fs.afterRead(inner.path, name)
+            return d
+        }
+        func remove(_ name: String, dir: Bool) throws { try inner.remove(name, dir: dir) }
+        func rename(_ name: String, to other: any KitDir, _ newName: String, swap: Bool) throws {
             try inner.rename(name, to: (other as? Dir)?.inner ?? other, newName, swap: swap)
         }
         func writable(_ name: String) -> Bool { inner.writable(name) }
