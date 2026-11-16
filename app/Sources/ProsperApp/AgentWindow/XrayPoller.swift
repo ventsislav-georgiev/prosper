@@ -5,9 +5,11 @@ import AppKit
 // hidden; one read in flight (a tick while it runs is skipped, never queued); closing the panel or switching the pane
 // to another session cancels the read (the product runner SIGTERMs its dch); an ended session keeps its one open read.
 // #1381 (design 2.2 / 3.4): the Memory tab the same way every 30 s, sharing the one read in flight with Tasks.
+// #1389: Prompts and Responses from dch's chapters (`--xray <n> --json`) at the Tasks cadence, 5 s local, 15 s remote.
 
 extension XrayPanelModel {
-    /// Design 3.4 / 3.5: Tasks 5 s for a local session, 15 s for a remote one; Memory 30 s (#1381, design 2.2).
+    /// Design 3.4 / 3.5: Tasks (#1389: and dch's chapters) 5 s for a local session, 15 s for a remote one; Memory 30 s
+    /// (#1381, design 2.2).
     var interval: TimeInterval { loaded && tab == .memory ? 30 : target.dir == nil ? 15 : 5 }
 
     /// One tick (the product's ticker fires each second; rows call it with an injected clock).
@@ -17,11 +19,14 @@ extension XrayPanelModel {
         let s = paneState()
         guard s.visible, reading == nil, let dch, let run else { return }
         // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again
-        guard !loaded || s.live && (tab == .tasks || tab == .memory && memory != nil) else { return }
+        // #1389: Prompts/Responses poll dch only on a dch-chapters pane whose read answered (a Transcript pane never)
+        let prose = (tab == .prompts || tab == .responses) && dchChapters != nil && fromDch()
+        guard !loaded || s.live && (tab == .tasks || tab == .memory && memory != nil || prose) else { return }
         guard now().timeIntervalSince(lastRead) >= interval else { return }
         // design 3.9: no Tasks retry until the dch path's mtime moves
         if failed, tab == .tasks, mtime(dch) == failedMtime { return }
-        if !loaded { readBoth() } else if tab == .memory { readMemory() } else { readTasks(dch, run) }
+        if !loaded { readBoth() } else if tab == .memory { readMemory() } else if prose { readChapters(dch, run) }
+        else { readTasks(dch, run) }
     }
 
     private func readTasks(_ dch: String, _ run: @escaping XrayPanels.Run) {
@@ -34,6 +39,28 @@ extension XrayPanelModel {
             self.take(r)
             self.landed()
         }
+    }
+
+    /// #1389: one chapters read (`--xray <n> --json`), labelled as Tasks' (takeChapters).
+    private func readChapters(_ dch: String, _ run: @escaping XrayPanels.Run) {
+        lastRead = now()
+        let env = target.env, a = target.chaptersArgs
+        reading = Task { [weak self] in
+            let r = await run(dch, a, env)
+            guard !Task.isCancelled, let self else { return }
+            self.reading = nil
+            self.takeChapters(r)
+            self.landed()
+        }
+    }
+
+    /// #1389, as take: exit 4 or 7 (or a remote -1) keeps the rows and says "host unreachable"; any other answer
+    /// replaces them, so exit 1 (the host's dch does not know the form), 6 (refused) or bad JSON leaves no Prompts or
+    /// Responses tab (nil), and with the tab gone the tick reads no more chapters.
+    func takeChapters(_ r: (status: Int32, out: Data)) {
+        if unreached(r.status) { unreachable = true; return }
+        unreachable = false
+        dchChapters = r.status == 0 ? XrayChapters.parse(r.out) : nil
     }
 
     /// #1381: one `--memory` read in `reading` (the tab switch's, the pending one, the 30 s poll). A host that did not

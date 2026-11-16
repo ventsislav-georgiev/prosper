@@ -9,6 +9,7 @@ import SwiftUI
 // #1352: a task row and the memory card's "Read the prompt" jump to the prompt that last changed it (design 3.3).
 // #1354 (P6 step A): Prompts and Responses from the pane's own chapters (Transcript mode), newest first; automatic rows
 // hidden until shown, other sessions' messages marked and hideable (dch 1.78.0+, operator ruling Q1).
+// #1389 (P6 step B): the same tabs for a Terminal-mode pane and a remote session, from `dch --xray <n> --json`'s chapters.
 
 /// The tabs in dch's order (xview.c xv_ord); later phases put Refs and Search between Responses and Tasks.
 enum XrayTab: String, CaseIterable { case prompts = "Prompts", responses = "Responses", tasks = "Tasks", memory = "Memory" }
@@ -28,6 +29,8 @@ struct XrayTarget: Equatable {
     }
 
     func args(_ form: String) -> [String] { ["--xray", name, "--\(form)", "--json"] }
+    /// #1389: dch README "dch --xray <n> --json  # a session's chapters (prompts / commands) as one JSON object".
+    var chaptersArgs: [String] { ["--xray", name, "--json"] }
     var env: [String: String] { AgentIsland.listEnv(dir: dir ?? DchCommand.defaultSocketDir) }
 }
 
@@ -54,6 +57,16 @@ final class XrayPanels: ObservableObject {
         return m.focusedRuntime?.transcript
     }
 
+    /// #1389: the pane reads its Prompts and Responses from dch: a remote row, or a local one in Terminal mode (a
+    /// Transcript-mode pane keeps its own chapters, never both). Off under XCTest as `run` is: rows put `fromDch` here.
+    static var chaptersRead: @MainActor (UUID, XrayTarget) -> Bool = { NSClassFromString("XCTestCase") == nil && fromDch($0, $1) }
+
+    /// The focused pane's mode through the window model (no model or another pane focused: no read).
+    static func fromDch(_ pane: UUID, _ target: XrayTarget) -> Bool {
+        guard let m = model(pane), m.layout.focused == pane else { return false }
+        return target.dir == nil || m.paneMode != .transcript
+    }
+
     /// #1352: the window's presenter, the transcript, the link opener and the cwd, for the panel that came to `pane`.
     private func wire(_ m: XrayPanelModel, _ pane: UUID) {
         let target = m.target
@@ -63,6 +76,7 @@ final class XrayPanels: ObservableObject {
         }
         m.dismiss = { Self.window(pane)?.cards.close() }
         m.transcript = { Self.transcript(pane, target) }
+        m.fromDch = { Self.chaptersRead(pane, target) }
         m.openURL = { Self.model(pane)?.openURL($0) }
         m.cwd = { Self.model(pane)?.focusedRuntime?.transcript.cwd }
     }
@@ -119,6 +133,10 @@ final class XrayPanelModel: ObservableObject {
     @Published var tasks: XrayTasks?   // set here and by the poller (XrayPoller.swift)
     /// nil: no Memory tab (exit not 0, no row).
     @Published private(set) var memory: XrayMemory?
+    /// #1389: Prompts and Responses from dch's chapters (Terminal mode, remote); nil: none (not read, exit not 0, bad JSON).
+    @Published var dchChapters: [TranscriptOutline.Chapter]?
+    /// #1389: this pane reads dch's chapters (XrayPanels.chaptersRead); false: never runs that read.
+    var fromDch: () -> Bool = { false }
     @Published private(set) var loaded = false
     @Published var tab: XrayTab
     @Published var filter = ""
@@ -184,19 +202,27 @@ final class XrayPanelModel: ObservableObject {
         guard let dch, let run else { return }
         lastRead = now()
         let env = target.env, a = target.args("tasks"), b = target.args("memory")
+        let c = fromDch() ? target.chaptersArgs : nil   // #1389: the third read only for a dch-chapters pane
+        let chapters: @Sendable () async -> (status: Int32, out: Data)? = {
+            guard let c else { return nil }
+            return await run(dch, c, env)
+        }
         reading = Task { [weak self] in
             async let t = run(dch, a, env)
             async let m = run(dch, b, env)
-            let (tr, mr) = await (t, m)
+            async let k = chapters()
+            let (tr, mr, kr) = await (t, m, k)
             guard !Task.isCancelled else { return }   // #1368: closed or switched away: the SIGTERMed answer is not news
             self?.reading = nil
-            self?.apply(tasks: tr, memory: mr)
+            self?.apply(tasks: tr, memory: mr, chapters: kr)
         }
     }
 
-    func apply(tasks tr: (status: Int32, out: Data), memory mr: (status: Int32, out: Data)) {
+    func apply(tasks tr: (status: Int32, out: Data), memory mr: (status: Int32, out: Data),
+               chapters kr: (status: Int32, out: Data)? = nil) {
         take(tr)
         takeMemory(mr)
+        if let kr { takeChapters(kr) }
         loaded = true
         if let fallback, tasks == nil {
             if isCurrent() { close(); fallback() }   // another session now shown: the list never opens over it
@@ -225,9 +251,10 @@ final class XrayPanelModel: ObservableObject {
         return t.schema == 1 && !t.tasks.isEmpty ? t : nil
     }
 
-    /// #1354: Prompts and Responses while the pane's transcript is there (Transcript mode, a local session).
+    /// #1354: Prompts and Responses while the pane's transcript is there (Transcript mode, a local session); #1389: or
+    /// while dch's chapters read answered (Terminal mode, remote).
     var tabs: [XrayTab] {
-        let prose = transcript() != nil
+        let prose = transcript() != nil || dchChapters != nil
         return XrayTab.allCases.filter {
             switch $0 {
             case .prompts, .responses: prose
@@ -281,7 +308,8 @@ final class XrayPanelModel: ObservableObject {
         return out
     }
 
-    /// #1353 (R1381-i1): the Memory tab's footer: "host unreachable" when the last read did not reach the host.
+    /// #1353 (R1381-i1): the Memory tab's footer: "host unreachable" when the last read did not reach the host; #1389:
+    /// Prompts' and Responses' too.
     var memoryFooter: [String] { unreachable ? ["host unreachable"] : [] }
 
     /// Esc: clears the filter, then closes.
@@ -343,9 +371,9 @@ final class XrayPanelModel: ObservableObject {
 
     // MARK: #1354 Prompts and Responses
 
-    /// The pane's chapters (none without its transcript); a new poll or page redraws the panel.
+    /// The pane's chapters (#1389: without its transcript, dch's); a new poll or page redraws the panel.
     var chapters: [TranscriptOutline.Chapter] {
-        guard let tm = transcript() else { return [] }
+        guard let tm = transcript() else { return dchChapters ?? [] }
         if watched !== tm {
             watched = tm
             watch = tm.$chapters.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
@@ -666,6 +694,7 @@ struct XrayPanelView: View {
                     Button(f.button, action: f.toggle).buttonStyle(.link).font(Neon.font(10, weight: .medium))
                 }
             }
+            ForEach(panel.memoryFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
         }
         .padding(sz(10))
     }
