@@ -1547,6 +1547,8 @@ tag from the now-released section and put it on the new top draft.
   which stays black. (#1375)
 - In the Agent Sessions terminal, Cmd-Backspace deletes the line, and Cmd-Left/Right and Option-
   Left/Right move to the line start/end and by word, as in Ghostty. (#1376)
+- The Agent Sessions sidebar no longer shows a session's old name or state after it moves between
+  groups (Needs you, Sessions, Sidekicks); reopening the window is no longer needed. (#1373)
 
 ## v2.174.0
 

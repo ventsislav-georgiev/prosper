@@ -736,14 +736,14 @@ struct AgentSidebarView: View {
                                                 AgentHistoryMenuItems(store: store, record: r, groups: groups) { model.act($0, r) }
                                             }
                                         }
-                                        .id(row.id)
+                                        .id(ItemID(section: section.title, row: row.id))
                                     }
                                 }
                             }
                         }
                         .padding(.horizontal, sz(8)).padding(.bottom, sz(12))
                     }
-                    .onChange(of: model.selection) { _, id in if let id { proxy.scrollTo(id) } }
+                    .onChange(of: model.selection) { _, id in if let id, let item = item(id) { proxy.scrollTo(item) } }
                 }
             }
             Spacer(minLength: 0)
@@ -751,6 +751,19 @@ struct AgentSidebarView: View {
             if let store = model.store { AgentDirStatusStrip(store: store) }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// #1373: a row's identity in the one lazy list is its section and its row. With the row's id alone, a session that
+    /// moved from one section to another (Needs you to Sessions, Sessions to Sidekicks) kept its old section's cell and
+    /// drew its old title, state and number until the window was reopened.
+    struct ItemID: Hashable {
+        let section: String
+        let row: AgentSidebar.RowID
+    }
+
+    /// The selection's scroll target: its row in the section that holds it now (nil: not listed).
+    func item(_ id: AgentSidebar.RowID) -> ItemID? {
+        model.sections.first { $0.rows.contains { $0.id == id } }.map { ItemID(section: $0.title, row: id) }
     }
 
     /// #1103: a live row's Open in terminal: that row selected first (as ask does), then the header's action.
