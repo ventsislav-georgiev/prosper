@@ -84,11 +84,18 @@ if [[ -n "$PREV_TAG" ]]; then
   done
 fi
 
+# Detached HEAD is fine (release worktree); a named branch other than main is not.
+BR=$(git symbolic-ref -q --short HEAD || true)
+if [[ -n "$BR" && "$BR" != main ]]; then
+  echo "error: on branch $BR; release from main or a detached HEAD" >&2
+  exit 1
+fi
+
 echo "Releasing $NEXT (from ${LATEST:-explicit})"
 
 # Push main first so the branch ref advances with the tag, then push the tag.
 # release.yml triggers on the v* tag and builds the exact tagged commit.
-git push origin HEAD
+git push origin HEAD:refs/heads/main
 git tag -s "$NEXT" -m "Prosper $NEXT"
 git push origin "$NEXT"
 echo "Pushed $NEXT — release.yml will build, sign, notarize, and publish the Release."
