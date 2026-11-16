@@ -122,12 +122,15 @@ protocol KitDir: AnyObject {
     func writable(_ name: String) -> Bool
     /// the child's inode (no follow): a rename keeps it; nil when it cannot be read
     func identity(_ name: String) -> UInt64?
+    /// the child's owner (no follow); nil when it cannot be read
+    func owner(_ name: String) -> uid_t?
     /// atomic: a new `.<name>.prosper-<UUID>` (O_EXCL | O_NOFOLLOW, exactly `mode`, no ACL, fsync'd), then renameat over `name`
     func write(_ name: String, _ data: Data, mode: mode_t) throws
 }
 
 extension KitDir {
     func identity(_ name: String) -> UInt64? { nil }
+    func owner(_ name: String) -> uid_t? { nil }
 }
 
 final class KitPOSIXDir: KitDir {
@@ -199,6 +202,8 @@ final class KitPOSIXDir: KitDir {
     func writable(_ name: String) -> Bool { Self.isName(name) && faccessat(fd, name, W_OK, AT_EACCESS) == 0 }
 
     func identity(_ name: String) -> UInt64? { lstatAt(name).map { UInt64($0.st_ino) } }
+
+    func owner(_ name: String) -> uid_t? { lstatAt(name)?.st_uid }
 
     func write(_ name: String, _ data: Data, mode: mode_t) throws {
         guard Self.isName(name) else { throw KitStoreError.badName(path) }
@@ -750,7 +755,8 @@ struct KitStore: Sendable {
     /// (a link is kept, never followed), never recursive except into stageCopy's own UUID dir. Only these dirs, each
     /// opened O_NOFOLLOW: kits/<ext-id>/tmp: stageCopy's temp (a UUID string, a dir or a regular file) and the runner's
     /// stdin temp (`stdin.` + 6 of [A-Za-z0-9], mktemp's XXXXXX; a regular file); kits/<ext-id>, its bin/ and
-    /// kit-runtime/: a writer temp (`.<name>.prosper-<UUID>`, a regular file). Returns the names removed (bare names).
+    /// kit-runtime/: a writer temp (`.<name>.prosper-<UUID>`, a regular file); <configHome>/<recorded slug>/ (L1): the
+    /// user's own layer, so only writeSettingsEnv's temp (isSettingsEnvTemp). Returns the names removed (bare names).
     @discardableResult
     func sweepStaleTemps(now: Date) throws -> [String] {
         var removed: [String] = []
@@ -769,7 +775,23 @@ struct KitStore: Sendable {
             }
         }
         if fs.kind(layout.kitRuntime) != .missing { removed += try sweep(try fs.openDir(layout.kitRuntime), now: now, Self.isWriterTemp) }
+        if let slug = recordedSlug() { removed += try sweepSettingsTemps(layout.configHome + "/" + slug, now: now) }
         return removed
+    }
+
+    /// L1: only `..settings.env.prosper-<UUID>` in the slug dir, never recursive. Anything but a real dir there (a link
+    /// included) is the user's and is skipped, never followed; openDir's O_NOFOLLOW refuses a link swapped in after the check.
+    private func sweepSettingsTemps(_ kitConfig: String, now: Date) throws -> [String] {
+        guard fs.kind(kitConfig) == .directory else { return [] }
+        return try sweep(try fs.openDir(kitConfig), now: now, Self.isSettingsEnvTemp)
+    }
+
+    /// exactly KitPOSIXDir.write's temp for .settings.env: `..settings.env.prosper-<UUID>`, a regular file only
+    static func isSettingsEnvTemp(_ n: String, _ kind: KitFileKind) -> Bool {
+        let mark = "..settings.env.prosper-"
+        guard case .file = kind, n.hasPrefix(mark) else { return false }
+        let id = String(n.dropFirst(mark.count))
+        return UUID(uuidString: id)?.uuidString == id
     }
 
     private func sweep(_ dir: any KitDir, now: Date, _ match: (String, KitFileKind) -> Bool) throws -> [String] {
@@ -903,11 +925,21 @@ struct KitStore: Sendable {
 
     /// <configHome>/<recorded slug>/.settings.env (0600) from KitRunner.settingsEnvText; the slug dir is made 0700 when
     /// missing (an existing one is the user's: never re-moded). No recorded slug: .noSlug; nil text: .envText(".settings.env").
-    func writeSettingsEnv(_ settings: [String: String]) throws {
+    /// After the write, stale temps of earlier writes in that dir are swept by `now` (L1); a failed sweep does not fail the write.
+    func writeSettingsEnv(_ settings: [String: String], now: Date = Date()) throws {
         guard let slug = recordedSlug() else { throw KitStoreError.noSlug }
         guard let text = KitRunner.settingsEnvText(settings) else { throw KitStoreError.envText(".settings.env") }
         let kitConfig = layout.configHome + "/" + slug
         try fs.ensureDir(kitConfig, narrow: false)
         try replace(in: try fs.openDir(kitConfig), ".settings.env", Data(text.utf8), mode: Self.envMode, label: kitConfig + "/.settings.env")
+        _ = try? sweepSettingsTemps(kitConfig, now: now)
+    }
+
+    /// <configHome>/<recorded slug>/.settings.env parsed by KitRunner.parseSettingsEnv (text, never sourced), keyed by the
+    /// variable name (KIT_<KEY>). [:] when no slug is recorded, or the file is missing, not a regular file or over the cap.
+    func readSettingsEnv() -> [String: String] {
+        guard let slug = recordedSlug(),
+              let d = fs.read(layout.configHome + "/" + slug + "/.settings.env", limit: KitRunner.settingsEnvCap) else { return [:] }
+        return KitRunner.parseSettingsEnv(d)
     }
 }

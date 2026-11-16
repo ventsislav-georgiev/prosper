@@ -148,6 +148,38 @@ enum KitRunner {
 
     static let reserved: Set<String> = ["KIT_DIR", "KIT_BIN", "KIT_CONFIG", "KIT_STATE_DIR", "KIT_STATUS"]
 
+    /// .settings.env's read cap: a form's few settings are far below it
+    static let settingsEnvCap = 64 << 10
+
+    /// The inverse of settingsEnvText, the runner's kv() and load() in Swift: per "\n" line, KIT_<[A-Z0-9_]+>='<text>'
+    /// where <text> is runs without ' joined by '\'' (one '). Any other line (a hand edit: unquoted, "$(...)", a CR
+    /// ending), a reserved name or bytes that are not UTF-8 are skipped; a later line wins. Nothing is run or expanded:
+    /// '$(x)' reads as the literal text. Over settingsEnvCap: [:].
+    static func parseSettingsEnv(_ data: Data) -> [String: String] {
+        guard data.count <= settingsEnvCap else { return [:] }
+        let quote = UInt8(ascii: "'"), escaped = Array("'\\''".utf8)
+        var out: [String: String] = [:]
+        for line in data.split(separator: UInt8(ascii: "\n")) {
+            let b = Array(line)
+            guard let eq = b.firstIndex(of: UInt8(ascii: "=")) else { continue }
+            let key = b[..<eq], rest = b[(eq + 1)...]
+            guard key.count > 4, key.starts(with: Array("KIT_".utf8)),
+                  key.allSatisfy({ (65...90).contains($0) || (48...57).contains($0) || $0 == 95 }),
+                  rest.count >= 2, rest.first == quote, rest.last == quote else { continue }
+            let body = Array(rest.dropFirst().dropLast())
+            var value: [UInt8] = [], i = 0, ok = true
+            while i < body.count {
+                if body[i] != quote { value.append(body[i]); i += 1; continue }
+                guard body[i...].starts(with: escaped) else { ok = false; break }
+                value.append(quote); i += escaped.count
+            }
+            guard ok, let k = String(bytes: key, encoding: .utf8), !reserved.contains(k),
+                  let v = String(bytes: value, encoding: .utf8) else { continue }
+            out[k] = v
+        }
+        return out
+    }
+
     private static func assignments(_ pairs: [(String, String)]) -> String? {
         var out = ""
         for (name, value) in pairs {

@@ -1050,6 +1050,80 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(list(store.layout.kitRuntime), ["prosper-kit-run"])
         XCTAssertEqual(list(store.layout.root).filter { $0.hasPrefix(".") }, [])
     }
+
+    // #918 S2 (L1): the slug dir is the user's own layer: only writeSettingsEnv's own temp is ever swept there
+    func testSweepRemovesOnlyStaleSettingsEnvTempsInTheSlugDir() throws {
+        let (_, home, store) = try scene()
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        let dir = home.path + "/example-kit/"
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: dir + "sub", withIntermediateDirectories: true)
+        let now = Date()
+        let old = now.addingTimeInterval(-3600)
+        let id = { UUID().uuidString }
+        let stale = "..settings.env.prosper-" + id(), fresh = "..settings.env.prosper-" + id()
+        let notes = "notes.prosper-" + id(), localMD = ".local.md.prosper-" + id(), lower = "..settings.env.prosper-" + id().lowercased()
+        let twice = "..settings.env.prosper-" + id() + ".prosper-" + id(), asDir = "..settings.env.prosper-" + id()
+        let nested = "sub/..settings.env.prosper-" + id()
+        for n in [stale, fresh, notes, localMD, lower, twice, nested] { try Data("x".utf8).write(to: URL(fileURLWithPath: dir + n)) }
+        try fm.createDirectory(atPath: dir + asDir, withIntermediateDirectories: false)
+        for n in [stale, notes, localMD, lower, twice, asDir, nested, "sub"] { try aged(dir + n, old) }
+        XCTAssertEqual(try store.sweepStaleTemps(now: now), [stale])
+        XCTAssertEqual(list(dir), [asDir, fresh, localMD, lower, twice, notes, "sub"].sorted())
+        XCTAssertEqual(list(dir + "sub").count, 1, "never recursive")
+        XCTAssertEqual(try store.sweepStaleTemps(now: now.addingTimeInterval(KitStore.staleTempAge + 5)), [fresh])
+    }
+
+    func testSweepNeverFollowsALinkAtTheSlugDir() throws {
+        let (_, home, store) = try scene()
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        let elsewhere = home.path + "/elsewhere"
+        let temp = elsewhere + "/..settings.env.prosper-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: elsewhere, withIntermediateDirectories: false)
+        try Data("x".utf8).write(to: URL(fileURLWithPath: temp))
+        let now = Date()
+        try aged(temp, now.addingTimeInterval(-3600))
+        try FileManager.default.createSymbolicLink(atPath: home.path + "/example-kit", withDestinationPath: elsewhere)
+        XCTAssertEqual(try store.sweepStaleTemps(now: now), [])
+        XCTAssertEqual(list(elsewhere).count, 1, "the link's target is untouched")
+    }
+
+    func testWriteSettingsEnvSweepsItsOwnStaleTemps() throws {
+        let (_, home, store) = try scene()
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        let dir = home.path + "/example-kit/"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: false)
+        let now = Date()
+        let stale = "..settings.env.prosper-" + UUID().uuidString, localMD = ".local.md.prosper-" + UUID().uuidString
+        for n in [stale, localMD] {
+            try Data("x".utf8).write(to: URL(fileURLWithPath: dir + n))
+            try aged(dir + n, now.addingTimeInterval(-3600))
+        }
+        try store.writeSettingsEnv(["theme": "dark"], now: now)
+        XCTAssertEqual(list(dir), [".settings.env", localMD].sorted())
+    }
+
+    func testSettingsEnvRoundTripsThroughTheParserAndNothingIsExpanded() throws {
+        let (_, _, store) = try scene()
+        XCTAssertEqual(store.readSettingsEnv(), [:], "no slug recorded")
+        let settings = ["theme": "it's a 'dark' one", "level": "2", "Path": "/Users/example/My Kit", "empty": "", "cmd": "$(example)",
+                        "quotes": "'''", "wide": "caf\u{E9} \u{1F600}"]
+        let expected = Dictionary(uniqueKeysWithValues: settings.map { ("KIT_" + $0.key.uppercased(), $0.value) })
+        let text = try XCTUnwrap(KitRunner.settingsEnvText(settings))
+        XCTAssertEqual(KitRunner.parseSettingsEnv(Data(text.utf8)), expected)
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        XCTAssertEqual(store.readSettingsEnv(), [:], "no file yet")
+        try store.writeSettingsEnv(settings)
+        XCTAssertEqual(store.readSettingsEnv(), expected)
+        // hand-edited lines are skipped, never run or expanded; a quoted "$(...)" is literal text; a later line wins
+        let hand = "KIT_A=$(example)\nKIT_B=plain\nKIT_C=\"dq\"\nKIT_D='a'b'\nKIT_E='ok'\r\nkit_f='x'\nKIT_='x'\nKIT_DIR='/x'\n"
+            + "export KIT_G='x'\nKIT_H='kept'\nKIT_I='$(example)'\n# KIT_J='x'\nKIT_K='x'=''\nKIT_H='later'"
+        XCTAssertEqual(KitRunner.parseSettingsEnv(Data(hand.utf8)), ["KIT_H": "later", "KIT_I": "$(example)"])
+        let line = "KIT_H='x'\n"
+        let over = String(repeating: line, count: KitRunner.settingsEnvCap / line.utf8.count + 1)
+        XCTAssertGreaterThan(over.utf8.count, KitRunner.settingsEnvCap)
+        XCTAssertEqual(KitRunner.parseSettingsEnv(Data(over.utf8)), [:], "over the cap: nothing is read")
+    }
 }
 
 /// The stream seam's swap fake: when readdir of `label` reaches the end of the list, `action` runs once (it swaps
