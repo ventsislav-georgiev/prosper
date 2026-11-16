@@ -136,6 +136,20 @@ final class XrayPanelTasksTests: XCTestCase {
 
     // MARK: filter
 
+    /// #1381 (design 3.2): with no filter an empty group is not drawn (no "In progress 0"), as on the Memory tab; the
+    /// tab count and the spoken headers stay. Red at TIP: shownGroups kept every group when the filter was empty.
+    func testNoEmptyGroupIsDrawnWithNoFilter() {
+        let p = panel((0, Self.ndjson([Self.header, Self.rows[1], Self.rows[2], Self.rows[3], Self.done])))
+        XCTAssertEqual(p.filter, "")
+        XCTAssertEqual(p.shownGroups.map { "\($0.title) \($0.tasks.count)" }, ["Pending 2", "Done 1"], "the drawn headers")
+        XCTAssertEqual(p.title(.tasks), "Tasks 2")
+        XCTAssertEqual(p.spoken(.tasks), "Tasks, 2 open")
+        p.filter = "zzz-none"
+        XCTAssertEqual(p.shownGroups.count, 0, "a filter that matches nothing: no group")
+        p.filter = ""
+        XCTAssertEqual(p.shownGroups.map(\.title), ["Pending", "Done"])
+    }
+
     func testFilterIsCaseInsensitiveOverIdTitleNoteAndLabel() {
         let p = panel()
         func ids(_ q: String) -> [String] { p.filter = q; return p.shownGroups.flatMap(\.tasks).map(\.id) }

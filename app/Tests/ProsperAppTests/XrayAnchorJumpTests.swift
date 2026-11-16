@@ -124,6 +124,44 @@ final class XrayAnchorJumpTests: XCTestCase {
         XCTAssertEqual(XrayPanelModel.olderNote, "The prompt is older than the loaded part.")
     }
 
+    /// #1381 (R1352-i2): a bump (stop, or a new transcript file) while a jump waits on loadEarlier runs the waiter, so
+    /// the jump ends: re-entered on the fresh tail it is refused and the row opens the card. Red at TIP: bump() dropped
+    /// the waiters, so done never ran and the click did nothing.
+    func testBumpMidJumpIsRefusedAndTheCardOpens() throws {
+        let s = try scene(turns: 40, pageBytes: 2_048)
+        defer { s.model.stop() }
+        s.model.offMain = { _ in }   // the earlier page never lands: the jump waits on loadEarlier
+        var out: [TranscriptJumper.AnchorJump] = []
+        TranscriptJumper.of(s.model).jump(anchor: s.anchor(line: Self.promptLine(0)), in: s.model) { out.append($0) }
+        XCTAssertEqual(out, [], "waiting on the earlier page")
+        s.model.stop()
+        XCTAssertEqual(out, [.refused], "stop: the waiter ran once, refused on the fresh tail")
+
+        let n = try scene(turns: 40, pageBytes: 2_048)
+        defer { n.model.stop() }
+        n.model.offMain = { _ in }
+        let t = try XCTUnwrap(XrayTasks.parse(XrayPanelTasksTests.ndjson([XrayPanelTasksTests.header,
+            #"{"task":{"id":"1","title":"t","status":"pending","chapter":"\#(n.anchor(line: Self.promptLine(0)))"}}"#,
+            XrayPanelTasksTests.done])).tasks.first)
+        let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
+        var cards = 0, shown = 0, dismissed = 0
+        p.presentCard = { _ in cards += 1 }
+        p.present = { _, _ in shown += 1 }
+        p.dismiss = { dismissed += 1 }
+        p.transcript = { n.model }
+        p.activate(t)
+        XCTAssertEqual(cards, 0, "the jump waits")
+        let other = n.url.deletingLastPathComponent().appendingPathComponent("y.jsonl")
+        try JumpFixture.line(JumpFixture.user("Prompt new")).write(to: other)
+        n.model.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/tmp/dch-test", name: "api"), dchVersion: "1.30.0",
+                                             dchState: "idle", sessionId: "0b7c2f3e-1111-2222-3333-777788889999",
+                                             transcriptPath: other.path))
+        XCTAssertEqual(cards, 1, "a new file mid-jump: the plain card opens")
+        XCTAssertEqual(shown, 0, "no older note")
+        XCTAssertEqual(dismissed, 0)
+        XCTAssertEqual(p.card, t)
+    }
+
     /// Red with no-anchorOK: a 130-digit offset of zeros parses to 0 (turn 0's prompt) and would jump.
     func testBadAnchorIsRefused() throws {
         let s = try scene()

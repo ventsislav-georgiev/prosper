@@ -1562,6 +1562,10 @@ tag from the now-released section and put it on the new top draft.
   a needs-you dot; hover for the name), or Hidden, where it slides in when you point at the window's
   left edge and Control-Command-S keeps it open. Choose in Settings › Agent Island › Agent Sessions
   or the Go menu. (#1379)
+- X-ray's Memory tab now refreshes every 30 seconds while you watch it, switching to Memory while
+  another read is running no longer skips its refresh, empty task groups are no longer shown, and
+  clicking a task whose prompt was loading when the transcript changed now opens the task's card
+  instead of doing nothing. (#1381)
 
 ## v2.174.0
 

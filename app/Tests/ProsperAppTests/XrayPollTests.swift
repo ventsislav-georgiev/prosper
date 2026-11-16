@@ -405,4 +405,85 @@ final class XrayPollTests: XCTestCase {
         c4.started(44)
         XCTAssertEqual(fast.pids, [], "exited before started reported it: no signal at the launch")
     }
+
+    // MARK: #1381 (design 2.2 / 3.4): the Memory poll
+
+    /// Red at TIP: the poller read Tasks only (tick returned unless tab == .tasks), so no Memory read at +30/+60.
+    func testMemoryCadenceIsThirtySecondsWhileMemoryShows() async {
+        for remote in [false, true] {
+            let clock = Clock(), run = PollRun(), p = panel(remote: remote, clock)
+            await open(p, run)
+            p.select(.memory)
+            await p.reading?.value
+            XCTAssertEqual(run.memoryReads, 2, "the open read and the switch")
+            await tick(p, clock, at: 29)
+            XCTAssertEqual(run.memoryReads, 2, "remote \(remote): not before 30 s")
+            await tick(p, clock, at: 30)
+            XCTAssertEqual(run.memoryReads, 3, "remote \(remote): at 30 s")
+            await tick(p, clock, at: 59)
+            XCTAssertEqual(run.memoryReads, 3)
+            await tick(p, clock, at: 60)
+            XCTAssertEqual(run.memoryReads, 4)
+            XCTAssertEqual(run.tasksReads, 1, "Memory shown: no Tasks poll")
+            XCTAssertEqual(run.calls.last, ["--xray", remote ? "example-host:api" : "api", "--memory", "--json"])
+            XCTAssertEqual(p.memory?.count, 1)
+        }
+    }
+
+    /// On Tasks, hidden (window or selection), or ended: no Memory poll.
+    func testNoMemoryReadOnTasksWhileHiddenOrEnded() async {
+        let clock = Clock(), run = PollRun(), p = panel(clock)
+        var (visible, live, current) = (true, true, true)
+        p.paneState = { (visible, live) }
+        p.isCurrent = { current }
+        await open(p, run)
+        for s in [30.0, 60, 600] { await tick(p, clock, at: s) }
+        XCTAssertEqual(run.memoryReads, 1, "on Tasks: the open read only")
+        XCTAssertEqual(run.tasksReads, 4, "Tasks is polled")
+        p.select(.memory)
+        await p.reading?.value
+        XCTAssertEqual(run.memoryReads, 2, "the switch")
+        visible = false
+        for s in [630.0, 660, 1200] { await tick(p, clock, at: s) }
+        XCTAssertEqual(run.memoryReads, 2, "window hidden: no Memory poll")
+        (visible, current) = (true, false)
+        for s in [1230.0, 1260] { await tick(p, clock, at: s) }
+        XCTAssertEqual(run.memoryReads, 2, "drawer hidden by a selection change: no Memory poll")
+        (current, live) = (true, false)
+        for s in [1290.0, 1320, 1800] { await tick(p, clock, at: s) }
+        XCTAssertEqual(run.memoryReads, 2, "ended: no Memory poll")
+        live = true
+        await tick(p, clock, at: 1830)
+        XCTAssertEqual(run.memoryReads, 3, "shown and live again: polled")
+        XCTAssertEqual(run.tasksReads, 4)
+    }
+
+    /// One read in flight, shared: a Memory tick while a Tasks read runs is skipped, never queued (the switch's own
+    /// pending read runs once after it). Red at TIP: the pending read never ran (memoryReads stayed 1).
+    func testMemoryTickWhileATasksReadRunsIsSkipped() async {
+        let clock = Clock(), run = PollRun(), p = panel(clock)
+        await open(p, run)
+        run.hold = true
+        clock.t = Self.base + 5
+        p.tick()
+        for _ in 0..<10_000 where run.held < 1 { await Task.yield() }
+        XCTAssertEqual(run.held, 1, "the Tasks poll runs")
+        p.select(.memory)
+        for s in [40.0, 70, 100] { clock.t = Self.base + s; p.tick() }
+        XCTAssertEqual(run.calls.count, 3, "Memory ticks while the Tasks read runs: skipped")
+        XCTAssertEqual(run.memoryReads, 1)
+        run.hold = false
+        let r = p.reading
+        run.answer()
+        await r?.value
+        await p.reading?.value
+        XCTAssertEqual(run.memoryReads, 2, "the switch's read, once, after the Tasks read")
+        XCTAssertTrue(p.reading == nil)
+        await tick(p, clock, at: 129)
+        XCTAssertEqual(run.memoryReads, 2, "the cadence counts from that read")
+        await tick(p, clock, at: 130)
+        XCTAssertEqual(run.memoryReads, 3)
+        XCTAssertEqual(run.tasksReads, 2)
+        XCTAssertEqual(run.cancels, 0)
+    }
 }

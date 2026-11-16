@@ -4,10 +4,11 @@ import AppKit
 // a visible window, `--tasks` is read again every 5 s (local) or 15 s (remote: each read dials the host). Never while
 // hidden; one read in flight (a tick while it runs is skipped, never queued); closing the panel or switching the pane
 // to another session cancels the read (the product runner SIGTERMs its dch); an ended session keeps its one open read.
+// #1381 (design 2.2 / 3.4): the Memory tab the same way every 30 s, sharing the one read in flight with Tasks.
 
 extension XrayPanelModel {
-    /// Design 3.4 / 3.5: 5 s for a local session, 15 s for a remote one.
-    var interval: TimeInterval { target.dir == nil ? 15 : 5 }
+    /// Design 3.4 / 3.5: Tasks 5 s for a local session, 15 s for a remote one; Memory 30 s (#1381, design 2.2).
+    var interval: TimeInterval { loaded && tab == .memory ? 30 : target.dir == nil ? 15 : 5 }
 
     /// One tick (the product's ticker fires each second; rows call it with an injected clock).
     func tick() {
@@ -15,10 +16,12 @@ extension XrayPanelModel {
         guard isCurrent() else { return cancel() }   // hidden by a selection change: SIGTERM; read again on return
         let s = paneState()
         guard s.visible, reading == nil, let dch, let run else { return }
-        guard !loaded || s.live && tab == .tasks else { return }   // ended: the open read was its one read
+        // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again
+        guard !loaded || s.live && (tab == .tasks || tab == .memory && memory != nil) else { return }
         guard now().timeIntervalSince(lastRead) >= interval else { return }
-        if failed, mtime(dch) == failedMtime { return }   // design 3.9: no retry until the dch path's mtime moves
-        if loaded { readTasks(dch, run) } else { readBoth() }
+        // design 3.9: no Tasks retry until the dch path's mtime moves
+        if failed, tab == .tasks, mtime(dch) == failedMtime { return }
+        if !loaded { readBoth() } else if tab == .memory { readMemory() } else { readTasks(dch, run) }
     }
 
     private func readTasks(_ dch: String, _ run: @escaping XrayPanels.Run) {
@@ -29,15 +32,42 @@ extension XrayPanelModel {
             guard !Task.isCancelled, let self else { return }
             self.reading = nil
             self.take(r)
-            if !self.tabs.contains(self.tab), let first = self.tabs.first { self.tab = first }
+            self.landed()
         }
     }
+
+    /// #1381: one `--memory` read in `reading` (the tab switch's, the pending one, the 30 s poll). A host that did not
+    /// answer (4, 7, a remote -1) keeps the rows, as Tasks; any other answer replaces the Memory tab (nil: none).
+    func readMemory() {
+        guard let dch, let run else { return }
+        lastRead = now()
+        let env = target.env, a = target.args("memory")
+        reading = Task { [weak self] in
+            let r = await run(dch, a, env)
+            guard !Task.isCancelled, let self else { return }
+            self.reading = nil
+            if !self.unreached(r.status) { self.takeMemory(r) }
+            self.pendingMemory = false   // this read answered the switch
+            self.landed()
+        }
+    }
+
+    /// After a read: the strip moves to the tab left when its tab went; then R1352-i1's pending Memory read, once.
+    func landed() {
+        if !tabs.contains(tab), let first = tabs.first { tab = first }
+        guard pendingMemory else { return }
+        pendingMemory = false
+        if tab == .memory, !stopped { readMemory() }
+    }
+
+    /// Design 3.5: exit 4 or 7, or a remote read's -1 (timed out dialling): the host did not answer.
+    func unreached(_ status: Int32) -> Bool { status == 4 || status == 7 || status == -1 && target.dir == nil }
 
     /// Design 3.5 / 3.9: exit 4 or 7, or a remote read's -1 (timed out dialling), keeps the rows and says "host
     /// unreachable" (the poll goes on); any other answer replaces the Tasks tab (nil: none, so exit 6 or "does not know"
     /// removes it), and a non-zero exit (a local -1 too) stops the reads until the mtime moves.
     func take(_ r: (status: Int32, out: Data)) {
-        if r.status == 4 || r.status == 7 || r.status == -1 && target.dir == nil { unreachable = true; return }
+        if unreached(r.status) { unreachable = true; return }
         unreachable = false
         tasks = Self.tasksTab(r)
         failed = r.status != 0
@@ -48,6 +78,7 @@ extension XrayPanelModel {
     func cancel() {
         reading?.cancel()
         reading = nil
+        pendingMemory = false
     }
 
     /// The panel left XrayPanels.open: no tick reads again.

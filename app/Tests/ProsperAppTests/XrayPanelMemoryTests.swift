@@ -150,8 +150,8 @@ final class XrayPanelMemoryTests: XCTestCase {
         XCTAssertEqual(parsed.map(longestRun), OutsideText.maxMarks, "and in the parse")
     }
 
-    /// Design 3.4 as built in P4: Memory is read on open and again on a switch to its tab, never polled.
-    func testMemoryIsReadOnOpenAndOnTabSwitchOnly() async throws {
+    /// Design 3.4: Memory is read on open, again on a switch to its tab and (#1381) every 30 s while it shows.
+    func testMemoryIsReadOnOpenOnTabSwitchAndEveryThirtySeconds() async throws {
         let fake = XrayPanelTasksTests.FakeRun(memory: (0, Self.memoryOut))
         let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
         var t = Self.now
@@ -166,10 +166,63 @@ final class XrayPanelMemoryTests: XCTestCase {
         XCTAssertEqual(memoryReads(), 2, "the switch to Memory")
         XCTAssertEqual(fake.calls.last, ["/fake/dch", "--xray", "api", "--memory", "--json"])
         for s in [30.0, 60, 600] { t = Self.now + s; p.tick(); await p.reading?.value }
-        XCTAssertEqual(fake.calls.count, 3, "no poll while Memory is shown")
+        XCTAssertEqual(memoryReads(), 5, "polled at +30, +60 and +600 while Memory is shown")
+        XCTAssertEqual(fake.calls.count, 6, "and no Tasks read")
         p.select(.tasks)
         await p.reading?.value
-        XCTAssertEqual(memoryReads(), 2, "a switch to Tasks reads no memory")
+        XCTAssertEqual(memoryReads(), 5, "a switch to Tasks reads no memory")
         p.stop()
+    }
+
+    /// #1381 (R1352-i1): a switch to Memory while a Tasks read is held gives exactly one Memory read, after it. Red at
+    /// TIP: select skipped the read while one was in flight and nothing ran it later.
+    func testSwitchDuringAHeldTasksReadReadsMemoryOnceAfterIt() async {
+        let clock = XrayPollTests.Clock(), run = XrayPollTests.PollRun()
+        let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
+        p.now = { clock.t }
+        p.paneState = { (true, true) }
+        p.mtime = { _ in XrayPollTests.base }
+        p.read(dch: "/fake/dch", run: run.run)
+        await p.reading?.value
+        XCTAssertEqual(run.memoryReads, 1, "the open read")
+        run.hold = true
+        clock.t = XrayPollTests.base + 5
+        p.tick()
+        for _ in 0..<10_000 where run.held < 1 { await Task.yield() }
+        XCTAssertEqual(run.held, 1, "the Tasks poll is held")
+        p.select(.memory)
+        p.select(.tasks)
+        p.select(.memory)
+        XCTAssertEqual(run.memoryReads, 1, "nothing while the Tasks read runs")
+        run.hold = false
+        let r = p.reading
+        run.answer()
+        await r?.value
+        await p.reading?.value
+        XCTAssertEqual(run.memoryReads, 2, "one Memory read after it, never two")
+        XCTAssertTrue(p.reading == nil)
+        XCTAssertEqual(p.tab, .memory)
+        XCTAssertEqual(run.calls.last, ["--xray", "api", "--memory", "--json"])
+        p.stop()
+    }
+
+    /// #1381 (QA r1297): the 16 KB cut is on a Character: a flag (two scalars) or a letter with three marks is kept
+    /// whole or dropped whole, and the text stays within 16 KB of UTF-8. Red at TIP (cut on a scalar): half a flag, or
+    /// the letter with one of its marks, was kept.
+    func testCutKeepsAGraphemeWholeAtTheSixteenKBEdge() {
+        let flag = "\u{1F1FA}\u{1F1F8}", marked = "e\u{0301}\u{0302}\u{0303}"
+        for g in [flag, marked] {
+            let pad = String(repeating: "a", count: XrayMemory.maxBody - 4)   // the edge falls inside g
+            let r = XrayMemory.cleanBody(pad + g + "z")
+            XCTAssertTrue(r.cut)
+            XCTAssertEqual(r.text.utf8.count, pad.utf8.count, "\(g.unicodeScalars.count) scalars: dropped whole")
+            XCTAssertTrue(r.text == pad, "no part of the grapheme is kept")
+            let fits = String(repeating: "a", count: XrayMemory.maxBody - g.utf8.count)
+            let whole = XrayMemory.cleanBody(fits + g + "z")
+            XCTAssertTrue(whole.cut)
+            XCTAssertEqual(whole.text.utf8.count, XrayMemory.maxBody, "at the edge exactly")
+            XCTAssertTrue(whole.text.hasSuffix(g), "kept whole")
+            XCTAssertEqual(whole.text.unicodeScalars.count, fits.unicodeScalars.count + g.unicodeScalars.count)
+        }
     }
 }

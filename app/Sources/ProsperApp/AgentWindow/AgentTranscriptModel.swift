@@ -569,6 +569,7 @@ final class AgentTranscriptModel: ObservableObject {
         assembler = fresh()
         bump()
         publish()
+        flushEarlier()   // #1381: after the new state (see bump)
     }
 
     /// #831 B1 (11.2, 4.4 M1): the watch and the timer stop and the blocks and the tail offset stay (an Ended pane's
@@ -757,8 +758,10 @@ final class AgentTranscriptModel: ObservableObject {
         w.forEach { $0() }
     }
 
+    /// #1381 (R1352-i2): the loadEarlier waiters stay; the caller flushes them once the new tail is in place, so a jump
+    /// that spans the bump re-enters on that tail and is refused (no tail inode yet or another file), or reads `.older`
+    /// when there is no tail at all (close), and its caller shows the card. Dropping them left the click doing nothing.
     private func bump() {
-        earlierWaiters = []
         generation += 1
         busy = false
         pollAgain = false
@@ -774,6 +777,7 @@ final class AgentTranscriptModel: ObservableObject {
         lastGrowth = now()
         watch = nil
         publish()
+        flushEarlier()   // #1381: on the fresh tail, before its first poll
         if running { poll() }
     }
 
@@ -785,6 +789,7 @@ final class AgentTranscriptModel: ObservableObject {
         missing = false
         assembler = fresh()
         publish()
+        flushEarlier()   // #1381: no tail now
     }
 
     private func arm(_ path: String) {

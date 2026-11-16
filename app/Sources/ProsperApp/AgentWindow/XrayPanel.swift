@@ -3,7 +3,8 @@ import SwiftUI
 
 // #1351 (#1346 P3a, design 3.1-3.9): the X-ray panel, a drawer over one pane (both modes; it overlays, so the terminal
 // keeps its grid) with a tab strip in dch's order: Tasks and (#1352) Memory. Read when the panel opens; #1368's poller
-// (XrayPoller.swift) re-reads Tasks while it is shown; Memory is read again on a switch to its tab, never polled (#1352).
+// (XrayPoller.swift) re-reads Tasks while it is shown; Memory is read again on a switch to its tab (#1352) and every
+// 30 s while it is shown (#1381).
 // #1352: a task row and the memory card's "Read the prompt" jump to the prompt that last changed it (design 3.3).
 
 /// The tabs in dch's order (xview.c xv_ord); later phases put Prompts, Responses, Refs and Search before these.
@@ -129,6 +130,8 @@ final class XrayPanelModel: ObservableObject {
     @Published var unreachable = false
     var stopTicker: (() -> Void)?
     var stopped = false
+    /// #1381 (R1352-i1): a switch to Memory came while another read ran; that read's end runs the Memory read, once.
+    var pendingMemory = false
     /// #1368: the pane's window visible and its session live; XrayPanels.open wires it (default: hidden, no poll).
     var paneState: () -> (visible: Bool, live: Bool) = { (false, false) }
     /// #1368: the dch path's modification date (design 3.9's retry key).
@@ -194,18 +197,12 @@ final class XrayPanelModel: ObservableObject {
         if memory?.count == 0 { memory = nil }
     }
 
-    /// #1352: a tab chosen in the strip; Memory is read again then (once; design 3.4's 30 s Memory poll is not built).
+    /// #1352: a tab chosen in the strip; Memory is read again then: at once, or (#1381, R1352-i1) when the read in
+    /// flight ends. The 30 s Memory poll is the poller's (XrayPoller.swift).
     func select(_ t: XrayTab) {
         tab = t
-        guard t == .memory, loaded, reading == nil, let dch, let run else { return }
-        let env = target.env, a = target.args("memory")
-        reading = Task { [weak self] in
-            let r = await run(dch, a, env)
-            guard !Task.isCancelled, let self else { return }
-            self.reading = nil
-            self.takeMemory(r)
-            if !self.tabs.contains(self.tab), let first = self.tabs.first { self.tab = first }
-        }
+        guard t == .memory, loaded else { return }
+        if reading != nil { pendingMemory = true } else { readMemory() }
     }
 
     /// Design 3.9 and QA R1349-i2: a Tasks tab only for exit 0, header schema 1 and at least one task.
@@ -229,12 +226,12 @@ final class XrayPanelModel: ObservableObject {
         return q.isEmpty || [t.id, t.title, t.note ?? "", t.label].contains { $0.localizedCaseInsensitiveContains(q) }
     }
 
-    /// The groups with the filter applied; under a filter an emptied group goes.
+    /// The groups with the filter applied; an empty group goes, with or without a filter (#1381, as Memory's).
     var shownGroups: [XrayTasks.Group] {
         guard let tasks else { return [] }
         let q = filter.trimmingCharacters(in: .whitespaces)
         return tasks.groups.map { XrayTasks.Group(title: $0.title, tasks: $0.tasks.filter { Self.matches($0, q) }) }
-            .filter { q.isEmpty || !$0.tasks.isEmpty }
+            .filter { !$0.tasks.isEmpty }
     }
 
     /// "Tasks \u{00B7} <title>" for a command list; nil otherwise.

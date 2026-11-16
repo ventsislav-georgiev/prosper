@@ -100,18 +100,19 @@ struct XrayMemory: Equatable {
     }
 
     /// OutsideText.shown drops every control scalar, newline included, so it is applied per line (split on U+000A) and the
-    /// lines are joined again: a CR, tab or bidi scalar goes, the line breaks stay. Then at most 16 KB of UTF-8, cut on a scalar.
+    /// lines are joined again: a CR, tab or bidi scalar goes, the line breaks stay. Then at most 16 KB of UTF-8, cut on a
+    /// Character (#1381, QA r1297: a flag or a letter with its marks is kept whole or dropped whole).
     static func cleanBody(_ raw: String) -> (text: String, cut: Bool) {
         let text = raw.components(separatedBy: "\n")   // not split(separator:): a CR LF is one Character
             .map { OutsideText.shown($0, max: Int.max) }.joined(separator: "\n")
         guard text.utf8.count > maxBody else { return (text, false) }
-        var out = String.UnicodeScalarView(), bytes = 0
-        for u in text.unicodeScalars {
-            bytes += String(u).utf8.count
+        var out = "", bytes = 0
+        for c in text {
+            bytes += c.utf8.count
             if bytes > maxBody { break }
-            out.append(u)
+            out.append(c)
         }
-        return (String(out), true)
+        return (out, true)
     }
 
     private static func item(_ m: Row.M) -> Item {
