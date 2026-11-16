@@ -1589,6 +1589,8 @@ tag from the now-released section and put it on the new top draft.
   "Too slow as a regex: matched as text" instead of naming a session that was never searched. (#995)
 - Agent Sessions shows a group of sessions (a main and its sidekicks) as one row in the sidebar,
   each session on its own line. (#1342)
+- Agent Sessions: in Mini mode the arrows and Command-1...9 reach rows in folded sections, and a
+  slid-out sidebar no longer takes the arrow keys or Command-Backspace
 
 ## v2.174.0
 

@@ -283,6 +283,83 @@ final class AgentSidebarModeTests: XCTestCase {
         }
     }
 
+    // MARK: Keys and folds (#1383)
+
+    private func keyEvent(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], _ chars: String = "") throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                                       context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false,
+                                       keyCode: code))
+    }
+
+    /// R1379-s1: a Slide sidebar that slid out holds no keys even when keyFocus is written back to .sidebar (the chapter
+    /// list does that when its card closes): Command-Backspace is not the row's remove and the arrows leave the selection.
+    func testASlidOutSidebarNeverHoldsTheKeysEvenWhenKeyFocusIsWrittenBack() throws {
+        try withModeRow {
+            Preferences.agentSidebarMode = .slide
+            let m = d1.windowModel(d1.store([d1.session("api", .idle), d1.session("web", .idle)]))
+            defer { m.close() }
+            m.setVisible(true)
+            let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],
+                                     backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            win.model = m
+            defer { win.close() }
+            let api = AgentSidebar.RowID.live(AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
+            m.select(api)
+            @MainActor func route(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], _ chars: String = "") throws -> AgentsNSWindow.KeyRoute {
+                let e = try keyEvent(code, flags, chars)   // built here: a parameter event cannot be sent to the static route
+                return AgentsNSWindow.route(e, responder: .other, sidebarFocused: win.sidebarFocused, terminalMode: false)
+            }
+            let down = try keyEvent(125)
+            m.slide(true)
+            m.keyFocus = .sidebar
+            XCTAssertTrue(win.sidebarFocused, "revealed: the sidebar holds the keys")
+            XCTAssertEqual(try route(51, [.command], "\u{7F}"), .stopOrRemove, "revealed: Command-Backspace is the row's")
+            m.slide(false)
+            XCTAssertEqual(m.keyFocus, .pane)
+            m.keyFocus = .sidebar   // what the chapter list's close writes back
+            XCTAssertFalse(m.sidebarShown)
+            XCTAssertFalse(win.sidebarFocused, "slid out: nothing is drawn, nothing holds the keys")
+            XCTAssertEqual(try route(51, [.command], "\u{7F}"), .pass)
+            XCTAssertEqual(try route(125), .pass)
+            win.sendEvent(down)
+            XCTAssertEqual(m.selection, api, "the arrows do not walk an unseen list")
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// R1379-s2: Mini's rail draws every row, so the fold (Full's saved choice) does not apply there: the arrows reach the
+    /// row, it has its Command-<n> number, no key in Mini writes the fold, and Full keeps it.
+    func testMiniIgnoresTheFoldAndFullKeepsIt() throws {
+        try withModeRow {
+            let key = "agentWindowCollapsedSections"
+            let saved = Preferences.defaults.object(forKey: key)
+            defer { if let saved { Preferences.defaults.set(saved, forKey: key) } else { Preferences.defaults.removeObject(forKey: key) } }
+            Preferences.defaults.removeObject(forKey: key)
+            let m = d1.windowModel(d1.store([d1.session("api", .idle)]))
+            defer { m.close() }
+            m.setVisible(true)
+            let row = AgentSidebar.RowID.live(AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
+            XCTAssertTrue(m.sections.contains { $0.title == "Sessions" && $0.rows.map(\.id) == [row] }, "\(m.sections.map(\.title))")
+            m.select(nil)
+            XCTAssertTrue(m.selection == nil, "nothing selected: the fold hides the whole list")
+            m.setCollapsed("Sessions", true)
+            XCTAssertTrue(m.navigableIDs.isEmpty && m.number(row) == nil, "Full: folded rows are skipped")
+            m.setSidebarMode(.mini)
+            XCTAssertEqual(m.navigableIDs, [row], "Mini: the arrows reach the drawn row")
+            XCTAssertEqual(m.number(row), 1, "Mini: the row has its chip's number")
+            m.collapseSelected(false)   // Right with nothing selected: the empty-list rule must not unfold, then selects
+            XCTAssertEqual(m.selection, row)
+            m.collapseSelected(true)    // Left: no fold in Mini
+            m.setCollapsed("Sessions", false)
+            XCTAssertEqual(Preferences.agentWindowCollapsedSections, ["Sessions"], "Mini wrote nothing to Full's fold")
+            m.select(nil)
+            m.setSidebarMode(.full)
+            XCTAssertTrue(m.isCollapsed("Sessions"), "Full keeps its fold")
+            XCTAssertTrue(m.navigableIDs.isEmpty && m.number(row) == nil, "and skips the row again")
+        }
+    }
+
     // MARK: The setting
 
     /// Unset and unknown read as Full; each mode round-trips; Settings' call and the Go menu's item (checked) apply it to

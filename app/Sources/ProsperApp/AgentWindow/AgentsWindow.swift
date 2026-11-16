@@ -209,7 +209,7 @@ final class AgentsNSWindow: NSWindow {
     }
     /// #831 7.2: the model's `keyFocus` (B1 step 5); the name stays for the routes and their rows. No model: the sidebar.
     var sidebarFocused: Bool {
-        get { model.map { $0.keyFocus == .sidebar } ?? true }
+        get { model.map { $0.keyFocus == .sidebar && $0.sidebarShown } ?? true }   // #1383: a hidden Slide sidebar holds no keys, whatever keyFocus was left at
         set { model?.keyFocus = newValue ? .sidebar : .pane }
     }
     /// 7.6: the focusing click's down, drags and up are swallowed together.

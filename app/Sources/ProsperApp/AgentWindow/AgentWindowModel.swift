@@ -1579,12 +1579,12 @@ final class AgentWindowModel: ObservableObject {
     }
 
     func isCollapsed(_ title: String) -> Bool {
-        AgentSidebar.collapsible.contains(title) && collapsed.contains(title)
+        sidebarMode != .mini && AgentSidebar.collapsible.contains(title) && collapsed.contains(title)   // #1383: Mini's rail draws no headers, so no fold
     }
 
     /// Folds or unfolds `title` (a header click); a section that never folds is left alone.
     func setCollapsed(_ title: String, _ on: Bool) {
-        guard AgentSidebar.collapsible.contains(title) else { return }
+        guard sidebarMode != .mini, AgentSidebar.collapsible.contains(title) else { return }   // #1383: Mini never writes Full's fold
         if on { collapsed.insert(title) } else { collapsed.remove(title) }
     }
 
