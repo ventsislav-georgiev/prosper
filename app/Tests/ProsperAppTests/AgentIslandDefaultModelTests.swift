@@ -191,6 +191,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                     func settled(_ t: [AXNode]) -> Bool {
                         t.contains { $0.named("Model aliases") } && t.contains { $0.named(line) }
                             && abs((model(t)?.frame.width ?? 0) - sz(200)) <= 1 && abs((command(t)?.frame.width ?? 0) - sz(260)) <= 1
+                            && abs((model(t)?.frame.height ?? 0) - (command(t)?.frame.height ?? 100_000)) <= 1   // not mid-layout
                     }
                     let tree = axTree(size, until: settled)
                     let field = model(tree), other = command(tree)
@@ -220,9 +221,15 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                     XCTAssertLessThanOrEqual(f.maxX, m.minX + 1, "the field before the menu, no overlap at \(scale)")
                     // Fixed slots: a refusal in the subtitle moves and resizes nothing (one line, as the hint).
                     if let h = hint {
-                        XCTAssertEqual(f, h.field, "the field's frame with \(line) at \(scale)")
-                        XCTAssertEqual(ti, h.title, "the row's title with \(line) at \(scale)")
-                        XCTAssertEqual(m, h.menu, "the menu with \(line) at \(scale)")
+                        func same(_ a: CGRect, _ b: CGRect, _ what: String) {   // 0.5 pt per component: a sub-ULP layout difference is not a move
+                            XCTAssertEqual(a.minX, b.minX, accuracy: 0.5, "\(what) minX with \(line) at \(scale)")
+                            XCTAssertEqual(a.minY, b.minY, accuracy: 0.5, "\(what) minY with \(line) at \(scale)")
+                            XCTAssertEqual(a.width, b.width, accuracy: 0.5, "\(what) width with \(line) at \(scale)")
+                            XCTAssertEqual(a.height, b.height, accuracy: 0.5, "\(what) height with \(line) at \(scale)")
+                        }
+                        same(f, h.field, "the field's frame")
+                        same(ti, h.title, "the row's title")
+                        same(m, h.menu, "the menu")
                         XCTAssertEqual(s.minY, h.sub.minY, accuracy: 0.5, "the subtitle's place with \(line) at \(scale)")
                         XCTAssertEqual(s.height, h.sub.height, accuracy: 0.5, "one line, as the hint: \(line) at \(scale)")
                     } else {
