@@ -273,6 +273,9 @@ enum AgentWindowControls {
     static let blockedSentence = " It's waiting on a prompt: answer it first."
 
     /// The strip's line, naming the session by title.
+    /// #1289 (G5): a URL chip's accessibility name: the PR by its full name ("Open pull request acme/api#12").
+    static func openPRLabel(_ c: AgentIsland.PRChip) -> String { "Open pull request \(c.fullName.isEmpty ? c.label : c.fullName)" }
+
     static func question(_ v: AgentWindowVerb, _ s: AgentSession) -> String {
         let blocked = s.state == .blocked ? blockedSentence : ""
         switch v {

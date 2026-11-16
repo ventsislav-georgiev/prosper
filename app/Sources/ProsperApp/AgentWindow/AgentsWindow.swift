@@ -228,6 +228,8 @@ final class AgentsNSWindow: NSWindow {
         case close, toggleMode, verbosity(AgentVerbosity), session(Int), find, findNext(Bool)
         /// #847: ⌘N (the New session form, or its Name field when open) and ⇧⌘N (the quick shell).
         case newSession, newShell
+        /// #1289 (#829 G2/G8): Cmd-Backspace on the selected row: Stop (live) or Remove from History, asked in the strip.
+        case stopOrRemove
         /// #1110: ⌘1…⌘9, the numbered row at that position (1-based).
         case jump(Int)
         /// #895: the terminal's text size: +1, -1, 0 (back to today's size).
@@ -262,7 +264,7 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .toggleMode, .verbosity, .session, .jump, .find, .findNext, .font: return form ? .swallow : r
+        case .toggleMode, .verbosity, .session, .jump, .find, .findNext, .font, .stopOrRemove: return form ? .swallow : r
         default: return r
         }
     }
@@ -281,6 +283,8 @@ final class AgentsNSWindow: NSWindow {
         if let v = verbosity(for: event) { return terminalMode ? .swallow : .verbosity(v) }
         if mods == [.command] {
             if let n = digit(event.keyCode) { return .jump(n) }
+            // #1289: Cmd-Backspace with the sidebar focused only; a text field, the composer and the terminal keep it.
+            if event.keyCode == 51 { return sidebarFocused && responder == .other ? .stopOrRemove : .pass }
             switch key {
             case "t": return .toggleMode
             case "f": return terminalMode ? .find : .pass
@@ -337,6 +341,7 @@ final class AgentsNSWindow: NSWindow {
         // #847: the model checks the gate; refused, the key does nothing (handled: no beep).
         case .newSession: model.openNewSession()
         case .newShell: model.startShell()
+        case .stopOrRemove: model.askStopOrRemove()
         case .swallow: break
         case .sidebar, .pass: return super.performKeyEquivalent(with: event)
         }
@@ -551,7 +556,8 @@ struct AgentSidebarView: View {
                                     ForEach(section.rows) { row in
                                         Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
                                             AgentSidebarRowView(row: row, selected: model.selection == row.id,
-                                                                number: model.number(row.id), inView: inView.contains(row.id))
+                                                                number: model.number(row.id), inView: inView.contains(row.id),
+                                                                openPR: model.openPR)
                                         }
                                         .buttonStyle(.plain)
                                         .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
@@ -824,6 +830,8 @@ struct AgentSidebarRowView: View {
     var number: Int?
     /// #900 B2 step 4b (7.2): the session is shown in another pane of the active layout (AgentWindowModel.inViewRows).
     var inView = false
+    /// #1289 (G5): a URL chip's click, the model's openURL seam (nothing opens from a row itself).
+    var openPR: @MainActor (AgentIsland.PRChip) -> Void = { _ in }
     /// Tests: a row part's frame in the row, by kind and row title (nil in the product). Main actor.
     static var probe: ((String, String, CGRect) -> Void)?
 
@@ -857,6 +865,14 @@ struct AgentSidebarRowView: View {
                               AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, row.detail, row.modelWords] + row.countWords
                              + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? .isSelected : [])
+        // #1289 (G5): the element ignores its children, so each URL chip is an action on it, as on the island's row.
+        .accessibilityActions {
+            ForEach(row.prLinks.indices, id: \.self) { i in
+                if row.prLinks[i].url != nil {
+                    Button(AgentWindowControls.openPRLabel(row.prLinks[i])) { openPR(row.prLinks[i]) }
+                }
+            }
+        }
         // #1110: drawn over the slot the title line keeps (#1268; outside the row's element, so it is read with its own
         // name and help); no number, no chip.
         .overlayPreferenceValue(AgentDigitChipSlot.self) { slot in
@@ -1065,10 +1081,17 @@ extension AgentSidebarRowView {
                 .lineLimit(1)
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5)
             ForEach(chips, id: \.self) { pr in
-                Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Neon.blue)
+                let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Neon.blue)
                     .padding(.horizontal, sz(4)).padding(.vertical, sz(1))
                     .background(RoundedRectangle(cornerRadius: sz(3)).fill(Neon.blue.opacity(0.12)))
                     .fixedSize()
+                // #1289 (G5): a chip whose URL passed the allowlist is a button (the island's help); else text, as before.
+                if let link = row.prLinks.first(where: { $0.label == pr && $0.url != nil }) {
+                    Button { openPR(link) } label: { chip }
+                        .buttonStyle(.plain).help(link.help).accessibilityLabel(AgentWindowControls.openPRLabel(link))
+                } else {
+                    chip
+                }
             }
             Spacer(minLength: 0)
             if modelSlot, row.modelSlot { modelSlotView }

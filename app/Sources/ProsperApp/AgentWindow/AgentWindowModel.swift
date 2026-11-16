@@ -71,6 +71,8 @@ enum AgentSidebar {
         let prs: [String]
         /// Every open PR shown (the chips' fallback when they do not fit).
         var prCount = 0
+        /// #1289 (G5): the shown chips' values (label, help, allowlisted url); "+N" has none.
+        var prLinks: [AgentIsland.PRChip] = []
         /// #1115: live subagents and merged PRs, drawn as symbol plus number; 0 (none, or the detail is off) draws nothing.
         var agents = 0
         var merged = 0
@@ -165,7 +167,7 @@ enum AgentSidebar {
         // #1267: or a label carried over an answer with no mapping (display only).
         let claude = s.transcriptPath != nil || s.modelCarried > 0, model = claude ? s.model.map(AgentModelEffort.shortName) : nil
         return Row(id: .live(s.key), title: s.title, state: s.state, detail: AgentWindowControls.lock(action) ?? s.state.label,
-                   age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more,
+                   age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more, prLinks: Array(chips.prefix(2)),
                    agents: details.agents ? max(0, s.agents) : 0, merged: details.merged ? max(0, s.meta?.merged ?? 0) : 0,
                    session: s, modelSlot: claude, model: model, effort: model == nil ? nil : s.effort)
     }
@@ -1716,6 +1718,22 @@ final class AgentWindowModel: ObservableObject {
     }
 
     // MARK: #829 Restart agent, Stop, Kill (ask, then act)
+
+    /// #1289 (G5): a PR chip's way out; tests replace it (the island's seam opens nothing under XCTest).
+    var openURL: @MainActor (URL) -> Void = { AgentIsland.openURL($0) }
+
+    /// #1289 (G5): an allowlisted chip opens its URL; a chip with none opens nothing.
+    func openPR(_ chip: AgentIsland.PRChip) {
+        guard let url = chip.url else { return }
+        openURL(url)
+    }
+
+    /// #1289 (G2/G8): Cmd-Backspace on the selected row only asks: Stop on a live session, Remove on a History record (the
+    /// strip; confirm re-checks the gate and says why it runs nothing). No row selected: nothing.
+    func askStopOrRemove() {
+        guard let row = selectedRow else { return }
+        if let s = row.session { ask(.stop, s) } else if let r = row.record { act(.remove, r) }
+    }
 
     /// A header "⋯" or row context-menu item: selects the row first (R6), then asks.
     func ask(_ verb: AgentWindowVerb, _ s: AgentSession) {

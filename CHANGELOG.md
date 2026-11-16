@@ -1370,6 +1370,10 @@ tag from the now-released section and put it on the new top draft.
   downloaded.
 - Plugins: a second Prosper (or a dev build) sharing the plugins folder no longer takes the plugin
   host's socket away from the first one, so the first app's plugins keep working.
+- Agent Sessions: clicking a pull request chip on a session in the sidebar now opens that pull
+  request.
+- Agent Sessions: Command-Backspace in the sidebar asks to stop the selected session, or to remove a
+  selected History entry; nothing happens until you confirm.
 
 ## v2.174.0
 
