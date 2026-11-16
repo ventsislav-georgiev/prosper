@@ -1443,6 +1443,8 @@ tag from the now-released section and put it on the new top draft.
   refused Kill click no longer clears its note early; Stop all's question gives its skips in one
   short clause ("Skipped: 2 old dch, 1 "-" name."); and removing an old-dch History row no longer
   shows "pinned" for an older pinned copy of the same conversation. (#991)
+- Agent Sessions lists the sessions on your other machines under "Other machines", each with its
+  host, and opens them in Terminal mode. (#836)
 
 ## v2.174.0
 

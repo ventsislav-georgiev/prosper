@@ -39,6 +39,28 @@ struct AgentTerminalSpawn: Equatable {
         return AgentTerminalSpawn(exe: dch, args: ["-E", "-a", key.name], env: env, cols: cols, rows: rows)
     }
 
+    /// #836: a remote session's terminal key: its host behind "@" in the dir slot (AgentPaneLayout.resolve's own form),
+    /// never an absolute path, so no local socket dir can be one.
+    static func remoteKey(host: String, name: String) -> AgentSessionKey { AgentSessionKey(dir: "@" + host, name: name) }
+
+    /// The host of a remote key; nil for a local one.
+    static func remoteHost(_ key: AgentSessionKey) -> String? { key.dir.hasPrefix("@") ? String(key.dir.dropFirst()) : nil }
+
+    /// #836 (b): `-E --host <host> -a <name>`: attach only, no detach key, on that host (dch's README "Remote hosts" at
+    /// v1.74.0: `--host` is the unambiguous form; `-a host:name` would attach a local session of that exact name).
+    /// No DCH_SOCKET_DIR: no local socket is involved.
+    static func remote(host: String, name: String, cols: Int, rows: Int, dch: String = DchCommand.dchPath,
+                       env: [String: String] = DchCommand.childEnv()) -> AgentTerminalSpawn {
+        AgentTerminalSpawn(exe: dch, args: ["-E", "--host", host, "-a", name], env: env, cols: cols, rows: rows)
+    }
+
+    /// The attach for `key`: remote for a remote key, else local.
+    static func attach(_ key: AgentSessionKey, cols: Int, rows: Int, dch: String = DchCommand.dchPath,
+                       env: [String: String] = DchCommand.childEnv()) -> AgentTerminalSpawn {
+        if let h = remoteHost(key) { return remote(host: h, name: key.name, cols: cols, rows: rows, dch: dch, env: env) }
+        return local(key, cols: cols, rows: rows, dch: dch, env: env)
+    }
+
     /// `--scrollback n` after the attach arguments (nil: unchanged). dch >= 1.40.0 then sends up to n rows
     /// of history before the screen; an older master ignores it without a word, an older client would not know it.
     func scrollback(_ n: Int?) -> AgentTerminalSpawn {
@@ -184,6 +206,8 @@ final class AgentTerminalController: ObservableObject {
     @Published private(set) var findSelected: Int?
 
     private(set) var key: AgentSessionKey?
+    /// #836: the attached session is on another machine.
+    var remoteHost: String? { key.flatMap(AgentTerminalSpawn.remoteHost) }
     /// The view's grid, and the size the pty last got.
     private(set) var grid: (cols: Int, rows: Int)?
     private(set) var sentSize: (cols: Int, rows: Int)?
@@ -228,7 +252,7 @@ final class AgentTerminalController: ObservableObject {
     // Seams.
     var spawn: (AgentTerminalSpawn, AgentTerminalIO) throws -> AgentTerminalChild = AgentTerminalController.realSpawn
     var makeScreen: (AgentTerminalScreenEvents) -> AgentTerminalScreen = { AgentGhosttyScreen($0) }
-    var request: (AgentSessionKey, Int, Int) -> AgentTerminalSpawn = { AgentTerminalSpawn.local($0, cols: $1, rows: $2) }
+    var request: (AgentSessionKey, Int, Int) -> AgentTerminalSpawn = { AgentTerminalSpawn.attach($0, cols: $1, rows: $2) }
     /// The store still lists the session (an exit 0 then means it was detached, not ended).
     var isLive: (AgentSessionKey) -> Bool = { _ in false }
     var after: (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, work in
@@ -466,6 +490,17 @@ final class AgentTerminalController: ObservableObject {
         child = nil
         writer.child = nil
         inbox = nil
+        // #836 (e): a remote attach never retries by itself: the card and its Reconnect (dch's `-a host:name` exit codes).
+        if let host = remoteHost {
+            switch code {
+            case 0: phase = .ended
+            case 4: phase = .failed("\(host) refused the attach")
+            case 5: phase = .detached("Opened on another device")
+            default: phase = .failed("Lost the connection to \(host)")
+            }
+            revealed = true
+            return
+        }
         // INFO-4: the store's list trails the socket, so a stale "live" never flashes "Couldn't attach".
         let live = isLive(key) && socketExists(key)
         switch code {
@@ -871,6 +906,11 @@ struct AgentTerminalPane: View {
         case .detached(let why):
             AgentTerminalCard(icon: "rectangle.portrait.and.arrow.right", text: why) {
                 AgentPillButton(title: "Reattach", icon: "arrow.clockwise", tint: Neon.blue) { controller.retry() }
+            }
+        case .failed(let why) where controller.remoteHost != nil:
+            // #836 (e): no auto-retry; Reconnect is the human's (no Open in terminal: there is no local session).
+            AgentTerminalCard(icon: "exclamationmark.triangle.fill", text: why) {
+                AgentPillButton(title: "Reconnect", icon: "arrow.clockwise", tint: Neon.blue) { controller.retry() }
             }
         case .failed(let why):
             AgentTerminalCard(icon: "exclamationmark.triangle.fill", text: why) {

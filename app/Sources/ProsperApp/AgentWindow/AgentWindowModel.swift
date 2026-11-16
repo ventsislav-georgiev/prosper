@@ -56,6 +56,18 @@ enum AgentSidebar {
         case live(AgentSessionKey)
         /// A History record (its `id`): it can share a key with a live session (#580).
         case history(AgentSessionKey)
+        /// #836: a session on another machine, from `dch --ls-json --remote` (Terminal only).
+        case remote(host: String, name: String)
+    }
+
+    /// #836: one `dch --ls-json --remote` row that carries a "host" key: dch writes the plain name and the host apart
+    /// (dch.c:16380-16397 at v1.74.0); `stale` is dch's own two-minute cache of a host that missed its probe.
+    struct Remote: Equatable {
+        let host: String
+        let name: String
+        let alias: String
+        let stale: Bool
+        let cwd: String?
     }
 
     struct Row: Identifiable, Equatable {
@@ -78,6 +90,8 @@ enum AgentSidebar {
         var merged = 0
         var session: AgentSession?
         var record: DchHistoryRecord?
+        /// #836: a row from another machine; nil for local and History rows.
+        var remote: Remote?
         /// #1203: a live Claude session's row (it has a transcript) keeps the model slot, with or without a value;
         /// Codex, shell and History rows have none.
         var modelSlot = false
@@ -127,9 +141,10 @@ enum AgentSidebar {
     }
 
     static let needsYouTitle = "Needs you"
+    static let otherMachinesTitle = "Other machines"   // #836
     /// #828: the sections a header click folds away. Needs you never folds: it is the list of
     /// sessions waiting on the human.
-    static let collapsible: Set<String> = ["Sessions", "Sidekicks", "History", "Layouts"]   // #901 B3 step 4b: Layouts
+    static let collapsible: Set<String> = ["Sessions", "Sidekicks", "Other machines", "History", "Layouts"]   // #901 B3 step 4b: Layouts
 
     /// Waiting for the human: blocked on a prompt, or done (the turn is over and the
     /// next message is theirs). Working and idle sessions are not.
@@ -141,7 +156,7 @@ enum AgentSidebar {
     /// #829 G0: `actions` are the island's row texts; a running one replaces the state word.
     static func sections(sessions: [AgentSession], history: [DchHistoryRecord], sort: AgentIslandSort,
                          sidekickPattern: String, details: AgentIslandRowDetails, now: TimeInterval,
-                         actions: [AgentSessionKey: String] = [:]) -> [Section] {
+                         actions: [AgentSessionKey: String] = [:], remote: [Remote] = []) -> [Section] {
         let needs = sessions.filter(needsYou).sorted {
             if $0.state != $1.state { return $0.state < $1.state }
             if $0.activity != $1.activity { return $0.activity > $1.activity }
@@ -154,6 +169,8 @@ enum AgentSidebar {
         add(needsYouTitle, needs.map(live))
         add("Sessions", rest.primary.map(live))
         add("Sidekicks", rest.sidekicks.map(live))
+        // #836: grouped under their host (host, then name), after the local live rows.
+        add(otherMachinesTitle, remote.sorted { ($0.host, $0.name) < ($1.host, $1.name) }.map(row))
         add("History", AgentIsland.cappedHistory(history).map { row($0, now: now) })
         return out
     }
@@ -175,6 +192,32 @@ enum AgentSidebar {
     static func row(_ r: DchHistoryRecord, now: TimeInterval) -> Row {
         Row(id: .history(r.id), title: r.title, state: nil, detail: "Ended · " + AgentIsland.endLabel(r.end),
             age: r.lastSeen > 0 ? AgentIsland.age(now - r.lastSeen) : "", prs: [], record: r)
+    }
+
+    /// #836 (c): no island state (the island answers only for local sessions): no state glyph, no age, nothing to answer.
+    static func row(_ r: Remote) -> Row {
+        Row(id: .remote(host: r.host, name: r.name), title: r.alias.isEmpty ? r.name : r.alias, state: nil,
+            detail: r.stale ? "Stale" : "Terminal only", age: "", prs: [], remote: r)
+    }
+
+    /// #836 (a): the rows of `dch --ls-json --remote` output that carry a "host"; local rows (no "host") are the island's.
+    /// nil when the bytes are not a JSON array (a timed-out or failed call): the caller keeps what it had. A name or host
+    /// that is empty, over 256 bytes, starts with "-" (dch would read it as a flag) or holds a control character is
+    /// left out, as is a second row of the same host and name.
+    static func parseRemote(_ data: Data) -> [Remote]? {
+        guard !data.isEmpty, let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return nil }
+        func ok(_ s: String) -> Bool {
+            !s.isEmpty && s.utf8.count <= 256 && !s.hasPrefix("-") && !s.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
+        }
+        var seen = Set<[String]>(), out: [Remote] = []
+        for o in rows {
+            guard let host = o["host"] as? String, let name = o["name"] as? String, ok(host), ok(name),
+                  seen.insert([host, name]).inserted else { continue }
+            let alias = (o["alias"] as? String).flatMap { ok($0) ? $0 : nil } ?? ""
+            let stale = (o["stale"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+            out.append(Remote(host: host, name: name, alias: alias, stale: stale, cwd: o["cwd"] as? String))
+        }
+        return out
     }
 
     /// The transcript model's input for a live session.
@@ -669,6 +712,23 @@ final class AgentWindowModel: ObservableObject {
     /// The age clock: while visible the rows are rebuilt at least this often, so a row's age is never more than
     /// this behind (#1114: whole minutes, so at most one minute low, for at most this long past the minute).
     var ageInterval: TimeInterval = 30
+    /// #836 (a): the remote list's call, the island's own bounded runner (DchCommand.runIsland, its 4 s bound and kill);
+    /// none under XCTest, so an unstubbed test never runs dch. Never the server's list (d).
+    var remoteRun: @Sendable (_ args: [String], _ env: [String: String]) -> Data? = { args, env in
+        NSClassFromString("XCTestCase") == nil ? DchCommand.runIsland(args: args, env: env) : nil
+    }
+    /// Where that call runs: off main in the app; under XCTest inline, so a fake's answer is in at once.
+    var remoteOffMain = NSClassFromString("XCTestCase") == nil
+    /// Monotonic seconds for the remote call's spacing (tests set it).
+    var remoteClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    /// dch's own remote probe tick (README "Following the list": every 2 s): no more often than this.
+    static let remoteEvery: TimeInterval = 2
+    /// #836: the last good `--ls-json --remote` rows; a call that failed or timed out keeps them.
+    private(set) var remoteSessions: [AgentSidebar.Remote] = []
+    private var remoteInFlight = false
+    private var remoteAt: TimeInterval?
+    /// Counts remote list calls started (tests).
+    private(set) var remoteCalls = 0
     /// #829: Restart agent, Stop and Kill: the island's controller methods (its gates, runner
     /// keys, busy refusal and row texts). True: the job started.
     var restartSession: (AgentSession) -> Bool = { AgentIslandController.shared.restart($0, sayBusy: true) }
@@ -1098,6 +1158,7 @@ final class AgentWindowModel: ObservableObject {
             .sink { [weak self] v, details, actions in
                 MainActor.assumeIsolated {
                     self?.refresh(sessions: v.0, history: v.1, sort: v.2, pattern: v.3, details: details, actions: actions)
+                    self?.pollRemote()
                     self?.stampLastLive(v.0)   // after the refresh: a pane it just filled is stamped by this publish
                 }
             }
@@ -1121,7 +1182,8 @@ final class AgentWindowModel: ObservableObject {
         switch t {
         case let .session(dir, name)?: .live(AgentSessionKey(dir: dir, name: name))
         case let .history(dir, id, _)?: .history(AgentSessionKey(dir: dir, name: id))
-        case .remote?, nil: nil
+        case let .remote(h, n)?: .remote(host: h, name: n)
+        case nil: nil
         }
     }
 
@@ -1130,6 +1192,7 @@ final class AgentWindowModel: ObservableObject {
         switch id {
         case let .live(k): .session(dir: k.dir, name: k.name)
         case let .history(k): .history(dir: k.dir, id: k.name, seen: row(id)?.record?.lastSeen)
+        case let .remote(h, n): .remote(host: h, name: n)
         }
     }
 
@@ -1138,6 +1201,45 @@ final class AgentWindowModel: ObservableObject {
         guard let s = store else { return }
         refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
                 actions: s.actions)
+        pollRemote()
+    }
+
+    /// #836 (a): one `dch --ls-json --remote` per refresh (a store publish, the age tick, showing the window), at most one
+    /// at a time and one per `remoteEvery`. Hidden, closed or the island off: none.
+    /// shortcut: a quiet island publishes nothing, so a remote change shows by the next age tick (30 s) at worst;
+    /// give the remote list a timer of its own (or --follow on its own connection) if that is too slow.
+    func pollRemote() {
+        guard visible, !closed, store != nil, !remoteInFlight else { return }
+        let t = remoteClock()
+        if let at = remoteAt, t - at < Self.remoteEvery { return }
+        remoteAt = t
+        remoteInFlight = true
+        remoteCalls += 1
+        let run = remoteRun, env = AgentIsland.listEnv(dir: DchCommand.defaultSocketDir)
+        guard remoteOffMain else { return remoteListed(run(["--ls-json", "--remote"], env)) }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let data = run(["--ls-json", "--remote"], env)
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteListed(data) } }
+        }
+    }
+
+    /// #836 (e): the answer replaces the remote rows whole, so a host dch no longer lists drops its rows in one refresh.
+    /// A host that missed one probe is still listed by dch, "stale":true, for two minutes (its cache), so one refresh
+    /// is enough and a transient miss never empties the section. nil or not an array: the rows stay (a wedged dch is
+    /// not "no hosts").
+    func remoteListed(_ data: Data?) {
+        remoteInFlight = false
+        guard !closed, let data, let rows = AgentSidebar.parseRemote(data), rows != remoteSessions else { return }
+        remoteSessions = rows
+        guard let s = store else { return }
+        refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
+                actions: s.actions)
+    }
+
+    /// #836: the focused pane's remote session while its row is listed; nil for anything else.
+    var focusedRemote: AgentSidebar.Remote? {
+        guard case let .remote(h, n)? = focusedTarget else { return nil }
+        return row(.remote(host: h, name: n))?.remote
     }
 
     private func refresh(sessions: [AgentSession], history: [DchHistoryRecord], sort: AgentIslandSort,
@@ -1149,7 +1251,7 @@ final class AgentWindowModel: ObservableObject {
         let n = AgentPaneLayout.splitsEnabled ? Self.needing(sessions) : nil
         if n != needs { needs = n }
         let new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
-                                        details: details, now: now(), actions: actions)
+                                        details: details, now: now(), actions: actions, remote: remoteSessions)
         let old = sections
         publishing = (sessions, history)
         defer { publishing = nil }
@@ -1180,7 +1282,10 @@ final class AgentWindowModel: ObservableObject {
             filled = true
             // B1 step 2: only into an empty focused pane; a pane with a target (an adopted layout's, its session gone)
             // keeps it and shows its placeholder (R3.4), never another conversation.
-            if focusedTarget == nil, let first = navigableIDs.first { select(first, manual: false) }
+            // #836: never a remote row: an attach there takes the session from the device that has it (dch exit 5).
+            if focusedTarget == nil, let first = navigableIDs.first(where: { if case .remote = $0 { false } else { true } }) {
+                select(first, manual: false)
+            }
         }
     }
 
@@ -1230,7 +1335,9 @@ final class AgentWindowModel: ObservableObject {
     private func settle() -> Bool {
         let wasEnded = focusedEnded
         for p in layout.panes { if let r = runtimes[p.id] { settle(r, target: p.target) } }
-        let s = store == nil ? Self.rowID(focusedTarget) : Self.resolvedRow(content)
+        // #836: a remote pane resolves to no content (AgentPaneLayout.resolve); its row is the selection while listed.
+        let s = store == nil ? Self.rowID(focusedTarget) : focusedRemote.map { AgentSidebar.RowID.remote(host: $0.host, name: $0.name) }
+            ?? Self.resolvedRow(content)
         // Any change of row drops the confirm strip's question, a refusal and the rename field (R5), as a
         // `select()` did before B1 for the publish-driven changes too (an end, the swap to History).
         if s != selection {
@@ -1341,7 +1448,8 @@ final class AgentWindowModel: ObservableObject {
     @discardableResult
     func focusSelection() -> Bool {
         // #887 (QA #747 INFO-4): the New session form covers the pane, so its session takes no input meanwhile.
-        guard renaming == nil, newSession == nil, !focusedEnded, selectedRow?.session != nil else { return false }
+        guard renaming == nil, newSession == nil, !focusedEnded,
+              selectedRow?.session != nil || selectedRow?.remote != nil else { return false }
         if paneMode == .terminal { terminal.focus() } else { interaction.focusComposer() }
         return true
     }
@@ -1445,7 +1553,8 @@ final class AgentWindowModel: ObservableObject {
     /// The detail pane's mode: a row with nothing to attach (History, an ended session's held row,
     /// none) is Transcript and remembers nothing, so no terminal card shows where no terminal can be.
     var paneMode: AgentPaneMode {
-        guard !focusedEnded, let s = selectedRow?.session else { return .transcript }
+        // #836 (b): a remote row is Terminal only.
+        guard !focusedEnded, let s = selectedRow?.session else { return selectedRow?.remote != nil ? .terminal : .transcript }
         return mode(s)
     }
 
@@ -1971,6 +2080,12 @@ final class AgentWindowModel: ObservableObject {
             r.transcript.start()
         }
         rebind()
+        // #836 (b): a listed remote row attaches its terminal; no transcript, input box, hook or plan lookup for it.
+        if visible, newSession == nil, let r = focusedRemote {
+            interaction.follow(nil)
+            terminal.attach(AgentTerminalSpawn.remoteKey(host: r.host, name: r.name))
+            return
+        }
         guard visible, let f = focusedRuntime, f.ended == nil, case .live(let s)? = f.content else {
             interaction.follow(nil)   // 4.4 (d): nothing on an ended pane takes input; hidden or not live: nothing
             terminal.attach(nil)

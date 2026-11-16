@@ -1117,7 +1117,47 @@ extension AgentSidebarRowView {
             Spacer(minLength: 0)
             if modelSlot, row.modelSlot { modelSlotView }
             if !row.age.isEmpty || row.state != nil { ageSlot }
+            if let r = row.remote { Self.hostSlot(r.host) }
         }
+    }
+
+    /// #836 (a): the host label, in a slot of one fixed width on every remote row, so a longer host never moves the
+    /// line and a row's width never flickers; a long name is cut in the middle.
+    static let hostWidth: CGFloat = 84
+    static func hostSlot(_ host: String) -> some View {
+        Text(host).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+            .lineLimit(1).truncationMode(.middle)
+            .frame(width: sz(hostWidth), alignment: .trailing)
+            .help("On \(host)")
+    }
+}
+
+/// #836 (b): a remote session's header: its title and host, then the transcript controls drawn disabled with their
+/// reason (a remote session has no transcript, todo list or view level here) and the mode toggle fixed on Terminal.
+struct AgentRemoteHeader: View {
+    let row: AgentSidebar.Row
+    let remote: AgentSidebar.Remote
+
+    static let modeReason = "A session on another machine opens in Terminal only"
+    static let levelReason = "No transcript for a session on another machine"
+    static let todosReason = "No todo list for a session on another machine"
+
+    var body: some View {
+        HStack(alignment: .center, spacing: sz(8)) {
+            Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+            Text(remote.host).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+            Spacer(minLength: sz(4))
+            Image(systemName: "checklist").font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
+                .opacity(0.45).help(Self.todosReason).accessibilityLabel("Todo list").accessibilityValue(Self.todosReason)
+            if !AgentWindowBand.shown {
+                // The picker's own buttons carry their own help, which would win over a reason set around them.
+                Image(systemName: AgentVerbosity.default.icon).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
+                    .opacity(0.45).help(Self.levelReason).accessibilityLabel("View").accessibilityValue(Self.levelReason)
+            }
+            AgentPaneModeToggle(mode: .terminal, style: .icons, set: { _ in }, off: Self.modeReason)
+                .disabled(true).opacity(0.45)
+        }
+        .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
     }
 }
 
@@ -1229,6 +1269,15 @@ struct AgentDetailView: View {
                 } else {
                     transcriptPane(row, s, ended: ended)
                 }
+            }
+        } else if let row = model.selectedRow, let r = row.remote {
+            // #836 (b): another machine's session: Terminal only, under a header whose transcript controls are off.
+            VStack(spacing: 0) {
+                AgentRemoteHeader(row: row, remote: r).modifier(AgentPaneProbe(kind: "header"))
+                Rectangle().fill(Neon.stroke).frame(height: 1)
+                AgentTerminalPane(controller: model.terminal, open: {})
+                    .frame(minHeight: 0, maxHeight: .infinity)
+                    .modifier(AgentPaneProbe(kind: "terminal"))
             }
         } else if let row = model.selectedRow, let r = row.record {
             titled(row.title) {
