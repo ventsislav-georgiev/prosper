@@ -1200,8 +1200,16 @@ final class ExtensionRegistry: ObservableObject {
         if try fm.attributesOfItem(atPath: dest.path)[.type] as? FileAttributeType == .typeDirectory {
             try RemoteInstaller.removeHiddenMembers(dest)
         }
+        // #1241: an install over an installed id tears the old code down as reset does: after the copy, so a failed
+        // copy changes nothing, and before discover. Enabled, trusted and privileged stay (discover reads them by id).
+        let old = record(id: loaded.id)
+        if let old { teardown(old) }
         discover()
         guard let record = record(id: loaded.id) else { throw ExtensionError.notFound(loaded.id) }
+        if old != nil {
+            onEnabledChanged?()   // as reset: the new manifest's shortcuts, themes and live flags
+            replayLaunch(id: loaded.id)   // as a re-enable: only the launch handler re-takes what the teardown released
+        }
         return record
     }
 

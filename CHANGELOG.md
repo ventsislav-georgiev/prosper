@@ -1593,6 +1593,9 @@ tag from the now-released section and put it on the new top draft.
   slid-out sidebar no longer takes the arrow keys or Command-Backspace. (#1383)
 - The island's New session menu has "New session…", which opens the form in the Agent Sessions
   window. (#910)
+- Updating or reinstalling an extension now stops the old version first (its timers, menu bar items,
+  key rules, file watches and keep-awake holds are released) and starts the new version's launch
+  code, instead of leaving the old version running until the app restarts. (#1241)
 
 ## v2.174.0
 
