@@ -130,6 +130,8 @@ final class IncreaseContrastTests: XCTestCase {
             XCTAssertFalse(Self.same(on.text, off.text), "\(name): secondary text unchanged")
             XCTAssertTrue(Self.same(on.text, p.textPrimary), "\(name): secondary text is not the full text colour")
             let lines = [("divider", on.stroke)] + on.border.enumerated().map { ("border end \($0.offset)", $0.element) }
+                // #1303: the chrome edges Neon.faded makes opaque (accent and destructive button borders).
+                + [("faded accent", Neon.faded(Neon.blue, 0.5)), ("faded danger", Neon.faded(Neon.magenta, 0.55))]
             for (sn, s) in ThemeContrastTests.ruleSurfaces(p) {
                 for (ln, c) in lines {
                     let r = ThemeContrastTests.contrast(NSColor(c), on: s)
@@ -141,7 +143,7 @@ final class IncreaseContrastTests: XCTestCase {
                 pairs += 1
             }
         }
-        XCTAssertEqual(pairs, 22 * 6 * 4, "divider, two border ends and secondary text on six surfaces per theme")
+        XCTAssertEqual(pairs, 22 * 6 * 6, "divider, two border ends, two faded edges and secondary text on six surfaces per theme")
     }
 
     /// The Reduce Transparency rule follows the injected reader (never the Mac's flag) and the

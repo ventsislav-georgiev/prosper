@@ -546,7 +546,7 @@ struct ClipboardView: View {
             // #713: the bar's padding and gaps drag the panel (see WindowDragHandle).
             .background(WindowDragHandle())
 
-            Divider()
+            NeonDivider()
 
             // #1000: while the store cannot save (store.notice), say so above the list; the clips held in memory stay listed.
             if let notice = store.notice {
@@ -557,7 +557,7 @@ struct ClipboardView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, sz(14))
                     .padding(.vertical, sz(6))
-                Divider()
+                NeonDivider()
             }
 
             if store.items.isEmpty && store.receiving.isEmpty {
@@ -565,7 +565,7 @@ struct ClipboardView: View {
             } else {
                 HStack(spacing: 0) {
                     listPane
-                    Divider()
+                    Divider().overlay(Neon.stroke)  // vertical: NeonDivider is a horizontal hairline
                     previewPane
                 }
                 // Scroll viewport pinned to an exact pitch multiple so reveals land
@@ -574,7 +574,7 @@ struct ClipboardView: View {
                        maxHeight: Self.listViewportH)
             }
 
-            Divider()
+            NeonDivider()
             actionBar
         }
         // Width fixed; height is intrinsic (search bar + pinned `listViewportH` +
@@ -654,7 +654,7 @@ struct ClipboardView: View {
                     .fill(model.typeFilter != nil ? Neon.blue.opacity(0.16) : Neon.card)
                     .overlay(
                         RoundedRectangle(cornerRadius: sz(6))
-                            .strokeBorder(Neon.blue.opacity(model.typeFilter != nil ? 0.5 : 0.15), lineWidth: 1))
+                            .strokeBorder(Neon.faded(Neon.blue, model.typeFilter != nil ? 0.5 : 0.15), lineWidth: 1))
             )
             .foregroundColor(model.typeFilter != nil ? Neon.blueBright : Neon.textSecondary)
         }
@@ -857,7 +857,7 @@ struct ClipboardView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                Divider()
+                NeonDivider()
 
                 // Information section
                 informationSection(item)
@@ -919,7 +919,7 @@ struct ClipboardView: View {
             RoundedRectangle(cornerRadius: sz(10))
                 .fill(ClipboardView.swatch(value).map(Color.init) ?? Color.gray.opacity(0.2))
                 .frame(height: sz(100))
-                .overlay(RoundedRectangle(cornerRadius: sz(10)).strokeBorder(Color.secondary.opacity(0.2)))
+                .overlay(RoundedRectangle(cornerRadius: sz(10)).strokeBorder(Neon.stroke))
             Text(value)
                 .font(Neon.font(13, design: .monospaced))
                 .textSelection(.enabled)

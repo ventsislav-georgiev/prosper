@@ -76,7 +76,8 @@ final class ThemeStore: ObservableObject {
     private let cacheDir: URL
     private var reduceTransparencyObserver: NSObjectProtocol?
     private let increaseContrastReader: @MainActor () -> Bool
-    private let reduceTransparencyReader: @MainActor () -> Bool
+    /// #1303: internal so the Appearance pane greys its controls on the same reader, never its own system read.
+    let reduceTransparencyReader: @MainActor () -> Bool
     private var assetTask: Task<Void, Never>?
     private var lastAssets: [String: String] = [:]
     private let log = Logger(subsystem: "com.prosper", category: "theme")
@@ -233,19 +234,12 @@ final class ThemeStore: ObservableObject {
     static func effectiveOpacity(_ stored: CGFloat, reduceTransparency: Bool) -> CGFloat {
         reduceTransparency ? 1.0 : stored
     }
-    static func effectiveOpacity(_ stored: CGFloat) -> CGFloat {
-        effectiveOpacity(stored, reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
-    }
 
     /// Same precedence for Frost: system "Reduce transparency" forces it off (the
     /// stored preference is kept and re-applies when the accessibility setting is
-    /// turned off). The `reduceTransparency` overload is the pure decision (unit-
-    /// testable); the convenience reads the live accessibility flag.
+    /// turned off). Pure; the store passes its injected reader's value.
     static func effectiveFrost(_ stored: Bool, reduceTransparency: Bool) -> Bool {
         !reduceTransparency && stored
-    }
-    static func effectiveFrost(_ stored: Bool) -> Bool {
-        effectiveFrost(stored, reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
     }
 
     // MARK: - Display metrics (size + opacity)

@@ -47,6 +47,10 @@ enum Neon {
         LinearGradient(colors: cardStrokeColors, startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
+    /// #1303: a line or label a view fades with its own alpha; under Increase Contrast it is
+    /// drawn opaque instead (an alpha of 0, an edge that is off, stays off).
+    static func faded(_ c: Color, _ alpha: Double) -> Color { c.opacity(hc && alpha > 0 ? 1 : alpha) }
+
     static var barFill: LinearGradient {
         LinearGradient(colors: [p.blueBright, p.blue, p.indigo],
                        startPoint: .top, endPoint: .bottom)
@@ -805,7 +809,7 @@ struct NeonButtonStyle: ButtonStyle {
                     .fill(accent.opacity(configuration.isPressed ? 0.30 : 0.12)))
             .overlay(
                 RoundedRectangle(cornerRadius: sz(8), style: .continuous)
-                    .strokeBorder(accent.opacity(0.55), lineWidth: 1))
+                    .strokeBorder(Neon.faded(accent, 0.55), lineWidth: 1))
             .shadow(color: accent.opacity(configuration.isPressed ? 0.4 : 0.18), radius: sz(6))
             .contentShape(Rectangle())
             .opacity(isEnabled ? 1 : 0.35)
@@ -913,7 +917,7 @@ struct SettingsSidebar: View {
                             Text(group.0)
                                 .font(Neon.font(10, weight: .bold))
                                 .textCase(.uppercase).tracking(sz(1.4))
-                                .foregroundStyle(Neon.textSecondary.opacity(0.7))
+                                .foregroundStyle(Neon.faded(Neon.textSecondary, 0.7))
                                 .padding(.leading, sz(12)).padding(.bottom, sz(2))
                             ForEach(group.1) { tab in
                                 row(tab)
@@ -981,7 +985,7 @@ struct SettingsSidebar: View {
         .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
         .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Neon.card)
             .overlay(RoundedRectangle(cornerRadius: sz(9), style: .continuous)
-                .strokeBorder(Neon.blue.opacity(searchFocused ? 0.55 : 0.2), lineWidth: 1)))
+                .strokeBorder(Neon.faded(Neon.blue, searchFocused ? 0.55 : 0.2), lineWidth: 1)))
         // Esc clears first, and only gives up focus once the field is already empty
         // — so one Esc never loses both the query and the caret.
         .onExitCommand { if searching { query = "" } else { searchFocused = false } }
@@ -1152,6 +1156,6 @@ struct NeonSelectedRowFill: View {
             .fill(selected ? Neon.blue.opacity(0.14) : .clear)
             .overlay(
                 RoundedRectangle(cornerRadius: sz(9), style: .continuous)
-                    .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1))
+                    .strokeBorder(Neon.faded(Neon.blue, selected ? 0.45 : 0), lineWidth: 1))
     }
 }

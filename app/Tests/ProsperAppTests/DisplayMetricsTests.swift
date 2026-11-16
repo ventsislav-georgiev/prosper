@@ -105,7 +105,7 @@ final class DisplayMetricsTests: XCTestCase {
     func testEffectiveOpacityFullIsAlwaysFull() {
         // 1.0 maps to 1.0 on both branches (reduce-transparency on or off), so this
         // is stable regardless of the test machine's accessibility setting.
-        XCTAssertEqual(ThemeStore.effectiveOpacity(1.0), 1.0)
+        XCTAssertEqual(ThemeStore.effectiveOpacity(1.0, reduceTransparency: false), 1.0)
     }
 
     // MARK: Frost — preference + precedence

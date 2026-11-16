@@ -1533,19 +1533,19 @@ private struct RunnerView: View {
 
             // ── Result list or loading (empty input → single line, nothing here)
             if model.showSpinner && model.outcome == nil {
-                Divider()
+                NeonDivider()
                 ProgressView()
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, sz(20))
             } else if case .extView(let node) = model.outcome {
-                Divider()
+                NeonDivider()
                 extViewInline(node: node, rows: rows)
                 if !rows.isEmpty {
-                    Divider()
+                    NeonDivider()
                     actionBar(outcome: model.outcome!)
                 }
             } else if let outcome = model.outcome {
-                Divider()
+                NeonDivider()
                 if let card = calcCard(for: outcome) {
                     // Calc / unit / currency: big two-column Raycast calculator card.
                     CalcCardView(card: card)
@@ -1556,7 +1556,7 @@ private struct RunnerView: View {
                     resultRowList(rows: rows)
                 }
 
-                Divider()
+                NeonDivider()
 
                 // ── Action bar ────────────────────────────────────────────
                 actionBar(outcome: outcome)
@@ -1857,7 +1857,7 @@ private struct RunnerView: View {
             }
             .allowsHitTesting(false)   // #713: a hint, not a button: grab area
 
-            Divider().frame(height: sz(14))
+            Divider().overlay(Neon.stroke).frame(height: sz(14))  // vertical: NeonDivider is a horizontal hairline
 
             // Actions menu — right side (⌘K). Lists the selected row's file
             // actions when it has them (the `files` finder), then Copy / quicklink.
@@ -2111,7 +2111,7 @@ private struct ModeChip: View {
                 .fill(Neon.blue.opacity(0.16))
                 .overlay(
                     RoundedRectangle(cornerRadius: sz(8))
-                        .strokeBorder(Neon.blue.opacity(0.5), lineWidth: 1))
+                        .strokeBorder(Neon.faded(Neon.blue, 0.5), lineWidth: 1))
         )
         .shadow(color: Neon.blue.opacity(0.3), radius: sz(5))
         .fixedSize()

@@ -127,37 +127,7 @@ struct AppearanceSettingsPane: View {
                 .labelsHidden()
             }
 
-            NeonSection("Transparency", accent: "Transparency",
-                        footer: reduceTransparency
-                            ? "System “Reduce transparency” is on, so windows stay opaque."
-                            : theme.frost
-                                ? "Tunes the frosted glass: lower shows more of the blurred desktop through it."
-                                : "Lets the desktop show through Prosper’s windows.") {
-                Picker("", selection: Binding(
-                    get: { Self.nearest(theme.opacity, in: Self.opacityPresets) },
-                    set: { theme.setOpacity($0) })) {
-                    ForEach(Self.opacityPresets, id: \.self) { v in
-                        Text(Self.percent(v)).tag(v)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .disabled(reduceTransparency)
-            }
-
-            NeonSection("Frost", accent: "Frost",
-                        footer: reduceTransparency
-                            ? "System “Reduce transparency” is on, so Frost is unavailable."
-                            : "Frosted glass: blurs the desktop behind Prosper’s windows. Use Transparency to tune the glass.") {
-                Toggle(isOn: Binding(
-                    get: { theme.frost },
-                    set: { theme.setFrost($0) })) {
-                    Text("Frosted glass background").foregroundStyle(Neon.textPrimary)
-                }
-                .toggleStyle(.switch)
-                .tint(Neon.blue)
-                .disabled(reduceTransparency)
-            }
+            BackdropSections(theme: theme)
         }
         // Attached OUTSIDE NeonScroll's content closure — i.e. outside every
         // NeonSection's interior content id (#078 round 6, see `NeonSection.card`)
@@ -177,10 +147,6 @@ struct AppearanceSettingsPane: View {
     // and never tear the window down; see ThemeStore.setOpacity/setFrost.)
     static let sizePresets: [CGFloat] = [0.7, 0.85, 1.0, 1.15, 1.3, 1.45]
     static let opacityPresets: [CGFloat] = [1.0, 0.9, 0.8, 0.75, 0.65, 0.5, 0.35]
-
-    private var reduceTransparency: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-    }
 
     static func percent(_ v: CGFloat) -> String { "\(Int((v * 100).rounded()))%" }
 
@@ -681,6 +647,61 @@ private struct KeyHandling: NSViewRepresentable {
             else { return e }
             if e.keyCode == 126 { onUp?() } else { onDown?() }
             return nil
+        }
+    }
+}
+
+/// Settings \u{2192} Appearance: the Transparency and Frost sections. Both controls are off, with a
+/// footer that says why, while the system's Reduce Transparency or Increase Contrast is on (#1303):
+/// either one already keeps windows opaque and Frost off. Read through the store's injected reader
+/// and its `increaseContrast`, never a system read here. Its own view so a test can host it
+/// on a scratch store without the pane's key monitor.
+struct BackdropSections: View {
+    @ObservedObject var theme: ThemeStore
+
+    /// The system setting that keeps windows opaque, by its name in System Settings, or nil.
+    static func lock(reduceTransparency: Bool, increaseContrast: Bool) -> String? {
+        reduceTransparency ? "Reduce transparency" : increaseContrast ? "Increase contrast" : nil
+    }
+
+    static func transparencyFooter(lock: String?, frost: Bool) -> String {
+        if let lock { return "System \u{201C}\(lock)\u{201D} is on, so windows stay opaque." }
+        return frost
+            ? "Tunes the frosted glass: lower shows more of the blurred desktop through it."
+            : "Lets the desktop show through Prosper\u{2019}s windows."
+    }
+
+    static func frostFooter(lock: String?) -> String {
+        if let lock { return "System \u{201C}\(lock)\u{201D} is on, so Frost is unavailable." }
+        return "Frosted glass: blurs the desktop behind Prosper\u{2019}s windows. Use Transparency to tune the glass."
+    }
+
+    var body: some View {
+        let lock = Self.lock(reduceTransparency: theme.reduceTransparencyReader(),
+                             increaseContrast: theme.increaseContrast)
+        NeonSection("Transparency", accent: "Transparency",
+                    footer: Self.transparencyFooter(lock: lock, frost: theme.frost)) {
+            Picker("", selection: Binding(
+                get: { AppearanceSettingsPane.nearest(theme.opacity, in: AppearanceSettingsPane.opacityPresets) },
+                set: { theme.setOpacity($0) })) {
+                ForEach(AppearanceSettingsPane.opacityPresets, id: \.self) { v in
+                    Text(AppearanceSettingsPane.percent(v)).tag(v)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(lock != nil)
+        }
+
+        NeonSection("Frost", accent: "Frost", footer: Self.frostFooter(lock: lock)) {
+            Toggle(isOn: Binding(
+                get: { theme.frost },
+                set: { theme.setFrost($0) })) {
+                Text("Frosted glass background").foregroundStyle(Neon.textPrimary)
+            }
+            .toggleStyle(.switch)
+            .tint(Neon.blue)
+            .disabled(lock != nil)
         }
     }
 }

@@ -1382,6 +1382,10 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.74.0 (was 1.73.0). X-ray's reference answers start from the newest mentions, X-ray
   Search finds a subagent hand-back by the words of its report, and a revived session no longer
   passes Claude's MCP setting on to programs started in it later. (#1309)
+- Increase Contrast now also reaches the launcher, the Clipboard panel, Settings and the stats
+  popup: their dividers, borders and faint labels are drawn solid. While it is on, Transparency and
+  Frost in Appearance are off, with a note saying why. The launcher and Clipboard dividers now use
+  the theme's divider colour.
 
 ## v2.174.0
 

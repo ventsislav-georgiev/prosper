@@ -1524,7 +1524,7 @@ private struct BigBattery: View {
             HStack(spacing: h * 0.04) {
                 ZStack {
                     RoundedRectangle(cornerRadius: h * 0.28)
-                        .stroke(Neon.textSecondary.opacity(0.6), lineWidth: h * 0.07)
+                        .stroke(Neon.faded(Neon.textSecondary, 0.6), lineWidth: h * 0.07)
                     RoundedRectangle(cornerRadius: h * 0.2)
                         .fill(fill)
                         .padding(h * 0.12)
@@ -1537,7 +1537,7 @@ private struct BigBattery: View {
                 }
                 .frame(width: bodyW)
                 RoundedRectangle(cornerRadius: h * 0.06)
-                    .fill(Neon.textSecondary.opacity(0.6))
+                    .fill(Neon.faded(Neon.textSecondary, 0.6))
                     .frame(width: h * 0.08, height: h * 0.34)
             }
         }
