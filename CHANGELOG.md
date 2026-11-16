@@ -1429,6 +1429,9 @@ tag from the now-released section and put it on the new top draft.
 - With Increase Contrast, a custom theme's faint accent on buttons, search fields and borders falls
   back to a readable colour, and a theme whose own text is too faint on its cards falls back to
   black or white.
+- Claude Account Pool: terminal sessions can start through the pool with the shipped ccpool-launch
+  script (its path is shown in Settings), a ccpool-statusline script shows which account a Claude
+  Code session is using, and extensions can read the pool's state with host.ccpool.status().
 
 ## v2.174.0
 

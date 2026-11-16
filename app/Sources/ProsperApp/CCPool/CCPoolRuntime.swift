@@ -87,13 +87,15 @@ final class CCPoolRuntime {
 
     init(directory: URL, secrets: CCPoolSecrets, config: CCPoolServiceConfig, vaultURL: URL,
          defaults: UserDefaults = Preferences.defaults, probeBase: URL = CCPoolService.productionUpstream,
-         logger: CCPoolLogger = CCPoolOSLog(), trash: @escaping CCPoolMigration.Trash = CCPoolMigration.moveToTrash) {
+         logger: CCPoolLogger = CCPoolOSLog(), trash: @escaping CCPoolMigration.Trash = CCPoolMigration.moveToTrash,
+         launcherPath: String? = nil) {
         store = CCPoolStore(directory: directory, logger: logger)
         self.secrets = secrets
         service = CCPoolService(config: config, store: store, secrets: secrets, logger: logger)
         lifecycle = CCPoolLifecycle(service: service)
         model = CCPoolPaneModel(store: store, secrets: secrets, service: service, logger: logger, defaults: defaults,
-                                probeBase: probeBase, vaultURL: vaultURL, trash: trash, lifecycle: lifecycle)
+                                probeBase: probeBase, vaultURL: vaultURL, trash: trash, launcherPath: launcherPath,
+                                lifecycle: lifecycle)
         // UserDefaults is thread-safe; held the way Preferences.defaults is.
         nonisolated(unsafe) let routeDefaults = defaults
         routeOn = { routeDefaults.bool(forKey: CCPoolPaneModel.routeKey) }
@@ -123,7 +125,11 @@ final class CCPoolRuntime {
     private(set) static var shared: CCPoolRuntime?
 
     /// AppDelegate's push of the extension's live flag, at launch and on every enable/disable.
-    static func setExtensionLive(_ live: Bool) { push(live, into: &shared, build: production) }
+    /// #915: and host.ccpool.status() reads this instance's service from then on (the off answer while none is built).
+    static func setExtensionLive(_ live: Bool) {
+        push(live, into: &shared, build: production)
+        ExtensionPoolStatus.source = CCPoolService.statusSource(shared?.service)
+    }
 
     /// #1190 INFO-5 (b): the push, on a slot a test owns. The first live push builds; a push while
     /// nothing is built and the extension is off builds nothing.
@@ -147,6 +153,50 @@ final class CCPoolRuntime {
         return CCPoolRuntime(directory: CCPoolStore.defaultDirectory, secrets: CCPoolKeychainSecrets(),
                              config: CCPoolServiceConfig(),
                              vaultURL: CCPoolMigration.vaultURL(home: FileManager.default.homeDirectoryForCurrentUser,
-                                                                environment: ProcessInfo.processInfo.environment))
+                                                                environment: ProcessInfo.processInfo.environment),
+                             launcherPath: launcherPath(extensionsDir: ExtensionRegistry.bundledSystemDir))
+    }
+
+    /// #915 (spec 3.5): the shipped launcher, inside the bundled ccpool extension in Contents/Resources/extensions
+    /// (scripts/bundle.sh copies Resources/extensions there; ExtensionRegistry.bundledSystemDir finds it). nil when
+    /// the app has no bundled extensions dir (a bare `swift run`): the pane then names bin/ccpool-launch relatively.
+    static func launcherPath(extensionsDir: URL?) -> String? {
+        extensionsDir?.appending(path: "ccpool/bin/ccpool-launch").path
+    }
+}
+
+/// #915 (spec 3.5): host.ccpool.status(), label-level. The keys are running, port, current (absent when none) and
+/// accounts, each {label, state, until (absent unless limited or held)}: never a token, a Keychain id, a header value,
+/// a usage figure or a pin. Reads the lock-guarded status and store only, so it answers on any thread.
+extension CCPoolService {
+    /// What host.ccpool.status() reads: this service, or the off answer (not running, the default port, no accounts)
+    /// while nothing is built. Formed here, in nonisolated code, never in @MainActor code (errata C7): any thread calls it.
+    static func statusSource(_ service: CCPoolService?) -> @Sendable () -> String {
+        { service?.statusJSON() ?? statusJSON(running: false, port: defaultPort, state: nil, now: 0) }
+    }
+
+    func statusJSON(now: Double = Date().timeIntervalSince1970) -> String {
+        if case .running(let port) = status { return Self.statusJSON(running: true, port: port, state: store.snapshot, now: now) }
+        return Self.statusJSON(running: false, port: config.port, state: store.snapshot, now: now)
+    }
+
+    static func statusJSON(running: Bool, port: UInt16, state: CCPoolState?, now: Double) -> String {
+        var obj: [String: Any] = ["running": running, "port": Int(port)]
+        if let current = state?.current { obj["current"] = current }
+        obj["accounts"] = (state?.order ?? []).compactMap { label -> [String: Any]? in
+            guard let account = state?.accounts[label] else { return nil }
+            // The Refresh-only states (rejected, unverified) live in the pane model, not the store: never reached here.
+            let row = CCPoolPaneModel.rowState(label: label, account: account, current: state?.current, now: now,
+                                               rejected: [], unverified: [])
+            switch row {
+            case .active: return ["label": label, "state": "active"]
+            case .ready, .rejected, .unverified: return ["label": label, "state": "ready"]
+            case .limited(let until, _): return ["label": label, "state": "limited", "until": until]
+            case .held(let until): return ["label": label, "state": "held", "until": until]
+            case .refused: return ["label": label, "state": "refused"]
+            }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else { return ExtensionPoolStatus.off }
+        return String(decoding: data, as: UTF8.self)
     }
 }

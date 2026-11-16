@@ -1,0 +1,47 @@
+#!/bin/sh
+# ccpool-statusline: a Claude Code status line segment for Prosper's Claude Account Pool.
+#
+# Prints green "ccpool <label>" when this session is routed through the pool (ANTHROPIC_BASE_URL is
+# http://127.0.0.1:${CCPOOL_PORT:-8790}) and the pool's health answer names its current account, red "ccpool down"
+# when routed but the health answer fails, and nothing when the session is not routed. Not wired anywhere: a
+# statusLine is a single slot, so the user picks it.
+#
+# stdin is Claude Code's statusLine JSON. It is not used. It is drained by a background cat, so a writer is never
+# blocked or cut off. This script does not wait for that cat: it never hangs on a stdin that stays open.
+
+if [ ! -t 0 ]; then
+    exec 3<&0
+    cat <&3 >/dev/null 2>&1 3<&- &
+    exec 3<&- </dev/null
+fi
+
+port=${CCPOOL_PORT:-8790}
+case $port in
+    '' | *[!0-9]* | ??????*) exit 0 ;;
+esac
+base="http://127.0.0.1:$port"
+case ${ANTHROPIC_BASE_URL:-} in
+    "$base" | "$base/") ;;
+    *) exit 0 ;;
+esac
+
+green=$(printf '\033[32m')
+red=$(printf '\033[31m')
+plain=$(printf '\033[0m')
+
+# -q: no ~/.curlrc; --noproxy: a proxy variable in the shell never carries a loopback probe.
+body=$(curl -q -s -f --noproxy '*' --max-time 1 "$base/ccpool/health" 2>/dev/null)
+service=$(printf '%s' "$body" | plutil -extract service raw -o - - 2>/dev/null)
+if [ "$service" != "ccpool-proxy" ]; then
+    printf '%sccpool down%s' "$red" "$plain"
+    exit 0
+fi
+# A label is user text: C0 controls, DEL and the UTF-8 C1 controls (0xC2 0x80-0x9F) are dropped before it is printed.
+c1=$(printf '\302[\200-\237]')
+label=$(printf '%s' "$body" | plutil -extract current raw -o - - 2>/dev/null | LC_ALL=C tr -d '\000-\037\177' \
+    | LC_ALL=C sed "s/$c1//g")
+if [ -n "$label" ]; then
+    printf '%sccpool %s%s' "$green" "$label" "$plain"
+else
+    printf '%sccpool%s' "$green" "$plain"
+fi

@@ -1268,4 +1268,52 @@ final class ExtensionHostAPITests: XCTestCase {
         XCTAssertEqual(none, LiveExtensionHostServices.wakeAcctTag("   "))  // empty == whitespace
         XCTAssertEqual(none.count, 16)     // still a well-formed tag, just unmatchable
     }
+
+    /// #915 (spec 3.5): host.ccpool.status() through the host seam, for every tier (open read): the pool's
+    /// label-level answer decoded into Lua, no key outside the literal set, and status is the table's only function
+    /// (no token, add or remove). `until` is a Lua keyword: callers read it as a["until"].
+    func testCCPoolStatusIsReadOnlyAndLabelLevelForEveryTier() throws {
+        let before = ExtensionPoolStatus.source
+        defer { ExtensionPoolStatus.source = before }
+        var st = CCPoolState()
+        st.order = ["alpha", "beta"]
+        st.accounts = ["alpha": .init(id: "id-alpha"),
+                       "beta": .init(id: "id-beta", cooldown: [CCPoolCore.fiveHour: 1_700_003_600])]
+        st.current = "alpha"
+        let json = CCPoolService.statusJSON(running: true, port: 4321, state: st, now: 1_700_000_000)
+        let script = """
+        function probe()
+            local st = host.ccpool.status()
+            local out = { tostring(st.running), string.format('%d', st.port), tostring(st.current) }
+            for _, a in ipairs(st.accounts) do
+                out[#out + 1] = a.label .. ':' .. a.state .. ':' .. (a['until'] and string.format('%d', a['until']) or '-')
+            end
+            local fns = 0
+            for _ in pairs(host.ccpool) do fns = fns + 1 end
+            out[#out + 1] = 'fns=' .. fns
+            return table.concat(out, ',')
+        end
+        function keys()
+            local seen, list = {}, {}
+            local st = host.ccpool.status()
+            for k in pairs(st) do seen[k] = true end
+            for _, a in ipairs(st.accounts) do for k in pairs(a) do seen[k] = true end end
+            for k in pairs(seen) do list[#list + 1] = k end
+            table.sort(list)
+            return table.concat(list, ' ')
+        end
+        """
+        for (privileged, trusted) in [(true, true), (false, true), (false, false)] {
+            let lua = try LuaRuntime()
+            try ExtensionHost(extensionID: "com.test", services: FakeServices(), privileged: privileged, trusted: trusted)
+                .install(into: lua)
+            try lua.run(script)
+            ExtensionPoolStatus.source = { json }
+            XCTAssertEqual(try lua.callGlobal("probe"), "true,4321,alpha,alpha:active:-,beta:limited:1700003600,fns=1")
+            XCTAssertEqual(try lua.callGlobal("keys"), "accounts current label port running state until")
+            ExtensionPoolStatus.source = nil
+            XCTAssertEqual(try lua.callGlobal("probe"), "false,0,nil,fns=1", "nothing registered: the off answer")
+        }
+        XCTAssertFalse(json.contains("id-alpha") || json.contains("id-beta"), "a Keychain id in the answer")
+    }
 }

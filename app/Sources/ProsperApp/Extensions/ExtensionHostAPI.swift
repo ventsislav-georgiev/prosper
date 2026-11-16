@@ -2,6 +2,23 @@ import CryptoKit
 import Foundation
 import LuaRuntime
 
+/// #915 (spec 3.5): the account pool's read-only, label-level status behind host.ccpool.status(), as a JSON object
+/// {running, port, current?, accounts: [{label, state, until?}]}. Its owner (the native pool) sets `source` at launch;
+/// unset, the answer is "not running, no accounts". Never a token, an account id or a header value. Read from any
+/// thread (the source reads lock-guarded state only), like the other open reads.
+enum ExtensionPoolStatus {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _source: (@Sendable () -> String)?
+    static let off = #"{"accounts":[],"port":0,"running":false}"#
+
+    static var source: (@Sendable () -> String)? {
+        get { lock.withLock { _source } }
+        set { lock.withLock { _source = newValue } }
+    }
+
+    static func json() -> String { source?() ?? off }
+}
+
 /// The native capabilities an extension may reach through `host.*`. Abstracted
 /// behind a protocol so it can be faked in tests and so the Lua surface is
 /// decoupled from the concrete MLX / clipboard / shell implementations.
@@ -448,7 +465,7 @@ struct ExtensionHost {
         "__h_snippets_replacements", "__h_snippets_config", "__h_snippets_collections", "__h_snippets_ignored",
         "__h_quicklinks_all", "__h_files_search", "__h_timer_scheduled", "__h_log", "__h_env_get",
         "__h_battery_source", "__h_battery_pct", "__h_network_reachable", "__h_network_addresses",
-        "__h_screen_all", "__h_screen_lid", "__h_dch_sessions", "__h_app_frontmost", "__h_app_windows",
+        "__h_screen_all", "__h_screen_lid", "__h_dch_sessions", "__h_ccpool_status", "__h_app_frontmost", "__h_app_windows",
         "__h_kbd_current", "__h_kbd_layouts", "__h_url_default", "__h_fs_exists", "__h_fs_attrs",
         "__h_fallback_list", "__h_fallback_mode_get", "__h_fs_read", "__h_menus_list",
     ]
@@ -965,6 +982,8 @@ struct ExtensionHost {
         lua.register("__h_screen_all") { rt in rt.push(services.screenAllJSON()); return 1 }
         lua.register("__h_screen_lid") { rt in rt.push(Double(services.screenLidClosed())); return 1 }
         lua.register("__h_dch_sessions") { rt in rt.push(services.dchSessionsJSON()); return 1 }
+        // #915: the account pool, read-only and label-level; open to every extension and kit (spec 3.5).
+        lua.register("__h_ccpool_status") { rt in rt.push(ExtensionPoolStatus.json()); return 1 }
 
         // --- caffeinate / power (automation: holds system resources + pmset) ---
         if automation {
@@ -1580,6 +1599,18 @@ struct ExtensionHost {
         end,
     }
     __h_dch_sessions = nil
+
+    -- Claude Account Pool (#915), read-only and label-level: no token, no add, no remove.
+    --   host.ccpool.status() -> { running=, port=, current=, accounts = { {label=, state=, until=}, ... } }
+    -- state: active | ready | limited | held | refused; until (epoch seconds) for limited and held only.
+    local raw_ccpool_status = __h_ccpool_status
+    host.ccpool = {
+        status = function()
+            local raw = raw_ccpool_status()
+            return raw and json_decode(raw) or { running = false, port = 0, accounts = {} }
+        end,
+    }
+    __h_ccpool_status = nil
 
     -- Power / battery / network / screen (Hammerspoon openlid parity). Reads are
     -- open; the caffeinate writes are privileged (no-op stubs otherwise). Captured

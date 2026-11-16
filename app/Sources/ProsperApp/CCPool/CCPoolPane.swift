@@ -197,7 +197,8 @@ struct CCPoolPane: View {
                     .foregroundStyle(Neon.textPrimary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                caption(model.launcherText)
+                // #915: selectable, so the path can be copied by hand; no copy button (no pasteboard here).
+                caption(model.launcherText).textSelection(.enabled)
             }
         }
     }

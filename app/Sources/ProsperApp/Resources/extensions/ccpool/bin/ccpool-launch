@@ -1,0 +1,49 @@
+#!/bin/sh
+# ccpool-launch [TOOL] [-- ARGS]: start TOOL (default: claude) through Prosper's Claude Account Pool.
+#
+# Asks the pool's health answer on http://127.0.0.1:${CCPOOL_PORT:-8790}/ccpool/health (curl, 1 s) and, when a
+# ccpool proxy answers, runs TOOL with ANTHROPIC_BASE_URL pointing at it. The proxy lives inside Prosper and is
+# turned on in Settings; this script never starts it, never reads the Keychain and never prints a token.
+#
+# Exit status: TOOL's own once it runs; 1 the pool is not running; 2 another program holds the port;
+# 3 ANTHROPIC_BASE_URL already points somewhere else (a session behind another proxy is not routed);
+# 64 a bad CCPOOL_PORT.
+
+port=${CCPOOL_PORT:-8790}
+case $port in
+    '' | *[!0-9]* | ??????*) echo "ccpool-launch: CCPOOL_PORT is not a port number" >&2; exit 64 ;;
+esac
+if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    echo "ccpool-launch: CCPOOL_PORT is not a port number" >&2
+    exit 64
+fi
+
+tool=claude
+if [ $# -gt 0 ] && [ "$1" != "--" ]; then tool=$1; shift; fi
+if [ $# -gt 0 ] && [ "$1" = "--" ]; then shift; fi
+
+base="http://127.0.0.1:$port"
+# Another proxy in front (headroom or similar) has one upstream per proxy, not per session: leave it alone.
+if [ -n "${ANTHROPIC_BASE_URL:-}" ] && [ "$ANTHROPIC_BASE_URL" != "$base" ] && [ "$ANTHROPIC_BASE_URL" != "$base/" ]; then
+    echo "ccpool-launch: ANTHROPIC_BASE_URL is already set; a session behind another proxy is not routed through the pool" >&2
+    exit 3
+fi
+
+# -q: no ~/.curlrc; --noproxy: a proxy variable in the shell never carries a loopback probe.
+answer=$(curl -q -s -i --noproxy '*' --max-time 1 "$base/ccpool/health" </dev/null 2>/dev/null)
+code=$?
+if [ "$code" -eq 7 ]; then
+    # Connection refused: nothing listens on the port.
+    # The separator is U+203A, written as its UTF-8 bytes so this file stays ASCII.
+    printf 'ccpool-launch: the pool is not running; turn it on in Prosper Settings \342\200\272 Claude Account Pool\n' >&2
+    exit 1
+fi
+# A ccpool proxy names itself in the first token of its Server header, or as the service of its health answer.
+if [ "$code" -eq 0 ] && printf '%s\n' "$answer" | tr -d '\r' \
+    | grep -E -i -q '^server:[[:space:]]*ccpool([[:space:]]|$)|"service"[[:space:]]*:[[:space:]]*"ccpool-proxy"'; then
+    ANTHROPIC_BASE_URL=$base
+    export ANTHROPIC_BASE_URL
+    exec "$tool" "$@"
+fi
+echo "ccpool-launch: port $port is held by another program" >&2
+exit 2
