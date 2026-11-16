@@ -299,20 +299,26 @@ struct AgentNewSessionView: View {
                     }
                 }
             }
+            sidekickRow(errors.sidekick)
+            promptRows
             Divider().padding(.vertical, sz(4))
             HStack(spacing: sz(8)) {
-                // QA #736 INFO-3: Start's condition; it dims in place.
+                // QA #736 INFO-3: Start's condition; it dims in place. #847 D6.2: also while the box or the prompt holds.
+                let shellWhy = model.newSessionShellRefusal
                 AgentPillButton(title: "New shell", icon: "apple.terminal", tint: Neon.terminal,
-                                enabled: model.canStartNewSession) { model.startShell() }
+                                enabled: model.canStartNewSession && shellWhy == nil) { model.startShell() }
+                    .help(shellWhy ?? "")
                 Spacer(minLength: 0)
                 AgentPillButton(title: "Cancel", icon: "xmark", tint: Neon.textSecondary) { model.cancelNewSession() }
                     .keyboardShortcut(.cancelAction)
-                // One width for both labels: nothing moves when it switches.
-                ZStack {
-                    AgentPillButton(title: "Starting…", icon: "play.fill", tint: Neon.blue) {}.hidden()
-                    AgentPillButton(title: starting ? "Starting…" : "Start", icon: "play.fill", tint: Neon.blue,
-                                    enabled: model.canStartNewSession) { model.startNewSession() }
-                }
+                // One width for both labels: nothing moves when it switches. #847 T29: the visible pill fills the
+                // hidden copy's frame, so Start's own frame is the same while "Starting\u{2026}" shows.
+                AgentPillButton(title: "Starting…", icon: "play.fill", tint: Neon.blue) {}.hidden()
+                    .overlay {
+                        AgentPillButton(title: starting ? "Starting\u{2026}" : "Start", icon: "play.fill", tint: Neon.blue,
+                                        enabled: model.canStartNewSession, fill: true) { model.startNewSession() }
+                            .keyboardShortcut(.return, modifiers: .command)   // #847 D5.2: from any field, the prompt editor too
+                    }
             }
             slot(model.newSessionStatus)
         }
@@ -323,6 +329,59 @@ struct AgentNewSessionView: View {
         .padding(sz(20))
         .frame(minWidth: 0, maxWidth: sz(520), alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// #847 D6.1: why the box and the prompt are dimmed (newSessionClaude false), shown on the Sidekick line.
+    static func notClaude(command: String, host: String?) -> String {
+        if host != nil { return "A sidekick and a first prompt start on this Mac only" }
+        return command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "The login shell has no Claude to name, brief or prompt"
+            : "Needs a claude command (claude, or a wrapper that runs claude)"
+    }
+
+    /// #847 D3, D5.4: the box in a fixed sz(18) row, its line (the sidekick's name, or why it is dimmed) and its slot.
+    private func sidekickRow(_ error: String?) -> some View {
+        let claude = model.newSessionClaude
+        let line = claude ? "Also start " + model.newSessionSidekickName + ", briefed by the sidekick prompt"
+            : Self.notClaude(command: form.command, host: form.host)
+        return field("Sidekick", error: error) {
+            HStack(spacing: sz(6)) {
+                Toggle("Sidekick", isOn: Binding(get: { form.sidekick && claude }, set: { model.setNewSessionSidekick($0) }))
+                    .toggleStyle(.checkbox).labelsHidden()
+                    .disabled(!claude)
+                Text(verbatim: line).font(Neon.font(11.5)).foregroundStyle(claude ? Neon.textPrimary : Neon.textSecondary)
+                    .lineLimit(1).truncationMode(.tail).help(line)
+            }
+            .frame(height: sz(18))
+        }
+    }
+
+    /// #847 D5.1-D5.3: the disclosure, and the editor at a fixed sz(96) under it (the one accepted reflow). Return adds
+    /// a line, Command-Return is Start. Not a Claude: dimmed, the text kept.
+    private var promptRows: some View {
+        let claude = model.newSessionClaude
+        return HStack(alignment: .top, spacing: sz(8)) {
+            Color.clear.frame(width: sz(64), height: 1)
+            VStack(alignment: .leading, spacing: sz(6)) {
+                Button { model.toggleNewSessionPrompt() } label: {
+                    Text(verbatim: form.promptShown ? "\u{25BE} Prompt" : "\u{25B8} Prompt (optional)")
+                        .font(Neon.font(11.5)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                        .frame(height: sz(18)).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!claude)
+                .help(claude ? "A first message for the new session" : Self.notClaude(command: form.command, host: form.host))
+                if form.promptShown {
+                    AgentComposerField(text: Binding(get: { form.prompt }, set: { model.setNewSessionPrompt($0) }),
+                                       onSubmit: { model.startNewSession() }, editable: claude && form.starting == nil,
+                                       returnSubmits: false)
+                        .frame(height: sz(96))
+                        .overlay(RoundedRectangle(cornerRadius: sz(4)).stroke(Neon.textSecondary.opacity(0.4)))
+                        .opacity(claude ? 1 : 0.45)
+                }
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func field<C: View>(_ label: String, error: String?, @ViewBuilder _ content: () -> C) -> some View {

@@ -1774,7 +1774,12 @@ struct AgentDetailView: View {
     var body: some View {
         if let form = model.newSession {
             // #847: the form in place of the pane's content (the selected session's terminal detaches meanwhile).
-            AgentNewSessionView(model: model, form: form)
+            // D5.4: a short window scrolls the form instead of clipping Start.
+            if scrolls {
+                ScrollView(.vertical) { AgentNewSessionView(model: model, form: form) }
+            } else {
+                AgentNewSessionView(model: model, form: form)
+            }
         } else if let row = model.selectedRow, let s = row.session {
             // QA #668 F1: an ended session's held row is display-only.
             let ended = model.focusedEnded
@@ -3383,6 +3388,8 @@ struct AgentComposerField: NSViewRepresentable {
     var editable = true
     /// #845: the window's interaction model, which moves the keyboard here (a row click, Return, Right).
     var owner: AgentWindowInteraction?
+    /// #847 D5.2: false for the New session prompt: Return adds a line and Command-Return submits.
+    var returnSubmits = true
 
     /// QA #672 #2: VoiceOver hears why the field takes nothing (only an ended session's is not editable).
     static func label(editable: Bool) -> String { editable ? "Message Claude" : "Message Claude, session ended" }
@@ -3422,6 +3429,7 @@ struct AgentComposerField: NSViewRepresentable {
         tv.textColor = NSColor(Neon.textPrimary)
         tv.insertionPointColor = NSColor(Neon.textPrimary)
         tv.onSubmit = { context.coordinator.parent.onSubmit() }
+        tv.returnSubmits = returnSubmits
         // Selectable first: a false isSelectable clears isEditable, a true isEditable sets isSelectable.
         tv.isSelectable = editable
         tv.isEditable = editable
@@ -3442,6 +3450,8 @@ struct AgentComposerField: NSViewRepresentable {
 
 final class AgentComposerTextView: NSTextView {
     var onSubmit: () -> Void = {}
+    /// #847 D5.2: false: Return or Enter alone adds a line, Command-Return submits.
+    var returnSubmits = true
     weak var owner: AgentWindowInteraction?
 
     /// #845: a focus asked for before the box was in the window (a row click from Terminal mode builds it next pass).
@@ -3450,12 +3460,14 @@ final class AgentComposerTextView: NSTextView {
         if window != nil, owner?.composerFocusPending == true { owner?.focusComposer() }
     }
 
-    /// Return or keypad Enter alone sends; Shift-Return adds a line; an IME's marked text keeps Return.
+    /// Return or keypad Enter alone sends (returnSubmits; else adds a line, and Command-Return sends); Shift-Return
+    /// adds a line; an IME's marked text keeps Return.
     override func keyDown(with event: NSEvent) {
         let mods = event.modifierFlags.intersection([.shift, .command, .option, .control])
         if event.keyCode == 36 || event.keyCode == 76, !hasMarkedText() {
-            if mods.isEmpty { return onSubmit() }
+            if mods.isEmpty { return returnSubmits ? onSubmit() : insertNewlineIgnoringFieldEditor(nil) }
             if mods == .shift { return insertNewlineIgnoringFieldEditor(nil) }
+            if mods == .command, !returnSubmits { return onSubmit() }
         }
         super.keyDown(with: event)
     }

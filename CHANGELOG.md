@@ -1568,6 +1568,9 @@ tag from the now-released section and put it on the new top draft.
   instead of doing nothing. (#1381)
 - X-ray's Memory tab now says "host unreachable" when a session's machine stops answering, and
   clears it when the machine answers again. (#1353)
+- The New session form in the Agent Sessions window has a Sidekick box, which also starts a QA
+  session named after yours, and an optional Prompt you can type there, which the new session gets
+  as its first message. Command-Return starts it. (#1370)
 
 ## v2.174.0
 

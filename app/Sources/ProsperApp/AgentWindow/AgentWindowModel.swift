@@ -1776,8 +1776,14 @@ final class AgentWindowModel: ObservableObject {
         [weak self] in self?.island().spawn(in: $0, command: $1, name: $2, done: $3)
     }
     /// #847 D3.7: a first message into a started session, then `then`: the island controller's sayFirst (#1369).
+    /// #1370 (R1369 rider): a failure seeds the draft at once when that session is the selected one (follow() seeds
+    /// the others when they are selected later).
     lazy var sayFirst: (_ key: AgentSessionKey, _ text: String, _ then: (@MainActor () -> Void)?) -> Void = {
-        [weak self] in self?.island().sayFirst($0, $1, then: $2)
+        [weak self] key, text, then in
+        self?.island().sayFirst(key, text) { @MainActor [weak self] in
+            self?.seedUnsentFirst(key, selectedOnly: true)
+            then?()
+        }
     }
     /// #847 D2.4: the prompt as last typed, kept across Cancel while the window lives; a Start that takes it drops it.
     /// Never persisted: a prompt can hold anything.
@@ -2034,7 +2040,7 @@ final class AgentWindowModel: ObservableObject {
         if let host = f.host {
             return spawnRemote(host, AgentNewSession.argv(f.command, shell: nil), name: newSessionName)
         }
-        // #847 D3.5, D6.1: the sidekick and the prompt only for a Claude; the prompt never joins the argv.
+        // #847 D3.5, D6.1: the sidekick and the prompt only for a Claude; the prompt never joins the spawn's argv.
         return spawn(AgentNewSession.expand(f.folder, home: home), AgentNewSession.argv(f.command, shell: shell),
                      name: newSessionName, command: f.command, sidekick: newSessionSidekickOn ? newSessionSidekickName : nil,
                      prompt: newSessionClaude ? f.prompt : "")
@@ -2208,7 +2214,7 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// #847 D3.7: sayFirst(main, prompt), then sayFirst(sidekick, the Settings prompt rendered for main); a blank
-    /// prompt skips the main's call. The text goes only through the seam, never into an argv.
+    /// prompt skips the main's call. The text goes only through the seam, never into the spawn's argv.
     private func firstMessages(main: AgentSessionKey, prompt: String, sidekick: AgentSessionKey?) {
         let say = sayFirst, brief = AgentNewSession.render(Preferences.agentIslandSidekickPrompt, name: main.name)
         var next: (@MainActor () -> Void)?
@@ -2458,6 +2464,17 @@ final class AgentWindowModel: ObservableObject {
     /// catch-up poll when shown again. A pane that left the layout was already stopped by syncRuntimes.
     /// #822: the terminal attaches to a visible, focused, live session in Terminal mode and detaches on anything else.
     /// The transcript runs in both modes: the header's cwd and todos come from it, so a toggle never changes the header.
+    /// #847 D2.3: a first message the island could not send becomes the empty draft once (never over a typed one).
+    /// selectedOnly: only while `key` is the focused pane's live session of a visible window (follow()'s condition).
+    private func seedUnsentFirst(_ key: AgentSessionKey, selectedOnly: Bool) {
+        if selectedOnly {
+            guard visible, !closed, let f = focusedRuntime, f.ended == nil, case .live(let s)? = f.content, s.key == key else { return }
+        }
+        if let c = interaction.controller, let t = c.unsentFirst[key], interaction.seedDraft(key: key, text: t) {
+            c.dropUnsentFirst(key)
+        }
+    }
+
     private func follow() {
         guard !closed else { return }
         let shown = visible ? shownPanes : []
@@ -2494,10 +2511,7 @@ final class AgentWindowModel: ObservableObject {
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
         interaction.plan = withConfigDir(transcript.pendingPlan)
         let terminalMode = paneMode == .terminal
-        // #847 D2.3: a first message the island could not send becomes the empty draft once (never over a typed one).
-        if let c = interaction.controller, let t = c.unsentFirst[s.key], interaction.seedDraft(key: s.key, text: t) {
-            c.dropUnsentFirst(s.key)
-        }
+        seedUnsentFirst(s.key, selectedOnly: false)
         // #822: Terminal mode has no input box (the terminal is the input).
         interaction.follow(terminalMode ? nil : s)
         // #847: the New session form covers the pane, so no terminal under it.
