@@ -767,14 +767,40 @@ extension AgentRowModelEffortTests {
         }
     }
 
+    /// #1365 (R1345-s1): a remote Claude row (host "host-a", a carried label) at the sidebar's width, every scale, 1x and
+    /// 2x, by the probes: both badges on line one (no "effort" alone), the title keeps its floor. The hidden host slot
+    /// gives way first (was: the badges plus it did not fit, so no badge at all). Prints the widths behind it.
+    @MainActor
+    func testRemoteRowKeepsBothBadgesAtTheSidebarWidth() {
+        var r = named1345("session-tokens")
+        r.remote = AgentSidebar.Remote(host: "host-a", name: "api", alias: "", stale: false, cwd: nil)
+        atScales { scale in
+            let v = AgentSidebarRowView(row: r, selected: false, number: 4)
+            print("ROW1365-WIDTHS (\(scale)) floor \(AgentSidebarRowView.badgeTitleFloor) badges \(ideal(v.modelSlotView).width)"
+                  + " host \(ideal(AgentSidebarRowView.hostSlot("host-a")).width) line \(column(sz(274)))"
+                  + " withHost \(ideal(v.titleLine(badges: true)).width) noHost \(ideal(v.titleLine(badges: true, hostSlot: false)).width)")
+            for px: CGFloat in [1, 2] {
+                let tag = "(\(scale), \(Int(px))x)"
+                let f = hosted1345(r, number: 4, width: sz(274), backing: px).frames
+                print("ROW1365-A \(tag) \(f.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" })")
+                guard let b = f["badges"], let t = f["title"] else { XCTFail("both badges probed: \(f.keys.sorted()) \(tag)"); continue }
+                XCTAssertTrue(f["effort"] == nil, "not the effort's alone: \(tag)")
+                XCTAssertTrue(b.midY >= t.minY && b.midY <= t.maxY, "badges on line one: \(b) in title \(t) \(tag)")
+                XCTAssertGreaterThanOrEqual(titleRoom1345(f, "badges") + 1, AgentSidebarRowView.badgeTitleFloor, "the floor kept: \(tag)")
+            }
+        }
+    }
+
     /// (e) The row's height is TIP's at 0.7, 0.85 and 1.0, with and without a number, with a model, without one and on
     /// History: literal heights measured at TIP (204f78a9, the scratch run ROW1345-TIP in ticket1.log: 31, 39, 45 for
     /// all six rows at each scale).
     @MainActor
     func testRowHeightIsTipsAtEveryScale() {
         let tip: [CGFloat: CGFloat] = [0.7: 31, 0.85: 39, 1.0: 45]
+        var remote = named1345("session-tokens")   // #1365: a remote Claude row on the new step, same height
+        remote.remote = AgentSidebar.Remote(host: "host-a", name: "api", alias: "", stale: false, cwd: nil)
         let rows = [row(session("api", model: "claude-fable-9-2-20991231", effort: "high")),
-                    row(session("api", path: nil)), history("api-old")]
+                    row(session("api", path: nil)), history("api-old"), remote]
         atScales { scale in
             for r in rows {
                 for number in [nil, 4] as [Int?] {

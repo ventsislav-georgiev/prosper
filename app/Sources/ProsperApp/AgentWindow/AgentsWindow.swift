@@ -1047,11 +1047,14 @@ extension AgentSidebarRowView {
 
     /// The first line. #1345: the title, then the model and effort badges trailing (#1268's slot). Operator 2026-11-16
     /// ("Cut the name first"): the title is cut down to `badgeTitleFloor` before a badge goes; below that the model's
-    /// badge goes (the effort's alone, same floor), then both, and the title alone truncates as before.
+    /// badge goes (the effort's alone, same floor), then both, and the title alone truncates as before. #1365: on a row
+    /// with a host the hidden host slot goes before any badge (both badges then end at the line's edge, not above the
+    /// age); the effort step has none (it is reached only when both badges without it do not fit, and with it it is wider).
     var titleLine: some View {
         ViewThatFits(in: .horizontal) {
             titleLine(badges: true)
-            titleLine(badges: true, effortOnly: true)
+            titleLine(badges: true, hostSlot: false)
+            titleLine(badges: true, effortOnly: true, hostSlot: false)
             titleLine(badges: false)
         }
     }
@@ -1064,8 +1067,9 @@ extension AgentSidebarRowView {
 
     /// #1345: `badges` puts the model slot at the end (a Claude row only; `effortOnly`, the effort's badge alone), then,
     /// on a row with a host, a hidden host slot as wide as line two's, so the badges end right above the age. With the
-    /// badges the title keeps `badgeTitleFloor` (ViewThatFits counts only that), so it is cut before they go.
-    func titleLine(badges: Bool, effortOnly: Bool = false) -> some View {
+    /// badges the title keeps `badgeTitleFloor` (ViewThatFits counts only that), so it is cut before they go. #1365:
+    /// `hostSlot` false leaves the hidden host slot out.
+    func titleLine(badges: Bool, effortOnly: Bool = false, hostSlot: Bool = true) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
             let withBadges = badges && row.modelSlot
             let title = Text(row.title).font(Neon.font(12.5, weight: .medium))
@@ -1088,7 +1092,7 @@ extension AgentSidebarRowView {
             if withBadges {
                 HStack(spacing: sz(5)) {   // line two's spacing between the age and the host
                     modelSlotView(effortOnly: effortOnly)
-                    if let h = row.remote?.host ?? row.host { Self.hostSlot(h).hidden() }
+                    if hostSlot, let h = row.remote?.host ?? row.host { Self.hostSlot(h).hidden() }
                 }
             }
         }
