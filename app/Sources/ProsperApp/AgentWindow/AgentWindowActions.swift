@@ -175,7 +175,8 @@ struct AgentPlanInput: Equatable, Sendable {
         let delimiter = { (l: String) in l.contains("|") && l.contains("-") && l.allSatisfy { "|:- \t".contains($0) } }
         for (k, raw) in all.enumerated() {
             var l = raw
-            if l.hasPrefix("```") || l.hasPrefix("~~~") { continue }
+            // QA 832 rider 3: a fence ends a table right above it (the render draws no fence line).
+            if l.hasPrefix("```") || l.hasPrefix("~~~") { table = false; continue }
             if l.first == "=", l.allSatisfy({ "= \t".contains($0) }) { continue }
             // A table's rows: from a "|" line over a delimiter row to the first line with no "|".
             table = l.contains("|") && (table || (k + 1 < all.count && delimiter(all[k + 1])))
@@ -376,10 +377,12 @@ struct AgentWindowDriver: Sendable {
 
     /// Claude Code's composer: the last "❯" line at column 0 right under a rule with a rule further down.
     static func composer(_ lines: [String]) -> Int? {
-        lines.indices.last { k in
-            k > 0 && AgentPrompt.isRule(lines[k - 1]) && lines[k].first == "❯"
-                && lines[(k + 1)...].contains(where: AgentPrompt.isRule)
-        }
+        lines.indices.last { isComposer(lines, $0) }
+    }
+
+    static func isComposer(_ lines: [String], _ k: Int) -> Bool {
+        k > 0 && AgentPrompt.isRule(lines[k - 1]) && lines[k].first == "\u{276F}"
+            && lines[(k + 1)...].contains(where: AgentPrompt.isRule)
     }
 
     /// #1065: the screen's bottom-most numbered line is inside the composer, between its "❯" line
@@ -396,9 +399,12 @@ struct AgentWindowDriver: Sendable {
     /// right under a rule with a rule further down: a draft typed there ("❯ 1. fix the build")
     /// is text, never a row. Claude Code hides the composer while a dialog shows, and a dialog
     /// row under a rule (a focused "❯ 5. Chat about this") has no rule below it.
+    /// QA #651 INFO-4: from the FIRST such line, not the last: Claude Code draws one composer, at the
+    /// bottom, so a second one is a dialog drawn that way, and taking it would hide the rows above it.
+    /// A transcript echo drawn between rules above the real composer only refuses more (fails safe).
     static func promptTail(_ screen: String) -> Bool {
         let lines = AgentPrompt.unframe(screen.split(separator: "\n", omittingEmptySubsequences: false))
-        return lines[((composer(lines) ?? -1) + 1)...].contains { l in
+        return lines[((lines.indices.first { isComposer(lines, $0) } ?? -1) + 1)...].contains { l in
             AgentPrompt.option(l)?.caret == true
                 || l.trimmingCharacters(in: .whitespaces).hasPrefix("Claude has written up a plan")
         }

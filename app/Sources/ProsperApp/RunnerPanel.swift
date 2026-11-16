@@ -2070,14 +2070,23 @@ struct GatedField: View, Equatable {
             // any modifier (⌘↑ ⇧↑ ⌥↑ ⇧⌘↓ …) the arrow is a caret/selection move and
             // goes to the field editor (#702); the key-only overload matched them all.
             .onKeyPress(keys: [.upArrow, .downArrow]) { press in
-                guard press.modifiers.isDisjoint(with: [.shift, .control, .option, .command])
-                else { return .ignored }
-                if press.key == .upArrow { onUp() } else { onDown() }
-                return .handled
+                let editor = NSApp.keyWindow?.firstResponder as? NSTextView
+                return Self.arrow(press.key, press.modifiers, composing: editor?.hasMarkedText() == true,
+                                  up: onUp, down: onDown)
             }
             // Belt-and-braces: never let an implicit animation interpolate the field's
             // layout/caret on a surrounding result change.
             .transaction { $0.disablesAnimations = true }
+    }
+
+    /// The field's up/down arrow: a row move only for a plain arrow with no composition. QA #519 INFO-3:
+    /// while an input method has marked text the arrows are its (candidate list), as the key monitor
+    /// leaves Return, Esc and Backspace to it.
+    static func arrow(_ key: KeyEquivalent, _ modifiers: EventModifiers, composing: Bool,
+                      up: () -> Void, down: () -> Void) -> KeyPress.Result {
+        guard !composing, modifiers.isDisjoint(with: [.shift, .control, .option, .command]) else { return .ignored }
+        if key == .upArrow { up() } else { down() }
+        return .handled
     }
 }
 

@@ -243,6 +243,29 @@ final class RunnerEditingKeysTests: XCTestCase {
         XCTAssertEqual(i.editor.selectedRange(), NSRange(location: 5, length: 0))
     }
 
+    /// QA #519 INFO-3: while an input method composes (marked text), the field's plain up/down
+    /// arrow is the input method's (its candidates), never a row move; with nothing marked it is
+    /// the row move. The field's handler with a fake composition state: no input method, no event.
+    func testPlainVerticalArrowsDuringACompositionAreTheInputMethods() {
+        func handled(_ r: KeyPress.Result) -> Bool { if case .handled = r { return true } else { return false } }
+        var log: [String] = []
+        for key in [KeyEquivalent.upArrow, .downArrow] {
+            log = []
+            let r = GatedField.arrow(key, [], composing: true, up: { log.append("up") }, down: { log.append("down") })
+            XCTAssertFalse(handled(r), "composing: the arrow goes on to the field editor")
+            XCTAssertEqual(log, [], "composing: no row moved")
+        }
+        log = []
+        for key in [KeyEquivalent.upArrow, .downArrow] {
+            XCTAssertTrue(handled(GatedField.arrow(key, [], composing: false, up: { log.append("up") },
+                                                   down: { log.append("down") })))
+        }
+        XCTAssertEqual(log, ["up", "down"], "nothing marked: the plain arrows move rows")
+        XCTAssertFalse(handled(GatedField.arrow(.upArrow, .shift, composing: false, up: { log.append("up") }, down: {})),
+                       "a modified arrow stays the field's (#702)")
+        XCTAssertEqual(log, ["up", "down"])
+    }
+
     // MARK: - The monitor alone
 
     /// Each editing key leaves the monitor as the same event object, no handler

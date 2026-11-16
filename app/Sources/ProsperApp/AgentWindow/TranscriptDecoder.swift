@@ -363,13 +363,50 @@ enum TranscriptDecoder {
     /// #828: Claude Code wraps a paste in `<pasted_content id="k3x9">` … `</pasted_content id="k3x9">`
     /// (the closer repeats a random id). Each matched pair becomes its text: no tags, no id. A
     /// shape this does not know (no closer, another id, other attributes) stays as written.
+    /// QA #660 INFO-3: one forward scan (it was a lazy backreference regex, O(k*n) for k openers with
+    /// no closer). The same pairs as that regex: an opener `<pasted_content id="ID">` (ID 1...64 of
+    /// [A-Za-z0-9_-]), one optional newline, the body up to the FIRST closer of the same id after it,
+    /// one optional newline before that closer; the scan goes on after the closer. Bytes, not
+    /// Characters, so "\r\n" splits as the regex's UTF-16 did.
     static func unwrapPasted(_ s: String) -> String {
         guard s.contains("<pasted_content") else { return s }
-        return pastedPair.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$2")
+        let b = Array(s.utf8)
+        let open = Array(#"<pasted_content id=""#.utf8), close = Array(#"</pasted_content id=""#.utf8)
+        func at(_ i: Int, _ p: [UInt8]) -> Bool { i + p.count <= b.count && b[i..<(i + p.count)].elementsEqual(p) }
+        // From `i`, an id then `">`: the index after the `>`.
+        func idEnd(_ i: Int) -> Int? {
+            var j = i
+            while j < b.count, j - i < 64, Self.idBytes.contains(b[j]) { j += 1 }
+            guard j > i, j + 1 < b.count, b[j] == UInt8(ascii: "\""), b[j + 1] == UInt8(ascii: ">") else { return nil }
+            return j + 2
+        }
+        // Every closer, by id, in order: each opener then moves its id's cursor forward only.
+        var closers: [ArraySlice<UInt8>: [Int]] = [:]
+        for i in b.indices where b[i] == UInt8(ascii: "<") && at(i, close) {
+            if let e = idEnd(i + close.count) { closers[b[(i + close.count)..<(e - 2)], default: []].append(i) }
+        }
+        var cursor: [ArraySlice<UInt8>: Int] = [:], out: [UInt8] = [], copied = 0, i = 0
+        let nl = UInt8(ascii: "\n")
+        while i < b.count {
+            guard b[i] == UInt8(ascii: "<"), at(i, open), let e = idEnd(i + open.count) else { i += 1; continue }
+            let id = b[(i + open.count)..<(e - 2)], list = closers[id] ?? []
+            let start = e < b.count && b[e] == nl ? e + 1 : e
+            var c = cursor[id] ?? 0
+            while c < list.count, list[c] < start { c += 1 }
+            cursor[id] = c
+            guard c < list.count, let after = idEnd(list[c] + close.count) else { i = e; continue }
+            let end = list[c] > start && b[list[c] - 1] == nl ? list[c] - 1 : list[c]
+            out += b[copied..<i]
+            out += b[start..<end]
+            i = after
+            copied = after
+        }
+        guard copied > 0 else { return s }
+        out += b[copied...]
+        return String(decoding: out, as: UTF8.self)
     }
 
-    private static let pastedPair = try! NSRegularExpression(
-        pattern: #"<pasted_content id="([A-Za-z0-9_-]{1,64})">\n?([\s\S]*?)\n?</pasted_content id="\1">"#)
+    private static let idBytes = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-".utf8)
 
     /// `<local-command-stdout>x</local-command-stdout>` → `x`: Claude Code's wrapper tags
     /// around notices and tool errors. Only for those two; user and model text stay as written.

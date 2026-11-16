@@ -1461,6 +1461,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions no longer takes over a session on another machine by itself: showing the window,
   restoring a layout or the session coming back online now shows an Attach button, and opening it
   needs a click or Attach. (#1330)
+- Command Runner: while an input method is composing text (for example Japanese or Chinese input),
+  the up and down arrows now move through its candidates instead of moving the result rows (#996)
 
 ## v2.174.0
 
