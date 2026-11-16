@@ -92,7 +92,8 @@ final class XrayChild: @unchecked Sendable {
 
     init(signal: @escaping @Sendable (pid_t) -> Void = { _ = Darwin.kill($0, SIGTERM) }) { self.signal = signal }
 
-    func started(_ p: pid_t) { lock.withLock { pid = p; if cancelled { signal(p) } } }
+    func started(_ p: pid_t) { lock.withLock { pid = p; if cancelled, !done { signal(p) } } }
+    /// Called from runCapturingBoth's onExit (#1380), the termination handler, not after the call returns.
     func reaped() { lock.withLock { done = true } }
     func cancel() { lock.withLock { if !cancelled, !done, let p = pid { signal(p) }; cancelled = true } }
 }

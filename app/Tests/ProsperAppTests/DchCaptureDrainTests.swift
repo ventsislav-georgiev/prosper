@@ -34,6 +34,21 @@ final class DchCaptureDrainTests: XCTestCase {
         return call.lock.withLock { call.result }
     }
 
+    /// #1380: the exit hook runs (from the termination handler) before the call returns, once, with a real /bin/sh.
+    func testTheExitHookRunsBeforeTheCallReturns() {
+        final class Hits: @unchecked Sendable { let lock = NSLock(); var n = 0 }
+        let hits = Hits(), done = XCTestExpectation(description: "returned")
+        let seen = Hits()
+        DispatchQueue.global().async {
+            let r = DchCommand.runCapturingBoth(args: ["-c", "exit 0"], env: [:], path: "/bin/sh",
+                                                onExit: { hits.lock.withLock { hits.n += 1 } })
+            seen.lock.withLock { seen.n = hits.lock.withLock { hits.n } + 10 * Int(r.status) }
+            done.fulfill()
+        }
+        XCTAssertEqual(XCTWaiter().wait(for: [done], timeout: 20), .completed)
+        XCTAssertEqual(seen.lock.withLock { seen.n }, 1, "hook ran once before the return; exit status 0")
+    }
+
     /// The hang: 200000 bytes to stderr while stdout is still open, then "done", exit 3.
     func testAFloodOfStderrBeforeStdoutStillReturns() throws {
         let r = try XCTUnwrap(run("printf '%0200000d' 0 >&2; printf 'done\\n'; exit 3"))

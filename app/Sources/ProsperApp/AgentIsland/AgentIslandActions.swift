@@ -1568,7 +1568,14 @@ final class DchActionRunner: @unchecked Sendable {
                                   _ onPid: @escaping @Sendable (pid_t) -> Void,
                                   _ onOutput: @escaping @Sendable (Data) -> Void) -> (status: Int32, out: Data)
 
+    /// #1380: as Launch, plus `onExit`, called when the process has exited (before the reap is reported).
+    typealias LaunchExit = @Sendable (_ path: String, _ args: [String], _ env: [String: String], _ cwd: String?,
+                                      _ onPid: @escaping @Sendable (pid_t) -> Void,
+                                      _ onOutput: @escaping @Sendable (Data) -> Void,
+                                      _ onExit: @escaping @Sendable () -> Void) -> (status: Int32, out: Data)
+
     private final class Job: @unchecked Sendable {   // touched under `lock` only
+        var exited = false   // #1380: the process is reaped: its pid is never signalled again
         var yields = false   // #744: a Stop or Restart, which a Kill may cut through
         var pid: pid_t?
         var cancelled = false
@@ -1590,19 +1597,26 @@ final class DchActionRunner: @unchecked Sendable {
     private var parked: [(dir: String, job: Job, finish: @Sendable () -> Void)] = []
     private let bound: TimeInterval
     private let ceiling: TimeInterval
-    private let launch: Launch
+    private let launch: LaunchExit
     private let signal: @Sendable (pid_t) -> Void
 
     init(bound: TimeInterval = DchActionRunner.bound, ceiling: TimeInterval = DchActionRunner.ceiling,
-         launch: @escaping Launch = { path, args, env, cwd, onPid, onOutput in
-             let r = DchCommand.runCapturingBoth(args: args, env: env, path: path, merge: true, cwd: cwd,
-                                                 onPid: onPid, onOutput: onOutput)
-             return (r.status, r.out)
-         },
+         launch: Launch? = nil, launchExit: LaunchExit? = nil,
          signal: @escaping @Sendable (pid_t) -> Void = { _ = Darwin.kill($0, SIGTERM) }) {
         self.bound = bound
         self.ceiling = ceiling
-        self.launch = launch
+        // A `launch` seam never reports an exit: its job is reaped when it returns, as before #1380.
+        if let launchExit {
+            self.launch = launchExit
+        } else if let launch {
+            self.launch = { @Sendable path, args, env, cwd, onPid, onOutput, _ in launch(path, args, env, cwd, onPid, onOutput) }
+        } else {
+            self.launch = { @Sendable path, args, env, cwd, onPid, onOutput, onExit in
+                let r = DchCommand.runCapturingBoth(args: args, env: env, path: path, merge: true, cwd: cwd,
+                                                    onPid: onPid, onOutput: onOutput, onExit: onExit)
+                return (r.status, r.out)
+            }
+        }
         self.signal = signal
     }
 
@@ -1669,7 +1683,7 @@ final class DchActionRunner: @unchecked Sendable {
             }, { chunk in
                 self.lock.withLock { job.lastOutput = .now() }
                 lines.add(chunk)
-            }) } ?? (status: 0, out: Data())
+            }, { self.lock.withLock { job.exited = true } }) } ?? (status: 0, out: Data())
             lines.flush()
             var result = AgentIsland.actionResult(status: r.status, output: pre + r.out)
             let (parks, resume) = lock.withLock { () -> (Bool, [@Sendable () -> Void]) in
@@ -1740,7 +1754,7 @@ final class DchActionRunner: @unchecked Sendable {
 
     /// Under `lock`: the pid to signal, at most once per job; nil before the pid is known or after the reap.
     private func claimSignal(_ job: Job) -> pid_t? {
-        guard !job.signalled, let pid = job.pid else { return nil }
+        guard !job.signalled, !job.exited, let pid = job.pid else { return nil }
         job.signalled = true
         return pid
     }

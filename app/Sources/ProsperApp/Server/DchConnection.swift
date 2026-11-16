@@ -2550,7 +2550,8 @@ enum DchCommand {
     /// gets each stdout chunk as it comes (a restart reports per session).
     static func runCapturingBoth(args: [String], env: [String: String], path: String = dchPath, merge: Bool = false,
                                  cwd: String? = nil, onPid: (pid_t) -> Void = { _ in },
-                                 onOutput: (Data) -> Void = { _ in }) -> (out: Data, err: String, status: Int32) {
+                                 onOutput: (Data) -> Void = { _ in },
+                                 onExit: @escaping @Sendable () -> Void = {}) -> (out: Data, err: String, status: Int32) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
@@ -2560,6 +2561,12 @@ enum DchCommand {
         let errPipe = Pipe()
         p.standardOutput = pipe
         p.standardError = merge ? pipe : errPipe
+        // #1380: `onExit` runs from the termination handler (Foundation's own reap comes first there), and this call
+        // returns only after it ran, so a caller marks its pid done before anyone can act on it after the return.
+        // shortcut: the pid is reaped just before the handler runs, a window only the OS could close; upgrade if a
+        // pre-reap exit event is ever needed.
+        let exited = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in onExit(); exited.signal() }
         do { try p.run() } catch { return (Data(), "", -1) }
         onPid(p.processIdentifier)
         // R988c-1: stderr is read to its end on another thread while this one drains stdout (the screen), so
@@ -2583,6 +2590,7 @@ enum DchCommand {
         }
         group.wait()
         p.waitUntilExit()
+        exited.wait()
         // A cut can end inside a UTF-8 sequence: decode what is valid (U+FFFD for the cut end), never "" for all of it.
         let text = String(data: err.kept, encoding: .utf8) ?? (err.cut ? String(decoding: err.kept, as: UTF8.self) : "")
         return (data, text, p.terminationStatus)

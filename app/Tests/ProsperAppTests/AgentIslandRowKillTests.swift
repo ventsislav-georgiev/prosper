@@ -32,6 +32,33 @@ final class AgentIslandRowKillTests: XCTestCase {
         XCTAssertEqual(r.map { AgentIsland.rowText($0, name: "a", .stop) }, AgentIsland.killedText)
     }
 
+    /// #1380 (R1368-i1): once the launch reports the exit, a cancel signals nothing; before it, exactly once.
+    /// Fake launch and signal recorder only.
+    func testCancelAfterTheExitIsReportedSignalsNothing() {
+        final class Rec: @unchecked Sendable {
+            let lock = NSLock(), exited = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            var signals: [pid_t] = []
+        }
+        for reportExit in [true, false] {
+            let rec = Rec(), key = AgentSessionKey(dir: "/d", name: "a"), finished = DispatchSemaphore(value: 0)
+            let runner = DchActionRunner(launchExit: { _, _, _, _, onPid, _, onExit in
+                onPid(4244)
+                if reportExit { onExit() }
+                rec.exited.signal()
+                rec.release.wait()
+                return (0, Data())
+            }, signal: { pid in rec.lock.withLock { rec.signals.append(pid) } })
+            XCTAssertTrue(runner.start(key, path: "/fake/dch", args: ["x"], env: { [:] }) { _ in finished.signal() })
+            XCTAssertEqual(rec.exited.wait(timeout: .now() + 10), .success)
+            runner.cancel(key)
+            runner.cancel(key)
+            XCTAssertEqual(rec.lock.withLock { rec.signals }, reportExit ? [] : [4244],
+                           reportExit ? "exit reported: the pid may be reused, no signal" : "still running: exactly one SIGTERM")
+            rec.release.signal()
+            XCTAssertEqual(finished.wait(timeout: .now() + 10), .success)
+        }
+    }
+
     private final class Box: @unchecked Sendable {
         private let lock = NSLock()
         private var r: DchActionResult?

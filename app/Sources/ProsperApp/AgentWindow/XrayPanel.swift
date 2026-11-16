@@ -75,8 +75,8 @@ final class XrayPanels: ObservableObject {
             await withCheckedContinuation { c in
                 DispatchQueue.global(qos: .utility).async {
                     let r = DchCommand.bounded(DchCommand.remoteTimeout) { onPid in
-                        defer { child.reaped() }
-                        return DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: { onPid($0); child.started($0) })
+                        DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: { onPid($0); child.started($0) },
+                                                    onExit: { child.reaped() })   // #1380: marked at the exit, not after the return
                     }
                     let v: (status: Int32, out: Data) = r.map { ($0.status, $0.out) } ?? (-1, Data())
                     c.resume(returning: v)

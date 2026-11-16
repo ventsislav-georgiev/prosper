@@ -398,5 +398,11 @@ final class XrayPollTests: XCTestCase {
         c3.reaped()
         c3.cancel()
         XCTAssertEqual(late.pids, [], "reaped: its pid may be reused")
+        // #1380: the exit is reported before the pid (a fast child) and the cancel came first: never signalled.
+        let fast = Sent(), c4 = child(fast)
+        c4.cancel()
+        c4.reaped()
+        c4.started(44)
+        XCTAssertEqual(fast.pids, [], "exited before started reported it: no signal at the launch")
     }
 }
