@@ -1518,6 +1518,8 @@ tag from the now-released section and put it on the new top draft.
   session ends. (#1364)
 - Agent Sessions and Agent Island: History lists pinned sessions first, then the rest, each A to Z
   by name, as dch does. (#1347)
+- Agent Sessions: the subagents count on a session row has an outline, so a session with subagents
+  stands out from its PR counts. (#1360)
 
 ## v2.174.0
 

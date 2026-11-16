@@ -1122,6 +1122,9 @@ extension AgentSidebarRowView {
         case .blocked: return agentStateColor(.blocked)
         }
     }
+    /// #1360: the subagents count's outline: textPrimary, selected or not (3:1 over the row on all 22 themes, and stronger
+    /// than the quiet ink of the counts beside it on an unselected row; AgentCountOutlineTests).
+    static func outlineInk(selected: Bool) -> Color { Neon.textPrimary }
 
     /// #1203: the model slot's width. #1268: the widest known short name and the widest effort word, each in its badge
     /// (not a model id); a longer name is cut in the middle inside its badge.
@@ -1229,7 +1232,8 @@ extension AgentSidebarRowView {
                 .foregroundStyle(row.state == .blocked ? Self.ink(.blocked, selected: selected) : Self.ink(.quiet, selected: selected))
                 .lineLimit(1)
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
-                             quiet: Self.ink(.quiet, selected: selected), open: Self.ink(.blue, selected: selected))
+                             quiet: Self.ink(.quiet, selected: selected), open: Self.ink(.blue, selected: selected),
+                             outline: Self.outlineInk(selected: selected))
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
                 let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Self.ink(.blue, selected: selected))
@@ -1300,15 +1304,26 @@ struct AgentCountGroups: View {
     /// #1271: the inks of the other groups and of the open PRs' group (the selected sidebar row's, see `AgentSidebarRowView.ink`).
     var quiet = Neon.textSecondary
     var open = Neon.blue
+    /// #1360: the agents group's outline ink (a capsule, stroke only, its padding in the group's width); nil: none (the header).
+    var outline: Color?
 
     var body: some View {
         if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
             HStack(spacing: sz(6)) {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
+                    let ring = g.0 == .agents ? outline : nil
                     HStack(spacing: sz(2)) {
                         Image(systemName: g.0.symbol).font(Neon.font(size - 1))
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
                     }
+                    .padding(.horizontal, ring == nil ? 0 : sz(4))
+                    .background {   // no vertical padding: the line's height stays (31/39/45)
+                        if let ring {
+                            Capsule().strokeBorder(ring, lineWidth: 1)
+                                .modifier(AgentSidebarRowProbe(kind: "capsule.\(g.0)", title: g.0.words(g.1)))
+                        }
+                    }
+                    .modifier(AgentSidebarRowProbe(kind: "count.\(g.0)", title: g.0.words(g.1)))
                     .foregroundStyle(g.0 == .open ? open : quiet)
                     .fixedSize()
                     .accessibilityElement(children: .ignore)

@@ -140,20 +140,23 @@ extension AgentWindowD1Tests {
         let relaunching = "Relaunching\u{2026}", all = Set(states)
         let calm: Set<String> = ["Done", "Idle"]
         // The state texts that DROP the open count, per (digits, scale); every other state keeps it.
+        // #1360: every cell's agents group is outlined, its capsule's padding (sz(4) each side) in the line's width, so
+        // the count gives way sooner: from TIP's prints plus 2 * sz(4) (BADGE1268C-FIT reads the new widths).
         let drops: [Int: [CGFloat: Set<String>]] = [
-            999: [0.7: all.subtracting(calm), 0.85: all.subtracting(calm.union(["Ending\u{2026}", "Exiting\u{2026}", "Working"])),
-                  1.0: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}", "Stopping\u{2026}"]],
-            9_999: [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
-            99_999: [0.7: all, 0.85: all.subtracting(["Idle"]), 1.0: all.subtracting(["Idle"])],
+            999: [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
+            9_999: [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(["Idle"]), 1.0: all.subtracting(calm)],
+            99_999: [0.7: all, 0.85: all, 1.0: all],
         ]
         // The cells drawn cut, per (digits as printed, scale).
         let cuts: [String: [CGFloat: Set<String>]] = [
-            "9999": [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}"],
-                     0.85: ["Needs input", relaunching, "Restarting\u{2026}"], 1.0: [relaunching]],
-            "99999": [0.7: all.subtracting(calm.union(["Exiting\u{2026}", "Working"])),
-                      0.85: all.subtracting(calm.union(["Ending\u{2026}", "Exiting\u{2026}", "Pausing\u{2026}", "Working"])),
-                      1.0: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}"]],
-            "99999+": [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
+            "999": [0.7: [relaunching], 0.85: [relaunching], 1.0: [relaunching]],
+            "9999": [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}", "Starting\u{2026}", "Stopping\u{2026}"],
+                     0.85: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}"],
+                     1.0: ["Needs input", relaunching, "Restarting\u{2026}"]],
+            "99999": [0.7: all.subtracting(calm), 0.85: all.subtracting(calm),
+                      1.0: ["Needs input", "Pausing\u{2026}", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}",
+                            "Starting\u{2026}", "Stopping\u{2026}"]],
+            "99999+": [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
         ]
         let cut = Set(cuts.flatMap { digits, byScale in byScale.flatMap { scale, s in s.map { "\($0) \(digits) \(scale)" } } })
         let named = (drops.values.flatMap { $0.values } + cuts.values.flatMap { $0.values }).reduce(Set<String>()) { $0.union($1) }
