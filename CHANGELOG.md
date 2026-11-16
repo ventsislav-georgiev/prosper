@@ -1469,6 +1469,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: Command-L in a transcript pane (or "Jump to Chapter..." in the pane's "..." menu)
   opens Jump to Chapter, a filterable list of the conversation's prompts that scrolls to the one you
   pick. (#1319)
+- Agent island: a session and its sidekick (named like api and api-qa) now offer Stop both from a
+  live row's menu and Resume both from History. The main starts first, and the sidekick starts only
+  when its main came back. A larger group offers Stop all N and Resume all N (#908)
 
 ## v2.174.0
 
