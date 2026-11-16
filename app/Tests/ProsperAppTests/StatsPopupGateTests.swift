@@ -15,6 +15,10 @@ final class StatsPopupGateTests: XCTestCase {
         super.tearDown()
     }
 
+    /// The ping thread runs at background QoS, so on a loaded Mac its first turn can come late:
+    /// the event ends these waits, the ceiling only fails a hang.
+    private static let ceiling: TimeInterval = 20
+
     private func poller(_ modules: Set<StatsModule>, ticks: Int) -> (StatsPoller, () -> StatsSnapshot?) {
         var cfg = StatsPoller.Config()
         cfg.baseInterval = 0.05; cfg.activeInterval = 0.05; cfg.slowDivider = 1
@@ -66,11 +70,11 @@ final class StatsPopupGateTests: XCTestCase {
         let opened = expectation(description: "first echo on open")
         lock.withLock { firstPing = opened }
         p.setPopupActive(true)
-        wait(for: [opened], timeout: 1)
+        wait(for: [opened], timeout: Self.ceiling)   // the echo ends the wait; the ceiling only guards a hang
 
         p.setPopupActive(false)
         _ = p.history("net.up")   // queue.sync: the stop has been applied
-        Thread.sleep(forTimeInterval: 1.5)   // past the loop's 1 s sleep: a live loop pings again
+        Thread.sleep(forTimeInterval: 1.5)   // past the loop's 1 s sleep: a live loop pings again (one-sided: a late thread can only hide it, never fail a stopped one)
         XCTAssertEqual(lock.withLock { pings }, 1, "closing the popup stops the ping thread")
     }
 
@@ -90,7 +94,7 @@ final class StatsPopupGateTests: XCTestCase {
             let e = expectation(description: what)
             lock.withLock { nextPing = e }
             action()
-            wait(for: [e], timeout: 1)
+            wait(for: [e], timeout: Self.ceiling)
         }
         func settled() -> Int {   // queue.sync, then past the loop's 1 s sleep
             _ = p.history("net.up")
@@ -129,11 +133,11 @@ final class StatsPopupGateTests: XCTestCase {
         let reader = NetPingReader(historyLength: 10, interval: 1)
         reader.start()
         let landed = expectation(for: NSPredicate { _, _ in reader.connectivity() == [true] }, evaluatedWith: nil)
-        wait(for: [landed], timeout: 5)
+        wait(for: [landed], timeout: Self.ceiling)
 
         reader.stop()
         reader.start()   // the next popup open
-        wait(for: [secondRun], timeout: 5)
+        wait(for: [secondRun], timeout: Self.ceiling)
         XCTAssertEqual(reader.connectivity(), [], "a new run keeps nothing from the last one")
         XCTAssertTrue(reader.latest() == nil, "no latency until this run's first echo")
         reader.stop()
@@ -155,7 +159,7 @@ final class StatsPopupGateTests: XCTestCase {
         cfg.baseInterval = 0.05; cfg.activeInterval = 0.05; cfg.slowDivider = 1
         let p = StatsPoller(modules: [.network], config: cfg, deliverQueue: DispatchQueue(label: "test.stats.rebuilt"))
         StatsController.startPrimed(p, popupShown: true, screenHidden: false)
-        wait(for: [echo], timeout: 5)
+        wait(for: [echo], timeout: Self.ceiling)
         p.stop()
         _ = p.history("net.up")   // queue.sync: the stop has been applied
     }
