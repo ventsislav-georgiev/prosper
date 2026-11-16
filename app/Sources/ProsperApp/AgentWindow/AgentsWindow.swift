@@ -926,6 +926,13 @@ struct AgentSidebarRowView: View {
                 titleLine
                 detailVariants
             }
+            .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { AgentDigitChipSlot.Value(block: $0) }
+            .modifier(AgentSidebarRowProbe(kind: "block", title: row.title))
+            // #1345: the ⌘<n> chip's own column on EVERY row (the widest digit's chip, at no height), so the badges and
+            // the age end at one edge with a number or none and the row's height never changes.
+            Self.digitColumn
+                .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { AgentDigitChipSlot.Value(column: $0) }
+                .modifier(AgentSidebarRowProbe(kind: "chipColumn", title: row.title))
         }
         .padding(.horizontal, sz(10)).padding(.vertical, sz(7))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -948,17 +955,16 @@ struct AgentSidebarRowView: View {
                 }
             }
         }
-        // #1110: drawn over the slot the title line keeps (#1268; outside the row's element, so it is read with its own
-        // name and help); no number, no chip.
+        // #1110: drawn over the row's chip column (outside the row's element, so it is read with its own name and help);
+        // no number, no chip. #1345: centred on the two lines (the column's x, the text block's y).
         .overlayPreferenceValue(AgentDigitChipSlot.self) { slot in
-            if let slot, let number {
+            if let column = slot.column, let block = slot.block, let number {
                 GeometryReader { proxy in
-                    let r = proxy[slot]
                     AgentDigitChip(number: number, active: selected)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("Command-\(number)")
                         .help("Select this session (⌘\(number))")
-                        .position(x: r.midX, y: r.midY)
+                        .position(x: proxy[column].midX, y: proxy[block].midY)
                 }
             }
         }
@@ -995,10 +1001,14 @@ struct AgentSidebarRowProbe: ViewModifier {
     #endif
 }
 
-/// #1110: the bounds of the ⌘<n> chip's slot (#1268: at the end of the row's title line).
+/// #1110: the bounds of the ⌘<n> chip's slot. #1345: the row's chip column (x) and its two-line text block (y).
 private struct AgentDigitChipSlot: PreferenceKey {
-    static let defaultValue: Anchor<CGRect>? = nil
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
+    struct Value { var block: Anchor<CGRect>?, column: Anchor<CGRect>? }
+    static let defaultValue = Value()
+    static func reduce(value: inout Value, nextValue: () -> Value) {
+        let next = nextValue()
+        value = Value(block: next.block ?? value.block, column: next.column ?? value.column)
+    }
 }
 
 /// #1110: a numbered row's ⌘<n> chip, Clipboard History's position keycap (ClipboardPanel.swift's PositionKeyCap: private
@@ -1029,19 +1039,45 @@ struct AgentDigitChip: View {
 }
 
 extension AgentSidebarRowView {
-    /// The first line. #1268: the title, then the ⌘<n> chip's slot at its end on EVERY row (the widest digit's chip, at
-    /// no height, so every title is cut at the same place and the row's height never changes); the chip is drawn over
-    /// it by the row, only with a number, and overhangs into the row's padding as it did on the second line.
+    /// #1345: the ⌘<n> chip's column, the widest digit's chip at no height (digits are proportional: the nine together are
+    /// the widest whatever the font); the row draws the chip over it, only with a number.
+    static var digitColumn: some View {
+        ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
+    }
+
+    /// The first line. #1345: the title, then the model and effort badges trailing (#1268's slot). Operator 2026-11-16
+    /// ("Cut the name first"): the title is cut down to `badgeTitleFloor` before a badge goes; below that the model's
+    /// badge goes (the effort's alone, same floor), then both, and the title alone truncates as before.
     var titleLine: some View {
+        ViewThatFits(in: .horizontal) {
+            titleLine(badges: true)
+            titleLine(badges: true, effortOnly: true)
+            titleLine(badges: false)
+        }
+    }
+
+    /// #1345: the least a title beside the badges is cut to: a literal 8-character string and the "…", in the title's
+    /// font at the UI scale (about 8 characters of a typical name; wide letters keep fewer, narrow ones more).
+    static var badgeTitleFloor: CGFloat {
+        ("abcdefgh\u{2026}" as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: sz(12.5), weight: .medium)]).width
+    }
+
+    /// #1345: `badges` puts the model slot at the end (a Claude row only; `effortOnly`, the effort's badge alone), then,
+    /// on a row with a host, a hidden host slot as wide as line two's, so the badges end right above the age. With the
+    /// badges the title keeps `badgeTitleFloor` (ViewThatFits counts only that), so it is cut before they go.
+    func titleLine(badges: Bool, effortOnly: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
-            Text(row.title).font(Neon.font(12.5, weight: .medium))
+            let withBadges = badges && row.modelSlot
+            let title = Text(row.title).font(Neon.font(12.5, weight: .medium))
                 .foregroundStyle(row.state == nil ? Self.ink(.quiet, selected: selected) : Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
                 .modifier(AgentSidebarRowProbe(kind: "title", title: row.title))
+            if withBadges {
+                AgentWidthFloor(floor: Self.badgeTitleFloor) { title }.layoutPriority(1)
+            } else {
+                title
+            }
             Spacer(minLength: sz(4))
-            // Digits are proportional: the nine together are the widest whatever the font.
-            ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
-                .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { $0 }
             if AgentPaneLayout.splitsEnabled {
                 // #900 B2 step 4b (7.2, #828 slot rule): the "in view" glyph's slot is always laid out with
                 // the gate on (hidden by opacity, never removed), so the title never moves; gate off: no slot.
@@ -1049,16 +1085,20 @@ extension AgentSidebarRowView {
                     .frame(width: sz(14)).opacity(inView ? 1 : 0)
                     .modifier(AgentSidebarRowProbe(kind: inView ? "glyph" : "slot", title: row.title))
             }
+            if withBadges {
+                HStack(spacing: sz(5)) {   // line two's spacing between the age and the host
+                    modelSlotView(effortOnly: effortOnly)
+                    if let h = row.remote?.host ?? row.host { Self.hostSlot(h).hidden() }
+                }
+            }
         }
     }
 
-    /// The second line. The PR chips whole, else their count, else none: never a cut-off chip. #1268: what gives way
-    /// first is the PR chips (to their count), then the model badges, then the count; the state text and the age slot
-    /// are on every variant. #1203: the badges show only where the line still fits with them.
+    /// The second line. The PR chips whole, else their count, else none: never a cut-off chip; the state text and the
+    /// age slot are on every variant. #1345: the model badges are on the first line (was: a step of this ladder).
     var detailVariants: some View {
         ViewThatFits(in: .horizontal) {
-            detailLine(row.prs, modelSlot: true)
-            if !row.prs.isEmpty { detailLine([], open: row.prCount, modelSlot: true) }
+            detailLine(row.prs)
             detailLine([], open: row.prCount)
             detailLine([])
         }
@@ -1128,20 +1168,26 @@ extension AgentSidebarRowView {
     /// known (no size change when it arrives): the hidden widest pair sizes it, the value is drawn over it, trailing.
     /// #1268: two badges, the model's (neutral) then the effort's (tinted by level); no model, nothing drawn. The words
     /// stay the row's (modelWords): the badges are inside the row's element and add none of their own.
-    var modelSlotView: some View {
+    var modelSlotView: some View { modelSlotView(effortOnly: false) }
+
+    /// #1345: `effortOnly`, line one's step below the title's floor: the effort's badge alone, in a slot as wide as the
+    /// widest effort word's (no size change when it arrives; none known, nothing drawn).
+    func modelSlotView(effortOnly: Bool) -> some View {
         HStack(spacing: sz(3)) {
-            Self.badge(Self.modelWidest, Self.neutralLook)
+            if !effortOnly { Self.badge(Self.modelWidest, Self.neutralLook) }
             Self.badge(Self.effortWidest, Self.neutralLook)
         }
         .hidden()
         .overlay(alignment: .trailing) {
-            let shown = Self.badges(model: row.model, effort: row.effort, selected: selected)
+            let all = Self.badges(model: row.model, effort: row.effort, selected: selected)
+            let shown = effortOnly ? Array(all.dropFirst()) : all
             HStack(spacing: sz(3)) {
                 // The effort badge (second) keeps its word whole before the model's name is cut.
                 ForEach(shown.indices, id: \.self) { i in Self.badge(shown[i].text, shown[i].look).layoutPriority(Double(i)) }
             }
         }
         .fixedSize()
+        .modifier(AgentSidebarRowProbe(kind: effortOnly ? "effort" : "badges", title: row.title))
         // At no height, as the chip's slot: the badges never change the line's height at any scale (0.7 read 1 pt).
         .frame(height: 0)
         .help("Model and effort of the last answer")
@@ -1157,6 +1203,7 @@ extension AgentSidebarRowView {
         }
         .font(Neon.font(10).monospacedDigit())
         .fixedSize()
+        .modifier(AgentSidebarRowProbe(kind: "age", title: row.title))
     }
 
     /// #1304: each shown chip with its own link (by position, as the accessibility actions do: two chips can share a
@@ -1170,10 +1217,9 @@ extension AgentSidebarRowView {
 
     /// #1115: the state text, the count groups (no " · ": the gap and the symbol separate them), then the PR chips,
     /// or with `open` the open PRs' count as a blue group in their place.
-    /// #1203: `modelSlot` puts the model slot after the Spacer (a Claude row only): trailing, so it never moves the state
-    /// text, and it is never a zero-width child (it always has the widest pair's width).
-    /// #1268: then the age slot, the last thing on the line (live and History rows); the ⌘<n> chip is on the first line.
-    func detailLine(_ chips: [String], open: Int = 0, modelSlot: Bool = false) -> some View {
+    /// #1268: then the age slot, trailing (live and History rows), then the host slot. #1345: the model badges are on
+    /// the first line, right above the age; the ⌘<n> chip is in the row's own column.
+    func detailLine(_ chips: [String], open: Int = 0) -> some View {
         HStack(spacing: sz(5)) {
             Text(row.detail).font(Neon.font(10.5))
                 .foregroundStyle(row.state == .blocked ? Self.ink(.blocked, selected: selected) : Self.ink(.quiet, selected: selected))
@@ -1195,7 +1241,6 @@ extension AgentSidebarRowView {
                 }
             }
             Spacer(minLength: 0)
-            if modelSlot, row.modelSlot { modelSlotView }
             if !row.age.isEmpty || row.state != nil { ageSlot }
             if let h = row.remote?.host ?? row.host { Self.hostSlot(h, selected: selected) }   // #1324: a remote History row's too
         }

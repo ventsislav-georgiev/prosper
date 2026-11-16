@@ -123,29 +123,40 @@ extension AgentWindowD1Tests {
     // MARK: The fit
 
     /// #1268 (R5): which step of line two's ladder shows, from a literal table (state text, group digits, UI scale):
-    /// the open PRs' count (`count`) or the line without it (`none`); the chips never fit (long names). Up to 999 every
-    /// state keeps the open count at every scale; 9999 too except "Relaunching\u{2026}" at 0.7 and 0.85; 99999 per state as
-    /// measured. The cap "99999+" (a row with no PRs: the line without the count) fits whole except "Relaunching\u{2026}"
-    /// at 0.7, where the last step is drawn in less than it needs (measured 165 vs 162.4): the one `cut` cell. What
-    /// shows is read by pixels (the ladder renders exactly as the wanted step, not as the other); every other cell
-    /// fits uncut; the row's height is the same in every cell. Widths print as BADGE1268C-FIT.
+    /// the open PRs' count (`count`) or the line without it (`none`); the chips never fit (long names). #1345 round 2:
+    /// measured at the row's real line two (`rowColumn`, 134.8 / 164.4 / 195.0 at 0.7 / 0.85 / 1.0: the chip's column
+    /// and its gap are beside it now; was TIP's 162.4 / 197.2 / 232.0). At 999 the quiet states keep the count at every
+    /// scale (Done and Idle at 0.7; also Ending, Exiting and Working at 0.85; seven states at 1.0); from 9999 almost every
+    /// state drops it; 99999 drops it everywhere but Idle at 0.85 and 1.0. A `cut` cell's last step is drawn in less than
+    /// it needs (its unrounded ideal over rowColumn, as ViewThatFits compares). What shows is read by pixels (the ladder
+    /// renders exactly as the wanted step, not as the other); every other cell fits uncut; the row's height is the same in
+    /// every cell. Widths print as BADGE1268C-FIT (fittingSizes, then the unrounded ideals).
     @MainActor
     func testRowSymbolsLadderStepByStateDigitsAndScaleFromALiteralTable() throws {
         _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let states = AgentState.allCases.map(\.label) + AgentIsland.runningTexts.sorted()
-        let relaunching = "Relaunching\u{2026}"
+        let relaunching = "Relaunching\u{2026}", all = Set(states)
+        let calm: Set<String> = ["Done", "Idle"]
         // The state texts that DROP the open count, per (digits, scale); every other state keeps it.
         let drops: [Int: [CGFloat: Set<String>]] = [
-            999: [0.7: [], 0.85: [], 1.0: []],
-            9_999: [0.7: [relaunching], 0.85: [relaunching], 1.0: []],
-            99_999: [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}"],
-                     0.85: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}"],
-                     1.0: ["Needs input", relaunching, "Restarting\u{2026}"]],
+            999: [0.7: all.subtracting(calm), 0.85: all.subtracting(calm.union(["Ending\u{2026}", "Exiting\u{2026}", "Working"])),
+                  1.0: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}", "Stopping\u{2026}"]],
+            9_999: [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
+            99_999: [0.7: all, 0.85: all.subtracting(["Idle"]), 1.0: all.subtracting(["Idle"])],
         ]
-        let cut: Set<String> = ["\(relaunching) 99999+ 0.7"]
-        let named = drops.values.flatMap { $0.values }.reduce(Set<String>()) { $0.union($1) }
+        // The cells drawn cut, per (digits as printed, scale).
+        let cuts: [String: [CGFloat: Set<String>]] = [
+            "9999": [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}"],
+                     0.85: ["Needs input", relaunching, "Restarting\u{2026}"], 1.0: [relaunching]],
+            "99999": [0.7: all.subtracting(calm.union(["Exiting\u{2026}", "Working"])),
+                      0.85: all.subtracting(calm.union(["Ending\u{2026}", "Exiting\u{2026}", "Pausing\u{2026}", "Working"])),
+                      1.0: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}"]],
+            "99999+": [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
+        ]
+        let cut = Set(cuts.flatMap { digits, byScale in byScale.flatMap { scale, s in s.map { "\($0) \(digits) \(scale)" } } })
+        let named = (drops.values.flatMap { $0.values } + cuts.values.flatMap { $0.values }).reduce(Set<String>()) { $0.union($1) }
         XCTAssertTrue(named.isSubset(of: Set(states)), "the table names the app's state texts: \(named.subtracting(states))")
         func differ(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Int {
             guard a.pixelsWide == b.pixelsWide, a.pixelsHigh == b.pixelsHigh else { return -1 }
@@ -161,11 +172,21 @@ extension AgentWindowD1Tests {
             return n
         }
         func ideal<V: View>(_ v: V) -> CGFloat { NSHostingView(rootView: v.fixedSize()).fittingSize.width }
+        // #1345 round 2: the ideal ViewThatFits compares, unrounded (a fittingSize is whole points rounded up: "Idle 99999
+        // 0.85" read 165 for a count the ladder keeps at 164.4).
+        func exact<V: View>(_ v: V) -> CGFloat {
+            let box = ExactIdeal1345.Box()
+            _ = NSHostingView(rootView: ExactIdeal1345(box: box) { v }).fittingSize
+            return box.width
+        }
         var cells = 0
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             // The 290 pt sidebar less its 8 pt list inset each side; in a row: padding 10 each side, the glyph slot 14, its gap 8.
             let width = sz(290) - sz(16), column = width - 2 * sz(10) - sz(14) - sz(8)
+            // #1345 round 2: the table is measured at the row's real line two, less the chip's column and its gap (was
+            // `column`, TIP's, when line two ran under the chip); both print.
+            let rowColumn = column - sz(8) - NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width
             let long = String(repeating: "w", count: 40)
             for state in states {
                 func height(_ r: AgentSidebar.Row) -> CGFloat {
@@ -182,19 +203,20 @@ extension AgentWindowD1Tests {
                     let keeps = !capped && !(drops[digits]?[scale]?.contains(state) ?? false)
                     let v = AgentSidebarRowView(row: r, selected: false)
                     let count = v.detailLine([], open: r.prCount), none = v.detailLine([])
-                    let shownIdeal = keeps ? ideal(count) : ideal(none)
-                    print("BADGE1268C-FIT \(tag) column \(column) count \(ideal(count)) none \(ideal(none)) shows \(keeps ? "count" : "none")")
+                    let shownIdeal = keeps ? exact(count) : exact(none)
+                    XCTAssertEqual(shownIdeal, keeps ? ideal(count) : ideal(none), accuracy: 1, "\(tag): the unrounded ideal read")
+                    print("BADGE1268C-FIT \(tag) column \(column) rowColumn \(rowColumn) count \(ideal(count)) none \(ideal(none)) exact \(exact(count)) \(exact(none)) shows \(keeps ? "count" : "none")")
                     if cut.contains(tag) {
-                        XCTAssertGreaterThan(shownIdeal, column, "\(tag): the last step, drawn in less than it needs")
+                        XCTAssertGreaterThan(shownIdeal, rowColumn, "\(tag): the last step, drawn in less than it needs")
                     } else {
-                        XCTAssertLessThanOrEqual(shownIdeal, column, "\(tag): \(keeps ? "count" : "none") fits uncut")
+                        XCTAssertLessThanOrEqual(shownIdeal, rowColumn, "\(tag): \(keeps ? "count" : "none") fits uncut")
                     }
-                    let size = CGSize(width: column, height: NSHostingView(rootView: v.detailVariants.frame(width: column)).fittingSize.height)
-                    let shown = try render(v.detailVariants.frame(width: column), size: size, dark: true)
-                    let want = try render((keeps ? count : none).frame(width: column), size: size, dark: true)
+                    let size = CGSize(width: rowColumn, height: NSHostingView(rootView: v.detailVariants.frame(width: rowColumn)).fittingSize.height)
+                    let shown = try render(v.detailVariants.frame(width: rowColumn), size: size, dark: true)
+                    let want = try render((keeps ? count : none).frame(width: rowColumn), size: size, dark: true)
                     XCTAssertEqual(differ(shown, want), 0, "\(tag): \(keeps ? "the open count" : "the line without it") shows")
                     if !capped {
-                        let other = try render((keeps ? none : count).frame(width: column), size: size, dark: true)
+                        let other = try render((keeps ? none : count).frame(width: rowColumn), size: size, dark: true)
                         XCTAssertGreaterThan(differ(shown, other), 0, "\(tag): and not the other step")
                     }
                     XCTAssertEqual(height(r), plainHeight, accuracy: 0.5, "\(tag): the row's height")
@@ -216,12 +238,15 @@ extension AgentWindowD1Tests {
             ThemeRuntime.scale = scale
             let width = sz(290) - sz(16), left = sz(10) + sz(14) + sz(8)
             let long = String(repeating: "w", count: 40)
-            // #1268: the text column (was width - left: the row's right padding was left out); at 0.7 the two chips no
-            // longer fit beside the age slot (ideal 165 vs 162.4 in round one), so that row shows the count there.
-            let column = width - left - sz(10)
+            // #1268: the text column (was width - left: the row's right padding was left out). #1345: less the chip's
+            // column and its gap (line two no longer runs under the chip); the chips row drops its 3 agents and 192
+            // merged (about 70 pt at 1.0) so its two chips still fit the narrower line at both scales (was: 0.7 showed
+            // the count, ideal 165 vs 162.4).
+            let column = width - left - sz(10) - sz(8)
+                - NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width
             let cases: [(String, AgentSidebar.Row, Int)] = [   // the option that shows: 0 chips, 1 the count, 2 none
                 ("chips", AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: "Working", age: "",
-                                           prs: ["api#1", "api#2"], prCount: 2, agents: 3, merged: 192), scale == 0.7 ? 1 : 0),
+                                           prs: ["api#1", "api#2"], prCount: 2, agents: 0, merged: 0), 0),
                 ("count", AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: "Working", age: "",
                                            prs: [long + "#1", long + "#2"], prCount: 2, agents: 3, merged: 192), 1),
             ]
@@ -409,14 +434,16 @@ extension AgentWindowD1Tests {
         r.model = "Fable 9"
         r.effort = "high"
         let v = AgentSidebarRowView(row: r, selected: false)
-        let count = v.detailLine([], open: r.prCount), badges = v.detailLine([], open: r.prCount, modelSlot: true)
-        let none = v.detailLine([])
-        print("BADGE1268D-FIT count \(ideal(count)) count+badges \(ideal(badges)) none \(ideal(none)) chips+badges \(ideal(v.detailLine(r.prs, modelSlot: true)))")
-        let narrow: CGFloat = 232, wide: CGFloat = 300
-        XCTAssertGreaterThan(ideal(badges), narrow, "premise: count+badges overflows the narrow column")
+        // #1345: line two has no badge step any more (the badges are on line one): count, then none, at literal columns
+        // between the measured widths (BADGE1268D-FIT at 1.0: count 174, none 145), and with the badges' room (wide)
+        // the line is the count line exactly (was: count+badges there).
+        let count = v.detailLine([], open: r.prCount), none = v.detailLine([])
+        print("BADGE1268D-FIT count \(ideal(count)) none \(ideal(none)) chips \(ideal(v.detailLine(r.prs)))")
+        let narrow: CGFloat = 232, between: CGFloat = 160, wide: CGFloat = 300
         XCTAssertLessThanOrEqual(ideal(count), narrow, "premise: count fits the narrow column")
-        XCTAssertLessThanOrEqual(ideal(badges), wide, "premise: count+badges fits the wide column")
-        XCTAssertGreaterThan(ideal(v.detailLine(r.prs, modelSlot: true)), wide, "premise: the chips still never fit")
+        XCTAssertGreaterThan(ideal(count), between, "premise: count overflows the between column")
+        XCTAssertLessThanOrEqual(ideal(none), between, "premise: none fits the between column")
+        XCTAssertGreaterThan(ideal(v.detailLine(r.prs)), wide, "premise: the chips still never fit")
         func shows(_ column: CGFloat, _ want: some View, _ other: some View, _ tag: String) throws {
             let size = CGSize(width: column, height: NSHostingView(rootView: v.detailVariants.frame(width: column)).fittingSize.height)
             let shown = try render(v.detailVariants.frame(width: column), size: size, dark: true)
@@ -424,7 +451,21 @@ extension AgentWindowD1Tests {
             XCTAssertGreaterThan(differ(shown, try render(other.frame(width: column), size: size, dark: true)), 0, "\(tag): and not the other")
         }
         try shows(narrow, count, none, "narrow: the open count, not none")
-        try shows(narrow, count, badges, "narrow: the open count, not the badges")
-        try shows(wide, badges, count, "wide: the badges")
+        try shows(between, none, count, "between: none, not the count")
+        try shows(wide, count, none, "wide: the count line, no badges on it")
+    }
+}
+
+/// Tests (#1345 round 2): records its child's ideal size unrounded, as ViewThatFits reads it.
+struct ExactIdeal1345: Layout {
+    final class Box: @unchecked Sendable { var width: CGFloat = 0 }
+    let box: Box
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let s = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        box.width = s.width
+        return s
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: .unspecified)
     }
 }

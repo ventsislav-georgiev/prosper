@@ -26,8 +26,11 @@ final class AgentRowBadgeTests: XCTestCase {
 
     func ideal<V: View>(_ v: V) -> CGSize { NSHostingView(rootView: v.fixedSize()).fittingSize }
 
-    /// The text column of a row `width` wide: padding 10 each side, the glyph slot 14, its gap 8.
-    func column(_ width: CGFloat) -> CGFloat { width - 2 * sz(10) - sz(14) - sz(8) }
+    /// The text column of a row `width` wide: padding 10 each side, the glyph slot 14, its gap 8; #1345: less the chip's
+    /// column and its gap 8.
+    func column(_ width: CGFloat) -> CGFloat {
+        width - 2 * sz(10) - sz(14) - sz(8) - sz(8) - ideal(AgentSidebarRowView.digitColumn).width
+    }
 
     /// A live Claude row by hand: idle, "4m", two PR chips, 3 agents, model and effort.
     func row(age: String = "4m", prs: Bool = true, model: String? = "Fable 9.2", effort: String? = "high") -> AgentSidebar.Row {
@@ -198,7 +201,7 @@ final class AgentRowBadgeTests: XCTestCase {
         let ages = ["", "now", "4m", "59m", "23h", "364d", "1y", "99y"]
         atScales { scale in
             let lines = ages.map { ideal(AgentSidebarRowView(row: row(age: $0, prs: false), selected: false)
-                .detailLine([], modelSlot: true)).width }
+                .detailLine([])).width }
             for (age, w) in zip(ages, lines) {
                 XCTAssertEqual(w, lines.first ?? -1, accuracy: 0.01, "line two with age \"\(age)\" (\(scale))")
             }
@@ -223,18 +226,17 @@ final class AgentRowBadgeTests: XCTestCase {
 
     // MARK: The ladder
 
-    /// One row per step of the ladder (chips + badges, count + badges, count, none): each at a column just as wide as
-    /// its own variant, so the step before it does not fit; the state text and the age are on every step.
-    func testCrowdedLineGivesUpChipsThenBadgesThenCount() {
+    /// One row per step of line two's ladder (chips, count, none; #1345: the badges are on line one, was chips +
+    /// badges, count + badges, count, none): each at a column just as wide as its own variant, so the step before it
+    /// does not fit; the state text and the age are on every step and the badges on none.
+    func testCrowdedLineGivesUpChipsThenCount() {
         let r = row()
         atScales { scale in
             let v = AgentSidebarRowView(row: r, selected: false)
-            let widths = [v.detailLine(r.prs, modelSlot: true), v.detailLine([], open: r.prCount, modelSlot: true),
-                          v.detailLine([], open: r.prCount), v.detailLine([])].map { ideal($0).width }
-            XCTAssertEqual(widths.count, 4)
+            let widths = [v.detailLine(r.prs), v.detailLine([], open: r.prCount), v.detailLine([])].map { ideal($0).width }
+            XCTAssertEqual(widths.count, 3)
             for (a, b) in zip(widths, widths.dropFirst()) { XCTAssertGreaterThan(a, b + 1, "steps apart: \(widths) (\(scale))") }
-            let want: [(chips: Bool, badges: Bool, count: Bool)] = [(true, true, false), (false, true, true),
-                                                                    (false, false, true), (false, false, false)]
+            let want: [(chips: Bool, count: Bool)] = [(true, false), (false, true), (false, false)]
             for (step, w) in zip(want, widths) {
                 let width = w.rounded(.up) + 0.5
                 let t = AXTreeSupport.tree(v.detailVariants.frame(width: width, alignment: .leading),
@@ -245,18 +247,9 @@ final class AgentRowBadgeTests: XCTestCase {
                 let tag = "at \(width) (\(scale)): \(labels.filter { !$0.isEmpty }.sorted())"
                 XCTAssertTrue(labels.isSuperset(of: ["Idle", "4m", "3 agents"]), "state, count groups and age stay \(tag)")
                 XCTAssertEqual(labels.contains("api#1"), step.chips, "chips \(tag)")
-                XCTAssertEqual(labels.contains("Fable 9.2") && labels.contains("high"), step.badges, "badges \(tag)")
+                XCTAssertFalse(labels.contains("Fable 9.2") || labels.contains("high"), "no badges on line two \(tag)")
                 XCTAssertEqual(labels.contains("2 open pull requests"), step.count, "count \(tag)")
             }
-            // Room for the badges without the count but not for both: the badges go first, the count stays.
-            let between = ideal(v.detailLine([], modelSlot: true)).width
-            XCTAssertTrue(between < (widths.dropFirst().first ?? 0) && between > (widths.dropFirst(2).first ?? 1e9),
-                          "badges alone between the count with and without them: \(between) in \(widths) (\(scale))")
-            let bw = between.rounded(.up) + 0.5
-            let bt = AXTreeSupport.tree(v.detailVariants.frame(width: bw, alignment: .leading),
-                                        CGSize(width: bw, height: sz(30))) { t in t.contains { $0.named("4m") } }
-            XCTAssertTrue(bt.contains { $0.named("2 open pull requests") }, "the count kept at \(bw) (\(scale))")
-            XCTAssertFalse(bt.contains { $0.named("Fable 9.2") }, "the badges gave way at \(bw) (\(scale))")
             // Too narrow for every step but the last: the state text and the age still drawn.
             let narrow = (widths.last ?? 0).rounded(.up) + 0.5
             let t = AXTreeSupport.tree(v.detailVariants.frame(width: narrow, alignment: .leading),
@@ -265,7 +258,7 @@ final class AgentRowBadgeTests: XCTestCase {
             // The sidebar's own width (fixed sz(290), rows sz(274)): which step it takes, for the report.
             let side = AXTreeSupport.tree(v.detailVariants.frame(width: column(sz(274)), alignment: .leading),
                                           CGSize(width: column(sz(274)), height: sz(30))) { t in t.contains { $0.named("4m") } }
-            print("BADGE1268-LADDER scale \(scale) column \(column(sz(274))) steps \(widths.map { ($0 * 10).rounded() / 10 }) "
+            print("ROW1345-LADDER scale \(scale) column \(column(sz(274))) steps \(widths.map { ($0 * 10).rounded() / 10 }) "
                   + "sidebar names \(Set(side.flatMap(\.names)).sorted())")
             XCTAssertTrue(side.contains { $0.named("4m") }, "the age at the sidebar's width (\(scale))")
         }

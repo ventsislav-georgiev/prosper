@@ -259,10 +259,13 @@ extension AgentWindowD1Tests {
             }
             XCTAssertEqual(ideal.count, 1, "the row's width does not follow the age at \(scale): \(ideal)")
             XCTAssertEqual(edges.count, 1, "the title ends at the same pixel for every age at \(scale): \(edges)")
-            // #1268 (R2): left of the age slot (the last thing on line two, sz(10) inside the row's edge) every pixel is the
-            // same for "now" and every other age, "120d" included: the badges and the state text never move.
+            // #1268 (R2): left of the age slot (the last thing on line two) every pixel is the same for "now" and every
+            // other age, "120d" included: the badges and the state text never move. #1345: the age ends sz(10) + the chip's
+            // column and its gap sz(8) inside the row's edge (was sz(10)); the column as a fittingSize is at most 1.3 pt over
+            // its frame, which only moves this bound left, off the age.
             guard let first = reps.first else { return XCTFail("no render (\(scale))") }
-            let left = Int((sz(290) - sz(16) - sz(10) - ageSlot - 1) * CGFloat(first.pixelsWide) / (sz(290) - sz(16) + 24))
+            let column = NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width
+            let left = Int((sz(290) - sz(16) - sz(10) - sz(8) - column - ageSlot - 1) * CGFloat(first.pixelsWide) / (sz(290) - sz(16) + 24))
             for (age, rep) in zip(ages, reps).dropFirst() {
                 var diff = 0
                 for y in 0..<min(rep.pixelsHigh, first.pixelsHigh) {

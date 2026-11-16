@@ -1509,6 +1509,10 @@ tag from the now-released section and put it on the new top draft.
   session menus has a symbol. (#1358)
 - Agent Sessions: a confirm question and its buttons sit on one line, the buttons right after the
   question; on a narrow pane they move under it, lined up with its start. (#1361)
+- Agent Sessions: a session row shows the model and effort badges on its first line, the age right
+  under them, and the ⌘ shortcut to the right of both lines; a long session name is shortened (down
+  to about 8 characters and "…") before a badge gives way, and the effort badge is the last to go.
+  (#1345)
 
 ## v2.174.0
 

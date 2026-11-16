@@ -369,7 +369,7 @@ extension AgentWindowD1Tests {
                 XCTAssertTrue(nRow.frame.contains(nChip.frame), "the chip whole inside the narrow row (\(scale))")
                 XCTAssertGreaterThan(nChip.frame.minX, nRow.frame.midX, "at the trailing end (\(scale))")
                 XCTAssertEqual(nChip.frame.midY - nRow.frame.minY, wChip.frame.midY - wRow.frame.minY, accuracy: 0.5,
-                               "on line one, as at the sidebar's width (\(scale))")
+                               "centred on the two lines, as at the sidebar's width (\(scale))")
             } else {
                 XCTFail("R1: the chip drawn in a narrow row too (\(scale)): \(narrow.map(\.label).filter { !$0.isEmpty })")
             }
