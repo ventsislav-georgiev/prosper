@@ -539,8 +539,12 @@ extension AgentIsland {
 
     /// The texts a row shows while a job runs; a dir job clears any left when it ends.
     static var runningTexts: Set<String> {
-        Set(phaseWords.map { $0.prefix(1).uppercased() + $0.dropFirst() + "…" } + [restartingText, stoppingText, resumingText, sendingText])
+        Set(phaseWords.map { $0.prefix(1).uppercased() + $0.dropFirst() + "\u{2026}" }
+            + [restartingText, stoppingText, resumingText, sendingText, firstSendingText])
     }
+
+    /// #847 D2.1: a new session's row while the controller types its first message (the window's composer locks).
+    static let firstSendingText = "Sending first message\u{2026}"
 
     /// A result as its row's text: a short word for ok, else dch's detail
     /// without a leading "<name>: ".

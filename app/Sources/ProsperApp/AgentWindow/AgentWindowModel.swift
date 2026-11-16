@@ -1775,9 +1775,10 @@ final class AgentWindowModel: ObservableObject {
                             _ done: @escaping @MainActor @Sendable (AgentSessionKey?, String?) -> Void) -> AgentSessionKey? = {
         [weak self] in self?.island().spawn(in: $0, command: $1, name: $2, done: $3)
     }
-    /// #847 D3.7: a first message into a started session, then `then`. PART 1 (#907): a stub that sends nothing and
-    /// runs nothing after; the island controller's sayFirst (part 2, #1369) replaces this default.
-    var sayFirst: (_ key: AgentSessionKey, _ text: String, _ then: (@MainActor () -> Void)?) -> Void = { _, _, _ in }
+    /// #847 D3.7: a first message into a started session, then `then`: the island controller's sayFirst (#1369).
+    lazy var sayFirst: (_ key: AgentSessionKey, _ text: String, _ then: (@MainActor () -> Void)?) -> Void = {
+        [weak self] in self?.island().sayFirst($0, $1, then: $2)
+    }
     /// #847 D2.4: the prompt as last typed, kept across Cancel while the window lives; a Start that takes it drops it.
     /// Never persisted: a prompt can hold anything.
     private(set) var lastPrompt = ""
@@ -2493,6 +2494,10 @@ final class AgentWindowModel: ObservableObject {
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
         interaction.plan = withConfigDir(transcript.pendingPlan)
         let terminalMode = paneMode == .terminal
+        // #847 D2.3: a first message the island could not send becomes the empty draft once (never over a typed one).
+        if let c = interaction.controller, let t = c.unsentFirst[s.key], interaction.seedDraft(key: s.key, text: t) {
+            c.dropUnsentFirst(s.key)
+        }
         // #822: Terminal mode has no input box (the terminal is the input).
         interaction.follow(terminalMode ? nil : s)
         // #847: the New session form covers the pane, so no terminal under it.

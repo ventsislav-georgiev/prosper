@@ -1600,6 +1600,70 @@ final class AgentIslandController {
         return true
     }
 
+    // MARK: - First message (#847 D2)
+
+    /// #847 D2.1: attempts `firstStep` apart until `firstWait` after the call; `firstPause` and `firstClock` are
+    /// test seams (no real wait).
+    nonisolated static let firstWait: TimeInterval = 90
+    nonisolated static let firstStep: TimeInterval = 2
+    var firstPause: @Sendable (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    var firstClock: @Sendable () -> Date = { Date() }
+    /// #847 D2.3: a first message that was not sent, for the window to seed as that session's draft. Never persisted.
+    private(set) var unsentFirst: [AgentSessionKey: String] = [:]
+
+    func dropUnsentFirst(_ key: AgentSessionKey) { unsentFirst[key] = nil }
+
+    /// #847 D2.1: types a new session's first message with `--say` (the window composer's verb, reply mapping and
+    /// prompt check), off main, then runs `then` on main either way. Not through beginHuman (D2.2): no live row
+    /// is needed and no card is cleared; the key is only held in inFlight meanwhile. A blank text: no call.
+    func sayFirst(_ key: AgentSessionKey, _ text: String, then: (@MainActor () -> Void)? = nil) {
+        guard let message = AgentWindowDriver.message(text) else { then?(); return }
+        let mine = inFlight.insert(key).inserted   // held elsewhere: that holder releases it, not this run
+        store?.actions[key] = AgentIsland.firstSendingText
+        let io = io, pause = firstPause, clock = firstClock
+        Task { @MainActor [weak self] in
+            let why = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    c.resume(returning: Self.firstRun(key, message, io: io, pause: pause, clock: clock))
+                }
+            }
+            if let self {
+                if mine { inFlight.remove(key) }
+                if let why {
+                    unsentFirst[key] = text
+                    store?.actions[key] = AgentWindowText.firstNotSent(why)
+                } else if store?.actions[key] == AgentIsland.firstSendingText {
+                    store?.actions[key] = nil
+                }
+            }
+            then?()
+        }
+    }
+
+    /// One first message's attempts; nil when sent, else the window's reason. A round that typed nothing (a
+    /// prompt or empty screen on the read, or dch skipped not_claude / no_screen / prompt) waits for the next one;
+    /// anything else ends it: a skipped draft (never type over one) and every failed or missing reply, with NO
+    /// retry (the text may sit in the composer or have gone out). dch-lite (an empty read, no mirror) fails at once.
+    nonisolated static func firstRun(_ key: AgentSessionKey, _ text: String, io: AgentPromptIO,
+                                     pause: (TimeInterval) -> Void, clock: () -> Date) -> String? {
+        let start = clock()
+        var last = AgentWindowText.unconfirmed
+        while true {
+            let shown = io.read(key)
+            if shown.isEmpty, io.noMirror(key) { return AgentWindowText.noScreen }
+            if let why = AgentWindowDriver.refusal(shown) {
+                last = why
+            } else {
+                let reply = AgentWindowDriver.sayReply(io.say(key, text))
+                guard let why = AgentWindowDriver.sayFailure(reply) else { return nil }
+                guard reply?.result == "skipped", ["not_claude", "no_screen", "prompt"].contains(reply?.reason) else { return why }
+                last = why
+            }
+            if clock().timeIntervalSince(start) >= firstWait { return last }
+            pause(firstStep)
+        }
+    }
+
     /// The click's bookkeeping, on main; nil when the session is already in flight.
     /// #1321 (QA r1244 INFO-1): nil too for an action with no prompt (the window's message or Esc) while a job
     /// runs on the session (a Restart or Stop, the phone's too): dch types its pause, /exit and resume into

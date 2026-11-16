@@ -138,6 +138,7 @@ extension AgentWindowD1Tests {
         defer { ThemeRuntime.scale = saved }
         let states = AgentState.allCases.map(\.label) + AgentIsland.runningTexts.sorted()
         let relaunching = "Relaunching\u{2026}", all = Set(states)
+        let first = AgentIsland.firstSendingText   // #1369: longer than "Relaunching\u{2026}", so cut wherever it is
         let calm: Set<String> = ["Done", "Idle"]
         // The state texts that DROP the open count, per (digits, scale); every other state keeps it.
         // #1360: every cell's agents group is outlined, its capsule's padding (sz(4) each side) in the line's width, so
@@ -149,13 +150,13 @@ extension AgentWindowD1Tests {
         ]
         // The cells drawn cut, per (digits as printed, scale).
         let cuts: [String: [CGFloat: Set<String>]] = [
-            "999": [0.7: [relaunching], 0.85: [relaunching], 1.0: [relaunching]],
-            "9999": [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}", "Starting\u{2026}", "Stopping\u{2026}"],
-                     0.85: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}"],
-                     1.0: ["Needs input", relaunching, "Restarting\u{2026}"]],
+            "999": [0.7: [relaunching, first], 0.85: [relaunching, first], 1.0: [relaunching, first]],
+            "9999": [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}", "Starting\u{2026}", "Stopping\u{2026}", first],
+                     0.85: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}", first],
+                     1.0: ["Needs input", relaunching, "Restarting\u{2026}", first]],
             "99999": [0.7: all.subtracting(calm), 0.85: all.subtracting(calm),
                       1.0: ["Needs input", "Pausing\u{2026}", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}",
-                            "Starting\u{2026}", "Stopping\u{2026}"]],
+                            "Starting\u{2026}", "Stopping\u{2026}", first]],
             "99999+": [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
         ]
         let cut = Set(cuts.flatMap { digits, byScale in byScale.flatMap { scale, s in s.map { "\($0) \(digits) \(scale)" } } })

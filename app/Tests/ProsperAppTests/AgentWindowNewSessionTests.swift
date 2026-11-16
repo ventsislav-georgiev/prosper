@@ -32,6 +32,8 @@ extension AgentWindowD1Tests {
         let island = AgentIslandController()
         island.historyDirs = { ["/tmp/dch-test"] }
         island.chooseFolder = { _ in XCTFail("no chooser here") }
+        // #1369: the real sayFirst is the default seam now; its io never runs dch here (dch-lite: fails at once).
+        island.io = AgentPromptIO(read: { _ in "" }, status: { _ in "" }, send: { _, _ in }, noMirror: { _ in true })
         m.island = { island }
         m.home = "/Users/example"
         m.shell = "/bin/fish"
@@ -45,6 +47,42 @@ extension AgentWindowD1Tests {
         m.setVisible(true)
         Self.drainMain()   // QA #690 INFO-1: the shown window's first turn: the first row's client is live before a row acts
         return m
+    }
+
+    // MARK: First message not sent (#1369)
+
+    /// T28 (#847 D2.3): a first message the island could not send fills that session's EMPTY draft once, when the
+    /// session is selected; a typed draft is never overwritten. The island's io is dch-lite (an empty read with no
+    /// mirror), so its sayFirst fails at once and no dch runs.
+    @MainActor
+    func testAgentWindowNewSessionUnsentFirstSeedsAnEmptyDraftOnceNeverATypedOne() {
+        withNewSessionPrefs {
+            let a = session("api", .idle), b = session("web", .idle)
+            let spawns = SpawnCalls(), m = newSessionModel(store([a, b]), spawns)
+            defer { m.close() }
+            let island = m.island()
+            m.interaction.controller = island
+            for s in [a, b] {
+                m.select(.live(s.key))
+                m.setMode(.transcript, for: s)
+            }
+            XCTAssertEqual(m.interaction.session?.key, b.key, "web is followed: its input box takes the typed draft")
+            m.interaction.draft = "typed by hand"
+            for (s, text) in [(a, "Example task for api"), (b, "Example task for web")] {
+                let done = expectation(description: "then \(s.name)")
+                island.sayFirst(s.key, text) { done.fulfill() }
+                wait(for: [done], timeout: 10)
+            }
+            XCTAssertEqual(island.unsentFirst[a.key], "Example task for api")
+            m.select(.live(a.key))
+            XCTAssertEqual(m.interaction.draft(for: a.key), "Example task for api", "the empty draft is filled")
+            XCTAssertTrue(island.unsentFirst[a.key] == nil, "taken once")
+            m.interaction.draft = ""   // the person clears it
+            m.select(.live(b.key))
+            m.select(.live(a.key))
+            XCTAssertEqual(m.interaction.draft(for: a.key), "", "filled once, never again")
+            XCTAssertEqual(m.interaction.draft(for: b.key), "typed by hand", "a typed draft is never overwritten")
+        }
     }
 
     // MARK: Open and prefill

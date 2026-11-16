@@ -322,6 +322,8 @@ enum AgentWindowText {
     static let planCaret = "The terminal's highlighted row is the feedback row. Open in terminal to approve"
     /// The plan rows the window never answers, shown under the rows.
     static let planTerminal = "Clearing the context and bypassing permissions are chosen in the terminal"
+    /// #847 D2.1: a new session's first message failed; `why` is one of the texts above.
+    static func firstNotSent(_ why: String) -> String { "First message not sent: " + why }
 }
 
 enum AgentWindowOutcome: Equatable, Sendable {
@@ -428,20 +430,7 @@ struct AgentWindowDriver: Sendable {
         let shown = io.read(key)
         if let why = refusal(shown, lite: AgentWindowText.noScreen) { return .failed(why) }
         let head = Self.head(text), before = Self.count(head, in: shown)
-        let reply = Self.sayReply(io.say(key, text))
-        switch (reply?.result, reply?.reason) {
-        case ("ok"?, _): break
-        case (nil, _): return .failed(AgentWindowText.unconfirmed)
-        case ("skipped"?, "prompt"?): return .failed(AgentWindowText.blocked)
-        case ("skipped"?, "draft"?): return .failed(AgentWindowText.draft)
-        case ("skipped"?, "no_screen"?): return .failed(AgentWindowText.noScreen)
-        case ("skipped"?, "not_claude"?): return .failed(AgentWindowText.notClaude)
-        case ("failed"?, "not_foreground"?): return .failed(AgentWindowText.notForeground)
-        case ("failed"?, "not_submitted"?): return .failed(AgentWindowText.notSubmitted)
-        case ("failed"?, "draft_left"?): return .failed(AgentWindowText.draftLeft)
-        case ("failed"?, "withdrawn"?), ("failed"?, "interrupted"?): return .failed(AgentWindowText.notSent)
-        case (let r?, let why): return .failed("dch didn't send it (\(why ?? r)). Open in terminal")
-        }
+        if let why = Self.sayFailure(Self.sayReply(io.say(key, text))) { return .failed(why) }
         for _ in 0..<confirmReads {
             pause(confirmStep)
             let st = status()
@@ -461,6 +450,24 @@ struct AgentWindowDriver: Sendable {
             return (r, why)
         }
         return nil
+    }
+
+    /// Why a `--say` reply sent nothing (or nothing confirmed), as the window says it; nil for ok.
+    /// #1369: one mapping for the composer's send and the controller's sayFirst.
+    static func sayFailure(_ reply: (result: String, reason: String?)?) -> String? {
+        switch (reply?.result, reply?.reason) {
+        case ("ok"?, _): return nil
+        case (nil, _): return AgentWindowText.unconfirmed
+        case ("skipped"?, "prompt"?): return AgentWindowText.blocked
+        case ("skipped"?, "draft"?): return AgentWindowText.draft
+        case ("skipped"?, "no_screen"?): return AgentWindowText.noScreen
+        case ("skipped"?, "not_claude"?): return AgentWindowText.notClaude
+        case ("failed"?, "not_foreground"?): return AgentWindowText.notForeground
+        case ("failed"?, "not_submitted"?): return AgentWindowText.notSubmitted
+        case ("failed"?, "draft_left"?): return AgentWindowText.draftLeft
+        case ("failed"?, "withdrawn"?), ("failed"?, "interrupted"?): return AgentWindowText.notSent
+        case (let r?, let why): return "dch didn't send it (\(why ?? r)). Open in terminal"
+        }
     }
 
     /// The first 24 non-space characters: what the screen shows of a sent message, however wrapped.
@@ -882,6 +889,15 @@ final class AgentWindowInteraction: ObservableObject {
 
     /// #831 B1 (3.5): a session's draft, read-only, for a pane that does not hold the input.
     func draft(for key: AgentSessionKey) -> String { drafts[key] ?? "" }
+
+    /// #847 D2.3: a first message the controller could not send becomes the session's draft, only into an empty
+    /// one (a typed draft is never overwritten). True when it was taken.
+    @discardableResult
+    func seedDraft(key: AgentSessionKey, text: String) -> Bool {
+        guard drafts[key] == nil, !text.isEmpty else { return false }
+        drafts[key] = text
+        return true
+    }
 
     var draft: String {
         get { session.flatMap { drafts[$0.key] } ?? "" }
