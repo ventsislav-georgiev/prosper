@@ -57,7 +57,8 @@ final class IncreaseContrastTests: XCTestCase {
         var on = false
         let center = NotificationCenter()
         let store = ThemeStore(defaults: scratchDefaults("ic1076"), cacheDir: tempDir("ic1076"),
-                               increaseContrastReader: { on }, workspaceCenter: center)
+                               increaseContrastReader: { on }, reduceTransparencyReader: { false },
+                               workspaceCenter: center)
         var fired = 0
         store.onChange = { fired += 1 }
         let theme = store.activeID
@@ -85,7 +86,8 @@ final class IncreaseContrastTests: XCTestCase {
 
         on = true
         let seeded = ThemeStore(defaults: scratchDefaults("ic1076"), cacheDir: tempDir("ic1076"),
-                                increaseContrastReader: { on }, workspaceCenter: NotificationCenter())
+                                increaseContrastReader: { on }, reduceTransparencyReader: { false },
+                                workspaceCenter: NotificationCenter())
         XCTAssertTrue(seeded.increaseContrast, "seeded from the reader at init")
         XCTAssertTrue(ThemeRuntime.increaseContrast)
     }
@@ -142,6 +144,25 @@ final class IncreaseContrastTests: XCTestCase {
         XCTAssertEqual(pairs, 22 * 6 * 4, "divider, two border ends and secondary text on six surfaces per theme")
     }
 
+    /// The Reduce Transparency rule follows the injected reader (never the Mac's flag) and the
+    /// handler re-reads it; Increase Contrast off, so only the reduce reader decides.
+    func testReduceTransparencyFollowsItsInjectedReader() {
+        var reduce = true
+        let center = NotificationCenter()
+        let store = ThemeStore(defaults: scratchDefaults("ic1076"), cacheDir: tempDir("ic1076"),
+                               increaseContrastReader: { false }, reduceTransparencyReader: { reduce },
+                               workspaceCenter: center)
+        store.setOpacity(0.7)
+        store.setFrost(true)
+        XCTAssertEqual(ThemeRuntime.opacity, 1, "reduce reader on: opaque")
+        XCTAssertFalse(ThemeRuntime.frost, "reduce reader on: frost off")
+        XCTAssertFalse(store.increaseContrast)
+        reduce = false
+        Self.post(center)
+        XCTAssertEqual(ThemeRuntime.opacity, 0.7, accuracy: 0.0001, "the notification re-reads the reduce reader")
+        XCTAssertTrue(ThemeRuntime.frost)
+    }
+
     /// With the state on, the window opacity reads opaque and frost is off whatever the user
     /// stored (the stored values are kept), and a window skinned by applyWindowOpacity reports
     /// opaque. The window is built offscreen and never ordered in.
@@ -149,7 +170,8 @@ final class IncreaseContrastTests: XCTestCase {
         var on = false
         let center = NotificationCenter()
         let store = ThemeStore(defaults: scratchDefaults("ic1076"), cacheDir: tempDir("ic1076"),
-                               increaseContrastReader: { on }, workspaceCenter: center)
+                               increaseContrastReader: { on }, reduceTransparencyReader: { false },
+                               workspaceCenter: center)
         store.setOpacity(0.7)
         store.setFrost(true)
         on = true

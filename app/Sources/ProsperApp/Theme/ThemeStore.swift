@@ -76,6 +76,7 @@ final class ThemeStore: ObservableObject {
     private let cacheDir: URL
     private var reduceTransparencyObserver: NSObjectProtocol?
     private let increaseContrastReader: @MainActor () -> Bool
+    private let reduceTransparencyReader: @MainActor () -> Bool
     private var assetTask: Task<Void, Never>?
     private var lastAssets: [String: String] = [:]
     private let log = Logger(subsystem: "com.prosper", category: "theme")
@@ -100,10 +101,12 @@ final class ThemeStore: ObservableObject {
     init(defaults: UserDefaults = Preferences.defaults,
          cacheDir: URL = ThemeStore.defaultCacheDir,
          increaseContrastReader: @escaping @MainActor () -> Bool = ThemeStore.systemIncreaseContrast,
+         reduceTransparencyReader: @escaping @MainActor () -> Bool = ThemeStore.systemReduceTransparency,
          workspaceCenter: NotificationCenter = NSWorkspace.shared.notificationCenter) {
         self.defaults = defaults
         self.cacheDir = cacheDir
         self.increaseContrastReader = increaseContrastReader
+        self.reduceTransparencyReader = reduceTransparencyReader
         let ic = increaseContrastReader()
         increaseContrast = ic
         ThemeRuntime.increaseContrast = ic
@@ -137,6 +140,11 @@ final class ThemeStore: ObservableObject {
         NSClassFromString("XCTestCase") == nil && NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
     }
 
+    /// The real "Reduce transparency" flag; false under XCTest so no test reads the Mac's setting.
+    static func systemReduceTransparency() -> Bool {
+        NSClassFromString("XCTestCase") == nil && NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+    }
+
     private func accessibilityDisplayOptionsChanged() {
         let ic = increaseContrastReader()
         let contrastChanged = ic != increaseContrast
@@ -160,10 +168,10 @@ final class ThemeStore: ObservableObject {
 
     /// #1076: Increase Contrast makes windows opaque, on top of the Reduce Transparency rule.
     private func liveOpacity(_ stored: CGFloat) -> CGFloat {
-        increaseContrast ? 1.0 : Self.effectiveOpacity(stored)
+        increaseContrast ? 1.0 : Self.effectiveOpacity(stored, reduceTransparency: reduceTransparencyReader())
     }
     private func liveFrost(_ stored: Bool) -> Bool {
-        !increaseContrast && Self.effectiveFrost(stored)
+        !increaseContrast && Self.effectiveFrost(stored, reduceTransparency: reduceTransparencyReader())
     }
 
     /// #752: every popover wears the active theme's appearance, set as it shows.

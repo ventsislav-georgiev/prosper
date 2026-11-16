@@ -146,7 +146,7 @@ final class DisplayMetricsTests: XCTestCase {
         store.setFrost(true)
         XCTAssertTrue(store.frost)
         XCTAssertTrue(Preferences.uiFrost, "must persist to the preference")
-        XCTAssertEqual(ThemeRuntime.frost, ThemeStore.effectiveFrost(true),
+        XCTAssertEqual(ThemeRuntime.frost, ThemeStore.effectiveFrost(true, reduceTransparency: false),
                        "must mirror the effective value into the render-thread global")
         XCTAssertGreaterThan(store.backdropTick, t0, "frost change must bump backdropTick to re-render backdrops")
         XCTAssertEqual(store.generation, g0, "frost is backdrop-only — must NOT bump generation (no full teardown)")
@@ -188,8 +188,8 @@ final class DisplayMetricsTests: XCTestCase {
         store.setOpacity(0.7)
         XCTAssertEqual(store.opacity, 0.7, accuracy: 0.0001)
         // ThemeRuntime gets the *effective* opacity (downgraded to 1.0 only when the
-        // system Reduce-transparency setting is on).
-        XCTAssertEqual(ThemeRuntime.opacity, ThemeStore.effectiveOpacity(0.7), accuracy: 0.0001)
+        // Reduce-transparency reader is on; the default reader is false under XCTest).
+        XCTAssertEqual(ThemeRuntime.opacity, ThemeStore.effectiveOpacity(0.7, reduceTransparency: false), accuracy: 0.0001)
         XCTAssertGreaterThan(store.backdropTick, t0, "opacity is backdrop-only — bumps backdropTick, not generation")
         XCTAssertEqual(store.generation, g0, "opacity change must NOT trigger a full-window teardown")
 
