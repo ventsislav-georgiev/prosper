@@ -103,8 +103,10 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         """),
     ]
 
-    /// Hidden characters in the command: the card refuses "Yes", Always allow does not.
+    /// Hidden characters in the command: the card refuses "Yes", and (#1315) so does Always allow.
     private static let hidden = dialog(proceed, ["Yes", noTell], body: ["   echo safe \u{202E}txt.exe"])
+    /// #1315: a mark stack past AgentPrompt.maxMarks on one base, which the card also makes deny-only.
+    private static let markStack = dialog(proceed, ["Yes", noTell], body: ["   echo e\u{301}\u{301}\u{301}\u{301}"])
 
     /// The operator's case: a long `gh pr create` heredoc on a narrow pty, the
     /// dialog's top rule and title scrolled off; the screen starts mid-heredoc.
@@ -169,15 +171,18 @@ final class AgentIslandAutoAllowTests: XCTestCase {
     }
 
     /// What only guards a human's view (the card's rule) never stops Always allow:
-    /// a head off the screen, a context over the 10-row cap, hidden characters.
-    /// The card itself still refuses them.
-    func testOffScreenLongAndHiddenPromptsAreAllowedButTheCardStillRefuses() throws {
-        for (name, screen) in [("top off the screen", Self.offTop), ("hidden characters", Self.hidden)] {
+    /// a head off the screen, a context over the 10-row cap. The card itself still refuses them.
+    /// #1315 (#1251): hidden or reordering characters and a mark stack do stop it (fail closed), as the card.
+    func testOffScreenLongPromptsAreAllowedHiddenOnesNotAndTheCardRefusesBoth() throws {
+        for (name, screen, allowed) in [("top off the screen", Self.offTop, true), ("hidden characters", Self.hidden, false),
+                                        ("mark stack", Self.markStack, false)] {
             let p = try XCTUnwrap(AgentPrompt.parse(screen), name)
-            XCTAssertEqual(p.allowYes?.digit, 1, name)
+            XCTAssertEqual(p.hasHiddenCharacters, !allowed, "\(name): the fixture")
+            XCTAssertEqual(p.allowYes?.digit, allowed ? 1 : nil, name)
             let f = FakeIO(screen)
-            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }), .allowed(p), name)
-            XCTAssertEqual(f.sends, ["1"], name)
+            XCTAssertEqual(AgentPrompt.autoAllow(key, io: f.io, notAgain: nil, answered: false, isOn: { true }),
+                           allowed ? AgentAutoAllow.allowed(p) : .human, name)
+            XCTAssertEqual(f.sends, allowed ? ["1"] : [], name)
             let card = FakeIO(screen)
             XCTAssertEqual(AgentPrompt.answer(key, digit: 1, expected: p, io: card.io), .changed, "\(name): the card's Yes")
             XCTAssertEqual(card.sends, [], name)
@@ -578,6 +583,79 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(tick(c, .blocked), .working)
         drain(c)
         XCTAssertEqual(f.sends, ["1", "1"], "a later appearance is answered again")
+    }
+
+    // MARK: - #1315 (#993 part B)
+
+    /// #1251 lead: a plain Bash prompt with a hidden character (or a mark stack) is the human's: Needs input, no
+    /// key, no note; its plain twin is still answered.
+    @MainActor func testAHiddenCharacterPromptIsNotAutoAllowedButItsPlainTwinIs() {
+        for (name, screen) in [("hidden characters", Self.hidden), ("mark stack", Self.markStack)] {
+            let f = FakeIO(screen), (c, r) = controller(f)
+            tick(c, .blocked)
+            drain(c)
+            XCTAssertEqual(f.sends, [], "\(name): no key")
+            XCTAssertEqual(r.lastState, .blocked, "\(name): Needs input")
+            XCTAssertTrue(c.store?.actions[key] == nil, "\(name): not \"Allowed automatically\"")
+        }
+        let twin = Self.dialog(Self.proceed, ["Yes", Self.noTell], body: ["   echo safe txt.exe"])
+        let f = FakeIO(twin), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"], "the plain twin is answered")
+        XCTAssertFalse(r.everBlocked)
+    }
+
+    /// QA #581 INFO-4: A, B, then A and B again inside the loop window are the human's (the guard keeps every
+    /// prompt answered in the window, not only the last); after the window A is answered again.
+    @MainActor func testAnAlternatingPairStopsInsideTheLoopWindow() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"], "A")
+        for (screen, sends, why) in [(Self.otherBash, 2, "B"), (Self.bash3, 2, "A again: refused"),
+                                     (Self.otherBash, 2, "B again: refused")] {
+            tick(c, .working)
+            r.now += 3
+            f.set(screen)
+            tick(c, .blocked)
+            drain(c)
+            XCTAssertEqual(f.sends.count, sends, why)
+        }
+        XCTAssertEqual(r.lastState, .blocked, "the repeat goes out as Needs input")
+        tick(c, .working)
+        r.now += AgentIslandController.loopWindow
+        f.set(Self.bash3)
+        XCTAssertEqual(tick(c, .blocked), .working)
+        drain(c)
+        XCTAssertEqual(f.sends.count, 3, "past the window: answered again")
+        XCTAssertGreaterThan(AgentIslandController.loopMemory, Int(AgentIslandController.loopWindow / AgentPollGate.floor),
+                             "the cap holds every answer the window can hold")
+    }
+
+    /// QA #581 INFO-7: a finished row text ("Restart failed: ...") is not replaced by the note.
+    @MainActor func testARestartFailureSurvivesAnAutoAllow() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        c.store?.actions[key] = "Restart failed: example"
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"])
+        XCTAssertEqual(c.store?.actions[key], "Restart failed: example")
+    }
+
+    /// QA #581 INFO-7: the note goes when the row next blocks on a prompt left to the human.
+    @MainActor func testTheAllowedNoteClearsOnTheNextHumanPrompt() {
+        let f = FakeIO(Self.bash3), (c, r) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
+        tick(c, .working)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText, "kept while it works")
+        f.set(Self.neverAnswered[0].1)   // a plan approval: the human's
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(r.lastState, .blocked)
+        XCTAssertTrue(c.store?.actions[key] == nil, "the stale note is gone")
     }
 
     // MARK: - QA #581 fixes

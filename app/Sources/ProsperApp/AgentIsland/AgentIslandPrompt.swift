@@ -807,11 +807,12 @@ extension AgentPrompt {
     /// last "No…". nil for everything else: question forms (a chip line), plan
     /// approvals, trust and edit dialogs, pickers, a preview form, a hook's
     /// or an ask rule's confirmation (`isUserAskConfirmation`, #790). A head off the
-    /// screen (a long heredoc on a narrow pty) and hidden characters do not
-    /// matter here: the question, the option shape and the #475 re-check do.
+    /// screen (a long heredoc on a narrow pty) does not matter here: the question, the
+    /// option shape and the #475 re-check do. #1315 (#1251): hidden or reordering
+    /// characters, or a mark stack, do: the card makes that prompt deny-only, so no rule answers it.
     var allowYes: AgentPromptOption? {
         let o = options
-        guard question == "Do you want to proceed?", !questionWrapped, preview.isEmpty, notes.isEmpty,
+        guard question == "Do you want to proceed?", !questionWrapped, !hasHiddenCharacters, preview.isEmpty, notes.isEmpty,
               !context.contains(where: Self.isChipLine), !Self.isUserAskConfirmation(context), (2...3).contains(o.count),
               o[0].label == "Yes", o[0].hint == nil, o[0].detail.isEmpty,
               o[o.count - 1].style(first: false) == .deny, o[o.count - 1].detail.isEmpty,

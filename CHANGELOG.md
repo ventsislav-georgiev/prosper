@@ -1447,6 +1447,10 @@ tag from the now-released section and put it on the new top draft.
   host, and opens them in Terminal mode. (#836)
 - With Increase Contrast, primary text on a custom theme whose text is too faint now uses black or
   white, like secondary text. (#1325)
+- Always allow no longer answers a permission prompt that hides or reorders characters (the card
+  already offers only "No" there), stops answering two prompts that keep alternating within 30
+  seconds, and no longer replaces a row's "Restart failed" text with "Allowed automatically"; the
+  note also goes once the row waits on you again. (#1315)
 
 ## v2.174.0
 

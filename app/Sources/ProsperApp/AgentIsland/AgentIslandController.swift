@@ -1550,6 +1550,10 @@ final class AgentIslandController {
     }
     /// The same prompt back this soon after its answer is the human's (the loop guard).
     static let loopWindow: TimeInterval = 30
+    /// #1315 (QA #581 INFO-4): the loop guard keeps every prompt answered in the last `loopWindow`, at most this
+    /// many per session, so A/B/A/B stops at the second A. Checks start at most once per poll floor (2 s), so 30 s
+    /// holds about 15 answers: the cap only bounds memory, the window is the rule.
+    static let loopMemory = 16
     /// An answered session still listed blocked has its screen read again this soon.
     static let verifyDelay: TimeInterval = 2
     /// #792: how long a prompt left to dch's own auto-allow waits for its answer before the
@@ -1573,8 +1577,8 @@ final class AgentIslandController {
     }
     /// One blocked stretch of a session; dropped once the row is not blocked.
     private var autoAllow: [AgentSessionKey: AutoAllowState] = [:]
-    /// The prompt last answered per session, and when: the loop guard.
-    private var allowed: [AgentSessionKey: (prompt: AgentPrompt, at: Date)] = [:]
+    /// The prompts answered per session, oldest first, and when: the loop guard (`loopWindow`, `loopMemory`).
+    private var allowed: [AgentSessionKey: [(prompt: AgentPrompt, at: Date)]] = [:]
     /// QA #581 INFO-3: the live re-read timer per session; an older one is a no-op.
     private var rereadGen: [AgentSessionKey: Int] = [:]
     /// #927: the last gen handed out, controller-wide, so a pruned key's next gen never matches an old timer.
@@ -1699,7 +1703,7 @@ final class AgentIslandController {
         // a listed row's entry and any still inside its window.
         rereadGen = rereadGen.filter { autoAllow[$0.key] != nil }
         let listed = Set(store.sessions.map(\.key)), t = now()
-        allowed = allowed.filter { listed.contains($0.key) || t.timeIntervalSince($0.value.at) < Self.loopWindow }
+        allowed = allowed.filter { listed.contains($0.key) || $0.value.last.map { t.timeIntervalSince($0.at) < Self.loopWindow } == true }
         for key in blocked where autoAllow[key] == nil { startAutoAllow(key, answered: false) }   // #935: it asks claudeKeys
         recheckHuman()
     }
@@ -1746,9 +1750,21 @@ final class AgentIslandController {
         for s in sessions {
             guard let a = s.autoAllowed, let was = dchSeen[s.key], was != a else { continue }
             Self.log.info("dch auto-allow answered in \(s.key.name, privacy: .public): \(a.title, privacy: .private)")
-            if !runner.isBusy(s.key) { store?.actions[s.key] = AgentIsland.autoAllowedText }
+            noteAllowed(s.key)
         }
         dchSeen = Dictionary(sessions.map { ($0.key, $0.autoAllowed) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// #1315 (QA #581 INFO-7): "Allowed automatically" goes only over no text or its own, so a finished
+    /// "Restart failed: ..." stays; never while the row's job runs.
+    private func noteAllowed(_ key: AgentSessionKey) {
+        guard !runner.isBusy(key), [nil, AgentIsland.autoAllowedText].contains(store?.actions[key]) else { return }
+        store?.actions[key] = AgentIsland.autoAllowedText
+    }
+
+    /// #1315 (QA #581 INFO-7): the row is left to the human on a prompt: an earlier answer's note is stale.
+    private func dropAllowedNote(_ key: AgentSessionKey) {
+        if store?.actions[key] == AgentIsland.autoAllowedText { store?.actions[key] = nil }
     }
 
     /// QA #581 F3: the setting toggled (Settings): off drops every hold and
@@ -1779,6 +1795,7 @@ final class AgentIslandController {
         guard claudeKeys.withLock({ $0.contains(key) }) else {
             guard autoAllow[key] != nil else { return }
             autoAllow[key] = .human(left: nil, seen: activity(key), at: now())
+            dropAllowedNote(key)
             publish()
             refreshCards()
             return layout()
@@ -1804,7 +1821,7 @@ final class AgentIslandController {
         // #781 rider: and a list of its dir read now, on this queue, must still name one (the newest poll is up to 2 s old).
         let relist = claudeNow
         let isOn: @Sendable () -> Bool = { on() && claude.withLock { $0.contains(key) } && relist(key) }
-        let last = allowed[key].flatMap { t.timeIntervalSince($0.at) < Self.loopWindow ? $0.prompt : nil }
+        let recent = (allowed[key] ?? []).filter { t.timeIntervalSince($0.at) < Self.loopWindow }.map(\.prompt)
         // #792: a fresh blocked stretch only; the re-read after Prosper's own answer stays Prosper's.
         let master = answered ? "" : store?.sessions.first { $0.key == key }?.version ?? ""
         let probe = controlDch, run = runDch, builds = dchBuilds, path = dchConfigPath()
@@ -1815,6 +1832,8 @@ final class AgentIslandController {
                                                config: { bin in run(bin.path, ["--config"], env).map { String(decoding: $0, as: UTF8.self) } },
                                                timedOut: { DchConfigWriter.mayAllow(path: path) })
             let s = dch ? nil : screen?.text ?? io.read(key), read = s.flatMap(AgentPrompt.parse)
+            // #1315: autoAllow parses this same screen, so a recent prompt that matches it is the one to refuse.
+            let last = read.flatMap { p in recent.first { p.sameIdentity($0) } }
             let r = s.map { AgentPrompt.autoAllow(key, io: io, notAgain: last, answered: answered || retaken, isOn: isOn, screen: $0) } ?? .dch
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.autoAllowed(key, r, read, act, t, answered: answered, retaken: retaken) } }
         }
@@ -1832,10 +1851,12 @@ final class AgentIslandController {
             return startAutoAllow(key, answered: false, retaken: answered || retaken)
         }
         if case .allowed(let p) = r {
-            allowed[key] = (p, now())
+            let n = now()
+            allowed[key] = Array(((allowed[key] ?? []).filter { n.timeIntervalSince($0.at) < Self.loopWindow } + [(prompt: p, at: n)])
+                .suffix(Self.loopMemory))
             // QA #581 INFO-1: with the head off the screen the title is a command line.
             Self.log.info("Always allow answered Yes in \(key.name, privacy: .public): \(p.title, privacy: .private)")
-            if !runner.isBusy(key) { store?.actions[key] = AgentIsland.autoAllowedText }
+            noteAllowed(key)
         }
         // QA #581 F2: the check held the key, so refreshCards skipped it; read the card now.
         // #754 INFO-R2: also when the hold is already gone (switched off meanwhile).
@@ -1844,6 +1865,7 @@ final class AgentIslandController {
         guard autoAllow[key] == .checking else { return layout() }   // not blocked any more
         if r == .human {
             autoAllow[key] = .human(left: read, seen: act, at: t)
+            dropAllowedNote(key)
             publish()
             recheckHuman()   // #791: printed while it was checked
         } else if r == .dch {
@@ -1860,6 +1882,7 @@ final class AgentIslandController {
                 guard let self, self.rereadGen[key] == gen, self.autoAllow[key] == .answered else { return }
                 guard human else { return self.startAutoAllow(key, answered: true) }
                 self.autoAllow[key] = .human(left: nil, seen: self.activity(key), at: self.now())
+                self.dropAllowedNote(key)
                 self.publish()
                 self.refreshCards()
                 self.layout()
@@ -1884,6 +1907,7 @@ final class AgentIslandController {
                 return self.startAutoAllow(key, answered: false)
             }
             self.autoAllow[key] = .human(left: nil, seen: self.activity(key), at: self.now())
+            self.dropAllowedNote(key)
             self.publish()
             self.refreshCards()
             self.layout()
