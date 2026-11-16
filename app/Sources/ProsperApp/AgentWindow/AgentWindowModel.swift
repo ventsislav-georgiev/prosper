@@ -1807,7 +1807,8 @@ final class AgentWindowModel: ObservableObject {
         newSessionTookKeys = sessionHasKeys
         newSession = AgentNewSessionForm(folder: AgentNewSession.abbreviate(folder ?? newSessionDefaultFolder, home: home),
                                          command: typed.isEmpty ? "claude" : typed,
-                                         prompt: lastPrompt, promptShown: !lastPrompt.isEmpty)   // #847 D2.4, D5.1
+                                         prompt: lastPrompt, promptShown: !lastPrompt.isEmpty,   // #847 D2.4, D5.1
+                                         openedOn: focusedEnded ? nil : selectedRow?.session?.name)   // #1214
         follow()   // P1b: the form covers the pane, so the terminal detaches (its view leaves the window)
         guard typed.isEmpty else { return }
         island().newSessionCommand { [weak self] argv in
@@ -1853,7 +1854,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// #847 D6.1: the box turns on only for a command the form can name and brief (newSessionClaude).
     func setNewSessionSidekick(_ on: Bool) {
-        guard newSession?.starting == nil else { return }
+        guard newSession?.starting == nil, newSession?.group == nil else { return }   // #1214: one session joins a group
         newSession?.sidekick = on && newSessionClaude
     }
 
@@ -1909,7 +1910,76 @@ final class AgentWindowModel: ObservableObject {
             .union(claimed.filter { t - $0.value <= Self.spawnSlack }.keys).filter { $0.lowercased() != own }
     }
 
+    // MARK: #1214 Add to group
+
+    /// The live records of sessions (their commands): the island's file read; none under XCTest (tests set it).
+    var memberRecords: ([AgentSession]) -> [DchHistoryRecord] = {
+        NSClassFromString("XCTestCase") == nil ? AgentIsland.liveRecords($0) : []
+    }
+
+    /// The groups running in the spawn dir: the #1116 rule over the live sessions only (nothing stored); none for
+    /// another Mac.
+    var newSessionGroups: [AgentGroup] {
+        guard let store, newSession?.host == nil else { return [] }
+        let dir = island().spawnDir()
+        return AgentIsland.groups(store.sessions.map(\.key).filter { $0.dir == dir }, suffix: store.pairSuffix)
+    }
+
+    /// The live sessions of folded `names` in `g`'s dir, in that order.
+    private func live(_ names: [String], in g: AgentGroup) -> [AgentSession] {
+        names.compactMap { n in store?.sessions.first { $0.key.dir == g.dir && $0.name.lowercased() == n } }
+    }
+
+    /// The choice: the group's folder, its role member's command and (a sidekick) the template first prompt naming its
+    /// main; the name is the group's next (newSessionAutoName), the preview. nil stem: no group, the fills taken back
+    /// only where untouched (the prompt).
+    func setNewSessionGroup(_ stem: String?, sidekick: Bool) {
+        guard var f = newSession, f.starting == nil, f.host == nil else { return }
+        if let filled = f.groupPrompt, f.prompt == filled { f.prompt = lastPrompt; f.promptShown = !lastPrompt.isEmpty }
+        f.groupPrompt = nil
+        guard let stem, let g = newSessionGroups.first(where: { $0.stem == stem }) else {
+            f.group = nil
+            newSession = f
+            return
+        }
+        f.group = AgentNewSessionForm.GroupPick(stem: stem, sidekick: sidekick)
+        f.sidekick = false
+        f.name = ""
+        f.nameEdited = false
+        if let cwd = live(g.mains + g.sidekicks, in: g).first(where: { !$0.cwd.isEmpty })?.cwd {
+            f.folder = AgentNewSession.abbreviate(cwd, home: home)
+        }
+        let role = sidekick ? g.sidekicks : g.mains
+        if let argv = AgentIsland.inferredCommand(live: memberRecords(live(role, in: g)), history: []) {
+            f.command = AgentIsland.shellLine(argv)
+        }
+        if sidekick {
+            let main = g.mains.first { $0 == f.openedOn?.lowercased() } ?? g.mains.first
+            let spelled = main.flatMap { m in live([m], in: g).first?.name } ?? main ?? stem
+            f.prompt = AgentNewSession.render(Preferences.agentIslandSidekickPrompt, name: spelled)
+            f.promptShown = true
+            f.groupPrompt = f.prompt
+        }
+        newSession = f
+    }
+
+    /// The chosen group's next name; nil: no group chosen. "" when none fits (newSessionGroupError says why).
+    private var newSessionGroupName: String? {
+        guard let p = newSession?.group else { return nil }
+        guard let store, newSessionGroups.contains(where: { $0.stem == p.stem }) else { return "" }
+        return AgentNewSession.groupName(stem: p.stem, sidekick: p.sidekick, suffix: store.pairSuffix, taken: spawnTaken,
+                                         dir: island().spawnDir()) ?? ""
+    }
+
+    /// The group row's slot: the chosen group stopped, or no name of it fits (and none is typed).
+    var newSessionGroupError: String? {
+        guard let p = newSession?.group else { return nil }
+        if !newSessionGroups.contains(where: { $0.stem == p.stem }) { return "\(p.stem) is not running any more" }
+        return newSession?.nameEdited == false && newSessionGroupName == "" ? "No free name in \(p.stem) fits: type one" : nil
+    }
+
     var newSessionAutoName: String {
+        if let name = newSessionGroupName { return name }   // #1214
         if let host = newSession?.host {
             return AgentNewSession.autoName(folder: newSessionFolder, taken: remoteTaken(host), dir: island().spawnDir())
         }
@@ -1936,7 +2006,9 @@ final class AgentWindowModel: ObservableObject {
 
     /// The picker: the folder becomes that Mac's newest known folder (this Mac: the usual default).
     func setNewSessionHost(_ host: String?) {
-        guard var f = newSession, f.starting == nil, f.host != host else { return }
+        guard let cur = newSession, cur.starting == nil, cur.host != host else { return }
+        setNewSessionGroup(nil, sidekick: false)   // #1214: groups are this Mac's; takes back an untouched group prompt as None does
+        guard var f = newSession else { return }
         f.host = host
         f.folder = host.map { AgentNewSession.remoteRecents(host: $0, sessions: remoteSessions, history: remoteHistory).first ?? "" }
             ?? AgentNewSession.abbreviate(newSessionDefaultFolder, home: home)
@@ -2032,7 +2104,7 @@ final class AgentWindowModel: ObservableObject {
         guard newSession?.starting == nil, store?.resumeGate.isOK == true else { return false }
         if let host = newSession?.host, !newSessionHosts.contains(host) { return false }   // #1323: gone, or dch too old
         let e = newSessionErrors
-        return e.folder == nil && e.name == nil && e.sidekick == nil
+        return e.folder == nil && e.name == nil && e.sidekick == nil && newSessionGroupError == nil   // #1214
     }
 
     /// Start or Return: nothing runs unless every check passes now.

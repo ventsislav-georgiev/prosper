@@ -1579,6 +1579,9 @@ tag from the now-released section and put it on the new top draft.
 - X-ray's Prompts and Responses tabs also work for a session in Terminal mode and for a session on
   another Mac. (#1389)
 - X-ray has a Search tab: search a session's transcript, on this Mac or another. (#1355)
+- The New session form can add a session to a group already running: pick the group and Main or
+  Sidekick, and the form fills in the group's folder, the command its members run and the next free
+  name (for example "sec-2"); a new sidekick gets the sidekick prompt naming its main. (#1214)
 
 ## v2.174.0
 

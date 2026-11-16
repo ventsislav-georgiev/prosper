@@ -29,6 +29,17 @@ struct AgentNewSessionForm: Equatable {
     var promptShown = false
     /// Set while the second spawn (the sidekick's) runs; `starting` stays the main's.
     var startingSidekick: AgentSessionKey?
+    /// #1214: "Add to group": the running group's stem (folded) and the role the new session takes; nil: no group.
+    var group: GroupPick?
+    /// #1214: the selected live session's name when the form opened (the main a new sidekick works for).
+    var openedOn: String?
+    /// #1214: the first prompt the group choice filled in, so another choice can take it back.
+    var groupPrompt: String?
+
+    struct GroupPick: Equatable {
+        var stem: String
+        var sidekick: Bool
+    }
 }
 
 /// The form's rules. Pure.
@@ -66,6 +77,27 @@ enum AgentNewSession {
 
     /// #847 S9: the sidekick's name: the main's (typed or automatic) and the Settings suffix.
     static func sidekickName(_ main: String, suffix: String) -> String { main + suffix }
+
+    /// #1214: the next member of group `stem` (folded): a main "stem-N" or a sidekick "stem<suffix>-N", N one past the
+    /// highest number that role uses in `taken` (live, History and claimed names, case-folded; the bare member is 1).
+    /// Never a gap: a lower free number may be an ended member's in History. nil (refused): a name past dch's room in
+    /// `dir` (a cut stem is another group, and dch would hash the name), one nameError refuses, or one the #1116 rule
+    /// does not read back into that group in that role.
+    static func groupName(stem: String, sidekick: Bool, suffix: String, taken: Set<String>, dir: String) -> String? {
+        let base = sidekick ? stem + suffix.lowercased() : stem
+        var used = Set<Int>()
+        for t in taken.map({ $0.lowercased() }) {
+            if t == base { used.insert(1); continue }
+            guard let d = AgentIsland.trailingDigits(t), d.digits.count <= 9,
+                  (d.rest.hasSuffix("-") ? d.rest.dropLast() : d.rest) == base, let n = Int(d.digits) else { continue }
+            used.insert(n)
+        }
+        let name = "\(base)-\((used.max() ?? 0) + 1)"
+        guard nameError(name, taken: taken, dir: dir) == nil else { return nil }
+        let keys = (taken.union([name])).map { AgentSessionKey(dir: dir, name: $0) }
+        let g = AgentIsland.groups(keys, suffix: suffix).first { $0.stem == stem }
+        return (sidekick ? g?.sidekicks : g?.mains)?.contains(name) == true ? name : nil
+    }
 
     /// #847 D4.3: "$name" replaced by the main session's name where the next character is not [A-Za-z0-9_]
     /// ("$names" stays). The only placeholder.
@@ -247,6 +279,9 @@ struct AgentNewSessionView: View {
                     .accessibilityLabel("On")
                 }
             }
+            // #1214: only while a group runs (this Mac): no row, no gap otherwise.
+            let groups = model.newSessionGroups
+            if !groups.isEmpty { groupRow(groups) }
             field("Folder", error: errors.folder) {
                 HStack(spacing: sz(6)) {
                     TextField(form.host == nil ? "~" : "/Users/you/project", text: Binding(get: { form.folder }, set: { model.setNewSessionFolder($0) }))
@@ -348,11 +383,38 @@ struct AgentNewSessionView: View {
             HStack(spacing: sz(6)) {
                 Toggle("Sidekick", isOn: Binding(get: { form.sidekick && claude }, set: { model.setNewSessionSidekick($0) }))
                     .toggleStyle(.checkbox).labelsHidden()
-                    .disabled(!claude)
+                    .disabled(!claude || form.group != nil)   // #1214: one session joins a group
                 Text(verbatim: line).font(Neon.font(11.5)).foregroundStyle(claude ? Neon.textPrimary : Neon.textSecondary)
                     .lineLimit(1).truncationMode(.tail).help(line)
             }
             .frame(height: sz(18))
+        }
+    }
+
+    /// #1214: "Add to group": the running groups by stem, then the role. Both menus have fixed widths in points (a
+    /// pop-up's text does not follow the UI scale), so a choice never resizes the row.
+    static let groupChoiceLabel = "Add to group"
+    static let groupRoleLabel = "Role in the group"
+    static let groupNone = "None"
+
+    private func groupRow(_ groups: [AgentGroup]) -> some View {
+        let pick = form.group
+        return field("Group", error: model.newSessionGroupError) {
+            HStack(spacing: sz(6)) {
+                Picker(Self.groupChoiceLabel, selection: Binding(get: { pick?.stem },
+                                                                 set: { model.setNewSessionGroup($0, sidekick: pick?.sidekick ?? false) })) {
+                    Text(verbatim: Self.groupNone).tag(String?.none)
+                    ForEach(groups, id: \.stem) { g in Text(verbatim: g.stem).tag(Optional(g.stem)) }
+                }
+                .labelsHidden().pickerStyle(.menu).frame(width: 150)   // the title is its AX label (a second one reads twice)
+                Picker(Self.groupRoleLabel, selection: Binding(get: { pick?.sidekick ?? false },
+                                                               set: { model.setNewSessionGroup(pick?.stem, sidekick: $0) })) {
+                    Text(verbatim: "Main").tag(false)
+                    Text(verbatim: "Sidekick").tag(true)
+                }
+                .labelsHidden().pickerStyle(.menu).frame(width: 100)
+                .disabled(pick == nil)
+            }
         }
     }
 
