@@ -37,7 +37,8 @@ enum Neon {
     // custom theme's line under 3:1 on its card takes the full text colour (ThemeRuntime.contrastLines).
     private static var hc: Bool { ThemeRuntime.increaseContrast }
     static var stroke: Color { hc ? ThemeRuntime.contrastLines.stroke : p.blue.opacity(0.16) }
-    static var textPrimary: Color { p.textPrimary }
+    // #1325: under Increase Contrast primary text is never weaker than secondary (the last resort on a faint-text theme).
+    static var textPrimary: Color { hc ? ThemeRuntime.contrastLines.text : p.textPrimary }
     static var textSecondary: Color { hc ? ThemeRuntime.contrastLines.text : p.textSecondary }
 
     /// The two ends of `cardStroke`, top-leading first.

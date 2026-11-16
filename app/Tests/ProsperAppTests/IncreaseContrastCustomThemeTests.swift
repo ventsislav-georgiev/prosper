@@ -230,7 +230,8 @@ final class IncreaseContrastCustomThemeTests: XCTestCase {
         let palette: Set<String> = ["ClipboardPanel.swift|Neon.blue", "SettingsTheme.swift|accent", "SettingsTheme.swift|Neon.blue",
                                     "AgentsWindow.swift|Neon.blue", "AgentsWindow.swift|tint", "RunnerPanel.swift|Neon.blue"]
         let fixed: Set<String> = ["StatsPopupView.swift|Neon.textSecondary", "SettingsTheme.swift|Neon.textSecondary",
-                                  "AgentsWindow.swift|Neon.textSecondary", "AgentIslandView.swift|.white"]
+                                  "AgentsWindow.swift|Neon.textSecondary", "AgentIslandView.swift|.white",
+                                  "AgentIslandView.swift|text"]  // #1316: island chip text (3 sites)
         XCTAssertEqual(try Self.fadedSites(), palette.union(fixed))
     }
 
@@ -296,5 +297,48 @@ final class IncreaseContrastCustomThemeTests: XCTestCase {
             ThemeRuntime.increaseContrast = true
             XCTAssertTrue(Self.same(Neon.faded(Neon.blue, 0.3), p.blue), "on keeps the accent")
         }
+    }
+
+    // MARK: #1325
+
+    /// R1317-q1: under Increase Contrast every built-in theme keeps all five faded keys and its own text.
+    /// Literal exceptions "theme|key" (worst ratio on card and cardHi, under the 3:1 floor, so the table
+    /// falls back to the text colour): mint blueBright 2.71, solar blueBright 2.73. Set equality.
+    func testBuiltInThemesKeepAllFadedKeysAndTextUnderIncreaseContrast() throws {
+        let dir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Resources/extensions", isDirectory: true)
+        let bundled = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("theme-") }
+            .map { d -> (String, ThemePalette) in
+                (d.lastPathComponent, try ThemePalette.resolve(ThemeSpec.decode(Data(contentsOf: d.appendingPathComponent("theme.json")))))
+            }
+        let themes = [("Default", ThemePalette.default)] + bundled
+        XCTAssertEqual(themes.count, 22)
+        let expected: Set<String> = ["theme-mint|blueBright", "theme-solar|blueBright"]
+        var broken = Set<String>()
+        for (name, p) in themes {
+            let l = ThemeRuntime.resolveContrastLines(p)
+            if !Self.same(l.text, p.textPrimary) { broken.insert("\(name)|text") }
+            for (key, c) in [("blue", p.blue), ("blueBright", p.blueBright), ("indigo", p.indigo),
+                             ("magenta", p.magenta), ("terminal", p.terminal)] {
+                if !(l.faded[c].map { Self.same($0, c) } ?? false) { broken.insert("\(name)|\(key)") }
+            }
+        }
+        XCTAssertEqual(broken, expected)
+    }
+
+    /// R1317-n1: a faint-text theme under Increase Contrast has primary text black or white (the same as
+    /// secondary) at 4.5:1 on card and cardHi; off it is the theme's own.
+    func testPrimaryTextTakesTheLastResortUnderIncreaseContrast() throws {
+        let (store, center, box) = try applied(Self.lowTextDarkJSON, ic: true, label: "primlast")
+        defer { withExtendedLifetime(store) {} }
+        let p = ThemeRuntime.palette
+        XCTAssertLessThan(Self.ratio(p.textPrimary, p.card), 4.5)
+        XCTAssertTrue(Self.same(Neon.textPrimary, ThemeRuntime.contrastLines.text))
+        XCTAssertTrue(Self.same(Neon.textPrimary, .white) || Self.same(Neon.textPrimary, .black))
+        for s in [p.card, p.cardHi] { XCTAssertGreaterThanOrEqual(Self.ratio(Neon.textPrimary, s), 4.5) }
+        Self.flip(box, false, center)
+        XCTAssertTrue(Self.same(Neon.textPrimary, p.textPrimary), "off")
     }
 }

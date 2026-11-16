@@ -1445,6 +1445,8 @@ tag from the now-released section and put it on the new top draft.
   shows "pinned" for an older pinned copy of the same conversation. (#991)
 - Agent Sessions lists the sessions on your other machines under "Other machines", each with its
   host, and opens them in Terminal mode. (#836)
+- With Increase Contrast, primary text on a custom theme whose text is too faint now uses black or
+  white, like secondary text. (#1325)
 
 ## v2.174.0
 
