@@ -147,7 +147,12 @@ final class AgentsNSWindow: NSWindow {
 
     /// R900-5a-1: the window stops being key while a divider drag is under way (its up may never come): the drag ends,
     /// saved once. No drag (always with the gate off): nothing.
-    override func resignKey() { super.resignKey(); Self.resignedKey(model) }
+    override func resignKey() { super.resignKey(); Self.resignedKey(model); goMenu.remove(from: AgentGoMenu.mainMenu()) }
+    /// #1359: the Go menu after Edit while this window is key (resignKey above takes it out).
+    override func becomeKey() { super.becomeKey(); goMenu.install(in: AgentGoMenu.mainMenu()) }
+    private(set) lazy var goMenu = AgentGoMenu(window: self)
+    /// #1359 (tests): the last action `perform` ran, the key's or a Go menu item's.
+    private(set) var lastPerformed: AgentGoMenu.Action?
     @MainActor static func resignedKey(_ m: AgentWindowModel?) { m?.dragEnded() }
 
     @discardableResult override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
@@ -324,18 +329,34 @@ final class AgentsNSWindow: NSWindow {
         let pane = PaneKeys.Context(responder: responderKind, keyFocus: model.keyFocus, panes: model.layout.panes.count,
                                     splitsEnabled: AgentPaneLayout.splitsEnabled)
         if let a = PaneKeys.treeAction(for: event, context: pane, renaming: model.renaming != nil || model.layoutRenaming != nil,
-                                       form: model.newSession != nil), model.perform(a) { return true }
+                                       form: model.newSession != nil), perform(pane: a) { return true }
         // #901 B3 step 6 (section 10): ⌘J, gate on only (read first) and never under the rename field or the New session
         // form; nothing to jump to: today's route below. Gate off: the line is skipped, ⌘J travels as before.
         if AgentPaneLayout.splitsEnabled, model.renaming == nil, model.layoutRenaming == nil, model.newSession == nil,
-           PaneKeys.action(for: event, context: pane) == .nextNeedsYou, model.nextNeedsYou() { return true }
-        switch Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                          terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
-                          form: model.newSession != nil) {
+           PaneKeys.action(for: event, context: pane) == .nextNeedsYou, perform(pane: .nextNeedsYou) { return true }
+        let r = Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
+                           terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
+                           form: model.newSession != nil)
+        return perform(r) || super.performKeyEquivalent(with: event)
+    }
+
+    /// #1359: what a pane key does, for the key (above) and the Go menu's pane items alike.
+    @discardableResult func perform(pane a: PaneAction) -> Bool {
+        lastPerformed = .pane(a)
+        guard let model else { return false }
+        return a == .nextNeedsYou ? model.nextNeedsYou() : model.perform(a)
+    }
+
+    /// #1359: what a routed key does, for the key (performKeyEquivalent) and the Go menu's items alike: one function.
+    /// False: not the window's (.sidebar, .pass, a refused Command-T), so the key goes on to super.
+    @discardableResult func perform(_ r: KeyRoute) -> Bool {
+        lastPerformed = .key(r)
+        guard let model else { return false }
+        switch r {
         case .close: performClose(nil)
         case .verbosity(let v): model.verbosity = v
         case .toggleMode:
-            guard model.toggleMode() else { return super.performKeyEquivalent(with: event) }
+            guard model.toggleMode() else { return false }
             model.focusSelection()   // #845: the shown mode's input, Transcript's too
         case .session(let d): model.move(d)
         case .jump(let n): model.selectNumbered(n)   // no row there: nothing, and the key stops here (no beep, not the terminal's)
@@ -348,9 +369,31 @@ final class AgentsNSWindow: NSWindow {
         case .stopOrRemove: model.askStopOrRemove()
         case .chapters: toggleChapters()
         case .swallow: break
-        case .sidebar, .pass: return super.performKeyEquivalent(with: event)
+        case .sidebar, .pass: return false
         }
         return true
+    }
+
+    /// #1359: the chords `route` acts on, one per action (Shift-Command-= and the keypad digits are aliases left out): the key
+    /// equivalent as a menu shows it, the modifiers, the key code and the route. The Go menu's rows hold its list to this
+    /// table and this table to `route`.
+    static let keyTable: [(key: String, mods: NSEvent.ModifierFlags, keyCode: UInt16, route: KeyRoute)] = [
+        ("w", .command, 13, .close), ("n", .command, 45, .newSession), ("n", [.command, .shift], 45, .newShell),
+        ("1", [.command, .option], 18, .verbosity(.focused)), ("2", [.command, .option], 19, .verbosity(.default)),
+        ("3", [.command, .option], 20, .verbosity(.verbose)),
+        ("1", .command, 18, .jump(1)), ("2", .command, 19, .jump(2)), ("3", .command, 20, .jump(3)),
+        ("4", .command, 21, .jump(4)), ("5", .command, 23, .jump(5)), ("6", .command, 22, .jump(6)),
+        ("7", .command, 26, .jump(7)), ("8", .command, 28, .jump(8)), ("9", .command, 25, .jump(9)),
+        ("\u{8}", .command, 51, .stopOrRemove), ("l", .command, 37, .chapters), ("t", .command, 17, .toggleMode),
+        ("f", .command, 3, .find), ("g", .command, 5, .findNext(true)), ("g", [.command, .shift], 5, .findNext(false)),
+        ("=", .command, 24, .font(1)), ("-", .command, 27, .font(-1)), ("0", .command, 29, .font(0)),
+        ("\u{F700}", .command, 126, .session(-1)), ("\u{F701}", .command, 125, .session(1)),
+    ]
+
+    /// #1359: a built key-down for a table chord (handed to `route`, never posted).
+    static func keyEvent(_ key: String, _ mods: NSEvent.ModifierFlags, _ keyCode: UInt16) -> NSEvent? {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: mods, timestamp: 0, windowNumber: 0, context: nil,
+                         characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: keyCode)
     }
 
     /// #882: the letter a chord matches. On a Cyrillic, Greek or Hebrew layout `charactersIgnoringModifiers` is
