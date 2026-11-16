@@ -44,6 +44,9 @@ final class ThemeStore: ObservableObject {
     /// Frosted-glass backgrounds. Persisted via Preferences; mirrored into
     /// `ThemeRuntime.frost`. Forced off while system "Reduce transparency" is on.
     @Published private(set) var frost = false
+    /// #1076: system "Increase contrast", re-read on every accessibility display change.
+    /// Mirrored into `ThemeRuntime.increaseContrast`; the chosen theme is untouched.
+    @Published private(set) var increaseContrast = false
 
     /// Selected menu-bar icon (Settings → Appearance → Menu Bar Icon).
     /// Persisted via Preferences. Published (not gated behind `generation` or
@@ -72,6 +75,7 @@ final class ThemeStore: ObservableObject {
     private let defaults: UserDefaults
     private let cacheDir: URL
     private var reduceTransparencyObserver: NSObjectProtocol?
+    private let increaseContrastReader: @MainActor () -> Bool
     private var assetTask: Task<Void, Never>?
     private var lastAssets: [String: String] = [:]
     private let log = Logger(subsystem: "com.prosper", category: "theme")
@@ -94,9 +98,15 @@ final class ThemeStore: ObservableObject {
     nonisolated private static let maxAssetBytes = 32 * 1024 * 1024
 
     init(defaults: UserDefaults = Preferences.defaults,
-         cacheDir: URL = ThemeStore.defaultCacheDir) {
+         cacheDir: URL = ThemeStore.defaultCacheDir,
+         increaseContrastReader: @escaping @MainActor () -> Bool = ThemeStore.systemIncreaseContrast,
+         workspaceCenter: NotificationCenter = NSWorkspace.shared.notificationCenter) {
         self.defaults = defaults
         self.cacheDir = cacheDir
+        self.increaseContrastReader = increaseContrastReader
+        let ic = increaseContrastReader()
+        increaseContrast = ic
+        ThemeRuntime.increaseContrast = ic
         // Seed the display metrics from the persisted prefs and publish them into
         // ThemeRuntime BEFORE any view renders, so the first frame already honours
         // the user's size/opacity (no flash of default-sized UI on launch).
@@ -107,28 +117,53 @@ final class ThemeStore: ObservableObject {
         opacity = o
         frost = f
         ThemeRuntime.scale = s
-        ThemeRuntime.opacity = Self.effectiveOpacity(o)
-        ThemeRuntime.frost = Self.effectiveFrost(f)
+        ThemeRuntime.opacity = liveOpacity(o)
+        ThemeRuntime.frost = liveFrost(f)
         _ = Self.popoverAppearanceObserver
         _ = Self.popoverCloseObserver
-        // Re-evaluate transparency live when the user toggles the system "Reduce
-        // transparency" accessibility setting while Prosper is running (otherwise the
-        // downgrade only applies on next setOpacity/launch).
-        reduceTransparencyObserver = NSWorkspace.shared.notificationCenter.addObserver(
+        // Re-evaluate transparency and contrast live when the user toggles the system
+        // "Reduce transparency" or "Increase contrast" setting while Prosper is running
+        // (otherwise the change only applies on next setOpacity/launch).
+        reduceTransparencyObserver = workspaceCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let op = Self.effectiveOpacity(self.opacity)
-                let fr = Self.effectiveFrost(self.frost)
-                guard op != ThemeRuntime.opacity || fr != ThemeRuntime.frost else { return }
-                ThemeRuntime.opacity = op
-                ThemeRuntime.frost = fr
-                self.backdropTick &+= 1
-                self.onChange?()
-            }
+            MainActor.assumeIsolated { self?.accessibilityDisplayOptionsChanged() }
         }
+    }
+
+    /// The real "Increase contrast" flag; false under XCTest so no test reads the Mac's setting.
+    static func systemIncreaseContrast() -> Bool {
+        NSClassFromString("XCTestCase") == nil && NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+    }
+
+    private func accessibilityDisplayOptionsChanged() {
+        let ic = increaseContrastReader()
+        let contrastChanged = ic != increaseContrast
+        if contrastChanged {
+            increaseContrast = ic
+            ThemeRuntime.increaseContrast = ic
+            // Text and line tokens are read on rebuild, like a palette swap.
+            generation &+= 1
+        }
+        let op = liveOpacity(opacity)
+        let fr = liveFrost(frost)
+        let backdropChanged = op != ThemeRuntime.opacity || fr != ThemeRuntime.frost
+        if backdropChanged {
+            ThemeRuntime.opacity = op
+            ThemeRuntime.frost = fr
+            backdropTick &+= 1
+        }
+        guard contrastChanged || backdropChanged else { return }
+        onChange?()
+    }
+
+    /// #1076: Increase Contrast makes windows opaque, on top of the Reduce Transparency rule.
+    private func liveOpacity(_ stored: CGFloat) -> CGFloat {
+        increaseContrast ? 1.0 : Self.effectiveOpacity(stored)
+    }
+    private func liveFrost(_ stored: Bool) -> Bool {
+        !increaseContrast && Self.effectiveFrost(stored)
     }
 
     /// #752: every popover wears the active theme's appearance, set as it shows.
@@ -228,7 +263,7 @@ final class ThemeStore: ObservableObject {
         let clamped = CGFloat(Preferences.uiOpacity)
         guard clamped != opacity else { return }
         opacity = clamped
-        ThemeRuntime.opacity = Self.effectiveOpacity(clamped)
+        ThemeRuntime.opacity = liveOpacity(clamped)
         backdropTick &+= 1
         onChange?()
     }
@@ -239,7 +274,7 @@ final class ThemeStore: ObservableObject {
         Preferences.uiFrost = value
         guard value != frost else { return }
         frost = value
-        ThemeRuntime.frost = Self.effectiveFrost(value)
+        ThemeRuntime.frost = liveFrost(value)
         backdropTick &+= 1
         onChange?()
     }

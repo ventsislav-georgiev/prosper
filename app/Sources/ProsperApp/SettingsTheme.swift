@@ -32,13 +32,19 @@ enum Neon {
     static var cardHi: Color { p.cardHi }
 
     // Lines + text
-    static var stroke: Color { p.blue.opacity(0.16) }
+    // #1076: under system Increase Contrast the divider and border go opaque (3:1 on every
+    // built-in surface) and secondary text takes the full text colour; the theme stays.
+    private static var hc: Bool { ThemeRuntime.increaseContrast }
+    static var stroke: Color { p.blue.opacity(hc ? 1 : 0.16) }
     static var textPrimary: Color { p.textPrimary }
-    static var textSecondary: Color { p.textSecondary }
+    static var textSecondary: Color { hc ? p.textPrimary : p.textSecondary }
 
+    /// The two ends of `cardStroke`, top-leading first.
+    static var cardStrokeColors: [Color] {
+        hc ? [p.blue, p.indigo] : [p.blue.opacity(0.38), p.indigo.opacity(0.10)]
+    }
     static var cardStroke: LinearGradient {
-        LinearGradient(colors: [p.blue.opacity(0.38), p.indigo.opacity(0.10)],
-                       startPoint: .topLeading, endPoint: .bottomTrailing)
+        LinearGradient(colors: cardStrokeColors, startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
     static var barFill: LinearGradient {

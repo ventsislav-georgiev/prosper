@@ -151,6 +151,11 @@ enum ThemeRuntime {
     /// needs a non-opaque window), same onChange hook as `opacity`.
     nonisolated(unsafe) static var frost = false
 
+    /// #1076: system "Increase contrast" (Accessibility, Display). ThemeStore is the single
+    /// writer; while set, `Neon.stroke`, `Neon.cardStroke` and `Neon.textSecondary` read their
+    /// strong values, and the store forces `opacity` to 1 and `frost` off.
+    nonisolated(unsafe) static var increaseContrast = false
+
     /// Densest glass tint — the alpha of the theme gradient over the frost blur at
     /// the 100% Transparency preset (preserves the original frost look). Lower presets
     /// thin it toward `frostTintMin` so more blurred desktop shows through. Never read

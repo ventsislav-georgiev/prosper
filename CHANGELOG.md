@@ -1359,6 +1359,11 @@ tag from the now-released section and put it on the new top draft.
   longer shows as downloaded.
 - Turning on Always allow from the Agent Sessions menu now asks first (Turn on or Cancel); turning
   it off stays immediate.
+- Prosper now follows the macOS Increase Contrast setting (System Settings > Accessibility >
+  Display) without a restart: windows turn fully opaque, dividers and borders are drawn solid, and
+  secondary text uses the full text colour, in your chosen theme. Some windows (the launcher, the
+  agent island, the clipboard panel and a few popups) still draw part of their own chrome and follow
+  in a later update.
 
 ## v2.174.0
 
