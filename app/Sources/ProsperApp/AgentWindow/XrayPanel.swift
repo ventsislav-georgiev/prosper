@@ -11,9 +11,9 @@ import SwiftUI
 // hidden until shown, other sessions' messages marked and hideable (dch 1.78.0+, operator ruling Q1).
 // #1389 (P6 step B): the same tabs for a Terminal-mode pane and a remote session, from `dch --xray <n> --json`'s chapters.
 
-/// The tabs in dch's order (xview.c xv_ord); a later phase puts Refs between Responses and Search.
+/// The tabs in dch's order (xview.c xv_ord); #1415: Refs between Responses and Search.
 enum XrayTab: String, CaseIterable {
-    case prompts = "Prompts", responses = "Responses", search = "Search", tasks = "Tasks", memory = "Memory"
+    case prompts = "Prompts", responses = "Responses", refs = "Refs", search = "Search", tasks = "Tasks", memory = "Memory"
 }
 
 /// The session a read names: a local one by name in its socket dir, a remote one as "host:name" (design 3.5).
@@ -68,6 +68,10 @@ final class XrayPanels: ObservableObject {
     /// #1355: a new panel has a Search tab. Off under XCTest so the existing rows keep their exact tab sets; rows set
     /// XrayPanelModel.searchable themselves.
     static var searchTab: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
+
+    /// #1415 (gate A): the Refs tab and its reads. Off in the product until the ref card ships (#1356 step 3), and under
+    /// XCTest; rows set it and restore it.
+    static var refsTab: @MainActor () -> Bool = { false }
 
     /// The focused pane's mode through the window model (no model or another pane focused: no read).
     static func fromDch(_ pane: UUID, _ target: XrayTarget) -> Bool {
@@ -152,6 +156,9 @@ final class XrayPanelModel: ObservableObject {
     @Published private(set) var memory: XrayMemory?
     /// #1389: Prompts and Responses from dch's chapters (Terminal mode, remote); nil: none (not read, exit not 0, bad JSON).
     @Published var dchChapters: [TranscriptOutline.Chapter]?
+    /// #1415: the refs of dch's `--json` read (gate A on only); nil: none read. "Show all kinds" (dch `a`).
+    @Published var refs: XrayRefs?
+    @Published var showAllRefs = false
     /// #1389: this pane reads dch's chapters (XrayPanels.chaptersRead); false: never runs that read.
     var fromDch: () -> Bool = { false }
     /// #1355: the Search tab is there (false once dch answered exit 1, does not know --search, or 6, refused); the
@@ -230,7 +237,8 @@ final class XrayPanelModel: ObservableObject {
         guard let dch, let run else { return }
         lastRead = now()
         let env = target.env, a = target.args("tasks"), b = target.args("memory")
-        let c = fromDch() ? target.chaptersArgs : nil   // #1389: the third read only for a dch-chapters pane
+        // #1389: the third read only for a dch-chapters pane; #1415: or, gate A on, for a Transcript pane's refs alone
+        let refsOnly = !fromDch(), c = !refsOnly || XrayPanels.refsTab() ? target.chaptersArgs : nil
         let chapters: @Sendable () async -> (status: Int32, out: Data)? = {
             guard let c else { return nil }
             return await run(dch, c, env)
@@ -242,15 +250,15 @@ final class XrayPanelModel: ObservableObject {
             let (tr, mr, kr) = await (t, m, k)
             guard !Task.isCancelled else { return }   // #1368: closed or switched away: the SIGTERMed answer is not news
             self?.reading = nil
-            self?.apply(tasks: tr, memory: mr, chapters: kr)
+            self?.apply(tasks: tr, memory: mr, chapters: kr, refsOnly: refsOnly)
         }
     }
 
     func apply(tasks tr: (status: Int32, out: Data), memory mr: (status: Int32, out: Data),
-               chapters kr: (status: Int32, out: Data)? = nil) {
+               chapters kr: (status: Int32, out: Data)? = nil, refsOnly: Bool = false) {
         take(tr)
         takeMemory(mr)
-        if let kr { takeChapters(kr) }
+        if let kr { if refsOnly { takeRefs(kr) } else { takeChapters(kr) } }
         loaded = true
         if let fallback, tasks == nil {
             if isCurrent() { close(); fallback() }   // another session now shown: the list never opens over it
@@ -268,6 +276,10 @@ final class XrayPanelModel: ObservableObject {
     /// flight ends. The 30 s Memory poll is the poller's (XrayPoller.swift).
     func select(_ t: XrayTab) {
         tab = t
+        // #1415: a Transcript pane reads its refs again on a switch to Refs: at once, or at the next tick after the read
+        if t == .refs, loaded, !fromDch() {
+            if reading == nil, let dch, let run { readChapters(dch, run) } else { lastRead = .distantPast }
+        }
         guard t == .memory, loaded else { return }
         if reading != nil { pendingMemory = true } else { readMemory() }
     }
@@ -286,6 +298,7 @@ final class XrayPanelModel: ObservableObject {
         return XrayTab.allCases.filter {
             switch $0 {
             case .prompts, .responses: prose
+            case .refs: XrayPanels.refsTab() && refs?.entries.isEmpty == false
             case .search: searchable
             case .tasks: tasks != nil
             case .memory: memory != nil
@@ -298,14 +311,17 @@ final class XrayPanelModel: ObservableObject {
         switch tab {
         case .prompts: shownPrompts.count
         case .responses: shownResponses.filter { !$0.auto }.count
+        case .refs: refs?.entries.count ?? 0   // #1415: every ref, hidden kinds included (dch's rule)
         case .search: search?.hits.count ?? 0
         case .tasks: tasks?.open ?? 0
         case .memory: memory?.count ?? 0
         }
     }
-    /// "Tasks 3" (open tasks), "Memory 2" (every row); #1355: "Search" before a search, "Search 50+" past dch's cap.
+    /// "Tasks 3" (open tasks), "Memory 2" (every row); #1355: "Search" before a search, "Search 50+" past dch's cap;
+    /// #1415: "Refs \u{2265}3" while dch says its list is not complete.
     func title(_ tab: XrayTab) -> String {
-        tab == .search && search == nil ? tab.rawValue : "\(tab.rawValue) \(count(tab))\(tab == .search && search?.more == true ? "+" : "")"
+        tab == .search && search == nil ? tab.rawValue
+            : "\(tab.rawValue) \(tab == .refs && refs?.complete == false ? "\u{2265}" : "")\(count(tab))\(tab == .search && search?.more == true ? "+" : "")"
     }
     /// VoiceOver: "Tasks, 3 open"; "Memory, 2".
     func spoken(_ tab: XrayTab) -> String { tab == .tasks ? "Tasks, \(count(tab)) open" : title(tab).replacingOccurrences(of: " ", with: ", ") }
@@ -478,6 +494,32 @@ final class XrayPanelModel: ObservableObject {
         guard let memory else { return [] }
         return memory.groups.map { XrayMemory.Group(title: $0.title, items: $0.items.filter { Self.matches($0, filter) }) }
             .filter { !$0.items.isEmpty }
+    }
+
+    // MARK: #1415 Refs
+
+    /// Case-insensitive, over the ref's text and its title.
+    static func matches(_ e: XrayRefs.Entry, _ filter: String) -> Bool {
+        let q = filter.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty || e.text.localizedCaseInsensitiveContains(q) || e.title.localizedCaseInsensitiveContains(q)
+    }
+
+    /// The rows in dch's order with the filter applied; issues, pulls and tickets unless "Show all kinds".
+    var shownRefs: [XrayRefs.Entry] {
+        (refs?.ordered ?? []).filter { Self.matches($0, filter) && (showAllRefs || XrayRefs.byDefault($0)) }
+    }
+
+    /// The footer's toggle (dch `a`): "2 files, commits and links hidden" + Show all kinds, or Hide; none without such a row.
+    var refsToggle: (text: String?, button: String)? {
+        let n = (refs?.entries ?? []).filter { Self.matches($0, filter) && !XrayRefs.byDefault($0) }.count
+        guard n > 0 else { return nil }
+        return showAllRefs ? (nil, "Hide files, commits and links") : ("\(n) files, commits and links hidden", "Show all kinds")
+    }
+
+    /// "N more refs not indexed" (dch's dropped_keys), then "host unreachable" and why Search went.
+    var refsFooter: [String] {
+        let n = refs?.droppedKeys ?? 0
+        return (n > 0 ? ["\(n) more refs not indexed"] : []) + goneFooter
     }
 }
 
@@ -684,6 +726,8 @@ struct XrayPanelView: View {
             memoryTab
         } else if panel.tab == .search {
             searchTab
+        } else if panel.tab == .refs {
+            refsTab
         } else if panel.tab == .prompts || panel.tab == .responses {
             promptsTab(panel.tab)
         } else {
@@ -763,6 +807,33 @@ struct XrayPanelView: View {
                 }
             }
             ForEach(panel.searchFooter, id: \.self) { faint($0) }
+        }
+        .padding(sz(10))
+    }
+
+    /// #1415: the Refs list; a row does nothing yet (#1356 step 3 opens its card).
+    var refsTab: some View {
+        let complete = panel.refs?.complete ?? true
+        return VStack(alignment: .leading, spacing: sz(4)) {
+            TextField("Filter", text: $panel.filter)
+                .textFieldStyle(.roundedBorder)
+                .font(Neon.font(11))
+                .focused($filterFocus)
+                .accessibilityLabel("Filter refs")
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(panel.shownRefs.enumerated()), id: \.offset) { _, e in
+                        XrayRefRowView(row: XrayRefRow(e, complete: complete, home: panel.home, cwd: panel.cwd())) {}
+                    }
+                }
+            }
+            if let f = panel.refsToggle {
+                HStack(spacing: sz(6)) {
+                    if let t = f.text { faint(t) }
+                    Button(f.button) { panel.showAllRefs.toggle() }.buttonStyle(.link).font(Neon.font(10, weight: .medium))
+                }
+            }
+            ForEach(panel.refsFooter, id: \.self) { faint($0) }
         }
         .padding(sz(10))
     }
@@ -900,6 +971,31 @@ struct XraySearchRowView: View {
         .font(Neon.font(11))
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(row.spoken)
+    }
+}
+
+/// #1415: one Refs row: bold when defined or mentioned twice, the title faint, the count at the right.
+struct XrayRefRowView: View {
+    let row: XrayRefRow
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: sz(6)) {
+                Text(verbatim: row.text).fontWeight(row.bold ? .semibold : .regular).foregroundStyle(Neon.textPrimary)
+                    .lineLimit(1).truncationMode(.head).layoutPriority(1)
+                if !row.title.isEmpty {
+                    Text(verbatim: row.title).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: sz(4))
+                Text(verbatim: row.count).foregroundStyle(Neon.textSecondary).fixedSize()
+            }
+            .font(Neon.font(11))
+            .padding(.vertical, sz(2))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
         .accessibilityLabel(row.spoken)
     }
 }

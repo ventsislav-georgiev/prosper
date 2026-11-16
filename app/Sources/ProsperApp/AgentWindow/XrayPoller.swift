@@ -6,11 +6,13 @@ import AppKit
 // to another session cancels the read (the product runner SIGTERMs its dch); an ended session keeps its one open read.
 // #1381 (design 2.2 / 3.4): the Memory tab the same way every 30 s, sharing the one read in flight with Tasks.
 // #1389: Prompts and Responses from dch's chapters (`--xray <n> --json`) at the Tasks cadence, 5 s local, 15 s remote.
+// #1415 (gate A): the Refs tab reads that same `--json` every 30 s (Memory's cadence) while it is shown and live; a
+// Transcript pane keeps only its refs (its chapters are its own), a dch-chapters pane takes both.
 
 extension XrayPanelModel {
     /// Design 3.4 / 3.5: Tasks (#1389: and dch's chapters) 5 s for a local session, 15 s for a remote one; Memory 30 s
     /// (#1381, design 2.2).
-    var interval: TimeInterval { loaded && tab == .memory ? 30 : target.dir == nil ? 15 : 5 }
+    var interval: TimeInterval { loaded && (tab == .memory || tab == .refs) ? 30 : target.dir == nil ? 15 : 5 }
 
     /// One tick (the product's ticker fires each second; rows call it with an injected clock).
     func tick() {
@@ -21,12 +23,13 @@ extension XrayPanelModel {
         // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again
         // #1389: Prompts/Responses poll dch only on a dch-chapters pane whose read answered (a Transcript pane never)
         let prose = (tab == .prompts || tab == .responses) && dchChapters != nil && fromDch()
-        guard !loaded || s.live && (tab == .tasks || tab == .memory && memory != nil || prose) else { return }
+        let refsShown = tab == .refs && refs != nil   // #1415: only while Refs is the shown tab (gate A keeps it nil)
+        guard !loaded || s.live && (tab == .tasks || tab == .memory && memory != nil || prose || refsShown) else { return }
         guard now().timeIntervalSince(lastRead) >= interval else { return }
         // design 3.9: no Tasks retry until the dch path's mtime moves
         if failed, tab == .tasks, mtime(dch) == failedMtime { return }
         if tab == .tasks, tasksRefused { return }
-        if !loaded { readBoth() } else if tab == .memory { readMemory() } else if prose { readChapters(dch, run) }
+        if !loaded { readBoth() } else if tab == .memory { readMemory() } else if prose || refsShown { readChapters(dch, run) }
         else { readTasks(dch, run) }
     }
 
@@ -42,15 +45,16 @@ extension XrayPanelModel {
         }
     }
 
-    /// #1389: one chapters read (`--xray <n> --json`), labelled as Tasks' (takeChapters).
-    private func readChapters(_ dch: String, _ run: @escaping XrayPanels.Run) {
+    /// #1389: one chapters read (`--xray <n> --json`), labelled as Tasks' (takeChapters); #1415: a Transcript pane's
+    /// keeps the refs alone (takeRefs).
+    func readChapters(_ dch: String, _ run: @escaping XrayPanels.Run) {
         lastRead = now()
-        let env = target.env, a = target.chaptersArgs
+        let env = target.env, a = target.chaptersArgs, refsOnly = !fromDch()
         reading = Task { [weak self] in
             let r = await run(dch, a, env)
             guard !Task.isCancelled, let self else { return }
             self.reading = nil
-            self.takeChapters(r)
+            if refsOnly { self.takeRefs(r) } else { self.takeChapters(r) }
             self.landed()
         }
     }
@@ -63,6 +67,14 @@ extension XrayPanelModel {
         if unreached(r.status) { unreachable = true; return }
         unreachable = false
         dchChapters = r.status == 0 ? XrayChapters.parse(r.out) : nil
+        if XrayPanels.refsTab() { refs = r.status == 0 ? XrayRefs.parse(r.out) : nil }   // #1415: the same bytes
+    }
+
+    /// #1415: a Transcript pane's `--json` read: its refs only, by takeChapters' rules (4/7 keep the rows).
+    func takeRefs(_ r: (status: Int32, out: Data)) {
+        if unreached(r.status) { unreachable = true; return }
+        unreachable = false
+        refs = r.status == 0 ? XrayRefs.parse(r.out) : nil
     }
 
     /// #1381: one `--memory` read in `reading` (the tab switch's, the pending one, the 30 s poll). A host that did not
