@@ -1406,8 +1406,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions window: two PR chips with the same number from different owners (for example
   acme/api#12 and fork/api#12) now each open their own pull request.
 - Increase Contrast now also reaches the window-snap footprint, the layout palette and overlay, and
-  the autocomplete suggestion and button: their edges and text turn opaque, the palette backdrop
-  turns solid, and the footprint drops its blur.
+  the autocomplete suggestion and button: their edges turn opaque, the suggestion text gets darker
+  but stays lighter than typed text, the palette backdrop turns solid, and the footprint drops its
+  blur.
 - Agent Island: a line of dashes inside a command, a description or a question no longer cuts the
   prompt card short; the card now shows the dialog's title, description and question start that it
   used to hide.
