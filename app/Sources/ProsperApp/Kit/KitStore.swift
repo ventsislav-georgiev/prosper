@@ -592,6 +592,31 @@ struct KitStore: Sendable {
         return nil
     }
 
+    // #1409: kits/<ext-id>/runtime.json, Prosper's own file (0600): the machine state, so a relaunch keeps live/previous.
+    // Not layout.state: that dir is the kit's own KIT_STATE_DIR, written by kit tools.
+    static let runtimeStateName = "runtime.json"
+    static let runtimeStateSchema = 1
+    static let runtimeStateCap = 16 << 10
+    var runtimeStatePath: String { layout.root + "/" + Self.runtimeStateName }
+
+    private struct RuntimeStateFile: Codable {
+        var schema: Int
+        var state: KitUpdateState
+    }
+
+    /// nil when the file is missing, not a regular file, over the cap, not JSON or not this schema.
+    func readRuntimeState() -> KitUpdateState? {
+        guard let d = fs.read(runtimeStatePath, limit: Self.runtimeStateCap),
+              let f = try? JSONDecoder().decode(RuntimeStateFile.self, from: d), f.schema == Self.runtimeStateSchema else { return nil }
+        return f.state
+    }
+
+    func writeRuntimeState(_ s: KitUpdateState) throws {
+        try ensureLayout()
+        let data = try JSONEncoder().encode(RuntimeStateFile(schema: Self.runtimeStateSchema, state: s))
+        try replace(in: try fs.openDir(layout.root), Self.runtimeStateName, data, mode: Self.envMode, label: runtimeStatePath)
+    }
+
     /// The store's only remove: strictly inside kits/<ext-id>/, never a glob; a link is unlinked, never followed.
     /// Directory-relative from kits/<ext-id> opened O_NOFOLLOW: a link in place of a dir on the way is refused.
     func removeTree(_ path: String) throws {

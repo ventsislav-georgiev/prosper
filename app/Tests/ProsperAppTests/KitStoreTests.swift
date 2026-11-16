@@ -914,6 +914,31 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(list(s.path).filter { $0.contains(".prosper-") }, [], "no temp is left behind")
     }
 
+    /// #1409: runtime.json round-trips at 0600; a file over the cap, of another schema or not JSON reads as nil.
+    func testRuntimeStateRoundTripAndBounds() throws {
+        let (_, _, store) = try scene()
+        XCTAssertTrue(store.readRuntimeState() == nil, "no file")
+        var s = KitUpdateState(live: KitRef(version: "2.0.0", treeHash: Self.tree0, slug: "example-kit"))
+        s.previous = KitRef(version: "1.0.0", treeHash: Self.tree0, slug: "example-kit")
+        try store.writeRuntimeState(s)
+        XCTAssertEqual(store.runtimeStatePath, store.layout.root + "/runtime.json")
+        XCTAssertEqual(mode(store.runtimeStatePath), 0o600)
+        XCTAssertTrue(store.readRuntimeState() == s)
+        let good = try Data(contentsOf: URL(fileURLWithPath: store.runtimeStatePath))
+        let text = try XCTUnwrap(String(data: good, encoding: .utf8))
+        XCTAssertTrue(text.contains("\"schema\":1"), text)
+        let bad: [Data] = [Data(text.replacingOccurrences(of: "\"schema\":1", with: "\"schema\":2").utf8),
+                           good + Data(repeating: 0x20, count: KitStore.runtimeStateCap + 1 - good.count),
+                           Data("{ not json".utf8)]
+        for d in bad {
+            try d.write(to: URL(fileURLWithPath: store.runtimeStatePath))
+            XCTAssertTrue(store.readRuntimeState() == nil, String(decoding: d.prefix(80), as: UTF8.self))
+        }
+        // at the cap exactly it still reads
+        try (good + Data(repeating: 0x20, count: KitStore.runtimeStateCap - good.count)).write(to: URL(fileURLWithPath: store.runtimeStatePath))
+        XCTAssertTrue(store.readRuntimeState() == s)
+    }
+
     /// #1396: recordSlug writes through replace(in:). The existence check is made to see "missing" (a link that appears
     /// after it), so the write itself must refuse the link.
     func testRecordSlugRefusesALinkInPlaceOfKitEnv() throws {

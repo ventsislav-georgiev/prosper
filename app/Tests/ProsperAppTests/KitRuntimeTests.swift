@@ -281,8 +281,8 @@ final class KitRuntimeTests: XCTestCase {
         XCTAssertEqual(text(layout.bin + "/calm-note")?.contains(layout.live + "/tools/calm-note"), true)
     }
 
-    /// #1408 N1: a relaunch forgets the machine state, so an update looks like a first apply; its failed wiring must swap
-    /// back to the old copy the swap left at previous, never leave no live copy.
+    /// #1408 N1, #1409: a relaunch restores the machine state, so an update after it is a real update; its failed wiring
+    /// goes through the machine's own swapBack to the old copy (re-validated from live/ on disk), never leaves no live copy.
     func testAFailedUpdateAfterARelaunchKeepsTheOldCopyLive() async throws {
         let settingsURL = LockedURL()
         let e = try env(KitRTConsent(true, onAsk: { n in if n == 2, let u = settingsURL.value { try? Data("{ not json".utf8).write(to: u) } }))
@@ -295,18 +295,157 @@ final class KitRuntimeTests: XCTestCase {
         XCTAssertFalse(old.isEmpty)
         let shim = text(layout.bin + "/calm-note")
         let md = bytes(e.claudeMD)
-        let rt = try runtime(e) // the relaunch: no state
-        XCTAssertTrue(rt.current == nil)
+        let rt = try runtime(e) // the relaunch: the state comes back from runtime.json
+        XCTAssertEqual(rt.current?.live.version, "1.0.0")
         let r = try await rt.apply(source(e, version: "2.0.0", timeout: 20))
         XCTAssertEqual(e.consent.seen.count, 2)
         XCTAssertTrue(r.failures.first?.hasPrefix("applyWiring") == true, "\(r.failures)")
         XCTAssertEqual(r.failures.count, 1, "\(r.failures)")
+        XCTAssertEqual(r.state?.live.version, "1.0.0", "the machine swapped back, not a first apply's drop")
+        XCTAssertEqual(r.state?.previous?.version, "", "the retiring ref came back: the first apply's empty ref (#1408 N2)")
+        XCTAssertEqual(r.notes, [], "the old copy validated again from live/")
+        XCTAssertEqual(try runtime(e).current?.live.version, "1.0.0", "saved after the failed update")
         XCTAssertEqual(version(layout.live), "1.0.0", "the old copy is live again")
         XCTAssertEqual(snapshot(layout.live), old, "byte-identical")
         XCTAssertEqual(kind(layout.previous), .missing, "the failed new copy is gone")
         XCTAssertEqual(list(layout.staged), [])
         XCTAssertEqual(text(layout.bin + "/calm-note"), shim)
         XCTAssertEqual(bytes(e.claudeMD), md)
+    }
+
+    /// #1409: a new runtime over the same store sees live and previous, and its rollback works (the previous kit is
+    /// validated again from previous/ on disk); the rollback's state is saved too.
+    func testARelaunchKeepsLiveAndPreviousAndRollsBack() async throws {
+        let e = try env()
+        let first = try runtime(e)
+        let layout = first.store.layout
+        let ext = try source(e, version: "1.0.0")
+        _ = await first.apply(ext)
+        XCTAssertEqual(try runtime(e).current?.live.version, "1.0.0", "a first apply is saved")
+        let up = try await first.apply(source(e, version: "2.0.0", timeout: 20))
+        XCTAssertEqual(up.failures, [])
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: layout.root + "/runtime.json")[.posixPermissions] as? Int, 0o600)
+        let rt = try runtime(e) // the relaunch
+        XCTAssertTrue(rt.restoreRefusal == nil)
+        XCTAssertEqual(rt.current?.live.version, "2.0.0")
+        XCTAssertEqual(rt.current?.previous?.version, "1.0.0")
+        XCTAssertEqual(rt.current?.phase, .idle)
+        let three = try source(e, version: "3.0.0")
+        let updatable = await rt.updateAvailable(three)
+        XCTAssertTrue(updatable)
+        let back = await rt.rollback(ext)
+        XCTAssertTrue(back.refused == nil, "\(String(describing: back.refused))")
+        XCTAssertEqual(back.failures, [])
+        XCTAssertEqual(back.notes, [])
+        XCTAssertEqual(back.state?.live.version, "1.0.0")
+        XCTAssertEqual(version(layout.live), "1.0.0")
+        XCTAssertEqual(version(layout.previous), "2.0.0")
+        XCTAssertEqual(try kitHookTimeout(e), 10)
+        XCTAssertEqual(text(layout.bin + "/calm-note")?.contains(layout.live + "/tools/calm-note"), true)
+        let again = try runtime(e) // a second relaunch sees the rollback
+        XCTAssertEqual(again.current?.live.version, "1.0.0")
+        XCTAssertEqual(again.current?.previous?.version, "2.0.0")
+    }
+
+    /// #1409: a corrupt, over-cap or wrong-schema runtime.json is refused: nothing applied, nothing run from it, nothing
+    /// written, and the refusal is what rollback / remove / repair answer.
+    func testABadStateFileIsRefused() async throws {
+        let e = try env()
+        let first = try runtime(e)
+        let layout = first.store.layout
+        let ext = try source(e, version: "1.0.0")
+        _ = await first.apply(ext)
+        let path = layout.root + "/runtime.json"
+        let good = try XCTUnwrap(bytes(URL(fileURLWithPath: path)))
+        let goodText = String(decoding: good, as: UTF8.self)
+        XCTAssertTrue(goodText.contains("\"schema\":1"), goodText)
+        let bad: [(String, Data)] = [
+            ("corrupt", Data("{ not json".utf8)),
+            ("over the cap", Data(good) + Data(repeating: 0x20, count: KitStore.runtimeStateCap + 1 - good.count)),
+            ("wrong schema", Data(goodText.replacingOccurrences(of: "\"schema\":1", with: "\"schema\":2").utf8))]
+        for (label, d) in bad {
+            try d.write(to: URL(fileURLWithPath: path))
+            let (md, st, live, bin, seen) = (bytes(e.claudeMD), bytes(e.settings), snapshot(layout.live), snapshot(layout.bin), e.consent.seen.count)
+            let rt = try runtime(e)
+            XCTAssertTrue(rt.current == nil, label)
+            XCTAssertTrue(rt.restoreRefusal?.hasPrefix("kit state") == true, "\(label): \(String(describing: rt.restoreRefusal))")
+            let rb = await rt.rollback(ext)
+            XCTAssertEqual(rb.refused, rt.restoreRefusal, label)
+            let rm = await rt.remove(ext)
+            XCTAssertEqual(rm.refused, rt.restoreRefusal, label)
+            let rp = await rt.repair(ext)
+            XCTAssertEqual(rp.refused, rt.restoreRefusal, label)
+            XCTAssertEqual(rt.status(ext)?.live, nil, label)
+            XCTAssertEqual(e.consent.seen.count, seen, label)
+            XCTAssertEqual(bytes(e.claudeMD), md, label)
+            XCTAssertEqual(bytes(e.settings), st, label)
+            XCTAssertEqual(snapshot(layout.live), live, label)
+            XCTAssertEqual(snapshot(layout.bin), bin, label)
+            XCTAssertEqual(bytes(URL(fileURLWithPath: path)).map { Data($0) }, d, "\(label): the file is left as found")
+        }
+    }
+
+    /// #1409: a state naming a live copy that is gone on disk is refused the same way.
+    func testAStateWhoseLiveDirIsGoneIsRefused() async throws {
+        let e = try env()
+        let first = try runtime(e)
+        let layout = first.store.layout
+        let ext = try source(e, version: "1.0.0")
+        _ = await first.apply(ext)
+        try FileManager.default.moveItem(atPath: layout.live, toPath: e.root.appendingPathComponent("moved-live").path)
+        let (md, st, seen) = (bytes(e.claudeMD), bytes(e.settings), e.consent.seen.count)
+        let rt = try runtime(e)
+        XCTAssertTrue(rt.current == nil)
+        XCTAssertTrue(rt.restoreRefusal?.contains("\(layout.live) is gone") == true, "\(String(describing: rt.restoreRefusal))")
+        let rb = await rt.rollback(ext)
+        XCTAssertEqual(rb.refused, rt.restoreRefusal)
+        let rp = await rt.repair(ext)
+        XCTAssertEqual(rp.refused, rt.restoreRefusal)
+        XCTAssertEqual(e.consent.seen.count, seen)
+        XCTAssertEqual(bytes(e.claudeMD), md)
+        XCTAssertEqual(bytes(e.settings), st)
+        XCTAssertEqual(kind(layout.live), .missing)
+    }
+
+    /// QA R1408-i1: a failed first apply forgets the slug it recorded, so a kit renamed before its retry applies under the
+    /// new name; the runner script stays (the next apply rewrites it).
+    func testAFailedFirstApplyForgetsItsSlug() async throws {
+        let settingsURL = LockedURL()
+        let e = try env(KitRTConsent(true, onAsk: { n in if n == 1, let u = settingsURL.value { try? Data("{ not json".utf8).write(to: u) } }))
+        settingsURL.value = e.settings
+        let rt = try runtime(e)
+        let layout = rt.store.layout
+        let r = try await rt.apply(source(e, version: "1.0.0"))
+        XCTAssertTrue(r.failures.first?.hasPrefix("applyWiring") == true, "\(r.failures)")
+        XCTAssertEqual(r.failures.count, 1, "\(r.failures)")
+        XCTAssertTrue(rt.store.recordedSlug() == nil, "the attempt's slug is not kept")
+        XCTAssertEqual(kind(layout.kitEnv), .missing)
+        XCTAssertNotEqual(kind(layout.runner), .missing, "the runner script stays")
+        try Data(Self.userSettings.utf8).write(to: e.settings)
+        let again = try await rt.apply(source(e, name: "calm-agent-two", version: "1.0.0"))
+        XCTAssertEqual(again.failures, [])
+        XCTAssertTrue(again.state?.lastRefusal == nil, "\(String(describing: again.state?.lastRefusal))")
+        XCTAssertEqual(version(layout.live), "1.0.0")
+        XCTAssertEqual(text(layout.kitEnv)?.hasPrefix("KIT_SLUG='calm-agent-two'\n"), true)
+        XCTAssertEqual(try runtime(e).current?.live.slug, "calm-agent-two")
+    }
+
+    /// #1408 N5, #1409: a crash-leftover previous/ with no state is never promoted to live by a failed first apply: the new
+    /// copy is dropped and the leftover stays where it was, untouched.
+    func testAFailedFirstApplyNeverPromotesALeftoverPrevious() async throws {
+        let settingsURL = LockedURL()
+        let e = try env(KitRTConsent(true, onAsk: { n in if n == 1, let u = settingsURL.value { try? Data("{ not json".utf8).write(to: u) } }))
+        let rt = try runtime(e)
+        let layout = rt.store.layout
+        try rt.store.ensureLayout()
+        try FileManager.default.createDirectory(atPath: layout.previous, withIntermediateDirectories: false)
+        try Data("leftover\n".utf8).write(to: URL(fileURLWithPath: layout.previous + "/marker"))
+        settingsURL.value = e.settings
+        let r = try await rt.apply(source(e, version: "1.0.0"))
+        XCTAssertTrue(r.failures.first?.hasPrefix("applyWiring") == true, "\(r.failures)")
+        XCTAssertEqual(r.state?.live.version, "")
+        XCTAssertEqual(kind(layout.live), .missing, "nothing promoted to live")
+        XCTAssertEqual(text(layout.previous + "/marker"), "leftover\n")
     }
 
     /// #1408 N2: a rollback right after a good first apply has nothing to roll back to and changes nothing.

@@ -44,6 +44,24 @@ struct KitApprovedConsent: ManagedConfigConsent {
     }
 }
 
+/// #1409: the validator over a rendered copy. A rendered `*.md` has the local.md import as an absolute path, which the
+/// validator would not count; that one line reads back as KitValidator.localImportLine. Everything else is the disk's.
+/// shortcut: only the exact `@{{kit_config}}/local.md` spelling reads back; another spelling of it fails the re-validation
+/// (reported, nothing applied from it); store the validated kit instead if a kit needs one.
+struct KitRenderedReader: KitFileReader {
+    let importLine: String
+    var base = KitPOSIXFileReader()
+
+    func kind(_ path: String) -> KitFileKind { base.kind(path) }
+    func names(_ dir: String) -> [String]? { base.names(dir) }
+    func realPath(_ path: String) -> String? { base.realPath(path) }
+    func contents(_ path: String) -> Data? {
+        let d = base.contents(path)
+        guard KitRender.isRendered(path), let data = d, let text = String(data: data, encoding: .utf8) else { return d }
+        return Data(text.replacingOccurrences(of: importLine, with: KitValidator.localImportLine).utf8)
+    }
+}
+
 enum KitRuntimeError: Error, Equatable {
     case notValidated(String)
     case wiring(String)
@@ -63,13 +81,17 @@ final class KitRuntime: @unchecked Sendable {
     let now: @Sendable () -> Date
 
     private let lock = NSLock()
-    // shortcut: the machine state and the validated kits live in memory only, so a relaunch forgets live/previous; persist
-    // them beside pieces.json when #918 gives the runtime a lifetime longer than one session.
+    // #1409: the machine state persists in kits/<ext-id>/runtime.json (written at the end of every drive that changes it);
+    // the validated kits are not stored: they are re-validated from their dirs on disk (restoreKits) at the next call.
     private var state: KitUpdateState?
     private var kits: [String: KitValidated] = [:] // by version: live, previous, retiring and staged only
     private var consentAnswer = false
     private var approved: ManagedConfigChangeSet?
     private var wiring: String? // nil: the last wiring landed
+    private var sluggedHere = false // this drive's shims step wrote kit.env's first KIT_SLUG (QA R1408-i1)
+    /// Why the persisted state was not restored at init (nil: restored, or no file). The runtime then starts with nothing
+    /// applied, and every call that needs an applied kit is refused with this text.
+    let restoreRefusal: String?
 
     init(provider: ManagedConfigProvider, store: KitStore, isTrusted: @escaping @Sendable (String) -> Bool,
          now: @escaping @Sendable () -> Date = { Date() }) {
@@ -77,6 +99,53 @@ final class KitRuntime: @unchecked Sendable {
         self.store = store
         self.isTrusted = isTrusted
         self.now = now
+        switch Self.restore(store) {
+        case .success(let s): state = s; restoreRefusal = nil
+        case .failure(let why): state = nil; restoreRefusal = why.text
+        }
+    }
+
+    /// The persisted state, or why it is refused. Missing file: nothing applied (no refusal). Outside data: every ref
+    /// must be a valid version and tree, and the dir of each applied ref (live, previous, retiring) must be on disk.
+    private static func restore(_ store: KitStore) -> Result<KitUpdateState?, KitRuntimeError> {
+        guard store.fs.kind(store.runtimeStatePath) != .missing else { return .success(nil) }
+        guard let s = store.readRuntimeState() else {
+            return .failure(.refused("kit state \(store.runtimeStatePath): unreadable, over \(KitStore.runtimeStateCap) bytes or not schema \(KitStore.runtimeStateSchema): nothing applied"))
+        }
+        let refs: [(KitRef?, String?)] = [(s.live, store.layout.live), (s.previous, store.layout.previous),
+                                          (s.retiring, store.layout.root + "/retiring"), (s.staged, nil)]
+        for case let (ref?, dir) in refs where !ref.version.isEmpty {
+            guard KitStore.isValidVersion(ref.version), KitStore.isTree(ref.treeHash) else {
+                return .failure(.refused("kit state \(store.runtimeStatePath): a bad version or tree: nothing applied"))
+            }
+            if let dir, store.fs.kind(dir) != .directory {
+                return .failure(.refused("kit state \(store.runtimeStatePath): \(dir) is gone: nothing applied"))
+            }
+        }
+        return .success(s)
+    }
+
+    /// After a relaunch: live, previous and retiring are validated again from their dirs on disk, each once. The copy on
+    /// disk is RENDERED, so the reader turns the rendered local.md import line back into its placeholder form; the
+    /// source (market / local) and the other kits' slugs were checked at the apply and are not known here (.local, []).
+    private func restoreKits(_ ext: LoadedExtension, host: String) -> [String] {
+        guard let s = current else { return [] }
+        var notes: [String] = []
+        let refs: [(KitRef?, String)] = [(s.live, store.layout.live), (s.previous, store.layout.previous),
+                                         (s.retiring, store.layout.root + "/retiring")]
+        for case let (ref?, dir) in refs where !ref.version.isEmpty && kit(ref.version) == nil {
+            let reader = KitRenderedReader(importLine: "@" + KitRender.escapeImport(context(ref.slug).kitConfig) + "/local.md")
+            guard let m = (try? ExtensionLoader.load(directory: URL(fileURLWithPath: dir, isDirectory: true), isSystem: false,
+                                                     hostVersion: host))?.manifest,
+                  m.extension.id == ext.manifest.extension.id, m.extension.version == ref.version,
+                  case .ok(let v) = store.validate(KitStaged(version: ref.version, tree: ref.treeHash, path: dir, source: ""),
+                                                   manifest: m, source: .local, otherKitSlugs: [], reader: reader) else {
+                notes.append("kit \(ref.version) at \(dir): not validated again")
+                continue
+            }
+            lock.withLock { kits[v.version] = v }
+        }
+        return notes
     }
 
     var current: KitUpdateState? { lock.withLock { state } }
@@ -145,8 +214,11 @@ final class KitRuntime: @unchecked Sendable {
         var s = current ?? KitUpdateState(live: KitRef(version: "", treeHash: "", slug: meta.name)) // first apply: no live yet
         s.live.slug = kitSlug(meta.name)
         let host = await ExtensionRegistry.bundleVersion
+        let restored = restoreKits(ext, host: host)
         let runner = KitEffectRunner(store: store, handlers: handlers(ext, source: source, cap: cap, others: otherKitSlugs, host: host), now: now)
-        return await drive(s, .staged(version: meta.version, treeHash: tree, slug: meta.name, publisher: nil), ext, config, runner)
+        var r = await drive(s, .staged(version: meta.version, treeHash: tree, slug: meta.name, publisher: nil), ext, config, runner)
+        r.notes = restored + r.notes
+        return r
     }
 
     /// Reported only: the caller decides whether to call apply.
@@ -163,10 +235,12 @@ final class KitRuntime: @unchecked Sendable {
         case .success(let c): config = c
         case .failure(let why): return KitRuntimeResult(refused: why.text)
         }
-        guard let s = current else { return KitRuntimeResult(refused: "nothing applied") }
+        guard let s = current else { return KitRuntimeResult(refused: restoreRefusal ?? "nothing applied") }
         let host = await ExtensionRegistry.bundleVersion
+        let restored = restoreKits(ext, host: host)
         let runner = KitEffectRunner(store: store, handlers: handlers(ext, source: .local, cap: KitStore.localByteCap, others: [], host: host), now: now)
         var r = await drive(s, .rollbackRequested, ext, config, runner)
+        r.notes = restored + r.notes
         if r.state?.lastRefusal == .noRollbackCopy { r.refused = "nothing to roll back to" } // #1408 N2
         return r
     }
@@ -188,6 +262,7 @@ final class KitRuntime: @unchecked Sendable {
             consent: { [self] _ in lock.withLock { consentAnswer } },
             shims: { [self] ref in
                 guard let v = kit(ref.version) else { throw KitRuntimeError.notValidated(ref.version) }
+                if store.recordedSlug() == nil { lock.withLock { sluggedHere = true } } // QA R1408-i1: this attempt records it
                 _ = try store.recordSlug(v.slug) // E-2: the first apply records it; later the recorded one stays
                 try store.installRunner()
                 let c = context(v.slug)
@@ -213,6 +288,7 @@ final class KitRuntime: @unchecked Sendable {
         var out = KitRuntimeResult()
         var s = start
         var pending = [first]
+        lock.withLock { sluggedHere = false }
         var steps = 0
         while !pending.isEmpty, steps < 32 {
             steps += 1
@@ -235,11 +311,21 @@ final class KitRuntime: @unchecked Sendable {
             if let f = r.failure { out.failures.append(f) }
         }
         let keep = Set([s.live.version, s.previous?.version, s.retiring?.version, s.staged?.version].compactMap { $0 })
-        lock.withLock {
+        let slugged = lock.withLock { () -> Bool in
             state = s
             kits = kits.filter { keep.contains($0.key) }
             approved = nil
             wiring = nil
+            defer { sluggedHere = false }
+            return sluggedHere
+        }
+        // QA R1408-i1: a failed first apply (live is the empty ref again) forgets the slug it recorded, so a renamed kit's
+        // retry records its own; the runner script and the seeds stay (the next apply rewrites them).
+        if slugged, s.live.version.isEmpty {
+            do { try store.removeTree(store.layout.kitEnv) } catch { out.failures.append("kit.env: \(error)") }
+        }
+        if s != start { // #1409: every drive that changes the state (apply, update, rollback, a failed one too)
+            do { try store.writeRuntimeState(s) } catch { out.failures.append("runtime.json: \(error)") }
         }
         out.state = s
         return out
@@ -299,8 +385,10 @@ final class KitRuntime: @unchecked Sendable {
         case .success(let c): config = c
         case .failure(let why): return KitRuntimeResult(refused: why.text)
         }
-        guard let live = current?.live.version, let v = kit(live) else { return KitRuntimeResult(refused: "nothing applied") }
-        var out = KitRuntimeResult(state: current)
+        let host = await ExtensionRegistry.bundleVersion
+        let notes = restoreKits(ext, host: host) // #1409: after a relaunch
+        guard let live = current?.live.version, let v = kit(live) else { return KitRuntimeResult(refused: restoreRefusal ?? "nothing applied", notes: notes) }
+        var out = KitRuntimeResult(state: current, notes: notes)
         let r = await config.remove(owner: owner(ext, v, dir: store.layout.live), ids: ids)
         out.config = r
         guard r.ok else { return out }
@@ -317,8 +405,10 @@ final class KitRuntime: @unchecked Sendable {
         case .success(let c): config = c
         case .failure(let why): return KitRuntimeResult(refused: why.text)
         }
-        guard let live = current?.live.version, let v = kit(live) else { return KitRuntimeResult(refused: "nothing applied") }
-        var out = KitRuntimeResult(state: current)
+        let host = await ExtensionRegistry.bundleVersion
+        let notes = restoreKits(ext, host: host) // #1409: after a relaunch
+        guard let live = current?.live.version, let v = kit(live) else { return KitRuntimeResult(refused: restoreRefusal ?? "nothing applied", notes: notes) }
+        var out = KitRuntimeResult(state: current, notes: notes)
         let p = plan(v)
         let r = await config.repair(p.pieces, owner: owner(ext, v, dir: store.layout.live))
         out.config = r

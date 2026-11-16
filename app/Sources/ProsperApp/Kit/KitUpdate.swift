@@ -12,23 +12,23 @@ import Foundation
 // swap in the store step and cannot fail half way, so it has no answer and no failure edge.
 // A shims or wiring failure on a FIRST apply (previous is the runtime's empty ref) answers dropLive, never swapBack (#1408).
 
-struct KitRef: Hashable, Sendable {
+struct KitRef: Hashable, Sendable, Codable {
     var version: String
     var treeHash: String
     var slug: String
 }
 
-enum KitUpdatePhase: Hashable, Sendable {
+enum KitUpdatePhase: Hashable, Sendable, Codable {
     case idle, validating, rendering, consenting, swapping, shims, wiring, rollingBack
 }
 
-enum KitUpdateRefusal: Hashable, Sendable {
+enum KitUpdateRefusal: Hashable, Sendable, Codable {
     case slugChanged, publisherChanged, validation, consentDenied, render, shims
     /// a rollback asked while previous is the runtime's empty ref (right after a first apply): nothing to roll back to
     case noRollbackCopy
 }
 
-struct KitUpdateState: Hashable, Sendable {
+struct KitUpdateState: Hashable, Sendable, Codable {
     var live: KitRef
     var staged: KitRef? = nil
     var previous: KitRef? = nil
