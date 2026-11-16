@@ -1,4 +1,5 @@
 import Darwin
+import Darwin.membership
 import Foundation
 import XCTest
 @testable import ProsperApp
@@ -567,7 +568,7 @@ final class KitStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.swapBack(), "nothing to swap back to")
         try stageMarked(store, f.root, "1.0.0")
         try store.swap(version: "1.0.0", tree: Self.tree0)
-        XCTAssertThrowsError(try store.swapBack()) { XCTAssertEqual($0 as? KitStoreError, .notADirectory(store.layout.previous)) }
+        XCTAssertThrowsError(try store.swapBack()) { XCTAssertEqual($0 as? KitStoreError, .rollbackCopyGone) }
         XCTAssertEqual(marker(store.layout.live), "1.0.0")
         try stageMarked(store, f.root, "1.0.1")
         try store.swap(version: "1.0.1", tree: Self.tree0)
@@ -849,6 +850,53 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(text(store.layout.bin + "/alpha"), shim(c, "alpha").text)
         let temps = (list(store.layout.root) + list(store.layout.bin)).filter { $0.contains(".prosper-") && $0 != ".prosper-shims" }
         XCTAssertEqual(temps, [], "no temp is left behind")
+    }
+
+    /// R1391-s1 (QA r1322): kit.env keeps mode 0600 but an access list (set in process on the row's own file, no chflags)
+    /// denies writing its data to the current user: only faccessat(AT_EACCESS) sees that; a mode-bit check would not.
+    func testReplaceRefusedByAnACLDenyWhileTheModeAllowsIt() throws {
+        let (_, home, store) = try scene()
+        let c = context(home, store)
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        try store.writeKitEnv(c)
+        let env = store.layout.kitEnv
+        let before = text(env)
+        var who = [UInt8](repeating: 0, count: 16)
+        XCTAssertEqual(mbr_uid_to_uuid(geteuid(), &who), 0)
+        var acl: acl_t? = acl_init(1)
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        var entry: acl_entry_t?
+        var perms: acl_permset_t?
+        XCTAssertEqual(acl_create_entry(&acl, &entry), 0)
+        XCTAssertEqual(acl_set_tag_type(entry, ACL_EXTENDED_DENY), 0)
+        XCTAssertEqual(who.withUnsafeBytes { acl_set_qualifier(entry, $0.baseAddress) }, 0)
+        XCTAssertEqual(acl_get_permset(entry, &perms), 0)
+        XCTAssertEqual(acl_add_perm(perms, ACL_WRITE_DATA), 0)
+        XCTAssertEqual(acl_set_permset(entry, perms), 0)
+        guard acl_set_file(env, ACL_TYPE_EXTENDED, acl) == 0 else { return XCTFail("acl_set_file: errno \(errno)") }
+        XCTAssertEqual(mode(env), 0o600, "the mode still allows the owner to write")
+        XCTAssertTrue(hasACL(env))
+        XCTAssertEqual(faccessat(AT_FDCWD, env, W_OK, AT_EACCESS), -1, "the kernel says no")
+        var other = c
+        other.kitDir = "/Users/example/other-kit"
+        XCTAssertThrowsError(try store.writeKitEnv(other)) { XCTAssertEqual($0 as? KitStoreError, .notWritable(env)) }
+        XCTAssertEqual(text(env), before)
+        XCTAssertEqual(mode(env), 0o600)
+        XCTAssertTrue(hasACL(env), "the deny entry stays")
+        XCTAssertEqual(list(store.layout.root).filter { $0.contains(".prosper-") }, [], "no temp is left behind")
+    }
+
+    /// R1391-s2 (QA r1322): a shim renamed by case only ("Tool" -> "tool") is the same file on APFS: never stale, never
+    /// removed after it is written; the record then holds the new name.
+    func testShimRenamedByCaseOnlyIsKept() throws {
+        let (_, home, store) = try scene()
+        let c = context(home, store)
+        XCTAssertEqual(try store.writeShims([shim(c, "Tool")]), [])
+        XCTAssertEqual(text(store.layout.bin + "/.prosper-shims"), "Tool\n")
+        XCTAssertEqual(try store.writeShims([shim(c, "tool", script: "other.sh")]), [])
+        XCTAssertEqual(text(store.layout.bin + "/tool"), shim(c, "tool", script: "other.sh").text)
+        XCTAssertEqual(list(store.layout.bin).map { $0.lowercased() }, [".prosper-shims", "tool"])
+        XCTAssertEqual(text(store.layout.bin + "/.prosper-shims"), "tool\n")
     }
 
     private func aged(_ path: String, _ date: Date) throws {

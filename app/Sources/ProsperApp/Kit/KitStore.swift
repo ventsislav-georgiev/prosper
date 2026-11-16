@@ -40,7 +40,32 @@ enum KitStoreError: Error, Equatable, Sendable {
     case envText(String)
     /// no slug recorded yet (recordSlug comes first): kit.env and .settings.env need it
     case noSlug
+    /// swapBack found no previous: there is nothing to roll back to (never reported as a success)
+    case rollbackCopyGone
     case io(String, Int32)
+}
+
+extension KitStoreError: LocalizedError {
+    var errorDescription: String? { self == .rollbackCopyGone ? "the rollback copy is gone" : nil }
+}
+
+/// #1393 (kit917k L2'): which step of KitStore.swap threw, so the effect runner can tell "nothing changed" from "live is new".
+enum KitSwapStep: Hashable, Sendable {
+    /// removing a stale incoming or retiring: nothing of live, previous or the staged copy moved
+    case prepare
+    /// staged/<v>+<t> -> incoming: the staged copy is still staged
+    case toIncoming
+    /// previous -> retiring: previous is still previous
+    case retire
+    /// the stamp, then the RENAME_SWAP (or the first apply's incoming -> live): live is the OLD one; previous may sit at retiring
+    case exchange
+    /// incoming (the old live) -> previous, AFTER the RENAME_SWAP: live is the NEW one
+    case keepOld
+}
+
+struct KitSwapError: Error, Equatable, Sendable {
+    var step: KitSwapStep
+    var error: KitStoreError
 }
 
 /// The directory-stream seam (rider R917-s2a-q2): a row can make readdir fail part-way.
@@ -95,8 +120,14 @@ protocol KitDir: AnyObject {
     func rename(_ name: String, to other: any KitDir, _ newName: String, swap: Bool) throws
     /// faccessat(W_OK, effective ids) on the child
     func writable(_ name: String) -> Bool
+    /// the child's inode (no follow): a rename keeps it; nil when it cannot be read
+    func identity(_ name: String) -> UInt64?
     /// atomic: a new `.<name>.prosper-<UUID>` (O_EXCL | O_NOFOLLOW, exactly `mode`, no ACL, fsync'd), then renameat over `name`
     func write(_ name: String, _ data: Data, mode: mode_t) throws
+}
+
+extension KitDir {
+    func identity(_ name: String) -> UInt64? { nil }
 }
 
 final class KitPOSIXDir: KitDir {
@@ -166,6 +197,8 @@ final class KitPOSIXDir: KitDir {
     }
 
     func writable(_ name: String) -> Bool { Self.isName(name) && faccessat(fd, name, W_OK, AT_EACCESS) == 0 }
+
+    func identity(_ name: String) -> UInt64? { lstatAt(name).map { UInt64($0.st_ino) } }
 
     func write(_ name: String, _ data: Data, mode: mode_t) throws {
         guard Self.isName(name) else { throw KitStoreError.badName(path) }
@@ -603,6 +636,8 @@ struct KitStore: Sendable {
     /// becomes `retiring` (the machine's retiring, KitUpdate .swapped) until dropRetiring or restoreRetiring. On the first
     /// apply (no live yet) incoming -> live never replaces anything (RENAME_EXCL). A stale incoming or retiring is removed
     /// first by the store's own remove, by its literal name. Every step is relative to kits/<ext-id> opened O_NOFOLLOW.
+    /// #1393: a throw after the checks is a KitSwapError naming the step. Before the RENAME_SWAP the stamp `.swap-incoming`
+    /// records the inode of the NEW copy (at incoming), so `recoverIncoming` can tell which copy a crash left at incoming.
     func swap(version: String, tree: String) throws {
         guard Self.isValidVersion(version) else { throw KitStoreError.badVersion }
         guard Self.isTree(tree) else { throw KitStoreError.badTree }
@@ -617,15 +652,46 @@ struct KitStore: Sendable {
         case .symlink: throw KitStoreError.link(layout.live)
         default: throw KitStoreError.notADirectory(layout.live)
         }
-        try removeEntry(root, "incoming")
-        try removeEntry(root, "retiring") // always: the machine's retiring after this swap is the current previous or none
-        try staged.rename(name, to: root, "incoming", swap: false)
-        guard live == .directory else { return try root.rename("incoming", to: root, "live", swap: false) }
-        if root.kind("previous") != .missing {
-            try root.rename("previous", to: root, "retiring", swap: false)
+        func at(_ step: KitSwapStep, _ body: () throws -> Void) throws {
+            do { try body() } catch { throw KitSwapError(step: step, error: error as? KitStoreError ?? .io("swap", EIO)) }
         }
-        try root.rename("incoming", to: root, "live", swap: true)
-        try root.rename("incoming", to: root, "previous", swap: false) // the old live, now at incoming
+        try at(.prepare) {
+            try removeEntry(root, "incoming")
+            try removeEntry(root, "retiring") // always: the machine's retiring after this swap is the current previous or none
+        }
+        try at(.toIncoming) { try staged.rename(name, to: root, "incoming", swap: false) }
+        guard live == .directory else { return try at(.exchange) { try root.rename("incoming", to: root, "live", swap: false) } }
+        if root.kind("previous") != .missing {
+            try at(.retire) { try root.rename("previous", to: root, "retiring", swap: false) }
+        }
+        try at(.exchange) {
+            if let ino = root.identity("incoming") { try root.write(Self.swapStamp, Data("\(ino)\n".utf8), mode: Self.envMode) }
+            try root.rename("incoming", to: root, "live", swap: true)
+        }
+        try at(.keepOld) { try root.rename("incoming", to: root, "previous", swap: false) } // the old live, now at incoming
+        try? root.remove(Self.swapStamp, dir: false)
+    }
+
+    static let swapStamp = ".swap-incoming"
+
+    /// L2'' / QA r1252 rider (1): a crash (or a throw) after the RENAME_SWAP left the OLD live at incoming and no previous.
+    /// When the stamp's inode is live's (the swap happened) and previous is missing, incoming -> previous (RENAME_EXCL).
+    /// Any other incoming (the NEW copy, a crash before the swap) is left for the next swap's own first step. The stamp goes
+    /// after the check. Returns whether it moved incoming.
+    @discardableResult
+    func recoverIncoming() throws -> Bool {
+        guard fs.kind(layout.root) != .missing else { return false }
+        let root = try fs.openDir(layout.root)
+        guard root.kind(Self.swapStamp) != .missing else { return false }
+        let text = root.read(Self.swapStamp, limit: 64).flatMap { String(data: $0, encoding: .utf8) }
+        var moved = false
+        if let ino = text.flatMap({ UInt64($0.trimmingCharacters(in: .newlines)) }), root.identity("live") == ino,
+           root.kind("incoming") == .directory, root.kind("previous") == .missing {
+            try root.rename("incoming", to: root, "previous", swap: false)
+            moved = true
+        }
+        try root.remove(Self.swapStamp, dir: false)
+        return moved
     }
 
     /// The machine's dropPrevious after wiringApplied: the retiring copy goes. None there: nothing to do.
@@ -647,6 +713,7 @@ struct KitStore: Sendable {
     func swapBack() throws {
         let root = try fs.openDir(layout.root)
         try Self.requireDir(root, "live", label: layout.live)
+        guard root.kind("previous") != .missing else { throw KitStoreError.rollbackCopyGone }
         try Self.requireDir(root, "previous", label: layout.previous)
         try root.rename("previous", to: root, "live", swap: true)
     }
