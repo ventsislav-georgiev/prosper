@@ -6806,3 +6806,49 @@ extension AgentIslandControlsTests {
         settle(c)
     }
 }
+
+extension AgentIslandControlsTests {
+    /// #1320 (QA #535 INFO c): with the island's own History tab open, a session that ends re-reads History once,
+    /// so "Resume interrupted (n)" counts its record at once, with no tab click (the store's count, a pinned clock).
+    @MainActor
+    func testASessionEndingWhileTheHistoryTabIsOpenRecountsResumeInterrupted() {
+        let f = FakeProc(), reads = Reads(), dir = tempDir(), path = dir.path
+        func crashed(_ name: String) -> DchHistoryRecord {
+            DchHistoryRecord(key: AgentSessionKey(dir: path, name: name), cwd: "/src", started: 1000, updated: 2000,
+                             ended: 2000, end: "signal 9")
+        }
+        reads.records = [crashed("x")]
+        let c = controller(f, reads, dirs: [path])
+        c.store = nil
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        let g = notched
+        c.currentGeometry = { g }
+        c.makePoller = { Self.sockPoller(path) }
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        func sock(_ name: String, _ on: Bool) {
+            let url = dir.appendingPathComponent("\(name).sock")
+            if on { FileManager.default.createFile(atPath: url.path, contents: nil) } else { try? FileManager.default.removeItem(at: url) }
+        }
+        sock("a", true)
+        sock("b", true)
+        c.extLive = true
+        c.reload()
+        settle(c) { c.store?.sessions.count == 2 && c.store?.history.isEmpty == false }
+        c.store?.now = { 3000 }
+        c.setExpanded(true)
+        c.showHistory()
+        settle(c)
+        XCTAssertEqual(c.store?.historyTab, true)
+        XCTAssertEqual(c.store?.resumableCount, 1, "x only")
+        let before = reads.count
+        reads.lock.withLock { reads.records = [crashed("b"), crashed("x")] }
+        sock("b", false)
+        settle(c) { c.store?.sessions.count == 1 }
+        settle(c) { reads.count == before + 1 }
+        XCTAssertEqual(c.store?.sessions.map(\.name), ["a"])
+        XCTAssertEqual(reads.count, before + 1, "the one that left, once")
+        XCTAssertEqual(c.store?.resumableCount, 2, "b's record counts while the tab stays open")
+        XCTAssertEqual(f.args, [], "reads only, no verb")
+    }
+}

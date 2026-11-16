@@ -312,7 +312,10 @@ extension AgentIsland {
     /// #719: `exact` (dch 1.28.2): `<file>.json`, this one record file.
     static func reviveArgs(_ r: DchHistoryRecord, live: Set<String>, records: Set<String>,
                            noMessage: Bool = false, exact: Bool = false) -> [String]? {
-        let tail = (noMessage ? ["--no-message"] : []) + ["--json"], arg = r.editTarget(exact: exact)
+        // #1320 (QA #535 INFO a): dch refuses `<file>.json` as ambiguous when that is another session's name (rec_arg,
+        // dch.c:11204-11207 at v1.76.0); the plain target names this record there too (the name's newest, or an aside file).
+        let ambiguous = exact && live.union(records).contains(r.file + ".json")
+        let tail = (noMessage ? ["--no-message"] : []) + ["--json"], arg = ambiguous ? r.target : r.editTarget(exact: exact)
         guard let new = reviveAs(r, live: live, records: records) else { return named("--revive", [arg], tail) }
         return named("--revive", [arg], ["--as", new] + tail)
     }
@@ -554,10 +557,18 @@ extension AgentIsland {
     static let ambiguousText = "another session's name matches its record file"
 
     /// #719 L-1: dch 1.28.2's skip detail ends "(record <file>)"; that file, else nil.
+    /// #1320 (QA #535 INFO b): the file is the record's (rv_say's `name`): itself or `<name>.<ended>`, and either can
+    /// hold " (record ": the shortest tail that is one of those, else the last " (record " as before.
+    /// shortcut: a long name's hashed file (canon_name) takes the fallback; match it if such a name ever holds the tag.
     static func recordFile(_ o: DchJSONLine) -> String? {
-        guard let d = o.detail, d.hasSuffix(")"), let r = d.range(of: " (record ", options: .backwards) else { return nil }
-        let file = String(d[r.upperBound...].dropLast())
-        return file.isEmpty ? nil : file
+        guard let d = o.detail, d.hasSuffix(")") else { return nil }
+        var tails: [String] = [], end = d.endIndex
+        while let r = d.range(of: " (record ", options: .backwards, range: d.startIndex..<end) {
+            tails.append(String(d[r.upperBound...].dropLast()))
+            end = r.lowerBound
+        }
+        let file = tails.first { $0 == o.name || $0.hasPrefix(o.name + ".") } ?? tails.first
+        return file?.isEmpty == false ? file : nil
     }
 
     /// #719: dch's (and our) by-hand `claude --resume <id>` under the record's own

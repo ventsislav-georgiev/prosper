@@ -325,7 +325,8 @@ final class AgentIslandController {
         // read takes, then shows; keep the island up meanwhile if that ever flickers.
         // #829 G0b: while the window watches, any session leaving (it ended by itself, or a
         // terminal killed it) is that edge too, so its record reaches the window's History.
-        if !was.isEmpty, sessions.isEmpty || windowWatching && !was.isSubset(of: live) { refreshHistory() }
+        // #1320 (QA #535 INFO c): the island's own History tab open is that edge too (its Resume interrupted count).
+        if !was.isEmpty, sessions.isEmpty || (windowWatching || store.historyTab) && !was.isSubset(of: live) { refreshHistory() }
         refreshCards()
         layout()
     }

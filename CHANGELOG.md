@@ -1477,6 +1477,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: on the selected session row, the state text, counts, age, host and PR chips are
   easier to read on the Fern, Mint, Solar and Daylight themes, and so is a Needs input line on light
   themes (#1271)
+- Agent Island: Resume no longer fails as "ambiguous" when another session is named after the record
+  plus ".json" (for example "work" beside "work.json"); a Resume interrupted skip lands on the right
+  History row when the session name contains " (record "; and the Resume interrupted count updates
+  when a session ends while the island's History tab is open. (#1320)
 
 ## v2.174.0
 
