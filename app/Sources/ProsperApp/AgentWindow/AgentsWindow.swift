@@ -120,6 +120,12 @@ final class AgentsWindow {
     /// the model, the panes' terminals and their last live sights). No window: nothing, the next build reads the settings.
     func restyle() { (window as? AgentsNSWindow).map { Self.applyStyle($0) } }
 
+    /// #1379: Settings' sidebar mode: saved, and the open window's sidebar redrawn at once (no window: the next build reads it).
+    func setSidebarMode(_ m: AgentSidebarMode) {
+        Preferences.agentSidebarMode = m
+        model?.setSidebarMode(m)
+    }
+
     /// #1378: the window's chrome for `style`. Standard: #860's mask and buttons. No title bar: the full-size content
     /// under a hidden title bar, the three buttons hidden. Borderless: no frame; `rounded` masks the content's corners
     /// (the window clear outside them), off leaves it square and opaque to its edges (AgentsNSWindow's fill setters).
@@ -405,6 +411,9 @@ final class AgentsNSWindow: NSWindow {
                                     splitsEnabled: AgentPaneLayout.splitsEnabled)
         if let a = PaneKeys.treeAction(for: event, context: pane, renaming: model.renaming != nil || model.layoutRenaming != nil,
                                        form: model.newSession != nil), perform(pane: a) { return true }
+        // #1379: Slide's Control-Command-S pins the sidebar with the split gate off too (on, the line above took it already).
+        if model.sidebarMode == .slide, model.renaming == nil, model.layoutRenaming == nil, model.newSession == nil,
+           PaneKeys.action(for: event, context: pane) == .toggleSidebar, perform(pane: .toggleSidebar) { return true }
         // #901 B3 step 6 (section 10): ⌘J, gate on only (read first) and never under the rename field or the New session
         // form; nothing to jump to: today's route below. Gate off: the line is skipped, ⌘J travels as before.
         if AgentPaneLayout.splitsEnabled, model.renaming == nil, model.layoutRenaming == nil, model.newSession == nil,
@@ -420,6 +429,12 @@ final class AgentsNSWindow: NSWindow {
         lastPerformed = .pane(a)
         guard let model else { return false }
         return a == .nextNeedsYou ? model.nextNeedsYou() : model.perform(a)
+    }
+
+    /// #1379: the Go menu's sidebar mode: saved and this window's sidebar redrawn at once (the model's call; no model: nothing).
+    func perform(mode m: AgentSidebarMode) {
+        lastPerformed = .sidebarMode(m)
+        model?.setSidebarMode(m)
     }
 
     /// #1359: what a routed key does, for the key (performKeyEquivalent) and the Go menu's items alike: one function.
@@ -727,10 +742,11 @@ struct AgentWindowRootView: View {
             // #900 B2 step 4 (7.2): ⌃⌘S hides the sidebar and its line (gate on only, `sidebarShown`): the pane column takes
             // the width and nothing else moves (the column keeps its place in the stack, so its identity). Rider 1197 (a):
             // under the band's height while the band is shown, so the sidebar title sits on the session title's line.
-            if model.sidebarShown {
+            // #1379: Full sz(290), Mini its rail; Slide has no column (its sidebar is the overlay below).
+            if model.sidebarShown && model.sidebarMode != .slide {
                 AgentSidebarView(model: model)
                     .padding(.top, AgentWindowBand.shown ? AgentWindowBand.height : 0)
-                    .frame(width: sz(290))
+                    .frame(width: model.sidebarColumnWidth)
                     .background(NeonSidebarSurface())
                 Rectangle().fill(Neon.stroke).frame(width: 1)
             }
@@ -755,7 +771,90 @@ struct AgentWindowRootView: View {
                 .background(SettingsBackground())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .topLeading) { if model.sidebarMode == .slide { slideLayer } }
     }
+
+    /// #1379 Slide: the left edge's strip (its pointer enter slides the sidebar in) and, while slid in or pinned, the full
+    /// sidebar over the panes, which keep their width; the pointer leaving it slides it out.
+    var slideLayer: some View {
+        ZStack(alignment: .topLeading) {
+            AgentSlideTracker(edge: true) { model.slide(true) }
+                .frame(width: AgentSlideTracker.edgeWidth)
+                .frame(maxHeight: .infinity)
+            if model.slideOpen {
+                HStack(spacing: 0) {
+                    AgentSidebarView(model: model)
+                        .padding(.top, AgentWindowBand.shown ? AgentWindowBand.height : 0)
+                        .frame(width: AgentWindowModel.fullSidebarWidth)
+                        .background(NeonSidebarSurface())
+                    Rectangle().fill(Neon.stroke).frame(width: 1)
+                }
+                .background(AgentSlideTracker(edge: false) { model.slide(false) })
+                .transition(.move(edge: .leading))
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// #1379: the Agent Sessions sidebar's mode (Settings > Agent Island > Agent Sessions, and the Go menu).
+enum AgentSidebarMode: String, CaseIterable {
+    case full, mini, slide
+    var label: String {
+        switch self {
+        case .full: return "Full"
+        case .mini: return "Mini"
+        case .slide: return "Hidden, slides in"
+        }
+    }
+    /// Settings' line under the picker.
+    var hint: String {
+        switch self {
+        case .full: return "Each session's name, state and details."
+        case .mini: return "A narrow rail: each session's state and number; hover for its name."
+        case .slide: return "Hidden: point at the window's left edge, or press Control-Command-S to keep it open."
+        }
+    }
+    /// The Go menu's item.
+    var menuTitle: String {
+        switch self {
+        case .full: return "Full Sidebar"
+        case .mini: return "Mini Sidebar"
+        case .slide: return "Slide-In Sidebar"
+        }
+    }
+}
+
+/// #1379 Slide: a pointer tracker that never takes a click (no hit). `edge`: the window's left edge strip, whose enter
+/// slides the sidebar in; else behind the slid-in sidebar, whose exit slides it out. Tests call the handlers directly.
+struct AgentSlideTracker: NSViewRepresentable {
+    let edge: Bool
+    let action: @MainActor () -> Void
+    /// A few points: the pointer at the window's very edge, never over the panes' own controls.
+    static let edgeWidth: CGFloat = 4
+    func makeNSView(context: Context) -> AgentSlideTrackerView { AgentSlideTrackerView(edge: edge) }
+    func updateNSView(_ nsView: AgentSlideTrackerView, context: Context) { nsView.action = action }
+}
+
+final class AgentSlideTrackerView: NSView {
+    let edge: Bool
+    var action: @MainActor () -> Void = {}
+    init(edge: Bool) {
+        self.edge = edge
+        super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        // The sidebar slides in under the pointer, so its first event is the exit (assumeInside).
+        let opts: NSTrackingArea.Options = edge ? [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+            : [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .assumeInside]
+        addTrackingArea(NSTrackingArea(rect: .zero, options: opts, owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { if edge { action() } }
+    override func mouseExited(with event: NSEvent) { if !edge { action() } }
 }
 
 struct AgentSidebarView: View {
@@ -779,20 +878,24 @@ struct AgentSidebarView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: sz(2)) {
                             // #901 B3 step 4a (8.1): the first section; nil (gate off, one layout of one pane): no view.
-                            if let rows = model.layoutRows { AgentLayoutsSection(model: model, rows: rows) }
+                            // #1379 Mini: the rail lists the rows alone (no Layouts section, no headers, nothing folded).
+                            let mini = model.sidebarMode == .mini
+                            if !mini, let rows = model.layoutRows { AgentLayoutsSection(model: model, rows: rows) }
                             ForEach(model.sections) { section in
                                 // #828: Sessions, Sidekicks and History fold on a header click
                                 // (remembered per Mac); a folded section keeps its selection.
-                                let folded = model.isCollapsed(section.title), inView = model.inViewRows
-                                AgentSectionHeader(title: section.title, count: section.rows.count, collapsed: folded,
-                                                   toggle: AgentSidebar.collapsible.contains(section.title)
-                                                       ? { model.toggleCollapsed(section.title) } : nil)
+                                let folded = !mini && model.isCollapsed(section.title), inView = model.inViewRows
+                                if !mini {
+                                    AgentSectionHeader(title: section.title, count: section.rows.count, collapsed: folded,
+                                                       toggle: AgentSidebar.collapsible.contains(section.title)
+                                                           ? { model.toggleCollapsed(section.title) } : nil)
+                                }
                                 if !folded {
                                     ForEach(section.rows) { row in
                                         Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
                                             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                                                 number: model.number(row.id), inView: inView.contains(row.id),
-                                                                openPR: model.openPR)
+                                                                openPR: model.openPR, mini: mini)
                                         }
                                         .buttonStyle(.plain)
                                         .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
@@ -887,7 +990,22 @@ struct AgentSidebarTitleRow: View {
     /// #923: the Diagnostics pane's text while it is up (read once when the item is chosen).
     @State private var diagnostics: String?
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if model.sidebarMode == .mini { miniBody } else { fullBody }
+    }
+
+    /// #1379 Mini: the rail keeps the list-wide "..." and #847's [>_] [+] (buttonsWidth fits sz(84)); the name and the count go.
+    var miniBody: some View {
+        HStack(spacing: 0) {
+            if let store = model.store { buttons(store) }
+        }
+        .frame(minHeight: sz(18))
+        .frame(minWidth: 0, maxWidth: .infinity)
+        .padding(.top, Self.padTop).padding(.bottom, sz(8))
+        .background(AgentWindowDragArea())
+    }
+
+    var fullBody: some View {
         HStack(spacing: sz(6)) {
             // #860: names the window (its title is hidden); "Sessions" in the accent, as Settings' rail titles.
             neonAccentedText(AgentsWindow.title, accent: "Sessions").font(Neon.font(13, weight: .semibold))
@@ -906,23 +1024,26 @@ struct AgentSidebarTitleRow: View {
         // minWidth 0: the frame is the width offered, never its child's (a cut count's rounding moved the overlay 1 pt).
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) {
-            if let store = model.store {
-                HStack(spacing: sz(4)) {
-                    // #897 (G9): the list-wide "..." in its own fixed sz(18) slot, beside the count; #847's pair keeps
-                    // the trailing edge.
-                    AgentSidebarMenuButton(store: store) { v in
-                        if v == .diagnostics { diagnostics = AgentDiagnostics.text(model.transcript) } else { model.runSidebar(v) }
-                    }
-                    .popover(isPresented: Binding(get: { diagnostics != nil }, set: { if !$0 { diagnostics = nil } })) {
-                        AgentDiagnosticsView(text: diagnostics ?? "")
-                    }
-                    AgentNewSessionButtons(model: model, store: store)
-                }
-                .fixedSize()
-            }
+            if let store = model.store { buttons(store) }
         }
         .padding(.horizontal, sz(14)).padding(.top, Self.padTop).padding(.bottom, sz(8))
         .background(AgentWindowDragArea())   // #1378: the row's empty parts move the window
+    }
+
+    /// The row's buttons, one view for Full and Mini (#1379: Mini keeps every list-wide action of the "...").
+    func buttons(_ store: AgentIslandStore) -> some View {
+        HStack(spacing: sz(4)) {
+            // #897 (G9): the list-wide "..." in its own fixed sz(18) slot, beside the count; #847's pair keeps
+            // the trailing edge.
+            AgentSidebarMenuButton(store: store) { v in
+                if v == .diagnostics { diagnostics = AgentDiagnostics.text(model.transcript) } else { model.runSidebar(v) }
+            }
+            .popover(isPresented: Binding(get: { diagnostics != nil }, set: { if !$0 { diagnostics = nil } })) {
+                AgentDiagnosticsView(text: diagnostics ?? "")
+            }
+            AgentNewSessionButtons(model: model, store: store)
+        }
+        .fixedSize()
     }
 
     /// #1103 F2: the content starts under the titlebar (no .fullSizeContentView), so the row's centre sits on the
@@ -1131,8 +1252,58 @@ struct AgentSidebarRowView: View {
     var openPR: @MainActor (AgentIsland.PRChip) -> Void = { _ in }
     /// Tests: a row part's frame in the row, by kind and row title (nil in the product). Main actor.
     static var probe: ((String, String, CGRect) -> Void)?
+    /// #1379: Mini's rail row.
+    var mini = false
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if mini { miniBody } else { fullBody }
+    }
+
+    /// The row's one accessibility label (#1379: Mini's tooltip and label too).
+    var accessibilityWords: String {
+        ([row.title, row.record?.pinned == true ? "pinned" : nil,
+          AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, row.detail, row.modelWords] + row.countWords
+         + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// #1289 (G5): the element ignores its children, so each URL chip is an action on it, as on the island's row.
+    var prActions: some View {
+        ForEach(row.prLinks.indices, id: \.self) { i in
+            if row.prLinks[i].url != nil {
+                Button(AgentWindowControls.openPRLabel(row.prLinks[i])) { openPR(row.prLinks[i]) }
+            }
+        }
+    }
+
+    /// #1379 Mini: the state mark, the Command-<n> chip (its column kept without one) and the needs-you mark (blocked or done);
+    /// the full row's words are its tooltip and its one VoiceOver label.
+    var miniBody: some View {
+        let needs = row.session.map(AgentSidebar.needsYou) ?? false
+        return HStack(spacing: sz(4)) {
+            stateMark
+            ZStack {
+                Self.digitColumn
+                if let number {
+                    AgentDigitChip(number: number, active: selected).modifier(AgentSidebarRowProbe(kind: "miniChip", title: row.title))
+                }
+            }
+            Circle().fill(agentStateColor(.blocked)).frame(width: sz(6), height: sz(6)).opacity(needs ? 1 : 0)
+                .modifier(AgentSidebarRowProbe(kind: needs ? "miniNeeds" : "miniSlot", title: row.title))
+        }
+        .padding(.horizontal, sz(6)).padding(.vertical, sz(7))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .coordinateSpace(.named(agentSidebarRowSpace))
+        .background(NeonSelectedRowFill(selected: selected))
+        .overlay(alignment: .leading) { NeonSelectionBar().opacity(selected ? 1 : 0) }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityWords)
+        .help(accessibilityWords)   // on the one element, so VoiceOver's help reads it too
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityActions { prActions }
+    }
+
+    var fullBody: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
             stateMark
             VStack(alignment: .leading, spacing: sz(3)) {
@@ -1156,18 +1327,9 @@ struct AgentSidebarRowView: View {
         .overlay(alignment: .leading) { NeonSelectionBar().opacity(selected ? 1 : 0) }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(([row.title, row.record?.pinned == true ? "pinned" : nil,
-                              AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, row.detail, row.modelWords] + row.countWords
-                             + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(accessibilityWords)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        // #1289 (G5): the element ignores its children, so each URL chip is an action on it, as on the island's row.
-        .accessibilityActions {
-            ForEach(row.prLinks.indices, id: \.self) { i in
-                if row.prLinks[i].url != nil {
-                    Button(AgentWindowControls.openPRLabel(row.prLinks[i])) { openPR(row.prLinks[i]) }
-                }
-            }
-        }
+        .accessibilityActions { prActions }
         // #1110: drawn over the row's chip column (outside the row's element, so it is read with its own name and help);
         // no number, no chip. #1345: centred on the two lines (the column's x, the text block's y).
         .overlayPreferenceValue(AgentDigitChipSlot.self) { slot in

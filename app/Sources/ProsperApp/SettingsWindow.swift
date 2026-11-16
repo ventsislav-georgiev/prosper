@@ -1029,6 +1029,7 @@ struct AgentSessionsSection: View {
     @State private var clipboard = Preferences.agentWindowClipboardWrites
     @State private var style = Preferences.agentWindowStyle
     @State private var rounded = Preferences.agentWindowRoundedCorners
+    @State private var sidebar = Preferences.agentSidebarMode
     /// #1378: the corners toggle's line, fixed per style (a window with a title bar keeps the system's corners).
     static func roundedHint(_ style: AgentWindowStyle) -> String {
         style == .borderless ? "Off: square corners, filling the window to its edges."
@@ -1051,10 +1052,19 @@ struct AgentSessionsSection: View {
             NeonRow("Rounded corners", subtitle: Self.roundedHint(style)) {
                 Toggle("", isOn: $rounded).labelsHidden().disabled(style != .borderless)
             }
+            NeonDivider()
+            // #1379: applied to an open window at once (its model); the Go menu sets the same.
+            NeonRow("Sidebar", subtitle: sidebar.hint) {
+                Picker("", selection: $sidebar) {
+                    ForEach(AgentSidebarMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+            }
         }
         .onChange(of: clipboard) { _, v in Preferences.agentWindowClipboardWrites = v }
         .onChange(of: style) { _, v in Preferences.agentWindowStyle = v; AgentsWindow.shared.restyle() }
         .onChange(of: rounded) { _, v in Preferences.agentWindowRoundedCorners = v; AgentsWindow.shared.restyle() }
+        .onChange(of: sidebar) { _, v in AgentsWindow.shared.setSidebarMode(v) }
     }
 }
 

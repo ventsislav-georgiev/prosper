@@ -67,6 +67,12 @@ final class AgentWindowStyleTests: XCTestCase {
         return cv.hitTest(sup.convert(p, from: nil))
     }
 
+    /// QA R1378-s1: the frame view's own hit at window point `p`, so a titlebar container over the content is seen.
+    func frameHit(_ win: NSWindow, _ p: CGPoint) -> NSView? {
+        guard let frame = win.contentView?.superview else { return nil }
+        return frame.hitTest(frame.superview?.convert(p, from: nil) ?? p)
+    }
+
     // MARK: The style per setting
 
     func testStandardIsTodaysWindow() throws {
@@ -317,9 +323,13 @@ final class AgentWindowStyleTests: XCTestCase {
                         let row = try XCTUnwrap(dragFrames(try XCTUnwrap(win.contentView)).first, "the title row \(style) at \(scale)")
                         let y = row.maxY - AgentSidebarTitleRow.padTop - sz(9)
                         for (what, dx) in [("+", sz(9)), (">_", sz(31)), ("...", sz(40) + sz(4) + sz(9))] {
-                            let v = try XCTUnwrap(hit(win, CGPoint(x: row.maxX - sz(14) - dx, y: y)), "\(what) \(style) at \(scale)")
+                            let p = CGPoint(x: row.maxX - sz(14) - dx, y: y)
+                            // QA R1378-s1: No title bar from the frame view, where the titlebar container lies over the band.
+                            let v = try XCTUnwrap(style == .noTitleBar ? frameHit(win, p) : hit(win, p), "\(what) \(style) at \(scale)")
                             let chain = Array(sequence(first: v, next: { $0.superview }))
                             let name = "\(type(of: v))"
+                            XCTAssertTrue(v.isDescendant(of: try XCTUnwrap(win.contentView)), "\(what) \(style) at \(scale): \(name)")
+                            XCTAssertFalse(chain.contains { "\(type(of: $0))".contains("Titlebar") }, "\(what) \(style) at \(scale): \(name)")
                             XCTAssertFalse(chain.contains { $0 is NSScrollView }, "\(what) \(style) at \(scale): \(name)")
                             XCTAssertFalse(chain.contains { $0 is AgentWindowDragView }, "\(what) \(style) at \(scale): \(name)")
                             if reference[what] == nil { reference[what] = name }

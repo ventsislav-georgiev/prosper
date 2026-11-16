@@ -469,6 +469,8 @@ enum Preferences {
         // #1378: the Agent Sessions window's style (AgentWindowStyle) and Borderless's rounded corners; per Mac, not in SyncedKeys.
         static let agentWindowStyle = "agentWindowStyle"
         static let agentWindowRoundedCorners = "agentWindowRoundedCorners"
+        // #1379: the Agent Sessions sidebar's mode (AgentSidebarMode); per Mac, not in SyncedKeys.
+        static let agentSidebarMode = "agentSidebarMode"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1232,6 +1234,12 @@ enum Preferences {
     static var agentWindowStyle: AgentWindowStyle {
         get { AgentWindowStyle(rawValue: defaults.string(forKey: Keys.agentWindowStyle) ?? "") ?? .standard }
         set { defaults.set(newValue.rawValue, forKey: Keys.agentWindowStyle) }
+    }
+
+    /// #1379: the Agent Sessions sidebar's mode; unset or unknown reads as Full.
+    static var agentSidebarMode: AgentSidebarMode {
+        get { AgentSidebarMode(rawValue: defaults.string(forKey: Keys.agentSidebarMode) ?? "") ?? .full }
+        set { defaults.set(newValue.rawValue, forKey: Keys.agentSidebarMode) }
     }
 
     /// #1378: Borderless's rounded corners; on when unset.

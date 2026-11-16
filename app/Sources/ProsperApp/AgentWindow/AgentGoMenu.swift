@@ -11,6 +11,8 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     enum Action: Equatable {
         case key(AgentsNSWindow.KeyRoute)
         case pane(PaneAction)
+        /// #1379: the sidebar's mode (no shortcut; the open mode checked).
+        case sidebarMode(AgentSidebarMode)
     }
 
     struct Entry: Equatable {
@@ -66,6 +68,11 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         ]
     }
 
+    /// #1379: the three sidebar modes, after the other items (a separator first).
+    static var modeEntries: [Entry?] {
+        [nil] + AgentSidebarMode.allCases.map { Entry($0.menuTitle, "", [], .sidebarMode($0)) }
+    }
+
     /// The main menu, read only outside XCTest (as `AgentsNSWindow.inputSourceID`): no row ever changes the app's.
     static var mainMenu: @MainActor () -> NSMenu? = { NSClassFromString("XCTestCase") == nil ? NSApp.mainMenu : nil }
 
@@ -98,7 +105,8 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let list = Self.entries(splits: AgentPaneLayout.splitsEnabled)
+        let list = Self.entries(splits: AgentPaneLayout.splitsEnabled) + Self.modeEntries
+        let mode = window?.model?.sidebarMode
         shown = list.compactMap { $0 }
         var tag = 0
         menu.items = list.map { e in
@@ -107,6 +115,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
             i.keyEquivalentModifierMask = e.mods
             i.target = self
             i.tag = tag
+            if case .sidebarMode(let m) = e.action { i.state = m == mode ? .on : .off }
             tag += 1
             return i
         }
@@ -121,6 +130,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         switch shown[sender.tag].action {
         case .key(let r): window.perform(r)
         case .pane(let a): window.perform(pane: a)
+        case .sidebarMode(let m): window.perform(mode: m)
         }
     }
 
@@ -137,6 +147,7 @@ extension AgentsNSWindow {
         guard let model else { return false }
         let renaming = model.renaming != nil || model.layoutRenaming != nil, form = model.newSession != nil
         switch a {
+        case .sidebarMode: return true
         case .pane: return AgentPaneLayout.splitsEnabled && !renaming && !form
         case .key(.xray) where XrayPanels.dch() == nil: return false   // #1351: below the gate the item is off (no process)
         case .key(let r):

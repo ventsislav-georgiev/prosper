@@ -1558,6 +1558,10 @@ tag from the now-released section and put it on the new top draft.
   title row and the session header, and double-click there to zoom it. (#1378)
 - X-ray has a Memory tab (the memories and instruction files in force for the session), and a task
   or memory opens the prompt that changed it. (#1352)
+- Agent Sessions: the sidebar can now be Full, a narrow Mini rail (each session's state, number and
+  a needs-you dot; hover for the name), or Hidden, where it slides in when you point at the window's
+  left edge and Control-Command-S keeps it open. Choose in Settings › Agent Island › Agent Sessions
+  or the Go menu. (#1379)
 
 ## v2.174.0
 

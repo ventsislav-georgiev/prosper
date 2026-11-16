@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import SwiftUI
 
 // #797 Agent window D1: the sidebar of every dch session and the one conversation
 // model behind the detail pane. Fed only by Agent Island's store (its poller is
@@ -430,11 +431,64 @@ final class AgentWindowModel: ObservableObject {
     @Published private(set) var sidebarHidden = Preferences.agentWindowSidebarHidden
     /// The sidebar is drawn: always with the split gate off (15.0: the parent's window), else unless hidden. The root
     /// view, `sidebarFrame` and `paneAreaFrame` all read this one value.
-    var sidebarShown: Bool { !(AgentPaneLayout.splitsEnabled && sidebarHidden) }
+    /// #1379: Slide draws no column; its sidebar is shown only while it is slid in (an overlay over the panes).
+    var sidebarShown: Bool {
+        sidebarMode == .slide ? slideOpen : !(AgentPaneLayout.splitsEnabled && sidebarHidden)
+    }
+
+    /// #1379: Settings' and the Go menu's sidebar mode (Preferences.agentSidebarMode), read when the model is made.
+    @Published private(set) var sidebarMode = Preferences.agentSidebarMode
+    /// #1379 Slide: slid in by the pointer at the window's left edge (out again when it leaves the sidebar), or pinned by Control-Command-S.
+    @Published private(set) var slideRevealed = false
+    @Published private(set) var slidePinned = false
+    var slideOpen: Bool { slideRevealed || slidePinned }
+    /// #1379: Reduce Motion, read on every slide (tests set it); on, the sidebar shows and hides at once.
+    static var reduceMotion: @MainActor () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// #1379 tests: the last slide's animation was on (nil: no slide yet).
+    private(set) var lastSlideAnimated: Bool?
+
+    /// #1379: the full sidebar's width (TIP's literal) and Mini's rail.
+    static var fullSidebarWidth: CGFloat { sz(290) }
+    static var miniSidebarWidth: CGFloat { sz(84) }
+    /// #1379: the width the sidebar column takes from the panes: Full, Mini's rail, Slide none (its sidebar is an overlay).
+    var sidebarColumnWidth: CGFloat {
+        switch sidebarMode {
+        case .full: return Self.fullSidebarWidth
+        case .mini: return Self.miniSidebarWidth
+        case .slide: return 0
+        }
+    }
+
+    /// #1379: a new mode from Settings or the Go menu, saved and drawn at once; Slide starts slid out.
+    func setSidebarMode(_ m: AgentSidebarMode) {
+        Preferences.agentSidebarMode = m
+        guard m != sidebarMode else { return }
+        sidebarMode = m
+        (slideRevealed, slidePinned) = (false, false)
+        if !sidebarShown { keyFocus = .pane }
+    }
+
+    /// #1379 Slide: the edge's enter (true) and the sidebar's exit (false); a pinned sidebar stays. Other modes: nothing.
+    func slide(_ reveal: Bool) {
+        guard sidebarMode == .slide, reveal != slideRevealed else { return }
+        animateSlide { slideRevealed = reveal }
+    }
+
+    private func animateSlide(_ change: () -> Void) {
+        let still = Self.reduceMotion()
+        lastSlideAnimated = !still
+        withAnimation(still ? nil : .easeOut(duration: 0.15), change)
+        if !slideOpen { keyFocus = .pane }
+    }
 
     /// ⌃⌘S (through `perform`) and the band's show-sidebar glyph: hides or shows the sidebar and saves the choice.
     /// Hidden, the panes take the keys (a hidden sidebar never holds them); shown again, the keys stay where they are.
+    /// #1379 Slide: pins the slid-in sidebar open or closed instead (nothing saved; any split gate).
     func toggleSidebar() {
+        if sidebarMode == .slide {
+            animateSlide { slidePinned = !slideOpen; slideRevealed = false }
+            return
+        }
         sidebarHidden.toggle()
         Preferences.agentWindowSidebarHidden = sidebarHidden
         if sidebarHidden { keyFocus = .pane }
@@ -531,14 +585,16 @@ final class AgentWindowModel: ObservableObject {
     /// sidebar sz(290) wide, a 1 pt line, the pane area). nil while no sidebar is drawn (the island off: one message;
     /// #900 B2 step 4: hidden by ⌃⌘S, so a click where it was is the pane area's).
     func sidebarFrame(in size: CGSize) -> CGRect? {
-        hasStore && sidebarShown ? CGRect(x: 0, y: 0, width: sz(290), height: size.height) : nil
+        hasStore && sidebarShown ? CGRect(x: 0, y: 0, width: sidebarMode == .mini ? Self.miniSidebarWidth : Self.fullSidebarWidth,
+                                           height: size.height) : nil   // #1379: Slide's overlay is the full width
     }
 
     /// The pane area's frame in the same content: right of the sidebar and its line, under the band while it is shown
     /// (AgentWindowBand.shown; 9.1: a click on the band is in no pane), else the whole height; nil with no store.
     func paneAreaFrame(in size: CGSize) -> CGRect? {
         let band = AgentWindowBand.shown ? AgentWindowBand.height : 0
-        let lead = sidebarShown ? sz(290) + 1 : 0   // #900 B2 step 4: hidden, the pane area starts at x = 0
+        // #900 B2 step 4: hidden, the pane area starts at x = 0; #1379: so does it under Slide's overlay (never shrunk)
+        let lead = sidebarShown && sidebarMode != .slide ? sidebarColumnWidth + 1 : 0
         return hasStore ? CGRect(x: lead, y: band, width: max(0, size.width - lead),
                                  height: max(0, size.height - band)) : nil
     }
