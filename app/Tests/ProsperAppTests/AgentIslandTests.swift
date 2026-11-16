@@ -1507,10 +1507,10 @@ final class AgentIslandTests: XCTestCase {
         let was = Preferences.agentIslandTerminal
         defer { Preferences.agentIslandTerminal = was }
         Preferences.agentIslandTerminal = "uninstalled"
-        let pane = AgentIslandPane()
-        let shown = pane.terminalPick.wrappedValue
+        // QA #577: the pane's statics, not its State: a State read with no view installed is a runtime warning.
+        let shown = AgentIslandPane.shownTerminal()
         XCTAssertEqual(shown, AgentTerminal.resolve(raw: nil, installed: AgentTerminal.isInstalled), "the fallback shows")
-        pane.terminalPick.wrappedValue = shown
+        AgentIslandPane.pickTerminal(shown)
         XCTAssertEqual(Preferences.agentIslandTerminal, shown.rawValue, "picking the shown fallback saves it")
     }
 
@@ -2510,12 +2510,16 @@ final class AgentIslandTests: XCTestCase {
         for (i, k) in all.enumerated() where !retired.contains(k) {
             XCTAssertEqual(Preferences.defaults.object(forKey: k) as? Bool, i % 2 == 0, "\(k) kept")
         }
-        final class Count: @unchecked Sendable { var n = 0 }
+        // QA #599 INFO-2: KVO on this row's own keys, so a write to another key anywhere in the process never counts.
+        final class Count: NSObject, @unchecked Sendable {
+            var n = 0
+            override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey: Any]?,
+                                       context: UnsafeMutableRawPointer?) { n += 1 }
+        }
         let writes = Count()
-        let o = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
-                                                       object: Preferences.defaults, queue: nil) { _ in writes.n += 1 }
+        for k in all { Preferences.defaults.addObserver(writes, forKeyPath: k, options: [], context: nil) }
         c.reload()
-        NotificationCenter.default.removeObserver(o)
+        for k in all { Preferences.defaults.removeObserver(writes, forKeyPath: k) }
         XCTAssertEqual(writes.n, 0, "already gone: nothing written")
     }
 
@@ -2933,7 +2937,8 @@ final class AgentIslandTests: XCTestCase {
     func testSplitEmptyProbeIsBoundedThenText() {
         let p = "(x?|y?){32}\\b"
         let start = Date()
-        XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), "Too slow on a session name: matched as text" + "\n" + AgentIsland.sidekickDchNote)
+        // QA #594 INFO-5: no session name was searched, so the caption names none.
+        XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), "Too slow as a regex: matched as text" + "\n" + AgentIsland.sidekickDchNote)
         let r = AgentIsland.split([session("xy", .idle), session("z\(p)Z", .idle)], pattern: p)
         XCTAssertEqual(names(r.sidekicks), ["z\(p)Z"], "matched as text")
         XCTAssertLessThan(Date().timeIntervalSince(start), 1)

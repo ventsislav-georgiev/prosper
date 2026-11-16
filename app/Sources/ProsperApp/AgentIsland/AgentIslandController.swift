@@ -1483,6 +1483,7 @@ final class AgentIslandController {
     /// unless a menu tracks, the window is the panel, or the click lands inside the panel's frame (a
     /// see-through corner of the island over the window below).
     func turnedAway(to window: NSWindow?, at p: NSPoint?) {
+        // R995-1112c: menusTracking counts every NSMenu of the app (a Settings popup too); it can only keep the island open longer.
         guard menusTracking == 0, let window, window !== panel else { return }
         if let p, panel?.frame.contains(p) == true { return }
         setExpanded(false)

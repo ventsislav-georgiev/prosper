@@ -1582,6 +1582,8 @@ tag from the now-released section and put it on the new top draft.
 - The New session form can add a session to a group already running: pick the group and Main or
   Sidekick, and the form fills in the group's folder, the command its members run and the next free
   name (for example "sec-2"); a new sidekick gets the sidekick prompt naming its main. (#1214)
+- Agent Island: when a sidekick pattern is too slow to try even on empty text, Settings now says
+  "Too slow as a regex: matched as text" instead of naming a session that was never searched. (#995)
 
 ## v2.174.0
 

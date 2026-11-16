@@ -12,6 +12,8 @@ final class LiveStatusPublisherTests: XCTestCase {
         struct Post { let json: String; let bearer: String; let waited: Bool }
         let p = LiveStatusPublisher()
         let center = NotificationCenter()
+        /// QA #600 INFO-4: Sparkle's center, apart from the workspace one, so a publisher listening on the wrong one fails.
+        let appCenter = NotificationCenter()
         var clock: TimeInterval = 1_800_000_000
         var timers: [(due: TimeInterval, id: Int, fire: @MainActor () -> Void)] = []
         var cancelled: Set<Int> = []
@@ -51,7 +53,7 @@ final class LiveStatusPublisherTests: XCTestCase {
             p.loadSeq = { [unowned self] in self.savedSeq }
             p.saveSeq = { [unowned self] in self.savedSeq = $0 }
             p.center = center
-            p.appCenter = center
+            p.appCenter = appCenter
             p.start()
         }
 
@@ -338,7 +340,7 @@ final class LiveStatusPublisherTests: XCTestCase {
     func testAnUpdateRelaunchQuitPostsNoOfflineButASleepStillDoes() {
         let r = Rig()
         r.p.sessionsChanged([s("a", .working)])
-        r.center.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
+        r.appCenter.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
         XCTAssertTrue(r.p.updateRelaunch)
         r.center.post(name: NSWorkspace.willSleepNotification, object: nil)
         XCTAssertEqual(r.posts.count, 2)
@@ -391,7 +393,7 @@ final class LiveStatusPublisherTests: XCTestCase {
         for (wait, offline) in [(59.0, false), (60.0, true), (3600.0, true)] {
             let r = Rig()
             r.p.sessionsChanged([s("a", .working)])
-            r.center.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
+            r.appCenter.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
             r.advance(wait)
             XCTAssertEqual(r.p.updateRelaunch, !offline, "\(wait) s")
             let before = r.posts.count
@@ -401,7 +403,7 @@ final class LiveStatusPublisherTests: XCTestCase {
         }
         let back = Rig()
         back.p.sessionsChanged([s("a", .working)])
-        back.center.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
+        back.appCenter.post(name: LiveStatusPublisher.updateWillRelaunch, object: nil)
         back.clock -= 3600   // the wall clock set back
         XCTAssertFalse(back.p.updateRelaunch, "a clock set back reads as outside the window")
     }

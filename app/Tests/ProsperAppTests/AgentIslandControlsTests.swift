@@ -2357,13 +2357,16 @@ final class AgentIslandControlsTests: XCTestCase {
     func testChooseFolderGoesThroughTheSeam() throws {
         let f = FakeProc()
         let c = opened(f, [session("a")])
-        var answer: String? = nil, asked = 0
-        c.chooseFolder = { done in asked += 1; done(answer) }
+        // QA #577: a box, not a var mutated after the (Sendable, main-actor) seam captured it.
+        final class Answer: @unchecked Sendable { var path: String? }
+        let answer = Answer()
+        var asked = 0
+        c.chooseFolder = { done in asked += 1; done(answer.path) }
         c.chooseNewSessionFolder()
         XCTAssertEqual(asked, 1)
         XCTAssertEqual(c.store?.expanded, false, "the island collapses for the panel")
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "cancelled: nothing spawns")
-        answer = "/picked/My Repo"
+        answer.path = "/picked/My Repo"
         let sub = try XCTUnwrap(c.makeControlsMenu().items.first?.submenu)
         XCTAssertEqual(sub.items.map(\.title), [AgentIsland.chooseFolderLabel], "no agent history: the chooser only")
         press(sub.items[0])

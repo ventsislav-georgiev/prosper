@@ -215,6 +215,8 @@ enum AgentIsland {
     /// How a non-empty pattern is matched. Every case but `.regex` matches it as text.
     enum SidekickMatch: Equatable {
         case regex, invalid, matchesEmpty, slow
+        /// QA #594 INFO-5: the "" probe ran out of its deadline; no session name was searched.
+        case slowProbe
 
         var caption: String? {
             switch self {
@@ -222,6 +224,7 @@ enum AgentIsland {
             case .invalid: "Not a valid regex: matched as text"
             case .matchesEmpty: "Matches every session: matched as text"
             case .slow: "Too slow on a session name: matched as text"
+            case .slowProbe: "Too slow as a regex: matched as text"
             }
         }
     }
@@ -305,9 +308,9 @@ enum AgentIsland {
                     let start = cpu()
                     re.enumerateMatches(in: "", options: .reportProgress, range: NSRange()) { r, _, stop in
                         if r != nil { how = .matchesEmpty; stop.pointee = true }
-                        else if cpu() - start > sidekickDeadline { how = .slow; stop.pointee = true }
+                        else if cpu() - start > sidekickDeadline { how = .slowProbe; stop.pointee = true }
                     }
-                } while how == .slow && tries < 2
+                } while how == .slowProbe && tries < 2
             }
             (re, how) = sidekickLock.withLock {
                 if sidekickCache[p] == nil { sidekickCache[p] = (re, how, 0, 0, 0, 0) }

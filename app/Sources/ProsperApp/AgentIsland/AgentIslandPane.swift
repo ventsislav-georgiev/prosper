@@ -12,8 +12,7 @@ import SwiftUI
 struct AgentIslandPane: View {
     @State private var source = AgentIslandSource(raw: Preferences.agentIslandSessions)
     @State private var click = AgentIslandClick(raw: Preferences.agentIslandClick)
-    @State private var terminal = AgentTerminal.resolve(raw: Preferences.agentIslandTerminal,
-                                                         installed: AgentTerminal.isInstalled)
+    @State private var terminal = Self.shownTerminal()
     private let terminals = AgentTerminal.available(installed: AgentTerminal.isInstalled)
     /// Preferences.Keys.isolateRemoteSessions (private there); a test pins the match.
     nonisolated static let isolateKey = "isolateRemoteSessions"
@@ -124,8 +123,14 @@ struct AgentIslandPane: View {
     /// terminal uninstalled the picker shows the fallback, and picking that same
     /// one must stick, or reinstalling the old terminal switches clicks back.
     var terminalPick: Binding<AgentTerminal> {
-        Binding(get: { terminal }, set: { terminal = $0; Preferences.agentIslandTerminal = $0.rawValue })
+        Binding(get: { terminal }, set: { terminal = $0; Self.pickTerminal($0) })
     }
+    /// What the picker shows on open: the stored terminal, else the fallback. Static so a test reads it with no
+    /// view installed (QA #577: a State read outside a view is a SwiftUI runtime warning).
+    nonisolated static func shownTerminal() -> AgentTerminal {
+        AgentTerminal.resolve(raw: Preferences.agentIslandTerminal, installed: AgentTerminal.isInstalled)
+    }
+    static func pickTerminal(_ t: AgentTerminal) { Preferences.agentIslandTerminal = t.rawValue }
 
     var body: some View {
         NeonSection("Sessions") {

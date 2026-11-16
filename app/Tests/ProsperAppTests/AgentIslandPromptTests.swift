@@ -693,6 +693,7 @@ final class AgentIslandPromptTests: XCTestCase {
 
     /// W1e: every lineLimit(1) Text in the card renders a string that, measured
     /// with its font, fits its width; so no edit can bring back a silent ellipsis.
+    @MainActor   // QA #577: AgentPromptCardView.changedText is main-actor isolated
     func testEveryOneLineTextInTheCardFitsItsWidth() throws {
         let screens = [bashScreen, editScreen, askFourScreen, askThreeScreen, boxedScreen, bash21(longCommand),
                        bash21([longLine]), bash21(wideCommand), bash21(["echo safe"], allow: wideAllow),

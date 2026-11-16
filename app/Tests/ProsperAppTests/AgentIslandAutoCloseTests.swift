@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import XCTest
 @testable import ProsperApp
 
@@ -88,6 +89,41 @@ final class AgentIslandAutoCloseTests: XCTestCase {
         post(c, NSWindow.didResignKeyNotification, otherWindow())
         post(c, NSWindow.didBecomeKeyNotification, nil)   // no window named: nothing to turn to
         XCTAssertEqual(c.store?.expanded, true)
+    }
+
+    /// R995-1112a: the status-bar icon lives in a Prosper window, so a mouse down on it (outside the panel's frame) closes
+    /// the island through the local monitor. A borderless status-bar-level strip stands in for it: never shown, no item.
+    @MainActor func testAMouseDownOnTheStatusBarIconCloses() throws {
+        let m = Monitors(), c = controller(m)
+        c.setExpanded(true)
+        c.panel = islandPanel()
+        let bar = NSWindow(contentRect: NSRect(x: 1200, y: 950, width: 30, height: 32), styleMask: [.borderless],
+                           backing: .buffered, defer: true)
+        bar.isReleasedWhenClosed = false
+        bar.level = .statusBar
+        try XCTUnwrap(m.onOwnClick)(bar, NSPoint(x: 1210, y: 965))
+        XCTAssertEqual(c.store?.expanded, false)
+    }
+
+    /// R995-1112b: a window the island opens itself (Agent Sessions from its button, Settings) closes it once, whichever
+    /// comes first, the explicit collapse or the window's didBecomeKey: one collapse, no second.
+    @MainActor func testAWindowTheIslandOpensClosesItOnce() throws {
+        for keyFirst in [false, true] {
+            let m = Monitors(), c = controller(m)
+            var collapses = 0
+            let sub = try XCTUnwrap(c.store).$expanded.dropFirst().sink { if !$0 { collapses += 1 } }
+            c.setExpanded(true)
+            let opened = otherWindow()
+            if keyFirst { post(c, NSWindow.didBecomeKeyNotification, opened) }
+            c.setExpanded(false)   // onAgentsWindow's own collapse, before AgentsWindow.shared.show()
+            if !keyFirst { post(c, NSWindow.didBecomeKeyNotification, opened) }
+            post(c, NSWindow.didBecomeKeyNotification, opened)
+            sub.cancel()
+            XCTAssertEqual(c.store?.expanded, false, "key first: \(keyFirst)")
+            XCTAssertEqual(collapses, 1, "key first: \(keyFirst)")
+            XCTAssertEqual(m.removed, ["global-1", "local-1"], "key first: \(keyFirst)")
+            XCTAssertEqual(c.focusObservers.count, 0, "key first: \(keyFirst)")
+        }
     }
 
     // MARK: - What never closes it
