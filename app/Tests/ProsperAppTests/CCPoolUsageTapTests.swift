@@ -39,6 +39,8 @@ struct UsageTapReply {
     var body: Data
     /// Declare more bytes than are sent, then hang up: a cut reply.
     var cut = false
+    /// Send the body whole as one chunk of a chunked reply, then hang up inside the next chunk: a transport error after the usage.
+    var dropMidChunk = false
 }
 
 /// Stands in for the upstream on an ephemeral loopback port; answers each request with the next scripted reply.
@@ -92,9 +94,21 @@ final class UsageTapStub: @unchecked Sendable {
                 head += "anthropic-ratelimit-unified-5h-utilization: \(r.util)\r\n"
                 head += "anthropic-ratelimit-unified-5h-reset: \(tapReset)\r\n"
                 // One reply per connection, so no attempt rides a pooled connection this stub no longer reads.
-                head += "Connection: close\r\nContent-Length: \(r.body.count + (r.cut ? 100 : 0))\r\n\r\n"
+                if r.dropMidChunk {
+                    head += "Connection: close\r\nTransfer-Encoding: chunked\r\n\r\n" + String(r.body.count, radix: 16) + "\r\n"
+                } else {
+                    head += "Connection: close\r\nContent-Length: \(r.body.count + (r.cut ? 100 : 0))\r\n\r\n"
+                }
                 var out = Data(head.utf8)
                 out.append(r.body)
+                if r.dropMidChunk {
+                    // The whole chunk goes first; the hang-up inside the next chunk is a second send, after the first is out.
+                    out.append(Data("\r\n".utf8))
+                    c.send(content: out, completion: .contentProcessed { _ in
+                        c.send(content: Data("40\r\npartial".utf8), completion: .contentProcessed { _ in c.cancel() })
+                    })
+                    return
+                }
                 c.send(content: out, completion: .contentProcessed { _ in c.cancel() })
                 return
             }
@@ -279,6 +293,22 @@ final class CCPoolUsageTapTests: XCTestCase {
         r.stub.push(UsageTapReply(contentType: "text/event-stream", util: "0.12", body: tapSSE, cut: true))
         _ = r.post()
         XCTAssertTrue(r.learned == [r.id: firstLearn], "a cut reply moves nothing: \(r.learned)")
+    }
+
+    /// The cut lands on the .streaming error path (onDone with an error) while the tap holds a whole usage and its
+    /// message_stop: the only thing between that result and the capacity is the `error == nil` guard.
+    func testStreamDroppedMidChunkWithAWholeUsageLearnsNothing() throws {
+        let r = try rig()
+        r.stub.push(UsageTapReply(util: "0.10", body: tapJSON))
+        XCTAssertEqual(r.post()?.status, 200)
+        XCTAssertTrue(r.learned == [r.id: CCPoolCapacityState(reset: 1_900_000_000, maxUtilization: 0.10)], "before: \(r.learned)")
+        XCTAssertTrue(r.learned != [r.id: secondLearn], "the 0.12 reply would change the state if it were learned")
+        r.stub.push(UsageTapReply(contentType: "text/event-stream", util: "0.12", body: tapSSE, dropMidChunk: true))
+        _ = r.post()
+        XCTAssertTrue(r.learned == [r.id: CCPoolCapacityState(reset: 1_900_000_000, maxUtilization: 0.10)], "after: \(r.learned)")
+        XCTAssertEqual(r.learned[r.id]?.dollars, 0)
+        XCTAssertEqual(r.learned[r.id]?.points, 0)
+        XCTAssertEqual(r.learned[r.id]?.maxUtilization, 0.10)
     }
 
     func testQuotaCheckLearnsNothing() throws {
