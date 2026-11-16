@@ -1527,6 +1527,7 @@ tag from the now-released section and put it on the new top draft.
   session, jump to session 1 to 9, Terminal or Transcript, jump to chapter, find, text size, new
   session, and more) while the window is in front; choosing an item does what its shortcut does.
   (#1359)
+- Agent Sessions: X-ray reads a session's task list from dch 1.78.0 (no UI yet). (#1349)
 
 ## v2.174.0
 
