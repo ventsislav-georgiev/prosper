@@ -1481,6 +1481,8 @@ tag from the now-released section and put it on the new top draft.
   plus ".json" (for example "work" beside "work.json"); a Resume interrupted skip lands on the right
   History row when the session name contains " (record "; and the Resume interrupted count updates
   when a session ends while the island's History tab is open. (#1320)
+- Agent Sessions: New session can start a session on another Mac running dch serve, in a folder you
+  pick from that Mac's recent folders or type as a full path. (#1323)
 
 ## v2.174.0
 

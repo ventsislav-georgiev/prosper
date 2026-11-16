@@ -1774,6 +1774,7 @@ final class AgentWindowModel: ObservableObject {
     func setNewSessionCommand(_ s: String) { newSession?.command = s }
 
     func chooseNewSessionFolder() {
+        guard newSession?.host == nil else { return }   // #1323: this Mac's chooser; another Mac's folder is typed
         island().chooseFolder { [weak self] path in
             guard let self, let path, self.newSession?.starting == nil else { return }
             self.setNewSessionFolder(AgentNewSession.abbreviate(path, home: self.home))
@@ -1790,8 +1791,77 @@ final class AgentWindowModel: ObservableObject {
     }
 
     var newSessionAutoName: String {
-        AgentNewSession.autoName(folder: AgentNewSession.expand(newSession?.folder ?? "", home: home), taken: spawnTaken,
-                                 dir: island().spawnDir())
+        if let host = newSession?.host {
+            return AgentNewSession.autoName(folder: newSessionFolder, taken: remoteTaken(host), dir: island().spawnDir())
+        }
+        return AgentNewSession.autoName(folder: AgentNewSession.expand(newSession?.folder ?? "", home: home), taken: spawnTaken,
+                                        dir: island().spawnDir())
+    }
+
+    // MARK: #1323 New session on another Mac
+
+    /// The picker's hosts: every host the remote list or remote History names, sorted; none below dch 1.41.0 (no
+    /// `--spawn host:name --cwd` there). Empty: no picker, this Mac only.
+    var newSessionHosts: [String] {
+        guard let v = store?.controlDch?.version, DchCommand.isAtLeast(v, AgentNewSession.remoteMinimum) else { return [] }
+        return Set(remoteSessions.map(\.host) + remoteHistory.map(\.host)).sorted()
+    }
+
+    /// The picker's label: a host is outside text (OutsideText.shown); the form keeps it raw for argv.
+    func newSessionHostLabel(_ host: String?) -> String {
+        host.map(AgentSidebarRowView.hostLabel) ?? AgentNewSession.thisMac
+    }
+
+    /// The picker: the folder becomes that Mac's newest known folder (this Mac: the usual default).
+    func setNewSessionHost(_ host: String?) {
+        guard var f = newSession, f.starting == nil, f.host != host else { return }
+        f.host = host
+        f.folder = host.map { AgentNewSession.remoteRecents(host: $0, sessions: remoteSessions, history: remoteHistory).first ?? "" }
+            ?? AgentNewSession.abbreviate(newSessionDefaultFolder, home: home)
+        f.status = nil
+        newSession = f
+    }
+
+    /// The names taken on `host`: its listed sessions' and its History records'.
+    private func remoteTaken(_ host: String) -> Set<String> {
+        Set(remoteSessions.filter { $0.host == host }.map(\.name) + remoteHistory.filter { $0.host == host }.map(\.record.name))
+    }
+
+    /// The remote folder as typed, trimmed (no "~": the home there is not known here).
+    private var newSessionFolder: String { (newSession?.folder ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The login shell the form's empty command runs: $SHELL here; /bin/zsh on another Mac (this $SHELL may not exist there).
+    private var newSessionShell: String? { newSession?.host == nil ? shell : nil }
+
+    /// The remote start: `dch --spawn host:name --cwd <path> -- <command>` on the verb seam (the island's runner, a call of
+    /// its own, never the list's). False: nothing ran.
+    private func spawnRemote(_ host: String, _ argv: [String], name: String) -> Bool {
+        guard let store, case .ok(let dch) = store.resumeGate else { return false }
+        requests += 1
+        let request = requests, key = AgentTerminalSpawn.remoteKey(host: host, name: name)
+        let args = AgentNewSession.remoteArgs(host: host, name: name, cwd: newSessionFolder, command: argv)
+        let started = remoteVerb(key, dch, args) { [weak self] res in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteSpawned(key, request: request, res) } }
+        }
+        guard started else { newSession?.status = "\(name) is busy: try again"; return false }
+        newSession?.starting = key
+        newSession?.request = request
+        newSession?.status = nil
+        return true
+    }
+
+    /// dch's answer: a failure is the form's line, the form open again; success waits for the row (landSpawn), which is
+    /// then selected and armed: the person's own Start.
+    func remoteSpawned(_ key: AgentSessionKey, request: Int, _ res: DchActionResult) {
+        guard newSession?.request == request, newSession?.starting == key else { return }   // closed or replaced meanwhile
+        if let why = AgentNewSession.remoteFailure(res, host: String(key.dir.dropFirst()), name: key.name) {
+            newSession?.starting = nil
+            newSession?.status = why
+            return
+        }
+        pendingSpawn = (key, now(), now())
+        remoteAt = nil   // the list again at once
+        refresh()
     }
 
     /// The name Start uses: the typed one, else the free name now (an untouched name taken since is re-picked).
@@ -1802,18 +1872,25 @@ final class AgentWindowModel: ObservableObject {
 
     var newSessionErrors: (folder: String?, name: String?) {
         guard let f = newSession else { return (nil, nil) }
+        if let host = f.host {
+            return (AgentNewSession.remoteFolderError(newSessionFolder),
+                    AgentNewSession.nameError(newSessionName, taken: remoteTaken(host), dir: island().spawnDir()))
+        }
         return (AgentNewSession.folderError(AgentNewSession.expand(f.folder, home: home), exists: folderExists),
                 AgentNewSession.nameError(newSessionName, taken: spawnTaken, dir: island().spawnDir()))
     }
 
     /// #847 D7.4: the argv that runs, `--name` included.
     var newSessionRuns: String {
-        let argv = AgentIsland.naming(AgentNewSession.argv(newSession?.command ?? "", shell: shell), name: newSessionName)
+        let argv = AgentIsland.naming(AgentNewSession.argv(newSession?.command ?? "", shell: newSessionShell), name: newSessionName)
         return AgentIsland.shellLine(argv) + (AgentIsland.shellWords(newSession?.command ?? "").isEmpty ? " (your login shell)" : "")
     }
 
     var newSessionRecents: [String] {
-        AgentNewSession.recents(last: Preferences.agentWindowNewSessionFolder, history: store?.history ?? [], exists: folderExists)
+        if let host = newSession?.host {
+            return AgentNewSession.remoteRecents(host: host, sessions: remoteSessions, history: remoteHistory)
+        }
+        return AgentNewSession.recents(last: Preferences.agentWindowNewSessionFolder, history: store?.history ?? [], exists: folderExists)
     }
 
     /// The status slot: starting, else the gate's refusal, else the last failure or busy text.
@@ -1827,6 +1904,7 @@ final class AgentWindowModel: ObservableObject {
     /// Every check, against the store as it is now.
     var canStartNewSession: Bool {
         guard newSession?.starting == nil, store?.resumeGate.isOK == true else { return false }
+        if let host = newSession?.host, !newSessionHosts.contains(host) { return false }   // #1323: gone, or dch too old
         let e = newSessionErrors
         return e.folder == nil && e.name == nil
     }
@@ -1835,6 +1913,9 @@ final class AgentWindowModel: ObservableObject {
     @discardableResult
     func startNewSession() -> Bool {
         guard let f = newSession, canStartNewSession else { return false }
+        if let host = f.host {
+            return spawnRemote(host, AgentNewSession.argv(f.command, shell: nil), name: newSessionName)
+        }
         return spawn(AgentNewSession.expand(f.folder, home: home), AgentNewSession.argv(f.command, shell: shell),
                      name: newSessionName, command: f.command)
     }
@@ -1846,6 +1927,7 @@ final class AgentWindowModel: ObservableObject {
         let argv = [AgentNewSession.loginShell(shell), "-l"]
         if let f = newSession {
             guard canStartNewSession else { return false }
+            if let host = f.host { return spawnRemote(host, [AgentNewSession.loginShell(nil), "-l"], name: newSessionName) }
             return spawn(AgentNewSession.expand(f.folder, home: home), argv, name: newSessionName, command: nil)
         }
         guard store?.resumeGate.isOK == true else {
@@ -1971,6 +2053,15 @@ final class AgentWindowModel: ObservableObject {
     /// #887 (QA #747 INFO-2): the row first, so a window shown again past the slack still lands a row already listed.
     private func landSpawn() {
         guard let p = pendingSpawn else { return }
+        // #1323: a remote start's row is in Other machines; selecting it is the person's pick, so it arms one attach.
+        if p.key.dir.hasPrefix("@") {
+            let id = AgentSidebar.RowID.remote(host: String(p.key.dir.dropFirst()), name: p.key.name)
+            if row(id) != nil {
+                select(id)
+                focusSelection()
+                return
+            }
+        }
         guard let s = row(.live(p.key))?.session else {
             guard now() - p.at > Self.spawnSlack else { return }
             // QA #747 INFO-1: answered but never listed: the form stays, re-enabled, and says so; a quick shell, the dir line.

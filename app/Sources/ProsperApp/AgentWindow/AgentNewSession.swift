@@ -21,6 +21,8 @@ struct AgentNewSessionForm: Equatable {
     var request = 0
     /// The status slot's failure or busy text.
     var status: String?
+    /// #1323: the Mac it starts on: nil this one, else a host from the remote list (raw, as argv takes it).
+    var host: String?
 }
 
 /// The form's rules. Pure.
@@ -119,6 +121,45 @@ enum AgentNewSession {
         return Array((first + AgentIsland.recentFolders(history, exists: exists)).filter { seen.insert($0).inserted }
             .prefix(AgentIsland.recentFoldersMax))
     }
+
+    // MARK: #1323 on another Mac
+
+    /// dch #114 (de271c3, first in v1.41.0): `--spawn host:name` with `--cwd` on the host.
+    static let remoteMinimum = [1, 41, 0]
+    static let thisMac = "This Mac"
+
+    /// `dch --host <host> --spawn <name> --cwd <path> -- <command>`: host and path raw (argv); the command named as the local
+    /// one. The --host form (remote Resume's): a local session or record named "host:name" would keep `--spawn host:name` here.
+    static func remoteArgs(host: String, name: String, cwd: String, command: [String]) -> [String] {
+        ["--host", host, "--spawn", name, "--cwd", cwd, "--"] + AgentIsland.naming(command, name: name)
+    }
+
+    /// v1 has no folder browser on the host: a typed absolute path, which dch checks there ("no such directory").
+    static func remoteFolderError(_ f: String) -> String? {
+        if f.isEmpty { return "Type a folder on that Mac" }
+        guard f.hasPrefix("/") else { return "Type a full path starting with /: a relative path has no folder to start from" }
+        return f.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f } ? "Use a path without control characters" : nil
+    }
+
+    /// `host`'s folders: its live sessions' cwds, then its History records' newest first; absolute, deduped, at most 8.
+    static func remoteRecents(host: String, sessions: [AgentSidebar.Remote], history: [AgentSidebar.RemoteRecord]) -> [String] {
+        let live = sessions.filter { $0.host == host }.compactMap(\.cwd)
+        let ended = history.filter { $0.host == host }.sorted { $0.record.lastSeen > $1.record.lastSeen }.map(\.record.cwd)
+        var seen = Set<String>()
+        return Array((live + ended).filter { remoteFolderError($0) == nil && seen.insert($0).inserted }
+            .prefix(AgentIsland.recentFoldersMax))
+    }
+
+    /// dch's answer to a remote --spawn as the form's line; nil: it started. The host is shown through OutsideText.
+    static func remoteFailure(_ r: DchActionResult, host: String, name: String) -> String? {
+        guard r.status != 0 else { return nil }
+        let h = OutsideText.shown(host), all = r.text.joined(separator: "\n")
+        if r.stopped { return "No answer from \(h)" }
+        if all.contains("no such directory") { return "No such folder on \(h)" }
+        if all.contains("--allow-create") { return "\(h) does not allow new sessions: run dch serve --allow-create there" }
+        if r.status == 7 || all.contains(": unreachable") { return "Can't reach \(h)" }
+        return AgentIsland.spawnText(r, name: name).map { OutsideText.shown($0) }
+    }
 }
 
 /// #1205: the "via ccpool" hint's source while the form is shown. The routing toggle, the proxy's state and the
@@ -167,15 +208,32 @@ struct AgentNewSessionView: View {
         VStack(alignment: .leading, spacing: sz(6)) {
             Text("New session").font(Neon.font(13, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                 .padding(.bottom, sz(6))
+            // #1323: only when the remote list names a host (and dch can start one there).
+            let hosts = model.newSessionHosts
+            if !hosts.isEmpty {
+                field("On", error: nil) {
+                    Picker("On", selection: Binding(get: { form.host }, set: { model.setNewSessionHost($0) })) {
+                        Text(verbatim: model.newSessionHostLabel(nil)).tag(String?.none)
+                        ForEach(hosts, id: \.self) { h in Text(verbatim: model.newSessionHostLabel(h)).tag(Optional(h)) }
+                    }
+                    .labelsHidden().pickerStyle(.menu).fixedSize()
+                    .accessibilityLabel("On")
+                }
+            }
             field("Folder", error: errors.folder) {
                 HStack(spacing: sz(6)) {
-                    TextField("~", text: Binding(get: { form.folder }, set: { model.setNewSessionFolder($0) }))
+                    TextField(form.host == nil ? "~" : "/Users/you/project", text: Binding(get: { form.folder }, set: { model.setNewSessionFolder($0) }))
                         .focused($focus, equals: .folder)
                         .accessibilityLabel("Folder")   // #887 (QA #747 INFO-6): VoiceOver read the placeholder
                     Menu {
                         ForEach(model.newSessionRecents, id: \.self) { f in
-                            let shown = AgentNewSession.abbreviate(f, home: model.home)
-                            Button(shown) { model.setNewSessionFolder(shown) }
+                            if form.host == nil {
+                                let shown = AgentNewSession.abbreviate(f, home: model.home)
+                                Button(shown) { model.setNewSessionFolder(shown) }
+                            } else {
+                                // #1323: another Mac's path: shown through OutsideText, set raw
+                                Button(OutsideText.shown(f)) { model.setNewSessionFolder(f) }
+                            }
                         }
                     } label: {
                         Image(systemName: "chevron.down").font(Neon.font(10, weight: .semibold)).foregroundStyle(Neon.textPrimary)
@@ -186,7 +244,9 @@ struct AgentNewSessionView: View {
                     .disabled(model.newSessionRecents.isEmpty)
                     .help("Recent folders")
                     .accessibilityLabel("Recent folders")
-                    AgentPillButton(title: "Choose…", icon: "folder", tint: Neon.blue) { model.chooseNewSessionFolder() }
+                    if form.host == nil {   // #1323: no folder browser on another Mac in v1
+                        AgentPillButton(title: "Choose\u{2026}", icon: "folder", tint: Neon.blue) { model.chooseNewSessionFolder() }
+                    }
                 }
             }
             field("Name", error: errors.name) {
