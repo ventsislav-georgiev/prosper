@@ -1556,6 +1556,8 @@ tag from the now-released section and put it on the new top draft.
   and, for Borderless, Rounded corners (turn it off for square corners that fill a full-screen
   window edge to edge); in every style you can drag the window by the empty parts of the sidebar's
   title row and the session header, and double-click there to zoom it. (#1378)
+- X-ray has a Memory tab (the memories and instruction files in force for the session), and a task
+  or memory opens the prompt that changed it. (#1352)
 
 ## v2.174.0
 

@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 // #1351 (#1346 P3a, design 3.1-3.9): the X-ray panel, a drawer over one pane (both modes; it overlays, so the terminal
-// keeps its grid) with a tab strip in dch's order. Tasks is the first working tab; Memory shows its label and count
-// (its content is P4). Read when the panel opens; #1368's poller (XrayPoller.swift) re-reads Tasks while it is shown.
+// keeps its grid) with a tab strip in dch's order: Tasks and (#1352) Memory. Read when the panel opens; #1368's poller
+// (XrayPoller.swift) re-reads Tasks while it is shown; Memory is read again on a switch to its tab, never polled (#1352).
+// #1352: a task row and the memory card's "Read the prompt" jump to the prompt that last changed it (design 3.3).
 
 /// The tabs in dch's order (xview.c xv_ord); later phases put Prompts, Responses, Refs and Search before these.
 enum XrayTab: String, CaseIterable { case tasks = "Tasks", memory = "Memory" }
@@ -33,11 +34,34 @@ final class XrayPanels: ObservableObject {
     @Published var open: [UUID: XrayPanelModel] = [:] {
         didSet {   // #1368: a panel that leaves stops polling and SIGTERMs its read; one that comes reads its pane's state
             for (k, m) in oldValue where open[k] !== m { m.stop() }
-            for (k, m) in open where oldValue[k] !== m { m.paneState = { Self.paneState(k) } }
+            for (k, m) in open where oldValue[k] !== m { m.paneState = { Self.paneState(k) }; wire(m, k) }
         }
     }
 
     func close(_ pane: UUID) { open[pane] = nil }
+
+    /// #1352: the window that draws `pane` (its presenter shows the memory card); rows put theirs here.
+    static var window: @MainActor (UUID) -> AgentsNSWindow? = { AgentsNSWindow.window(of: $0) }
+
+    /// #1352, design 3.3: the transcript a jump lands in: the pane's own, in Transcript mode, for a local session; nil
+    /// (Terminal mode, a remote row, another pane focused) means the card.
+    static func transcript(_ pane: UUID, _ target: XrayTarget) -> AgentTranscriptModel? {
+        guard target.dir != nil, let m = model(pane), m.layout.focused == pane, m.paneMode == .transcript else { return nil }
+        return m.focusedRuntime?.transcript
+    }
+
+    /// #1352: the window's presenter, the transcript, the link opener and the cwd, for the panel that came to `pane`.
+    private func wire(_ m: XrayPanelModel, _ pane: UUID) {
+        let target = m.target
+        m.present = { view, size in
+            guard let w = Self.window(pane), let anchor = XrayCardAnchor.view(for: pane, in: w) ?? w.contentView else { return }
+            w.cards.present(view, size: size, anchor: anchor) {}
+        }
+        m.dismiss = { Self.window(pane)?.cards.close() }
+        m.transcript = { Self.transcript(pane, target) }
+        m.openURL = { Self.model(pane)?.openURL($0) }
+        m.cwd = { Self.model(pane)?.focusedRuntime?.transcript.cwd }
+    }
 
     /// One dch run: (path, argv, env) -> (exit status, stdout); -1 when it never ran or timed out.
     typealias Run = @Sendable (_ path: String, _ args: [String], _ env: [String: String]) async -> (status: Int32, out: Data)
@@ -92,6 +116,8 @@ final class XrayPanelModel: ObservableObject {
     @Published var filterFocused = false
     /// The task whose card was asked for last (the presenter shows it).
     @Published private(set) var card: XrayTasks.Task?
+    /// #1352: the memory whose card was asked for last.
+    @Published private(set) var memoryCard: XrayMemory.Item?
     var reading: Task<Void, Never>?   // the open read or a poll (XrayPoller.swift)
     /// #1368: the poller's state (XrayPoller.swift): the read's dch and runner, when the last read started, the dch
     /// path's mtime after a failed read (no retry until it moves), exit 4/7's "host unreachable", the ticker's stop.
@@ -111,6 +137,14 @@ final class XrayPanelModel: ObservableObject {
     var now: () -> Date = Date.init
     var close: () -> Void = {}
     var presentCard: (XrayTasks.Task) -> Void = { _ in }
+    /// #1352 seams, wired by XrayPanels.open: any card through the window's presenter, its close, the pane's transcript
+    /// (nil: no jump, the card), the link opener, the session's cwd (instruction paths are shown relative to it).
+    var present: (AnyView, CGSize) -> Void = { _, _ in }
+    var dismiss: () -> Void = {}
+    var transcript: () -> AgentTranscriptModel? = { nil }
+    var openURL: (URL) -> Void = { _ in }
+    var cwd: () -> String? = { nil }
+    var home = NSHomeDirectory()
     /// The Todos chip's: run instead of keeping the panel when the read finds no Tasks tab (Q3).
     var fallback: (() -> Void)?
     /// R1351-i1: true while this panel is still the pane's open one and the pane still shows `target`; the fallback runs
@@ -146,14 +180,32 @@ final class XrayPanelModel: ObservableObject {
 
     func apply(tasks tr: (status: Int32, out: Data), memory mr: (status: Int32, out: Data)) {
         take(tr)
-        memory = mr.status == 0 ? XrayMemory.parse(mr.out) : nil
-        if memory?.count == 0 { memory = nil }
+        takeMemory(mr)
         loaded = true
         if let fallback, tasks == nil {
             if isCurrent() { close(); fallback() }   // another session now shown: the list never opens over it
             return
         }
         if !tabs.contains(tab), let first = tabs.first { tab = first }
+    }
+
+    func takeMemory(_ mr: (status: Int32, out: Data)) {
+        memory = mr.status == 0 ? XrayMemory.parse(mr.out) : nil
+        if memory?.count == 0 { memory = nil }
+    }
+
+    /// #1352: a tab chosen in the strip; Memory is read again then (once; design 3.4's 30 s Memory poll is not built).
+    func select(_ t: XrayTab) {
+        tab = t
+        guard t == .memory, loaded, reading == nil, let dch, let run else { return }
+        let env = target.env, a = target.args("memory")
+        reading = Task { [weak self] in
+            let r = await run(dch, a, env)
+            guard !Task.isCancelled, let self else { return }
+            self.reading = nil
+            self.takeMemory(r)
+            if !self.tabs.contains(self.tab), let first = self.tabs.first { self.tab = first }
+        }
     }
 
     /// Design 3.9 and QA R1349-i2: a Tasks tab only for exit 0, header schema 1 and at least one task.
@@ -213,10 +265,93 @@ final class XrayPanelModel: ObservableObject {
         return true
     }
 
-    /// Return or a click on a row: the card (chapter jumps are P4).
+    /// The task card.
     func openCard(_ t: XrayTasks.Task) {
         card = t
         presentCard(t)
+    }
+
+    /// #1352, design 3.3: "older than the loaded part", shown with the card when the prompt is above what can load.
+    static let olderNote = "The prompt is older than the loaded part."
+
+    /// Return or a click on a task row: the prompt that last changed it (`chapter`, never `created_chapter`); no
+    /// chapter, no transcript (Terminal mode, remote) or a refused anchor: the card; too old: the card with the note.
+    func activate(_ t: XrayTasks.Task) {
+        go(t.chapter) { [weak self] older in
+            guard let self else { return }
+            guard older else { return self.openCard(t) }
+            self.card = t
+            self.present(AnyView(XrayTaskCard(task: t, now: self.now(), open: self.openURL, note: Self.olderNote)), XrayTaskCard.size)
+        }
+    }
+
+    /// Return or a click on a memory row: its card.
+    func openMemoryCard(_ m: XrayMemory.Item, note: String? = nil) {
+        memoryCard = m
+        let read: (() -> Void)? = XrayMemoryCard.canRead(m) ? { [weak self] in self?.readPrompt(m) } : nil
+        present(AnyView(XrayMemoryCard(item: m, now: now(), note: note, readPrompt: read)), XrayMemoryCard.size)
+    }
+
+    /// The card's "Read the prompt": the card goes and the transcript jumps; else the card stays (with the note when old).
+    func readPrompt(_ m: XrayMemory.Item) {
+        guard XrayMemoryCard.canRead(m) else { return }
+        go(m.chapter) { [weak self] older in if older { self?.openMemoryCard(m, note: Self.olderNote) } }
+    }
+
+    /// The jump; `card(older)` runs when it did not land.
+    private func go(_ anchor: String?, card: @escaping @MainActor (Bool) -> Void) {
+        guard let anchor, let tm = transcript() else { return card(false) }
+        TranscriptJumper.of(tm).jump(anchor: anchor, in: tm) { [weak self] r in
+            switch r {
+            case .jumped: self?.dismiss()
+            case .older: card(true)
+            case .refused: card(false)
+            }
+        }
+    }
+
+    // MARK: #1352 Memory
+
+    /// Design 3.2: case-insensitive, over id, title, note, kind, path and body.
+    static func matches(_ m: XrayMemory.Item, _ filter: String) -> Bool {
+        let q = filter.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty || [m.id, m.title, m.note ?? "", m.kindWord ?? "", m.path, m.body ?? ""]
+            .contains { $0.localizedCaseInsensitiveContains(q) }
+    }
+
+    /// The memory groups with the filter applied; an emptied group goes.
+    var shownMemory: [XrayMemory.Group] {
+        guard let memory else { return [] }
+        return memory.groups.map { XrayMemory.Group(title: $0.title, items: $0.items.filter { Self.matches($0, filter) }) }
+            .filter { !$0.items.isEmpty }
+    }
+}
+
+/// One memory row as drawn and spoken (design 3.2, 3.8): title; kind and note (an instruction file: its path) faint;
+/// at the right "wrote"/"loaded" and the age.
+struct XrayMemoryRow: Equatable {
+    let title: String
+    let detail: String
+    let session: String?
+    let age: String?
+    let spoken: String
+
+    /// Relative to the cwd (which wins when both hold), else ~ for the home dir; then the outside-text rule (160).
+    static func shortPath(_ p: String, home: String, cwd: String?) -> String {
+        var s = p
+        if let cwd, !cwd.isEmpty, cwd != "/", p.hasPrefix(cwd + "/") { s = String(p.dropFirst(cwd.count + 1)) }
+        else if !home.isEmpty, home != "/", p.hasPrefix(home + "/") { s = "~" + p.dropFirst(home.count) }
+        return OutsideText.shown(s, max: 160)
+    }
+
+    init(_ m: XrayMemory.Item, now: Date, home: String, cwd: String?) {
+        title = m.title
+        let note = m.kind == .instructions ? Self.shortPath(m.path, home: home, cwd: cwd) : m.note
+        detail = [m.kindWord, note].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " \u{00B7} ")
+        session = m.sessionWord.flatMap { $0.isEmpty ? nil : $0 }
+        let a = XrayTaskRow.age(m.updated, now: now)
+        age = a?.short
+        spoken = ([title, m.kindWord, note, session, a?.spoken].compactMap { $0 }.filter { !$0.isEmpty }).joined(separator: ", ")
     }
 }
 
@@ -341,7 +476,7 @@ struct XrayPanelView: View {
         } else if panel.tabs.isEmpty {
             faint("No tasks or memory for this session").padding(sz(10))
         } else if panel.tab == .memory {
-            faint("\(panel.count(.memory)) memories and instruction files").padding(sz(10))
+            memoryTab
         } else {
             tasksTab
         }
@@ -360,12 +495,35 @@ struct XrayPanelView: View {
                     ForEach(Array(panel.shownGroups.enumerated()), id: \.offset) { _, g in
                         faint("\(g.title) \(g.tasks.count)").padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
                         ForEach(Array(g.tasks.enumerated()), id: \.offset) { _, t in
-                            XrayTaskRowView(row: XrayTaskRow(t, now: panel.now())) { panel.openCard(t) }
+                            XrayTaskRowView(row: XrayTaskRow(t, now: panel.now())) { panel.activate(t) }
                         }
                     }
                 }
             }
             ForEach(panel.footer, id: \.self) { faint($0) }
+        }
+        .padding(sz(10))
+    }
+
+    var memoryTab: some View {
+        VStack(alignment: .leading, spacing: sz(4)) {
+            TextField("Filter", text: $panel.filter)
+                .textFieldStyle(.roundedBorder)
+                .font(Neon.font(11))
+                .focused($filterFocus)
+                .accessibilityLabel("Filter memory")
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(panel.shownMemory.enumerated()), id: \.offset) { _, g in
+                        faint("\(g.title) \(g.items.count)").padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
+                        ForEach(Array(g.items.enumerated()), id: \.offset) { _, m in
+                            XrayMemoryRowView(row: XrayMemoryRow(m, now: panel.now(), home: panel.home, cwd: panel.cwd())) {
+                                panel.openMemoryCard(m)
+                            }
+                        }
+                    }
+                }
+            }
         }
         .padding(sz(10))
     }
@@ -383,7 +541,7 @@ struct XrayTabStrip: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(panel.tabs, id: \.self) { t in
-                Button { panel.tab = t } label: {
+                Button { panel.select(t) } label: {
                     Text(verbatim: counts ? panel.title(t) : t.rawValue)
                         .font(Neon.font(10.5, weight: .medium))
                         .foregroundStyle(t == panel.tab ? Neon.textPrimary : Neon.textSecondary)
@@ -434,12 +592,98 @@ struct XrayTaskRowView: View {
     }
 }
 
+struct XrayMemoryRowView: View {
+    let row: XrayMemoryRow
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: sz(6)) {
+                Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                Text(verbatim: row.detail).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: sz(4))
+                ForEach([row.session, row.age].compactMap { $0 }, id: \.self) {
+                    Text(verbatim: $0).foregroundStyle(Neon.textSecondary).lineLimit(1).fixedSize()
+                }
+            }
+            .font(Neon.font(11))
+            .padding(.vertical, sz(2))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(row.spoken)
+    }
+}
+
+/// #1352, the memory card (design 3.2, 3.7): path, kind, scope, updated, then the body as plain text (never Markdown),
+/// its combining marks capped (OutsideText.capMarks); the cut and unreadable notes; "Read the prompt" when the memory
+/// was written or loaded in this session at a known prompt.
+struct XrayMemoryCard: View {
+    let item: XrayMemory.Item
+    var now = Date()
+    var note: String?
+    let readPrompt: (() -> Void)?
+
+    static let size = CGSize(width: 380, height: 360)
+
+    static func canRead(_ m: XrayMemory.Item) -> Bool { m.sessionWord != nil && m.chapter != nil }
+
+    static func fields(_ m: XrayMemory.Item, now: Date) -> [(label: String, value: String)] {
+        let pairs: [(String, String?)] = [("Path", OutsideText.shown(m.path, max: 160)), ("Kind", m.kindWord), ("Scope", m.scopeWord),
+                                          ("Updated", XrayTaskRow.age(m.updated, now: now)?.spoken)]
+        return pairs.compactMap { p -> (label: String, value: String)? in
+            guard let v = p.1, !v.isEmpty else { return nil }
+            return (p.0, v)
+        }
+    }
+
+    /// The body as drawn: marks capped again here (the item may not come from the parse); nil: "not readable".
+    static func bodyText(_ m: XrayMemory.Item) -> String? { m.body.map { OutsideText.capMarks($0) } }
+
+    /// The notes under the body.
+    static func notes(_ m: XrayMemory.Item) -> [String] {
+        (m.body == nil ? ["not readable"] : []) + (m.cut ? ["cut at 16 KB: see \(OutsideText.shown(m.path, max: 160))"] : [])
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(8)) {
+            Text(verbatim: item.title).font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textPrimary).lineLimit(2)
+            ForEach(Array(Self.fields(item, now: now).enumerated()), id: \.offset) { _, f in
+                HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
+                    Text(verbatim: f.label).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+                    Text(verbatim: f.value).font(Neon.font(11)).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.middle)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(f.label): \(f.value)")
+            }
+            if let b = Self.bodyText(item) {
+                ScrollView {
+                    Text(verbatim: b).font(Neon.font(11)).foregroundStyle(Neon.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                }
+                .accessibilityLabel("Body")
+            }
+            ForEach(Self.notes(item) + [note].compactMap { $0 }, id: \.self) {
+                Text(verbatim: $0).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+            }
+            if let readPrompt {
+                Button("Read the prompt", action: readPrompt)
+                    .keyboardShortcut(.defaultAction)   // Return in the card (design 3.2)
+                    .accessibilityLabel("Read the prompt that changed this memory")
+            }
+        }
+        .padding(sz(12))
+    }
+}
+
 /// The task card (design 3.2): title in full, status and label, doing, note, times, blocked by, group, URL; Open
 /// (http/https only, the raw url, and only when it is the shown one) and Copy (Pasteboard.swift).
 struct XrayTaskCard: View {
     let task: XrayTasks.Task
     let now: Date
     let open: (URL) -> Void
+    /// #1352: "older than the loaded part" when a jump could not reach the prompt.
+    var note: String?
 
     static let size = CGSize(width: 360, height: 320)
 
@@ -494,6 +738,7 @@ struct XrayTaskCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let note { Text(verbatim: note).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary) }
             HStack(spacing: sz(8)) {
                 if Self.openURL(task) != nil {
                     Button("Open", action: openLink).accessibilityLabel("Open the task's link")

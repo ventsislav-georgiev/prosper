@@ -223,6 +223,37 @@ struct AgentTranscriptView: View {
     }
 
     func jump(to chapter: TranscriptOutline.Chapter) { jump(toBlock: chapter.id) }
+
+    /// #1352 (#1346 design 3.3): where a dch chapter anchor led.
+    enum AnchorJump: Equatable { case jumped(Int), older, refused }
+
+    /// dch's anchor f<inode>:<offset>, after DchCtl.anchorOK; nil for any other shape (both numbers digits only).
+    static func anchor(_ a: String) -> (inode: UInt64, offset: UInt64)? {
+        guard DchCtl.anchorOK(a), a.hasPrefix("f") else { return nil }
+        let p = a.dropFirst().split(separator: ":", omittingEmptySubsequences: false)
+        guard p.count == 2, p.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy { (0x30...0x39).contains($0) } }),
+              let i = UInt64(p[0]), let o = UInt64(p[1]) else { return nil }
+        return (i, o)
+    }
+
+    /// Design 3.3: the block whose source line starts at the anchor's offset in the same transcript file (its inode),
+    /// jumped to; not loaded yet: earlier pages load until it is (`pages` at most), else `.older` (above the history cap,
+    /// or paging stopped moving). A bad anchor, another file, or a line that made no block: `.refused` (the caller's card).
+    func jump(anchor a: String, in m: AgentTranscriptModel, pages: Int = 64, done: @escaping @MainActor (AnchorJump) -> Void) {
+        guard let at = Self.anchor(a), let t = m.tail, t.inode == at.inode else { return done(.refused) }
+        let off = at.offset
+        if let b = m.blocks.first(where: { $0.source?.lowerBound == off }) {
+            jump(toBlock: b.id)
+            return done(.jumped(b.id))
+        }
+        let from = t.earliestLoaded
+        guard off < from else { return done(.refused) }
+        guard pages > 0, !m.atHistoryCap else { return done(.older) }
+        m.loadEarlier { [weak self, weak m] in
+            guard let self, let m, let now = m.tail?.earliestLoaded, now < from else { return done(.older) }
+            self.jump(anchor: a, in: m, pages: pages - 1, done: done)
+        }
+    }
     func jump(toBlock id: Int) { send(id) }
     func jumpToLatest() { send(nil) }
 

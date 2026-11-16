@@ -496,6 +496,8 @@ final class AgentTranscriptModel: ObservableObject {
     private var pollAgain = false
     /// QA #626 INFO-3: a "Load earlier" asked for while a read is in flight runs after it.
     private(set) var earlierAgain = false
+    /// #1352: run once the next earlier page is in (or at once when none can load); a new file or session drops them.
+    private var earlierWaiters: [@MainActor () -> Void] = []
 
     // Seams.
     var now: () -> Date = Date.init
@@ -689,8 +691,9 @@ final class AgentTranscriptModel: ObservableObject {
 
     /// Rule 9 paging: decode the page before the earliest loaded line, while the
     /// per-session block bound has room. Read, decoded and prepended off main.
-    func loadEarlier() {
-        guard running, let t = tail, !atHistoryCap else { return }
+    func loadEarlier(then done: (@MainActor () -> Void)? = nil) {
+        if let done { earlierWaiters.append(done) }
+        guard running, let t = tail, !atHistoryCap else { return flushEarlier() }
         guard !busy else { earlierAgain = true; return }
         busy = true
         let gen = generation
@@ -710,6 +713,7 @@ final class AgentTranscriptModel: ObservableObject {
         busy = false
         (tail, assembler) = (h.value.0, h.value.1)
         publish()
+        flushEarlier()
         if pollAgain {
             pollAgain = false
             poll()
@@ -747,7 +751,14 @@ final class AgentTranscriptModel: ObservableObject {
     }
 
     /// A new tail or assembler: whatever is in flight belongs to the old one.
+    private func flushEarlier() {
+        let w = earlierWaiters
+        earlierWaiters = []
+        w.forEach { $0() }
+    }
+
     private func bump() {
+        earlierWaiters = []
         generation += 1
         busy = false
         pollAgain = false
