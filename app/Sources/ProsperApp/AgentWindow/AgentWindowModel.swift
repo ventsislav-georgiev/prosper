@@ -184,8 +184,10 @@ enum AgentSidebar {
         add(otherMachinesTitle, remote.sorted { ($0.host, $0.name) < ($1.host, $1.name) }.map(row))
         // #1324 (a): after the local records (unchanged), each host's, capped per host as dch's picker does (50 names).
         let stale = Set(remoteHistory.filter(\.stale).map(\.record.id))
+        // R1364-s1: a name live on a host hides that host's records only (the key carries "@" + host).
+        let liveFar = Set(remote.map { AgentSessionKey(dir: "@" + $0.host, name: $0.name) })
         let far = Dictionary(grouping: remoteHistory, by: \.host).sorted { $0.key < $1.key }
-            .flatMap { AgentIsland.cappedHistory($0.value.map(\.record)) }
+            .flatMap { AgentIsland.cappedHistory($0.value.map(\.record), live: liveFar) }
             .map { row($0, now: now, stale: stale.contains($0.id), action: actions[$0.id]) }
         add("History", AgentIsland.cappedHistory(history, live: Set(sessions.map(\.key))).map { row($0, now: now) } + far)
         return out

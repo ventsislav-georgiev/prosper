@@ -36,12 +36,17 @@ final class AgentWindowRemoteHistoryTests: XCTestCase {
         var pins = 0
     }
 
+    /// The list fixture without the host rows named "api" and "build" (R1364-s1: a name live on a host hides that host's record of it, so
+    /// the rows below, which list and resume those records, run where they are not live).
+    static let list = AgentWindowRemoteRowsTests.fixture.split(separator: "\n")
+        .filter { l in !l.contains(#""host":"host-"#) || !(l.contains(#""name":"api""#) || l.contains(#""name":"build""#)) }.joined(separator: "\n")
+
     static func key(_ host: String, _ name: String) -> AgentSessionKey { AgentSessionKey(dir: "@" + host, name: name) }
 
-    /// A visible window on the fake list (step A's fixture: host-a runs "api"), the fake History answer and a recording
+    /// A visible window on the fake list (step A's fixture without the live api and build), the fake History answer and a recording
     /// verb seam; the island's own Resume, Pin and Remove are counted.
     @MainActor
-    func model(_ history: Lister, verbs: Verbs = Verbs(), lister: Lister = Lister(AgentWindowRemoteRowsTests.fixture))
+    func model(_ history: Lister, verbs: Verbs = Verbs(), lister: Lister = Lister(AgentWindowRemoteHistoryTests.list))
         -> (AgentWindowModel, AgentIslandStore, Log) {
         let log = Log()
         let store = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
@@ -116,19 +121,59 @@ final class AgentWindowRemoteHistoryTests: XCTestCase {
         XCTAssertEqual(history.calls.count, 2)
     }
 
+    // MARK: R1364-s1: a session live on a host hides that host's record of the same name, and only that
+
+    private func remoteRecord(_ host: String, _ name: String, file: String = "") -> AgentSidebar.RemoteRecord {
+        AgentSidebar.RemoteRecord(record: DchHistoryRecord(key: Self.key(host, name), cwd: "/Users/example/api",
+                                  ended: AgentWindowD1Tests.now - 600, end: "stopped", file: file), stale: false)
+    }
+
+    private func liveRemote(_ host: String, _ name: String) -> AgentSidebar.Remote {
+        AgentSidebar.Remote(host: host, name: name, alias: "", stale: false, cwd: nil)
+    }
+
+    private func history(local: [DchHistoryRecord] = [], remote: [AgentSidebar.Remote],
+                         far: [AgentSidebar.RemoteRecord]) -> [AgentSidebar.Row] {
+        AgentSidebar.sections(sessions: [], history: local, sort: .name, sidekickPattern: "-qa", details: .all,
+                              now: AgentWindowD1Tests.now, remote: remote, remoteHistory: far)
+            .first { $0.title == "History" }?.rows ?? []
+    }
+
+    func testALiveRemoteSessionHidesItsAsideRecordOnThatHost() {
+        let rows = history(remote: [liveRemote("host-a", "api")],
+                           far: [remoteRecord("host-a", "api", file: "api.1762000000"), remoteRecord("host-a", "docs")])
+        XCTAssertEqual(rows.map(\.title), ["docs"], "api is live on host-a: its aside record is not listed; docs stays")
+        XCTAssertTrue(history(remote: [liveRemote("host-a", "api")], far: [remoteRecord("host-a", "api", file: "api.1762000000")]).isEmpty,
+                      "nothing left: no History section at all")
+    }
+
+    func testTheSameNameEndedOnAnotherHostStaysListed() {
+        let rows = history(remote: [liveRemote("host-a", "api")], far: [remoteRecord("host-a", "api"), remoteRecord("host-b", "api")])
+        XCTAssertEqual(rows.map(\.id), [.history(Self.key("host-b", "api"))])
+        XCTAssertEqual(rows.map(\.host), ["host-b"])
+    }
+
+    func testTheSameNameAsALocalRecordStaysListed() {
+        let local = DchHistoryRecord(key: AgentSessionKey(dir: Self.dir, name: "api"), cwd: "/Users/example/api",
+                                     ended: AgentWindowD1Tests.now - 600, end: "stopped", file: "api")
+        let rows = history(local: [local], remote: [liveRemote("host-a", "api")], far: [remoteRecord("host-a", "api")])
+        XCTAssertEqual(rows.map(\.id), [.history(local.id)], "the local record stays; host-a's is hidden")
+        XCTAssertEqual(rows.map(\.host), [nil])
+    }
+
     // MARK: (b) (d) Resume: the --host form, once, never --all; (c) the island's words, no auto-select
 
     @MainActor
     func testRemoteResumeRunsTheHostFormOnceAndNeverAll() throws {
-        let history = Lister(Self.fixture), verbs = Verbs(), lister = Lister(AgentWindowRemoteRowsTests.fixture)
+        let history = Lister(Self.fixture), verbs = Verbs(), lister = Lister(Self.list)
         let (m, _, log) = model(history, verbs: verbs, lister: lister)
         defer { m.close() }
         let api = try XCTUnwrap(m.row(.history(Self.key("host-a", "api")))?.record)
         m.click(.history(api.id))
         m.act(.resume, api)
         XCTAssertEqual(verbs.calls.count, 1)
-        XCTAssertEqual(verbs.calls.last?.args, ["--host", "host-a", "--revive", "api.json", "--as", "api-2", "--json"],
-                       "the unambiguous --host form, the exact record file; api runs on host-a, so --as")
+        XCTAssertEqual(verbs.calls.last?.args, ["--host", "host-a", "--revive", "api.json", "--json"],
+                       "the unambiguous --host form, the exact record file; api is not live on host-a here")
         XCTAssertEqual(verbs.calls.last?.key, Self.key("host-a", "api"), "its own key: never a local job's")
         XCTAssertEqual(verbs.calls.last?.dch, "/opt/example/bin/dch")
         XCTAssertEqual(m.row(.history(api.id))?.detail, AgentIsland.resumingText)
@@ -161,6 +206,21 @@ final class AgentWindowRemoteHistoryTests: XCTestCase {
         m.act(.resume, docs)
         XCTAssertEqual(verbs.calls.last?.args, ["--host", "host-a", "--revive", "docs.json", "--json"])
         XCTAssertTrue(m.remoteResumeText[docs.id] == nil)
+    }
+
+    /// The --as branch of Resume stays live code (a session can start between the list and the click, R1364-s1): the
+    /// model's own entry, host-a's api record while api is live on host-a (the old list fixture), not a History row.
+    @MainActor
+    func testResumeOfARecordWhoseNameIsLiveOnItsHostGoesAsTheNextFreeName() throws {
+        let verbs = Verbs()
+        let (m, _, _) = model(Lister(Self.fixture), verbs: verbs, lister: Lister(AgentWindowRemoteRowsTests.fixture))
+        defer { m.close() }
+        let parsed = try XCTUnwrap(AgentSidebar.parseRemoteHistory(Data(Self.fixture.utf8)))
+        let api = try XCTUnwrap(parsed.first { $0.host == "host-a" && $0.record.name == "api" }?.record)
+        XCTAssertTrue(m.row(.history(api.id)) == nil, "its row is hidden while api is live on host-a")
+        m.resumeRemote(api)
+        XCTAssertEqual(verbs.calls.last?.args, ["--host", "host-a", "--revive", "api.json", "--as", "api-2", "--json"])
+        XCTAssertEqual(verbs.calls.last?.key, Self.key("host-a", "api"))
     }
 
     // MARK: (a) a failed answer keeps the rows; an offline host's go with dch's cache

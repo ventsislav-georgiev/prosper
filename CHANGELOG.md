@@ -1520,6 +1520,8 @@ tag from the now-released section and put it on the new top draft.
   by name, as dch does. (#1347)
 - Agent Sessions: the subagents count on a session row has an outline, so a session with subagents
   stands out from its PR counts. (#1360)
+- Agent Sessions: under Other machines, a session that is running again no longer also shows as an
+  ended record in that host's History. (#1366)
 
 ## v2.174.0
 
