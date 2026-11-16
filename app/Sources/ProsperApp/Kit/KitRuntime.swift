@@ -10,7 +10,8 @@ import Foundation
 // - "Update available" (source version > live version) is only reported, never applied.
 // The two answers the runner needs that are async here (consent, wiring) are awaited BEFORE the runner runs that action and
 // handed to it as values: the runner's handlers stay synchronous and nothing blocks on a Task.
-// Kit content is never run here. One call at a time per kit (the caller serialises; there is one runtime per kit store).
+// Kit content is never run here. One runtime per kit store; #918 S1 (R1402-i1): one op at a time per runtime, a second
+// apply / rollback / remove / repair / refresh while one runs is refused busy and touches nothing.
 
 struct KitRuntimeResult: Sendable {
     /// the machine after the call; nil when the call was refused before it
@@ -30,6 +31,8 @@ struct KitRuntimeStatus: Sendable {
     var pieces: [ManagedConfigPieceStatus]
     var off: Set<String>
     var live: String?
+    /// #918 S1: refresh's notes (a kit not validated again, a refused state file, busy)
+    var notes: [String] = []
 }
 
 /// The sheet approved at askConsent answers itself once more, at the wiring, when the wiring's sheet AND its per-file
@@ -89,6 +92,8 @@ final class KitRuntime: @unchecked Sendable {
     private var approved: ManagedConfigChangeSet?
     private var wiring: String? // nil: the last wiring landed
     private var sluggedHere = false // this drive's shims step wrote kit.env's first KIT_SLUG (QA R1408-i1)
+    private var busy = false // #918 S1: an op holds the runtime
+    static let busyText = "busy: another kit action is running"
     /// Why the persisted state was not restored at init (nil: restored, or no file). The runtime then starts with nothing
     /// applied, and every call that needs an applied kit is refused with this text.
     let restoreRefusal: String?
@@ -156,6 +161,18 @@ final class KitRuntime: @unchecked Sendable {
 
     var current: KitUpdateState? { lock.withLock { state } }
 
+    /// #918 S1 single-flight: false when another op holds the runtime. Every caller releases with `defer { end() }`
+    /// right after a true answer, so a refused or early return releases too.
+    private func begin() -> Bool {
+        lock.withLock { () -> Bool in
+            guard !busy else { return false }
+            busy = true
+            return true
+        }
+    }
+
+    private func end() { lock.withLock { busy = false } }
+
     private var configHome: URL { URL(fileURLWithPath: store.layout.configHome, isDirectory: true) }
 
     /// E-2: the slug recorded at the first apply decides; the manifest's only until then.
@@ -175,21 +192,67 @@ final class KitRuntime: @unchecked Sendable {
 
     private func kit(_ version: String) -> KitValidated? { lock.withLock { kits[version] } }
 
-    private func plan(_ v: KitValidated) -> KitPlan { KitRender.plan(v, context(v.slug), off: off()) }
+    private func plan(_ v: KitValidated) -> KitPlan { KitRender.plan(v, context(v.slug), off: off(), offTools: offTools()) }
 
     // MARK: the S2 off set (kits/<ext-id>/pieces.json, Prosper's own file: no sheet)
 
-    private struct Pieces: Codable { var off: [String] }
+    /// #918 S1: offTools is optional, so a pieces.json written before it still decodes.
+    private struct Pieces: Codable {
+        var off: [String]
+        var offTools: [String: [String]]? = nil
+    }
+
+    private func pieces() -> Pieces? {
+        guard let d = store.fs.read(store.layout.piecesJSON, limit: 64 << 10) else { return nil }
+        return try? JSONDecoder().decode(Pieces.self, from: d)
+    }
 
     /// Outside data (stale or hand-edited): KitRender.plan takes its closure and ignores unknown ids.
     func off() -> Set<String> {
-        guard let d = store.fs.read(store.layout.piecesJSON, limit: 64 << 10), let p = try? JSONDecoder().decode(Pieces.self, from: d) else { return [] }
-        return Set(p.off.prefix(KitManifest.maxPieces))
+        Set((pieces()?.off ?? []).prefix(KitManifest.maxPieces))
     }
 
-    func setOff(_ ids: Set<String>) throws {
+    /// #918 S1 (G1 c): tools piece id -> its tools switched off. Outside data as off(): at most maxPieces pieces, each
+    /// with at most maxEntries names (the validator's file cap bounds a piece's tools); unknown ids and names are ignored by plan.
+    func offTools() -> [String: Set<String>] {
+        var out: [String: Set<String>] = [:]
+        for (id, names) in (pieces()?.offTools ?? [:]).sorted(by: { $0.key < $1.key }).prefix(KitManifest.maxPieces) {
+            out[id] = Set(names.prefix(KitValidator.maxEntries))
+        }
+        return out
+    }
+
+    /// The raw writer, no closure check: setSelection is the checked one. Keeps the per-tool part as it is.
+    func setOff(_ ids: Set<String>) throws { try writePieces(off: ids, offTools: offTools()) }
+
+    private func writePieces(off ids: Set<String>, offTools: [String: Set<String>]) throws {
+        let tools = offTools.isEmpty ? nil : offTools.mapValues { $0.sorted() }
         try store.ensureLayout()
-        try store.fs.openDir(store.layout.root).write("pieces.json", try JSONEncoder().encode(Pieces(off: ids.sorted())), mode: KitStore.envMode)
+        try store.fs.openDir(store.layout.root).write("pieces.json", try JSONEncoder().encode(Pieces(off: ids.sorted(), offTools: tools)), mode: KitStore.envMode)
+    }
+
+    /// #918 S1 (G1 a, b): the CLOSED off set is written (the asked pieces and their dependents), never the asked one; a
+    /// refused selection (the local.md piece off while another claude-md piece is on) is returned and nothing is written.
+    /// `offTools` keeps only the kit's own tools pieces and tool names.
+    func setSelection(_ v: KitValidated, off asked: Set<String>, offTools: [String: Set<String>] = [:]) throws -> KitSelectionResult {
+        let r = KitPieceSelection(v).closure(off: asked)
+        guard case .closed(let closed, _) = r else { return r }
+        var tools: [String: Set<String>] = [:]
+        for (id, names) in offTools {
+            guard let known = v.tools[id].map({ Set($0.map(\.name)) }) else { continue }
+            let mine = names.intersection(known)
+            if !mine.isEmpty { tools[id] = mine }
+        }
+        try writePieces(off: closed, offTools: tools)
+        return r
+    }
+
+    /// #918 S1: the install sheet's preview of the extension's own dir, through the validator only: nothing is copied,
+    /// written or run. Followed TIP over the split: KitValidation, not Result<_, [KitRefusal]> ([KitRefusal] is no Error).
+    /// shortcut: the source byte cap (apply's treeHash) is not checked here; a market kit over it previews and is refused
+    /// at apply. Add the treeHash walk here if the sheet must say so first.
+    func preview(_ ext: LoadedExtension, source: KitInstallSource, otherKitSlugs: Set<String>) -> KitValidation {
+        KitValidator.validate(kitDir: ext.directory, manifest: ext.manifest, source: source, otherKitSlugs: otherKitSlugs)
     }
 
     // MARK: checks every entry point shares
@@ -207,6 +270,8 @@ final class KitRuntime: @unchecked Sendable {
 
     /// Apply or update from the extension's own dir. Nothing happens for the version already live.
     func apply(_ ext: LoadedExtension, source: KitInstallSource = .local, otherKitSlugs: Set<String> = []) async -> KitRuntimeResult {
+        guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
+        defer { end() } // apply
         guard isTrusted(ext.id) else { return KitRuntimeResult(refused: "untrusted kit: trust it first") } // spec 4.9
         let config: ManagedConfig
         switch self.config(for: ext) {
@@ -235,6 +300,8 @@ final class KitRuntime: @unchecked Sendable {
     }
 
     func rollback(_ ext: LoadedExtension) async -> KitRuntimeResult {
+        guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
+        defer { end() } // rollback
         guard isTrusted(ext.id) else { return KitRuntimeResult(refused: "untrusted kit: trust it first") }
         let config: ManagedConfig
         switch self.config(for: ext) {
@@ -273,7 +340,7 @@ final class KitRuntime: @unchecked Sendable {
                 try store.installRunner()
                 let c = context(v.slug)
                 try store.writeKitEnv(c)
-                return KitRender.plan(v, c, off: off()).shims
+                return KitRender.plan(v, c, off: off(), offTools: offTools()).shims
             },
             applyWiring: { [self] _ in
                 if let why = lock.withLock({ wiring }) { throw KitRuntimeError.wiring(why) }
@@ -386,6 +453,8 @@ final class KitRuntime: @unchecked Sendable {
 
     /// ManagedConfig's remove (its own sheet), then the shims of the removed pieces. `ids` nil: the whole kit.
     func remove(_ ext: LoadedExtension, ids: [String]? = nil) async -> KitRuntimeResult {
+        guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
+        defer { end() } // remove
         let config: ManagedConfig
         switch self.config(for: ext) {
         case .success(let c): config = c
@@ -405,6 +474,8 @@ final class KitRuntime: @unchecked Sendable {
 
     /// The live version's declared pieces through ManagedConfig's repair (its own sheet), then its shims again.
     func repair(_ ext: LoadedExtension) async -> KitRuntimeResult {
+        guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
+        defer { end() } // repair
         guard isTrusted(ext.id) else { return KitRuntimeResult(refused: "untrusted kit: trust it first") }
         let config: ManagedConfig
         switch self.config(for: ext) {
@@ -421,6 +492,21 @@ final class KitRuntime: @unchecked Sendable {
         guard r.ok else { return out }
         do { try store.writeShims(p.shims) } catch { out.failures.append("writeShims: \(error)") }
         return out
+    }
+
+    /// #918 S1 (#1409 S3): status after a relaunch. restoreKits validates live, previous and retiring again from their dirs
+    /// (with the host version), then status reports them; status() alone has live nil until a drive ran. Busy: nothing is
+    /// read but pieces.json, live nil, the busy text in notes (the caller keeps what it shows). nil: not this runtime's kit
+    /// or no managed config.
+    func refresh(_ ext: LoadedExtension) async -> KitRuntimeStatus? {
+        guard begin() else { return KitRuntimeStatus(pieces: [], off: off(), live: nil, notes: [Self.busyText]) }
+        defer { end() } // refresh
+        guard case .success = self.config(for: ext) else { return nil }
+        let host = await ExtensionRegistry.bundleVersion
+        let restored = restoreKits(ext, host: host) // refresh
+        guard var s = status(ext) else { return nil }
+        s.notes = (restoreRefusal.map { [$0] } ?? []) + restored
+        return s
     }
 
     /// ManagedConfig.status(owner:declared:) for the live version's planned pieces, plus the off set.
