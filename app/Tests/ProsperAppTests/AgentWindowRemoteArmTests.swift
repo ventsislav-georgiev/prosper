@@ -159,4 +159,25 @@ final class AgentWindowRemoteArmTests: XCTestCase {
         let rec = try XCTUnwrap(AgentSidebar.parseRemoteHistory(Data(history.utf8))?.first)
         XCTAssertEqual(AgentSidebar.row(rec.record, now: AgentWindowD1Tests.now, stale: false, action: nil).title, "docs")
     }
+
+    /// R1330-s1: the failed Resume text of a remote record holds the remote name and another machine's dch text.
+    @MainActor
+    func testARemoteRowsFailedResumeDetailIsShownThroughOutsideText() throws {
+        let history = #"""
+        [{"name":"do\u202ecs","alias":"","cwd":"/Users/example/docs","ended":1799999500,"end":"exit 1","file":"docs","host":"host-a","stale":false}]
+        """#
+        let rec = try XCTUnwrap(AgentSidebar.parseRemoteHistory(Data(history.utf8))?.first)
+        let failed = "dch: do\u{202E}cs: no such file\u{202E}"
+        let row = AgentSidebar.row(rec.record, now: AgentWindowD1Tests.now, stale: false, action: failed)
+        XCTAssertEqual(row.detail, "dch: docs: no such file", "the override dropped from the detail")
+        // The stored text (what the pane's refusal line draws) is the shown text.
+        let (m, _, _) = rows.model(Lister("[]"), sessions: [])
+        defer { m.close() }
+        let res = AgentIsland.actionResult(status: 1, output: Data("dch: do\u{202E}cs: boom\u{202E}\n".utf8))
+        let raw = AgentIsland.rowText(res, name: "docs", .resume)
+        XCTAssertTrue(raw.contains("\u{202E}"), "the fake result carries the override: \(raw.count)")
+        m.remoteResumed(rec.record.id, name: "docs", arg: "docs", res)
+        XCTAssertEqual(m.remoteResumeText[rec.record.id], OutsideText.shown(raw))
+        XCTAssertTrue(m.remoteResumeText[rec.record.id]?.contains("\u{202E}") == false)
+    }
 }

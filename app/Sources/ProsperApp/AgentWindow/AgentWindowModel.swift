@@ -213,7 +213,7 @@ enum AgentSidebar {
     /// #1324 (a): a remote record's row: the local row's text (its Resume's text while one runs or after), the host slot.
     static func row(_ r: DchHistoryRecord, now: TimeInterval, stale: Bool, action: String?) -> Row {
         Row(id: .history(r.id), title: OutsideText.shown(r.title), state: nil,   // #1330 (R836-q2)
-            detail: action ?? (stale ? "Stale \u{00B7} " : "") + "Ended \u{00B7} " + AgentIsland.endLabel(r.end),
+            detail: action.map { OutsideText.shown($0) } ?? (stale ? "Stale \u{00B7} " : "") + "Ended \u{00B7} " + AgentIsland.endLabel(r.end),
             age: r.lastSeen > 0 ? AgentIsland.age(now - r.lastSeen) : "", prs: [], record: r,
             host: String(r.key.dir.dropFirst()))
     }
@@ -2096,7 +2096,7 @@ final class AgentWindowModel: ObservableObject {
     func remoteResumed(_ key: AgentSessionKey, name: String, arg: String, _ res: DchActionResult) {
         remoteResumeText[key] = res.stopped
             ? "\(AgentIsland.Verb.resume.rawValue) cancelled: no answer in \(Int(Self.remoteReviveBound / 60))m"
-            : AgentIsland.rowText(DchControlOps.renamed(res, arg, to: name), name: name, .resume)
+            : OutsideText.shown(AgentIsland.rowText(DchControlOps.renamed(res, arg, to: name), name: name, .resume))   // R1330-s1: the other machine's text
         remoteAt = nil
         remoteHistoryAt = nil
         refresh()
