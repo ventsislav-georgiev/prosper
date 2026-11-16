@@ -1140,6 +1140,9 @@ final class AgentIslandPromptTests: XCTestCase {
         }
         for (why, rule) in [("autowrap tail at column 0", String(repeating: "─", count: 30)),
                             ("at column 1", " " + String(repeating: "─", count: 40)),
+                            // QA #297 LOW-1 (#993): frame-wide within the slack, but inside the command's
+                            // dashed frame, a command row under it: the dialog's text, not its top.
+                            ("frame-wide inside the command", String(repeating: "\u{2500}", count: 88)),
                             // Literal widths, not 90 - frameSlack (QA #310 C19): the slack itself is pinned.
                             ("one past the slack", String(repeating: "─", count: 87))] {
             let p = try prompt(screen(rule))
@@ -1153,9 +1156,6 @@ final class AgentIslandPromptTests: XCTestCase {
             XCTAssertEqual(f.answer(1, expected: p), .changed, "\(why): the head is compared")
             XCTAssertEqual(f.sent, [], why)
         }
-        // Within the slack (2) it is a frame (the fixture frames are 90 at column 0 and 89 at column 1).
-        let frame = try prompt(screen(String(repeating: "─", count: 88)))
-        XCTAssertEqual(frame.context, ["echo hello"])
     }
 
     func testAColumnZeroRuleInAnAskQuestionDoesNotEndTheContext() throws {
@@ -2256,6 +2256,116 @@ final class AgentIslandPromptTests: XCTestCase {
     func testBoxDrawingInAPreviewFormLabelRejectsTheSplit() {
         XCTAssertNil(AgentPrompt.parse(altered(rowLayoutScreen, "2. Two lines, swapped", "2. ├── src/ tree view")))
         XCTAssertNil(AgentPrompt.parse(altered(rowLayoutScreen, "1. PR line (Recommended)", "1. PR line ─ compact    ")))
+    }
+
+    // MARK: - #993: a rule in the dialog's own text never ends the walk (QA #297, #310, #581, #591)
+
+    /// QA #297 LOW-1: a full-width rule at column 0 inside an undashed command (a CR overprint,
+    /// a width disagreement): the command row under it is further in than a title, so it is text.
+    func testA993FrameWideRuleInAnUndashedCommandKeepsTheHead() throws {
+        let rule = String(repeating: "\u{2500}", count: 90)
+        let screen = altered(bashScreen, "release\n", "release\n\(rule)\n")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.context, [" Bash command", "   rm -rf .build && swift build -c release", rule,
+                                   "   Clean and rebuild the release products"], "the head above the rule is shown (no dedent: the rule is at 0)")
+        XCTAssertTrue(p.topFound)
+        let f = FakeDch()
+        f.screen = altered(screen, "rm -rf .build", "rm -rf ~/other")
+        XCTAssertEqual(f.answer(1, expected: p), .changed, "the head is compared")
+        XCTAssertEqual(f.sent, [])
+    }
+
+    /// QA #310 LOW (a): a description that is a full-width rule at column 1 (the dashed frame
+    /// right under it): text, so the title, tip and description stay on the card.
+    func testA993DescriptionThatIsAFullWidthRuleKeepsTheTitle() throws {
+        let rule = " " + String(repeating: "\u{2500}", count: 99)
+        let p = try prompt(altered(run2Screen, " Run /usr/bin/true with qa310 argument", rule))
+        XCTAssertEqual(p.context, ["Bash command", tip, String(rule.dropFirst()), "/usr/bin/true qa310",
+                                   "This command requires approval"])
+        XCTAssertTrue(p.topFound)
+    }
+
+    /// QA #297 LOW-1 on a 2.1.309 dialog: a command row that is a full-width rule at column 1,
+    /// a command row under it: inside the dashed frame, so text; the rows above it stay.
+    func testA993FullWidthRuleInsideTheDashedCommandFrameKeepsTheHead() throws {
+        let rule = " " + String(repeating: "\u{2500}", count: 99)
+        let screen = altered(run2Screen, "\n /usr/bin/true qa310\n", "\n /usr/bin/true one\n\(rule)\n /usr/bin/true two\n")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.context.first, "Bash command")
+        XCTAssertEqual(Array(p.context.suffix(4)), ["/usr/bin/true one", String(rule.dropFirst()), "/usr/bin/true two",
+                                                    "This command requires approval"])
+        XCTAssertTrue(p.topFound)
+        let f = FakeDch()
+        f.screen = altered(screen, "/usr/bin/true one", "/usr/bin/true six")
+        XCTAssertEqual(f.answer(1, expected: p), .changed, "the row above the rule is compared")
+        XCTAssertEqual(f.sent, [])
+    }
+
+    /// QA #310 F2: a full-width rule at column 0 inside an AskUserQuestion question: a question
+    /// form's top has its chip line under it, so the whole question is read.
+    func testA993FullWidthRuleInAnAskQuestionKeepsTheQuestionHead() throws {
+        let rule = String(repeating: "\u{2500}", count: 90)
+        let screen = altered(askFourScreen, "Which deployment target?", "Deploy the release?\n\(rule)\nThis wipes\nthe cache.")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.question, "Deploy the release? \(rule) This wipes the cache.")
+        XCTAssertEqual(p.context, ["\u{2190}  \u{2610} Target  \u{2714} Submit  \u{2192}"])
+        XCTAssertTrue(p.topFound)
+        let f = FakeDch()
+        f.screen = altered(screen, "Deploy the release?", "Wipe production?")
+        XCTAssertEqual(f.answer(1, expected: p), .changed, "the question head is compared")
+        XCTAssertEqual(f.sent, [])
+        // QA #297 INFO-3: the same rule in Claude Code's question gutter (a bar at column 0) is no rule at all.
+        let gutter = altered(askFourScreen, "Which deployment target?",
+                             "\u{2502} Deploy the release?\n\u{2502} \(rule)\n\u{2502} This wipes the cache.")
+        let g = try prompt(gutter)
+        XCTAssertEqual(g.question, "Deploy the release? \(rule) This wipes the cache.")
+        XCTAssertTrue(g.topFound)
+    }
+
+    /// QA #310 F1 residual: no full-width rule on the screen at all, and a 20-cell rule in the
+    /// command with a column-1 row under it: under the frame minimum, so text; the top is not found.
+    func testA993ShortRuleOnAScreenWithNoFrameIsNeverTheTop() throws {
+        let screen = [" echo head", String(repeating: "\u{2500}", count: 20), " echo tail", "",
+                      " Do you want to proceed?", " \u{276F} 1. Yes", "   2. No"].joined(separator: "\n")
+        let p = try prompt(screen)
+        XCTAssertEqual(p.context, [" echo head", String(repeating: "\u{2500}", count: 20), " echo tail"])
+        XCTAssertFalse(p.topFound)
+        XCTAssertEqual(p.options.map { p.isEnabled($0) }, [false, true])
+    }
+
+    /// QA #581 INFO-6: a text line right on top of "Do you want to proceed?" at its column: the
+    /// question may be the tail of a longer one, so Always allow leaves it to the human.
+    func testA993AWrappedQuestionIsNeverAPlainPermissionPrompt() throws {
+        let plain = try prompt(bashScreen)
+        XCTAssertFalse(plain.questionWrapped)
+        XCTAssertTrue(plain.allowYes != nil, "the premise: the plain prompt is Always allow's")
+        let wrapped = try prompt(altered(bashScreen, "products\n\n", "products\n\n Delete the backups as well, then tell me.\n"))
+        XCTAssertEqual(wrapped.question, "Do you want to proceed?")
+        XCTAssertTrue(wrapped.questionWrapped)
+        XCTAssertTrue(wrapped.allowYes == nil)
+        // A line further in right on top of it (the description, column 3) is no wrap.
+        let description = try prompt(altered(bashScreen, "products\n\n", "products\n"))
+        XCTAssertFalse(description.questionWrapped)
+        XCTAssertTrue(description.allowYes != nil)
+    }
+
+    /// QA #591 INFO-3 and INFO-5: "esc to cancel" counts as the footer only as whole words, and a
+    /// long "Esc to <other>" line under the options is no footer at all.
+    func testA993FooterNeedsEscToCancelAsWholeWords() {
+        let live = bash21(["echo safe"]), footer = " Esc to cancel \u{00B7} Tab to amend"
+        let long = " \u{00B7} ctrl+e to explain \u{00B7} shift+tab to cycle \u{00B7} ctrl+t to show todos"
+        for (why, line) in [("INFO-3 over 64", " Esc to cancelled the last run" + long),
+                            ("INFO-3 at most 64", " Esc to cancelled"),
+                            ("INFO-3 inside, at most 64", " Press Esc to cancellation"),
+                            ("INFO-5 esc to <other>", " Esc to interrupt" + long),
+                            ("INFO-5 esc <other>", " Esc twice to rewind" + long)] {
+            XCTAssertFalse(AgentPrompt.isFooter(line), why)
+            XCTAssertNil(AgentPrompt.parse(altered(live, footer, line)), why)
+        }
+        XCTAssertTrue(AgentPrompt.isFooter(footer + long), "the premise: the real footer at any length")
+        XCTAssertNotNil(AgentPrompt.parse(altered(live, footer, footer + long)))
+        XCTAssertTrue(AgentPrompt.isFooter(" Esc to cancel"))
+        XCTAssertTrue(AgentPrompt.isFooter(" Press Esc to cancel."), "at most 64, a full stop after it")
     }
 }
 

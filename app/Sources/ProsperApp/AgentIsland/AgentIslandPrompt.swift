@@ -93,6 +93,9 @@ struct AgentPrompt: Hashable {
     /// dialog and question form has a top rule, so not seeing it means the head
     /// may be above the screen. Only a "No…" option answers such a dialog.
     var topFound = true
+    /// QA #581 INFO-6: a text line sits right on top of the question at its column, so the question
+    /// may have wrapped and `question` is only its tail. Always allow (`allowYes`) leaves it to the human.
+    var questionWrapped = false
 
     /// Any hidden or reordering character anywhere the card shows (Trojan
     /// Source), or (#1251) a base with more than `maxMarks` combining
@@ -290,7 +293,7 @@ extension AgentPrompt {
         var after = lines[(last + 1 + below.count)...].filter { !isBlank($0) }
         // Frame widths, below: a rule's raw extent and the widest rule on the screen.
         let extent = { (r: Substring) in r.reversed().drop(while: \.isWhitespace).count }
-        let width = raw.indices.filter { isRule(lines[$0]) }.map { extent(raw[$0]) }.max() ?? 0
+        let width = max(raw.indices.filter { isRule(lines[$0]) }.map { extent(raw[$0]) }.max() ?? 0, minFrame)
         // #574: the session-title rule Claude Code draws under a dialog is the
         // last line; taken off only right under the footer, so the footer is
         // still the dialog's last line and nothing may follow the title rule.
@@ -365,6 +368,8 @@ extension AgentPrompt {
         while i >= 0, isBlank(lines[i]) || isFrame(i) { i -= 1 }
         guard i >= 0 else { return nil }
         var question = lines[i].trimmingCharacters(in: .whitespaces)
+        let spaces = { (s: String) in s.prefix(while: { $0 == " " }).count }
+        let wrapped = i > 0 && !isBlankOrRule(lines[i - 1]) && spaces(lines[i - 1]) == spaces(lines[i])
         var context: [String] = []
         var j = i - 1
         // Up to the dialog's top: the first solid frame (top rule, 1.x box
@@ -376,14 +381,28 @@ extension AgentPrompt {
         // compared (QA #310 F0). Everything from the top rule down (title, tip,
         // description, command rows with their gutter, a Write's path and
         // content, the reason line) is the dialog, so all of it is compared.
+        // QA #297 LOW-1, QA #310 F2 and LOW (a): a solid frame ends the walk only where it opens the
+        // dialog: no dashed frame left open under it (a command's own rule), its first line text at most
+        // one column in from it (not a rule: a description that is one; not a wrapped command row), and
+        // a chip line on a question form (a rule in the question). Any other one is the dialog's text,
+        // kept, and the walk goes on; run off the screen top, the first one is the top, as before.
+        let askForm = form != nil || found.contains { $0.label == "Chat about this" }
+        var dashed = 0, first: (row: Int, kept: Int)?
         while j >= 0 {
-            if isFrame(j) {
-                if !isDashed(lines[j]), context.contains(where: { !isBlank($0) }) { break }
-            } else {
+            if isFrame(j), isDashed(lines[j]) {
+                dashed += 1
+            } else if isFrame(j), context.contains(where: { !isBlank($0) }) {
+                let head = lines[(j + 1)...].first { !isBlank($0) } ?? ""
+                if dashed % 2 == 0, !isRule(head), spaces(head) <= spaces(lines[j]) + 1,
+                   !askForm || isChipLine(head) { break }
+                if first == nil { first = (j, context.count) }
+                context.insert(lines[j], at: 0)
+            } else if !isFrame(j) {
                 context.insert(lines[j], at: 0)
             }
             j -= 1
         }
+        if j < 0, let first { (j, context) = (first.row, Array(context.suffix(first.kept))) }
         // j is the top rule's row, -1 when off the screen (that fails too).
         if let boxTop, j <= boxTop { return nil }
         // #526: an AskUserQuestion's question wraps over several lines under its
@@ -423,7 +442,7 @@ extension AgentPrompt {
             },
             preview: form?.preview ?? [], notes: form?.notes ?? [],
             // Off the screen top: the dialog's own top rule is not on screen.
-            topFound: j >= 0)
+            topFound: j >= 0, questionWrapped: wrapped)
         let footer = form == nil ? after.last.flatMap { isFooter($0) ? $0.trimmingCharacters(in: .whitespaces) : nil } : nil
         return AgentPromptScreen(prompt: prompt, caret: caret, checked: checked, footer: footer)
     }
@@ -563,6 +582,12 @@ extension AgentPrompt {
     /// width-disagreement autowrap tail is at most ~40 cells on a 90-cell screen.
     static let frameSlack = 2
 
+    /// QA #310 F1 residual: the frame width never drops under this, so on a screen with no
+    /// full-width rule at all a short rule is never the frame. The narrowest live dialog seen is 30
+    /// cells (QA #325 run-6); a screen narrower has no frame: deny-only, fails safe.
+    /// shortcut: a constant, not the pty width; read the width from dch if a narrower pane is ever real.
+    static let minFrame = 30
+
     /// "  ❯ 2. Yes, and …" -> (2, "Yes, and …", caret). Single digit 1-9 only.
     static func option(_ line: String) -> (digit: Int, label: String, caret: Bool)? {
         var s = Substring(line).drop(while: \.isWhitespace)
@@ -653,9 +678,11 @@ extension AgentPrompt {
     /// #802: so does the plan approval's last line (`planFooterPath`); Claude Code 2.1.318 draws
     /// no "Esc to cancel" under a plan. Not any other ctrl+g line: the composer shows a bare
     /// "ctrl+g to edit in <editor>" hint under a wrapped draft.
+    /// QA #591 INFO-3: "esc to cancel" as whole words only: "Esc to cancelled ..." is no footer.
     static func isFooter(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces).lowercased()
-        return t.hasPrefix("esc to cancel") || (t.count <= 64 && t.contains("esc to cancel"))
+        let cancel = t.range(of: #"esc to cancel(?![\p{L}\p{N}])"#, options: .regularExpression)
+        return cancel?.lowerBound == t.startIndex || (t.count <= 64 && cancel != nil)
             || (t.hasPrefix("enter to select · ") && t.hasSuffix(" · esc to cancel"))
             || planFooterPath(line) != nil
     }
@@ -769,7 +796,7 @@ extension AgentPrompt {
         let masked = countdown.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$1m:ss$2")
         guard masked != s else { return p }
         return AgentPrompt(question: p.question, context: masked.components(separatedBy: "\n"), options: p.options,
-                           preview: p.preview, notes: p.notes, topFound: p.topFound)
+                           preview: p.preview, notes: p.notes, topFound: p.topFound, questionWrapped: p.questionWrapped)
     }
 
     // MARK: - Always allow (#751)
@@ -784,7 +811,7 @@ extension AgentPrompt {
     /// matter here: the question, the option shape and the #475 re-check do.
     var allowYes: AgentPromptOption? {
         let o = options
-        guard question == "Do you want to proceed?", preview.isEmpty, notes.isEmpty,
+        guard question == "Do you want to proceed?", !questionWrapped, preview.isEmpty, notes.isEmpty,
               !context.contains(where: Self.isChipLine), !Self.isUserAskConfirmation(context), (2...3).contains(o.count),
               o[0].label == "Yes", o[0].hint == nil, o[0].detail.isEmpty,
               o[o.count - 1].style(first: false) == .deny, o[o.count - 1].detail.isEmpty,
