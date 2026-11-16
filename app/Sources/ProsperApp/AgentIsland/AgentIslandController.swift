@@ -74,7 +74,13 @@ final class AgentIslandController {
     private var readAt: [AgentSessionKey: TimeInterval] = [:]
     private var cardGen: [AgentSessionKey: Int] = [:]
     /// Keys whose answer is still on the queue: no second send, no re-added card.
-    private var inFlight: Set<AgentSessionKey> = []
+    /// #1314 (R990-n1): mirrored as the runner's hold, here only, so every start() caller (the phone's too) sees it.
+    private var inFlight: Set<AgentSessionKey> = [] {
+        didSet {
+            for k in oldValue.subtracting(inFlight) { runner.release(k) }
+            for k in inFlight.subtracting(oldValue) { runner.hold(k) }
+        }
+    }
     let queue = DispatchQueue(label: "eu.illegible.prosper.agentisland", qos: .utility)
     /// Test seams (#478, #475): the poller reload() starts, the dch IO, and
     /// showsPanel = false so layout() never builds or orders the panel.
@@ -497,7 +503,7 @@ final class AgentIslandController {
     /// #744: `yields` (a Stop or Restart) lets a `kill` run beside it; any other job
     /// starting hands its rows' text back from an earlier Kill.
     @discardableResult
-    private func run(_ key: AgentSessionKey, alias: AgentSessionKey? = nil, dch: String, args: [String]?, running: String?, cwd: String? = nil,
+    private func run(_ key: AgentSessionKey, alias: AgentSessionKey? = nil, rows: [String] = [], dch: String, args: [String]?, running: String?, cwd: String? = nil,
                      bound: TimeInterval? = nil, spawn: [String]? = nil, history: Bool = false,
                      yields: Bool = false, kill: Bool = false,
                      onLine: (@MainActor @Sendable (String) -> Void)? = nil,
@@ -508,7 +514,7 @@ final class AgentIslandController {
         let env = controlEnv, contributors = spawn == nil ? [] : sessionEnvContributors()
         var hook: (@Sendable (String) -> Void)?
         if let onLine { hook = { line in DispatchQueue.main.async { MainActor.assumeIsolated { onLine(line) } } } }
-        let started = runner.start(key, alias: alias, path: dch, args: args, cwd: cwd, bound: bound, yields: yields, kill: kill,
+        let started = runner.start(key, alias: alias, rows: rows, path: dch, args: args, cwd: cwd, bound: bound, yields: yields, kill: kill,
                                    env: { spawn.map { Self.spawnEnv(env(key.dir), argv: $0, contributors) } ?? env(key.dir) },
                                    onLine: hook, prepare: prepare) { [weak self] r in
             DispatchQueue.main.async {
@@ -831,15 +837,19 @@ final class AgentIslandController {
     private func stopAll() {
         guard let store, case .ok(let dch) = store.restartGate else { return }
         let byDir = Dictionary(grouping: store.stopAllTargets, by: \.key.dir)
-        for (dir, rows) in byDir.sorted(by: { $0.key < $1.key }) {
+        for (dir, all) in byDir.sorted(by: { $0.key < $1.key }) {
             let key = AgentSessionKey(dir: dir, name: "")
-            let started = run(key, dch: dch, args: AgentIsland.stopArgs(rows.map(\.name)), running: AgentIsland.stoppingText,
+            // #1314: a session a window action holds is skipped, and the dir line says so in Stop's busy words.
+            let rows = all.filter { !inFlight.contains($0.key) }, held = all.filter { inFlight.contains($0.key) }.map(\.name)
+            let busy = held.isEmpty ? nil : held.joined(separator: ", ") + ": " + AgentIsland.stopBusyText
+            guard !rows.isEmpty else { store.actions[key] = busy; continue }
+            let started = run(key, rows: rows.map(\.name), dch: dch, args: AgentIsland.stopArgs(rows.map(\.name)), running: AgentIsland.stoppingText,
                               bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.dirLine($0, dir: dir, .stop) }) {
                 [weak self] r in
                 guard let self else { return }
                 // #749 (QA #572 INFO-R5): a row a Kill cut through counts as killed, as the row reads.
                 // #750 (QA #576 INFO-2): only a Kill that worked before this job ended (r.killed).
-                self.dirDone(dir, AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped"))
+                self.dirDone(dir, [AgentIsland.tally(r, .stop, title: "Stop all", empty: "nothing stopped"), busy].compactMap { $0 }.joined(separator: "; "))
                 self.refreshHistory()
             }
             if started { for s in rows { store.actions[s.key] = AgentIsland.stoppingText } }
@@ -1101,7 +1111,13 @@ final class AgentIslandController {
         guard let store, case .ok(let dch) = store.restartGate else { return }
         for dir in Set(store.sessions.map(\.key.dir)).sorted() {
             let key = AgentSessionKey(dir: dir, name: "")
-            run(key, dch: dch, args: force ? AgentIsland.restartAllForceArgs : AgentIsland.restartAllArgs,
+            // #1314: --all restarts every row: one a window action holds refuses the dir, which says so.
+            let rows = store.sessions.filter { $0.key.dir == dir }
+            if rows.contains(where: { inFlight.contains($0.key) }) {
+                store.actions[key] = AgentIsland.restartBusyText
+                continue
+            }
+            run(key, rows: rows.map(\.name), dch: dch, args: force ? AgentIsland.restartAllForceArgs : AgentIsland.restartAllArgs,
                 running: force ? AgentIsland.restartAllForceRunningText : AgentIsland.restartAllRunningText,
                 bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.dirLine($0, dir: dir, .restart) }) {
                 [weak self] r in self?.dirDone(dir, AgentIsland.restartAllSummary(r))

@@ -1421,6 +1421,9 @@ tag from the now-released section and put it on the new top draft.
   the main text colour; the launcher and clipboard vertical dividers now use the theme's line colour
   instead of the system grey, and the clipboard colour swatch border now uses the theme's line
   colour too.
+- The phone's Restart and Stop, and Stop all / Restart all, now also wait while an Agents window
+  answer is still being typed into that session: the phone gets a busy answer, Stop all skips that
+  session and says so, and Restart all leaves its folder alone and says so.
 
 ## v2.174.0
 

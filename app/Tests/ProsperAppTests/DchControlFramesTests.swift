@@ -310,6 +310,26 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(f.launchedArgs, [revive, AgentIsland.restartArgs("a-2")!])
     }
 
+    /// #1314 (R990-n1): a session the runner holds (the island's window action in flight, mirrored there)
+    /// refuses the phone's Restart, Stop and Restart all of its dir as busy, launching nothing; another row's
+    /// Restart runs. Once released, Restart and Stop run.
+    func testThePhonesRestartAndStopAnswerBusyWhileAWindowActionHoldsTheSession() {
+        let f = Fake()
+        f.ls["/d"] = Self.ls([("a", "1.24.1"), ("b", "1.24.1")])
+        f.out[AgentIsland.stopArgs(["a"])!.joined(separator: " ")] = Self.ok("a")
+        let o = ops(f), a = AgentSessionKey(dir: "/d", name: "a")
+        o.runner.hold(a)
+        XCTAssertEqual(message(call(o, DchFrame.restart, ["names": ["a"]])), "a: Restart failed: dch: busy with an earlier request")
+        XCTAssertTrue(message(call(o, DchFrame.stop, ["names": ["a"]])).contains("busy with an earlier request"))
+        XCTAssertEqual(call(o, DchFrame.restart, ["all": true]).type, DchFrame.error, "Restart all would restart a")
+        XCTAssertTrue(f.launches.isEmpty, "refused: never launched")
+        XCTAssertEqual(names(call(o, DchFrame.restart, ["names": ["b"]])), ["b"], "another row runs")
+        o.runner.release(a)
+        XCTAssertEqual(names(call(o, DchFrame.restart, ["names": ["a"]])), ["a"], "free once released")
+        XCTAssertEqual(names(call(o, DchFrame.stop, ["names": ["a"]])), ["a"])
+        XCTAssertEqual(f.launchedArgs, [AgentIsland.restartArgs("b")!, AgentIsland.restartArgs("a")!, AgentIsland.stopArgs(["a"])!])
+    }
+
     func testReviveAllRunsReviveAllArgsPerHistoryDir() {
         let f = Fake()
         f.hist["/d"] = Self.hist([["name": "a", "updated": Self.now - 60, "end": "signal 9"]])

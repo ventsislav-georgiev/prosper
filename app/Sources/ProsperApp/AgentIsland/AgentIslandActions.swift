@@ -1487,6 +1487,9 @@ final class DchActionRunner: @unchecked Sendable {
     /// #744 (QA #572 INFO-1): Kills, apart from `jobs`: one may run beside its row's
     /// (or its dir's) Stop or Restart, as dch -k only SIGTERMs the master.
     private var kills: [AgentSessionKey: Job] = [:]
+    /// #1314 (R990-n1): the sessions a window answer, key sequence or Always allow check holds (the island's
+    /// inFlight, mirrored): a start on one is refused like a busy one; a Kill still cuts through (#744: the user's escape).
+    private var held: Set<AgentSessionKey> = []
     private let bound: TimeInterval
     private let ceiling: TimeInterval
     private let launch: Launch
@@ -1520,6 +1523,10 @@ final class DchActionRunner: @unchecked Sendable {
         kills[key] != nil || [key, AgentSessionKey(dir: key.dir, name: "")].contains { jobs[$0].map { !$0.yields } ?? false }
     }
 
+    /// #1314: hold or free a session for a window action; only the island's inFlight sets these.
+    func hold(_ key: AgentSessionKey) { lock.withLock { _ = held.insert(key) } }
+    func release(_ key: AgentSessionKey) { lock.withLock { _ = held.remove(key) } }
+
     /// #744: a job of the key's own (a dir-wide one for `(dir, "")`), not one of its rows.
     func hasJob(_ key: AgentSessionKey) -> Bool { lock.withLock { jobs[key] != nil } }
 
@@ -1533,15 +1540,18 @@ final class DchActionRunner: @unchecked Sendable {
     /// (nil: nothing runs) and lines of its own, read as if dch had printed them first (a guard's skips).
     /// #1311 (QA #462 L-B): `alias`, a Resume --as's new name, is held beside `key` for the job's life: a start
     /// on either is refused, isBusy and cancel reach the job by either, the reap frees both. Not for a Kill.
+    /// #1314: a held `key` or `alias` refuses a start but a Kill's; so does, for a dir-wide job, a held one of
+    /// `rows`, the session names it acts on (Stop all's names, Restart all's live rows; empty: none).
     @discardableResult
-    func start(_ key: AgentSessionKey, alias: AgentSessionKey? = nil, path: String, args: [String], cwd: String? = nil,
+    func start(_ key: AgentSessionKey, alias: AgentSessionKey? = nil, rows: [String] = [], path: String, args: [String], cwd: String? = nil,
                bound: TimeInterval? = nil, yields: Bool = false, kill: Bool = false,
                env: @escaping @Sendable () -> [String: String], onLine: (@Sendable (String) -> Void)? = nil,
                prepare: (@Sendable () -> (args: [String]?, out: Data))? = nil,
                done: @escaping @Sendable (DchActionResult) -> Void) -> Bool {
         let job = Job(), keys: Set<AgentSessionKey> = kill ? [key] : Set([key] + [alias].compactMap { $0 })
         guard lock.withLock({ () -> Bool in
-            guard !(kill ? killConflicts(key) : keys.contains { conflicts($0) }) else { return false }
+            guard !(kill ? killConflicts(key) : keys.contains { conflicts($0) || held.contains($0) }) else { return false }
+            guard kill || !rows.contains(where: { held.contains(AgentSessionKey(dir: key.dir, name: $0)) }) else { return false }
             job.yields = yields
             if kill { kills[key] = job } else { for k in keys { jobs[k] = job } }
             return true

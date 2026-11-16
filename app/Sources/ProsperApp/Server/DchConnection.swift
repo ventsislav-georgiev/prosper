@@ -1613,7 +1613,8 @@ struct DchControlOps: Sendable {
         switch req {
         case .all:
             let jobs: [(AgentSessionKey, [String]?)] = Set(live.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.restartAllArgs) }
-            run(jobs, path: path, bound: DchActionRunner.restartBound, yields: true, reply) { Self.answer(all: $0, .restart) }
+            run(jobs, path: path, bound: DchActionRunner.restartBound, yields: true, rows: Dictionary(grouping: live.map(\.key), by: \.dir).mapValues { $0.map(\.name) },
+                reply) { Self.answer(all: $0, .restart) }
         case .names(let names):
             switch Self.resolve(names, live: live) {
             case .failure(let why): reply(Self.error(why.message))
@@ -1639,7 +1640,7 @@ struct DchControlOps: Sendable {
             }
             let groups = Dictionary(grouping: rows, by: \.key.dir).sorted { $0.key < $1.key }
             run(groups.map { (AgentSessionKey(dir: $0.key, name: ""), AgentIsland.stopArgs($0.value.map(\.name))) },
-                path: path, bound: DchActionRunner.restartBound, yields: true, reply) { rs in
+                path: path, bound: DchActionRunner.restartBound, yields: true, rows: groups.reduce(into: [:]) { $0[$1.key] = $1.value.map(\.name) }, reply) { rs in
                 let byDir = Dictionary(uniqueKeysWithValues: zip(groups.map(\.key), rs))
                 return Self.answer(named: rows.map { ($0.name, byDir[$0.key.dir] ?? DchActionResult(status: -1)) }, .stop)
             }
@@ -1773,15 +1774,16 @@ struct DchControlOps: Sendable {
     /// #627: any job with nil args (a name dch would read as a flag) refuses the whole request.
     /// #749 (QA #572 INFO-R1): `yields` for a Stop or Restart, as the island's: an island Kill may cut through it.
     /// #1311: `alias` (a one-job request: the revive by name) is held busy beside the job's key.
+    /// #1314: `rows`, per dir, the session names a dir-wide job acts on: one a window action holds refuses it (busy).
     private func run(_ jobs: [(AgentSessionKey, [String]?)], path: String, bound: TimeInterval?, yields: Bool = false,
-                     alias: AgentSessionKey? = nil, _ reply: @escaping Reply,
+                     alias: AgentSessionKey? = nil, rows: [String: [String]] = [:], _ reply: @escaping Reply,
                      answer: @escaping @Sendable ([DchActionResult]) -> Data) {
         let ready = jobs.compactMap { key, args in args.map { (key, $0) } }
         guard ready.count == jobs.count else { return reply(Self.error(Self.dashNameRefusal)) }
         let group = DispatchGroup(), results = Results(jobs.count), env = env
         for (i, (key, args)) in ready.enumerated() {
             group.enter()
-            let started = runner.start(key, alias: alias, path: path, args: args, bound: bound, yields: yields, env: { env(key.dir) }) { r in
+            let started = runner.start(key, alias: alias, rows: rows[key.dir] ?? [], path: path, args: args, bound: bound, yields: yields, env: { env(key.dir) }) { r in
                 results.lock.withLock { results.all[i] = r }
                 group.leave()
             }

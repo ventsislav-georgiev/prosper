@@ -5846,6 +5846,72 @@ extension AgentIslandControlsTests {
         XCTAssertFalse(c.runner.isBusy(a.key))
     }
 
+    /// #1314 (R990-n1): a window action's hold is the runner's too: a start straight on the runner (the phone's
+    /// path) on the held row, or a dir-wide job acting on it, is refused like a busy one, and Restart all refuses the
+    /// dir and says so; a Kill still cuts through (#744: the user's escape). Once the action ends, a start runs.
+    @MainActor
+    func testAWindowActionHoldsTheRunnerForEveryStartButAKill() throws {
+        let f = FakeProc()
+        let a = session("a", version: "1.24.1"), b = session("b", version: "1.24.1")
+        let c = opened(f, [a, b])
+        let store = try XCTUnwrap(c.store), res = Results(), dir = AgentSessionKey(dir: "/d", name: "")
+        let go = { (k: AgentSessionKey, rows: [String]) in
+            c.runner.start(k, rows: rows, path: "/fake/dch", args: ["x"], env: { [:] }, done: res.add)
+        }
+        let hold = DispatchSemaphore(value: 0), over = expectation(description: "the action ends")
+        XCTAssertTrue(c.humanAction(a, prompt: nil, run: { _ -> Int in hold.wait(); return 0 }) { _ in over.fulfill() })
+        XCTAssertFalse(go(a.key, []), "the held row: refused like a busy one")
+        XCTAssertFalse(go(dir, ["b", "a"]), "a dir-wide job acting on it: refused")
+        c.askRestartAll()
+        c.confirmRestartAll(true)
+        XCTAssertEqual(store.actions[dir], AgentIsland.restartBusyText, "Restart all says why it did not run")
+        XCTAssertEqual(f.args.count, 0, "refused: never launched")
+        XCTAssertTrue(c.kill(a), "a Kill still cuts through the hold")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { !c.runner.isKillBusy(a.key) }
+        hold.signal()
+        wait(for: [over], timeout: 5)
+        XCTAssertTrue(go(a.key, []), "free once the action ends")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        XCTAssertEqual(res.done.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.count, 2)
+        XCTAssertEqual(f.args.first, AgentIsland.killArgs("a"))
+        XCTAssertEqual(f.args.last, ["x"])
+    }
+
+    /// #1314 (R990-n1): Stop all skips the session a window action holds and stops the others; the dir line
+    /// adds Stop's busy words for it. Once the action ends, Stop all stops both.
+    @MainActor
+    func testStopAllSkipsTheSessionAWindowActionHoldsAndStopsTheOthers() throws {
+        let f = FakeProc()
+        let a = session("a", version: "1.24.1"), b = session("b", version: "1.24.1")
+        let c = opened(f, [a, b])
+        let store = try XCTUnwrap(c.store), dir = AgentSessionKey(dir: "/d", name: "")
+        let hold = DispatchSemaphore(value: 0), over = expectation(description: "the action ends")
+        XCTAssertTrue(c.humanAction(a, prompt: nil, run: { _ -> Int in hold.wait(); return 0 }) { _ in over.fulfill() })
+        c.askStopAll()
+        c.confirmStopAll(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.count, 1)
+        XCTAssertEqual(f.args.first, AgentIsland.stopArgs(["b"]), "the held session skipped, the other stopped")
+        XCTAssertTrue(store.actions[a.key] == nil, "the held row never reads Stopping")
+        f.output = #"{"name":"b","result":"ok","reason":"","detail":"","session_id":"abc"}"# + "\n"
+        f.release.signal()
+        settle(c) { store.actions[dir] != nil && store.actions[dir] != AgentIsland.stoppingText }
+        XCTAssertEqual(store.actions[dir], "1 stopped; a: " + AgentIsland.stopBusyText)
+        hold.signal()
+        wait(for: [over], timeout: 5)
+        c.askStopAll()
+        c.confirmStopAll(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, AgentIsland.stopArgs(["a", "b"]), "both once the action ends")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(dir) }
+        XCTAssertFalse(c.runner.isBusy(dir))
+    }
+
     /// #990 (QA #512 INFO-1): a dch that never stops writing ends at the absolute ceiling, through the
     /// idle bound's own cancel: one SIGTERM, the result stopped, the row's cancelled text.
     func testTheCeilingEndsAJobThatNeverStopsWriting() {
