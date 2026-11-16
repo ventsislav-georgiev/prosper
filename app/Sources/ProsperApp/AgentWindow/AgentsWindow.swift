@@ -1674,7 +1674,9 @@ struct AgentRemoteHeader: View {
 
     /// The chip's click: X-ray on Tasks as the local chip does; no list to fall back to, so `none` runs when X-ray is off
     /// or the read finds no Tasks tab.
-    @MainActor static func todosTapped(in win: AgentsNSWindow?, none: @escaping () -> Void) {
+    /// `clear` runs first: a reason from an earlier click must not outlive a click that finds the tab (#1398).
+    @MainActor static func todosTapped(in win: AgentsNSWindow?, clear: () -> Void, none: @escaping () -> Void) {
+        clear()
         win?.todosChipTapped(listOpen: false, list: none)
     }
 
@@ -1684,7 +1686,7 @@ struct AgentRemoteHeader: View {
             Text(AgentSidebarRowView.hostLabel(remote.host)).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
             Spacer(minLength: sz(4))
             let noList = none == row.id
-            Button { Self.todosTapped(in: AgentsNSWindow.window(of: pane)) { none = row.id } } label: {
+            Button { Self.todosTapped(in: AgentsNSWindow.window(of: pane), clear: { none = nil }) { none = row.id } } label: {
                 Image(systemName: "checklist").font(Neon.font(11)).foregroundStyle(Neon.textSecondary).opacity(noList ? 0.45 : 1)
             }
             .buttonStyle(.plain).help(Self.todosHelp(noList: noList)).accessibilityLabel(Self.todosOpens)

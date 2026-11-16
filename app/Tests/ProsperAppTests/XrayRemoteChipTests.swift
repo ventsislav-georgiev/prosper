@@ -60,7 +60,7 @@ final class XrayRemoteChipTests: XCTestCase {
             try await window { win, m in
                 XCTAssertEqual(m.selectedRow?.id, Self.remoteID)
                 var none = 0
-                AgentRemoteHeader.todosTapped(in: win) { none += 1 }
+                AgentRemoteHeader.todosTapped(in: win, clear: {}) { none += 1 }
                 let p = try XCTUnwrap(XrayPanels.shared.open[m.layout.focused])
                 await p.reading?.value
                 XCTAssertEqual(p.tab, .tasks)
@@ -79,7 +79,7 @@ final class XrayRemoteChipTests: XCTestCase {
             try await withSeams([1, 78, 0], fake) {
                 try await window { win, m in
                     var none = 0
-                    AgentRemoteHeader.todosTapped(in: win) { none += 1 }
+                    AgentRemoteHeader.todosTapped(in: win, clear: {}) { none += 1 }
                     await XrayPanels.shared.open[m.layout.focused]?.reading?.value
                     XCTAssertTrue(XrayPanels.shared.open[m.layout.focused] == nil, "exit \(status): nothing opens")
                     XCTAssertEqual(none, 1, "exit \(status): the reason is shown once")
@@ -89,6 +89,39 @@ final class XrayRemoteChipTests: XCTestCase {
                                       "before a click the help says what a click does")
                 }
             }
+        }
+    }
+
+    /// Red at TIP: todosTapped has no `clear` (the Button never cleared the reason: a later click that finds the tab left it).
+    func testReasonClearsWhenALaterClickFindsTheTasksTab() async throws {
+        let bad = FakeRun(tasks: (1, Data("the host's dch does not know --tasks\n".utf8)))
+        try await withSeams([1, 78, 0], bad) {
+            try await window { win, m in
+                var reason: AgentSidebar.RowID? = nil
+                let row = Self.remoteID
+                AgentRemoteHeader.todosTapped(in: win, clear: { reason = nil }) { reason = row }
+                await XrayPanels.shared.open[m.layout.focused]?.reading?.value
+                XCTAssertTrue(reason == row, "no Tasks tab: the reason is set")
+                XCTAssertTrue(XrayPanels.shared.open[m.layout.focused] == nil, "nothing opens")
+                XrayPanels.run = FakeRun().run
+                AgentRemoteHeader.todosTapped(in: win, clear: { reason = nil }) { reason = row }
+                let p = try XCTUnwrap(XrayPanels.shared.open[m.layout.focused])
+                await p.reading?.value
+                XCTAssertEqual(p.tab, .tasks, "X-ray opens on Tasks")
+                XCTAssertTrue(reason == nil, "and the reason is gone")
+            }
+        }
+    }
+
+    /// Red at TIP: not red (the lookup is unchanged there); a mutant of window(of:) turns it red. Pins the lookup the header Button uses.
+    func testTheButtonsWindowLookupFindsTheWindowOfTheFocusedPane() async throws {
+        try await window { win, m in
+            let anchor = NSView()   // the header's anchor, registered as the drawn one would be
+            win.contentView?.addSubview(anchor)
+            let saved = XrayCardAnchor.views
+            XrayCardAnchor.views[m.layout.focused] = XrayCardAnchor.WeakAnchor(anchor)
+            defer { XrayCardAnchor.views = saved }
+            XCTAssertTrue(AgentsNSWindow.window(of: m.layout.focused) === win, "the pane's header window is the window")
         }
     }
 }
