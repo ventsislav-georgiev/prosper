@@ -35,6 +35,8 @@ struct Clip: Equatable, Sendable {
     var source: Range<UInt64>? = nil
     /// The tool_use id whose result this is, so expand finds the same text again.
     var toolID: String? = nil
+    /// #1354: a prompt's author when it is not the user (dch's markers); nil on every other clip.
+    var origin: PromptOrigin? = nil
     var capped: Bool { total > text.count }
 
     init(_ s: String, cap: Int, source: Range<UInt64>? = nil, toolID: String? = nil) {
@@ -44,6 +46,17 @@ struct Clip: Equatable, Sendable {
         self.toolID = toolID
     }
     var lineCount: Int { text.reduce(1) { $1 == "\n" ? $0 + 1 : $0 } }
+}
+
+/// #1354 (X-ray P6, dch v1.80.0 xray.c injected/harness/peer): who wrote a prompt the user did not type. Only the
+/// record's literal markers set it; a typed look-alike stays the user's.
+struct PromptOrigin: Equatable, Sendable {
+    /// dch's `auto`: harness text in a record the harness says it wrote (a task notification), or a subagent's hand-back.
+    var auto = false
+    /// dch's `peer`: another agent session sent it; its name, "" for a path or a bare id; nil: not a peer.
+    var peer: String?
+    /// An auto prompt's title: the notification's <summary>, else its <event>; a hand-back's "subagent <name>: <line>".
+    var summary: String?
 }
 
 struct DiffLine: Equatable, Sendable {
@@ -256,7 +269,10 @@ enum TranscriptDecoder {
 
     private static func user(_ o: [String: Any], source: Range<UInt64>?, cap: Int) -> [DecodedEntry.Item] {
         typealias K = TranscriptKeys
+        // #1354: Claude Code writes another agent's message as meta (dch xray.c:6431): a peer is read before isMeta
+        if let p = peer(o) { return [prompt(p.text, origin: p.origin, source: source, cap: cap) ?? .hidden("user/empty")] }
         if K.bool(o, "isMeta") { return [.hidden("user/meta")] }
+        let inj = injected(o)
         let m = message(o)
         let content = K.get(m, "content")
         if K.bool(o, "isCompactSummary") {
@@ -264,10 +280,7 @@ enum TranscriptDecoder {
             return [.block(.compaction(trigger: nil, preTokens: nil,
                                        summary: t.isEmpty ? nil : Clip(t, cap: cap, source: source)), .specific)]
         }
-        if let s = content as? String {
-            if let c = command(s) { return [.block(c, .specific)] }
-            return s.isBlank ? [.hidden("user/empty")] : [.block(.user(Clip(unwrapPasted(s), cap: cap, source: source)), .specific)]
-        }
+        if let s = content as? String { return [prompt(s, inj: inj, source: source, cap: cap) ?? .hidden("user/empty")] }
         guard let parts = content as? [Any] else { return [unrecognized("user without content", o)] }
         var items: [DecodedEntry.Item] = []
         var text = ""
@@ -285,9 +298,66 @@ enum TranscriptDecoder {
             default: items.append(unrecognized("content \(K.str(b, "type") ?? "?")", b))
             }
         }
-        if let c = command(text) { items.insert(.block(c, .specific), at: 0) }
-        else if !text.isBlank { items.insert(.block(.user(Clip(unwrapPasted(text), cap: cap, source: source)), .specific), at: 0) }
+        if let p = prompt(text, inj: inj, source: source, cap: cap) { items.insert(p, at: 0) }
         return items.isEmpty ? [.hidden("user/empty")] : items
+    }
+
+    /// A user text: a slash command's chip, else a prompt (nil when blank). `inj`: the record is the harness's, so a text
+    /// of harness blocks only is auto (dch xray.c:6218); `origin` (a peer's) wins.
+    private static func prompt(_ s: String, inj: Bool = false, origin: PromptOrigin? = nil, source: Range<UInt64>?,
+                               cap: Int) -> DecodedEntry.Item? {
+        if let c = command(s) { return .block(c, .specific) }
+        guard !s.isBlank else { return nil }
+        var clip = Clip(unwrapPasted(s), cap: cap, source: source)
+        clip.origin = origin ?? (inj ? harness(s) : nil)
+        return .block(.user(clip), .specific)
+    }
+
+    /// #1354, dch injected() (xray.c:6188): "origin":{"kind":"task-notification"} on `o`; text alone never makes it.
+    static func injected(_ o: [String: Any]?) -> Bool {
+        TranscriptKeys.str(TranscriptKeys.obj(o, "origin"), "kind") == "task-notification"
+    }
+
+    static let harnessTags = ["task-notification", "system-reminder"]
+
+    /// #1354, dch harness() (xray.c:1825): the text is only <task-notification> and <system-reminder> blocks (whitespace
+    /// between) -> auto, titled by the first notification's <summary>, else its <event>; nil for any other text.
+    static func harness(_ s: String) -> PromptOrigin? {
+        var rest = Substring(s), summary: String?, first = true
+        while let c = rest.first {
+            if c.isWhitespace { rest = rest.dropFirst(); continue }
+            guard let t = harnessTags.first(where: { rest.hasPrefix("<\($0)>") }),
+                  let end = rest.range(of: "</\(t)>") else { return nil }
+            if t == harnessTags[0], first {
+                first = false
+                let inner = String(rest[rest.index(rest.startIndex, offsetBy: t.count + 2)..<end.lowerBound])
+                summary = [tag("summary", in: inner), tag("event", in: inner)].lazy.compactMap { $0 }.first { !$0.isEmpty }
+            }
+            rest = rest[end.upperBound...]
+        }
+        return s.isBlank ? nil : PromptOrigin(auto: true, summary: summary)
+    }
+
+    static let handbackLead = "[Subagent hand-back]"
+
+    /// #1354, dch peer() / peer_body() / peer_text() (xray.c:6238-6332): "origin":{"kind":"peer"} with a string "body" is
+    /// another agent's message. A hand-back ("handback": JSON true) is auto: its report when not blank, else its body,
+    /// without the hand-back lead. The sender's name is "" when it holds "/" or is 12+ hex digits. nil: not a peer.
+    static func peer(_ o: [String: Any]?) -> (text: String, origin: PromptOrigin)? {
+        guard let g = TranscriptKeys.obj(o, "origin"), TranscriptKeys.str(g, "kind") == "peer",
+              let body = g["body"] as? String else { return nil }
+        let hb = (g["handback"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+        var text = body
+        if hb {
+            if let r = g["handbackReportText"] as? String, !r.isBlank { text = r }
+            let t = text.drop(while: \.isWhitespace)
+            if t.hasPrefix(handbackLead) { text = String(t.dropFirst(handbackLead.count).drop(while: \.isWhitespace)) }
+        }
+        var name = TranscriptOutline.title(g["name"] as? String ?? "", or: "")
+        if name.contains("/") || (name.count >= 12 && name.allSatisfy(\.isHexDigit)) { name = "" }
+        let line = TranscriptOutline.title(text, or: "")
+        let summary = hb ? "subagent" + (name.isEmpty ? "" : " " + name) + (line.isEmpty ? "" : ": " + line) : nil
+        return (text, PromptOrigin(auto: hb, peer: name, summary: summary))
     }
 
     private static func assistant(_ o: [String: Any], source: Range<UInt64>?, cap: Int) -> [DecodedEntry.Item] {
@@ -336,8 +406,14 @@ enum TranscriptDecoder {
     private static func attachment(_ o: [String: Any], cap: Int) -> [DecodedEntry.Item] {
         let a = TranscriptKeys.obj(o, "attachment")
         // A prompt typed while the agent worked: the one attachment the user wrote.
-        if TranscriptKeys.str(a, "type") == "queued_command", let p = TranscriptKeys.str(a, "prompt"), !p.isBlank {
-            return [.block(.user(Clip(unwrapPasted(p), cap: cap)), .specific)]
+        guard TranscriptKeys.str(a, "type") == "queued_command" else { return [.hidden("attachment")] }
+        // #1354, dch xray.c:7017-7018: auto by commandMode or the attachment's origin. A queued peer stays the visible prompt
+        // it was at TIP (shortcut: not marked as a peer; mark it when the transcript can show the mark).
+        let inj = TranscriptKeys.str(a, "commandMode") == "task-notification" || injected(a)
+        if let p = TranscriptKeys.str(a, "prompt"), !p.isBlank {
+            var clip = Clip(unwrapPasted(p), cap: cap)
+            clip.origin = inj ? harness(p) : nil
+            return [.block(.user(clip), .specific)]
         }
         return [.hidden("attachment")]
     }

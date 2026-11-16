@@ -1571,6 +1571,9 @@ tag from the now-released section and put it on the new top draft.
 - The New session form in the Agent Sessions window has a Sidekick box, which also starts a QA
   session named after yours, and an optional Prompt you can type there, which the new session gets
   as its first message. Command-Return starts it. (#1370)
+- X-ray has Prompts and Responses tabs for a conversation shown as a transcript; automatic prompts
+  are hidden until you show them, and messages from other agent sessions are marked with their
+  sender and can be hidden. (#1354)
 
 ## v2.174.0
 

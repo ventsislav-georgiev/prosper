@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // #1351 (#1346 P3a, design 3.1-3.9): the X-ray panel, a drawer over one pane (both modes; it overlays, so the terminal
@@ -6,9 +7,11 @@ import SwiftUI
 // (XrayPoller.swift) re-reads Tasks while it is shown; Memory is read again on a switch to its tab (#1352) and every
 // 30 s while it is shown (#1381).
 // #1352: a task row and the memory card's "Read the prompt" jump to the prompt that last changed it (design 3.3).
+// #1354 (P6 step A): Prompts and Responses from the pane's own chapters (Transcript mode), newest first; automatic rows
+// hidden until shown, other sessions' messages marked and hideable (dch 1.78.0+, operator ruling Q1).
 
-/// The tabs in dch's order (xview.c xv_ord); later phases put Prompts, Responses, Refs and Search before these.
-enum XrayTab: String, CaseIterable { case tasks = "Tasks", memory = "Memory" }
+/// The tabs in dch's order (xview.c xv_ord); later phases put Refs and Search between Responses and Tasks.
+enum XrayTab: String, CaseIterable { case prompts = "Prompts", responses = "Responses", tasks = "Tasks", memory = "Memory" }
 
 /// The session a read names: a local one by name in its socket dir, a remote one as "host:name" (design 3.5).
 struct XrayTarget: Equatable {
@@ -155,6 +158,11 @@ final class XrayPanelModel: ObservableObject {
     var home = NSHomeDirectory()
     /// The Todos chip's: run instead of keeping the panel when the read finds no Tasks tab (Q3).
     var fallback: (() -> Void)?
+    /// #1354: Prompts and Responses show the automatic rows (dch `n`, off at open) / hide other sessions' messages (`a`).
+    @Published var showAuto = false
+    @Published var hidePeer = false
+    private weak var watched: AgentTranscriptModel?
+    private var watch: AnyCancellable?
     /// R1351-i1: true while this panel is still the pane's open one and the pane still shows `target`; the fallback runs
     /// only then (chosen over cancelling the read: a panel hidden by a selection change stays open, so close never fires).
     var isCurrent: () -> Bool = { true }
@@ -217,13 +225,31 @@ final class XrayPanelModel: ObservableObject {
         return t.schema == 1 && !t.tasks.isEmpty ? t : nil
     }
 
-    var tabs: [XrayTab] { XrayTab.allCases.filter { $0 == .tasks ? tasks != nil : memory != nil } }
+    /// #1354: Prompts and Responses while the pane's transcript is there (Transcript mode, a local session).
+    var tabs: [XrayTab] {
+        let prose = transcript() != nil
+        return XrayTab.allCases.filter {
+            switch $0 {
+            case .prompts, .responses: prose
+            case .tasks: tasks != nil
+            case .memory: memory != nil
+            }
+        }
+    }
 
-    func count(_ tab: XrayTab) -> Int { tab == .tasks ? tasks?.open ?? 0 : memory?.count ?? 0 }
+    /// Design 3.1: Prompts = rows listed; Responses = items shown without the automatic ones (dch README).
+    func count(_ tab: XrayTab) -> Int {
+        switch tab {
+        case .prompts: shownPrompts.count
+        case .responses: shownResponses.filter { !$0.auto }.count
+        case .tasks: tasks?.open ?? 0
+        case .memory: memory?.count ?? 0
+        }
+    }
     /// "Tasks 3" (open tasks), "Memory 2" (every row).
     func title(_ tab: XrayTab) -> String { "\(tab.rawValue) \(count(tab))" }
     /// VoiceOver: "Tasks, 3 open"; "Memory, 2".
-    func spoken(_ tab: XrayTab) -> String { tab == .tasks ? "Tasks, \(count(tab)) open" : "Memory, \(count(tab))" }
+    func spoken(_ tab: XrayTab) -> String { tab == .tasks ? "Tasks, \(count(tab)) open" : "\(tab.rawValue), \(count(tab))" }
 
     /// Design 3.2: case-insensitive, over id, title, note and label.
     static func matches(_ t: XrayTasks.Task, _ filter: String) -> Bool {
@@ -315,6 +341,62 @@ final class XrayPanelModel: ObservableObject {
         }
     }
 
+    // MARK: #1354 Prompts and Responses
+
+    /// The pane's chapters (none without its transcript); a new poll or page redraws the panel.
+    var chapters: [TranscriptOutline.Chapter] {
+        guard let tm = transcript() else { return [] }
+        if watched !== tm {
+            watched = tm
+            watch = tm.$chapters.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
+        }
+        return tm.chapters
+    }
+
+    /// dch xv_vis1 (xview.c:2283-2297): the filter (title, and the answer on Responses), then auto rows unless shown,
+    /// then peer rows when hidden; newest first. Responses lists the chapters with an answer. `auto` / `peer`: true shows
+    /// those rows whatever the toggles say (the footer's counts).
+    func shown(_ tab: XrayTab, auto: Bool? = nil, peer: Bool? = nil) -> [TranscriptOutline.Chapter] {
+        let (all, keepPeer) = (auto ?? self.showAuto, peer ?? !self.hidePeer)
+        let q = filter.trimmingCharacters(in: .whitespaces)
+        return chapters.reversed().filter { c in
+            (tab != .responses || c.response != nil)
+                && (q.isEmpty || c.title.localizedCaseInsensitiveContains(q)
+                    || tab == .responses && (c.response ?? "").localizedCaseInsensitiveContains(q))
+                && (all || !c.auto) && (keepPeer || c.from != .peer)
+        }
+    }
+    var shownPrompts: [TranscriptOutline.Chapter] { shown(.prompts) }
+    var shownResponses: [TranscriptOutline.Chapter] { shown(.responses) }
+
+    /// The automatic rows and the other sessions' messages on `tab` (filter applied, shown or not): the footer's counts.
+    func hidden(_ tab: XrayTab) -> (auto: Int, peer: Int) {
+        let all = shown(tab, auto: true, peer: true)
+        return (all.filter(\.auto).count, all.filter { $0.from == .peer }.count)
+    }
+
+    /// The footer's toggles (dch xview.c:3563-3575): "3 automatic hidden" + Show, or Hide; "2 agent messages hidden" + Show,
+    /// or Hide; none when the tab has no such row.
+    func promptFooter(_ tab: XrayTab) -> [(text: String?, button: String, toggle: () -> Void)] {
+        let n = hidden(tab)
+        var out: [(text: String?, button: String, toggle: () -> Void)] = []
+        if n.auto > 0 {
+            out.append((showAuto ? nil : "\(n.auto) automatic hidden", showAuto ? "Hide automatic" : "Show automatic",
+                        { [weak self] in self?.showAuto.toggle() }))
+        }
+        if n.peer > 0 {
+            out.append((hidePeer ? "\(n.peer) agent message\(n.peer == 1 ? "" : "s") hidden" : nil,
+                        hidePeer ? "Show agent messages" : "Hide agent messages", { [weak self] in self?.hidePeer.toggle() }))
+        }
+        return out
+    }
+
+    /// Return or a click on a Prompts or Responses row: the pane's transcript jumps to that chapter (#1319's seam).
+    func activate(_ c: TranscriptOutline.Chapter) {
+        guard let tm = transcript() else { return }
+        TranscriptJumper.of(tm).jump(to: c)
+    }
+
     // MARK: #1352 Memory
 
     /// Design 3.2: case-insensitive, over id, title, note, kind, path and body.
@@ -329,6 +411,55 @@ final class XrayPanelModel: ObservableObject {
         guard let memory else { return [] }
         return memory.groups.map { XrayMemory.Group(title: $0.title, items: $0.items.filter { Self.matches($0, filter) }) }
             .filter { !$0.items.isEmpty }
+    }
+}
+
+/// #1354: one Prompts or Responses row as drawn and spoken (design 3.2, 3.7, 3.8): the number, dch's mark (xview.c:2404
+/// xv_mark: a robot and the sender for another session's message, an inbox and the name for a subagent's hand-back, a bell
+/// for another automatic prompt), the title (faint for an automatic row); Responses adds the tools line and the answer.
+struct XrayPromptRow: Equatable {
+    let ordinal: String
+    let mark: String?
+    let title: String
+    let faint: Bool
+    let tools: String?
+    let answer: String?
+    /// The answer goes on past what the row shows (the transcript has it).
+    let more: Bool
+    let spoken: String
+
+    /// dch README Responses: "the answer wrapped to the width, at most 8 lines".
+    static let answerLines = 8
+    static let lineCap = 240
+
+    static func mark(_ c: TranscriptOutline.Chapter) -> String? {
+        let symbol: String? = c.peer == nil ? (c.auto && c.kind != .compaction ? "\u{1F514}" : nil) : c.auto ? "\u{1F4E5}" : "\u{1F916}"
+        guard let symbol else { return nil }
+        let sender = OutsideText.shown(c.peer ?? "", max: 40)
+        return sender.isEmpty ? symbol : symbol + " " + sender
+    }
+
+    init(_ c: TranscriptOutline.Chapter, response: Bool = false) {
+        ordinal = "\(c.ordinal)"
+        mark = Self.mark(c)
+        title = OutsideText.shown(c.title, max: TranscriptOutline.titleCap)
+        faint = c.auto
+        tools = response ? c.tools.map { OutsideText.shown($0, max: 160) } : nil
+        let lines = response ? (c.response ?? "").split(separator: "\n", omittingEmptySubsequences: false) : []
+        answer = response ? lines.prefix(Self.answerLines).map { OutsideText.shown(String($0), max: Self.lineCap) }
+            .joined(separator: "\n") : nil
+        more = lines.count > Self.answerLines || lines.prefix(Self.answerLines).contains { $0.count > Self.lineCap }
+        let sender = OutsideText.shown(c.peer ?? "", max: 40), who: String
+        switch c.from {
+        case .own: who = "Prompt \(c.ordinal)"
+        case .auto where c.peer != nil: who = "Hand-back" + (sender.isEmpty ? "" : " from " + sender) + ", prompt \(c.ordinal)"
+        case .auto: who = "Automatic prompt \(c.ordinal)"
+        case .peer: who = "Message from " + (sender.isEmpty ? "another session" : sender) + ", prompt \(c.ordinal)"
+        }
+        let first = answer.flatMap { $0.split(separator: "\n").first.map(String.init) }
+        let lead: String = response ? "Response to " + who.prefix(1).lowercased() + String(who.dropFirst()) : who
+        let parts: [String?] = [lead, title, tools.map { "tools " + $0 }, first]
+        spoken = parts.compactMap { $0 }.joined(separator: ", ")
     }
 }
 
@@ -482,6 +613,8 @@ struct XrayPanelView: View {
             faint("No tasks or memory for this session").padding(sz(10))
         } else if panel.tab == .memory {
             memoryTab
+        } else if panel.tab == .prompts || panel.tab == .responses {
+            promptsTab(panel.tab)
         } else {
             tasksTab
         }
@@ -506,6 +639,33 @@ struct XrayPanelView: View {
                 }
             }
             ForEach(panel.footer, id: \.self) { faint($0) }
+        }
+        .padding(sz(10))
+    }
+
+    /// #1354: Prompts or Responses, newest first; the footer's counts and toggles (design 1.3, 3.10).
+    func promptsTab(_ tab: XrayTab) -> some View {
+        let rows = panel.shown(tab)
+        return VStack(alignment: .leading, spacing: sz(4)) {
+            TextField("Filter", text: $panel.filter)
+                .textFieldStyle(.roundedBorder)
+                .font(Neon.font(11))
+                .focused($filterFocus)
+                .accessibilityLabel(tab == .prompts ? "Filter prompts" : "Filter responses")
+            if rows.isEmpty { faint(tab == .prompts ? "No prompts shown" : "No responses yet") }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: sz(2)) {
+                    ForEach(rows) { c in
+                        XrayPromptRowView(row: XrayPromptRow(c, response: tab == .responses)) { panel.activate(c) }
+                    }
+                }
+            }
+            ForEach(Array(panel.promptFooter(tab).enumerated()), id: \.offset) { _, f in
+                HStack(spacing: sz(6)) {
+                    if let t = f.text { faint(t) }
+                    Button(f.button, action: f.toggle).buttonStyle(.link).font(Neon.font(10, weight: .medium))
+                }
+            }
         }
         .padding(sz(10))
     }
@@ -591,6 +751,36 @@ struct XrayTaskRowView: View {
             }
             .font(Neon.font(11))
             .padding(.vertical, sz(2))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(row.spoken)
+    }
+}
+
+/// #1354: a Prompts or Responses row; a click (or Return / Space with VoiceOver) jumps to its chapter.
+struct XrayPromptRowView: View {
+    let row: XrayPromptRow
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: sz(1)) {
+                HStack(spacing: sz(6)) {
+                    Text(verbatim: row.ordinal).foregroundStyle(Neon.textSecondary).fixedSize()
+                    if let m = row.mark { Text(verbatim: m).foregroundStyle(Neon.textSecondary).lineLimit(1) }
+                    Text(verbatim: row.title).foregroundStyle(row.faint ? Neon.textSecondary : Neon.textPrimary)
+                        .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                }
+                if let t = row.tools { Text(verbatim: t).foregroundStyle(Neon.textSecondary).lineLimit(1) }
+                if let a = row.answer {
+                    Text(verbatim: a + (row.more ? "\u{2026}" : "")).foregroundStyle(row.faint ? Neon.textSecondary : Neon.textPrimary)
+                        .lineLimit(XrayPromptRow.answerLines).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(Neon.font(11))
+            .padding(.vertical, sz(2))
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

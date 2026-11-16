@@ -40,6 +40,9 @@ struct TranscriptAssembler {
     private(set) var dropped = 0
     private(set) var droppedCounts: [String: TierCounts] = [:]
     private(set) var hiddenCounts: [String: Int] = [:]
+    /// #1354: another session's message (a peer prompt): never drawn (hidden and counted as at TIP), kept only for the
+    /// outline's chapters (X-ray), with an id from the same counter so it sorts among `blocks`.
+    private(set) var asides: [TranscriptBlock] = []
     /// #923: the last few failed lines' reasons (version and reason, never content), oldest first.
     private(set) var parseErrors: [String] = []
     static let maxParseErrors = 5
@@ -117,6 +120,11 @@ struct TranscriptAssembler {
             case .hidden:
                 hiddenCounts[v, default: 0] += 1
             case .block(let body, let tier):
+                if TranscriptOutline.chapterOnly(body) {
+                    hiddenCounts[v, default: 0] += 1
+                    if e.sidechain == nil { asides.append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source)) }
+                    continue
+                }
                 if case .compaction(nil, nil, let summary?) = body, mergeSummary(summary, sidechain: e.sidechain) { continue }
                 if case .failed(let reason, _) = body {
                     parseErrors.append("\(v): \(reason)")
@@ -269,6 +277,7 @@ struct TranscriptAssembler {
             pairedIDs.insert(id)
         }
         blocks = front + blocks
+        asides = page.asides.map(renumber) + asides
         // The page's calls still open (no result on the page, none seen after it) take the live results.
         // Bound: at most page.pending (<= maxPending); the oldest go first past maxPending, as in add().
         // R1269-b: an id the page's order holds twice (one call id used twice) is carried once, the first slot kept.
@@ -800,7 +809,9 @@ final class AgentTranscriptModel: ObservableObject {
 
     private func publish() {
         blocks = assembler.blocks
-        let c = TranscriptOutline.chapters(blocks)
+        // #1354: the outline also sees the asides (peer prompts) at or after the first loaded block; the view never does
+        let floor = blocks.first?.id ?? Int.min
+        let c = TranscriptOutline.chapters((blocks + assembler.asides.filter { $0.id >= floor }).sorted { $0.id < $1.id })
         if c != chapters { chapters = c }
         hiddenCount = assembler.hiddenTotal
         cwd = assembler.cwd
