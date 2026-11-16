@@ -198,7 +198,11 @@ final class AgentIslandController {
     var controlEnv: @Sendable (_ dir: String) -> [String: String] = { dir in
         AgentIsland.controlEnv(dir: dir, login: NSClassFromString("XCTestCase") == nil ? LoginPath.read() : nil)
     }
-    var runner = DchActionRunner.shared
+    /// #991 (R1314-n3): a swap moves inFlight's holds along (released in the old runner, held in the new),
+    /// so none is left behind in DchActionRunner.shared by a test that swaps it mid-action.
+    var runner = DchActionRunner.shared {
+        didSet { for k in inFlight { oldValue.release(k); runner.hold(k) } }
+    }
     /// spec 6.1: the contributors of the next --spawn's env, asked on main at each spawn (the ccpool runtime is
     /// built by its extension's first live push). The pool's routing is the only member; no runtime (the
     /// extension never went live, or XCTest): none, and the env is spawnEnv's alone.
@@ -463,9 +467,9 @@ final class AgentIslandController {
     /// failure goes on the dir's status line, then History is re-read.
     private func edit(_ r: DchHistoryRecord, args: [String]?, _ verb: AgentIsland.Verb) {
         guard let store, case .ok(let dch) = store.historyEditGate else { return }
-        let dir = r.key.dir, name = r.name, sid = r.agent?.sessionID ?? ""
+        let dir = r.key.dir, name = r.name, bare = args == AgentIsland.forgetArgs([name])
         run(r.id, dch: dch, args: args, running: nil) { [weak self] res in
-            if let failed = AgentIsland.editFailure(res, name: name, verb, sid: sid) {
+            if let failed = AgentIsland.editFailure(res, name: name, verb, bare: bare) {
                 self?.store?.actions[AgentSessionKey(dir: dir, name: "")] = failed
             }
             self?.refreshHistory()
@@ -906,17 +910,34 @@ final class AgentIslandController {
     /// Checked each second while the row still says it; jobs are bounded, so is this.
     /// #750 (QA #576 INFO-1): busy as a Kill sees it; a Stop or Restart since would not refuse one.
     /// #829: `text` is the refusal shown (a Kill's, or a Restart's or Stop's: busy as any job sees it).
-    private func clearRefusal(_ key: AgentSessionKey, _ text: String) {
+    /// #991 (QA #576 INFO-6): one chain per key: a second refusal restarts the 1 s wait, the older chain ends.
+    private func clearRefusal(_ key: AgentSessionKey, _ text: String, chain: Int? = nil) {
+        let id: Int
+        if let chain {
+            id = chain
+        } else {
+            refusalSeq += 1
+            id = refusalSeq
+            refusalChain[key] = id
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, let store = self.store, store.actions[key] == text else { return }
+                guard let self, self.refusalChain[key] == id else { return }
+                guard let store = self.store, store.actions[key] == text else {
+                    self.refusalChain[key] = nil
+                    return
+                }
                 let kill = text == AgentIsland.killBusyText
-                if kill ? self.runner.isKillBusy(key) : self.runner.isBusy(key) { return self.clearRefusal(key, text) }   // #750 (QA #576 INFO-1)
+                if kill ? self.runner.isKillBusy(key) : self.runner.isBusy(key) { return self.clearRefusal(key, text, chain: id) }   // #750 (QA #576 INFO-1)
+                self.refusalChain[key] = nil
                 store.actions[key] = nil
                 self.layout()
             }
         }
     }
+
+    /// #991: the live clearRefusal chain's id per key; an older chain sees another and ends.
+    private var refusalChain: [AgentSessionKey: Int] = [:], refusalSeq = 0
 
     /// `dch -k <name>` with its dir's control env, on the row's key, beside a Stop or
     /// Restart there (else a busy row refuses: false). "Killing…", then "Killed" or why
@@ -975,8 +996,14 @@ final class AgentIslandController {
         for (dir, rows) in Dictionary(grouping: store.killAllTargets, by: \.key.dir).sorted(by: { $0.key < $1.key }) {
             let tally = KillTally(left: rows.count), dirKey = AgentSessionKey(dir: dir, name: "")
             let finish = { @MainActor @Sendable [weak self] in
-                guard tally.left == 0, let self, !self.runner.hasJob(dirKey) else { return }
-                self.store?.actions[dirKey] = tally.line
+                guard tally.left == 0, let self else { return }
+                guard self.runner.hasJob(dirKey) else {
+                    self.store?.actions[dirKey] = tally.line
+                    return
+                }
+                // #991 (QA #576 INFO-5): beside a dir job a Kill ran: the tally once it ends, unless its
+                // own end wrote the dir line (the island's Stop or Restart all counts the kills itself).
+                if tally.busy < rows.count { self.killTallyAfter(dirKey, tally.line, over: self.store?.actions[dirKey]) }
             }
             for s in rows {
                 let started = killRow(s, dch: dch, refresh: false) { [weak self] r in
@@ -1000,6 +1027,20 @@ final class AgentIslandController {
     }
 
     /// One Kill all dir's count (or every dir's calls left), on main.
+    /// #991 (QA #576 INFO-5): Kill all's dir tally once the dir job beside it (the phone's Stop or Restart
+    /// all, which writes no dir line here) ended, checked each second; jobs are bounded, so is this.
+    /// `over`: the dir line then; a line written since (the island's own job's summary) stays.
+    private func killTallyAfter(_ dirKey: AgentSessionKey, _ line: String, over: String?) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let store = self.store, store.actions[dirKey] == over else { return }
+                if self.runner.hasJob(dirKey) { return self.killTallyAfter(dirKey, line, over: over) }
+                store.actions[dirKey] = line
+                self.layout()
+            }
+        }
+    }
+
     @MainActor private final class KillTally {
         var left: Int, killed = 0, gone = 0, failed = 0, busy = 0
         init(left: Int) { self.left = left }

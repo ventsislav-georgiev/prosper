@@ -573,6 +573,8 @@ extension AgentIsland {
     /// QA #453 L3: a Resume that did not start reads its exec line, "dch: <as>: …", as spawnText does.
     /// #584: a Message with no line for its name failed, whatever the exit.
     static func rowText(_ r: DchActionResult, name: String, _ verb: Verb) -> String {
+        // #991 (QA #579 INFO-3): a Kill ended the session while the job ran: it reads killed, as the row does.
+        if killedHere(r, name) { return killedText }
         if r.stopped { return "\(verb.rawValue) cancelled: no answer in \(verb.minutes)m" }
         if let f = r.json.last(where: { $0.name == name && ($0.isFinal || $0.isMaster) }) {
             let started = f.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? f.name
@@ -581,6 +583,11 @@ extension AgentIsland {
             return (f.isMaster && f.failed ? r.dchLine : exec).map { "\(verb.rawValue) failed: \($0)" } ?? finalText(f, verb)
         }
         return r.status == 0 && verb != .message ? verb.done : "\(verb.rawValue) \(failedText(r))"
+    }
+
+    /// #991: a Kill that worked ended `name` while `r`'s job ran (`r.killed`), and dch's last word on it is no ok.
+    static func killedHere(_ r: DchActionResult, _ name: String) -> Bool {
+        r.killed.contains(name) && r.json.last(where: { $0.name == name && $0.isFinal })?.result != "ok"
     }
 
     /// Restart all's one line: the masters moved to this dch, the agents
@@ -760,15 +767,17 @@ extension AgentIsland {
 
     /// A pin, unpin or remove's line for its dir's status; nil when it worked.
     /// dch's detail for a failed result (io_error's is the OS error), else the exit.
-    /// #716 L-2: `sid`, the row's Claude id. Below 1.28.1 an X by the bare name
-    /// forgets every record of the name, and dch refuses a pinned aside one, whose
-    /// line carries that record's id: not this row's failure.
-    static func editFailure(_ r: DchActionResult, name: String, _ verb: Verb, sid: String? = nil) -> String? {
+    /// #716 L-2: `bare`, the X ran by the bare name (below 1.28.1): dch forgets every record of the name,
+    /// one line each, newest (the row's own) first, and refuses a pinned aside one: not this row's failure.
+    /// #991 (QA #534 L-1, I-1): told by its place, never its Claude id: an aside may share the row's id,
+    /// and the row's own record may hold another since the read.
+    static func editFailure(_ r: DchActionResult, name: String, _ verb: Verb, bare: Bool = false) -> String? {
         let what = "\(verb.rawValue) \(name)"
         if r.stopped { return "\(what) cancelled: no answer in \(verb.minutes)m" }
         // #719: an unpin that finds nothing (dch 1.28.2: not_found, exit 1): the record went; the re-read drops its row.
         let failed = r.json.filter { $0.isFinal && $0.failed && !unpinGone($0, verb) }
-        let another = { (o: DchJSONLine) in o.reason == "pinned" && sid != nil && !(o.sessionID ?? "").isEmpty && o.sessionID != sid }
+        let own = r.json.first { $0.isFinal }
+        let another = { (o: DchJSONLine) in bare && o.reason == "pinned" && o != own }
         if let f = failed.first(where: { !another($0) }) {
             if f.reason == "pinned" { return "\(what) failed: \(pinnedRefusal)" }
             if f.reason == "ambiguous" { return "\(what) failed: \(ambiguousText)" }
@@ -793,9 +802,13 @@ extension AgentIsland {
 
     /// QA #572 INFO-4: the question names its scope, the asked tab or every tab (`tab` nil).
     /// #749 (QA #572 INFO-R6): `dashed` of the `skipped` rows for their "-" name, the rest for an old dch.
+    /// #991 (QA #576 INFO-7): one clause, "Skipped: N <why>[, N <why>].", short words, so the whole line
+    /// fits the dir line's one line (AgentIslandControlsTests measures it).
     static func stopAllQuestion(_ n: Int, skipped: Int, dashed: Int = 0, tab: String?, tabs: Bool = true) -> String {
-        "Stop \(n) session\(n == 1 ? "" : "s")\(scope(tab, tabs: tabs))?"
-            + (skipped > dashed ? " \(skipped - dashed) on an old dch skipped." : "") + dashSkipped(dashed)
+        let old = max(0, skipped - dashed)
+        let why = [old > 0 ? "\(old) old dch" : nil, dashed > 0 ? "\(dashed) \u{201C}-\u{201D} name\(dashed == 1 ? "" : "s")" : nil]
+        return "Stop \(n) session\(n == 1 ? "" : "s")\(scope(tab, tabs: tabs))?"
+            + (skipped > 0 ? " Skipped: " + why.compactMap { $0 }.joined(separator: ", ") + "." : "")
     }
 
     /// #749 (QA #572 INFO-R6): no scope for every tab while the tabs are off (`tabs` false).
@@ -854,9 +867,10 @@ extension AgentIsland {
     static let killBusyText = "Kill not run: another job is running"
 
     /// A Kill's row text: "Killed", "Already ended", else why not.
+    static let killedText = "Killed"
     static func killText(_ r: DchActionResult) -> String {
         if r.stopped { return "Kill cancelled: no answer in \(Int(DchActionRunner.bound / 60))m" }
-        if killed(r) { return "Killed" }
+        if killed(r) { return killedText }
         if killGone(r) { return alreadyEndedText }
         return r.line.isEmpty ? "Kill failed (exit \(r.status))" : "Kill failed: \(r.line)"
     }
@@ -1490,6 +1504,9 @@ final class DchActionRunner: @unchecked Sendable {
     /// #1314 (R990-n1): the sessions a window answer, key sequence or Always allow check holds (the island's
     /// inFlight, mirrored): a start on one is refused like a busy one; a Kill still cuts through (#744: the user's escape).
     private var held: Set<AgentSessionKey> = []
+    /// #991 (QA #579 INFO-1): a dir job reaped while a Kill on a row of its dir still ran: its `done`,
+    /// run once the dir's last Kill reaps, so a Kill that worked there counts in its `killed`.
+    private var parked: [(dir: String, job: Job, finish: @Sendable () -> Void)] = []
     private let bound: TimeInterval
     private let ceiling: TimeInterval
     private let launch: Launch
@@ -1574,16 +1591,37 @@ final class DchActionRunner: @unchecked Sendable {
             }) } ?? (status: 0, out: Data())
             lines.flush()
             var result = AgentIsland.actionResult(status: r.status, output: pre + r.out)
-            lock.withLock {
+            let (parks, resume) = lock.withLock { () -> (Bool, [@Sendable () -> Void]) in
                 if kill { kills[key] = nil } else { for k in keys { jobs[k] = nil } }
                 job.pid = nil   // reaped: never signalled again (the pid may be reused)
                 result.stopped = job.cancelled
-                result.killed = job.killed
                 // #750 (QA #576 INFO-2): a Kill that worked marks the dir's Stop all or Restart all it
-                // cut through, in the same lock as its reap (a row's own job reads no tally).
-                if kill, AgentIsland.killed(result) { jobs[AgentSessionKey(dir: key.dir, name: "")]?.killed.insert(key.name) }
+                // cut through, in the same lock as its reap (a row's own job reads no tally); #991: a parked one too.
+                if kill, AgentIsland.killed(result) {
+                    jobs[AgentSessionKey(dir: key.dir, name: "")]?.killed.insert(key.name)
+                    for p in parked where p.dir == key.dir { p.job.killed.insert(key.name) }
+                }
+                if kill {
+                    guard !kills.keys.contains(where: { $0.dir == key.dir }) else { return (false, []) }
+                    let mine = parked.filter { $0.dir == key.dir }.map(\.finish)
+                    parked.removeAll { $0.dir == key.dir }
+                    return (false, mine)
+                }
+                // #991 (QA #579 INFO-1): a dir job reaped before a Kill in its dir: done waits for that Kill.
+                guard key.name.isEmpty, kills.keys.contains(where: { $0.dir == key.dir }) else {
+                    result.killed = job.killed
+                    return (false, [])
+                }
+                let parkedResult = result
+                parked.append((key.dir, job, { [self] in
+                    var r = parkedResult
+                    r.killed = lock.withLock { job.killed }
+                    done(r)
+                }))
+                return (true, [])
             }
-            done(result)
+            if !parks { done(result) }
+            resume.forEach { $0() }
         }
         arm(job, bound: bound ?? self.bound)
         // #990: the same one-SIGTERM cancel as the idle bound; after the reap it signals nothing.

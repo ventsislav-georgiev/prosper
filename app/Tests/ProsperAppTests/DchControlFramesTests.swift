@@ -1994,4 +1994,19 @@ final class DchControlFramesTests: XCTestCase {
                                                                  Self.line(files[1], "ok", detail: "pinned")].joined(separator: "\n")
         XCTAssertEqual(names(call(ops(f, binary: Self.v1281), DchFrame.pin, ["name": "work", "pin": true])), ["work"])
     }
+
+    /// #991 (QA #579 INFO-3): the phone's Stop reply reads a session a Kill ended while the Stop ran
+    /// (the runner's `killed`) as killed: ok, its name in "names" and "a: Killed" in "message", never a
+    /// failure; another session's failure still makes the reply an error, naming both.
+    func testThePhonesStopReplyReportsAKilledSessionAsKilled() {
+        let gone = { (n: String) in DchJSONLine(name: n, result: "failed", reason: "gone", detail: "\(n): master gone") }
+        let r = DchActionResult(status: 1, json: [gone("a")], killed: ["a"])
+        let ok = Self.decode(DchControlOps.answer(named: [("a", r)], .stop))
+        XCTAssertEqual(ok.type, DchFrame.ok)
+        XCTAssertEqual(names(ok), ["a"])
+        XCTAssertEqual((ok.json as? [String: Any])?["message"] as? String, "a: \(AgentIsland.killedText)")
+        let both = DchActionResult(status: 1, json: [gone("a"), gone("b")], killed: ["a"])
+        XCTAssertEqual(message(Self.decode(DchControlOps.answer(named: [("a", both), ("b", both)], .stop))),
+                       "a: \(AgentIsland.killedText); b: master gone")
+    }
 }

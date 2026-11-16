@@ -1824,14 +1824,16 @@ struct DchControlOps: Sendable {
     /// #861: a revive that came back withdrawn or draft_left is ok under its `as` name, its
     /// "<name>: <rowText>" in the ok's "message" (forget's partial success; remote-frames.md 0x0c).
     /// #886: which lines those are is AgentIsland.resumedUnsent's (dch 1.58.0's "running" when the line has it).
+    /// #991 (QA #579 INFO-3): a session a Kill ended while the job ran is no failure: ok, "<name>: Killed" in "message".
     static func answer(named: [(String, DchActionResult)], _ verb: AgentIsland.Verb, record: DchHistoryRecord? = nil) -> Data {
         var ok: [String] = [], lines: [String] = [], failed = false
         for (n, r) in named {
             let last = r.json.last { $0.name == n && ($0.isFinal || $0.isMaster) }
             let unsent = !r.stopped && last.map { AgentIsland.resumedUnsent($0, verb) } == true
-            if unsent || !r.stopped && last.map({ isOK($0) || AgentIsland.unpinGone($0, verb) }) ?? (r.status == 0) {
+            let killed = AgentIsland.killedHere(r, n)
+            if killed || unsent || !r.stopped && last.map({ isOK($0) || AgentIsland.unpinGone($0, verb) }) ?? (r.status == 0) {
                 ok.append(last?.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? n)
-                if !unsent { continue }
+                if !unsent && !killed { continue }
             } else {
                 failed = true
             }

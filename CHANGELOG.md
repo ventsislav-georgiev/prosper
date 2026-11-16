@@ -1437,6 +1437,12 @@ tag from the now-released section and put it on the new top draft.
   keeps more of a prompt's title on narrow terminals when an agent's name is long. (#1327)
 - Renaming an account in the account pool now renames its Keychain item too, so Keychain Access
   shows the new name. (#1326)
+- Agent Island: Kill all during a Stop all or Restart all started from the phone now still writes
+  the folder's tally once that job ends; a session killed while a Stop or Stop all ran is counted
+  and reported as killed, on the island and in the phone's reply, instead of failed; a second
+  refused Kill click no longer clears its note early; Stop all's question gives its skips in one
+  short clause ("Skipped: 2 old dch, 1 "-" name."); and removing an old-dch History row no longer
+  shows "pinned" for an older pinned copy of the same conversation. (#991)
 
 ## v2.174.0
 

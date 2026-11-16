@@ -2838,14 +2838,14 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertTrue(store.confirmingStopAll)
         XCTAssertFalse(store.confirmingRestartAll, "the forced question too")
         XCTAssertTrue(store.showsControlLine)
-        XCTAssertEqual(AgentIsland.stopAllQuestion(1, skipped: 1, tab: "Sessions"), "Stop 1 session in Sessions? 1 on an old dch skipped.")
+        XCTAssertEqual(AgentIsland.stopAllQuestion(1, skipped: 1, tab: "Sessions"), "Stop 1 session in Sessions? Skipped: 1 old dch.")
         XCTAssertEqual(AgentIsland.stopAllQuestion(3, skipped: 0, tab: nil), "Stop 3 sessions in every tab?")
         XCTAssertEqual(AgentIsland.stopAllQuestion(3, skipped: 0, tab: nil, tabs: false), "Stop 3 sessions?",
                        "#749: no tabs, no \"every tab\"")
         XCTAssertEqual(AgentIsland.stopAllQuestion(2, skipped: 3, dashed: 1, tab: "Sessions"),
-                       "Stop 2 sessions in Sessions? 2 on an old dch skipped. 1 skipped: name starts with “-”.")
+                       "Stop 2 sessions in Sessions? Skipped: 2 old dch, 1 \u{201C}-\u{201D} name.")
         XCTAssertEqual(AgentIsland.stopAllQuestion(2, skipped: 1, dashed: 1, tab: "Sessions"),
-                       "Stop 2 sessions in Sessions? 1 skipped: name starts with “-”.", "#749: a \"-\" name is no old dch")
+                       "Stop 2 sessions in Sessions? Skipped: 1 \u{201C}-\u{201D} name.", "#749: a \"-\" name is no old dch")
         XCTAssertEqual(store.asked, .init(keys: [AgentSessionKey(dir: "/d", name: "main")], skipped: 1, tab: "Sessions"),
                        "the line's count, skips and tab, fixed when asked")
         c.confirmStopAll(false)
@@ -3656,8 +3656,9 @@ final class AgentIslandControlsTests: XCTestCase {
         c.askKill(b)
         c.confirmKill(true)
         h.open.signal()
-        settle(c) { !c.runner.hasJob(d) && c.killedRows[b.key] == "Ending…" && store.actions[d] != AgentIsland.stoppingText }
+        settle(c) { !c.runner.hasJob(d) && c.killedRows[b.key] == "Ending\u{2026}" }
         XCTAssertEqual(c.killedRows[b.key], "Ending…")
+        XCTAssertEqual(store.actions[d], AgentIsland.stoppingText, "#991 (QA #579 INFO-1): the tally waits for the Kill")
         h.killGate.signal()
         settle(c) { store.actions[b.key] != AgentIsland.killingText }
         XCTAssertEqual(store.actions[b.key], failed, "a stale phase is never shown")
@@ -3727,7 +3728,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.sidekickPattern, "")
         c.askStopAll(global: true)
         XCTAssertTrue(store.confirmingStopAll)
-        let skips = " 2 on an old dch skipped. 1 skipped: name starts with “-”."
+        let skips = " Skipped: 2 old dch, 1 \u{201C}-\u{201D} name."
         XCTAssertEqual(store.stopAllQuestion, "Stop 1 session?" + skips)
         store.sidekickPattern = "-qa"
         XCTAssertEqual(store.stopAllQuestion, "Stop 1 session in every tab?" + skips)
@@ -3811,10 +3812,10 @@ final class AgentIslandControlsTests: XCTestCase {
         c.confirmKill(true)
         XCTAssertEqual(store.actions[a.key], AgentIsland.killingText)
         h.open.signal()
-        settle(c) { store.actions[d] != AgentIsland.stoppingText }
-        XCTAssertEqual(store.actions[d], "2 failed", "a Kill still out is no kill")
+        settle(c) { !c.runner.hasJob(d) }
+        XCTAssertEqual(store.actions[d], AgentIsland.stoppingText, "#991 (QA #579 INFO-1): the tally waits for the Kill still out")
         h.killGate.signal()
-        settle(c) { store.actions[a.key] != AgentIsland.killingText }
+        settle(c) { store.actions[a.key] != AgentIsland.killingText && store.actions[d] != AgentIsland.stoppingText }
         XCTAssertEqual(store.actions[a.key], "master gone; Kill failed: dch: permission denied")
         XCTAssertEqual(store.actions[d], "2 failed")
         // Already ended: the row says so, the dir counts it failed (dch's word on the Stop).
@@ -6297,5 +6298,204 @@ extension AgentIslandControlsTests {
         let shown = AgentIsland.displayCommand(accented)
         XCTAssertEqual(shown.unicodeScalars.count, 48 * 2 + 1)
         XCTAssertTrue(shown.hasSuffix("\u{2026}"))
+    }
+}
+
+// MARK: - #991: tallies and row texts (QA #534, #576, #579; R1314-n3)
+
+extension AgentIslandControlsTests {
+    /// The own row "work" (Claude id A) and its pinned aside under dch 1.25: the X runs by the bare name and
+    /// dch answers `lines`, newest record first. The dir line after it.
+    @MainActor
+    private func xByBareName(_ lines: [String], asideSID: String = "A") throws -> String? {
+        let f = FakeProc(), reads = Reads()
+        let own = rec719("work", sid: "A", ago: 60)
+        var aside = rec719("work.1762000000", name: "work", sid: asideSID, ago: 600)
+        aside.pinned = true
+        reads.records = [own, aside]
+        let c = controller(f, reads, dch: Self.v125)
+        c.store?.sessions = [session("b", version: "1.25.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store), before = reads.count
+        f.output = lines.joined(separator: "\n") + "\n"
+        f.status = 1
+        c.remove(own)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, ["--forget", "work", "--json"], "below 1.28.1: the bare name")
+        f.release.signal()
+        settle(c) { reads.count == before + 1 }
+        return store.actions[AgentSessionKey(dir: "/d", name: "")]
+    }
+
+    private static func line991(_ result: String, _ reason: String, _ sid: String) -> String {
+        #"{"name":"work","result":"\#(result)","reason":"\#(reason)","detail":"x","session_id":"\#(sid)"}"#
+    }
+
+    /// QA #534 L-1: below 1.28.1 a pinned aside sharing the own row's Claude id is still the aside: dch
+    /// prints the own record first, so the refusal on a later line is no failure of this row.
+    @MainActor
+    func testXBelow1281IgnoresAPinnedAsideWithTheRowsOwnClaudeID() throws {
+        let dirLine = try xByBareName([Self.line991("ok", "", "A"), Self.line991("failed", "pinned", "A")])
+        XCTAssertTrue(dirLine == nil, "the row went; the pinned aside stays, which History shows: got \(dirLine ?? "nil")")
+    }
+
+    /// QA #534 I-1 (S4): the stale-row race. The own record holds another Claude id since the read (B) and
+    /// was pinned meanwhile: its refusal is the first line, so it reads as this row's failure, never swallowed.
+    @MainActor
+    func testXBelow1281ReportsTheOwnRecordsRefusalWhateverItsClaudeID() throws {
+        let dirLine = try xByBareName([Self.line991("failed", "pinned", "B"), Self.line991("ok", "", "C")], asideSID: "C")
+        XCTAssertEqual(dirLine, "Remove work failed: \(AgentIsland.pinnedRefusal)")
+    }
+
+    /// QA #534 S2: below 1.28.2 two taken records of a name may share a Claude id; a final naming it lands
+    /// on the newest of them (dirLine's first(where:)), never the older.
+    @MainActor
+    func testResumeAllFinalWithASharedClaudeIDLandsOnTheNewestTakenRow() throws {
+        let f = FakeProc(), reads = Reads()
+        let rows = [rec719("work", sid: "A", ago: 60), rec719("work.1762099910", name: "work", sid: "A", ago: 90)]
+        reads.records = rows
+        let c = controller(f, reads, dch: DchCommand.Binary(path: "/fake/dch", version: [1, 28, 0]))
+        c.store?.sessions = [session("b", version: "1.28.0")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        store.now = { Self.t719 }
+        XCTAssertEqual(store.reviveAllTaken, Set(rows.map(\.id)), "both taken below 1.28.2")
+        f.output = #"{"name":"work","as":"work","result":"ok","reason":"","detail":"revived","session_id":"A"}"# + "\n"
+        c.resumeCrashed(noMessage: true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { store.historyActions[rows[0].id] != nil || store.historyActions[rows[1].id] != nil }
+        XCTAssertEqual(store.historyActions[rows[0].id], "Resumed without the message")
+        XCTAssertTrue(store.historyActions[rows[1].id] == nil, "not the older row")
+    }
+
+    /// QA #576 INFO-5: Kill all beside the phone's Stop all of the dir (a yielding dir job the island did
+    /// not start) kills the rows; the dir line gets Kill all's tally once that job ends.
+    @MainActor
+    func testKillAllBesideAPhoneStopAllTalliesOnceItEnds() throws {
+        let h = Hang()
+        let a = session("a", version: "1.24.1"), b = session("b", version: "1.24.1")
+        let c = opened(FakeProc(), [a, b])
+        c.runner = h.runner()
+        let store = try XCTUnwrap(c.store), d = AgentSessionKey(dir: "/d", name: "")
+        XCTAssertTrue(c.runner.start(d, path: "/fake/dch", args: AgentIsland.stopArgs(["a", "b"])!, yields: true, env: { [:] }) { _ in })
+        c.askKillAll(global: true)
+        c.confirmKillAll(true)
+        settle(c) { store.actions[a.key] == "Killed" && store.actions[b.key] == "Killed" }
+        XCTAssertEqual(Set(h.kills), [["-k", "a"], ["-k", "b"]])
+        XCTAssertTrue(store.actions[d] == nil, "no tally while the phone's job runs")
+        h.open.signal()
+        settle(c) { store.actions[d] != nil }
+        XCTAssertEqual(store.actions[d], "2 killed")
+    }
+
+    /// QA #576 INFO-6: a second Kill refusal on a row restarts its one 1 s clear: the first chain does not
+    /// clear the second refusal early (it would, 1 s after the first click, once the job ended).
+    @MainActor
+    func testASecondKillRefusalRestartsTheOneClear() throws {
+        let h = Hang()
+        let p = session("p", version: "1.24.1")
+        let c = opened(FakeProc(), [p])
+        c.runner = h.runner()
+        let store = try XCTUnwrap(c.store)
+        XCTAssertTrue(c.runner.start(p.key, path: "/fake/dch", args: ["--send", "p", "hi"], env: { [:] }) { _ in })
+        let t0 = Date()
+        XCTAssertFalse(c.kill(p))
+        XCTAssertEqual(store.actions[p.key], AgentIsland.killBusyText)
+        settle(c) { Date() >= t0.addingTimeInterval(0.5) }
+        XCTAssertFalse(c.kill(p), "the second click, still busy")
+        let t1 = Date()
+        h.open.signal()
+        settle(c) { !c.runner.isBusy(p.key) }
+        settle(c) { Date() >= t0.addingTimeInterval(1.2) }
+        XCTAssertLessThan(Date().timeIntervalSince(t1), 0.95, "checked before the second click's clear is due")
+        XCTAssertEqual(store.actions[p.key], AgentIsland.killBusyText, "the first click's chain ended without clearing")
+        settle(c) { store.actions[p.key] == nil }
+        XCTAssertTrue(store.actions[p.key] == nil, "cleared 1 s after the second click")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(t1), 0.95)
+    }
+
+    /// QA #576 INFO-7: Stop all's skips are one clause, and the longest likely line (two-digit count, every
+    /// tab, both reasons) fits the dir line: the line's width (island width, list inset and the row's lead on
+    /// both sides) less the Stop and Cancel buttons and the HStack's three 10 pt gaps, at the line's 11 pt.
+    @MainActor
+    func testStopAllSkipClauseIsOneShapeAndFitsTheDirLine() {
+        XCTAssertEqual(AgentIsland.stopAllQuestion(12, skipped: 3, dashed: 1, tab: nil),
+                       "Stop 12 sessions in every tab? Skipped: 2 old dch, 1 \u{201C}-\u{201D} name.")
+        XCTAssertEqual(AgentIsland.stopAllQuestion(2, skipped: 2, dashed: 2, tab: nil, tabs: false),
+                       "Stop 2 sessions? Skipped: 2 \u{201C}-\u{201D} names.")
+        XCTAssertEqual(AgentIsland.stopAllQuestion(2, skipped: 2, dashed: 0, tab: nil, tabs: false), "Stop 2 sessions? Skipped: 2 old dch.")
+        func width(_ s: String, _ w: NSFont.Weight = .regular) -> CGFloat {
+            NSAttributedString(string: s, attributes: [.font: NSFont.systemFont(ofSize: 11, weight: w)]).size().width
+        }
+        let g = AgentIslandGeometry.self
+        let budget = g.expandedWidth - 2 * g.listInset - 2 * g.rowLead - 3 * 10 - width("Stop", .semibold) - width("Cancel", .semibold)
+        let worst = AgentIsland.stopAllQuestion(12, skipped: 3, dashed: 1, tab: nil)
+        let wider = AgentIsland.stopAllQuestion(12, skipped: 13, dashed: 11, tab: nil)   // measured, not pinned
+        print("MEASURE991 budget \(budget) worst \(width(worst)) (\(worst.count) chars) wider \(width(wider)) (\(wider.count) chars)")
+        XCTAssertLessThanOrEqual(width(worst) + g.fitMargin, budget, worst)
+    }
+
+    /// QA #579 INFO-1: Stop all's job reaps while a Kill on one of its rows still runs; that Kill then works.
+    /// The dir's tally waits for it and counts the row killed, as the row reads.
+    @MainActor
+    func testADirJobReapedBeforeAWorkingKillTalliesTheRowKilled() throws {
+        let h = Hang()
+        let a = session("a", version: "1.24.1"), b = session("b", version: "1.24.1")
+        let c = opened(FakeProc(), [a, b])
+        c.runner = h.runner()
+        let store = try XCTUnwrap(c.store), d = AgentSessionKey(dir: "/d", name: "")
+        h.output = #"{"name":"a","result":"failed","reason":"gone","detail":"a: master gone"}"# + "\n"
+            + #"{"name":"b","result":"failed","reason":"gone","detail":"b: master gone"}"# + "\n"
+        h.lock.withLock { h.holdKill = true }
+        c.askStopAll()
+        c.confirmStopAll(true)
+        c.askKill(a)
+        c.confirmKill(true)
+        settle(c) { h.kills.count == 1 }
+        h.open.signal()
+        settle(c) { !c.runner.isBusy(b.key) }
+        let reaped = Date().addingTimeInterval(0.3)
+        settle(c) { Date() >= reaped }
+        XCTAssertEqual(store.actions[d], AgentIsland.stoppingText, "the tally waits for the Kill")
+        h.killGate.signal()
+        settle(c) { store.actions[d] != AgentIsland.stoppingText }
+        XCTAssertEqual(store.actions[a.key], "Killed")
+        XCTAssertEqual(store.actions[d], "1 killed, 1 failed")
+    }
+
+    /// QA #579 INFO-3 (the row text): a session a Kill ended while the job ran reads killed.
+    @MainActor
+    func testRowTextReadsKilledForASessionAKillEnded() {
+        let gone = DchJSONLine(name: "a", result: "failed", reason: "gone", detail: "a: master gone")
+        var r = DchActionResult(status: 1, json: [gone])
+        XCTAssertEqual(AgentIsland.rowText(r, name: "a", .stop), "master gone")
+        r.killed = ["a"]
+        XCTAssertEqual(AgentIsland.rowText(r, name: "a", .stop), AgentIsland.killedText)
+        XCTAssertEqual(AgentIsland.rowText(DchActionResult(status: 0, killed: ["a"]), name: "a", .stop), AgentIsland.killedText,
+                       "no line: killed, not Stopped")
+    }
+
+    /// R1314-n3: swapping the controller's runner mid-action moves the hold: the old runner is free, the new
+    /// one refuses a start on the held row until the action ends.
+    @MainActor
+    func testSwappingTheRunnerMovesTheWindowActionsHold() throws {
+        let f = FakeProc(), a = session("a", version: "1.24.1")
+        let c = opened(f, [a])
+        let old = c.runner, hold = DispatchSemaphore(value: 0), over = expectation(description: "the action ends")
+        XCTAssertTrue(c.humanAction(a, prompt: nil, run: { _ -> Int in hold.wait(); return 0 }) { _ in over.fulfill() })
+        let h = Hang()
+        c.runner = h.runner()
+        XCTAssertFalse(c.runner.start(a.key, path: "/fake/dch", args: ["x"], env: { [:] }) { _ in }, "held in the new runner")
+        XCTAssertTrue(old.start(a.key, path: "/fake/dch", args: ["x"], env: { [:] }) { _ in }, "released in the old one")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        hold.signal()
+        wait(for: [over], timeout: 5)
+        XCTAssertTrue(c.runner.start(a.key, path: "/fake/dch", args: ["x"], env: { [:] }) { _ in }, "free once the action ends")
+        h.open.signal()
+        settle(c) { !c.runner.isBusy(a.key) }
     }
 }
