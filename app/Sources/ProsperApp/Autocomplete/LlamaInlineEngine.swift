@@ -92,6 +92,11 @@ actor LlamaInlineEngine {
         let fileName: String
         let downloadURL: URL
         let bytes: Int64
+        /// Sizes of the same file name downloaded from `resolve/main` by v2.123.0 to v2.155 (before
+        /// the URLs were pinned in v2.156.0): valid older downloads, accepted, never re-fetched (#1300).
+        var legacyBytes: [Int64] = []
+        /// The one size rule: the pinned size or a legacy one. Progress keeps using `bytes`.
+        func accepts(size: Int64?) -> Bool { size.map { $0 == bytes || legacyBytes.contains($0) } ?? false }
         var sizeLabel: String { String(format: "%.1f GB", Double(bytes) / 1_073_741_824) }
     }
 
@@ -105,22 +110,22 @@ actor LlamaInlineEngine {
             id: "e2b-q4", label: "Gemma 4 E2B (QAT 4-bit)", detail: "fastest, lightest",
             fileName: "gemma-4-E2B_q4_0-it.gguf",
             downloadURL: URL(string: "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/675cff42a74c774d6cb76f76d8eacb49b48c9b93/gemma-4-E2B_q4_0-it.gguf")!,
-            bytes: 3_349_516_256),
+            bytes: 3_349_516_256, legacyBytes: [3_349_514_112]),
         CatalogModel(
             id: "e2b-q8", label: "Gemma 4 E2B (8-bit)", detail: "sharper E2B, more RAM",
             fileName: "gemma-4-E2B-it-Q8_0.gguf",
             downloadURL: URL(string: "https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/b4243c156154b6dca9324415f8c7ccc098b4aed1/gemma-4-E2B-it-Q8_0.gguf")!,
-            bytes: 4_967_497_152),
+            bytes: 4_967_497_152, legacyBytes: [4_967_494_592]),
         CatalogModel(
             id: "e4b-q4", label: "Gemma 4 E4B (QAT 4-bit)", detail: "larger base, smarter",
             fileName: "gemma-4-E4B_q4_0-it.gguf",
             downloadURL: URL(string: "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/gemma-4-E4B_q4_0-it.gguf")!,
-            bytes: 5_154_941_280),
+            bytes: 5_154_941_280, legacyBytes: [5_154_939_136]),
         CatalogModel(
             id: "e4b-q8", label: "Gemma 4 E4B (8-bit)", detail: "smartest, most RAM",
             fileName: "gemma-4-E4B-it-Q8_0.gguf",
             downloadURL: URL(string: "https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF/resolve/b8093469224f83f5c38f691eb906c380e9e63114/gemma-4-E4B-it-Q8_0.gguf")!,
-            bytes: 8_031_242_688),
+            bytes: 8_031_242_688, legacyBytes: [8_031_240_160]),
     ]
 
     /// Active catalog entry for inline + translate. Switching unloads the
@@ -141,8 +146,10 @@ actor LlamaInlineEngine {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Prosper/models/gguf/\(model.fileName)")
     }
-    static func isDownloaded(_ model: CatalogModel) -> Bool {
-        FileManager.default.fileExists(atPath: fileURL(for: model).path)
+    /// Downloaded only at the catalog's exact byte size (#1300, same rule as #1040's GGUF check);
+    /// a truncated file is "not downloaded". `url` is a test seam.
+    static func isDownloaded(_ model: CatalogModel, at url: URL? = nil) -> Bool {
+        model.accepts(size: ModelFiles.fileSize(url ?? fileURL(for: model)))
     }
 
     /// GGUF path: env override (bench) or the selected catalog model.
@@ -153,8 +160,13 @@ actor LlamaInlineEngine {
         return fileURL(for: selectedModel)
     }
 
-    static var modelIsDownloaded: Bool {
-        FileManager.default.fileExists(atPath: modelFileURL.path)
+    static var modelIsDownloaded: Bool { modelFileIsReady(selectedModel, path: modelFileURL) }
+
+    /// The env override has no registered size (shortcut: exists-only for a bench file, upgrade when
+    /// benches need integrity); the catalog file must match its exact size (#1300).
+    static func modelFileIsReady(_ model: CatalogModel, path: URL, envOverride: Bool? = nil) -> Bool {
+        let overridden = envOverride ?? !(ProcessInfo.processInfo.environment["PROSPER_LLAMA_GGUF"] ?? "").isEmpty
+        return overridden ? FileManager.default.fileExists(atPath: path.path) : isDownloaded(model, at: path)
     }
 
     /// Download the GGUF into the app-managed models directory. Idempotent
@@ -163,10 +175,12 @@ actor LlamaInlineEngine {
     /// restarts; add HTTP Range resume if users on flaky links complain.
     static func downloadModel(
         _ model: CatalogModel = selectedModel,
+        to destOverride: URL? = nil,   // test seam (#1300)
         progress: @escaping @Sendable (Double, String) -> Void
     ) async throws {
-        let dest = fileURL(for: model)
-        if FileManager.default.fileExists(atPath: dest.path) {
+        let dest = destOverride ?? fileURL(for: model)
+        // Exact size only (#1300): a truncated file falls through and is replaced by the move below.
+        if isDownloaded(model, at: dest) {
             progress(1.0, "Downloaded.")
             return
         }
@@ -295,7 +309,7 @@ actor LlamaInlineEngine {
         let signpost = Perf.signposter.beginInterval("model.load", id: Perf.signposter.makeSignpostID(), "inline")
         defer { Perf.signposter.endInterval("model.load", signpost) }
         let path = Self.modelFileURL.path
-        guard FileManager.default.fileExists(atPath: path) else {
+        guard Self.modelIsDownloaded else {
             throw EngineError.modelMissing(path)
         }
         llama_backend_init()

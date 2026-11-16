@@ -45,11 +45,17 @@ extension MLXEngine: AgentChatEngine {
 enum GGUFDownload {
     enum DownloadError: Error { case failed(String) }
 
+    /// `fetch`'s shape as a value: the seam rows inject so no test downloads (#1300).
+    typealias Fetch = @Sendable (_ url: URL, _ dest: URL, _ expectedBytes: Int64,
+                       _ progress: @escaping @Sendable (Double, String) -> Void) async throws -> Void
+    static let live: Fetch = { try await fetch(url: $0, dest: $1, expectedBytes: $2, progress: $3) }
+
     static func fetch(
         url: URL, dest: URL, expectedBytes: Int64,
         progress: @escaping @Sendable (Double, String) -> Void
     ) async throws {
-        if FileManager.default.fileExists(atPath: dest.path) {
+        // Exact registered size only (#1300): a truncated file falls through and the move below replaces it.
+        if ModelFiles.fileSize(dest) == expectedBytes {
             progress(1.0, "Downloaded.")
             return
         }
@@ -183,15 +189,18 @@ actor LlamaAgentEngine: AgentChatEngine {
     /// models unloads the previous one first (swap-not-add memory rule).
     func ensureModel(
         _ spec: AgentGGUF,
+        dest destOverride: URL? = nil,            // test seams (#1300): a temp file and a fake fetch
+        fetch: GGUFDownload.Fetch = GGUFDownload.live,
         progress: @escaping @Sendable (Double, String) -> Void
     ) async throws {
         if loadedFileName == spec.fileName, ctx != nil { return }
         unloadLocked()
-        let dest = Self.fileURL(fileName: spec.fileName)
-        if !FileManager.default.fileExists(atPath: dest.path) {
-            try await GGUFDownload.fetch(
-                url: spec.downloadURL, dest: dest, expectedBytes: spec.bytes, progress: progress)
+        let dest = destOverride ?? Self.fileURL(fileName: spec.fileName)
+        if ModelFiles.fileSize(dest) != spec.bytes {
+            try await fetch(spec.downloadURL, dest, spec.bytes, progress)
         }
+        // A file still not at the registered size after fetch is never handed to llama.cpp (#1300).
+        guard ModelFiles.fileSize(dest) == spec.bytes else { throw EngineError.modelMissing(dest.path) }
         progress(0.99, "Loading model…")
         try load(path: dest.path)
         loadedFileName = spec.fileName

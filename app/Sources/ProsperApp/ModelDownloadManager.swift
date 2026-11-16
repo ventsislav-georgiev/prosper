@@ -28,10 +28,15 @@ final class ModelDownloadManager: ObservableObject {
 
     /// Begin downloading `modelId` if not already on disk. No-op if it's the active
     /// download or already downloaded.
-    func start(_ modelId: String) {
+    /// `gguf`, `isDownloaded` and `fetch` are test seams (#1300): defaults are the registry, the
+    /// disk check and the real download.
+    func start(_ modelId: String,
+               gguf lookup: @escaping ModelFiles.GGUFLookup = ModelFiles.registeredGGUF,
+               isDownloaded: (String) -> Bool = { ModelFiles.isModelDownloaded($0) },
+               fetch: @escaping GGUFDownload.Fetch = GGUFDownload.live) {
         guard !modelId.isEmpty,
               activeModelId != modelId,
-              !ModelFiles.isModelDownloaded(modelId) else { return }
+              !isDownloaded(modelId) else { return }
         cancel()
         errorMessage = nil
         activeModelId = modelId
@@ -39,17 +44,21 @@ final class ModelDownloadManager: ObservableObject {
         status = "Starting download…"
         task = Task {
             do {
-                if let gguf = AgentModelRegistry.gguf(for: modelId) {
+                if let gguf = AgentModelRegistry.gguf(for: modelId), let reg = lookup(modelId) {
                     // Single-file GGUF (llama.cpp agent rows).
-                    let dest = LlamaAgentEngine.fileURL(fileName: gguf.fileName)
-                    // start() only gets here when the file is not intact (#1040): a wrong-size file
-                    // would make fetch() report "Downloaded." from its exists check, so clear it.
+                    let dest = reg.url
+                    // R1040-n1 (#1300): the guard ran before this Task did; one stat through the same
+                    // helper right before the delete, so a file that is at the registered size by now
+                    // (or a later change to the guard) never loses a good multi-GB file.
+                    if ModelFiles.fileSize(dest) == reg.bytes {
+                        guard self.activeModelId == modelId else { return }
+                        self.revision += 1
+                        self.reset()
+                        return
+                    }
+                    // Not intact (#1040): fetch() would otherwise treat a leftover as present, so clear it.
                     try? FileManager.default.removeItem(at: dest)
-                    try await GGUFDownload.fetch(
-                        url: gguf.downloadURL,
-                        dest: dest,
-                        expectedBytes: gguf.bytes
-                    ) { p, s in
+                    try await fetch(gguf.downloadURL, dest, reg.bytes) { p, s in
                         Task { @MainActor in
                             guard ModelDownloadManager.shared.activeModelId == modelId else { return }
                             ModelDownloadManager.shared.progress = p
@@ -82,6 +91,9 @@ final class ModelDownloadManager: ObservableObject {
             }
         }
     }
+
+    /// Test seam (#1300): resolves when the current download Task ends.
+    func waitForTask() async { await task?.value }
 
     /// Stop the in-flight download (if any) and clear progress state.
     func cancel() {

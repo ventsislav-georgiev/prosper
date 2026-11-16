@@ -1364,6 +1364,10 @@ tag from the now-released section and put it on the new top draft.
   secondary text uses the full text colour, in your chosen theme. Some windows (the launcher, the
   agent island, the clipboard panel and a few popups) still draw part of their own chrome and follow
   in a later update.
+- A truncated or partly copied local model file (inline autocomplete or agent GGUF) no longer shows
+  as downloaded or loads: it is fetched again, and Resume never deletes a complete file. Inline
+  models downloaded by earlier versions (before the files were pinned in v2.156.0) still count as
+  downloaded.
 
 ## v2.174.0
 

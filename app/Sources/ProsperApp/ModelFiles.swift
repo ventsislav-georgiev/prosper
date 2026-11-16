@@ -184,7 +184,8 @@ enum ModelFiles {
 
     /// Size on disk of `url` (nil when absent). One stat, no read of the file: a size check
     /// only (a sha256 of a multi-GB file would block; see report, item 2).
-    private static func fileSize(_ url: URL) -> Int64? {
+    /// Also the size rule of the inline, fetch and agent-load checks (#1300): `fileSize(url) == bytes`.
+    static func fileSize(_ url: URL) -> Int64? {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64
     }
 
