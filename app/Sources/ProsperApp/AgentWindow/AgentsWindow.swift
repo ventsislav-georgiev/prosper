@@ -3406,6 +3406,10 @@ struct AgentComposerField: NSViewRepresentable {
     var owner: AgentWindowInteraction?
     /// #847 D5.2: false for the New session prompt: Return adds a line and Command-Return submits.
     var returnSubmits = true
+    /// #1392: VoiceOver's name for the field; nil keeps `label(editable:)`.
+    var label: String?
+
+    var accessibilityName: String { label ?? Self.label(editable: editable) }
 
     /// QA #672 #2: VoiceOver hears why the field takes nothing (only an ended session's is not editable).
     static func label(editable: Bool) -> String { editable ? "Message Claude" : "Message Claude, session ended" }
@@ -3449,7 +3453,7 @@ struct AgentComposerField: NSViewRepresentable {
         // Selectable first: a false isSelectable clears isEditable, a true isEditable sets isSelectable.
         tv.isSelectable = editable
         tv.isEditable = editable
-        tv.setAccessibilityLabel(AgentComposerField.label(editable: editable))
+        tv.setAccessibilityLabel(accessibilityName)
         tv.owner = owner
         owner?.composer = tv
     }

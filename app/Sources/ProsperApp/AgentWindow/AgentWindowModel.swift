@@ -1884,9 +1884,11 @@ final class AgentWindowModel: ObservableObject {
     static let sidekickSuffixUnusable = "Sidekick suffix in Settings isn't usable"
     static let plainShellRefusal = "Clear the prompt and sidekick to start a plain shell"
 
-    /// #847 D6.2: the form's New shell would drop a checked box or a typed prompt silently: refused while either holds.
+    /// #847 D6.2: the form's New shell would drop a checked box or a typed prompt silently: refused while either holds
+    /// and takes effect (#1392: the effective values, as the box and the editor show them; Start ignores both when not Claude).
     var newSessionShellRefusal: String? {
-        guard let f = newSession, f.sidekick || !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard let f = newSession,
+              newSessionSidekickOn || newSessionClaude && !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return Self.plainShellRefusal
     }
 

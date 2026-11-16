@@ -276,3 +276,61 @@ final class AgentNewSessionTests: XCTestCase {
         XCTAssertFalse(d.contains("$name"))
     }
 }
+
+/// #1392 (QA R1370-s1, R1370-s2): New shell reads the effective box and prompt; the editor and the disclosure speak
+/// their own names.
+extension AgentWindowD1Tests {
+
+    /// R1370-s1: a box or a prompt that Start would ignore (not a Claude, another Mac) never locks New shell.
+    @MainActor
+    func testAgentWindowNewSessionShellRefusalReadsTheEffectiveBoxAndPrompt() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/api")
+            m.setNewSessionCommand("claude")
+            // Both sides of the existing rule: a Claude with a prompt, a Claude with the box.
+            m.setNewSessionPrompt("fix it")
+            XCTAssertEqual(m.newSessionShellRefusal, AgentWindowModel.plainShellRefusal, "claude and a prompt")
+            m.setNewSessionPrompt("")
+            XCTAssertTrue(m.newSessionShellRefusal == nil)
+            m.setNewSessionSidekick(true)
+            XCTAssertEqual(m.newSessionShellRefusal, AgentWindowModel.plainShellRefusal, "claude and the box")
+            m.setNewSessionSidekick(false)
+            // The prompt typed with claude, then the command becomes bash.
+            m.setNewSessionPrompt("fix it")
+            m.setNewSessionCommand("bash")
+            XCTAssertTrue(m.newSessionShellRefusal == nil, "bash: the prompt is ignored, New shell is enabled")
+            // The box ticked with claude, then bash.
+            m.setNewSessionPrompt("")
+            m.setNewSessionCommand("claude")
+            m.setNewSessionSidekick(true)
+            m.setNewSessionCommand("bash")
+            XCTAssertTrue(m.newSessionShellRefusal == nil, "bash: the box reads unchecked, New shell is enabled")
+            // Another Mac: the same for a prompt and for the box.
+            m.setNewSessionCommand("claude")
+            m.setNewSessionPrompt("fix it")
+            m.setNewSessionSidekick(true)
+            XCTAssertEqual(m.newSessionShellRefusal, AgentWindowModel.plainShellRefusal)
+            m.setNewSessionHost("example-host")
+            XCTAssertTrue(m.newSessionShellRefusal == nil, "a remote host: both are ignored")
+            m.setNewSessionHost(nil)
+            XCTAssertEqual(m.newSessionShellRefusal, AgentWindowModel.plainShellRefusal, "back on this Mac: they count again")
+        }
+    }
+
+    /// R1370-s2: the editor's name, the composer's default, and the disclosure's label and value.
+    @MainActor
+    func testAgentWindowNewSessionPromptEditorAndDisclosureSpeakTheirOwnNames() {
+        let field = AgentNewSessionView.promptEditor(text: .constant(""), onSubmit: {}, editable: true)
+        XCTAssertEqual(field.accessibilityName, "First prompt for the new session")
+        XCTAssertFalse(field.returnSubmits, "the editor is still the New session one")
+        let plain = AgentComposerField(text: .constant(""), onSubmit: {})
+        XCTAssertEqual(plain.accessibilityName, "Message Claude")
+        XCTAssertEqual(AgentComposerField(text: .constant(""), onSubmit: {}, editable: false).accessibilityName,
+                       "Message Claude, session ended")
+        XCTAssertEqual(AgentNewSessionView.promptDisclosureLabel, "Prompt, optional")
+        XCTAssertEqual(AgentNewSessionView.promptDisclosureValue(shown: true), "expanded")
+        XCTAssertEqual(AgentNewSessionView.promptDisclosureValue(shown: false), "collapsed")
+    }
+}

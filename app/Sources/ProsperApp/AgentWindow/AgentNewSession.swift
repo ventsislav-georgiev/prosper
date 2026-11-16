@@ -358,6 +358,13 @@ struct AgentNewSessionView: View {
 
     /// #847 D5.1-D5.3: the disclosure, and the editor at a fixed sz(96) under it (the one accepted reflow). Return adds
     /// a line, Command-Return is Start. Not a Claude: dimmed, the text kept.
+    static let promptDisclosureLabel = "Prompt, optional"
+    static let promptEditorLabel = "First prompt for the new session"   // #1392: not the composer's "Message Claude"
+    static func promptDisclosureValue(shown: Bool) -> String { shown ? "expanded" : "collapsed" }
+    static func promptEditor(text: Binding<String>, onSubmit: @escaping () -> Void, editable: Bool) -> AgentComposerField {
+        AgentComposerField(text: text, onSubmit: onSubmit, editable: editable, returnSubmits: false, label: promptEditorLabel)
+    }
+
     private var promptRows: some View {
         let claude = model.newSessionClaude
         return HStack(alignment: .top, spacing: sz(8)) {
@@ -369,12 +376,13 @@ struct AgentNewSessionView: View {
                         .frame(height: sz(18)).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(Self.promptDisclosureLabel)
+                .accessibilityValue(Self.promptDisclosureValue(shown: form.promptShown))
                 .disabled(!claude)
                 .help(claude ? "A first message for the new session" : Self.notClaude(command: form.command, host: form.host))
                 if form.promptShown {
-                    AgentComposerField(text: Binding(get: { form.prompt }, set: { model.setNewSessionPrompt($0) }),
-                                       onSubmit: { model.startNewSession() }, editable: claude && form.starting == nil,
-                                       returnSubmits: false)
+                    Self.promptEditor(text: Binding(get: { form.prompt }, set: { model.setNewSessionPrompt($0) }),
+                                      onSubmit: { model.startNewSession() }, editable: claude && form.starting == nil)
                         .frame(height: sz(96))
                         .overlay(RoundedRectangle(cornerRadius: sz(4)).stroke(Neon.textSecondary.opacity(0.4)))
                         .opacity(claude ? 1 : 0.45)
