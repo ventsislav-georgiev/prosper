@@ -1549,6 +1549,9 @@ tag from the now-released section and put it on the new top draft.
   Left/Right move to the line start/end and by word, as in Ghostty. (#1376)
 - The Agent Sessions sidebar no longer shows a session's old name or state after it moves between
   groups (Needs you, Sessions, Sidekicks); reopening the window is no longer needed. (#1373)
+- The X-ray Tasks tab refreshes itself while you watch it: every 5 seconds for a local session, 15
+  for a remote one, and never while hidden. A host that stops answering keeps its tasks on screen
+  with a "host unreachable" note. (#1368)
 
 ## v2.174.0
 

@@ -3,7 +3,7 @@ import SwiftUI
 
 // #1351 (#1346 P3a, design 3.1-3.9): the X-ray panel, a drawer over one pane (both modes; it overlays, so the terminal
 // keeps its grid) with a tab strip in dch's order. Tasks is the first working tab; Memory shows its label and count
-// (its content is P4). Read once when the panel opens (no poller here: #1368).
+// (its content is P4). Read when the panel opens; #1368's poller (XrayPoller.swift) re-reads Tasks while it is shown.
 
 /// The tabs in dch's order (xview.c xv_ord); later phases put Prompts, Responses, Refs and Search before these.
 enum XrayTab: String, CaseIterable { case tasks = "Tasks", memory = "Memory" }
@@ -30,7 +30,12 @@ struct XrayTarget: Equatable {
 @MainActor
 final class XrayPanels: ObservableObject {
     static let shared = XrayPanels()
-    @Published var open: [UUID: XrayPanelModel] = [:]
+    @Published var open: [UUID: XrayPanelModel] = [:] {
+        didSet {   // #1368: a panel that leaves stops polling and SIGTERMs its read; one that comes reads its pane's state
+            for (k, m) in oldValue where open[k] !== m { m.stop() }
+            for (k, m) in open where oldValue[k] !== m { m.paneState = { Self.paneState(k) } }
+        }
+    }
 
     func close(_ pane: UUID) { open[pane] = nil }
 
@@ -41,15 +46,19 @@ final class XrayPanels: ObservableObject {
     /// fake here; no row runs a real dch).
     static var run: Run = { path, args, env in
         guard NSClassFromString("XCTestCase") == nil else { return (-1, Data()) }
-        return await withCheckedContinuation { c in
-            DispatchQueue.global(qos: .utility).async {
-                let r = DchCommand.bounded(DchCommand.remoteTimeout) { onPid in
-                    DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: onPid)
+        let child = XrayChild()   // #1368: a cancelled read (panel closed, session switched) SIGTERMs its dch
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { c in
+                DispatchQueue.global(qos: .utility).async {
+                    let r = DchCommand.bounded(DchCommand.remoteTimeout) { onPid in
+                        defer { child.reaped() }
+                        return DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: { onPid($0); child.started($0) })
+                    }
+                    let v: (status: Int32, out: Data) = r.map { ($0.status, $0.out) } ?? (-1, Data())
+                    c.resume(returning: v)
                 }
-                let v: (status: Int32, out: Data) = r.map { ($0.status, $0.out) } ?? (-1, Data())
-                c.resume(returning: v)
             }
-        }
+        } onCancel: { child.cancel() }
     }
 
     /// The dch path X-ray runs, when it passes XrayTabs.gate (1.78.0); nil below it: no item, no route, no process.
@@ -74,7 +83,7 @@ final class XrayPanels: ObservableObject {
 final class XrayPanelModel: ObservableObject {
     let target: XrayTarget
     /// nil: no Tasks tab (design 3.9: exit not 0, a schema other than 1, an empty list, a shell).
-    @Published private(set) var tasks: XrayTasks?
+    @Published var tasks: XrayTasks?   // set here and by the poller (XrayPoller.swift)
     /// nil: no Memory tab (exit not 0, no row).
     @Published private(set) var memory: XrayMemory?
     @Published private(set) var loaded = false
@@ -83,7 +92,21 @@ final class XrayPanelModel: ObservableObject {
     @Published var filterFocused = false
     /// The task whose card was asked for last (the presenter shows it).
     @Published private(set) var card: XrayTasks.Task?
-    private(set) var reading: Task<Void, Never>?
+    var reading: Task<Void, Never>?   // the open read or a poll (XrayPoller.swift)
+    /// #1368: the poller's state (XrayPoller.swift): the read's dch and runner, when the last read started, the dch
+    /// path's mtime after a failed read (no retry until it moves), exit 4/7's "host unreachable", the ticker's stop.
+    var dch: String?
+    var run: XrayPanels.Run?
+    var lastRead = Date.distantPast
+    var failed = false
+    var failedMtime: Date?
+    @Published var unreachable = false
+    var stopTicker: (() -> Void)?
+    var stopped = false
+    /// #1368: the pane's window visible and its session live; XrayPanels.open wires it (default: hidden, no poll).
+    var paneState: () -> (visible: Bool, live: Bool) = { (false, false) }
+    /// #1368: the dch path's modification date (design 3.9's retry key).
+    var mtime: (String) -> Date? = { (try? FileManager.default.attributesOfItem(atPath: $0))?[.modificationDate] as? Date }
 
     var now: () -> Date = Date.init
     var close: () -> Void = {}
@@ -101,17 +124,28 @@ final class XrayPanelModel: ObservableObject {
 
     /// The one read on open: both forms, so the strip knows which tabs exist.
     func read(dch: String, run: @escaping XrayPanels.Run) {
+        (self.dch, self.run) = (dch, run)
+        if stopTicker == nil { stopTicker = XrayPanels.ticker { [weak self] in self?.tick() } }
+        readBoth()
+    }
+
+    /// Both forms; again from the poller when a cancel left the panel unread (#1368).
+    func readBoth() {
+        guard let dch, let run else { return }
+        lastRead = now()
         let env = target.env, a = target.args("tasks"), b = target.args("memory")
         reading = Task { [weak self] in
             async let t = run(dch, a, env)
             async let m = run(dch, b, env)
             let (tr, mr) = await (t, m)
+            guard !Task.isCancelled else { return }   // #1368: closed or switched away: the SIGTERMed answer is not news
+            self?.reading = nil
             self?.apply(tasks: tr, memory: mr)
         }
     }
 
     func apply(tasks tr: (status: Int32, out: Data), memory mr: (status: Int32, out: Data)) {
-        tasks = Self.tasksTab(tr)
+        take(tr)
         memory = mr.status == 0 ? XrayMemory.parse(mr.out) : nil
         if memory?.count == 0 { memory = nil }
         loaded = true
@@ -163,6 +197,7 @@ final class XrayPanelModel: ObservableObject {
         var out = [tasks.headerWarn, tasks.doneWarn].compactMap { $0 }.filter { !$0.isEmpty }
         if tasks.partial { out.append("partial") }
         if tasks.droppedCount > 0 { out.append("\(tasks.droppedCount) not shown") }
+        if unreachable { out.append("host unreachable") }   // #1368, design 3.5: exit 4/7 kept the rows
         return out
     }
 
