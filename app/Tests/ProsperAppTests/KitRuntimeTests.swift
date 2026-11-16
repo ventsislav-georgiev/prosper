@@ -110,6 +110,14 @@ final class KitRuntimeTests: XCTestCase {
     }
 
     private func bytes(_ u: URL) -> [UInt8]? { (try? Data(contentsOf: u)).map(Array.init) }
+    /// every file under a store dir by relative path (a dir listed with no bytes)
+    private func snapshot(_ dir: String) -> [String: Data] {
+        var out: [String: Data] = [:]
+        for case let rel as String in FileManager.default.enumerator(atPath: dir)?.allObjects ?? [] {
+            out[rel] = (try? Data(contentsOf: URL(fileURLWithPath: dir + "/" + rel))) ?? Data()
+        }
+        return out
+    }
     private func text(_ path: String) -> String? { try? String(contentsOfFile: path, encoding: .utf8) }
     private func kind(_ path: String) -> KitFileKind { KitPOSIXFS().kind(path) }
     private func list(_ dir: String) -> [String] { ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).sorted() }
@@ -244,6 +252,111 @@ final class KitRuntimeTests: XCTestCase {
         XCTAssertEqual(text(layout.bin + "/calm-note")?.contains(layout.live + "/tools/calm-note"), true, "the old version's shims")
     }
 
+    /// #1408: a FIRST apply whose wiring fails ends with nothing applied (no rollback copy to swap back to).
+    func testAFailedFirstApplyLeavesNothingApplied() async throws {
+        let settingsURL = LockedURL()
+        let e = try env(KitRTConsent(true, onAsk: { n in if n == 1, let u = settingsURL.value { try? Data("{ not json".utf8).write(to: u) } }))
+        settingsURL.value = e.settings
+        let rt = try runtime(e)
+        let layout = rt.store.layout
+        let md = bytes(e.claudeMD)
+        let r = try await rt.apply(source(e, version: "1.0.0"))
+        XCTAssertEqual(e.consent.seen.count, 1)
+        XCTAssertTrue(r.failures.first?.hasPrefix("applyWiring") == true, "\(r.failures)")
+        XCTAssertEqual(r.failures.count, 1, "nothing after the wiring failed: \(r.failures)")
+        XCTAssertFalse(r.configRefusals.isEmpty)
+        XCTAssertEqual(r.state?.live.version, "")
+        XCTAssertTrue(r.state?.previous == nil)
+        XCTAssertEqual(r.state?.phase, .idle)
+        XCTAssertEqual(kind(layout.live), .missing, "the new copy is dropped")
+        XCTAssertEqual(kind(layout.previous), .missing)
+        XCTAssertEqual(list(layout.staged), [])
+        XCTAssertEqual(kind(layout.bin + "/calm-note"), .missing, "no shim")
+        XCTAssertEqual(bytes(e.claudeMD), md, "no wiring")
+        // the store is back to nothing applied: a later apply runs as a first one
+        try Data(Self.userSettings.utf8).write(to: e.settings)
+        let again = try await rt.apply(source(e, version: "1.0.0"))
+        XCTAssertEqual(again.failures, [])
+        XCTAssertEqual(version(layout.live), "1.0.0")
+        XCTAssertEqual(text(layout.bin + "/calm-note")?.contains(layout.live + "/tools/calm-note"), true)
+    }
+
+    /// #1408 N1: a relaunch forgets the machine state, so an update looks like a first apply; its failed wiring must swap
+    /// back to the old copy the swap left at previous, never leave no live copy.
+    func testAFailedUpdateAfterARelaunchKeepsTheOldCopyLive() async throws {
+        let settingsURL = LockedURL()
+        let e = try env(KitRTConsent(true, onAsk: { n in if n == 2, let u = settingsURL.value { try? Data("{ not json".utf8).write(to: u) } }))
+        settingsURL.value = e.settings
+        let before = try runtime(e)
+        let layout = before.store.layout
+        let first = try await before.apply(source(e, version: "1.0.0"))
+        XCTAssertEqual(first.failures, [])
+        let old = snapshot(layout.live)
+        XCTAssertFalse(old.isEmpty)
+        let shim = text(layout.bin + "/calm-note")
+        let md = bytes(e.claudeMD)
+        let rt = try runtime(e) // the relaunch: no state
+        XCTAssertTrue(rt.current == nil)
+        let r = try await rt.apply(source(e, version: "2.0.0", timeout: 20))
+        XCTAssertEqual(e.consent.seen.count, 2)
+        XCTAssertTrue(r.failures.first?.hasPrefix("applyWiring") == true, "\(r.failures)")
+        XCTAssertEqual(r.failures.count, 1, "\(r.failures)")
+        XCTAssertEqual(version(layout.live), "1.0.0", "the old copy is live again")
+        XCTAssertEqual(snapshot(layout.live), old, "byte-identical")
+        XCTAssertEqual(kind(layout.previous), .missing, "the failed new copy is gone")
+        XCTAssertEqual(list(layout.staged), [])
+        XCTAssertEqual(text(layout.bin + "/calm-note"), shim)
+        XCTAssertEqual(bytes(e.claudeMD), md)
+    }
+
+    /// #1408 N2: a rollback right after a good first apply has nothing to roll back to and changes nothing.
+    func testARollbackAfterAFirstApplyChangesNothing() async throws {
+        let e = try env()
+        let rt = try runtime(e)
+        let layout = rt.store.layout
+        let ext = try source(e, version: "1.0.0")
+        let first = await rt.apply(ext)
+        XCTAssertEqual(first.failures, [])
+        let (live, md, st, shim) = (snapshot(layout.live), bytes(e.claudeMD), bytes(e.settings), text(layout.bin + "/calm-note"))
+        let r = await rt.rollback(ext)
+        XCTAssertEqual(r.refused, "nothing to roll back to")
+        XCTAssertEqual(r.failures, [])
+        XCTAssertEqual(r.state?.live.version, "1.0.0")
+        XCTAssertEqual(e.consent.seen.count, 1, "no sheet")
+        XCTAssertEqual(snapshot(layout.live), live)
+        XCTAssertEqual(kind(layout.previous), .missing)
+        XCTAssertEqual(text(layout.bin + "/calm-note"), shim)
+        XCTAssertEqual(bytes(e.claudeMD), md)
+        XCTAssertEqual(bytes(e.settings), st)
+    }
+
+    /// L4: a file changes under the update's sheet, so the wiring's change set is not the one approved: KitApprovedConsent
+    /// falls back to the real consent, which is asked again, and that second answer for the update (a no) decides.
+    func testTheWiringAsksAgainWhenTheChangeSetShifts() async throws {
+        let settingsURL = LockedURL()
+        let e = try env(KitRTConsent(true, answers: [true, true, false], onAsk: { n in
+            guard n == 2, let u = settingsURL.value, let d = try? Data(contentsOf: u),
+                  var doc = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return }
+            doc["model"] = "example-model" // the person's own edit while the sheet is open
+            if let out = try? JSONSerialization.data(withJSONObject: doc) { try? out.write(to: u) }
+        }))
+        settingsURL.value = e.settings
+        let rt = try runtime(e)
+        let layout = rt.store.layout
+        let first = try await rt.apply(source(e, version: "1.0.0"))
+        XCTAssertEqual(first.failures, [])
+        XCTAssertEqual(e.consent.seen.count, 1, "an unchanged sheet answers the wiring itself")
+        let r = try await rt.apply(source(e, version: "2.0.0", timeout: 20))
+        XCTAssertEqual(e.consent.seen.count, 3, "asked at askConsent and again at the wiring")
+        let shown = e.consent.seen.dropFirst()
+        XCTAssertTrue(shown.first?.identity != nil && shown.first?.identity != shown.last?.identity, "the re-ask shows the shifted set")
+        XCTAssertFalse(r.failures.isEmpty, "the re-ask's no fails the wiring")
+        XCTAssertEqual(r.state?.live.version, "1.0.0")
+        XCTAssertEqual(version(layout.live), "1.0.0", "swapped back")
+        XCTAssertEqual(try kitHookTimeout(e), 10, "the update's wiring never landed")
+        XCTAssertEqual(try settings(e)["model"] as? String, "example-model")
+    }
+
     func testOffPieceSurvivesUpdate() async throws {
         let e = try env()
         let rt = try runtime(e)
@@ -354,8 +467,10 @@ final class KitRuntimeTests: XCTestCase {
         let up = try await rt.apply(source(e, version: "2.0.0", timeout: 20))
         XCTAssertEqual(up.failures, [])
         XCTAssertEqual(try kitHookTimeout(e), 20)
+        XCTAssertEqual(e.consent.seen.count, 2)
         let back = await rt.rollback(ext)
         XCTAssertEqual(back.failures, [])
+        XCTAssertEqual(e.consent.seen.count, 3, "a rollback has no askConsent: its wiring asks (R1402-s1)")
         XCTAssertEqual(back.state?.live.version, "1.0.0")
         XCTAssertEqual(back.state?.previous?.version, "2.0.0")
         XCTAssertEqual(version(layout.live), "1.0.0")
@@ -363,10 +478,33 @@ final class KitRuntimeTests: XCTestCase {
         XCTAssertEqual(try kitHookTimeout(e), 10)
         let forth = await rt.rollback(ext)
         XCTAssertEqual(forth.failures, [])
+        XCTAssertEqual(e.consent.seen.count, 4)
         XCTAssertEqual(forth.state?.live.version, "2.0.0")
         XCTAssertEqual(version(layout.live), "2.0.0")
         XCTAssertEqual(version(layout.previous), "1.0.0")
         XCTAssertEqual(try kitHookTimeout(e), 20)
+    }
+
+    /// R1402-s1: a rollback answered no at its one sheet leaves the copies, the shims and the person's files as they were.
+    func testARollbackAnsweredNoChangesNothing() async throws {
+        let e = try env(KitRTConsent(true, answers: [true, true, false]))
+        let rt = try runtime(e)
+        let layout = rt.store.layout
+        let ext = try source(e, version: "1.0.0")
+        _ = await rt.apply(ext)
+        let up = try await rt.apply(source(e, version: "2.0.0", timeout: 20))
+        XCTAssertEqual(up.failures, [])
+        let (md, st, shim) = (bytes(e.claudeMD), bytes(e.settings), text(layout.bin + "/calm-note"))
+        let no = await rt.rollback(ext)
+        XCTAssertEqual(e.consent.seen.count, 3, "the rollback asked once")
+        XCTAssertFalse(no.failures.isEmpty, "the no fails the rollback's wiring")
+        XCTAssertEqual(no.state?.live.version, "2.0.0")
+        XCTAssertEqual(no.state?.previous?.version, "1.0.0")
+        XCTAssertEqual(version(layout.live), "2.0.0")
+        XCTAssertEqual(version(layout.previous), "1.0.0")
+        XCTAssertEqual(text(layout.bin + "/calm-note"), shim)
+        XCTAssertEqual(bytes(e.claudeMD), md)
+        XCTAssertEqual(bytes(e.settings), st)
     }
 
     func testNoEnvKeyEverPlanned() async throws {

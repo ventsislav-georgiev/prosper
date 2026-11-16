@@ -129,8 +129,7 @@ final class ManagedConfigUnitTests: XCTestCase {
         for file in swiftFiles(dir) where !file.path.contains("/ManagedConfig/") && !file.path.contains("/ManagedConfigHost/") {
             if try String(contentsOf: file, encoding: .utf8).contains("ManagedConfig") { callers.append(file.lastPathComponent) }
         }
-        // #872 P1: the Agent Kit model, validator and pure render build ManagedConfigPiece values and
-        // reuse ManagedConfigPaths / ManagedConfigPlanner.hookEvents; they never call apply or remove.
+        // #872 P1 / #1402: the Kit files build pieces and reuse ManagedConfigPaths; only KitRuntime calls apply, remove and repair.
         // #1108 P3a: the Text viewer's save uses the file-writer seam only; it never calls apply or remove.
         XCTAssertEqual(callers.sorted(), ["AppDelegate.swift", "ExtensionHostAPI.swift", "ExtensionRegistry.swift", "KitManifest.swift",
                                           "KitRender.swift", "KitRuntime.swift", "KitStore.swift", "KitValidator.swift", "LiveExtensionHostServices.swift", "TextFileWriter.swift"])

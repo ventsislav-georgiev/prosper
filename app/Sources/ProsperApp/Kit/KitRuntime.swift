@@ -166,7 +166,9 @@ final class KitRuntime: @unchecked Sendable {
         guard let s = current else { return KitRuntimeResult(refused: "nothing applied") }
         let host = await ExtensionRegistry.bundleVersion
         let runner = KitEffectRunner(store: store, handlers: handlers(ext, source: .local, cap: KitStore.localByteCap, others: [], host: host), now: now)
-        return await drive(s, .rollbackRequested, ext, config, runner)
+        var r = await drive(s, .rollbackRequested, ext, config, runner)
+        if r.state?.lastRefusal == .noRollbackCopy { r.refused = "nothing to roll back to" } // #1408 N2
+        return r
     }
 
     private func handlers(_ ext: LoadedExtension, source: KitInstallSource, cap: Int, others: Set<String>, host: String) -> KitEffectHandlers {

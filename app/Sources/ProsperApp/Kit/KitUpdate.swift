@@ -10,6 +10,7 @@ import Foundation
 // tree hash of the action. An answer is compared with `staged` (or, after the swap, `live`) WHOLE: an
 // answer for another version or another tree is ignored (S4b, R917-s4-q1). swapBack is ONE atomic rename
 // swap in the store step and cannot fail half way, so it has no answer and no failure edge.
+// A shims or wiring failure on a FIRST apply (previous is the runtime's empty ref) answers dropLive, never swapBack (#1408).
 
 struct KitRef: Hashable, Sendable {
     var version: String
@@ -23,6 +24,8 @@ enum KitUpdatePhase: Hashable, Sendable {
 
 enum KitUpdateRefusal: Hashable, Sendable {
     case slugChanged, publisherChanged, validation, consentDenied, render, shims
+    /// a rollback asked while previous is the runtime's empty ref (right after a first apply): nothing to roll back to
+    case noRollbackCopy
 }
 
 struct KitUpdateState: Hashable, Sendable {
@@ -66,6 +69,8 @@ enum KitUpdateAction: Hashable, Sendable {
     case writeShims(String)
     case applyWiring(String)
     case swapBack
+    /// A failed FIRST apply (no real previous): the new live copy and its shims go; nothing is applied after it.
+    case dropLive(String)
     case keepPrevious(String)
     case dropPrevious(String)
     case dropStaged(String)
@@ -80,6 +85,10 @@ enum KitUpdateMachine {
     private static func isLive(_ s: KitUpdateState, _ v: String, _ t: String) -> Bool {
         s.live.version == v && s.live.treeHash == t
     }
+
+    /// The runtime seeds a first apply with an empty live ref (version ""), which the swap makes `previous`:
+    /// that is no copy to swap back to.
+    private static func isFirstApply(_ s: KitUpdateState) -> Bool { s.previous?.version.isEmpty == true }
 
     static func step(_ s: KitUpdateState, _ e: KitUpdateEvent) -> (KitUpdateState, [KitUpdateAction]) {
         var n = s
@@ -133,6 +142,10 @@ enum KitUpdateMachine {
             return (n, [.applyWiring(v)])
         case let .shimsFailed(v, t):
             guard isLive(s, v, t) else { return (s, []) }
+            if s.phase == .shims, isFirstApply(s), let none = s.previous {
+                n.live = none; n.previous = nil; n.retiring = nil; n.staged = nil; n.phase = .idle
+                return (n, [.dropLive(v)])
+            }
             if s.phase == .shims, let old = s.previous {
                 n.live = old; n.previous = s.retiring; n.retiring = nil; n.staged = nil; n.phase = .idle
                 return (n, [.swapBack, .writeShims(old.version), .dropStaged(v)])
@@ -154,6 +167,10 @@ enum KitUpdateMachine {
             return (s, [])
         case let .wiringFailed(v, t):
             guard isLive(s, v, t) else { return (s, []) }
+            if s.phase == .wiring, isFirstApply(s), let none = s.previous {
+                n.live = none; n.previous = nil; n.retiring = nil; n.staged = nil; n.phase = .idle
+                return (n, [.dropLive(v)])
+            }
             if s.phase == .wiring, let old = s.previous {
                 n.live = old; n.previous = s.retiring; n.retiring = nil; n.staged = nil; n.phase = .idle
                 return (n, [.swapBack, .writeShims(old.version), .dropStaged(v)])
@@ -165,6 +182,7 @@ enum KitUpdateMachine {
             return (s, [])
         case .rollbackRequested:
             guard s.phase == .idle, let prev = s.previous else { return (s, []) }
+            if prev.version.isEmpty { n.lastRefusal = .noRollbackCopy; return (n, []) } // #1408 N2: no swapBack, no throw
             n.live = prev; n.previous = s.live; n.phase = .rollingBack
             return (n, [.swapBack, .writeShims(prev.version), .applyWiring(prev.version)])
         case .cancel:

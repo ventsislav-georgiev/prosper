@@ -570,4 +570,48 @@ final class KitUpdateMachineTests: XCTestCase {
             XCTAssertTrue(edges[s].map { $0.contains(where: { $0 != s }) } ?? false, "phase \(s.phase) cannot be left")
         }
     }
+
+    // MARK: #1408 a failed FIRST apply (the runtime's empty live ref, version "") drops the new live, never swaps back
+
+    func firstApply() -> KitUpdateState { KitUpdateState(live: KitRef(version: "", treeHash: "", slug: slug)) }
+
+    func testAFailedFirstApplyDropsLiveAndNeverSwapsBack() {
+        let upToShims: [E] = [staged("1.0.0"), .validatedOk("1.0.0", tree: "h1.0.0"), .rendered("1.0.0", tree: "h1.0.0"),
+                              .consentGiven("1.0.0", tree: "h1.0.0"), .swapped("1.0.0", tree: "h1.0.0")]
+        let rows: [(String, [E])] = [("shimsFailed", upToShims + [.shimsFailed("1.0.0", tree: "h1.0.0")]),
+                                     ("wiringFailed", upToShims + [.shimsWritten("1.0.0", tree: "h1.0.0"), .wiringFailed("1.0.0", tree: "h1.0.0")])]
+        for (name, flow) in rows {
+            let r = drive(firstApply(), flow)
+            XCTAssertEqual(r.steps.last, [.dropLive("1.0.0")], name)
+            XCTAssertFalse(r.steps.flatMap { $0 }.contains(.swapBack), name)
+            XCTAssertEqual(r.state, firstApply(), "\(name): back to nothing applied")
+            // the failure's answer repeated is out of phase
+            XCTAssertEqual(KitUpdateMachine.step(r.state, flow.last ?? .cancel).1, [], name)
+        }
+        // an update with a real previous still swaps back, through both failures
+        let two = drive(fresh(), goodFlow("2.0.0")).state
+        let up: [E] = [staged("3.0.0"), .validatedOk("3.0.0", tree: "h3.0.0"), .rendered("3.0.0", tree: "h3.0.0"),
+                       .consentGiven("3.0.0", tree: "h3.0.0"), .swapped("3.0.0", tree: "h3.0.0")]
+        XCTAssertEqual(drive(two, up + [.shimsFailed("3.0.0", tree: "h3.0.0")]).steps.last, [.swapBack, .writeShims("2.0.0"), .dropStaged("3.0.0")])
+        XCTAssertEqual(drive(two, up + [.shimsWritten("3.0.0", tree: "h3.0.0"), .wiringFailed("3.0.0", tree: "h3.0.0")]).steps.last,
+                       [.swapBack, .writeShims("2.0.0"), .dropStaged("3.0.0")])
+        // and the first update after a good first apply (previous = the empty ref is gone: previous is 1.0.0) swaps back too
+        let one = drive(firstApply(), goodFlow("1.0.0")).state
+        XCTAssertEqual(one.previous?.version, "")
+        XCTAssertEqual(drive(one, Array(goodFlow("2.0.0").dropLast()) + [.wiringFailed("2.0.0", tree: "h2.0.0")]).steps.last,
+                       [.swapBack, .writeShims("1.0.0"), .dropStaged("2.0.0")])
+    }
+
+    /// #1408 N2: a rollback right after a good first apply (previous = the empty ref) is refused: no swapBack.
+    func testARollbackAfterAFirstApplyIsRefused() {
+        let one = drive(firstApply(), goodFlow("1.0.0")).state
+        let r = KitUpdateMachine.step(one, .rollbackRequested)
+        XCTAssertEqual(r.1, [])
+        XCTAssertEqual(r.0.lastRefusal, .noRollbackCopy)
+        XCTAssertEqual(r.0.live, live("1.0.0"))
+        XCTAssertEqual(r.0.phase, .idle)
+        // a real previous still rolls back
+        XCTAssertEqual(KitUpdateMachine.step(drive(fresh(), goodFlow("2.0.0")).state, .rollbackRequested).1,
+                       [.swapBack, .writeShims("1.0.0"), .applyWiring("1.0.0")])
+    }
 }

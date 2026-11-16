@@ -144,6 +144,21 @@ final class KitEffectRunner: Sendable {
             } catch { return stop(.wiringFailed(v, tree: t), Self.text(error)) }
         case .swapBack:
             do { try store.swapBack(); return true } catch { return stop(nil, Self.text(error)) }
+        case .dropLive:
+            // #1408: a failed first apply: its shims, then the live copy, through the store's own replace and remove.
+            // shortcut: the machine forgets live/previous at a relaunch, so a real update looks like a first apply; when the
+            // swap left an old copy at previous on disk, swap back to it (as at TIP) instead of leaving no live copy; drop
+            // this check when #1409 persists the machine state.
+            do {
+                if store.fs.kind(store.layout.previous) != .missing {
+                    try store.swapBack()
+                    try store.restoreRetiring() // the failed new copy (now at previous) goes; an older retiring comes back
+                } else {
+                    _ = try store.writeShims([])
+                    try store.removeTree(store.layout.live)
+                }
+                return true
+            } catch { return stop(nil, Self.text(error)) }
         case .dropPrevious:
             do { try store.dropRetiring(); return true } catch { return stop(nil, Self.text(error)) }
         case .dropStaged(let v):
