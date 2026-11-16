@@ -1505,8 +1505,11 @@ final class AgentIslandController {
     }
 
     /// The click's bookkeeping, on main; nil when the session is already in flight.
+    /// #1321 (QA r1244 INFO-1): nil too for an action with no prompt (the window's message or Esc) while a job
+    /// runs on the session (a Restart or Stop, the phone's too): dch types its pause, /exit and resume into
+    /// that composer. An answer to a prompt still goes: the pause waits on it, and dch never types over one.
     private func beginHuman(_ s: AgentSession, _ p: AgentPrompt?) -> Int? {
-        guard let store, inFlight.insert(s.key).inserted else { return nil }
+        guard let store, p != nil || !runner.isBusy(s.key), inFlight.insert(s.key).inserted else { return nil }
         store.cards[s.key] = nil
         // QA #620 INFO-1: the prompt a human clicks is the human's: a re-read still seeing it (or one
         // in flight) never checks it, and the next prompt is a fresh check.

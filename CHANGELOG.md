@@ -1455,6 +1455,9 @@ tag from the now-released section and put it on the new top draft.
   instead of "Stop failed". (#1328)
 - Agent Sessions: History now lists the ended sessions of your other machines, each with its host,
   and Resume brings one back on that machine. (#1324)
+- The Agent Sessions window no longer sends a message or Esc into a session while its Restart or
+  Stop is running (also one started from the phone); answering the session's prompt still works,
+  since the restart waits on it. (#1321)
 
 ## v2.174.0
 
