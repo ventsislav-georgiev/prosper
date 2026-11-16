@@ -1487,6 +1487,9 @@ tag from the now-released section and put it on the new top draft.
   whole command that sent it, not only the first 48 characters. (#1332)
 - Agent Island Settings: a new Pairs field sets the name suffix that makes two sessions a pair for
   Stop both and Resume both (default -qa); leave it empty to turn pairs off. (#1338)
+- Agent Sessions: "Diagnostics..." in the sidebar menu shows the Prosper, dch and Claude Code
+  versions, the tested range, tier counts and the last parse errors for a bug report, with Copy.
+  (#923)
 
 ## v2.174.0
 

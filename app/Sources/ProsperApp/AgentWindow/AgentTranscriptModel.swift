@@ -40,6 +40,9 @@ struct TranscriptAssembler {
     private(set) var dropped = 0
     private(set) var droppedCounts: [String: TierCounts] = [:]
     private(set) var hiddenCounts: [String: Int] = [:]
+    /// #923: the last few failed lines' reasons (version and reason, never content), oldest first.
+    private(set) var parseErrors: [String] = []
+    static let maxParseErrors = 5
     private(set) var latestVersion: String?
     /// The newest entry's working directory: the header's project line.
     private(set) var cwd: String?
@@ -115,6 +118,10 @@ struct TranscriptAssembler {
                 hiddenCounts[v, default: 0] += 1
             case .block(let body, let tier):
                 if case .compaction(nil, nil, let summary?) = body, mergeSummary(summary, sidechain: e.sidechain) { continue }
+                if case .failed(let reason, _) = body {
+                    parseErrors.append("\(v): \(reason)")
+                    if parseErrors.count > Self.maxParseErrors { parseErrors.removeFirst() }
+                }
                 append(TranscriptBlock(id: take(), body: body, tier: tier, version: v, source: source), sidechain: e.sidechain)
             case .toolUse(let id, let name, let input):
                 let op = id != nil && e.sidechain == nil ? AgentTodos.op(name: name, input: input) : nil
@@ -505,6 +512,7 @@ final class AgentTranscriptModel: ObservableObject {
 
     var counts: [String: TierCounts] { assembler.counts() }
     var latestVersion: String? { assembler.latestVersion }
+    var parseErrors: [String] { assembler.parseErrors }
 
     /// Rule 6: follow dch's mapping. Never guesses a path.
     func update(_ s: AgentTranscriptSource) {

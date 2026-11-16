@@ -135,6 +135,7 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
             AgentIsland.stopAllGlobalLabel, AgentIsland.killAllGlobalLabel, "-",
             "Resume interrupted (1)", "Resume interrupted (1) without the message", "Clear unpinned" + Self.ellipsis, "-",
             "Sort", "Row details", "Always allow permission prompts", "Agent Island Settings" + Self.ellipsis,
+            "Diagnostics" + Self.ellipsis,
         ])
         XCTAssertEqual(Set(enabled(e)), [true], "all on with every gate open")
         guard case .submenu(_, _, let new)? = e.first else { return XCTFail("New session is a submenu") }
@@ -174,9 +175,9 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
             AgentIsland.newSessionLabel, "-", "Restart stale agents", "Restart all agents (force)",
             AgentIsland.stopAllGlobalLabel, AgentIsland.killAllGlobalLabel, "-",
             "Sort", "Row details", "Always allow permission prompts", "Agent Island Settings" + Self.ellipsis,
-            "-", "note: Controls \(why)",
+            "Diagnostics" + Self.ellipsis, "-", "note: Controls \(why)",
         ])
-        XCTAssertEqual(enabled(e), [false, false, false, false, false, true, true, true, true])
+        XCTAssertEqual(enabled(e), [false, false, false, false, false, true, true, true, true, true])
     }
 
     /// The restart gate (a 1.24.0 control dch): Restart and Stop all off, naming the version; Kill all needs only the

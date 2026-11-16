@@ -339,6 +339,8 @@ enum AgentSidebarVerb: Equatable {
     case resumeInterrupted(noMessage: Bool), clearUnpinned
     case sort(AgentIslandSort), rowDetail(WritableKeyPath<AgentIslandRowDetails, Bool>), autoAllow
     case settings
+    /// #923: the window's Diagnostics pane (AgentsWindow presents it; the island has nothing to run).
+    case diagnostics
 }
 
 /// One sidebar "..." entry, a value (rows read the list; no menu is popped).
@@ -409,6 +411,7 @@ extension AgentWindowControls {
             }),
             .item(autoAllowLabel, enabled: true, checked: autoAllow, verb: .autoAllow),
             .item(islandSettingsLabel, enabled: true, checked: nil, verb: .settings),
+            .item(AgentDiagnostics.menuLabel, enabled: true, checked: nil, verb: .diagnostics),
         ]
         if let why = m.refused { out += [.divider, .note("Controls \(why)")] }
         return out
@@ -434,6 +437,7 @@ extension AgentWindowControls {
             c.rowDetailsChanged()
         case .autoAllow: AgentIslandPane.autoAllowToggled(!Preferences.agentIslandAutoAllow, c)
         case .settings: openSettings()
+        case .diagnostics: break   // the window's own pane (AgentSidebarTitleRow)
         }
     }
 

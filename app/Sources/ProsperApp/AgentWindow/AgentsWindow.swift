@@ -662,6 +662,8 @@ struct AgentSidebarView: View {
 /// sz(18) slots. The count gives way first (lineLimit 1, lowest priority); the buttons never move or resize.
 struct AgentSidebarTitleRow: View {
     @ObservedObject var model: AgentWindowModel
+    /// #923: the Diagnostics pane's text while it is up (read once when the item is chosen).
+    @State private var diagnostics: String?
 
     var body: some View {
         HStack(spacing: sz(6)) {
@@ -685,7 +687,12 @@ struct AgentSidebarTitleRow: View {
                 HStack(spacing: sz(4)) {
                     // #897 (G9): the list-wide "..." in its own fixed sz(18) slot, beside the count; #847's pair keeps
                     // the trailing edge.
-                    AgentSidebarMenuButton(store: store) { model.runSidebar($0) }
+                    AgentSidebarMenuButton(store: store) { v in
+                        if v == .diagnostics { diagnostics = AgentDiagnostics.text(model.transcript) } else { model.runSidebar(v) }
+                    }
+                    .popover(isPresented: Binding(get: { diagnostics != nil }, set: { if !$0 { diagnostics = nil } })) {
+                        AgentDiagnosticsView(text: diagnostics ?? "")
+                    }
                     AgentNewSessionButtons(model: model, store: store)
                 }
                 .fixedSize()
