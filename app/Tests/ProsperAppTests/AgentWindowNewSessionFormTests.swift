@@ -140,6 +140,38 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1399 (R1392-s1): what VoiceOver gets, read from the drawn form's AX tree (never the statics): the editor is an
+    /// AXTextArea labelled "First prompt for the new session"; the disclosure's label is "Prompt, optional" with the value
+    /// "expanded" / "collapsed"; no label in the tree carries the triangle glyphs (U+25B8, U+25BE).
+    @MainActor
+    func testAgentWindowNewSessionFormPromptEditorAndDisclosureSpeakTheirNamesOnTheAXTree() throws {
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = wiringModel(store([mapped("a")]), spawns)
+            defer { m.close() }
+            let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(800)))
+            defer { win.close() }
+            m.openNewSession()
+            func disclosure(_ t: [AXTreeNode]) -> AXTreeNode? { t.last { $0.label == "Prompt, optional" && !$0.ignored } }
+            func glyphs(_ t: [AXTreeNode]) -> [String] {
+                t.map(\.label).filter { $0.contains("\u{25B8}") || $0.contains("\u{25BE}") }
+            }
+            let closed = AXTreeSupport.poll(host) { disclosure($0)?.value == "collapsed" }
+            XCTAssertEqual(disclosure(closed)?.value, "collapsed", "the disclosure's value while the prompt is hidden")
+            XCTAssertTrue(glyphs(closed).isEmpty, "no glyph in a label while hidden: \(glyphs(closed))")
+
+            m.toggleNewSessionPrompt()
+            let open = AXTreeSupport.poll(host) { t in
+                disclosure(t)?.value == "expanded" && t.contains { $0.role == "AXTextArea" && $0.label == "First prompt for the new session" }
+            }
+            XCTAssertEqual(disclosure(open)?.value, "expanded", "the disclosure's value while the prompt is shown")
+            XCTAssertTrue(open.contains { $0.role == "AXTextArea" && $0.label == "First prompt for the new session" },
+                          "the editor's AX label: \(open.filter { $0.role == "AXTextArea" }.map(\.label))")
+            XCTAssertTrue(glyphs(open).isEmpty, "no glyph in a label while shown: \(glyphs(open))")
+        }
+    }
+
     // MARK: T31: Return and Command-Return in the editor
 
     /// T31 (D5.2): in the prompt editor Return and keypad Enter add a line and start nothing; Command-Return starts
@@ -221,7 +253,7 @@ extension AgentWindowD1Tests {
                 let box = try XCTUnwrap(tree.last(where: isBox), "\(command): \(tree.map(\.name))")
                 XCTAssertFalse(box.enabled, "the box dimmed: \(command)")
                 XCTAssertTrue(tree.contains { $0.named(why) }, "the reason on the line: \(command)")
-                let disclosure = try XCTUnwrap(tree.first { $0.role == "AXButton" && $0.named(prefix: "\u{25B8} Prompt") }, command)
+                let disclosure = try XCTUnwrap(tree.first { $0.role == "AXButton" && $0.named("Prompt, optional") }, command)
                 XCTAssertFalse(disclosure.enabled, "the disclosure dimmed: \(command)")
             }
             m.setNewSessionCommand("claude")
