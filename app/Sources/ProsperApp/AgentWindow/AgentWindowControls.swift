@@ -119,7 +119,10 @@ extension AgentWindowMenuEntry {
             case .action(.split(.columns)): AgentMenuSymbol.splitRight
             case .action(.split(.rows)): AgentMenuSymbol.splitDown
             case .action(.zoom): AgentMenuSymbol.zoom
-            case .action: AgentMenuSymbol.closePane   // the menu draws no other PaneAction
+            case .action(.closePane): AgentMenuSymbol.closePane
+            // R1358-n1: the menu draws only the cases above; every other PaneAction is named, so a new one fails to compile.
+            case .action(.focus), .action(.cycle), .action(.layout), .action(.previousLayout), .action(.allModes),
+                 .action(.nextNeedsYou), .action(.toggleSidebar), .action(.sidebar): nil
             }
         case .side: AgentMenuSymbol.side
         case .chapters: AgentMenuSymbol.chapters
@@ -152,8 +155,11 @@ extension AgentSidebarMenuEntry {
         switch self {
         case .item(_, _, _, let verb): verb.symbol
         case .submenu(let title, _, _):
+            // shortcut: submenus are told apart by title (no kind field); an unknown title has no symbol, a test row
+            // catches it. Upgrade: a submenu kind enum.
             title == AgentIsland.newSessionLabel ? AgentMenuSymbol.newSession
-                : title == AgentWindowControls.sortLabel ? AgentMenuSymbol.sort : AgentMenuSymbol.rowDetails
+                : title == AgentWindowControls.sortLabel ? AgentMenuSymbol.sort
+                : title == AgentWindowControls.rowDetailsLabel ? AgentMenuSymbol.rowDetails : nil
         case .divider, .note: nil
         }
     }
@@ -509,6 +515,8 @@ extension AgentWindowControls {
     static let alwaysAllowAction = "Turn on"
     static let sortLabel = "Sort"
     static let rowDetailsLabel = "Row details"
+    /// The sidebar "\u{22EF}" button's help (a value, so a test pins it literally).
+    static let sidebarMenuHelp = "New session, restart, stop or end all, History and Agent Island settings"
     /// Agent Island's Settings pane (Resources/extensions/agentisland/extension.toml: id and its sidebar section).
     static let islandExtensionID = "com.prosper.agentisland", islandSectionID = "agentisland"
 
@@ -870,7 +878,7 @@ struct AgentSidebarMenuButton: View {
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
         .frame(width: sz(18), height: sz(18))
-        .help("New session, restart, stop or end all, History and Agent Island settings")
+        .help(AgentWindowControls.sidebarMenuHelp)
         .accessibilityLabel("Session list actions")
     }
 }

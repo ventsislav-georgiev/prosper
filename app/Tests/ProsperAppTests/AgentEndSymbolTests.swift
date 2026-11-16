@@ -93,12 +93,14 @@ final class AgentEndSymbolTests: XCTestCase {
             ("store question action", AgentWindowControls.storeQuestion(st)?.action ?? "none", "End"),
             ("pane menu help", AgentSessionMenuButton.help(session("api")),
              "Open in terminal, rename, restart, stop or end this session"),
+            ("sidebar menu help", AgentWindowControls.sidebarMenuHelp,
+             "New session, restart, stop or end all, History and Agent Island settings"),
         ]
         XCTAssertEqual(Set(rows.map(\.0)), ["killLabel", "killingText", "killAllLabel", "killAllGlobalLabel", "killQuestion",
                                             "killAllQuestion", "killAllQuestion1", "killBusyText", "killedText", "killText ok",
                                             "killText cancelled", "killText failed", "killText failed exit", "killTally",
                                             "killTally none", "confirmTitle", "window question", "store question action",
-                                            "pane menu help"])
+                                            "pane menu help", "sidebar menu help"])
         for (name, got, want) in rows {
             XCTAssertEqual(got, want, name)
             XCTAssertFalse(got.lowercased().contains("kill"), "\(name) says kill: \(got)")
@@ -126,23 +128,39 @@ final class AgentEndSymbolTests: XCTestCase {
     }
 
     /// The words that live inside SwiftUI bodies and the stale-help strings (not reachable as values): no string literal
-    /// of the island's and the window's menu files holds the word "Kill". Comments and identifiers are not strings.
+    /// of the island's and the window's GUI files holds "kill" in any case (R1358-i1). Comments and identifiers are not
+    /// strings. LITERAL allowlist: (file, exact text, why); the text is cut from the line before the scan, and every
+    /// entry must still occur (a stale entry fails).
     func testNoKillLiteralInTheGUIFiles() throws {
         let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let files = ["AgentIsland/AgentIslandActions.swift", "AgentIsland/AgentIslandController.swift",
                      "AgentIsland/AgentIslandView.swift", "AgentWindow/AgentWindowControls.swift",
-                     "AgentWindow/AgentWindowModel.swift"]
-        let literal = try NSRegularExpression(pattern: #""[^"\n]*\bKill\b[^"\n]*""#)
+                     "AgentWindow/AgentWindowModel.swift", "AgentWindow/AgentsWindow.swift"]
+        let allowed: [(file: String, text: String, why: String)] = [
+            ("AgentIsland/AgentIslandActions.swift", #"case "killed": return "closed""#, "dch's raw end state, shown as closed"),
+            ("AgentIsland/AgentIslandActions.swift", #"["exit 0", "killed", "stopped"]"#, "dch's raw end states"),
+            ("AgentIsland/AgentIslandActions.swift", #"\(killed)"#, "an identifier in an interpolation (the count)"),
+            ("AgentIsland/AgentIslandActions.swift", #"\(killWarning)"#, "an identifier in an interpolation"),
+            ("AgentIsland/AgentIslandActions.swift", #"hasPrefix("killed: ")"#, "dch's output line, parsed"),
+            ("AgentIsland/AgentIslandActions.swift", #""stop", "kill", "ultrareview""#, "dch's subcommand names"),
+        ]
+        var used = Set<Int>()
+        let literal = try NSRegularExpression(pattern: #""[^"\n]*kill[^"\n]*""#, options: .caseInsensitive)
         for f in files {
             let text = try String(contentsOf: app.appendingPathComponent("Sources/ProsperApp/\(f)"), encoding: .utf8)
             XCTAssertFalse(text.isEmpty, f)
             for (i, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
             where !line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
-                let code = line.components(separatedBy: " //")[0]
+                var code = line.components(separatedBy: " //")[0]
+                for (k, a) in allowed.enumerated() where a.file == f && code.contains(a.text) {
+                    used.insert(k)
+                    code = code.replacingOccurrences(of: a.text, with: "")
+                }
                 XCTAssertEqual(literal.numberOfMatches(in: code, range: NSRange(code.startIndex..., in: code)), 0,
-                               "\(f):\(i + 1) has a Kill string: \(line)")
+                               "\(f):\(i + 1) has a kill string: \(line)")
             }
         }
+        XCTAssertEqual(used, Set(allowed.indices), "an allowlist entry no longer occurs: drop it")
     }
 
     // MARK: The symbols
