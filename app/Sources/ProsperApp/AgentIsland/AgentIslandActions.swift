@@ -969,6 +969,8 @@ extension AgentIsland {
 
     static let newSessionLabel = "New session"
     static let chooseFolderLabel = "Choose folder…"
+    /// #910: the island menu's last New session item; opens the Agent Sessions window's form.
+    static let newSessionFormLabel = "New session\u{2026}"
     static let recentFoldersMax = 8
 
     /// A record's folder: its Claude agent's cwd, else the session's.

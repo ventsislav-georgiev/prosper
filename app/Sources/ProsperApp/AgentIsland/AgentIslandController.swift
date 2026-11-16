@@ -217,6 +217,12 @@ final class AgentIslandController {
     var chooseFolder: @MainActor (@escaping @MainActor (String?) -> Void) -> Void = { done in
         AgentIslandController.openFolderPanel(done)
     }
+    /// #910 seam: opens the Agent Sessions window with the new-session form. Tests replace it; none shows a window.
+    /// The window builds on show (no store: its form refuses silently, as for Command-N).
+    var showNewSessionForm: @MainActor () -> Void = {
+        AgentsWindow.shared.show()
+        AgentsWindow.shared.model?.openNewSession()
+    }
     /// #579 seam: shows the header "⋯" menu at the mouse. Tests record it; none
     /// opens a real menu.
     var popUpMenu: @MainActor (NSMenu) -> Void = { $0.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil) }
@@ -1192,6 +1198,8 @@ final class AgentIslandController {
         }
         if !m.recent.isEmpty { sub.addItem(.separator()) }
         sub.addItem(AgentIslandMenuItem(AgentIsland.chooseFolderLabel) { [weak self] in self?.chooseNewSessionFolder() })
+        sub.addItem(.separator())
+        sub.addItem(AgentIslandMenuItem(AgentIsland.newSessionFormLabel, enabled: on) { [weak self] in self?.openNewSessionForm() })
         let new = AgentIslandMenuItem(AgentIsland.newSessionLabel, enabled: on)
         new.submenu = sub
         menu.addItem(new)
@@ -1342,6 +1350,13 @@ final class AgentIslandController {
         chooseFolder { [weak self] path in
             if let path { self?.newSession(in: path) }
         }
+    }
+
+    /// #910 "New session\u{2026}": the island collapses, then the window's form (it starts nothing itself).
+    func openNewSessionForm() {
+        guard let store, store.resumeGate.isOK else { return }
+        setExpanded(false)
+        showNewSessionForm()
     }
 
     /// The live chooser: directories only, after activating the app (an

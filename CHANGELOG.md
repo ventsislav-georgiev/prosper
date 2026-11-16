@@ -1591,6 +1591,8 @@ tag from the now-released section and put it on the new top draft.
   each session on its own line. (#1342)
 - Agent Sessions: in Mini mode the arrows and Command-1...9 reach rows in folded sections, and a
   slid-out sidebar no longer takes the arrow keys or Command-Backspace. (#1383)
+- The island's New session menu has "New session…", which opens the form in the Agent Sessions
+  window. (#910)
 
 ## v2.174.0
 

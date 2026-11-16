@@ -2334,7 +2334,8 @@ final class AgentIslandControlsTests: XCTestCase {
         let store = try XCTUnwrap(c.store)
         XCTAssertEqual(store.controlsMenu, .init(recent: [app], refused: nil), "the deleted folder is left out")
         let sub = try XCTUnwrap(c.makeControlsMenu().items.first?.submenu)
-        XCTAssertEqual(sub.items.map(\.title), [(app as NSString).abbreviatingWithTildeInPath, "", AgentIsland.chooseFolderLabel])
+        XCTAssertEqual(sub.items.map(\.title), [(app as NSString).abbreviatingWithTildeInPath, "", AgentIsland.chooseFolderLabel,
+                                                 "", AgentIsland.newSessionFormLabel])   // #910: the last item, after a separator
         press(sub.items[0])
         settle(c) { !f.args.isEmpty }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
@@ -2368,7 +2369,8 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "cancelled: nothing spawns")
         answer.path = "/picked/My Repo"
         let sub = try XCTUnwrap(c.makeControlsMenu().items.first?.submenu)
-        XCTAssertEqual(sub.items.map(\.title), [AgentIsland.chooseFolderLabel], "no agent history: the chooser only")
+        XCTAssertEqual(sub.items.map(\.title), [AgentIsland.chooseFolderLabel, "", AgentIsland.newSessionFormLabel],
+                       "no agent history: the chooser, then #910's New session\u{2026}")
         press(sub.items[0])
         settle(c) { !f.args.isEmpty }
         XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
@@ -2635,6 +2637,45 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { got != nil }         // the next test's turn on main
         XCTAssertEqual(got, ["claude", "--leak"], "the ask did infer and store")
         XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"), "nothing lands after the reset")
+    }
+
+    /// #910: New session\u{2026} is the submenu's last item, after a separator; it goes through the seam, collapses the island,
+    /// shows no window and spawns nothing.
+    @MainActor
+    func testNewSessionFormItemIsLastAndOnlyCallsTheSeam() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        var shown = 0
+        c.showNewSessionForm = { shown += 1 }
+        let sub = try XCTUnwrap(c.makeControlsMenu().items.first?.submenu)
+        XCTAssertEqual(sub.items.map(\.title), [AgentIsland.chooseFolderLabel, "", "New session\u{2026}"])
+        XCTAssertEqual(sub.items.map(\.isSeparatorItem), [false, true, false])
+        let item = try XCTUnwrap(sub.items.last)
+        XCTAssertTrue(item.isEnabled)
+        XCTAssertEqual(c.store?.expanded, true)
+        press(item)
+        XCTAssertEqual(shown, 1, "the seam, once")
+        XCTAssertEqual(c.store?.expanded, false, "the island collapses first")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "it starts nothing")
+        XCTAssertEqual(f.args, [], "no --spawn")
+    }
+
+    /// #910: gate off (a master newer than the control binary): the item is disabled and its action re-checks the gate.
+    @MainActor
+    func testNewSessionFormItemIsOffWhileRefused() throws {
+        let f = FakeProc()
+        let c = opened(f, [session("a", version: "1.25.0")])
+        var shown = 0
+        c.showNewSessionForm = { shown += 1 }
+        XCTAssertEqual(c.store?.controlsMenu.refused, "needs dch 1.25.0")
+        let menu = c.makeControlsMenu()
+        let sub = try XCTUnwrap(menu.items.first?.submenu)
+        XCTAssertEqual(sub.items.map(\.title), [AgentIsland.chooseFolderLabel, "", "New session\u{2026}"])
+        XCTAssertEqual(sub.items.map(\.isEnabled).last, false)
+        XCTAssertEqual(menu.items.first?.isEnabled, false)
+        press(sub.items[sub.items.count - 1])
+        XCTAssertEqual(shown, 0, "the action re-checks the gate")
+        XCTAssertEqual(f.args, [])
     }
 
     /// A master newer than the control binary: every #579 verb is off, with the reason.
