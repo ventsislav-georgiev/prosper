@@ -33,6 +33,8 @@ struct AgentTranscriptView: View {
     /// row's own id stops sz(14) short of the end, and from there new rows are not followed).
     static let bottomID = "bottom"
     static let space = "transcript-viewport"
+    /// #1334: what the end check reads from the scroll geometry: at the end, the clip's top, the rows' height.
+    struct EndGeometry: Equatable { let end: Bool, top: CGFloat, height: CGFloat }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -82,9 +84,17 @@ struct AgentTranscriptView: View {
             .scrollPosition(id: Binding(get: { place.wrappedValue },
                                         set: { place.wrappedValue = atEnd && $0 != place.wrappedValue ? nil : $0 }), anchor: .top)
             .defaultScrollAnchor(.bottom)
-            .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY >= $0.contentSize.height - 2 } action: { _, end in
-                atEnd = end
-                if end { place.wrappedValue = nil }
+            .onScrollGeometryChange(for: EndGeometry.self) {
+                EndGeometry(end: $0.visibleRect.maxY >= $0.contentSize.height - 2, top: $0.visibleRect.minY, height: $0.contentSize.height)
+            } action: { old, new in
+                // #1334: the rows grew under a still clip at the end (a level switch, a new line): SwiftUI's bottom anchor
+                // does not always follow (once any header has been laid out in the process), so the end is kept here.
+                if old.end, !new.end, new.top == old.top, new.height > old.height, place.wrappedValue == nil {
+                    proxy.scrollTo(Self.bottomID, anchor: .bottom)
+                    return
+                }
+                atEnd = new.end
+                if new.end { place.wrappedValue = nil }
             }
             // SwiftUI keeps the place's id across a switch but not its offset (the turns above change height): the held
             // turn is put back on top once the new level's rows are in the graph (main actor, in SwiftUI's update).

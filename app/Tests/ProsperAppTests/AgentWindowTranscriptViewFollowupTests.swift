@@ -261,6 +261,32 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(tvAtEnd(host), "at the end after a new line")
         }
     }
+
+    /// #1334: red before (the row above went red whenever a header row ran first in the process, as in the wide
+    /// transcript filter): the same row after a session header is measured at 0.7, 0.85 and 1.0, so it does not hang
+    /// on the order the rows run in.
+    @MainActor
+    func testTranscriptViewFollowupAReaderAtTheEndStaysAtTheEndAfterAHeaderIsMeasured() throws {
+        guard #available(macOS 15, *) else { throw XCTSkip("macOS 14 keeps today's behaviour") }
+        do {   // the header row's steps, its model closed and the scale put back before the scene
+            let saved = ThemeRuntime.scale
+            defer { ThemeRuntime.scale = saved }
+            let a = session("api", .working, ago: 40, agents: 3)
+            let st = store([a])
+            let m = windowModel(st)
+            m.setVisible(true)
+            defer { m.close() }
+            m.select(.live(a.key))
+            let row = try XCTUnwrap(m.selectedRow)
+            for scale: CGFloat in [0.7, 0.85, 1.0] {
+                ThemeRuntime.scale = scale
+                let header = AgentSessionHeader(row: row, session: a, cwd: "/Users/example/project", open: {}, store: st,
+                                                mode: .transcript, setMode: { _ in })
+                XCTAssertGreaterThan(NSHostingView(rootView: header.frame(width: 900 * scale)).fittingSize.height, 0)
+            }
+        }
+        try testTranscriptViewFollowupAReaderAtTheEndStaysAtTheEnd()
+    }
 }
 
 /// The row-owned place: what SwiftUI writes as the reader scrolls, and what a row sets to scroll the way SwiftUI does.

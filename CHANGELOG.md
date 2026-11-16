@@ -1472,6 +1472,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent island: a session and its sidekick (named like api and api-qa) now offer Stop both from a
   live row's menu and Resume both from History. The main starts first, and the sidekick starts only
   when its main came back. A larger group offers Stop all N and Resume all N (#908)
+- Agent Sessions transcript: a reader at the end of a transcript stays at the end when switching the
+  view level or when new lines arrive, also at a reduced UI size (#1334)
 
 ## v2.174.0
 
