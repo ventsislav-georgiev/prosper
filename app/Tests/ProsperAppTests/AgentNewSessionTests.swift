@@ -222,4 +222,57 @@ final class AgentNewSessionTests: XCTestCase {
         XCTAssertEqual(AgentIsland.newSessionArgs(folder: "/Users/example/api", command: ["claude"], taken: [], name: "mine"),
                        ["--spawn", "mine", "--", "claude", "--name", "mine"])
     }
+
+    // MARK: #907 (#847 P1d) sidekick helpers
+
+    /// T9: main + suffix; the suffix rule is #909's (AgentIsland.suffixOK, not forked): 1 to 16 of [A-Za-z0-9._-]
+    /// with at least one letter, digits allowed (operator 2026-11-13).
+    func testAgentNewSessionSidekickNameAndTheSuffixRule() {
+        XCTAssertEqual(AgentNewSession.sidekickName("api", suffix: "-qa"), "api-qa")
+        XCTAssertEqual(AgentNewSession.sidekickName("Feat.1", suffix: "_r2"), "Feat.1_r2")
+        for ok in ["-qa", "_r", "x", "-qa2", "qa2", " -qa".trimmingCharacters(in: .whitespaces), String(repeating: "a", count: 16)] {
+            XCTAssertTrue(AgentIsland.suffixOK(ok), ok.debugDescription)
+        }
+        for bad in ["", " -qa", "a/b", "a b", String(repeating: "a", count: 17), "-", "-1", "_", "-q\u{E4}"] {
+            XCTAssertFalse(AgentIsland.suffixOK(bad), bad.debugDescription)
+        }
+    }
+
+    /// T10 (D3.4): with a suffix, a taken sidekick (case-folded) takes its main name too, and the stem leaves room
+    /// for "-N" plus the suffix; nil is P1a's rule.
+    func testAgentNewSessionAutoNameLeavesTheSidekickFree() {
+        let d = Self.dir, api = "/Users/example/api"
+        XCTAssertEqual(AgentNewSession.autoName(folder: api, taken: ["API-QA"], dir: d, suffix: "-qa"), "api-2")
+        XCTAssertEqual(AgentNewSession.autoName(folder: api, taken: ["API-QA"], dir: d), "api", "nil: P1a's rule")
+        XCTAssertEqual(AgentNewSession.autoName(folder: api, taken: ["api-rev"], dir: d, suffix: "-qa"), "api", "another suffix")
+        XCTAssertEqual(AgentNewSession.autoName(folder: api, taken: ["Api-Qa", "API-2-qa"], dir: d, suffix: "-QA"), "api-3")
+        XCTAssertEqual(AgentNewSession.autoName(folder: api, taken: ["api"], dir: d, suffix: "-qa"), "api-2", "the main's own clash")
+        let long = "/Users/example/" + String(repeating: "a", count: 70)
+        for suffix in ["-qa", String(repeating: "q", count: 16)] {
+            let n = AgentNewSession.autoName(folder: long, taken: [], dir: d, suffix: suffix)
+            XCTAssertEqual(n.count, AgentNewSession.nameMax - 4 - suffix.count, suffix)
+            let taken = AgentNewSession.autoName(folder: long, taken: [n + suffix], dir: d, suffix: suffix)
+            XCTAssertEqual(taken, n + "-2", suffix)
+            for main in [n, taken] {
+                XCTAssertTrue(AgentNewSession.nameError(AgentNewSession.sidekickName(main, suffix: suffix), taken: [], dir: d) == nil,
+                              "the sidekick of \(main) fits")
+            }
+        }
+    }
+
+    /// T11 (D4.3, D4.5): only a whole "$name" is replaced; the default names both dch verbs once rendered.
+    func testAgentNewSessionRenderReplacesOnlyTheWholePlaceholder() {
+        XCTAssertEqual(AgentNewSession.render("$name x $names ${x}", name: "api"), "api x $names ${x}")
+        XCTAssertEqual(AgentNewSession.render("$name.$name-$name_x $name9 $nameX", name: "a.b"), "a.b.a.b-$name_x $name9 $nameX")
+        XCTAssertEqual(AgentNewSession.render("no placeholder", name: "api"), "no placeholder")
+        XCTAssertEqual(AgentNewSession.sidekickPromptDefault,
+                       "You are the QA sidekick of the Claude Code session $name, in this same folder. Get all your context "
+                       + "from $name: read its screen and scrollback with `dch --read $name --recent 500`, and look again as it "
+                       + "works. QA and review their work. Talk to me only through them: send each finding or question with "
+                       + "`dch --say $name -- \"QA: <message>\"`, never to me directly.")
+        let d = AgentNewSession.render(AgentNewSession.sidekickPromptDefault, name: "api")
+        XCTAssertTrue(d.contains("`dch --read api --recent 500`"))
+        XCTAssertTrue(d.contains("`dch --say api -- \"QA: <message>\"`"))
+        XCTAssertFalse(d.contains("$name"))
+    }
 }

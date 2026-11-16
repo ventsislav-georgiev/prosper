@@ -444,6 +444,7 @@ enum Preferences {
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
         static let agentIslandSidekickSuffix = "agentIslandSidekickSuffix"   // #847, per Mac
+        static let agentIslandSidekickPrompt = "agentIslandSidekickPrompt"   // #847 P1d, per Mac
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         // #821: the Agent Sessions window's verbosity (AgentVerbosity); per Mac, so not in SyncedKeys.
         static let agentWindowVerbosity = "agentWindowVerbosity"
@@ -1333,6 +1334,17 @@ enum Preferences {
     static var agentIslandSidekickSuffix: String {
         get { defaults.string(forKey: Keys.agentIslandSidekickSuffix) ?? AgentIsland.sidekickDefault }
         set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.agentIslandSidekickSuffix) }
+    }
+
+    /// #847 D4.1: the sidekick's first message, "$name" for the main session's name; unset reads the default.
+    /// Stored trimmed; empty removes the key (a sidekick with no brief is pointless). Per Mac, not synced.
+    static var agentIslandSidekickPrompt: String {
+        get { defaults.string(forKey: Keys.agentIslandSidekickPrompt) ?? AgentNewSession.sidekickPromptDefault }
+        set {
+            let v = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandSidekickPrompt) }
+            else { defaults.set(v, forKey: Keys.agentIslandSidekickPrompt) }
+        }
     }
 
     /// OQ-66: Agent Sessions' "Let sessions set the clipboard while you're viewing them"; on when unset.

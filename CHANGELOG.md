@@ -1534,6 +1534,9 @@ tag from the now-released section and put it on the new top draft.
   Island does. (#1344)
 - Agent Sessions: Shift-Cmd-X (or X-Ray… in a pane's menu) opens X-ray with a Tasks tab: the
   session's task list in groups, with a filter and a card per task (dch 1.78.0 or later). (#1351)
+- Settings > Agent Island: the Pairs suffix refusal now says it needs at least one letter, and New
+  session gains a Sidekick prompt field for the sidekick's first message (used once the New session
+  form can start a sidekick). (#907)
 
 ## v2.174.0
 

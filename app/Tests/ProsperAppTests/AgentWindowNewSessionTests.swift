@@ -13,7 +13,8 @@ extension AgentWindowD1Tests {
         var accept = true
     }
 
-    static let newSessionPrefs = ["agentWindowNewSessionFolder", "agentIslandNewSessionCommand", "agentIslandDefaultModel", modePref]
+    static let newSessionPrefs = ["agentWindowNewSessionFolder", "agentIslandNewSessionCommand", "agentIslandDefaultModel", modePref,
+                                  "agentIslandSidekickSuffix", "agentIslandSidekickPrompt"]   // #907
 
     @MainActor
     func withNewSessionPrefs(_ body: () throws -> Void) rethrows {

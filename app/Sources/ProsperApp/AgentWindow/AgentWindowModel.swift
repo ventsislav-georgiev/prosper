@@ -1214,7 +1214,9 @@ final class AgentWindowModel: ObservableObject {
             if let k = newSession?.starting {
                 // R2 F5: answered and waiting for its row: it started, so the form goes; else no answer will come.
                 if pendingSpawn?.key == k { newSession = nil } else {
-                    newSession?.starting = nil; newSession?.status = "No answer for \(k.name): Agent Island is off"
+                    let asked = newSession?.startingSidekick ?? k   // #847: the sidekick's answer is the one awaited
+                    newSession?.starting = nil; newSession?.startingSidekick = nil
+                    newSession?.status = "No answer for \(asked.name): Agent Island is off"
                 }
             }
             claimed = [:]
@@ -1717,6 +1719,12 @@ final class AgentWindowModel: ObservableObject {
                             _ done: @escaping @MainActor @Sendable (AgentSessionKey?, String?) -> Void) -> AgentSessionKey? = {
         [weak self] in self?.island().spawn(in: $0, command: $1, name: $2, done: $3)
     }
+    /// #847 D3.7: a first message into a started session, then `then`. PART 1 (#907): a stub that sends nothing and
+    /// runs nothing after; the island controller's sayFirst (part 2, #1369) replaces this default.
+    var sayFirst: (_ key: AgentSessionKey, _ text: String, _ then: (@MainActor () -> Void)?) -> Void = { _, _, _ in }
+    /// #847 D2.4: the prompt as last typed, kept across Cancel while the window lives; a Start that takes it drops it.
+    /// Never persisted: a prompt can hold anything.
+    private(set) var lastPrompt = ""
     var folderExists: (String) -> Bool = { AgentIsland.isFolder($0) }
     var home = NSHomeDirectory()
     var shell = ProcessInfo.processInfo.environment["SHELL"]
@@ -1735,7 +1743,8 @@ final class AgentWindowModel: ObservableObject {
         let typed = Preferences.agentIslandNewSessionCommand
         newSessionTookKeys = sessionHasKeys
         newSession = AgentNewSessionForm(folder: AgentNewSession.abbreviate(folder ?? newSessionDefaultFolder, home: home),
-                                         command: typed.isEmpty ? "claude" : typed)
+                                         command: typed.isEmpty ? "claude" : typed,
+                                         prompt: lastPrompt, promptShown: !lastPrompt.isEmpty)   // #847 D2.4, D5.1
         follow()   // P1b: the form covers the pane, so the terminal detaches (its view leaves the window)
         guard typed.isEmpty else { return }
         island().newSessionCommand { [weak self] argv in
@@ -1779,6 +1788,45 @@ final class AgentWindowModel: ObservableObject {
 
     func setNewSessionCommand(_ s: String) { newSession?.command = s }
 
+    /// #847 D6.1: the box turns on only for a command the form can name and brief (newSessionClaude).
+    func setNewSessionSidekick(_ on: Bool) {
+        guard newSession?.starting == nil else { return }
+        newSession?.sidekick = on && newSessionClaude
+    }
+
+    func setNewSessionPrompt(_ s: String) {
+        guard newSession != nil, newSession?.starting == nil else { return }
+        newSession?.prompt = s
+        lastPrompt = s
+    }
+
+    func toggleNewSessionPrompt() { newSession?.promptShown.toggle() }
+
+    /// #847 D6.1: an interactive Claude (AgentIsland.isInteractiveClaude, the rule naming() uses) on this Mac.
+    /// shortcut: another Mac (#1323) gets neither the sidekick nor the prompt (the say seam is this Mac's); upgrade
+    /// when the remote spawn learns both.
+    var newSessionClaude: Bool {
+        guard let f = newSession, f.host == nil else { return false }
+        return AgentIsland.isInteractiveClaude(AgentNewSession.argv(f.command, shell: shell))
+    }
+
+    /// The box as Start reads it: checked and allowed.
+    var newSessionSidekickOn: Bool { newSession?.sidekick == true && newSessionClaude }
+
+    /// #847 D3.2: the main name (typed or automatic) and the Settings suffix.
+    var newSessionSidekickName: String {
+        AgentNewSession.sidekickName(newSessionName, suffix: Preferences.agentIslandSidekickSuffix)
+    }
+
+    static let sidekickSuffixUnusable = "Sidekick suffix in Settings isn't usable"
+    static let plainShellRefusal = "Clear the prompt and sidekick to start a plain shell"
+
+    /// #847 D6.2: the form's New shell would drop a checked box or a typed prompt silently: refused while either holds.
+    var newSessionShellRefusal: String? {
+        guard let f = newSession, f.sidekick || !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return Self.plainShellRefusal
+    }
+
     func chooseNewSessionFolder() {
         guard newSession?.host == nil else { return }   // #1323: this Mac's chooser; another Mac's folder is typed
         island().chooseFolder { [weak self] path in
@@ -1800,8 +1848,11 @@ final class AgentWindowModel: ObservableObject {
         if let host = newSession?.host {
             return AgentNewSession.autoName(folder: newSessionFolder, taken: remoteTaken(host), dir: island().spawnDir())
         }
+        // #847 D3.4: with the box on, a free name whose sidekick is free too.
+        let suffix = Preferences.agentIslandSidekickSuffix
         return AgentNewSession.autoName(folder: AgentNewSession.expand(newSession?.folder ?? "", home: home), taken: spawnTaken,
-                                        dir: island().spawnDir())
+                                        dir: island().spawnDir(),
+                                        suffix: newSessionSidekickOn && AgentIsland.suffixOK(suffix) ? suffix : nil)
     }
 
     // MARK: #1323 New session on another Mac
@@ -1876,14 +1927,18 @@ final class AgentWindowModel: ObservableObject {
         return f.name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var newSessionErrors: (folder: String?, name: String?) {
-        guard let f = newSession else { return (nil, nil) }
+    var newSessionErrors: (folder: String?, name: String?, sidekick: String?) {
+        guard let f = newSession else { return (nil, nil, nil) }
         if let host = f.host {
             return (AgentNewSession.remoteFolderError(newSessionFolder),
-                    AgentNewSession.nameError(newSessionName, taken: remoteTaken(host), dir: island().spawnDir()))
+                    AgentNewSession.nameError(newSessionName, taken: remoteTaken(host), dir: island().spawnDir()), nil)
         }
+        // #847 D3.3: the sidekick's slot, only with the box on: the suffix first, then the main's rules on main + suffix.
+        let sidekick: String? = !newSessionSidekickOn ? nil
+            : !AgentIsland.suffixOK(Preferences.agentIslandSidekickSuffix) ? Self.sidekickSuffixUnusable
+            : AgentNewSession.nameError(newSessionSidekickName, taken: spawnTaken, dir: island().spawnDir())
         return (AgentNewSession.folderError(AgentNewSession.expand(f.folder, home: home), exists: folderExists),
-                AgentNewSession.nameError(newSessionName, taken: spawnTaken, dir: island().spawnDir()))
+                AgentNewSession.nameError(newSessionName, taken: spawnTaken, dir: island().spawnDir()), sidekick)
     }
 
     /// #847 D7.4: the argv that runs, `--name` included.
@@ -1902,7 +1957,7 @@ final class AgentWindowModel: ObservableObject {
     /// The status slot: starting, else the gate's refusal, else the last failure or busy text.
     var newSessionStatus: String? {
         guard let f = newSession else { return nil }
-        if let k = f.starting { return "Starting \(k.name)…" }
+        if let k = f.startingSidekick ?? f.starting { return "Starting \(k.name)…" }
         if let why = store?.resumeGate.refusal { return "Controls \(why)" }
         return f.status
     }
@@ -1912,7 +1967,7 @@ final class AgentWindowModel: ObservableObject {
         guard newSession?.starting == nil, store?.resumeGate.isOK == true else { return false }
         if let host = newSession?.host, !newSessionHosts.contains(host) { return false }   // #1323: gone, or dch too old
         let e = newSessionErrors
-        return e.folder == nil && e.name == nil
+        return e.folder == nil && e.name == nil && e.sidekick == nil
     }
 
     /// Start or Return: nothing runs unless every check passes now.
@@ -1922,8 +1977,10 @@ final class AgentWindowModel: ObservableObject {
         if let host = f.host {
             return spawnRemote(host, AgentNewSession.argv(f.command, shell: nil), name: newSessionName)
         }
+        // #847 D3.5, D6.1: the sidekick and the prompt only for a Claude; the prompt never joins the argv.
         return spawn(AgentNewSession.expand(f.folder, home: home), AgentNewSession.argv(f.command, shell: shell),
-                     name: newSessionName, command: f.command)
+                     name: newSessionName, command: f.command, sidekick: newSessionSidekickOn ? newSessionSidekickName : nil,
+                     prompt: newSessionClaude ? f.prompt : "")
     }
 
     /// ⇧⌘N, [>_] and the form's New shell: the login shell. With the form open, in its folder and name;
@@ -1932,7 +1989,7 @@ final class AgentWindowModel: ObservableObject {
     func startShell() -> Bool {
         let argv = [AgentNewSession.loginShell(shell), "-l"]
         if let f = newSession {
-            guard canStartNewSession else { return false }
+            guard canStartNewSession, newSessionShellRefusal == nil else { return false }
             if let host = f.host { return spawnRemote(host, [AgentNewSession.loginShell(nil), "-l"], name: newSessionName) }
             return spawn(AgentNewSession.expand(f.folder, home: home), argv, name: newSessionName, command: nil)
         }
@@ -1945,12 +2002,14 @@ final class AgentWindowModel: ObservableObject {
                      command: nil)
     }
 
-    private func spawn(_ folder: String, _ argv: [String], name: String, command: String?) -> Bool {
+    private func spawn(_ folder: String, _ argv: [String], name: String, command: String?, sidekick: String? = nil,
+                       prompt: String = "") -> Bool {
         requests += 1
         unlisted = nil
         let request = newSession == nil ? nil : requests, asked = now()   // nil: a quick shell, no form's
         guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
-            self?.spawned(key, failure, name: name, folder: folder, command: command, request: request, asked: asked)
+            self?.spawned(key, failure, name: name, folder: folder, command: command, request: request, asked: asked,
+                          argv: argv, sidekick: sidekick, prompt: prompt)
         }) else {
             let why = spawnRefusal(name)
             // never dropped silently; #948 F2: a gate refusal goes when the gate opens, a name or busy one with the form
@@ -2031,7 +2090,7 @@ final class AgentWindowModel: ObservableObject {
     /// failure re-enables the form with dch's line.
     /// QA #713 INFO-4: an answer touches the form only when it answers the open form's own request.
     private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String, command: String?,
-                         request: Int?, asked: TimeInterval) {
+                         request: Int?, asked: TimeInterval, argv: [String], sidekick: String?, prompt: String) {
         let mine = request != nil && newSession?.request == request && newSession?.starting != nil
         guard let key else {
             claimed[name] = nil
@@ -2046,13 +2105,58 @@ final class AgentWindowModel: ObservableObject {
             Preferences.agentIslandNewSessionCommand = kept == words ? command : AgentIsland.shellLine(kept)
         }
         if request != nil {
-            guard mine else { return }   // closed or replaced meanwhile: the human moved on
+            guard mine else { return }   // closed or replaced meanwhile: the human moved on (no sidekick, no message)
             newSession?.starting = key   // R2 F5: the form stays "Starting…" over the pane until the row lands
+            if !prompt.isEmpty { lastPrompt = "" }   // #847 D2.4: this start took it
+            // #847 D3.5: main first, then the sidekick, same folder and argv; the form waits for both answers.
+            if let sidekick { spawnSidekick(sidekick, main: key, folder: folder, argv: argv, prompt: prompt, request: request, asked: asked); return }
         } else if newSession != nil {
             return   // a quick shell's answer under a form opened since: the form keeps the pane
         }
         pendingSpawn = (key, now(), asked)
         refresh()
+        firstMessages(main: key, prompt: prompt, sidekick: nil)
+    }
+
+    /// #847 D3.5: the second spawn; a refusal (busy, gate) is its failure at once.
+    private func spawnSidekick(_ name: String, main: AgentSessionKey, folder: String, argv: [String], prompt: String,
+                               request: Int?, asked: TimeInterval) {
+        guard let side = spawnSession(folder, argv, name, { [weak self] key, failure in
+            self?.sidekickSpawned(key, failure, name: name, main: main, prompt: prompt, request: request, asked: asked)
+        }) else {
+            sidekickSpawned(nil, spawnRefusal(name), name: name, main: main, prompt: prompt, request: request, asked: asked)
+            return
+        }
+        claimed[name] = .infinity
+        newSession?.startingSidekick = side
+    }
+
+    /// #847 D3.5: the sidekick's answer. The main runs either way (never killed behind the user's back): the form goes
+    /// the main's way (pendingSpawn main, its row selected); a failure is the dir line, naming which one failed. Then
+    /// the first messages (D3.7), the sidekick's only when it started. A form closed meanwhile keeps the messages: both
+    /// sessions were asked for.
+    private func sidekickSpawned(_ key: AgentSessionKey?, _ failure: String?, name: String, main: AgentSessionKey, prompt: String,
+                                 request: Int?, asked: TimeInterval) {
+        claimed[name] = key == nil ? nil : now()
+        if key == nil {
+            let p = "New session failed: ", why = failure.map { $0.hasPrefix(p) ? String($0.dropFirst(p.count)) : $0 } ?? "no answer"
+            sayOnDirLine("\(main.name) started; sidekick \(name) failed: \(why)")
+        }
+        if newSession?.request == request, newSession?.starting == main {   // the form that asked, still open
+            newSession?.startingSidekick = nil
+            pendingSpawn = (main, now(), asked)
+            refresh()
+        }
+        firstMessages(main: main, prompt: prompt, sidekick: key)
+    }
+
+    /// #847 D3.7: sayFirst(main, prompt), then sayFirst(sidekick, the Settings prompt rendered for main); a blank
+    /// prompt skips the main's call. The text goes only through the seam, never into an argv.
+    private func firstMessages(main: AgentSessionKey, prompt: String, sidekick: AgentSessionKey?) {
+        let say = sayFirst, brief = AgentNewSession.render(Preferences.agentIslandSidekickPrompt, name: main.name)
+        var next: (@MainActor () -> Void)?
+        if let sidekick { next = { say(sidekick, brief, nil) } }
+        if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next?() } else { say(main, prompt, next) }
     }
 
     /// The pending spawn's row is there: Terminal (a reused name's Transcript choice dropped), selected, the keys in.

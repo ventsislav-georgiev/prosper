@@ -67,7 +67,7 @@ struct AgentIslandPane: View {
     @State private var suffix = Preferences.agentIslandSidekickSuffix
     @State private var suffixSaved = Preferences.agentIslandSidekickSuffix
     @State private var suffixRefusal: String?
-    static let suffixRule = "1 to 16 letters, digits, \".\", \"_\" or \"-\""
+    static let suffixRule = "1 to 16 letters, digits, \".\", \"_\" or \"-\", with at least one letter"   // R909-2
 
     /// #1338: the Pairs row's line for the stored suffix: what it does, off, or why a value written from outside is
     /// not used (AgentIsland.groups reads it as off; it is never rewritten).
@@ -97,6 +97,21 @@ struct AgentIslandPane: View {
         Preferences.agentIslandAutoAllow = on
         c.autoAllowChanged()   // QA #581 F3: off drops every hold now
     }
+
+    /// #847 D4.2: the Sidekick prompt field, and what it last read or saved (leaving commits only an edit, so an
+    /// unset prompt is never stored as a copy of the default).
+    @State private var sidekickPrompt = Preferences.agentIslandSidekickPrompt
+    @State private var sidekickPromptSaved = Preferences.agentIslandSidekickPrompt
+
+    /// #847 D4.1: the Sidekick prompt's commit: stored trimmed; empty removes it, so the field shows the default again.
+    static func commitSidekickPrompt(_ text: String) -> String {
+        Preferences.agentIslandSidekickPrompt = text
+        return Preferences.agentIslandSidekickPrompt
+    }
+
+    static let newSessionFooter = "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome. "
+        + "A sidekick runs the same command in the same folder as <name><suffix>, the suffix under Pairs. Its first message "
+        + "is the sidekick prompt, with $name replaced by the main session's name."
 
     /// #606: the field's commit: stored trimmed, empty = unset; the field shows
     /// what was stored.
@@ -147,13 +162,19 @@ struct AgentIslandPane: View {
             NeonRow("Always allow permission prompts") { Toggle("", isOn: $autoAllow).labelsHidden() }
         }
         .onChange(of: autoAllow) { _, v in Self.autoAllowToggled(v) }
-        NeonSection("New session",
-                    footer: "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome.") {
+        NeonSection("New session", footer: Self.newSessionFooter) {
             NeonRow("Command") {
                 // Unset: inferred once from the sessions you run (and stored), else claude.
                 TextField("claude", text: $command)
                     .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(260))
                     .onSubmit { command = Self.commit(command) }
+            }
+            NeonDivider()
+            NeonRow("Sidekick prompt") {
+                TextField(AgentNewSession.sidekickPromptDefault, text: $sidekickPrompt, axis: .vertical)
+                    .font(Neon.font(.body)).lineLimit(3...6).frame(width: sz(260))
+                    .accessibilityLabel("Sidekick prompt")
+                    .onSubmit { sidekickPrompt = Self.commitSidekickPrompt(sidekickPrompt); sidekickPromptSaved = sidekickPrompt }
             }
             NeonDivider()
             // The subtitle is one slot: the hint, or the refusal in its place (nothing moves).
@@ -183,6 +204,7 @@ struct AgentIslandPane: View {
         .onDisappear {
             _ = Self.commit(command)
             if model != modelSaved { _ = Self.commitModel(model) }
+            if sidekickPrompt != sidekickPromptSaved { _ = Self.commitSidekickPrompt(sidekickPrompt) }
         }
         // #1338: per Mac; not the Sidekicks tab pattern (synced), which only picks that tab.
         NeonSection("Pairs", footer: "Not the Sidekick pattern, which only picks the Sidekicks tab.") {

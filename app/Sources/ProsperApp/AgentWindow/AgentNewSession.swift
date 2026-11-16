@@ -23,6 +23,12 @@ struct AgentNewSessionForm: Equatable {
     var status: String?
     /// #1323: the Mac it starts on: nil this one, else a host from the remote list (raw, as argv takes it).
     var host: String?
+    /// #847 P1d: also start main + suffix (off on every open), the first message, and whether its editor is open.
+    var sidekick = false
+    var prompt = ""
+    var promptShown = false
+    /// Set while the second spawn (the sidekick's) runs; `starting` stays the main's.
+    var startingSidekick: AgentSessionKey?
 }
 
 /// The form's rules. Pure.
@@ -49,9 +55,30 @@ enum AgentNewSession {
 
     /// The folder's free name, compared case-folded (freeName). Cut to leave room for a "-N" under `nameLimit`
     /// (sessionName is ASCII: characters are bytes).
-    static func autoName(folder: String, taken: Set<String>, dir: String) -> String {
-        freeStem(AgentIsland.sessionName(folder: folder), taken: taken, dir: dir)
+    /// #847 D3.4: with `suffix` (the sidekick box on), the first free name whose sidekick is free too: a taken
+    /// "<t><suffix>" (case-folded) takes "<t>", and the stem leaves room for the suffix as well.
+    static func autoName(folder: String, taken: Set<String>, dir: String, suffix: String? = nil) -> String {
+        guard let suffix, !suffix.isEmpty else { return freeStem(AgentIsland.sessionName(folder: folder), taken: taken, dir: dir) }
+        let s = suffix.lowercased()
+        let mains = taken.compactMap { t in t.lowercased().hasSuffix(s) ? String(t.lowercased().dropLast(s.count)) : nil }
+        return freeStem(AgentIsland.sessionName(folder: folder), taken: taken.union(mains), dir: dir, room: suffix.utf8.count)
     }
+
+    /// #847 S9: the sidekick's name: the main's (typed or automatic) and the Settings suffix.
+    static func sidekickName(_ main: String, suffix: String) -> String { main + suffix }
+
+    /// #847 D4.3: "$name" replaced by the main session's name where the next character is not [A-Za-z0-9_]
+    /// ("$names" stays). The only placeholder.
+    static func render(_ template: String, name: String) -> String {
+        template.replacingOccurrences(of: "\\$name(?![A-Za-z0-9_])", with: NSRegularExpression.escapedTemplate(for: name),
+                                      options: .regularExpression)
+    }
+
+    /// #847 D4.5: the sidekick's first message when Settings holds none.
+    static let sidekickPromptDefault = "You are the QA sidekick of the Claude Code session $name, in this same folder. "
+        + "Get all your context from $name: read its screen and scrollback with `dch --read $name --recent 500`, and "
+        + "look again as it works. QA and review their work. Talk to me only through them: send each finding or "
+        + "question with `dch --say $name -- \"QA: <message>\"`, never to me directly."
 
     /// QA #736 INFO-3: the quick shell starts in every folder: a folder name dch refuses (id-shaped, too long for
     /// `dir`) gives way to the stem "shell".
@@ -60,8 +87,8 @@ enum AgentNewSession {
         return nameError(n, taken: taken, dir: dir) == nil ? n : freeStem("shell", taken: taken, dir: dir)
     }
 
-    private static func freeStem(_ stem: String, taken: Set<String>, dir: String) -> String {
-        AgentIsland.freeName(String(stem.prefix(max(1, nameLimit(dir: dir) - 4))), taken: taken)
+    private static func freeStem(_ stem: String, taken: Set<String>, dir: String, room: Int = 0) -> String {
+        AgentIsland.freeName(String(stem.prefix(max(1, nameLimit(dir: dir) - 4 - room))), taken: taken)
     }
 
     /// nil: the name can be spawned into socket dir `dir`. Empty (after trim) is the automatic name, so no error.
