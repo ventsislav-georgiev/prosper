@@ -46,10 +46,12 @@ extension AgentWindowD1Tests {
     /// The Sidekick checkbox: not the field's "Sidekick" label text (SwiftUI may name it "Sidekick" or "Sidekick, ...").
     func isBox(_ n: AXTreeNode) -> Bool { n.role != "AXStaticText" && n.named(prefix: "Sidekick") && n.frame.width > 0 }
 
+    @MainActor
     func assertRows(_ a: FormRows?, _ b: FormRows?, _ what: String, file: StaticString = #filePath, line: UInt = #line) {
         guard let a, let b else { return XCTFail("\(what): \(String(describing: a)) vs \(String(describing: b))", file: file, line: line) }
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         for (x, y, n) in [(a.start, b.start, "Start"), (a.cancel, b.cancel, "Cancel"), (a.shell, b.shell, "New shell"), (a.box, b.box, "Sidekick")] {
-            assertRect(x, y, accuracy: 0.5, "\(what): \(n)", file: file, line: line)
+            assertRect(x, y, accuracy: pixel, "\(what): \(n)", file: file, line: line)
         }
     }
 
@@ -100,6 +102,7 @@ extension AgentWindowD1Tests {
         defer { ThemeRuntime.scale = saved }
         let restore = AXTreeSupport.axOn()
         defer { restore() }
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withNewSessionPrefs {
             for scale: CGFloat in [1.0, 0.85, 0.7] {
                 ThemeRuntime.scale = scale
@@ -118,20 +121,21 @@ extension AgentWindowD1Tests {
                 let open = try XCTUnwrap(formRows(host).rows, "rows open at \(scale)")
                 let editor = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first?.enclosingScrollView, "the editor at \(scale)")
                 let frame = host.convert(editor.bounds, from: editor)
-                XCTAssertEqual(frame.height, sz(96), accuracy: 0.5, "a fixed sz(96) editor at \(scale)")
+                XCTAssertEqual(frame.height, sz(96), accuracy: pixel, "a fixed sz(96) editor at \(scale)")
                 let delta = base.start.minY - open.start.minY   // AX frames are y-up: down is a smaller minY
                 XCTAssertEqual(delta, sz(96) + sz(6), accuracy: 1, "one fixed delta at \(scale)")
                 for (a, b, n) in [(base.cancel, open.cancel, "Cancel"), (base.shell, open.shell, "New shell")] {
-                    XCTAssertEqual(a.minY - b.minY, delta, accuracy: 0.5, "\(n) by the same delta at \(scale)")
-                    XCTAssertEqual(a.minX, b.minX, accuracy: 0.5, "\(n) not sideways at \(scale)")
-                    XCTAssertEqual(a.size, b.size, "\(n) same size at \(scale)")
+                    XCTAssertEqual(a.minY - b.minY, delta, accuracy: pixel, "\(n) by the same delta at \(scale)")
+                    XCTAssertEqual(a.minX, b.minX, accuracy: pixel, "\(n) not sideways at \(scale)")
+                    XCTAssertEqual(a.width, b.width, accuracy: pixel, "\(n) same size at \(scale)")
+                    XCTAssertEqual(a.height, b.height, accuracy: pixel, "\(n) same size at \(scale)")
                 }
-                assertRect(open.box, base.box, accuracy: 0.5, "the box above stays at \(scale)")
+                assertRect(open.box, base.box, accuracy: pixel, "the box above stays at \(scale)")
                 XCTAssertEqual(formFields(host).map { host.convert($0.bounds, from: $0) }, fields, "the fields stay at \(scale)")
 
                 m.setNewSessionPrompt((1...12).map { "Example task line \($0)" }.joined(separator: "\n"))
                 settle(host)
-                assertRect(host.convert(editor.bounds, from: editor), frame, accuracy: 0.5, "12 lines keep the editor at \(scale)")
+                assertRect(host.convert(editor.bounds, from: editor), frame, accuracy: pixel, "12 lines keep the editor at \(scale)")
                 assertRows(formRows(host).rows, open, "typing moves nothing at \(scale)")
 
                 m.toggleNewSessionPrompt()
