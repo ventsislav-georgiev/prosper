@@ -1,7 +1,8 @@
 import Foundation
 
 // #918 S2 (spec 4.6, 4.12 row 8, errata A12): the facts the kit pane shows, as pure functions. Nothing here runs,
-// sources or writes anything; file system reads go through the caller's KitDir or arrive as values.
+// sources or writes anything; file system reads go through the caller's KitDir, arrive as values, or (R1422-i1) are a
+// stat/access probe and one bounded read.
 
 enum KitPaneFacts {
     struct Requirement: Equatable, Sendable {
@@ -11,13 +12,22 @@ enum KitPaneFacts {
 
     /// Each `requires` name looked up on `path` (the login PATH) through `isExecutable(<dir>/<name>)`: lookup only,
     /// nothing is executed. Only absolute PATH entries are tried (an empty or relative one would be the cwd); a name
-    /// that is empty, "." or "..", or holds a "/" is never looked up and reads as not found.
+    /// that is empty, "." or "..", or holds a "/" is never looked up and reads as not found. R1422-i1: the name is
+    /// outside text, so the row holds it as OutsideText shows it (the lookup uses the name as written).
     static func requirements(_ names: [String], path: String, isExecutable: (String) -> Bool) -> [Requirement] {
         let dirs = path.split(separator: ":").filter { $0.hasPrefix("/") }
         return names.map { name in
-            guard KitPOSIXDir.isName(name) else { return Requirement(name: name, found: false) }
-            return Requirement(name: name, found: dirs.contains { isExecutable(String($0) + "/" + name) })
+            let shown = OutsideText.shown(name, max: KitManifest.maxValue)
+            guard KitPOSIXDir.isName(name) else { return Requirement(name: shown, found: false) }
+            return Requirement(name: shown, found: dirs.contains { isExecutable(String($0) + "/" + name) })
         }
+    }
+
+    /// R1422-i1: the production `isExecutable` of requirements: a regular file (a link is followed) the caller may
+    /// execute, by stat and access(X_OK) alone; nothing is opened or run.
+    static func isExecutable(_ path: String) -> Bool {
+        var st = stat()
+        return stat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFREG && access(path, X_OK) == 0
     }
 
     struct Override: Equatable, Sendable {
@@ -73,5 +83,15 @@ enum KitPaneFacts {
     static func hooksDisabled(_ settingsJSON: Data) -> Bool {
         let top = (try? JSONSerialization.jsonObject(with: settingsJSON)) as? [String: Any]
         return top?["disableAllHooks"] as? Bool == true
+    }
+
+    /// R1422-i1: the user-scope settings.json's cap for hooksDisabled; a larger file reads as false.
+    static let settingsJSONMaxBytes = 1 << 20
+
+    /// R1422-i1: hooksDisabled of the file at `url`, read through BoundedFileRead (a regular file, at most
+    /// settingsJSONMaxBytes, never a pipe or device). Unreadable, missing or over the cap: false.
+    static func hooksDisabled(settingsAt url: URL) -> Bool {
+        guard let d = try? BoundedFileRead.data(url, maxBytes: settingsJSONMaxBytes) else { return false }
+        return hooksDisabled(d)
     }
 }
