@@ -1525,7 +1525,7 @@ tag from the now-released section and put it on the new top draft.
   ended record in that host's History. (#1366)
 - Agent Sessions: a Go menu after Edit lists the window's keyboard shortcuts (previous and next
   session, jump to session 1 to 9, Terminal or Transcript, jump to chapter, find, text size, new
-  session, and more) while the window is in front; choosing an item does what its shortcut does..
+  session, and more) while the window is in front; choosing an item does what its shortcut does.
   (#1359)
 
 ## v2.174.0
