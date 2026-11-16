@@ -82,6 +82,9 @@ struct AgentPlanInput: Equatable, Sendable {
     var file: String?
     /// The home whose .claude/plans a plan file must be in. Seam: tests pass a temp dir.
     var home: String = NSHomeDirectory()
+    /// #1092: dch's "config_dir" for this session (its live record), "" = the default. Only ever from dch's data,
+    /// never from the transcript or the screen (agent-written).
+    var configDir = ""
     /// A plan file over this is not read (Claude Code's plans are a few KiB).
     static let maxFileBytes = 256 * 1024
 
@@ -97,7 +100,13 @@ struct AgentPlanInput: Equatable, Sendable {
         if let plan { return plan }
         guard let file, let path = Self.clean(file), let shown = footer.flatMap(AgentPrompt.planFooterPath),
               Self.clean(shown.hasPrefix("~/") ? home + shown.dropFirst() : shown) == path else { return nil }
-        return Self.read(path, root: home + "/.claude/plans")
+        return planRoot.flatMap { Self.read(path, root: $0) }
+    }
+
+    /// <config_dir>/plans when dch gave the session one, else <home>/.claude/plans; nil (no read) when
+    /// config_dir is relative or holds "..". `read` then applies #1065's checks to it as to the default.
+    var planRoot: String? {
+        configDir.isEmpty ? home + "/.claude/plans" : Self.clean(configDir).map { $0 + "/plans" }
     }
 
     /// An absolute path with "." and empty components dropped; nil when relative or holding "..".
@@ -128,7 +137,9 @@ struct AgentPlanInput: Equatable, Sendable {
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         var ft = stat()
-        guard fstat(fd, &ft) == 0, ft.st_dev == st.st_dev, ft.st_ino == st.st_ino, (ft.st_mode & S_IFMT) == S_IFREG
+        // #1092: one link only; a hard link here to a file elsewhere is refused (Claude Code writes plans plainly).
+        guard fstat(fd, &ft) == 0, ft.st_dev == st.st_dev, ft.st_ino == st.st_ino, (ft.st_mode & S_IFMT) == S_IFREG,
+              ft.st_nlink == 1
         else { return nil }
         var data = Data(), buf = [UInt8](repeating: 0, count: 64 * 1024)
         while data.count <= maxFileBytes {

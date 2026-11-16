@@ -383,6 +383,85 @@ final class AgentWindowPlanTests: XCTestCase {
         XCTAssertNil(AgentPrompt.planFooterPath("Esc to cancel · ~/.claude/plans/a.md"))
     }
 
+    /// #1092: a temp folder holding a fake home (no plans) and a Claude config dir with plans/example-plan.md.
+    func planConfig() throws -> (home: String, config: String, file: String) {
+        let real = try XCTUnwrap(realpath(tempDir().path, nil))
+        defer { free(real) }
+        let base = String(cString: real), home = base + "/home", config = base + "/claude-work"
+        XCTAssertFalse(base.hasPrefix(NSHomeDirectory() + "/.claude"))
+        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: config + "/plans", withIntermediateDirectories: true)
+        let file = config + "/plans/example-plan.md"
+        try Data(T.planMarkdown.utf8).write(to: URL(fileURLWithPath: file))
+        return (home, config, file)
+    }
+
+    /// #1092: dch's config_dir for the session moves the plans root to <config_dir>/plans; without one it stays
+    /// <home>/.claude/plans; a relative or ".." config_dir reads nothing.
+    @MainActor
+    func testAgentWindowPlanFileIsReadFromTheSessionsConfigDir() throws {
+        let (home, config, file) = try planConfig()
+        let footer = "ctrl+g to edit in VS Code \u{00B7} \(file)"
+        var input = AgentPlanInput(id: "toolu_p", plan: nil, file: file, home: home)
+        input.configDir = config
+        XCTAssertEqual(input.planRoot, config + "/plans")
+        let w = try prompt(T.planScreen(caret: 1, footer: footer), plan: input)
+        XCTAssertEqual(w.approve, [1, 2], "read from <config_dir>/plans")
+        XCTAssertEqual(w.plan, T.planMarkdown)
+        // No config_dir: the home's plans, which do not hold this file.
+        var none = input
+        none.configDir = ""
+        XCTAssertEqual(none.planRoot, home + "/.claude/plans")
+        XCTAssertEqual(try prompt(T.planScreen(caret: 1, footer: footer), plan: none).why, AgentWindowText.planFile)
+        // With a config_dir, a plan in the home's plans is not under the root.
+        try FileManager.default.createDirectory(atPath: home + "/.claude/plans", withIntermediateDirectories: true)
+        let homeFile = home + "/.claude/plans/example-plan.md"
+        try Data(T.planMarkdown.utf8).write(to: URL(fileURLWithPath: homeFile))
+        let homeNoConfig = AgentPlanInput(id: "toolu_p", plan: nil, file: homeFile, home: home)
+        XCTAssertEqual(try prompt(T.planScreen(caret: 1, footer: T.planFooter), plan: homeNoConfig).approve, [1, 2], "home, no config_dir")
+        var homeFromConfig = homeNoConfig
+        homeFromConfig.configDir = config
+        XCTAssertEqual(try prompt(T.planScreen(caret: 1, footer: T.planFooter), plan: homeFromConfig).why, AgentWindowText.planFile)
+        // Relative, "..", or "~": refused, no read (the existing refusal text).
+        for bad in ["claude-work", "~/claude-work", config + "/../claude-work", config + "/x/.."] {
+            var b = input
+            b.configDir = bad
+            XCTAssertTrue(b.planRoot == nil, bad)
+            XCTAssertEqual(try prompt(T.planScreen(caret: 1, footer: footer), plan: b).why, AgentWindowText.planFile, bad)
+        }
+    }
+
+    /// #1092: #1065's checks apply to the config_dir root: a symlink below it is refused, a symlinked config dir
+    /// itself is resolved once; and (item 2) a hard-linked plan file is refused, both of its names.
+    @MainActor
+    func testAgentWindowPlanFileUnderTheConfigDirRefusesLinks() throws {
+        let (home, config, file) = try planConfig()
+        let plans = config + "/plans", fm = FileManager.default, base = (home as NSString).deletingLastPathComponent
+        XCTAssertEqual(AgentPlanInput.read(file, root: plans), T.planMarkdown)
+        try fm.createDirectory(atPath: base + "/real", withIntermediateDirectories: true)
+        try Data(T.planMarkdown.utf8).write(to: URL(fileURLWithPath: base + "/real/a.md"))
+        try fm.createSymbolicLink(atPath: plans + "/sub", withDestinationPath: base + "/real")
+        var viaLink = AgentPlanInput(id: "t", plan: nil, file: plans + "/sub/a.md", home: home)
+        viaLink.configDir = config
+        XCTAssertEqual(try prompt(T.planScreen(caret: 1, footer: "ctrl+g to edit in VS Code \u{00B7} \(plans)/sub/a.md"),
+                                  plan: viaLink).why, AgentWindowText.planFile, "a symlinked directory below the new root")
+        XCTAssertNil(AgentPlanInput.read(plans + "/sub/a.md", root: plans))
+        try fm.createSymbolicLink(atPath: base + "/linked-config", withDestinationPath: config)
+        XCTAssertEqual(AgentPlanInput.read(base + "/linked-config/plans/example-plan.md", root: base + "/linked-config/plans"),
+                       T.planMarkdown, "a symlinked config dir is resolved once")
+        // Item 2: a hard link (st_nlink 2) is refused under either name; the single name reads again once it goes.
+        XCTAssertEqual(link(base + "/real/a.md", plans + "/hard.md"), 0)
+        XCTAssertNil(AgentPlanInput.read(plans + "/hard.md", root: plans), "a hard link into the plans")
+        XCTAssertEqual(link(file, base + "/real/b.md"), 0)
+        XCTAssertNil(AgentPlanInput.read(file, root: plans), "a plan file with a second name elsewhere")
+        var hard = AgentPlanInput(id: "t", plan: nil, file: file, home: home)
+        hard.configDir = config
+        XCTAssertEqual(try prompt(T.planScreen(caret: 1, footer: "ctrl+g to edit in VS Code \u{00B7} \(file)"), plan: hard).why,
+                       AgentWindowText.planFile)
+        XCTAssertEqual(unlink(base + "/real/b.md"), 0)
+        XCTAssertEqual(AgentPlanInput.read(file, root: plans), T.planMarkdown, "one name again")
+    }
+
     /// Round 4: Claude Code's composer shows a bare "ctrl+g to edit in <editor>" hint under a
     /// wrapped draft (bundle read). Under a numbered list and a draft that starts "3. …" it is no
     /// footer, so the screen is no prompt and Always allow sends nothing.
@@ -777,6 +856,65 @@ final class AgentWindowPlanTests: XCTestCase {
         guard case .prompt(let unmapped) = m.interaction.panel else { return XCTFail("\(m.interaction.panel)") }
         XCTAssertEqual(unmapped.approve, [])
         XCTAssertEqual(unmapped.why, AgentWindowText.planUnchecked)
+        m.close()
+    }
+
+    /// #1092: the window gives a plan kept in a file the focused session's config_dir from dch's live record (the
+    /// controller's seam), and only that session's; no record: "" (the home's plans).
+    @MainActor
+    func testAgentWindowModelTakesThePlanConfigDirFromDchsLiveRecord() throws {
+        let d = AgentWindowD1Tests()
+        let url = tempDir().appendingPathComponent("plan.jsonl")
+        let attach = d.entry("attachment", ["version": "2.1.318", "isSidechain": false,
+                                            "attachment": ["type": "plan_mode", "reminderType": "full", "isSubAgent": false,
+                                                           "planFilePath": "/Users/example/.claude-work/plans/example-plan.md",
+                                                           "planExists": true]])
+        try (d.line(attach) + d.line(d.toolUse("toolu_p", "ExitPlanMode", [:], ["version": "2.1.318"]))).write(to: url)
+        let f = FormSim(.plan)
+        let c = t.controller(f.io, autoAllow: false)
+        final class Live: @unchecked Sendable {   // set and read on the main thread only (the seam is called there)
+            var records: [DchHistoryRecord] = []
+            var asked: [[AgentSessionKey]] = []
+        }
+        let live = Live()
+        c.readLiveRecords = { s in live.asked.append(s.map(\.key)); return live.records }
+        let st = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
+        st.sessions = [AgentSession(key: T.key, alias: "", activity: 1, state: .blocked, agents: 0, version: "1.30.0",
+                                    claudeSessionID: "0b7c2f3e-1111-2222-3333-444455556666", transcriptPath: url.path)]
+        var other = DchHistoryRecord(key: AgentSessionKey(dir: T.key.dir, name: "other"))
+        other.agent = .init(kind: "claude", configDir: "/Users/example/.claude-other")
+        var mine = DchHistoryRecord(key: T.key)
+        mine.agent = .init(kind: "claude", configDir: "/Users/example/.claude-work")
+        live.records = [other, mine]
+        let m = AgentWindowModel()
+        m.now = { 1_800_000_000 }
+        m.openSession = { _ in }
+        m.onVisible = { _ in }
+        m.ageInterval = 3600
+        m.transcript.offMain = { $0() }
+        m.transcript.makeWatch = { _, _ in NSObject() }
+        m.transcript.tickInterval = 3600
+        m.interaction.controller = c
+        m.interaction.readQueue = { $0() }
+        m.bind(st)
+        showTranscript(m)
+        m.setVisible(true)
+        XCTAssertEqual(m.transcript.pendingPlan?.configDir, "", "the transcript never sets it")
+        XCTAssertEqual(m.interaction.plan?.file, "/Users/example/.claude-work/plans/example-plan.md")
+        XCTAssertEqual(m.interaction.plan?.configDir, "/Users/example/.claude-work", "this session's record, not another's")
+        XCTAssertEqual(m.interaction.plan?.planRoot, "/Users/example/.claude-work/plans")
+        XCTAssertTrue(live.asked.last == [T.key], "\(live.asked)")
+        // No live record for the session (read again when the session is followed again): the default root.
+        live.records = [other]
+        let bKey = AgentSessionKey(dir: "/tmp/dch-test", name: "b")
+        st.sessions = [st.sessions[0], AgentSession(key: bKey, alias: "", activity: 0, state: .blocked, agents: 0, version: "1.30.0")]
+        showTranscript(m, [st.sessions[1]])
+        m.select(try XCTUnwrap(m.rows.first { $0.session?.key == bKey }?.id))
+        XCTAssertTrue(m.interaction.plan == nil, "b has no plan")
+        m.select(try XCTUnwrap(m.rows.first { $0.session?.key == T.key }?.id))
+        XCTAssertEqual(m.interaction.plan?.id, "toolu_p")
+        XCTAssertEqual(m.interaction.plan?.configDir, "")
+        XCTAssertEqual(m.interaction.plan?.planRoot, NSHomeDirectory() + "/.claude/plans")
         m.close()
     }
 

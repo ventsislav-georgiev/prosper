@@ -1424,6 +1424,8 @@ tag from the now-released section and put it on the new top draft.
 - The phone's Restart and Stop, and Stop all / Restart all, now also wait while an Agents window
   answer is still being typed into that session: the phone gets a busy answer, Stop all skips that
   session and says so, and Restart all leaves its folder alone and says so.
+- A session started with its own Claude config folder (CLAUDE_CONFIG_DIR) can now have its plan
+  approved from the Agent Sessions window.
 
 ## v2.174.0
 

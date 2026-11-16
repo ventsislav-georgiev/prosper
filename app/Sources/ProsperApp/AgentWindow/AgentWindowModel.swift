@@ -758,8 +758,17 @@ final class AgentWindowModel: ObservableObject {
         }
         // #802: and the pending ExitPlanMode is what a plan approval is checked against.
         planSubscription = f?.transcript.$pendingPlan.sink { [weak self] plan in
-            MainActor.assumeIsolated { self?.interaction.plan = plan }
+            MainActor.assumeIsolated { self?.interaction.plan = self?.withConfigDir(plan) }
         }
+    }
+
+    /// #1092: a plan kept in a file gets the focused live session's "config_dir" from dch's own live record (the
+    /// controller's readLiveRecords seam, none under XCTest), never from the transcript or the screen. No record, no
+    /// controller or "": the default <home>/.claude/plans. Read only while a plan file is pending (a few lstats).
+    private func withConfigDir(_ p: AgentPlanInput?) -> AgentPlanInput? {
+        guard var p, p.plan == nil, let s = focusedLive, let c = interaction.controller else { return p }
+        p.configDir = c.readLiveRecords([s]).first { $0.key == s.key }?.agent?.configDir ?? ""
+        return p
     }
 
     /// 11.2: a runtime per pane of the active layout. A layout switch frees every runtime of the old layout (stopped
@@ -1969,7 +1978,7 @@ final class AgentWindowModel: ObservableObject {
         }
         let transcript = f.transcript
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
-        interaction.plan = transcript.pendingPlan
+        interaction.plan = withConfigDir(transcript.pendingPlan)
         let terminalMode = paneMode == .terminal
         // #822: Terminal mode has no input box (the terminal is the input).
         interaction.follow(terminalMode ? nil : s)
