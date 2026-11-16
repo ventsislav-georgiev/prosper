@@ -284,6 +284,16 @@ final class ExtensionRegistry: ObservableObject {
     /// All discovered extensions, system first, in discovery order.
     @Published private(set) var records: [ExtensionRecord] = []
 
+    /// #984: a folder the last discover() could not load: its name as shown (OutsideText) and the plain reason.
+    struct RefusedFolder: Equatable, Sendable {
+        let folder: String
+        let reason: String
+        let directory: URL
+    }
+    static let maxRefused = 20, refusedNameMax = 80
+    /// #984: the first `maxRefused` folders the last discover() refused, in discovery order.
+    @Published private(set) var refused: [RefusedFolder] = []
+
     private let systemDir: URL?
     private let userDir: URL
     /// Pristine copies of system extensions, used by `reset(id:)`.
@@ -463,6 +473,7 @@ final class ExtensionRegistry: ObservableObject {
             at: userDir, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
 
         var loads: [LoadedExtension] = []
+        var refusedFound: [RefusedFolder] = []
         for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
             else { continue }
@@ -474,6 +485,12 @@ final class ExtensionRegistry: ObservableObject {
                 loads.append(isSystem ? LoadedExtension(manifest: loaded.manifest, directory: entry, isSystem: true) : loaded)
             } catch {
                 log.error("failed to load extension at \(entry.path, privacy: .public): \(String(describing: error), privacy: .public)")
+                if refusedFound.count < Self.maxRefused {
+                    refusedFound.append(RefusedFolder(
+                        folder: OutsideText.shown(entry.lastPathComponent, max: Self.refusedNameMax),
+                        reason: (error as? LocalizedError)?.errorDescription ?? ExtensionLoadError.unreadableManifest,
+                        directory: entry))
+                }
             }
         }
         // #1246: a built-in's id stays the built-in's: a user folder declaring it is a duplicate whatever it sorts like.
@@ -521,6 +538,7 @@ final class ExtensionRegistry: ObservableObject {
         }
 
         records = found
+        refused = refusedFound
         dropStalePhoneApprovals()
         rebuildRoutes()
         asyncRuntimes.invalidateAll()   // drop stale off-main VMs on rescan

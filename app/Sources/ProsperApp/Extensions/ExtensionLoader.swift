@@ -27,6 +27,33 @@ enum ExtensionLoadError: Error, Equatable {
     case entryMissing(String)
 }
 
+/// #984 (QA #160): what the Settings list and the marketplace show for a refused manifest: fixed sentences. A parse
+/// failure shows the guard's own reason (#883, #1082) when it is one, else one sentence: the parser's text never.
+extension ExtensionLoadError: LocalizedError {
+    static let unreadableManifest = "The extension's manifest could not be read."
+    /// The reasons the guard and the bounded read give; nothing else in `.parse` is shown.
+    static let guardReasons: Set<String> = [
+        String(describing: TOMLGuard.Rejected(limit: .size)),
+        String(describing: TOMLGuard.Rejected(limit: .depth)),
+        String(describing: TOMLGuard.Rejected(limit: .unterminatedString)),
+        BoundedFileRead.Failure.tooLarge(ExtensionLoader.manifestFileName, limit: TOMLGuard.maxBytes).description,
+    ]
+
+    var errorDescription: String? {
+        switch self {
+        case .manifestMissing: "The extension's folder has no extension.toml."
+        case .unreadable: Self.unreadableManifest
+        case .invalidUTF8: "The extension's manifest is not valid UTF-8."
+        case .parse(let why): Self.guardReasons.contains(why) ? why : Self.unreadableManifest
+        case let .incompatibleHost(need, have):
+            "The extension needs Prosper \(OutsideText.shown(need, max: 24)) or newer; this is \(have)."
+        case let .unsupportedAPILevel(need, max):
+            "The extension needs extension API level \(need); this Prosper supports up to \(max)."
+        case .entryMissing(let main): "The extension's entry file \(OutsideText.shown(main, max: 80)) is missing."
+        }
+    }
+}
+
 /// Reads + validates `extension.toml` from a directory. Static-first: this runs
 /// at discovery time, before any Lua executes (see docs/ADR-002-extensibility.md).
 enum ExtensionLoader {

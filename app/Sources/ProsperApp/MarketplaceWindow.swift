@@ -325,10 +325,15 @@ struct MarketplaceRootView: View {
             } catch {
                 await MainActor.run {
                     installingID = nil
-                    installError = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                    installError = Self.installErrorText(error)
                 }
             }
         }
+    }
+
+    /// The line an install failure shows; #984: a refused manifest reads as ExtensionLoadError's plain sentence.
+    nonisolated static func installErrorText(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? String(describing: error)
     }
 }
 

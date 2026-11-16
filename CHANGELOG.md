@@ -1602,6 +1602,9 @@ tag from the now-released section and put it on the new top draft.
   error or replacing the file with the swapped-in one. (#1243)
 - Agent Sessions: X-ray Refs tab; a ref opens its context: definition, mentions across sessions,
   matching tasks and memories, with Open, Copy and Search. (#1417)
+- An extension whose manifest Prosper refuses (too large, nested too deep, or unreadable) now shows
+  in Settings > Extensions as a "Not loaded" row with the reason, and the Marketplace shows that
+  same plain sentence instead of the parser's raw error text. (#984)
 
 ## v2.174.0
 

@@ -86,6 +86,19 @@ struct ExtensionsPane: View {
                 }
                 NeonDivider()
                 installedList(userRecords, emptyText: "No user extensions installed yet.")
+                // #984: a folder discover() refused, as a disabled row with its plain reason; Reveal is the only action.
+                ForEach(Array(registry.refused.enumerated()), id: \.offset) { _, refused in
+                    NeonDivider()
+                    HStack(spacing: sz(12)) {
+                        Text(verbatim: Self.refusedLine(refused))
+                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button("Reveal in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([refused.directory])
+                        }.rowAction()
+                    }
+                }
             }
 
             NeonSection("System Extensions", collapsed: $systemCollapsed) {
@@ -96,6 +109,11 @@ struct ExtensionsPane: View {
                 installedList(themeRecords, emptyText: "No theme extensions found.")
             }
         }
+    }
+
+    /// #984: one refused folder's line in the list: its name as shown and why it was not loaded.
+    nonisolated static func refusedLine(_ refused: ExtensionRegistry.RefusedFolder) -> String {
+        "Not loaded: \(refused.folder): \(refused.reason)"
     }
 
     /// #726: the row's "Allow on iPhone" toggle shows only for a trusted user or market
