@@ -627,7 +627,7 @@ struct AgentIslandView: View {
                 Text("\(ear.value)")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     // #581: nothing live (history only): a dim 0, no glyph on the left.
-                    .foregroundStyle(ear.state == .blocked ? ear.state.color : Color.white.opacity(s.total == 0 ? 0.35 : 0.9))
+                    .foregroundStyle(ear.state == .blocked ? ear.state.color : (s.total == 0 ? Color.white.opacity(0.35) : Neon.faded(.white, 0.9)))
                     .frame(width: g.earWidth)
             }
             .frame(height: g.barHeight)
@@ -750,7 +750,7 @@ struct AgentIslandView: View {
         Button(action: onControls) {
             Text(verbatim: "⋯")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color.white.opacity(0.75))
+                .foregroundStyle(Neon.faded(.white, 0.75))
                 .frame(minWidth: 16)
                 .contentShape(Rectangle())
         }
@@ -764,7 +764,7 @@ struct AgentIslandView: View {
         Button(action: onAgentsWindow) {
             Image(systemName: "sidebar.left")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.75))
+                .foregroundStyle(Neon.faded(.white, 0.75))
                 .frame(minWidth: 16)
                 .contentShape(Rectangle())
         }
@@ -782,7 +782,7 @@ struct AgentIslandView: View {
                 AgentIslandComposer(store: store, onSend: onSendMessage, onCancel: onCancelMessage)
             } else if store.confirmingRestartAll {
                 Text(verbatim: store.restartAllForce ? AgentIsland.restartAllForceQuestion : AgentIsland.restartAllQuestion)
-                    .foregroundStyle(Color.white.opacity(0.8))
+                    .foregroundStyle(Neon.faded(.white, 0.8))
                 Spacer(minLength: 0)
                 lineButton("Restart") { onConfirmRestartAll(true) }
                 lineButton("Cancel") { onConfirmRestartAll(false) }
@@ -790,7 +790,7 @@ struct AgentIslandView: View {
                 // #580: same line, same look. QA #572: the rows named when asked (a change drops it).
                 let n = store.asked.keys.count
                 Text(verbatim: store.stopAllQuestion)
-                    .foregroundStyle(Color.white.opacity(0.8))
+                    .foregroundStyle(Neon.faded(.white, 0.8))
                 Spacer(minLength: 0)
                 lineButton("Stop") { onConfirmStopAll(true) }
                     .accessibilityLabel(Text(verbatim: "Stop \(n) session\(n == 1 ? "" : "s")"))
@@ -800,21 +800,21 @@ struct AgentIslandView: View {
                 // #744: like Stop all's.
                 let n = store.asked.keys.count
                 Text(verbatim: store.killAllQuestion)
-                    .foregroundStyle(Color.white.opacity(0.8))
+                    .foregroundStyle(Neon.faded(.white, 0.8))
                 Spacer(minLength: 0)
                 lineButton("Kill") { onConfirmKillAll(true) }
                     .accessibilityLabel(Text(verbatim: "Kill \(n) session\(n == 1 ? "" : "s")"))
                 lineButton("Cancel") { onConfirmKillAll(false) }
                     .accessibilityLabel(Text(verbatim: "Cancel Kill all"))
             } else if let s = store.killTarget {
-                Text(verbatim: AgentIsland.killQuestion(s.title)).foregroundStyle(Color.white.opacity(0.8))
+                Text(verbatim: AgentIsland.killQuestion(s.title)).foregroundStyle(Neon.faded(.white, 0.8))
                 Spacer(minLength: 0)
                 lineButton("Kill") { onConfirmKill(true) }
                     .accessibilityLabel(Text(verbatim: "Kill \(s.title)"))
                 lineButton("Cancel") { onConfirmKill(false) }
                     .accessibilityLabel(Text(verbatim: "Cancel Kill"))
             } else {
-                Text(verbatim: store.dirStatus).foregroundStyle(Color.white.opacity(0.6))
+                Text(verbatim: store.dirStatus).foregroundStyle(Neon.faded(.white, 0.6))
                 Spacer(minLength: 0)
             }
         }
@@ -832,7 +832,7 @@ struct AgentIslandView: View {
         Button(action: action) {
             Text(verbatim: title)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.9))
+                .foregroundStyle(Neon.faded(.white, 0.9))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -895,7 +895,7 @@ struct AgentIslandView: View {
             } else if store.confirmingClear {
                 // #605: #580's inline question, same look; the count is live.
                 let n = store.unpinnedCount
-                Text(verbatim: AgentIsland.clearQuestion(n)).foregroundStyle(Color.white.opacity(0.8))
+                Text(verbatim: AgentIsland.clearQuestion(n)).foregroundStyle(Neon.faded(.white, 0.8))
                 Spacer(minLength: 0)
                 lineButton("Clear") { onConfirmClear(true) }
                     .accessibilityLabel(Text(verbatim: "Clear \(n) unpinned"))
@@ -906,7 +906,7 @@ struct AgentIslandView: View {
                     Button(action: onResumeAll) {
                         Text(verbatim: label)
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.9))
+                            .foregroundStyle(Neon.faded(.white, 0.9))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

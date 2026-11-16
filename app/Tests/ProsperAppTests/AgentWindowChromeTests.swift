@@ -542,12 +542,6 @@ extension AgentWindowD1Tests {
         }
 
         // An opacity change (backdropTick, no rebuild) fades the open window's body in place.
-        // #881 (QA #735 INFO-6): the product reads the Mac's flag directly (ThemeStore.effectiveOpacity,
-        // no seam), and with it on the window stays at 1.0 by design, so the fade is not checkable here.
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
-            throw XCTSkip("System Settings › Accessibility › Display › Reduce transparency is on: "
-                          + "ThemeStore.effectiveOpacity keeps windows at 1.0, so the 0.8 fade is not checked")
-        }
         ThemeStore.shared.setOpacity(0.8)
         AppDelegate.applyThemedWindowSizing([win], scale: ThemeRuntime.scale)
         XCTAssertFalse(win.isOpaque)

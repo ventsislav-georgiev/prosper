@@ -826,7 +826,7 @@ struct AgentSectionHeader: View {
             // header keeps its height; Needs you tints tick and title in the blocked colour (was a dot).
             NeonSectionLabel(title: title, size: 9.5,
                              tint: title == AgentSidebar.needsYouTitle ? AgentState.blocked.color : nil)
-            Text("\(count)").font(Neon.font(9.5, weight: .medium).monospacedDigit()).foregroundStyle(Neon.textSecondary.opacity(0.8))
+            Text("\(count)").font(Neon.font(9.5, weight: .medium).monospacedDigit()).foregroundStyle(Neon.faded(Neon.textSecondary, 0.8))
             Spacer(minLength: 0)
         }
         .padding(.horizontal, sz(8)).padding(.top, sz(12)).padding(.bottom, sz(4))
@@ -854,7 +854,7 @@ struct AgentSidebarRowView: View {
                 } else {
                     Text(row.state?.glyph ?? "○")
                         .font(Neon.font(11, weight: .bold))
-                        .foregroundStyle(row.state == nil ? Neon.textSecondary.opacity(0.6) : agentStateColor(row.state))
+                        .foregroundStyle(row.state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentStateColor(row.state))
                 }
             }
             .frame(width: sz(14))
@@ -958,7 +958,7 @@ struct AgentDigitChip: View {
                 .fill(active ? Neon.blue : Neon.bgBottom)
                 .overlay(
                     RoundedRectangle(cornerRadius: sz(4))
-                        .strokeBorder(Neon.blue.opacity(active ? 0.9 : 0.6), lineWidth: 1))
+                        .strokeBorder(Neon.faded(Neon.blue, active ? 0.9 : 0.6), lineWidth: 1))
         )
         .fixedSize()
     }
@@ -2563,7 +2563,7 @@ struct AgentPillButton: View {
                 .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
                 .frame(maxWidth: fill ? .infinity : nil)
                 .background(Capsule().fill(tint.opacity(0.12)))
-                .overlay(Capsule().stroke(tint.opacity(0.45), lineWidth: 1))
+                .overlay(Capsule().stroke(Neon.faded(tint, 0.45), lineWidth: 1))
                 .contentShape(Capsule())
                 .fixedSize(horizontal: !fill, vertical: true)
         }

@@ -1414,6 +1414,7 @@ tag from the now-released section and put it on the new top draft.
 - While a session resumes under a new name (because its old name is still running), the new name's
   row is busy too: its Restart, Stop, Message and Kill wait until the resume finishes, on the island
   and from the phone.
+- Increase Contrast now also reaches the Agent Island and the Agent Sessions window chrome.
 
 ## v2.174.0
 
