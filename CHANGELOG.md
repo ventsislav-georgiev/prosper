@@ -1396,6 +1396,11 @@ tag from the now-released section and put it on the new top draft.
   shows up, and either one when the New session form opens.
 - Agent Sessions window: when a new session ends at once, the "ended at once or never started"
   message now says how it ended, for example "(exit 127)".
+- Agent island: Restart and Stop now refuse ("Restart not run: another job is running") while an
+  answer or key sequence from the Agents window is still being typed into that session, a dch action
+  that never stops printing is now cancelled after an hour, and when an Agents window answer finds
+  its prompt already gone, the prompt that replaced it is checked again right away instead of
+  waiting for its next output.
 
 ## v2.174.0
 

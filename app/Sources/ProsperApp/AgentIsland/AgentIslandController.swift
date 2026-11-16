@@ -615,6 +615,11 @@ final class AgentIslandController {
     func restart(_ s: AgentSession, sayBusy: Bool = false) -> Bool {
         guard let store, case .ok(let dch) = store.restartGate, let args = AgentIsland.restartArgs(s.name) else { return false }
         let key = s.key
+        // #990 (QA #665 INFO-3): an answer, key sequence or Always allow check in flight holds the session: refused, never queued.
+        if inFlight.contains(key) {
+            if sayBusy { refuseBusy(key, AgentIsland.restartBusyText) }
+            return false
+        }
         let started = run(key, dch: dch, args: args, running: AgentIsland.restartingText,
                           bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) {
             [weak self] r in
@@ -648,6 +653,10 @@ final class AgentIslandController {
         guard let store, case .ok(let dch) = store.restartGate, AgentIsland.canStop(s),
               let args = AgentIsland.stopArgs([s.name]) else { return false }
         let key = s.key
+        if inFlight.contains(key) {   // #990: as restart()
+            if sayBusy { refuseBusy(key, AgentIsland.stopBusyText) }
+            return false
+        }
         let started = run(key, dch: dch, args: args, running: AgentIsland.stoppingText,
                           bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) {
             [weak self] r in
@@ -1409,12 +1418,16 @@ final class AgentIslandController {
                                   run: @escaping @Sendable (AgentPromptIO) -> R,
                                   done: @escaping @MainActor @Sendable (R) -> Void) -> Bool {
         guard beginHuman(s, prompt) != nil else { return false }
-        let key = s.key, io = io
+        let key = s.key, io = io, at = clickAt(key)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let r = run(io)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.inFlight.remove(key)
+                    // #990 (QA #644 INFO-1): the window's stale answer (its one caller) rechecks as answer() does.
+                    if let prompt, let at, (r as? AgentWindowOutcome) == .failed(AgentWindowText.changed) {
+                        self?.recheckStaleClick(key, prompt, at)
+                    }
                     done(r)
                 }
             }

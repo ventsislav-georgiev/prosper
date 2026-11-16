@@ -1768,6 +1768,27 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(r.lastState, .blocked)
     }
 
+    /// #990 (QA #644 INFO-1): the window's answer on B after C printed comes back stale (the
+    /// prompt changed, nothing sent): C is read and checked like after the island's stale click
+    /// (#795); a plain permission is answered.
+    @MainActor func testAStaleWindowAnswerStillChecksThePromptThatReplacedIt() throws {
+        let b = try XCTUnwrap(AgentPrompt.parse(Self.neverAnswered[0].1))
+        let f = FakeIO(Self.neverAnswered[0].1), (c, r) = leftWithItsCard(f)
+        f.set(Self.bash2)
+        tick(c, .blocked, activity: 2)   // C printed, inside the floor
+        let over = expectation(description: "the window's answer ends")
+        XCTAssertTrue(c.humanAction(session(.blocked, activity: 2), prompt: b,
+                                    run: { _ in AgentWindowOutcome.failed(AgentWindowText.changed) }) { _ in over.fulfill() })
+        wait(for: [over], timeout: 5)
+        drain(c)
+        XCTAssertEqual(f.sends, [], "the stale answer sends nothing")
+        r.now += AgentPollGate.floor
+        fire(c, r)
+        drain(c)
+        drain(c)
+        XCTAssertEqual(f.sends, ["1"], "C checked")
+    }
+
     /// QA #644 INFO-2: the same with a plain Bash B, one Always allow would answer: the stale
     /// click's re-read finds B still on screen and leaves it to the human; it is never checked.
     @MainActor func testAStaleClickOnAPlainPromptStillOnScreenNeverAnswersIt() throws {

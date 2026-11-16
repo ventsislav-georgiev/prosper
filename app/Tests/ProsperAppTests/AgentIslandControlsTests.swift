@@ -5764,6 +5764,57 @@ extension AgentIslandControlsTests {
         f.release.signal()
     }
 
+    /// #990 (QA #665 INFO-3): Restart and Stop refuse while a window action (an answer or a key
+    /// sequence) holds the session: nothing launched; the window's call says so, the island's stays silent.
+    @MainActor
+    func testRestartAndStopRefuseWhileAnActionIsInFlight() throws {
+        let f = FakeProc()
+        let a = session("a", version: "1.24.0")
+        let c = opened(f, [a])
+        let store = try XCTUnwrap(c.store)
+        let hold = DispatchSemaphore(value: 0), over = expectation(description: "the action ends")
+        XCTAssertTrue(c.humanAction(a, prompt: nil, run: { _ -> Int in hold.wait(); return 0 }) { _ in over.fulfill() })
+        XCTAssertFalse(c.restart(a))
+        XCTAssertFalse(c.stop(a))
+        XCTAssertTrue(store.actions[a.key] == nil, "the island's own call: silent")
+        XCTAssertFalse(c.restart(a, sayBusy: true))
+        XCTAssertEqual(store.actions[a.key], AgentIsland.restartBusyText)
+        XCTAssertFalse(c.stop(a, sayBusy: true))
+        XCTAssertEqual(store.actions[a.key], AgentIsland.stopBusyText)
+        XCTAssertEqual(f.args.count, 0, "refused: never launched")
+        hold.signal()
+        wait(for: [over], timeout: 5)
+        XCTAssertTrue(c.restart(a), "free again once the action ends")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(a.key) }
+        XCTAssertFalse(c.runner.isBusy(a.key))
+    }
+
+    /// #990 (QA #512 INFO-1): a dch that never stops writing ends at the absolute ceiling, through the
+    /// idle bound's own cancel: one SIGTERM, the result stopped, the row's cancelled text.
+    func testTheCeilingEndsAJobThatNeverStopsWriting() {
+        let sent = Results(), res = Results(), term = DispatchSemaphore(value: 0)
+        // The idle bound (60 s) never runs out here; only the ceiling can end the job.
+        let runner = DchActionRunner(bound: 60, ceiling: 0.2, launch: { _, _, _, _, onPid, onOutput in
+            onPid(4242)
+            for i in 0..<200 {   // a line every 0.05 s until signalled; the 10 s cap only ends a broken ceiling
+                if term.wait(timeout: .now() + 0.05) == .success { break }
+                onOutput(Data("a: step \(i)\n".utf8))
+            }
+            return (0, Data())
+        }, signal: { _ in sent.add(DchActionResult(status: 15, text: [])); term.signal() })
+        XCTAssertTrue(runner.start(AgentSessionKey(dir: "/d", name: "a"), path: "/fake/dch", args: ["talk"],
+                                   env: { [:] }, done: res.add))
+        XCTAssertEqual(res.done.wait(timeout: .now() + 15), .success)
+        XCTAssertEqual(sent.all.count, 1, "exactly one SIGTERM: only the ceiling sends it")
+        XCTAssertEqual(res.all.map(\.stopped), [true])
+        if let r = res.all.last {
+            XCTAssertEqual(AgentIsland.rowText(r, name: "a", .restart), "Restart cancelled: no answer in 15m")
+        }
+        XCTAssertEqual(DchActionRunner.ceiling, 3600)
+    }
+
     /// G0b (a): the window showing reads History once, on the edge only.
     @MainActor
     func testWindowShowingReadsHistoryOnceOnTheEdge() {

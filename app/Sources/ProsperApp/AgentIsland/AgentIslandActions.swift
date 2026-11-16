@@ -1454,6 +1454,10 @@ final class DchActionRunner: @unchecked Sendable {
     static let restartBound: TimeInterval = 900
     /// #584: `--say` waits up to 30 s for its paste, then re-presses Enter (AgentPromptIO.sayTimeout).
     static let messageBound: TimeInterval = 60
+    /// #990 (QA #512 INFO-1): the absolute ceiling, from the start, for a dch that never stops writing.
+    /// The longest real action, Restart all or Stop all, waits up to DCH_AGENT_TIMEOUT_MS (10 min) for
+    /// its agents to pause, then DCH_AGENT_STEP_MS (60 s) per step: about 14 min; this is about 4x that.
+    static let ceiling: TimeInterval = 3600
     /// #591 r2 (QA #462 M2): the one runner the island's buttons and the phone's
     /// verbs share, so a phone job and an island job on one row or dir exclude each other.
     static let shared = DchActionRunner()
@@ -1479,10 +1483,11 @@ final class DchActionRunner: @unchecked Sendable {
     /// (or its dir's) Stop or Restart, as dch -k only SIGTERMs the master.
     private var kills: [AgentSessionKey: Job] = [:]
     private let bound: TimeInterval
+    private let ceiling: TimeInterval
     private let launch: Launch
     private let signal: @Sendable (pid_t) -> Void
 
-    init(bound: TimeInterval = DchActionRunner.bound,
+    init(bound: TimeInterval = DchActionRunner.bound, ceiling: TimeInterval = DchActionRunner.ceiling,
          launch: @escaping Launch = { path, args, env, cwd, onPid, onOutput in
              let r = DchCommand.runCapturingBoth(args: args, env: env, path: path, merge: true, cwd: cwd,
                                                  onPid: onPid, onOutput: onOutput)
@@ -1490,6 +1495,7 @@ final class DchActionRunner: @unchecked Sendable {
          },
          signal: @escaping @Sendable (pid_t) -> Void = { _ = Darwin.kill($0, SIGTERM) }) {
         self.bound = bound
+        self.ceiling = ceiling
         self.launch = launch
         self.signal = signal
     }
@@ -1563,6 +1569,8 @@ final class DchActionRunner: @unchecked Sendable {
             done(result)
         }
         arm(job, bound: bound ?? self.bound)
+        // #990: the same one-SIGTERM cancel as the idle bound; after the reap it signals nothing.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + ceiling) { [weak self] in self?.cancel(job) }
         return true
     }
 
