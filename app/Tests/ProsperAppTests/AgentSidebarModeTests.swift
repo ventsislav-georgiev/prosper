@@ -125,13 +125,14 @@ final class AgentSidebarModeTests: XCTestCase {
             let node = try XCTUnwrap(tree.first { $0.label.hasPrefix("api") }, "\(tree.map(\.label))")
             XCTAssertEqual(node.label, full, "VoiceOver reads the full row's words")
             XCTAssertEqual(node.help, full, "the tooltip holds the full row's words")
+            let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
             for scale in Self.scales {
                 ThemeRuntime.scale = scale
                 let width = sz(68)
                 let on = rowParts(AgentSidebarRowView(row: blocked, selected: false, number: 2, mini: true), width: width)
                 XCTAssertNotNil(on["miniChip"], "the Command-2 chip is drawn at \(scale): \(on.keys.sorted())")
                 XCTAssertNotNil(on["miniNeeds"], "the needs-you mark is drawn at \(scale)")
-                XCTAssertLessThanOrEqual(on["miniNeeds"]?.maxX ?? .infinity, width + 0.5, "inside the rail at \(scale)")
+                XCTAssertLessThanOrEqual(on["miniNeeds"]?.maxX ?? .infinity, width + pixel, "inside the rail at \(scale)")
                 let off = rowParts(AgentSidebarRowView(row: idle, selected: false, mini: true), width: width)
                 XCTAssertTrue(off["miniChip"] == nil && off["miniNeeds"] == nil, "no number, no need at \(scale): \(off.keys.sorted())")
                 XCTAssertNotNil(off["miniSlot"], "the mark's slot is kept at \(scale)")
@@ -147,6 +148,7 @@ final class AgentSidebarModeTests: XCTestCase {
             let m = d1.windowModel(d1.store([d1.session("api", .working)]))
             defer { m.close() }
             XCTAssertEqual(m.sidebarMode, .mini)
+            let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
             for scale in Self.scales {
                 ThemeRuntime.scale = scale
                 let rail = AgentWindowModel.miniSidebarWidth
@@ -160,9 +162,9 @@ final class AgentSidebarModeTests: XCTestCase {
                 XCTAssertTrue(tree.contains { $0.role == "AXMenuButton" && $0.title == "Session list actions" },
                               "the ... menu at \(scale): \(tree.map { "\($0.role) \($0.title) \($0.label)" })")
                 XCTAssertEqual(found.count, 3, "..., >_ and + at \(scale)")
-                for n in found { XCTAssertGreaterThanOrEqual(n.frame.width, sz(18) - 0.5, "\(n.title)\(n.label) hit size at \(scale)") }
+                for n in found { XCTAssertGreaterThanOrEqual(n.frame.width, sz(18) - pixel, "\(n.title)\(n.label) hit size at \(scale)") }
                 let span = (found.map(\.frame.maxX).max() ?? .infinity) - (found.map(\.frame.minX).min() ?? 0)
-                XCTAssertLessThanOrEqual(span, rail + 0.5, "inside the rail at \(scale)")
+                XCTAssertLessThanOrEqual(span, rail + pixel, "inside the rail at \(scale)")
             }
         }
     }
