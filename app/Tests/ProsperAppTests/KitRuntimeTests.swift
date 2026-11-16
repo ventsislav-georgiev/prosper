@@ -385,6 +385,46 @@ final class KitRuntimeTests: XCTestCase {
         }
     }
 
+    /// QA R1409-s1: a state file whose live version, tree or slug is not a valid one, or whose phase is not idle, is refused
+    /// like a corrupt file. Each bad file is the good one with a single field changed (decoded, edited, encoded).
+    func testAStateFileWithABadRefFieldOrPhaseIsRefused() async throws {
+        let e = try env()
+        let first = try runtime(e)
+        let layout = first.store.layout
+        let ext = try source(e, version: "1.0.0")
+        _ = await first.apply(ext)
+        let path = layout.root + "/runtime.json"
+        let good = try XCTUnwrap(bytes(URL(fileURLWithPath: path)))
+        let cases: [(String, (inout [String: Any]) -> Void)] = [
+            ("live version", { $0["version"] = "../1.0.0" }),
+            ("short tree", { $0["treeHash"] = String(repeating: "a", count: 63) }),
+            ("live slug", { $0["slug"] = "../x" }),
+            ("leading dash slug", { $0["slug"] = "-x" }),
+            ("phase", { $0["phase"] = ["swapping": [String: Any]()] })]
+        for (label, edit) in cases {
+            var root = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(good)) as? [String: Any])
+            var state = try XCTUnwrap(root["state"] as? [String: Any])
+            if label == "phase" { edit(&state) } else {
+                var live = try XCTUnwrap(state["live"] as? [String: Any])
+                edit(&live)
+                state["live"] = live
+            }
+            root["state"] = state
+            let d = try JSONSerialization.data(withJSONObject: root)
+            try d.write(to: URL(fileURLWithPath: path))
+            let (md, st, live, bin, seen) = (bytes(e.claudeMD), bytes(e.settings), snapshot(layout.live), snapshot(layout.bin), e.consent.seen.count)
+            let rt = try runtime(e)
+            XCTAssertTrue(rt.current == nil, label)
+            XCTAssertTrue(rt.restoreRefusal?.hasPrefix("kit state") == true, "\(label): \(String(describing: rt.restoreRefusal))")
+            XCTAssertEqual(e.consent.seen.count, seen, label)
+            XCTAssertEqual(bytes(e.claudeMD), md, label)
+            XCTAssertEqual(bytes(e.settings), st, label)
+            XCTAssertEqual(snapshot(layout.live), live, label)
+            XCTAssertEqual(snapshot(layout.bin), bin, label)
+            XCTAssertEqual(bytes(URL(fileURLWithPath: path)).map { Data($0) }, d, "\(label): the file is left as found")
+        }
+    }
+
     /// #1409: a state naming a live copy that is gone on disk is refused the same way.
     func testAStateWhoseLiveDirIsGoneIsRefused() async throws {
         let e = try env()

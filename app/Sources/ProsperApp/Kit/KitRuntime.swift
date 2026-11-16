@@ -112,11 +112,17 @@ final class KitRuntime: @unchecked Sendable {
         guard let s = store.readRuntimeState() else {
             return .failure(.refused("kit state \(store.runtimeStatePath): unreadable, over \(KitStore.runtimeStateCap) bytes or not schema \(KitStore.runtimeStateSchema): nothing applied"))
         }
+        guard s.phase == .idle else {
+            return .failure(.refused("kit state \(store.runtimeStatePath): phase \(s.phase) is not idle: nothing applied"))
+        }
         let refs: [(KitRef?, String?)] = [(s.live, store.layout.live), (s.previous, store.layout.previous),
                                           (s.retiring, store.layout.root + "/retiring"), (s.staged, nil)]
         for case let (ref?, dir) in refs where !ref.version.isEmpty {
             guard KitStore.isValidVersion(ref.version), KitStore.isTree(ref.treeHash) else {
                 return .failure(.refused("kit state \(store.runtimeStatePath): a bad version or tree: nothing applied"))
+            }
+            guard ManagedConfigPaths.isValidSlug(ref.slug), !ref.slug.hasPrefix("-") else {
+                return .failure(.refused("kit state \(store.runtimeStatePath): a bad slug: nothing applied"))
             }
             if let dir, store.fs.kind(dir) != .directory {
                 return .failure(.refused("kit state \(store.runtimeStatePath): \(dir) is gone: nothing applied"))
