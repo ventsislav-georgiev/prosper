@@ -102,12 +102,15 @@ final class AgentIslandThemeTests: XCTestCase {
                 ("accent answer", accent.text, accentFill, 4.5),
                 ("accent dim", accent.dim, accentFill, 3),
                 ("accent hint", accent.dim, onto(accentFill, AgentPromptCardView.hintFill), 3),
+                ("accent detail lines", AgentPromptCardView.detailInk(.accent), accentFill, 4.5),
                 ("deny answer", deny.text, denyFill, 4.5),
                 ("deny dim", deny.dim, denyFill, 3),
                 ("deny hint", deny.dim, onto(denyFill, AgentPromptCardView.hintFill), 3),
+                ("deny detail lines", AgentPromptCardView.detailInk(.deny), denyFill, 4.5),
                 ("plain answer", plain.text, wash, 4.5),
                 ("plain dim", plain.dim, wash, 3),
                 ("plain hint", plain.dim, onto(wash, AgentPromptCardView.hintFill), 3),
+                ("plain detail lines", AgentPromptCardView.detailInk(.plain), wash, 4.5),
                 ("open terminal", Neon.textPrimary, onto(card, AgentPromptCardView.wash), 4.5),
                 // The composer's field.
                 ("draft", Neon.textPrimary, card, 4.5),
@@ -119,7 +122,7 @@ final class AgentIslandThemeTests: XCTestCase {
                 pairs += 1
             }
         }
-        XCTAssertEqual(pairs, 22 * 25)
+        XCTAssertEqual(pairs, 22 * 28)
     }
 
     // MARK: Cards

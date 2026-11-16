@@ -1567,6 +1567,8 @@ struct AgentPromptCardView: View {
         case .plain: (Self.wash, Neon.textPrimary, Neon.textSecondary)
         }
     }
+    /// #1377: the detail lines are words read to choose an answer: the label's ink (4.5:1 on every theme), not dim (3:1).
+    static func detailInk(_ style: AgentPromptOption.Style) -> Color { look(style).text }
     static var wash: Color { Neon.textPrimary.opacity(0.08) }
     static var contextFill: Color { Neon.textPrimary.opacity(0.04) }
     static var hintFill: Color { Neon.textPrimary.opacity(0.1) }
@@ -1646,10 +1648,10 @@ struct AgentPromptCardView: View {
                             .lineLimit(1)
                             .agentCardSlot(height: G.cardLabelLine, alignment: .top)
                     }
-                    // Continuation or description: dim, under the label.
+                    // Continuation or description under the label, in the label's ink (#1377).
                     rows(detail) { d in
                         cardText(d, G.detailFont)
-                            .foregroundStyle(dim)
+                            .foregroundStyle(Self.detailInk(style))
                             .lineLimit(1)
                             .agentCardSlot(height: G.cardDetailLine, alignment: .top)
                     }
