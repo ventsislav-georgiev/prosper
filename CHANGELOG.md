@@ -1434,10 +1434,9 @@ tag from the now-released section and put it on the new top draft.
   Code session is using, and extensions can read the pool's state with host.ccpool.status().
 - Ships dch 1.79.0 (was 1.74.0). X-ray's full reference search keeps the newest mentions on very
   large transcripts, a quick search's time budget also ends a slow folder lookup, and the X-ray view
-  keeps more of a prompt's title on narrow terminals when an agent's name is long. (#1327) X-ray
-  reads a session's task list and its memories (--tasks, --memory); Resume under a new name also
-  renames the Claude session; a session started while the system is out of terminals retries for up
-  to 2 s instead of failing at once. (#1348)
+  keeps more of a prompt's title on narrow terminals when an agent's name is long. (#1327) Resume
+  under a new name also renames the Claude session, and a session started while the system is out of
+  terminals retries for up to 2 s instead of failing at once. (#1348)
 - Renaming an account in the account pool now renames its Keychain item too, so Keychain Access
   shows the new name. (#1326)
 - Agent Island: Kill all during a Stop all or Restart all started from the phone now still writes
