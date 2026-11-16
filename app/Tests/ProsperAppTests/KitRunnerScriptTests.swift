@@ -6,7 +6,7 @@ import XCTest
 // own tempDir(): a made-up config home <tempDir>/cfg, the runner written there, and targets, hooks
 // and settings the row wrote whose bodies are only printf lines (and at most one exit). Each Process
 // is one of the four shells with the runner as its script, an explicit environment (PATH and HOME
-// = the tempDir), the tempDir as its cwd, stdin from a Pipe or /dev/null, a 10 s deadline on the
+// = the tempDir), the tempDir as its cwd, stdin from a Pipe, a file the row wrote, or /dev/null, a 10 s deadline on the
 // recorded process. No kit, tool, hook or shim of anyone's is run. The other-owner case of the
 // hook and kit.env checks is DESCRIBED ONLY: a row cannot chown without root.
 
@@ -64,8 +64,8 @@ final class KitRunnerScriptTests: XCTestCase {
         }
     }
 
-    private func run(_ shell: String, _ kit: Kit, _ args: [String], stdin: String? = nil, env extra: [String: String] = [:],
-                     file: StaticString = #filePath, line: UInt = #line) throws -> Run {
+    private func run(_ shell: String, _ kit: Kit, _ args: [String], stdin: String? = nil, stdinFile: URL? = nil,
+                     env extra: [String: String] = [:], file: StaticString = #filePath, line: UInt = #line) throws -> Run {
         precondition(Self.shells.contains(shell))
         let p = Process()
         p.executableURL = URL(fileURLWithPath: shell)
@@ -81,6 +81,8 @@ final class KitRunnerScriptTests: XCTestCase {
             inPipe.fileHandleForWriting.write(Data(stdin.utf8)) // small: fits the pipe buffer before launch
             try inPipe.fileHandleForWriting.close()
             p.standardInput = inPipe
+        } else if let stdinFile {
+            p.standardInput = try FileHandle(forReadingFrom: stdinFile) // too big for a pipe buffer
         } else {
             p.standardInput = FileHandle.nullDevice
         }
@@ -191,6 +193,51 @@ final class KitRunnerScriptTests: XCTestCase {
         }
     }
 
+    // #1390: with a hook, stdin is buffered up to 1 MiB; more is refused (65) before anything runs.
+    static let stdinCap = 1_048_576
+
+    private func bytes(_ kit: Kit, _ count: Int) throws -> URL {
+        let url = kit.root.appendingPathComponent("stdin-\(count)")
+        try Data((0..<count).map { UInt8(truncatingIfNeeded: $0 &* 31) }).write(to: url)
+        return url
+    }
+
+    func testStdinOverTheCapRefusedBeforeAnythingRuns() throws {
+        let kit = try makeKit(tempDir(), targetBody: "printf 'TARGET RAN\\n'\n")
+        try hook(kit, "t.pre", "printf 'PRE RAN\\n' >&2\n")
+        try hook(kit, "t.post", "printf 'POST RAN\\n' >&2\n")
+        let refused = "prosper-kit-run: refused: stdin is over 1 MiB (1048576 bytes)"
+        for size in [Self.stdinCap + 1, 4 * Self.stdinCap] {
+            let input = try bytes(kit, size)
+            try eachShell { shell in
+                let r = try run(shell, kit, [Self.ext, "tools", "t", kit.target], stdinFile: input)
+                XCTAssertEqual(r.status, 65, "\(shell) \(size)")
+                XCTAssertEqual(r.out, "", "\(shell) \(size): the target did not run")
+                XCTAssertEqual(lines(r.err), [refused], "\(shell) \(size): no hook ran")
+                XCTAssertEqual(tree(kit.tmp), [], "\(shell) \(size): no stdin.* left")
+            }
+        }
+    }
+
+    /// Each prints the cksum (CRC and byte count) of the stdin it got: at the cap all three agree.
+    func testStdinAtTheCapReachesHooksAndTargetWhole() throws {
+        let kit = try makeKit(tempDir(), targetBody: "printf 'T %s\\n' \"$(cksum)\"\n")
+        try hook(kit, "t.pre", "printf 'PRE %s\\n' \"$(cksum)\" >&2\n")
+        try hook(kit, "t.post", "printf 'POST %s\\n' \"$(cksum)\" >&2\n")
+        let atCap = try bytes(kit, Self.stdinCap), over = try bytes(kit, Self.stdinCap + 1)
+        try eachShell { shell in
+            let r = try run(shell, kit, [Self.ext, "tools", "t", kit.target], stdinFile: atCap)
+            XCTAssertEqual(r.status, 0, shell)
+            let sum = String(lines(r.out).first?.dropFirst(2) ?? "")
+            XCTAssertTrue(sum.hasSuffix(" \(Self.stdinCap)"), "\(shell): \(r.out)")
+            XCTAssertEqual(lines(r.err), ["PRE \(sum)", "POST \(sum)"], shell)
+            XCTAssertEqual(tree(kit.tmp), [], shell)
+            let o = try run(shell, kit, [Self.ext, "tools", "t", kit.target], stdinFile: over)
+            XCTAssertEqual(o.status, 65, "\(shell): one byte over the cap")
+            XCTAssertEqual(o.out, "", shell)
+        }
+    }
+
     func testWorldWritablePreSkipped() throws {
         let kit = try makeKit(tempDir())
         try hook(kit, "t.pre", "printf 'PRE RAN\\n' >&2\nexit 2\n", mode: 0o707)
@@ -269,6 +316,28 @@ final class KitRunnerScriptTests: XCTestCase {
                 "G=it's $HOME `x`", "L=40", "D=\(kit.kd.path)/live", "B=\(kit.kd.path)/bin", "C=\(kit.config.path)",
                 "S=\(kit.state)", "X=unset",
             ], shell)
+        }
+    }
+
+    /// #1390: a caller's own KIT_* never reaches a hook or the target; only settings set KIT_<KEY>.
+    func testCallerKitVariablesAreUnset() throws {
+        let kit = try makeKit(tempDir(), targetBody: """
+        printf 'F=%s\\n' "${KIT_FOO-unset}"
+        printf 'G=%s\\n' "${KIT_GREETING-unset}"
+        printf 'l=%s\\n' "${KIT_lower-unset}"
+
+        """)
+        try write(kit.config.appendingPathComponent(".settings.env"), "KIT_GREETING='hi'\n", mode: 0o600)
+        let pre = kit.hooks.appendingPathComponent("t.pre")
+        let caller = ["KIT_FOO": "x", "KIT_GREETING": "caller", "KIT_lower": "y"]
+        try eachShell { shell in
+            for hooked in [false, true] {
+                if hooked { try hook(kit, "t.pre", "printf 'PRE F=%s\\n' \"${KIT_FOO-unset}\" >&2\n") } else { try? FileManager.default.removeItem(at: pre) }
+                let r = try run(shell, kit, [Self.ext, "tools", "t", kit.target], stdin: "{}", env: caller)
+                XCTAssertEqual(r.status, 0, "\(shell) hooked=\(hooked)")
+                XCTAssertEqual(lines(r.out), ["F=unset", "G=hi", "l=unset"], "\(shell) hooked=\(hooked)")
+                XCTAssertEqual(r.err, hooked ? "PRE F=unset\n" : "", "\(shell) hooked=\(hooked)")
+            }
         }
     }
 
@@ -441,5 +510,12 @@ final class KitRunnerScriptTests: XCTestCase {
         for key in ["", "a-b", "a b", "dir", "status", "state_dir", "\u{00DF}", "a=b"] {
             XCTAssertTrue(KitRunner.settingsEnvText([key: "v"]) == nil, key.debugDescription)
         }
+    }
+
+    /// #1390 (R917-s3-q1): "a" and "A" are both KIT_A; refused instead of the later one winning.
+    func testSettingsKeyCaseCollisionGivesNil() {
+        XCTAssertTrue(KitRunner.settingsEnvText(["a": "1", "A": "2"]) == nil)
+        XCTAssertTrue(KitRunner.settingsEnvText(["Limit": "1", "LIMIT": "2", "x": "3"]) == nil)
+        XCTAssertEqual(KitRunner.settingsEnvText(["a": "1", "b": "2"]), "KIT_A='1'\nKIT_B='2'\n")
     }
 }

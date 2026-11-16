@@ -10,9 +10,12 @@ import Foundation
 // target. The args after the target go to .pre, the target and .post alike.
 // The kits folder is <dir of the runner>/../kits (never HOME, never a variable); per kit the runner
 // reads kits/<ext-id>/kit.env (kitEnvText) and <KIT_CONFIG>/.settings.env (settingsEnvText), both
-// parsed line by line as KEY='value' text, never sourced.
-// Exit codes: 64 bad arguments or ids, 78 kit.env missing or unsafe, 70 no temp file, a .pre's
-// non-zero status, else the target's status.
+// parsed line by line as KEY='value' text, never sourced. Every KIT_* the caller exported is unset
+// at start, so hooks and the target see only kit.env's and .settings.env's KIT_* names.
+// With a hook, stdin is buffered up to 1 MiB (a hook's JSON is a few KiB); more is refused before
+// any hook or the target runs.
+// Exit codes: 64 bad arguments or ids, 65 stdin over 1 MiB, 78 kit.env missing or unsafe, 70 no
+// temp file or stdin unreadable, a .pre's non-zero status, else the target's status.
 
 enum KitRunner {
     static let script = #"""
@@ -21,6 +24,9 @@ enum KitRunner {
     # usage: prosper-kit-run <ext-id> <piece-id> <name> [<interpreter>] </abs/target> [args...]
     set -u
     unset KIT_DIR KIT_BIN KIT_CONFIG KIT_STATE_DIR KIT_STATUS
+    # Every other KIT_* the caller exported. A value holding "\nKIT_X=" only adds one more unset;
+    # LC_ALL=C so a value that is not UTF-8 cannot stop sed early.
+    for k in $(env | LC_ALL=C sed -n 's/^\(KIT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$k"; done
     die() { printf 'prosper-kit-run: %s\n' "$1" >&2; exit "$2"; }
     idok() { case $1 in ''|.|..|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
     [ "$#" -ge 4 ] || die 'usage: <ext-id> <piece-id> <name> [<interpreter>] <target> [args]' 64
@@ -98,7 +104,9 @@ enum KitRunner {
       trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
       mkdir -m 700 -p "$kd/tmp" || die 'cannot make the tmp folder' 70
       tmpf=$(mktemp "$kd/tmp/stdin.XXXXXX") || die 'cannot make the stdin temp file' 70
-      cat > "$tmpf"
+      # One byte past the cap is read so that "over" can be told from "at"; a cut input never runs.
+      head -c 1048577 > "$tmpf" || die 'cannot read stdin' 70
+      [ $(wc -c < "$tmpf") -le 1048576 ] 2>/dev/null || die 'refused: stdin is over 1 MiB (1048576 bytes)' 65
     fi
     run() { if [ -n "$tmpf" ]; then command "$@" < "$tmpf"; else command "$@"; fi; }
     if [ -n "$pre" ]; then
@@ -123,14 +131,16 @@ enum KitRunner {
 
     /// <KIT_CONFIG>/.settings.env: one KIT_<KEY>='value' per setting, sorted by key. nil (nothing is
     /// written) for a key that is not [A-Za-z0-9_] ASCII, one that would shadow a runner variable,
-    /// or a value holding NUL or a line break.
+    /// or a value holding NUL or a line break, and for two keys that differ only in case ("a", "A":
+    /// both KIT_A, and the runner would keep the later one silently).
     static func settingsEnvText(_ settings: [String: String]) -> String? {
         var pairs: [(String, String)] = []
+        var names: Set<String> = []
         for (key, value) in settings.sorted(by: { $0.key < $1.key }) {
             guard !key.isEmpty, key.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_") })
             else { return nil }
             let name = "KIT_" + key.uppercased()
-            guard !reserved.contains(name) else { return nil }
+            guard !reserved.contains(name), names.insert(name).inserted else { return nil }
             pairs.append((name, value))
         }
         return assignments(pairs)
