@@ -818,11 +818,18 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
 }
 
 /// The ghostty app and its config: Prosper's background and text colours, libghostty's own palette
-/// and font (what Ghostty draws), no key bindings inside libghostty (the window owns ⌘ keys, the
-/// view's Edit-menu actions own ⌘C/⌘V/⌘A), OSC 52 reads denied and writes asked (see the view).
+/// and font (what Ghostty draws), no key bindings inside libghostty but Ghostty's macOS text ones (the window owns Cmd
+/// keys, the view's Edit-menu actions own Cmd-C/V/A), OSC 52 reads denied and writes asked (see the view).
 @MainActor
 enum AgentTerminalLook {
     static let controller: TerminalController = make()
+
+    /// #1376: Ghostty's macOS default keybinds that only send text to the program (line kill, line start and end, word
+    /// back and forward), kept after `keybind = clear`; its others (copy, paste, new window...) would bypass the window.
+    static let textKeybinds = [
+        "super+backspace=text:\\x15", "super+arrow_left=text:\\x01", "super+arrow_right=text:\\x05",
+        "alt+arrow_left=esc:b", "alt+arrow_right=esc:f",
+    ]
 
     /// A ghostty app on Prosper's config, its generated config file already gone (QA #681 INFO-10).
     static func make() -> TerminalController {
@@ -834,6 +841,7 @@ enum AgentTerminalLook {
     static var configuration: TerminalConfiguration {
         TerminalConfiguration(startingFrom: .default) {
             $0.withCustom("keybind", "clear")
+            for bind in textKeybinds { $0.withCustom("keybind", bind) }
             $0.withCustom("clipboard-read", "deny")
             $0.withCustom("clipboard-write", "ask")
             // QA #681 INFO-2: the default primary-paste reads the system pasteboard straight through

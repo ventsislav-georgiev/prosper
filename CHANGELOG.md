@@ -1545,6 +1545,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island follows the selected theme: its History rows, prompt cards and message field use the
   theme's colours, and the shown tab takes the theme's accent where it reads on the black notch,
   which stays black. (#1375)
+- In the Agent Sessions terminal, Cmd-Backspace deletes the line, and Cmd-Left/Right and Option-
+  Left/Right move to the line start/end and by word, as in Ghostty. (#1376)
 
 ## v2.174.0
 
