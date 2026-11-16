@@ -108,7 +108,7 @@ final class KitStoreTests: XCTestCase {
             XCTAssertEqual(mode(d), 0o700, d)
             dirs += 1
         }
-        XCTAssertEqual(dirs, 10)
+        XCTAssertEqual(dirs, 8)
         let want = ["CLAUDE.md": 0o600, "README.md": 0o600, "seed/notes.toml": 0o600, "hooks/guard.sh": 0o700, "tools/calm-note": 0o700, "extra/gx": 0o700]
         for (rel, m) in want { XCTAssertEqual(mode(s.path + "/" + rel), m, rel) }
         XCTAssertEqual(try store.recordSlug("calm-agent"), "calm-agent")
@@ -119,7 +119,7 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(store.recordedSlug(), "calm-agent")
         XCTAssertEqual(try String(contentsOfFile: store.layout.kitEnv, encoding: .utf8), "KIT_SLUG='calm-agent'\n")
         XCTAssertThrowsError(try store.recordSlug("-dash")) { XCTAssertEqual($0 as? KitStoreError, .badSlug) }
-        XCTAssertEqual(list(store.layout.root), ["bin", "fired", "kit.env", "live", "previous", "staged", "state", "tmp"])
+        XCTAssertEqual(list(store.layout.root), ["bin", "fired", "kit.env", "staged", "state", "tmp"]) // live, previous: by the swap only
     }
 
     func testByteCapStopsCopy() throws {
@@ -228,6 +228,12 @@ final class KitStoreTests: XCTestCase {
         let deeper = try KitStore(configHome: home, extID: Self.ext, fs: KitPOSIXFS(stream: KitFailingDirStream(failIn: f.url("hooks").path)))
         XCTAssertThrowsError(try stage(deeper, f.kit)) { XCTAssertEqual($0 as? KitStoreError, .unreadableDir("hooks")) }
         XCTAssertEqual(list(store.layout.staged), [])
+        // the validator's reader lists through the same seam (rider: kit917e m5 gets its row)
+        XCTAssertEqual(KitPOSIXFileReader().names(f.kit.path), KitStore.listNames(f.kit.path, KitPOSIXDirStream()))
+        XCTAssertTrue(KitPOSIXFileReader(stream: failing).names(f.kit.path) == nil, "the validator's reader: no short list")
+        guard case .refused = try f.validate(reader: KitPOSIXFileReader(stream: failing)) else {
+            return XCTFail("a folder that cannot be listed whole is refused")
+        }
     }
 
     func testLateDropOfAnOldTreeKeepsTheNewOne() throws {
@@ -287,6 +293,441 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(KitPOSIXFS().kind(store.layout.staged), .missing)
         XCTAssertEqual(KitPOSIXFS().kind(elsewhere.path), .directory)
     }
+
+    // MARK: S5b-1: directory-relative walks (R917-s5a-q1), write n == 0 (R917-s5a-n1), swap, sweep
+
+    /// A canary dir OUTSIDE the store and the source: b/file with known bytes.
+    private func canary(_ root: URL) throws -> (dir: URL, file: URL, bytes: Data) {
+        let dir = root.appendingPathComponent("canary", isDirectory: true)
+        let file = dir.appendingPathComponent("b/file")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let bytes = Data("canary bytes\n".utf8)
+        try bytes.write(to: file)
+        return (dir, file, bytes)
+    }
+
+    func testWalkStaysInTheOpenedDirAfterASwap() throws {
+        let root = tempDir()
+        let home = root.appendingPathComponent("config", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let src = KitDirFixture(root: root, kit: root.appendingPathComponent("src", isDirectory: true))
+        try src.write("a/b/file", "kit bytes\n")
+        let c = try canary(root)
+        // after a/ is listed, a/ is moved aside inside the source and a link to the canary takes its name:
+        // a joined path a/b would now read the canary; the walk holds a/ open and reads the original
+        let swapDir = KitSwapAfterListing(label: src.url("a").path) {
+            try? FileManager.default.moveItem(at: src.url("a"), to: src.url("a-moved"))
+            try? FileManager.default.createSymbolicLink(atPath: src.url("a").path, withDestinationPath: c.dir.path)
+        }
+        let store = try KitStore(configHome: home, extID: Self.ext, fs: KitPOSIXFS(stream: swapDir))
+        let s = try store.stageCopy(from: src.kit.path, version: "1.0.0", tree: Self.tree0, byteCap: 1024)
+        XCTAssertTrue(swapDir.fired)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: s.path + "/a/b/file")), Data("kit bytes\n".utf8))
+        XCTAssertEqual(list(s.path), ["a"], "the moved dir was never listed")
+        XCTAssertEqual(try Data(contentsOf: c.file), c.bytes)
+
+        // the listed CHILD swapped for a link before its kind is read: refused, nothing staged
+        let src2 = KitDirFixture(root: root, kit: root.appendingPathComponent("src2", isDirectory: true))
+        try src2.write("a/b/file", "kit bytes\n")
+        let swapChild = KitSwapAfterListing(label: src2.url("a").path) {
+            try? FileManager.default.moveItem(at: src2.url("a/b"), to: src2.url("a/b-moved"))
+            try? FileManager.default.createSymbolicLink(atPath: src2.url("a/b").path, withDestinationPath: c.dir.appendingPathComponent("b").path)
+        }
+        let store2 = try KitStore(configHome: home, extID: Self.ext, fs: KitPOSIXFS(stream: swapChild))
+        XCTAssertThrowsError(try store2.stageCopy(from: src2.kit.path, version: "1.0.1", tree: Self.tree0, byteCap: 1024)) {
+            XCTAssertEqual($0 as? KitStoreError, .link("a/b"))
+        }
+        XCTAssertTrue(swapChild.fired)
+        XCTAssertEqual(list(store2.layout.staged), ["1.0.0+" + Self.tree0])
+        XCTAssertEqual(list(store2.layout.tmp), [])
+        XCTAssertEqual(try Data(contentsOf: c.file), c.bytes)
+    }
+
+    func testRemoveTreeStaysInsideAfterASwap() throws {
+        let (f, home, store) = try scene()
+        let c = try canary(f.root)
+        try f.write("a/b/file", "kit bytes\n")
+        let s = try stage(store, f.kit)
+        let fm = FileManager.default
+        // after staged/<copy>/a is listed, it is moved aside inside the store and a link to the canary takes its name
+        let swap = KitSwapAfterListing(label: s.path + "/a") {
+            try? FileManager.default.moveItem(atPath: s.path + "/a", toPath: s.path + "/a-moved")
+            try? FileManager.default.createSymbolicLink(atPath: s.path + "/a", withDestinationPath: c.dir.path)
+        }
+        let swapping = try KitStore(configHome: home, extID: Self.ext, fs: KitPOSIXFS(stream: swap))
+        XCTAssertThrowsError(try swapping.dropStaged(version: "1.0.0", tree: Self.tree0), "a link where a/ was is not rmdir'd")
+        XCTAssertTrue(swap.fired)
+        XCTAssertEqual(try Data(contentsOf: c.file), c.bytes, "nothing outside kits/<ext-id> is removed")
+        XCTAssertEqual(list(c.dir.path), ["b"])
+        XCTAssertEqual(list(s.path + "/a-moved"), [], "the original a/ was emptied through its own descriptor")
+        // a link in place of a dir ON THE WAY is refused, its target untouched
+        try fm.removeItem(atPath: s.path + "/a") // the row's own link
+        try fm.moveItem(atPath: s.path, toPath: s.path + "-real")
+        try fm.createSymbolicLink(atPath: s.path, withDestinationPath: c.dir.path)
+        XCTAssertThrowsError(try store.removeTree(s.path + "/b")) { XCTAssertEqual($0 as? KitStoreError, .link(s.path)) }
+        XCTAssertEqual(try Data(contentsOf: c.file), c.bytes)
+    }
+
+    func testWriteReturningZeroFails() throws {
+        let root = tempDir()
+        let once = KitZeroWriteOnce()
+        var fs = KitPOSIXFS()
+        fs.writeBytes = { fd, p, n in once.take() ? 0 : Darwin.write(fd, p, n) }
+        let path = root.appendingPathComponent("f").path
+        XCTAssertThrowsError(try fs.create(path, Data("abc".utf8), mode: 0o600)) { XCTAssertEqual($0 as? KitStoreError, .io("write", EIO)) }
+        XCTAssertNoThrow(try KitPOSIXFS().create(path + "2", Data("abc".utf8), mode: 0o600))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path + "2")), Data("abc".utf8))
+    }
+
+    /// A tiny source whose only file `marker` holds `v`, staged as v + tree0.
+    private func stageMarked(_ store: KitStore, _ root: URL, _ v: String) throws {
+        let src = KitDirFixture(root: root, kit: root.appendingPathComponent("src-" + v, isDirectory: true))
+        try src.write("marker", v)
+        _ = try store.stageCopy(from: src.kit.path, version: v, tree: Self.tree0, byteCap: 1024)
+    }
+
+    private func marker(_ dir: String) -> String? { try? String(contentsOfFile: dir + "/marker", encoding: .utf8) }
+
+    func testFirstApplyRenames() throws {
+        let (f, _, store) = try scene()
+        try stageMarked(store, f.root, "1.0.0")
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.live), .missing, "ensureLayout makes no empty live")
+        try store.swap(version: "1.0.0", tree: Self.tree0)
+        XCTAssertEqual(marker(store.layout.live), "1.0.0")
+        XCTAssertEqual(mode(store.layout.live), 0o700)
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.previous), .missing, "no previous on the first apply")
+        XCTAssertEqual(list(store.layout.staged), [])
+        // a version that is not staged is refused and changes nothing
+        XCTAssertThrowsError(try store.swap(version: "9.9.9", tree: Self.tree0)) {
+            XCTAssertEqual($0 as? KitStoreError, .notADirectory(store.stagedPath("9.9.9", Self.tree0)))
+        }
+        XCTAssertThrowsError(try store.swap(version: "../x", tree: Self.tree0)) { XCTAssertEqual($0 as? KitStoreError, .badVersion) }
+        XCTAssertEqual(marker(store.layout.live), "1.0.0")
+    }
+
+    func testPreviousIsOne() throws {
+        let (f, _, store) = try scene()
+        for v in ["1.0.0", "1.0.1", "1.0.2"] {
+            try stageMarked(store, f.root, v)
+            try store.swap(version: v, tree: Self.tree0)
+        }
+        XCTAssertEqual(marker(store.layout.live), "1.0.2")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.1")
+        XCTAssertEqual(mode(store.layout.previous), 0o700)
+        XCTAssertEqual(list(store.layout.staged), [], "the older previous is kept as retiring, not parked under staged/")
+        XCTAssertEqual(list(store.layout.root), ["bin", "fired", "live", "previous", "retiring", "staged", "state", "tmp"])
+        XCTAssertEqual(list(store.layout.previous), ["marker"])
+    }
+
+    /// Ruling r-917s5b1a: the older previous is the machine's `retiring` (KitUpdate .swapped) until dropRetiring; one
+    /// retiring only: a stale one is removed by the next swap that has a previous to retire.
+    func testSwapKeepsTheOlderPreviousAsRetiring() throws {
+        let (f, _, store) = try scene()
+        let retiring = store.layout.root + "/retiring"
+        for v in ["1.0.0", "1.0.1"] {
+            try stageMarked(store, f.root, v)
+            try store.swap(version: v, tree: Self.tree0)
+        }
+        XCTAssertEqual(KitPOSIXFS().kind(retiring), .missing, "no previous before the second swap: nothing retires")
+        try stageMarked(store, f.root, "1.0.2")
+        try store.swap(version: "1.0.2", tree: Self.tree0)
+        XCTAssertEqual(marker(store.layout.live), "1.0.2")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.1")
+        XCTAssertEqual(marker(retiring), "1.0.0")
+        XCTAssertEqual(mode(retiring), 0o700)
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.root + "/incoming"), .missing)
+        // no dropRetiring in between: the stale retiring (1.0.0) goes, the previous (1.0.1) retires
+        try stageMarked(store, f.root, "1.0.3")
+        try store.swap(version: "1.0.3", tree: Self.tree0)
+        XCTAssertEqual(marker(store.layout.live), "1.0.3")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.2")
+        XCTAssertEqual(marker(retiring), "1.0.1")
+        XCTAssertEqual(list(retiring), ["marker"])
+        XCTAssertEqual(list(store.layout.staged), [], "nothing parked under staged/")
+        XCTAssertEqual(list(store.layout.root), ["bin", "fired", "live", "previous", "retiring", "staged", "state", "tmp"])
+    }
+
+    /// dropRetiring is the machine's dropPrevious after wiringApplied; restoreRetiring is the disk half of a failed shim
+    /// write or wiring AFTER swapBack (KitUpdate .shimsFailed / .wiringFailed: previous = retiring).
+    func testDropAndRestoreRetiring() throws {
+        let (f, _, store) = try scene()
+        let retiring = store.layout.root + "/retiring"
+        for v in ["1.0.0", "1.0.1", "1.0.2"] {
+            try stageMarked(store, f.root, v)
+            try store.swap(version: v, tree: Self.tree0)
+        }
+        try store.dropRetiring()
+        XCTAssertEqual(KitPOSIXFS().kind(retiring), .missing)
+        XCTAssertEqual(marker(store.layout.live), "1.0.2", "dropRetiring removes only retiring")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.1", "dropRetiring removes only retiring")
+        try store.dropRetiring() // absent: a no-op
+        XCTAssertEqual(marker(store.layout.previous), "1.0.1")
+        // a failed apply of 1.0.3: swap, swapBack, restoreRetiring
+        try stageMarked(store, f.root, "1.0.3")
+        try store.swap(version: "1.0.3", tree: Self.tree0)
+        XCTAssertEqual(marker(retiring), "1.0.1")
+        try store.swapBack()
+        XCTAssertEqual(marker(store.layout.previous), "1.0.3")
+        try store.restoreRetiring()
+        XCTAssertEqual(marker(store.layout.live), "1.0.2")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.1", "previous is the older one again, the failed new is gone")
+        XCTAssertEqual(KitPOSIXFS().kind(retiring), .missing)
+        XCTAssertEqual(list(store.layout.root), ["bin", "fired", "live", "previous", "staged", "state", "tmp"])
+        // no retiring (the second apply ever fails): restoreRetiring leaves no previous
+        let (g, _, fresh) = try scene(#function + "-fresh")
+        for v in ["2.0.0", "2.0.1"] {
+            try stageMarked(fresh, g.root, v)
+            try fresh.swap(version: v, tree: Self.tree0)
+        }
+        try fresh.swapBack()
+        try fresh.restoreRetiring()
+        XCTAssertEqual(marker(fresh.layout.live), "2.0.0")
+        XCTAssertEqual(KitPOSIXFS().kind(fresh.layout.previous), .missing)
+        XCTAssertEqual(KitPOSIXFS().kind(fresh.layout.root + "/retiring"), .missing)
+    }
+
+    /// Review r-917s5b1b: a leftover retiring with NO previous (a crash left it) goes at the next swap: the machine's
+    /// retiring is nil there, so no dropPrevious would ever come and a restore would make it an unknown previous.
+    func testSwapRemovesAStaleRetiringWithoutAPrevious() throws {
+        let (f, _, store) = try scene()
+        let retiring = store.layout.root + "/retiring"
+        try stageMarked(store, f.root, "1.0.0")
+        try store.swap(version: "1.0.0", tree: Self.tree0)
+        try FileManager.default.createDirectory(atPath: retiring, withIntermediateDirectories: false)
+        try Data("stale".utf8).write(to: URL(fileURLWithPath: retiring + "/marker"))
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.previous), .missing)
+        try stageMarked(store, f.root, "1.0.1")
+        try store.swap(version: "1.0.1", tree: Self.tree0)
+        XCTAssertEqual(KitPOSIXFS().kind(retiring), .missing, "the stale retiring is gone")
+        XCTAssertEqual(marker(store.layout.live), "1.0.1")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.0")
+        // the failed apply: swapBack + restoreRetiring leaves no previous (the machine's previous is nil)
+        try store.swapBack()
+        try store.restoreRetiring()
+        XCTAssertEqual(marker(store.layout.live), "1.0.0")
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.previous), .missing)
+        XCTAssertEqual(KitPOSIXFS().kind(retiring), .missing)
+    }
+
+    /// Ruling r-917s5b1a L2: the swap stopped after any one of its steps (the fake fails the Nth rename, the state a crash
+    /// there leaves) never leaves a staged <version>+<tree> name holding other content, never loses a copy, and live,
+    /// once it exists, is never missing. The next swap removes the stale `incoming` (its own first step).
+    func testACrashBetweenSwapStepsNeverMislabels() throws {
+        let (f, home, _) = try scene()
+        func ownVersions(_ store: KitStore, _ n: Int) {
+            for s in list(store.layout.staged) {
+                XCTAssertEqual(marker(store.layout.staged + "/" + s), String(s.prefix { $0 != "+" }), "rename \(n): \(s) holds its own version")
+            }
+        }
+        func copies(_ store: KitStore) -> [String] {
+            ["live", "previous", "retiring", "incoming"].compactMap { marker(store.layout.root + "/" + $0) }
+                + list(store.layout.staged).compactMap { marker(store.layout.staged + "/" + $0) }
+        }
+        var completed = 0
+        for n in 1...6 {
+            let ext = "com.example.crash\(n)"
+            let store = try KitStore(configHome: home, extID: ext)
+            for v in ["1.0.0", "1.0.1"] {
+                try stageMarked(store, f.root, v)
+                try store.swap(version: v, tree: Self.tree0)
+            }
+            try stageMarked(store, f.root, "1.0.2")
+            let crashing = try KitStore(configHome: home, extID: ext, fs: KitFailNthRename(n))
+            if (try? crashing.swap(version: "1.0.2", tree: Self.tree0)) != nil { completed += 1 }
+            let live = marker(store.layout.live)
+            XCTAssertTrue(live == "1.0.1" || live == "1.0.2", "rename \(n): live is never missing (\(live ?? "none"))")
+            ownVersions(store, n)
+            XCTAssertEqual(copies(store).sorted(), ["1.0.0", "1.0.1", "1.0.2"], "rename \(n): every copy once, none lost")
+            // the next swap goes through: a stale incoming is removed first
+            try stageMarked(store, f.root, "1.0.3")
+            try store.swap(version: "1.0.3", tree: Self.tree0)
+            XCTAssertEqual(marker(store.layout.live), "1.0.3", "rename \(n)")
+            XCTAssertEqual(KitPOSIXFS().kind(store.layout.root + "/incoming"), .missing, "rename \(n)")
+            ownVersions(store, n)
+        }
+        XCTAssertEqual(completed, 2, "four renames with live and previous present: the 5th and 6th never come")
+        // the first apply: two renames (staged -> incoming, incoming -> live)
+        for n in 1...2 {
+            let store = try KitStore(configHome: home, extID: "com.example.first\(n)")
+            try stageMarked(store, f.root, "1.0.0")
+            let crashing = try KitStore(configHome: home, extID: "com.example.first\(n)", fs: KitFailNthRename(n))
+            XCTAssertThrowsError(try crashing.swap(version: "1.0.0", tree: Self.tree0))
+            XCTAssertEqual(KitPOSIXFS().kind(store.layout.live), .missing, "first apply, rename \(n): no live yet")
+            ownVersions(store, n)
+            XCTAssertEqual(copies(store), ["1.0.0"], "first apply, rename \(n)")
+            if n == 2 { try stageMarked(store, f.root, "1.0.0") } // the staged copy went to incoming
+            try store.swap(version: "1.0.0", tree: Self.tree0)
+            XCTAssertEqual(marker(store.layout.live), "1.0.0")
+            XCTAssertEqual(KitPOSIXFS().kind(store.layout.root + "/incoming"), .missing)
+        }
+    }
+
+    func testSwapBackRestoresTheOldLive() throws {
+        let (f, _, store) = try scene()
+        XCTAssertThrowsError(try store.swapBack(), "nothing to swap back to")
+        try stageMarked(store, f.root, "1.0.0")
+        try store.swap(version: "1.0.0", tree: Self.tree0)
+        XCTAssertThrowsError(try store.swapBack()) { XCTAssertEqual($0 as? KitStoreError, .notADirectory(store.layout.previous)) }
+        XCTAssertEqual(marker(store.layout.live), "1.0.0")
+        try stageMarked(store, f.root, "1.0.1")
+        try store.swap(version: "1.0.1", tree: Self.tree0)
+        try store.swapBack()
+        XCTAssertEqual(marker(store.layout.live), "1.0.0")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.1")
+        try store.swapBack() // and forth again: one swap each way
+        XCTAssertEqual(marker(store.layout.live), "1.0.1")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.0")
+    }
+
+    func testSwapRefusesALinkInPlaceOfLive() throws {
+        let (f, _, store) = try scene()
+        let elsewhere = f.root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        try Data("theirs\n".utf8).write(to: elsewhere.appendingPathComponent("marker"))
+        try stageMarked(store, f.root, "1.0.0")
+        try FileManager.default.createSymbolicLink(atPath: store.layout.live, withDestinationPath: elsewhere.path)
+        XCTAssertThrowsError(try store.swap(version: "1.0.0", tree: Self.tree0)) { XCTAssertEqual($0 as? KitStoreError, .link(store.layout.live)) }
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.live), .symlink)
+        XCTAssertEqual(list(elsewhere.path), ["marker"])
+        XCTAssertEqual(marker(elsewhere.path), "theirs\n")
+        XCTAssertEqual(list(store.layout.staged), ["1.0.0+" + Self.tree0], "the staged copy stays")
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.previous), .missing)
+        // swapBack refuses a link at live the same way
+        try FileManager.default.createDirectory(atPath: store.layout.previous, withIntermediateDirectories: true)
+        XCTAssertThrowsError(try store.swapBack()) { XCTAssertEqual($0 as? KitStoreError, .link(store.layout.live)) }
+        XCTAssertEqual(marker(elsewhere.path), "theirs\n")
+    }
+
+    func testSwapLeavesNoMissingWindow() throws {
+        let (f, _, store) = try scene()
+        for i in 0...50 { try stageMarked(store, f.root, "1.0.\(i)") }
+        try store.swap(version: "1.0.0", tree: Self.tree0)
+        let watcher = KitLiveWatcher(path: store.layout.live)
+        watcher.start()
+        let t0 = Date()
+        var swapped = 0
+        for i in 1...50 {
+            do { try store.swap(version: "1.0.\(i)", tree: Self.tree0); swapped += 1 } catch { XCTFail("swap \(i): \(error)"); break }
+        }
+        let ms = Int(Date().timeIntervalSince(t0) * 1000)
+        let seen = watcher.stop()
+        print("testSwapLeavesNoMissingWindow: 50 swaps in \(ms) ms, \(seen.looks) lstat calls")
+        XCTAssertEqual(swapped, 50)
+        XCTAssertTrue(seen.stopped, "the watcher thread ended")
+        XCTAssertGreaterThan(seen.looks, 0)
+        XCTAssertEqual(seen.misses, 0, "live was never missing")
+        XCTAssertEqual(marker(store.layout.live), "1.0.50")
+        XCTAssertEqual(marker(store.layout.previous), "1.0.49")
+        XCTAssertEqual(list(store.layout.staged), [])
+    }
+
+    func testSweepRemovesOldTempOnly() throws {
+        let (f, _, store) = try scene()
+        try store.ensureLayout()
+        let fm = FileManager.default
+        let now = Date()
+        let old = now.addingTimeInterval(-3600)
+        let oldTemp = UUID().uuidString, oldFile = UUID().uuidString, fresh = UUID().uuidString, link = UUID().uuidString
+        let lower = UUID().uuidString.lowercased() // a UUID, but not as stageCopy names it (its own UUID: APFS folds case)
+        try fm.createDirectory(atPath: store.layout.tmp + "/" + oldTemp + "/inner", withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: URL(fileURLWithPath: store.layout.tmp + "/" + oldTemp + "/inner/f"))
+        try Data("y".utf8).write(to: URL(fileURLWithPath: store.layout.tmp + "/" + oldFile))
+        try fm.createDirectory(atPath: store.layout.tmp + "/" + fresh, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: store.layout.tmp + "/notes", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: store.layout.tmp + "/" + lower, withIntermediateDirectories: true)
+        // the link's target is the row's own old dir OUTSIDE the store, with a file in it
+        let c = try canary(f.root)
+        try fm.createSymbolicLink(atPath: store.layout.tmp + "/" + link, withDestinationPath: c.dir.path)
+        for n in [oldTemp, oldFile, "notes", lower] {
+            try fm.setAttributes([.modificationDate: old], ofItemAtPath: store.layout.tmp + "/" + n)
+        }
+        try fm.setAttributes([.modificationDate: old], ofItemAtPath: c.dir.path)
+        let removed = try store.sweepStaleTemps(now: now)
+        XCTAssertEqual(removed.sorted(), [oldTemp, oldFile].sorted())
+        XCTAssertEqual(list(store.layout.tmp), [fresh, link, "notes", lower].sorted())
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.tmp + "/" + link), .symlink)
+        XCTAssertEqual(list(c.dir.path), ["b"], "the link's target is untouched")
+        XCTAssertEqual(try Data(contentsOf: c.file), c.bytes)
+        // the same entries a minute later than their age: the fresh one goes too, nothing else
+        XCTAssertEqual(try store.sweepStaleTemps(now: now.addingTimeInterval(KitStore.staleTempAge + 5)), [fresh])
+        XCTAssertEqual(list(store.layout.tmp), [link, "notes", lower].sorted())
+        // no store yet: nothing to sweep, nothing made
+        let bare = try KitStore(configHome: f.root.appendingPathComponent("none"), extID: Self.ext)
+        XCTAssertEqual(try bare.sweepStaleTemps(now: now), [])
+        XCTAssertEqual(KitPOSIXFS().kind(bare.layout.prosper), .missing)
+    }
+}
+
+/// The stream seam's swap fake: when readdir of `label` reaches the end of the list, `action` runs once (it swaps
+/// a dir for a link between the listing and the walk's next step). Every path it touches is the row's own.
+final class KitSwapAfterListing: KitDirStream, @unchecked Sendable {
+    let label: String
+    private let action: @Sendable () -> Void
+    private let lock = NSLock()
+    private var _fired = false
+    var fired: Bool { lock.withLock { _fired } }
+
+    init(label: String, action: @escaping @Sendable () -> Void) {
+        self.label = label
+        self.action = action
+    }
+
+    func open(_ dir: String, fd: Int32) -> (any KitDirHandle)? {
+        guard let h = KitPOSIXDirStream().open(dir, fd: fd) else { return nil }
+        return dir == label ? Hooked(h, self) : h
+    }
+
+    fileprivate func fireOnce() {
+        let first = lock.withLock { () -> Bool in defer { _fired = true }; return !_fired }
+        if first { action() }
+    }
+
+    final class Hooked: KitDirHandle {
+        let inner: any KitDirHandle
+        let owner: KitSwapAfterListing
+        init(_ inner: any KitDirHandle, _ owner: KitSwapAfterListing) { self.inner = inner; self.owner = owner }
+        func next() -> (name: [UInt8]?, error: Int32) {
+            let r = inner.next()
+            if r.name == nil, r.error == 0 { owner.fireOnce() }
+            return r
+        }
+    }
+}
+
+/// write(2) returns 0 the first time only, then writes for real (a mutant that loops on 0 then finishes, never hangs).
+final class KitZeroWriteOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var used = false
+    func take() -> Bool { lock.withLock { defer { used = true }; return !used } }
+}
+
+/// A thread that lstat()s `path` in a loop until stopped; counts every failed lstat.
+final class KitLiveWatcher: @unchecked Sendable {
+    let path: String
+    private let lock = NSLock()
+    private var stopFlag = false
+    private var looks = 0
+    private var misses = 0
+    private let done = DispatchSemaphore(value: 0)
+
+    init(path: String) { self.path = path }
+
+    func start() { Thread { self.loop() }.start() }
+
+    private func loop() {
+        var st = stat()
+        while !lock.withLock({ stopFlag }) {
+            let r = lstat(path, &st)
+            lock.withLock { looks += 1; if r != 0 { misses += 1 } }
+        }
+        done.signal()
+    }
+
+    func stop() -> (looks: Int, misses: Int, stopped: Bool) {
+        lock.withLock { stopFlag = true }
+        let stopped = done.wait(timeout: .now() + 10) == .success
+        return lock.withLock { (looks, misses, stopped) }
+    }
 }
 
 /// A validator reader that records every path it is given.
@@ -325,8 +766,37 @@ final class KitStoreMemorySourceFS: KitFS, @unchecked Sendable {
 
     func kind(_ path: String) -> KitFileKind {
         guard let rel = inside(path) else { return base.kind(path) }
+        return kind(rel: rel)
+    }
+
+    fileprivate func kind(rel: String) -> KitFileKind {
         lock.withLock { _kinds += 1 }
         return rel.isEmpty ? .directory : entries[rel] ?? .missing
+    }
+
+    func openDir(_ path: String) throws -> any KitDir {
+        guard let rel = inside(path) else { return try base.openDir(path) }
+        guard rel.isEmpty || entries[rel] == .directory else { throw KitStoreError.notADirectory(path) }
+        return Dir(self, rel)
+    }
+
+    /// The memory source as a held dir: children by name relative to it, as the POSIX dir does.
+    final class Dir: KitDir {
+        let fs: KitStoreMemorySourceFS
+        let rel: String
+        init(_ fs: KitStoreMemorySourceFS, _ rel: String) { self.fs = fs; self.rel = rel }
+        var path: String { rel.isEmpty ? fs.root : fs.root + "/" + rel }
+        private func child(_ n: String) -> String { rel.isEmpty ? n : rel + "/" + n }
+        func names() -> [String]? { fs.names(path) }
+        func kind(_ name: String) -> KitFileKind { fs.kind(rel: child(name)) }
+        func modified(_ name: String) -> Date? { nil }
+        func dir(_ name: String) throws -> any KitDir {
+            guard fs.entries[child(name)] == .directory else { throw KitStoreError.notADirectory(child(name)) }
+            return Dir(fs, child(name))
+        }
+        func read(_ name: String, limit: Int) -> Data? { fs.read(path + "/" + name, limit: limit) }
+        func remove(_ name: String, dir: Bool) throws { throw KitStoreError.io("remove", EPERM) }
+        func rename(_ name: String, to other: any KitDir, _ newName: String, swap: Bool) throws { throw KitStoreError.io("rename", EPERM) }
     }
 
     func names(_ dir: String) -> [String]? {
@@ -345,15 +815,14 @@ final class KitStoreMemorySourceFS: KitFS, @unchecked Sendable {
     func ensureDir(_ path: String, narrow: Bool) throws { note(path); try base.ensureDir(path, narrow: narrow) }
     func create(_ path: String, _ data: Data, mode: mode_t) throws { note(path); try base.create(path, data, mode: mode) }
     func rename(_ from: String, _ to: String) throws { note(from); note(to); try base.rename(from, to) }
-    func remove(_ path: String, dir: Bool) throws { note(path); try base.remove(path, dir: dir) }
 }
 
 /// The directory-stream seam's fake: in `failIn`, readdir gives one real name, then NULL with EIO.
 struct KitFailingDirStream: KitDirStream {
     let failIn: String
 
-    func open(_ dir: String) -> (any KitDirHandle)? {
-        guard let h = KitPOSIXDirStream().open(dir) else { return nil }
+    func open(_ dir: String, fd: Int32) -> (any KitDirHandle)? {
+        guard let h = KitPOSIXDirStream().open(dir, fd: fd) else { return nil }
         return dir == failIn ? FailAfterOne(h) : h
     }
 
@@ -369,6 +838,43 @@ struct KitFailingDirStream: KitDirStream {
                 guard let n = r.name else { return r }
                 if n != Array(".".utf8), n != Array("..".utf8) { return (n, 0) }
             }
+        }
+    }
+}
+
+/// The POSIX store disk, except that the Nth dir-relative rename (counted from 1) throws EIO and renames nothing: the
+/// state a crash between two steps of the swap leaves behind. Every path it touches is the row's own.
+final class KitFailNthRename: KitFS, @unchecked Sendable {
+    let n: Int
+    private let base = KitPOSIXFS()
+    private let lock = NSLock()
+    private var renames = 0
+    init(_ n: Int) { self.n = n }
+
+    var writer: any ManagedConfigFileWriter { base.writer }
+    func openDir(_ path: String) throws -> any KitDir { Dir(self, try base.openDir(path)) }
+    func kind(_ path: String) -> KitFileKind { base.kind(path) }
+    func names(_ dir: String) -> [String]? { base.names(dir) }
+    func read(_ path: String, limit: Int) -> Data? { base.read(path, limit: limit) }
+    func ensureDir(_ path: String, narrow: Bool) throws { try base.ensureDir(path, narrow: narrow) }
+    func create(_ path: String, _ data: Data, mode: mode_t) throws { try base.create(path, data, mode: mode) }
+    func rename(_ from: String, _ to: String) throws { try base.rename(from, to) }
+    fileprivate func failsNow() -> Bool { lock.withLock { renames += 1; return renames == n } }
+
+    final class Dir: KitDir {
+        let fs: KitFailNthRename
+        let inner: any KitDir
+        init(_ fs: KitFailNthRename, _ inner: any KitDir) { self.fs = fs; self.inner = inner }
+        var path: String { inner.path }
+        func names() -> [String]? { inner.names() }
+        func kind(_ name: String) -> KitFileKind { inner.kind(name) }
+        func modified(_ name: String) -> Date? { inner.modified(name) }
+        func dir(_ name: String) throws -> any KitDir { Dir(fs, try inner.dir(name)) }
+        func read(_ name: String, limit: Int) -> Data? { inner.read(name, limit: limit) }
+        func remove(_ name: String, dir: Bool) throws { try inner.remove(name, dir: dir) }
+        func rename(_ name: String, to other: any KitDir, _ newName: String, swap: Bool) throws {
+            if fs.failsNow() { throw KitStoreError.io("rename", EIO) }
+            try inner.rename(name, to: (other as? Dir)?.inner ?? other, newName, swap: swap)
         }
     }
 }

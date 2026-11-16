@@ -39,19 +39,9 @@ struct KitPOSIXFileReader: KitFileReader {
     func contents(_ path: String) -> Data? { FileManager.default.contents(atPath: path) }
 
     /// readdir, not FileManager: contentsOfDirectory hides "._*" names, which can hold a binary.
-    func names(_ dir: String) -> [String]? {
-        guard let d = opendir(dir) else { return nil }
-        defer { closedir(d) }
-        var out: [String] = []
-        // a NULL with errno set is a read error, not the end of the list: the walk then refuses the folder
-        while true {
-            errno = 0
-            guard let e = readdir(d) else { if errno != 0 { return nil }; break }
-            let name = withUnsafeBytes(of: e.pointee.d_name) { raw in Self.name(raw.prefix { $0 != 0 }) }
-            if name != ".", name != ".." { out.append(name) }
-        }
-        return out.sorted()
-    }
+    /// The directory-stream seam (R917-s2a-q2): the store's errno-aware loop, so a row can make readdir fail part-way.
+    var stream: any KitDirStream = KitPOSIXDirStream()
+    func names(_ dir: String) -> [String]? { KitStore.listNames(dir, stream) }
 
     /// Strict UTF-8: a lossy decode would name a different file than the one on disk.
     static func name<S: Sequence>(_ bytes: S) -> String where S.Element == UInt8 {
