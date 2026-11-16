@@ -155,6 +155,7 @@ extension AgentWindowD1Tests {
     /// only to the slots reported in that pass.
     @MainActor
     func testSidebarHiddenBandSlotsKeepTheirSizesAtEveryScale() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withSidebarRow(gate: true) {
             let restoreModes = transcriptMode(["api"])
             defer { restoreModes(); AgentWindowBand.probe = nil }
@@ -194,43 +195,43 @@ extension AgentWindowD1Tests {
                         for (k, rs) in seen {
                             for r in rs {
                                 if k == "band", let b = last["band"] {
-                                    XCTAssertEqual(r.width, b.width, accuracy: 0.5, "band: no other width between (\(step) \(tag))")
-                                    XCTAssertEqual(r.height, b.height, accuracy: 0.5, "band: its height (\(step) \(tag))")
+                                    XCTAssertEqual(r.width, b.width, accuracy: pixel, "band: no other width between (\(step) \(tag))")
+                                    XCTAssertEqual(r.height, b.height, accuracy: pixel, "band: its height (\(step) \(tag))")
                                 }
                                 if let w = fixed[k] {
-                                    XCTAssertEqual(r.width, w, accuracy: 0.5, "\(k): a fixed width (\(step) \(tag))")
-                                    if let s = shown[k] { XCTAssertEqual(r.height, s.height, accuracy: 0.5, "\(k): its height (\(step) \(tag))") }
+                                    XCTAssertEqual(r.width, w, accuracy: pixel, "\(k): a fixed width (\(step) \(tag))")
+                                    if let s = shown[k] { XCTAssertEqual(r.height, s.height, accuracy: pixel, "\(k): its height (\(step) \(tag))") }
                                 }
                                 if label == "wide", k != "band", let s = shown[k] {
-                                    XCTAssertEqual(r.width, s.width, accuracy: 0.5, "\(k): the same width (\(step) \(tag))")
-                                    XCTAssertEqual(r.height, s.height, accuracy: 0.5, "\(k): the same height (\(step) \(tag))")
+                                    XCTAssertEqual(r.width, s.width, accuracy: pixel, "\(k): the same width (\(step) \(tag))")
+                                    XCTAssertEqual(r.height, s.height, accuracy: pixel, "\(k): the same height (\(step) \(tag))")
                                 }
                             }
                         }
                     }
                     let column = size.width - sz(290) - 1
-                    XCTAssertEqual(m.paneArea.width, column, accuracy: 0.5, "shown: the column (\(tag))")
+                    XCTAssertEqual(m.paneArea.width, column, accuracy: pixel, "shown: the column (\(tag))")
                     let changes = m.paneAreaChanges
                     m.toggleSidebar()
                     let (hiddenSeen, hidden) = pass()
                     onePass(hiddenSeen, hidden, "hide")
                     XCTAssertEqual(m.paneAreaChanges, changes + 1, "one change, no size in between (\(tag))")
-                    XCTAssertEqual(m.paneArea.width, size.width, accuracy: 0.5, "hidden: the whole width (\(tag))")
-                    XCTAssertEqual(m.paneArea.height, size.height - AgentWindowBand.height, accuracy: 0.5, "(\(tag))")
+                    XCTAssertEqual(m.paneArea.width, size.width, accuracy: pixel, "hidden: the whole width (\(tag))")
+                    XCTAssertEqual(m.paneArea.height, size.height - AgentWindowBand.height, accuracy: pixel, "(\(tag))")
                     m.toggleSidebar()
                     let (againSeen, again) = pass()
                     onePass(againSeen, again, "show")
                     XCTAssertEqual(m.paneAreaChanges, changes + 2, "one change again (\(tag))")
-                    XCTAssertEqual(m.paneArea.width, column, accuracy: 0.5, "shown again (\(tag))")
+                    XCTAssertEqual(m.paneArea.width, column, accuracy: pixel, "shown again (\(tag))")
                     let sb = try XCTUnwrap(shown["band"], tag), hb = try XCTUnwrap(hidden["band"], tag)
-                    XCTAssertEqual(hb.width - sb.width, sz(290) + 1, accuracy: 0.5, "the band widens by the sidebar (\(tag))")
-                    XCTAssertEqual(hb.height, sb.height, accuracy: 0.5, "(\(tag))")
+                    XCTAssertEqual(hb.width - sb.width, sz(290) + 1, accuracy: pixel, "the band widens by the sidebar (\(tag))")
+                    XCTAssertEqual(hb.height, sb.height, accuracy: pixel, "(\(tag))")
                     for s in [shown, hidden, again] {
                         let g = try XCTUnwrap(s["sidebar"], "the glyph's slot is always laid out (\(tag))")
-                        XCTAssertEqual(g.width, AgentWindowBand.sidebarWidth, accuracy: 0.5, "(\(tag))")
-                        XCTAssertEqual(g.height, AgentWindowBand.sidebarWidth, accuracy: 0.5, "(\(tag))")
-                        XCTAssertEqual(try XCTUnwrap(s["all"], tag).width, AgentWindowBand.allWidth, accuracy: 0.5, "(\(tag))")
-                        if let l = s["layout"] { XCTAssertEqual(l.width, AgentWindowBand.layoutWidth, accuracy: 0.5, "(\(tag))") }
+                        XCTAssertEqual(g.width, AgentWindowBand.sidebarWidth, accuracy: pixel, "(\(tag))")
+                        XCTAssertEqual(g.height, AgentWindowBand.sidebarWidth, accuracy: pixel, "(\(tag))")
+                        XCTAssertEqual(try XCTUnwrap(s["all"], tag).width, AgentWindowBand.allWidth, accuracy: pixel, "(\(tag))")
+                        if let l = s["layout"] { XCTAssertEqual(l.width, AgentWindowBand.layoutWidth, accuracy: pixel, "(\(tag))") }
                     }
                     // A wider tier's slot (the layout control at the minimum) keeps its last frame here: a subset, not equal.
                     XCTAssertTrue(Set(shown.keys).isSubset(of: Set(again.keys)), "shown again: every slot (\(tag))")
@@ -239,8 +240,8 @@ extension AgentWindowD1Tests {
                         XCTAssertEqual(Set(hidden.keys), Set(shown.keys), "the same slots (\(tag))")
                         for k in shown.keys where k != "band" {
                             let a = try XCTUnwrap(shown[k]), b = try XCTUnwrap(hidden[k])
-                            XCTAssertEqual(a.width, b.width, accuracy: 0.5, "\(k): the same width (\(tag))")
-                            XCTAssertEqual(a.height, b.height, accuracy: 0.5, "\(k): the same height (\(tag))")
+                            XCTAssertEqual(a.width, b.width, accuracy: pixel, "\(k): the same width (\(tag))")
+                            XCTAssertEqual(a.height, b.height, accuracy: pixel, "\(k): the same height (\(tag))")
                         }
                     }
                     XCTAssertFalse(win.isVisible, "never shown")
@@ -262,6 +263,7 @@ extension AgentWindowD1Tests {
     /// its title sits on the session title's line; with the gate off it is where it was.
     @MainActor
     func testSidebarHiddenSidebarTopInsetEqualsTheBand() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withSidebarRow(gate: false) {
             for scale: CGFloat in [0.7, 1.0] {
                 ThemeRuntime.scale = scale
@@ -274,8 +276,8 @@ extension AgentWindowD1Tests {
                 AgentPaneLayout.splitsEnabled = true
                 let on = try sidebarTitleFrame(m, size)
                 // Screen coordinates, bottom-left origin: lower on screen is a smaller y.
-                XCTAssertEqual(off.minY - on.minY, AgentWindowBand.height, accuracy: 0.5, "the band's height (\(scale))")
-                XCTAssertEqual(off.height, on.height, accuracy: 0.5, "the row itself unchanged (\(scale))")
+                XCTAssertEqual(off.minY - on.minY, AgentWindowBand.height, accuracy: pixel, "the band's height (\(scale))")
+                XCTAssertEqual(off.height, on.height, accuracy: pixel, "the row itself unchanged (\(scale))")
             }
         }
     }

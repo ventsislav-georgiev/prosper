@@ -83,6 +83,7 @@ final class AgentSidebarModeTests: XCTestCase {
     /// Full keeps TIP's sz(290), Mini is a narrow rail, Slide takes no width while slid out; at 0.7, 0.85 and 1.0, in the
     /// model's frames and in the drawn window (the title row's drag view is the column; the header's starts after it).
     func testTheSidebarWidthPerModeAtEveryScale() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withModeRow {
             for scale in Self.scales {
                 ThemeRuntime.scale = scale
@@ -98,10 +99,10 @@ final class AgentSidebarModeTests: XCTestCase {
                         let drags = dragFrames(win)
                         XCTAssertGreaterThanOrEqual(drags.count, 1, "\(mode) at \(scale)")
                         if mode == .slide {
-                            XCTAssertEqual(drags.first?.minX ?? -1, 0, accuracy: 0.5, "Slide: the panes reach the left edge at \(scale)")
+                            XCTAssertEqual(drags.first?.minX ?? -1, 0, accuracy: pixel, "Slide: the panes reach the left edge at \(scale)")
                             XCTAssertFalse(drags.contains { abs($0.width - sz(290)) < 1 }, "no sidebar drawn at \(scale)")
                         } else {
-                            XCTAssertEqual(drags.first?.minX ?? -1, 0, accuracy: 0.5, "\(mode) at \(scale)")
+                            XCTAssertEqual(drags.first?.minX ?? -1, 0, accuracy: pixel, "\(mode) at \(scale)")
                             XCTAssertEqual(drags.first?.width ?? 0, want, accuracy: 1, "the title row spans the column, \(mode) at \(scale)")
                         }
                     }
@@ -186,13 +187,14 @@ final class AgentSidebarModeTests: XCTestCase {
     /// The edge tracker sits at the window's left edge, a few points wide, over the whole height; its enter reveals the
     /// sidebar as an overlay (the panes keep x = 0 and their width), the overlay's exit hides it again.
     func testSlideEdgeRevealsAnOverlayAndLeavingHidesIt() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withModeRow {
             for scale in Self.scales {
                 ThemeRuntime.scale = scale
                 try built(.slide) { win, m in
                     let edge = try XCTUnwrap(trackers(win, edge: true).first, "the edge tracker at \(scale)")
                     let r = edge.convert(edge.bounds, to: nil), content = try XCTUnwrap(win.contentView).bounds
-                    XCTAssertEqual(r.minX, 0, accuracy: 0.5, "at the left edge at \(scale)")
+                    XCTAssertEqual(r.minX, 0, accuracy: pixel, "at the left edge at \(scale)")
                     XCTAssertTrue(r.width > 0 && r.width <= 8, "a few points wide at \(scale): \(r)")
                     XCTAssertEqual(r.height, content.height, accuracy: 1, "the whole height at \(scale)")
                     edge.updateTrackingAreas()
