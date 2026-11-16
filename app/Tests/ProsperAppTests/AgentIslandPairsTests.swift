@@ -226,4 +226,57 @@ final class AgentIslandPairsTests: XCTestCase {
         XCTAssertEqual(Preferences.agentIslandSidekickSuffix, "a/b", "an unusable value reads as is, never rewritten")
         XCTAssertFalse(SyncedKeys.isSynced(k), "per Mac")
     }
+
+    // #908 rider p5 and the Step A INFO: a bound (stopped) result never reads "had already ended", and
+    // neither does a revive's line; only dch --stop's no_session does.
+    func testOnlyAFinishedStopReadsAlreadyEnded() {
+        let gone = [line("api-qa", "failed", reason: "no_session", detail: "no such session")]
+        let ok = AgentPairOutcome.result(DchActionResult(status: 0, json: [line("api", "ok")]))
+        XCTAssertEqual(AgentIsland.pairLine(.stop, [("api", ok), ("api-qa", .result(DchActionResult(status: 1, json: gone, stopped: true)))]),
+                       "Stop both: api stopped, api-qa: Stop cancelled: no answer in 15m", "p5: a stopped job is no ended session")
+        XCTAssertFalse(AgentIsland.pairLine(.resume, [("api", ok), ("api-qa", .result(DchActionResult(status: 1, json: gone)))])
+            .contains("had already ended"), "a revive never reads as ended")
+    }
+
+    // #908 riders p6 and QA 791 (3): a link across two dirs pairs nothing, even with both names in each dir;
+    // QA 791 (1): a self link pairs nothing. groups() alike.
+    func testLinksNeverCrossDirsAndNeverPairANameWithItself() {
+        let keys = [key("api"), key("api-rev"), key("api", "/e"), key("api-rev", "/e")]
+        let across = [(main: key("api"), sidekick: key("api-rev", "/e"))]
+        XCTAssertTrue(AgentIsland.pairs(keys, suffix: "", links: across).isEmpty, "p6")
+        XCTAssertTrue(AgentIsland.groups(keys, suffix: "", links: across).isEmpty)
+        XCTAssertEqual(pair(AgentIsland.pairs(keys, suffix: "", links: [(main: key("api"), sidekick: key("api-rev"))]), "api-rev"),
+                       AgentPair(dir: "/d", main: "api", sidekick: "api-rev"), "the same link in one dir pairs")
+        let me = [(main: key("api"), sidekick: key("API"))]
+        XCTAssertTrue(AgentIsland.pairs([key("api")], suffix: "", links: me).isEmpty, "QA 791 (1): a self link, any case")
+        XCTAssertTrue(AgentIsland.groups([key("api")], suffix: "", links: me).isEmpty)
+    }
+
+    // #908 QA 791 (2): a join given one name twice still ends, once.
+    @MainActor
+    func testJoinWithOneNameTwiceStillEnds() {
+        var lines: [String] = []
+        let j = AgentPairJoin(.stop, main: "api", sidekick: "api") { lines.append($0) }
+        j.fill("api", .notListed)
+        j.fill("api", .refused)
+        XCTAssertEqual(lines, ["Stop both: api is not listed any more"])
+    }
+
+    // #908: a group of more than two reads "all N"; a group of two keeps "both".
+    @MainActor
+    func testGroupTextsCountTheMembers() {
+        typealias A = AgentIsland
+        XCTAssertEqual(A.groupLabel(.stop, others: ["feat-2", "feat-qa"]), "Stop all 3 (with feat-2, feat-qa)")
+        XCTAssertEqual(A.groupLabel(.resume, others: ["feat-2", "feat-qa"]), "Resume all 3 (with feat-2, feat-qa)")
+        XCTAssertEqual(A.groupLabel(.stop, others: ["api-qa"]), A.stopBothLabel(partner: "api-qa"))
+        XCTAssertEqual(A.pairNotRun(.stop, "feat-2 is busy", count: 3), "Stop all 3 not run: feat-2 is busy")
+        XCTAssertEqual(A.pairFirstText(["feat-1", "feat-2", "feat-qa"]), "Resume all 3: feat-1 first, then feat-2, feat-qa\u{2026}")
+        var lines: [String] = []
+        let j = AgentPairJoin(.stop, names: ["feat-1", "feat-2", "feat-qa"]) { lines.append($0) }
+        j.fill("feat-qa", .notListed)
+        j.fill("feat-1", .result(DchActionResult(status: 0, json: [line("feat-1", "ok")])))
+        XCTAssertTrue(lines.isEmpty, "two of three")
+        j.fill("feat-2", .result(DchActionResult(status: 0, json: [line("feat-2", "ok")])))
+        XCTAssertEqual(lines, ["Stop all 3: feat-1 stopped, feat-2 stopped, feat-qa is not listed any more"])
+    }
 }

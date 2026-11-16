@@ -174,17 +174,29 @@ extension AgentIsland {
         return members.sorted { key($0) < key($1) }.map(\.0)
     }
 
-    static func stopBothLabel(partner: String) -> String { "Stop both (with \(partner))" }
-    static func resumeBothLabel(partner: String) -> String { "Resume both (with \(partner))" }
+    static func stopBothLabel(partner: String) -> String { groupLabel(.stop, others: [partner]) }
+    static func resumeBothLabel(partner: String) -> String { groupLabel(.resume, others: [partner]) }
 
-    /// "Stop both" / "Resume both".
-    static func pairTitle(_ verb: Verb) -> String { (verb == .stop ? "Stop" : "Resume") + " both" }
+    /// #908: "Stop both (with api-qa)", "Resume all 3 (with feat-2, feat-qa)": the other members, group order.
+    static func groupLabel(_ verb: Verb, others: [String]) -> String {
+        "\(pairTitle(verb, count: others.count + 1)) (with \(others.joined(separator: ", ")))"
+    }
+
+    /// "Stop both" / "Resume both"; #908: a group of more than two, "Stop all 3" / "Resume all 3".
+    static func pairTitle(_ verb: Verb, count: Int = 2) -> String {
+        (verb == .stop ? "Stop" : "Resume") + (count > 2 ? " all \(count)" : " both")
+    }
 
     /// The dir line when nothing ran: "Stop both not run: api-qa is busy".
-    static func pairNotRun(_ verb: Verb, _ why: String) -> String { "\(pairTitle(verb)) not run: \(why)" }
+    static func pairNotRun(_ verb: Verb, _ why: String, count: Int = 2) -> String { "\(pairTitle(verb, count: count)) not run: \(why)" }
 
     /// The dir line while the main's revive runs.
-    static func pairFirstText(main: String, sidekick: String) -> String { "Resume both: \(main) first, then \(sidekick)…" }
+    static func pairFirstText(main: String, sidekick: String) -> String { pairFirstText([main, sidekick]) }
+
+    /// #908: "Resume all 3: feat-1 first, then feat-2, feat-qa...", the members in the order they start.
+    static func pairFirstText(_ names: [String]) -> String {
+        "\(pairTitle(.resume, count: names.count)): \(names.first ?? "") first, then \(names.dropFirst().joined(separator: ", "))\u{2026}"
+    }
 
     /// The pair's one dir line, main first: "Stop both: api stopped, api-qa had already ended",
     /// "Resume both: api: <why>; api-qa not started".
@@ -195,14 +207,15 @@ extension AgentIsland {
             if i > 0 { line += members[i].outcome == .notStarted ? "; " : ", " }
             line += p
         }
-        return "\(pairTitle(verb)): \(line)"
+        return "\(pairTitle(verb, count: members.count)): \(line)"
     }
 
     /// One member's words in `pairLine`.
     static func pairPart(_ verb: Verb, _ name: String, _ o: AgentPairOutcome) -> String {
         switch o {
         case .result(let r):
-            if !r.stopped, r.json.last(where: { $0.name == name && $0.isFinal })?.reason == "no_session" {
+            // Step A INFO: dch --stop's no_session; a revive never reads as ended.
+            if verb == .stop, !r.stopped, r.json.last(where: { $0.name == name && $0.isFinal })?.reason == "no_session" {
                 return "\(name) had already ended"
             }
             let t = rowText(r, name: name, verb)
@@ -232,9 +245,15 @@ final class AgentPairJoin {
     private var outcomes: [String: AgentPairOutcome] = [:]
     private let done: @MainActor (String) -> Void
 
-    init(_ verb: AgentIsland.Verb, main: String, sidekick: String, done: @escaping @MainActor (String) -> Void) {
+    convenience init(_ verb: AgentIsland.Verb, main: String, sidekick: String, done: @escaping @MainActor (String) -> Void) {
+        self.init(verb, names: [main, sidekick], done: done)
+    }
+
+    /// #908: any count, in line order. QA 791 (2): a name given twice is one member, so the join still ends.
+    init(_ verb: AgentIsland.Verb, names: [String], done: @escaping @MainActor (String) -> Void) {
         self.verb = verb
-        names = [main, sidekick]
+        var seen = Set<String>()
+        self.names = names.filter { seen.insert($0).inserted }
         self.done = done
     }
 
@@ -248,6 +267,41 @@ final class AgentPairJoin {
 }
 
 extension AgentIslandStore {
+    /// #908: every group of the live sessions and the History records under `pairSuffix`, once per draw or click.
+    var groups: [AgentGroup] {
+        AgentIsland.groups(sessions.map(\.key) + history.map(\.key), suffix: pairSuffix)
+    }
+
+    /// #908: `s`'s group's live sessions in group order, `s` itself in its place; nil when `s` is in no group.
+    /// A folded member maps back to its live session by a folded compare in `s`'s dir (the first one: the fold limit).
+    func liveGroup(_ s: AgentSession, _ groups: [AgentGroup]) -> [AgentSession]? {
+        let me = s.name.lowercased()
+        guard let g = groups.first(where: { $0.dir == s.key.dir && ($0.mains + $0.sidekicks).contains(me) }) else { return nil }
+        return (g.mains + g.sidekicks).compactMap { n in
+            n == me ? s : sessions.first { $0.key.dir == g.dir && $0.name.lowercased() == n }
+        }
+    }
+
+    /// #908: `r`'s group for Resume both: each member not live by its newest record, mains then sidekicks in
+    /// group order, and the names of the members live in `r`'s dir; nil when `r` is in no group.
+    func historyGroup(_ r: DchHistoryRecord, _ groups: [AgentGroup])
+        -> (mains: [DchHistoryRecord], sidekicks: [DchHistoryRecord], live: [String])? {
+        let me = r.name.lowercased()
+        guard let g = groups.first(where: { $0.dir == r.key.dir && ($0.mains + $0.sidekicks).contains(me) }) else { return nil }
+        var live: [String] = []
+        func records(_ names: [String]) -> [DchHistoryRecord] {
+            names.compactMap { n in
+                if let s = sessions.first(where: { $0.key.dir == g.dir && $0.name.lowercased() == n }) {
+                    live.append(s.name)
+                    return nil
+                }
+                return n == me ? r : history.first { $0.key.dir == g.dir && $0.name.lowercased() == n }
+            }
+        }
+        let mains = records(g.mains), sidekicks = records(g.sidekicks)
+        return (mains, sidekicks, live)
+    }
+
     /// Live sessions and every History record, paired once per draw (never per row).
     func pairs(suffix: String) -> [AgentSessionKey: AgentPair] {
         AgentIsland.pairs(sessions.map(\.key) + history.map(\.key), suffix: suffix)

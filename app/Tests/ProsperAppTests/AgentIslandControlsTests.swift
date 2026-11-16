@@ -6522,3 +6522,287 @@ extension AgentIslandControlsTests {
         settle(c) { !c.runner.isBusy(a.key) }
     }
 }
+
+// MARK: - #908 (#847 P1e Step B): Stop both / Stop all N, Resume both / Resume all N in the island
+
+extension AgentIslandControlsTests {
+    private static func pairJSON(_ name: String, _ result: String = "ok", reason: String = "", detail: String = "") -> String {
+        #"{"name":"\#(name)","as":"\#(name)","result":"\#(result)","reason":"\#(reason)","detail":"\#(detail)","session_id":""}"# + "\n"
+    }
+
+    private static let pairDir = AgentSessionKey(dir: "/d", name: "")
+
+    /// A panel-less controller with `live` sessions (masters at 1.24.0), `records` in History and the "-qa"
+    /// suffix, once its control binary is read.
+    @MainActor
+    private func pairController(_ f: FakeProc, live: [String], records: [DchHistoryRecord] = []) -> AgentIslandController {
+        let reads = Reads()
+        reads.records = records
+        let c = controller(f, reads)
+        c.store?.sessions = live.map { session($0, version: "1.24.0") }
+        c.store?.pairSuffix = "-qa"
+        c.setExpanded(true)
+        settle(c) { c.store?.controlDch != nil && c.store?.history.count == records.count }
+        return c
+    }
+
+    @MainActor
+    private func drawnRow(_ c: AgentIslandController, _ name: String) -> AgentIslandView.Drawn? {
+        c.store.flatMap { s in AgentIslandView(store: s, onStop: { c.stop($0) }, onStopGroup: { c.stopGroup($0, with: $1) }).drawn.first { $0.session.name == name } }
+    }
+
+    @MainActor
+    private func historyItem(_ c: AgentIslandController, _ name: String) -> AgentIslandView.HistoryDrawn.MenuItem? {
+        c.store?.historyTab = true
+        return c.store.flatMap { s in
+            AgentIslandView(store: s, onResumeGroup: { c.resumeGroup($0) }).historyDrawn.first { $0.record.name == name }?
+                .menu.first { $0.title.hasPrefix("Resume both") || $0.title.hasPrefix("Resume all") }
+        }
+    }
+
+    /// T12, T16: Stop both from the sidekick's row runs one Stop per member, each row "Stopping...", and the
+    /// join writes one dir line, main first; a plain Stop on a paired row is one job and no dir line.
+    @MainActor
+    func testStopBothRunsOneStopPerMemberAndJoinsOneDirLine() throws {
+        let f = FakeProc(), c = pairController(f, live: ["api-qa", "api"])
+        let store = try XCTUnwrap(c.store), row = try XCTUnwrap(drawnRow(c, "api-qa"))
+        XCTAssertEqual(row.stopBothTitle, "Stop both (with api)")
+        XCTAssertTrue(row.stopBothEnabled)
+        row.stopBoth?()
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "api")], AgentIsland.stoppingText)
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "api-qa")], AgentIsland.stoppingText)
+        for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
+        XCTAssertEqual(f.args.count, 2)
+        XCTAssertEqual(Set(f.args), [["--stop", "api", "--json"], ["--stop", "api-qa", "--json"]])
+        f.lock.withLock { f.output = Self.pairJSON("api") + Self.pairJSON("api-qa") }
+        f.release.signal(); f.release.signal()
+        settle(c) { store.actions[Self.pairDir] != nil }
+        XCTAssertEqual(store.actions[Self.pairDir], "Stop both: api stopped, api-qa stopped")
+        // T16: Stop alone.
+        store.actions = [:]
+        try XCTUnwrap(drawnRow(c, "api")).stop()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "api")] == AgentIsland.Verb.stop.done }
+        XCTAssertEqual(f.args.count, 3)
+        XCTAssertEqual(f.args.last, ["--stop", "api", "--json"])
+        XCTAssertNil(store.actions[Self.pairDir], "a single Stop writes no dir line")
+    }
+
+    /// T13: the partner's no_session reads "had already ended"; a skip reads its words.
+    @MainActor
+    func testStopBothNamesEachMembersOutcome() throws {
+        for (qa, want) in [(Self.pairJSON("api-qa", "failed", reason: "no_session", detail: "no such session"), "api-qa had already ended"),
+                           (Self.pairJSON("api-qa", "skipped", reason: "respawn_pending", detail: "api-qa: a respawn is pending"),
+                            "api-qa: a respawn is pending")] {
+            let f = FakeProc(), c = pairController(f, live: ["api", "api-qa"])
+            let store = try XCTUnwrap(c.store)
+            try XCTUnwrap(drawnRow(c, "api")?.stopBoth)()
+            for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
+            f.lock.withLock { f.output = Self.pairJSON("api") + qa }
+            f.release.signal(); f.release.signal()
+            settle(c) { store.actions[Self.pairDir] != nil }
+            XCTAssertEqual(store.actions[Self.pairDir], "Stop both: api stopped, \(want)")
+        }
+    }
+
+    /// T14: the partner gone between the draw and the click: one job; the line names it.
+    @MainActor
+    func testStopBothWithThePartnerGoneStopsTheRowAlone() throws {
+        let f = FakeProc(), c = pairController(f, live: ["api", "api-qa"])
+        let store = try XCTUnwrap(c.store), press = try XCTUnwrap(drawnRow(c, "api")?.stopBoth)
+        store.sessions = [session("api", version: "1.24.0")]
+        press()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.lock.withLock { f.output = Self.pairJSON("api") }
+        f.release.signal()
+        settle(c) { store.actions[Self.pairDir] != nil }
+        XCTAssertEqual(f.args, [["--stop", "api", "--json"]])
+        XCTAssertEqual(store.actions[Self.pairDir], "Stop both: api stopped, api-qa is not listed any more")
+    }
+
+    /// T15 (M10): a member busy (a Restart on api-qa) runs nothing at all; nor does a member on an old master.
+    @MainActor
+    func testStopBothWithABusyOrOldMemberRunsNothing() throws {
+        let f = FakeProc(), c = pairController(f, live: ["api", "api-qa"])
+        let store = try XCTUnwrap(c.store), press = try XCTUnwrap(drawnRow(c, "api")?.stopBoth)
+        XCTAssertTrue(c.restart(session("api-qa", version: "1.24.0")))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        press()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "never half-stops")
+        XCTAssertEqual(f.args.count, 1)
+        XCTAssertEqual(store.actions[Self.pairDir], "Stop both not run: api-qa is busy")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "api-qa")) }
+        store.sessions = [session("api", version: "1.24.0"), session("api-qa", version: "1.23.0")]
+        let old = try XCTUnwrap(drawnRow(c, "api"))
+        XCTAssertFalse(old.stopBothEnabled, "the partner cannot stop")
+        c.stopGroup(old.session, with: ["api", "api-qa"])
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(store.actions[Self.pairDir], "Stop both not run: api-qa (restart this session first)")
+    }
+
+    /// Stop all 3: one Stop per live member, one line in group order.
+    @MainActor
+    func testStopAllThreeStopsEveryLiveMember() throws {
+        let f = FakeProc(), c = pairController(f, live: ["feat-qa", "feat-2", "feat-1", "other"])
+        let store = try XCTUnwrap(c.store), row = try XCTUnwrap(drawnRow(c, "feat-2"))
+        XCTAssertEqual(row.stopBothTitle, "Stop all 3 (with feat-1, feat-qa)")
+        XCTAssertTrue(drawnRow(c, "other").map { $0.stopBoth == nil } == true, "a session in no group draws no item")
+        row.stopBoth?()
+        for _ in 0..<3 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
+        XCTAssertEqual(Set(f.args.map { $0.dropFirst().first ?? "" }), ["feat-1", "feat-2", "feat-qa"])
+        f.lock.withLock { f.output = Self.pairJSON("feat-1") + Self.pairJSON("feat-2") + Self.pairJSON("feat-qa") }
+        for _ in 0..<3 { f.release.signal() }
+        settle(c) { store.actions[Self.pairDir] != nil }
+        XCTAssertEqual(store.actions[Self.pairDir], "Stop all 3: feat-1 stopped, feat-2 stopped, feat-qa stopped")
+    }
+
+    /// T17, T21 (M8): Resume both revives the main alone until its revive ends, then the sidekick, each by
+    /// reviveArgs exactly (no folder, no command, no --as); one line when the chain ends.
+    @MainActor
+    func testResumeBothRevivesTheMainThenTheSidekickAfterItEnds() throws {
+        let f = FakeProc(), c = pairController(f, live: ["other"], records: [record("api-qa"), record("api", ended: 90)])
+        let store = try XCTUnwrap(c.store), item = try XCTUnwrap(historyItem(c, "api-qa"))
+        XCTAssertEqual(item.title, "Resume both (with api)")
+        item.action()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(store.actions[Self.pairDir], "Resume both: api first, then api-qa\u{2026}")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "the sidekick waits for the main's end")
+        XCTAssertEqual(f.args, [["--revive", "api", "--json"]])
+        f.lock.withLock { f.output = Self.pairJSON("api") + Self.pairJSON("api-qa") }
+        f.release.signal()
+        settle(c) { f.args.count == 2 }
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--revive", "api", "--json"], ["--revive", "api-qa", "--json"]])
+        f.release.signal()
+        settle(c) { store.actions[Self.pairDir]?.hasPrefix("Resume both: api resumed") == true }
+        XCTAssertEqual(store.actions[Self.pairDir], "Resume both: api resumed, api-qa resumed")
+    }
+
+    /// T18 (M7, M11): a main that does not come back starts no sidekick, and the line names why; a main
+    /// "live" (it runs) counts as up.
+    @MainActor
+    func testResumeBothStartsNoSidekickWhenTheMainIsNotUp() throws {
+        let why = "api: NOT revived \u{2014} its directory /Users/example/x is gone"
+        for (main, second, want) in [(Self.pairJSON("api", "failed", reason: "cwd_gone", detail: why), false,
+                                      "Resume both: api: NOT revived \u{2014} its directory /Users/example/x is gone; api-qa not started"),
+                                     (Self.pairJSON("api", "failed", reason: "live", detail: "session api is live"), true, nil)]
+                as [(String, Bool, String?)] {
+            let f = FakeProc(), c = pairController(f, live: ["other"], records: [record("api"), record("api-qa")])
+            let store = try XCTUnwrap(c.store)
+            try XCTUnwrap(historyItem(c, "api")).action()
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+            f.lock.withLock { f.status = 1; f.output = main }
+            f.release.signal()
+            if second {
+                settle(c) { f.args.count == 2 }
+                XCTAssertEqual(f.args.last, ["--revive", "api-qa", "--json"], "a live main is up")
+                XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+                f.release.signal()
+                settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "api-qa")) }
+            } else {
+                settle(c) { store.actions[Self.pairDir]?.hasSuffix("not started") == true }
+                XCTAssertEqual(f.args.count, 1, "no sidekick beside a failed main")
+                XCTAssertEqual(store.actions[Self.pairDir], want)
+            }
+        }
+    }
+
+    /// T19 (M9): the sidekick live by the main's end is never revived (no --as copy).
+    @MainActor
+    func testResumeBothSkipsASidekickThatIsLiveByThen() throws {
+        let f = FakeProc(), c = pairController(f, live: ["other"], records: [record("api"), record("api-qa")])
+        let store = try XCTUnwrap(c.store)
+        try XCTUnwrap(historyItem(c, "api")).action()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        store.sessions = [session("other"), session("api-qa")]
+        f.lock.withLock { f.output = Self.pairJSON("api") }
+        f.release.signal()
+        settle(c) { store.actions[Self.pairDir]?.hasSuffix("is running") == true }
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args, [["--revive", "api", "--json"]])
+        XCTAssertFalse(f.args.joined().contains("--as"))
+        XCTAssertEqual(store.actions[Self.pairDir], "Resume both: api resumed, api-qa is running")
+    }
+
+    /// T20: Resume interrupted during the chain launches nothing; Resume both under a running Resume
+    /// interrupted launches nothing either.
+    @MainActor
+    func testResumeBothAndResumeInterruptedNeverOverlap() throws {
+        let f = FakeProc(), c = pairController(f, live: ["other"], records: [record("api"), record("api-qa")])
+        let store = try XCTUnwrap(c.store)
+        try XCTUnwrap(historyItem(c, "api")).action()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args.count, 1)
+        f.lock.withLock { f.status = 1; f.output = Self.pairJSON("api", "failed", reason: "cwd_gone", detail: "api: gone") }
+        f.release.signal()
+        settle(c) { store.actions[Self.pairDir]?.hasSuffix("not started") == true }
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args.last, AgentIsland.reviveAllArgs)
+        c.resumeGroup(record("api"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
+        XCTAssertEqual(f.args.count, 2)
+        XCTAssertEqual(store.actions[Self.pairDir], "Resume both not run: api is busy")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(Self.pairDir) }
+    }
+
+    /// Resume all 3: the mains one after another, then the sidekick, because one main came back.
+    @MainActor
+    func testResumeAllThreeRunsTheMainsInTurnThenTheSidekick() throws {
+        let f = FakeProc(), c = pairController(f, live: ["other"], records: [record("feat-qa"), record("feat-2"), record("feat-1")])
+        let store = try XCTUnwrap(c.store), item = try XCTUnwrap(historyItem(c, "feat-qa"))
+        XCTAssertEqual(item.title, "Resume all 3 (with feat-1, feat-2)")
+        item.action()
+        XCTAssertEqual(store.actions[Self.pairDir], "Resume all 3: feat-1 first, then feat-2, feat-qa\u{2026}")
+        f.lock.withLock { f.output = Self.pairJSON("feat-1", "failed", reason: "cwd_gone", detail: "feat-1: gone") + Self.pairJSON("feat-2") }
+        for n in 1...3 {
+            settle(c) { f.args.count == n }
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 0.2), .timedOut, "one at a time")
+            f.release.signal()
+        }
+        XCTAssertEqual(f.args.map { $0.dropFirst().first ?? "" }, ["feat-1", "feat-2", "feat-qa"])
+        settle(c) { store.actions[Self.pairDir]?.hasPrefix("Resume all 3: feat-1: gone") == true }
+        XCTAssertEqual(store.actions[Self.pairDir], "Resume all 3: feat-1: gone, feat-2 resumed, feat-qa resumed")
+    }
+
+    /// T22, T23 and T11's controller half: the items follow the suffix and the offer rules; "" draws today's rows.
+    @MainActor
+    func testGroupItemsFollowTheSuffixAndWhoIsLive() throws {
+        let store = AgentIslandStore(geometry: notched)
+        store.controlDch = Self.v1241
+        store.sessions = [session("api", version: "1.24.0"), session("api-qa", version: "1.24.0")]
+        store.history = [record("x"), record("x-qa"), record("api")]
+        let view = { AgentIslandView(store: store) }
+        func historyTitles(_ name: String) -> [String] {
+            store.historyTab = true   // the History tab draws the records; the Sessions tab, the live rows
+            defer { store.historyTab = false }
+            return view().historyDrawn.first { $0.record.name == name }?.menu.map(\.title) ?? []
+        }
+        XCTAssertEqual(view().drawn.count, 2)
+        XCTAssertTrue(view().drawn.allSatisfy { $0.stopBoth == nil }, "suffix \"\" (a store built outright): no item")
+        XCTAssertEqual(historyTitles("x"), ["Resume"])
+        store.pairSuffix = "-qa"
+        let titles = Dictionary(uniqueKeysWithValues: view().drawn.map { ($0.session.name, $0.stopBothTitle) })
+        XCTAssertEqual(titles, ["api": "Stop both (with api-qa)", "api-qa": "Stop both (with api)"])
+        XCTAssertEqual(historyTitles("x"), ["Resume", "Resume both (with x-qa)"])
+        XCTAssertEqual(historyTitles("api"), ["Resume"], "its partner is live")
+        store.sessions = [session("api", version: "1.24.0")]
+        XCTAssertTrue(view().drawn.first.map { $0.stopBoth == nil } == true, "the partner in History only")
+        XCTAssertEqual(historyTitles("api"), ["Resume"], "api itself is live")
+        store.sessions = [session("api", version: "1.24.0"), session("api-qa", version: "1.23.0")]
+        XCTAssertEqual(view().drawn.map(\.stopBothEnabled), [false, false], "an old master on either side")
+        let k = "agentIslandSidekickSuffix", saved = Preferences.defaults.object(forKey: k)
+        defer { Preferences.defaults.set(saved, forKey: k) }
+        let f = FakeProc(), c = controller(f, Reads())
+        Preferences.agentIslandSidekickSuffix = "-rev"
+        c.rowDetailsChanged()
+        XCTAssertEqual(c.store?.pairSuffix, "-rev", "Settings > Pairs regroups at once")
+        settle(c)
+    }
+}

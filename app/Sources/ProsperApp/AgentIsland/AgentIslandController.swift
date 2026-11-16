@@ -244,6 +244,7 @@ final class AgentIslandController {
         guard timer == nil, let geometry = currentGeometry() else { return }
         store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails,
                                  sort: Preferences.agentIslandSort, sidekickPattern: Self.sidekickPattern)
+        store?.pairSuffix = Preferences.agentIslandSidekickSuffix   // #908
         onStoreChanged?()
         let poller = makePoller(), hidden = screen.hidden
         queue.async { poller.hidden = hidden }
@@ -340,6 +341,7 @@ final class AgentIslandController {
         store.details = Preferences.agentIslandRowDetails
         store.sort = Preferences.agentIslandSort
         store.sidekickPattern = Self.sidekickPattern
+        store.pairSuffix = Preferences.agentIslandSidekickSuffix   // #908: Settings > Pairs regroups at once
         refreshCards()
         layout()
     }
@@ -406,8 +408,11 @@ final class AgentIslandController {
     /// A History row's click. A name that is live now revives under the first
     /// free `<name>-N`. A busy row refuses (the runner never queues).
     /// #669: `noMessage` is the row's Resume (no message), on its own 1.27.0 gate.
-    func resume(_ r: DchHistoryRecord, noMessage: Bool = false) {
-        guard let store, case .ok(let dch) = noMessage ? store.reviveNoMessageGate : store.resumeGate else { return }
+    /// #908: false when nothing started; `then` gets the result (lines renamed to the record's name) last in `done`.
+    @discardableResult
+    func resume(_ r: DchHistoryRecord, noMessage: Bool = false,
+                then: (@MainActor @Sendable (DchActionResult) -> Void)? = nil) -> Bool {
+        guard let store, case .ok(let dch) = noMessage ? store.reviveNoMessageGate : store.resumeGate else { return false }
         let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
         let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
         // #714: the row's own id (an aside record's is its file); dch's lines carry the name.
@@ -416,14 +421,66 @@ final class AgentIslandController {
         let exact = store.reviveFileGate.isOK, arg = r.editTarget(exact: exact)
         // #1311: the --as name's row is busy too while the job runs.
         let alias = AgentIsland.reviveAs(r, live: live, records: records).map { AgentSessionKey(dir: r.key.dir, name: $0) }
-        run(key, alias: alias, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact),
-            running: AgentIsland.resumingText,
-            history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) }) { [weak self] res in
+        return run(key, alias: alias, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact),
+                   running: AgentIsland.resumingText,
+                   history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) }) { [weak self] res in
             // #716 L-3: dch names a no_history line after the argument (an aside file; #719 `<file>.json`).
-            let text = AgentIsland.rowText(DchControlOps.renamed(res, arg, to: name), name: name, verb)
+            let named = DchControlOps.renamed(res, arg, to: name)
+            let text = AgentIsland.rowText(named, name: name, verb)
             self?.store?.historyActions[key] = AgentIsland.byHand(text, r)
             self?.refreshHistory()
+            then?(named)
         }
+    }
+
+    // MARK: - Resume both / Resume all N (#908, #847 P1e S5)
+
+    /// A History row's Resume both: its group's records, mains first, ONE AFTER ANOTHER, each after the previous
+    /// revive ENDED; the sidekicks only when at least one main is up (revivedOrLive), never with --as. Nothing
+    /// runs when, since the render, the group dissolved, a member is live, or a member's record is busy.
+    func resumeGroup(_ r: DchHistoryRecord) {
+        guard let store, store.resumeGate.isOK, AgentIsland.passable(r.name) else { return }
+        let dirKey = AgentSessionKey(dir: r.key.dir, name: "")
+        guard let g = store.historyGroup(r, store.groups) else {
+            store.actions[dirKey] = AgentIsland.pairNotRun(.resume, "\(r.name) is not paired any more")
+            return layout()
+        }
+        let queue = g.mains + g.sidekicks, count = queue.count + g.live.count
+        if let name = g.live.first {
+            store.actions[dirKey] = AgentIsland.pairNotRun(.resume, "\(name) is running", count: count)
+            return layout()
+        }
+        if let busy = queue.first(where: { runner.isBusy($0.id) }) {
+            store.actions[dirKey] = AgentIsland.pairNotRun(.resume, "\(busy.name) is busy", count: count)
+            return layout()
+        }
+        store.actions[dirKey] = AgentIsland.pairFirstText(queue.map(\.name))
+        resumeStep(queue, mains: g.mains.count, at: 0, up: false, outcomes: [])
+    }
+
+    /// One member of Resume both's chain, then the next from its `then`; the pair line when the chain ends.
+    /// `up`: a main is up so far. Each check and start run in one main-actor turn.
+    private func resumeStep(_ queue: [DchHistoryRecord], mains: Int, at i: Int, up: Bool, outcomes: [AgentPairOutcome]) {
+        guard let store else { return }
+        guard i < queue.count else {
+            let members = zip(queue.map(\.name), outcomes).map { (name: $0, outcome: $1) }
+            store.actions[AgentSessionKey(dir: queue.first?.key.dir ?? "", name: "")] = AgentIsland.pairLine(.resume, members)
+            return layout()
+        }
+        let r = queue[i], main = i < mains
+        func next(_ o: AgentPairOutcome, up: Bool) { resumeStep(queue, mains: mains, at: i + 1, up: up, outcomes: outcomes + [o]) }
+        // OQ-87: no sidekick beside a main that did not come back.
+        if !main && !up { return next(.notStarted, up: up) }
+        // Live at its turn: never revived (reviveArgs would add --as, a duplicate); a live main is up.
+        if store.sessions.contains(where: { $0.key.dir == r.key.dir && $0.name.lowercased() == r.name.lowercased() }) {
+            return next(.running, up: up || main)
+        }
+        guard let now = store.history.first(where: { $0.id == r.id }) else { return next(.noRecord, up: up) }
+        let started = resume(now, then: { [weak self] res in
+            self?.resumeStep(queue, mains: mains, at: i + 1, up: up || main && AgentIsland.revivedOrLive(res, name: now.name),
+                             outcomes: outcomes + [.result(res)])
+        })
+        if !started { next(.refused, up: up) }
     }
 
     /// The Resume interrupted button, and nothing else: `--revive --all` in each dir
@@ -660,8 +717,9 @@ final class AgentIslandController {
     /// later. A busy row (or its dir under an "all" job) refuses. The ended
     /// session shows in History after one re-read.
     /// #829: false when nothing started; with `sayBusy` (the window's call) a busy row says so.
+    /// #908: `then` gets the result last in `done` (Stop both's join).
     @discardableResult
-    func stop(_ s: AgentSession, sayBusy: Bool = false) -> Bool {
+    func stop(_ s: AgentSession, sayBusy: Bool = false, then: (@MainActor @Sendable (DchActionResult) -> Void)? = nil) -> Bool {
         guard let store, case .ok(let dch) = store.restartGate, AgentIsland.canStop(s),
               let args = AgentIsland.stopArgs([s.name]) else { return false }
         let key = s.key
@@ -674,9 +732,42 @@ final class AgentIslandController {
             [weak self] r in
             self?.setRow(key, AgentIsland.rowText(r, name: key.name, .stop))
             self?.refreshHistory()
+            then?(r)
         }
         if !started, sayBusy { refuseBusy(key, AgentIsland.stopBusyText) }
         return started
+    }
+
+    /// #908 (#847 P1e S4): a row's Stop both / Stop all N, no question (the island's Stop asks none). `names`:
+    /// the group's live members drawn, `s` included, in group order (the line's order). Re-read now: a member no
+    /// longer live in the group reads "is not listed any more"; any member busy, or on a master that cannot stop,
+    /// runs nothing. Else one Stop per member, group order
+    /// (the main first), in this one main-actor turn; the join writes one dir line when all are in.
+    @discardableResult
+    func stopGroup(_ s: AgentSession, with names: [String]) -> Bool {
+        guard let store, store.restartGate.isOK, AgentIsland.canStop(s), AgentIsland.passable(s.name) else { return false }
+        let asked = Set(([s.name] + names).map { $0.lowercased() })
+        let members = (store.liveGroup(s, store.groups) ?? [s]).filter { asked.contains($0.name.lowercased()) }
+        let live = Set(members.map { $0.name.lowercased() }), gone = names.filter { !live.contains($0.lowercased()) }
+        let order = names.map { n in members.first { $0.name.lowercased() == n.lowercased() }?.name ?? n }
+        let count = members.count + gone.count, dirKey = AgentSessionKey(dir: s.key.dir, name: "")
+        func notRun(_ why: String) -> Bool {
+            store.actions[dirKey] = AgentIsland.pairNotRun(.stop, why, count: count)
+            layout()
+            return false
+        }
+        if let busy = members.first(where: { runner.isBusy($0.key) || inFlight.contains($0.key) }) { return notRun("\(busy.name) is busy") }
+        if let old = members.first(where: { !AgentIsland.canStop($0) }) { return notRun("\(old.name) (restart this session first)") }
+        let join = AgentPairJoin(.stop, names: order + members.map(\.name).filter { !order.contains($0) }) { [weak self] line in
+            self?.store?.actions[dirKey] = line
+            self?.layout()
+        }
+        for n in gone { join.fill(n, .notListed) }
+        for m in members {
+            let name = m.name
+            if !stop(m, then: { join.fill(name, .result($0)) }) { join.fill(name, .refused) }
+        }
+        return true
     }
 
     // MARK: - Message (#584)
@@ -1301,6 +1392,8 @@ final class AgentIslandController {
             onAgentsWindow: { [weak self] in self?.setExpanded(false); AgentsWindow.shared.show() },
             onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) },
             onStop: { [weak self] in self?.stop($0) },
+            onStopGroup: { [weak self] in self?.stopGroup($0, with: $1) },
+            onResumeGroup: { [weak self] in self?.resumeGroup($0) },
             onConfirmStopAll: { [weak self] in self?.confirmStopAll($0) },
             onKill: { [weak self] in self?.askKill($0) },
             onConfirmKill: { [weak self] in self?.confirmKill($0) },
