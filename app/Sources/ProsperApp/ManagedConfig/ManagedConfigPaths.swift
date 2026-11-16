@@ -172,13 +172,21 @@ protocol ManagedConfigFileWriter: Sendable {
     func writeTemp(_ data: [UInt8], besides target: URL, mode: mode_t) throws -> URL
     /// rename(2) over `target`, then fsync the directory.
     func replace(_ target: URL, with temp: URL) throws
+    /// #1243 (N947-d): renameat(2) inside `dir`, the directory the commit holds open, then fsync it.
+    func replace(_ target: URL, with temp: URL, in dir: Int32) throws
+}
+
+extension ManagedConfigFileWriter {
+    /// A wrapper without its own pinned rename renames by path (test wrappers); ManagedConfigPOSIXWriter overrides it.
+    func replace(_ target: URL, with temp: URL, in dir: Int32) throws { try replace(target, with: temp) }
 }
 
 struct ManagedConfigPOSIXWriter: ManagedConfigFileWriter {
     struct WriteError: Error, CustomStringConvertible {
         var step: String
         var code: Int32
-        var description: String { "\(step) failed: \(String(cString: strerror(code)))" }
+        var reason: String? = nil
+        var description: String { "\(step) failed: \(reason ?? String(cString: strerror(code)))" }
     }
 
     func writeTemp(_ data: [UInt8], besides target: URL, mode: mode_t) throws -> URL {
@@ -208,5 +216,10 @@ struct ManagedConfigPOSIXWriter: ManagedConfigFileWriter {
             _ = fsync(dfd)
             _ = close(dfd)
         }
+    }
+
+    func replace(_ target: URL, with temp: URL, in dir: Int32) throws {
+        guard renameat(dir, temp.lastPathComponent, dir, target.lastPathComponent) == 0 else { throw WriteError(step: "rename", code: errno) }
+        _ = fsync(dir)
     }
 }

@@ -144,6 +144,7 @@ final class ManagedConfigCommitTests: XCTestCase {
 
     /// The new failure point: the replacement cannot take the user's new mode (its temp is gone), so
     /// nothing is replaced: the file keeps its bytes and the user's mode, no temp and no backup is left.
+    /// #1243 (N1231-a): the failed open of the temp is named as such, never as a chmod on a bad handle.
     func testAFailedModeCopyLeavesTheFileAsItWas() async throws {
         let env = makeMCEnv()
         let url = env.claudeMD, dir = env.claude
@@ -161,7 +162,7 @@ final class ManagedConfigCommitTests: XCTestCase {
         }
         let r = await env.mc.apply([MCPieces.block()], owner: env.owner)
         XCTAssertEqual(r.status, .failed)
-        XCTAssertTrue(r.message.contains("chmod"), r.message)
+        XCTAssertTrue(r.message.contains("open temp failed") && !r.message.contains("chmod"), r.message)
         XCTAssertEqual(env.bytes(url), original)
         XCTAssertEqual(env.mode(url), 0o600)
         XCTAssertEqual((ManagedConfig.entries(of: dir) ?? []).filter { $0.hasPrefix(prefix) }, [])

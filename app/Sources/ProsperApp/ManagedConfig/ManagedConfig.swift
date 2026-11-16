@@ -72,6 +72,9 @@ final class ManagedConfig: Sendable {
     let consent: any ManagedConfigConsent
     let writer: any ManagedConfigFileWriter
     let now: @Sendable () -> Date
+    /// #1243 test seam, nil in the product: runs in commit with the temp and its open handle, after the handle's
+    /// checks and before the temp's identity check and the rename, so a row can swap things there without a race.
+    let beforeRename: (@Sendable (_ temp: URL, _ handle: Int32) -> Void)?
 
     /// errata C9: re-plan at most 3 times on a concurrent write, then "file changed, retry".
     static let maxReplans = 3
@@ -83,11 +86,13 @@ final class ManagedConfig: Sendable {
     private static let writeLock = NSLock()
 
     init(roots: ManagedConfigRoots, consent: any ManagedConfigConsent,
-         writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(), now: @escaping @Sendable () -> Date = { Date() }) {
+         writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(), now: @escaping @Sendable () -> Date = { Date() },
+         beforeRename: (@Sendable (_ temp: URL, _ handle: Int32) -> Void)? = nil) {
         self.roots = roots
         self.consent = consent
         self.writer = writer
         self.now = now
+        self.beforeRename = beforeRename
     }
 
     var stateURL: URL { roots.stateDir.appendingPathComponent("state.json") }
@@ -298,6 +303,23 @@ final class ManagedConfig: Sendable {
                             return .failed("removing \(f.target) failed: \(String(cString: strerror(errno)))", committed: committed)
                         }
                     } else if let bytes = f.newBytes {
+                        // #1243 (N947-d): the resolve pins only a path string, so the directory is opened once here and the
+                        // opens and the rename below are relative to it: a parent swapped after this point is never followed.
+                        // Checked first: the target still resolves to the same path, and that path's directory is the one held.
+                        let dirURL = f.url.deletingLastPathComponent()
+                        let dir = open(dirURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC), dirErrno = errno
+                        defer { if dir >= 0 { _ = close(dir) } }
+                        guard dir >= 0 else {
+                            if let backup { _ = unlink(backup.path) }
+                            throw ManagedConfigPOSIXWriter.WriteError(step: "open directory", code: dirErrno)
+                        }
+                        var pinned = stat(), atPath = stat()
+                        guard case .success(let again) = ManagedConfigPaths.resolve(f.target, kind: f.kind, owner: plan.owner, roots: roots),
+                              again.url.path == f.url.path, fstat(dir, &pinned) == 0, stat(dirURL.path, &atPath) == 0,
+                              pinned.st_dev == atPath.st_dev, pinned.st_ino == atPath.st_ino else {
+                            if let backup { _ = unlink(backup.path) }
+                            return .changed(committed: committed)
+                        }
                         // #1025 (c): the mode as it is now; a chmod while the sheet was up changes no byte and stays
                         var st = stat()
                         let mode = stat(f.url.path, &st) == 0 ? st.st_mode & 0o7777 : f.mode
@@ -312,8 +334,9 @@ final class ManagedConfig: Sendable {
                         // the file being replaced (a chmod by path lands on it until the rename), `new` the temp.
                         // #1231: O_NOFOLLOW on the temp (Prosper's own file). #947 (R1231-1): and on the old file: f.url
                         // is already the resolved path, so a link there was swapped in after the plan.
-                        let old = open(f.url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW), oldErrno = errno
-                        let new = open(temp.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC), newErrno = errno
+                        // #1243 (N1231-a): O_NONBLOCK on the temp too, so a FIFO in its place cannot hang the open.
+                        let old = openat(dir, f.url.lastPathComponent, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW), oldErrno = errno
+                        let new = openat(dir, temp.lastPathComponent, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC), newErrno = errno
                         defer { if old >= 0 { _ = close(old) }; if new >= 0 { _ = close(new) } }
                         func held(_ fd: Int32) -> mode_t? { var s = stat(); return fd >= 0 && fstat(fd, &s) == 0 ? s.st_mode & 0o7777 : nil }
                         let before = held(old) ?? mode
@@ -322,14 +345,27 @@ final class ManagedConfig: Sendable {
                             if old < 0, oldErrno == ELOOP {
                                 throw ManagedConfigPOSIXWriter.WriteError(step: "open target", code: oldErrno)
                             }
-                            // a link where our temp was: never renamed over the user's file (fails closed, no fallback)
-                            if new < 0, newErrno == ELOOP {
+                            // #1243 (N1231-a): ANY failed open of the temp fails closed under its own name (a link where our
+                            // temp was, or the temp gone), never as the chmod below on a bad handle, never renamed in
+                            if new < 0 {
                                 throw ManagedConfigPOSIXWriter.WriteError(step: "open temp", code: newErrno)
+                            }
+                            var handle = stat()
+                            guard fstat(new, &handle) == 0, (handle.st_mode & S_IFMT) == S_IFREG else {
+                                throw ManagedConfigPOSIXWriter.WriteError(step: "open temp", code: EFTYPE, reason: "not a regular file")
                             }
                             if before != mode, fchmod(new, before) != 0 {
                                 throw ManagedConfigPOSIXWriter.WriteError(step: "chmod", code: errno)
                             }
-                            try writer.replace(f.url, with: temp)
+                            beforeRename?(temp, new)
+                            // the name about to be renamed is still the file held open: a link, hard link or FIFO swapped in
+                            // since the open fails closed and nothing is renamed
+                            var named = stat()
+                            guard fstatat(dir, temp.lastPathComponent, &named, AT_SYMLINK_NOFOLLOW) == 0,
+                                  named.st_dev == handle.st_dev, named.st_ino == handle.st_ino else {
+                                throw ManagedConfigPOSIXWriter.WriteError(step: "check temp", code: EEXIST, reason: "the temp file was replaced")
+                            }
+                            try writer.replace(f.url, with: temp, in: dir)
                         } catch {
                             _ = unlink(temp.path)
                             if let backup { _ = unlink(backup.path) }

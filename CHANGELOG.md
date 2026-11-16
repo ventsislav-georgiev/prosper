@@ -1596,6 +1596,10 @@ tag from the now-released section and put it on the new top draft.
 - Updating or reinstalling an extension now stops the old version first (its timers, menu bar items,
   key rules, file watches and keep-awake holds are released) and starts the new version's launch
   code, instead of leaving the old version running until the app restarts. (#1241)
+- Managed config: if Prosper's temporary file or the folder of the file being changed is swapped out
+  mid-write, the write now stops with a clear error ("open temp failed", "check temp failed", "open
+  directory failed") and leaves your file as it was, instead of failing with a misleading chmod
+  error or replacing the file with the swapped-in one. (#1243)
 
 ## v2.174.0
 
