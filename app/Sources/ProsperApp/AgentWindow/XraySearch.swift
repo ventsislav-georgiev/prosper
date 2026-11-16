@@ -25,6 +25,9 @@ struct XraySearch: Equatable {
     static let toolCap = 120
     static let wordCap = 16
 
+    static let tooLarge = "The search answer was too large"
+    static let cannotSearch = "This host\u{2019}s dch cannot search"
+    static let refused = "Search was refused"
     /// The query rule, said where a query fails DchCtl.searchOK (nothing runs then).
     static let badQuery = "Search needs 2 to 200 bytes and no control character"
 
@@ -99,11 +102,17 @@ extension XrayPanelModel {
 
     /// As take: exit 4 or 7 (or a remote -1) keeps the last hits and says "host unreachable"; exit 1 (the host's dch does
     /// not know --search, or no corpus) or 6 (refused) leaves no Search tab; any other answer replaces the hits, and a
-    /// failed one (exit 2, 3, a local -1, bad JSON) says so.
+    /// failed one (exit 2, 3, a local -1, bad JSON) says so. #1407: an over-cap answer (overCap) says it was too large.
     func takeSearch(_ r: (status: Int32, out: Data)) {
         if unreached(r.status) { unreachable = true; return }
         unreachable = false
-        if r.status == 1 || r.status == 6 { (searchable, search) = (false, nil); return }
+        if r.status == 1 || r.status == 6 {
+            (searchable, search) = (false, nil)
+            searchGone = r.status == 1 ? XraySearch.cannotSearch : XraySearch.refused   // R1355-i1: said where the strip lands
+            return
+        }
+        // #1407: this answer was too large; unlike exit 6 (the host never answers this form) another text may fit, so the tab stays
+        if r.status == XrayPanels.overCap { (search, searchNote) = (nil, XraySearch.tooLarge); return }
         search = r.status == 0 ? XraySearch.parse(r.out) : nil
         if search == nil { searchNote = "The search failed" }
     }

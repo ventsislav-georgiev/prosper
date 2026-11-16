@@ -115,6 +115,56 @@ final class XrayRemoteTabsTests: XCTestCase {
         }
     }
 
+    /// #1407: an over-cap Tasks answer on the open read (remote): no Tasks tab, never "host unreachable", the Memory tab
+    /// stays, and no Tasks read at +15 s or +30 s. Red at TIP: no XrayPanels.overCap (and the cap was -1: the rows
+    /// stayed and "host unreachable" showed, XrayPoller.swift:93). Pinned beside it: a remote -1 timeout keeps the
+    /// rows, says "host unreachable" and is read again (the old path).
+    func testOverCapTasksGivesNoTabAndNoFurtherRead() async throws {
+        let clock = Clock(), run = Run(), p = try panel(clock)
+        run.tasks = (XrayPanels.overCap, Data())
+        await open(p, run)
+        XCTAssertTrue(p.tasks == nil)
+        XCTAssertEqual(p.tabs, [.memory])
+        XCTAssertFalse(p.unreachable)
+        XCTAssertFalse(p.footer.contains(Self.label), "\(p.footer)")
+        for s in [15.0, 30] { await tick(p, clock, at: s) }
+        XCTAssertEqual(run.tasksReads, 1, "no Tasks read on the next ticks")
+        XCTAssertFalse(p.footer.contains(Self.label))
+
+        let c2 = Clock(), r2 = Run(), q = try panel(c2)
+        await open(q, r2)
+        r2.tasks = (-1, Data())
+        await tick(q, c2, at: 15)
+        XCTAssertEqual(q.tasks?.tasks.count, 4, "a remote timeout keeps the rows")
+        XCTAssertTrue(q.footer.contains(Self.label), "\(q.footer)")
+        await tick(q, c2, at: 30)
+        XCTAssertEqual(r2.tasksReads, 3, "and the poll goes on")
+    }
+
+    /// #1407: the same for the dch chapters read (remote pane): no Prompts or Responses tab, no "host unreachable", and
+    /// no chapters read at +15 s or +30 s. Red at TIP: no XrayPanels.overCap (the cap was -1: unreached, rows kept).
+    func testOverCapChaptersGivesNoTabAndNoFurtherRead() async throws {
+        let clock = XrayChaptersTests.Clock(), run = XrayChaptersTests.Run()
+        let p = XrayPanelModel(target: try XCTUnwrap(XrayTarget.of(Self.remoteRow)), tab: .prompts)
+        p.now = { clock.t }
+        p.paneState = { (true, true) }
+        p.mtime = { _ in Self.base }
+        p.fromDch = { true }
+        run.chapters = (XrayPanels.overCap, Data())
+        p.read(dch: "/fake/dch", run: run.run)
+        await p.reading?.value
+        XCTAssertTrue(p.dchChapters == nil)
+        XCTAssertEqual(p.tabs, [.tasks, .memory])
+        XCTAssertFalse(p.unreachable)
+        XCTAssertFalse(p.footer.contains(Self.label), "\(p.footer)")
+        for s: TimeInterval in [15, 30] {
+            clock.t = Self.base + s
+            p.tick()
+            await p.reading?.value
+        }
+        XCTAssertEqual(run.chapterReads, 1, "no chapters read on the next ticks")
+    }
+
     /// "the host's dch does not know --tasks/--memory" (exit 1): no tab, on the open read and on a poll.
     func testNoTabWhenTheHostsDchDoesNotKnowTheFlag() async throws {
         let clock = Clock(), run = Run(), p = try panel(clock)

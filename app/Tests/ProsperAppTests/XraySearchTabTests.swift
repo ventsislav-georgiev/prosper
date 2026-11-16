@@ -129,7 +129,8 @@ final class XraySearchTabTests: XCTestCase {
         XCTAssertEqual(p.search?.hits.last.map { XraySearchRow($0, now: Self.base).who }, "Reply")
     }
 
-    /// Exit 1 (the host's dch does not know --search) and 6 (refused): no Search tab, the strip moves to Tasks.
+    /// Exit 1 (the host's dch does not know --search) and 6 (refused): no Search tab, the strip moves to Tasks, and the
+    /// footer there says why (R1355-i1; red at TIP: the tab vanished with no word, no searchGone).
     func testExitOneAndSixGiveNoSearchTab() async {
         for status: Int32 in [1, 6] {
             let run = Run(), p = await opened(Self.remote, Clock(), run)
@@ -139,7 +140,43 @@ final class XraySearchTabTests: XCTestCase {
             XCTAssertEqual(p.tab, .tasks)
             XCTAssertTrue(p.search == nil)
             XCTAssertEqual(p.searchFooter, [])
+            let word = status == 1 ? "This host\u{2019}s dch cannot search" : "Search was refused"
+            XCTAssertEqual(p.searchGone, word, "exit \(status)")
+            XCTAssertEqual(p.footer.last, word)
+            XCTAssertEqual(p.goneFooter.last, word)
         }
+    }
+
+    /// R1355-i1: a panel whose only tab was Search: exit 1 leaves no tab and the empty state says why.
+    func testExitOneOnAnOnlySearchTabSaysWhyOnTheEmptyState() async {
+        let run = Run(), p = await opened(Self.remote, Clock(), run)
+        p.tasks = nil
+        p.takeMemory((2, Data()))
+        XCTAssertEqual(p.tabs, [.search])
+        run.answer("login", (1, Data()))
+        await search(p, "login")
+        XCTAssertEqual(p.tabs, [])
+        XCTAssertEqual(p.searchGone, XraySearch.cannotSearch)
+        XCTAssertEqual(p.emptyLines, ["No tasks or memory for this session", XraySearch.cannotSearch])
+    }
+
+    /// R1355-s1: a tool name with a bidi override, a newline and 150 more scalars, and a snippet with a bidi override, ESC
+    /// and a newline: the row holds no bidi or control scalar, who is at most 40 characters, the snippet at most 240, and
+    /// spoken is built from the same cleaned strings. Red under the mutants tool-name-raw and snippet-raw.
+    func testAHitsToolAndSnippetAreCleanedForTheRow() {
+        let tool = "Bash\u{202E}x\n" + String(repeating: "t", count: 150)
+        let snippet = "fix \u{202E}the\u{1B}[31m login\ntest " + String(repeating: "s", count: 400)
+        let h = XraySearch.Hit(who: "tool", tool: tool, at: nil, snippet: snippet)
+        let row = XraySearchRow(h, now: Self.base)
+        for s in [row.who, row.snippet, row.spoken] {
+            XCTAssertTrue(s.unicodeScalars.allSatisfy { $0.value >= 0x20 && !(0x7F...0x9F).contains($0.value) && $0.value != 0x202E },
+                          "no bidi or control scalar: \(s.debugDescription)")
+        }
+        XCTAssertLessThanOrEqual(row.who.count, 40)
+        XCTAssertLessThanOrEqual(row.snippet.count, 240)
+        XCTAssertTrue(row.who.hasPrefix("Bashx"), row.who)
+        XCTAssertTrue(row.snippet.hasPrefix("fix the[31m logintest"), row.snippet)
+        XCTAssertEqual(row.spoken, [row.who, row.snippet].joined(separator: ", "))
     }
 
     /// Exit 4, 7 or a remote -1 keeps the last hits and says "host unreachable"; the next answer clears the line. A
@@ -163,6 +200,25 @@ final class XraySearchTabTests: XCTestCase {
         XCTAssertTrue(lp.search == nil)
         XCTAssertEqual(lp.searchNote, "The search failed")
         XCTAssertEqual(lp.searchFooter, [])
+    }
+
+    /// #1407: an over-cap search (local or remote) says so, keeps the tab and the hits empty, never "host unreachable".
+    /// Not exit 6's drop: that says the host never answers this form; another text may fit. Red at TIP: no
+    /// XrayPanels.overCap (the cap was -1: a remote one kept the hits and said "host unreachable", XraySearch.swift:104).
+    func testAnOverCapSearchSaysSoAndKeepsTheTab() async {
+        for target in [Self.local, Self.remote] {
+            let run = Run(), p = await opened(target, Clock(), run)
+            run.answer("login", (XrayPanels.overCap, Data()))
+            await search(p, "login")
+            XCTAssertEqual(p.searchNote, "The search answer was too large", "\(target.name)")
+            XCTAssertTrue(p.search == nil, "the hits are empty")
+            XCTAssertTrue(p.tabs.contains(.search))
+            XCTAssertFalse(p.unreachable)
+            XCTAssertEqual(p.searchFooter, [])
+            await search(p, "again")
+            XCTAssertEqual(p.search?.hits.count, 3, "another text answers")
+            XCTAssertTrue(p.searchNote == nil)
+        }
     }
 
     /// A new query cancels the read in flight (the product runner SIGTERMs its dch); only the new answer lands.

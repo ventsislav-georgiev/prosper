@@ -2550,7 +2550,7 @@ enum DchCommand {
     /// #579: `cwd` is the child's working dir (--spawn has no --cwd); `onOutput`
     /// gets each stdout chunk as it comes (a restart reports per session).
     /// #1405: `outputLimit` (nil: none, every caller but X-ray's reads) stops the read at max + 1 bytes of stdout,
-    /// ends the child through its `terminate` (its own pid, not once it exited) and returns (no data, stderr, -1).
+    /// ends the child through its `terminate` (its own pid, not once it exited) and returns (no data, stderr, XrayPanels.overCap); the status of every other path is unchanged.
     static func runCapturingBoth(args: [String], env: [String: String], path: String = dchPath, merge: Bool = false,
                                  cwd: String? = nil, onPid: (pid_t) -> Void = { _ in },
                                  onOutput: (Data) -> Void = { _ in },
@@ -2607,7 +2607,7 @@ enum DchCommand {
         exited.wait()
         // A cut can end inside a UTF-8 sequence: decode what is valid (U+FFFD for the cut end), never "" for all of it.
         let text = String(data: err.kept, encoding: .utf8) ?? (err.cut ? String(decoding: err.kept, as: UTF8.self) : "")
-        return over ? (Data(), text, -1) : (data, text, p.terminationStatus)
+        return over ? (Data(), text, XrayPanels.overCap) : (data, text, p.terminationStatus)
     }
 
     /// #477: every Agent Island dch call (--ls-json, -lj, --read, --status, --send)

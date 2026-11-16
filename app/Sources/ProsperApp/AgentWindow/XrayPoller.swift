@@ -25,6 +25,7 @@ extension XrayPanelModel {
         guard now().timeIntervalSince(lastRead) >= interval else { return }
         // design 3.9: no Tasks retry until the dch path's mtime moves
         if failed, tab == .tasks, mtime(dch) == failedMtime { return }
+        if tab == .tasks, tasksRefused { return }
         if !loaded { readBoth() } else if tab == .memory { readMemory() } else if prose { readChapters(dch, run) }
         else { readTasks(dch, run) }
     }
@@ -54,6 +55,7 @@ extension XrayPanelModel {
         }
     }
 
+    /// #1407: an over-cap answer (XrayPanels.overCap) is a refusal here, as exit 6: no chapters, and no re-read.
     /// #1389, as take: exit 4 or 7 (or a remote -1) keeps the rows and says "host unreachable"; any other answer
     /// replaces them, so exit 1 (the host's dch does not know the form), 6 (refused) or bad JSON leaves no Prompts or
     /// Responses tab (nil), and with the tab gone the tick reads no more chapters.
@@ -94,12 +96,13 @@ extension XrayPanelModel {
 
     /// Design 3.5 / 3.9: exit 4 or 7, or a remote read's -1 (timed out dialling), keeps the rows and says "host
     /// unreachable" (the poll goes on); any other answer replaces the Tasks tab (nil: none, so exit 6 or "does not know"
-    /// removes it), and a non-zero exit (a local -1 too) stops the reads until the mtime moves.
+    /// removes it), an over-cap answer (#1407) is a refusal that is not read again while the panel is open, and a non-zero exit (a local -1 too) stops the reads until the mtime moves.
     func take(_ r: (status: Int32, out: Data)) {
         if unreached(r.status) { unreachable = true; return }
         unreachable = false
         tasks = Self.tasksTab(r)
         failed = r.status != 0
+        if r.status == XrayPanels.overCap { tasksRefused = true }   // #1407: no Tasks read again until the panel is reopened
         if failed { failedMtime = dch.flatMap(mtime) }
     }
 

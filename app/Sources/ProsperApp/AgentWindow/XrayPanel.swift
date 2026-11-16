@@ -105,8 +105,12 @@ final class XrayPanels: ObservableObject {
     }
 
     /// #1405: the most stdout one X-ray read keeps: the largest parser cap (XrayChapters' 16 MiB; Tasks and Memory cap
-    /// lines and rows, not bytes). Past it the read stops, dch is ended and the answer is a failure (-1), as a timeout.
+    /// lines and rows, not bytes). Past it the read stops, dch is ended and the answer is `overCap`.
     nonisolated static let maxReadBytes = XrayChapters.maxBytes
+
+    /// #1407: the status of a read that went past maxReadBytes. Int32.min: a dch exit is 0...255 and the timeout (and a
+    /// launch that failed) is -1, so no other answer shares it. The readers treat it as a refusal, never as unreachable.
+    nonisolated static let overCap = Int32.min
 
     /// `run`'s blocking body, lifted so a row can drive it with a recorder child (R1380-s2): the exit is marked on the
     /// child (#1380) and on `bounded`, so neither a cancel nor the timeout signals a reaped dch's pid (R1380-s1).
@@ -156,6 +160,8 @@ final class XrayPanelModel: ObservableObject {
     @Published var query = ""
     @Published var search: XraySearch?
     @Published var searchNote: String?
+    /// #1355 (R1355-i1): why the Search tab went (exit 1 or 6), said where the strip lands; a new panel has none.
+    @Published var searchGone: String?
     @Published private(set) var loaded = false
     @Published var tab: XrayTab
     @Published var filter = ""
@@ -172,6 +178,8 @@ final class XrayPanelModel: ObservableObject {
     var lastRead = Date.distantPast
     var failed = false
     var failedMtime: Date?
+    /// #1407: the Tasks read went past the byte limit (XrayPanels.overCap): not read again while this panel is open.
+    var tasksRefused = false
     @Published var unreachable = false
     var stopTicker: (() -> Void)?
     var stopped = false
@@ -329,12 +337,19 @@ final class XrayPanelModel: ObservableObject {
         if tasks.partial { out.append("partial") }
         if tasks.droppedCount > 0 { out.append("\(tasks.droppedCount) not shown") }
         if unreachable { out.append("host unreachable") }   // #1368, design 3.5: exit 4/7 kept the rows
+        if let g = searchGone { out.append(g) }   // R1355-i1
         return out
     }
 
     /// #1353 (R1381-i1): the Memory tab's footer: "host unreachable" when the last read did not reach the host; #1389:
     /// Prompts' and Responses' too.
     var memoryFooter: [String] { unreachable ? ["host unreachable"] : [] }
+
+    /// R1355-i1: what the empty state draws: its text, then why Search went (an older dch usually lacks Tasks too).
+    var emptyLines: [String] { ["No tasks or memory for this session"] + (searchGone.map { [$0] } ?? []) }
+
+    /// R1355-i1: the footer of the tabs the strip lands on: memoryFooter, then why Search went.
+    var goneFooter: [String] { memoryFooter + (searchGone.map { [$0] } ?? []) }
 
     /// Esc: clears the filter, then closes.
     func escape() {
@@ -662,7 +677,9 @@ struct XrayPanelView: View {
         if !panel.loaded {
             faint("Reading\u{2026}").padding(sz(10))
         } else if panel.tabs.isEmpty {
-            faint("No tasks or memory for this session").padding(sz(10))
+            VStack(alignment: .leading, spacing: sz(4)) {
+                ForEach(panel.emptyLines, id: \.self) { faint($0) }
+            }.padding(sz(10))
         } else if panel.tab == .memory {
             memoryTab
         } else if panel.tab == .search {
@@ -720,7 +737,7 @@ struct XrayPanelView: View {
                     Button(f.button, action: f.toggle).buttonStyle(.link).font(Neon.font(10, weight: .medium))
                 }
             }
-            ForEach(panel.memoryFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
+            ForEach(panel.goneFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
         }
         .padding(sz(10))
     }
@@ -769,7 +786,7 @@ struct XrayPanelView: View {
                     }
                 }
             }
-            ForEach(panel.memoryFooter, id: \.self) { faint($0) }
+            ForEach(panel.goneFooter, id: \.self) { faint($0) }
         }
         .padding(sz(10))
     }

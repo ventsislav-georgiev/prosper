@@ -246,6 +246,29 @@ final class XrayPollTests: XCTestCase {
         XCTAssertEqual(run.tasksReads, 4, "the poll goes on at 15 s")
     }
 
+    /// #1407: an over-cap Tasks answer, local or remote, is a refusal: no Tasks tab, never "host unreachable", and no
+    /// Tasks read again while the panel is open, not even when the dch path's mtime moves (the exit-1/6 rule would
+    /// retry then). Memory answers 2 (no tab) so the strip stays on Tasks and only the refusal can stop the poll.
+    /// Red at TIP: XrayPoller.swift:93 had no overCap (the cap was -1, unreached for a remote pane); no XrayPanels.overCap.
+    func testOverCapTasksIsARefusalNotReadAgainEvenWhenTheMtimeMoves() async {
+        for remote in [false, true] {
+            let clock = Clock(), run = PollRun(), p = panel(remote: remote, clock)
+            var mtime = Self.base
+            p.mtime = { _ in mtime }
+            run.memory = (2, Data())
+            run.tasks = (XrayPanels.overCap, Data())
+            await open(p, run)
+            XCTAssertTrue(p.tasks == nil, "remote \(remote): no Tasks tab")
+            XCTAssertFalse(p.unreachable)
+            XCTAssertFalse(p.footer.contains("host unreachable"), "\(p.footer)")
+            XCTAssertEqual(p.tabs, [])
+            for s in [15.0, 30, 45] { await tick(p, clock, at: s) }
+            mtime = Self.base + 3600
+            for s in [60.0, 75] { await tick(p, clock, at: s) }
+            XCTAssertEqual(run.tasksReads, 1, "remote \(remote): the open read only")
+        }
+    }
+
     func testLocalTimeoutStopsUntilTheMtimeMoves() async {
         let clock = Clock(), run = PollRun(), p = panel(clock)
         var mtime = Self.base
