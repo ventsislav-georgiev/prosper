@@ -243,7 +243,7 @@ def main(argv=None):
     ap.add_argument("target", help="host:port")
     ap.add_argument("--mutating", action="store_true", help="also run fixtures that change server state")
     ap.add_argument("--fixtures", default=os.path.dirname(os.path.abspath(__file__)))
-    ap.add_argument("--timeout", type=float, default=5)
+    ap.add_argument("--timeout", type=float, default=10)
     a = ap.parse_args(argv)
     host, _, port = a.target.rpartition(":")
     if not host or not port.isdigit():
