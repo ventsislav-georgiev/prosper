@@ -27,6 +27,9 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             let (win, host) = focusWindow(m)
             defer { win.close() }
+            var raised = 0
+            win.raise = { _ in raised += 1 }   // the recorder first: the real key-and-front call never runs
+            defer { XCTAssertEqual(raised, 0, "nothing raised the window") }
             let fake = FakeCardPresenter()
             win.cards = fake
             m.select(live("a"))
@@ -167,6 +170,9 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             let (win, host) = focusWindow(m)
             defer { win.close() }
+            var raised = 0
+            win.raise = { _ in raised += 1 }   // gate on: the recorder first, the real call never runs
+            defer { XCTAssertEqual(raised, 0, "nothing raised the window") }
             let fake = FakeCardPresenter()
             win.cards = fake
             settle(host)

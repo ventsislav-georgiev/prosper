@@ -569,8 +569,8 @@ extension AgentWindowD1Tests {
     /// installs the `raise` recorder. The set computed from the tree must EQUAL the literal list (a new file joins it on
     /// purpose), and each listed file assigns `.raise =`. Reads the package's own test sources only (#filePath).
     func testPaneFocusEveryGateOnSendEventFileSetsTheRecorder() throws {
-        let listed: Set<String> = ["AgentWindowKeyFocusTests.swift", "AgentWindowPaneFocusTests.swift",
-                                   "AgentWindowPaneRefusalTests.swift"]
+        let listed: Set<String> = ["AgentWindowChapterListTests.swift", "AgentWindowKeyFocusTests.swift",
+                                   "AgentWindowPaneFocusTests.swift", "AgentWindowPaneRefusalTests.swift"]
         let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let enumerator = FileManager.default.enumerator(at: tests, includingPropertiesForKeys: nil)
         var found: Set<String> = [], raises: [String: Bool] = [:], read = 0
