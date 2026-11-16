@@ -8,6 +8,19 @@ import XCTest
 @MainActor
 final class AutocompleteWordBoundaryTests: XCTestCase {
 
+    private var savedSpell: SpellOracle?
+
+    override func setUp() {
+        super.setUp()
+        savedSpell = SpellOracle.current
+        SpellOracle.current = .fake() // verdicts must not follow the Mac's dictionaries (#1310)
+    }
+
+    override func tearDown() {
+        if let savedSpell { SpellOracle.current = savedSpell }
+        super.tearDown()
+    }
+
     func testNewWordAfterCompleteWordGetsSpace() {
         // "brown" is a complete word, "fox..." is a new word -> insert a space.
         XCTAssertEqual(

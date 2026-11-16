@@ -20,10 +20,9 @@ import Foundation
 ///     (pure bigram next-word prediction).
 ///
 /// Deterministic given its inputs EXCEPT the typo-correction branch, which asks
-/// the live OS spell checker — so `testDeriveIncludesTypoCorrection` depends on
-/// the system dictionary recognizing a common misspelling, same as every other
-/// NSSpellChecker call in this codebase (it works fine under `swift test`, not
-/// sandboxed out). Everything else is unit-tested directly with a small
+/// the OS spell checker through `SpellOracle.current`: tests install a fixed
+/// word-list fake there, so `testDeriveIncludesTypoCorrection` does not depend
+/// on the Mac's dictionaries (#1310). Everything else is unit-tested directly with a small
 /// hand-built `Lexicon` and no `Bundle.main`.
 struct CompletionCandidates {
     /// Partial word under the cursor, lowercased. Empty when at a boundary.
@@ -86,11 +85,7 @@ struct CompletionCandidates {
             // the correction isn't merely a prefix-extension (those are covered above).
             // Source: the OS spell checker (NSSpellChecker) — no bundled index.
             if !lexicon.isKnownWord(fragment) {
-                let checker = NSSpellChecker.shared
-                let range = NSRange(location: 0, length: (fragment as NSString).length)
-                let guesses = checker.guesses(
-                    forWordRange: range, in: fragment, language: nil, inSpellDocumentWithTag: 0
-                ) ?? []
+                let guesses = SpellOracle.current.guesses(fragment) ?? []
                 ranked += guesses.prefix(3).map { $0.lowercased() }
                     .filter { !$0.hasPrefix(fragment) }
             }

@@ -10,6 +10,19 @@ import XCTest
 @MainActor
 final class CompletionCandidatesTests: XCTestCase {
 
+    private var savedSpell: SpellOracle?
+
+    override func setUp() {
+        super.setUp()
+        savedSpell = SpellOracle.current
+        SpellOracle.current = .fake() // verdicts must not follow the Mac's dictionaries (#1310)
+    }
+
+    override func tearDown() {
+        if let savedSpell { SpellOracle.current = savedSpell }
+        super.tearDown()
+    }
+
     /// A compact lexicon mirroring the "website d → download" scenario.
     private func makeLexicon() -> Lexicon {
         let freq: [String: Int] = [
@@ -133,6 +146,17 @@ final class CompletionCandidatesTests: XCTestCase {
         // the tiny hand-built lexicon, so this only passes via the OS corrector.
         let c = CompletionCandidates.derive(before: "please recieve", lexicon: makeLexicon())
         XCTAssertTrue(c.words.contains("receive"))
+    }
+
+    func testDeriveTypoCorrectionComesFromTheSpellOracle() {
+        // A made-up correction no real dictionary offers: it can only come from
+        // the installed oracle (#1310).
+        var spell = SpellOracle.fake()
+        spell.guesses = { $0 == "downlaod" ? ["downlord"] : [] }
+        SpellOracle.current = spell
+        let c = CompletionCandidates.derive(before: "the downlaod", lexicon: makeLexicon())
+        XCTAssertTrue(c.words.contains("downlord"), "\(c.words)")
+        XCTAssertFalse(c.words.contains("download"))
     }
 
     func testDeriveEmptyLexiconNoCandidates() {

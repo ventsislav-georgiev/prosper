@@ -2,6 +2,57 @@ import AppKit
 import CoreGraphics
 import os
 
+/// The spell-checker questions the autocomplete guards ask, behind one seam so
+/// tests answer them from a fixed word list instead of the Mac's installed
+/// dictionaries (#1310). `live` makes exactly the NSSpellChecker calls the
+/// guards made before the seam; production never installs anything else.
+@MainActor
+struct SpellOracle {
+    /// The installed spelling languages (`availableLanguages`).
+    var languages: @MainActor () -> [String]
+    /// 2-arg `checkSpelling(of:startingAt:)`: the checker's own language.
+    var isMisspelled: @MainActor (_ word: String) -> Bool
+    /// Sets `automaticallyIdentifiesLanguages` (the glue check's two tiers).
+    var setAutoIdentify: @MainActor (_ on: Bool) -> Void
+    /// Long-form `checkSpelling(of:startingAt:language:wrap:...)`.
+    var isMisspelledIn: @MainActor (_ word: String, _ language: String?) -> Bool
+    /// `guesses(forWordRange:in:language: nil, ...)`.
+    var guesses: @MainActor (_ word: String) -> [String]?
+    /// `completions(forPartialWordRange:in:language:...)`.
+    var completions: @MainActor (_ fragment: String, _ language: String?) -> [String]?
+
+    static let live = SpellOracle(
+        languages: { NSSpellChecker.shared.availableLanguages },
+        isMisspelled: { word in
+            NSSpellChecker.shared.checkSpelling(of: word, startingAt: 0).location != NSNotFound
+        },
+        setAutoIdentify: { NSSpellChecker.shared.automaticallyIdentifiesLanguages = $0 },
+        isMisspelledIn: { word, language in
+            NSSpellChecker.shared.checkSpelling(
+                of: word, startingAt: 0, language: language, wrap: false,
+                inSpellDocumentWithTag: 0, wordCount: nil
+            ).location != NSNotFound
+        },
+        guesses: { word in
+            let range = NSRange(location: 0, length: (word as NSString).length)
+            return NSSpellChecker.shared.guesses(
+                forWordRange: range, in: word, language: nil, inSpellDocumentWithTag: 0
+            )
+        },
+        completions: { fragment, language in
+            let range = NSRange(location: 0, length: (fragment as NSString).length)
+            return NSSpellChecker.shared.completions(
+                forPartialWordRange: range, in: fragment, language: language,
+                inSpellDocumentWithTag: 0
+            )
+        }
+    )
+
+    /// The oracle every autocomplete spell question goes through. Tests swap it
+    /// in setUp and restore the saved value in tearDown.
+    static var current = SpellOracle.live
+}
+
 /// Orchestrates inline autocomplete: a CGEventTap watches keystrokes, debounces,
 /// reads caret context via AX, requests a completion, and renders a ghost
 /// suggestion. Tab accepts one word at a time; RightArrow accepts the whole
@@ -2116,20 +2167,14 @@ final class AutocompleteEngine {
         // "the quick brois "). Non-ASCII / latinica glue keeps auto-ID — the
         // primary-language path is what silently swallowed the space in
         // Cyrillic glue ("пак"+"всяко") on an English system.
-        let checker = NSSpellChecker.shared
+        let spell = SpellOracle.current
         let gluedIsWord: Bool
         if glued.allSatisfy({ $0.isASCII }), !CoreBridge.looksLikeTransliteratedBulgarian(before) {
-            checker.automaticallyIdentifiesLanguages = false
-            gluedIsWord = Lexicon.shared.isKnownWord(glued) || checker.checkSpelling(
-                of: glued, startingAt: 0, language: nil, wrap: false,
-                inSpellDocumentWithTag: 0, wordCount: nil
-            ).location == NSNotFound
+            spell.setAutoIdentify(false)
+            gluedIsWord = Lexicon.shared.isKnownWord(glued) || !spell.isMisspelledIn(glued, nil)
         } else {
-            checker.automaticallyIdentifiesLanguages = true
-            gluedIsWord = checker.checkSpelling(
-                of: glued, startingAt: 0, language: nil, wrap: false,
-                inSpellDocumentWithTag: 0, wordCount: nil
-            ).location == NSNotFound
+            spell.setAutoIdentify(true)
+            gluedIsWord = !spell.isMisspelledIn(glued, nil)
         }
         return gluedIsWord ? suggestion : " " + suggestion
     }
@@ -2167,11 +2212,8 @@ final class AutocompleteEngine {
         // dictionary, like the sister-language gates.
         if trailing.count >= 4,
            trailing.unicodeScalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) }),
-           NSSpellChecker.shared.availableLanguages.contains("bg") {
-            return NSSpellChecker.shared.checkSpelling(
-                of: trailing.lowercased(), startingAt: 0, language: "bg", wrap: false,
-                inSpellDocumentWithTag: 0, wordCount: nil
-            ).location != NSNotFound
+           SpellOracle.current.languages().contains("bg") {
+            return SpellOracle.current.isMisspelledIn(trailing.lowercased(), "bg")
         }
         guard trailing.count >= 2, trailing.allSatisfy({ $0.isASCII && $0.isLowercase }),
               !Lexicon.shared.isKnownWord(trailing),
@@ -2257,11 +2299,7 @@ final class AutocompleteEngine {
               !RecentSentences.shared.hasRecentWord(trailing),
               !CoreBridge.looksLikeTransliteratedBulgarian(before)
         else { return false }
-        let checker = NSSpellChecker.shared
-        let range = NSRange(location: 0, length: (trailing as NSString).length)
-        let guesses = checker.guesses(
-            forWordRange: range, in: trailing, language: nil, inSpellDocumentWithTag: 0
-        ) ?? []
+        let guesses = SpellOracle.current.guesses(trailing) ?? []
         return guesses.contains { Lexicon.shared.isKnownWord($0.lowercased()) }
     }
 
@@ -2276,10 +2314,7 @@ final class AutocompleteEngine {
         }
         let trailing = String(word.reversed())
         guard trailing.count >= 3 else { return false } // too short to judge
-        let checker = NSSpellChecker.shared
-        let range = checker.checkSpelling(of: trailing, startingAt: 0)
-        // location == NSNotFound means no misspelling found.
-        return range.location != NSNotFound
+        return SpellOracle.current.isMisspelled(trailing)
     }
 
     /// True when the trailing fragment is a valid PREFIX of real words (the user is
@@ -2296,22 +2331,13 @@ final class AutocompleteEngine {
         guard fragment.count >= 5,
               fragment.unicodeScalars.allSatisfy({ (0x0400...0x04FF).contains($0.value) })
         else { return nil }
-        let checker = NSSpellChecker.shared
-        guard checker.availableLanguages.contains("bg") else { return nil }
-        func isWord(_ w: String) -> Bool {
-            checker.checkSpelling(
-                of: w, startingAt: 0, language: "bg", wrap: false,
-                inSpellDocumentWithTag: 0, wordCount: nil
-            ).location == NSNotFound
-        }
+        let spell = SpellOracle.current
+        guard spell.languages().contains("bg") else { return nil }
+        func isWord(_ w: String) -> Bool { !spell.isMisspelledIn(w, "bg") }
         // A complete word needs no finishing — ghosting "та" after every full
         // word would be noise, not help.
         guard !isWord(fragment.lowercased()) else { return nil }
-        let range = NSRange(location: 0, length: (fragment as NSString).length)
-        let completions = checker.completions(
-            forPartialWordRange: range, in: fragment, language: "bg",
-            inSpellDocumentWithTag: 0
-        ) ?? []
+        let completions = spell.completions(fragment, "bg") ?? []
         let lower = fragment.lowercased()
         guard let word = completions.first(where: {
             $0.count > fragment.count && $0.lowercased().hasPrefix(lower)
@@ -2332,11 +2358,7 @@ final class AutocompleteEngine {
         if lex.words.contains(where: { $0.count > frag.count && $0.lowercased().hasPrefix(fl) }) {
             return true
         }
-        let checker = NSSpellChecker.shared
-        let range = NSRange(location: 0, length: (frag as NSString).length)
-        let completions = checker.completions(
-            forPartialWordRange: range, in: frag, language: nil, inSpellDocumentWithTag: 0
-        ) ?? []
+        let completions = SpellOracle.current.completions(frag, nil) ?? []
         return completions.contains { $0.count > frag.count && $0.lowercased().hasPrefix(fl) }
     }
 
@@ -2349,11 +2371,7 @@ final class AutocompleteEngine {
         }
         let original = String(word.reversed())
         guard original.count >= 3 else { return nil }
-        let checker = NSSpellChecker.shared
-        let range = NSRange(location: 0, length: (original as NSString).length)
-        guard let guesses = checker.guesses(
-            forWordRange: range, in: original, language: nil, inSpellDocumentWithTag: 0
-        ) else { return nil }
+        guard let guesses = SpellOracle.current.guesses(original) else { return nil }
         // Prefer a correction the lexicon knows as a common word ("tte" guesses
         // may lead with an abbreviation; the user almost always meant "the").
         let best = guesses.first { Lexicon.shared.isKnownWord($0.lowercased()) }
