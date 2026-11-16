@@ -66,6 +66,15 @@ final class DchCaptureDrainTests: XCTestCase {
         XCTAssertTrue(kills.lock.withLock { kills.pids }.isEmpty, "the child had exited: no kill")
     }
 
+    /// #1405: no limit by default (every caller but X-ray's reads): 17 MiB, past X-ray's limit, come back whole.
+    /// A pin of the default; it also passes at TIP, where there was no limit at all.
+    func testWithoutALimitMoreThanTheXrayLimitComesBackWhole() throws {
+        let r = try XCTUnwrap(run("s=$(printf '%01048576d' 0); i=0; while [ $i -lt 17 ]; do printf %s \"$s\"; i=$((i+1)); done"))
+        XCTAssertGreaterThan(r.out.count, XrayPanels.maxReadBytes)
+        XCTAssertEqual(r.out.count, 17 << 20)
+        XCTAssertEqual(r.status, 0)
+    }
+
     /// The hang: 200000 bytes to stderr while stdout is still open, then "done", exit 3.
     func testAFloodOfStderrBeforeStdoutStillReturns() throws {
         let r = try XCTUnwrap(run("printf '%0200000d' 0 >&2; printf 'done\\n'; exit 3"))

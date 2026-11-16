@@ -2549,10 +2549,13 @@ enum DchCommand {
     /// `status` is the exit code (-1 when it never started).
     /// #579: `cwd` is the child's working dir (--spawn has no --cwd); `onOutput`
     /// gets each stdout chunk as it comes (a restart reports per session).
+    /// #1405: `outputLimit` (nil: none, every caller but X-ray's reads) stops the read at max + 1 bytes of stdout,
+    /// ends the child through its `terminate` (its own pid, not once it exited) and returns (no data, stderr, -1).
     static func runCapturingBoth(args: [String], env: [String: String], path: String = dchPath, merge: Bool = false,
                                  cwd: String? = nil, onPid: (pid_t) -> Void = { _ in },
                                  onOutput: (Data) -> Void = { _ in },
-                                 onExit: @escaping @Sendable () -> Void = {}) -> (out: Data, err: String, status: Int32) {
+                                 onExit: @escaping @Sendable () -> Void = {},
+                                 outputLimit: (max: Int, terminate: @Sendable (pid_t) -> Void)? = nil) -> (out: Data, err: String, status: Int32) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
@@ -2567,7 +2570,9 @@ enum DchCommand {
         // shortcut: the pid is reaped just before the handler runs, a window only the OS could close; upgrade if a
         // pre-reap exit event is ever needed.
         let exited = DispatchSemaphore(value: 0)
-        p.terminationHandler = { _ in onExit(); exited.signal() }
+        final class Reaped: @unchecked Sendable { let lock = NSLock(); var done = false }
+        let reaped = Reaped()
+        p.terminationHandler = { _ in reaped.lock.withLock { reaped.done = true }; onExit(); exited.signal() }
         do { try p.run() } catch { return (Data(), "", -1) }
         onPid(p.processIdentifier)
         // R988c-1: stderr is read to its end on another thread while this one drains stdout (the screen), so
@@ -2584,17 +2589,25 @@ enum DchCommand {
                 }
             }
         }
-        var data = Data()
-        while case let chunk = pipe.fileHandleForReading.availableData, !chunk.isEmpty {
+        var data = Data(), over = false
+        while case var chunk = pipe.fileHandleForReading.availableData, !chunk.isEmpty {
+            if let outputLimit, data.count + chunk.count > outputLimit.max {
+                chunk = chunk.prefix(outputLimit.max + 1 - data.count)   // exactly max + 1 bytes were read
+                over = true
+            }
             data.append(chunk)
             onOutput(chunk)
+            if over {
+                if !reaped.lock.withLock({ reaped.done }) { outputLimit?.terminate(p.processIdentifier) }
+                break
+            }
         }
         group.wait()
         p.waitUntilExit()
         exited.wait()
         // A cut can end inside a UTF-8 sequence: decode what is valid (U+FFFD for the cut end), never "" for all of it.
         let text = String(data: err.kept, encoding: .utf8) ?? (err.cut ? String(decoding: err.kept, as: UTF8.self) : "")
-        return (data, text, p.terminationStatus)
+        return over ? (Data(), text, -1) : (data, text, p.terminationStatus)
     }
 
     /// #477: every Agent Island dch call (--ls-json, -lj, --read, --status, --send)

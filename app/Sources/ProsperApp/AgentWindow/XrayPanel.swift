@@ -91,19 +91,24 @@ final class XrayPanels: ObservableObject {
         let child = XrayChild()   // #1368: a cancelled read (panel closed, session switched) SIGTERMs its dch
         return await withTaskCancellationHandler {
             await withCheckedContinuation { c in
-                DispatchQueue.global(qos: .utility).async { c.resume(returning: runBounded(child, path, args, env)) }
+                DispatchQueue.global(qos: .utility).async { c.resume(returning: runBounded(child, path, args, env, outputLimit: maxReadBytes)) }
             }
         } onCancel: { child.cancel() }
     }
 
+    /// #1405: the most stdout one X-ray read keeps: the largest parser cap (XrayChapters' 16 MiB; Tasks and Memory cap
+    /// lines and rows, not bytes). Past it the read stops, dch is ended and the answer is a failure (-1), as a timeout.
+    nonisolated static let maxReadBytes = XrayChapters.maxBytes
+
     /// `run`'s blocking body, lifted so a row can drive it with a recorder child (R1380-s2): the exit is marked on the
     /// child (#1380) and on `bounded`, so neither a cancel nor the timeout signals a reaped dch's pid (R1380-s1).
     nonisolated static func runBounded(_ child: XrayChild, _ path: String, _ args: [String], _ env: [String: String],
-                           timeout: TimeInterval = DchCommand.remoteTimeout,
+                           timeout: TimeInterval = DchCommand.remoteTimeout, outputLimit: Int? = nil,
                            terminate: @escaping @Sendable (pid_t) -> Void = DchCommand.sigkill) -> (status: Int32, out: Data) {
         let r = DchCommand.bounded(timeout, terminate: terminate) { onPid, onExit in
             DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: { onPid($0); child.started($0) },
-                                        onExit: { onExit(); child.reaped() })
+                                        onExit: { onExit(); child.reaped() },
+                                        outputLimit: outputLimit.map { ($0, terminate) })
         }
         return r.map { ($0.status, $0.out) } ?? (-1, Data())
     }
