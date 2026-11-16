@@ -1379,6 +1379,9 @@ tag from the now-released section and put it on the new top draft.
 - Sidekick tabs: one slow moment (a busy machine, memory pressure) no longer makes Prosper regroup
   your sidekick tab and say "Too slow on a session name" for a pattern that is fine; the pattern is
   searched once more before it is judged slow, and old slow moments are forgotten.
+- Ships dch 1.74.0 (was 1.73.0). X-ray's reference answers start from the newest mentions, X-ray
+  Search finds a subagent hand-back by the words of its report, and a revived session no longer
+  passes Claude's MCP setting on to programs started in it later. (#1309)
 
 ## v2.174.0
 
