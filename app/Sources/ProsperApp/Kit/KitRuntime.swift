@@ -202,9 +202,16 @@ final class KitRuntime: @unchecked Sendable {
         var offTools: [String: [String]]? = nil
     }
 
+    /// R1421-i1: each key decodes alone, so a wrongly typed offTools drops only offTools, never the off set.
     private func pieces() -> Pieces? {
-        guard let d = store.fs.read(store.layout.piecesJSON, limit: 64 << 10) else { return nil }
-        return try? JSONDecoder().decode(Pieces.self, from: d)
+        guard let d = store.fs.read(store.layout.piecesJSON, limit: 64 << 10),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+        func part<T: Decodable>(_ key: String, _ t: T.Type) -> T? {
+            guard let v = o[key], let data = try? JSONSerialization.data(withJSONObject: v, options: [.fragmentsAllowed]) else { return nil }
+            return try? JSONDecoder().decode(t, from: data)
+        }
+        guard let off = part("off", [String].self) else { return nil }
+        return Pieces(off: off, offTools: part("offTools", [String: [String]].self))
     }
 
     /// Outside data (stale or hand-edited): KitRender.plan takes its closure and ignores unknown ids.
@@ -223,7 +230,12 @@ final class KitRuntime: @unchecked Sendable {
     }
 
     /// The raw writer, no closure check: setSelection is the checked one. Keeps the per-tool part as it is.
-    func setOff(_ ids: Set<String>) throws { try writePieces(off: ids, offTools: offTools()) }
+    /// #1428: takes the busy flag, so a write cannot land between apply's plan and its shims handler.
+    func setOff(_ ids: Set<String>) throws {
+        guard begin() else { throw KitRuntimeError.refused(Self.busyText) }
+        defer { end() } // setOff
+        try writePieces(off: ids, offTools: offTools())
+    }
 
     private func writePieces(off ids: Set<String>, offTools: [String: Set<String>]) throws {
         let tools = offTools.isEmpty ? nil : offTools.mapValues { $0.sorted() }
@@ -235,6 +247,8 @@ final class KitRuntime: @unchecked Sendable {
     /// refused selection (the local.md piece off while another claude-md piece is on) is returned and nothing is written.
     /// `offTools` keeps only the kit's own tools pieces and tool names.
     func setSelection(_ v: KitValidated, off asked: Set<String>, offTools: [String: Set<String>] = [:]) throws -> KitSelectionResult {
+        guard begin() else { throw KitRuntimeError.refused(Self.busyText) }
+        defer { end() } // setSelection
         let r = KitPieceSelection(v).closure(off: asked)
         guard case .closed(let closed, _) = r else { return r }
         var tools: [String: Set<String>] = [:]

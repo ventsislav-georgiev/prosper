@@ -264,11 +264,48 @@ final class KitRuntimePaneTests: XCTestCase {
         XCTAssertEqual(rt.offTools(), ["tools": ["calm-todo"]])
     }
 
+    /// #1428: setSelection and setOff during a parked apply throw busy and write nothing; after it returns, a write lands.
+    func testSetSelectionAndSetOffDuringAnApplyAreRefusedBusy() async throws {
+        let rec = KitRTConsent()
+        let gate = KitParkedConsent(rec)
+        let e = try env(rec, sheet: gate)
+        let rt = try runtime(e)
+        let ext = try source(e, version: "1.0.0")
+        let v = try validated(rt, ext)
+        XCTAssertEqual(try rt.setSelection(v, off: ["hud"]), .closed(off: ["hud"], unknown: []))
+        let saved = bytes(rt.store.layout.piecesJSON)
+        XCTAssertTrue(saved != nil)
+        let first = Task { () -> KitRuntimeResult in
+            let r = await rt.apply(ext, source: .local, otherKitSlugs: [])
+            gate.wake()
+            return r
+        }
+        await gate.waitParked()
+        XCTAssertTrue(gate.didPark, "the apply is parked at its sheet")
+        XCTAssertThrowsError(try rt.setSelection(v, off: ["tools"])) { XCTAssertEqual($0 as? KitRuntimeError, .refused(KitRuntime.busyText)) }
+        XCTAssertThrowsError(try rt.setOff([])) { XCTAssertEqual($0 as? KitRuntimeError, .refused(KitRuntime.busyText)) }
+        XCTAssertEqual(bytes(rt.store.layout.piecesJSON), saved, "pieces.json unchanged")
+        gate.release()
+        _ = await first.value
+        XCTAssertEqual(try rt.setSelection(v, off: []), .closed(off: [], unknown: []))
+        XCTAssertEqual(rt.off(), [])
+    }
+
     func testAnOldPiecesFileWithoutOffToolsStillDecodes() throws {
         let e = try env()
         let rt = try runtime(e)
         try rt.store.ensureLayout()
         try Data(#"{"off":["hud"]}"#.utf8).write(to: URL(fileURLWithPath: rt.store.layout.piecesJSON))
+        XCTAssertEqual(rt.off(), ["hud"])
+        XCTAssertEqual(rt.offTools(), [:])
+    }
+
+    /// R1421-i1: a wrongly typed offTools drops only offTools.
+    func testAWronglyTypedOffToolsKeepsTheOffSet() throws {
+        let e = try env()
+        let rt = try runtime(e)
+        try rt.store.ensureLayout()
+        try Data(#"{"off":["hud"],"offTools":7}"#.utf8).write(to: URL(fileURLWithPath: rt.store.layout.piecesJSON))
         XCTAssertEqual(rt.off(), ["hud"])
         XCTAssertEqual(rt.offTools(), [:])
     }
