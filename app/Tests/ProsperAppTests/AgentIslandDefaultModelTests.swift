@@ -183,7 +183,9 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                 for (stored, line) in cases {
                     Preferences.agentIslandDefaultModel = stored
                     func model(_ t: [AXNode]) -> AXNode? { t.first { $0.label == "Default model" && $0.role == "AXTextField" } }
-                    func command(_ t: [AXNode]) -> AXNode? { t.first { $0.role == "AXTextField" && $0.label != "Default model" } }
+                    func command(_ t: [AXNode]) -> AXNode? {   // #1338: not the Pairs field either
+                        t.first { $0.role == "AXTextField" && $0.label != "Default model" && $0.label != "Sidekick suffix" }
+                    }
                     // Settled at THIS scale: the menu and the subtitle on the tree, and both fields laid out at this
                     // scale's widths (a pass right after another scale's could read a frame of the old layout).
                     func settled(_ t: [AXNode]) -> Bool {
@@ -204,7 +206,8 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                     XCTAssertTrue(menu != nil, "the aliases menu, named, at \(scale)")
                     XCTAssertTrue(sub != nil, "\(line) at \(scale)")
                     XCTAssertTrue(title != nil, "the row's title at \(scale)")
-                    XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.count, 2, "Command and Default model at \(scale)")
+                    XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.count, 3, "Command, Default model and (#1338) Sidekick suffix at \(scale)")
+                    XCTAssertTrue(tree.contains { $0.role == "AXTextField" && $0.label == "Sidekick suffix" }, "#1338: the Pairs field, named, at \(scale)")
                     guard let f = field?.frame, let o = other?.frame, let m = menu?.frame, let ti = title?.frame, let s = sub?.frame
                     else { continue }
                     XCTAssertEqual(f.height, o.height, accuracy: 1, "same control height at \(scale)")

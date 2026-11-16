@@ -62,6 +62,36 @@ struct AgentIslandPane: View {
         if modelRefusal == nil { model = Preferences.agentIslandDefaultModel; modelSaved = model }
     }
 
+    /// #1338: the Pairs field, what it last read or saved (leaving commits only an edit), and why its last commit
+    /// was refused (nil: saved).
+    @State private var suffix = Preferences.agentIslandSidekickSuffix
+    @State private var suffixSaved = Preferences.agentIslandSidekickSuffix
+    @State private var suffixRefusal: String?
+    static let suffixRule = "1 to 16 letters, digits, \".\", \"_\" or \"-\""
+
+    /// #1338: the Pairs row's line for the stored suffix: what it does, off, or why a value written from outside is
+    /// not used (AgentIsland.groups reads it as off; it is never rewritten).
+    static func suffixHint(_ s: String) -> String {
+        if s.isEmpty { return "Off: no pairs by name. Type a suffix to turn pairs on" }
+        guard AgentIsland.suffixOK(s) else { return "Not used, pairs are off: " + suffixRule }
+        return "<name> and <name>\(s) act as a pair: Stop both, Resume both. Empty turns pairs off"
+    }
+
+    /// #1338 (spec-pairs S6): the Pairs field's commit: trimmed; empty is stored as "" (pairs off); a value suffixOK
+    /// refuses is not saved (the previous one stays) and the reason comes back. A save regroups the island at once.
+    static func commitSuffix(_ text: String, _ c: AgentIslandController = .shared) -> String? {
+        let v = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard v.isEmpty || AgentIsland.suffixOK(v) else { return "Not saved: " + suffixRule }
+        Preferences.agentIslandSidekickSuffix = v
+        c.rowDetailsChanged()
+        return nil
+    }
+
+    private func saveSuffix() {
+        suffixRefusal = Self.commitSuffix(suffix)
+        if suffixRefusal == nil { suffix = Preferences.agentIslandSidekickSuffix; suffixSaved = suffix }
+    }
+
     /// #751: the Always allow toggle's hook (#754 INFO-R3: a function so a test drives it).
     static func autoAllowToggled(_ on: Bool, _ c: AgentIslandController = .shared) {
         Preferences.agentIslandAutoAllow = on
@@ -143,6 +173,15 @@ struct AgentIslandPane: View {
                 }
             }
         }
+        // #1338: per Mac; not the Sidekicks tab pattern (synced), which only picks that tab.
+        NeonSection("Pairs", footer: "Not the Sidekick pattern, which only picks the Sidekicks tab.") {
+            NeonRow("Sidekick suffix", subtitle: suffixRefusal ?? Self.suffixHint(suffixSaved)) {
+                TextField(AgentIsland.sidekickDefault, text: $suffix)
+                    .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(80))
+                    .accessibilityLabel("Sidekick suffix")
+                    .onSubmit { saveSuffix() }
+            }
+        }
         .onAppear {
             guard command.isEmpty else { return }
             // Typed meanwhile: the user's text stays.
@@ -153,6 +192,7 @@ struct AgentIslandPane: View {
         .onDisappear {
             _ = Self.commit(command)
             if model != modelSaved { _ = Self.commitModel(model) }
+            if suffix != suffixSaved { _ = Self.commitSuffix(suffix) }
         }
     }
 }

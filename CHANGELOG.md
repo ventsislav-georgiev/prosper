@@ -1485,6 +1485,8 @@ tag from the now-released section and put it on the new top draft.
   pick from that Mac's recent folders or type as a full path. (#1323)
 - Agent Island: hovering the end text of a History session that was ended by a signal shows the
   whole command that sent it, not only the first 48 characters. (#1332)
+- Agent Island Settings: a new Pairs field sets the name suffix that makes two sessions a pair for
+  Stop both and Resume both (default -qa); leave it empty to turn pairs off. (#1338)
 
 ## v2.174.0
 
