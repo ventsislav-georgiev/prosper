@@ -30,6 +30,16 @@ final class AgentIslandSayFirstTests: XCTestCase {
         var says: [String] = []
         var pauses: [TimeInterval] = []
         var t: TimeInterval = 0
+        /// #1384: hooks run off main, outside the lock (@Sendable, so they never inherit the test's main actor); the
+        /// gate parks the first say until released (bounded), as a say that takes a while.
+        var onSay: (@Sendable () -> Void)?
+        var onPause: (@Sendable () -> Void)?
+        var gate: DispatchSemaphore?
+        var held: [Bool] = []
+        var started: [Bool] = []
+        var saysAt = -1, readsAt = -1
+        /// The thread of each say and each pause: one run is one thread (firstRun is synchronous), so they tell runs apart.
+        var sayers: [UInt32] = [], pausers: [UInt32] = []
         init(screens: [String] = [AgentIslandSayFirstTests.idle], replies: [String]) {
             self.screens = screens
             self.replies = replies
@@ -39,7 +49,15 @@ final class AgentIslandSayFirstTests: XCTestCase {
             AgentPromptIO(read: { _ in self.lock.withLock { self.reads += 1; return Self.next(&self.screens) } },
                           status: { _ in self.lock.withLock { XCTFail("sayFirst never asks the status"); return "" } },
                           send: { _, _ in XCTFail("sayFirst never uses --send") },
-                          say: { _, text in self.lock.withLock { self.says.append(text); return Self.next(&self.replies) } },
+                          say: { _, text in
+                              let (r, g, hook) = self.lock.withLock { () -> (String, DispatchSemaphore?, (@Sendable () -> Void)?) in
+                                  self.says.append(text)
+                                  return (Self.next(&self.replies), self.says.count == 1 ? self.gate : nil, self.onSay)
+                              }
+                              hook?()
+                              _ = g?.wait(timeout: .now() + 10)
+                              return r
+                          },
                           noMirror: { _ in self.lock.withLock { self.noMirror } })
         }
         var counts: (reads: Int, says: Int, pauses: Int) { lock.withLock { (reads, says.count, pauses.count) } }
@@ -53,9 +71,25 @@ final class AgentIslandSayFirstTests: XCTestCase {
         c.controlDch = { nil }
         c.io = f.io
         c.store = AgentIslandStore(geometry: notched)
-        c.firstPause = { d in f.lock.withLock { f.pauses.append(d); f.t += d } }
+        c.firstPause = { d in
+            f.lock.withLock { f.pauses.append(d); f.t += d }
+            f.onPause?()
+        }
         c.firstClock = { f.lock.withLock { Date(timeIntervalSinceReferenceDate: f.t) } }
         return c
+    }
+
+    /// From a hook (off main): the controller's answer on main. The test thread is in wait(for:), serving main.
+    private nonisolated static func onMain(_ b: @MainActor () -> Bool) -> Bool {
+        DispatchQueue.main.sync { MainActor.assumeIsolated(b) }
+    }
+
+    /// A runner whose job on `key` runs until `park` is signalled (bounded); no process, no signal.
+    private static func parkedRunner(_ park: DispatchSemaphore?) -> DchActionRunner {
+        DchActionRunner(bound: 60, launch: { _, _, _, _, _, _ in
+            _ = park?.wait(timeout: .now() + 10)
+            return (0, Data())
+        }, signal: { _ in })
     }
 
     /// Runs sayFirst to its end; `then` must run exactly once (an over-fulfilled expectation fails the test).
@@ -160,22 +194,126 @@ final class AgentIslandSayFirstTests: XCTestCase {
         XCTAssertEqual(c.unsentFirst[key], "Example task")
     }
 
-    /// T17: the key is in flight for the run (Always allow and the window's clicks stand down), and not after.
+    /// T17 (#1384, was testInFlightHoldsTheKeyOnlyDuringTheRun): the key is in flight around each say (Always allow and
+    /// the window's clicks stand down for it), never across the wait between rounds, and not after the run.
     @MainActor
-    func testInFlightHoldsTheKeyOnlyDuringTheRun() {
+    func testInFlightHoldsTheKeyOnlyAroundEachSay() {
         let f = FirstIO(replies: [Self.reply("skipped", "no_screen"), Self.reply("ok")])
         let c = controller(f)
+        let key = key
+        f.onSay = { let h = Self.onMain { c.heldByAutoAllow(key) }; f.lock.withLock { f.started.append(h) } }
+        f.onPause = { let h = Self.onMain { c.heldByAutoAllow(key) }; f.lock.withLock { f.held.append(h) } }
         let done = expectation(description: "then")
         var heldInThen: Bool?
         c.sayFirst(key, "Example task") {
-            heldInThen = c.heldByAutoAllow(self.key)
+            heldInThen = c.heldByAutoAllow(key)
             done.fulfill()
         }
-        XCTAssertTrue(c.heldByAutoAllow(key), "held from the call")
         wait(for: [done], timeout: 10)
+        XCTAssertEqual(f.lock.withLock { f.started }, [true, true], "held during each say")
+        XCTAssertEqual(f.lock.withLock { f.held }, [false], "not held between rounds")
         XCTAssertEqual(heldInThen, false, "released before then runs")
         XCTAssertFalse(c.heldByAutoAllow(key))
         XCTAssertEqual(f.counts.says, 2)
+    }
+
+    /// T19 (#1384, R1369-s1): a prompt on the read for 3 rounds. Between the rounds nothing holds the key, so the
+    /// answer buttons show and a job on the session starts (the runner's start refuses a held key); then it says once.
+    @MainActor
+    func testAPromptForThreeRoundsDoesNotHoldTheKeyBetweenRounds() {
+        let f = FirstIO(screens: [Self.prompt, Self.prompt, Self.prompt, Self.idle], replies: [Self.reply("ok")])
+        let c = controller(f)
+        c.runner = Self.parkedRunner(nil)
+        let key = key
+        f.onPause = {
+            let h = Self.onMain { c.heldByAutoAllow(key) }
+            let first = f.lock.withLock { f.held.append(h); return f.started.isEmpty }
+            guard first else { return }
+            let done = DispatchSemaphore(value: 0)
+            let ok = Self.onMain { c.runner.start(key, path: "/usr/bin/example-dch", args: ["--restart", "api"], env: { [:] }, done: { _ in done.signal() }) }
+            if ok { _ = done.wait(timeout: .now() + 10) }   // reaped (the key is free again) before the next round
+            f.lock.withLock { f.started.append(ok) }
+        }
+        sayFirst(c, "Example task")
+        XCTAssertEqual(f.lock.withLock { f.held }, [false, false, false], "no hold between rounds")
+        XCTAssertEqual(f.lock.withLock { f.started }, [true], "a restart-like job starts between rounds")
+        XCTAssertEqual(f.counts.says, 1)
+        XCTAssertTrue(c.store?.actions[key] == nil)
+    }
+
+    /// T20 (#1384, R1369-s1): the key held by another say (the window's or an island click's would hold it the same
+    /// way): the other run waits, no read and no say, until it is released, then says once. Ordered by events, never
+    /// by timing: the waiter's 1st pause (its claim was refused, so the holder has the key) waits for the holder's say,
+    /// which is parked; at the waiter's 2nd pause (refused again, the say still parked) the counts are taken, the say is
+    /// released and the pause waits for the holder's `then` (its key released), so the waiter's next round says.
+    @MainActor
+    func testAKeyHeldElsewhereMeansNoSayUntilItIsReleased() {
+        let f = FirstIO(replies: [Self.reply("ok"), Self.reply("ok")])
+        let gate = DispatchSemaphore(value: 0), holderSaid = DispatchSemaphore(value: 0), holderDone = DispatchSemaphore(value: 0)
+        f.gate = gate
+        let c = controller(f)
+        let key = key
+        f.onSay = {
+            f.lock.withLock { f.sayers.append(pthread_mach_thread_np(pthread_self())) }
+            holderSaid.signal()
+        }
+        f.onPause = {
+            let n = f.lock.withLock { f.pausers.append(pthread_mach_thread_np(pthread_self())); return f.pauses.count }
+            if n == 1 { _ = holderSaid.wait(timeout: .now() + 10) }
+            guard n == 2 else { return }
+            let h = Self.onMain { c.heldByAutoAllow(key) }
+            f.lock.withLock { f.saysAt = f.says.count; f.readsAt = f.reads; f.held.append(h) }
+            gate.signal()
+            _ = holderDone.wait(timeout: .now() + 10)
+        }
+        let done = expectation(description: "then")
+        done.expectedFulfillmentCount = 2
+        // The first `then` is the holder's: the waiter cannot end before the key is released.
+        c.sayFirst(key, "Example task") { holderDone.signal(); done.fulfill() }
+        c.sayFirst(key, "Example task") { holderDone.signal(); done.fulfill() }
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(f.lock.withLock { f.held }, [true], "the key is held at the waiter's 2nd pause")
+        XCTAssertEqual(f.lock.withLock { f.saysAt }, 1, "only the holder's say while it holds the key")
+        XCTAssertEqual(f.lock.withLock { f.readsAt }, 1, "and no read by the waiter")
+        let (sayers, pausers) = f.lock.withLock { (f.sayers, f.pausers) }
+        XCTAssertEqual(pausers.count, 2, "the waiter waits two rounds, then its claim is free")
+        XCTAssertEqual(Set(pausers).count, 1, "one run waits")
+        XCTAssertEqual(sayers.count, 2, "then exactly one say by the waiter once released")
+        XCTAssertFalse(pausers.contains(sayers.first ?? 0), "the holder never waits")
+        XCTAssertEqual(sayers.last, pausers.first, "the 2nd say is the waiter's")
+        XCTAssertEqual(f.counts.reads, 2)
+        XCTAssertFalse(c.heldByAutoAllow(key))
+    }
+
+    /// T21 (#1384, R1369-s1): a runner job on the session (a Restart or Stop): no read and no say until it is reaped.
+    @MainActor
+    func testARunnerJobOnTheKeyMeansNoSayUntilItEnds() {
+        let f = FirstIO(replies: [Self.reply("ok")])
+        let park = DispatchSemaphore(value: 0), ended = DispatchSemaphore(value: 0)
+        let c = controller(f)
+        c.runner = Self.parkedRunner(park)
+        XCTAssertTrue(c.runner.start(key, path: "/usr/bin/example-dch", args: ["--restart", "api"], env: { [:] }, done: { _ in ended.signal() }))
+        f.onPause = {
+            guard f.lock.withLock({ f.pauses.count == 2 }) else { return }
+            f.lock.withLock { f.saysAt = f.says.count; f.readsAt = f.reads }
+            park.signal()
+            _ = ended.wait(timeout: .now() + 10)   // reaped: the runner is free before the next round
+        }
+        sayFirst(c, "Example task")
+        XCTAssertEqual(f.lock.withLock { f.saysAt }, 0, "no say while the job runs")
+        XCTAssertEqual(f.lock.withLock { f.readsAt }, 0, "and no read")
+        XCTAssertEqual(f.counts.says, 1, "one say after it ended")
+        XCTAssertTrue(c.store?.actions[key] == nil)
+    }
+
+    /// T22 (#1384, R1369-s2): a controller nobody gave an io runs dch-lite under tests: an empty read, no mirror,
+    /// no reply, so no row can reach a real `dch --say`.
+    @MainActor
+    func testTheDefaultIoUnderTestsIsDchLite() {
+        let io = AgentIslandController().io
+        XCTAssertTrue(io.noMirror(key))
+        XCTAssertEqual(io.read(key), "")
+        XCTAssertTrue(AgentWindowDriver.sayReply(io.say(key, "Example task")) == nil)
     }
 
     /// T18: a blank or control-only text sends nothing (no read, no say, no line, no hold) and `then` still runs, at once.

@@ -87,7 +87,9 @@ final class AgentIslandController {
     var makePoller: () -> AgentIslandPoller = { AgentIslandPoller() }
     /// The poll timer's period; tests set a long one, so only an explicit refresh ticks.
     var pollEvery: TimeInterval = 1
-    var io = AgentPromptIO.live
+    /// #1384 (R1369-s2): never the real dch under XCTest (a row that reaches the default gets dch-lite: an empty
+    /// read, no mirror, no reply), the shape of XrayPanels.run's guard.
+    var io: AgentPromptIO = NSClassFromString("XCTestCase") == nil ? .live : .lite
     var showsPanel = true
     /// More seams (#477): the screen geometry, the center the screen observer
     /// lives on, the outside-click monitor (tests never install a real global
@@ -1615,20 +1617,35 @@ final class AgentIslandController {
 
     /// #847 D2.1: types a new session's first message with `--say` (the window composer's verb, reply mapping and
     /// prompt check), off main, then runs `then` on main either way. Not through beginHuman (D2.2): no live row
-    /// is needed and no card is cleared; the key is only held in inFlight meanwhile. A blank text: no call.
+    /// is needed and no card is cleared. #1384 (R1369-s1): the key is held in inFlight only around each round's read
+    /// and say (claimed and released on main), never across a wait, so Stop, Restart and the answer buttons work
+    /// between rounds; a round whose key is held elsewhere or has a runner job just waits. A blank text: no call.
     func sayFirst(_ key: AgentSessionKey, _ text: String, then: (@MainActor () -> Void)? = nil) {
         guard let message = AgentWindowDriver.message(text) else { then?(); return }
-        let mine = inFlight.insert(key).inserted   // held elsewhere: that holder releases it, not this run
         store?.actions[key] = AgentIsland.firstSendingText
         let io = io, pause = firstPause, clock = firstClock
+        // Called by firstRun's queue; main.sync is safe, main never waits on that queue (the Task awaits a continuation).
+        let claim: @Sendable () -> Bool = { [weak self] in
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    guard let self else { return true }
+                    guard !self.inFlight.contains(key), !self.runner.isBusy(key) else { return false }
+                    self.inFlight.insert(key)
+                    return true
+                }
+            }
+        }
+        let release: @Sendable () -> Void = { [weak self] in
+            DispatchQueue.main.sync { MainActor.assumeIsolated { _ = self?.inFlight.remove(key) } }
+        }
         Task { @MainActor [weak self] in
             let why = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    c.resume(returning: Self.firstRun(key, message, io: io, pause: pause, clock: clock))
+                    c.resume(returning: Self.firstRun(key, message, io: io, pause: pause, clock: clock,
+                                                           claim: claim, release: release))
                 }
             }
             if let self {
-                if mine { inFlight.remove(key) }
                 if let why {
                     unsentFirst[key] = text
                     store?.actions[key] = AgentWindowText.firstNotSent(why)
@@ -1645,19 +1662,29 @@ final class AgentIslandController {
     /// anything else ends it: a skipped draft (never type over one) and every failed or missing reply, with NO
     /// retry (the text may sit in the composer or have gone out). dch-lite (an empty read, no mirror) fails at once.
     nonisolated static func firstRun(_ key: AgentSessionKey, _ text: String, io: AgentPromptIO,
-                                     pause: (TimeInterval) -> Void, clock: () -> Date) -> String? {
+                                     pause: (TimeInterval) -> Void, clock: () -> Date,
+                                     claim: () -> Bool, release: () -> Void) -> String? {
         let start = clock()
         var last = AgentWindowText.unconfirmed
         while true {
-            let shown = io.read(key)
-            if shown.isEmpty, io.noMirror(key) { return AgentWindowText.noScreen }
-            if let why = AgentWindowDriver.refusal(shown) {
-                last = why
-            } else {
-                let reply = AgentWindowDriver.sayReply(io.say(key, text))
-                guard let why = AgentWindowDriver.sayFailure(reply) else { return nil }
-                guard reply?.result == "skipped", ["not_claude", "no_screen", "prompt"].contains(reply?.reason) else { return why }
-                last = why
+            // #1384: `claim` (main) takes the key for this round only; false (held elsewhere, or a runner job) = a waiting round.
+            if claim() {
+                var end: String??   // nil: this round waits
+                let shown = io.read(key)
+                if shown.isEmpty, io.noMirror(key) {
+                    end = .some(AgentWindowText.noScreen)
+                } else if let why = AgentWindowDriver.refusal(shown) {
+                    last = why
+                } else {
+                    let reply = AgentWindowDriver.sayReply(io.say(key, text))
+                    if let why = AgentWindowDriver.sayFailure(reply) {
+                        if reply?.result == "skipped", ["not_claude", "no_screen", "prompt"].contains(reply?.reason) { last = why } else { end = .some(why) }
+                    } else {
+                        end = .some(nil)
+                    }
+                }
+                release()
+                if let end { return end }
             }
             if clock().timeIntervalSince(start) >= firstWait { return last }
             pause(firstStep)
@@ -2383,6 +2410,9 @@ enum GhosttyEventSender {
 }
 
 extension AgentPromptIO {
+    /// #1384: dch-lite as XCTest sees it: an empty read, no mirror, no reply (the default io of a test's controller).
+    static let lite = AgentPromptIO(read: { _ in "" }, status: { _ in "" }, send: { _, _ in }, noMirror: { _ in true })
+
     /// Every call runs with DCH_SOCKET_DIR = the session's own dir, never the
     /// Remote Terminal env. `--read` is the plain visible screen; `--send` types
     /// its text as raw bytes with no Enter, after "--" (QA #629 F1: else dch parses a
