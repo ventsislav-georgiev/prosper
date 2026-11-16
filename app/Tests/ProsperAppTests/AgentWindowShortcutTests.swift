@@ -51,6 +51,39 @@ extension AgentWindowSidebarMenuTests {
         XCTAssertTrue(rec.args.isEmpty, "no dch")
     }
 
+    /// #1304: two chips with one label from different owners each carry and open their own URL.
+    @MainActor
+    func testShortcutSameLabelChipsFromDifferentOwnersOpenTheirOwnURL() {
+        let pr = { (repo: String) in DchSessionMeta.PR(url: "https://github.com/\(repo)/pull/12", repo: repo, num: 12, title: "t") }
+        var s = session("api")
+        s.meta = DchSessionMeta(openPRs: [pr("acme/api"), pr("fork/api")], merged: 0)
+        let row = AgentSidebar.row(s, details: .all, now: Self.now)
+        XCTAssertEqual(row.prs, ["api#12", "api#12"])
+        let shown = AgentSidebarRowView.chipLinks(row.prs, row.prLinks)
+        XCTAssertEqual(shown.map { $0.link?.url?.absoluteString },
+                       ["https://github.com/acme/api/pull/12", "https://github.com/fork/api/pull/12"])
+
+        let st = store([s], dch: bin([1, 30, 0])), rec = Launches(), m = model(st, controller(st, rec))
+        defer { m.close() }
+        var opened: [String] = []
+        m.openURL = { opened.append($0.absoluteString) }
+        for entry in shown { if let link = entry.link { m.openPR(link) } }
+        XCTAssertEqual(opened, ["https://github.com/acme/api/pull/12", "https://github.com/fork/api/pull/12"])
+        XCTAssertTrue(rec.args.isEmpty, "no dch")
+    }
+
+    /// #1304: one chip is unchanged; "+N" and a URL-less chip carry no link.
+    @MainActor
+    func testShortcutChipLinksKeepOneChipAndLeaveOverflowAsText() {
+        let one = AgentIsland.PRChip(label: "api#1", title: "t", url: URL(string: "https://github.com/acme/api/pull/1"))
+        let bare = AgentIsland.PRChip(label: "api#2", title: "t", url: nil)
+        let single = AgentSidebarRowView.chipLinks(["api#1"], [one])
+        XCTAssertEqual(single.map(\.text), ["api#1"])
+        XCTAssertTrue(single.first?.link == one)
+        let many = AgentSidebarRowView.chipLinks(["api#1", "api#2", "+1"], [one, bare])
+        XCTAssertEqual(many.map { $0.link?.label }, ["api#1", nil, nil])
+    }
+
     // MARK: Cmd-Backspace
 
     /// The route: the window's only with the sidebar focused and no text field, composer or terminal holding the keys;

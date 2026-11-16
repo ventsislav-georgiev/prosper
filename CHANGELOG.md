@@ -1403,6 +1403,8 @@ tag from the now-released section and put it on the new top draft.
   waiting for its next output.
 - An extension whose config change has a malformed hook or status line (not a plain command) is now
   refused before anything is written, so the Apply sheet can no longer hide a command.
+- Agent Sessions window: two PR chips with the same number from different owners (for example
+  acme/api#12 and fork/api#12) now each open their own pull request.
 
 ## v2.174.0
 

@@ -1080,6 +1080,15 @@ extension AgentSidebarRowView {
         .fixedSize()
     }
 
+    /// #1304: each shown chip with its own link (by position, as the accessibility actions do: two chips can share a
+    /// label across owners); a "+N" or a chip with no allowlisted URL has none.
+    static func chipLinks(_ chips: [String], _ links: [AgentIsland.PRChip]) -> [(text: String, link: AgentIsland.PRChip?)] {
+        chips.enumerated().map { i, text in
+            let link = links.indices.contains(i) && links[i].label == text && links[i].url != nil ? links[i] : nil
+            return (text, link)
+        }
+    }
+
     /// #1115: the state text, the count groups (no " · ": the gap and the symbol separate them), then the PR chips,
     /// or with `open` the open PRs' count as a blue group in their place.
     /// #1203: `modelSlot` puts the model slot after the Spacer (a Claude row only): trailing, so it never moves the state
@@ -1091,13 +1100,14 @@ extension AgentSidebarRowView {
                 .foregroundStyle(row.state == .blocked ? agentStateColor(.blocked) : Neon.textSecondary)
                 .lineLimit(1)
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5)
-            ForEach(chips, id: \.self) { pr in
+            ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
+                let pr = entry.text
                 let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Neon.blue)
                     .padding(.horizontal, sz(4)).padding(.vertical, sz(1))
                     .background(RoundedRectangle(cornerRadius: sz(3)).fill(Neon.blue.opacity(0.12)))
                     .fixedSize()
                 // #1289 (G5): a chip whose URL passed the allowlist is a button (the island's help); else text, as before.
-                if let link = row.prLinks.first(where: { $0.label == pr && $0.url != nil }) {
+                if let link = entry.link {
                     Button { openPR(link) } label: { chip }
                         .buttonStyle(.plain).help(link.help).accessibilityLabel(AgentWindowControls.openPRLabel(link))
                 } else {
