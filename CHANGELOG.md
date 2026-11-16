@@ -1600,6 +1600,8 @@ tag from the now-released section and put it on the new top draft.
   mid-write, the write now stops with a clear error ("open temp failed", "check temp failed", "open
   directory failed") and leaves your file as it was, instead of failing with a misleading chmod
   error or replacing the file with the swapped-in one. (#1243)
+- Agent Sessions: X-ray Refs tab; a ref opens its context: definition, mentions across sessions,
+  matching tasks and memories, with Open, Copy and Search. (#1417)
 
 ## v2.174.0
 

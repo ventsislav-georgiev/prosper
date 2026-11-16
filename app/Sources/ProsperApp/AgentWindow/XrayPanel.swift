@@ -72,9 +72,10 @@ final class XrayPanels: ObservableObject {
     /// XrayPanelModel.searchable themselves.
     static var searchTab: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
 
-    /// #1415 (gate A): the Refs tab and its reads. Off in the product until the ref card ships (#1356 step 3), and under
-    /// XCTest; rows set it and restore it.
-    static var refsTab: @MainActor () -> Bool = { false }
+    /// #1415 (gate A): the Refs tab and its reads. #1417: on in the product (the ref card ships); off under XCTest as
+    /// searchTab is, so the rows that pin exact tab sets and read counts keep them; rows set it and restore it.
+    static let refsTabShips = true
+    static var refsTab: @MainActor () -> Bool = { refsTabShips && NSClassFromString("XCTestCase") == nil }
 
     /// The focused pane's mode through the window model (no model or another pane focused: no read).
     static func fromDch(_ pane: UUID, _ target: XrayTarget) -> Bool {
@@ -85,10 +86,14 @@ final class XrayPanels: ObservableObject {
     /// #1352: the window's presenter, the transcript, the link opener and the cwd, for the panel that came to `pane`.
     private func wire(_ m: XrayPanelModel, _ pane: UUID) {
         let target = m.target
-        m.present = { view, size in
-            guard let w = Self.window(pane), let anchor = XrayCardAnchor.view(for: pane, in: w) ?? w.contentView else { return }
-            w.cards.present(view, size: size, anchor: anchor) {}
+        // #1417: `closed` runs once when the card goes, whoever closed it (the ref card cancels its --ref read there)
+        func show(_ view: AnyView, _ size: CGSize, _ closed: @escaping @MainActor () -> Void) {
+            guard let w = Self.window(pane), let anchor = XrayCardAnchor.view(for: pane, in: w) ?? w.contentView else { return closed() }
+            w.cards.present(view, size: size, anchor: anchor, closed: closed)
         }
+        m.present = { show($0, $1) {} }
+        m.presentRef = { show($0, $1, $2) }
+        m.panels = self
         m.dismiss = { Self.window(pane)?.cards.close() }
         m.transcript = { Self.transcript(pane, target) }
         m.fromDch = { Self.chaptersRead(pane, target) }
@@ -165,6 +170,9 @@ final class XrayPanelModel: ObservableObject {
     /// #1416: the ref card's data from the last --ref read (XrayPanels.runRef), or why it has none.
     @Published var refContext: XrayRefContext?
     @Published var refNote: String?
+    /// #1417: the Refs row whose card was asked for last; the panels whose --ref read it runs (XrayPanels.open wires it).
+    @Published private(set) var refCard: XrayRefs.Entry?
+    weak var panels: XrayPanels?
     /// #1389: this pane reads dch's chapters (XrayPanels.chaptersRead); false: never runs that read.
     var fromDch: () -> Bool = { false }
     /// #1355: the Search tab is there (false once dch answered exit 1, does not know --search, or 6, refused); the
@@ -209,6 +217,8 @@ final class XrayPanelModel: ObservableObject {
     /// #1352 seams, wired by XrayPanels.open: any card through the window's presenter, its close, the pane's transcript
     /// (nil: no jump, the card), the link opener, the session's cwd (instruction paths are shown relative to it).
     var present: (AnyView, CGSize) -> Void = { _, _ in }
+    /// #1417: as present, with the presenter's `closed` (the ref card's --ref cancel).
+    var presentRef: (AnyView, CGSize, @escaping @MainActor () -> Void) -> Void = { _, _, _ in }
     var dismiss: () -> Void = {}
     var transcript: () -> AgentTranscriptModel? = { nil }
     var openURL: (URL) -> Void = { _ in }
@@ -229,6 +239,7 @@ final class XrayPanelModel: ObservableObject {
         self.target = target
         self.tab = tab
         searchable = XrayPanels.searchTab()
+        panels = XrayPanels.shared
     }
 
     /// The one read on open: both forms, so the strip knows which tabs exist.
@@ -520,6 +531,24 @@ final class XrayPanelModel: ObservableObject {
         let n = (refs?.entries ?? []).filter { Self.matches($0, filter) && !XrayRefs.byDefault($0) }.count
         guard n > 0 else { return nil }
         return showAllRefs ? (nil, "Hide files, commits and links") : ("\(n) files, commits and links hidden", "Show all kinds")
+    }
+
+    /// R1415-i1 (b): a filter that leaves no row says so (a list of hidden kinds alone has the toggle's line instead).
+    var refsEmpty: String? {
+        shownRefs.isEmpty && !filter.trimmingCharacters(in: .whitespaces).isEmpty ? "No refs match" : nil
+    }
+
+    /// #1417: Return or a click on a Refs row: its card at once (header from the row), then the --ref read fills it. The
+    /// card's close, however it goes (presenter closed, Esc, Search), cancels that read (XrayPanels.closeRef).
+    func openRef(_ e: XrayRefs.Entry) {
+        refCard = e
+        (refContext, refNote) = (nil, nil)
+        let panels = panels
+        if panels?.runRef(e.text, for: self) != true { refNote = Self.refNotARef }   // refused: nothing runs
+        let read = panels?.refReading
+        presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: refs?.complete ?? true)), XrayRefPopover.size) { [weak panels] in
+            panels?.closeRef(started: read)
+        }
     }
 
     /// "N more refs not indexed" (dch's dropped_keys), then "host unreachable" and why Search went.
@@ -817,7 +846,7 @@ struct XrayPanelView: View {
         .padding(sz(10))
     }
 
-    /// #1415: the Refs list; a row does nothing yet (#1356 step 3 opens its card).
+    /// #1415: the Refs list; #1417: a row opens its card.
     var refsTab: some View {
         let complete = panel.refs?.complete ?? true
         return VStack(alignment: .leading, spacing: sz(4)) {
@@ -829,10 +858,11 @@ struct XrayPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(panel.shownRefs.enumerated()), id: \.offset) { _, e in
-                        XrayRefRowView(row: XrayRefRow(e, complete: complete, home: panel.home, cwd: panel.cwd())) {}
+                        XrayRefRowView(row: XrayRefRow(e, complete: complete, home: panel.home, cwd: panel.cwd())) { panel.openRef(e) }
                     }
                 }
             }
+            if let n = panel.refsEmpty { faint(n) }
             if let f = panel.refsToggle {
                 HStack(spacing: sz(6)) {
                     if let t = f.text { faint(t) }

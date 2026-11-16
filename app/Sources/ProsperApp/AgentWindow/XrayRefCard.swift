@@ -193,7 +193,7 @@ struct XrayRefContext: Equatable {
             heading = "First mention" + soFar
             firstMention = m
         } else {
-            heading = Self.noDefinition + soFar
+            heading = Self.noDefinition + (s.partial ? " so far" : "")   // R1416-s1: never "found found so far"
             firstMention = nil
         }
         let own = s.first?.session
@@ -239,8 +239,8 @@ extension XrayTarget {
 extension XrayPanels {
     /// #1416: one --ref read. A text DchCtl.refOK refuses, or one starting with "-" (dch would read it as a flag), runs
     /// nothing and returns false. A new read cancels the one in flight (the product runner SIGTERMs its dch).
-    /// shortcut: one --ref for the app, not per window; the card is a transient popover, so two never show at once. Key
-    /// it by window if a later step keeps two cards open.
+    /// shortcut: one --ref for the app, not per window; the card is a transient popover (a click or key in another
+    /// window closes it first), so two never show at once. Key it by window if a later step keeps two cards open.
     @discardableResult
     func runRef(_ text: String, for m: XrayPanelModel) -> Bool {
         guard DchCtl.refOK(text), !text.hasPrefix("-"), let dch = m.dch, let run = m.run else { return false }
@@ -261,6 +261,12 @@ extension XrayPanels {
         refReading?.cancel()
         refReading = nil
     }
+
+    /// #1417: the card that started `read` went (presenter closed, Esc, Search): its read is cancelled, unless a newer
+    /// card's read is the one in flight now (a replaced card's close may come after the new card's read started).
+    func closeRef(started read: Task<Void, Never>?) {
+        if let read, read == refReading { closeRef() }
+    }
 }
 
 extension XrayPanelModel {
@@ -279,9 +285,12 @@ extension XrayPanelModel {
         }
     }
 
-    /// Search: the ref text becomes the query and runs, only when DchCtl.searchOK takes it (else nothing changes).
+    /// Search: the ref text becomes the query and runs, only when DchCtl.searchOK takes it (else nothing changes); #1417:
+    /// the card closes and the panel lands on the Search tab.
     func searchRef(_ text: String) {
         guard DchCtl.searchOK(text) else { return }
+        dismiss()
+        tab = .search
         query = text
         runSearch()
     }

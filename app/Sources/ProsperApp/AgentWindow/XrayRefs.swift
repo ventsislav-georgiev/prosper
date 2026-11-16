@@ -36,7 +36,7 @@ struct XrayRefs: Equatable {
     static let titleCap = 120
 
     /// The parse: bytes in, never throws; nil (no refs) unless one object with schema 1 and a refs array. A row that is
-    /// not an object, has no text, or whose key or text is over 256 bytes is skipped.
+    /// not an object, has no text, or whose key or text is over 256 bytes is skipped and counted in droppedKeys (R1415-i1 a).
     static func parse(_ data: Data) -> XrayRefs? {
         guard data.count <= XrayChapters.maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               o["schema"] as? Int == 1, let list = o["refs"] as? [Any] else { return nil }
@@ -53,7 +53,8 @@ struct XrayRefs: Equatable {
                          definitions: int(c["definitions"]) ?? 0, title: OutsideText.shown(title, max: titleCap),
                          underline: c["underline"] as? Bool == true, index: k)
         }
-        let over = list.count - min(list.count, maxRows)   // both counts are of an array in hand: no overflow
+        // both counts are of arrays in hand (at most the 16 MiB read): no overflow; dch's count is bounded by int
+        let over = list.count - entries.count
         return XrayRefs(entries: entries, droppedKeys: (int(o["dropped_keys"]) ?? 0) + over,
                         complete: o["complete"] as? Bool != false, why: (o["why"] as? String).map { OutsideText.shown($0, max: 40) },
                         sessionID: (o["session_id"] as? String).map { OutsideText.shown($0, max: 64) })

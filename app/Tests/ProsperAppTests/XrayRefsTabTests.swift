@@ -19,7 +19,7 @@ final class XrayRefsTabTests: XCTestCase {
     final class Run: @unchecked Sendable {
         private let lock = NSLock()
         private var _calls: [[String]] = []
-        let json: Answer
+        var json: Answer   // rows change it between reads, never while one runs
         init(json: Answer = (0, XrayRefsParseTests.object(refs: XrayRefsTabTests.three))) { self.json = json }
         var calls: [[String]] { lock.withLock { _calls } }
         var jsonReads: Int { calls.filter { $0.last == "--json" && $0.count == 3 }.count }
@@ -68,6 +68,7 @@ final class XrayRefsTabTests: XCTestCase {
     func testTabOnlyWithTheGateOnAndRefs() {
         let gate = XrayPanels.refsTab
         defer { XrayPanels.refsTab = gate }
+        XCTAssertTrue(XrayPanels.refsTabShips, "#1417: gate A is on in the product")
         XCTAssertFalse(XrayPanels.refsTab(), "gate A is off under XCTest")
         XCTAssertEqual(applied().tabs, [.prompts, .responses, .tasks, .memory], "gate off: the tab set is unchanged")
         XCTAssertTrue(applied().refs == nil, "gate off: no refs kept")
@@ -178,6 +179,71 @@ final class XrayRefsTabTests: XCTestCase {
         for s in [500.0, 600] { await tick(p, clock, at: s) }
         XCTAssertEqual(run.jsonReads, 3, "ended: no read")
         XCTAssertEqual(run.tasksReads, 5)
+    }
+
+    /// R1415-i1 (a): a row the parse drops (no text, a text over 256 bytes, not an object) counts in "not indexed".
+    func testParseDroppedRowsCountAsNotIndexed() {
+        let gate = XrayPanels.refsTab
+        defer { XrayPanels.refsTab = gate }
+        XrayPanels.refsTab = { true }
+        let long = String(repeating: "a", count: 257)
+        let refs = ##"[{"key":"issue:#1","shape":"issue","text":"#1","count":1},{"key":"issue:#2","shape":"issue","count":1},"##
+            + ##"{"key":"ticket:X","shape":"ticket","text":"\##(long)","count":1},7]"##
+        let p = applied(refs, dropped: 2)
+        XCTAssertEqual(p.refs?.entries.count, 1)
+        XCTAssertEqual(p.refsFooter, ["5 more refs not indexed"], "dch's 2 and the 3 the parse dropped")
+    }
+
+    /// R1415-i1 (b): a filter that matches nothing says so; no filter says nothing.
+    func testAFilterMatchingNothingSaysNoRefsMatch() {
+        let gate = XrayPanels.refsTab
+        defer { XrayPanels.refsTab = gate }
+        XrayPanels.refsTab = { true }
+        let p = applied()
+        XCTAssertTrue(p.refsEmpty == nil)
+        p.filter = "nothing-like-this"
+        XCTAssertEqual(p.shownRefs.count, 0)
+        XCTAssertEqual(p.refsEmpty, "No refs match")
+        p.filter = "login"
+        XCTAssertTrue(p.refsEmpty == nil)
+    }
+
+    /// R1415-i1 (c): a Refs re-read that fails while Refs is shown takes the tab away (as Memory's does); the strip lands
+    /// on its first tab. A host that did not answer (exit 4) keeps the rows and the tab.
+    func testRefsGoneWhileShownLandsOnTheFirstTab() async {
+        let gate = XrayPanels.refsTab
+        defer { XrayPanels.refsTab = gate }
+        XrayPanels.refsTab = { true }
+        let clock = Clock(), run = Run(), p = panel(clock)
+        await open(p, run)
+        p.select(.refs)
+        await p.reading?.value
+        run.json = (4, Data())
+        await tick(p, clock, at: 30)
+        XCTAssertEqual(p.tab, .refs, "exit 4: the rows stay")
+        XCTAssertEqual(p.refsFooter, ["host unreachable"])
+        run.json = (3, Data())
+        await tick(p, clock, at: 60)
+        XCTAssertTrue(p.refs == nil)
+        XCTAssertEqual(p.tabs, [.tasks, .memory])
+        XCTAssertEqual(p.tab, .tasks, "the strip's first tab")
+    }
+
+    /// R1415-i1 (d): a switch to Refs while another read runs reads the refs at the next tick, not 30 s later.
+    func testSwitchToRefsWhileAReadIsInFlightReadsAtTheNextTick() async {
+        let gate = XrayPanels.refsTab
+        defer { XrayPanels.refsTab = gate }
+        XrayPanels.refsTab = { true }
+        let clock = Clock(), run = Run(), p = panel(clock)
+        await open(p, run)
+        clock.t = Self.base + 5
+        p.tick()
+        XCTAssertTrue(p.reading != nil, "the Tasks poll runs")
+        p.select(.refs)
+        XCTAssertEqual(run.jsonReads, 1, "no second read over the one in flight")
+        await p.reading?.value
+        await tick(p, clock, at: 6)
+        XCTAssertEqual(run.jsonReads, 2, "the next tick reads")
     }
 
     func testGateOffTranscriptPaneRunsNoJsonRead() async {
