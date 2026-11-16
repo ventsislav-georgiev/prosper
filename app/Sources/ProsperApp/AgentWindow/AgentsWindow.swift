@@ -1124,11 +1124,13 @@ extension AgentSidebarRowView {
     /// #836 (a): the host label, in a slot of one fixed width on every remote row, so a longer host never moves the
     /// line and a row's width never flickers; a long name is cut in the middle.
     static let hostWidth: CGFloat = 84
+    /// #1330 (R836-q2): a host from dch is outside text: shown through OutsideText.shown; argv and keys keep it raw.
+    static func hostLabel(_ host: String) -> String { OutsideText.shown(host) }
     static func hostSlot(_ host: String) -> some View {
-        Text(host).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+        Text(hostLabel(host)).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
             .lineLimit(1).truncationMode(.middle)
             .frame(width: sz(hostWidth), alignment: .trailing)
-            .help("On \(host)")
+            .help("On \(hostLabel(host))")
     }
 }
 
@@ -1145,7 +1147,7 @@ struct AgentRemoteHeader: View {
     var body: some View {
         HStack(alignment: .center, spacing: sz(8)) {
             Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1).truncationMode(.middle)
-            Text(remote.host).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+            Text(AgentSidebarRowView.hostLabel(remote.host)).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
             Spacer(minLength: sz(4))
             Image(systemName: "checklist").font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                 .opacity(0.45).help(Self.todosReason).accessibilityLabel("Todo list").accessibilityValue(Self.todosReason)
@@ -2462,7 +2464,7 @@ struct AgentRemoteResumeButton: View {
 
     var body: some View {
         let on = store.resumeGate.isOK && AgentIsland.passable(record.name)
-        let help = "\(AgentIsland.resumeLabel) on \(host)"
+        let help = "\(AgentIsland.resumeLabel) on \(AgentSidebarRowView.hostLabel(host))"
         VStack(spacing: sz(6)) {
             AgentPillButton(title: AgentIsland.resumeLabel, icon: "play.fill", tint: Neon.blue, enabled: on) { act(.resume) }
                 .help(help).accessibilityLabel(help)

@@ -208,6 +208,13 @@ final class AgentTerminalController: ObservableObject {
     private(set) var key: AgentSessionKey?
     /// #836: the attached session is on another machine.
     var remoteHost: String? { key.flatMap(AgentTerminalSpawn.remoteHost) }
+    /// #1330 (R836-q1): a remote attach takes the session from the device holding it (dch exit 5 there), so one starts
+    /// only for the key the human armed (a click, a key, Attach); Reconnect is retry() on it. Any other attach or a
+    /// detach (hide, the row gone, the New session form) drops it.
+    private(set) var armed: AgentSessionKey?
+    /// #1330: a remote session shown but not attached: its card offers Attach.
+    @Published private(set) var held: AgentSessionKey?
+    static let heldText = "Attaching takes this session over from the other device using it"
     /// The view's grid, and the size the pty last got.
     private(set) var grid: (cols: Int, rows: Int)?
     private(set) var sentSize: (cols: Int, rows: Int)?
@@ -297,6 +304,8 @@ final class AgentTerminalController: ObservableObject {
     /// Attach to `key`, or detach (nil). The window model calls this from follow(): visible, a live
     /// session selected, and its mode Terminal. The same key again changes nothing.
     func attach(_ key: AgentSessionKey?) {
+        if held != nil { held = nil }
+        if key != armed { armed = nil }
         guard key != self.key else { return }
         focusPending = false   // #845: a focus asked for on another session never lands on this one
         detach()
@@ -305,6 +314,23 @@ final class AgentTerminalController: ObservableObject {
         closeFind(refocus: false)   // QA #694 INFO-1: the find bar goes with the session, the keys stay put
         guard key != nil else { phase = .idle; return }
         begin()
+    }
+
+    /// #1330: the human's pick of remote `key`: the next attach to it starts.
+    func arm(_ key: AgentSessionKey) { armed = key }
+
+    /// #1330: remote `key` focused but not armed: nothing attached, the card with Attach.
+    func hold(_ key: AgentSessionKey) {
+        if self.key != nil { attach(nil) }
+        armed = nil
+        if held != key { held = key }
+    }
+
+    /// #1330: the card's Attach.
+    func attachHeld() {
+        guard let k = held else { return }
+        arm(k)
+        attach(k)
     }
 
     /// Retry or Reattach from the overlay.
@@ -494,9 +520,9 @@ final class AgentTerminalController: ObservableObject {
         if let host = remoteHost {
             switch code {
             case 0: phase = .ended
-            case 4: phase = .failed("\(host) refused the attach")
+            case 4: phase = .failed("\(OutsideText.shown(host)) refused the attach")   // #1330 (R836-q2)
             case 5: phase = .detached("Opened on another device")
-            default: phase = .failed("Lost the connection to \(host)")
+            default: phase = .failed("Lost the connection to \(OutsideText.shown(host))")
             }
             revealed = true
             return
@@ -899,6 +925,10 @@ struct AgentTerminalPane: View {
     /// Why nothing is attached, with the way out. (A held row never gets here: it shows Transcript.)
     @ViewBuilder var card: some View {
         switch controller.phase {
+        case .idle where controller.held != nil:
+            AgentTerminalCard(icon: "desktopcomputer", text: AgentTerminalController.heldText) {
+                AgentPillButton(title: "Attach", icon: "arrow.right.circle", tint: Neon.blue) { controller.attachHeld() }
+            }
         case .idle, .attaching, .live:
             EmptyView()
         case .ended:

@@ -212,7 +212,7 @@ enum AgentSidebar {
 
     /// #1324 (a): a remote record's row: the local row's text (its Resume's text while one runs or after), the host slot.
     static func row(_ r: DchHistoryRecord, now: TimeInterval, stale: Bool, action: String?) -> Row {
-        Row(id: .history(r.id), title: r.title, state: nil,
+        Row(id: .history(r.id), title: OutsideText.shown(r.title), state: nil,   // #1330 (R836-q2)
             detail: action ?? (stale ? "Stale \u{00B7} " : "") + "Ended \u{00B7} " + AgentIsland.endLabel(r.end),
             age: r.lastSeen > 0 ? AgentIsland.age(now - r.lastSeen) : "", prs: [], record: r,
             host: String(r.key.dir.dropFirst()))
@@ -220,7 +220,8 @@ enum AgentSidebar {
 
     /// #836 (c): no island state (the island answers only for local sessions): no state glyph, no age, nothing to answer.
     static func row(_ r: Remote) -> Row {
-        Row(id: .remote(host: r.host, name: r.name), title: r.alias.isEmpty ? r.name : r.alias, state: nil,
+        // #1330 (R836-q2): outside text, drawn as the layout names are; the id keeps the raw host and name (argv).
+        Row(id: .remote(host: r.host, name: r.name), title: OutsideText.shown(r.alias.isEmpty ? r.name : r.alias), state: nil,
             detail: r.stale ? "Stale" : "Terminal only", age: "", prs: [], remote: r)
     }
 
@@ -1510,6 +1511,8 @@ final class AgentWindowModel: ObservableObject {
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true, placement: PaneLayout.Placement = .focused) {
         if manual { removing = nil; pendingSpawn = nil; newSession = nil }
+        // #1330 (R836-q1): only the human's pick (a click, a key) arms a remote attach; follow() alone never starts one.
+        if manual, case let .remote(h, n)? = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
         // `settle()` drops the strip's question on a change of row.
@@ -2204,9 +2207,11 @@ final class AgentWindowModel: ObservableObject {
         }
         rebind()
         // #836 (b): a listed remote row attaches its terminal; no transcript, input box, hook or plan lookup for it.
+        // #1330 (R836-q1): only when armed; a show, a restore, a re-list or the form closing shows the Attach card.
         if visible, newSession == nil, let r = focusedRemote {
             interaction.follow(nil)
-            terminal.attach(AgentTerminalSpawn.remoteKey(host: r.host, name: r.name))
+            let k = AgentTerminalSpawn.remoteKey(host: r.host, name: r.name)
+            if terminal.armed == k { terminal.attach(k) } else { terminal.hold(k) }
             return
         }
         guard visible, let f = focusedRuntime, f.ended == nil, case .live(let s)? = f.content else {

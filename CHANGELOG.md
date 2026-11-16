@@ -1458,6 +1458,9 @@ tag from the now-released section and put it on the new top draft.
 - The Agent Sessions window no longer sends a message or Esc into a session while its Restart or
   Stop is running (also one started from the phone); answering the session's prompt still works,
   since the restart waits on it. (#1321)
+- Agent Sessions no longer takes over a session on another machine by itself: showing the window,
+  restoring a layout or the session coming back online now shows an Attach button, and opening it
+  needs a click or Attach. (#1330)
 
 ## v2.174.0
 
