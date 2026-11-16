@@ -173,15 +173,6 @@ struct AgentIslandPane: View {
                 }
             }
         }
-        // #1338: per Mac; not the Sidekicks tab pattern (synced), which only picks that tab.
-        NeonSection("Pairs", footer: "Not the Sidekick pattern, which only picks the Sidekicks tab.") {
-            NeonRow("Sidekick suffix", subtitle: suffixRefusal ?? Self.suffixHint(suffixSaved)) {
-                TextField(AgentIsland.sidekickDefault, text: $suffix)
-                    .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(80))
-                    .accessibilityLabel("Sidekick suffix")
-                    .onSubmit { saveSuffix() }
-            }
-        }
         .onAppear {
             guard command.isEmpty else { return }
             // Typed meanwhile: the user's text stays.
@@ -192,7 +183,16 @@ struct AgentIslandPane: View {
         .onDisappear {
             _ = Self.commit(command)
             if model != modelSaved { _ = Self.commitModel(model) }
-            if suffix != suffixSaved { _ = Self.commitSuffix(suffix) }
         }
+        // #1338: per Mac; not the Sidekicks tab pattern (synced), which only picks that tab.
+        NeonSection("Pairs", footer: "Not the Sidekick pattern, which only picks the Sidekicks tab.") {
+            NeonRow("Sidekick suffix", subtitle: suffixRefusal ?? Self.suffixHint(suffixSaved)) {
+                TextField(AgentIsland.sidekickDefault, text: $suffix)
+                    .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(80))
+                    .accessibilityLabel("Sidekick suffix")
+                    .onSubmit { saveSuffix() }
+            }
+        }
+        .onDisappear { if suffix != suffixSaved { _ = Self.commitSuffix(suffix) } }
     }
 }

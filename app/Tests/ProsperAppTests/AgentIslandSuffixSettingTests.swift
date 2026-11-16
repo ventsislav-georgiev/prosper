@@ -88,4 +88,24 @@ final class AgentIslandSuffixSettingTests: XCTestCase {
                            "<name> and <name>-qa act as a pair: Stop both, Resume both. Empty turns pairs off")
         }
     }
+
+    /// R1338-s1: the pane's hooks sit on the New session section (Settings scrolls lazily, so hooks on Pairs would
+    /// fire as Pairs scrolls); Pairs has only its own suffix commit on leaving. A source pin.
+    func testPaneHooksStayOnNewSessionAndPairsCommitsItsOwn() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/AgentIsland/AgentIslandPane.swift"), encoding: .utf8)
+        let newSession = try XCTUnwrap(source.range(of: "NeonSection(\"New session\""))
+        let pairs = try XCTUnwrap(source.range(of: "NeonSection(\"Pairs\""))
+        XCTAssertTrue(newSession.lowerBound < pairs.lowerBound)
+        let first = String(source[newSession.upperBound..<pairs.lowerBound])
+        XCTAssertTrue(first.contains(".onAppear {"), "Command inference leaves the New session section")
+        XCTAssertTrue(first.contains("Self.commit(command)") && first.contains("Self.commitModel(model)"),
+                      "Command and Default model commits leave the New session section")
+        XCTAssertFalse(first.contains("commitSuffix"))
+        let second = String(source[pairs.upperBound...])
+        XCTAssertTrue(second.contains(".onDisappear { if suffix != suffixSaved { _ = Self.commitSuffix(suffix) } }"))
+        XCTAssertFalse(second.contains(".onAppear"), "Pairs has no onAppear")
+        XCTAssertFalse(second.contains("Self.commit(command)"), "Pairs does not carry the Command commit")
+    }
 }
