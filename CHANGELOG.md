@@ -1539,6 +1539,9 @@ tag from the now-released section and put it on the new top draft.
   form can start a sidekick). (#907)
 - Agent Sessions: the model and effort badges show on long-running sessions with very large
   transcripts, and no longer vanish while the same Claude session runs. (#1372)
+- Agent Island's session rows now match Agent Sessions: the same state mark, state word, outlined
+  agents count, merged and open counts, model and effort badges, and tighter, even spacing, with the
+  PR name chips and their links kept below. (#1371)
 
 ## v2.174.0
 

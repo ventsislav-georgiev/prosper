@@ -1012,16 +1012,7 @@ struct AgentSidebarRowView: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
-            Group {   // #829 G7: a pinned History record's glyph, in the same slot
-                if row.record?.pinned == true {
-                    Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(Self.ink(.quiet, selected: selected))
-                } else {
-                    Text(row.state?.glyph ?? "○")
-                        .font(Neon.font(11, weight: .bold))
-                        .foregroundStyle(row.state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentStateColor(row.state))
-                }
-            }
-            .frame(width: sz(14))
+            stateMark
             VStack(alignment: .leading, spacing: sz(3)) {
                 titleLine
                 detailVariants
@@ -1139,6 +1130,20 @@ struct AgentDigitChip: View {
 }
 
 extension AgentSidebarRowView {
+    /// The state mark's slot (#1371: moved out of `body` unchanged, the island's session row draws it too).
+    var stateMark: some View {
+        Group {   // #829 G7: a pinned History record's glyph, in the same slot
+            if row.record?.pinned == true {
+                Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(Self.ink(.quiet, selected: selected))
+            } else {
+                Text(row.state?.glyph ?? "\u{25CB}")
+                    .font(Neon.font(11, weight: .bold))
+                    .foregroundStyle(row.state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentStateColor(row.state))
+            }
+        }
+        .frame(width: sz(14))
+    }
+
     /// #1345: the ⌘<n> chip's column, the widest digit's chip at no height (digits are proportional: the nine together are
     /// the widest whatever the font); the row draws the chip over it, only with a number.
     static var digitColumn: some View {

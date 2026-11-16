@@ -2131,7 +2131,7 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(notched.frame(notched.collapsedSize), CGRect(x: 632, y: 950, width: 249, height: 32),
                        "notch plus two 32 pt ears, centred, flush with the top")
         XCTAssertEqual(notched.frame(notched.expandedSize(rows: 3)),
-                       CGRect(x: 516, y: 982 - (32 + 4 + 144 + 12), width: 480, height: 32 + 4 + 144 + 12))
+                       CGRect(x: 516, y: 982 - (32 + 4 + 126 + 12), width: 480, height: 32 + 4 + 126 + 12))
         XCTAssertEqual(notched.expandedSize(rows: 20), notched.expandedSize(rows: 6), "scrolls after 6 rows")
     }
 
@@ -2154,29 +2154,31 @@ final class AgentIslandTests: XCTestCase {
     /// #525: two lines without PR meta, three with a PR line.
     func testRowHeightsPerRow() {
         var s = session("s", .working)
-        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "no meta: two lines, as before")
+        // #1371: 42 and 60 at UI scale 1.0 (were 48 and 64); the merged count is on line two, so alone it adds no line.
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 42, "no meta: two lines, as before")
         s.meta = DchSessionMeta()
-        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "an empty meta draws nothing")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 42, "an empty meta draws nothing")
         s.meta = DchSessionMeta(openPRs: [.init(url: "x", repo: "o/r", num: nil, title: "")])
-        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48, "a PR with no label draws nothing")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 42, "a PR with no label draws nothing")
         s.meta = DchSessionMeta(merged: 0)
-        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 48)
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), 42)
         s.meta = DchSessionMeta(merged: 3)
-        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), AgentIslandGeometry.prRowHeight, "merged alone")
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), AgentIslandGeometry.rowHeight, "merged alone: line two")
         s.meta = DchSessionMeta(openPRs: [pr("o/r", 1)])
         XCTAssertEqual(AgentIslandGeometry.height(of: s, show: .all), AgentIslandGeometry.prRowHeight, "one open PR")
-        XCTAssertEqual(AgentIslandGeometry.prRowHeight, 64)
+        XCTAssertEqual(AgentIslandGeometry.prRowHeight, 60)
     }
 
     /// QA #363 b: a whole AgentIslandRow, laid out offscreen (ImageRenderer, no
-    /// window), is 48 pt without a PR line and 64 pt with one, as the model says.
+    /// window), is 42 pt without a chip line and 60 pt with one at UI scale 1.0, as the model says (#1371: was 48 / 64;
+    /// merged alone sits on line two now, no third line).
     @MainActor
     func testWholeRowMeasures48Or64Offscreen() throws {
         var s = session("s", .working, activity: 100, alias: "a title", agents: 2)
         let cases: [(DchSessionMeta?, AgentIslandRowDetails, CGFloat)] = [
-            (nil, .all, 48), (DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 3), .all, 64),
-            (DchSessionMeta(merged: 3), .all, 64),
-            (DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 3), AgentIslandRowDetails(openPRs: false, merged: false), 48)]
+            (nil, .all, 42), (DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 3), .all, 60),
+            (DchSessionMeta(merged: 3), .all, 42),
+            (DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 3), AgentIslandRowDetails(openPRs: false, merged: false), 42)]
         for (meta, show, want) in cases {
             s.meta = meta
             XCTAssertEqual(AgentIslandGeometry.height(of: s, show: show), want)
@@ -2237,11 +2239,11 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertFalse(short.listScrolls(rows: 4), "4 two-line rows: 192")
         XCTAssertTrue(short.listScrolls(rows: [three, three, three, two]), "240 > 220")
         XCTAssertEqual(short.listHeight(rows: [three, three, three, two]), 220, "capped")
-        XCTAssertEqual(short.listHeight(rows: [three, three, three]), 192)
+        XCTAssertEqual(short.listHeight(rows: [three, three, three]), 3 * three, "#1371: 180 (was 192)")
         // The store hands the view and the panel the per-row heights.
         let store = AgentIslandStore(geometry: g)
         var a = session("a", .working), b = session("b", .idle)
-        a.meta = DchSessionMeta(merged: 2)
+        a.meta = DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 2)   // #1371: the chips make the third line (merged is on line two)
         b.meta = DchSessionMeta()
         store.sessions = [a, b]
         store.expanded = true
@@ -2264,8 +2266,7 @@ final class AgentIslandTests: XCTestCase {
             DchSessionMeta(openPRs: (1...50).map { pr("o/\(String(repeating: "a", count: 100))", 1_234_567_890 + $0) }, merged: big),
             DchSessionMeta(openPRs: (1...50).map { pr("o/r", 1_234_567_890 + $0) }, merged: big),
             DchSessionMeta(openPRs: (1...3).map { pr("o/\(String(repeating: "r", count: 40))", $0) }, merged: 99_999),
-            DchSessionMeta(merged: big),
-        ]
+        ]   // #1371: merged alone draws no chip line (the merged count is on line two), so it left this list
         for meta in metas {
             var s = session("s", .working); s.meta = meta
             let row = AgentIslandRow(session: s, now: 0, notice: nil, show: .all) {}
@@ -2273,7 +2274,8 @@ final class AgentIslandTests: XCTestCase {
             let w = host.fittingSize.width
             XCTAssertGreaterThan(w, 0)
             XCTAssertLessThanOrEqual(w, AgentIslandGeometry.rowTextWidth, "\(AgentIsland.prChips(meta).chips.map(\.label))")
-            let model = lineWidth(meta, AgentIsland.prChips(meta).chips, AgentIsland.prChips(meta).more)
+            // #1371: the chip line has no merged count now; the model measures the chips and "+N" only.
+            let model = lineWidth(DchSessionMeta(openPRs: meta.openPRs), AgentIsland.prChips(meta).chips, AgentIsland.prChips(meta).more)
             XCTAssertLessThanOrEqual(w, model + 0.01, "SwiftUI never draws wider than the model measured")
             XCTAssertLessThanOrEqual(model - w, 4, "the model is SwiftUI's width, rounded up per text")
         }
@@ -2372,10 +2374,10 @@ final class AgentIslandTests: XCTestCase {
     }
 
     /// #506 (c): rows with PR chips and merged counts, worst cases included, stay
-    /// inside the island at every audited UI scale. The island's sizes are fixed
-    /// (nothing follows ThemeRuntime.scale), so every scale renders the same
-    /// bitmap (to the rasterizer's ±1 antialiasing noise); and left and right of the rows' inset nothing but the shape's black
-    /// or the backdrop is ever drawn, so no row overflows its width.
+    /// inside the island at every audited UI scale: left and right of the rows' inset nothing but the shape's black
+    /// or the backdrop is ever drawn, so no row overflows its width. #1371: the session rows are the Agent Sessions
+    /// row pieces now and follow ThemeRuntime.scale like them, so every other scale renders a different bitmap than 1.0
+    /// (TIP pinned the same bitmap: the island's sizes were fixed then).
     @MainActor
     func testMetaRowsStayInsideTheIslandAtEveryScale() throws {
         let now = Date().timeIntervalSince1970, old = now - 50 * 86400
@@ -2432,9 +2434,9 @@ final class AgentIslandTests: XCTestCase {
             XCTAssertEqual(stray, 0, "scale \(scale): row pixels outside the rows' inset")
         }
         let base = try XCTUnwrap(pixels[1.0])
-        for (scale, px) in pixels {
-            XCTAssertTrue(px.count == base.count && zip(px, base).allSatisfy { near(Int($0), Int($1)) },
-                          "scale \(scale): the island does not follow the UI scale")
+        for (scale, px) in pixels where scale != 1.0 {
+            XCTAssertFalse(px.count == base.count && zip(px, base).allSatisfy { near(Int($0), Int($1)) },
+                           "scale \(scale): the session rows follow the UI scale")
         }
     }
 
@@ -2603,7 +2605,7 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(AgentIslandGeometry.height(of: s, show: noMerged), three)
         s.meta = mergedOnly
         XCTAssertEqual(AgentIslandGeometry.height(of: s, show: noMerged), two)
-        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: noPRs), three)
+        XCTAssertEqual(AgentIslandGeometry.height(of: s, show: noPRs), two, "#1371: merged alone is on line two")
         // The store's rows and size follow `details`.
         let g = notched
         var a = session("a", .working), b = session("b", .idle)
@@ -2614,8 +2616,8 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(store.details, .all, "a store built without details shows everything")
         XCTAssertEqual(store.rowHeights, [three, three])
         store.details = noPRs
-        XCTAssertEqual(store.rowHeights, [three, two])
-        XCTAssertEqual(store.size, g.expandedSize(rows: [three, two]))
+        XCTAssertEqual(store.rowHeights, [two, two], "#1371: no chips, no third line (merged is on line two)")
+        XCTAssertEqual(store.size, g.expandedSize(rows: [two, two]))
         store.details = neither
         XCTAssertEqual(store.rowHeights, [two, two])
         XCTAssertEqual(store.size, g.expandedSize(rows: 2))
@@ -2726,7 +2728,8 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(store.details, AgentIslandRowDetails(agents: false, openPRs: false, merged: false))
         store.details = AgentIslandRowDetails()
         // #571: drawn in the island's order (working, done, idle), whatever order the store was given.
-        XCTAssertEqual(store.rowHeights, [AgentIslandGeometry.prRowHeight, AgentIslandGeometry.rowHeight, AgentIslandGeometry.prRowHeight])
+        XCTAssertEqual(store.rowHeights, [AgentIslandGeometry.prRowHeight, AgentIslandGeometry.rowHeight, AgentIslandGeometry.rowHeight],
+                       "#1371: the merged-only row has no third line")
     }
 
     // MARK: - Sort and sidekick tabs (#571)

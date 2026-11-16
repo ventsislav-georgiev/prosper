@@ -96,7 +96,8 @@ final class IncreaseContrastIslandTests: XCTestCase {
         XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.75))", in: view), 2, "two 0.75 sites")
         XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.8))", in: view), 6, "three bare + killQuestion + clearQuestion + #1316 history row")
         XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.9))", in: view), 4, "two 0.9 sites + #1316 header and draft field")
-        XCTAssertEqual(Self.count("Neon.faded(", in: view), 27, "the ear count, the ten text sites and #1316's sixteen")
+        // #1371: 25, the session row's notice and PR chip inks are the Agent Sessions row's now (AgentIslandRowStyleTests).
+        XCTAssertEqual(Self.count("Neon.faded(", in: view), 25, "the ear count, the ten text sites and #1316's sixteen, less #1371's two")
         XCTAssertEqual(Self.count("Color.white.opacity(0.75)", in: view), 0)
         XCTAssertEqual(Self.count("case .idle: Color.white.opacity(0.4)", in: model), 1, "idle colour unchanged")
         XCTAssertEqual(Self.count("p.backgroundColor = .clear", in: controller), 1, "the panel stays clear for the notch corners")
@@ -127,18 +128,15 @@ final class IncreaseContrastIslandTests: XCTestCase {
         let left = Set(view.components(separatedBy: "\n")
             .filter { $0.contains("Color.white.opacity(") && !$0.contains("fill(") }
             .map { $0.trimmingCharacters(in: .whitespaces) })
+        // #1371: the session row's age, agents and merged counts and PR chip inks left (the Agent Sessions row's inks now).
         let kept: Set<String> = [
             ".foregroundStyle(ear.state == .blocked ? ear.state.color : (s.total == 0 ? Color.white.opacity(0.35) : Neon.faded(.white, 0.9)))",
             "Text(verbatim: \"Resume \\(why)\").foregroundStyle(Color.white.opacity(0.45))",
             ".foregroundStyle(on ? Neon.faded(.white, 0.9) : Color.white.opacity(0.45))",
             ".foregroundStyle(Color.white.opacity(0.35))",
-            ".foregroundStyle(Color.white.opacity(0.4))",
+            ".foregroundStyle(Color.white.opacity(0.4))",   // the History row's age, not the session row's
             ".foregroundStyle(end.hasPrefix(\"crashed\") ? AgentState.blocked.color : Color.white.opacity(0.5))",
             ".foregroundStyle(Color.white.opacity(opacity))",
-            ".foregroundStyle(Color.white.opacity(0.5))",
-            "chipText(chip.label, Color.white.opacity(0.4))",
-            "if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), Color.white.opacity(0.5)) }",
-            "AgentIslandCount(kind: .merged, n: n).foregroundStyle(Color.white.opacity(0.5))",
             "button(action: onJump, fill: Color.white.opacity(0.08)) {",   // a fill
             "case .plain: (Color.white.opacity(0.08), Neon.faded(.white, 0.9))",   // fill, then the faded label
         ]

@@ -38,8 +38,14 @@ struct AgentIslandGeometry: Equatable {
 
     static let expandedWidth: CGFloat = 480
     /// A two-line row (title, state); `prRowHeight` adds the PR line (#525).
-    static let rowHeight: CGFloat = 48
-    static let prRowHeight: CGFloat = 64
+    /// #1371: the session row is the Agent Sessions sidebar row's two lines (scaled, sz) in a card sz(40) high, never under
+    /// 36 (the History row's fixed 13/11 pt lines), plus `rowGap`; the PR chips' line adds `chipLineHeight` (the chips'
+    /// font is fixed). TIP: 48 and 64 at every scale (a 44 / 60 pt card and a 4 pt gap).
+    static var rowHeight: CGFloat { max(sz(40), 36) + rowGap }
+    static var prRowHeight: CGFloat { rowHeight + chipLineHeight }
+    /// #1371: the gap between two rows (TIP: 4, the card's 2 pt padding above and below).
+    static let rowGap: CGFloat = 2
+    static let chipLineHeight: CGFloat = 18
     // The row's insets (AgentIslandRow): leading, glyph column, gap, trailing.
     static let rowLead: CGFloat = 8
     static let glyphWidth: CGFloat = 14
@@ -68,7 +74,13 @@ struct AgentIslandGeometry: Equatable {
 
     /// One row's height: three lines when it has a PR line (#534: after the toggles).
     static func height(of s: AgentSession, show d: AgentIslandRowDetails) -> CGFloat {
-        AgentIsland.hasPRLine(s.meta, show: d) ? prRowHeight : rowHeight
+        hasChipLine(s.meta, show: d) ? prRowHeight : rowHeight
+    }
+
+    /// #1371: the third line holds the PR chips only (the merged count is on line two, as in Agent Sessions): a shown
+    /// open PR with a label (`AgentIsland.hasPRLine` without the merged count).
+    static func hasChipLine(_ m: DchSessionMeta?, show d: AgentIslandRowDetails) -> Bool {
+        d.openPRs && (m?.openPRs.contains { $0.label != nil } ?? false)
     }
 
     /// The first 6 rows (`rows`, their heights in order) plus the prompt cards
@@ -1123,10 +1135,10 @@ struct AgentIslandHistoryRow: View {
             }
             .padding(.leading, AgentIslandGeometry.rowLead)
             .padding(.trailing, AgentIslandGeometry.rowTrail)
-            .frame(height: AgentIslandGeometry.rowHeight - 4)
+            .frame(height: AgentIslandGeometry.rowHeight - AgentIslandGeometry.rowGap)
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(hover && enabled ? 0.10 : 0.05)))
             .contentShape(Rectangle())
-            .padding(.vertical, 2)
+            .padding(.vertical, AgentIslandGeometry.rowGap / 2)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
@@ -1182,58 +1194,36 @@ struct AgentIslandRow: View {
 
     var body: some View {
         let prs = AgentIsland.prChips(session.meta, show: show)   // once per body
-        let prLine = AgentIsland.hasPRLine(session.meta, show: show)
+        let chipLine = AgentIslandGeometry.hasChipLine(session.meta, show: show)
+        // #1371: the Agent Sessions sidebar row's own pieces (hover takes its selected look and inks).
+        let side = AgentSidebarRowView(row: Self.sidebarRow(session, show: show, now: now, notice: notice), selected: hover)
         Button(action: action) {
-            // #525: line 1 title, agents, age; line 2 state; line 3 PRs, merged.
-            // Every line spans the text column, so the right-hand columns (age,
-            // merged) line up across rows.
+            // #1371: line 1 the state mark, the title, the model and effort badges; line 2 the state word, the agents,
+            // merged and open counts, the age at the end; then the island's own PR chips. The text column stays
+            // `rowTextWidth` at every scale (the chips' budget): fixed insets, the mark in the fixed glyph slot.
             HStack(alignment: .firstTextBaseline, spacing: AgentIslandGeometry.glyphGap) {
-                Text(session.state.glyph)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(session.state.color)
+                side.stateMark
                     .frame(width: AgentIslandGeometry.glyphWidth)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(session.title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.white)
-                            .lineLimit(1)
-                        if let n = AgentIsland.agentsCount(session, show: show) {   // #1137: symbol plus number
-                            AgentIslandCount(kind: .agents, n: n)
-                                .foregroundStyle(Color.white.opacity(0.5))
-                                .padding(.horizontal, AgentIsland.chipInset).padding(.vertical, 1)
-                                .background(Capsule().fill(Color.white.opacity(0.1)))
-                                .fixedSize()
-                        }
-                        Spacer(minLength: 6)
-                        let age = AgentIsland.age(of: session, now: now)
-                        if !age.isEmpty {   // #1114: none on a working row
-                            Text(age)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Color.white.opacity(0.4))
-                                .fixedSize()
-                        }
+                    .modifier(AgentSidebarRowProbe(kind: "mark", title: session.title))
+                VStack(alignment: .leading, spacing: sz(3)) {
+                    side.titleLine
+                    ViewThatFits(in: .horizontal) {
+                        side.detailLine([], open: side.row.prCount)
+                        side.detailLine([])
                     }
-                    HStack(spacing: 6) {
-                        if let notice {
-                            Text(notice).foregroundStyle(Neon.faded(.white, 0.7))
-                        } else {
-                            Text(session.state.label).foregroundStyle(session.state.color)
-                        }
-                    }
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-                    if prLine { prLineView(prs) }
+                    if chipLine { prLineView(prs).modifier(AgentSidebarRowProbe(kind: "chips", title: session.title)) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.leading, AgentIslandGeometry.rowLead)
             .padding(.trailing, AgentIslandGeometry.rowTrail)
-            .frame(height: (prLine ? AgentIslandGeometry.prRowHeight : AgentIslandGeometry.rowHeight) - 4)
-            .background(RoundedRectangle(cornerRadius: 12)
-                .fill(Color.white.opacity(hover ? 0.10 : 0.05)))
+            .frame(height: (chipLine ? AgentIslandGeometry.prRowHeight : AgentIslandGeometry.rowHeight) - AgentIslandGeometry.rowGap)
+            .coordinateSpace(.named(agentSidebarRowSpace))
+            .background(NeonSelectedRowFill(selected: hover))
+            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Self.cardFill))
             .contentShape(Rectangle())
-            .padding(.vertical, 2)
+            .modifier(AgentSidebarRowProbe(kind: "card", title: session.title))
+            .padding(.vertical, AgentIslandGeometry.rowGap / 2)
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
@@ -1247,30 +1237,41 @@ struct AgentIslandRow: View {
         }
     }
 
+    /// #1371: the card is the theme's sidebar surface, the one the Agent Sessions rows sit on (TIP: white at 0.05 over the
+    /// island's black, 0.10 on hover). The island's black notch shape stays (#474).
+    static var cardFill: Color { Neon.sidebar }
+
+    /// #1371: the session as the Agent Sessions sidebar draws it; the island's notice ("Attach command copied", a
+    /// running action) is the state word's text, as TIP drew it in place of the state.
+    static func sidebarRow(_ s: AgentSession, show: AgentIslandRowDetails, now: TimeInterval, notice: String?) -> AgentSidebar.Row {
+        let r = AgentSidebar.row(s, details: show, now: now)
+        guard let notice else { return r }
+        return AgentSidebar.Row(id: r.id, title: r.title, state: r.state, detail: notice, age: r.age, prs: r.prs,
+                                prCount: r.prCount, prLinks: r.prLinks, agents: r.agents, merged: r.merged, session: r.session,
+                                modelSlot: r.modelSlot, model: r.model, effort: r.effort)
+    }
+
     /// #525: the PR line. Open PRs as "repo#12" chips in the agents capsule's
     /// style (a button when the URL passed the allowlist, else a dimmer label),
-    /// "+N pending PRs", then the merged count (#1137: symbol plus number) right-aligned. `AgentIsland.prChips`
+    /// "+N pending PRs" (#1371: the merged count is on line two now, in the sidebar's inks). `AgentIsland.prChips`
     /// measured it all to fit `rowTextWidth`. Static, no animation.
     func prLineView(_ prs: (chips: [AgentIsland.PRChip], more: Int)) -> some View {
         HStack(spacing: 0) {
             HStack(spacing: AgentIsland.chipSpacing) {
                 ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
                     if chip.url != nil {
-                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, Neon.faded(.white, 0.8)) }
+                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, AgentSidebarRowView.ink(.blue, selected: hover)) }
                             .buttonStyle(.plain)
                             .help(Text(verbatim: chip.help))
                     } else {
-                        chipText(chip.label, Color.white.opacity(0.4))
+                        chipText(chip.label, AgentSidebarRowView.ink(.quiet, selected: hover))
                             .help(Text(verbatim: chip.help))
                     }
                 }
-                if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), Color.white.opacity(0.5)) }
+                if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), AgentSidebarRowView.ink(.quiet, selected: hover)) }
             }
             .fixedSize()
-            Spacer(minLength: AgentIsland.mergedGap)
-            if let n = AgentIsland.mergedCount(session.meta, show: show) {
-                AgentIslandCount(kind: .merged, n: n).foregroundStyle(Color.white.opacity(0.5))
-            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -1280,7 +1281,7 @@ struct AgentIslandRow: View {
             .foregroundStyle(color)
             .lineLimit(1)
             .padding(.horizontal, AgentIsland.chipInset).padding(.vertical, 1)
-            .background(Capsule().fill(Color.white.opacity(0.1)))
+            .background(Capsule().fill(Neon.blue.opacity(0.12)))   // #1371: the sidebar chips' wash
             .contentShape(Capsule())
     }
 }
