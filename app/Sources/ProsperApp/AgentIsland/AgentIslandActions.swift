@@ -1599,6 +1599,7 @@ final class DchActionRunner: @unchecked Sendable {
                 // cut through, in the same lock as its reap (a row's own job reads no tally); #991: a parked one too.
                 if kill, AgentIsland.killed(result) {
                     jobs[AgentSessionKey(dir: key.dir, name: "")]?.killed.insert(key.name)
+                    jobs[key]?.killed.insert(key.name)   // #1328: the row's own Stop or Restart too
                     for p in parked where p.dir == key.dir { p.job.killed.insert(key.name) }
                 }
                 if kill {

@@ -2009,4 +2009,13 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(message(Self.decode(DchControlOps.answer(named: [("a", both), ("b", both)], .stop))),
                        "a: \(AgentIsland.killedText); b: master gone")
     }
+
+    /// #1328 (R991-n1): renamed() renames only the lines named after its argument; another name's line stays.
+    func testRenamedRewritesOnlyTheArgumentNamedLine() {
+        let r = DchActionResult(status: 1, json: [DchJSONLine(name: "work.json", result: "ok"),
+                                                   DchJSONLine(name: "other", result: "failed", reason: "gone")])
+        let got = DchControlOps.renamed(r, "work.json", to: "work").json
+        XCTAssertEqual(got.map(\.name), ["work", "other"])
+        XCTAssertEqual(got.last?.result, "failed")
+    }
 }

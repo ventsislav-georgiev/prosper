@@ -1451,6 +1451,8 @@ tag from the now-released section and put it on the new top draft.
   already offers only "No" there), stops answering two prompts that keep alternating within 30
   seconds, and no longer replaces a row's "Restart failed" text with "Allowed automatically"; the
   note also goes once the row waits on you again. (#1315)
+- Island: a session killed while its own Stop or Restart was still running now reads "Killed"
+  instead of "Stop failed". (#1328)
 
 ## v2.174.0
 
