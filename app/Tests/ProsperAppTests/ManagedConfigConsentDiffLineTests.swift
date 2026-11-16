@@ -261,6 +261,8 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
     private static let hostile = "a\u{0323}\u{0323}\u{0323}\u{0323}b\u{0323}\u{0323}\u{0323}\u{0323}\u{202E}cd"
     private static let shownHostile = "+ a\u{0323}\u{0323}\u{0323}\\u{0323}b\u{0323}\u{0323}\u{0323}\\u{0323}\\u{202E}cd"
     private static let ordinary = "+ Always ask first."
+    /// #1075: the fixture's note runs a command (the status line), so the button names it.
+    private static let apply = "Apply and allow 1 command to run"
 
     private static func file(lines: [ManagedConfigChangeSet.Line]) -> ManagedConfigChangeSet.File {
         ManagedConfigChangeSet.File(target: "claude:no\u{202E}tes.md", path: path,
@@ -284,7 +286,7 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
 
     private func tree(_ model: ManagedConfigConsentModel, _ size: CGSize) -> [AXTreeNode] {
         let view = ManagedConfigConsentView(model: model).frame(width: size.width).frame(maxHeight: .infinity, alignment: .top)
-        return AXTreeSupport.tree(view, size) { t in t.contains { $0.named("Apply") } && t.contains { $0.named(Self.ordinary) } }
+        return AXTreeSupport.tree(view, size) { t in t.contains { $0.named(Self.apply) } && t.contains { $0.named(Self.ordinary) } }
     }
 
     /// A line with stacked marks and an override next to an ordinary line: the sheet draws and lists the displayed form,
@@ -303,7 +305,7 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         func near(_ p: CGRect, _ q: CGRect) -> Bool {
             abs(p.minX - q.minX) <= 0.5 && abs(p.minY - q.minY) <= 0.5 && abs(p.width - q.width) <= 0.5 && abs(p.height - q.height) <= 0.5
         }
-        for label in [Self.ordinary, Self.owner, "Cancel", "Apply"] {
+        for label in [Self.ordinary, Self.owner, "Cancel", Self.apply] {
             let before = try XCTUnwrap(a.first { $0.named(label) && $0.frame.height > 0 }, "plain: \(label)")
             let after = try XCTUnwrap(b.first { $0.named(label) && $0.frame.height > 0 }, "hostile: \(label): \(b.map(\.names))")
             XCTAssertTrue(near(before.frame, after.frame), "\(label): \(after.frame) under the hostile line, \(before.frame) under a harmless one")
@@ -447,14 +449,14 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         XCTAssertEqual(cut.renderedStrings.filter { $0 == note }.count, 1, "\(cut.renderedStrings.suffix(4))")
         XCTAssertEqual(two.renderedStrings.filter { $0 == note }.count, 1, "two cut lines, one note")
         XCTAssertEqual(plain.renderedStrings.filter { $0 == note }.count, 0, "nothing cut, no note")
-        XCTAssertEqual(Array(cut.renderedStrings.suffix(3)), [note, "Cancel", "Apply"], "under the cards, above the buttons")
+        XCTAssertEqual(Array(cut.renderedStrings.suffix(3)), [note, "Cancel", Self.apply], "under the cards, above the buttons")
         let a = tree(plain, fitting(plain)), size = fitting(cut), b = tree(cut, size)
         fputs("mc1252b fact cut note: fitted height plain \(fitting(plain).height), with a cut line \(size.height)\n", stderr)
         XCTAssertFalse(a.contains { $0.named(note) }, "no note on the plain sheet")
         let shown = b.filter { $0.named(note) && $0.frame.height > 0 }
         XCTAssertEqual(Set(shown.map { $0.frame.minY.rounded() }).count, 1, "the note once: \(shown.map(\.frame))")
         let frame = try XCTUnwrap(shown.first, "\(b.map(\.names))").frame
-        for label in ["Fake Kit", Self.owner, "Cancel", "Apply"] {
+        for label in ["Fake Kit", Self.owner, "Cancel", Self.apply] {
             let node = try XCTUnwrap(b.first { $0.named(label) && $0.frame.height > 0 }, "\(label): \(b.map(\.names))")
             XCTAssertFalse(node.frame.intersects(frame), "\(label) \(node.frame) meets the note \(frame)")
         }

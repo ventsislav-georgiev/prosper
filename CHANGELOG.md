@@ -1386,6 +1386,9 @@ tag from the now-released section and put it on the new top draft.
   popup: their dividers, borders and faint labels are drawn solid. While it is on, Transparency and
   Frost in Appearance are off, with a note saying why. The launcher and Clipboard dividers now use
   the theme's divider colour.
+- The config-change sheet now warns, with a line per piece, when an extension's change will run a
+  command (a hook or the status line), and its Apply button says how many, for example "Apply and
+  allow 2 commands to run".
 
 ## v2.174.0
 

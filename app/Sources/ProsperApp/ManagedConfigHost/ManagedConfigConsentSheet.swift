@@ -106,11 +106,10 @@ final class ManagedConfigConsentModel: ObservableObject {
     }
 
     /// The consenting button reads the operation's verb. No default: a new action fails the build until it has one.
+    /// #1075: an Apply that runs commands names them (ManagedConfigCommandWarning.title).
     var verb: String {
         switch changes.action {
-        case .apply: return "Apply"
-        case .remove: return "Remove"
-        case .repair: return "Repair"
+        case .apply, .remove, .repair: return ManagedConfigCommandWarning.title(for: changes)
         }
     }
 
@@ -124,6 +123,11 @@ final class ManagedConfigConsentModel: ObservableObject {
         var out = file.notes
         if file.target == "claude:settings.json", !out.contains(Self.liveNote) { out.append(Self.liveNote) }
         return out
+    }
+
+    /// #1075: one plain line per piece of this file that runs a command (Apply and Repair; a Remove adds none).
+    func warnings(_ file: ManagedConfigChangeSet.File) -> [String] {
+        changes.action == .remove ? [] : ManagedConfigCommandWarning.lines(in: file)
     }
 
     func status(_ file: ManagedConfigChangeSet.File) -> String? {
@@ -148,7 +152,8 @@ final class ManagedConfigConsentModel: ObservableObject {
         for f in changes.files {
             out.append(ManagedConfigConsentDisplay.displayed(f.path))
             if let s = status(f) { out.append(s) }
-            out += f.lines.map(Self.text) + notes(f).map(ManagedConfigConsentDisplay.displayed) + (backupLine(f).map { [$0] } ?? [])
+            out += f.lines.map(Self.text) + notes(f).map(ManagedConfigConsentDisplay.displayed)
+                + warnings(f).map(ManagedConfigConsentDisplay.displayed) + (backupLine(f).map { [$0] } ?? [])
         }
         return out + (showsCutNote ? [Self.cutNote] : []) + ["Cancel", verb]
     }
@@ -160,6 +165,48 @@ final class ManagedConfigConsentModel: ObservableObject {
         // QA r1106: the backup directory only where its line is shown (a new file has none)
         changes.files.contains { f in ([f.path] + (backupLine(f) == nil ? [] : [f.backupDirectory]) + notes(f) + f.lines.map(\.text))
             .contains(where: ManagedConfigConsentDisplay.isCut) }
+    }
+}
+
+/// #1075 (OQ-92): the sheet warns on every piece that runs a command, and the Apply button names them. Pure, no isolation.
+/// The change set carries no piece kind, only the planner's note per command (ManagedConfigPlanner.hookNotes and
+/// statusLineNote, written on insert/update), so the warning is read from that sentence; being derived from `notes`, it is
+/// part of the sheet the apply loop's re-ask compares. Managed config can write two kinds that run a command (a hook, the
+/// statusLine); blocks, seeds and permissions run nothing, and an MCP server is refused by the JSON allowlist.
+enum ManagedConfigCommandWarning {
+    enum Kind: String, CaseIterable { case hook, statusLine }
+
+    /// The kinds that warn.
+    static let kinds: [Kind] = Kind.allCases
+
+    private static let head = "Claude Code will run ", tail = " in every session."
+
+    /// What the note says runs ("`cmd` on `Stop` (every match)"), nil for a note that is not a run sentence.
+    static func kind(of note: String) -> (kind: Kind, what: String)? {
+        guard note.hasPrefix(head), note.hasSuffix(tail), note.count > head.count + tail.count else { return nil }
+        let what = String(note.dropFirst(head.count).dropLast(tail.count))
+        let kind: Kind = what.hasSuffix("` as the status line") ? .statusLine : .hook
+        return kinds.contains(kind) ? (kind, what) : nil
+    }
+
+    static func lines(in file: ManagedConfigChangeSet.File) -> [String] {
+        file.notes.compactMap { kind(of: $0).map { "Runs a command: " + $0.what } }
+    }
+
+    /// The count the title names: Remove adds none.
+    static func count(_ changes: ManagedConfigChangeSet) -> Int {
+        changes.action == .remove ? 0 : changes.files.reduce(0) { $0 + lines(in: $1).count }
+    }
+
+    /// Apply names its commands; Remove and Repair keep their verb (a Repair's lines still show).
+    static func title(for changes: ManagedConfigChangeSet) -> String {
+        let n = count(changes)
+        switch changes.action {
+        case .remove: return "Remove"
+        case .repair: return "Repair"
+        case .apply: break
+        }
+        return n == 0 ? "Apply" : "Apply and allow \(n) command\(n == 1 ? "" : "s") to run"
     }
 }
 
@@ -371,6 +418,13 @@ struct ManagedConfigConsentView: View {
             ForEach(model.notes(file), id: \.self) { note in
                 Text(verbatim: ManagedConfigConsentDisplay.displayed(note))
                     .font(Neon.font(12))
+                    .foregroundStyle(Neon.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .clipped()
+            }
+            ForEach(Array(model.warnings(file).enumerated()), id: \.offset) { _, line in
+                Text(verbatim: ManagedConfigConsentDisplay.displayed(line))
+                    .font(Neon.font(12, weight: .semibold))
                     .foregroundStyle(Neon.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                     .clipped()
