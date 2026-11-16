@@ -82,15 +82,15 @@ final class IncreaseContrastChromeTests: XCTestCase {
         let settings = try Self.source("SettingsTheme.swift")
         let stats = try Self.source("SystemStats/StatsPopupView.swift")
 
-        let vertical = "Divider().overlay(Neon.stroke)"
-        func system(_ s: String) -> Int {
-            Self.count("Divider()", in: s) - Self.count("NeonDivider()", in: s) - Self.count(vertical, in: s)
-        }
+        // #1308: the vertical hairlines are plain Rectangles of the stroke token, no system Divider.
+        let vRunner = "Rectangle().fill(Neon.stroke).frame(width: 1, height: sz(14))"
+        let vClip = "Rectangle().fill(Neon.stroke).frame(width: 1)"
+        func system(_ s: String) -> Int { Self.count("Divider()", in: s) - Self.count("NeonDivider()", in: s) }
         XCTAssertEqual(Self.count("NeonDivider()", in: runner), 5, "launcher horizontal dividers")
-        XCTAssertEqual(Self.count(vertical, in: runner), 1, "launcher action bar divider")
+        XCTAssertEqual(Self.count(vRunner, in: runner), 1, "launcher action bar divider")
         XCTAssertEqual(system(runner), 3, "only the three Actions menu separators stay system")
         XCTAssertEqual(Self.count("NeonDivider()", in: clip), 4, "Clipboard horizontal dividers")
-        XCTAssertEqual(Self.count(vertical, in: clip), 1, "Clipboard list/preview divider")
+        XCTAssertEqual(Self.count(vClip, in: clip), 1, "Clipboard list/preview divider")
         XCTAssertEqual(system(clip), 2, "only the type-filter and row menu separators stay system")
         XCTAssertEqual(Self.count("Rectangle().fill(Neon.stroke).frame(height: 1)", in: settings), 1,
                        "NeonDivider paints the divider token")

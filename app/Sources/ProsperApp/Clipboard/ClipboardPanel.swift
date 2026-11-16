@@ -565,7 +565,7 @@ struct ClipboardView: View {
             } else {
                 HStack(spacing: 0) {
                     listPane
-                    Divider().overlay(Neon.stroke)  // vertical: NeonDivider is a horizontal hairline
+                    Rectangle().fill(Neon.stroke).frame(width: 1)  // vertical hairline: NeonDivider is horizontal; no system grey under the stroke
                     previewPane
                 }
                 // Scroll viewport pinned to an exact pitch multiple so reveals land

@@ -1857,7 +1857,7 @@ private struct RunnerView: View {
             }
             .allowsHitTesting(false)   // #713: a hint, not a button: grab area
 
-            Divider().overlay(Neon.stroke).frame(height: sz(14))  // vertical: NeonDivider is a horizontal hairline
+            Rectangle().fill(Neon.stroke).frame(width: 1, height: sz(14))  // vertical hairline: NeonDivider is horizontal; no system grey under the stroke
 
             // Actions menu — right side (⌘K). Lists the selected row's file
             // actions when it has them (the `files` finder), then Copy / quicklink.

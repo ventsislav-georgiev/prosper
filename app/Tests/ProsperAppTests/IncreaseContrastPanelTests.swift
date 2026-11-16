@@ -7,8 +7,15 @@ import XCTest
 /// the flag in; source rows read the files. No row reads the Mac's setting and no panel is made.
 @MainActor
 final class IncreaseContrastPanelTests: XCTestCase {
+    private static var savedIC = false
+
+    override func setUp() {
+        super.setUp()
+        MainActor.assumeIsolated { Self.savedIC = ThemeRuntime.increaseContrast }
+    }
+
     override func tearDown() {
-        MainActor.assumeIsolated { ThemeRuntime.increaseContrast = false }
+        MainActor.assumeIsolated { ThemeRuntime.increaseContrast = Self.savedIC }
         super.tearDown()
     }
 

@@ -1416,6 +1416,11 @@ tag from the now-released section and put it on the new top draft.
   row is busy too: its Restart, Stop, Message and Kill wait until the resume finishes, on the island
   and from the phone.
 - Increase Contrast now also reaches the Agent Island and the Agent Sessions window chrome.
+- With Increase Contrast on, a custom theme's faint lines (dividers, card borders) now fall back to
+  the main text colour when they would be hard to see on the theme's cards, and secondary text uses
+  the main text colour; the launcher and clipboard vertical dividers now use the theme's line colour
+  instead of the system grey, and the clipboard colour swatch border now uses the theme's line
+  colour too.
 
 ## v2.174.0
 

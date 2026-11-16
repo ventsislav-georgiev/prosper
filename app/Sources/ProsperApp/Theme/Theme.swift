@@ -130,7 +130,7 @@ enum ThemeRuntime {
     // writer and only on the main thread; readers are SwiftUI bodies (main) plus
     // a few main-thread AppKit setups. Value-type assignment is atomic enough for
     // that. If a background reader ever appears, switch to an os_unfair_lock box.
-    nonisolated(unsafe) static var palette: ThemePalette = .default
+    nonisolated(unsafe) static var palette: ThemePalette = .default { didSet { refreshContrastTokens() } }
 
     /// Global UI size multiplier. Every scalable dimension (font sizes, paddings,
     /// spacing, frames, corner radii, window widths) is read as `N * scale`, so
@@ -154,7 +154,39 @@ enum ThemeRuntime {
     /// #1076: system "Increase contrast" (Accessibility, Display). ThemeStore is the single
     /// writer; while set, `Neon.stroke`, `Neon.cardStroke` and `Neon.textSecondary` read their
     /// strong values, and the store forces `opacity` to 1 and `frost` off.
-    nonisolated(unsafe) static var increaseContrast = false
+    nonisolated(unsafe) static var increaseContrast = false { didSet { refreshContrastTokens() } }
+
+    /// #1308: the Increase Contrast line colours, resolved once per palette swap or flag flip
+    /// (never per draw). A line token (the divider, either card border end) under 3:1 on the
+    /// theme's card falls back to the full text colour; shortcut: the card is read opaque and
+    /// only card and cardHi are checked, other surfaces keep the built-in proof.
+    struct ContrastLines {
+        var stroke: Color
+        var cardEnds: [Color]
+    }
+    nonisolated(unsafe) private(set) static var contrastLines = resolveContrastLines(.default)
+
+    private static func refreshContrastTokens() {
+        if increaseContrast { contrastLines = resolveContrastLines(palette) }
+    }
+
+    static func resolveContrastLines(_ p: ThemePalette) -> ContrastLines {
+        func line(_ c: Color) -> Color {
+            [p.card, p.cardHi].allSatisfy { contrastRatio(c, $0) >= 3 } ? c : p.textPrimary
+        }
+        return ContrastLines(stroke: line(p.blue), cardEnds: [line(p.blue), line(p.indigo)])
+    }
+
+    /// WCAG 2 ratio of two opaque colours (alpha ignored).
+    static func contrastRatio(_ a: Color, _ b: Color) -> Double {
+        func lum(_ c: Color) -> Double {
+            let n = NSColor(c).usingColorSpace(.sRGB) ?? NSColor(c)
+            func lin(_ v: CGFloat) -> Double { let d = Double(v); return d <= 0.03928 ? d / 12.92 : pow((d + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(n.redComponent) + 0.7152 * lin(n.greenComponent) + 0.0722 * lin(n.blueComponent)
+        }
+        let l1 = lum(a), l2 = lum(b)
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
 
     /// Densest glass tint — the alpha of the theme gradient over the frost blur at
     /// the 100% Transparency preset (preserves the original frost look). Lower presets

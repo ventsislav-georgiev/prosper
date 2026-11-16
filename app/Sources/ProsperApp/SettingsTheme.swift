@@ -33,15 +33,16 @@ enum Neon {
 
     // Lines + text
     // #1076: under system Increase Contrast the divider and border go opaque (3:1 on every
-    // built-in surface) and secondary text takes the full text colour; the theme stays.
+    // built-in surface) and secondary text takes the full text colour; the theme stays. #1308: a
+    // custom theme's line under 3:1 on its card takes the full text colour (ThemeRuntime.contrastLines).
     private static var hc: Bool { ThemeRuntime.increaseContrast }
-    static var stroke: Color { p.blue.opacity(hc ? 1 : 0.16) }
+    static var stroke: Color { hc ? ThemeRuntime.contrastLines.stroke : p.blue.opacity(0.16) }
     static var textPrimary: Color { p.textPrimary }
     static var textSecondary: Color { hc ? p.textPrimary : p.textSecondary }
 
     /// The two ends of `cardStroke`, top-leading first.
     static var cardStrokeColors: [Color] {
-        hc ? [p.blue, p.indigo] : [p.blue.opacity(0.38), p.indigo.opacity(0.10)]
+        hc ? ThemeRuntime.contrastLines.cardEnds : [p.blue.opacity(0.38), p.indigo.opacity(0.10)]
     }
     static var cardStroke: LinearGradient {
         LinearGradient(colors: cardStrokeColors, startPoint: .topLeading, endPoint: .bottomTrailing)
