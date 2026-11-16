@@ -6,144 +6,39 @@ import XCTest
 final class AgentIslandPairsTests: XCTestCase {
     private func key(_ name: String, _ dir: String = "/d") -> AgentSessionKey { AgentSessionKey(dir: dir, name: name) }
 
-    private func pair(_ p: [AgentSessionKey: AgentPair], _ name: String, _ dir: String = "/d") -> AgentPair? {
-        p[key(name.lowercased(), dir)]
-    }
-
     private func line(_ name: String, _ result: String, reason: String? = nil, detail: String? = nil) -> DchJSONLine {
         DchJSONLine(name: name, result: result, reason: reason, detail: detail)
     }
 
-    private func session(_ name: String, dir: String = "/d", alias: String = "") -> AgentSession {
-        AgentSession(key: key(name, dir), alias: alias, activity: 0, state: .idle, agents: 0)
-    }
-
-    private func record(_ name: String, dir: String = "/d", alias: String = "", ended: TimeInterval = 100) -> DchHistoryRecord {
-        DchHistoryRecord(key: key(name, dir), alias: alias, cwd: "/Users/example/x", updated: ended, ended: ended, end: "stopped")
-    }
-
-    private let geometry = AgentIslandGeometry.make(
-        frame: CGRect(x: 0, y: 0, width: 1512, height: 982), visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 950),
-        topLeft: CGRect(x: 0, y: 950, width: 663.5, height: 32), topRight: CGRect(x: 848.5, y: 950, width: 663.5, height: 32),
-        safeTop: 32)
-
-    // T1
-    @MainActor
-    func testPairsByNameOnlyNeverByAlias() {
-        let p = AgentIsland.pairs([key("api"), key("api-qa")], suffix: "-qa")
-        XCTAssertEqual(pair(p, "api"), AgentPair(dir: "/d", main: "api", sidekick: "api-qa"))
-        XCTAssertEqual(pair(p, "api-qa"), pair(p, "api"))
-        XCTAssertEqual(p.count, 2)
-        // Aliases are never read: a record aliased "x-qa" beside a live "x" alias pairs nothing.
-        let store = AgentIslandStore(geometry: geometry)
-        store.sessions = [session("one", alias: "x")]
-        store.history = [record("two", alias: "x-qa")]
-        XCTAssertTrue(store.pairs(suffix: "-qa").isEmpty)
-    }
-
-    // T2
-    @MainActor
-    func testPairsFoldCaseAcrossLiveAndHistory() {
-        let store = AgentIslandStore(geometry: geometry)
-        store.sessions = [session("API")]
-        store.history = [record("api-QA")]
-        let p = store.pairs(suffix: "-qa")
-        XCTAssertEqual(pair(p, "API"), AgentPair(dir: "/d", main: "api", sidekick: "api-qa"))
-        XCTAssertEqual(pair(p, "Api-Qa"), pair(p, "api"), "any spelling finds it")
-        XCTAssertEqual(store.historyPartner(store.history.first ?? record("none"), pairs: p)?.name, nil,
-                       "the main has no record: the sidekick record's History partner is none")
-        XCTAssertEqual(store.livePartner(store.sessions.first ?? session("none"), pairs: p)?.name, nil,
-                       "api-QA is not live")
-        store.sessions = [session("API"), session("api-QA")]
-        XCTAssertEqual(store.livePartner(session("api"), pairs: p)?.name, "api-QA")
-        XCTAssertEqual(store.livePartner(session("API-qa"), pairs: p)?.name, "API")
-        store.history = [record("api", ended: 300), record("api-qa", ended: 200), record("api", ended: 100)]
-        XCTAssertEqual(store.historyPartner(record("API-QA"), pairs: p)?.ended, 300, "the newest record of the main")
-        XCTAssertTrue(p[key("api", "/e")] == nil)
-        XCTAssertEqual(p.first?.value.isMain("API"), true)
-        XCTAssertEqual(p.first?.value.isMain("api-qa"), false)
-    }
-
-    // T3
-    func testSuffixChangeRepairs() {
-        let keys = [key("api"), key("api-qa"), key("api-rev")]
-        XCTAssertEqual(pair(AgentIsland.pairs(keys, suffix: "-qa"), "api")?.sidekick, "api-qa")
-        XCTAssertEqual(pair(AgentIsland.pairs(keys, suffix: "-rev"), "api")?.sidekick, "api-rev")
-        XCTAssertTrue(AgentIsland.pairs([key("api"), key("api-qa")], suffix: "-rev").isEmpty)
-        XCTAssertTrue(AgentIsland.pairs(keys, suffix: "").isEmpty, "empty: off")
-        XCTAssertTrue(AgentIsland.pairs(keys, suffix: "   ").isEmpty, "blank: off")
-        XCTAssertEqual(pair(AgentIsland.pairs(keys, suffix: " -QA "), "api")?.sidekick, "api-qa", "trimmed, folded")
-        XCTAssertTrue(AgentIsland.pairs([key("api"), key("api-q/a")], suffix: "-q/a").isEmpty, "unusable: off")
-    }
-
-    // T4
-    func testPairsNeverCrossDirs() {
-        XCTAssertTrue(AgentIsland.pairs([key("api", "/d"), key("api-qa", "/e")], suffix: "-qa").isEmpty)
-        let p = AgentIsland.pairs([key("api", "/d"), key("api-qa", "/d"), key("api-qa", "/e")], suffix: "-qa")
-        XCTAssertEqual(pair(p, "api-qa", "/d"), AgentPair(dir: "/d", main: "api", sidekick: "api-qa"))
-        XCTAssertTrue(pair(p, "api-qa", "/e") == nil)
-        XCTAssertEqual(p.count, 2)
-        let both = AgentIsland.pairs([key("api", "/d"), key("api-qa", "/d"), key("api", "/e"), key("api-qa", "/e")], suffix: "-qa")
-        XCTAssertEqual(pair(both, "api", "/e")?.dir, "/e")
-        XCTAssertEqual(both.count, 4)
-    }
-
-    // T5
-    func testStoredLinksWinOverInference() {
-        let keys = [key("api"), key("api-qa"), key("api-rev")]
-        let p = AgentIsland.pairs(keys, suffix: "-qa", links: [(main: key("api"), sidekick: key("API-rev"))])
-        XCTAssertEqual(pair(p, "api"), AgentPair(dir: "/d", main: "api", sidekick: "api-rev"))
-        XCTAssertTrue(pair(p, "api-qa") == nil, "the link took api")
-        let absent = AgentIsland.pairs(keys, suffix: "-qa", links: [(main: key("api"), sidekick: key("api-gone"))])
-        XCTAssertEqual(pair(absent, "api")?.sidekick, "api-qa", "a link with an absent member pairs nothing")
-        let off = AgentIsland.pairs(keys, suffix: "", links: [(main: key("api"), sidekick: key("api-rev"))])
-        XCTAssertEqual(pair(off, "api-rev")?.main, "api", "links apply with the suffix off")
-        XCTAssertEqual(off.count, 2)
-        let cross = AgentIsland.pairs([key("api", "/d"), key("api-rev", "/e")], suffix: "",
-                                      links: [(main: key("api", "/d"), sidekick: key("api-rev", "/e"))])
-        XCTAssertTrue(cross.isEmpty, "a link never crosses dirs")
-        let twice = AgentIsland.pairs(keys, suffix: "", links: [(main: key("api"), sidekick: key("api-rev")),
-                                                                (main: key("api-qa"), sidekick: key("api"))])
-        XCTAssertEqual(pair(twice, "api")?.sidekick, "api-rev", "one partner each, the first link wins")
-        XCTAssertTrue(pair(twice, "api-qa") == nil)
-    }
-
-    // T6
-    func testNeverChains() {
-        let p = AgentIsland.pairs([key("api-qa-qa"), key("api-qa"), key("api")], suffix: "-qa")
-        XCTAssertEqual(pair(p, "api")?.sidekick, "api-qa")
-        XCTAssertEqual(pair(p, "api-qa")?.main, "api")
-        XCTAssertTrue(pair(p, "api-qa-qa") == nil)
-        XCTAssertEqual(p.count, 2)
-        let alone = AgentIsland.pairs([key("api-qa"), key("api-qa-qa")], suffix: "-qa")
-        XCTAssertEqual(pair(alone, "api-qa-qa"), AgentPair(dir: "/d", main: "api-qa", sidekick: "api-qa-qa"))
-    }
-
-    // T7
-    func testEdges() {
-        XCTAssertTrue(AgentIsland.pairs([key("qa"), key("")], suffix: "qa").isEmpty, "the suffix alone has no main")
-        XCTAssertTrue(AgentIsland.pairs([key("-qa"), key("")], suffix: "-qa").isEmpty, "\"-qa\" is not passable")
-        XCTAssertTrue(AgentIsland.pairs([key("--x"), key("--x-qa")], suffix: "-qa").isEmpty, "not passable")
-        let p = AgentIsland.pairs([key("api"), key("api-qa"), key("API-QA"), key("api-qa")], suffix: "-qa")
-        XCTAssertEqual(p.count, 2, "live and History of one name are one entry")
-        XCTAssertEqual(pair(p, "api")?.sidekick, "api-qa")
-    }
-
-    // T8
+    // T8; R909-2: a suffix needs a letter.
     func testSuffixOK() {
-        for s in ["-qa", "_r", ".x", "Q", String(repeating: "a", count: 16)] { XCTAssertTrue(AgentIsland.suffixOK(s), s) }
-        for s in ["", " ", "a/b", "q a", "é", "\u{0}", String(repeating: "a", count: 17)] {
+        for s in ["-qa", "_r", ".x", "Q", "-qa2", "1a", String(repeating: "a", count: 16)] { XCTAssertTrue(AgentIsland.suffixOK(s), s) }
+        for s in ["", " ", "a/b", "q a", "\u{E9}", "\u{0}", String(repeating: "a", count: 17), "-", "_", ".", "1", "-2", "--", "-.-_"] {
             XCTAssertFalse(AgentIsland.suffixOK(s), s)
         }
     }
 
-    // T9: correctness at size; no timing assertion (timing tests flake on this machine).
-    func testTwoThousandKeys() {
+    // R909-2: with "-" (or digits alone) every numbered name read as a sidekick: such a suffix is off, as "" is.
+    func testASuffixWithNoLetterGroupsNothing() {
+        let keys = [key("feat"), key("feat-1"), key("feat-2"), key("feat-qa")]
+        XCTAssertEqual(AgentIsland.groups(keys, suffix: "-"), [], "not feat with sidekicks feat-1, feat-2")
+        XCTAssertEqual(AgentIsland.groups(keys, suffix: "-1"), [])
+        XCTAssertEqual(AgentIsland.groups(keys, suffix: " - "), [], "trimmed first")
+        XCTAssertEqual(AgentIsland.groups(keys, suffix: "-qa"),
+                       [AgentGroup(dir: "/d", stem: "feat", mains: ["feat", "feat-1", "feat-2"], sidekicks: ["feat-qa"])],
+                       "a suffix with a letter groups as before")
+    }
+
+    // T9 for groups (R909-1, the size row pairs() had): 2000 keys, every group found, none doubled; no timing assert.
+    func testTwoThousandKeysGroup() {
         let keys = (0..<1000).flatMap { [key("s\($0)"), key("s\($0)-qa")] }.shuffled()
-        let p = AgentIsland.pairs(keys, suffix: "-qa")
-        XCTAssertEqual(p.count, 2000)
-        XCTAssertEqual(Set(p.values).count, 1000, "none doubled")
-        for i in 0..<1000 where pair(p, "s\(i)") != AgentPair(dir: "/d", main: "s\(i)", sidekick: "s\(i)-qa") {
+        let g = AgentIsland.groups(keys, suffix: "-qa")
+        XCTAssertEqual(g.count, 1000)
+        let members = g.flatMap { $0.mains + $0.sidekicks }
+        XCTAssertEqual(members.count, 2000)
+        XCTAssertEqual(Set(members).count, 2000, "none doubled")
+        let byStem = Dictionary(g.map { ($0.stem, $0) }, uniquingKeysWith: { a, _ in a })
+        for i in 0..<1000 where byStem["s\(i)"] != AgentGroup(dir: "/d", stem: "s\(i)", mains: ["s\(i)"], sidekicks: ["s\(i)-qa"]) {
             XCTFail("s\(i)")
         }
     }
@@ -243,13 +138,11 @@ final class AgentIslandPairsTests: XCTestCase {
     func testLinksNeverCrossDirsAndNeverPairANameWithItself() {
         let keys = [key("api"), key("api-rev"), key("api", "/e"), key("api-rev", "/e")]
         let across = [(main: key("api"), sidekick: key("api-rev", "/e"))]
-        XCTAssertTrue(AgentIsland.pairs(keys, suffix: "", links: across).isEmpty, "p6")
-        XCTAssertTrue(AgentIsland.groups(keys, suffix: "", links: across).isEmpty)
-        XCTAssertEqual(pair(AgentIsland.pairs(keys, suffix: "", links: [(main: key("api"), sidekick: key("api-rev"))]), "api-rev"),
-                       AgentPair(dir: "/d", main: "api", sidekick: "api-rev"), "the same link in one dir pairs")
+        XCTAssertTrue(AgentIsland.groups(keys, suffix: "", links: across).isEmpty, "p6")
+        XCTAssertEqual(AgentIsland.groups(keys, suffix: "", links: [(main: key("api"), sidekick: key("api-rev"))]),
+                       [AgentGroup(dir: "/d", stem: "api", mains: ["api"], sidekicks: ["api-rev"])], "the same link in one dir groups")
         let me = [(main: key("api"), sidekick: key("API"))]
-        XCTAssertTrue(AgentIsland.pairs([key("api")], suffix: "", links: me).isEmpty, "QA 791 (1): a self link, any case")
-        XCTAssertTrue(AgentIsland.groups([key("api")], suffix: "", links: me).isEmpty)
+        XCTAssertTrue(AgentIsland.groups([key("api")], suffix: "", links: me).isEmpty, "QA 791 (1): a self link, any case")
     }
 
     // #908 QA 791 (2): a join given one name twice still ends, once.

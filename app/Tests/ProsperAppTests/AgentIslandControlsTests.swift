@@ -6892,3 +6892,50 @@ extension AgentIslandControlsTests {
         XCTAssertEqual(f.args, [], "reads only, no verb")
     }
 }
+
+// MARK: - #909 (#847 P1e Step C1): the window's Stop both, through the island controller
+
+extension AgentIslandControlsTests {
+    /// The window's Stop both runs the island's stopGroup and so its busy check: a member busy at the answer runs
+    /// nothing (never half-stops) and the dir line says why; once free, the same answer stops every member.
+    @MainActor
+    func testWindowGroupStopBothTakesTheIslandsBusyCheck() throws {
+        let f = FakeProc(), c = pairController(f, live: ["api", "api-qa"])
+        let store = try XCTUnwrap(c.store)
+        let m = AgentWindowModel()
+        m.island = { c }
+        m.onVisible = { _ in }
+        m.openSession = { _ in }
+        m.ageInterval = 3600
+        m.transcript.offMain = { $0() }
+        m.transcript.makeWatch = { _, _ in NSObject() }
+        m.transcript.tickInterval = 3600
+        m.stopSession = { c.stop($0, sayBusy: true) }   // a single Stop would reach the fake runner too
+        m.bind(store)
+        m.setVisible(true)
+        defer { m.close() }
+        let api = try XCTUnwrap(store.sessions.first { $0.name == "api" })
+        let item = AgentWindowControls.menu(api, store: store).first {
+            if case .item(_, _, .stopGroup) = $0 { true } else { false }
+        }
+        guard case .item(let title, true, let both)? = item else { return XCTFail("no Stop both: \(String(describing: item))") }
+        XCTAssertEqual(title, "Stop both (with api-qa)\u{2026}")
+        XCTAssertTrue(c.restart(session("api-qa", version: "1.24.0")))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        m.ask(both, api)
+        m.confirm(true)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut, "never half-stops")
+        XCTAssertEqual(f.args.count, 1)
+        XCTAssertEqual(store.actions[Self.pairDir], "Stop both not run: api-qa is busy")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "api-qa")) }
+        m.ask(both, api)
+        m.confirm(true)
+        for _ in 0..<2 { XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success) }
+        XCTAssertEqual(Set(f.args.dropFirst()), [["--stop", "api", "--json"], ["--stop", "api-qa", "--json"]])
+        f.lock.withLock { f.output = Self.pairJSON("api") + Self.pairJSON("api-qa") }
+        f.release.signal(); f.release.signal()
+        settle(c) { store.actions[Self.pairDir]?.hasPrefix("Stop both:") == true }
+        XCTAssertEqual(store.actions[Self.pairDir], "Stop both: api stopped, api-qa stopped")
+    }
+}

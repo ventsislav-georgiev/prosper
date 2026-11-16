@@ -1500,6 +1500,9 @@ tag from the now-released section and put it on the new top draft.
   example "Remove from History (1 pinned older record stays)"), the resume-without-message button
   has its own skip icon instead of a second play triangle, and removing a session beside one named
   "<name>.json" no longer reports a false failure. (#1069)
+- Agent Sessions: a session with sidekicks (Settings › Agent Island › Pairs) offers Stop both and
+  Resume both, or Stop all N and Resume all N for a larger group, in its row and History menus. A
+  pairs suffix now needs at least one letter. (#909)
 
 ## v2.174.0
 

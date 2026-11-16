@@ -12,6 +12,11 @@ enum AgentWindowVerb: Equatable {
     case resume, resumeNoMessage, pin, remove
     /// #829 G4: a live session's; edits the header title in place (never asks).
     case rename
+    /// #909 (#847 P1e Step C): a live session's Stop both / Stop all N (asks). `names`: its group's live members as the
+    /// menu drew them, the session included, in group order (the island's onStopGroup names).
+    case stopGroup([String])
+    /// #909: a History record's Resume both / Resume all N (runs at once, as Resume).
+    case resumeGroup
 }
 
 /// The confirm strip's question: what, on which session (by key; re-resolved at the answer).
@@ -96,8 +101,9 @@ enum AgentWindowControls {
     /// gates and titles (AgentIslandView.Drawn). An item that asks gets an ellipsis; a disabled
     /// one reads the island's title, its reason included. A name dch would read as a flag gets
     /// no item (#627).
+    /// #909: `groups`: the store's groups read once by the caller's draw (R909-1); nil: read here, once.
     @MainActor
-    static func menu(_ s: AgentSession, store: AgentIslandStore) -> [AgentWindowMenuEntry] {
+    static func menu(_ s: AgentSession, store: AgentIslandStore, groups: [AgentGroup]? = nil) -> [AgentWindowMenuEntry] {
         let d = AgentIslandView.Drawn(session: s, card: nil, open: {}, answer: { _, _ in }, refused: store.resumeGate.refusal,
                                       canStop: AgentIsland.canStop(s), needs: store.restartNeeds)
         // G4: any name (dch -m takes it verbatim), any dch that runs: no gate but the control binary.
@@ -107,11 +113,27 @@ enum AgentWindowControls {
             out.append(.item(d.restartEnabled ? AgentIsland.restartLabel + "…" : d.restartTitle, enabled: d.restartEnabled,
                              verb: .restart))
             out.append(.item(d.stopEnabled ? AgentIsland.stopLabel + "…" : d.stopTitle, enabled: d.stopEnabled, verb: .stop))
+            if let g = stopGroupItem(s, d, store: store, groups: groups ?? store.groups) { out.append(g) }
             out.append(.divider)
             out.append(.item(AgentIsland.killLabel, enabled: d.killEnabled, verb: .kill))
         }
         if let why = d.refused { out.append(.note("Controls \(why)")) }
         return out
+    }
+
+    /// #909 (#847 P1e S4): Stop both / Stop all N right under Stop, only when `s`'s group has another live member
+    /// (#908's rule and title: AgentIslandView.drawn). On with Stop when every other member can stop; it asks (an
+    /// ellipsis). Off, it says why: Stop's own reason, or the member whose master cannot stop.
+    @MainActor
+    static func stopGroupItem(_ s: AgentSession, _ d: AgentIslandView.Drawn, store: AgentIslandStore,
+                              groups: [AgentGroup]) -> AgentWindowMenuEntry? {
+        let group = store.liveGroup(s, groups) ?? [], others = group.filter { $0.key != s.key }
+        guard !others.isEmpty else { return nil }
+        let title = AgentIsland.groupLabel(.stop, others: others.map(\.name)), verb = AgentWindowVerb.stopGroup(group.map(\.name))
+        let old = others.first { !AgentIsland.canStop($0) }
+        if d.stopEnabled, old == nil { return .item(title + "\u{2026}", enabled: true, verb: verb) }
+        let why = d.stopEnabled ? old.map { "restart \($0.name) first" } : d.needs ?? (d.canStop ? nil : "restart this session first")
+        return .item(AgentIsland.label(title, needs: why), enabled: false, verb: verb)
     }
 
     /// #1103: Open in terminal's title, the words of the button it replaced (and of every text that names it).
@@ -120,8 +142,9 @@ enum AgentWindowControls {
     /// #1103: the header "⋯" and a live row's context menu: Open in terminal first, then `menu`. An ended session's
     /// (a held row; the header passes no store) offers Open in terminal, off, and nothing else.
     @MainActor
-    static func sessionMenu(_ s: AgentSession, store: AgentIslandStore?, ended: Bool) -> [AgentWindowMenuEntry] {
-        let rest: [AgentWindowMenuEntry] = ended ? [] : store.map { menu(s, store: $0) } ?? []
+    static func sessionMenu(_ s: AgentSession, store: AgentIslandStore?, ended: Bool,
+                            groups: [AgentGroup]? = nil) -> [AgentWindowMenuEntry] {
+        let rest: [AgentWindowMenuEntry] = ended ? [] : store.map { menu(s, store: $0, groups: groups) } ?? []
         return [.open(enabled: !ended)] + (rest.isEmpty ? [] : [.divider] + rest)
     }
 
@@ -133,8 +156,8 @@ enum AgentWindowControls {
     /// notice (one room rule, the layout's show). `side`: show(.side)'s refusal for the row, read only with the gate on.
     @MainActor
     static func rowMenu(_ s: AgentSession, store: AgentIslandStore, splits: Bool,
-                        side: @autoclosure () -> PaneRefusal?) -> [AgentWindowMenuEntry] {
-        let out = sessionMenu(s, store: store, ended: false)
+                        side: @autoclosure () -> PaneRefusal?, groups: [AgentGroup]? = nil) -> [AgentWindowMenuEntry] {
+        let out = sessionMenu(s, store: store, ended: false, groups: groups)
         guard splits else { return out }
         let suffix = side()?.menuSuffix
         return Array(out.prefix(1)) + [.side(suffix.map { "\(sideLabel) \($0)" } ?? sideLabel, enabled: suffix == nil)]
@@ -143,12 +166,13 @@ enum AgentWindowControls {
 
     /// The row menu for `s`'s row in `m`: the gate and the layout's own answer for that row.
     @MainActor
-    static func rowMenu(_ s: AgentSession, store: AgentIslandStore, in m: AgentWindowModel) -> [AgentWindowMenuEntry] {
+    static func rowMenu(_ s: AgentSession, store: AgentIslandStore, in m: AgentWindowModel,
+                        groups: [AgentGroup]? = nil) -> [AgentWindowMenuEntry] {
         func refusal() -> PaneRefusal? {
             if case let .failure(r) = m.showing(.live(s.key), placement: .side) { return r }
             return nil
         }
-        return rowMenu(s, store: store, splits: AgentPaneLayout.splitsEnabled, side: refusal())
+        return rowMenu(s, store: store, splits: AgentPaneLayout.splitsEnabled, side: refusal(), groups: groups)
     }
 
     static let closePaneLabel = "Close Pane (the session keeps running)"
@@ -212,11 +236,19 @@ enum AgentWindowControls {
     /// gates (AgentIslandView.historyDrawn: absent while a gate refuses, nothing for a name dch
     /// would read as a flag). Remove asks, so it carries an ellipsis; on a pinned record it stays,
     /// off, saying why (the island hides its X).
+    /// #909 (#847 P1e S5): Resume both / Resume all N right after Resume when `r`'s group has no member live in its
+    /// dir (#908's offer rule and title: AgentIslandView.historyDrawn); acts at once (no ellipsis). `groups`: as `menu`.
     @MainActor
-    static func historyMenu(_ r: DchHistoryRecord, store: AgentIslandStore) -> [AgentWindowMenuEntry] {
+    static func historyMenu(_ r: DchHistoryRecord, store: AgentIslandStore, groups: [AgentGroup]? = nil) -> [AgentWindowMenuEntry] {
         var out: [AgentWindowMenuEntry] = []
         let ok = AgentIsland.passable(r.name)
-        if ok, store.resumeGate.isOK { out.append(.item(AgentIsland.resumeLabel, enabled: true, verb: .resume)) }
+        if ok, store.resumeGate.isOK {
+            out.append(.item(AgentIsland.resumeLabel, enabled: true, verb: .resume))
+            if let g = store.historyGroup(r, groups ?? store.groups), g.live.isEmpty {
+                let others = (g.mains + g.sidekicks).filter { $0.id != r.id }.map(\.name)
+                out.append(.item(AgentIsland.groupLabel(.resume, others: others), enabled: true, verb: .resumeGroup))
+            }
+        }
         if ok, store.reviveNoMessageGate.isOK { out.append(.item(AgentIsland.resumeNoMessageLabel, enabled: true, verb: .resumeNoMessage)) }
         if ok, store.historyEditGate.isOK {
             let older = AgentIsland.older(r, in: store.history)
@@ -280,8 +312,9 @@ enum AgentWindowControls {
     /// #1289 (G5): a URL chip's accessibility name: the PR by its full name ("Open pull request acme/api#12").
     static func openPRLabel(_ c: AgentIsland.PRChip) -> String { "Open pull request \(c.fullName.isEmpty ? c.label : c.fullName)" }
 
-    static func question(_ v: AgentWindowVerb, _ s: AgentSession) -> String {
-        let blocked = s.state == .blocked ? blockedSentence : ""
+    /// #909: `others`: Stop both's other members live now; one waiting on a prompt adds the blocked sentence too.
+    static func question(_ v: AgentWindowVerb, _ s: AgentSession, others: [AgentSession] = []) -> String {
+        let blocked = ([s] + others).contains { $0.state == .blocked } ? blockedSentence : ""
         switch v {
         case .restart:
             return "Restart \(s.title)? Claude Code is paused, then relaunched on the same conversation. This can take minutes."
@@ -290,7 +323,15 @@ enum AgentWindowControls {
             return "Stop \(s.title)? Claude Code is paused and the session ends. Resume it later from History." + blocked
         case .kill:
             return AgentIsland.killQuestion(s.title)
-        case .resume, .resumeNoMessage, .pin, .remove, .rename:
+        case .stopGroup(let names):
+            // S4: "Stop api and api-qa? Claude Code is paused in both and both sessions end. ..."; N: "in all three and the".
+            let list = names.count > 1 ? names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "") : names.joined()
+            let spell = NumberFormatter()
+            spell.numberStyle = .spellOut
+            spell.locale = Locale(identifier: "en")
+            let all = names.count > 2 ? "all \(spell.string(from: names.count as NSNumber) ?? "\(names.count)") and the" : "both and both"
+            return "Stop \(list)? Claude Code is paused in \(all) sessions end. Resume them later from History." + blocked
+        case .resume, .resumeNoMessage, .pin, .remove, .rename, .resumeGroup:
             return ""   // History verbs: removeQuestion; the rest never ask
         }
     }
@@ -305,6 +346,8 @@ enum AgentWindowControls {
         case .resumeNoMessage: AgentIsland.resumeNoMessageLabel
         case .pin: AgentIsland.pinLabel
         case .rename: AgentIsland.renameLabel
+        case .stopGroup(let names): AgentIsland.pairTitle(.stop, count: names.count)
+        case .resumeGroup: AgentIsland.pairTitle(.resume)
         }
     }
 
@@ -483,10 +526,12 @@ struct AgentSessionMenuItems: View {
     /// #900 B2 step 6b1: a sidebar row's model (its list is rowMenu: Open to the Side with the gate on) and the item's run.
     var row: AgentWindowModel? = nil
     var side: () -> Void = {}
+    /// #909 (R909-1): the sidebar's groups, read once per its draw; nil (the header's): read once per menu build.
+    var groups: [AgentGroup]? = nil
 
     var body: some View {
-        let base = row.map { AgentWindowControls.rowMenu(session, store: store, in: $0) }
-            ?? AgentWindowControls.sessionMenu(session, store: store, ended: ended)
+        let base = row.map { AgentWindowControls.rowMenu(session, store: store, in: $0, groups: groups) }
+            ?? AgentWindowControls.sessionMenu(session, store: store, ended: ended, groups: groups)
         AgentMenuEntries(entries: base + panes, act: ask, open: open, pane: pane, side: side)
     }
 }
@@ -495,9 +540,13 @@ struct AgentSessionMenuItems: View {
 struct AgentHistoryMenuItems: View {
     @ObservedObject var store: AgentIslandStore
     let record: DchHistoryRecord
+    /// #909 (R909-1): the sidebar's groups, read once per its draw.
+    var groups: [AgentGroup]? = nil
     let act: (AgentWindowVerb) -> Void
 
-    var body: some View { AgentMenuEntries(entries: AgentWindowControls.historyMenu(record, store: store), act: act) }
+    var body: some View {
+        AgentMenuEntries(entries: AgentWindowControls.historyMenu(record, store: store, groups: groups), act: act)
+    }
 }
 
 struct AgentMenuEntries: View {

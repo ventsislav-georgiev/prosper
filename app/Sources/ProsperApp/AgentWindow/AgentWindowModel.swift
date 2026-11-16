@@ -724,6 +724,10 @@ final class AgentWindowModel: ObservableObject {
     lazy var resumeNoMessage: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resume($0, noMessage: true) }
     lazy var pinRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().pin($0) }
     lazy var removeRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().remove($0) }
+    /// #909 (#847 P1e Step C): Stop both / Stop all N and Resume both / Resume all N, the island controller's own (#908:
+    /// its re-read at the click, its busy check, its one dir line).
+    lazy var stopGroup: (AgentSession, [String]) -> Bool = { [weak self] in self?.island().stopGroup($0, with: $1) ?? false }
+    lazy var resumeGroup: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resumeGroup($0) }
     /// #897 (G9): "Agent Island Settings...": Settings on Agent Island's pane, through the extension host's one opener.
     var openIslandSettings: () -> Void = {
         LiveExtensionHostServices.shared.openSettings(extensionID: AgentWindowControls.islandExtensionID,
@@ -2154,10 +2158,11 @@ final class AgentWindowModel: ObservableObject {
         case .resume where Self.isRemote(r): resumeRemote(r)
         case _ where Self.isRemote(r): break
         case .resume: resume(r)
+        case .resumeGroup: resumeGroup(r)   // #909: at once, as Resume (S5)
         case .resumeNoMessage: resumeNoMessage(r)
         case .pin: pinRecord(r)
         case .remove: confirming = AgentWindowConfirm(verb: .remove, key: r.id)
-        case .restart, .stop, .kill, .rename: break
+        case .restart, .stop, .kill, .rename, .stopGroup: break
         }
     }
 
@@ -2199,6 +2204,13 @@ final class AgentWindowModel: ObservableObject {
         confirming.flatMap { c in c.verb == .remove ? nil : store?.sessions.first { $0.key == c.key } }
     }
 
+    /// #909: Stop both's other asked members live now, for the question's blocked sentence.
+    var confirmingOthers: [AgentSession] {
+        guard case .stopGroup(let names)? = confirming?.verb, let s = confirmingSession, let store else { return [] }
+        let asked = Set(names.map { $0.lowercased() })
+        return store.sessions.filter { $0.key.dir == s.key.dir && $0.key != s.key && asked.contains($0.name.lowercased()) }
+    }
+
     /// The asked History record as it is now (nil: it went).
     var confirmingRecord: DchHistoryRecord? {
         confirming.flatMap { c in c.verb == .remove ? store?.history.first { $0.id == c.key } : nil }
@@ -2222,7 +2234,10 @@ final class AgentWindowModel: ObservableObject {
             return
         }
         guard let s else { return }
-        if let why = AgentWindowControls.notRun(AgentWindowControls.menu(s, store: store), c.verb) {
+        // #909 (S4 step 2): Stop both answers to Stop's gate; a member gone since the question is the controller's call.
+        var gate = c.verb
+        if case .stopGroup = gate { gate = .stop }
+        if let why = AgentWindowControls.notRun(AgentWindowControls.menu(s, store: store), gate) {
             refusal = AgentWindowRefusal(id: .live(s.key), text: why)
             return
         }
@@ -2230,7 +2245,8 @@ final class AgentWindowModel: ObservableObject {
         case .restart: _ = restartSession(s)
         case .stop: _ = stopSession(s)   // #831 B1: the pane goes Ended, then its record by resolve (4.5)
         case .kill: _ = killSession(s)
-        case .resume, .resumeNoMessage, .pin, .remove, .rename: break
+        case .stopGroup(let names): _ = stopGroup(s, names)
+        case .resume, .resumeNoMessage, .pin, .remove, .rename, .resumeGroup: break
         }
     }
 

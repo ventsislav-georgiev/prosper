@@ -3,26 +3,9 @@
 
 import Foundation
 
-/// A pair's two members by their folded (lowercased) names, in one socket dir.
-struct AgentPair: Hashable {
-    let dir: String
-    let main: String
-    let sidekick: String
-
-    /// `name` (any case) is the main.
-    func isMain(_ name: String) -> Bool { name.lowercased() == main }
-    /// The other member's folded name; nil when `name` is not a member.
-    func partner(of name: String) -> String? {
-        switch name.lowercased() {
-        case main: sidekick
-        case sidekick: main
-        default: nil
-        }
-    }
-}
-
 /// #1116: the sessions of one stem in one socket dir, by folded names, in group order (`AgentIsland.groups`):
-/// at least one main and one sidekick. A pair is the group of one main and one sidekick.
+/// at least one main and one sidekick. A pair is the group of one main and one sidekick (#909: Step A's two-member
+/// pairs() is gone; groups() alone decides).
 struct AgentGroup: Hashable {
     let dir: String
     let stem: String
@@ -49,54 +32,22 @@ enum AgentPairOutcome: Equatable, Sendable {
 extension AgentIsland {
     // MARK: - Pairs (#847 P1e)
 
-    /// Each member's folded key `(dir, name.lowercased())` -> its pair. `keys`: live keys and
-    /// History record keys (never a record's id). `links` (P1d's stored pairs) win over inference.
-    /// Rules, in order: 1. per dir, the folded passable names; 2. a link takes both members when
-    /// both are listed in its dir and neither is taken; 3. inferred, when `suffixOK`: n = m + suffix
-    /// with m listed in n's dir, one suffix stripped; 4. shortest main first, each name taken once.
-    static func pairs(_ keys: [AgentSessionKey], suffix: String,
-                      links: [(main: AgentSessionKey, sidekick: AgentSessionKey)] = []) -> [AgentSessionKey: AgentPair] {
-        var index: [String: Set<String>] = [:]
-        for k in keys where passable(k.name) { index[k.dir, default: []].insert(k.name.lowercased()) }
-        var out: [AgentSessionKey: AgentPair] = [:]
-        func take(_ dir: String, _ m: String, _ s: String) {
-            let a = AgentSessionKey(dir: dir, name: m), b = AgentSessionKey(dir: dir, name: s)
-            guard m != s, out[a] == nil, out[b] == nil else { return }
-            let p = AgentPair(dir: dir, main: m, sidekick: s)
-            out[a] = p
-            out[b] = p
-        }
-        for l in links where l.main.dir == l.sidekick.dir {
-            let lm = l.main.name.lowercased(), ls = l.sidekick.name.lowercased(), names = index[l.main.dir] ?? []
-            if names.contains(lm), names.contains(ls) { take(l.main.dir, lm, ls) }
-        }
-        let s = suffix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard suffixOK(s) else { return out }
-        for (dir, names) in index {
-            let mains = names.compactMap { n -> String? in
-                guard n.hasSuffix(s), n.count > s.count else { return nil }
-                let m = String(n.dropLast(s.count))
-                return names.contains(m) ? m : nil
-            }
-            for m in mains.sorted(by: { ($0.utf8.count, $0) < ($1.utf8.count, $1) }) { take(dir, m, m + s) }
-        }
-        return out
-    }
-
     /// The pair suffix is usable: 1 to 16 bytes, each ASCII [A-Za-z0-9._-], the bytes a name
     /// Prosper makes may hold, so main + suffix is a name dch takes when the main is.
+    /// R909-2: and at least one letter: with "-" (or "1", "-2", "_") every numbered name x-N would read as a sidekick of x.
     static func suffixOK(_ s: String) -> Bool {
-        (1...16).contains(s.utf8.count) && s.utf8.allSatisfy {
-            switch $0 {
-            case 0x30...0x39, 0x41...0x5a, 0x61...0x7a, 0x2d, 0x2e, 0x5f: true
-            default: false
+        (1...16).contains(s.utf8.count) && s.utf8.contains { (0x41...0x5a).contains($0) || (0x61...0x7a).contains($0) }
+            && s.utf8.allSatisfy {
+                switch $0 {
+                case 0x30...0x39, 0x41...0x5a, 0x61...0x7a, 0x2d, 0x2e, 0x5f: true
+                default: false
+                }
             }
-        }
     }
 
     // MARK: - Groups (#1116)
 
-    /// Every group in `keys` (live keys and History record keys, as `pairs`), by dir then stem. Per dir, on
+    /// Every group in `keys` (live keys and History record keys, never a record's id), by dir then stem. Per dir, on
     /// the folded passable names, each name in one group at most:
     /// 1. a stored link (m, k), both listed, puts k as a sidekick in m's group; k is linked once and is never a
     ///    linked main, m is never a linked sidekick; link roles win over the name;
@@ -300,24 +251,5 @@ extension AgentIslandStore {
         }
         let mains = records(g.mains), sidekicks = records(g.sidekicks)
         return (mains, sidekicks, live)
-    }
-
-    /// Live sessions and every History record, paired once per draw (never per row).
-    func pairs(suffix: String) -> [AgentSessionKey: AgentPair] {
-        AgentIsland.pairs(sessions.map(\.key) + history.map(\.key), suffix: suffix)
-    }
-
-    /// `s`'s partner, live in its dir; nil when unpaired or not live.
-    func livePartner(_ s: AgentSession, pairs: [AgentSessionKey: AgentPair]) -> AgentSession? {
-        guard let p = pairs[AgentSessionKey(dir: s.key.dir, name: s.name.lowercased())], let o = p.partner(of: s.name)
-        else { return nil }
-        return sessions.first { $0.key.dir == p.dir && $0.name.lowercased() == o }
-    }
-
-    /// `r`'s partner's newest record (`history` is newest first); nil when unpaired or none.
-    func historyPartner(_ r: DchHistoryRecord, pairs: [AgentSessionKey: AgentPair]) -> DchHistoryRecord? {
-        guard let p = pairs[AgentSessionKey(dir: r.key.dir, name: r.name.lowercased())], let o = p.partner(of: r.name)
-        else { return nil }
-        return history.first { $0.key.dir == p.dir && $0.name.lowercased() == o }
     }
 }

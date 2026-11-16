@@ -605,6 +605,8 @@ struct AgentSidebarView: View {
                 AgentNoSessionsState(store: store)
             } else {
                 ScrollViewReader { proxy in
+                    // #909 (R909-1): the groups once per draw, never per row (every row's menu reads them).
+                    let groups = model.store?.groups
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: sz(2)) {
                             // #901 B3 step 4a (8.1): the first section; nil (gate off, one layout of one pane): no view.
@@ -629,9 +631,9 @@ struct AgentSidebarView: View {
                                                 // #1103: the header's list, Open in terminal first (selects the row, as ask does).
                                                 AgentSessionMenuItems(store: store, session: s, ask: { model.ask($0, s) },
                                                                       open: { open(s) }, row: model,
-                                                                      side: { model.openToTheSide(row.id) })
+                                                                      side: { model.openToTheSide(row.id) }, groups: groups)
                                             } else if let r = row.record, row.host == nil, let store = model.store {   // #1324: a remote record has none
-                                                AgentHistoryMenuItems(store: store, record: r) { model.act($0, r) }
+                                                AgentHistoryMenuItems(store: store, record: r, groups: groups) { model.act($0, r) }
                                             }
                                         }
                                         .id(row.id)
@@ -1476,7 +1478,7 @@ struct AgentDetailView: View {
     /// R5: the question, re-read from the store each draw (a gone session or record draws none).
     @ViewBuilder var confirmStrip: some View {
         if let c = model.confirming {
-            let text = model.confirmingSession.map { AgentWindowControls.question(c.verb, $0) }
+            let text = model.confirmingSession.map { AgentWindowControls.question(c.verb, $0, others: model.confirmingOthers) }
                 ?? model.confirmingRecord.map { AgentWindowControls.removeQuestion($0, in: model.store?.history ?? []) }
             if let text {
                 AgentConfirmStrip(text: text, action: AgentWindowControls.confirmTitle(c.verb),
