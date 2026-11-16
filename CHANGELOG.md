@@ -1532,6 +1532,8 @@ tag from the now-released section and put it on the new top draft.
   yet). (#1350)
 - Agent Sessions: History's Remove says when a pinned older record of the same name stays, as Agent
   Island does. (#1344)
+- Agent Sessions: Shift-Cmd-X (or X-Ray… in a pane's menu) opens X-ray with a Tasks tab: the
+  session's task list in groups, with a filter and a card per task (dch 1.78.0 or later). (#1351)
 
 ## v2.174.0
 

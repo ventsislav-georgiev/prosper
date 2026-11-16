@@ -46,6 +46,8 @@ enum AgentWindowMenuEntry: Equatable {
     case side(String, enabled: Bool)
     /// #1319 (spec 8.3): "Jump to Chapter... Command-L" for `pane`'s header; off in a terminal pane.
     case chapters(enabled: Bool, pane: UUID)
+    /// #1351: "X-Ray... Shift-Command-X" for `pane`'s header; only at or above XrayTabs.gate.
+    case xray(pane: UUID)
 }
 
 /// #900 B2 step 6a: what a pane item runs: the key's own PaneAction through `perform`, or Equalize (no key, no
@@ -82,11 +84,12 @@ enum AgentMenuSymbol {
     static let sort = "arrow.up.arrow.down", sortActivity = "clock", sortName = "textformat"
     static let rowDetails = "list.bullet.rectangle", rowDetail = "list.bullet", autoAllow = "checkmark.shield"
     static let settings = "gearshape", diagnostics = "stethoscope"
+    static let xray = "rectangle.righthalf.inset.filled"
 
     /// Every name above, for the test that resolves each one (a typo draws no image).
     static let all: Set<String> = [open, rename, restart, stop, exit, resume, resumeNoMessage, pin, unpin, remove, duplicate, side,
                                    chapters, splitRight, splitDown, zoom, equalize, closePane, newSession, folder, chooseFolder,
-                                   sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics]
+                                   sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics, xray]
 }
 
 extension AgentWindowVerb {
@@ -126,6 +129,7 @@ extension AgentWindowMenuEntry {
             }
         case .side: AgentMenuSymbol.side
         case .chapters: AgentMenuSymbol.chapters
+        case .xray: AgentMenuSymbol.xray
         }
     }
 }
@@ -287,6 +291,8 @@ enum AgentWindowControls {
     static let closePaneLabel = "Close Pane (the session keeps running)"
     /// #1319: the "..." item of the Command-L list.
     static let chaptersLabel = "Jump to Chapter\u{2026} \u{2318}L"
+    /// #1351: the "..." item of the X-ray panel.
+    static let xrayLabel = "X-Ray\u{2026} \u{21E7}\u{2318}X"
 
     /// #900 B2 step 6a (7.3, 3.3, 15.0): the pane part of the header "⋯", appended after `sessionMenu` behind one
     /// divider. Gate off: nothing, whatever the layout holds (the menu is today's). Gate on: Split Right and Split Down;
@@ -686,6 +692,10 @@ struct AgentMenuEntries: View {
                 Button { AgentsNSWindow.chaptersChosen(pane: pane) } label: {
                     Label(AgentWindowControls.chaptersLabel, systemImage: e.symbol ?? "")
                 }.disabled(!enabled)
+            case .xray(let pane):
+                Button { AgentsNSWindow.xrayChosen(pane: pane) } label: {
+                    Label(AgentWindowControls.xrayLabel, systemImage: e.symbol ?? "")
+                }
             }
         }
     }

@@ -40,6 +40,7 @@ final class AgentsWindow {
         island.onHoldChanged = { [weak model] in model?.interaction.holdChanged() }
         let win = build(model)
         window = win
+        XrayPanels.warm()   // #1351: the gate's dch probe, off main (none under XCTest)
         self.model = model
 
         let nc = NotificationCenter.default
@@ -117,6 +118,7 @@ final class AgentsWindow {
         model?.close()
         model = nil
         window = nil
+        XrayPanels.shared.open = [:]   // #1351: no panel outlives its window
         let island = island()
         island.onStoreChanged = nil
         island.onHoldChanged = nil
@@ -243,6 +245,8 @@ final class AgentsNSWindow: NSWindow {
         case sidebar
         /// #1319 (spec 8.3): Command-L, the focused Transcript pane's Jump to Chapter list (opens it, or closes it when open).
         case chapters
+        /// #1351 (#1346 3.1): Shift-Command-X (key code 7, any layout), the focused pane's X-ray panel (opens or closes it).
+        case xray
         /// The window's, doing nothing here (⌥⌘1/2/3 in Terminal mode).
         case swallow
         case pass
@@ -271,7 +275,8 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .toggleMode, .verbosity, .session, .jump, .find, .findNext, .font, .stopOrRemove, .chapters: return form ? .swallow : r
+        case .toggleMode, .verbosity, .session, .jump, .find, .findNext, .font, .stopOrRemove, .chapters, .xray:
+            return form ? .swallow : r
         default: return r
         }
     }
@@ -308,6 +313,7 @@ final class AgentsNSWindow: NSWindow {
                 return responder == .text ? .pass : .session(event.keyCode == 126 ? -1 : 1)
             }
         }
+        if mods == [.command, .shift], event.keyCode == 7 { return .xray }   // #1351: both modes; the gate is perform's
         if mods == [.command, .shift], key == "g" { return terminalMode ? .findNext(false) : .pass }
         if mods == [.command, .shift], key == "+" || key == "=" { return terminalMode ? .font(1) : .pass }   // #895: Shift-Command-=
         if mods.isEmpty, sidebarFocused, responder == .other, [126, 125, 123, 124, 36, 76].contains(event.keyCode) {
@@ -368,6 +374,7 @@ final class AgentsNSWindow: NSWindow {
         case .newShell: model.startShell()
         case .stopOrRemove: model.askStopOrRemove()
         case .chapters: toggleChapters()
+        case .xray: return toggleXray()   // below the gate: false, so the key goes on (passes through)
         case .swallow: break
         case .sidebar, .pass: return false
         }
@@ -388,6 +395,7 @@ final class AgentsNSWindow: NSWindow {
         ("f", .command, 3, .find), ("g", .command, 5, .findNext(true)), ("g", [.command, .shift], 5, .findNext(false)),
         ("=", .command, 24, .font(1)), ("-", .command, 27, .font(-1)), ("0", .command, 29, .font(0)),
         ("\u{F700}", .command, 126, .session(-1)), ("\u{F701}", .command, 125, .session(1)),
+        ("x", [.command, .shift], 7, .xray),
     ]
 
     /// #1359: a built key-down for a table chord (handed to `route`, never posted).
@@ -465,6 +473,51 @@ final class AgentsNSWindow: NSWindow {
     @MainActor static func chaptersChosen(pane: UUID) {
         (XrayCardAnchor.views[pane]?.view ?? XrayCardAnchor.views[nil]?.view).flatMap { $0.window as? AgentsNSWindow }?
             .toggleChapters()
+    }
+
+    // MARK: #1351 the X-ray panel (#1346 P3a)
+
+    /// Shift-Command-X, the "..." item and the Todos chip: closes the focused pane's open panel; else opens one on `tab`
+    /// for the pane's live or remote session and reads it once. Below XrayTabs.gate (XrayPanels.dch nil): false (the key
+    /// passes through) and no process. `fallback` (the chip's list): run when the read finds no Tasks tab.
+    @discardableResult func toggleXray(on tab: XrayTab = .tasks, fallback: (() -> Void)? = nil) -> Bool {
+        guard let model, let dch = XrayPanels.dch() else { return false }
+        let pane = model.layout.focused, panels = XrayPanels.shared
+        let target = model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil
+        if let open = panels.open[pane] {
+            panels.close(pane)
+            if open.target == target || target == nil { return true }
+        }
+        guard let target else { return true }
+        let p = XrayPanelModel(target: target, tab: tab)
+        p.close = { panels.close(pane) }
+        p.fallback = fallback
+        p.presentCard = { [weak self, weak model, weak p] t in
+            guard let self, let anchor = XrayCardAnchor.view(for: pane, in: self) ?? self.contentView else { return }
+            let card = XrayTaskCard(task: t, now: p?.now() ?? Date(), open: { model?.openURL($0) })
+            self.cards.present(AnyView(card), size: XrayTaskCard.size, anchor: anchor) {}
+        }
+        panels.open[pane] = p
+        p.read(dch: dch, run: XrayPanels.run)
+        return true
+    }
+
+    /// The "..." item "X-Ray... Shift-Command-X": only at or above the gate and for a live or remote session.
+    @MainActor static func xrayItem(_ m: AgentWindowModel) -> AgentWindowMenuEntry? {
+        XrayPanels.dch() != nil && XrayTarget.of(m.selectedRow) != nil ? .xray(pane: m.layout.focused) : nil
+    }
+
+    /// The window that draws `pane`'s header (as chaptersChosen).
+    @MainActor static func window(of pane: UUID) -> AgentsNSWindow? {
+        (XrayCardAnchor.views[pane]?.view ?? XrayCardAnchor.views[nil]?.view).flatMap { $0.window as? AgentsNSWindow }
+    }
+
+    @MainActor static func xrayChosen(pane: UUID) { window(of: pane)?.toggleXray() }
+
+    /// Q3: the Todos chip opens the panel on Tasks when X-ray is there and the read finds a Tasks tab; else (the list
+    /// already open, the gate off, no Tasks tab) `list` runs, today's AgentTodosList.
+    func todosChipTapped(listOpen: Bool, list: @escaping () -> Void) {
+        if listOpen || !toggleXray(on: .tasks, fallback: list) { list() }
     }
 
     static let dvorakQwertyCommandID = "com.apple.keylayout.DVORAK-QWERTYCMD"
@@ -1436,7 +1489,8 @@ struct AgentDetailView: View {
             VStack(spacing: 0) {
                 // #900 B2 step 6a: the "⋯" pane items act on this pane (the focused one); empty with the gate off.
                 let id = model.layout.focused
-                let panes = [.divider, AgentsNSWindow.chaptersItem(model)] + AgentWindowControls.paneMenu(model, pane: id)
+                let panes = [.divider, AgentsNSWindow.chaptersItem(model)] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 }
+                    + AgentWindowControls.paneMenu(model, pane: id)
                 Group {
                     if compact {
                         AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
@@ -1446,7 +1500,7 @@ struct AgentDetailView: View {
                     } else {
                         AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
                                            level: $model.verbosity, todos: transcript.todos,
-                                           todosOpen: mode == .terminal ? floatingTodos : $transcript.todosOpen,
+                                           todosOpen: todosChip(mode == .terminal ? floatingTodos : $transcript.todosOpen),
                                            store: model.store, ask: { model.ask($0, s) }, ended: ended,
                                            rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
                                            endRename: { model.endRename($0, $1) },
@@ -1456,11 +1510,14 @@ struct AgentDetailView: View {
                 }
                 .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
-                if mode == .terminal {
-                    terminalPane(row, s)
-                } else {
-                    transcriptPane(row, s, ended: ended)
+                VStack(spacing: 0) {
+                    if mode == .terminal {
+                        terminalPane(row, s)
+                    } else {
+                        transcriptPane(row, s, ended: ended)
+                    }
                 }
+                .overlay(alignment: .trailing) { XrayDrawer(pane: id, target: XrayTarget.of(row)) }   // #1351: over, never resizing
             }
         } else if let row = model.selectedRow, let r = row.remote {
             // #836 (b): another machine's session: Terminal only, under a header whose transcript controls are off.
@@ -1470,6 +1527,7 @@ struct AgentDetailView: View {
                 AgentTerminalPane(controller: model.terminal, open: {})
                     .frame(minHeight: 0, maxHeight: .infinity)
                     .modifier(AgentPaneProbe(kind: "terminal"))
+                    .overlay(alignment: .trailing) { XrayDrawer(pane: model.layout.focused, target: XrayTarget.of(row)) }
             }
         } else if let row = model.selectedRow, let r = row.record {
             titled(row.title) {
@@ -1576,6 +1634,18 @@ struct AgentDetailView: View {
             }
             confirmStrip
         }
+    }
+
+    /// #1351 (Q3): the Todos chip's binding: opening goes to the X-ray panel on Tasks when it can (todosChipTapped).
+    /// Whether the list is open is read from the transcript model in both modes: Terminal mode's floatingTodos getter is
+    /// always false and its setter toggles, so neither its value nor `v` says open or closed there. `win`: rows pass theirs.
+    func todosChip(_ list: Binding<Bool>, in win: AgentsNSWindow? = nil) -> Binding<Bool> {
+        let pane = model.layout.focused
+        return Binding(get: { list.wrappedValue }, set: { [transcript] v in
+            let apply = { list.wrappedValue = v }
+            guard v, !transcript.todosOpen, let win = win ?? AgentsNSWindow.window(of: pane) else { return apply() }   // a close: never X-ray
+            win.todosChipTapped(listOpen: false, list: apply)
+        })
     }
 
     /// Terminal mode: the header's todo chip opens the list over the terminal, never inside the header

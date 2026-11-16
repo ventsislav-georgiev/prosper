@@ -89,4 +89,16 @@ final class XrayTasksParseTests: XCTestCase {
         XCTAssertEqual(d.groups.map(\.title), ["In progress", "Pending", "Done", "Dropped"])
         XCTAssertEqual(d.groups.last?.tasks.map(\.id), ["6"])
     }
+
+    /// #1351 (QA R1349-i2, R1349-i1): the header's schema is kept for the panel's check; the url is kept raw beside its
+    /// display form.
+    func testSchemaKeptAndRawURLBesideTheDisplayForm() {
+        let long = "https://example.org/" + String(repeating: "a", count: 2100)
+        let r = parse([header, row("1", "pending", extra: #","url":"\#(long)""#), done])
+        XCTAssertEqual(r.schema, 1)
+        XCTAssertEqual(r.tasks.first?.rawURL, long, "raw: whole")
+        XCTAssertNotEqual(r.tasks.first?.url, long, "display: capped")
+        XCTAssertEqual(parse([#"{"schema":2,"source":"claude","partial":false}"#, done]).schema, 2)
+        XCTAssertTrue(parse([row("1", "pending"), done]).schema == nil, "no header: nil")
+    }
 }

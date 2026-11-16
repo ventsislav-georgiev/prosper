@@ -43,6 +43,7 @@ final class AgentEndSymbolTests: XCTestCase {
         case .item(let t, _, _), .pane(let t, _, _), .side(let t, _): title = t
         case .open: title = AgentWindowControls.openLabel
         case .chapters: title = AgentWindowControls.chaptersLabel
+        case .xray: title = AgentWindowControls.xrayLabel
         case .divider, .note: return nil
         }
         return "\(title)|\(e.symbol ?? "NO SYMBOL")"
@@ -247,7 +248,7 @@ final class AgentEndSymbolTests: XCTestCase {
                      "pin.slash", "trash", "plus.square.on.square", "sidebar.right", "list.bullet", "rectangle.split.2x1",
                      "rectangle.split.1x2", "arrow.up.left.and.arrow.down.right", "equal.square", "xmark.rectangle", "plus",
                      "folder", "folder.badge.plus", "arrow.up.arrow.down", "clock", "textformat", "list.bullet.rectangle",
-                     "checkmark.shield", "gearshape", "stethoscope"]
+                     "checkmark.shield", "gearshape", "stethoscope", "rectangle.righthalf.inset.filled"]
         XCTAssertEqual(Set(names), AgentMenuSymbol.all)
         for n in names { XCTAssertTrue(NSImage(systemSymbolName: n, accessibilityDescription: nil) != nil, "\(n) does not resolve") }
     }

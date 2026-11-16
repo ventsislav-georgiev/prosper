@@ -33,7 +33,7 @@ final class AgentGoMenuTests: XCTestCase {
         XCTAssertEqual(entries.map(\.title), [
             "Previous Session", "Next Session", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
             "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7", "Jump to Session 8",
-            "Jump to Session 9", "Terminal or Transcript", "Jump to Chapter\u{2026}", "Focused Transcript",
+            "Jump to Session 9", "Terminal or Transcript", "Jump to Chapter\u{2026}", "X-Ray\u{2026}", "Focused Transcript",
             "Default Transcript", "Verbose Transcript", "Find\u{2026}", "Find Next", "Find Previous", "Bigger Text",
             "Smaller Text", "Actual Size", "New Session", "New Shell", "Stop or Remove", "Close Window",
         ])
@@ -42,7 +42,7 @@ final class AgentGoMenuTests: XCTestCase {
 
     /// Every table chord, built as a key-down, is what `route` returns (Terminal mode or Transcript; the sidebar focused).
     func testKeyTableIsWhatRouteReturns() {
-        XCTAssertEqual(AgentsNSWindow.keyTable.count, 26)
+        XCTAssertEqual(AgentsNSWindow.keyTable.count, 27)
         for c in AgentsNSWindow.keyTable {
             guard let e = AgentsNSWindow.keyEvent(c.key, c.mods, c.keyCode) else { return XCTFail("event \(c.route)") }
             let routes = [true, false].map {
@@ -61,7 +61,7 @@ final class AgentGoMenuTests: XCTestCase {
         go.menuNeedsUpdate(menu)
         let items = menu.items.filter { !$0.isSeparatorItem }
         XCTAssertEqual(items.count, go.shown.count)
-        XCTAssertEqual(items.count, 26)
+        XCTAssertEqual(items.count, 27)
         for (item, entry) in zip(items, go.shown) {
             XCTAssertTrue(item.target === go, item.title)
             XCTAssertEqual(item.action, #selector(AgentGoMenu.pick(_:)), item.title)

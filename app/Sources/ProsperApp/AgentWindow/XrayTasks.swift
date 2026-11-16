@@ -27,7 +27,9 @@ struct XrayTasks: Equatable {
         var chapter: String?          // an anchor: checked by DchCtl.anchorOK before any use, never shown
         var createdChapter: String?
         var blockedBy: [String]
-        var url: String?              // not opened here; a later phase accepts http/https only
+        var url: String?              // display form (cleaned, capped): shown, never opened
+        /// #1351 (QA R1349-i1): the url as dch sent it, the one Open checks (http/https only) and opens.
+        var rawURL: String?
         var group: String?
     }
 
@@ -36,6 +38,8 @@ struct XrayTasks: Equatable {
         var tasks: [Task]
     }
 
+    /// #1351 (QA R1349-i2): the header's schema; the panel has a Tasks tab only for 1. nil: no header.
+    var schema: Int?
     var source: String?
     var sessionTitle: String?
     /// The header's partial flag, or no done line (the output was cut).
@@ -128,12 +132,12 @@ struct XrayTasks: Equatable {
                     active: t.active.map { OutsideText.shown($0, max: 120) }, note: t.note.map { OutsideText.shown($0, max: 120) },
                     created: date(t.created), updated: date(t.updated), chapter: t.chapter, createdChapter: t.created_chapter,
                     blockedBy: (t.blocked_by ?? []).map { OutsideText.shown($0, max: 32) },
-                    url: t.url.map { OutsideText.shown($0, max: 2048) }, group: t.group.map { OutsideText.shown($0, max: 120) })
+                    url: t.url.map { OutsideText.shown($0, max: 2048) }, rawURL: t.url, group: t.group.map { OutsideText.shown($0, max: 120) })
     }
 
     /// The parse: bytes in, never throws; a bad line is counted and skipped.
     static func parse(_ data: Data) -> XrayTasks {
-        var r = XrayTasks(source: nil, sessionTitle: nil, partial: true, headerWarn: nil, doneWarn: nil, droppedCount: 0,
+        var r = XrayTasks(schema: nil, source: nil, sessionTitle: nil, partial: true, headerWarn: nil, doneWarn: nil, droppedCount: 0,
                           skippedLines: 0, tasks: [])
         var sawDone = false, headerPartial = false, rows = 0
         let dec = JSONDecoder()
@@ -147,6 +151,7 @@ struct XrayTasks: Equatable {
                 r.droppedCount = max(0, d.dropped ?? 0)
                 r.doneWarn = d.warn.map { OutsideText.shown($0, max: 160) }
             } else if let h = try? dec.decode(Header.self, from: line) {
+                r.schema = h.schema
                 r.source = h.source.map { OutsideText.shown($0, max: 40) }
                 r.sessionTitle = h.title.map { OutsideText.shown($0, max: 120) }
                 headerPartial = h.partial ?? false

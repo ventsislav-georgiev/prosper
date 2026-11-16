@@ -36,6 +36,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
             nil,
             Entry("Terminal or Transcript", "t", c, .key(.toggleMode)),
             Entry("Jump to Chapter\u{2026}", "l", c, .key(.chapters)),
+            Entry("X-Ray\u{2026}", "x", sc, .key(.xray)),
             Entry("Focused Transcript", "1", oc, .key(.verbosity(.focused))),
             Entry("Default Transcript", "2", oc, .key(.verbosity(.default))),
             Entry("Verbose Transcript", "3", oc, .key(.verbosity(.verbose))),
@@ -137,6 +138,7 @@ extension AgentsNSWindow {
         let renaming = model.renaming != nil || model.layoutRenaming != nil, form = model.newSession != nil
         switch a {
         case .pane: return AgentPaneLayout.splitsEnabled && !renaming && !form
+        case .key(.xray) where XrayPanels.dch() == nil: return false   // #1351: below the gate the item is off (no process)
         case .key(let r):
             guard let c = Self.keyTable.first(where: { $0.route == r }), let e = Self.keyEvent(c.key, c.mods, c.keyCode) else {
                 return false
