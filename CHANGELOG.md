@@ -1590,7 +1590,7 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions shows a group of sessions (a main and its sidekicks) as one row in the sidebar,
   each session on its own line. (#1342)
 - Agent Sessions: in Mini mode the arrows and Command-1...9 reach rows in folded sections, and a
-  slid-out sidebar no longer takes the arrow keys or Command-Backspace
+  slid-out sidebar no longer takes the arrow keys or Command-Backspace. (#1383)
 
 ## v2.174.0
 
