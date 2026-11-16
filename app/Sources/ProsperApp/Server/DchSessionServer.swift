@@ -375,8 +375,9 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
     /// #765: AgentIslandController.onSessions, on main: the rows for Remote Terminal's dir
     /// (nil once the island stops or lists other dirs), cached for the list frame and pushed
     /// to the watch streams. No dch fork: these are the island poller's own sessions.
-    @MainActor func islandSessions(_ sessions: [AgentSession]?) {
-        let cache = DchWatchHub.cache(island: sessions, dirs: sessions == nil ? [] : AgentIsland.liveSocketDirs(),
+    /// QA #606 INFO-6: `dirs` are the ones that list was read from, not the Preferences' now.
+    @MainActor func islandSessions(_ sessions: [AgentSession]?, dirs: [String] = AgentIslandController.shared.listedDirs) {
+        let cache = DchWatchHub.cache(island: sessions, dirs: dirs,
                                       remote: DchCommand.remoteSocketDir())
         queue.async { self.watch.island(cache) }
     }

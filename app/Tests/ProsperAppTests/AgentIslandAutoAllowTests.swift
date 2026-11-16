@@ -759,12 +759,14 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         s.cwd = "/src/app"
         s.version = "1.58.0"
         s.metaEpoch = 7
+        s.wireState = "blocked"
         let out = c.published([s]).first
         XCTAssertEqual(out?.state, .working, "held: the copy, not the session as is")
+        XCTAssertEqual(out?.wireState, "working", "QA #606 INFO-1a: the cached list says working too")
         XCTAssertEqual(out?.claudeSessionID, "00000000-0000-4000-8000-000000000001")
         XCTAssertEqual(out?.transcriptPath, s.transcriptPath)
         func fields(_ x: AgentSession) -> [String] {
-            Mirror(reflecting: x).children.filter { $0.label != "state" }.map { "\($0.label ?? ""): \($0.value)" }
+            Mirror(reflecting: x).children.filter { $0.label != "state" && $0.label != "wireState" }.map { "\($0.label ?? ""): \($0.value)" }
         }
         XCTAssertEqual(out.map(fields), fields(s), "the next field added to AgentSession is copied too")
     }

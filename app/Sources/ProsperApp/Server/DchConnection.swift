@@ -1210,7 +1210,7 @@ final class DchWatchHub: @unchecked Sendable {
     static func cache(island sessions: [AgentSession]?, dirs: [String], remote: String) -> Cache? {
         guard let sessions, dirs.contains(remote) else { return nil }
         let rows = sessions.filter { $0.key.dir == remote }.sorted { $0.name < $1.name }.map { s in
-            DchListRow(name: s.name, alias: s.alias, activityEpoch: Int(s.activity), state: wireState(s.state),
+            DchListRow(name: s.name, alias: s.alias, activityEpoch: Int(s.activity), state: s.wireState ?? wireState(s.state),
                        agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version, cwd: s.cwd, harness: s.harness)
         }
         return Cache(dir: remote, rows: rows)

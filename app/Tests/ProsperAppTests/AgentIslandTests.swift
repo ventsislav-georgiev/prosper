@@ -109,9 +109,9 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(calls.map(\.args), [["--ls-json"], ["--ls-json"], ["-lj"]], "old dch falls back to -lj")
         XCTAssertEqual(rows, [
             AgentSession(key: AgentSessionKey(dir: "/tmp/dch-501", name: "x"), alias: "task", activity: 42,
-                         state: .working, agents: 2, harness: "task"),
+                         state: .working, agents: 2, harness: "task", wireState: "working"),
             AgentSession(key: AgentSessionKey(dir: "/iso", name: "y"), alias: "Y", activity: 7,
-                         state: .idle, agents: 0),
+                         state: .idle, agents: 0, wireState: ""),
         ])
         XCTAssertEqual(AgentIsland.listEnv(dir: "/a", base: ["DCH_SOCKET_DIR": "/iso", "DCH_SESSION": "s",
                                                              "PATH": "/bin"]),
@@ -570,8 +570,9 @@ final class AgentIslandTests: XCTestCase {
         f.rows = [session("s", .idle, dir: dir.path)]
         let got = expectation(description: "sessions")
         let label = "agentisland.test.poll"
-        let t = AgentIslandController.makePollTimer(poller([dir.path], f), queue: DispatchQueue(label: label, qos: .utility)) {
-            XCTAssertEqual($0.map(\.name), ["s"])
+        let t = AgentIslandController.makePollTimer(poller([dir.path], f), queue: DispatchQueue(label: label, qos: .utility)) { sessions, dirs in
+            XCTAssertEqual(sessions.map(\.name), ["s"])
+            XCTAssertEqual(dirs, [dir.path], "the dirs the tick read")
             XCTAssertEqual(String(cString: __dispatch_queue_get_label(nil)), label, "ran on the poll queue")
             XCTAssertFalse(Thread.isMainThread)
             got.fulfill()
@@ -579,6 +580,38 @@ final class AgentIslandTests: XCTestCase {
         t.resume()
         wait(for: [got], timeout: 5)
         t.cancel()
+    }
+
+    /// QA #606 INFO-6: the controller keeps the dirs of the tick it applied, though the poller's dirs flip on at once.
+    @MainActor func testApplyKeepsTheDirsTheTickRead() {
+        final class Dirs: @unchecked Sendable {
+            let lock = NSLock(); var dirs: [String] = []
+            func get() -> [String] { lock.withLock { dirs } }
+            func set(_ d: [String]) { lock.withLock { dirs = d } }
+        }
+        let dir = tempDir(), path = dir.path, other = tempDir().path, dirs = Dirs()
+        touch(dir, "s.sock")
+        dirs.set([path])
+        let c = AgentIslandController()
+        c.showsPanel = false
+        c.center = NotificationCenter()
+        c.touchFonts = {}
+        c.autoAllowOn = { false }
+        c.monitorClicks = { _ in nil }
+        c.currentGeometry = { self.notched }
+        c.makePoller = {
+            AgentIslandPoller(dirs: { dirs.get() }, list: { _, _ in
+                [AgentSession(key: AgentSessionKey(dir: path, name: "s"), alias: "", activity: 0, state: .working, agents: 0)] })
+        }
+        var seen: [[String]] = []
+        c.onSessions = { if $0 != nil { seen.append(c.listedDirs); dirs.set([other]) } }   // flips after the first tick
+        addTeardownBlock { @MainActor in c.extLive = false; c.reload() }
+        c.extLive = true
+        c.reload()
+        let deadline = Date().addingTimeInterval(5)
+        while !seen.contains([other]), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertTrue(seen.first == [path], "the first publish: the dirs its tick read, not the flipped ones")
+        XCTAssertTrue(seen.last == [other], "the next publish: its own tick's dirs")
     }
 
     /// The controller's own reload() and queue, so re-inlining the handler into a
@@ -1881,7 +1914,7 @@ final class AgentIslandTests: XCTestCase {
             args == ["-lj"] ? Data("t\tT\t5\n".utf8) : nil
         }
         XCTAssertEqual(rows, [AgentSession(key: AgentSessionKey(dir: "/d", name: "t"), alias: "T", activity: 5,
-                                           state: .idle, agents: 0)])
+                                           state: .idle, agents: 0, wireState: "")])   // the -lj row: dch gave no state
     }
 
     // MARK: - Session meta (#506)

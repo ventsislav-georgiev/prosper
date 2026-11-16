@@ -317,6 +317,40 @@ final class DchWatchStreamTests: XCTestCase {
                        "#1220: the island carries the title too; a's is its alias already")
     }
 
+    /// QA #606 INFO-1b: a state dch did not print ("" from the -lj fallback) or does not know is absent from the cached
+    /// row as a fork's is, never "idle"; a blocked row the island answers still reads working (INFO-1a, deliberate).
+    func testCachedStateIsDchsOwnWord() {
+        let tsv = AgentIsland.list(dirs: [Self.dir]) { args, _ in args == ["-lj"] ? Data("api\t\t1\n".utf8) : Data() }
+        let forkTSV = DchFrame.listPayload(DchCommand.parseListTSV("api\t\t1\n"))
+        XCTAssertEqual(tsv.first?.wireState, "")
+        XCTAssertEqual(DchWatchHub.cache(island: tsv, dirs: [Self.dir], remote: Self.dir).map { DchFrame.listPayload($0.rows) }, forkTSV)
+        XCTAssertFalse(String(decoding: forkTSV, as: UTF8.self).contains("state"), "the fork omits it")
+        let out = #"[{"name":"a","activity_epoch":5,"state":"sleepy"},{"name":"b","activity_epoch":6,"state":"blocked"}]"#
+        let json = AgentIsland.list(dirs: [Self.dir]) { args, _ in args == ["--ls-json"] ? Data(out.utf8) : nil }
+        XCTAssertEqual(DchWatchHub.cache(island: json, dirs: [Self.dir], remote: Self.dir).map { DchFrame.listPayload($0.rows) },
+                       DchFrame.listPayload(DchCommand.parseListJSON(Data(out.utf8))), "an unknown word goes out as dch printed it")
+        let held = DchWatchHub.cache(island: json.map(AgentIslandController.answering), dirs: [Self.dir], remote: Self.dir)
+        XCTAssertEqual(held?.rows.map(\.state), ["working", "working"], "an answered row reads working")
+    }
+
+    /// QA #606 INFO-6: the cache follows the dirs the list was read from, not the Preferences at publish time.
+    @MainActor func testIslandSessionsFollowsTheDirsTheTickRead() {
+        let savedIso = Preferences.isolateRemoteSessions, savedSrc = Preferences.agentIslandSessions
+        defer { Preferences.isolateRemoteSessions = savedIso; Preferences.agentIslandSessions = savedSrc }
+        Preferences.isolateRemoteSessions = true
+        Preferences.agentIslandSessions = "mac"   // now: only the default dir, which is not Remote Terminal's
+        let s = DchSessionServer(bindHost: { nil }, port: 0, retryBase: 60, onReady: {})
+        let dir = DchCommand.remoteSocketDir()
+        XCTAssertNotEqual(dir, DchCommand.defaultSocketDir)
+        let api = AgentSession(key: AgentSessionKey(dir: dir, name: "api"), alias: "", activity: 100, state: .working, agents: 0)
+        s.islandSessions([api], dirs: [dir])
+        XCTAssertTrue(s.queue.sync { s.watch.cachedList() } != nil, "the tick read Remote Terminal's dir")
+        Preferences.isolateRemoteSessions = false
+        Preferences.agentIslandSessions = "all"   // now: lists it, but the tick that made this list did not
+        s.islandSessions([], dirs: [DchCommand.isolatedSocketDir])
+        XCTAssertFalse(s.queue.sync { s.watch.available() }, "a dir the tick never read: no empty list")
+    }
+
     /// QA #606 INFO-7: DchSessionServer.islandSessions puts the island's rows for Remote Terminal's dir into the
     /// server's own hub (on its queue), and nil (the island stopped) takes them out. Never started: no socket.
     @MainActor func testIslandSessionsFeedsTheServersHub() {
@@ -326,7 +360,7 @@ final class DchWatchStreamTests: XCTestCase {
         let s = DchSessionServer(bindHost: { nil }, port: 0, retryBase: 60, onReady: {})
         let dir = DchCommand.remoteSocketDir()
         let api = AgentSession(key: AgentSessionKey(dir: dir, name: "api"), alias: "", activity: 100, state: .working, agents: 0)
-        s.islandSessions([api])
+        s.islandSessions([api], dirs: [dir])
         XCTAssertEqual(s.queue.sync { s.watch.cachedList() },
                        DchFrame.listPayload([DchListRow(name: "api", alias: "", activityEpoch: 100, state: "working", agents: 0)]))
         s.islandSessions(nil)

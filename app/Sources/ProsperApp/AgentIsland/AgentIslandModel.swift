@@ -105,6 +105,9 @@ struct AgentSession: Equatable, Identifiable {
     /// #1210: dch's harness title (DchListRow.harness), "" when none. Only the Sidekicks split matches it;
     /// `title` never reads it (an empty alias already holds it, as dch's label does).
     var harness: String = ""
+    /// QA #606 INFO-1b: the state word dch printed ("" when it gave none), for Remote Terminal's cached list so
+    /// an unknown state is absent from the row as a fork's is. nil: built here, the cache words `state`.
+    var wireState: String? = nil
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -740,7 +743,8 @@ enum AgentIsland {
                              agents: row.agents, meta: row.meta, version: row.version, metaEpoch: row.metaEpoch,
                              autoAllowed: row.autoAllowed,
                              claudeSessionID: mapping[row.name]?.sessionID, transcriptPath: mapping[row.name]?.path,
-                             claudeForeground: foreground[row.name], cwd: row.cwd, harness: row.harness)
+                             claudeForeground: foreground[row.name], cwd: row.cwd, harness: row.harness,
+                             wireState: row.state)
                 return AgentModelEffort.carry(AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO),
                                               previous: before[s.key])
             }
@@ -1025,6 +1029,8 @@ final class AgentIslandPoller: @unchecked Sendable {
     private var published: [AgentSession]?
     /// #768: display asleep or screen locked (the controller's ScreenGate): the longer backstop.
     var hidden = false
+    /// QA #606 INFO-6: the dirs the last tick read; poll queue only.
+    private(set) var listedDirs: [String] = []
 
     init(now: @escaping () -> TimeInterval = { Date().timeIntervalSince1970 },
          dirs: @escaping () -> [String] = AgentIsland.liveSocketDirs,
@@ -1037,6 +1043,7 @@ final class AgentIslandPoller: @unchecked Sendable {
     /// The sorted sessions when they differ from the last tick's, else nil.
     func tick() -> [AgentSession]? {
         let dirs = dirs()
+        listedDirs = dirs
         let snap = scanner.scan(dirs)
         let t = now()
         if snap.isEmpty {

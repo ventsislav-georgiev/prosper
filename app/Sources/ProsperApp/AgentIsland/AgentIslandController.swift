@@ -251,8 +251,8 @@ final class AgentIslandController {
         let poller = makePoller(), hidden = screen.hidden
         queue.async { poller.hidden = hidden }
         self.poller = poller
-        let t = Self.makePollTimer(poller, queue: queue, every: pollEvery) { [weak self] sessions in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
+        let t = Self.makePollTimer(poller, queue: queue, every: pollEvery) { [weak self] sessions, dirs in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions, dirs: dirs) } }
         }
         t.resume()
         timer = t
@@ -266,12 +266,12 @@ final class AgentIslandController {
     /// @MainActor (setEventHandler is not @Sendable) and its executor check
     /// trapped on the poll queue.
     nonisolated static func makePollTimer(_ poller: AgentIslandPoller, queue: DispatchQueue, every: TimeInterval = 1,
-                                          onSessions: @escaping @Sendable ([AgentSession]) -> Void) -> DispatchSourceTimer {
+                                          onSessions: @escaping @Sendable ([AgentSession], [String]) -> Void) -> DispatchSourceTimer {
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: every, leeway: .milliseconds(250))
         t.setEventHandler {
             guard let sessions = poller.tick() else { return }
-            onSessions(sessions)
+            onSessions(sessions, poller.listedDirs)   // the dirs this tick read, on the poll queue
         }
         return t
     }
@@ -296,8 +296,12 @@ final class AgentIslandController {
         layout()
     }
 
-    private func apply(_ sessions: [AgentSession]) {
+    /// QA #606 INFO-6: the dirs the list on `store`/`deferred` was read from (Remote Terminal's cache follows them).
+    private(set) var listedDirs: [String] = []
+
+    private func apply(_ sessions: [AgentSession], dirs: [String]) {
         guard timer != nil, let store else { return }   // a tick that raced teardown
+        listedDirs = dirs
         let sessions = withSent(sessions)
         // #768: only ages moved and nobody sees them (collapsed, or the display
         // asleep or locked): Live status and the watch stream still get the list,
@@ -907,7 +911,8 @@ final class AgentIslandController {
         guard let poller else { return }
         queue.async { [weak self] in
             guard let sessions = poller.tick() else { return }
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions) } }
+            let dirs = poller.listedDirs
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions, dirs: dirs) } }
         }
     }
 
@@ -2121,7 +2126,8 @@ final class AgentIslandController {
                      agents: s.agents, meta: s.meta, version: s.version, metaEpoch: s.metaEpoch,
                      autoAllowed: s.autoAllowed, claudeSessionID: s.claudeSessionID, transcriptPath: s.transcriptPath,
                      claudeForeground: s.claudeForeground,
-                     cwd: s.cwd, harness: s.harness)   // #1220: the phone's list frame carries it
+                     cwd: s.cwd, harness: s.harness,   // #1220: the phone's list frame carries it
+                     wireState: "working")   // QA #606 INFO-1a: deliberate, the cached list says it too
     }
 
     private func publish() {

@@ -330,7 +330,7 @@ until the island publishes again at least 5 s later. Each row's keys are sorted.
 |-----|------|----------|---------|
 | `name` | string | yes | The dch session name: what attach, kill and rename take. |
 | `alias` | string | no | Display alias (dch's alias, else the Claude Code session name); absent when empty. |
-| `state` | string | no | `working`, `idle`, `blocked` or `done`; absent when unknown. |
+| `state` | string | no | `working`, `idle`, `blocked` or `done`; absent when unknown. Prosper's answer from the island list reports a blocked session it is answering automatically as `working`. |
 | `agents` | int | no | Live subagents; absent when 0. |
 | `cwd` | string | no | Since the 2026-11-12 amendment (dch 1.52.0, Prosper #877): the session's start directory as `getcwd` gave its master (absolute, no trailing slash, `/` the one exception), from the session's live history record, passed on as dch read it. **Absent, never `null` or `""`**, when there is no record (`DCH_NO_HISTORY`, an older dch), the record has no cwd, or the path is 512 bytes of UTF-8 or longer (dch serve's `cwd[512]`, serve.c:340@v1.54.0). An older client ignores it. |
 | `meta` | object | no | `{"prs": {"open": [{url, repo, title, num?}], "merged"?: int}}`; only allowlisted `https://github.com/<owner>/<repo>/pull/<n>` URLs. |
