@@ -37,7 +37,8 @@ extension XrayPanelModel {
     }
 
     /// #1381: one `--memory` read in `reading` (the tab switch's, the pending one, the 30 s poll). A host that did not
-    /// answer (4, 7, a remote -1) keeps the rows, as Tasks; any other answer replaces the Memory tab (nil: none).
+    /// answer (4, 7, a remote -1) keeps the rows and says "host unreachable", as Tasks; any other answer clears that line
+    /// (#1353, R1381-i1: the host answered) and replaces the Memory tab (nil: none).
     func readMemory() {
         guard let dch, let run else { return }
         lastRead = now()
@@ -46,7 +47,8 @@ extension XrayPanelModel {
             let r = await run(dch, a, env)
             guard !Task.isCancelled, let self else { return }
             self.reading = nil
-            if !self.unreached(r.status) { self.takeMemory(r) }
+            self.unreachable = self.unreached(r.status)
+            if !self.unreachable { self.takeMemory(r) }
             self.pendingMemory = false   // this read answered the switch
             self.landed()
         }

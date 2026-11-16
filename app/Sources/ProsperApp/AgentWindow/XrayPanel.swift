@@ -255,6 +255,9 @@ final class XrayPanelModel: ObservableObject {
         return out
     }
 
+    /// #1353 (R1381-i1): the Memory tab's footer: "host unreachable" when the last read did not reach the host.
+    var memoryFooter: [String] { unreachable ? ["host unreachable"] : [] }
+
     /// Esc: clears the filter, then closes.
     func escape() {
         if filter.isEmpty { close() } else { filter = "" }
@@ -526,6 +529,7 @@ struct XrayPanelView: View {
                     }
                 }
             }
+            ForEach(panel.memoryFooter, id: \.self) { faint($0) }
         }
         .padding(sz(10))
     }

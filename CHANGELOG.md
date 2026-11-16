@@ -1566,6 +1566,8 @@ tag from the now-released section and put it on the new top draft.
   another read is running no longer skips its refresh, empty task groups are no longer shown, and
   clicking a task whose prompt was loading when the transcript changed now opens the task's card
   instead of doing nothing. (#1381)
+- X-ray's Memory tab now says "host unreachable" when a session's machine stops answering, and
+  clears it when the machine answers again. (#1353)
 
 ## v2.174.0
 
