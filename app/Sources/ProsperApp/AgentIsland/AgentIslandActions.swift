@@ -155,20 +155,56 @@ extension AgentIsland {
     static let reviveFileMinimum = [1, 28, 2]
     /// #719: 1.28.3's --all also holds the id of a record that ended on purpose.
     static let reviveEndedHoldMinimum = [1, 28, 3]
-    /// The History tab lists this many records in all, newest first, unless more
+    /// The History tab lists this many records in all, the newest first, unless more
     /// are pinned: pinned ones are never capped, unpinned ones fill the rest.
     static let historyCap = 50
 
+    /// #1347: dch's History order (picker.c pk_natcmp at v1.78.0) on the shown title: ASCII case folded, a run
+    /// of digits by value ("a2" before "a10"), other bytes by value ('-' < '.' < digits < letters), a prefix first.
+    /// shortcut: ASCII only, as dch's tolower/isdigit in the C locale; a byte above 127 sorts after every ASCII one.
+    static func natCompare(_ a: String, _ b: String) -> Int {
+        let x = Array(a.utf8), y = Array(b.utf8)
+        func at(_ s: [UInt8], _ i: Int) -> UInt8 { i < s.count ? s[i] : 0 }
+        func low(_ c: UInt8) -> Int { Int(c >= 65 && c <= 90 ? c + 32 : c) }
+        func digit(_ c: UInt8) -> Bool { c >= 48 && c <= 57 }
+        var i = 0, j = 0
+        while i < x.count, j < y.count {
+            if digit(x[i]), digit(y[j]) {
+                while at(x, i) == 48, digit(at(x, i + 1)) { i += 1 }
+                while at(y, j) == 48, digit(at(y, j + 1)) { j += 1 }
+                var la = 0, lb = 0
+                while digit(at(x, i + la)) { la += 1 }
+                while digit(at(y, j + lb)) { lb += 1 }
+                if la != lb { return la < lb ? -1 : 1 }
+                for k in 0..<la where x[i + k] != y[j + k] { return Int(x[i + k]) - Int(y[j + k]) }
+                i += la; j += lb
+                continue
+            }
+            if low(x[i]) != low(y[j]) { return low(x[i]) - low(y[j]) }
+            i += 1; j += 1
+        }
+        return Int(at(x, i)) - Int(at(y, j))
+    }
+
+    /// #1347: dch's pk_hcmp: by title (`natCompare`); a tie the newest first, then the name, then the dir.
+    static func historyBefore(_ a: DchHistoryRecord, _ b: DchHistoryRecord) -> Bool {
+        let c = natCompare(a.title, b.title)
+        if c != 0 { return c < 0 }
+        if a.lastSeen != b.lastSeen { return a.lastSeen > b.lastSeen }
+        return (a.key.name, a.key.dir) < (b.key.name, b.key.dir)
+    }
+
     /// #605: the History tab's rows: every pinned record (never capped), then
-    /// unpinned ones up to `historyCap` minus the pinned count; each part newest
-    /// first (`history` is).
+    /// unpinned ones up to `historyCap` minus the pinned count, the newest of them (`history` is newest first).
+    /// #1347: then each part A to Z by title, as dch's picker does: it caps the newest first, sorts after.
     /// #743: one row per name in a dir, its newest record (`newestPerName`).
     /// #1364: none for a name live in its socket dir (`live`, the live sessions' keys): a cold start under the name
     /// moved its record aside with its pin, and the live row already shows the session. It comes back when that ends.
     static func cappedHistory(_ history: [DchHistoryRecord], live: Set<AgentSessionKey> = []) -> [DchHistoryRecord] {
         let rows = newestPerName(history).filter { !live.contains($0.key) }
         let pinned = rows.filter(\.pinned)
-        return pinned + rows.filter { !$0.pinned }.prefix(max(0, historyCap - pinned.count))
+        let rest = rows.filter { !$0.pinned }.prefix(max(0, historyCap - pinned.count))
+        return pinned.sorted(by: historyBefore) + rest.sorted(by: historyBefore)
     }
 
     /// #743: a cold start under a name (`dch <name>` by hand, never --revive) moves the

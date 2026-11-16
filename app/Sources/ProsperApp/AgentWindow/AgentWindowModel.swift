@@ -252,7 +252,7 @@ enum AgentSidebar {
     /// #1324 (a): the records of `dch --history --json --remote` that carry a "host" (the local ones, without, are the
     /// island's), each read by the island's own parseHistory under the dir "@" + host. nil when the bytes are not a JSON
     /// array (a timed-out or failed call): the caller keeps what it had. A host, name or file that remoteOK refuses is
-    /// left out, as is a second record of the same host and id. Per host newest first (cappedHistory's order).
+    /// left out, as is a second record of the same host and id. Per host as cappedHistory orders it (#1347: pinned, then A to Z).
     static func parseRemoteHistory(_ data: Data) -> [RemoteRecord]? {
         guard !data.isEmpty, let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return nil }
         var seen = Set<AgentSessionKey>()

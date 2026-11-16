@@ -151,7 +151,7 @@ final class DchControlFramesTests: XCTestCase {
         let r = call(ops(f), DchFrame.history, raw: Data())
         XCTAssertEqual(r.type, DchFrame.historyResp)
         let rows = r.json as? [[String: Any]] ?? []
-        XCTAssertEqual(rows.map { $0["name"] as? String }, ["clean", "crashy"], "newest first, as the History tab")
+        XCTAssertEqual(rows.map { $0["name"] as? String }, ["clean", "crashy"], "#1347: A to Z by title (clean, Crashy), as the History tab")
         let crashy = rows.last ?? [:], clean = rows.first ?? [:]
         XCTAssertEqual(crashy["alias"] as? String, "Crashy")
         XCTAssertEqual(crashy["end"] as? String, "signal 9")

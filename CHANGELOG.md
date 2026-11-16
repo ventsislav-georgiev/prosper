@@ -1516,6 +1516,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a session that is running again no longer also shows as an ended record under
   History (in the window, the island and the phone); the record comes back with its pin when the
   session ends. (#1364)
+- Agent Sessions and Agent Island: History lists pinned sessions first, then the rest, each A to Z
+  by name, as dch does. (#1347)
 
 ## v2.174.0
 

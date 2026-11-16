@@ -3950,7 +3950,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(rows[0], DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "keep"), pinned: true))
     }
 
-    /// Pinned first, newest first; unpinned fill up to 50; a pin is never capped.
+    /// Pinned first; the newest unpinned fill up to 50; a pin is never capped; #1347: each part A to Z (digit runs by value).
     @MainActor
     func testPinnedRowsLeadAndAreNeverCapped() {
         let unpinned = (0..<60).map { record("u\($0)", ended: TimeInterval(1000 - $0)) }
@@ -3960,7 +3960,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let rows = AgentIsland.cappedHistory(history)
         XCTAssertEqual(rows.count, AgentIsland.historyCap)
         XCTAssertEqual(rows.prefix(2).map(\.name), ["p-new", "p-old"])
-        XCTAssertEqual(rows.dropFirst(2).map(\.name), (0..<48).map { "u\($0)" }, "unpinned newest first, up to the cap")
+        XCTAssertEqual(rows.dropFirst(2).map(\.name), (0..<48).map { "u\($0)" }, "the 48 newest unpinned, up to the cap (u0 to u47 are also the first 48 A to Z: AgentHistorySortTests pins the cap)")
         let many = (0..<55).map { pinned("p\($0)", ended: TimeInterval(900 - $0)) } + unpinned.prefix(3)
         let all = AgentIsland.cappedHistory(many.sorted { $0.lastSeen > $1.lastSeen })
         XCTAssertEqual(all.map(\.name), (0..<55).map { "p\($0)" }, "55 pinned: every pin, no unpinned row")
@@ -4238,7 +4238,7 @@ final class AgentIslandControlsTests: XCTestCase {
         store.actions[AgentSessionKey(dir: "/d", name: "")] = "Remove ios failed: session is live"
         store.historyTab = true
         store.expanded = true
-        XCTAssertEqual(store.shownHistory.map(\.name), ["prosper-main", "dch", "review", "ios", "scratch"])
+        XCTAssertEqual(store.shownHistory.map(\.name), ["dch", "prosper-main", "ios", "review", "scratch"], "#1347: pinned A to Z by title (Prosper is prosper-main's alias), then the rest")
         let out = tempDir(), saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         func pixels() throws -> Data {
@@ -4449,8 +4449,8 @@ final class AgentIslandControlsTests: XCTestCase {
             store.sessions = masters.enumerated().map { session("s\($0.offset)", version: $0.element) }
             XCTAssertEqual(store.reviveNoMessageGate, gate, "\(dch.version) \(masters)")
             let on = gate.isOK
-            XCTAssertEqual(drawn().map { $0.resumeNoMessage != nil }, [on, on, false], "drawn only with the gate; #627 never")
-            XCTAssertEqual(drawn().map(\.enabled), [store.resumeGate.isOK, store.resumeGate.isOK, false], "Resume unchanged")
+            XCTAssertEqual(drawn().map { $0.resumeNoMessage != nil }, [on, false, on], "drawn only with the gate; #627 never (#1347: p, --all, x A to Z)")
+            XCTAssertEqual(drawn().map(\.enabled), [store.resumeGate.isOK, false, store.resumeGate.isOK], "Resume unchanged")
         }
         store.controlDch = Self.v126
         store.sessions = []
@@ -4490,11 +4490,11 @@ final class AgentIslandControlsTests: XCTestCase {
         func menus() -> [[String]] { AgentIslandView(store: store).historyDrawn.map { $0.menu.map(\.title) } }
         let both = ["Resume", "Resume (no message)"]
         store.controlDch = Self.v127
-        XCTAssertEqual(menus(), [both + ["Unpin"], both + ["Pin", "Remove from History"], []], "a pin leads")
+        XCTAssertEqual(menus(), [both + ["Unpin"], [], both + ["Pin", "Remove from History"]], "a pin leads; #1347: then --all, x A to Z")
         store.controlDch = Self.v125
-        XCTAssertEqual(menus(), [["Resume", "Unpin"], ["Resume", "Pin", "Remove from History"], []], "1.25: no no-message")
+        XCTAssertEqual(menus(), [["Resume", "Unpin"], [], ["Resume", "Pin", "Remove from History"]], "1.25: no no-message")
         store.controlDch = Self.v1241
-        XCTAssertEqual(menus(), [["Resume"], ["Resume"], []], "1.24.1: Resume only")
+        XCTAssertEqual(menus(), [["Resume"], [], ["Resume"]], "1.24.1: Resume only")
         store.controlDch = nil
         XCTAssertEqual(menus(), [[], [], []], "Resume refused: an empty menu")
         XCTAssertEqual(AgentIsland.resumeWithMessageHelp, "Resume with dch's carry-on message")
@@ -5688,11 +5688,11 @@ final class AgentIslandControlsTests: XCTestCase {
                 store.history = history
                 store.historyTab = true
                 let drawn = AgentIslandView(store: store).historyDrawn, label = "\(what), file on own: \(fileOnOwn)"
-                // Pinned rows lead (#605): the pinned-twice name first.
+                // Pinned rows lead (#605): the pinned-twice name first; #1347: then A to Z, a name in two dirs newest first.
                 let lead = drawn.first?.record.pinned == true
                 XCTAssertEqual(drawn.map { "\($0.record.key.dir) \($0.record.name)" },
-                               lead ? ["/d work", "/d a", "/e work", "/d b"] : ["/d a", "/e work", "/d work", "/d b"], label)
-                let work = drawn[lead ? 0 : 2]
+                               lead ? ["/d work", "/d a", "/d b", "/e work"] : ["/d a", "/d b", "/e work", "/d work"], label)
+                let work = drawn[lead ? 0 : 3]
                 XCTAssertEqual(work.record.lastSeen, 2000, "the newest record: \(label)")
                 XCTAssertEqual(work.older, records - 1, label)
                 XCTAssertEqual(work.olderUnpinned, history.filter { $0.key == work.record.key && $0.id != work.id && !$0.pinned }.count, label)

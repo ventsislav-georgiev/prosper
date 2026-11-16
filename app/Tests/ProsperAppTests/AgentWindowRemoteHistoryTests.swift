@@ -101,11 +101,11 @@ final class AgentWindowRemoteHistoryTests: XCTestCase {
         XCTAssertEqual(AgentWindowModel.remoteHistoryArgs, ["--history", "--json", "--remote"])
         let h = try XCTUnwrap(m.sections.last)
         XCTAssertEqual(h.title, "History")
-        XCTAssertEqual(h.rows.map(\.id), [.history(Self.local.id), .history(Self.key("host-a", "docs")),
-                                          .history(Self.key("host-a", "api")), .history(Self.key("host-b", "build"))])
+        XCTAssertEqual(h.rows.map(\.id), [.history(Self.local.id), .history(Self.key("host-a", "api")),
+                                          .history(Self.key("host-a", "docs")), .history(Self.key("host-b", "build"))])
         XCTAssertEqual(h.rows.first, AgentSidebar.row(Self.local, now: AgentWindowD1Tests.now), "the local row as before")
         XCTAssertEqual(h.rows.map(\.host), [nil, "host-a", "host-a", "host-b"], "the host slot's value")
-        XCTAssertEqual(h.rows.map(\.title), ["old", "Docs", "api", "build"])
+        XCTAssertEqual(h.rows.map(\.title), ["old", "api", "Docs", "build"])
         XCTAssertEqual(h.rows.last?.detail, "Stale \u{00B7} Ended \u{00B7} " + AgentIsland.endLabel("exit 1"), "dch's cache of a quiet host")
         // dch's History spacing: the list again after 2 s, History not before 10 s.
         log.clock += AgentWindowModel.remoteEvery
