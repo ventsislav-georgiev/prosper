@@ -187,7 +187,7 @@ enum AgentSidebar {
         let far = Dictionary(grouping: remoteHistory, by: \.host).sorted { $0.key < $1.key }
             .flatMap { AgentIsland.cappedHistory($0.value.map(\.record)) }
             .map { row($0, now: now, stale: stale.contains($0.id), action: actions[$0.id]) }
-        add("History", AgentIsland.cappedHistory(history).map { row($0, now: now) } + far)
+        add("History", AgentIsland.cappedHistory(history, live: Set(sessions.map(\.key))).map { row($0, now: now) } + far)
         return out
     }
 

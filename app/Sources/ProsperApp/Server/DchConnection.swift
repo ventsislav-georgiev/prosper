@@ -1510,6 +1510,8 @@ struct DchControlOps: Sendable {
         var held: Set<String>?
         // #992 R950-1: a live name sends --all to <name>-N (reviveAllTaken's `live`); listed only when it can matter.
         let reviveFile = bin.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveFileMinimum) } ?? false
+        // #1364: cappedHistory hides a live name's record. shortcut: below 1.28.2 (no id-shaped record) nothing is
+        // listed, so the phone still shows it there; list always if such a dch must be served.
         let live = reviveFile || all.contains { AgentIsland.refusedName($0.name) == .idShaped } ? sessions() : []
         if let bin, reviveFile {
             if Self.reviveExact(bin, live) {
@@ -1522,7 +1524,7 @@ struct DchControlOps: Sendable {
         let ended = bin.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveEndedHoldMinimum) } ?? false
         let taken = AgentIsland.reviveAllTaken(all, now: t, held: held, endedHolds: ended, live: Set(live.map(\.key)))
         reply(DchFrame.encode(DchFrame.historyResp,
-                              json: AgentIsland.cappedHistory(all).map { Self.historyWire($0, now: t, taken: taken) }))
+                              json: AgentIsland.cappedHistory(all, live: Set(live.map(\.key))).map { Self.historyWire($0, now: t, taken: taken) }))
     }
 
     /// #746: the newest record of `name` (`history` is newest first): the phone's row, as

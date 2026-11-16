@@ -163,8 +163,10 @@ extension AgentIsland {
     /// unpinned ones up to `historyCap` minus the pinned count; each part newest
     /// first (`history` is).
     /// #743: one row per name in a dir, its newest record (`newestPerName`).
-    static func cappedHistory(_ history: [DchHistoryRecord]) -> [DchHistoryRecord] {
-        let rows = newestPerName(history)
+    /// #1364: none for a name live in its socket dir (`live`, the live sessions' keys): a cold start under the name
+    /// moved its record aside with its pin, and the live row already shows the session. It comes back when that ends.
+    static func cappedHistory(_ history: [DchHistoryRecord], live: Set<AgentSessionKey> = []) -> [DchHistoryRecord] {
+        let rows = newestPerName(history).filter { !live.contains($0.key) }
         let pinned = rows.filter(\.pinned)
         return pinned + rows.filter { !$0.pinned }.prefix(max(0, historyCap - pinned.count))
     }

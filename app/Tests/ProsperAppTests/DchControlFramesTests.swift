@@ -890,8 +890,24 @@ final class DchControlFramesTests: XCTestCase {
         f.hist["/e"] = Self.hist([row])
         f.ls["/d"] = Self.ls([(id, "1.24.1")])
         let rows = call(ops(f, dirs: ["/d", "/e"]), DchFrame.history, raw: Data()).json as? [[String: Any]] ?? []
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertEqual(rows.filter { $0["takes"] as? Bool == true }.count, 1, "only the dir where the name is live")
+        // #1364: the live name's own record is not listed; the shared reviveAllTaken still takes it (the island's count).
+        XCTAssertEqual(rows.count, 1, "only the other dir's record")
+        XCTAssertEqual(rows.filter { $0["takes"] as? Bool == true }.count, 0, "the other dir's name is free: dch refuses it")
+    }
+
+    /// #1364: the phone's list is the tab's: a record whose name is live in its socket dir (here the aside one a cold
+    /// start leaves, pin copied) is left out while it runs, and comes back pinned when it ends.
+    func testHistoryRespLeavesOutALiveNamesRecordUntilItEnds() {
+        let f = Fake()
+        f.hist["/d"] = Self.hist([
+            ["name": "weekly", "file": "weekly.1762000000", "pinned": true, "updated": Self.now - 60, "ended": Self.now - 60, "end": "stopped"],
+            ["name": "api", "updated": Self.now - 90, "ended": Self.now - 90, "end": "stopped"]])
+        f.ls["/d"] = Self.ls([("weekly", "1.28.2")])
+        func rows() -> [[String: Any]] { call(ops(f, binary: Self.v1282), DchFrame.history, raw: Data()).json as? [[String: Any]] ?? [] }
+        XCTAssertEqual(rows().compactMap { $0["name"] as? String }, ["api"], "weekly is live: only its live row")
+        f.ls["/d"] = nil
+        XCTAssertEqual(rows().compactMap { $0["name"] as? String }, ["weekly", "api"], "ended: back, pinned first")
+        XCTAssertEqual(rows().first?["pinned"] as? Bool, true)
     }
 
     func testRestartAllWithNoResultAndANonZeroExitIsAnError() {

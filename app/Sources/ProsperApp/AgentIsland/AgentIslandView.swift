@@ -437,7 +437,7 @@ final class AgentIslandStore: ObservableObject {
     var killTarget: AgentSession? { confirmingKill.flatMap { k in sessions.first { $0.key == k } } }
 
     /// #605: pinned first, then unpinned up to the cap (the tab's count too).
-    var cappedHistory: [DchHistoryRecord] { AgentIsland.cappedHistory(history) }
+    var cappedHistory: [DchHistoryRecord] { AgentIsland.cappedHistory(history, live: Set(sessions.map(\.key))) }
     /// #578: the History tab's rows, capped.
     var shownHistory: [DchHistoryRecord] { historyTab ? cappedHistory : [] }
 

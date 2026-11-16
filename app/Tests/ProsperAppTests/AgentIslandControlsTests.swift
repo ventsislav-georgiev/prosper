@@ -1296,7 +1296,7 @@ final class AgentIslandControlsTests: XCTestCase {
     func testRendersHistoryTabOffscreen() throws {
         let now = Date().timeIntervalSince1970
         let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails(), sidekickPattern: "-qa")
-        store.sessions = [session("prosper-main", version: "1.24.0"), session("prosper-qa")]
+        store.sessions = [session("live", version: "1.24.0"), session("prosper-qa")]   // #1364: not prosper-main (it would hide a)
         store.controlDch = Self.v124
         var a = record("prosper-main", ended: now - 120, end: "signal 9")
         a.alias = "Prosper"
@@ -1317,10 +1317,10 @@ final class AgentIslandControlsTests: XCTestCase {
         let out = tempDir()
         func island(_ name: String) throws { try render(store, name, to: out) }
         try island("agent-island-history")
-        store.sessions = [session("prosper-main", version: "1.25.0")]
+        store.sessions = [session("live", version: "1.25.0")]
         try island("agent-island-history-gated")
         // #585: nothing --revive --all would take and no status: no header line.
-        store.sessions = [session("prosper-main", version: "1.24.0")]
+        store.sessions = [session("live", version: "1.24.0")]
         XCTAssertEqual(store.resumeAllButton, "Resume interrupted (3)", "a, b and c; not d (killed) or e (stopped)")
         var f = record("done", ended: now - 300, end: "exit 0")
         f.cwd = NSHomeDirectory() + "/personal/dch"
@@ -4222,7 +4222,7 @@ final class AgentIslandControlsTests: XCTestCase {
     func testRendersHistoryPinsAndClearConfirmOffscreen() throws {
         let now = Date().timeIntervalSince1970
         let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
-        store.sessions = [session("prosper-main", version: "1.25.0")]
+        store.sessions = [session("live", version: "1.25.0")]   // #1364: a live prosper-main would hide its record
         store.controlDch = Self.v125
         var a = pinned("prosper-main", ended: now - 120)
         a.alias = "Prosper"
@@ -4256,7 +4256,7 @@ final class AgentIslandControlsTests: XCTestCase {
         store.confirmingClear = false
         let edits = try pixels()
         store.controlDch = Self.v1241
-        store.sessions = [session("prosper-main", version: "1.24.1")]
+        store.sessions = [session("live", version: "1.24.1")]
         XCTAssertNotEqual(edits, try pixels(), "under 1.25.0: no pin, X or Clear drawn")
         try render(store, "agent-island-605-history-gated-1.24.1", to: out)
     }
@@ -4605,7 +4605,7 @@ final class AgentIslandControlsTests: XCTestCase {
     func testRendersResumeNoMessageOffscreen() throws {
         let now = Date().timeIntervalSince1970
         let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
-        store.sessions = [session("prosper-main", version: "1.27.0")]
+        store.sessions = [session("live", version: "1.27.0")]   // #1364: a live prosper-main would hide its record
         store.controlDch = Self.v127
         var a = pinned("prosper-main", ended: now - 120)
         a.alias = "Prosper"
@@ -4632,7 +4632,7 @@ final class AgentIslandControlsTests: XCTestCase {
         }
         let quiet = try pixels()
         store.controlDch = Self.v126
-        store.sessions = [session("prosper-main", version: "1.26.0")]
+        store.sessions = [session("live", version: "1.26.0")]
         XCTAssertNotEqual(quiet, try pixels(), "under 1.27.0: no icon, no header choice")
         try render(store, "agent-island-669-gated-1.26", to: out)
     }
@@ -4719,6 +4719,8 @@ final class AgentIslandControlsTests: XCTestCase {
         store.historyActions = [rows[2].id: "Resumed"]
         store.historyTab = true
         func statuses() -> [String?] { AgentIslandView(store: store).historyDrawn.map { $0.status } }
+        XCTAssertEqual(statuses(), [], "#1364: work is live: its records draw no History row")
+        store.sessions = [session("b", version: "1.25.0")]   // work ended: its row is back
         XCTAssertEqual(statuses(), ["Resumed"], "an older record's status, while the row's own has none")
         store.historyActions[rows[1].id] = "Resumed as work-2"
         XCTAssertEqual(statuses(), ["Resumed as work-2"], "the newest older record's first")
@@ -6831,10 +6833,12 @@ extension AgentIslandControlsTests {
         let titles = Dictionary(uniqueKeysWithValues: view().drawn.map { ($0.session.name, $0.stopBothTitle) })
         XCTAssertEqual(titles, ["api": "Stop both (with api-qa)", "api-qa": "Stop both (with api)"])
         XCTAssertEqual(historyTitles("x"), ["Resume", "Resume both (with x-qa)"])
+        XCTAssertEqual(historyTitles("api"), [], "#1364: api is live: its record draws no row")
+        store.sessions = [session("api-qa", version: "1.24.0")]
         XCTAssertEqual(historyTitles("api"), ["Resume"], "its partner is live")
         store.sessions = [session("api", version: "1.24.0")]
         XCTAssertTrue(view().drawn.first.map { $0.stopBoth == nil } == true, "the partner in History only")
-        XCTAssertEqual(historyTitles("api"), ["Resume"], "api itself is live")
+        XCTAssertEqual(historyTitles("api"), [], "#1364: api itself is live: no row")
         store.sessions = [session("api", version: "1.24.0"), session("api-qa", version: "1.23.0")]
         XCTAssertEqual(view().drawn.map(\.stopBothEnabled), [false, false], "an old master on either side")
         let k = "agentIslandSidekickSuffix", saved = Preferences.defaults.object(forKey: k)
