@@ -640,7 +640,8 @@ extension AgentWindowD1Tests {
         st.history = [h, aside("h", ago: 9000), aside("h", ago: 9500, pinned: true)]
         let menu = AgentWindowControls.historyMenu(h, store: st)
         XCTAssertEqual(menu[3], .item("Pin (also 2 older records of this name)", enabled: true, verb: .pin))
-        XCTAssertEqual(menu[4], .item("Remove from History (also 1 older record of this name)…", enabled: true, verb: .remove))
+        XCTAssertEqual(menu[4], .item("Remove from History (also 1 older record of this name; 1 pinned older record stays)\u{2026}",
+                                    enabled: true, verb: .remove), "#1344: the island's note for the pinned older record")
         // A live master newer than the control dch closes the gates, as in the island.
         st.sessions = [ctlSession("live", version: "1.30.0")]
         XCTAssertFalse(AgentWindowControls.historyMenu(h, store: st).contains { if case .item(_, _, .pin) = $0 { true } else { false } })
@@ -657,6 +658,40 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(AgentWindowControls.historyOff(.pin, pinned(h), store: st), "Unpin (needs dch 1.25.0)")
         XCTAssertEqual(AgentWindowControls.historyOff(.resumeNoMessage, h, store: st), "Resume (no message) (needs dch 1.27.0)")
         XCTAssertEqual(AgentWindowControls.historyOff(.resume, dash, store: st), "Resume (not available for this session)")
+    }
+
+    /// #1344: the window's Remove says when a pinned older record stays, in the island's words.
+    @MainActor
+    func testAgentWindowHistoryMenuRemoveSaysThePinnedOlderRecordStays() throws {
+        let h = record("h")
+        let st = store([], history: [h, aside("h", ago: 9500, pinned: true)]).with(bin([1, 27, 0]))
+        func remove(_ r: DchHistoryRecord) -> AgentWindowMenuEntry? {
+            AgentWindowControls.historyMenu(r, store: st).last
+        }
+        XCTAssertEqual(remove(h), .item("Remove from History (1 pinned older record stays)\u{2026}", enabled: true, verb: .remove))
+        st.history = [h, aside("h", ago: 9000, pinned: true), aside("h", ago: 9500, pinned: true)]
+        XCTAssertEqual(remove(h), .item("Remove from History (2 pinned older records stay)\u{2026}", enabled: true, verb: .remove))
+        st.history = [h, aside("h", ago: 9000)]
+        XCTAssertEqual(remove(h), .item("Remove from History (also 1 older record of this name)\u{2026}", enabled: true, verb: .remove),
+                       "no pinned older record: no note")
+    }
+
+    @MainActor
+    func testAgentWindowHistoryMenuRemoveWithNoOlderRecordIsThePlainLabel() throws {
+        let h = record("h"), other = pinned(record("other", ago: 5000))
+        let st = store([], history: [h, other]).with(bin([1, 27, 0]))
+        XCTAssertEqual(AgentWindowControls.historyMenu(h, store: st).last,
+                       .item("Remove from History\u{2026}", enabled: true, verb: .remove))
+    }
+
+    @MainActor
+    func testAgentWindowHistoryMenuRemoveLabelEqualsTheIslandsForTheSameRecord() throws {
+        let h = record("h")
+        let st = store([], history: [h, aside("h", ago: 9000), aside("h", ago: 9500, pinned: true)]).with(bin([1, 27, 0]))
+        let want = "Remove from History (also 1 older record of this name; 1 pinned older record stays)"
+        XCTAssertEqual(AgentIsland.removeEditLabel(older: 2, unpinned: 1), want, "the island's words")
+        XCTAssertEqual(AgentWindowControls.historyMenu(h, store: st).last,
+                       .item(want + "\u{2026}", enabled: true, verb: .remove), "the window's: the same words, then its ellipsis")
     }
 
     // MARK: G6-G8: act through the island; Remove asks

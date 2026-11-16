@@ -365,7 +365,7 @@ enum AgentWindowControls {
             out.append(.item(AgentIsland.editLabel(r.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel, older: older.count),
                              enabled: true, verb: .pin))
             out.append(r.pinned ? .item(removePinnedTitle, enabled: false, verb: .remove)
-                : .item(AgentIsland.editLabel(AgentIsland.removeLabel, older: older.filter { !$0.pinned }.count) + "…",
+                : .item(AgentIsland.removeEditLabel(older: older.count, unpinned: older.filter { !$0.pinned }.count) + "\u{2026}",
                         enabled: true, verb: .remove))
         }
         if let why = store.resumeGate.refusal { out.append(.note("Resume \(why)")) }

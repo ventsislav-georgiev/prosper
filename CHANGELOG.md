@@ -1530,6 +1530,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: X-ray reads a session's task list from dch 1.78.0 (no UI yet). (#1349)
 - Agent Sessions: X-ray also reads the memories and instruction files a session has in force (no UI
   yet). (#1350)
+- Agent Sessions: History's Remove says when a pinned older record of the same name stays, as Agent
+  Island does. (#1344)
 
 ## v2.174.0
 
