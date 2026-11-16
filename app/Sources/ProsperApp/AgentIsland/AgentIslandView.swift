@@ -1029,6 +1029,8 @@ struct AgentIslandHistoryRow: View {
     var olderUnpinned = 0
     @State private var hover = false
 
+    /// QA #569 INFO-2: the row's tooltip and hint; "" on a refused row (the tooltip is then empty, never the Resume text).
+    var helpText: String { enabled ? AgentIsland.resumeWithMessageHelp : "" }
     var pinLabel: String { AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel, older: older) }
     var removeLabel: String { AgentIsland.editLabel(AgentIsland.removeLabel, older: olderUnpinned) }
 
@@ -1091,10 +1093,10 @@ struct AgentIslandHistoryRow: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .onHover { hover = $0 }
-        .help(Text(verbatim: enabled ? AgentIsland.resumeWithMessageHelp : ""))
+        .help(Text(verbatim: helpText))
         // A Resume status replaces line 2.
         .accessibilityLabel(AgentIsland.historyRowAccessibilityLabel(record, status: status, end: end, age: age, cwd: cwd))
-        .accessibilityHint(enabled ? AgentIsland.resumeWithMessageHelp : "")
+        .accessibilityHint(helpText)
         .accessibilityActions {
             if let resumeNoMessage { Button(AgentIsland.resumeNoMessageLabel, action: resumeNoMessage) }
             if let pin { Button(pinLabel, action: pin) }

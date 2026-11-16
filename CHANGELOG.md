@@ -1374,6 +1374,8 @@ tag from the now-released section and put it on the new top draft.
   request.
 - Agent Sessions: Command-Backspace in the sidebar asks to stop the selected session, or to remove a
   selected History entry; nothing happens until you confirm.
+- Agent Island History: two ended runs of one name that ended in the same second now always show the
+  same one as the row (it was whichever dch listed first).
 
 ## v2.174.0
 

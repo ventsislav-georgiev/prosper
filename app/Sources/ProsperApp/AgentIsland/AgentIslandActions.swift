@@ -210,7 +210,7 @@ extension AgentIsland {
     /// vanished record has ended 0). `run` is bound to the control binary.
     static func history(dirs: [String], run: Runner) -> [DchHistoryRecord] {
         dirs.flatMap { parseHistory(run(["--history", "--json"], listEnv(dir: $0)) ?? Data(), dir: $0) }
-            .sorted { $0.lastSeen != $1.lastSeen ? $0.lastSeen > $1.lastSeen : ($0.name, $0.key.dir) < ($1.name, $1.key.dir) }
+            .sorted { $0.lastSeen != $1.lastSeen ? $0.lastSeen > $1.lastSeen : ($0.name, $0.key.dir, $0.file) < ($1.name, $1.key.dir, $1.file) }
     }
 
     /// #585: the end in neutral words; nothing the user did on purpose reads as
