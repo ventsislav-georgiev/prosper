@@ -90,6 +90,9 @@ final class XrayPanelModel: ObservableObject {
     var presentCard: (XrayTasks.Task) -> Void = { _ in }
     /// The Todos chip's: run instead of keeping the panel when the read finds no Tasks tab (Q3).
     var fallback: (() -> Void)?
+    /// R1351-i1: true while this panel is still the pane's open one and the pane still shows `target`; the fallback runs
+    /// only then (chosen over cancelling the read: a panel hidden by a selection change stays open, so close never fires).
+    var isCurrent: () -> Bool = { true }
 
     init(target: XrayTarget, tab: XrayTab) {
         self.target = target
@@ -112,7 +115,10 @@ final class XrayPanelModel: ObservableObject {
         memory = mr.status == 0 ? XrayMemory.parse(mr.out) : nil
         if memory?.count == 0 { memory = nil }
         loaded = true
-        if let fallback, tasks == nil { close(); fallback(); return }
+        if let fallback, tasks == nil {
+            if isCurrent() { close(); fallback() }   // another session now shown: the list never opens over it
+            return
+        }
         if !tabs.contains(tab), let first = tabs.first { tab = first }
     }
 
@@ -189,6 +195,9 @@ struct XrayTaskRow: Equatable {
     let age: String?
     let spoken: String
 
+    /// R1351-i2: the ids the row names; the card keeps the full list.
+    static let blockedShown = 3
+
     static func statusName(_ s: XrayTasks.Status) -> String {
         switch s {
         case .active: "In progress"
@@ -228,10 +237,12 @@ struct XrayTaskRow: Equatable {
         id = t.id
         title = t.status == .active ? (t.active.flatMap { $0.isEmpty ? nil : $0 } ?? t.title) : t.title
         label = Self.label(t)
-        blocked = t.blockedBy.isEmpty ? nil : "blocked by \(t.blockedBy.joined(separator: ", "))"
+        blocked = t.blockedBy.isEmpty ? nil : "blocked by \(t.blockedBy.prefix(Self.blockedShown).joined(separator: ", "))"
+            + (t.blockedBy.count > Self.blockedShown ? " +\(t.blockedBy.count - Self.blockedShown)" : "")
         let a = Self.age(t.updated ?? t.created, now: now)
         age = a?.short
-        spoken = (["\(Self.statusName(t.status)) task \(t.id)", title, label, blocked, a?.spoken].compactMap { $0 })
+        let blockedAll = t.blockedBy.isEmpty ? nil : "blocked by \(t.blockedBy.joined(separator: ", "))"
+        spoken = (["\(Self.statusName(t.status)) task \(t.id)", title, label, blockedAll, a?.spoken].compactMap { $0 })
             .joined(separator: ", ")
     }
 }
@@ -247,8 +258,9 @@ struct XrayDrawer: View {
     var body: some View {
         if let p = panels.open[pane], p.target == target {
             XrayPanelView(panel: p)
-                .frame(width: sz(340))
+                .frame(maxWidth: sz(340))   // R1351-n1: min(340, the pane's width): the overlay is offered the pane's width
                 .frame(maxHeight: .infinity)
+                .modifier(AgentPaneProbe(kind: "xray"))   // tests only (nil probe: nothing)
                 .background(Neon.card)
                 .overlay(alignment: .leading) { Rectangle().fill(Neon.stroke).frame(width: 1) }
         }
@@ -368,9 +380,14 @@ struct XrayTaskRowView: View {
                 Image(systemName: row.mark).foregroundStyle(Neon.textSecondary)
                 Text(verbatim: row.id).foregroundStyle(Neon.textSecondary).fixedSize()
                 Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail)
+                    .layoutPriority(1).modifier(AgentPaneProbe(kind: "xrayTitle"))   // tests only (nil probe: nothing)
                 Spacer(minLength: sz(4))
-                ForEach([row.label, row.blocked, row.age].compactMap { $0 }, id: \.self) {
+                ForEach([row.label, row.age].compactMap { $0 }, id: \.self) {
                     Text(verbatim: $0).foregroundStyle(Neon.textSecondary).lineLimit(1).fixedSize()
+                }
+                // truncates under its own cap: a long id list never pushes the title out
+                if let b = row.blocked {
+                    Text(verbatim: b).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail).frame(maxWidth: sz(120), alignment: .trailing)
                 }
             }
             .font(Neon.font(11))
@@ -383,7 +400,7 @@ struct XrayTaskRowView: View {
 }
 
 /// The task card (design 3.2): title in full, status and label, doing, note, times, blocked by, group, URL; Open
-/// (http/https only, the raw url) and Copy (Pasteboard.swift).
+/// (http/https only, the raw url, and only when it is the shown one) and Copy (Pasteboard.swift).
 struct XrayTaskCard: View {
     let task: XrayTasks.Task
     let now: Date
@@ -416,7 +433,10 @@ struct XrayTaskCard: View {
         fields(t, now: now).map { "\($0.label): \($0.value)" }.joined(separator: "\n")
     }
 
-    func openLink() { if let u = Self.openable(task.rawURL) { open(u) } }
+    /// R1351-s1: Open only when the shown url is the raw one (cleaning dropped nothing and capped nothing); else text only.
+    static func openURL(_ t: XrayTasks.Task) -> URL? { t.url == t.rawURL ? openable(t.rawURL) : nil }
+
+    func openLink() { if let u = Self.openURL(task) { open(u) } }
 
     func copy() {
         Pasteboard.general.clearContents()
@@ -440,7 +460,7 @@ struct XrayTaskCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack(spacing: sz(8)) {
-                if Self.openable(task.rawURL) != nil {
+                if Self.openURL(task) != nil {
                     Button("Open", action: openLink).accessibilityLabel("Open the task's link")
                 }
                 Button("Copy", action: copy).accessibilityLabel("Copy the task")

@@ -492,6 +492,10 @@ final class AgentsNSWindow: NSWindow {
         let p = XrayPanelModel(target: target, tab: tab)
         p.close = { panels.close(pane) }
         p.fallback = fallback
+        p.isCurrent = { [weak model, weak p] in
+            guard let model, let p else { return false }
+            return panels.open[pane] === p && model.newSession == nil && XrayTarget.of(model.selectedRow) == target
+        }
         p.presentCard = { [weak self, weak model, weak p] t in
             guard let self, let anchor = XrayCardAnchor.view(for: pane, in: self) ?? self.contentView else { return }
             let card = XrayTaskCard(task: t, now: p?.now() ?? Date(), open: { model?.openURL($0) })

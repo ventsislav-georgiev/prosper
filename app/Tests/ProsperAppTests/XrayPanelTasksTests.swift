@@ -67,11 +67,15 @@ final class XrayPanelTasksTests: XCTestCase {
         return p
     }
 
+    static let otherKey = AgentSessionKey(dir: "/tmp/dch-test", name: "api-qa")
+
     /// A never-shown window on a model with session "api" selected; the terminal on a recorder (nothing spawns).
     func window(_ body: (AgentsNSWindow, AgentWindowModel, FakeCardPresenter) async throws -> Void) async rethrows {
         let key = AgentSessionKey(dir: "/tmp/dch-test", name: "api")
         let store = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
         store.sessions = [AgentSession(key: key, alias: "", activity: AgentWindowD1Tests.now - 60, state: .idle, agents: 0,
+                                       version: "1.78.0"),
+                          AgentSession(key: Self.otherKey, alias: "", activity: AgentWindowD1Tests.now - 120, state: .idle, agents: 0,
                                        version: "1.78.0")]
         let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
         m.now = { AgentWindowD1Tests.now }
@@ -185,8 +189,15 @@ final class XrayPanelTasksTests: XCTestCase {
         var opened: [URL] = []
         let card = t.map { XrayTaskCard(task: $0, now: Self.now, open: { opened.append($0) }) }
         card?.openLink()
-        XCTAssertEqual(opened.map(\.absoluteString), [long], "the raw url, whole")
+        XCTAssertTrue(opened.isEmpty, "R1351-s1: the shown url is the capped one, so no Open (was: the raw url, whole)")
+        XCTAssertTrue(t.flatMap { XrayTaskCard.openURL($0) } == nil)
         XCTAssertNotEqual(t?.url, long, "the display form differs (capped)")
+        let clean = "https://example.org/" + String(repeating: "a", count: 1900)
+        let c = XrayTasks.parse(Self.ndjson([Self.header, #"{"task":{"id":"2","title":"t","status":"pending","url":"\#(clean)"}}"#,
+                                             Self.done])).tasks.first
+        XCTAssertEqual(c?.url, clean, "a clean url is the same in both forms")
+        c.map { XrayTaskCard(task: $0, now: Self.now, open: { opened.append($0) }) }?.openLink()
+        XCTAssertEqual(opened.map(\.absoluteString), [clean], "equal forms: Open gets it, whole")
         for bad in ["javascript:void(0)", "file:///etc/hosts", "mailto:someone@example.org", "https://", "not a url"] {
             XCTAssertTrue(XrayTaskCard.openable(bad) == nil, "\(bad) refused")
         }
@@ -195,6 +206,13 @@ final class XrayPanelTasksTests: XCTestCase {
                                               Self.done])).tasks.first
         js.map { XrayTaskCard(task: $0, now: Self.now, open: { opened.append($0) }) }?.openLink()
         XCTAssertEqual(opened.count, 1, "javascript: opens nothing")
+        // R1351-s1: a scalar the display form drops (a zero-width space) makes shown and raw differ: no Open, no open.
+        let zw = XrayTasks.parse(Self.ndjson([Self.header,
+            #"{"task":{"id":"4","title":"t","status":"pending","url":"https://example.org/a\#u{200B}b"}}"#, Self.done])).tasks.first
+        XCTAssertNotEqual(zw?.url, zw?.rawURL, "the unseen scalar is dropped from the shown form")
+        XCTAssertTrue(zw.flatMap { XrayTaskCard.openURL($0) } == nil, "no Open control")
+        zw.map { XrayTaskCard(task: $0, now: Self.now, open: { opened.append($0) }) }?.openLink()
+        XCTAssertEqual(opened.count, 1, "the fake records no open for it")
 
         let nine = tasks.first { $0.id == "9" }
         nine.map { XrayTaskCard(task: $0, now: Self.now, open: { _ in }) }?.copy()
@@ -358,6 +376,121 @@ final class XrayPanelTasksTests: XCTestCase {
                     win.todosChipTapped(listOpen: true) { listed += 1 }
                     XCTAssertEqual(listed, wantPanel ? 1 : 2, "an open list: the chip closes it")
                 }
+            }
+        }
+    }
+
+    // MARK: R1351-i1: the chip's fallback on the wrong session
+
+    /// A runner whose answers wait for the test: each call parks a continuation until `release` (no real wait).
+    final class HeldRun: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: [CheckedContinuation<Void, Never>] = []
+        var count: Int { lock.withLock { held.count } }
+        let out: Data
+        init(out: Data) { self.out = out }
+        var run: XrayPanels.Run {
+            { [self] _, _, _ in
+                await withCheckedContinuation { c in lock.withLock { held.append(c) } }
+                return (0, out)
+            }
+        }
+        func release() { lock.withLock { () -> [CheckedContinuation<Void, Never>] in let h = held; held = []; return h }.forEach { $0.resume() } }
+    }
+
+    /// Tap the chip on "api", select "api-qa" before the read returns, A has no Tasks tab: the list does not open over B.
+    /// The control (no selection change) runs the fallback once.
+    func testChipFallbackNeverOpensTheListOverAnotherSession() async throws {
+        let none = Self.ndjson([Self.header, #"{"done":true,"count":0,"dropped":0}"#])
+        for switchAway in [true, false] {
+            let held = HeldRun(out: none)
+            let (dch, run) = (XrayPanels.dch, XrayPanels.run)
+            defer { (XrayPanels.dch, XrayPanels.run) = (dch, run); XrayPanels.shared.open = [:] }
+            XrayPanels.dch = Self.gate([1, 78, 0])
+            XrayPanels.run = held.run
+            try await window { win, m, _ in
+                var listed = 0
+                win.todosChipTapped(listOpen: false) { listed += 1; m.transcript.todosOpen = true }
+                let p = try XCTUnwrap(XrayPanels.shared.open[m.layout.focused])
+                for _ in 0..<10_000 where held.count < 2 { await Task.yield() }   // both reads parked, no wall clock
+                XCTAssertEqual(held.count, 2, "both reads are held")
+                if switchAway { m.select(.live(Self.otherKey)) }
+                held.release()
+                await p.reading?.value
+                XCTAssertEqual(listed, switchAway ? 0 : 1, switchAway ? "nothing opens over the other session" : "control: it opens")
+                XCTAssertEqual(m.transcript.todosOpen, !switchAway)
+            }
+        }
+    }
+
+    // MARK: R1351-i2 and n1: the row's blocked-by cap, the drawer's width
+
+    static func task(blocked: [String], id: String = "12") -> XrayTasks.Task {
+        let ids = blocked.map { "\"\($0)\"" }.joined(separator: ",")
+        return XrayTasks.parse(Self.ndjson([Self.header,
+            #"{"task":{"id":"\#(id)","title":"Fix the login test","status":"pending","label":"PARKED","updated":"2026-11-16T11:00:00Z","blocked_by":[\#(ids)]}}"#,
+            Self.done])).tasks[0]
+    }
+
+    /// Hosts `v` in a never-shown borderless window and returns the frames the pane probe saw (kind to the latest frame),
+    /// in the container's space. Layout passes are bounded; nothing is posted.
+    final class Box { var d: [String: CGRect] = [:] }
+    func frames<V: View>(_ v: V, size: CGSize, kinds: [String]) -> [String: CGRect] {
+        let box = Box()
+        AgentPaneArea.probe = { k, _, r in box.d[k] = r }
+        let host = NSHostingView(rootView: v.environment(\.agentPaneID, UUID()).coordinateSpace(.named(agentPaneAreaSpace)))
+        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        win.contentView = host
+        host.frame = CGRect(origin: .zero, size: size)
+        defer { AgentPaneArea.probe = nil; win.contentView = nil; win.close() }
+        for i in 0..<43 where i >= 40 || !kinds.allSatisfy({ box.d[$0] != nil }) {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        return box.d
+    }
+
+    func testRowShowsTheFirstBlockedIdsAndAPlusNCardKeepsAll() {
+        let two = XrayTaskRow(Self.task(blocked: ["9", "10"]), now: Self.now)
+        XCTAssertEqual(two.blocked, "blocked by 9, 10", "two ids whole")
+        let ids = (1...12).map { "T\($0)" }
+        let many = Self.task(blocked: ids)
+        let row = XrayTaskRow(many, now: Self.now)
+        XCTAssertEqual(row.blocked, "blocked by T1, T2, T3 +9", "the first ones and +N")
+        XCTAssertTrue(row.spoken.contains("blocked by " + ids.joined(separator: ", ")), "VoiceOver keeps the whole list")
+        XCTAssertTrue(XrayTaskCard.fields(many, now: Self.now).contains { $0.label == "Blocked by" && $0.value == ids.joined(separator: ", ") },
+                      "the card keeps the full list")
+        // The title keeps room at the drawer's width, worst case: the longest ids (32 scalars), a label and an age.
+        let wide = Self.task(blocked: (1...12).map { String(repeating: "x", count: 31) + String($0 % 10) })
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            let w = sz(340)
+            let f = frames(XrayTaskRowView(row: XrayTaskRow(wide, now: Self.now), open: {}).padding(sz(10)).frame(width: w),
+                           size: CGSize(width: w, height: 80), kinds: ["xrayTitle"])
+            XCTAssertGreaterThan(f["xrayTitle"]?.width ?? 0, 0, "the title keeps room at \(scale)")
+        }
+    }
+
+    func testDrawerIsAtMostThePaneWideAndNeverDrawsOutsideIt() {
+        let pane = UUID(), target = XrayTarget(name: "api", dir: "/tmp/dch-test")
+        let p = panel()
+        XrayPanels.shared.open = [pane: p]
+        defer { XrayPanels.shared.open = [:] }
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            for paneWidth: CGFloat in [300, 500] {
+                let host = Color.clear.frame(width: paneWidth, height: 400)
+                    .overlay(alignment: .trailing) { XrayDrawer(pane: pane, target: target) }
+                    .frame(width: 700, height: 400, alignment: .topLeading)
+                let d = frames(host, size: CGSize(width: 700, height: 400), kinds: ["xray"])["xray"]
+                XCTAssertTrue(d != nil, "the drawer is drawn")
+                XCTAssertEqual(d?.width ?? 0, min(sz(340), paneWidth), accuracy: 0.5, "min(sz(340), the pane) at \(scale), pane \(paneWidth)")
+                XCTAssertLessThanOrEqual(d?.maxX ?? 1000, paneWidth + 0.5, "no drawer pixel past the pane at \(scale), pane \(paneWidth)")
             }
         }
     }
