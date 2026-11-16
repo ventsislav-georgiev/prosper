@@ -116,7 +116,8 @@ final class KitEffectRunner: Sendable {
                                     : "swap: incoming -> previous failed twice (\(e.error)): the old live stays at incoming until the next stage or swap")
             } catch {
                 // before the RENAME_SWAP live is the old copy; a previous moved to retiring goes back
-                if let e = error as? KitSwapError, e.step == .exchange {
+                // retiring exists here only when this swap retired a previous (prepare removed any older one)
+                if let e = error as? KitSwapError, e.step == .exchange, store.fs.kind(store.layout.root + "/retiring") != .missing {
                     do { try store.restoreRetiring() } catch { r.notes.append("swap: restoreRetiring failed: " + Self.text(error)) }
                 }
                 return stop(.swapFailed(v, tree: t), Self.text(error))

@@ -563,6 +563,34 @@ final class KitStoreTests: XCTestCase {
         }
     }
 
+    /// R1393-i1: a stale `.swap-incoming` naming live's inode (a failed cleanup that recovery could not remove either) is
+    /// removed by the swap's prepare. A crash after the retire and before the stamp (the stamp write fails) then leaves no
+    /// stamp, so recovery never makes the NEW copy at incoming the previous; the true previous waits at retiring.
+    func testStaleStampIsClearedAtPrepareSoACrashNeverMakesTheNewCopyPrevious() throws {
+        let (f, home, store) = try scene()
+        for v in ["1.0.0", "1.0.1"] {
+            try stageMarked(store, f.root, v)
+            try store.swap(version: v, tree: Self.tree0)
+        }
+        let ino = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: store.layout.live)[.systemFileNumber] as? UInt64)
+        let stamp = store.layout.root + "/" + KitStore.swapStamp
+        try Data("\(ino)\n".utf8).write(to: URL(fileURLWithPath: stamp))
+        try stageMarked(store, f.root, "1.0.2")
+        let crashing = try KitStore(configHome: home, extID: Self.ext, fs: KitEffectFailRenames([], failStamp: true))
+        XCTAssertThrowsError(try crashing.swap(version: "1.0.2", tree: Self.tree0)) {
+            XCTAssertEqual(($0 as? KitSwapError)?.step, .exchange)
+        }
+        XCTAssertEqual(KitPOSIXFS().kind(stamp), .missing, "prepare removed the stale stamp")
+        XCTAssertEqual(marker(store.layout.live), "1.0.1")
+        XCTAssertEqual(marker(store.layout.root + "/retiring"), "1.0.0")
+        XCTAssertEqual(marker(store.layout.root + "/incoming"), "1.0.2")
+        XCTAssertFalse(try store.recoverIncoming(), "no stamp: nothing is moved")
+        XCTAssertEqual(marker(store.layout.previous), nil, "the new copy is never made previous")
+        XCTAssertEqual(marker(store.layout.root + "/incoming"), "1.0.2")
+        try store.restoreRetiring()
+        XCTAssertEqual(marker(store.layout.previous), "1.0.0", "the true previous comes back from retiring")
+    }
+
     func testSwapBackRestoresTheOldLive() throws {
         let (f, _, store) = try scene()
         XCTAssertThrowsError(try store.swapBack(), "nothing to swap back to")

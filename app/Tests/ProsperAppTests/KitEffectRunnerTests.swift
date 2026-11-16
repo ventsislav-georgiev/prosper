@@ -238,6 +238,26 @@ final class KitEffectRunnerTests: XCTestCase {
         XCTAssertEqual(marker(lone.store.layout.live), "1.0.0")
     }
 
+    /// R1393-i2: an exchange failure when the swap retired nothing must not run restoreRetiring, whose first act removes
+    /// previous. The first apply (no live) with a leftover previous is that case: rename 1 = staged -> incoming, 2 = incoming
+    /// -> live. The leftover previous survives; the retired case is testEachSwapThrowPointMapsAsTheTable's [3] (restored).
+    func testExchangeFailureWithNothingRetiredKeepsPrevious() throws {
+        let sc = try scene()
+        try install(sc, sc.store, "1.0.0")
+        try install(sc, sc.store, "1.0.1") // live 1.0.1, previous 1.0.0
+        try FileManager.default.removeItem(atPath: sc.store.layout.live)
+        let c = try ref(sc, "1.0.2")
+        _ = try sc.store.stageCopy(from: sc.root.path + "/src-1.0.2", version: "1.0.2", tree: c.treeHash, byteCap: 1024)
+        let failing = try KitStore(configHome: sc.home, extID: Self.ext, fs: KitEffectFailRenames([2]))
+        let runner = KitEffectRunner(store: failing, handlers: handlers(sc, Calls()))
+        let state = KitUpdateState(live: try ref(sc, "1.0.1"), staged: c, previous: try ref(sc, "1.0.0"), phase: .validating)
+        let r = runner.run([.swap("1.0.2")], state, prior: state)
+        XCTAssertEqual(r.events, [.swapFailed("1.0.2", tree: c.treeHash)])
+        XCTAssertEqual(r.notes, [])
+        XCTAssertEqual(kind(sc.store.layout.root + "/retiring"), .missing, "nothing was retired")
+        XCTAssertEqual(marker(sc.store.layout.previous), "1.0.0", "restoreRetiring did not run: previous is not removed")
+    }
+
     /// QA r1252 rider (2): the stale-temp sweep runs on the runner's queue before a stage (an aged tmp/<UUID> is gone after
     /// it), never at init, and never while an apply runs: a stage asked for during applyWiring waits for it, so the clock
     /// the sweep reads is not read during the apply.
@@ -285,10 +305,12 @@ final class KitEffectRunnerTests: XCTestCase {
 /// between the swap's steps leaves them; `identity` and `write` pass through, so the swap's stamp is real.
 final class KitEffectFailRenames: KitFS, @unchecked Sendable {
     let fails: Set<Int>
+    /// the stamp write throws (a crash after the retire and before the stamp), leaving any earlier stamp as it was
+    let failStamp: Bool
     private let base = KitPOSIXFS()
     private let lock = NSLock()
     private var renames = 0
-    init(_ fails: Set<Int>) { self.fails = fails }
+    init(_ fails: Set<Int>, failStamp: Bool = false) { self.fails = fails; self.failStamp = failStamp }
 
     var writer: any ManagedConfigFileWriter { base.writer }
     func openDir(_ path: String) throws -> any KitDir { Dir(self, try base.openDir(path)) }
@@ -317,6 +339,9 @@ final class KitEffectFailRenames: KitFS, @unchecked Sendable {
         }
         func writable(_ name: String) -> Bool { inner.writable(name) }
         func identity(_ name: String) -> UInt64? { inner.identity(name) }
-        func write(_ name: String, _ data: Data, mode: mode_t) throws { try inner.write(name, data, mode: mode) }
+        func write(_ name: String, _ data: Data, mode: mode_t) throws {
+            if fs.failStamp && name == KitStore.swapStamp { throw KitStoreError.io("write", EIO) }
+            try inner.write(name, data, mode: mode)
+        }
     }
 }

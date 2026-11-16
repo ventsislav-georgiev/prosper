@@ -660,6 +660,7 @@ struct KitStore: Sendable {
         try at(.prepare) {
             try removeEntry(root, "incoming")
             try removeEntry(root, "retiring") // always: the machine's retiring after this swap is the current previous or none
+            try removeEntry(root, Self.swapStamp) // a stale stamp (a failed cleanup) must never name this swap's live
         }
         try at(.toIncoming) { try staged.rename(name, to: root, "incoming", swap: false) }
         guard live == .directory else { return try at(.exchange) { try root.rename("incoming", to: root, "live", swap: false) } }
