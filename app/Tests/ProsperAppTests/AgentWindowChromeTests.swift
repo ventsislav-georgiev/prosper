@@ -841,6 +841,7 @@ extension AgentWindowD1Tests {
             m.setVisible(true)
             defer { m.close() }
             m.select(.live(s.key))
+            Self.drainMain()   // QA #690 INFO-1: the app's turn, the screen's grid report lands and the client starts
             XCTAssertEqual(m.terminal.phase, .live)
             try XCTUnwrap(box.io).output([0x41])
             let deadline = Date().addingTimeInterval(2)

@@ -42,6 +42,7 @@ extension AgentWindowD1Tests {
         }
         _ = fakeTerminal(m)
         m.setVisible(true)
+        Self.drainMain()   // QA #690 INFO-1: the shown window's first turn: the first row's client is live before a row acts
         return m
     }
 

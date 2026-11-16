@@ -16,7 +16,16 @@ extension AgentWindowD1Tests {
         session(name, state, ago: ago, path: "/Users/example/.claude/projects/p/0b7c2f3e-1111-2222-3333-444455556666.jsonl")
     }
 
+    /// QA #690 INFO-1: one main-queue turn, the app's next one. Every block queued on main before this call runs
+    /// (the queue is FIFO), so a screen's grid report sent through `events.resize` has landed after it.
+    static func drainMain() {
+        let turn = XCTestExpectation(description: "main queue turn")
+        DispatchQueue.main.async { turn.fulfill() }
+        XCTAssertEqual(XCTWaiter.wait(for: [turn], timeout: 2), .completed, "a main-queue turn")
+    }
+
     /// The window model's terminal on recorders; the grid known, as if its view had laid out.
+    /// The readers first give the app one main turn, so a read sees what the app's next turn would.
     @MainActor
     func fakeTerminal(_ m: AgentWindowModel) -> (spawned: () -> [AgentTerminalSpawn], children: () -> [AgentTerminalTests.FakeChild]) {
         final class Log { var spawns: [AgentTerminalSpawn] = []; var children: [AgentTerminalTests.FakeChild] = [] }
@@ -29,14 +38,15 @@ extension AgentWindowD1Tests {
             return c
         }
         m.terminal.makeScreen = { [weak t = m.terminal] events in
-            // The screen runs at the view's grid at once (libghostty reports it from its IO thread).
-            if let t, let g = t.grid { t.gridChanged(cols: g.cols, rows: g.rows, generation: t.generation) }
+            // The screen runs at the view's grid and reports it through the controller's own resize event, as libghostty
+            // does from its IO thread: the report lands on a later main turn, after begin() set the screen and the phase.
+            if let g = t?.grid { events.resize(g.cols, g.rows) }
             return AgentTerminalTests.FakeScreen(events)
         }
         m.terminal.after = { _, _ in }
         m.terminal.clientVersion = { _ in [1, 40, 0] }
         m.terminal.gridChanged(cols: 80, rows: 24)
-        return ({ log.spawns }, { log.children })
+        return ({ Self.drainMain(); return log.spawns }, { Self.drainMain(); return log.children })
     }
 
     @MainActor
@@ -233,6 +243,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(terminated().last, 1, "back to Transcript: detached")
             XCTAssertEqual(m.interaction.session?.key, two.key)
             m.toggleMode()
+            Self.drainMain()   // the app's turn between the toggle and the close: the screen's report lands, the 6th client starts
             m.close()
             XCTAssertEqual(terminated().last, 1, "closed: detached")
             XCTAssertEqual(m.terminal.phase, .idle)
@@ -342,6 +353,9 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.paneMode, .terminal)
             XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\tb"])
             XCTAssertTrue(m.terminal.focusPending)
+            // The app's turn before SwiftUI builds the view: the screen's report lands and the client goes live (#845: only
+            // a live client takes the keys), the focus still pending on the view.
+            Self.drainMain()
             let host = AgentTerminalHostView(frame: .init(x: 0, y: 0, width: 200, height: 100))
             host.owner = m.terminal
             m.terminal.view = host
@@ -360,6 +374,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.paneMode, .transcript, "b was set to Transcript")
             XCTAssertTrue(win.performKeyEquivalent(with: cmdUp))
             XCTAssertEqual(m.paneMode, .terminal)
+            Self.drainMain()   // the app's turn before the next key: a's fresh client is live
             // ⌥⌘1 in Terminal mode: taken, nothing changes.
             let level = m.verbosity
             XCTAssertTrue(win.performKeyEquivalent(with: key(18, "1", [.command, .option])))
@@ -551,5 +566,31 @@ extension XCTestCase {
         let saved = Preferences.defaults.stringArray(forKey: key)
         addTeardownBlock { Preferences.defaults.set(saved, forKey: key) }
         for s in sessions ?? m.store?.sessions ?? [] { m.setMode(.transcript, for: s) }
+    }
+}
+
+/// #1337 (QA #690 INFO-1): fakeTerminal's screen reports its grid the way libghostty does, through the controller's own
+/// resize event (AgentTerminalController.begin(): DispatchQueue.main.async -> gridChanged), not inside makeScreen.
+final class AgentWindowFake1337Tests: XCTestCase {
+    @MainActor
+    func testTheFakeScreensGridReportLandsAfterBeginSetTheScreenAndPhase() throws {
+        let d = AgentWindowD1Tests()
+        try d.withModePref {
+            let one = d.mapped("one")
+            let m = d.windowModel(d.store([one]))
+            let t = d.fakeTerminal(m)
+            defer { m.close() }
+            m.setVisible(true)
+            m.select(.live(one.key))
+            XCTAssertEqual(m.terminal.key, one.key)
+            XCTAssertEqual(m.terminal.phase, .attaching, "begin() set the phase; the screen's report has not landed")
+            XCTAssertNotNil(m.terminal.screen, "begin() set the screen")
+            XCTAssertTrue(m.terminal.screenGrid == nil, "no report inside makeScreen")
+            AgentWindowD1Tests.drainMain()
+            XCTAssertEqual(m.terminal.screenGrid?.cols, 80, "the report, on the next main turn")
+            XCTAssertEqual(m.terminal.screenGrid?.rows, 24)
+            XCTAssertEqual(m.terminal.phase, .live, "the report matched the view's grid: the client started")
+            XCTAssertEqual(t.spawned().map(\.args), [["-E", "-a", "one", "--scrollback", "2000"]], "one client")
+        }
     }
 }
