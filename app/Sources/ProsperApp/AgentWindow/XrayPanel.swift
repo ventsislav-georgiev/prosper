@@ -11,8 +11,10 @@ import SwiftUI
 // hidden until shown, other sessions' messages marked and hideable (dch 1.78.0+, operator ruling Q1).
 // #1389 (P6 step B): the same tabs for a Terminal-mode pane and a remote session, from `dch --xray <n> --json`'s chapters.
 
-/// The tabs in dch's order (xview.c xv_ord); later phases put Refs and Search between Responses and Tasks.
-enum XrayTab: String, CaseIterable { case prompts = "Prompts", responses = "Responses", tasks = "Tasks", memory = "Memory" }
+/// The tabs in dch's order (xview.c xv_ord); a later phase puts Refs between Responses and Search.
+enum XrayTab: String, CaseIterable {
+    case prompts = "Prompts", responses = "Responses", search = "Search", tasks = "Tasks", memory = "Memory"
+}
 
 /// The session a read names: a local one by name in its socket dir, a remote one as "host:name" (design 3.5).
 struct XrayTarget: Equatable {
@@ -31,6 +33,8 @@ struct XrayTarget: Equatable {
     func args(_ form: String) -> [String] { ["--xray", name, "--\(form)", "--json"] }
     /// #1389: dch README "dch --xray <n> --json  # a session's chapters (prompts / commands) as one JSON object".
     var chaptersArgs: [String] { ["--xray", name, "--json"] }
+    /// #1355: dch README "dch --xray <n> --search <text> --json"; the text is checked by DchCtl.searchOK first.
+    func searchArgs(_ text: String) -> [String] { ["--xray", name, "--search", text, "--json"] }
     var env: [String: String] { AgentIsland.listEnv(dir: dir ?? DchCommand.defaultSocketDir) }
 }
 
@@ -60,6 +64,10 @@ final class XrayPanels: ObservableObject {
     /// #1389: the pane reads its Prompts and Responses from dch: a remote row, or a local one in Terminal mode (a
     /// Transcript-mode pane keeps its own chapters, never both). Off under XCTest as `run` is: rows put `fromDch` here.
     static var chaptersRead: @MainActor (UUID, XrayTarget) -> Bool = { NSClassFromString("XCTestCase") == nil && fromDch($0, $1) }
+
+    /// #1355: a new panel has a Search tab. Off under XCTest so the existing rows keep their exact tab sets; rows set
+    /// XrayPanelModel.searchable themselves.
+    static var searchTab: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
 
     /// The focused pane's mode through the window model (no model or another pane focused: no read).
     static func fromDch(_ pane: UUID, _ target: XrayTarget) -> Bool {
@@ -142,6 +150,12 @@ final class XrayPanelModel: ObservableObject {
     @Published var dchChapters: [TranscriptOutline.Chapter]?
     /// #1389: this pane reads dch's chapters (XrayPanels.chaptersRead); false: never runs that read.
     var fromDch: () -> Bool = { false }
+    /// #1355: the Search tab is there (false once dch answered exit 1, does not know --search, or 6, refused); the
+    /// query typed, the last answer's hits (nil before a search) and the line that says why nothing ran or came.
+    @Published var searchable: Bool
+    @Published var query = ""
+    @Published var search: XraySearch?
+    @Published var searchNote: String?
     @Published private(set) var loaded = false
     @Published var tab: XrayTab
     @Published var filter = ""
@@ -193,6 +207,7 @@ final class XrayPanelModel: ObservableObject {
     init(target: XrayTarget, tab: XrayTab) {
         self.target = target
         self.tab = tab
+        searchable = XrayPanels.searchTab()
     }
 
     /// The one read on open: both forms, so the strip knows which tabs exist.
@@ -263,6 +278,7 @@ final class XrayPanelModel: ObservableObject {
         return XrayTab.allCases.filter {
             switch $0 {
             case .prompts, .responses: prose
+            case .search: searchable
             case .tasks: tasks != nil
             case .memory: memory != nil
             }
@@ -274,14 +290,17 @@ final class XrayPanelModel: ObservableObject {
         switch tab {
         case .prompts: shownPrompts.count
         case .responses: shownResponses.filter { !$0.auto }.count
+        case .search: search?.hits.count ?? 0
         case .tasks: tasks?.open ?? 0
         case .memory: memory?.count ?? 0
         }
     }
-    /// "Tasks 3" (open tasks), "Memory 2" (every row).
-    func title(_ tab: XrayTab) -> String { "\(tab.rawValue) \(count(tab))" }
+    /// "Tasks 3" (open tasks), "Memory 2" (every row); #1355: "Search" before a search, "Search 50+" past dch's cap.
+    func title(_ tab: XrayTab) -> String {
+        tab == .search && search == nil ? tab.rawValue : "\(tab.rawValue) \(count(tab))\(tab == .search && search?.more == true ? "+" : "")"
+    }
     /// VoiceOver: "Tasks, 3 open"; "Memory, 2".
-    func spoken(_ tab: XrayTab) -> String { tab == .tasks ? "Tasks, \(count(tab)) open" : "\(tab.rawValue), \(count(tab))" }
+    func spoken(_ tab: XrayTab) -> String { tab == .tasks ? "Tasks, \(count(tab)) open" : title(tab).replacingOccurrences(of: " ", with: ", ") }
 
     /// Design 3.2: case-insensitive, over id, title, note and label.
     static func matches(_ t: XrayTasks.Task, _ filter: String) -> Bool {
@@ -646,6 +665,8 @@ struct XrayPanelView: View {
             faint("No tasks or memory for this session").padding(sz(10))
         } else if panel.tab == .memory {
             memoryTab
+        } else if panel.tab == .search {
+            searchTab
         } else if panel.tab == .prompts || panel.tab == .responses {
             promptsTab(panel.tab)
         } else {
@@ -700,6 +721,31 @@ struct XrayPanelView: View {
                 }
             }
             ForEach(panel.memoryFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
+        }
+        .padding(sz(10))
+    }
+
+    /// #1355: the query runs on Return (never per keystroke, never polled); a hit does nothing yet (P8/P9).
+    var searchTab: some View {
+        VStack(alignment: .leading, spacing: sz(4)) {
+            TextField("Search", text: $panel.query)
+                .textFieldStyle(.roundedBorder)
+                .font(Neon.font(11))
+                .focused($filterFocus)
+                .onSubmit { panel.runSearch() }
+                .accessibilityLabel("Search this session")
+            if let n = panel.searchNote { faint(n) }
+            if let s = panel.search {
+                if s.hits.isEmpty { faint("No hits") }
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: sz(4)) {
+                        ForEach(Array(s.hits.enumerated()), id: \.offset) { _, h in
+                            XraySearchRowView(row: XraySearchRow(h, now: panel.now()))
+                        }
+                    }
+                }
+            }
+            ForEach(panel.searchFooter, id: \.self) { faint($0) }
         }
         .padding(sz(10))
     }
@@ -818,6 +864,25 @@ struct XrayPromptRowView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(row.spoken)
+    }
+}
+
+/// #1355: one Search hit; not a button yet (P8/P9 open the hit's prompt).
+struct XraySearchRowView: View {
+    let row: XraySearchRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(1)) {
+            HStack(spacing: sz(6)) {
+                Text(verbatim: row.who).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                if let a = row.age { Text(verbatim: a).foregroundStyle(Neon.textSecondary).fixedSize() }
+            }
+            Text(verbatim: row.snippet).foregroundStyle(Neon.textPrimary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+        }
+        .font(Neon.font(11))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(row.spoken)
     }
 }

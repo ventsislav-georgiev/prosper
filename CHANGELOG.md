@@ -1578,6 +1578,7 @@ tag from the now-released section and put it on the new top draft.
   list it says "No task list on that host". (#1388)
 - X-ray's Prompts and Responses tabs also work for a session in Terminal mode and for a session on
   another Mac. (#1389)
+- X-ray has a Search tab: search a session's transcript, on this Mac or another. (#1355)
 
 ## v2.174.0
 
