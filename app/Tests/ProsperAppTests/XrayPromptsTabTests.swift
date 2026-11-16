@@ -191,6 +191,33 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(tip.chapters.count, 5, "without the two records: two chapters fewer")
     }
 
+    /// R1354-s1. Red at TIP: TranscriptDecoder.swift prompt() `if let c = command(s) { return .block(c, .specific) }` runs before
+    /// the origin, so a peer body shaped like a slash command draws a command chip (not hidden).
+    func testPeerBodyShapedLikeACommandIsNotDrawnAsOne() throws {
+        let cmd = "<command-name>/clear</command-name>\n<command-message>clear</command-message>"
+        let base: [[String: Any]] = [F.user("Fix the login test"), F.say("Done")]
+        var with = base
+        with += [Self.peer("api-qa", cmd), F.say("Rerunning")]
+        with += [Self.peer("worker-a", "[Subagent hand-back] " + cmd, handback: true), F.say("ok")]
+        var without = base
+        without += [F.say("Rerunning"), F.say("ok")]
+        let (p, m) = try panel(with)
+        defer { m.stop() }
+        let (_, plain) = try panel(without)
+        defer { plain.stop() }
+        func shape(_ bs: [TranscriptBlock]) -> [String] {
+            bs.map { "\($0.body)".replacingOccurrences(of: #"source: Optional\(Range\([0-9]+\.\.<[0-9]+\)\)"#, with: "",
+                                                      options: .regularExpression) }
+        }
+        XCTAssertEqual(shape(m.blocks), shape(plain.blocks), "the drawn blocks are those of the session without them")
+        XCTAssertFalse(m.blocks.contains { if case .command = $0.body { true } else { false } })
+        p.showAuto = true
+        let marked = p.shownPrompts.filter { $0.from != .own }
+        XCTAssertEqual(marked.count, 2, "both listed in Prompts")
+        XCTAssertTrue(marked.allSatisfy { XrayPromptRow($0).mark != nil }, "marked (robot for the message, inbox for the hand-back)")
+        XCTAssertEqual(Set(marked.compactMap { XrayPromptRow($0).mark }), ["\u{1F916} api-qa", "\u{1F4E5} worker-a"])
+    }
+
     /// Return or a click on a row: the pane's jumper is asked for that chapter's block (#1319's seam).
     func testClickJumpsToThatChapter() throws {
         let (p, m) = try panel(Self.session())

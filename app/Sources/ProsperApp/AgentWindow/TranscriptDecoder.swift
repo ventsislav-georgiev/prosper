@@ -306,7 +306,7 @@ enum TranscriptDecoder {
     /// of harness blocks only is auto (dch xray.c:6218); `origin` (a peer's) wins.
     private static func prompt(_ s: String, inj: Bool = false, origin: PromptOrigin? = nil, source: Range<UInt64>?,
                                cap: Int) -> DecodedEntry.Item? {
-        if let c = command(s) { return .block(c, .specific) }
+        if origin == nil, let c = command(s) { return .block(c, .specific) }   // a peer's text is never the user's command
         guard !s.isBlank else { return nil }
         var clip = Clip(unwrapPasted(s), cap: cap, source: source)
         clip.origin = origin ?? (inj ? harness(s) : nil)
