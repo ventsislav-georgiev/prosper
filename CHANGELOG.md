@@ -1507,6 +1507,8 @@ tag from the now-released section and put it on the new top draft.
   pairs suffix now needs at least one letter. (#909)
 - Agent Sessions and Agent Island: Kill is now End (with the door symbol), and every item in the
   session menus has a symbol. (#1358)
+- Agent Sessions: a confirm question and its buttons sit on one line, the buttons right after the
+  question; on a narrow pane they move under it, lined up with its start. (#1361)
 
 ## v2.174.0
 

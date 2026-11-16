@@ -751,36 +751,81 @@ struct AgentSessionMenuButton: View {
 // MARK: - Strips
 
 /// R5: the inline question at the top of the detail pane. Drawn over the conversation's top,
-/// so it never moves the header, the transcript or the input box. The question wraps whole on
-/// its own lines and the buttons sit under it: nothing is squeezed at the narrowest pane.
+/// so it never moves the header, the transcript or the input box. #1361: when the question fits on one line beside
+/// its buttons it is ONE row (symbol, question, Cancel, verb; the buttons a fixed sz(8) after the text, all on one
+/// vertical centre); when it does not, the question wraps whole on its own lines and the buttons sit under it,
+/// left-aligned with its start (ViewThatFits): nothing is squeezed at the narrowest pane.
 struct AgentConfirmStrip: View {
     let text: String
     let action: String
     let confirm: () -> Void
     let cancel: () -> Void
+    /// Tests only: (part, frame in the strip) as "text", "cancel" and "verb" are laid out (nil in the product). Main actor.
+    static var probe: ((String, CGRect) -> Void)?
+
+    private var symbol: some View {
+        Image(systemName: "exclamationmark.triangle.fill").font(Neon.font(11)).foregroundStyle(AgentState.blocked.color)
+    }
+
+    private func question(oneLine: Bool) -> some View {
+        Text(text).font(Neon.font(11.5)).foregroundStyle(Neon.textPrimary)
+            .textSelection(.enabled)   // G8: the "claude --resume <id>" can be copied
+            .fixedSize(horizontal: oneLine, vertical: true)
+            .modifier(AgentConfirmProbe(part: "text"))
+            .frame(maxWidth: oneLine ? nil : .infinity, alignment: .leading)
+    }
+
+    /// Cancel, then the verb: the VoiceOver and Tab order.
+    private var buttons: some View {
+        HStack(spacing: sz(8)) {
+            AgentPillButton(title: "Cancel", icon: "xmark", tint: Neon.textSecondary, action: cancel)
+                .keyboardShortcut(.cancelAction)
+                .modifier(AgentConfirmProbe(part: "cancel"))
+            // QA #665 INFO-2: VoiceOver reads the verb; the question is the Text before.
+            AgentPillButton(title: action, icon: "exclamationmark.octagon", tint: Neon.magenta, action: confirm)
+                .modifier(AgentConfirmProbe(part: "verb"))
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: sz(6)) {
-            HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
-                Image(systemName: "exclamationmark.triangle.fill").font(Neon.font(11)).foregroundStyle(AgentState.blocked.color)
-                Text(text).font(Neon.font(11.5)).foregroundStyle(Neon.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)   // G8: the "claude --resume <id>" can be copied
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: sz(8)) {
+                symbol
+                question(oneLine: true)
+                buttons
             }
-            HStack(spacing: sz(8)) {
-                AgentPillButton(title: "Cancel", icon: "xmark", tint: Neon.textSecondary, action: cancel)
-                    .keyboardShortcut(.cancelAction)
-                // QA #665 INFO-2: VoiceOver reads the verb; the question is the Text above.
-                AgentPillButton(title: action, icon: "exclamationmark.octagon", tint: Neon.magenta, action: confirm)
+            HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
+                symbol
+                VStack(alignment: .leading, spacing: sz(6)) {
+                    question(oneLine: false)
+                    buttons
+                }
             }
         }
+        .coordinateSpace(.named(agentConfirmSpace))
         .padding(.horizontal, sz(16)).padding(.vertical, sz(8))
         // minWidth 0: the strip is the pane's width exactly; a wrapped Text's fraction of a
         // point over (seen at 0.7) stays inside the padding, never past the window.
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(Neon.card)
         .overlay(alignment: .bottom) { Rectangle().fill(Neon.stroke).frame(height: 1) }
+    }
+}
+
+let agentConfirmSpace = "agentConfirmStrip"
+
+/// Tests: a strip part's frame in the strip, through `AgentConfirmStrip.probe` (nil in the product: no observer).
+struct AgentConfirmProbe: ViewModifier {
+    let part: String
+    @ViewBuilder func body(content: Content) -> some View {
+        if AgentConfirmStrip.probe != nil {
+            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentConfirmSpace)) }) { r in
+                agentProbeCalled()
+                AgentConfirmStrip.probe?(part, r)
+            }
+        } else {
+            content
+        }
     }
 }
 
