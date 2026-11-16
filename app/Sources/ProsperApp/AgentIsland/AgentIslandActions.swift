@@ -260,9 +260,12 @@ extension AgentIsland {
     /// #585: dch's own `--revive --all` rule (rv_all_takes, dch 1.24.1): an
     /// abnormal end (not exit 0, killed or stopped; vanished counts), last seen
     /// within 3 days, after running at least 5 minutes (last seen minus started).
-    static func reviveAllTakes(_ r: DchHistoryRecord, now: TimeInterval) -> Bool {
-        !endedOnPurpose.contains(r.end) && r.lastSeen >= now - 3 * 86400 && r.lastSeen - r.started >= 5 * 60
-            && refusedName(r.name) == nil   // #950: dch fails such a record on every run, so it is no work to offer
+    /// #992 R950-1: dch refuses the name it starts (do_spawn_verb on h->as, dch.c:10855 at v1.76.0): `live`, the
+    /// record's dir's live names, sends a live name to `<name>-N` (dch.c:11336-11350), which is never id-shaped.
+    static func reviveAllTakes(_ r: DchHistoryRecord, now: TimeInterval, live: Set<String> = []) -> Bool {
+        let refused = refusedName(r.name)   // #950: dch fails such a record on every run, so it is no work to offer
+        return !endedOnPurpose.contains(r.end) && r.lastSeen >= now - 3 * 86400 && r.lastSeen - r.started >= 5 * 60
+            && (refused == nil || refused == .idShaped && live.contains { $0.lowercased() == r.name.lowercased() })
     }
 
     /// #950: why dch starts no session of this name (refuse_id_name, dch.c:2124-2135 at v1.65.0): its first
@@ -281,15 +284,18 @@ extension AgentIsland {
     /// first (`history` is), a record whose Claude id is held is skipped (live_sid,
     /// dup_sid). `held` starts as the live sessions' Claude ids and gains each taken
     /// record's; with `endedHolds` (1.28.3) also the id of a record that ended on purpose.
+    /// #992 R950-1: `live`, the live sessions' keys (reviveAllTakes reads its dir's names).
     static func reviveAllTaken(_ history: [DchHistoryRecord], now: TimeInterval, held: Set<String>?,
-                               endedHolds: Bool) -> Set<AgentSessionKey> {
-        guard let held else { return Set(history.filter { reviveAllTakes($0, now: now) }.map(\.id)) }
+                               endedHolds: Bool, live: Set<AgentSessionKey> = []) -> Set<AgentSessionKey> {
+        func names(_ dir: String) -> Set<String> { Set(live.filter { $0.dir == dir }.map(\.name)) }
+        guard let held else { return Set(history.filter { reviveAllTakes($0, now: now, live: names($0.key.dir)) }.map(\.id)) }
         var taken = Set<AgentSessionKey>()
         for dir in Set(history.map(\.key.dir)) {
             var ids = held
+            let liveNames = names(dir)
             for r in history where r.key.dir == dir {
                 let sid = r.agent?.sessionID ?? ""
-                guard reviveAllTakes(r, now: now) else {
+                guard reviveAllTakes(r, now: now, live: liveNames) else {
                     if endedHolds, endedOnPurpose.contains(r.end), !sid.isEmpty { ids.insert(sid) }
                     continue
                 }

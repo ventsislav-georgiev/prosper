@@ -449,7 +449,8 @@ final class AgentIslandStore: ObservableObject {
     /// the ones whose Claude id no live session or newer record holds.
     var reviveAllTaken: Set<AgentSessionKey> {
         let ended = controlDch.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveEndedHoldMinimum) } ?? false
-        return AgentIsland.reviveAllTaken(history, now: now(), held: reviveFileGate.isOK ? liveSIDs : nil, endedHolds: ended)
+        return AgentIsland.reviveAllTaken(history, now: now(), held: reviveFileGate.isOK ? liveSIDs : nil, endedHolds: ended,
+                                           live: Set(sessions.map(\.key)))   // #992 R950-1
     }
 
     /// Each History dir's last --all status, by dir.

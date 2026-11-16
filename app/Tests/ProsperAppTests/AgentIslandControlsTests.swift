@@ -221,6 +221,11 @@ final class AgentIslandControlsTests: XCTestCase {
             ("m0123456789abcdef-2", nil), ("x0123456789abcdef", nil), ("m 123456789abcdef", nil),
             ("-x", .dash), ("--", .dash), ("-", .dash), ("-m0123456789abcdef", .dash), (" -x", nil),
             ("", nil), ("   ", nil), ("api", nil), ("api-qa", nil),
+            // N950-b: bytes, not characters: 16 characters, 17 bytes, the accent's bytes no hex digits.
+            ("m0123456789abcd\u{00E9}", nil),
+            // N950-b: 17 bytes, C3 B0 in the last two hex positions: 0x80 or more is never a hex digit (masked
+            // to 7 bits they would read "C0").
+            ("m0123456789abcd\u{00F0}", nil),
         ]
         for (name, want) in rows {
             XCTAssertTrue(AgentIsland.refusedName(name) == want, name.debugDescription)
@@ -251,6 +256,24 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(store.resumableCount, 1)
         XCTAssertEqual(store.resumeAllButton, "Resume interrupted (1)")
         XCTAssertEqual(AgentIsland.reviveAllTaken(store.history, now: now, held: nil, endedHolds: false).count, 1)
+    }
+
+    /// #992 R950-1: the island's count asks about the name dch starts: a live session holds the id-shaped record's
+    /// name, so --revive --all starts it as <name>-2 (dch takes that name) and the count holds it.
+    @MainActor
+    func testResumeAllCountTakesAnIdShapedRecordWhoseNameIsLive() {
+        let now: TimeInterval = 2_000_000_000, id = "m0123456789abcdef"
+        let store = AgentIslandStore(geometry: notched)
+        store.now = { now }
+        store.sessions = [session("a", version: "1.24.0")]
+        store.controlDch = Self.v124
+        store.historyTab = true
+        store.history = [DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: id), started: now - 3600, updated: now - 60,
+                                          ended: now - 60, end: "signal 9")]
+        XCTAssertEqual(store.resumableCount, 0, "the name is free: dch would start it as is and refuse it")
+        store.sessions = [session("a", version: "1.24.0"), session(id, version: "1.24.0")]
+        XCTAssertEqual(store.resumableCount, 1, "live: dch starts \(id)-2")
+        XCTAssertEqual(store.resumeAllButton, "Resume interrupted (1)")
     }
 
     /// #950: an id-shaped name dch refused (not_started): its own sentence in the row text and the tally, apart

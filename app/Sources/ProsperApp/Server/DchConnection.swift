@@ -1508,8 +1508,10 @@ struct DchControlOps: Sendable {
         // #719 (QA #533 F1): "takes" as dch 1.28.2's --revive --all, which skips a Claude id
         // a live session or a newer record holds; the island's reviveFileGate.
         var held: Set<String>?
-        if let bin, DchCommand.isAtLeast(bin.version, AgentIsland.reviveFileMinimum) {
-            let live = sessions()
+        // #992 R950-1: a live name sends --all to <name>-N (reviveAllTaken's `live`); listed only when it can matter.
+        let reviveFile = bin.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveFileMinimum) } ?? false
+        let live = reviveFile || all.contains { AgentIsland.refusedName($0.name) == .idShaped } ? sessions() : []
+        if let bin, reviveFile {
             if Self.reviveExact(bin, live) {
                 // #720 (QA #535 M-1): and the sessions of the other socket dir, as dch holds a Claude from any dir.
                 let listed = dirs(), read = read
@@ -1518,7 +1520,7 @@ struct DchControlOps: Sendable {
             }
         }
         let ended = bin.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveEndedHoldMinimum) } ?? false
-        let taken = AgentIsland.reviveAllTaken(all, now: t, held: held, endedHolds: ended)
+        let taken = AgentIsland.reviveAllTaken(all, now: t, held: held, endedHolds: ended, live: Set(live.map(\.key)))
         reply(DchFrame.encode(DchFrame.historyResp,
                               json: AgentIsland.cappedHistory(all).map { Self.historyWire($0, now: t, taken: taken) }))
     }

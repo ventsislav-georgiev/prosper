@@ -881,6 +881,19 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertTrue(takes("m0123456789abcdef") == false)
     }
 
+    /// #992 R950-1: the history frame asks about the name dch starts: a live session holds the id-shaped record's
+    /// name, so --revive --all would start it as <name>-2, which dch takes; the other dir's same record stays out.
+    func testHistoryRespTakesAnIdShapedRecordWhoseNameIsLive() {
+        let f = Fake(), id = "m0123456789abcdef"
+        let row: [String: Any] = ["name": id, "started": Self.now - 3600, "updated": Self.now - 60, "ended": Self.now - 60, "end": "signal 9"]
+        f.hist["/d"] = Self.hist([row])
+        f.hist["/e"] = Self.hist([row])
+        f.ls["/d"] = Self.ls([(id, "1.24.1")])
+        let rows = call(ops(f, dirs: ["/d", "/e"]), DchFrame.history, raw: Data()).json as? [[String: Any]] ?? []
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.filter { $0["takes"] as? Bool == true }.count, 1, "only the dir where the name is live")
+    }
+
     func testRestartAllWithNoResultAndANonZeroExitIsAnError() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1")])

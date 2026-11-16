@@ -1463,6 +1463,9 @@ tag from the now-released section and put it on the new top draft.
   needs a click or Attach. (#1330)
 - Command Runner: while an input method is composing text (for example Japanese or Chinese input),
   the up and down arrows now move through its candidates instead of moving the result rows (#996)
+- Agent island: Resume interrupted now also counts a session named like a session id when another
+  live session holds that name, since dch brings it back under a new name (for example name-2); the
+  phone's history agrees (#992)
 
 ## v2.174.0
 
