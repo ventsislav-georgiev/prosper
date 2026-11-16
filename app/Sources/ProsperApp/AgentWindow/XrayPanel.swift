@@ -51,6 +51,9 @@ final class XrayPanels: ObservableObject {
 
     func close(_ pane: UUID) { open[pane] = nil }
 
+    /// #1416: the one --ref read in flight (XrayRefCard.swift runRef / closeRef); a new one or a card close cancels it.
+    var refReading: Task<Void, Never>?
+
     /// #1352: the window that draws `pane` (its presenter shows the memory card); rows put theirs here.
     static var window: @MainActor (UUID) -> AgentsNSWindow? = { AgentsNSWindow.window(of: $0) }
 
@@ -159,6 +162,9 @@ final class XrayPanelModel: ObservableObject {
     /// #1415: the refs of dch's `--json` read (gate A on only); nil: none read. "Show all kinds" (dch `a`).
     @Published var refs: XrayRefs?
     @Published var showAllRefs = false
+    /// #1416: the ref card's data from the last --ref read (XrayPanels.runRef), or why it has none.
+    @Published var refContext: XrayRefContext?
+    @Published var refNote: String?
     /// #1389: this pane reads dch's chapters (XrayPanels.chaptersRead); false: never runs that read.
     var fromDch: () -> Bool = { false }
     /// #1355: the Search tab is there (false once dch answered exit 1, does not know --search, or 6, refused); the
@@ -413,7 +419,7 @@ final class XrayPanelModel: ObservableObject {
     }
 
     /// The jump; `card(older)` runs when it did not land.
-    private func go(_ anchor: String?, card: @escaping @MainActor (Bool) -> Void) {
+    func go(_ anchor: String?, card: @escaping @MainActor (Bool) -> Void) {
         guard let anchor, let tm = transcript() else { return card(false) }
         TranscriptJumper.of(tm).jump(anchor: anchor, in: tm) { [weak self] r in
             switch r {
