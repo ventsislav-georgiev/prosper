@@ -75,6 +75,29 @@ struct ManagedConfigPlanner {
         return .refusedJSONPath(name)
     }
 
+    /// #1312: the one shape of a command hook entry; anything else is refused at plan time. shortcut: Claude Code
+    /// also has prompt/agent/http handlers and more handler keys; they are refused until a decision adds them.
+    private static func members(_ v: OrderedJSON.Value) -> [String: OrderedJSON.Value]? {
+        guard case .object(let m) = v else { return nil }
+        let d = Dictionary(m.map { ($0.key, $0.value.value) }, uniquingKeysWith: { a, _ in a })
+        return d.count == m.count ? d : nil // a repeated key is odd data too
+    }
+
+    private static func commandShape(_ v: OrderedJSON.Value, extra: String) -> Bool {
+        guard let m = members(v), Set(m.keys).isSubset(of: ["type", "command", extra]),
+              case .string("command")? = m["type"], case .string? = m["command"] else { return false }
+        if let e = m[extra] { guard case .number = e else { return false } }
+        return true
+    }
+
+    static func isCommandStatusLine(_ v: OrderedJSON.Value) -> Bool { commandShape(v, extra: "padding") }
+
+    static func isCommandHookGroup(_ v: OrderedJSON.Value) -> Bool {
+        guard let m = members(v), Set(m.keys).isSubset(of: ["matcher", "hooks"]), case .array(let list)? = m["hooks"] else { return false }
+        if let matcher = m["matcher"] { guard case .string = matcher else { return false } }
+        return list.allSatisfy { commandShape($0.value, extra: "timeout") }
+    }
+
     // MARK: work files
 
     private mutating func work(_ url: URL, target: String, backupRel: String, kitDir: URL?,
@@ -238,7 +261,9 @@ struct ManagedConfigPlanner {
         let node = doc.node(at: path)
         switch op {
         case .append:
-            guard case .object = value else { throw .invalidPiece("a hooks entry is an object") }
+            if !ManagedConfigPlanner.isCommandHookGroup(value) {
+                throw .invalidPiece("\(name) takes only {matcher?: string, hooks: [{type: \"command\", command: string, timeout?: number}]}, no other key")
+            }
             var elements: [OrderedJSON.Node] = []
             if let node {
                 guard case .array(let els) = node.value else { throw .corrupt("\(name) is not an array") }
@@ -311,6 +336,10 @@ struct ManagedConfigPlanner {
             return existing == nil ? .insert : .update
 
         case .set:
+            // #1312: only a command status line plans, so the sheet's note (and its count) never misses one.
+            if !ManagedConfigPlanner.isCommandStatusLine(value) {
+                throw .invalidPiece("\(name) takes only {type: \"command\", command: string, padding?: number}, no other key")
+            }
             if let other = state.records.first(where: { $0.path == w.url.path && $0.piece.path == path && $0.piece.op == .set && $0.owner != owner.id }) {
                 throw .conflict(owner: other.owner)
             }

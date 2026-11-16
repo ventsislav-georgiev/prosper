@@ -1401,6 +1401,8 @@ tag from the now-released section and put it on the new top draft.
   that never stops printing is now cancelled after an hour, and when an Agents window answer finds
   its prompt already gone, the prompt that replaced it is checked again right away instead of
   waiting for its next output.
+- An extension whose config change has a malformed hook or status line (not a plain command) is now
+  refused before anything is written, so the Apply sheet can no longer hide a command.
 
 ## v2.174.0
 
