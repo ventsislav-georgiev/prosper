@@ -288,6 +288,19 @@ enum TranscriptVerbosity {
         return out
     }
 
+    /// #904 (spec 8.4): the row that shows `block` at `level`: its own row, its one-line row, the thread row it is a
+    /// step of, or the Focused summary row that folds it (folded or open, the summary is the row). Built on `project`,
+    /// so it is the row the window draws; nil when no row shows it (hidden at this level, or not loaded).
+    static func rowID(containing block: Int, in blocks: [TranscriptBlock], level: AgentVerbosity) -> String? {
+        func shows(_ r: TranscriptRow) -> Bool {
+            switch r.kind {
+            case .block(let b), .line(let b), .thread(let b, _, _): TranscriptOutline.holds(b, block)
+            case .summary(_, let children, let errors): (children + errors).contains(where: shows)
+            }
+        }
+        return project(blocks, level: level).first(where: shows)?.id
+    }
+
     // MARK: Default
 
     static func defaultRows(_ b: TranscriptBlock) -> [TranscriptRow] {

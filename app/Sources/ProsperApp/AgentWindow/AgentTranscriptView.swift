@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // #786 Agent window, spike A: the read-only conversation view. Settings-console
@@ -23,6 +24,15 @@ struct AgentTranscriptView: View {
     @State var atEnd = true
     /// Test seam: a row moves the place through the binding SwiftUI writes (SwiftUI never sees an AppKit clip scroll).
     var position: Binding<Int?>?
+    /// #904 (spec 8.4): this pane's jumps. Each pane passes its own, so a jump scrolls only that pane; the jumper never
+    /// reaches the window model (focus, selection) or a row's fold. Standalone views share the idle one nobody jumps.
+    @ObservedObject var jumper: TranscriptJumper = .idle
+    /// Where the marked row's top sits in the viewport (its overlay reports it while drawn); nil while undrawn.
+    @State var landedTop: CGFloat?
+    /// The 1 pt sentinel at the bottom of the padded rows: "back to latest" scrolls to it with anchor .bottom (P0 run3: the last
+    /// row's own id stops sz(14) short of the end, and from there new rows are not followed).
+    static let bottomID = "bottom"
+    static let space = "transcript-viewport"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,9 +50,11 @@ struct AgentTranscriptView: View {
                         keepsPlace
                     } else {
                         // macOS 14: no scroll geometry to tell the end from a place; a switch lands at the end, as before.
-                        ScrollView { LazyVStack(alignment: .leading, spacing: sz(10)) { rows } .padding(sz(14)) }
-                            .defaultScrollAnchor(.bottom)
-                            .id(identity)
+                        ScrollViewReader { proxy in
+                            jumps(ScrollView { withSentinel(LazyVStack(alignment: .leading, spacing: sz(10)) { rows } .padding(sz(14))) }
+                                .defaultScrollAnchor(.bottom), proxy)
+                        }
+                        .id(identity)
                     }
                 } else {
                     VStack(alignment: .leading, spacing: sz(10)) { rows }.padding(sz(14))
@@ -64,7 +76,7 @@ struct AgentTranscriptView: View {
         let list = model.viewIdentity
         let place = position ?? Binding(get: { kept?.list == list ? kept?.turn : nil },
                                         set: { t in kept = t.map { (list, $0) } })
-        return ScrollViewReader { proxy in ScrollView { LazyVStack(alignment: .leading, spacing: sz(10)) { rows }.scrollTargetLayout().padding(sz(14)) }
+        return ScrollViewReader { proxy in jumps(ScrollView { withSentinel(LazyVStack(alignment: .leading, spacing: sz(10)) { rows }.scrollTargetLayout().padding(sz(14))) }
             // A new place SwiftUI reports at the end is no place: the end keeps following. Its echo of a place just set
             // (it writes back the id it scrolled to, before the geometry leaves the end) is kept.
             .scrollPosition(id: Binding(get: { place.wrappedValue },
@@ -76,7 +88,10 @@ struct AgentTranscriptView: View {
             }
             // SwiftUI keeps the place's id across a switch but not its offset (the turns above change height): the held
             // turn is put back on top once the new level's rows are in the graph (main actor, in SwiftUI's update).
-            .onChange(of: level) { if let t = place.wrappedValue { proxy.scrollTo(t, anchor: .top) } }
+            // #904: a reader at the end stays at the end: the sentinel, the true bottom (the turns above change height).
+            .onChange(of: level) {
+                if let t = place.wrappedValue { proxy.scrollTo(t, anchor: .top) } else if atEnd { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+            }, proxy)
             .id(list)
         }
     }
@@ -98,6 +113,8 @@ struct AgentTranscriptView: View {
             VStack(alignment: .leading, spacing: sz(10)) {
                 ForEach(TranscriptVerbosity.project(t, level: level, working: working && t[0].id == turns.last?[0].id)) { r in
                     TranscriptRowView(row: r, level: level, expand: { await model.fullText($0) }).id(level)
+                        .overlay(alignment: .leading) { if jumper.marked == r.id { mark } }
+                        .id(r.id)
                 }
             }
         }
@@ -107,12 +124,100 @@ struct AgentTranscriptView: View {
         }
     }
 
+    /// The sentinel overlays the padded rows' last point: no layout of its own (a VStack around the LazyVStack plus
+    /// the per-row ids lost the end across a level switch, #904 r1).
+    private func withSentinel(_ rows: some View) -> some View {
+        rows.overlay(alignment: .bottom) { Color.clear.frame(height: 1).id(Self.bottomID) }
+    }
+
+    /// The scroll view with this pane's jumps: rows report their place in `space`, a request scrolls.
+    private func jumps(_ scroll: some View, _ proxy: ScrollViewProxy) -> some View {
+        scroll.coordinateSpace(.named(Self.space))
+            .onChange(of: jumper.request) { _, r in if let r { land(r, proxy) } }
+    }
+
+    /// The mark: a bar over the row's leading edge (an overlay: the row does not move). It reports the row's top.
+    private var mark: some View {
+        Rectangle().fill(Neon.blue).frame(width: sz(3))
+            .transition(.opacity)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.space)).minY } action: { landedTop = $0 }
+    }
+
+    /// Spec 8.4, no animation. The turn first: the LazyVStack knows its turns' ids even undrawn, not the rows inside an
+    /// undrawn turn. On the next runloop the row is put on top once more unless it is drawn within the top sz(40).
+    /// Never opens or closes a fold: a block inside a folded step lands on the fold's row.
+    private func land(_ r: TranscriptJumper.Request, _ proxy: ScrollViewProxy) {
+        var t = Transaction()
+        t.disablesAnimations = true
+        guard let block = r.block else {
+            withTransaction(t) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+            return
+        }
+        guard let target = TranscriptOutline.target(block, in: model.blocks, level: level) else { return }
+        landedTop = nil
+        jumper.mark(target.row)
+        withTransaction(t) { proxy.scrollTo(target.turn, anchor: .top) }
+        let landed = $landedTop, row = target.row
+        DispatchQueue.main.async {
+            if let top = landed.wrappedValue, top > -1, top <= sz(40) { return }
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { proxy.scrollTo(row, anchor: .top) }
+        }
+    }
+
     /// QA #657 INFO-3a: Focused's last turn reads "Working" while dch says the session works (the state the window
     /// already handed the model) or a tool call is open; an unknown state (nil, "") is the tool call alone.
     /// R1269-q1: never on an ended pane (its model gets no update() again: the state and the open call are the last seen).
     static func turnWorking(state: String?, toolPending: Bool, ended: Bool = false) -> Bool {
         !ended && (toolPending || state == "working")
     }
+}
+
+/// #904 (spec 8.4): one pane's jump requests and its mark. Step B (the list) and step C (the rail) call it.
+@MainActor final class TranscriptJumper: ObservableObject {
+    /// `block` nil: back to latest (the sentinel). `serial` makes a repeated jump to the same block a new request.
+    struct Request: Equatable { let serial: Int; let block: Int? }
+    /// For a view nobody jumps (standalone transcripts): never asked to jump.
+    static let idle = TranscriptJumper()
+    static let markDuration: TimeInterval = 1.2
+
+    @Published private(set) var request: Request?
+    /// The row the last jump landed on, while its mark shows.
+    @Published private(set) var marked: String?
+    private var serial = 0, marks = 0
+
+    // Seams: Reduce Motion, and the clock that removes the mark.
+    var reduceMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    var after: (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { d, f in
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(d))
+            f()
+        }
+    }
+
+    func jump(to chapter: TranscriptOutline.Chapter) { jump(toBlock: chapter.id) }
+    func jump(toBlock id: Int) { send(id) }
+    func jumpToLatest() { send(nil) }
+
+    private func send(_ block: Int?) {
+        serial += 1
+        request = Request(serial: serial, block: block)
+    }
+
+    /// Shows the mark on `row` and removes it after `markDuration`, unless a later jump marked another row.
+    func mark(_ row: String) {
+        marked = row
+        marks += 1
+        let n = marks
+        after(Self.markDuration) { [weak self] in
+            guard let self, self.marks == n else { return }
+            withAnimation(Self.removal(reduceMotion: self.reduceMotion())) { self.marked = nil }
+        }
+    }
+
+    /// Reduce Motion: a plain removal, no fade.
+    static func removal(reduceMotion: Bool) -> Animation? { reduceMotion ? nil : .easeOut(duration: 0.2) }
 }
 
 struct TranscriptBanner: View {

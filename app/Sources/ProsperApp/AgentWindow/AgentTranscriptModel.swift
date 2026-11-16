@@ -439,6 +439,8 @@ final class AgentTranscriptModel: ObservableObject {
     nonisolated static let healthThreshold = 0.5
 
     @Published private(set) var blocks: [TranscriptBlock] = []
+    /// #904 (spec 8.1): the chapters of `blocks`, computed on main in `publish()` (once per poll or page, never per draw).
+    @Published private(set) var chapters: [TranscriptOutline.Chapter] = []
     @Published private(set) var mode: AgentWindowMode = .terminalFirst("No session selected")
     @Published private(set) var banner: String?
     @Published private(set) var hiddenCount = 0
@@ -774,6 +776,8 @@ final class AgentTranscriptModel: ObservableObject {
 
     private func publish() {
         blocks = assembler.blocks
+        let c = TranscriptOutline.chapters(blocks)
+        if c != chapters { chapters = c }
         hiddenCount = assembler.hiddenTotal
         cwd = assembler.cwd
         let t = assembler.todos
