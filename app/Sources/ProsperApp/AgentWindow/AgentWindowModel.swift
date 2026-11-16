@@ -70,6 +70,14 @@ enum AgentSidebar {
         let cwd: String?
     }
 
+    /// #1324 (a): one `dch --history --json --remote` record that carries a "host" key, keyed AgentSessionKey("@" + host,
+    /// name) (step A's remote key), so it never meets a local record; `stale` is dch's two-minute cache of a quiet host.
+    struct RemoteRecord: Equatable {
+        let record: DchHistoryRecord
+        let stale: Bool
+        var host: String { String(record.key.dir.dropFirst()) }
+    }
+
     struct Row: Identifiable, Equatable {
         let id: RowID
         let title: String
@@ -92,6 +100,8 @@ enum AgentSidebar {
         var record: DchHistoryRecord?
         /// #836: a row from another machine; nil for local and History rows.
         var remote: Remote?
+        /// #1324: a remote History row's host (the host slot); its record is keyed "@" + host, as step A's remote key.
+        var host: String?
         /// #1203: a live Claude session's row (it has a transcript) keeps the model slot, with or without a value;
         /// Codex, shell and History rows have none.
         var modelSlot = false
@@ -156,7 +166,8 @@ enum AgentSidebar {
     /// #829 G0: `actions` are the island's row texts; a running one replaces the state word.
     static func sections(sessions: [AgentSession], history: [DchHistoryRecord], sort: AgentIslandSort,
                          sidekickPattern: String, details: AgentIslandRowDetails, now: TimeInterval,
-                         actions: [AgentSessionKey: String] = [:], remote: [Remote] = []) -> [Section] {
+                         actions: [AgentSessionKey: String] = [:], remote: [Remote] = [],
+                         remoteHistory: [RemoteRecord] = []) -> [Section] {
         let needs = sessions.filter(needsYou).sorted {
             if $0.state != $1.state { return $0.state < $1.state }
             if $0.activity != $1.activity { return $0.activity > $1.activity }
@@ -171,7 +182,12 @@ enum AgentSidebar {
         add("Sidekicks", rest.sidekicks.map(live))
         // #836: grouped under their host (host, then name), after the local live rows.
         add(otherMachinesTitle, remote.sorted { ($0.host, $0.name) < ($1.host, $1.name) }.map(row))
-        add("History", AgentIsland.cappedHistory(history).map { row($0, now: now) })
+        // #1324 (a): after the local records (unchanged), each host's, capped per host as dch's picker does (50 names).
+        let stale = Set(remoteHistory.filter(\.stale).map(\.record.id))
+        let far = Dictionary(grouping: remoteHistory, by: \.host).sorted { $0.key < $1.key }
+            .flatMap { AgentIsland.cappedHistory($0.value.map(\.record)) }
+            .map { row($0, now: now, stale: stale.contains($0.id), action: actions[$0.id]) }
+        add("History", AgentIsland.cappedHistory(history).map { row($0, now: now) } + far)
         return out
     }
 
@@ -194,6 +210,14 @@ enum AgentSidebar {
             age: r.lastSeen > 0 ? AgentIsland.age(now - r.lastSeen) : "", prs: [], record: r)
     }
 
+    /// #1324 (a): a remote record's row: the local row's text (its Resume's text while one runs or after), the host slot.
+    static func row(_ r: DchHistoryRecord, now: TimeInterval, stale: Bool, action: String?) -> Row {
+        Row(id: .history(r.id), title: r.title, state: nil,
+            detail: action ?? (stale ? "Stale \u{00B7} " : "") + "Ended \u{00B7} " + AgentIsland.endLabel(r.end),
+            age: r.lastSeen > 0 ? AgentIsland.age(now - r.lastSeen) : "", prs: [], record: r,
+            host: String(r.key.dir.dropFirst()))
+    }
+
     /// #836 (c): no island state (the island answers only for local sessions): no state glyph, no age, nothing to answer.
     static func row(_ r: Remote) -> Row {
         Row(id: .remote(host: r.host, name: r.name), title: r.alias.isEmpty ? r.name : r.alias, state: nil,
@@ -206,9 +230,7 @@ enum AgentSidebar {
     /// left out, as is a second row of the same host and name.
     static func parseRemote(_ data: Data) -> [Remote]? {
         guard !data.isEmpty, let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return nil }
-        func ok(_ s: String) -> Bool {
-            !s.isEmpty && s.utf8.count <= 256 && !s.hasPrefix("-") && !s.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
-        }
+        let ok = remoteOK
         var seen = Set<[String]>(), out: [Remote] = []
         for o in rows {
             guard let host = o["host"] as? String, let name = o["name"] as? String, ok(host), ok(name),
@@ -218,6 +240,29 @@ enum AgentSidebar {
             out.append(Remote(host: host, name: name, alias: alias, stale: stale, cwd: o["cwd"] as? String))
         }
         return out
+    }
+
+    /// #836: a name or host Prosper passes on: not empty, at most 256 bytes, no leading "-" (dch would read a flag),
+    /// no C0 control or DEL.
+    static func remoteOK(_ s: String) -> Bool {
+        !s.isEmpty && s.utf8.count <= 256 && !s.hasPrefix("-") && !s.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
+    }
+
+    /// #1324 (a): the records of `dch --history --json --remote` that carry a "host" (the local ones, without, are the
+    /// island's), each read by the island's own parseHistory under the dir "@" + host. nil when the bytes are not a JSON
+    /// array (a timed-out or failed call): the caller keeps what it had. A host, name or file that remoteOK refuses is
+    /// left out, as is a second record of the same host and id. Per host newest first (cappedHistory's order).
+    static func parseRemoteHistory(_ data: Data) -> [RemoteRecord]? {
+        guard !data.isEmpty, let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return nil }
+        var seen = Set<AgentSessionKey>()
+        return rows.compactMap { o -> RemoteRecord? in
+            guard let host = o["host"] as? String, let name = o["name"] as? String, remoteOK(host), remoteOK(name),
+                  (o["file"] as? String).map({ $0.isEmpty || remoteOK($0) }) ?? true,
+                  let one = try? JSONSerialization.data(withJSONObject: [o]),
+                  let r = AgentIsland.parseHistory(one, dir: "@" + host).first, seen.insert(r.id).inserted else { return nil }
+            let stale = (o["stale"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+            return RemoteRecord(record: r, stale: stale)
+        }.sorted { $0.host != $1.host ? $0.host < $1.host : $0.record.lastSeen > $1.record.lastSeen }
     }
 
     /// The transcript model's input for a live session.
@@ -729,6 +774,32 @@ final class AgentWindowModel: ObservableObject {
     private var remoteAt: TimeInterval?
     /// Counts remote list calls started (tests).
     private(set) var remoteCalls = 0
+    /// #1324 (a): the remote History call (`dch --history --json --remote`), the same bounded runner, its own seam so a
+    /// fake list answers only the list; none under XCTest. It rides in the list's job (one in flight with it).
+    var remoteHistoryRun: @Sendable (_ args: [String], _ env: [String: String]) -> Data? = { args, env in
+        NSClassFromString("XCTestCase") == nil ? DchCommand.runIsland(args: args, env: env) : nil
+    }
+    /// dch's own picker reads remote history every 10 s, not every 2 s: each fetch runs a dch on every host and logs
+    /// there (README.md:3289-3291 at v1.74.0).
+    static let remoteHistoryEvery: TimeInterval = 10
+    static let remoteHistoryArgs = ["--history", "--json", "--remote"]
+    /// #1324: the last good remote History records; a call that failed or timed out keeps them.
+    private(set) var remoteHistory: [AgentSidebar.RemoteRecord] = []
+    private var remoteHistoryAt: TimeInterval?
+    /// #1324 (b): dch's DCH_AGENT_TIMEOUT_MS (600 s) plus margin, the #836 Round 2 bound for --revive; an idle bound
+    /// (DchActionRunner: each NDJSON line restarts it).
+    nonisolated static let remoteReviveBound: TimeInterval = 660
+    /// #1324 (b): a remote record's Resume, a dch call of its own on the island's shared action runner (never the
+    /// list's call or stream), keyed by the record's id under "@" + host, so it never meets a local job; false: the key
+    /// is busy and nothing ran. None under XCTest. `done` runs on the runner's thread.
+    var remoteVerb: (_ key: AgentSessionKey, _ dch: String, _ args: [String],
+                     _ done: @escaping @Sendable (DchActionResult) -> Void) -> Bool = { key, dch, args, done in
+        NSClassFromString("XCTestCase") == nil
+            && DchActionRunner.shared.start(key, path: dch, args: args, bound: AgentWindowModel.remoteReviveBound,
+                                            env: { AgentIsland.listEnv(dir: DchCommand.defaultSocketDir) }, done: done)
+    }
+    /// #1324 (c): a remote Resume's row text (the island's words), by record id: the island keeps only its own records'.
+    @Published private(set) var remoteResumeText: [AgentSessionKey: String] = [:]
     /// #829: Restart agent, Stop and Kill: the island's controller methods (its gates, runner
     /// keys, busy refusal and row texts). True: the job started.
     var restartSession: (AgentSession) -> Bool = { AgentIslandController.shared.restart($0, sayBusy: true) }
@@ -1213,13 +1284,20 @@ final class AgentWindowModel: ObservableObject {
         let t = remoteClock()
         if let at = remoteAt, t - at < Self.remoteEvery { return }
         remoteAt = t
+        // #1324 (a): History in the same job, at dch's own History spacing.
+        let history = remoteHistoryAt.map { t - $0 >= Self.remoteHistoryEvery } ?? true
+        if history { remoteHistoryAt = t }
         remoteInFlight = true
         remoteCalls += 1
-        let run = remoteRun, env = AgentIsland.listEnv(dir: DchCommand.defaultSocketDir)
-        guard remoteOffMain else { return remoteListed(run(["--ls-json", "--remote"], env)) }
+        let run = remoteRun, runHistory = remoteHistoryRun, env = AgentIsland.listEnv(dir: DchCommand.defaultSocketDir)
+        let historyArgs = Self.remoteHistoryArgs
+        let job: @Sendable () -> (Data?, Data?) = {
+            (run(["--ls-json", "--remote"], env), history ? runHistory(historyArgs, env) : nil)
+        }
+        guard remoteOffMain else { let r = job(); return remoteListed(r.0, history: r.1) }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let data = run(["--ls-json", "--remote"], env)
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteListed(data) } }
+            let r = job()
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteListed(r.0, history: r.1) } }
         }
     }
 
@@ -1227,11 +1305,18 @@ final class AgentWindowModel: ObservableObject {
     /// A host that missed one probe is still listed by dch, "stale":true, for two minutes (its cache), so one refresh
     /// is enough and a transient miss never empties the section. nil or not an array: the rows stay (a wedged dch is
     /// not "no hosts").
-    func remoteListed(_ data: Data?) {
+    /// #1324 (a): the History answer the same way: replaced whole when it is an array, kept otherwise; an offline
+    /// host's records stay, "stale", for dch's two minutes, then go with the next good answer.
+    func remoteListed(_ data: Data?, history: Data? = nil) {
         remoteInFlight = false
-        guard !closed, let data, let rows = AgentSidebar.parseRemote(data), rows != remoteSessions else { return }
-        remoteSessions = rows
-        guard let s = store else { return }
+        guard !closed else { return }
+        var changed = false
+        if let data, let rows = AgentSidebar.parseRemote(data), rows != remoteSessions { remoteSessions = rows; changed = true }
+        if let history, let recs = AgentSidebar.parseRemoteHistory(history), recs != remoteHistory {
+            remoteHistory = recs
+            changed = true
+        }
+        guard changed, let s = store else { return }
         refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
                 actions: s.actions)
     }
@@ -1250,8 +1335,10 @@ final class AgentWindowModel: ObservableObject {
         // #901 B3 step 5 (section 10): the attention source, on this visible refresh only; gate off: stays nil.
         let n = AgentPaneLayout.splitsEnabled ? Self.needing(sessions) : nil
         if n != needs { needs = n }
+        // #1324: a remote Resume's text by its record id ("@" + host: never a local key).
         let new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
-                                        details: details, now: now(), actions: actions, remote: remoteSessions)
+                                        details: details, now: now(), actions: actions.merging(remoteResumeText) { a, _ in a },
+                                        remote: remoteSessions, remoteHistory: remoteHistory)
         let old = sections
         publishing = (sessions, history)
         defer { publishing = nil }
@@ -1305,7 +1392,8 @@ final class AgentWindowModel: ObservableObject {
     private func resolvedContent(of pane: UUID, _ target: PaneTarget?) -> PaneContent? {
         guard let t = target,
               let v = publishing ?? store.map({ (sessions: $0.sessions, history: $0.history) }) else { return nil }
-        return AgentPaneLayout.resolve(t, sessions: v.sessions, history: v.history,
+        // #1324: a remote History pane resolves to its record while dch lists it.
+        return AgentPaneLayout.resolve(t, sessions: v.sessions, history: v.history + remoteHistory.map(\.record),
                                        lastLive: lastLive[AgentPaneLayout.PaneSlot(layout: layout.id, pane: pane)])
     }
 
@@ -1968,12 +2056,47 @@ final class AgentWindowModel: ObservableObject {
         select(.history(r.id))
         refusal = nil
         switch verb {
+        // #1324 (b): a remote record has Resume only (no pin, remove or no-message there: they would run here).
+        case .resume where Self.isRemote(r): resumeRemote(r)
+        case _ where Self.isRemote(r): break
         case .resume: resume(r)
         case .resumeNoMessage: resumeNoMessage(r)
         case .pin: pinRecord(r)
         case .remove: confirming = AgentWindowConfirm(verb: .remove, key: r.id)
         case .restart, .stop, .kill, .rename: break
         }
+    }
+
+    /// #1324: a record from another machine (its dir is "@" + host; a socket dir is an absolute path).
+    nonisolated static func isRemote(_ r: DchHistoryRecord) -> Bool { r.key.dir.hasPrefix("@") }
+
+    /// #1324 (b): `dch --host <h> --revive <file>.json --json` (`--as` a free name when the name runs on that host), the
+    /// unambiguous form: `--revive host:name` would revive a local record of that exact name (README.md:3346-3360 at
+    /// v1.74.0). Never `--all`. Its text is the island's: resumingText, then rowText; the resumed session shows in
+    /// "Other machines" on the next list, never attached or selected by this.
+    func resumeRemote(_ r: DchHistoryRecord) {
+        guard Self.isRemote(r), let store, case .ok(let dch) = store.resumeGate else { return }
+        let host = String(r.key.dir.dropFirst()), key = r.id, name = r.name, arg = r.editTarget(exact: true)
+        let live = Set(remoteSessions.filter { $0.host == host }.map(\.name))
+        let records = Set(remoteHistory.filter { $0.host == host && $0.record.key != r.key }.map(\.record.name))
+        guard AgentSidebar.remoteOK(host), let args = AgentIsland.reviveArgs(r, live: live, records: records, exact: true)
+        else { return }
+        let started = remoteVerb(key, dch, ["--host", host] + args) { [weak self] res in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteResumed(key, name: name, arg: arg, res) } }
+        }
+        guard started else { return }   // busy: nothing ran, nothing shown (the island's rule)
+        remoteResumeText[key] = AgentIsland.resumingText
+        refresh()
+    }
+
+    /// #1324 (c): the result in the island's words; then the list and History are read again at once.
+    func remoteResumed(_ key: AgentSessionKey, name: String, arg: String, _ res: DchActionResult) {
+        remoteResumeText[key] = res.stopped
+            ? "\(AgentIsland.Verb.resume.rawValue) cancelled: no answer in \(Int(Self.remoteReviveBound / 60))m"
+            : AgentIsland.rowText(DchControlOps.renamed(res, arg, to: name), name: name, .resume)
+        remoteAt = nil
+        remoteHistoryAt = nil
+        refresh()
     }
 
     /// The asked session as it is now (nil: it ended).

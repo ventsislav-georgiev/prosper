@@ -577,7 +577,7 @@ struct AgentSidebarView: View {
                                                 AgentSessionMenuItems(store: store, session: s, ask: { model.ask($0, s) },
                                                                       open: { open(s) }, row: model,
                                                                       side: { model.openToTheSide(row.id) })
-                                            } else if let r = row.record, let store = model.store {
+                                            } else if let r = row.record, row.host == nil, let store = model.store {   // #1324: a remote record has none
                                                 AgentHistoryMenuItems(store: store, record: r) { model.act($0, r) }
                                             }
                                         }
@@ -1117,7 +1117,7 @@ extension AgentSidebarRowView {
             Spacer(minLength: 0)
             if modelSlot, row.modelSlot { modelSlotView }
             if !row.age.isEmpty || row.state != nil { ageSlot }
-            if let r = row.remote { Self.hostSlot(r.host) }
+            if let h = row.remote?.host ?? row.host { Self.hostSlot(h) }   // #1324: a remote History row's too
         }
     }
 
@@ -1281,7 +1281,8 @@ struct AgentDetailView: View {
             }
         } else if let row = model.selectedRow, let r = row.record {
             titled(row.title) {
-                AgentHistoryDetail(row: row, record: r, store: model.store, refusal: model.refusalText(row.id),
+                AgentHistoryDetail(row: row, record: r, store: model.store,
+                                   refusal: model.refusalText(row.id) ?? model.remoteResumeText[r.id],
                                    act: { model.act($0, r) })
                     // #829 G8: Remove asks, over the pane's top. #900 6b2d (fixed slots): one slot, the question wins it, so
                     // the strip never moves; the refusal line takes it once the question is gone.
@@ -2441,10 +2442,38 @@ struct AgentHistoryDetail: View {
                 Text((record.cwd as NSString).abbreviatingWithTildeInPath).font(Neon.font(11, design: .monospaced))
                     .foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.middle)
             }
-            if let store { AgentHistoryButtons(store: store, record: record, refusal: refusal, act: act) }
+            if let store, let host = row.host {
+                AgentRemoteResumeButton(store: store, record: record, host: host, status: refusal, act: act)
+            } else if let store { AgentHistoryButtons(store: store, record: record, refusal: refusal, act: act) }
         }
         .padding(sz(24))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// #1324 (b): a remote record's one verb, Resume on its host (no pin, remove or no-message: those would run here),
+/// and the status line in AgentHistoryButtons' fixed two-line slot.
+struct AgentRemoteResumeButton: View {
+    @ObservedObject var store: AgentIslandStore
+    let record: DchHistoryRecord
+    let host: String
+    var status: String?
+    let act: (AgentWindowVerb) -> Void
+
+    var body: some View {
+        let on = store.resumeGate.isOK && AgentIsland.passable(record.name)
+        let help = "\(AgentIsland.resumeLabel) on \(host)"
+        VStack(spacing: sz(6)) {
+            AgentPillButton(title: AgentIsland.resumeLabel, icon: "play.fill", tint: Neon.blue, enabled: on) { act(.resume) }
+                .help(help).accessibilityLabel(help)
+            ZStack {
+                Text(" \n ").hidden()
+                Text(status ?? " ").foregroundStyle(Neon.textSecondary)
+                    .lineLimit(2).multilineTextAlignment(.center)
+                    .accessibilityHidden(status == nil)
+            }
+            .font(Neon.font(10.5))
+        }
     }
 }
 

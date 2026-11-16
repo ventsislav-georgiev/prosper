@@ -1453,6 +1453,8 @@ tag from the now-released section and put it on the new top draft.
   note also goes once the row waits on you again. (#1315)
 - Island: a session killed while its own Stop or Restart was still running now reads "Killed"
   instead of "Stop failed". (#1328)
+- Agent Sessions: History now lists the ended sessions of your other machines, each with its host,
+  and Resume brings one back on that machine. (#1324)
 
 ## v2.174.0
 
