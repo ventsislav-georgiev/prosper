@@ -1065,6 +1065,9 @@ struct AgentIslandHistoryRow: View {
 
     /// QA #569 INFO-2: the row's tooltip and hint; "" on a refused row (the tooltip is then empty, never the Resume text).
     var helpText: String { enabled ? AgentIsland.resumeWithMessageHelp : "" }
+    /// #1332 N937-c: the end text's tooltip: the whole (capped) sender command, which the label cuts at 48 characters,
+    /// as outside text (OutsideText.shown); with no sender command the row's own tooltip, so the label's area keeps it.
+    var endHelp: String { AgentIsland.signalSender(record.end)?.command.map { OutsideText.shown($0) } ?? helpText }
     var pinLabel: String { AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel, older: older) }
     var removeLabel: String { AgentIsland.editLabel(AgentIsland.removeLabel, older: olderUnpinned) }
 
@@ -1106,6 +1109,7 @@ struct AgentIslandHistoryRow: View {
                                 .foregroundStyle(end.hasPrefix("crashed") ? AgentState.blocked.color : Color.white.opacity(0.5))
                                 // #839: a sender's program name can be long; the label truncates, cwd yields first.
                                 .lineLimit(1).layoutPriority(1)
+                                .help(Text(verbatim: endHelp))   // #1332 N937-c: the whole sender command
                             Text(verbatim: cwd)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(Color.white.opacity(0.35))

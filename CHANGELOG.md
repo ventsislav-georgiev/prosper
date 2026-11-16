@@ -1483,6 +1483,8 @@ tag from the now-released section and put it on the new top draft.
   when a session ends while the island's History tab is open. (#1320)
 - Agent Sessions: New session can start a session on another Mac running dch serve, in a folder you
   pick from that Mac's recent folders or type as a full path. (#1323)
+- Agent Island: hovering the end text of a History session that was ended by a signal shows the
+  whole command that sent it, not only the first 48 characters. (#1332)
 
 ## v2.174.0
 

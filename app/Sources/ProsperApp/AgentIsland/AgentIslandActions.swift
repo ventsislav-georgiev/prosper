@@ -245,12 +245,14 @@ extension AgentIsland {
     }
 
     /// #937: the sender command as outside data: hidden and control characters dropped (AgentPrompt.isHidden),
-    /// blank runs folded to one, at most 120 characters (dch's own cap); nil when nothing is left.
+    /// blank runs folded to one, at most 120 Unicode scalars (dch's own 120-byte cap), cut between characters
+    /// (#1332 N937-a: piled combining marks are bounded too); nil when nothing is left.
     static func senderCommand(_ raw: Substring) -> String? {
         var kept = String.UnicodeScalarView()
         for u in raw.unicodeScalars where !AgentPrompt.isHidden(u) { kept.append(u) }
         let one = String(kept).split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let cut = String(one.prefix(120)).trimmingCharacters(in: .whitespaces)
+        var scalars = 0   // whole characters while their scalars still fit in 120; one longer character alone is dropped
+        let cut = String(one.prefix { scalars += $0.unicodeScalars.count; return scalars <= 120 }).trimmingCharacters(in: .whitespaces)
         return cut.isEmpty ? nil : cut
     }
 
