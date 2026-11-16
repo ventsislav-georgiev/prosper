@@ -1074,6 +1074,30 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(try store.sweepStaleTemps(now: now.addingTimeInterval(KitStore.staleTempAge + 5)), [fresh])
     }
 
+    // #1427: an unlistable or read-only slug dir (the user's layer) never makes the sweep throw
+    func testSweepIgnoresAnUnsweepableSlugDir() throws {
+        let (_, home, store) = try scene()
+        try store.installRunner()
+        XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")
+        let dir = home.path + "/example-kit"
+        let fm = FileManager.default
+        let now = Date()
+        let old = now.addingTimeInterval(-3600)
+        try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let settings = "..settings.env.prosper-" + UUID().uuidString, mine = ".prosper-kit-run.prosper-" + UUID().uuidString
+        try Data("x".utf8).write(to: URL(fileURLWithPath: dir + "/" + settings))
+        try Data("x".utf8).write(to: URL(fileURLWithPath: store.layout.kitRuntime + "/" + mine))
+        try aged(dir + "/" + settings, old)
+        try aged(store.layout.kitRuntime + "/" + mine, old)
+        defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir) }
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir)
+        XCTAssertEqual(try store.sweepStaleTemps(now: now), [mine], "the store's own temp goes, the user's stays")
+        XCTAssertEqual(list(dir), [settings])
+        XCTAssertEqual(list(store.layout.kitRuntime), ["prosper-kit-run"])
+        try fm.setAttributes([.posixPermissions: 0o300], ofItemAtPath: dir)
+        XCTAssertNoThrow(try store.sweepStaleTemps(now: now))
+    }
+
     func testSweepNeverFollowsALinkAtTheSlugDir() throws {
         let (_, home, store) = try scene()
         XCTAssertEqual(try store.recordSlug("example-kit"), "example-kit")

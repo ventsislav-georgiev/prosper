@@ -775,7 +775,8 @@ struct KitStore: Sendable {
             }
         }
         if fs.kind(layout.kitRuntime) != .missing { removed += try sweep(try fs.openDir(layout.kitRuntime), now: now, Self.isWriterTemp) }
-        if let slug = recordedSlug() { removed += try sweepSettingsTemps(layout.configHome + "/" + slug, now: now) }
+        // the slug dir is the user's layer: its state (unlistable, read-only) never refuses an apply
+        if let slug = recordedSlug() { removed += (try? sweepSettingsTemps(layout.configHome + "/" + slug, now: now)) ?? [] }
         return removed
     }
 
