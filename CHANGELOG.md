@@ -1368,6 +1368,8 @@ tag from the now-released section and put it on the new top draft.
   as downloaded or loads: it is fetched again, and Resume never deletes a complete file. Inline
   models downloaded by earlier versions (before the files were pinned in v2.156.0) still count as
   downloaded.
+- Plugins: a second Prosper (or a dev build) sharing the plugins folder no longer takes the plugin
+  host's socket away from the first one, so the first app's plugins keep working.
 
 ## v2.174.0
 

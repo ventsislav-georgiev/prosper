@@ -84,10 +84,10 @@ export default { server: Q };`,
   "def-getter.js": badDefault("defgetter", '{ get server() { throw new Error("getter boom"); } }'),
 };
 
-function ask(payload) {
+function ask(payload, path = sock) {
   return new Promise((resolve, reject) => {
     let buf = "";
-    const c = connect(sock);
+    const c = connect(path);
     const timer = setTimeout(() => { c.destroy(); reject(new Error("no reply")); }, 5000);
     c.on("connect", () => c.write(typeof payload === "string" ? payload : JSON.stringify(payload)));
     c.on("data", (d) => { buf += d.toString(); });
@@ -242,3 +242,42 @@ test("PluginInput: serverUrl is undefined, project has worktree and time.created
   expect(ctx.project.time.created).toBeGreaterThan(startedBefore);
   expect(ctx.project.time.created).toBeLessThanOrEqual(Date.now());
 });
+
+// ---- #1298: a second host never steals a live host's socket ----
+
+const spawnHost = (socket, log) => Bun.spawn([process.execPath, join(import.meta.dir, "plugin-host.js")], {
+  env: { PATH: process.env.PATH ?? "/usr/bin:/bin", PROSPER_PLUGINS_DIR: pluginsDir, PROSPER_PLUGIN_SOCKET: socket },
+  stdout: "ignore", stderr: Bun.file(log),
+});
+
+test("a second host on a live host's socket exits 0 and leaves the first answering", async () => {
+  const second = spawnHost(sock, join(root, "second.log"));
+  expect(await second.exited).toBe(0);
+  expect(readFileSync(join(root, "second.log"), "utf8")).toContain(`another host is live on ${sock}, exiting`);
+  expect(await ask("null")).toEqual({});   // the first host still owns the path
+  expect(host.exitCode).toBe(null);
+}, 15000);
+
+test("a stale socket file with no listener is replaced", async () => {
+  const stale = join(root, "stale.sock");
+  // A listener killed with SIGKILL never unlinks its socket: the file stays, nothing accepts.
+  const dead = Bun.spawn([process.execPath, "-e",
+    `Bun.listen({ unix: ${JSON.stringify(stale)}, socket: { data() {} } }); console.log("up"); setInterval(() => {}, 1000);`],
+    { stdout: "pipe", stderr: "ignore" });
+  const third = { proc: undefined };
+  try {
+    await dead.stdout.getReader().read();   // "up": the socket file exists
+    dead.kill(9);
+    await dead.exited;
+    expect(existsSync(stale)).toBe(true);
+    third.proc = spawnHost(stale, join(root, "third.log"));
+    let reply;
+    for (let i = 0; i < 200 && reply === undefined; i++) {
+      try { reply = await ask("null", stale); } catch { await Bun.sleep(50); }
+    }
+    expect(reply).toEqual({});
+    expect(third.proc.exitCode).toBe(null);
+  } finally {
+    if (third.proc) { third.proc.kill(); await third.proc.exited; }
+  }
+}, 20000);

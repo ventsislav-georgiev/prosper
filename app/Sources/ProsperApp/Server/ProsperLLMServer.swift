@@ -33,7 +33,8 @@ final class ProsperLLMServer: @unchecked Sendable {
     /// Bound port, valid after `start()` returns. 0 until then.
     private(set) var port: UInt16 = 0
     /// Bearer token required on `/v1/*`. Minted per `start()`.
-    private(set) var token: String = ""
+    /// Rows set a fake token (internal setter) to pass `authorize` without a listener.
+    var token: String = ""
 
     private init() {}
 
@@ -177,8 +178,11 @@ extension ProsperLLMServer {
 /// Parses one or more HTTP/1.1 requests off a single connection and dispatches them.
 /// Only the subset the agent harness uses is implemented: GET, POST with
 /// `Content-Length` bodies, keep-alive, and chunked SSE responses.
-private final class HTTPConnection: @unchecked Sendable {
-    private let conn: NWConnection
+final class HTTPConnection: @unchecked Sendable {
+    /// nil only in rows, which drive the connection through `sink` and never open a socket.
+    private let conn: NWConnection?
+    /// QA #219 (b) (#1298) test seam: when set, every wire write goes here instead of the socket. Production leaves it nil.
+    private let sink: (@Sendable (Data) -> Void)?
     private unowned let server: ProsperLLMServer
     private let queue: DispatchQueue
     private let log: Logger
@@ -200,9 +204,10 @@ private final class HTTPConnection: @unchecked Sendable {
     /// an error is reported as a 500 JSON response or an in-stream SSE event.
     private var headerSent = false
 
-    init(conn: NWConnection, server: ProsperLLMServer, queue: DispatchQueue, log: Logger,
-         onClose: @escaping (ObjectIdentifier) -> Void) {
+    init(conn: NWConnection?, server: ProsperLLMServer, queue: DispatchQueue, log: Logger,
+         sink: (@Sendable (Data) -> Void)? = nil, onClose: @escaping (ObjectIdentifier) -> Void) {
         self.conn = conn
+        self.sink = sink
         self.server = server
         self.queue = queue
         self.log = log
@@ -210,6 +215,7 @@ private final class HTTPConnection: @unchecked Sendable {
     }
 
     func start() {
+        guard let conn else { return }
         conn.stateUpdateHandler = { [weak self] state in
             switch state {
             case .failed, .cancelled: self?.close()
@@ -231,7 +237,7 @@ private final class HTTPConnection: @unchecked Sendable {
         guard !closed else { return }
         closed = true
         cancelInflight()
-        conn.cancel()
+        conn?.cancel()
         onClose(ObjectIdentifier(self))
     }
 
@@ -241,7 +247,14 @@ private final class HTTPConnection: @unchecked Sendable {
         inflight.removeAll()
     }
 
+    /// Rows: hand the connection request bytes as if they had arrived on the socket.
+    func feed(_ data: Data) {
+        buffer.append(data)
+        drain()
+    }
+
     private func receive() {
+        guard let conn else { return }
         conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             if let data, !data.isEmpty {
@@ -796,7 +809,12 @@ private final class HTTPConnection: @unchecked Sendable {
     /// the connection down — which cancels in-flight generation and stops the GPU
     /// instead of decoding for a dead socket.
     private func sendRaw(_ data: Data, thenClose: Bool = false) {
-        conn.send(content: data, completion: .contentProcessed { [weak self] error in
+        if let sink {
+            sink(data)
+            if thenClose { queue.async { self.close() } }
+            return
+        }
+        conn?.send(content: data, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
             if error != nil || thenClose { self.queue.async { self.close() } }
         })

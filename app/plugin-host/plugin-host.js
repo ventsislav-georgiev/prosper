@@ -20,6 +20,7 @@
 
 import { existsSync, readdirSync, writeFileSync, renameSync, watch } from "node:fs";
 import { join } from "node:path";
+import { connect } from "node:net";
 
 const HOOK_TIMEOUT_MS = 15_000;   // a wedged plugin hook can't stall a tool call forever
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;   // cap the per-connection request buffer
@@ -222,6 +223,25 @@ async function loadAndAdvertise() {
   console.error(`prosper-plugin-host: ${plugins.length} plugin(s), events: ${events.join(",") || "none"}`);
 }
 
+// QA #113 (#1298): a listener already accepting on SOCKET is another live host (a second app sharing
+// the plugins dir): leave its socket alone and exit. Mirrors BunHarness.socketIsLive: a connect that
+// succeeds, or stays pending (a full backlog), is live; a refused connect or a missing path is stale
+// and falls through to the delete + listen below. Any other error is fatal, never a silent steal.
+const live = await new Promise((resolve) => {
+  const c = connect(SOCKET);
+  const done = (v) => { clearTimeout(timer); c.destroy(); resolve(v); };
+  const timer = setTimeout(() => done(true), 2000);
+  c.on("connect", () => done(true));
+  c.on("error", (err) => {
+    if (["ECONNREFUSED", "ENOENT", "ENOTSOCK"].includes(err.code)) done(false);
+    else { console.error("prosper-plugin-host: cannot probe", SOCKET, err); process.exit(1); }
+  });
+});
+if (live) {
+  console.error(`prosper-plugin-host: another host is live on ${SOCKET}, exiting`);
+  process.exit(0);
+}
+
 await loadAndAdvertise();
 
 // Reload when the plugins dir changes (file added/removed/edited at runtime). Debounced —
@@ -241,7 +261,7 @@ try {
 
 // ---- socket server --------------------------------------------------------
 
-// Stale socket from a previous run blocks bind; remove it.
+// Stale socket (no live listener, probed above) blocks bind; remove it.
 try { await Bun.file(SOCKET).delete(); } catch {}
 
 try {
