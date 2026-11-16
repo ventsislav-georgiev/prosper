@@ -1466,6 +1466,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent island: Resume interrupted now also counts a session named like a session id when another
   live session holds that name, since dch brings it back under a new name (for example name-2); the
   phone's history agrees (#992)
+- Agent Sessions: Command-L in a transcript pane (or "Jump to Chapter..." in the pane's "..." menu)
+  opens Jump to Chapter, a filterable list of the conversation's prompts that scrolls to the one you
+  pick. (#1319)
 
 ## v2.174.0
 

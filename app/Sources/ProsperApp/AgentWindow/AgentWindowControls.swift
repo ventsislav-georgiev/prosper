@@ -39,6 +39,8 @@ enum AgentWindowMenuEntry: Equatable {
     case pane(String, enabled: Bool, verb: AgentPaneVerb)
     /// #900 B2 step 6b1 (7.1): a live row's "Open to the Side" (only with the split gate on): runs at once, asks nothing.
     case side(String, enabled: Bool)
+    /// #1319 (spec 8.3): "Jump to Chapter... Command-L" for `pane`'s header; off in a terminal pane.
+    case chapters(enabled: Bool, pane: UUID)
 }
 
 /// #900 B2 step 6a: what a pane item runs: the key's own PaneAction through `perform`, or Equalize (no key, no
@@ -150,6 +152,8 @@ enum AgentWindowControls {
     }
 
     static let closePaneLabel = "Close Pane (the session keeps running)"
+    /// #1319: the "..." item of the Command-L list.
+    static let chaptersLabel = "Jump to Chapter\u{2026} \u{2318}L"
 
     /// #900 B2 step 6a (7.3, 3.3, 15.0): the pane part of the header "⋯", appended after `sessionMenu` behind one
     /// divider. Gate off: nothing, whatever the layout holds (the menu is today's). Gate on: Split Right and Split Down;
@@ -514,6 +518,8 @@ struct AgentMenuEntries: View {
                 Button(title) { pane(verb) }.disabled(!enabled)
             case .side(let title, let enabled):
                 Button(title, action: side).disabled(!enabled)
+            case .chapters(let enabled, let pane):
+                Button(AgentWindowControls.chaptersLabel) { AgentsNSWindow.chaptersChosen(pane: pane) }.disabled(!enabled)
             }
         }
     }

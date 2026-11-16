@@ -196,6 +196,15 @@ struct AgentTranscriptView: View {
         }
     }
 
+    /// #1319: each pane's jumper, by its transcript model (one per pane runtime); weak keys, so it goes with the pane.
+    private static let byModel = NSMapTable<AgentTranscriptModel, TranscriptJumper>.weakToStrongObjects()
+    static func of(_ m: AgentTranscriptModel) -> TranscriptJumper {
+        if let j = byModel.object(forKey: m) { return j }
+        let j = TranscriptJumper()
+        byModel.setObject(j, forKey: m)
+        return j
+    }
+
     func jump(to chapter: TranscriptOutline.Chapter) { jump(toBlock: chapter.id) }
     func jump(toBlock id: Int) { send(id) }
     func jumpToLatest() { send(nil) }

@@ -128,9 +128,11 @@ final class AgentWindowLayoutChordTests: XCTestCase {
         for (l, qwerty, typed, dvorak, cmd, want) in rows {
             for r: AgentsNSWindow.ResponderKind in [.text, .terminal, .other] {
                 XCTAssertEqual(route(ev(qwerty, l, typed, .command), r), want, "⌘ on the QWERTY \(l) key")
-                XCTAssertEqual(route(ev(dvorak, cmd, l, .command), r), .pass, "⌘\(cmd) on the Dvorak \(l) key is no chord")
+                // #1319: key code 37 is the L key's position, Command-L by key code (spec 8.3): consumed in a terminal pane.
+                XCTAssertEqual(route(ev(dvorak, cmd, l, .command), r), dvorak == 37 ? .swallow : .pass, "\u{2318}\(cmd) on the Dvorak \(l) key is no chord")
             }
         }
+        XCTAssertEqual(route(ev(37, "l", "n", .command), .text, terminal: false), .chapters, "#1319: Command-L by key code in Transcript")
         XCTAssertEqual(route(ev(45, "n", "B", [.command, .shift])), .newShell, "⇧⌘ on the QWERTY N key")
         XCTAssertEqual(route(ev(37, "l", "N", [.command, .shift])), .pass, "⇧⌘ on the Dvorak N key")
         XCTAssertEqual(route(ev(5, "g", "I", [.command, .shift])), .findNext(false))

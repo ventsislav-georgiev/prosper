@@ -236,6 +236,8 @@ final class AgentsNSWindow: NSWindow {
         case font(Int)
         /// Up, down, left, right, Return for the sidebar (sendEvent).
         case sidebar
+        /// #1319 (spec 8.3): Command-L, the focused Transcript pane's Jump to Chapter list (opens it, or closes it when open).
+        case chapters
         /// The window's, doing nothing here (⌥⌘1/2/3 in Terminal mode).
         case swallow
         case pass
@@ -264,7 +266,7 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .toggleMode, .verbosity, .session, .jump, .find, .findNext, .font, .stopOrRemove: return form ? .swallow : r
+        case .toggleMode, .verbosity, .session, .jump, .find, .findNext, .font, .stopOrRemove, .chapters: return form ? .swallow : r
         default: return r
         }
     }
@@ -285,6 +287,8 @@ final class AgentsNSWindow: NSWindow {
             if let n = digit(event.keyCode) { return .jump(n) }
             // #1289: Cmd-Backspace with the sidebar focused only; a text field, the composer and the terminal keep it.
             if event.keyCode == 51 { return sidebarFocused && responder == .other ? .stopOrRemove : .pass }
+            // #1319 (v3.2.6 :2590): Command-L by key code from every responder; a terminal pane consumes it with no action (10.1).
+            if isChapterKey(event) { return terminalMode ? .swallow : .chapters }
             switch key {
             case "t": return .toggleMode
             case "f": return terminalMode ? .find : .pass
@@ -342,6 +346,7 @@ final class AgentsNSWindow: NSWindow {
         case .newSession: model.openNewSession()
         case .newShell: model.startShell()
         case .stopOrRemove: model.askStopOrRemove()
+        case .chapters: toggleChapters()
         case .swallow: break
         case .sidebar, .pass: return super.performKeyEquivalent(with: event)
         }
@@ -370,6 +375,54 @@ final class AgentsNSWindow: NSWindow {
     }
 
     static let chordLetters: Set<String> = ["w", "t", "f", "g", "n"]
+
+    /// #1319 (spec 8.3, v2.1 QA4 INFO-20): Command-L is the L key's position (kVK_ANSI_L, 37) with exactly Command, on every
+    /// layout (a Cyrillic one types U+0434 there); Shift-Command-L, Option-Command-L and Control-Command-L pass through.
+    static func isChapterKey(_ event: NSEvent) -> Bool {
+        event.type == .keyDown && event.keyCode == 37
+            && event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command]
+    }
+
+    // MARK: #1319 the Jump to Chapter list
+
+    /// The list's surface (spec 8.3: a popover from the pane header's "..."). Rows put a fake here before the first key.
+    var cards: XrayCardPresenter = XrayPopoverPresenter()
+    /// The open list, nil while closed.
+    private(set) var chapterList: TranscriptChapterListModel?
+
+    /// Command-L and the "..." item: closes an open list; else opens one on the focused pane while it shows a session's
+    /// transcript (a terminal pane, the New session form, a History row or an empty pane: nothing). On close the keys go
+    /// back where they were: the composer (first responder, its draft and selection untouched) or the sidebar.
+    func toggleChapters() {
+        if chapterList != nil || cards.isShown {
+            cards.close()   // its `closed` puts the keys back
+            chapterList = nil
+            return
+        }
+        guard let model, model.paneMode == .transcript, model.newSession == nil, model.selectedRow?.session != nil,
+              let rt = model.focusedRuntime, let anchor = XrayCardAnchor.view(for: rt.pane, in: self) ?? contentView else { return }
+        let list = TranscriptChapterListModel(transcript: rt.transcript, jumper: .of(rt.transcript))
+        list.close = { [weak self] in self?.cards.close() }
+        let focus = model.keyFocus, back = firstResponder
+        chapterList = list
+        cards.present(AnyView(TranscriptChapterList(list: list)), size: TranscriptChapterList.size, anchor: anchor) { [weak self] in
+            guard let self else { return }
+            self.chapterList = nil
+            self.model?.keyFocus = focus
+            if self.firstResponder !== back { self.makeFirstResponder(back) }
+        }
+    }
+
+    /// The "..." item "Jump to Chapter... Command-L": on in a Transcript pane, off in a terminal pane (10.1).
+    @MainActor static func chaptersItem(_ m: AgentWindowModel) -> AgentWindowMenuEntry {
+        .chapters(enabled: m.paneMode == .transcript, pane: m.layout.focused)
+    }
+
+    /// The item's run: the window that draws `pane`'s header opens its list (runs on main, a menu Button's action).
+    @MainActor static func chaptersChosen(pane: UUID) {
+        (XrayCardAnchor.views[pane]?.view ?? XrayCardAnchor.views[nil]?.view).flatMap { $0.window as? AgentsNSWindow }?
+            .toggleChapters()
+    }
 
     static let dvorakQwertyCommandID = "com.apple.keylayout.DVORAK-QWERTYCMD"
     /// #948 F1 seam: the current keyboard input source's id, read only (never selected). Under XCTest "" unless a test
@@ -1246,7 +1299,7 @@ struct AgentDetailView: View {
             VStack(spacing: 0) {
                 // #900 B2 step 6a: the "⋯" pane items act on this pane (the focused one); empty with the gate off.
                 let id = model.layout.focused
-                let panes = AgentWindowControls.paneMenu(model, pane: id)
+                let panes = [.divider, AgentsNSWindow.chaptersItem(model)] + AgentWindowControls.paneMenu(model, pane: id)
                 Group {
                     if compact {
                         AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
@@ -1332,7 +1385,7 @@ struct AgentDetailView: View {
 
     @ViewBuilder func transcriptPane(_ row: AgentSidebar.Row, _ s: AgentSession, ended: Bool) -> some View {
         AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
-                            ownsLifecycle: false, level: model.verbosity, ended: ended)
+                            ownsLifecycle: false, level: model.verbosity, ended: ended, jumper: .of(transcript))
             .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
             .clipped()
             .overlay(alignment: .top) { overTop(row, s) }   // #829 R5, QA #665 INFO-1: over the conversation, so nothing moves
@@ -1816,7 +1869,7 @@ struct AgentUnfocusedPane: View {
                     .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTranscriptView(model: transcript, scrolls: scrolls, ownsLifecycle: false, level: model.verbosity,
-                                    ended: ended)
+                                    ended: ended, jumper: .of(transcript))
                     .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
                     .clipped()
                 Rectangle().fill(Neon.stroke).frame(height: 1)
@@ -1916,7 +1969,7 @@ struct AgentCompactHeader: View {
                 AgentPaneModeToggle(mode: mode, style: .icons, set: setMode, off: ended ? AgentPaneModeToggle.endedReason : nil)
                     .disabled(ended).opacity(ended ? 0.45 : 1)
             }
-            if let menu { menu }
+            if let menu { menu.background(XrayCardAnchor()) }   // #1319: the list's popover hangs from it
         }
         .padding(.horizontal, sz(10))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2202,7 +2255,7 @@ struct AgentSessionHeader: View {
                                     off: ended ? AgentPaneModeToggle.endedReason : nil)
                     .disabled(ended).opacity(ended ? 0.45 : 1)
             }
-            menuButton   // #829: always last, fixed size
+            menuButton.background(XrayCardAnchor())   // #829: always last, fixed size; #1319: the list hangs from it
         }
     }
 
