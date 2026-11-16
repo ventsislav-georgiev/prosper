@@ -231,6 +231,7 @@ extension AgentWindowD1Tests {
         func sessionRows(_ t: [AXTreeNode]) -> [CGRect] {
             titles.compactMap { n in unique(t) { $0.label.hasPrefix("\(n),") && !$0.label.contains(", Control ") }.first?.frame }
         }
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
             gate(false)
@@ -255,10 +256,10 @@ extension AgentWindowD1Tests {
             XCTAssertTrue((shifts.first ?? 0) > 0, "moved down (\(scale)): \(shifts)")
             // one amount, to the pixel: at 0.85 and 0.7 the section's height is fractional and each row's origin is
             // rounded to the pixel on its own (measured: 94.5 / 95.0 at 0.85), so one rounding step apart at most
-            XCTAssertTrue(shifts.allSatisfy { abs($0 - (shifts.first ?? 0)) <= 0.5 }, "by one amount (\(scale)): \(shifts)")
+            XCTAssertTrue(shifts.allSatisfy { abs($0 - (shifts.first ?? 0)) <= pixel }, "by one amount (\(scale)): \(shifts)")
             XCTAssertEqual(zip(base, moved).filter { $0.size != $1.size }.count, 0, "sizes kept (\(scale))")
             XCTAssertEqual(layoutRows.count, 3, "\(scale)")
-            XCTAssertTrue(layoutRows.allSatisfy { abs($0.frame.height - (layoutRows.first?.frame.height ?? 0)) < 0.5 },
+            XCTAssertTrue(layoutRows.allSatisfy { abs($0.frame.height - (layoutRows.first?.frame.height ?? 0)) <= pixel },
                           "one row height (\(scale))")
         }
     }

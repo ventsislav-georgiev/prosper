@@ -272,6 +272,7 @@ final class ManagedConfigConsentRiderTests: XCTestCase {
         XCTAssertEqual(long.count, 128)
         XCTAssertTrue(ManagedConfigPaths.isValidID(long))
         let backup = "Backup: \(Self.existing.backupDirectory)"
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (1 pt a pixel; 0.5 pt at 2x): never a literal 0.5
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             let tag = "scale \(scale)"
@@ -281,7 +282,7 @@ final class ManagedConfigConsentRiderTests: XCTestCase {
             let b = tree(w, size, id: long)
             let idNode = try XCTUnwrap(b.first { $0.named(long) && $0.frame.height > 0 }, "\(tag): \(b.map(\.name))")
             let title = try XCTUnwrap(b.first { $0.named("Fake Kit") && $0.frame.height > 0 }, tag)
-            XCTAssertLessThanOrEqual(idNode.frame.maxY, title.frame.minY + 0.5, "\(tag): the id is below the title") // y up
+            XCTAssertLessThanOrEqual(idNode.frame.maxY, title.frame.minY + pixel, "\(tag): the id is below the title") // y up
             // whole: at least the lines the id needs at its width (a lower bound: a break may come earlier, never later)
             let font = NSFont.monospacedSystemFont(ofSize: 11 * scale, weight: .regular)
             let oneLine = (long as NSString).size(withAttributes: [.font: font]).width
@@ -293,15 +294,15 @@ final class ManagedConfigConsentRiderTests: XCTestCase {
             // selectable: the id's nodes have the roles of the backup line's (a selectable Text)
             XCTAssertEqual(Set(b.filter { $0.named(long) }.map(\.role)), Set(b.filter { $0.named(backup) }.map(\.role)), "\(tag): selectable like the backup line")
             // the sheet's size rule: the buttons inside it, unchanged in size and x, below the whole id
-            let content = try XCTUnwrap(b.first, tag).frame.insetBy(dx: -0.5, dy: -0.5)
+            let content = try XCTUnwrap(b.first, tag).frame.insetBy(dx: -pixel, dy: -pixel)
             for button in ["Cancel", "Apply"] {
                 let before = try XCTUnwrap(a.first { $0.named(button) && $0.frame.height > 0 }, "\(tag): \(button)")
                 let after = try XCTUnwrap(b.first { $0.named(button) && $0.frame.height > 0 }, "\(tag): \(button)")
                 XCTAssertTrue(content.contains(after.frame), "\(tag): \(button) at \(after.frame) inside the sheet \(content)")
-                XCTAssertEqual(after.frame.width, before.frame.width, accuracy: 0.5, "\(tag): \(button) keeps its width")
-                XCTAssertEqual(after.frame.height, before.frame.height, accuracy: 0.5, "\(tag): \(button) keeps its height")
-                XCTAssertEqual(after.frame.minX, before.frame.minX, accuracy: 0.5, "\(tag): \(button) keeps its x")
-                XCTAssertLessThanOrEqual(after.frame.maxY, idNode.frame.minY + 0.5, "\(tag): \(button) is below the whole id")
+                XCTAssertEqual(after.frame.width, before.frame.width, accuracy: pixel, "\(tag): \(button) keeps its width")
+                XCTAssertEqual(after.frame.height, before.frame.height, accuracy: pixel, "\(tag): \(button) keeps its height")
+                XCTAssertEqual(after.frame.minX, before.frame.minX, accuracy: pixel, "\(tag): \(button) keeps its x")
+                XCTAssertLessThanOrEqual(after.frame.maxY, idNode.frame.minY + pixel, "\(tag): \(button) is below the whole id")
             }
             // bounded: at most two more id lines than a short id (the id line holds at most three)
             let grow = size.height - fitting(s).height

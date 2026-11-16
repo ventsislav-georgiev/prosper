@@ -106,6 +106,21 @@ enum AXTreeSupport {
         return tree
     }
 
+    /// One device pixel in points for `win`: 1 / its backingScaleFactor, never more than 1 (no factor: 1). A layout is
+    /// rounded to the pixel, so a "one rounding step" tolerance is this, not a literal 0.5 (that is one pixel at 2x only;
+    /// the CI runner's display backs at 1x, where a pixel is 1 pt).
+    static func devicePixel(of win: NSWindow) -> CGFloat {
+        let f = win.backingScaleFactor
+        return f > 1 ? 1 / f : 1
+    }
+
+    /// The pixel of the window `tree` lays out in (the same never-shown borderless window `hosted` makes).
+    static var devicePixel: CGFloat {
+        let (win, _) = hosted(Color.clear, CGSize(width: 1, height: 1))
+        defer { win.close() }
+        return devicePixel(of: win)
+    }
+
     /// The whole thing: host `view` at `size`, flags on, poll, close the window, put the flags back.
     static func tree<V: View>(_ view: V, _ size: CGSize, until done: ([AXTreeNode]) -> Bool) -> [AXTreeNode] {
         let restore = axOn()
@@ -118,8 +133,27 @@ enum AXTreeSupport {
     }
 }
 
+private final class FixedBackingWindow: NSWindow {
+    var fixedBacking: CGFloat = 1
+    override var backingScaleFactor: CGFloat { fixedBacking }
+}
+
 /// The helper's own row: the flags go back as found.
 final class AXTreeSupportTests: XCTestCase {
+    /// One pixel is 0.5 pt on a 2x window and 1 pt on a 1x one, and never more than 1 pt.
+    @MainActor
+    func testDevicePixelIsOneOverTheBackingScaleAndNeverMoreThanOne() {
+        let win = FixedBackingWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        defer { win.close() }
+        for (backing, want) in [(1, 1), (2, 0.5), (3, 1.0 / 3), (0.5, 1), (0, 1)] as [(CGFloat, CGFloat)] {
+            win.fixedBacking = backing
+            XCTAssertEqual(AXTreeSupport.devicePixel(of: win), want, accuracy: 1e-9, "backing \(backing)")
+        }
+        let real = AXTreeSupport.devicePixel
+        XCTAssertTrue(real > 0 && real <= 1, "\(real)")
+    }
+
     /// R1137-1: the helper puts the flags back as it found them. NSApplication reads AXEnhancedUserInterface back and
     /// reports nothing for AXManualAccessibility (run of 2026-11-14: before [false, nil], while walking [true, nil]),
     /// so the readable one is checked: on before the helper runs (as an AX client would have left it), still on after;
