@@ -49,15 +49,19 @@ final class DchCaptureDrainTests: XCTestCase {
         XCTAssertEqual(seen.lock.withLock { seen.n }, 1, "hook ran once before the return; exit status 0")
     }
 
-    /// R1380-s1: bounded times out (0.5 s) while a grandchild /bin/sleep (3 s, left to finish by itself) holds the pipe
+    /// R1380-s1: bounded times out (2.0 s) while a grandchild /bin/sleep (6 s, left to finish by itself) holds the pipe
     /// of an sh that already exited: the kill recorder gets nothing. Red when bounded ignores the exit mark: it gets
-    /// sh's pid. Returns nil at 0.5 s; the call's thread ends with the sleep, not waited for.
+    /// sh's pid. Order proven: the body's onExit also signals a semaphore the row waits on (under 10 s, a failure
+    /// otherwise) before it reads the recorder, and the 2.0 s bound is far past sh's exit. The call's thread ends
+    /// with the sleep, not waited for.
     func testBoundedSkipsTheKillOfAChildThatAlreadyExited() {
         final class Kills: @unchecked Sendable { let lock = NSLock(); var pids: [pid_t] = [] }
-        let kills = Kills()
-        let out = DchCommand.bounded(0.5, terminate: { pid in kills.lock.withLock { kills.pids.append(pid) } }) { onPid, onExit in
-            DchCommand.runCapturingBoth(args: ["-c", "(/bin/sleep 3) & exit 0"], env: [:], path: "/bin/sh", onPid: onPid, onExit: onExit).out
+        let kills = Kills(), exited = DispatchSemaphore(value: 0)
+        let out = DchCommand.bounded(2.0, terminate: { pid in kills.lock.withLock { kills.pids.append(pid) } }) { onPid, onExit in
+            DchCommand.runCapturingBoth(args: ["-c", "(/bin/sleep 6) & exit 0"], env: [:], path: "/bin/sh", onPid: onPid,
+                                                onExit: { onExit(); exited.signal() }).out
         }
+        XCTAssertEqual(exited.wait(timeout: .now() + 10), .success, "the exit handler ran")
         XCTAssertTrue(out == nil, "timed out while the grandchild held the pipe")
         XCTAssertTrue(kills.lock.withLock { kills.pids }.isEmpty, "the child had exited: no kill")
     }

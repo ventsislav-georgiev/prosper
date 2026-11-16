@@ -458,14 +458,14 @@ final class XrayPollTests: XCTestCase {
         XCTAssertEqual(run.tasksReads, 4)
     }
 
-    /// R1380-s2: XrayPanels.runBounded with a recorder child and kill: /bin/sh exits at once, its own /bin/sleep (3 s,
-    /// left to finish by itself) holds the pipe, the 0.5 s bound passes, then a cancel: no SIGTERM and no kill. Red when
+    /// R1380-s2: XrayPanels.runBounded with a recorder child and kill: /bin/sh exits at once, its own /bin/sleep (6 s,
+    /// left to finish by itself) holds the pipe, the 2.0 s bound passes (sh exits in milliseconds), then a cancel: no SIGTERM and no kill. Red when
     /// the helper drops the child's onExit (the cancel signals sh's pid) or bounded ignores the exit mark (the kill).
     func testRunBoundedSignalsNothingOnceTheChildExitedEvenWhenAGrandchildHoldsThePipe() {
         final class Rec: @unchecked Sendable { let lock = NSLock(); var pids: [pid_t] = [] }
         let sigs = Rec(), kills = Rec()
         let child = XrayChild(signal: { pid in sigs.lock.withLock { sigs.pids.append(pid) } })
-        let r = XrayPanels.runBounded(child, "/bin/sh", ["-c", "(/bin/sleep 3) & exit 0"], [:], timeout: 0.5,
+        let r = XrayPanels.runBounded(child, "/bin/sh", ["-c", "(/bin/sleep 6) & exit 0"], [:], timeout: 2.0,
                                       terminate: { pid in kills.lock.withLock { kills.pids.append(pid) } })
         XCTAssertEqual(r.status, -1, "the bound passed while the grandchild held the pipe")
         child.cancel()
