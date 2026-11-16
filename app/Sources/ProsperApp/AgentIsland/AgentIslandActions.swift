@@ -1483,9 +1483,9 @@ enum LoginPath {
     typealias Probe = @Sendable (_ shell: String, _ script: String) -> Data?
 
     static let shellProbe: Probe = { shell, script in
-        DchCommand.bounded(timeout) { onPid in
+        DchCommand.bounded(timeout) { onPid, onExit in
             DchCommand.runCapturingBoth(args: ["-lc", script], env: ProcessInfo.processInfo.environment,
-                                        path: shell, onPid: onPid).out
+                                        path: shell, onPid: onPid, onExit: onExit).out
         }
     }
 

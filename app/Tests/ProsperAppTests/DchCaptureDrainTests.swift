@@ -49,6 +49,19 @@ final class DchCaptureDrainTests: XCTestCase {
         XCTAssertEqual(seen.lock.withLock { seen.n }, 1, "hook ran once before the return; exit status 0")
     }
 
+    /// R1380-s1: bounded times out (0.5 s) while a grandchild /bin/sleep (3 s, left to finish by itself) holds the pipe
+    /// of an sh that already exited: the kill recorder gets nothing. Red when bounded ignores the exit mark: it gets
+    /// sh's pid. Returns nil at 0.5 s; the call's thread ends with the sleep, not waited for.
+    func testBoundedSkipsTheKillOfAChildThatAlreadyExited() {
+        final class Kills: @unchecked Sendable { let lock = NSLock(); var pids: [pid_t] = [] }
+        let kills = Kills()
+        let out = DchCommand.bounded(0.5, terminate: { pid in kills.lock.withLock { kills.pids.append(pid) } }) { onPid, onExit in
+            DchCommand.runCapturingBoth(args: ["-c", "(/bin/sleep 3) & exit 0"], env: [:], path: "/bin/sh", onPid: onPid, onExit: onExit).out
+        }
+        XCTAssertTrue(out == nil, "timed out while the grandchild held the pipe")
+        XCTAssertTrue(kills.lock.withLock { kills.pids }.isEmpty, "the child had exited: no kill")
+    }
+
     /// The hang: 200000 bytes to stderr while stdout is still open, then "done", exit 3.
     func testAFloodOfStderrBeforeStdoutStillReturns() throws {
         let r = try XCTUnwrap(run("printf '%0200000d' 0 >&2; printf 'done\\n'; exit 3"))

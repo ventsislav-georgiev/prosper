@@ -504,8 +504,8 @@ final class DchOwnerCheck: ObservableObject, @unchecked Sendable {
         var vars = ProcessInfo.processInfo.environment
         vars["TAILSCALE_BE_CLI"] = "1"   // the app binary acts as the CLI, never the GUI
         let env = vars, exit = Exit()
-        guard let out = DchCommand.bounded(bound, { onPid in
-            let r = DchCommand.runCapturingBoth(args: args, env: env, path: cli, onPid: onPid)
+        guard let out = DchCommand.bounded(bound, { onPid, onExit in
+            let r = DchCommand.runCapturingBoth(args: args, env: env, path: cli, onPid: onPid, onExit: onExit)
             exit.err = r.err
             exit.status = r.status
             return r.out

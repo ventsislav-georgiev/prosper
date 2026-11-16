@@ -2156,8 +2156,9 @@ enum DchCommand {
         guard FileManager.default.isExecutableFile(atPath: real), let m = AgentDirScanner.mtime(real) else { return nil }
         if let hit = versionCache.lock.withLock({ versionCache.map[real] }), hit.mtime == m,
            hit.until.map({ Date() < $0 }) ?? true { return hit.version }
-        guard let out = bounded(islandTimeout, { onPid in
-            runCapturingBoth(args: ["--version"], env: AgentIsland.listEnv(dir: defaultSocketDir), path: real, onPid: onPid).out
+        guard let out = bounded(islandTimeout, { onPid, onExit in
+            runCapturingBoth(args: ["--version"], env: AgentIsland.listEnv(dir: defaultSocketDir), path: real, onPid: onPid,
+                             onExit: onExit).out
         }) else {
             versionCache.lock.withLock {   // never over an overlapping call's answer (QA #518 LOW-1)
                 if let e = versionCache.map[real], e.mtime == m, e.until == nil { return }
@@ -2506,8 +2507,8 @@ enum DchCommand {
         guard let left else { return nil }   // nothing left: the fallback is not started; the request's failure answer
         let standIn = remoteStandIn, fallback = end == nil ? nil : remoteFallbackStandIn
         let path = fallback?.path ?? standIn?.path ?? dchPath, argv = fallback?.args ?? standIn?.args ?? args, env = remoteEnv()
-        return bounded(left, terminate: standIn?.terminate ?? sigkill) { onPid in
-            runCapturingBoth(args: argv, env: env, path: path, onPid: onPid)
+        return bounded(left, terminate: standIn?.terminate ?? sigkill) { onPid, onExit in
+            runCapturingBoth(args: argv, env: env, path: path, onPid: onPid, onExit: onExit)
         }
     }
 
@@ -2606,12 +2607,12 @@ enum DchCommand {
     /// #578: `path` is the control binary for --history.
     static func runIsland(args: [String], env: [String: String], path: String? = nil) -> Data? {
         let path = path ?? dchPath   // on the caller's thread, not the body's
-        return bounded(islandTimeout) { onPid in runCapturingBoth(args: args, env: env, path: path, onPid: onPid).out }
+        return bounded(islandTimeout) { onPid, onExit in runCapturingBoth(args: args, env: env, path: path, onPid: onPid, onExit: onExit).out }
     }
 
     private final class BoundedCall<T>: @unchecked Sendable {
         let lock = NSLock(), done = DispatchSemaphore(value: 0)
-        var pid: pid_t?, out: T?
+        var pid: pid_t?, out: T?, exited = false   // R1380-s1: the child was reaped; its pid may be reused
     }
 
     /// `bounded`'s kill: SIGKILL to the one pid the body recorded.
@@ -2623,16 +2624,17 @@ enum DchCommand {
     /// thread, never the caller. #988: generic, so a Remote Terminal call keeps stderr and the status.
     static func bounded<T>(_ timeout: TimeInterval,
                            terminate: @escaping @Sendable (pid_t) -> Void = DchCommand.sigkill,
-                           _ body: @escaping @Sendable (_ onPid: (pid_t) -> Void) -> T) -> T? {
+                           _ body: @escaping @Sendable (_ onPid: (pid_t) -> Void, _ onExit: @escaping @Sendable () -> Void) -> T) -> T? {
         let call = BoundedCall<T>()
         DispatchQueue.global(qos: .utility).async {
-            let out = body { pid in call.lock.withLock { call.pid = pid } }
+            let out = body({ pid in call.lock.withLock { call.pid = pid } }, { call.lock.withLock { call.exited = true } })
             call.lock.withLock { call.out = out }
             call.done.signal()
         }
         if call.done.wait(timeout: .now() + timeout) == .success { return call.lock.withLock { call.out } }
-        // A body that has returned has reaped its child: never signal a pid that may be reused.
-        if let pid = call.lock.withLock({ call.out == nil ? call.pid : nil }) { terminate(pid) }
+        // A body that has returned, or whose child reported its exit (a grandchild may still hold the pipe), has
+        // reaped that child: never signal a pid that may be reused.
+        if let pid = call.lock.withLock({ call.out == nil && !call.exited ? call.pid : nil }) { terminate(pid) }
         return nil
     }
 }

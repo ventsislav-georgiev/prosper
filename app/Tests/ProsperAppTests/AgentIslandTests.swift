@@ -1732,7 +1732,7 @@ final class AgentIslandTests: XCTestCase {
         var io: AgentPromptIO {
             AgentPromptIO.live { args, _ in
                 self.lock.withLock { self.args.append(args) }
-                return DchCommand.bounded(self.timeout, terminate: self.terminate) { onPid in
+                return DchCommand.bounded(self.timeout, terminate: self.terminate) { onPid, _ in
                     onPid(4242)
                     self.released.wait()
                     return Data("late".utf8)
@@ -1770,7 +1770,7 @@ final class AgentIslandTests: XCTestCase {
     }
 
     func testBoundedCallReturnsTheOutputAndNeverKillsAFinishedChild() {
-        let out = DchCommand.bounded(5, terminate: { _ in XCTFail("finished in time") }) { onPid in
+        let out = DchCommand.bounded(5, terminate: { _ in XCTFail("finished in time") }) { onPid, _ in
             onPid(4242)
             return Data("ok".utf8)
         }
@@ -1782,7 +1782,7 @@ final class AgentIslandTests: XCTestCase {
     func testBoundedCallKillsARealChildByItsPid() throws {
         final class Child: @unchecked Sendable { let lock = NSLock(); var p: Process? }
         let child = Child(), start = Date()
-        let out = DchCommand.bounded(2) { onPid in
+        let out = DchCommand.bounded(2) { onPid, _ in
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/sleep")
             p.arguments = ["30"]

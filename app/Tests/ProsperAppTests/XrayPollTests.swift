@@ -458,6 +458,21 @@ final class XrayPollTests: XCTestCase {
         XCTAssertEqual(run.tasksReads, 4)
     }
 
+    /// R1380-s2: XrayPanels.runBounded with a recorder child and kill: /bin/sh exits at once, its own /bin/sleep (3 s,
+    /// left to finish by itself) holds the pipe, the 0.5 s bound passes, then a cancel: no SIGTERM and no kill. Red when
+    /// the helper drops the child's onExit (the cancel signals sh's pid) or bounded ignores the exit mark (the kill).
+    func testRunBoundedSignalsNothingOnceTheChildExitedEvenWhenAGrandchildHoldsThePipe() {
+        final class Rec: @unchecked Sendable { let lock = NSLock(); var pids: [pid_t] = [] }
+        let sigs = Rec(), kills = Rec()
+        let child = XrayChild(signal: { pid in sigs.lock.withLock { sigs.pids.append(pid) } })
+        let r = XrayPanels.runBounded(child, "/bin/sh", ["-c", "(/bin/sleep 3) & exit 0"], [:], timeout: 0.5,
+                                      terminate: { pid in kills.lock.withLock { kills.pids.append(pid) } })
+        XCTAssertEqual(r.status, -1, "the bound passed while the grandchild held the pipe")
+        child.cancel()
+        XCTAssertTrue(sigs.lock.withLock { sigs.pids }.isEmpty, "no SIGTERM to a reaped pid")
+        XCTAssertTrue(kills.lock.withLock { kills.pids }.isEmpty, "no kill of a reaped pid")
+    }
+
     /// One read in flight, shared: a Memory tick while a Tasks read runs is skipped, never queued (the switch's own
     /// pending read runs once after it). Red at TIP: the pending read never ran (memoryReads stayed 1).
     func testMemoryTickWhileATasksReadRunsIsSkipped() async {

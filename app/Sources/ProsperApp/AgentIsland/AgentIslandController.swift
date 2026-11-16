@@ -2413,8 +2413,8 @@ extension AgentPromptIO {
     /// timed-out or failed call is not that (the caller then fails closed as unconfirmed).
     static func liveNoMirror(_ args: [String], _ env: [String: String]) -> Bool {
         let path = DchCommand.dchPath   // on the caller's thread
-        return DchCommand.bounded(DchCommand.islandTimeout) { onPid in
-            Data(DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: onPid).status == 3 ? [1] : [])
+        return DchCommand.bounded(DchCommand.islandTimeout) { onPid, onExit in
+            Data(DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: onPid, onExit: onExit).status == 3 ? [1] : [])
         } == Data([1])
     }
 
@@ -2424,8 +2424,8 @@ extension AgentPromptIO {
 
     static func liveSay(_ args: [String], _ env: [String: String]) -> Data {
         let path = DchCommand.dchPath   // on the caller's thread
-        return DchCommand.bounded(sayTimeout) { onPid in
-            DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: onPid).out
+        return DchCommand.bounded(sayTimeout) { onPid, onExit in
+            DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: onPid, onExit: onExit).out
         } ?? Data()
     }
 }

@@ -59,6 +59,20 @@ final class AgentIslandRowKillTests: XCTestCase {
         }
     }
 
+    /// R1380-s2: the product's default launch (no launch seam) reports the exit: /bin/sh exits at once while its own
+    /// /bin/sleep (left to finish by itself, 3 s) holds the merged pipe, so a cancel 0.5 s later reaches a reaped pid
+    /// and signals nothing. Red when the default launch passes `onExit: {}`: the recorder gets sh's pid. Takes ~3.5 s.
+    func testCancelWhileAGrandchildHoldsThePipeAfterTheExitSignalsNothing() {
+        final class Rec: @unchecked Sendable { let lock = NSLock(); var signals: [pid_t] = [] }
+        let rec = Rec(), key = AgentSessionKey(dir: "/d", name: "a"), finished = DispatchSemaphore(value: 0)
+        let runner = DchActionRunner(signal: { pid in rec.lock.withLock { rec.signals.append(pid) } })
+        XCTAssertTrue(runner.start(key, path: "/bin/sh", args: ["-c", "(/bin/sleep 3) & exit 0"], env: { [:] }) { _ in finished.signal() })
+        Thread.sleep(forTimeInterval: 0.5)
+        runner.cancel(key)
+        XCTAssertTrue(rec.lock.withLock { rec.signals }.isEmpty, "sh was reaped: its pid may be reused, no signal")
+        XCTAssertEqual(finished.wait(timeout: .now() + 10), .success)
+    }
+
     private final class Box: @unchecked Sendable {
         private let lock = NSLock()
         private var r: DchActionResult?

@@ -74,16 +74,21 @@ final class XrayPanels: ObservableObject {
         let child = XrayChild()   // #1368: a cancelled read (panel closed, session switched) SIGTERMs its dch
         return await withTaskCancellationHandler {
             await withCheckedContinuation { c in
-                DispatchQueue.global(qos: .utility).async {
-                    let r = DchCommand.bounded(DchCommand.remoteTimeout) { onPid in
-                        DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: { onPid($0); child.started($0) },
-                                                    onExit: { child.reaped() })   // #1380: marked at the exit, not after the return
-                    }
-                    let v: (status: Int32, out: Data) = r.map { ($0.status, $0.out) } ?? (-1, Data())
-                    c.resume(returning: v)
-                }
+                DispatchQueue.global(qos: .utility).async { c.resume(returning: runBounded(child, path, args, env)) }
             }
         } onCancel: { child.cancel() }
+    }
+
+    /// `run`'s blocking body, lifted so a row can drive it with a recorder child (R1380-s2): the exit is marked on the
+    /// child (#1380) and on `bounded`, so neither a cancel nor the timeout signals a reaped dch's pid (R1380-s1).
+    nonisolated static func runBounded(_ child: XrayChild, _ path: String, _ args: [String], _ env: [String: String],
+                           timeout: TimeInterval = DchCommand.remoteTimeout,
+                           terminate: @escaping @Sendable (pid_t) -> Void = DchCommand.sigkill) -> (status: Int32, out: Data) {
+        let r = DchCommand.bounded(timeout, terminate: terminate) { onPid, onExit in
+            DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: { onPid($0); child.started($0) },
+                                        onExit: { onExit(); child.reaped() })
+        }
+        return r.map { ($0.status, $0.out) } ?? (-1, Data())
     }
 
     /// The dch path X-ray runs, when it passes XrayTabs.gate (1.78.0); nil below it: no item, no route, no process.
