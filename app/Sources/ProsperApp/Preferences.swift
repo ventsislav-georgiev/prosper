@@ -466,6 +466,9 @@ enum Preferences {
         static let agentWindowLayoutsBackup = "agentWindowLayoutsBackup"
         static let agentWindowLayoutsCorrupt = "agentWindowLayoutsCorrupt"
         static let agentWindowSidebarHidden = "agentWindowSidebarHidden"
+        // #1378: the Agent Sessions window's style (AgentWindowStyle) and Borderless's rounded corners; per Mac, not in SyncedKeys.
+        static let agentWindowStyle = "agentWindowStyle"
+        static let agentWindowRoundedCorners = "agentWindowRoundedCorners"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1223,6 +1226,18 @@ enum Preferences {
     static var agentWindowSidebarHidden: Bool {
         get { defaults.bool(forKey: Keys.agentWindowSidebarHidden) }
         set { defaults.set(newValue, forKey: Keys.agentWindowSidebarHidden) }
+    }
+
+    /// #1378: the Agent Sessions window's style; unset or unknown reads as Standard.
+    static var agentWindowStyle: AgentWindowStyle {
+        get { AgentWindowStyle(rawValue: defaults.string(forKey: Keys.agentWindowStyle) ?? "") ?? .standard }
+        set { defaults.set(newValue.rawValue, forKey: Keys.agentWindowStyle) }
+    }
+
+    /// #1378: Borderless's rounded corners; on when unset.
+    static var agentWindowRoundedCorners: Bool {
+        get { defaults.object(forKey: Keys.agentWindowRoundedCorners) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.agentWindowRoundedCorners) }
     }
 
     /// Agent Island's terminal raw value (`AgentTerminal`); unset or uninstalled

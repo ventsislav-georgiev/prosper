@@ -1552,6 +1552,10 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray Tasks tab refreshes itself while you watch it: every 5 seconds for a local session, 15
   for a remote one, and never while hidden. A host that stops answering keeps its tasks on screen
   with a "host unreachable" note. (#1368)
+- Settings > Agent Island > Agent Sessions has a Window style (Standard, No title bar or Borderless)
+  and, for Borderless, Rounded corners (turn it off for square corners that fill a full-screen
+  window edge to edge); in every style you can drag the window by the empty parts of the sidebar's
+  title row and the session header, and double-click there to zoom it. (#1378)
 
 ## v2.174.0
 

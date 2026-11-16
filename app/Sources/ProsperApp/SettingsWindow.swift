@@ -1027,13 +1027,34 @@ struct AgentIslandRowDetailsSection: View {
 struct AgentSessionsSection: View {
     static let clipboardLabel = "Let sessions set the clipboard while you're viewing them"
     @State private var clipboard = Preferences.agentWindowClipboardWrites
+    @State private var style = Preferences.agentWindowStyle
+    @State private var rounded = Preferences.agentWindowRoundedCorners
+    /// #1378: the corners toggle's line, fixed per style (a window with a title bar keeps the system's corners).
+    static func roundedHint(_ style: AgentWindowStyle) -> String {
+        style == .borderless ? "Off: square corners, filling the window to its edges."
+            : "Borderless only: a window with a title bar keeps rounded corners."
+    }
 
     var body: some View {
         NeonSection("Agent Sessions",
                     footer: "A program in a session's terminal can set the clipboard only while that session is selected in the Agent Sessions window and the window is on screen. It can never read your clipboard.") {
             NeonRow(Self.clipboardLabel) { Toggle("", isOn: $clipboard).labelsHidden() }
+            NeonDivider()
+            // #1378: applied to an open window at once (AgentsWindow.restyle). Menu, not segmented: segmented ignores the UI scale.
+            NeonRow("Window style") {
+                Picker("", selection: $style) {
+                    ForEach(AgentWindowStyle.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+            }
+            NeonDivider()
+            NeonRow("Rounded corners", subtitle: Self.roundedHint(style)) {
+                Toggle("", isOn: $rounded).labelsHidden().disabled(style != .borderless)
+            }
         }
         .onChange(of: clipboard) { _, v in Preferences.agentWindowClipboardWrites = v }
+        .onChange(of: style) { _, v in Preferences.agentWindowStyle = v; AgentsWindow.shared.restyle() }
+        .onChange(of: rounded) { _, v in Preferences.agentWindowRoundedCorners = v; AgentsWindow.shared.restyle() }
     }
 }
 

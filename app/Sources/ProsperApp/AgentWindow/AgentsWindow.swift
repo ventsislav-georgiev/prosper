@@ -87,6 +87,9 @@ final class AgentsWindow {
     /// `autosave`, so no frame is read from or written to the defaults).
     static func makeWindow(_ model: AgentWindowModel, autosave: String? = "ProsperAgentsWindow") -> AgentsNSWindow {
         let hosting = NSHostingController(rootView: Themed { AgentWindowRootView(model: model) })
+        // #1378: no title bar safe area for SwiftUI. Under No title bar's .fullSizeContentView it would pad the content
+        // by the hidden bar, and a list touching that band grows under the title row (Standard has no such band).
+        hosting.safeAreaRegions = []
         let win = AgentsNSWindow(contentViewController: hosting)
         win.model = model
         // 4.2 Pick Another: the sidebar gets the keys (called on the main actor, from a button's action).
@@ -105,12 +108,46 @@ final class AgentsWindow {
         win.setContentSize(NSSize(width: 1000 * s, height: 680 * s))
         win.contentMinSize = contentMinSize(scale: s)
         SettingsWindow.applyWindowOpacity(win)
+        if Preferences.agentWindowStyle != .standard { applyStyle(win) }   // #1378: Standard is built as before
         win.isReleasedWhenClosed = false
         if let autosave { win.setFrameAutosaveName(autosave) }
         if !(autosave.map { win.setFrameUsingName($0) } ?? false) { win.centerOnScreen() }
         win.clampToContentMinSize()
         return win
     }
+
+    /// #1378: Settings changed the style or the corners: the open window is restyled in place (a reopen would tear down
+    /// the model, the panes' terminals and their last live sights). No window: nothing, the next build reads the settings.
+    func restyle() { (window as? AgentsNSWindow).map { Self.applyStyle($0) } }
+
+    /// #1378: the window's chrome for `style`. Standard: #860's mask and buttons. No title bar: the full-size content
+    /// under a hidden title bar, the three buttons hidden. Borderless: no frame; `rounded` masks the content's corners
+    /// (the window clear outside them), off leaves it square and opaque to its edges (AgentsNSWindow's fill setters).
+    /// Titled styles keep the system's rounded frame: AppKit has no public way to square it.
+    static func applyStyle(_ win: AgentsNSWindow, style: AgentWindowStyle = Preferences.agentWindowStyle,
+                           rounded: Bool = Preferences.agentWindowRoundedCorners) {
+        win.style = style
+        win.roundedCorners = rounded
+        switch style {
+        case .standard: win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        case .noTitleBar: win.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        case .borderless: win.styleMask = [.borderless, .resizable, .miniaturizable]
+        }
+        for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            win.standardWindowButton(b)?.isHidden = style != .standard
+        }
+        win.hasShadow = true
+        if let cv = win.contentView {
+            let mask = style == .borderless && rounded
+            cv.wantsLayer = true
+            cv.layer?.cornerRadius = mask ? cornerRadius : 0
+            cv.layer?.masksToBounds = mask
+        }
+        SettingsWindow.applyWindowOpacity(win)   // the fill through AgentsNSWindow's setters, then the shadow again
+    }
+
+    /// #1378: the rounded Borderless window's corner radius, near the system's for a window without a toolbar.
+    static let cornerRadius: CGFloat = 12
 
     private func teardown(_ win: NSWindow) {
         observers.forEach(NotificationCenter.default.removeObserver)
@@ -133,6 +170,37 @@ final class AgentsWindow {
 /// #845: a row click, Return and Right (on an unfolded section) move the keyboard into the session.
 final class AgentsNSWindow: NSWindow {
     weak var model: AgentWindowModel?
+    /// #1378: set by AgentsWindow.applyStyle; Standard and rounded until then.
+    var style = AgentWindowStyle.standard
+    var roundedCorners = true
+    /// #1378: a borderless NSWindow answers false to both; every style here takes the keys and the main role.
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+    /// #1378: Borderless owns the window's fill, whatever the theme hook (applyWindowOpacity) asks: rounded, clear outside
+    /// the content's rounded mask; square, opaque to the edges in the theme's colour (no wallpaper at a corner of a window
+    /// sized to the screen). The titled styles take the theme's values as before.
+    override var isOpaque: Bool {
+        get { super.isOpaque }
+        set { super.isOpaque = style == .borderless ? !roundedCorners : newValue }
+    }
+    override var backgroundColor: NSColor! {
+        get { super.backgroundColor }
+        set {
+            guard style == .borderless else { return super.backgroundColor = newValue }
+            super.backgroundColor = roundedCorners ? .clear : (newValue ?? NSColor(Neon.bgTop)).withAlphaComponent(1)
+        }
+    }
+    /// #1378: No title bar and Borderless have no close button to press, so Command-W closes straight (no delegate here).
+    override func performClose(_ sender: Any?) {
+        style == .standard ? super.performClose(sender) : close()
+    }
+    /// #1378: Command-M minimises in No title bar and Borderless (Prosper has no Window menu; Standard keeps today's keys). Rows put
+    /// a recorder here: the default is never run by a row.
+    var minimize: (NSWindow) -> Void = { $0.miniaturize(nil) }
+    static func isMinimizeChord(_ event: NSEvent) -> Bool {
+        event.type == .keyDown && event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command]
+            && chordLetter(event) == "m"
+    }
     /// #831 7.2: the model's `keyFocus` (B1 step 5); the name stays for the routes and their rows. No model: the sidebar.
     var sidebarFocused: Bool {
         get { model.map { $0.keyFocus == .sidebar } ?? true }
@@ -323,6 +391,7 @@ final class AgentsNSWindow: NSWindow {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if style != .standard, Self.isMinimizeChord(event) { minimize(self); return true }
         guard let model else {
             if event.modifierFlags.contains(.command), Self.chordLetter(event) == "w" {
                 performClose(nil)
@@ -773,6 +842,44 @@ struct AgentSidebarView: View {
     }
 }
 
+/// #1378: the Agent Sessions window's style (Settings > Agent Island > Agent Sessions).
+enum AgentWindowStyle: String, CaseIterable {
+    case standard, noTitleBar, borderless
+    var label: String {
+        switch self {
+        case .standard: return "Standard"
+        case .noTitleBar: return "No title bar"
+        case .borderless: return "Borderless"
+        }
+    }
+}
+
+/// #1378: behind the sidebar title row and the session header, so their empty parts drag the window in every style (the
+/// controls drawn over it keep their clicks: SwiftUI hit-tests them first). Adds no accessibility element.
+struct AgentWindowDragArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> AgentWindowDragView { AgentWindowDragView() }
+    func updateNSView(_ nsView: AgentWindowDragView, context: Context) {}
+}
+
+final class AgentWindowDragView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        guard event.clickCount == 2 else { return window?.performDrag(with: event) ?? () }
+        // The app's defaults search the global domain, where the system keeps it (the test store under XCTest).
+        Self.doubleClick(Preferences.defaults.string(forKey: "AppleActionOnDoubleClick"), window)
+    }
+    /// A title bar's double-click (the system's "double-click a window's title bar to" setting): Minimize, Do Nothing,
+    /// else zoom (the default, "Maximize" or "Fill").
+    static func doubleClick(_ action: String?, _ win: NSWindow?) {
+        switch action {
+        case "Minimize": win?.miniaturize(nil)
+        case "None": break
+        default: win?.zoom(nil)
+        }
+    }
+}
+
 /// The sidebar's title row: the window's name, the count, then #847's [>_] New shell and [+] New session in fixed
 /// sz(18) slots. The count gives way first (lineLimit 1, lowest priority); the buttons never move or resize.
 struct AgentSidebarTitleRow: View {
@@ -785,11 +892,12 @@ struct AgentSidebarTitleRow: View {
             // #860: names the window (its title is hidden); "Sessions" in the accent, as Settings' rail titles.
             neonAccentedText(AgentsWindow.title, accent: "Sessions").font(Neon.font(13, weight: .semibold))
                 .foregroundStyle(Neon.textPrimary).lineLimit(1)
+                .allowsHitTesting(false)   // #1378: a press on the name drags the window, as on a title bar
             Spacer(minLength: 0)
             let n = model.sections.filter { $0.title != "History" }.reduce(0) { $0 + $1.rows.count }
             if n > 0 {
                 Text(n == 1 ? "1 session" : "\(n) sessions").font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
-                    .lineLimit(1).layoutPriority(-1)
+                    .lineLimit(1).layoutPriority(-1).allowsHitTesting(false)   // #1378: drags too
             }
         }
         // The buttons sit over a reserved trailing strip, inside the row's height: a cut count can never move them.
@@ -814,6 +922,7 @@ struct AgentSidebarTitleRow: View {
             }
         }
         .padding(.horizontal, sz(14)).padding(.top, Self.padTop).padding(.bottom, sz(8))
+        .background(AgentWindowDragArea())   // #1378: the row's empty parts move the window
     }
 
     /// #1103 F2: the content starts under the titlebar (no .fullSizeContentView), so the row's centre sits on the
@@ -2353,6 +2462,7 @@ struct AgentSessionHeader: View {
         }
         .padding(.horizontal, sz(16)).padding(.top, Self.padTop).padding(.bottom, Self.padBottom)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AgentWindowDragArea())   // #1378: the header's empty parts move the window
         // #860: on the window's backdrop, as Settings' pane title (no opaque band under the titlebar).
     }
 
