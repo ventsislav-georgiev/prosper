@@ -129,7 +129,7 @@ final class AgentIslandCountSymbolsTests: XCTestCase {
                 XCTAssertEqual(prs.more, more, "\(tag) at \(scale)")
                 let s = session("api", .idle, agents: 99_999, meta: meta)
                 let row = AgentIslandRow(session: s, now: Self.now, notice: nil, show: .all) {}
-                let line = ideal(row.prLineView(prs))
+                let line = ideal(row.prLineView(prs, selected: false))
                 XCTAssertLessThanOrEqual(line, AgentIslandGeometry.rowTextWidth, "\(tag): the PR line fits whole at \(scale)")
                 widths[tag, default: []].append(line)
             }

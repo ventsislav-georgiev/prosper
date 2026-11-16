@@ -2270,7 +2270,7 @@ final class AgentIslandTests: XCTestCase {
         for meta in metas {
             var s = session("s", .working); s.meta = meta
             let row = AgentIslandRow(session: s, now: 0, notice: nil, show: .all) {}
-            let host = NSHostingView(rootView: row.prLineView(AgentIsland.prChips(meta)).fixedSize())
+            let host = NSHostingView(rootView: row.prLineView(AgentIsland.prChips(meta), selected: false).fixedSize())
             let w = host.fittingSize.width
             XCTAssertGreaterThan(w, 0)
             XCTAssertLessThanOrEqual(w, AgentIslandGeometry.rowTextWidth, "\(AgentIsland.prChips(meta).chips.map(\.label))")
@@ -2676,6 +2676,24 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(c.store?.details, AgentIslandRowDetails(openPRs: false, merged: false))
         XCTAssertEqual(c.store?.rowHeights, [AgentIslandGeometry.rowHeight])
         XCTAssertEqual(c.store.map { $0.size.height }, before.map { $0.height - (AgentIslandGeometry.prRowHeight - AgentIslandGeometry.rowHeight) })
+    }
+
+    /// QA #606 INFO-7: onRowDetails (the phone's sidekick frame, #765) is told of every Settings change, once,
+    /// with or without a store: the island need not be built for the pattern to reach the phone.
+    @MainActor
+    func testRowDetailsChangedTellsTheServerWithOrWithoutAStore() {
+        clearRowDetailKeys()
+        let c = AgentIslandController()
+        c.showsPanel = false
+        final class Told { var n = 0 }
+        let told = Told()
+        c.onRowDetails = { told.n += 1 }
+        c.rowDetailsChanged()
+        XCTAssertTrue(c.store == nil)
+        XCTAssertEqual(told.n, 1, "no store: told all the same")
+        c.store = AgentIslandStore(geometry: notched)
+        c.rowDetailsChanged()
+        XCTAssertEqual(told.n, 2, "with a store: told once more")
     }
 
     /// #596 (QA #465 INFO-3): each Row details toggle binds its own detail.

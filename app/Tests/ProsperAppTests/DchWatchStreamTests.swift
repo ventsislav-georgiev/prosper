@@ -317,6 +317,22 @@ final class DchWatchStreamTests: XCTestCase {
                        "#1220: the island carries the title too; a's is its alias already")
     }
 
+    /// QA #606 INFO-7: DchSessionServer.islandSessions puts the island's rows for Remote Terminal's dir into the
+    /// server's own hub (on its queue), and nil (the island stopped) takes them out. Never started: no socket.
+    @MainActor func testIslandSessionsFeedsTheServersHub() {
+        let saved = Preferences.isolateRemoteSessions
+        defer { Preferences.isolateRemoteSessions = saved }
+        Preferences.isolateRemoteSessions = false   // one dir: Remote Terminal's is the island's
+        let s = DchSessionServer(bindHost: { nil }, port: 0, retryBase: 60, onReady: {})
+        let dir = DchCommand.remoteSocketDir()
+        let api = AgentSession(key: AgentSessionKey(dir: dir, name: "api"), alias: "", activity: 100, state: .working, agents: 0)
+        s.islandSessions([api])
+        XCTAssertEqual(s.queue.sync { s.watch.cachedList() },
+                       DchFrame.listPayload([DchListRow(name: "api", alias: "", activityEpoch: 100, state: "working", agents: 0)]))
+        s.islandSessions(nil)
+        XCTAssertFalse(s.queue.sync { s.watch.available() }, "the island stopped: the list frame forks again")
+    }
+
     func testCacheOnlyForRemoteTerminalsDir() {
         let other = Self.session("x", dir: "/tmp/dch-test-default")
         XCTAssertNil(DchWatchHub.cache(island: nil, dirs: [Self.dir], remote: Self.dir), "the island stopped")

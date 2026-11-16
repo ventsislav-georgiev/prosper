@@ -769,6 +769,16 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertEqual(out.map(fields), fields(s), "the next field added to AgentSession is copied too")
     }
 
+    /// QA #606 INFO-7: a hold rewrites only a blocked row: the held session read idle or done goes out as it is.
+    @MainActor func testAHoldPublishesANonBlockedStateAsIs() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(c.published([session(.blocked)]).first?.state, .working, "held")
+        XCTAssertEqual(c.published([session(.idle)]).first?.state, .idle)
+        XCTAssertEqual(c.published([session(.done)]).first?.state, .done)
+    }
+
     /// Teardown drops every hold.
     @MainActor func testTeardownDropsTheHold() {
         let f = FakeIO(Self.bash3), (c, _) = controller(f)

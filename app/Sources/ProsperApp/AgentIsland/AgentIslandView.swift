@@ -1218,7 +1218,7 @@ struct AgentIslandRow: View {
                         side.detailLine([], open: side.row.prCount)
                         side.detailLine([])
                     }
-                    if chipLine { prLineView(prs).modifier(AgentSidebarRowProbe(kind: "chips", title: session.title)) }
+                    if chipLine { prLineView(prs, selected: hover).modifier(AgentSidebarRowProbe(kind: "chips", title: session.title)) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1269,21 +1269,22 @@ struct AgentIslandRow: View {
     /// #525: the PR line. Open PRs as "repo#12" chips in the agents capsule's
     /// style (a button when the URL passed the allowlist, else a dimmer label),
     /// "+N pending PRs" (#1371: the merged count is on line two now, in the sidebar's inks). `AgentIsland.prChips`
-    /// measured it all to fit `rowTextWidth`. Static, no animation.
-    func prLineView(_ prs: (chips: [AgentIsland.PRChip], more: Int)) -> some View {
+    /// measured it all to fit `rowTextWidth`. Static, no animation. `selected`: the row's hover, passed in, so a row
+    /// can build the line with no view installed (no State read).
+    func prLineView(_ prs: (chips: [AgentIsland.PRChip], more: Int), selected: Bool) -> some View {
         HStack(spacing: 0) {
             HStack(spacing: AgentIsland.chipSpacing) {
                 ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
                     if chip.url != nil {
-                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, AgentSidebarRowView.ink(.blue, selected: hover)) }
+                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, AgentSidebarRowView.ink(.blue, selected: selected)) }
                             .buttonStyle(.plain)
                             .help(Text(verbatim: chip.help))
                     } else {
-                        chipText(chip.label, AgentSidebarRowView.ink(.quiet, selected: hover))
+                        chipText(chip.label, AgentSidebarRowView.ink(.quiet, selected: selected))
                             .help(Text(verbatim: chip.help))
                     }
                 }
-                if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), AgentSidebarRowView.ink(.quiet, selected: hover)) }
+                if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), AgentSidebarRowView.ink(.quiet, selected: selected)) }
             }
             .fixedSize()
             Spacer(minLength: 0)
