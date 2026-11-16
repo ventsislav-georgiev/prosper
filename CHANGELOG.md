@@ -1474,6 +1474,9 @@ tag from the now-released section and put it on the new top draft.
   when its main came back. A larger group offers Stop all N and Resume all N (#908)
 - Agent Sessions transcript: a reader at the end of a transcript stays at the end when switching the
   view level or when new lines arrive, also at a reduced UI size (#1334)
+- Agent Sessions: on the selected session row, the state text, counts, age, host and PR chips are
+  easier to read on the Fern, Mint, Solar and Daylight themes, and so is a Needs input line on light
+  themes (#1271)
 
 ## v2.174.0
 

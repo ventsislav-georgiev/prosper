@@ -903,7 +903,7 @@ struct AgentSidebarRowView: View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
             Group {   // #829 G7: a pinned History record's glyph, in the same slot
                 if row.record?.pinned == true {
-                    Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(Neon.textSecondary)
+                    Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(Self.ink(.quiet, selected: selected))
                 } else {
                     Text(row.state?.glyph ?? "○")
                         .font(Neon.font(11, weight: .bold))
@@ -1024,7 +1024,7 @@ extension AgentSidebarRowView {
     var titleLine: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
             Text(row.title).font(Neon.font(12.5, weight: .medium))
-                .foregroundStyle(row.state == nil ? Neon.textSecondary : Neon.textPrimary)
+                .foregroundStyle(row.state == nil ? Self.ink(.quiet, selected: selected) : Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
                 .modifier(AgentSidebarRowProbe(kind: "title", title: row.title))
             Spacer(minLength: sz(4))
@@ -1034,7 +1034,7 @@ extension AgentSidebarRowView {
             if AgentPaneLayout.splitsEnabled {
                 // #900 B2 step 4b (7.2, #828 slot rule): the "in view" glyph's slot is always laid out with
                 // the gate on (hidden by opacity, never removed), so the title never moves; gate off: no slot.
-                Image(systemName: "eye").font(Neon.font(9, weight: .semibold)).foregroundStyle(Neon.textSecondary)
+                Image(systemName: "eye").font(Neon.font(9, weight: .semibold)).foregroundStyle(Self.ink(.quiet, selected: selected))
                     .frame(width: sz(14)).opacity(inView ? 1 : 0)
                     .modifier(AgentSidebarRowProbe(kind: inView ? "glyph" : "slot", title: row.title))
             }
@@ -1050,6 +1050,21 @@ extension AgentSidebarRowView {
             if !row.prs.isEmpty { detailLine([], open: row.prCount, modelSlot: true) }
             detailLine([], open: row.prCount)
             detailLine([])
+        }
+    }
+
+    /// #1271: the three inks a row's text draws besides the title's primary: the quiet one (state text, counts, age, host),
+    /// the accent one (the PR chips and the open-PR count) and the needs-input amber of a blocked row's state text. Over
+    /// the selected row's fill (the accent at 0.14 over the sidebar) the quiet and accent inks miss 4.5:1 on several themes
+    /// (the quiet one on Fern, Mint, Solar and Daylight) and the amber on every light one, so on the selected row they draw
+    /// textPrimary, which clears it on all 22 (AgentRowSelectedTextTests); the glyph keeps its colour and the words stay.
+    enum Ink { case quiet, blue, blocked }
+    static func ink(_ ink: Ink, selected: Bool) -> Color {
+        if selected { return Neon.textPrimary }
+        switch ink {
+        case .quiet: return Neon.textSecondary
+        case .blue: return Neon.blue
+        case .blocked: return agentStateColor(.blocked)
         }
     }
 
@@ -1127,7 +1142,7 @@ extension AgentSidebarRowView {
     var ageSlot: some View {
         ZStack(alignment: .trailing) {
             Text(AgentIsland.ageWidest).hidden()
-            Text(row.age).foregroundStyle(Neon.textSecondary)
+            Text(row.age).foregroundStyle(Self.ink(.quiet, selected: selected))
         }
         .font(Neon.font(10).monospacedDigit())
         .fixedSize()
@@ -1150,12 +1165,13 @@ extension AgentSidebarRowView {
     func detailLine(_ chips: [String], open: Int = 0, modelSlot: Bool = false) -> some View {
         HStack(spacing: sz(5)) {
             Text(row.detail).font(Neon.font(10.5))
-                .foregroundStyle(row.state == .blocked ? agentStateColor(.blocked) : Neon.textSecondary)
+                .foregroundStyle(row.state == .blocked ? Self.ink(.blocked, selected: selected) : Self.ink(.quiet, selected: selected))
                 .lineLimit(1)
-            AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5)
+            AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
+                             quiet: Self.ink(.quiet, selected: selected), open: Self.ink(.blue, selected: selected))
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
-                let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Neon.blue)
+                let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Self.ink(.blue, selected: selected))
                     .padding(.horizontal, sz(4)).padding(.vertical, sz(1))
                     .background(RoundedRectangle(cornerRadius: sz(3)).fill(Neon.blue.opacity(0.12)))
                     .fixedSize()
@@ -1170,7 +1186,7 @@ extension AgentSidebarRowView {
             Spacer(minLength: 0)
             if modelSlot, row.modelSlot { modelSlotView }
             if !row.age.isEmpty || row.state != nil { ageSlot }
-            if let h = row.remote?.host ?? row.host { Self.hostSlot(h) }   // #1324: a remote History row's too
+            if let h = row.remote?.host ?? row.host { Self.hostSlot(h, selected: selected) }   // #1324: a remote History row's too
         }
     }
 
@@ -1179,8 +1195,8 @@ extension AgentSidebarRowView {
     static let hostWidth: CGFloat = 84
     /// #1330 (R836-q2): a host from dch is outside text: shown through OutsideText.shown; argv and keys keep it raw.
     static func hostLabel(_ host: String) -> String { OutsideText.shown(host) }
-    static func hostSlot(_ host: String) -> some View {
-        Text(hostLabel(host)).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+    static func hostSlot(_ host: String, selected: Bool = false) -> some View {
+        Text(hostLabel(host)).font(Neon.font(10, weight: .medium)).foregroundStyle(ink(.quiet, selected: selected))
             .lineLimit(1).truncationMode(.middle)
             .frame(width: sz(hostWidth), alignment: .trailing)
             .help("On \(hostLabel(host))")
@@ -1221,6 +1237,9 @@ struct AgentRemoteHeader: View {
 struct AgentCountGroups: View {
     let counts: [(AgentSidebar.Count, Int)]
     let size: CGFloat
+    /// #1271: the inks of the other groups and of the open PRs' group (the selected sidebar row's, see `AgentSidebarRowView.ink`).
+    var quiet = Neon.textSecondary
+    var open = Neon.blue
 
     var body: some View {
         if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
@@ -1230,7 +1249,7 @@ struct AgentCountGroups: View {
                         Image(systemName: g.0.symbol).font(Neon.font(size - 1))
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
                     }
-                    .foregroundStyle(g.0 == .open ? Neon.blue : Neon.textSecondary)
+                    .foregroundStyle(g.0 == .open ? open : quiet)
                     .fixedSize()
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(g.0.words(g.1))
