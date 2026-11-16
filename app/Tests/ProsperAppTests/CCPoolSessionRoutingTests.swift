@@ -194,7 +194,7 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         // No ccpool runtime (the extension never went live; always so under XCTest): no contributor at all.
         let bare = Recorder()
         let d = controller(bare, routing: nil)
-        XCTAssertTrue(d.sessionEnvContributors().isEmpty, "no runtime: no contributor")
+        XCTAssertEqual(d.sessionEnvContributors().count, 1, "no runtime: no pool contributor, only the kit one (empty provider, #917 S7)")
         XCTAssertEqual(spawnedEnv(d, bare, ["claude"], name: "api"), today)
     }
 
