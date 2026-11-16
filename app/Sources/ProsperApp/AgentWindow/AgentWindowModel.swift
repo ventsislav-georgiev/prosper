@@ -1721,7 +1721,7 @@ final class AgentWindowModel: ObservableObject {
         guard let u = unlisted,
               let r = history.first(where: { $0.key == u.key && !$0.end.isEmpty && $0.started >= u.asked - 1 }) else { return }
         unlisted = nil
-        let plain = Self.notListedText(u.key.name), said = Self.notListedText(u.key.name, end: r.end)
+        let plain = Self.notListedText(u.key.name), said = Self.notListedText(u.key.name, end: r.end.hasPrefix("exit ") ? r.end : AgentIsland.endLabel(r.end))
         if newSession?.status == plain {
             newSession?.status = said
         } else if newSession == nil, let l = dirLine, l.text == plain, store?.actions[l.key] == plain {

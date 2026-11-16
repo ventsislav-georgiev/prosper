@@ -195,4 +195,75 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSessionStatus, AgentWindowModel.notListedText("web"), "an older record: no end")
         }
     }
+
+    /// QA R948-q1: a signal end carries the sender's pid and argv; the sentence shows it as the island does (#839 no
+    /// pid, #937 no hidden characters), on the form's status and on the dir line.
+    @MainActor
+    func testAgentWindow948UnlistedSignalEndHidesPidAndHiddenCharacters() throws {
+        try withNewSessionPrefs {
+            let st = store([mapped("other")]), spawns = SpawnCalls()
+            let m = newSessionModel(st, spawns)
+            defer { m.close() }
+            var clock = Self.now
+            m.now = { clock }
+            let island = m.island()
+            island.store = st
+            island.showsPanel = false
+            island.controlDch = { DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1]) }
+            island.listSessions = { _ in [] }
+            final class Box: @unchecked Sendable {
+                let lock = NSLock()
+                var records: [DchHistoryRecord] = []
+            }
+            let box = Box()
+            island.readHistory = { _, _ in box.lock.withLock { box.records } }
+            let key = AgentSessionKey(dir: "/tmp/dch-test", name: "")
+            let raw = "signal 9 from 4242 /bin/kill\u{202E}x -9"
+
+            m.openNewSession(folder: "/Users/example/web")
+            XCTAssertTrue(m.startNewSession())
+            var r = DchHistoryRecord(key: AgentSessionKey(dir: "/tmp/dch-test", name: "web"))
+            r.started = clock
+            r.ended = clock
+            r.end = raw
+            box.lock.withLock { box.records = [r] }
+            spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
+            clock += AgentWindowModel.spawnSlack + 1
+            try XCTUnwrap(m.spawnDeadline).fire()
+            let end = Date().addingTimeInterval(5)
+            while m.newSessionStatus == AgentWindowModel.notListedText("web"), Date() < end {
+                island.queue.sync {}
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            }
+            let status = try XCTUnwrap(m.newSessionStatus)
+            XCTAssertEqual(status, AgentWindowModel.notListedText("web", end: "crashed (signal 9) from /bin/killx -9"))
+            XCTAssertTrue(status.contains("kill"))
+            XCTAssertFalse(status.contains("4242"))
+            XCTAssertFalse(status.contains("\u{202E}"))
+
+            // The quick shell's dir line.
+            m.cancelNewSession()
+            m.select(.live(mapped("other").key))
+            XCTAssertTrue(m.startShell())
+            let shell = try XCTUnwrap(spawns.calls.last?.name)
+            var q = DchHistoryRecord(key: AgentSessionKey(dir: "/tmp/dch-test", name: shell))
+            q.started = clock
+            q.ended = clock
+            q.end = raw
+            box.lock.withLock { box.records = [q] }
+            spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: shell), nil)
+            clock += AgentWindowModel.spawnSlack + 1
+            try XCTUnwrap(m.spawnDeadline).fire()
+            let want = AgentWindowModel.notListedText(shell, end: "crashed (signal 9) from /bin/killx -9")
+            let until = Date().addingTimeInterval(5)
+            while st.actions[key] != want, Date() < until {
+                island.queue.sync {}
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            }
+            let line = try XCTUnwrap(st.actions[key])
+            XCTAssertEqual(line, want)
+            XCTAssertFalse(line.contains("4242"))
+            XCTAssertFalse(line.contains("\u{202E}"))
+        }
+    }
 }
