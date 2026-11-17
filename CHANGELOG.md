@@ -1612,6 +1612,9 @@ tag from the now-released section and put it on the new top draft.
   starts the session. (#1096)
 - Agent Sessions: when a quick shell (Shift-Command-N) never shows up, the note no longer says
   "check the command", since no command was typed. (#1096)
+- Uninstalling an extension whose block in your config file has broken Prosper markers no longer
+  gets stuck: a sheet first says the file stays exactly as it is and Prosper only forgets the block,
+  and nothing changes if you cancel. (#1244)
 
 ## v2.174.0
 

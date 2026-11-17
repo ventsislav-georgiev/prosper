@@ -27,6 +27,8 @@ struct ManagedConfigPlanner {
         var deleteFile = false
         /// The path the records named before the target resolved here (a dotfiles symlink added or dropped).
         var movedFrom: String? = nil
+        /// #1244: a block here is forgotten over broken markers (the sheet says the file stays as it is)
+        var leftAsItIs = false
     }
 
     let roots: ManagedConfigRoots
@@ -39,6 +41,8 @@ struct ManagedConfigPlanner {
     var actions: [ManagedConfigPieceAction] = []
     /// piece id -> the file its action belongs to, so a part-way failure reports only what landed.
     var pieceFiles: [String: String] = [:]
+    /// #1244: set only by the uninstall's Remove: a block with broken markers is forgotten instead of refused.
+    var forgetBroken = false
 
     static func key(_ owner: String, _ id: String) -> String { owner + "\u{1F}" + id }
     static func skeleton(_ nl: String) -> [UInt8] { Array(("{}" + nl).utf8) }
@@ -203,7 +207,7 @@ struct ManagedConfigPlanner {
         let record = newRecord(piece, w, written: block, hash: OrderedJSON.sha256(Array(block.utf8)))
         switch ManagedTextBlock.find(owner: owner.id, piece: piece.id, in: w.text) {
         case .corrupt(let lines):
-            throw .corrupt("broken prosper markers at line(s) \(lines.map(String.init).joined(separator: ", "))")
+            throw .brokenMarkers(lines: lines)
         case .present(let b, let e):
             let onDisk = ManagedTextBlock.bytes(of: w.text, begin: b, end: e)
             if onDisk.elementsEqual(block.utf8) { // A-INFO-3, #1226: the file's bytes, not a String
@@ -466,7 +470,11 @@ struct ManagedConfigPlanner {
         case .block:
             switch ManagedTextBlock.find(owner: r.owner, piece: r.piece.id, in: w.text) {
             case .corrupt(let lines):
-                return refuse(.corrupt("broken prosper markers at line(s) \(lines.map(String.init).joined(separator: ", "))"))
+                let reason = ManagedConfigRefusalReason.brokenMarkers(lines: lines)
+                guard forgetBroken else { return refuse(reason) }
+                // #1244: no step: the file keeps every byte; drop() below takes the record (action stays .forget)
+                w.leftAsItIs = true
+                forgetNote(&w, r.piece.id, reason)
             case .present(let b, let e):
                 // A-INFO-10: an edited block is drift here too; Remove asks (spec 2.5) and the sheet names it
                 if !ManagedTextBlock.bytes(of: w.text, begin: b, end: e).elementsEqual(r.written.utf8) {
@@ -545,6 +553,15 @@ struct ManagedConfigPlanner {
     private func driftNote(_ w: inout Work, _ id: String, _ verb: String) {
         let note = "The \(id) block was edited by hand: \(verb) those edits too. A copy of the file as it is now goes to the backups, "
             + "which keep the copies from Prosper's last \(ManagedConfig.preWriteBackupsKept) writes to this file."
+        if !w.notes.contains(note) { w.notes.append(note) }
+    }
+
+    /// #1244: what an uninstall over broken markers does, said before it happens. Piece id and line numbers only (C11).
+    private func forgetNote(_ w: inout Work, _ id: String, _ reason: ManagedConfigRefusalReason) {
+        guard case .brokenMarkers(let lines) = reason else { return }
+        let note = "The \(id) block's prosper marker lines are broken (line(s) \(lines.map(String.init).joined(separator: ", "))), so Prosper "
+            + "cannot tell where it ends: its text stays in this file exactly as it is, and Prosper forgets the block. "
+            + "Delete that text yourself if you no longer want it."
         if !w.notes.contains(note) { w.notes.append(note) }
     }
 

@@ -10,6 +10,8 @@ struct ManagedConfigPlan: Sendable {
         case repair([String]?)
         /// A-INFO-1: repair by declared pieces, record or not
         case repairPieces([ManagedConfigPiece])
+        /// #1244: Remove of every piece for an uninstall: a block with broken markers is forgotten, its file left as it is
+        case uninstall
     }
 
     struct FileChange: Sendable {
@@ -28,6 +30,8 @@ struct ManagedConfigPlan: Sendable {
         var kind: ManagedConfigPiece.Kind // to re-resolve the target after consent (A-INFO-6)
         var movedFrom: String? // the records' old path: the target resolves here now
         var pieces: Set<String> // ids whose action belongs to this file
+        /// #1244: a piece over broken markers is forgotten here; nothing in the file is written
+        var forgets = false
         var writes: Bool { delete || newBytes != nil }
     }
 
@@ -40,6 +44,8 @@ struct ManagedConfigPlan: Sendable {
 
     var actions: [ManagedConfigPieceAction] { changes.pieces }
     var writesUserFiles: Bool { files.contains { $0.writes } }
+    /// #1244: a forget over broken markers writes no user file and is still asked first
+    var asks: Bool { files.contains { $0.writes || $0.forgets } }
 
     /// A-INFO-7/9: what a consent covers. The sheet's lines are masked, elided and trimmed, so two
     /// different writes can show the same lines; this is a digest per written file (path -> hash of the
@@ -111,6 +117,9 @@ final class ManagedConfig: Sendable {
     func apply(_ pieces: [ManagedConfigPiece], owner: ManagedConfigOwner) async -> ManagedConfigResult { await apply(plan(pieces, owner: owner)) }
     /// `ids == nil` removes every piece of `owner`.
     func remove(owner: ManagedConfigOwner, ids: [String]? = nil) async -> ManagedConfigResult { await apply(planRemove(owner: owner, ids: ids)) }
+    /// #1244: the uninstall's Remove (every piece): a block whose markers are broken is not refused; the sheet says the file
+    /// stays as it is and the record goes, and on Remove only Prosper's record is dropped. Declining changes nothing.
+    func uninstall(owner: ManagedConfigOwner) async -> ManagedConfigResult { await apply(prepare(.uninstall, owner: owner)) }
     func repair(owner: ManagedConfigOwner, ids: [String]? = nil) async -> ManagedConfigResult { await apply(planRepair(owner: owner, ids: ids)) }
     /// A-INFO-1: Repair by the owner's declared pieces, recorded or not. A block whose record was lost
     /// and whose text was edited (apply refuses it as drift, repair(owner:ids:) does not know it) is
@@ -136,7 +145,7 @@ final class ManagedConfig: Sendable {
             if plan.files.isEmpty { return .init(status: landed.isEmpty ? .nothingToDo : .done, pieces: merged(plan.actions)) }
             // A-INFO-7/9: the same lines over other bytes is a change the user never saw: ask again
             let digests = plan.writtenDigests
-            if plan.writesUserFiles, plan.changes != consented?.changes || digests != consented?.digests {
+            if plan.asks, plan.changes != consented?.changes || digests != consented?.digests {
                 var sheet = plan.changes
                 // the same sheet again: name each file whose bytes differ (compared above without the note)
                 if let consented, consented.changes == plan.changes {
@@ -172,7 +181,7 @@ final class ManagedConfig: Sendable {
         let action: ManagedConfigChangeSet.Action
         switch operation {
         case .apply: action = .apply
-        case .remove: action = .remove
+        case .remove, .uninstall: action = .remove
         case .repair, .repairPieces: action = .repair
         }
         func refused(_ reason: ManagedConfigRefusalReason) -> ManagedConfigPlan {
@@ -202,6 +211,9 @@ final class ManagedConfig: Sendable {
             for r in mine where ids?.contains(r.piece.id) ?? true {
                 if case .remove = operation { planner.remove(r) } else { planner.apply(r.piece, repair: true) }
             }
+        case .uninstall:
+            planner.forgetBroken = true
+            for r in state.records where r.owner == owner.id { planner.remove(r) }
         }
         planner.finish()
         // A-INFO-5: on a case-insensitive volume two case variants are one file, written twice.
@@ -229,12 +241,16 @@ final class ManagedConfig: Sendable {
                 record?.path = path // a moved record's file entry follows it
                 record?.created = w.created
             }
+            let forgets = w.leftAsItIs && !delete && newBytes == nil
             guard delete || newBytes != nil || !w.upserts.isEmpty || !w.deletes.isEmpty || record != old || w.movedFrom != nil else { continue }
             changes.append(.init(url: w.url, target: w.target, backupRel: w.backupRel, kitDir: w.kitDir, base: w.base, baseHash: hash(w.base),
                                  newBytes: newBytes, delete: delete, mode: w.mode, upserts: Array(w.upserts.values),
                                  deletes: w.deletes, fileRecord: record, kind: w.kind, movedFrom: w.movedFrom,
-                                 pieces: Set(planner.pieceFiles.filter { $0.value == path }.keys)))
-            if delete || newBytes != nil {
+                                 pieces: Set(planner.pieceFiles.filter { $0.value == path }.keys), forgets: forgets))
+            if forgets {
+                files.append(.init(target: w.target, path: path, backupDirectory: backupsDir.appendingPathComponent(w.backupRel).deletingLastPathComponent().path,
+                                   lines: [], notes: w.notes, leftAsItIs: true))
+            } else if delete || newBytes != nil {
                 // QA #724 INFO-13: the first step starts from the file as it is (absent: nothing, never the
                 // `{}` skeleton) and the last ends at what is written (a restored original, or nothing).
                 // A file that appears or goes is one whole-file hunk; otherwise one hunk per splice.
@@ -269,7 +285,8 @@ final class ManagedConfig: Sendable {
         guard hash(stateBytes, at: stateURL) == plan.stateHash else { return .changed(committed: []) }
         var state = stateBytes.flatMap(Self.decodeState) ?? ManagedConfigState()
         // Spec 2.5 step 1: every target still matches the plan before anything is written.
-        for f in plan.files where f.writes && hash(read(f.url), at: f.url) != f.baseHash { return .changed(committed: []) }
+        // #1244: a forget too, so markers mended while the sheet was up are planned again (a real Remove, asked anew)
+        for f in plan.files where (f.writes || f.forgets) && hash(read(f.url), at: f.url) != f.baseHash { return .changed(committed: []) }
         // A-INFO-6: the path shape is re-checked after consent too: a symlink that appeared or went
         // while the sheet was up is a concurrent change (replan, and the sheet again if the set differs).
         for f in plan.files where f.writes {

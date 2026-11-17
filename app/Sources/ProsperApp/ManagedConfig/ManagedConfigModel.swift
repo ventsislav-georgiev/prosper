@@ -62,6 +62,9 @@ enum ManagedConfigRefusalReason: Error, Equatable, Sendable, CustomStringConvert
     case localSettings
     case refusedJSONPath(String)
     case corrupt(String)
+    /// #1244: a block's prosper marker lines do not pair up (the 1-based lines named). Typed, so an uninstall
+    /// meets it by case (ManagedConfigPlanner.forgetBroken), never by matching the text.
+    case brokenMarkers(lines: [Int])
     case drifted
     case missing
     case replaced
@@ -83,6 +86,7 @@ enum ManagedConfigRefusalReason: Error, Equatable, Sendable, CustomStringConvert
         case .localSettings: return "refused: settings.local.json is Claude Code's local-scope file; user settings go to settings.json"
         case .refusedJSONPath(let path): return "refused JSON path \(path): not in the managed-key allowlist"
         case .corrupt(let why): return "corrupt: \(why)"
+        case .brokenMarkers(let lines): return "corrupt: broken prosper markers at line(s) \(lines.map(String.init).joined(separator: ", "))"
         case .drifted: return "drifted: the block was edited by hand; use Repair or Remove"
         case .missing: return "missing: removed by hand; use Repair or Remove"
         case .replaced: return "replaced: the value was changed by hand; use Repair or Remove"
@@ -187,6 +191,8 @@ struct ManagedConfigChangeSet: Equatable, Sendable {
         /// the file does not exist yet / the change deletes it (a file only Prosper wrote)
         var newFile = false
         var deletesFile = false
+        /// #1244: an uninstall over broken markers: the file is left byte for byte, only Prosper's record goes
+        var leftAsItIs = false
     }
 
     var action: Action

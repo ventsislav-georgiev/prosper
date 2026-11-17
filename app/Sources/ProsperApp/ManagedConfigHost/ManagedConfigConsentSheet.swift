@@ -54,6 +54,8 @@ final class ManagedConfigSheetConsent: ManagedConfigConsent {
 @MainActor
 final class ManagedConfigConsentModel: ObservableObject {
     static let liveNote = "Applies to open Claude Code sessions immediately."
+    /// #1244: a forget over broken markers writes nothing; the sheet says so above the planner's note
+    static let leftAsItIsStatus = "this file is not changed: Prosper only drops its record of the block"
 
     let changes: ManagedConfigChangeSet
     private var done: (@MainActor (Bool) -> Void)?
@@ -115,7 +117,8 @@ final class ManagedConfigConsentModel: ObservableObject {
 
     /// A new file has nothing to back up: no backup line for it. #1252: the directory can hold a kit's own names: displayed.
     func backupLine(_ file: ManagedConfigChangeSet.File) -> String? {
-        file.newFile ? nil : "Backup: " + ManagedConfigConsentDisplay.displayed(file.backupDirectory)
+        // #1244: a forget writes no copy either
+        file.newFile || file.leftAsItIs ? nil : "Backup: " + ManagedConfigConsentDisplay.displayed(file.backupDirectory)
     }
 
     /// The planner's sentences, plus the live note for settings.json whatever the planner said.
@@ -133,6 +136,7 @@ final class ManagedConfigConsentModel: ObservableObject {
     func status(_ file: ManagedConfigChangeSet.File) -> String? {
         if file.newFile { return "new file" }
         if file.deletesFile { return "the file is removed (Prosper created it)" }
+        if file.leftAsItIs { return Self.leftAsItIsStatus }
         return nil
     }
 

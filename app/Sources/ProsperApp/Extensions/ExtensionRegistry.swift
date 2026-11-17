@@ -1176,7 +1176,8 @@ final class ExtensionRegistry: ObservableObject {
             }
         }
         guard !recorded.isEmpty else { return nil }
-        let result = await config.remove(owner: owner)
+        // #1244: a block with broken markers is forgotten (its file left as it is) after a sheet that says so, not refused
+        let result = await config.uninstall(owner: owner)
         if result.ok { return nil }
         return result.status == .denied ? "Remove was cancelled: the extension and its config stay" : result.message
     }
