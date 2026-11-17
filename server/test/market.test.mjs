@@ -451,7 +451,7 @@ test("publish spends the D1 statements it did before: the session pair, owner SE
   assert.deepEqual(t.log.map((s) => s.trim().split(/\s+/).slice(0, 2).join(" ")), [
     "SELECT email,",
     "UPDATE sessions",
-    "SELECT owner_email",
+    "SELECT owner_email,",
     "SELECT 1",
     "BATCH",
   ]);
@@ -890,4 +890,36 @@ test("a kit publish spends the same D1 statements and KV puts as an extension pu
   assert.equal((await t.publish(PUB, "com.example.kit", "1.0.0", undefined, KIT)).status, 200);
   assert.equal(t.log.length, 5);
   assert.deepEqual([...t.kv.keys()].sort(), ["pkg:com.example.kit:1.0.0", `rl:publish:${PUB}`]);
+});
+
+// R1493-s1: an existing id never changes kind to or from "kit".
+test("publish: a kind change to or from kit is 409 kind_change before any write; same-kind and theme<->extension go on", async () => {
+  const kinds = (t, id) => t.raw.prepare(`SELECT kind FROM packages WHERE id = ?`).get(id).kind;
+  const vers = (t, id) => t.raw.prepare(`SELECT COUNT(*) n FROM package_versions WHERE package_id = ?`).get(id).n;
+  for (const [from, to] of [[{}, KIT], [KIT, {}], [{ kind: "theme", preview: { t: 1 } }, KIT], [KIT, { kind: "theme", preview: { t: 1 } }]]) {
+    const t = setup();
+    assert.equal((await t.publish(PUB, "com.example.x", "1.0.0", undefined, from)).status, 200);
+    const kv = t.kv.size, kind = kinds(t, "com.example.x");
+    const r = await t.publish(PUB, "com.example.x", "1.1.0", undefined, to);
+    assert.equal(r.status, 409);
+    assert.equal(r.json.error, "kind_change");
+    assert.ok(Object.values(r.json).every((v) => typeof v === "string"));
+    assert.equal(kinds(t, "com.example.x"), kind);
+    assert.equal(t.kv.size, kv, "no KV put");
+    assert.equal(vers(t, "com.example.x"), 1, "no version row");
+  }
+  const t = setup();
+  await t.publish(PUB, "com.example.k", "1.0.0", undefined, KIT);
+  assert.equal((await t.publish(PUB, "com.example.k", "1.1.0", undefined, KIT)).status, 200, "kit -> kit");
+  await t.publish(PUB, "com.example.e", "1.0.0");
+  assert.equal((await t.publish(PUB, "com.example.e", "1.1.0")).status, 200, "extension -> extension");
+  assert.equal((await t.publish(PUB, "com.example.e", "1.2.0", undefined, { kind: "theme" })).status, 200, "extension -> theme");
+});
+
+test("a re-publish of an existing id spends the same D1 statements as before (the kind rides the owner SELECT)", async () => {
+  const t = setup();
+  await t.publish(PUB, "com.example.one", "1.0.0");
+  t.log.length = 0;
+  assert.equal((await t.publish(PUB, "com.example.one", "1.1.0")).status, 200);
+  assert.equal(t.log.length, 5);
 });

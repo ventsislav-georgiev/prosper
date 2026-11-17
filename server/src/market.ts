@@ -195,13 +195,16 @@ async function publish(c: Ctx) {
 
   // Ownership: first publisher owns the id; only they may push more versions.
   const existing = await c.env.DB.prepare(
-    `SELECT owner_email FROM packages WHERE id = ?1`,
+    `SELECT owner_email, kind FROM packages WHERE id = ?1`,
   )
     .bind(id)
-    .first<{ owner_email: string }>();
+    .first<{ owner_email: string; kind: string }>();
   if (existing && existing.owner_email !== email) {
     return c.json({ error: "not_owner" }, 403);
   }
+  // A kit is never swapped with another kind: apps that installed the extension would auto-update into a kit artifact.
+  // Same SELECT as the owner check, so no extra D1 statement. theme <-> extension stays allowed.
+  if (existing && (existing.kind === "kit") !== (kind === "kit")) return c.json({ error: "kind_change" }, 409);
 
   // Versions are immutable once published.
   const dupe = await c.env.DB.prepare(
