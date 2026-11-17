@@ -1692,6 +1692,9 @@ tag from the now-released section and put it on the new top draft.
 - Settings > Agent Island > Agent Sessions: a new "Terminal colours" choice keeps Prosper's colours
   (the default) or uses "My Ghostty theme", which takes only the colour settings from your own
   Ghostty config; Prosper's own keys and clipboard rules stay as they are. (#1456)
+- Settings > Appearance > Theme rows now line up: the selected row's highlight leaves room around
+  its colour swatch, every row's tint dots end at the same place on the right, and the checkmark has
+  its own spot on every row, so nothing shifts when you pick a theme. (#1462)
 
 ## v2.174.0
 

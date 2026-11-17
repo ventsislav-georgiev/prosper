@@ -403,7 +403,7 @@ struct ThemeList: View {
         }
     }
 
-    private func row(_ d: ThemeDescriptor) -> some View {
+    func row(_ d: ThemeDescriptor) -> some View {
         let selected = theme.activeID == d.id
         let palette = theme.previews[d.id] ?? .default
         return Group {
@@ -427,9 +427,11 @@ struct ThemeList: View {
                 swatches(palette)
                 titles(d)
                 Spacer(minLength: sz(12))
-                if selected { checkmark }
+                // The same trailing slots as a tinted row: no dots here, but the room is kept.
+                Color.clear.frame(width: dotsSlotWidth, height: 1).anchorPreference(key: ThemeRowFrames.self, value: .bounds) { [.dotsSlot: $0] }
+                checkmark.opacity(selected ? 1 : 0)
             }
-            .padding(.vertical, sz(6))
+            .padding(.vertical, sz(6)).padding(.horizontal, Self.rowPad)
             .background(highlight(selected))
             .contentShape(Rectangle())
         }
@@ -450,11 +452,16 @@ struct ThemeList: View {
         HStack(spacing: sz(12)) {
             tintedRowButton(d, selected: selected, palette: palette)
             dots(d, options: options, selected: selected)
+                .anchorPreference(key: ThemeRowFrames.self, value: .bounds) { [.dots: $0] }
+                .frame(width: dotsSlotWidth, alignment: .trailing)
+                // A background: a second anchorPreference on the same view would replace the dots' own value.
+                .background(Color.clear.anchorPreference(key: ThemeRowFrames.self, value: .bounds) { [.dotsSlot: $0] })
             // Hidden from VoiceOver: the row button says the theme is active (QA #744 INFO-3).
             Button { theme.select(id: d.id) } label: { checkmark.opacity(selected ? 1 : 0) }
                 .buttonStyle(.plain)
                 .accessibilityHidden(true)
         }
+        .padding(.horizontal, Self.rowPad)
         .background(highlight(selected))
     }
 
@@ -485,18 +492,29 @@ struct ThemeList: View {
         theme.select(id: d.id, tint: key)
     }
 
+    /// Padding between a row's highlight edge and its content (the swatch keeps it).
+    static var rowPad: CGFloat { sz(10) }
+
+    /// Width of the trailing dots area on every row: the most dots any theme has, in their sz(18) slots and sz(4) gaps.
+    private var dotsSlotWidth: CGFloat {
+        let n = CGFloat(theme.tints.values.map(\.count).max() ?? 0)
+        return n > 0 ? n * sz(18) + (n - 1) * sz(4) : 0
+    }
+
     private func titles(_ d: ThemeDescriptor) -> some View {
         VStack(alignment: .leading, spacing: sz(2)) {
             Text(d.title).foregroundStyle(Neon.textPrimary)
             Text(d.isBuiltIn ? "Built-in · \(d.appearance.rawValue)" : "\(d.id) · \(d.appearance.rawValue)")
                 .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
         }
+        .anchorPreference(key: ThemeRowFrames.self, value: .bounds) { [.title: $0] }
     }
 
     private var checkmark: some View {
         Image(systemName: "checkmark.circle.fill")
             .foregroundStyle(Neon.blueBright)
             .shadow(color: Neon.blue.opacity(0.6), radius: sz(4))
+            .anchorPreference(key: ThemeRowFrames.self, value: .bounds) { [.check: $0] }
     }
 
     /// Selected-row highlight — same fill + border treatment as the
@@ -507,6 +525,7 @@ struct ThemeList: View {
             .overlay(
                 RoundedRectangle(cornerRadius: sz(8), style: .continuous)
                     .strokeBorder(Neon.blue.opacity(selected ? 0.45 : 0), lineWidth: 1))
+            .anchorPreference(key: ThemeRowFrames.self, value: .bounds) { [.highlight: $0] }
     }
 
     /// A tiny preview strip: background, accent, secondary accent, text.
@@ -519,6 +538,17 @@ struct ThemeList: View {
         .clipShape(RoundedRectangle(cornerRadius: sz(6), style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: sz(6), style: .continuous)
             .strokeBorder(Neon.stroke, lineWidth: 1))
+        .anchorPreference(key: ThemeRowFrames.self, value: .bounds) { [.swatch: $0] }
+    }
+}
+
+/// The parts of a theme row whose frames the alignment rows read (a preference: nothing is drawn or shown).
+enum ThemeRowPart: Hashable { case highlight, swatch, title, dotsSlot, dots, check }
+
+struct ThemeRowFrames: PreferenceKey {
+    static var defaultValue: [ThemeRowPart: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [ThemeRowPart: Anchor<CGRect>], nextValue: () -> [ThemeRowPart: Anchor<CGRect>]) {
+        value.merge(nextValue()) { a, _ in a }
     }
 }
 
