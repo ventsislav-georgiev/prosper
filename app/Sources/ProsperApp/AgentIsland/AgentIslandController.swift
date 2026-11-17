@@ -1332,7 +1332,8 @@ final class AgentIslandController {
         guard store?.resumeGate.isOK == true else { return }
         // #1228: the Default model, read when it starts (on main: newSessionCommand's `done`); Restart/Resume never pass here.
         newSessionCommand { [weak self] command in
-            self?.spawn(in: folder, command: AgentIsland.withModel(command, model: Preferences.agentIslandDefaultModel))
+            self?.spawn(in: folder, command: AgentIsland.withModel(command, model: Preferences.agentIslandDefaultModel,
+                                                                    effort: Preferences.agentIslandDefaultEffort))
         }
     }
 

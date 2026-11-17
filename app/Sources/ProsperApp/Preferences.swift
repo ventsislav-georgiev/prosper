@@ -443,6 +443,7 @@ enum Preferences {
         static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
+        static let agentIslandDefaultEffort = "agentIslandDefaultEffort"   // #1454, per Mac
         static let agentIslandSidekickSuffix = "agentIslandSidekickSuffix"   // #847, per Mac
         static let agentIslandSidekickPrompt = "agentIslandSidekickPrompt"   // #847 P1d, per Mac
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
@@ -1350,6 +1351,16 @@ enum Preferences {
         set {
             if newValue.isEmpty { defaults.removeObject(forKey: Keys.agentIslandDefaultModel) }
             else { defaults.set(newValue, forKey: Keys.agentIslandDefaultModel) }
+        }
+    }
+
+    /// #1454: the effort a new Claude session starts with; "" = Claude Code's own (the key removed). AgentIsland.withModel
+    /// adds it only when it is one of AgentIsland.effortLevels (the key can be written from outside).
+    static var agentIslandDefaultEffort: String {
+        get { defaults.string(forKey: Keys.agentIslandDefaultEffort) ?? "" }
+        set {
+            if newValue.isEmpty { defaults.removeObject(forKey: Keys.agentIslandDefaultEffort) }
+            else { defaults.set(newValue, forKey: Keys.agentIslandDefaultEffort) }
         }
     }
 

@@ -1143,7 +1143,8 @@ extension AgentIsland {
             switch arg {
             case .operand(let a): return [a]
             case .rest(let r): return r
-            case .option(let o, _): return o[0] == "--model" || o[0].hasPrefix("--model=") ? [] : o
+            case .option(let o, _):   // #1454: and the recorded effort, so a later Default effort wins (as the model)
+                return ["--model", "--effort"].contains { o[0] == $0 || o[0].hasPrefix($0 + "=") } ? [] : o
             }
         }
     }
@@ -1201,18 +1202,30 @@ extension AgentIsland {
     /// wrapper, for --name and --model alike: a list of known wrapper words would stop unknown wrappers (a person's
     /// own launcher script, the common case) from getting the flags; an editor opening a file named claude is the
     /// rare one, and the form shows the command before it starts. Upgrade if that ever bites.
-    static func withModel(_ argv: [String], model: String) -> [String] {
-        guard modelRefusal(model) == nil, isInteractiveClaude(argv),
+    /// #1454: `effort` the same way, by the same rules (a typed --effort / --effort= wins), only when it is one of
+    /// effortLevels ("" = Claude Code picks); it goes after the model (`claude --model m --effort e`).
+    static func withModel(_ argv: [String], model: String, effort: String = "") -> [String] {
+        let withEffort = effortLevels.contains(effort) ? adding("--effort", effort, to: argv) : argv
+        return modelRefusal(model) == nil ? adding("--model", model, to: withEffort) : withEffort
+    }
+
+    /// #1454: Claude Code's --effort levels, in the settings menu's order (AgentModelEffort.levels, the transcript's set).
+    static let effortLevels = ["low", "medium", "high", "xhigh", "max"]
+
+    /// #1228: `flag value` right after the claude token under withModel's rules (a) to (c); `flag` is typed when
+    /// claudeArgs holds `flag` or `flag=`.
+    private static func adding(_ flag: String, _ value: String, to argv: [String]) -> [String] {
+        guard isInteractiveClaude(argv),
               let tok = argv.firstIndex(where: { dchBase($0, is: "claude") }),
               claudeRuns(argv, tok: tok) || !argv[..<tok].contains(where: { $0.hasPrefix("-") }),
               !claudeArgs(argv[(tok + 1)...]).contains(where: { arg in
                   guard case .option(let o, _) = arg, let a = o.first else { return false }
-                  return a == "--model" || a.hasPrefix("--model=") || conversationFlags.contains(a)
+                  return a == flag || a.hasPrefix(flag + "=") || conversationFlags.contains(a)
                       || conversationFlagsEq.contains { a.hasPrefix($0) } || clusterContinues(a)
               })
         else { return argv }
         var out = argv
-        out.insert(contentsOf: ["--model", model], at: tok + 1)
+        out.insert(contentsOf: [flag, value], at: tok + 1)
         return out
     }
 

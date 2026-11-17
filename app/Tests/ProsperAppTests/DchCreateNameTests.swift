@@ -209,3 +209,24 @@ final class DchCreateNameTests: XCTestCase {
         XCTAssertEqual(spawned("", ["claude"]), ["-E", "--", "claude"])
     }
 }
+
+/// #1454: the Mac's Default effort on a phone's create, as the Default model; a typed one kept; a resume gets none.
+extension DchCreateNameTests {
+    func testAPhoneCreateGetsTheDefaultEffort() {
+        XCTAssertTrue(Preferences.defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
+        let keys = ["agentIslandDefaultEffort", "agentIslandDefaultModel"], saved = keys.map { Preferences.defaults.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { Preferences.defaults.set(v, forKey: k) } }
+        Preferences.agentIslandDefaultModel = ""
+        Preferences.agentIslandDefaultEffort = ""
+        XCTAssertEqual(spawned("work", ["claude"]), ["-E", "-n", "work", "--", "claude", "--name", "work"], "unset: today's")
+        Preferences.agentIslandDefaultEffort = "high"
+        XCTAssertEqual(spawned("work", ["claude"]), ["-E", "-n", "work", "--", "claude", "--name", "work", "--effort", "high"])
+        XCTAssertEqual(spawned("work", ["claude", "--effort=low"]), ["-E", "-n", "work", "--", "claude", "--name", "work", "--effort=low"],
+                       "a typed effort wins")
+        XCTAssertEqual(spawned("work", ["claude", "--resume", "abc"]), ["-E", "-n", "work", "--", "claude", "--name", "work", "--resume", "abc"],
+                       "a resume keeps what it has")
+        Preferences.agentIslandDefaultModel = "sonnet"
+        XCTAssertEqual(spawned("work", ["claude"]),
+                       ["-E", "-n", "work", "--", "claude", "--name", "work", "--model", "sonnet", "--effort", "high"], "both")
+    }
+}

@@ -61,6 +61,17 @@ struct AgentIslandPane: View {
         if modelRefusal == nil { model = Preferences.agentIslandDefaultModel; modelSaved = model }
     }
 
+    /// #1454: the Default effort menu ("" = Claude Code picks); a saved value outside the levels shows as that.
+    @State private var effort = Self.shownEffort()
+    nonisolated static func shownEffort() -> String {
+        AgentIsland.effortLevels.contains(Preferences.agentIslandDefaultEffort) ? Preferences.agentIslandDefaultEffort : ""
+    }
+    static let effortDefaultLabel = "Claude Code picks"
+    /// #1454: the menu's pick, saved at once ("" clears the key; nothing else outside the levels is saved).
+    static func commitEffort(_ v: String) {
+        if v.isEmpty || AgentIsland.effortLevels.contains(v) { Preferences.agentIslandDefaultEffort = v }
+    }
+
     /// #1338: the Pairs field, what it last read or saved (leaving commits only an edit), and why its last commit
     /// was refused (nil: saved).
     @State private var suffix = Preferences.agentIslandSidekickSuffix
@@ -196,6 +207,17 @@ struct AgentIslandPane: View {
                         aliasesMenu("...")
                     }
                 }
+            }
+            NeonDivider()
+            NeonRow("Default effort") {
+                // Menu, not segmented: segmented controls ignore the UI scale.
+                Picker("", selection: $effort) {
+                    Text(Self.effortDefaultLabel).tag("")
+                    ForEach(AgentIsland.effortLevels, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+                .accessibilityLabel("Default effort")
+                .onChange(of: effort) { _, v in Self.commitEffort(v) }
             }
         }
         .onAppear {

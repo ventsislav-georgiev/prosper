@@ -1685,6 +1685,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: the header count reads like "6/17 active · 🤖 9" (sessions working or needing
   input, of all, and the total sub-agents); hover it, or use VoiceOver, for the full split; a narrow
   header drops the word "active". (#1467)
+- Settings > Agent Island > New session has a Default effort menu under Default model: new Claude
+  sessions (and their sidekick, and sessions started from the phone) start with that effort unless
+  the command already sets one; "Claude Code picks" leaves it to Claude Code, and Restart and Resume
+  keep what the session had. (#1454)
 
 ## v2.174.0
 

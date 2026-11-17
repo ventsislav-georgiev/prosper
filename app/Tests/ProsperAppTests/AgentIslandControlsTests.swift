@@ -7087,3 +7087,66 @@ extension AgentIslandControlsTests {
         XCTAssertEqual(store.actions[Self.pairDir], "Stop both: api stopped, api-qa stopped")
     }
 }
+
+/// #1454: the Default effort through the island's New session; Restart and Resume run today's dch verbs.
+extension AgentIslandControlsTests {
+    @MainActor
+    func testDefaultEffortReachesNewSessionOnlyNeverRestartOrResume() {
+        XCTAssertTrue(Preferences.defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
+        let keys = ["agentIslandDefaultEffort", "agentIslandDefaultModel"], saved = keys.map { Preferences.defaults.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { Preferences.defaults.set(v, forKey: k) }; Preferences.agentIslandNewSessionCommand = "" }
+        Preferences.agentIslandDefaultModel = ""
+        Preferences.agentIslandDefaultEffort = "high"
+        Preferences.agentIslandNewSessionCommand = "/opt/homebrew/bin/headroom wrap claude --chrome"
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        c.restart(session("a"))
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "a")) }
+        let x = record("x")
+        c.resume(x)
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(x.id) }
+        c.newSession(in: "/src/app")
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        XCTAssertEqual(f.args, [["--restart", "a", "--include-agents", "-f", "--json"], ["--revive", "x", "--json"],
+                                ["--spawn", "app", "--", "/opt/homebrew/bin/headroom", "wrap", "claude", "--name", "app",
+                                 "--effort", "high", "--chrome"]])
+        XCTAssertEqual(f.args.last?.filter { $0 == "--effort" }.count, 1, "the flag once")
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "/opt/homebrew/bin/headroom wrap claude --chrome",
+                       "the saved command never takes the flag")
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "app")) }
+    }
+
+    /// As F1228-1 for the model: an inferred command is stored without the recorded effort, so a later one wins.
+    @MainActor
+    func testInferredCommandStoredWithoutEffortSoALaterDefaultEffortWins() throws {
+        XCTAssertTrue(Preferences.defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
+        let keys = ["agentIslandDefaultEffort", "agentIslandDefaultModel"], saved = keys.map { Preferences.defaults.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { Preferences.defaults.set(v, forKey: k) }; Preferences.agentIslandNewSessionCommand = "" }
+        Preferences.agentIslandNewSessionCommand = ""
+        Preferences.agentIslandDefaultModel = ""
+        Preferences.agentIslandDefaultEffort = "high"
+        let f = FakeProc()
+        let c = opened(f, [session("a")])
+        var live = agentRecord("a", ended: 0, cwd: "/a", launch: ["claude"], argv: ["claude", "--effort", "high", "--chrome"])
+        live.end = ""
+        let rec = live
+        c.readLiveRecords = { _ in [rec] }   // runs on the controller's queue, off main
+        c.newSession(in: "/x/proj")
+        settle(c) { !f.args.isEmpty }
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome", "the stored command holds no --effort")
+        XCTAssertEqual(f.args.last, ["--spawn", "proj", "--", "claude", "--name", "proj", "--effort", "high", "--chrome"])
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "proj")) }
+        Preferences.agentIslandDefaultEffort = "low"
+        c.newSession(in: "/x/two")
+        settle(c) { f.args.count == 2 }
+        XCTAssertEqual(f.args.last, ["--spawn", "two", "--", "claude", "--name", "two", "--effort", "low", "--chrome"])
+        f.release.signal()
+        settle(c) { !c.runner.isBusy(AgentSessionKey(dir: "/d", name: "two")) }
+    }
+}
