@@ -273,6 +273,27 @@ final class CCPoolUsageRecordTests: XCTestCase {
         XCTAssertEqual(log.lines.filter { $0.contains("usage record") }, ["-: usage record could not be opened; 1 row(s) dropped"])
     }
 
+    /// R1482b-r1: with a reader already open the O_NONBLOCK open succeeds, so only the fstat check refuses the FIFO.
+    func testFifoWithAReaderOpenIsRefusedByFstat() throws {
+        let dir = tempDir().appendingPathComponent("usage")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fifo = dir.appendingPathComponent("usage-\(recDay).jsonl").path
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        let reader = open(fifo, O_RDONLY | O_NONBLOCK)
+        XCTAssertGreaterThanOrEqual(reader, 0)
+        defer { if reader >= 0 { Darwin.close(reader) } }
+        let log = ThrottleLog()
+        let w = CCPoolUsageRecord(directory: dir, logger: log)
+        w.add(writerRow())
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async { w.flush(); done.signal() }
+        XCTAssertTrue(done.wait(timeout: .now() + 2) == .success, "flush() returned within 2 s")
+        var buf = [UInt8](repeating: 0, count: 64)
+        // No writer ever held the FIFO, so the reader sees end of file: 0 bytes.
+        XCTAssertEqual(read(reader, &buf, buf.count), 0)
+        XCTAssertEqual(log.lines.filter { $0.contains("usage record") }, ["-: usage record could not be opened; 1 row(s) dropped"])
+    }
+
     /// i2: the time stays below year 9999, so a day file name always matches isOwnName.
     func testRowTimeIsBelowYear9999() {
         var row = writerRow()
