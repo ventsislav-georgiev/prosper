@@ -108,6 +108,9 @@ final class ClipboardKeyTests: XCTestCase {
         let again = ClipboardStore(dir: d, keySource: { key })
         XCTAssertTrue(Set(again.items.compactMap { again.text(for: $0) }) == ["alpha", "delta", "epsilon"],
                       "the unpinned disk row and the cleared clip are gone, the pinned one and the later clips stay")
+        // R1288-m1: a cleared unpinned row back in the index has no blob, so the text set above drops it.
+        XCTAssertEqual(again.items.count, 3, "alpha, delta, epsilon: no blobless ghost row")
+        XCTAssertTrue(again.items.allSatisfy { again.text(for: $0) != nil }, "every row reads back")
         XCTAssertEqual(again.items.filter(\.pinned).count, 1)
         let blobs = blobNames(d)
         XCTAssertTrue(blobs.contains(names.pinned), "the pinned row keeps its blob")
