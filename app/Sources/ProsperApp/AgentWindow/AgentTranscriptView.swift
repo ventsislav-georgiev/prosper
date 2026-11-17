@@ -73,6 +73,7 @@ struct AgentTranscriptView: View {
         // #860: no fill of its own; the window's SettingsBackground shows through at the live opacity.
         .onAppear { if scrolls && ownsLifecycle { model.start() } }
         .onDisappear { if scrolls && ownsLifecycle { model.stop() } }
+        .modifier(XrayRefScope(transcript: model))   // #1418: gate B on only: the refs and the link handler
     }
 
     /// QA #657 INFO-6: one ScrollView across a level switch (the level is in each row's id, not the ScrollView's), so the
@@ -417,13 +418,13 @@ struct TranscriptBlockView: View {
                 RoundedRectangle(cornerRadius: 1).fill(Neon.blue).frame(width: 2)
                 VStack(alignment: .leading, spacing: sz(3)) {
                     Text("You").font(Neon.font(10, weight: .semibold)).foregroundStyle(Neon.blue)
-                    ClipText(clip: c, expand: expand)
+                    ClipText(clip: c, expand: expand, refLinks: true)
                 }
             }
             .padding(sz(8))
             .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.cardHi))
         case .assistant(let c):
-            ClipText(clip: c, markdown: true, expand: expand)
+            ClipText(clip: c, markdown: true, expand: expand, refLinks: true)
         case .thinking(let c):
             Fold(icon: "brain", title: "Thinking", detail: c.text.isEmpty ? "not recorded" : nil,
                  open: expanded && !c.text.isEmpty) {
@@ -719,6 +720,9 @@ private struct ClipText: View {
     var markdown = false
     var color: Color = Neon.textPrimary
     var expand: (Clip) async -> String? = { _ in nil }
+    /// #1418: a user or assistant prose clip, where refs are linked (gate B); tool output, bash and diffs never are.
+    var refLinks = false
+    @Environment(\.xrayRefEntries) private var refs
     @State private var full: String?
 
     var body: some View {
@@ -736,6 +740,7 @@ private struct ClipText: View {
     }
 
     private func text(_ s: String) -> Text {
+        if refLinks, let a = XrayRefSpans.attributed(s, markdown: markdown, refs: refs, color: color) { return Text(a) }
         guard markdown, let a = transcriptMarkdown(s) else { return Text(s) }
         return Text(a)
     }

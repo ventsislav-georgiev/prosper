@@ -84,7 +84,7 @@ final class XrayPanels: ObservableObject {
     }
 
     /// #1352: the window's presenter, the transcript, the link opener and the cwd, for the panel that came to `pane`.
-    private func wire(_ m: XrayPanelModel, _ pane: UUID) {
+    func wire(_ m: XrayPanelModel, _ pane: UUID) {   // #1418: and XrayRefLink.panel, for a transcript link's card
         let target = m.target
         // #1417: `closed` runs once when the card goes, whoever closed it (the ref card cancels its --ref read there)
         func show(_ view: AnyView, _ size: CGSize, _ closed: @escaping @MainActor () -> Void) {
