@@ -1623,6 +1623,8 @@ tag from the now-released section and put it on the new top draft.
   program is not reading input. (#1171)
 - Reveal in Finder for a folder Prosper could not load now says which folder it belongs to when read
   by VoiceOver. (#1433)
+- VoiceOver no longer reads "go down" after "Recent folders" on the New session form's folder menu
+  button; the chevron looks the same. (#1429)
 
 ## v2.174.0
 

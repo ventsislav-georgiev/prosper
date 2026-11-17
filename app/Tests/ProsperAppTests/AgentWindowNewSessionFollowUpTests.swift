@@ -385,6 +385,11 @@ extension AgentWindowD1Tests {
             print("#887 a11y tree:\n" + tree.map { "  \($0.role) label=\($0.label) title=\($0.title)" }.joined(separator: "\n"))
             XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.map(\.label), ["Folder", "Name", "Command"])
             XCTAssertEqual(tree.filter { $0.role == "AXMenuButton" }.map(\.title), ["Session list actions", "Recent folders"])
+            // #1429: the chevron's own symbol text ("go down") is not read after the title.
+            let recents = tree.filter { $0.role == "AXMenuButton" && $0.title == "Recent folders" }
+            XCTAssertEqual(recents.count, 1)
+            XCTAssertTrue(recents.allSatisfy { ["", "Recent folders"].contains($0.label) }, "\(recents.map(\.label))")
+            XCTAssertFalse(tree.contains { $0.reads("go down") }, "no node reads the symbol's own text")
         }
     }
 

@@ -54,6 +54,19 @@ enum AgentNewSession {
         return f.hasPrefix("~/") ? home + f.dropFirst(1) : f
     }
 
+    /// #1429: the Recent folders chevron. The borderless menu button takes its label image's own accessibility
+    /// description, and a bare chevron.down symbol's is "go down" (VoiceOver read it after the title). The button
+    /// draws the symbol at its default configuration (the label's font never reached it), so this is that symbol,
+    /// unconfigured, described by the menu's title; the pixel row compares it with the old Image(systemName:).
+    static func recentFoldersChevron() -> NSImage {
+        NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Recent folders") ?? NSImage()
+    }
+
+    /// The menu's label around `chevron` (the tests draw the old symbol image through it too).
+    static func recentFoldersLabel(_ chevron: Image) -> some View {
+        chevron.font(Neon.font(10, weight: .semibold)).foregroundStyle(Neon.textPrimary).contentShape(Rectangle())
+    }
+
     /// `path` with `home` as "~", for the folder field.
     static func abbreviate(_ path: String, home: String) -> String {
         if path == home { return "~" }
@@ -221,6 +234,17 @@ enum AgentNewSession {
     }
 }
 
+extension View {
+    /// The Recent folders menu's style, size and names (#887), shared with the #1429 pixel row.
+    func recentFoldersMenuStyle(disabled: Bool) -> some View {
+        menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .frame(width: sz(18), height: sz(18))
+            .disabled(disabled)
+            .help("Recent folders")
+            .accessibilityLabel("Recent folders")
+    }
+}
+
 /// #1205: the "via ccpool" hint's source while the form is shown. The routing toggle, the proxy's state and the
 /// pool's accounts all change through the ccpool pane model, which publishes each change on main (the toggle's
 /// setter; every start, stop and restart ends in its @Published job count; store changes hop to main first). This
@@ -298,14 +322,9 @@ struct AgentNewSessionView: View {
                             }
                         }
                     } label: {
-                        Image(systemName: "chevron.down").font(Neon.font(10, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                            .contentShape(Rectangle())
+                        AgentNewSession.recentFoldersLabel(Image(nsImage: AgentNewSession.recentFoldersChevron()))
                     }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
-                    .frame(width: sz(18), height: sz(18))
-                    .disabled(model.newSessionRecents.isEmpty)
-                    .help("Recent folders")
-                    .accessibilityLabel("Recent folders")
+                    .recentFoldersMenuStyle(disabled: model.newSessionRecents.isEmpty)
                     if form.host == nil {   // #1323: no folder browser on another Mac in v1
                         AgentPillButton(title: "Choose\u{2026}", icon: "folder", tint: Neon.blue) { model.chooseNewSessionFolder() }
                     }
