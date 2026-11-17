@@ -9,7 +9,36 @@ import XCTest
 /// a fake remote list, a recording spawn); no dch, no host, no window shown.
 final class AgentWindowRemoteArmTests: XCTestCase {
     typealias Lister = AgentWindowRemoteRowsTests.Lister
-    let rows = AgentWindowRemoteRowsTests()
+    let rows = Rows()
+    static let wideArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+
+    /// #1477 b3: AgentWindowRemoteRowsTests' model with every pane terminal on its recorders. With splits on each pane has
+    /// its own controller (made on first need), so a layout's new pane would otherwise get one that never spawns a fake.
+    struct Rows {
+        let base = AgentWindowRemoteRowsTests()
+        @MainActor func session(_ name: String, _ state: AgentState = .idle) -> AgentSession { base.session(name, state) }
+        @MainActor func spin(until done: () -> Bool) { base.spin(until: done) }
+        @MainActor
+        func model(_ lister: Lister, sessions: [AgentSession]) -> (AgentWindowModel, AgentIslandStore, AgentWindowRemoteRowsTests.Log) {
+            let (m, store, log) = base.model(lister, sessions: sessions)
+            let first = m.terminal
+            m.paneAfter = { _, _ in }   // an unfocused pane's rest is never run here
+            m.makeTerminal = {
+                let t = AgentTerminalController()
+                t.request = first.request
+                t.spawn = first.spawn
+                t.makeScreen = { [weak t] events in
+                    if let t, let g = t.grid { t.gridChanged(cols: g.cols, rows: g.rows, generation: t.generation) }
+                    return AgentTerminalTests.FakeScreen(events)
+                }
+                t.after = { _, _ in }
+                t.clientVersion = first.clientVersion
+                t.gridChanged(cols: 80, rows: 24)
+                return t
+            }
+            return (m, store, log)
+        }
+    }
     static let api = AgentSidebar.RowID.remote(host: "host-a", name: "api")
     static let apiKey = AgentTerminalSpawn.remoteKey(host: "host-a", name: "api")
     static let apiArgs = ["-E", "--host", "host-a", "-a", "api", "--scrollback", "2000"]
@@ -82,6 +111,30 @@ final class AgentWindowRemoteArmTests: XCTestCase {
         m.click(Self.api)
         XCTAssertEqual(log.spawns.count, 1)
         XCTAssertEqual(log.spawns.last?.args, Self.apiArgs)
+    }
+
+    /// #1477 b3: the same in a split: the remote target in the unfocused pane, a local session focused. A click on the
+    /// remote row focuses its pane (rule 1) and starts exactly one attach, in that pane's terminal.
+    @MainActor
+    func testARestoredRemoteTargetInAnUnfocusedPaneWaitsForAClick() throws {
+        XCTAssertTrue(AgentPaneLayout.splitsEnabled)
+        let (m, _, log) = rows.model(Lister(AgentWindowRemoteRowsTests.fixture), sessions: [rows.session("web")])
+        defer { m.close() }
+        m.paneArea = Self.wideArea
+        let local = Pane(id: UUID(), target: .session(dir: AgentWindowRemoteRowsTests.dir, name: "web"))
+        let remote = Pane(id: UUID(), target: .remote(host: "host-a", name: "api"))
+        m.adopt(PaneLayout(id: UUID(), name: nil, tree: .split(.columns, ratio: 0.5, .leaf(local), .leaf(remote)),
+                           focused: local.id, zoomed: nil))
+        m.refresh()
+        let n = log.spawns.count   // the focused local "web" may have attached
+        XCTAssertFalse(log.spawns.contains { $0.args == Self.apiArgs }, "a restored target never attaches")
+        m.click(Self.api)
+        XCTAssertEqual(m.layout.focused, remote.id, "the click focuses the remote target's pane")
+        XCTAssertEqual(log.spawns.count, n + 1, "a click: exactly one attach")
+        XCTAssertEqual(log.spawns.last?.args, Self.apiArgs)
+        XCTAssertEqual(m.terminal.key, Self.apiKey, "in the focused pane's own terminal")
+        m.refresh()
+        XCTAssertEqual(log.spawns.count, n + 1, "the next refresh keeps the one attach")
     }
 
     // MARK: (d) the New session form closing over it

@@ -1705,8 +1705,6 @@ final class AgentWindowModel: ObservableObject {
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true, placement: PaneLayout.Placement = .focused) {
         if manual { removing = nil; pendingSpawn = nil; newSession = nil }
-        // #1330 (R836-q1): only the human's pick (a click, a key) arms a remote attach; follow() alone never starts one.
-        if manual, case let .remote(h, n)? = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
         // `settle()` drops the strip's question on a change of row.
@@ -1718,6 +1716,9 @@ final class AgentWindowModel: ObservableObject {
         case let .failure(r):
             paneRefusal = r   // R899-2: kept for the pane notice line, never dropped silently
         }
+        // #1330 (R836-q1): only the human's pick (a click, a key) arms a remote attach; follow() alone never starts one.
+        // #1477 b3: armed after the move, on the pane the pick focused (rule 1 can move the focus to another pane's terminal).
+        if manual, case let .remote(h, n)? = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
         follow()
     }
 
