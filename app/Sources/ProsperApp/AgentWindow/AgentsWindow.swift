@@ -778,6 +778,8 @@ struct AgentWindowRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .topLeading) { if model.sidebarMode == .slide { slideLayer } }
+        // #1457: Mini's quick tooltip, over the panes beside its row (only Mini rows report bounds)
+        .overlayPreferenceValue(AgentMiniTipAnchors.self) { AgentMiniTipLabel(tip: model.miniTip, anchors: $0) }
     }
 
     /// #1379 Slide: the left edge's strip (its pointer enter slides the sidebar in) and, while slid in or pinned, the full
@@ -817,7 +819,7 @@ enum AgentSidebarMode: String, CaseIterable {
     var hint: String {
         switch self {
         case .full: return "Each session's name, state and details."
-        case .mini: return "A narrow rail: each session's state and number; hover for its name."
+        case .mini: return "A narrow rail: each session's state, short name and number; hover for its full name."
         case .slide: return "Hidden: point at the window's left edge, or press Control-Command-S to keep it open."
         }
     }
@@ -978,7 +980,8 @@ struct AgentSidebarView: View {
         Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                 number: model.number(row.id), inView: inView.contains(row.id),
-                                openPR: model.openPR, mini: mini, show: details)   // #1455
+                                openPR: model.openPR, mini: mini, show: details,   // #1455
+                                tip: mini ? model.miniTip : nil)   // #1457
         }
         .buttonStyle(.plain)
         .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
@@ -1077,7 +1080,7 @@ struct AgentSidebarTitleRow: View {
         if model.sidebarMode == .mini { miniBody } else { fullBody }
     }
 
-    /// #1379 Mini: the rail keeps the list-wide "..." and #847's [>_] [+] (buttonsWidth fits sz(84)); the name and the count go.
+    /// #1379 Mini: the rail keeps the list-wide "..." and #847's [>_] [+] (buttonsWidth fits the rail, #1457 measured); the name and the count go.
     var miniBody: some View {
         HStack(spacing: 0) {
             if let store = model.store { buttons(store) }
@@ -1371,6 +1374,11 @@ struct AgentSidebarRowView: View {
     struct Inks { var primary, quiet, blue, blocked, mark: Color; var badges: ThemePalette }
     /// #1455: the Row details shown (Settings > Agent Island > Row details); the agents, merged and open PRs are the Row's.
     var show: AgentIslandRowDetails = .all
+    /// #1457: Mini's quick full-name tooltip (the window model's); nil, none.
+    var tip: AgentMiniTip? = nil
+
+    /// #1457: Mini's pointer entering (true) or leaving the row.
+    func hover(_ inside: Bool) { tip?.hover(row, inside) }
 
     /// #1455: a live row's state word goes with State off, unless an action or notice stands in its place; History keeps it.
     var stateShown: Bool { show.state || row.state == nil || row.detail != row.state?.label }
@@ -1403,23 +1411,21 @@ struct AgentSidebarRowView: View {
         }
     }
 
-    /// #1379 Mini: the state mark, the Command-<n> chip (its column kept without one) and the needs-you mark (blocked or done);
-    /// the full row's words are its tooltip and its one VoiceOver label.
+    /// #1379 Mini: the state mark, #1457 the name cut to `miniNameLength` characters with its Command number as a superscript
+    /// (rows 1-9 with Shortcut on), and the needs-you mark (blocked or done); the full row's words are its tooltip and its one
+    /// VoiceOver label, and the hover shows the whole name beside the row after `AgentMiniTip.delay` (`hover`).
     var miniBody: some View {
         let needs = row.session.map(AgentSidebar.needsYou) ?? false
-        return HStack(spacing: sz(4)) {
-            stateMark
-            ZStack {
-                Self.miniDigitColumn
-                if let number = shownNumber, number <= 9 {   // #1470: the 84 pt rail fits a Command chip only; rows 10-18 still jump
-                    AgentDigitChip(number: number, active: selected).modifier(AgentSidebarRowProbe(kind: "miniChip", title: row.title))
-                }
-            }
+        let number = shownNumber.flatMap { $0 <= 9 ? $0 : nil }   // #1470: rows 10-18 (Option-Command) still jump, unmarked
+        return Self.miniLine(mark: stateMark, name: Self.miniName(row.title), number: number, selected: selected,
+                             ink: row.state == nil ? ink(.quiet) : inks?.primary ?? Neon.textPrimary, title: row.title) {
             Circle().fill(agentStateColor(.blocked)).frame(width: sz(6), height: sz(6)).opacity(needs ? 1 : 0)
                 .modifier(AgentSidebarRowProbe(kind: needs ? "miniNeeds" : "miniSlot", title: row.title))
         }
-        .padding(.horizontal, sz(6)).padding(.vertical, sz(7))
+        .padding(.vertical, sz(7))
         .frame(maxWidth: .infinity, alignment: .leading)
+        .anchorPreference(key: AgentMiniTipAnchors.self, value: .bounds) { [row.id: $0] }
+        .onHover(perform: hover)
         .coordinateSpace(.named(agentSidebarRowSpace))
         .background(NeonSelectedRowFill(selected: selected))
         .overlay(alignment: .leading) { NeonSelectionBar().opacity(selected ? 1 : 0) }
@@ -1483,15 +1489,79 @@ let agentSidebarRowSpace = "agentSidebarRow"
 /// R900-4b-2: the observer is attached only while the probe is set (read at body time), so the product has none.
 struct AgentSidebarRowProbe: ViewModifier {
     let kind: String, title: String
+    /// #1457: the frame in the window (Mini's tooltip, outside any row) instead of the row's space.
+    var global = false
     @ViewBuilder func body(content: Content) -> some View {
         if AgentSidebarRowView.probe != nil {
-            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(agentSidebarRowSpace)) }) { r in
+            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: global ? .global : .named(agentSidebarRowSpace)) }) { r in
                 agentProbeCalled()
                 AgentSidebarRowView.probe?(kind, title, r)
             }
         } else {
             content
         }
+    }
+}
+
+/// #1457: Mini's quick tooltip: the hovered row's whole name, shown `delay` after the pointer enters it and gone when it
+/// leaves. The window model holds one; the rows report to it through `AgentSidebarRowView.hover`.
+@MainActor
+final class AgentMiniTip: ObservableObject {
+    struct Shown: Equatable { let id: AgentSidebar.RowID, title: String }
+    static var delay: Duration = .milliseconds(300)
+    @Published private(set) var shown: Shown?
+    private var pending: (id: AgentSidebar.RowID, task: Task<Void, Never>)?
+
+    func hover(_ row: AgentSidebar.Row, _ inside: Bool) {
+        if inside {
+            pending?.task.cancel()
+            let next = Shown(id: row.id, title: OutsideText.shown(row.title))
+            pending = (row.id, Task { @MainActor [weak self] in
+                try? await Task.sleep(for: AgentMiniTip.delay)
+                guard !Task.isCancelled, let self else { return }
+                self.shown = next
+                self.pending = nil
+            })
+        } else {
+            // another row's enter may come first: only this row's pending show and shown label go
+            if pending?.id == row.id { pending?.task.cancel(); pending = nil }
+            if shown?.id == row.id { shown = nil }
+        }
+    }
+}
+
+/// #1457: every drawn Mini row's bounds, by row (the tooltip's place).
+struct AgentMiniTipAnchors: PreferenceKey {
+    static let defaultValue: [AgentSidebar.RowID: Anchor<CGRect>] = [:]
+    static func reduce(value: inout [AgentSidebar.RowID: Anchor<CGRect>], nextValue: () -> [AgentSidebar.RowID: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+/// #1457: the tooltip's label in the window's own overlay (never a window or panel of its own), beside the hovered Mini
+/// row, one line cut to the window's width. Not hit-tested (the row keeps its hover) and not read (the row's label is).
+struct AgentMiniTipLabel: View {
+    @ObservedObject var tip: AgentMiniTip
+    let anchors: [AgentSidebar.RowID: Anchor<CGRect>]
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let s = tip.shown, let a = anchors[s.id] {
+                let r = proxy[a], gap = sz(6)
+                Text(s.title).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .padding(.horizontal, sz(6)).padding(.vertical, sz(3))
+                    .background(RoundedRectangle(cornerRadius: sz(4)).fill(Neon.bgBottom)
+                        .overlay(RoundedRectangle(cornerRadius: sz(4)).strokeBorder(Neon.stroke, lineWidth: 1)))
+                    .modifier(AgentSidebarRowProbe(kind: "miniTip", title: s.title, global: true))
+                    .frame(maxWidth: max(0, proxy.size.width - r.maxX - 2 * gap), alignment: .leading)
+                    .alignmentGuide(.leading) { _ in -(r.maxX + gap) }
+                    .alignmentGuide(.top) { d in d.height / 2 - r.midY }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -1584,6 +1654,46 @@ extension AgentSidebarRowView {
     /// #1470: Mini's column keeps the nine Command chips' width (its rail has no room for an Option-Command chip).
     static var miniDigitColumn: some View {
         ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
+    }
+
+    /// #1457 (operator 2026-11-17): the characters of a session's name Mini shows.
+    static let miniNameLength = 8
+
+    /// #1457: the name as Mini shows it: OutsideText's, cut to `miniNameLength` Characters (never inside a grapheme) plus "...".
+    static func miniName(_ title: String) -> String {
+        let s = OutsideText.shown(title)
+        return s.count > miniNameLength ? String(s.prefix(miniNameLength)) + "\u{2026}" : s
+    }
+
+    /// #1457: Mini's line: the mark's slot, the name with the Command number's superscript after it (the widest digit's slot
+    /// kept), then the needs-you slot at the trailing edge. The rail is measured from this very line (`miniWidestLine`).
+    static func miniLine<Mark: View, Needs: View>(mark: Mark, name: String, number: Int?, selected: Bool, ink: Color,
+                                                  title: String, @ViewBuilder needs: () -> Needs) -> some View {
+        HStack(spacing: sz(4)) {
+            mark
+            HStack(alignment: .top, spacing: sz(1)) {
+                Text(name).font(Neon.font(11, weight: .medium)).foregroundStyle(ink).lineLimit(1).truncationMode(.tail)
+                    .modifier(AgentSidebarRowProbe(kind: "miniName", title: title))
+                ZStack(alignment: .leading) {
+                    ForEach(1...9, id: \.self) { miniSuperscript($0, selected: selected).hidden() }
+                    if let number { miniSuperscript(number, selected: selected).modifier(AgentSidebarRowProbe(kind: "miniSup", title: title)) }
+                }
+            }
+            Spacer(minLength: 0)
+            needs()
+        }
+        .padding(.horizontal, sz(6))
+    }
+
+    static func miniSuperscript(_ n: Int, selected: Bool) -> some View {
+        Text("\(n)").font(Neon.font(8, weight: .bold, design: .rounded))
+            .foregroundStyle(selected ? Neon.blue : Neon.faded(Neon.blue, 0.75)).fixedSize()
+    }
+
+    /// #1457: the widest Mini line: a name of `miniNameLength` W's cut as a longer name is, the mark's and needs-you slots.
+    static var miniWidestLine: some View {
+        miniLine(mark: Color.clear.frame(width: sz(14), height: 0), name: miniName(String(repeating: "W", count: miniNameLength + 1)),
+                 number: nil, selected: false, ink: .clear, title: "") { Color.clear.frame(width: sz(6), height: sz(6)) }
     }
 
     /// #1470 a2: each view's exact ideal width, unrounded (a fittingSize is whole points rounded up); [] if not laid out.

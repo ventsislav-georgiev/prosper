@@ -90,7 +90,7 @@ final class AgentSidebarModeTests: XCTestCase {
                 let size = CGSize(width: 1000 * scale, height: 680 * scale)
                 for mode in AgentSidebarMode.allCases {
                     try built(mode) { win, m in
-                        let want: CGFloat = mode == .full ? AgentWindowModel.fullSidebarWidth : mode == .mini ? sz(84) : 0
+                        let want: CGFloat = mode == .full ? AgentWindowModel.fullSidebarWidth : mode == .mini ? AgentWindowModel.miniSidebarWidth : 0
                         XCTAssertEqual(m.sidebarColumnWidth, want, accuracy: 0.01, "\(mode) at \(scale)")
                         XCTAssertEqual(m.paneAreaFrame(in: size)?.minX ?? -1, mode == .slide ? 0 : want + 1, accuracy: 0.01,
                                        "the panes start after the column, \(mode) at \(scale)")
@@ -113,34 +113,36 @@ final class AgentSidebarModeTests: XCTestCase {
 
     // MARK: Mini
 
-    /// A Mini row: its VoiceOver label is the full row's (the session's words), its tooltip the same words; the Command-<n> chip
-    /// and the needs-you mark are drawn for a numbered blocked row; an idle row without a number has neither.
+    /// A Mini row: its VoiceOver label is the full row's (the session's words), its tooltip the same words; the Command-<n>
+    /// superscript (#1457, was the chip) and the needs-you mark are drawn for a numbered blocked row; an idle row without a
+    /// number has neither. The row's width is the measured rail's less the list's padding (#1457, was sz(68)).
     func testMiniRowKeepsTheWordsAndDrawsTheNumberAndTheNeedsYouMark() throws {
         try withModeRow {
             let blocked = AgentSidebar.row(d1.session("api", .blocked), details: .all, now: AgentWindowD1Tests.now)
             let idle = AgentSidebar.row(d1.session("api-qa", .idle), details: .all, now: AgentWindowD1Tests.now)
             let full = AgentSidebarRowView(row: blocked, selected: false, number: 2).accessibilityWords
             XCTAssertTrue(full.hasPrefix("api, "), full)
+            let row = AgentWindowModel.miniSidebarWidth - 2 * sz(8)
             let tree = AXTreeSupport.tree(AgentSidebarRowView(row: blocked, selected: false, number: 2, mini: true)
-                .frame(width: sz(68)), CGSize(width: sz(68), height: 60)) { t in t.contains { $0.label.hasPrefix("api") } }
+                .frame(width: row), CGSize(width: row, height: 60)) { t in t.contains { $0.label.hasPrefix("api") } }
             let node = try XCTUnwrap(tree.first { $0.label.hasPrefix("api") }, "\(tree.map(\.label))")
             XCTAssertEqual(node.label, full, "VoiceOver reads the full row's words")
             XCTAssertEqual(node.help, full, "the tooltip holds the full row's words")
             let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
             for scale in Self.scales {
                 ThemeRuntime.scale = scale
-                let width = sz(68)
+                let width = AgentWindowModel.miniSidebarWidth - 2 * sz(8)
                 let on = rowParts(AgentSidebarRowView(row: blocked, selected: false, number: 2, mini: true), width: width)
-                XCTAssertNotNil(on["miniChip"], "the Command-2 chip is drawn at \(scale): \(on.keys.sorted())")
+                XCTAssertNotNil(on["miniSup"], "the Command-2 superscript is drawn at \(scale): \(on.keys.sorted())")
                 XCTAssertNotNil(on["miniNeeds"], "the needs-you mark is drawn at \(scale)")
                 XCTAssertLessThanOrEqual(on["miniNeeds"]?.maxX ?? .infinity, width + pixel, "inside the rail at \(scale)")
                 let off = rowParts(AgentSidebarRowView(row: idle, selected: false, mini: true), width: width)
-                XCTAssertTrue(off["miniChip"] == nil && off["miniNeeds"] == nil, "no number, no need at \(scale): \(off.keys.sorted())")
+                XCTAssertTrue(off["miniSup"] == nil && off["miniNeeds"] == nil, "no number, no need at \(scale): \(off.keys.sorted())")
                 XCTAssertNotNil(off["miniSlot"], "the mark's slot is kept at \(scale)")
-                // #1470: the rail fits the nine Command chips only; rows 10-18 (Option-Command) draw none there.
+                // #1470: Mini marks the nine Command rows only; rows 10-18 (Option-Command) draw none there.
                 for (n, chip) in [(9, true), (10, false), (18, false)] {
                     let p = rowParts(AgentSidebarRowView(row: blocked, selected: false, number: n, mini: true), width: width)
-                    XCTAssertEqual(p["miniChip"] != nil, chip, "row \(n)'s chip at \(scale): \(p.keys.sorted())")
+                    XCTAssertEqual(p["miniSup"] != nil, chip, "row \(n)'s chip at \(scale): \(p.keys.sorted())")
                     XCTAssertLessThanOrEqual(p["miniNeeds"]?.maxX ?? .infinity, width + pixel, "row \(n) inside the rail at \(scale)")
                 }
             }

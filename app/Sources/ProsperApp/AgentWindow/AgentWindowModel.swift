@@ -506,7 +506,25 @@ final class AgentWindowModel: ObservableObject {
         return max(0, w[0] - w[1])
     }
     private static var digitColumnExtraByScale: [CGFloat: CGFloat] = [:]
-    static var miniSidebarWidth: CGFloat { sz(84) }
+    /// #1457: Mini's rail fits a name of `miniNameLength` wide characters, its superscript, the mark and needs-you slots
+    /// (AgentSidebarRowView.miniWidestLine, measured at the current UI scale, once per scale), and the list's padding.
+    static var miniSidebarWidth: CGFloat { miniSidebarWidth(at: ThemeRuntime.scale) }
+    static func miniSidebarWidth(at scale: CGFloat) -> CGFloat {
+        if let w = miniSidebarWidthByScale[scale] { return w }
+        let saved = ThemeRuntime.scale
+        ThemeRuntime.scale = scale   // the line's fonts and paddings read it while it is measured
+        defer { ThemeRuntime.scale = saved }
+        // not measured: the full sidebar (nothing clips), measured again on the next read
+        guard let line = AgentSidebarRowView.idealWidths(AgentSidebarRowView.miniWidestLine, EmptyView()).first, line > 0 else {
+            return fullSidebarWidth
+        }
+        let w = (line + 2 * sz(8)).rounded(.up)   // AgentSidebarView's list pads each side by sz(8)
+        miniSidebarWidthByScale[scale] = w
+        return w
+    }
+    private static var miniSidebarWidthByScale: [CGFloat: CGFloat] = [:]
+    /// #1457: Mini's quick full-name tooltip (its rows report their hover to it).
+    let miniTip = AgentMiniTip()
     /// #1379: the width the sidebar column takes from the panes: Full, Mini's rail, Slide none (its sidebar is an overlay).
     var sidebarColumnWidth: CGFloat {
         switch sidebarMode {

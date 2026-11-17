@@ -1763,6 +1763,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions panes are terminals only: the Transcript mode and its Terminal | Transcript toggle
   (and Command-T) are gone, and X-ray reads every tab from dch, so a Prompts or Responses row opens
   its card. (#1471)
+- Agent Sessions: the Mini sidebar now shows each session's name (its first 8 characters) beside the
+  status dot, with the Command number as a small superscript, and hovering a row shows its full name
+  after a moment. (#1457)
 
 ## v2.174.0
 

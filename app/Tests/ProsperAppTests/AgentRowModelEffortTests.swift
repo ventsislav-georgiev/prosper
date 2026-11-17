@@ -944,7 +944,7 @@ extension AgentRowModelEffortTests {
 
     /// #1470 a2 (operator 2026-11-17, "Widen the sidebar"): at 0.7 / 0.85 / 1.0 the full sidebar is TIP's sz(290) plus
     /// exactly the chip column's growth (all 18 chips' column less the nine Command chips', both built and measured here,
-    /// exact ideals), Mini keeps sz(84), and a full row at the sidebar's width keeps TIP's text block (line one and two)
+    /// exact ideals), Mini's rail is #1457's measured one (was sz(84)), and a full row at the sidebar's width keeps TIP's text block (line one and two)
     /// within one device pixel, by the probes: sz(274) less the padding, the mark, both gaps and the nine-chip column.
     @MainActor
     func testFullSidebarWidensByTheChipColumnSoTheTitleKeepsItsRoom() {
@@ -962,7 +962,8 @@ extension AgentRowModelEffortTests {
             print("SIDEBAR1470-A2 \(tag)")
             XCTAssertGreaterThan(all, nine + pixel, "premise: the Option-Command-9 chip is wider than Command-9's: \(tag)")
             XCTAssertEqual(AgentWindowModel.fullSidebarWidth - sz(290), all - nine, accuracy: pixel, "wider by the column's growth: \(tag)")
-            XCTAssertEqual(AgentWindowModel.miniSidebarWidth, sz(84), accuracy: pixel / 4, "Mini unchanged: \(tag)")
+            XCTAssertEqual(AgentWindowModel.miniSidebarWidth, (exact(AgentSidebarRowView.miniWidestLine) + 2 * sz(8)).rounded(.up),
+                           accuracy: pixel / 4, "Mini's measured rail (#1457): \(tag)")
             let tip = sz(274) - 2 * sz(10) - sz(14) - 2 * sz(8) - nine
             // 1x: the layout's own points (a 2x backing snaps the zero-height chip column by up to 1 pt, as ROW1365-A prints).
             let f = hosted1345(r, number: 18, width: AgentWindowModel.fullSidebarWidth - sz(16), backing: 1).frames
