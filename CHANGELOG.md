@@ -1638,6 +1638,9 @@ tag from the now-released section and put it on the new top draft.
   session, so other users on the Mac cannot see it in the process list. (#1410)
 - The consent sheet title now shows any quote mark inside an extension name as an apostrophe, so a
   name can no longer break out of the quoting. (#1437)
+- An extension no longer disappears if Prosper quits in the middle of installing or updating it: the
+  previous copy is put back on the next start, leftover install folders are cleaned up after a day,
+  and built-in extensions now update the same safe way. (#1435)
 
 ## v2.174.0
 

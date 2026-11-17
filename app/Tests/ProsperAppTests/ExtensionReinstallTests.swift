@@ -371,4 +371,213 @@ final class ExtensionReinstallTests: XCTestCase {
         XCTAssertEqual(reg.record(id: id)?.loaded.directory.lastPathComponent, id)
         XCTAssertTrue(reg.refused.isEmpty, "a dot-named leftover was refused: \(reg.refused.map(\.folder))")
     }
+
+    // MARK: - #1435: crash leftovers
+
+    private static let uuid = "0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D"
+    private static let otherUUID = "1A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D"
+
+    /// Sets `url`'s own modification date two days back (lutimes: a link's own date, never its target's).
+    private func makeStale(_ url: URL) {
+        let t = Int(Date().timeIntervalSince1970) - 2 * 86_400
+        var times = [timeval(tv_sec: t, tv_usec: 0), timeval(tv_sec: t, tv_usec: 0)]
+        XCTAssertEqual(lutimes(url.path, &times), 0, "precondition: the date was set")
+    }
+
+    private func names(_ dir: URL) -> Set<String> {
+        Set((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+    }
+
+    /// The aside name parse: the UUID is the last 36 characters after a "-", whatever "-" the name holds.
+    func testAsideOwnerParsesANameWithDashesAndRefusesOtherShapes() {
+        XCTAssertEqual(ExtensionRegistry.asideOwner(".old-my-ext-\(Self.uuid)"), "my-ext")
+        XCTAssertEqual(ExtensionRegistry.asideOwner(".old-a-\(Self.uuid.lowercased())"), "a")
+        XCTAssertTrue(ExtensionRegistry.asideOwner(".old-\(Self.uuid)") == nil, "the #1430 shape has no name")
+        XCTAssertTrue(ExtensionRegistry.asideOwner(".old--\(Self.uuid)") == nil, "an empty name")
+        XCTAssertTrue(ExtensionRegistry.asideOwner(".old-..-\(Self.uuid)") == nil, "a dot-named name")
+        XCTAssertTrue(ExtensionRegistry.asideOwner(".old-x") == nil)
+        XCTAssertTrue(ExtensionRegistry.asideOwner(".old-my-ext\(Self.uuid)") == nil, "no dash before the UUID")
+        XCTAssertTrue(ExtensionRegistry.asideOwner(".old-my-ext-\(Self.uuid.dropLast())Z") == nil, "not a UUID")
+    }
+
+    /// A crash between "dest -> aside" and "stage -> dest" leaves only ".old-<name>-<UUID>": discover moves it back
+    /// to <name> (a name with "-") and loads it. Parent: discover skips every ".old-", so the extension is gone.
+    func testLoneAsideIsMovedBackAndLoads() throws {
+        let services = ReinstallRecordingServices()
+        defer { TimerScheduler.shared.cancelAll(extID: id) }
+        let root = tempDir("leftover-lone")
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        try writeSource(user.appendingPathComponent(".old-my-ext-\(Self.uuid)", isDirectory: true),
+                        version: "1.0.0", lua: Self.newLua, extra: "mine.txt")
+
+        let reg = registry(root, services)
+
+        XCTAssertEqual(names(user), ["my-ext"], "the aside was not moved back")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: user.appendingPathComponent("my-ext/mine.txt").path))
+        XCTAssertEqual(reg.record(id: id)?.loaded.directory.lastPathComponent, "my-ext", "the moved-back folder must load")
+    }
+
+    /// An aside whose <name> folder is there (a failed remove after a good swap) is left while fresh and removed
+    /// once stale; an ".old-" whose name does not parse stays even when stale. Parent: nothing is ever removed.
+    func testAsideBesideItsFolderIsLeftFreshAndRemovedStale() throws {
+        let services = ReinstallRecordingServices()
+        defer { TimerScheduler.shared.cancelAll(extID: id) }
+        let root = tempDir("leftover-old")
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        try writeSource(user.appendingPathComponent(id, isDirectory: true), version: "2.0.0", lua: Self.newLua)
+        let fresh = ".old-\(id)-\(Self.uuid)", stale = ".old-\(id)-\(Self.otherUUID)"
+        try writeSource(user.appendingPathComponent(fresh, isDirectory: true), version: "1.0.0", lua: Self.newLua)
+        try writeSource(user.appendingPathComponent(stale, isDirectory: true), version: "1.0.0", lua: Self.newLua)
+        try writeSource(user.appendingPathComponent(".old-x", isDirectory: true), version: "1.0.0", lua: Self.newLua)
+        makeStale(user.appendingPathComponent(stale, isDirectory: true))
+        makeStale(user.appendingPathComponent(".old-x", isDirectory: true))
+
+        let reg = registry(root, services)
+
+        XCTAssertEqual(names(user), [id, fresh, ".old-x"], "only the stale aside of a live folder goes")
+        XCTAssertEqual(reg.record(id: id)?.manifest.extension.version, "2.0.0")
+    }
+
+    /// A stale ".stage-" is removed; a fresh one (an install may be in flight) is left. Parent: neither is removed.
+    func testStaleStageIsRemovedAndAFreshOneIsLeft() throws {
+        let services = ReinstallRecordingServices()
+        let root = tempDir("leftover-stage")
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        try writeSource(user.appendingPathComponent(".stage-fresh", isDirectory: true), version: "1.0.0", lua: Self.newLua)
+        try writeSource(user.appendingPathComponent(".stage-stale", isDirectory: true), version: "1.0.0", lua: Self.newLua)
+        makeStale(user.appendingPathComponent(".stage-stale", isDirectory: true))
+
+        let reg = registry(root, services)
+
+        XCTAssertEqual(names(user), [".stage-fresh"], "the stale stage must go and the fresh one stay")
+        XCTAssertTrue(reg.record(id: id) == nil, "a stage is never loaded")
+    }
+
+    /// A stale ".stage-" that is a link (its own date and its target's both stale) is neither removed nor followed:
+    /// the link and its target's file stay. Without the link guard the link itself is removed.
+    func testSymlinkedStageIsNeverFollowedOrRemoved() throws {
+        let services = ReinstallRecordingServices()
+        let root = tempDir("leftover-link")
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        let outside = root.appendingPathComponent("outside", isDirectory: true)
+        try writeSource(outside, version: "1.0.0", lua: Self.newLua, extra: "keep.txt")
+        try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
+        let link = user.appendingPathComponent(".stage-link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        makeStale(outside)
+        makeStale(link)
+
+        _ = registry(root, services)
+
+        XCTAssertEqual(names(user), [".stage-link"], "a linked stage was removed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.appendingPathComponent("keep.txt").path),
+                      "the link's target lost a file")
+    }
+
+    /// A stage copied from a two-day-old source (the copy seam keeps the source's date, as FileManager's copy does) has
+    /// its own date set to now before the rename, so another instance's sweep never takes it for a day-old leftover.
+    /// Without the touch the stage carries the source's two-day-old date.
+    func testStageDateIsFreshEvenWhenTheSourceIsOld() throws {
+        let services = ReinstallRecordingServices()
+        defer { TimerScheduler.shared.cancelAll(extID: id) }
+        let root = tempDir("leftover-stage-date")
+        let reg = registry(root, services)
+        let v1 = root.appendingPathComponent("v1", isDirectory: true)
+        try writeSource(v1, version: "1.0.0", lua: Self.newLua)
+        makeStale(v1)
+        reg.copyFolder = { [unowned self] src, dst in
+            try FileManager.default.copyItem(at: src, to: dst)
+            makeStale(dst)   // the copy carries the source's old date, whatever the copy call does
+        }
+        var stageDates: [Date] = []
+        reg.moveItem = { src, dst in
+            if src.lastPathComponent.hasPrefix(".stage-"),
+               let date = try? FileManager.default.attributesOfItem(atPath: src.path)[.modificationDate] as? Date {
+                stageDates.append(date)
+            }
+            try FileManager.default.moveItem(at: src, to: dst)
+        }
+
+        try reg.installLocal(from: v1)
+
+        XCTAssertEqual(stageDates.count, 1, "precondition: one stage was renamed in")
+        XCTAssertTrue((stageDates.first ?? .distantPast) > Date().addingTimeInterval(-3600),
+                      "the stage kept its source's old date: \(stageDates)")
+    }
+
+    private struct ForcedMoveFailure: Error {}
+
+    /// The final "stage -> dest" rename failing puts the old folder back byte-identical, leaves no stage or aside, and
+    /// keeps the old record live. Without the move-back the folder sits in an aside and the id has no folder.
+    func testFailedFinalRenameMovesTheOldFolderBack() async throws {
+        let services = ReinstallRecordingServices()
+        defer { TimerScheduler.shared.cancelAll(extID: id) }
+        let root = tempDir("leftover-rename")
+        let reg = try await installHoldingOld(root, services)
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        let before = snapshot(user.appendingPathComponent(id))
+        let v2 = root.appendingPathComponent("v2", isDirectory: true)
+        try writeSource(v2, version: "2.0.0", lua: Self.newLua)
+
+        reg.moveItem = { src, dst in
+            if src.lastPathComponent.hasPrefix(".stage-") { throw ForcedMoveFailure() }
+            try FileManager.default.moveItem(at: src, to: dst)
+        }
+        XCTAssertThrowsError(try reg.installLocal(from: v2)) { XCTAssertTrue($0 is ForcedMoveFailure, "\($0)") }
+
+        XCTAssertEqual(names(user), [id], "a failed rename left a stage or an aside, or lost the folder")
+        XCTAssertEqual(snapshot(user.appendingPathComponent(id)), before, "a failed rename changed the old folder")
+        XCTAssertEqual(services.resets(id), 0, "a failed rename tore the old generation down")
+        XCTAssertTrue(reg.record(id: id)?.isLive == true, "a failed rename must leave the old record live")
+    }
+
+    /// The startup refresh of a built-in to a newer bundled version goes through the stage: a failed copy leaves the
+    /// installed built-in byte-identical with no stage; with a good copy the next discover swaps the new one in.
+    /// Parent: remove-then-copy, so the failed copy had already removed the installed one.
+    func testBuiltInRefreshIsStagedSoAFailedCopyLeavesTheOldBuiltIn() throws {
+        let sid = "com.example.stage-seed"
+        let root = tempDir("leftover-seed")
+        func writeBuiltIn(_ dir: URL, version: String) throws {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try """
+            [extension]
+            id = "\(sid)"
+            name = "stage-seed"
+            title = "Stage seed"
+            description = "seed fixture"
+            version = "\(version)"
+            author = "Example Org"
+            system = true
+
+            [extension.host]
+            min_version = "2.0.0"
+            api_level = 1
+
+            [extension.entry]
+            main = "init.lua"
+            """.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+            try "-- \(version)".write(to: dir.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+        }
+        let system = root.appendingPathComponent("system", isDirectory: true)
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        try writeBuiltIn(system.appendingPathComponent(sid, isDirectory: true), version: "2.0.0")
+        let installed = user.appendingPathComponent(sid, isDirectory: true)
+        try writeBuiltIn(installed, version: "1.0.0")
+        try "mine".write(to: installed.appendingPathComponent("edited.txt"), atomically: true, encoding: .utf8)
+        let before = snapshot(installed)
+        let reg = ExtensionRegistry(systemDir: system, userDir: user, hostVersion: "2.0.0",
+                                    defaults: scratchDefaults("stage-seed"), services: ReinstallRecordingServices())
+
+        reg.copyFolder = Self.failingCopy
+        reg.discover()
+        XCTAssertEqual(snapshot(installed), before, "a failed refresh changed or removed the installed built-in")
+        XCTAssertEqual(names(user), [sid], "a failed refresh left a stage")
+        XCTAssertEqual(reg.record(id: sid)?.manifest.extension.version, "1.0.0")
+
+        reg.copyFolder = { try FileManager.default.copyItem(at: $0, to: $1) }
+        reg.discover()
+        XCTAssertEqual(snapshot(installed), snapshot(system.appendingPathComponent(sid)), "a good refresh swaps in")
+        XCTAssertEqual(names(user), [sid], "a good refresh left a stage or an aside")
+        XCTAssertEqual(reg.record(id: sid)?.manifest.extension.version, "2.0.0")
+    }
 }

@@ -398,14 +398,16 @@ final class ExtensionRegistry: ObservableObject {
             if !fm.fileExists(atPath: dest.path) {
                 try? fm.copyItem(at: child, to: dest)
             } else if isDevHost {
-                try? fm.removeItem(at: dest)
-                try? fm.copyItem(at: child, to: dest)
+                try? stageAndSwap(child, into: dest, sweep: false)   // #1435: a failed copy leaves the old copy
             } else if let bundled = Self.manifestVersion(at: child),
                       let installed = Self.manifestVersion(at: dest),
                       installed < bundled {
-                try? fm.removeItem(at: dest)
-                try? fm.copyItem(at: child, to: dest)
-                log.info("refreshed system extension \(child.lastPathComponent, privacy: .public) to newer bundled version")
+                do {
+                    try stageAndSwap(child, into: dest, sweep: false)
+                    log.info("refreshed system extension \(child.lastPathComponent, privacy: .public) to newer bundled version")
+                } catch {
+                    log.error("could not refresh system extension \(child.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
+                }
             }
         }
     }
@@ -457,6 +459,7 @@ final class ExtensionRegistry: ObservableObject {
     /// (Re)scan the editable userDir (after seeding from pristine), parse +
     /// validate manifests, and rebuild the routing table. Safe to call repeatedly.
     func discover() {
+        recoverInstallLeftovers()   // before the seed: a built-in's own copy comes back before a refresh is weighed
         seedSystemExtensions()
         let bundledIDs = bundledIDsByFolder()
 
@@ -1234,6 +1237,8 @@ final class ExtensionRegistry: ObservableObject {
 
     /// #1430: the folder copy install and reset use; a row swaps in a failing one.
     var copyFolder: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
+    /// #1435: every rename stageAndSwap makes; a row fails the final one to see the old folder moved back.
+    var moveItem: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }
 
     /// #1430: copies `source` into a dot-named stage beside `dest` (same folder, so the same volume), sweeps it when
     /// asked, then renames it into place. A failed copy or sweep removes only the stage: the installed folder stays.
@@ -1244,6 +1249,11 @@ final class ExtensionRegistry: ObservableObject {
         let stage = parent.appendingPathComponent(".stage-\(UUID().uuidString)", isDirectory: true)
         do {
             try copyFolder(source, stage)
+            // #1435: a copy keeps the source's date; the stage's own date is now, so another instance's sweep sees it fresh.
+            // Only a real folder: a source given as a link is copied as that link, and setting its date would reach the source.
+            if (try? fm.attributesOfItem(atPath: stage.path))?[.type] as? FileAttributeType == .typeDirectory {
+                try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: stage.path)
+            }
             // #1142: the copy leaves out hidden files and folders by the publish rule. A source
             // given as a link is copied as that link: never swept, it is the source folder itself.
             if sweep, try fm.attributesOfItem(atPath: stage.path)[.type] as? FileAttributeType == .typeDirectory {
@@ -1254,21 +1264,62 @@ final class ExtensionRegistry: ObservableObject {
             throw error
         }
         guard fm.fileExists(atPath: dest.path) else {
-            do { try fm.moveItem(at: stage, to: dest) } catch { try? fm.removeItem(at: stage); throw error }
+            do { try moveItem(stage, dest) } catch { try? fm.removeItem(at: stage); throw error }
             return
         }
-        let aside = parent.appendingPathComponent(".old-\(UUID().uuidString)", isDirectory: true)
-        do { try fm.moveItem(at: dest, to: aside) } catch { try? fm.removeItem(at: stage); throw error }
+        // #1435: the aside carries dest's folder name, so discover can move a crash-left one back.
+        let aside = parent.appendingPathComponent(".old-\(dest.lastPathComponent)-\(UUID().uuidString)", isDirectory: true)
+        do { try moveItem(dest, aside) } catch { try? fm.removeItem(at: stage); throw error }
         do {
-            try fm.moveItem(at: stage, to: dest)
+            try moveItem(stage, dest)
         } catch {
-            try? fm.moveItem(at: aside, to: dest)
+            try? moveItem(aside, dest)
             try? fm.removeItem(at: stage)
             throw error
         }
         // Not thrown: the new folder is in and the teardown must run; discover skips a ".old-" leftover.
         do { try fm.removeItem(at: aside) } catch {
             log.error("could not remove the replaced extension folder: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// #1435: the <name> of an aside ".old-<name>-<UUID>": the UUID is the last 36 characters after a "-", so a name
+    /// holding "-" still parses. Nil (never acted on) for any other shape, an empty name or a dot-named one.
+    static func asideOwner(_ folder: String) -> String? {
+        let uuidLength = 36
+        guard folder.hasPrefix(".old-"), folder.count > ".old-".count + 1 + uuidLength,
+              UUID(uuidString: String(folder.suffix(uuidLength))) != nil,
+              folder.dropLast(uuidLength).hasSuffix("-") else { return nil }
+        let owner = String(folder.dropFirst(".old-".count).dropLast(uuidLength + 1))
+        return owner.hasPrefix(".") ? nil : owner
+    }
+
+    /// #1435: a crash between "dest -> aside" and "stage -> dest" leaves only the aside: one whose <name> has nothing
+    /// beside it is moved back. A ".stage-" and an aside whose <name> is there are removed once a day old by their
+    /// modification date (younger: an install may be in flight). Only direct children of userDir with those prefixes
+    /// are touched; a link is skipped, never followed; a name that does not parse stays.
+    private func recoverInstallLeftovers() {
+        let fm = FileManager.default
+        let keys: Set<URLResourceKey> = [.isSymbolicLinkKey, .contentModificationDateKey]
+        guard let names = try? fm.contentsOfDirectory(atPath: userDir.path) else { return }
+        let dayAgo = Date().addingTimeInterval(-86_400)
+        for name in names.sorted() where name.hasPrefix(".stage-") || name.hasPrefix(".old-") {
+            let entry = userDir.appendingPathComponent(name, isDirectory: false)
+            guard let values = try? entry.resourceValues(forKeys: keys), values.isSymbolicLink == false else { continue }
+            if name.hasPrefix(".old-") {
+                guard let owner = Self.asideOwner(name) else { continue }
+                let home = userDir.appendingPathComponent(owner, isDirectory: true)
+                if (try? fm.attributesOfItem(atPath: home.path)) == nil {   // lstat: a link at <name> counts as there
+                    do { try moveItem(entry, home) } catch {
+                        log.error("could not move back a replaced extension folder: \(String(describing: error), privacy: .public)")
+                    }
+                    continue
+                }
+            }
+            guard let modified = values.contentModificationDate, modified < dayAgo else { continue }
+            do { try fm.removeItem(at: entry) } catch {
+                log.error("could not remove an install leftover: \(String(describing: error), privacy: .public)")
+            }
         }
     }
 
