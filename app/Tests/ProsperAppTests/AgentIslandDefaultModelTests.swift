@@ -199,6 +199,12 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                     let menu = tree.first { $0.named("Model aliases") }
                     let title = tree.first { $0.role == "AXStaticText" && $0.named("Default model") }
                     let sub = tree.first { $0.named(line) }
+                    // R1250-s: `tree` stops polling only when settled holds, so here it came back on AXTreeSupport's ceiling.
+                    // Both sizes: the empty Command field is not in FRAMES (no name), and it was the stale one in every red.
+                    if !settled(tree) {
+                        XCTFail("never settled at \(scale): field \(NSStringFromSize(field?.frame.size ?? .zero)) command "
+                            + "\(NSStringFromSize(other?.frame.size ?? .zero)) (want widths \(sz(200)) and \(sz(260)), heights within 1)")
+                    }
                     if !settled(tree) || title == nil {   // only on failure: every frame the row reads, for the log
                         print("#1228 FRAMES \(line) at \(scale): " + tree.filter { !($0.label + $0.title + $0.value).isEmpty }
                             .map { "\($0.role)|\($0.label)|\($0.title)|\($0.value)|\(NSStringFromRect($0.frame))" }.joined(separator: " ; "))
@@ -279,6 +285,9 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                             && abs((field(t)?.frame.width ?? 0) - sz(200)) <= 1
                     }
                     let tree = axTree(size, until: settled)
+                    if !settled(tree) {   // R1250-s: came back on AXTreeSupport's ceiling, the asserts below read that last pass
+                        XCTFail("never settled at \(scale): field \(NSStringFromSize(field(tree)?.frame.size ?? .zero)) (want width \(sz(200))) with \(line)")
+                    }
                     guard let f = field(tree)?.frame, let menuNode = tree.first(where: { $0.named("Model aliases") }),
                           let ti = tree.first(where: { $0.role == "AXStaticText" && $0.named("Default model") })?.frame,
                           let s = tree.first(where: { $0.named(line) })?.frame
