@@ -1002,14 +1002,17 @@ private struct SettingsRootView: View {
 struct AgentIslandRowDetailsSection: View {
     @State private var show = Preferences.agentIslandRowDetails
 
-    /// #596 (QA #465 INFO-3): label -> the detail its toggle binds, in drawn order.
+    /// #596 (QA #465 INFO-3): label -> the detail its toggle binds, in drawn order. #1455: every part of a session row.
     static let toggles: [(label: String, path: WritableKeyPath<AgentIslandRowDetails, Bool>)] = [
-        ("Agents", \.agents), ("Open PRs", \.openPRs), ("Merged", \.merged),
+        ("Model", \.model), ("Effort", \.effort), ("State", \.state), ("Agents", \.agents), ("Merged", \.merged),
+        ("Open PRs", \.openPRs), ("Age", \.age), ("Shortcut", \.shortcut),
     ]
+    static let footer = "Model and effort show only where they differ from the Default model and effort. "
+        + "Shortcut is the Command-1 to 9 chip in Agent Sessions."
 
     var body: some View {
         // NeonRow + a trailing toggle, as the manifest's own toggle rows above.
-        NeonSection("Row details", footer: "Shown on each session row besides its title, state and age.") {
+        NeonSection("Row details", footer: Self.footer) {
             ForEach(Self.toggles.indices, id: \.self) { i in
                 if i > 0 { NeonDivider() }
                 NeonRow(Self.toggles[i].label) { Toggle("", isOn: $show[dynamicMember: Self.toggles[i].path]).labelsHidden() }

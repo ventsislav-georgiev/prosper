@@ -1240,7 +1240,7 @@ struct AgentIslandRow: View {
         let chipLine = AgentIslandGeometry.hasChipLine(session.meta, show: show)
         // #1371: the Agent Sessions sidebar row's own pieces (hover takes its selected look and inks).
         let side = AgentSidebarRowView(row: Self.sidebarRow(session, show: show, now: now, notice: notice), selected: hover,
-                                       inks: Self.inks)
+                                       inks: Self.inks, show: show)
         Button(action: action) {
             // #1371: line 1 the state mark, the title, the model and effort badges; line 2 the state word, the agents,
             // merged and open counts, the age at the end; then the island's own PR chips. The text column stays
@@ -1299,7 +1299,7 @@ struct AgentIslandRow: View {
     /// (Row.modelWords) and the open count (Count.open, as Row.countWords; the agents and merged counts are spoken already).
     static func accessibilityLabel(_ s: AgentSession, now: TimeInterval, show: AgentIslandRowDetails) -> String {
         let row = AgentSidebar.row(s, details: show, now: now)
-        return ([AgentIsland.rowAccessibilityLabel(s, now: now, show: show), row.modelWords]
+        return ([AgentIsland.rowAccessibilityLabel(s, now: now, show: show), show.modelWords(model: row.model, effort: row.effort)]
                 + [row.prCount > 0 ? AgentSidebar.Count.open.words(row.prCount) : nil]).compactMap { $0 }.joined(separator: ", ")
     }
 

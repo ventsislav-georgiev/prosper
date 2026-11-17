@@ -435,6 +435,12 @@ enum Preferences {
         static let agentIslandShowAgents = "agentIslandShowAgents"
         static let agentIslandShowOpenPRs = "agentIslandShowOpenPRs"
         static let agentIslandShowMerged = "agentIslandShowMerged"
+        // #1455: the rest of the row's parts; per Mac too.
+        static let agentIslandShowModel = "agentIslandShowModel"
+        static let agentIslandShowEffort = "agentIslandShowEffort"
+        static let agentIslandShowState = "agentIslandShowState"
+        static let agentIslandShowAge = "agentIslandShowAge"
+        static let agentIslandShowShortcut = "agentIslandShowShortcut"
         // #571: the list order (AgentIslandSort) and the Sessions / Sidekicks
         // tabs; per Mac, so not in SyncedKeys.
         static let agentIslandSort = "agentIslandSort"
@@ -1271,7 +1277,15 @@ enum Preferences {
             return AgentIslandRowDetails(
                 agents: on(Keys.agentIslandShowAgents, d.agents),
                 openPRs: on(Keys.agentIslandShowOpenPRs, d.openPRs),
-                merged: on(Keys.agentIslandShowMerged, d.merged))
+                merged: on(Keys.agentIslandShowMerged, d.merged),
+                model: on(Keys.agentIslandShowModel, d.model),
+                effort: on(Keys.agentIslandShowEffort, d.effort),
+                state: on(Keys.agentIslandShowState, d.state),
+                age: on(Keys.agentIslandShowAge, d.age),
+                shortcut: on(Keys.agentIslandShowShortcut, d.shortcut),
+                // #1455: the rows compare against these (read here, so the pure functions never read defaults).
+                defaultModel: agentIslandDefaultModel,
+                defaultEffort: agentIslandDefaultEffort)
         }
         set {
             let old = agentIslandRowDetails
@@ -1279,6 +1293,11 @@ enum Preferences {
             put(newValue.agents, old.agents, Keys.agentIslandShowAgents)
             put(newValue.openPRs, old.openPRs, Keys.agentIslandShowOpenPRs)
             put(newValue.merged, old.merged, Keys.agentIslandShowMerged)
+            put(newValue.model, old.model, Keys.agentIslandShowModel)
+            put(newValue.effort, old.effort, Keys.agentIslandShowEffort)
+            put(newValue.state, old.state, Keys.agentIslandShowState)
+            put(newValue.age, old.age, Keys.agentIslandShowAge)
+            put(newValue.shortcut, old.shortcut, Keys.agentIslandShowShortcut)
         }
     }
 

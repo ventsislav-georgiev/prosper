@@ -2755,8 +2755,10 @@ final class AgentIslandTests: XCTestCase {
     /// #596 (QA #465 INFO-3): each Row details toggle binds its own detail.
     @MainActor
     func testRowDetailsTogglesBindTheirOwnDetail() {
-        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.label), ["Agents", "Open PRs", "Merged"])
-        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.path), [\.agents, \.openPRs, \.merged])
+        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.label),
+                       ["Model", "Effort", "State", "Agents", "Merged", "Open PRs", "Age", "Shortcut"])
+        XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.path),
+                       [\.model, \.effort, \.state, \.agents, \.merged, \.openPRs, \.age, \.shortcut])
     }
 
     /// Visual evidence: the island with the default row details (all on) and with all off,

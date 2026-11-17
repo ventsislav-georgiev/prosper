@@ -155,10 +155,16 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
             .item("Last activity", enabled: true, checked: false, verb: .sort(.activity)),
             .item("Name", enabled: true, checked: true, verb: .sort(.name)),
         ]))
+        // #1455: every part of a session row, in drawn order, the Settings section's list (AgentRowDetailsTests).
         XCTAssertEqual(entry(again, "Row details"), .submenu("Row details", enabled: true, [
+            .item("Model", enabled: true, checked: true, verb: .rowDetail(\.model)),
+            .item("Effort", enabled: true, checked: true, verb: .rowDetail(\.effort)),
+            .item("State", enabled: true, checked: true, verb: .rowDetail(\.state)),
             .item("Agents", enabled: true, checked: true, verb: .rowDetail(\.agents)),
-            .item("Open PRs", enabled: true, checked: false, verb: .rowDetail(\.openPRs)),
             .item("Merged", enabled: true, checked: true, verb: .rowDetail(\.merged)),
+            .item("Open PRs", enabled: true, checked: false, verb: .rowDetail(\.openPRs)),
+            .item("Age", enabled: true, checked: true, verb: .rowDetail(\.age)),
+            .item("Shortcut", enabled: true, checked: true, verb: .rowDetail(\.shortcut)),
         ]))
     }
 

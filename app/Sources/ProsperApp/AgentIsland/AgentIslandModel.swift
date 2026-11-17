@@ -134,12 +134,44 @@ enum AgentIslandSource: String, CaseIterable {
 /// Row details). Per Mac, never synced. #762: Agents, Open PRs and Merged, all on
 /// by default (Tasks done, In progress, Queued and Session name were removed).
 /// The pure functions below take it as a parameter and never read defaults.
+/// #1455: plus model, effort, state word, age and the Command 1-9 chip, all on by default; model and effort, when on, show
+/// only where they differ from `defaultModel` / `defaultEffort` (Preferences' Default model and effort; "" shows them all).
 struct AgentIslandRowDetails: Equatable {
     var agents = true
     var openPRs = true
     var merged = true
+    var model = true
+    var effort = true
+    var state = true
+    var age = true
+    var shortcut = true
+    var defaultModel = ""
+    var defaultEffort = ""
 
     static let all = AgentIslandRowDetails(agents: true, openPRs: true, merged: true)
+
+    /// #1455: a row's model label ("Opus 4.7") is the Default's when the Default, through the badge's own label function
+    /// (AgentModelEffort.shortName), reads the same; a bare family alias ("opus") matches that family at any version.
+    func isDefaultModel(_ label: String?) -> Bool {
+        guard let label, !defaultModel.isEmpty else { return false }
+        let d = AgentModelEffort.shortName(defaultModel).lowercased(), l = label.lowercased()
+        return l == d || (!d.contains(" ") && l.hasPrefix(d + " "))
+    }
+
+    /// #1455: the model and effort a row draws (nil: hidden), and whether each keeps its slot: an unknown value keeps it
+    /// while its toggle is on (no size change when it arrives, #1203); a hidden one hands its width back to the title.
+    func modelEffort(model: String?, effort: String?) -> (model: String?, effort: String?, modelSlot: Bool, effortSlot: Bool) {
+        let m = self.model && !isDefaultModel(model) ? model : nil
+        let e = self.effort && !(effort != nil && !defaultEffort.isEmpty && effort == defaultEffort) ? effort : nil
+        return (m, e, self.model && (model == nil || m != nil), self.effort && (effort == nil || e != nil))
+    }
+
+    /// #1455: Row.modelWords for the parts shown ("model Opus 4.7, effort high"); nil for none.
+    func modelWords(model: String?, effort: String?) -> String? {
+        let me = modelEffort(model: model, effort: effort)
+        let w = [me.model.map { "model \($0)" }, me.effort.map { "effort \($0)" }].compactMap { $0 }
+        return w.isEmpty ? nil : w.joined(separator: ", ")
+    }
 }
 
 /// #571: Settings › Agent Island › Sort sessions. Per Mac, never synced.
@@ -551,7 +583,7 @@ enum AgentIsland {
         // #1137: the counts in the Agent Sessions window's words ("3 agents", "192 merged pull requests").
         let agents: String? = agentsCount(s, show: d).map { AgentSidebar.Count.agents.words($0) }
         let merged: String? = mergedCount(s.meta, show: d).map { AgentSidebar.Count.merged.words($0) }
-        return [s.title, s.state.label, ago(age), agents, merged,
+        return [s.title, d.state ? s.state.label : nil, d.age ? ago(age) : nil, agents, merged,
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }

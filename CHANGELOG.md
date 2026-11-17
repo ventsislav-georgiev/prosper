@@ -1757,6 +1757,9 @@ tag from the now-released section and put it on the new top draft.
 - Resuming a session now routes it through the account pool, as a new session is (Resume interrupted
   still is not). A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL
   or an API key. (#1219, #1499)
+- Agent Island > Row details now has a toggle for every part of a session row: model, effort, state,
+  agents, merged, open PRs, age and the Command 1-9 shortcut chip; model and effort show only where
+  they differ from your Default model and effort. (#1455)
 
 ## v2.174.0
 

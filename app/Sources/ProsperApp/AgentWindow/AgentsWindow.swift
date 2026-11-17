@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 // #797 Agent window D1: the "Agent Sessions" window. A sidebar of every dch session (fed by
@@ -889,6 +890,9 @@ final class AgentSlideTrackerView: NSView {
 
 struct AgentSidebarView: View {
     @ObservedObject var model: AgentWindowModel
+    /// #1455: the store's Row details; a toggle the Rows do not carry (model, effort, state, age, shortcut) leaves the
+    /// sections equal (no publish), so the rows read the store's own value to redraw at once.
+    @State private var details = AgentIslandRowDetails.all
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -950,6 +954,7 @@ struct AgentSidebarView: View {
             if let store = model.store { AgentDirStatusStrip(store: store) }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .onReceive(model.store.map { $0.$details.eraseToAnyPublisher() } ?? Just(.all).eraseToAnyPublisher()) { details = $0 }
     }
 
     /// #1373: a row's identity in the one lazy list is its section and its row. With the row's id alone, a session that
@@ -974,7 +979,7 @@ struct AgentSidebarView: View {
         Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                 number: model.number(row.id), inView: inView.contains(row.id),
-                                openPR: model.openPR, mini: mini)
+                                openPR: model.openPR, mini: mini, show: details)   // #1455
         }
         .buttonStyle(.plain)
         .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
@@ -1365,6 +1370,18 @@ struct AgentSidebarRowView: View {
     /// #1452 b: the island's own inks (Agent Island > Follow theme off); nil, the theme's. The Agent Sessions rows never set it.
     var inks: Inks? = nil
     struct Inks { var primary, quiet, blue, blocked, mark: Color; var badges: ThemePalette }
+    /// #1455: the Row details shown (Settings > Agent Island > Row details); the agents, merged and open PRs are the Row's.
+    var show: AgentIslandRowDetails = .all
+
+    /// #1455: a live row's state word goes with State off, unless an action or notice stands in its place; History keeps it.
+    var stateShown: Bool { show.state || row.state == nil || row.detail != row.state?.label }
+    /// #1455: a live row's age goes with Age off (its slot too); History rows keep theirs.
+    var ageShown: Bool { show.age || row.state == nil }
+    var modelEffort: (model: String?, effort: String?, modelSlot: Bool, effortSlot: Bool) {
+        show.modelEffort(model: row.model, effort: row.effort)
+    }
+    /// #1455: the Command chip's number, nil with Shortcut off.
+    var shownNumber: Int? { show.shortcut ? number : nil }
 
     @ViewBuilder var body: some View {
         if mini { miniBody } else { fullBody }
@@ -1373,8 +1390,9 @@ struct AgentSidebarRowView: View {
     /// The row's one accessibility label (#1379: Mini's tooltip and label too).
     var accessibilityWords: String {
         ([row.title, row.record?.pinned == true ? "pinned" : nil,
-          AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, row.detail, row.modelWords] + row.countWords
-         + [AgentIsland.ago(row.age)]).compactMap { $0 }.joined(separator: ", ")
+          AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, stateShown ? row.detail : nil,
+          show.modelWords(model: row.model, effort: row.effort)] + row.countWords
+         + [ageShown ? AgentIsland.ago(row.age) : nil]).compactMap { $0 }.joined(separator: ", ")
     }
 
     /// #1289 (G5): the element ignores its children, so each URL chip is an action on it, as on the island's row.
@@ -1394,7 +1412,7 @@ struct AgentSidebarRowView: View {
             stateMark
             ZStack {
                 Self.miniDigitColumn
-                if let number, number <= 9 {   // #1470: the 84 pt rail fits a Command chip only; rows 10-18 still jump
+                if let number = shownNumber, number <= 9 {   // #1470: the 84 pt rail fits a Command chip only; rows 10-18 still jump
                     AgentDigitChip(number: number, active: selected).modifier(AgentSidebarRowProbe(kind: "miniChip", title: row.title))
                 }
             }
@@ -1424,10 +1442,12 @@ struct AgentSidebarRowView: View {
             .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { AgentDigitChipSlot.Value(block: $0) }
             .modifier(AgentSidebarRowProbe(kind: "block", title: row.title))
             // #1345: the ⌘<n> chip's own column on EVERY row (the widest digit's chip, at no height), so the badges and
-            // the age end at one edge with a number or none and the row's height never changes.
-            Self.digitColumn
-                .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { AgentDigitChipSlot.Value(column: $0) }
-                .modifier(AgentSidebarRowProbe(kind: "chipColumn", title: row.title))
+            // the age end at one edge with a number or none and the row's height never changes. #1455: none with Shortcut off.
+            if show.shortcut {
+                Self.digitColumn
+                    .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { AgentDigitChipSlot.Value(column: $0) }
+                    .modifier(AgentSidebarRowProbe(kind: "chipColumn", title: row.title))
+            }
         }
         .padding(.horizontal, sz(10)).padding(.vertical, sz(7))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1444,7 +1464,7 @@ struct AgentSidebarRowView: View {
         // #1110: drawn over the row's chip column (outside the row's element, so it is read with its own name and help);
         // no number, no chip. #1345: centred on the two lines (the column's x, the text block's y).
         .overlayPreferenceValue(AgentDigitChipSlot.self) { slot in
-            if let column = slot.column, let block = slot.block, let number {
+            if let column = slot.column, let block = slot.block, let number = shownNumber {
                 GeometryReader { proxy in
                     AgentDigitChip(number: number, active: selected)
                         .accessibilityElement(children: .ignore)
@@ -1600,7 +1620,8 @@ extension AgentSidebarRowView {
     /// `hostSlot` false leaves the hidden host slot out.
     func titleLine(badges: Bool, effortOnly: Bool = false, hostSlot: Bool = true) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
-            let withBadges = badges && row.modelSlot
+            let me = modelEffort
+            let withBadges = badges && row.modelSlot && (me.modelSlot || me.effortSlot)   // #1455: none shown, no slot
             let title = Text(row.title).font(Neon.font(12.5, weight: .medium))
                 .foregroundStyle(row.state == nil ? ink(.quiet) : inks?.primary ?? Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
@@ -1734,14 +1755,17 @@ extension AgentSidebarRowView {
     /// #1345: `effortOnly`, line one's step below the title's floor: the effort's badge alone, in a slot as wide as the
     /// widest effort word's (no size change when it arrives; none known, nothing drawn).
     func modelSlotView(effortOnly: Bool) -> some View {
-        HStack(spacing: sz(3)) {
-            if !effortOnly { Self.badge(Self.modelWidest, Self.neutralLook) }
-            Self.badge(Self.effortWidest, Self.neutralLook)
+        // #1455: a part hidden by Row details hands its slot back; with the model hidden the effort is drawn alone.
+        let me = modelEffort, alone = effortOnly || !me.modelSlot
+        return HStack(spacing: sz(3)) {
+            if !alone { Self.badge(Self.modelWidest, Self.neutralLook) }
+            if me.effortSlot { Self.badge(Self.effortWidest, Self.neutralLook) }
         }
         .hidden()
         .overlay(alignment: .trailing) {
-            let all = Self.badges(model: row.model, effort: row.effort, selected: selected)
-            let shown = effortOnly ? Array(all.dropFirst()) : all
+            // A hidden model stands in as "" (badges draws the effort only with a model), then is dropped.
+            let all = Self.badges(model: me.model ?? (me.effort == nil ? nil : ""), effort: me.effort, selected: selected)
+            let shown = alone ? Array(all.dropFirst()) : all
             HStack(spacing: sz(3)) {
                 // The effort badge (second) keeps its word whole before the model's name is cut.
                 ForEach(shown.indices, id: \.self) { i in
@@ -1784,9 +1808,11 @@ extension AgentSidebarRowView {
     /// the first line, right above the age; the ⌘<n> chip is in the row's own column.
     func detailLine(_ chips: [String], open: Int = 0) -> some View {
         HStack(spacing: sz(5)) {
-            Text(row.detail).font(Neon.font(10.5))
-                .foregroundStyle(row.state == .blocked ? ink(.blocked) : ink(.quiet))
-                .lineLimit(1)
+            if stateShown {
+                Text(row.detail).font(Neon.font(10.5))
+                    .foregroundStyle(row.state == .blocked ? ink(.blocked) : ink(.quiet))
+                    .lineLimit(1)
+            }
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
                              quiet: ink(.quiet), open: ink(.blue), outline: inks?.primary ?? Self.outlineInk(selected: selected))
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
@@ -1805,7 +1831,7 @@ extension AgentSidebarRowView {
                 }
             }
             Spacer(minLength: 0)
-            if !row.age.isEmpty || row.state != nil { ageSlot }
+            if ageShown && (!row.age.isEmpty || row.state != nil) { ageSlot }
             if let h = row.remote?.host ?? row.host { Self.hostSlot(h, ink: ink(.quiet)) }   // #1324: a remote History row's too
         }
     }
