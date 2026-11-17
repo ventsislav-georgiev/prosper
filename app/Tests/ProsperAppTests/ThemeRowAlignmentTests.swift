@@ -95,4 +95,25 @@ final class ThemeRowAlignmentTests: XCTestCase {
                           "scale \(scale): the checkmark slot has one frame on every row, selected or not: \(checks)")
         }
     }
+
+    /// QA r1419 a1: the plain row's checkmark (opacity 0 when unselected) is hidden from VoiceOver in both states; the
+    /// row button's selected trait alone carries the state.
+    func testPlainRowCheckmarkIsHiddenFromVoiceOverInBothStates() throws {
+        ThemeRuntime.scale = 1
+        let s = try store()
+        let plain = try XCTUnwrap(s.available.first { $0.id == "t.plain" })
+        let other = try XCTUnwrap(s.available.first { $0.id != plain.id })
+        XCTAssertTrue(s.tints[plain.id] == nil, "the fixture row is a plain row")
+        for selected in [true, false] {
+            s.select(id: selected ? plain.id : other.id)
+            ThemeRuntime.scale = 1
+            let tree = AXTreeSupport.tree(ThemeList(theme: s, paneID: "appearance").row(plain).frame(width: 400), CGSize(width: 400, height: 200)) { t in
+                t.contains { $0.names.contains { $0.contains(plain.title) } }
+            }
+            XCTAssertTrue(tree.contains { $0.names.contains { $0.contains(plain.title) } }, "selected \(selected): the row is in the tree")
+            let spoken = tree.filter { !$0.ignored && $0.names.contains { $0.localizedCaseInsensitiveContains("checkmark") } }
+            XCTAssertTrue(spoken.isEmpty, "selected \(selected): nothing in the row says checkmark: \(spoken.map { $0.names })")
+            XCTAssertEqual(tree.contains { $0.selected && !$0.ignored }, selected, "selected \(selected): the selected trait only on the selected row")
+        }
+    }
 }

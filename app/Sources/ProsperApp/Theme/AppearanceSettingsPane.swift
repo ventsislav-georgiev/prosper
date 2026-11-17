@@ -429,7 +429,7 @@ struct ThemeList: View {
                 Spacer(minLength: sz(12))
                 // The same trailing slots as a tinted row: no dots here, but the room is kept.
                 Color.clear.frame(width: dotsSlotWidth, height: 1).anchorPreference(key: ThemeRowFrames.self, value: .bounds) { [.dotsSlot: $0] }
-                checkmark.opacity(selected ? 1 : 0)
+                checkmark.opacity(selected ? 1 : 0).accessibilityHidden(true)
             }
             .padding(.vertical, sz(6)).padding(.horizontal, Self.rowPad)
             .background(highlight(selected))
