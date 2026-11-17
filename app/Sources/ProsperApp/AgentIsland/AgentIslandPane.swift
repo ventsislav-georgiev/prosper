@@ -38,10 +38,11 @@ struct AgentIslandPane: View {
 
     /// #1228: the Default model field's commit: trimmed; empty clears it; anything AgentIsland.modelRefusal refuses
     /// is not saved (the previous value stays) and its reason comes back. nil: saved.
-    static func commitModel(_ text: String) -> String? {
+    static func commitModel(_ text: String, _ c: AgentIslandController = .shared) -> String? {
         let v = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !v.isEmpty, let why = AgentIsland.modelRefusal(v) { return why }
         Preferences.agentIslandDefaultModel = v
+        c.rowDetailsChanged()   // #1455: rows compare against the new Default at once
         return nil
     }
 
@@ -68,8 +69,10 @@ struct AgentIslandPane: View {
     }
     static let effortDefaultLabel = "Claude Code picks"
     /// #1454: the menu's pick, saved at once ("" clears the key; nothing else outside the levels is saved).
-    static func commitEffort(_ v: String) {
-        if v.isEmpty || AgentIsland.effortLevels.contains(v) { Preferences.agentIslandDefaultEffort = v }
+    static func commitEffort(_ v: String, _ c: AgentIslandController = .shared) {
+        guard v.isEmpty || AgentIsland.effortLevels.contains(v) else { return }
+        Preferences.agentIslandDefaultEffort = v
+        c.rowDetailsChanged()   // #1455
     }
 
     /// #1338: the Pairs field, what it last read or saved (leaving commits only an edit), and why its last commit
