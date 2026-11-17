@@ -1512,6 +1512,13 @@ final class AgentMiniTip: ObservableObject {
     @Published private(set) var shown: Shown?
     private var pending: (id: AgentSidebar.RowID, task: Task<Void, Never>)?
 
+    /// A hovered row that leaves the list sends no hover-out: when the drawn rows no longer hold the shown or pending id,
+    /// both go, so the tip never returns when that id is drawn again.
+    func prune(_ drawn: Set<AgentSidebar.RowID>) {
+        if let p = pending, !drawn.contains(p.id) { p.task.cancel(); pending = nil }
+        if let s = shown, !drawn.contains(s.id) { shown = nil }
+    }
+
     func hover(_ row: AgentSidebar.Row, _ inside: Bool) {
         if inside {
             pending?.task.cancel()
@@ -1560,6 +1567,7 @@ struct AgentMiniTipLabel: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
+        .onChange(of: Set(anchors.keys)) { _, ids in tip.prune(ids) }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

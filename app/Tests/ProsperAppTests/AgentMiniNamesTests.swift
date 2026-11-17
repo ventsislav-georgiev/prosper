@@ -144,6 +144,45 @@ final class AgentMiniNamesTests: XCTestCase {
         }
     }
 
+    /// i1: a shown tip (and a pending show) whose row leaves the drawn rows is cleared, and does not come back when the id is drawn again.
+    func testMiniTipIsClearedWhenItsRowLeavesTheList() throws {
+        try modes.withModeRow {
+            Preferences.agentSidebarMode = .mini
+            let m = d1.windowModel(d1.store([d1.session(Self.long, .working), d1.session("api", .idle)]))
+            defer { m.close() }
+            m.setVisible(true)
+            let win = AgentWindowStyleTests.makeStandardWindow(m)
+            defer { win.contentViewController = nil }
+            modes.settle(win)
+            let rows = m.sections.flatMap(\.rows)
+            let row = try XCTUnwrap(rows.first { $0.title == Self.long })
+            let all = Set(rows.map(\.id))
+            let tip = m.miniTip
+            func spin(_ s: TimeInterval) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
+            tip.hover(row, true)
+            let deadline = Date().addingTimeInterval(3)
+            while tip.shown == nil && Date() < deadline { spin(0.05) }
+            XCTAssertEqual(tip.shown?.title, Self.long)
+            tip.prune(all)
+            XCTAssertEqual(tip.shown?.title, Self.long, "row still drawn: kept")
+            tip.prune(all.subtracting([row.id]))
+            XCTAssertTrue(tip.shown == nil, "row gone: cleared")
+            tip.prune(all)
+            spin(0.5)
+            XCTAssertTrue(tip.shown == nil, "row back: no tip until a new hover")
+            tip.hover(row, true)
+            tip.prune(all.subtracting([row.id]))
+            tip.prune(all)
+            spin(0.6)
+            XCTAssertTrue(tip.shown == nil, "a pending show for a gone row is cancelled")
+            tip.hover(row, true)
+            let d2 = Date().addingTimeInterval(3)
+            while tip.shown == nil && Date() < d2 { spin(0.05) }
+            XCTAssertEqual(tip.shown?.title, Self.long, "a new hover shows it again")
+            tip.hover(row, false)
+        }
+    }
+
     // MARK: Helpers
 
     static func exact<V: View>(_ v: V) -> CGFloat {

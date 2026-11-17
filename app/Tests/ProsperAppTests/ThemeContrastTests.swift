@@ -118,6 +118,21 @@ final class ThemeContrastTests: XCTestCase {
         XCTAssertEqual(Self.contrast(grey, on: .white), 4.54, accuracy: 0.01)
     }
 
+    /// #1457 b: the Mini row's 8 pt Command superscript on the Default theme: unselected it is Neon.faded(blue, 0.75) over
+    /// the rail surface, selected Neon.blue over NeonSelectedRowFill's blue at 0.14 over the rail. Both reach 4.5:1.
+    func testMiniSuperscriptInkClearsItsSurfacesOnDefault() {
+        let p = ThemePalette.default
+        let rail = NSColor(p.sidebar), blue = NSColor(p.blue)
+        func over(_ f: NSColor, _ a: CGFloat, _ b: NSColor) -> NSColor {
+            let f = Self.srgb(f), b = Self.srgb(b)
+            return NSColor(srgbRed: f.r * a + b.r * (1 - a), green: f.g * a + b.g * (1 - a), blue: f.b * a + b.b * (1 - a), alpha: 1)
+        }
+        let unselected = Self.contrast(blue.withAlphaComponent(0.75), on: rail)
+        let selected = Self.contrast(blue, on: over(blue, 0.14, rail))
+        XCTAssertGreaterThanOrEqual(unselected, Self.minimum, "unselected superscript is \(unselected):1")
+        XCTAssertGreaterThanOrEqual(selected, Self.minimum, "selected superscript is \(selected):1")
+    }
+
     /// Every surface token text is painted on, written out. #1095: the tint rule
     /// (ThemeTests.testBundledThemeTintsPassTheTextContrastRule) walks the same list, since
     /// accent text sits on all five (window gradient bgTop to bgBottom, the clipboard chip on
