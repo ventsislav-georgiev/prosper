@@ -1728,6 +1728,8 @@ tag from the now-released section and put it on the new top draft.
   (after Command-1 to 9). The Option-Command-1/2/3 shortcuts for the transcript's
   Focused/Default/Verbose view are gone. The sidebar is a little wider to fit the new chips, so
   session names keep their room. (#1470)
+- The ccpool status line now also names the pool account for a session running behind headroom.
+  (#1485)
 
 ## v2.174.0
 

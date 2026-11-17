@@ -192,17 +192,67 @@ final class CCPoolScriptsTests: XCTestCase {
         XCTAssertEqual(f.out, "\u{1B}[31mccpool down\u{1B}[0m", "a foreign answer is not the pool")
     }
 
-    // Not routed: nothing at all. ANTHROPIC_TARGET_API_URL is not read (#1200).
+    // Not routed: nothing at all (no URL, or a URL that is not this pool).
     func testStatuslinePrintsNothingWhenNotRouted() throws {
         let port = try pool()
         for env in [["CCPOOL_PORT": "\(port)"],
-                    ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:1"],
-                    ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:1",
-                     "ANTHROPIC_TARGET_API_URL": "http://127.0.0.1:\(port)"]] {
+                    ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:1"]] {
             let r = try run("ccpool-statusline", env: env)
             XCTAssertEqual(r.status, 0)
             XCTAssertEqual(r.out, "", "\(env)")
         }
+    }
+
+    // #1485: a session behind headroom has BASE at headroom and TARGET at its upstream. TARGET, when set and non-empty,
+    // is the URL that counts; the loopback, port and health checks are the same for it.
+    func testStatuslineReadsTheTargetUrlFirst() throws {
+        let port = try pool(current: "alpha")
+        let behind = try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:1",
+                                                        "ANTHROPIC_TARGET_API_URL": "http://127.0.0.1:\(port)"])
+        XCTAssertEqual(behind.out, "\u{1B}[32mccpool alpha\u{1B}[0m", "TARGET at the pool, BASE at headroom")
+
+        // An empty TARGET is unset: BASE counts.
+        let empty = try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:\(port)",
+                                                       "ANTHROPIC_TARGET_API_URL": ""])
+        XCTAssertEqual(empty.out, "\u{1B}[32mccpool alpha\u{1B}[0m")
+
+        // TARGET names something else: BASE at the pool does not count.
+        let other = try listener([("Server", "nginx")], "hello")
+        let elsewhere = try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:\(port)",
+                                                           "ANTHROPIC_TARGET_API_URL": "http://127.0.0.1:\(other)"])
+        XCTAssertEqual(elsewhere.out, "")
+    }
+
+    // BASE at a non-ccpool listener and no TARGET: nothing. BASE-only is the old rule.
+    func testStatuslineBaseAtAnotherListenerWithNoTargetPrintsNothing() throws {
+        let other = try listener([("Server", "nginx")], "hello")
+        let port = try pool()
+        let r = try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:\(other)"])
+        XCTAssertEqual(r.status, 0)
+        XCTAssertEqual(r.out, "")
+    }
+
+    // TARGET at a closed pool port: red "down", whatever BASE is.
+    func testStatuslineSaysDownWhenTheTargetIsDown() throws {
+        let port = freePort()
+        let r = try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:1",
+                                                   "ANTHROPIC_TARGET_API_URL": "http://127.0.0.1:\(port)"])
+        XCTAssertEqual(r.out, "\u{1B}[31mccpool down\u{1B}[0m")
+    }
+
+    // TARGET not on loopback: nothing printed and no connection made (a scratch curl on PATH records any call).
+    func testStatuslineNeverDialsANonLoopbackTarget() throws {
+        let dir = tempDir()
+        let record = dir.appendingPathComponent("curl-ran.txt")
+        let curl = dir.appendingPathComponent("curl")
+        try "#!/bin/sh\necho ran > '\(record.path)'\n".write(to: curl, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: curl.path)
+        let port = try pool()
+        let r = try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:\(port)",
+                                                   "ANTHROPIC_TARGET_API_URL": "http://example-host:1"],
+                        path: "\(dir.path):/usr/bin:/bin")
+        XCTAssertEqual(r.out, "")
+        XCTAssertTrue(!FileManager.default.fileExists(atPath: record.path), "curl ran for a non-loopback target")
     }
 
     // A label is user text: ESC (C0), DEL and a C1 control are dropped; the rest prints through printf '%s'.

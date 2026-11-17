@@ -1,8 +1,8 @@
 #!/bin/sh
 # ccpool-statusline: a Claude Code status line segment for Prosper's Claude Account Pool.
 #
-# Prints green "ccpool <label>" when this session is routed through the pool (ANTHROPIC_BASE_URL is
-# http://127.0.0.1:${CCPOOL_PORT:-8790}) and the pool's health answer names its current account, red "ccpool down"
+# Prints green "ccpool <label>" when this session is routed through the pool (ANTHROPIC_TARGET_API_URL, else
+# ANTHROPIC_BASE_URL, is http://127.0.0.1:${CCPOOL_PORT:-8790}) and the pool's health answer names its current account, red "ccpool down"
 # when routed but the health answer fails, and nothing when the session is not routed. Not wired anywhere: a
 # statusLine is a single slot, so the user picks it.
 #
@@ -20,7 +20,10 @@ case $port in
     '' | *[!0-9]* | ??????*) exit 0 ;;
 esac
 base="http://127.0.0.1:$port"
-case ${ANTHROPIC_BASE_URL:-} in
+# A session behind headroom has ANTHROPIC_BASE_URL at headroom and ANTHROPIC_TARGET_API_URL at its upstream: the
+# target, when set and non-empty, is the URL that counts; else the base.
+url=${ANTHROPIC_TARGET_API_URL:-${ANTHROPIC_BASE_URL:-}}
+case $url in
     "$base" | "$base/") ;;
     *) exit 0 ;;
 esac
