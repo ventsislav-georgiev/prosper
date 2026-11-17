@@ -1389,7 +1389,7 @@ struct AgentSidebarRowView: View {
     /// The row's one accessibility label (#1379: Mini's tooltip and label too).
     var accessibilityWords: String {
         ([row.title, row.record?.pinned == true ? "pinned" : nil,
-          AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, stateShown ? row.detail : nil,
+          AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, row.detail,
           show.modelWords(model: row.model, effort: row.effort)] + row.countWords
          + [ageShown ? AgentIsland.ago(row.age) : nil]).compactMap { $0 }.joined(separator: ", ")
     }
@@ -1763,7 +1763,7 @@ extension AgentSidebarRowView {
         .hidden()
         .overlay(alignment: .trailing) {
             // A hidden model stands in as "" (badges draws the effort only with a model), then is dropped.
-            let all = Self.badges(model: me.model ?? (me.effort == nil ? nil : ""), effort: me.effort, selected: selected)
+            let all = Self.badges(model: me.model ?? (me.effort == nil || me.modelSlot ? nil : ""), effort: me.effort, selected: selected)
             let shown = alone ? Array(all.dropFirst()) : all
             HStack(spacing: sz(3)) {
                 // The effort badge (second) keeps its word whole before the model's name is cut.

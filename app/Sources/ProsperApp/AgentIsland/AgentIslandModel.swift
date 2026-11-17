@@ -154,8 +154,14 @@ struct AgentIslandRowDetails: Equatable {
     /// (AgentModelEffort.shortName), reads the same; a bare family alias ("opus") matches that family at any version.
     func isDefaultModel(_ label: String?) -> Bool {
         guard let label, !defaultModel.isEmpty else { return false }
-        let d = AgentModelEffort.shortName(defaultModel).lowercased(), l = label.lowercased()
+        // A trailing "[...]" (context suffix, "opus[1m]") is not part of the model: strip one from both sides.
+        let d = AgentModelEffort.shortName(Self.unbracketed(defaultModel)).lowercased(), l = AgentModelEffort.shortName(Self.unbracketed(label)).lowercased()
         return l == d || (!d.contains(" ") && l.hasPrefix(d + " "))
+    }
+
+    static func unbracketed(_ s: String) -> String {
+        guard s.hasSuffix("]"), let i = s.lastIndex(of: "["), i > s.startIndex else { return s }
+        return String(s[..<i])
     }
 
     /// #1455: the model and effort a row draws (nil: hidden), and whether each keeps its slot: an unknown value keeps it
@@ -163,7 +169,8 @@ struct AgentIslandRowDetails: Equatable {
     func modelEffort(model: String?, effort: String?) -> (model: String?, effort: String?, modelSlot: Bool, effortSlot: Bool) {
         let m = self.model && !isDefaultModel(model) ? model : nil
         let e = self.effort && !(effort != nil && !defaultEffort.isEmpty && effort == defaultEffort) ? effort : nil
-        return (m, e, self.model && (model == nil || m != nil), self.effort && (effort == nil || e != nil))
+        // R1455a-s1: with a Default set an unknown value takes no slot (it would collapse when it arrives equal to it, #1203).
+        return (m, e, self.model && (model == nil ? defaultModel.isEmpty : m != nil), self.effort && (effort == nil ? defaultEffort.isEmpty : e != nil))
     }
 
     /// #1455: Row.modelWords for the parts shown ("model Opus 4.7, effort high"); nil for none.
@@ -583,7 +590,7 @@ enum AgentIsland {
         // #1137: the counts in the Agent Sessions window's words ("3 agents", "192 merged pull requests").
         let agents: String? = agentsCount(s, show: d).map { AgentSidebar.Count.agents.words($0) }
         let merged: String? = mergedCount(s.meta, show: d).map { AgentSidebar.Count.merged.words($0) }
-        return [s.title, d.state ? s.state.label : nil, d.age ? ago(age) : nil, agents, merged,
+        return [s.title, s.state.label, d.age ? ago(age) : nil, agents, merged,
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }

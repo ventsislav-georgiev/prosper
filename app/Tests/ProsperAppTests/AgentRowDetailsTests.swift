@@ -174,10 +174,40 @@ final class AgentRowDetailsTests: XCTestCase {
     func testStateOffHidesTheStateWord() {
         let word = AgentState.idle.label, off = details { $0.state = false }
         XCTAssertTrue(sidebar(.all).accessibilityWords.contains(word))
-        XCTAssertFalse(sidebar(off).accessibilityWords.contains(word))
+        // R1455a-m1: the coloured mark still shows the state, so State off hides the DRAWN word only: both labels keep it.
+        XCTAssertFalse(sidebar(off).stateShown, "the word is not drawn")
+        XCTAssertTrue(sidebar(off).accessibilityWords.contains(word), "VoiceOver keeps the state")
         XCTAssertLessThan(ideal(sidebar(off).detailLine([])).width, ideal(sidebar(.all).detailLine([])).width)
         XCTAssertTrue(island(.all).contains(word))
-        XCTAssertFalse(island(off).contains(word))
+        XCTAssertTrue(island(off).contains(word), "the island's label keeps the state too")
+    }
+
+    /// R1455a-s1: with a Default set an unknown model (effort) takes no slot, so arriving equal to it changes nothing.
+    @MainActor
+    func testUnknownModelWithADefaultTakesNoSlot() {
+        let at = details { $0.defaultModel = "opus"; $0.defaultEffort = "high" }
+        let me = at.modelEffort(model: nil, effort: nil)
+        XCTAssertFalse(me.modelSlot)
+        XCTAssertFalse(me.effortSlot)
+        XCTAssertTrue(details { $0.defaultModel = "opus" }.modelEffort(model: nil, effort: nil).effortSlot, "no Default effort: as before")
+        XCTAssertTrue(details { $0.defaultEffort = "high" }.modelEffort(model: nil, effort: nil).modelSlot, "no Default model: as before")
+        let pixel = AXTreeSupport.devicePixel
+        let before = ideal(sidebar(at, session(model: nil, effort: nil)).titleLine(badges: true)).width
+        let after = ideal(sidebar(at, session()).titleLine(badges: true)).width
+        XCTAssertEqual(before, after, accuracy: pixel, "the title keeps its width when the model arrives at the Default")
+    }
+
+    /// R1455a-s2: one trailing "[...]" goes from the Default and from the row's model before the label compare.
+    func testBracketSuffixIsStripped() {
+        let cases: [(String, String)] = [("opus[1m]", "claude-opus-4-7[1m]"), ("opus[1m]", "claude-opus-4-7"),
+                                         ("claude-opus-4-7[1m]", "claude-opus-4-7[1m]")]
+        for (def, raw) in cases {
+            let d = details { $0.defaultModel = def }
+            let label = AgentModelEffort.shortName(raw)   // what Row.model carries
+            XCTAssertTrue(d.isDefaultModel(label), "\(def) vs \(raw)")
+            XCTAssertTrue(d.modelEffort(model: label, effort: nil).model == nil, "\(def) vs \(raw)")
+        }
+        XCTAssertFalse(details { $0.defaultModel = "opus[1m]" }.isDefaultModel("Sonnet 4.5"))
     }
 
     @MainActor
