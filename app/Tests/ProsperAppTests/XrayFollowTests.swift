@@ -388,8 +388,12 @@ final class XrayFollowTests: XCTestCase {
 
     /// QA r1436 s2: a follow that ends after its snapshot while the panel is shown and live (a dropped link, a serve
     /// restart, serve evicting it) keeps its rows and the 5 s chapters poll resumes, so Prompts and Responses update
-    /// again. Red with ended-follow-frozen: `follow` stays set and no chapters read ever runs.
+    /// again; #1475 c (QA r1446 i2): and the 30 s Refs poll (the same `follow == nil` gate, XrayPoller.swift:33).
+    /// Red with ended-follow-frozen: `follow` stays set and no chapters read ever runs.
     func testAFollowEndedAfterItsSnapshotLetsThePollsResume() async throws {
+        let gate = XrayPanels.refsTab
+        defer { XrayPanels.refsTab = gate }
+        XrayPanels.refsTab = { true }
         try await withFollow { fake, panels in
             let run = XrayChaptersTests.Run(), clock = Clock()
             let p = panel(panels, clock: clock)
@@ -405,6 +409,12 @@ final class XrayFollowTests: XCTestCase {
             p.tab = .responses
             await tick(p, clock, at: 10)
             XCTAssertEqual(run.chapterReads, 2, "and on Responses")
+            p.tab = .refs
+            await tick(p, clock, at: 39)
+            XCTAssertEqual(run.chapterReads, 2, "Refs: not before its 30 s")
+            await tick(p, clock, at: 40)
+            XCTAssertEqual(run.chapterReads, 3, "and the Refs poll resumes")
+            XCTAssertTrue(p.refs != nil)
             XCTAssertTrue(fake.stopped.isEmpty)
             XCTAssertEqual(fake.args.count, 1, "the polls, no restart")
             p.stop()

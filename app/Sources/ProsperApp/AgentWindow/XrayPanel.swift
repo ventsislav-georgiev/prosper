@@ -355,6 +355,10 @@ final class XrayPanelModel: ObservableObject {
         guard let s, !stopped else { return }
         if fromDch() { (dchChapters, chapterAnchors) = (s.chapters, s.anchors) }
         if XrayPanels.refsTab() { refs = s.refs }
+        // #1475 c: the stream's Tasks and Memory replace the reads' (a reset keeps the rows until its blocks come)
+        if let t = s.tasks { tasks = Self.tasksTab(t) }
+        if let m = s.memory { memory = m.count == 0 ? nil : m }
+        if loaded, s.tasks != nil || s.memory != nil, !tabs.contains(tab), let first = tabs.first { tab = first }
         guard !loaded else { return }
         if answered { finishOpen() } else if fallback == nil { loaded = true }   // the chip's list waits for its Tasks
     }
@@ -397,16 +401,17 @@ final class XrayPanelModel: ObservableObject {
         if t == .refs, loaded, !fromDch(), follow == nil {   // #1475: a follow keeps the refs live
             if reading == nil, let dch, let run { readChapters(dch, run) } else { lastRead = .distantPast }
         }
-        guard t == .memory, loaded else { return }
+        guard t == .memory, loaded, follow?.carriesTasks != true else { return }   // #1475 c: the stream keeps it
         if reading != nil { pendingMemory = true } else { readMemory() }
     }
 
     /// Design 3.9 and QA R1349-i2: a Tasks tab only for exit 0, header schema 1 and at least one task.
     static func tasksTab(_ r: (status: Int32, out: Data)) -> XrayTasks? {
-        guard r.status == 0 else { return nil }
-        let t = XrayTasks.parse(r.out)
-        return t.schema == 1 && !t.tasks.isEmpty ? t : nil
+        r.status == 0 ? tasksTab(XrayTasks.parse(r.out)) : nil
     }
+
+    /// #1475 c: the same rule for a parse in hand (a follow's tasks block).
+    static func tasksTab(_ t: XrayTasks) -> XrayTasks? { t.schema == 1 && !t.tasks.isEmpty ? t : nil }
 
     /// #1354: Prompts and Responses while the pane's transcript is there (Transcript mode, a local session); #1389: or
     /// while dch's chapters read answered (Terminal mode, remote).

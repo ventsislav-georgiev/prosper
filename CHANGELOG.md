@@ -1739,6 +1739,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Kits can ship agent files (named workers): Prosper installs them byte for byte into
   ~/.claude/agents, never overwrites an agent file you already have, and on Remove deletes only the
   ones it wrote and you did not edit. (#920)
+- X-ray's Tasks and Memory tabs now update live from the same dch stream as Prompts and Responses,
+  with no polling (needs dch 1.91.0 or newer; older hosts keep the periodic refresh). (#1475)
 
 ## v2.174.0
 

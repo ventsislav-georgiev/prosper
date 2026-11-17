@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import os
 
 // #1475 (dch #445 phase 1): X-ray's Prompts, Responses and Refs come from one long-lived `dch --xray <n> --follow --json`
 // per session target instead of the open's chapters read and the 5 s / 30 s chapters and Refs polls. dch README "X-ray
@@ -8,6 +9,10 @@ import Foundation
 // a snapshot follows). The state is the cache: a panel opened on a target that has one draws it on the first frame.
 // The follow keeps running while the window or drawer is hidden (an idle follow costs dch no CPU); it ends when dch
 // ends it (the session ended), or when the LRU evicts it. Tasks and Memory keep their polls (phase 2 is dch #446).
+// #1475 c (dch #446, 1.91.0): `--tasks --memory` on the same follow: after every snapshot and reset a tasks block, then a
+// memory block (the one-shot lines: header, rows, done line; the tasks header has `session`, memory's never), then deltas
+// `task` / `memory` by id (`gone` removes); a whole block again replaces the kept one. The Tasks and Memory polls stop
+// while such a follow runs. An older host refuses the form with exit 2: the follow starts again without it, once.
 
 /// One target's follow and the state its lines built.
 @MainActor
@@ -16,6 +21,25 @@ final class XrayFollow: ObservableObject {
         var chapters: [TranscriptOutline.Chapter]?
         var refs: XrayRefs?
         var anchors: [String: Int]
+        /// #1475 c: the stream's tasks and memory blocks, parsed as the one-shot reads; nil: no block (yet).
+        var tasks: XrayTasks? = nil
+        var memory: XrayMemory? = nil
+    }
+
+    /// #1475 c: one tasks or memory block as dch's one-shot lines (header, rows with their ids, done line).
+    struct Block {
+        var head: Data
+        var rows: [(id: String?, line: Data)] = []
+        var done: Data?
+        var bytes: Int
+
+        init(_ head: Data) { (self.head, bytes) = (head, head.count) }
+        /// What XrayTasks.parse / XrayMemory.parse read: the lines in order.
+        var data: Data {
+            var out = head
+            for l in rows.map({ $0.line }) + (done.map { [$0] } ?? []) { out.append(0x0A); out.append(l) }
+            return out
+        }
     }
 
     let target: XrayTarget
@@ -30,6 +54,16 @@ final class XrayFollow: ObservableObject {
     /// replaced or dropped), bounded as XrayChapters.parse bounds one read; rows set it and restore it.
     static var maxKept = XrayChapters.maxBytes
     private var kept = 0
+    /// #1475 c: the kept blocks by row key ("task", "memory"), the one whose done line has not come, the ones changed.
+    private var blocks: [String: Block] = [:]
+    private var openBlock: String?
+    private var dirty: Set<String> = []
+    /// #1475 c: this run carries `--tasks --memory` (the probed dch is 1.91.0 or newer and the host did not refuse it).
+    private(set) var withTasks = false
+    private var tasksRefused = false
+    private var dch = ""
+    /// While it runs, the Tasks and Memory polls stay off (XrayPoller tick, select).
+    var carriesTasks: Bool { running && withTasks }
     /// The process's stop (SIGTERM); nil once it ended.
     private var stopProcess: (() -> Void)?
     var running: Bool { stopProcess != nil }
@@ -42,7 +76,9 @@ final class XrayFollow: ObservableObject {
     func start(_ dch: String) {
         guard stopProcess == nil else { return }
         failed = false
-        stopProcess = XrayPanels.follow(dch, target.followArgs, target.env,
+        self.dch = dch
+        withTasks = !tasksRefused && XrayPanels.followTasksOK()
+        stopProcess = XrayPanels.follow(dch, target.followArgs(tasks: withTasks), target.env,
                                         { [weak self] in self?.take($0) }, { [weak self] in self?.ended($0) })
     }
 
@@ -56,6 +92,8 @@ final class XrayFollow: ObservableObject {
     private func ended(_ status: Int32) {
         guard stopProcess != nil else { return }   // stopped by us: not news
         stopProcess = nil
+        // #1475 c: an older host's "bad usage: --tasks and --follow": the same follow without them, once; polls for those
+        if status == XrayPanels.followTasksRefused, withTasks, object == nil { tasksRefused = true; return start(dch) }
         if object == nil { failed = true; onEnd(self) }   // never a snapshot: the panels go back to today's reads
     }
 
@@ -63,10 +101,28 @@ final class XrayFollow: ObservableObject {
     func take(_ lines: [Data]) {
         var changed = false
         for d in lines {
-            guard let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], o["schema"] as? Int == 1 else { continue }
+            guard let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            // #1475 c: a block's rows and done line carry no schema (the one-shot lines); a delta may
+            if takeBlockLine(o, d) {
+                changed = true
+                if pastCap() { return }
+                continue
+            }
+            guard o["schema"] as? Int == 1 else { continue }
             // d.count is at most XrayLineSplit's cap and kept at most maxKept after each line: the sum cannot overflow
             if let s = o["snapshot"] as? [String: Any] { object = s; kept = d.count; changed = true; continue }
-            if o["reset"] != nil { object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0; changed = true; continue }
+            if o["reset"] != nil {
+                object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0; changed = true
+                (blocks, openBlock) = ([:], nil); dirty = ["task", "memory"]   // #1475 c: the blocks come again after it
+                continue
+            }
+            if o["source"] != nil {   // #1475 c: a tasks (with `session`) or memory header starts its block again
+                let k = o["session"] != nil ? "task" : "memory"
+                if let cut = openBlock, cut != k { dirty.insert(cut) }   // a block with no done line ends here (partial)
+                blocks[k] = Block(d); openBlock = k; changed = true   // shown at its done line, not row by row
+                if pastCap() { return }
+                continue
+            }
             guard var obj = object else { continue }   // a delta before any snapshot has nothing to apply to
             if let c = o["chapter"] as? [String: Any] {
                 var list = obj["chapters"] as? [Any] ?? []
@@ -100,11 +156,46 @@ final class XrayFollow: ObservableObject {
             kept += d.count   // a removal (count 0, evict) adds its own small line too
             object = obj
             changed = true
-            // #1475 a2 (QA r1436 s1): past the whole-object cap the follow ends and the panels read as today (giveUpFollow)
-            if kept > Self.maxKept { object = nil; failed = true; onEnd(self); return }
+            if pastCap() { return }
         }
         guard changed, let object else { return }
-        state = State(chapters: XrayChapters.parse(object), refs: XrayRefs.parse(object), anchors: XrayPanelModel.anchors(object))
+        // #1475 c: a block is parsed again only when it changed (up to 50000 rows)
+        let tasks = dirty.contains("task") ? blocks["task"].map { XrayTasks.parse($0.data) } : state?.tasks
+        let memory = dirty.contains("memory") ? blocks["memory"].map { XrayMemory.parse($0.data) } : state?.memory
+        dirty = []
+        state = State(chapters: XrayChapters.parse(object), refs: XrayRefs.parse(object), anchors: XrayPanelModel.anchors(object),
+                      tasks: tasks, memory: memory)
+    }
+
+    /// #1475 a2 (QA r1436 s1): past the whole-object cap the follow ends and the panels read as today (giveUpFollow);
+    /// #1475 c: the blocks' bytes count too (each sum at most maxKept plus one line after the check per line: no overflow).
+    private func pastCap() -> Bool {
+        guard kept + blocks.values.reduce(0, { $0 + $1.bytes }) > Self.maxKept else { return false }
+        object = nil; failed = true; onEnd(self)
+        return true
+    }
+
+    /// #1475 c: a block's row or done line, or a `task` / `memory` delta (by id; `gone` removes; a delta for no block
+    /// yet has nothing to apply to). false: not one of these lines.
+    private func takeBlockLine(_ o: [String: Any], _ d: Data) -> Bool {
+        if o["done"] != nil, let k = openBlock {
+            blocks[k]?.done = d; blocks[k]?.bytes += d.count; openBlock = nil; dirty.insert(k)
+            return true
+        }
+        guard let k = ["task", "memory"].first(where: { o[$0] != nil }), let row = o[k] as? [String: Any] else { return false }
+        guard var b = blocks[k] else { return true }
+        let id = row["id"] as? String, gone = row["gone"] as? Bool == true
+        if openBlock == k {
+            b.rows.append((id, d)); b.bytes += d.count   // the block's own row, as parse reads it
+        } else if let id, let i = b.rows.firstIndex(where: { $0.id == id }) {
+            b.bytes -= b.rows[i].line.count
+            if gone { b.rows.remove(at: i) } else { b.rows[i].line = d; b.bytes += d.count }
+        } else if id != nil, !gone {
+            b.rows.append((id, d)); b.bytes += d.count
+        } else { return true }   // gone for a row not kept, or no id: nothing to apply
+        blocks[k] = b
+        if openBlock != k { dirty.insert(k) }   // an open block shows at its done line
+        return true
     }
 
     /// One kept element's size as JSON (its line's, give or take the wrapper and escapes); 0 for what is not a JSON
@@ -163,14 +254,17 @@ final class XrayFollows {
 }
 
 extension XrayTarget {
-    /// #1475: dch README "dch --xray <n> --follow --json  # the same object, then its deltas as NDJSON".
-    var followArgs: [String] { ["--xray", name, "--follow", "--json"] }
+    /// #1475: dch README "dch --xray <n> --follow --json  # the same object, then its deltas as NDJSON"; #1475 c: with
+    /// `tasks`, dch 1.91.0's `--xray <n> --follow --tasks --memory --json`.
+    func followArgs(tasks: Bool) -> [String] { ["--xray", name, "--follow"] + (tasks ? ["--tasks", "--memory"] : []) + ["--json"] }
 }
 
 extension XrayFollow {
     /// The dch that has `--xray <n> --follow --json` with `reset` (it predates 1.66.0, README "X-ray queries"): every
     /// dch XrayTabs.gate lets in. A remote host's older dch exits before a snapshot: that target falls back (`failed`).
     static let minimumDch = XrayTabs.minimumDch
+    /// #1475 c: `--follow --tasks --memory` (dch #446).
+    static let tasksDch = [1, 91, 0]
 }
 
 extension XrayPanels {
@@ -185,6 +279,12 @@ extension XrayPanels {
     static var followOK: @MainActor () -> Bool = {
         NSClassFromString("XCTestCase") == nil && probed.map { DchCommand.isAtLeast($0.version, XrayFollow.minimumDch) } == true
     }
+
+    /// #1475 c: a follow carries Tasks and Memory on the probed dch 1.91.0 or newer (rows set `probed`).
+    static var followTasksOK: @MainActor () -> Bool = { probed.map { DchCommand.isAtLeast($0.version, XrayFollow.tasksDch) } == true }
+
+    /// #1475 c: streamLines' answer for exit 2 with "bad usage: --tasks and --follow" on stderr (an older host).
+    nonisolated static let followTasksRefused = Int32.min + 1
 
     /// The product's: a dch child whose stdout is read line by line. Never under XCTest (rows put a fake here).
     static var follow: Follow = { path, args, env, lines, ended in
@@ -209,13 +309,21 @@ extension XrayPanels {
         p.arguments = args
         p.environment = env
         p.standardInput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        let out = Pipe()
+        let out = Pipe(), err = Pipe()
         p.standardOutput = out
+        p.standardError = err
         let exited = DispatchSemaphore(value: 0)
         p.terminationHandler = { _ in child.reaped(); exited.signal() }
         do { try p.run() } catch { return -1 }
         child.started(p.processIdentifier)
+        // #1475 c: stderr drained beside stdout (a full pipe would stall dch); its first 4 KB kept for the refusal check
+        let errHead = OSAllocatedUnfairLock(initialState: Data()), drained = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            while case let c = err.fileHandleForReading.availableData, !c.isEmpty {
+                errHead.withLock { if $0.count < 4096 { $0.append(c.prefix(4096 - $0.count)) } }
+            }
+            drained.signal()
+        }
         var split = XrayLineSplit()
         split.cap = cap
         while case let chunk = out.fileHandleForReading.availableData, !chunk.isEmpty {
@@ -223,6 +331,8 @@ extension XrayPanels {
             if !ls.isEmpty { batch(ls) }
         }
         exited.wait()
+        if p.terminationStatus == 2, drained.wait(timeout: .now() + 2) == .success,
+           String(decoding: errHead.withLock { $0 }, as: UTF8.self).contains("bad usage: --tasks and --follow") { return followTasksRefused }
         return p.terminationStatus
     }
 }

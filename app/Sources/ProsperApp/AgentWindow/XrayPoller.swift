@@ -8,6 +8,7 @@ import AppKit
 // #1389: Prompts and Responses from dch's chapters (`--xray <n> --json`) at the Tasks cadence, 5 s local, 15 s remote.
 // #1415 (gate A): the Refs tab reads that same `--json` every 30 s (Memory's cadence) while it is shown and live; a
 // Transcript pane keeps only its refs (its chapters are its own), a dch-chapters pane takes both.
+// #1475 c: a follow that carries Tasks and Memory (dch 1.91.0) stops their polls while it runs.
 
 extension XrayPanelModel {
     /// Design 3.4 / 3.5: Tasks (#1389: and dch's chapters) 5 s for a local session, 15 s for a remote one; Memory 30 s
@@ -31,7 +32,8 @@ extension XrayPanelModel {
         // #1475: a follow keeps both live: no chapters or Refs poll beside it
         let prose = (tab == .prompts || tab == .responses) && dchChapters != nil && fromDch() && follow == nil
         let refsShown = tab == .refs && refs != nil && follow == nil   // #1415: only while Refs is the shown tab (gate A keeps it nil)
-        guard !loaded || s.live && (tab == .tasks || tab == .memory && memory != nil || prose || refsShown) else { return }
+        let streamed = follow?.carriesTasks == true   // #1475 c: the follow carries Tasks and Memory: no poll beside it
+        guard !loaded || s.live && (!streamed && (tab == .tasks || tab == .memory && memory != nil) || prose || refsShown) else { return }
         guard now().timeIntervalSince(lastRead) >= interval else { return }
         // design 3.9: no Tasks retry until the dch path's mtime moves
         if failed, tab == .tasks, mtime(dch) == failedMtime { return }
