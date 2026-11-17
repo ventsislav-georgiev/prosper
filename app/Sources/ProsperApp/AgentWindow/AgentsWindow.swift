@@ -286,25 +286,25 @@ final class AgentsNSWindow: NSWindow {
         }
     }
 
-    /// 7.6: a small state machine over the left button. A mouse-down that only focused a pane is swallowed, and so are
-    /// its drags and its up; any other down starts a click that passes. Every other event type passes.
+    /// 7.6: a small state machine per button (left, right, other; R1477b-m1). A mouse-down that only focused a pane is
+    /// swallowed, and so are that button's drags and its up; any other down starts a click that passes. Every other event
+    /// type passes.
     struct FocusClick: Equatable {
-        private(set) var swallowing = false
+        /// The buttons (0 left, 1 right, 2 other) whose focusing down was swallowed and whose up has not come yet.
+        private(set) var held: Set<Int> = []
+        var swallowing: Bool { !held.isEmpty }
+        static let downs: [NSEvent.EventType] = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        static let drags: [NSEvent.EventType] = [.leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        static let ups: [NSEvent.EventType] = [.leftMouseUp, .rightMouseUp, .otherMouseUp]
         /// True: swallow this event. `focusing` is read on a mouse-down only.
         mutating func take(_ type: NSEvent.EventType, focusing: Bool) -> Bool {
-            switch type {
-            case .leftMouseDown:
-                swallowing = focusing
+            if let b = Self.downs.firstIndex(of: type) {
+                if focusing { held.insert(b) } else { held.remove(b) }
                 return focusing
-            case .leftMouseDragged:
-                return swallowing
-            case .leftMouseUp:
-                let s = swallowing
-                swallowing = false
-                return s
-            default:
-                return false
             }
+            if let b = Self.drags.firstIndex(of: type) { return held.contains(b) }
+            if let b = Self.ups.firstIndex(of: type) { return held.remove(b) != nil }
+            return false
         }
     }
 
@@ -642,19 +642,23 @@ final class AgentsNSWindow: NSWindow {
             }
         }
         var focusing = false
-        if event.type == .leftMouseDown, let model {
+        let left = event.type == .leftMouseDown
+        if FocusClick.downs.contains(event.type), let model {
             // 7.2: the frames come from the model's geometry in the content (top-left origin), never x alone.
             let r = contentLayoutRect, at = event.locationInWindow
             let p = CGPoint(x: at.x - r.minX, y: r.maxY - at.y)
             let inSidebar = model.sidebarFrame(in: r.size)?.contains(p) == true
-            focusing = Self.mouseDown(model, at: p, in: r.size)
+            // R1477b-m1: a right or middle down takes the left first-click rule over the panes (never a mouse report or a
+            // responder move in an unfocused pane); in the sidebar it stays AppKit's (a row's menu) and moves no keys.
+            if left || !inSidebar { focusing = Self.mouseDown(model, at: p, in: r.size) }
             // #822: a sidebar click takes the keys from the terminal, so the arrows select again;
             // #845: from the input box too (a row's click then moves them in again, on mouse-up).
-            if inSidebar, responderKind == .terminal || firstResponder is AgentComposerTextView { makeFirstResponder(nil) }
-            if inSidebar { model.dropPendingFocus() }   // QA #694 INFO-2: a row's click asks again, on mouse-up
+            if left, inSidebar, responderKind == .terminal || firstResponder is AgentComposerTextView { makeFirstResponder(nil) }
+            if left, inSidebar { model.dropPendingFocus() }   // QA #694 INFO-2: a row's click asks again, on mouse-up
         }
         // R1196-1: `focusing` is true only for a down on an unfocused pane, which needs two panes shown: the gate on.
-        if Self.asksKey(focusing: focusing, isKey: isKeyWindow) { raise(self) }
+        // R1477b-m1: a right or middle down focuses the pane but asks no key and front (AppKit's own right-click does not).
+        if Self.asksKey(focusing: focusing && left, isKey: isKeyWindow) { raise(self) }
         if focusClick.take(event.type, focusing: focusing) { return }   // 7.6: the first click only focuses
         if AgentPaneLayout.splitsEnabled, let model, Self.layoutKey(event, model, responder: responderKind) { return }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on

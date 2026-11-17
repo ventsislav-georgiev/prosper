@@ -251,7 +251,9 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(c.take(.leftMouseUp, focusing: false), "its up is swallowed with it")
         XCTAssertFalse(c.take(.leftMouseDown, focusing: false), "the second down (on the now-focused pane) passes")
         XCTAssertFalse(c.take(.leftMouseUp, focusing: false))
-        XCTAssertFalse(c.take(.rightMouseDown, focusing: true), "a right-click is never taken")
+        XCTAssertTrue(c.take(.rightMouseDown, focusing: true), "R1477b-m1: a right-click on an unfocused pane only focuses too")
+        XCTAssertTrue(c.take(.rightMouseUp, focusing: false), "its up is swallowed with it")
+        XCTAssertFalse(c.swallowing)
     }
 
     /// N900-b (QA 991): a split while zoomed is measured against the UNZOOMED tiling (the layout unzooms first). At

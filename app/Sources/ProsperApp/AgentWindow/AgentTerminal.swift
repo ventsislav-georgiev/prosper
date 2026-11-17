@@ -803,6 +803,21 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         if let mouseWheel { mouseWheel(event) } else { super.scrollWheel(with: event) }
     }
 
+    /// R1477b-m1 (7.6): an unfocused pane's buttons, motion and exit never reach libghostty: GhosttyTerminal's
+    /// AppTerminalView+Input.swift sends a mouse report (?1000-?1003) and its right and other downs make the view first
+    /// responder. The window's first-click rule (AgentsNSWindow.sendEvent) already swallows a focusing down; this is the
+    /// second guard. No owner, or the focused pane: libghostty as before.
+    private var unfocused: Bool { owner?.paneFocused() == false }
+    override func rightMouseDown(with event: NSEvent) { if !unfocused { super.rightMouseDown(with: event) } }
+    override func rightMouseUp(with event: NSEvent) { if !unfocused { super.rightMouseUp(with: event) } }
+    override func rightMouseDragged(with event: NSEvent) { if !unfocused { super.rightMouseDragged(with: event) } }
+    override func otherMouseDown(with event: NSEvent) { if !unfocused { super.otherMouseDown(with: event) } }
+    override func otherMouseUp(with event: NSEvent) { if !unfocused { super.otherMouseUp(with: event) } }
+    override func otherMouseDragged(with event: NSEvent) { if !unfocused { super.otherMouseDragged(with: event) } }
+    override func mouseMoved(with event: NSEvent) { if !unfocused { super.mouseMoved(with: event) } }
+    override func mouseDragged(with event: NSEvent) { if !unfocused { super.mouseDragged(with: event) } }
+    override func mouseExited(with event: NSEvent) { if !unfocused { super.mouseExited(with: event) } }
+
     // MARK: Pasteboard (⌘C/⌘V/⌘A arrive through the Edit menu)
 
     @IBAction override func copy(_ sender: Any?) {

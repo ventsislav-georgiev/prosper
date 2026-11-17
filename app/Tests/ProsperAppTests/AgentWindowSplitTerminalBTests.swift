@@ -227,3 +227,124 @@ extension AgentWindowD1Tests {
         }
     }
 }
+
+// MARK: R1477b-m1 (QA r1457): the right and middle buttons, motion and exit on an unfocused pane
+
+extension AgentWindowD1Tests {
+    /// R1477b-m1 (7.6) through the window's sendEvent, built events handed to it (never posted; the window is never shown):
+    /// a right or middle down on the unfocused pane takes the left first-click rule: the pane is focused, the down, its
+    /// drag and its up are swallowed (so no view and no program sees them), no key and front is asked, and the window's
+    /// first responder then is the clicked pane's own input box (Transcript panes: the only view a row can find that
+    /// follows the focused pane; the terminal half is AgentTerminalTests' row below). The middle click runs first and the row
+    /// stops at the first down that is not swallowed, so a passing right down never opens AppKit's context menu.
+    @MainActor
+    func testAgentWindowSplitTerminalRightAndMiddleClickOnAnUnfocusedPaneOnlyFocus() throws {
+        let restoreModes = transcriptMode(["api", "web"])
+        defer { restoreModes() }
+        try withPaneMenu(true) {
+            let buttons: [(NSEvent.EventType, NSEvent.EventType, NSEvent.EventType)] = [
+                (.otherMouseDown, .otherMouseDragged, .otherMouseUp), (.rightMouseDown, .rightMouseDragged, .rightMouseUp)]
+            for (down, drag, up) in buttons {
+                let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+                m.setVisible(true)
+                defer { m.close() }
+                m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+                let second = try XCTUnwrap(m.layout.order.last)
+                let (win, host) = focusWindow(m)
+                defer { win.close() }
+                var raised = 0
+                win.raise = { _ in raised += 1 }   // before any down: the real call never runs
+                XCTAssertTrue(m.focusSelection())
+                paneFocusSettle(host) { paneFocusBox(host).map { win.firstResponder === $0 } ?? false }
+                let old = try XCTUnwrap(paneFocusBox(host), "\(down)")
+                XCTAssertTrue(win.firstResponder === old, "\(down): the keys in api's box")
+                let p = try paneFocusCentre(m, second, in: win.contentLayoutRect.size)
+                func event(_ type: NSEvent.EventType) throws -> NSEvent {
+                    let r = win.contentLayoutRect
+                    return try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: r.minX + p.x, y: r.maxY - p.y),
+                                                            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                            windowNumber: win.windowNumber, context: nil, eventNumber: 0,
+                                                            clickCount: 1, pressure: type == up ? 0 : 1))
+                }
+                win.sendEvent(try event(down))
+                XCTAssertEqual(m.layout.focused, second, "\(down): the unfocused pane is focused")
+                // A right down that passes would reach AppKit's context menu (a real menu): the middle click goes first, and
+                // once a down is not swallowed the row stops before any right down is sent.
+                guard win.focusClick.swallowing else { return XCTFail("\(down): not swallowed; the row stops here") }
+                win.sendEvent(try event(drag))
+                XCTAssertTrue(win.focusClick.swallowing, "\(down): its drag too")
+                win.sendEvent(try event(up))
+                XCTAssertFalse(win.focusClick.swallowing, "\(down): its up ends the swallow")
+                XCTAssertEqual(raised, 0, "\(down): no key and front for a right or middle click")
+                paneFocusSettle(host) { paneFocusBox(host).map { $0 !== old && win.firstResponder === $0 } ?? false }
+                let box = try XCTUnwrap(paneFocusBox(host), "\(down)")
+                XCTAssertFalse(box === old, "\(down): the focused pane's box is a new view")
+                XCTAssertTrue(win.firstResponder === box, "\(down): the keys followed the clicked pane")
+                XCTAssertFalse(win.isVisible, "never shown")
+            }
+        }
+    }
+}
+
+extension AgentTerminalTests {
+    /// A built mouse event at `p` (the view's own coordinates) for `v`'s window, never posted.
+    @MainActor
+    func splitMouse(_ type: NSEvent.EventType, _ p: NSPoint, _ v: ViewRig) throws -> NSEvent {
+        let at = v.host.convert(p, to: nil)
+        if type == .mouseExited {
+            return try XCTUnwrap(NSEvent.enterExitEvent(with: type, location: at, modifierFlags: [], timestamp: 0,
+                                                        windowNumber: v.window.windowNumber, context: nil, eventNumber: 0,
+                                                        trackingNumber: 0, userData: nil))
+        }
+        let up = [NSEvent.EventType.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(type)
+        return try XCTUnwrap(NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: 0,
+                                                windowNumber: v.window.windowNumber, context: nil, eventNumber: 0,
+                                                clickCount: 1, pressure: up ? 0 : 1))
+    }
+
+    /// R1477b-m1 (7.6), the second guard in the real view (libghostty, offscreen; the fake program puts the screen in
+    /// ?1003 any-motion mode with SGR reports): on an UNFOCUSED pane a right click, a middle click, a move, every drag and
+    /// the exit each write 0 bytes and leave the window's first responder where it was (never the pane: no keys moved);
+    /// on the FOCUSED pane the same move, right click and middle click still write their reports (the guard is not
+    /// "always drop"). Events are built and handed to the view's own methods.
+    @MainActor
+    func testUnfocusedSplitPaneMouseButtonsMotionAndExitWriteNothing() throws {
+        let v = startedView()
+        defer { v.tearDown() }
+        v.output("\u{1b}[?1003h\u{1b}[?1006h", self)
+        _ = v.take(self)
+        var focused = false
+        v.rig.c.paneFocused = { focused }
+        XCTAssertTrue(v.window.makeFirstResponder(nil))
+        let calls: [(String, NSEvent.EventType, @MainActor (NSEvent) -> Void)] = [
+            ("right down", .rightMouseDown, v.host.rightMouseDown), ("right drag", .rightMouseDragged, v.host.rightMouseDragged),
+            ("right up", .rightMouseUp, v.host.rightMouseUp), ("middle down", .otherMouseDown, v.host.otherMouseDown),
+            ("middle drag", .otherMouseDragged, v.host.otherMouseDragged), ("middle up", .otherMouseUp, v.host.otherMouseUp),
+            ("move", .mouseMoved, v.host.mouseMoved), ("left drag", .leftMouseDragged, v.host.mouseDragged),
+            ("exit", .mouseExited, v.host.mouseExited)]
+        var x: CGFloat = 40
+        for (name, type, call) in calls {
+            x += 37   // a new cell each time: a motion report would be due
+            call(try splitMouse(type, NSPoint(x: x, y: 200), v))
+            XCTAssertEqual(v.take(self), [], "unfocused \(name): 0 bytes to the program")
+            XCTAssertTrue(v.window.firstResponder === v.window, "unfocused \(name): the first responder is unchanged")
+        }
+        // The focused pane: libghostty as before, reports included (the right down first: it takes the keys, as before).
+        focused = true
+        v.host.rightMouseDown(with: try splitMouse(.rightMouseDown, NSPoint(x: 200, y: 200), v))
+        let right = String(decoding: v.take(self, until: { !$0.isEmpty }), as: UTF8.self)
+        XCTAssertTrue(right.contains("\u{1b}[<2;"), "focused right down: its press report (\(right.debugDescription))")
+        XCTAssertTrue(v.window.firstResponder === v.host, "the focused pane's right click takes the keys, as before")
+        v.host.rightMouseUp(with: try splitMouse(.rightMouseUp, NSPoint(x: 200, y: 200), v))
+        _ = v.take(self)
+        v.host.otherMouseDown(with: try splitMouse(.otherMouseDown, NSPoint(x: 200, y: 200), v))
+        let middle = String(decoding: v.take(self, until: { !$0.isEmpty }), as: UTF8.self)
+        XCTAssertTrue(middle.contains("\u{1b}[<1;"), "focused middle down: its press report (\(middle.debugDescription))")
+        v.host.otherMouseUp(with: try splitMouse(.otherMouseUp, NSPoint(x: 200, y: 200), v))
+        _ = v.take(self)
+        v.host.mouseMoved(with: try splitMouse(.mouseMoved, NSPoint(x: 300, y: 120), v))
+        v.host.mouseMoved(with: try splitMouse(.mouseMoved, NSPoint(x: 360, y: 160), v))
+        let moved = String(decoding: v.take(self, until: { !$0.isEmpty }), as: UTF8.self)
+        XCTAssertTrue(moved.contains("\u{1b}[<"), "focused move: a motion report (\(moved.debugDescription))")
+    }
+}

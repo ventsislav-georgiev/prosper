@@ -570,6 +570,7 @@ extension AgentWindowD1Tests {
     /// purpose), and each listed file assigns `.raise =`. Reads the package's own test sources only (#filePath).
     func testPaneFocusEveryGateOnSendEventFileSetsTheRecorder() throws {
         let listed: Set<String> = ["AgentWindowChapterListTests.swift", "AgentWindowKeyFocusTests.swift",
+                                   "AgentWindowSplitTerminalBTests.swift",   // #1477 b2 (R1477b-m1): right / middle clicks
                                    "AgentWindowPaneFocusTests.swift", "AgentWindowPaneRefusalTests.swift"]
         let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let enumerator = FileManager.default.enumerator(at: tests, includingPropertiesForKeys: nil)
