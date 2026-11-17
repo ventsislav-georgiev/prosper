@@ -1750,12 +1750,13 @@ tag from the now-released section and put it on the new top draft.
   rate, top sessions and time to finish, over the last 24 hours, 7 days or 14 days. (#1484)
 - X-ray chapter cards show where dch cut the middle of a long prompt or answer, with dch 1.93.0 or
   newer. (#1487)
-- the sub-agent count shows a robot instead of the people icon, in Agent Sessions and Agent Island.
+- The sub-agent count shows a robot instead of the people icon, in Agent Sessions and Agent Island.
   (#1453)
 - X-ray Refs list terms, identifiers and backticked words from the conversation, with where they
   were first mentioned (dch 1.93.0 or newer). (#1489)
 - Resuming a session now routes it through the account pool, as a new session is (Resume interrupted
-  still is not). (#1219)
+  still is not). A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL
+  or an API key. (#1219, #1499)
 
 ## v2.174.0
 
