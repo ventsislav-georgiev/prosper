@@ -2084,9 +2084,20 @@ enum DchCommand {
     /// from uncommitted code, so its version string proves nothing. Homebrew first,
     /// so it wins a version tie: --restart re-execs masters onto the calling
     /// binary's path, and a path inside Prosper.app goes away when the app moves.
+    /// #1460: then dch's README install (~/.local/bin/dch) and a dch on the login PATH,
+    /// read only from LoginPath's cache (never a shell spawn here), so an installed dch
+    /// newer than the bundled one is found. Absolute dirs only, deduplicated.
     static var controlCandidates: [String] {
-        ["/opt/homebrew/bin/dch", Bundle.main.resourceURL?.appendingPathComponent("dch").path,
-         "/usr/local/bin/dch"].compactMap { $0 }
+        controlCandidates(bundled: Bundle.main.resourceURL?.appendingPathComponent("dch").path, home: NSHomeDirectory(),
+                          loginPath: LoginPath.shared.lock.withLock { LoginPath.shared.path })
+    }
+
+    static func controlCandidates(bundled: String?, home: String, loginPath: String?) -> [String] {
+        let tree = home + "/personal/dch/dch"
+        let path = (loginPath ?? "").split(separator: ":").filter { $0.hasPrefix("/") }.map { "\($0)/dch" }
+        var seen = Set<String>()
+        return (["/opt/homebrew/bin/dch", bundled, "/usr/local/bin/dch", home + "/.local/bin/dch"].compactMap { $0 } + path)
+            .filter { $0 != tree && seen.insert($0).inserted }
     }
 
     /// `dch --version` is exactly "dch X.Y.Z" (one trailing newline allowed).

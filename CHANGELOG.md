@@ -1667,6 +1667,9 @@ tag from the now-released section and put it on the new top draft.
 - Settings, Agent island: the Command and Default model fields keep the right height after you
   change the UI scale (before, a field could keep the previous scale's height until something
   measured it again). (#1250)
+- Agent Sessions controls (Restart, Stop, End, the terminal and +) keep working after you install a
+  newer dch than the one Prosper ships: Prosper now also finds dch in ~/.local/bin and on your login
+  PATH, and picks it up as soon as a session starts on the newer version. (#1460)
 
 ## v2.174.0
 

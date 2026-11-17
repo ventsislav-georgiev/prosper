@@ -49,11 +49,28 @@ final class AgentIslandControlsTests: XCTestCase {
 
     /// Never dch's working tree; Homebrew first so it wins a tie.
     func testControlCandidatesSkipTheDchWorkingTreeAndLeadWithHomebrew() {
-        let c = DchCommand.controlCandidates
+        let c = DchCommand.controlCandidates(bundled: "/app/dch", home: "/Users/example", loginPath: "/Users/example/personal/dch")
         XCTAssertEqual(c.first, "/opt/homebrew/bin/dch")
-        XCTAssertEqual(c.last, "/usr/local/bin/dch")
+        XCTAssertEqual(c, ["/opt/homebrew/bin/dch", "/app/dch", "/usr/local/bin/dch", "/Users/example/.local/bin/dch"])
         XCTAssertFalse(c.contains { $0.contains("/personal/dch") }, "\(c)")
-        XCTAssertLessThanOrEqual(c.count, 3)
+    }
+
+    /// #1460: dch's README install (~/.local/bin) and the cached login PATH are candidates (absolute
+    /// dirs only, once each), so an installed 1.86.0 beats the bundled 1.84.0 and 1.86.0 masters pass.
+    func testAnInstalledNewerDchBeatsTheBundledOneAndANewerMasterStillRefuses() {
+        let c = DchCommand.controlCandidates(bundled: "/app/dch", home: "/Users/example",
+                                             loginPath: "/Users/example/bin:relative/bin:/opt/homebrew/bin:/Users/example/bin")
+        XCTAssertEqual(c, ["/opt/homebrew/bin/dch", "/app/dch", "/usr/local/bin/dch", "/Users/example/.local/bin/dch",
+                           "/Users/example/bin/dch"])
+        let installed = ["/app/dch": [1, 84, 0], "/Users/example/.local/bin/dch": [1, 86, 0]]
+        let dch = DchCommand.newest(c, version: { installed[$0] })
+        XCTAssertEqual(dch, DchCommand.Binary(path: "/Users/example/.local/bin/dch", version: [1, 86, 0]))
+        XCTAssertEqual(DchCommand.gate(dch, masters: ["1.86.0", "1.84.0"], minimum: AgentIsland.controlMinimum),
+                       .ok("/Users/example/.local/bin/dch"))
+        XCTAssertEqual(DchCommand.gate(dch, masters: ["1.87.0"], minimum: AgentIsland.controlMinimum),
+                       .refused("needs dch 1.87.0"), "never a downgrade: newer than every candidate refuses")
+        let onPath = DchCommand.newest(c, version: { ["/app/dch": [1, 84, 0], "/Users/example/bin/dch": [1, 86, 0]][$0] })
+        XCTAssertEqual(onPath?.path, "/Users/example/bin/dch", "a dch on the login PATH counts too")
     }
 
     func testNewestBinaryWinsAndTheEarlierCandidateWinsATie() {
@@ -1546,6 +1563,57 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c)
         XCTAssertEqual(reads(), 2, "no read per tick at 0")
         XCTAssertEqual(f.args, [], "and never a verb")
+    }
+
+    private final class Installed: @unchecked Sendable {
+        let lock = NSLock()
+        var dch: DchCommand.Binary?
+        var master = "1.84.0"
+        var skew: TimeInterval = 0
+    }
+
+    /// Nonisolated, as sockPoller: its closures run on the poll queue (a main-actor closure there traps).
+    nonisolated private static func versionPoller(_ dir: String, _ box: Installed) -> AgentIslandPoller {
+        AgentIslandPoller(now: { Date().timeIntervalSince1970 + box.lock.withLock { box.skew } }, dirs: { [dir] },
+                          list: { dirs, _ in dirs.map { d in
+            AgentSession(key: AgentSessionKey(dir: d, name: "api"), alias: "", activity: 0, state: .idle, agents: 0,
+                         version: box.lock.withLock { box.master })
+        } })
+    }
+
+    /// #1460: the island cached the bundled 1.84.0; a dch 1.86.0 is installed and a master restarts onto
+    /// it. That tick's list probes again, the newer binary is cached and the controls pass; a master newer
+    /// than every candidate still refuses.
+    @MainActor
+    func testACachedControlBinaryIsProbedAgainWhenANewerMasterAppears() {
+        let f = FakeProc(), argvs = Argvs(), dir = tempDir(), box = Installed()
+        argvs.json = "[]"
+        let bundled = DchCommand.Binary(path: "/app/dch", version: [1, 84, 0])
+        let installed = DchCommand.Binary(path: "/Users/example/.local/bin/dch", version: [1, 86, 0])
+        box.dch = bundled
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("api.sock").path, contents: nil)
+        let c = launched(f, argvs, dir: dir)
+        c.controlDch = { box.lock.withLock { box.dch } }
+        let path = dir.path
+        c.makePoller = { Self.versionPoller(path, box) }
+        let gate = { DchCommand.gate(c.store?.controlDch, masters: c.store?.sessions.map(\.version) ?? [],
+                                     minimum: AgentIsland.controlMinimum) }
+        c.extLive = true
+        c.reload()
+        settle(c) { c.store?.sessions.count == 1 && c.store?.controlDch != nil }
+        XCTAssertEqual(c.store?.controlDch, bundled)
+        XCTAssertEqual(gate(), .ok("/app/dch"))
+        box.lock.withLock { box.dch = installed; box.master = "1.86.0"; box.skew += 60 }   // past the backstop: the next tick lists
+        settle(c) { c.store?.controlDch == installed }
+        XCTAssertEqual(c.store?.sessions.first?.version, "1.86.0")
+        XCTAssertEqual(c.store?.controlDch, installed, "the newer master probed again")
+        XCTAssertEqual(gate(), .ok("/Users/example/.local/bin/dch"))
+        box.lock.withLock { box.master = "1.87.0"; box.skew += 60 }
+        settle(c) { c.store?.sessions.first?.version == "1.87.0" }
+        settle(c)
+        XCTAssertEqual(c.store?.controlDch, installed, "no newer candidate: the cache stays")
+        XCTAssertEqual(gate(), .refused("needs dch 1.87.0"))
+        XCTAssertEqual(f.args, [], "never a verb")
     }
 
     /// Visual evidence: the history-only island, collapsed (dim 0, no glyph)

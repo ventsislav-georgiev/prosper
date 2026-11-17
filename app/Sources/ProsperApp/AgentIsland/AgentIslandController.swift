@@ -351,6 +351,7 @@ final class AgentIslandController {
         deferred = nil
         let was = Set(store.sessions.map(\.key))
         store.sessions = sessions
+        reprobeIfStale()
         checkAutoAllow()   // #751: decided before the list is published
         publish()
         let live = Set(sessions.map(\.key))
@@ -433,6 +434,25 @@ final class AgentIslandController {
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.setHistory(records, dch, held) } }
         }
     }
+
+    /// #1460: a live master newer than the cached control binary (a dch installed or
+    /// upgraded since the last read) probes again (cached per path and mtime, so cheap);
+    /// a newer binary re-reads History with it, so the controls follow the newest dch.
+    /// No cached binary yet: the build's own read sets it.
+    private func reprobeIfStale() {
+        guard let store, !reprobing, let have = store.controlDch?.version,
+              store.sessions.contains(where: { !DchCommand.isAtLeast(have, DchCommand.masterVersion($0.version)) }) else { return }
+        reprobing = true
+        let probe = controlDch
+        queue.async { [weak self] in
+            let dch = probe()
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                self?.reprobing = false
+                if let dch, !DchCommand.isAtLeast(have, dch.version) { self?.refreshHistory() }
+            } }
+        }
+    }
+    private var reprobing = false
 
     private func setHistory(_ records: [DchHistoryRecord], _ dch: DchCommand.Binary?, _ held: Set<String>) {
         guard let store else { return }
