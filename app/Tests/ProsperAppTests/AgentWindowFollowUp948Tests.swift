@@ -345,8 +345,9 @@ extension AgentWindowD1Tests {
                     RunLoop.current.run(until: Date().addingTimeInterval(0.02))
                 }
                 XCTAssertEqual(st.actions[key], want, "end \(end.debugDescription)")
+                XCTAssertTrue(!(st.actions[key] ?? "").unicodeScalars.contains("\u{202E}"), "no direction mark on the dir line")
             }
-            XCTAssertEqual(AgentIsland.endLabel("exit 1x\u{202E}"), "exited (1x\u{202E})", "the exact endLabel reading")
+            XCTAssertEqual(AgentIsland.endLabel("exit 1x\u{202E}"), "exited (1x)", "the exact endLabel reading, the direction mark dropped")
             XCTAssertNotEqual(AgentIsland.endLabel("exit 1x\u{202E}"), "exit 1x\u{202E}", "not the raw text")
         }
     }

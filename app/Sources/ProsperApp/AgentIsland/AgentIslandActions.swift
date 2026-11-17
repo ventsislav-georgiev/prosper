@@ -279,9 +279,10 @@ extension AgentIsland {
         case "exit 0": return "exited"
         case "signal 15", "signal 1", "signal 2": return "ended (\(end))"
         default:
-            if end.hasPrefix("signal ") { return "crashed (\(end))" }
-            if end.hasPrefix("exit ") { return "exited (\(end.dropFirst(5)))" }
-            return end
+            // outside text: unseen scalars dropped and cut (OutsideText.shown), the fixed words above untouched
+            if end.hasPrefix("signal ") { return "crashed (\(OutsideText.shown(end, max: 40)))" }
+            if end.hasPrefix("exit ") { return "exited (\(OutsideText.shown(String(end.dropFirst(5)), max: 40)))" }
+            return OutsideText.shown(end, max: 60)
         }
     }
 

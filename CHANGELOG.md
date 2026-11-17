@@ -1706,6 +1706,9 @@ tag from the now-released section and put it on the new top draft.
   line now reads in words like every other end. (#1313)
 - The X-ray window opens on the tab you used last, and on Prompts the first time, instead of always
   opening on Tasks. (#1463)
+- Agent Sessions: a session's end text from dch (exit, signal or any other wording) now shows
+  without control or direction characters and is cut when very long, in the form status, the dir
+  line and the History rows. (#1313)
 
 ## v2.174.0
 
