@@ -1895,7 +1895,7 @@ final class AgentWindowInteractionTests: XCTestCase {
                 ThemeRuntime.scale = scale
                 let tag = "\(dark ? "dark" : "light")-\(scale)"
                 // The narrowest detail pane (the window's minimum width less the sidebar).
-                let width = 640 * scale - sz(290) - 1
+                let width = 640 * scale - AgentWindowModel.fullSidebarWidth - 1
                 for (name, state, screen, ask, draft, notice) in cases {
                     let f = FormSim(.plain(screen ?? ""))
                     if notice { f.status = "idle" }

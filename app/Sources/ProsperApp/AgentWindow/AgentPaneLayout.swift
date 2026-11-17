@@ -989,7 +989,7 @@ enum PaneAction: Equatable {
     case sidebar
 }
 
-/// 12: every new pane key through one pure function, shaped like `AgentsNSWindow.verbosity(for:)`. nil: not a pane
+/// 12: every new pane key through one pure function, shaped like `AgentsNSWindow.route`. nil: not a pane
 /// key here, so the key behaves as before #831 (the window's own route, the first responder).
 enum PaneKeys {
     /// 7.2: which side takes the plain keys (B1 replaces `sidebarFocused` with it).
@@ -1006,7 +1006,7 @@ enum PaneKeys {
 
     /// The letters follow #882's chord rule (`AgentsNSWindow.chordLetter`: the Command-modified Latin letter on a
     /// Cyrillic or Greek layout, the typed letter on Dvorak, never the key position); digits and arrows go by key
-    /// code, as #1110's ⌘1…⌘9 and the verbosity keys do. Modifiers must match exactly, so ⌥⌘1 (verbosity) is never ⌘1.
+    /// code, as #1110's Command-1...9 do. Modifiers must match exactly, so Option-Command-1 (#1470: row 10) is never Command-1.
     @MainActor
     static func action(for event: NSEvent, context c: Context) -> PaneAction? {
         guard event.type == .keyDown else { return nil }

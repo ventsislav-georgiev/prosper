@@ -29,17 +29,6 @@ enum AgentVerbosity: String, CaseIterable, Sendable {
         case .verbose: "list.bullet.rectangle"
         }
     }
-
-    /// ⌥⌘1 / ⌥⌘2 / ⌥⌘3 while the Agent Sessions window is key: the digit row's key codes
-    /// (kVK_ANSI_1...3), so the keys sit in the same place on every layout.
-    var keyCode: UInt16 {
-        switch self {
-        case .focused: 18
-        case .default: 19
-        case .verbose: 20
-        }
-    }
-    var shortcut: String { "⌥⌘\(keyCode - 17)" }
 }
 
 /// Default's "Todos 3/7" chip: the session's main-thread todo list. Claude Code 2.1.223+ keeps

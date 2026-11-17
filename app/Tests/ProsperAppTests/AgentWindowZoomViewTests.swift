@@ -14,7 +14,7 @@ extension AgentWindowD1Tests {
     /// The wide window of these rows and its pane area under the band at the current scale (gate on).
     @MainActor
     func zoomViewArea(_ size: CGSize) -> CGRect {
-        CGRect(x: 0, y: 0, width: size.width - sz(290) - 1, height: size.height - AgentWindowBand.height)
+        CGRect(x: 0, y: 0, width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: size.height - AgentWindowBand.height)
     }
 
     /// The panes drawn in a snapshot: its "pane <i>" keys.
@@ -117,7 +117,7 @@ extension AgentWindowD1Tests {
                 same(bandSnapshot(m, wide), slots, "unzoomed")
 
                 // Too small: three columns of a pane area 880·s wide are under 300·s each.
-                let narrow = CGSize(width: sz(290) + 1 + sz(880), height: sz(700)), small = zoomViewArea(narrow)
+                let narrow = CGSize(width: AgentWindowModel.fullSidebarWidth + 1 + sz(880), height: sz(700)), small = zoomViewArea(narrow)
                 XCTAssertEqual(m.paneFrames(in: small).count, 1, "too small (\(scale))")
                 XCTAssertEqual(AgentWindowBand.chip(m, in: small), "2 panes hidden, window too small")
                 same(bandSnapshot(m, narrow), ["layout", "chip"], "too small, a narrower band")
@@ -148,12 +148,12 @@ extension AgentWindowD1Tests {
             m.adopt(try m.layout.focus(try XCTUnwrap(m.layout.order.dropFirst().first)).get())
             XCTAssertTrue(m.perform(.zoom))
             for (words, size) in [("Zoomed · 2 of 3", CGSize(width: 1600, height: 900)),
-                                  ("2 panes hidden, window too small", CGSize(width: sz(290) + 1 + 880, height: 700))] {
+                                  ("2 panes hidden, window too small", CGSize(width: AgentWindowModel.fullSidebarWidth + 1 + 880, height: 700))] {
                 if words.hasPrefix("2 panes") { XCTAssertTrue(m.perform(.zoom), "unzoom for the too-small tree") }
                 let (tree, screen) = bandTree(AgentWindowRootView(model: m, scrolls: false), size, until: [words])
                 XCTAssertEqual(bandCount(tree, words), 1, "\"\(words)\" read once")
-                let row = CGRect(x: screen.minX + sz(290) + 1, y: screen.maxY - AgentWindowBand.height,
-                                 width: size.width - sz(290) - 1, height: AgentWindowBand.height)
+                let row = CGRect(x: screen.minX + AgentWindowModel.fullSidebarWidth + 1, y: screen.maxY - AgentWindowBand.height,
+                                 width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: AgentWindowBand.height)
                 XCTAssertTrue(tree.contains { $0.names.contains(words) && row.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) },
                               "\"\(words)\" is in the band's row")
             }
@@ -174,7 +174,7 @@ extension AgentWindowD1Tests {
             let a = try XCTUnwrap(m.layout.order.first), b = try XCTUnwrap(m.layout.order.last)
             let size = CGSize(width: 1600, height: 900), area = zoomViewArea(size)
             let fb = try XCTUnwrap(m.paneFrames(in: area)[b])
-            let p = CGPoint(x: sz(290) + 1 + fb.midX, y: AgentWindowBand.height + fb.midY)
+            let p = CGPoint(x: AgentWindowModel.fullSidebarWidth + 1 + fb.midX, y: AgentWindowBand.height + fb.midY)
             XCTAssertEqual(AgentsNSWindow.firstClick(at: CGPoint(x: fb.midX, y: fb.midY), frames: m.paneFrames(in: area), focused: a), b,
                            "the point is in b's tile")
             XCTAssertTrue(m.perform(.zoom))
@@ -305,7 +305,7 @@ extension AgentWindowD1Tests {
             m.adopt(m.layout.toggleZoom())   // a zoomed blob, inert with the gate off
             XCTAssertEqual(m.layout.zoomed, m.layout.focused)
             let size = CGSize(width: 1600, height: 900)
-            let area = CGRect(x: 0, y: 0, width: size.width - sz(290) - 1, height: size.height)
+            let area = CGRect(x: 0, y: 0, width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: size.height)
             let s = paneSnapshot(m, size)
             XCTAssertEqual(zoomViewPanes(s), ["pane 0"], "the focused pane alone")
             assertSame(s["pane 0"], area, "at the whole column, no band")

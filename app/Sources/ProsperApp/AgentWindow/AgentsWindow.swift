@@ -18,7 +18,11 @@ final class AgentsWindow {
     var isOpen: Bool { window != nil }
     static let title = "Agent Sessions"
     static let themedIdentifier = NSUserInterfaceItemIdentifier("prosper.agentsWindow")
-    static func contentMinSize(scale: CGFloat) -> NSSize { NSSize(width: 640 * scale, height: 420 * scale) }
+    /// #1470 a2: wider by the full sidebar's growth at `scale` (AgentWindowModel.digitColumnExtra), so the panes' least
+    /// width is TIP's.
+    static func contentMinSize(scale: CGFloat) -> NSSize {
+        NSSize(width: 640 * scale + AgentWindowModel.digitColumnExtra(at: scale), height: 420 * scale)
+    }
 
     // Seams (QA #626 INFO-7: show and teardown run in tests with a window never put on screen).
     var island: () -> AgentIslandController = { .shared }
@@ -306,12 +310,12 @@ final class AgentsNSWindow: NSWindow {
 
     /// #822 (spec 5.3): who gets a key.
     enum KeyRoute: Equatable {
-        case close, toggleMode, verbosity(AgentVerbosity), session(Int), find, findNext(Bool)
+        case close, toggleMode, session(Int), find, findNext(Bool)
         /// #847: ⌘N (the New session form, or its Name field when open) and ⇧⌘N (the quick shell).
         case newSession, newShell
         /// #1289 (#829 G2/G8): Cmd-Backspace on the selected row: Stop (live) or Remove from History, asked in the strip.
         case stopOrRemove
-        /// #1110: ⌘1…⌘9, the numbered row at that position (1-based).
+        /// #1110: Command-1...9, the numbered row at that position (1-based). #1470: Option-Command-1...9 are rows 10...18.
         case jump(Int)
         /// #895: the terminal's text size: +1, -1, 0 (back to today's size).
         case font(Int)
@@ -321,7 +325,7 @@ final class AgentsNSWindow: NSWindow {
         case chapters
         /// #1351 (#1346 3.1): Shift-Command-X (key code 7, any layout), the focused pane's X-ray panel (opens or closes it).
         case xray
-        /// The window's, doing nothing here (⌥⌘1/2/3 in Terminal mode).
+        /// The window's, doing nothing here (a chord under the New session form, a held Command-N).
         case swallow
         case pass
     }
@@ -334,14 +338,15 @@ final class AgentsNSWindow: NSWindow {
     }
 
     /// Pure: the event, the first responder's kind, the sidebar focus and the pane's mode.
-    /// ⌘W, ⌘T, ⌥⌘1/2/3, ⌘F, ⌘G, ⇧⌘G, ⌘N, ⇧⌘N go to the window; ⌘↑/⌘↓ (previous / next session) too,
+    /// Command-W, T, F, G, Shift-Command-G, Command-N, Shift-Command-N go to the window; Command-Up/Down (previous / next session) too,
     /// except in a text view, where they move to its start and end (QA #669). Plain arrows and
     /// Return go to the sidebar only while it has the focus and nothing that types does.
     /// Everything else (Esc, Tab, ⌃C, arrows, Return) reaches the first responder.
     /// #829 G4: while the title is a rename field, every key but ⌘W is the field's (the
-    /// verbosity keys, ⌘T, ⌘F, ⌘G, ⌘↑/⌘↓ and any shortcut added later stand down).
+    /// row keys, Command-T, F, G, Up, Down and any shortcut added later stand down).
     /// #887 (QA #747 INFO-4): while the New session `form` covers the pane, a chord that acts on the session under it
-    /// (⌘T, ⌥⌘1/2/3, ⌘F, ⌘G, ⇧⌘G, ⌘↑/⌘↓) is swallowed; ⌘W, ⌘N and ⇧⌘N stay the window's.
+    /// (Command-T, 1...9, F, G, Up, Down, Option-Command-1...9, Shift-Command-G) is swallowed; Command-W, Command-N and
+    /// Shift-Command-N stay the window's.
     /// #1110: ⌘1…⌘9 from every responder, the terminal and a text view too; it stands down for the rename field and is
     /// swallowed under the form, as ⌘↑/⌘↓.
     static func route(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool,
@@ -349,7 +354,7 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .toggleMode, .verbosity, .session, .jump, .find, .findNext, .font, .stopOrRemove, .chapters, .xray:
+        case .toggleMode, .session, .jump, .find, .findNext, .font, .stopOrRemove, .chapters, .xray:
             return form ? .swallow : r
         default: return r
         }
@@ -366,7 +371,9 @@ final class AgentsNSWindow: NSWindow {
             if event.isARepeat { return .swallow }   // R2 F1: a held chord starts one session, not one per key repeat
             return mods == [.command] ? .newSession : .newShell
         }
-        if let v = verbosity(for: event) { return terminalMode ? .swallow : .verbosity(v) }
+        // #1470: Option-Command-1...9 jump to rows 10...18 in both modes, by key code as Command-1...9 (the old detail-level
+        // keys are gone).
+        if mods == [.command, .option], let n = digit(event.keyCode) { return .jump(n + 9) }
         if mods == [.command] {
             if let n = digit(event.keyCode) { return .jump(n) }
             // #1289: Cmd-Backspace with the sidebar focused only; a text field, the composer and the terminal keep it.
@@ -444,7 +451,6 @@ final class AgentsNSWindow: NSWindow {
         guard let model else { return false }
         switch r {
         case .close: performClose(nil)
-        case .verbosity(let v): model.verbosity = v
         case .toggleMode:
             guard model.toggleMode() else { return false }
             model.focusSelection()   // #845: the shown mode's input, Transcript's too
@@ -470,11 +476,14 @@ final class AgentsNSWindow: NSWindow {
     /// table and this table to `route`.
     static let keyTable: [(key: String, mods: NSEvent.ModifierFlags, keyCode: UInt16, route: KeyRoute)] = [
         ("w", .command, 13, .close), ("n", .command, 45, .newSession), ("n", [.command, .shift], 45, .newShell),
-        ("1", [.command, .option], 18, .verbosity(.focused)), ("2", [.command, .option], 19, .verbosity(.default)),
-        ("3", [.command, .option], 20, .verbosity(.verbose)),
         ("1", .command, 18, .jump(1)), ("2", .command, 19, .jump(2)), ("3", .command, 20, .jump(3)),
         ("4", .command, 21, .jump(4)), ("5", .command, 23, .jump(5)), ("6", .command, 22, .jump(6)),
         ("7", .command, 26, .jump(7)), ("8", .command, 28, .jump(8)), ("9", .command, 25, .jump(9)),
+        ("1", [.command, .option], 18, .jump(10)), ("2", [.command, .option], 19, .jump(11)),
+        ("3", [.command, .option], 20, .jump(12)), ("4", [.command, .option], 21, .jump(13)),
+        ("5", [.command, .option], 23, .jump(14)), ("6", [.command, .option], 22, .jump(15)),
+        ("7", [.command, .option], 26, .jump(16)), ("8", [.command, .option], 28, .jump(17)),
+        ("9", [.command, .option], 25, .jump(18)),
         ("\u{8}", .command, 51, .stopOrRemove), ("l", .command, 37, .chapters), ("t", .command, 17, .toggleMode),
         ("f", .command, 3, .find), ("g", .command, 5, .findNext(true)), ("g", [.command, .shift], 5, .findNext(false)),
         ("=", .command, 24, .font(1)), ("-", .command, 27, .font(-1)), ("0", .command, 29, .font(0)),
@@ -620,13 +629,6 @@ final class AgentsNSWindow: NSWindow {
     static func digit(_ keyCode: UInt16) -> Int? {
         if let slot = QuickSelect.slot(forKeyCode: keyCode), slot < 9 { return slot + 1 }
         return [83, 84, 85, 86, 87, 88, 89, 91, 92].firstIndex(of: keyCode).map { $0 + 1 }
-    }
-
-    /// #821: ⌥⌘1 / ⌥⌘2 / ⌥⌘3 pick Focused / Default / Verbose (no app menu item uses them).
-    static func verbosity(for event: NSEvent) -> AgentVerbosity? {
-        guard event.type == .keyDown,
-              event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command, .option] else { return nil }
-        return AgentVerbosity.allCases.first { $0.keyCode == event.keyCode }
     }
 
     override func sendEvent(_ event: NSEvent) {
@@ -1346,7 +1348,7 @@ struct AgentSectionHeader: View {
 struct AgentSidebarRowView: View {
     let row: AgentSidebar.Row
     let selected: Bool
-    /// #1110: the row's ⌘<n> (1…9), nil for no chip.
+    /// #1110: the row's number (1...18: Command-1...9, then Option-Command-1...9), nil for no chip.
     var number: Int?
     /// #900 B2 step 4b (7.2): the session is shown in another pane of the active layout (AgentWindowModel.inViewRows).
     var inView = false
@@ -1384,8 +1386,8 @@ struct AgentSidebarRowView: View {
         return HStack(spacing: sz(4)) {
             stateMark
             ZStack {
-                Self.digitColumn
-                if let number {
+                Self.miniDigitColumn
+                if let number, number <= 9 {   // #1470: the 84 pt rail fits a Command chip only; rows 10-18 still jump
                     AgentDigitChip(number: number, active: selected).modifier(AgentSidebarRowProbe(kind: "miniChip", title: row.title))
                 }
             }
@@ -1439,8 +1441,8 @@ struct AgentSidebarRowView: View {
                 GeometryReader { proxy in
                     AgentDigitChip(number: number, active: selected)
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Command-\(number)")
-                        .help("Select this session (⌘\(number))")
+                        .accessibilityLabel(AgentDigitChip.words(number))
+                        .help("Select this session (\(AgentDigitChip.glyphs(number))\(AgentDigitChip.digit(number)))")
                         .position(x: proxy[column].midX, y: proxy[block].midY)
                 }
             }
@@ -1488,6 +1490,17 @@ private struct AgentDigitChipSlot: PreferenceKey {
     }
 }
 
+/// #1470 a2: records its subviews' ideal widths (AgentSidebarRowView.idealWidths); draws nothing.
+private struct AgentIdealWidths: Layout {
+    final class Box: @unchecked Sendable { var widths: [CGFloat] = [] }
+    let box: Box
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        box.widths = subviews.map { $0.sizeThatFits(.unspecified).width }
+        return .zero
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {}
+}
+
 /// #1110: a numbered row's ⌘<n> chip, Clipboard History's position keycap (ClipboardPanel.swift's PositionKeyCap: private
 /// there, and its glyph follows the clipboard's ⌘/⌃ setting while this chord is always ⌘). Brighter on the selected row.
 /// Neon.blue, not the keycap's blueBright: a theme that sets only its accent leaves blueBright at the default cyan.
@@ -1495,10 +1508,15 @@ struct AgentDigitChip: View {
     let number: Int
     var active = false
 
+    /// #1470: rows 10...18 are Option-Command-1...9.
+    static func glyphs(_ n: Int) -> String { n > 9 ? "\u{2325}\u{2318}" : "\u{2318}" }
+    static func digit(_ n: Int) -> Int { n > 9 ? n - 9 : n }
+    static func words(_ n: Int) -> String { (n > 9 ? "Option-Command-" : "Command-") + "\(digit(n))" }
+
     var body: some View {
         HStack(spacing: sz(1)) {
-            Text("\u{2318}")
-            Text("\(number)")
+            Text(Self.glyphs(number))
+            Text("\(Self.digit(number))")
         }
         .font(Neon.font(10, weight: .bold, design: .rounded))
         .foregroundStyle(active ? Neon.bgTop : Neon.blue)
@@ -1530,10 +1548,22 @@ extension AgentSidebarRowView {
         .frame(width: sz(14))
     }
 
-    /// #1345: the ⌘<n> chip's column, the widest digit's chip at no height (digits are proportional: the nine together are
-    /// the widest whatever the font); the row draws the chip over it, only with a number.
+    /// #1345: the Command-<n> chip's column, the widest digit's chip at no height (digits are proportional: the chips together
+    /// are the widest whatever the font); the row draws the chip over it, only with a number. #1470: all 18 (Option-Command-9's).
     static var digitColumn: some View {
+        ZStack { ForEach(1...18, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
+    }
+
+    /// #1470: Mini's column keeps the nine Command chips' width (its rail has no room for an Option-Command chip).
+    static var miniDigitColumn: some View {
         ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
+    }
+
+    /// #1470 a2: each view's exact ideal width, unrounded (a fittingSize is whole points rounded up); [] if not laid out.
+    static func idealWidths<A: View, B: View>(_ a: A, _ b: B) -> [CGFloat] {
+        let box = AgentIdealWidths.Box()
+        _ = NSHostingView(rootView: AgentIdealWidths(box: box) { a; b }).fittingSize
+        return box.widths
     }
 
     /// The first line. #1345: the title, then the model and effort badges trailing (#1268's slot). Operator 2026-11-16
@@ -2937,7 +2967,7 @@ struct AgentVerbosityPicker: View {
         if style == .menu {
             Menu {
                 ForEach(AgentVerbosity.allCases, id: \.self) { v in
-                    Button("\(v.title) (\(v.shortcut))") { level = v }
+                    Button(v.title) { level = v }
                 }
             } label: {
                 Image(systemName: level.icon).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
@@ -2961,7 +2991,7 @@ struct AgentVerbosityPicker: View {
                         .fixedSize()
                     }
                     .buttonStyle(.plain)
-                    .help("\(v.title) view (\(v.shortcut))")
+                    .help("\(v.title) view")
                     .accessibilityLabel("\(v.title) view")
                     .accessibilityAddTraits(v == level ? .isSelected : [])
                 }

@@ -281,8 +281,8 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(route(key(3, "f", .command), r, terminal: false), .pass, "no find bar over the transcript")
             XCTAssertEqual(route(key(5, "g", .command), r), .findNext(true))
             XCTAssertEqual(route(key(5, "g", [.command, .shift]), r), .findNext(false))
-            XCTAssertEqual(route(key(18, "1", [.command, .option]), r), .swallow, "⌥⌘1 does nothing in Terminal mode")
-            XCTAssertEqual(route(key(18, "1", [.command, .option]), r, terminal: false), .verbosity(.focused))
+            XCTAssertEqual(route(key(18, "1", [.command, .option]), r), .jump(10), "#1470: Option-Command-1 is row 10 (\(r))")
+            XCTAssertEqual(route(key(18, "1", [.command, .option]), r, terminal: false), .jump(10))
         }
         // QA #669: ⌘↑/⌘↓ move between sessions, except in a text view (start / end of the text there).
         XCTAssertEqual(route(up, .text), .pass)
@@ -375,7 +375,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(win.performKeyEquivalent(with: cmdUp))
             XCTAssertEqual(m.paneMode, .terminal)
             Self.drainMain()   // the app's turn before the next key: a's fresh client is live
-            // ⌥⌘1 in Terminal mode: taken, nothing changes.
+            // Option-Command-1 in Terminal mode (#1470: row 10, none here): taken, the level unchanged.
             let level = m.verbosity
             XCTAssertTrue(win.performKeyEquivalent(with: key(18, "1", [.command, .option])))
             XCTAssertEqual(m.verbosity, level)
@@ -437,7 +437,7 @@ extension AgentWindowD1Tests {
                     try save(a, "822-transcript-\(tag)")
                     try save(b, "822-terminal-\(tag)")
                     let px = CGFloat(a.pixelsWide) / (size.width + 24)
-                    let side = Int((sz(290) * px).rounded(.down))
+                    let side = Int((AgentWindowModel.fullSidebarWidth * px).rounded(.down))
                     let headerBottom = { (rep: NSBitmapImageRep) in self.headerBottom(rep, x: side + Int(sz(8) * px)) }
                     let hb = try XCTUnwrap(headerBottom(a))
                     // #1103: one header height per mode: Terminal mode's one line, Transcript mode's title and folder lines.

@@ -24,7 +24,7 @@ extension AgentWindowD1Tests {
             m.setVisible(true)
             defer { m.close() }
             XCTAssertEqual(m.keyFocus, .sidebar, "the window starts with the sidebar's keys (\(scale))")
-            let line = sz(290) + 0.5, inPane = sz(290) + 1 + 100
+            let line = AgentWindowModel.fullSidebarWidth + 0.5, inPane = AgentWindowModel.fullSidebarWidth + 1 + 100
             XCTAssertFalse(m.mouseDown(at: CGPoint(x: inPane, y: 300), in: size), "one pane: the click passes (\(scale))")
             XCTAssertEqual(m.keyFocus, .pane, "a pane click (\(scale))")
             XCTAssertFalse(m.mouseDown(at: CGPoint(x: 100, y: -10), in: size))

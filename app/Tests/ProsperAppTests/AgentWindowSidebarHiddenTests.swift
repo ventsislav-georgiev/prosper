@@ -209,7 +209,7 @@ extension AgentWindowD1Tests {
                             }
                         }
                     }
-                    let column = size.width - sz(290) - 1
+                    let column = size.width - AgentWindowModel.fullSidebarWidth - 1
                     XCTAssertEqual(m.paneArea.width, column, accuracy: pixel, "shown: the column (\(tag))")
                     let changes = m.paneAreaChanges
                     m.toggleSidebar()
@@ -224,7 +224,7 @@ extension AgentWindowD1Tests {
                     XCTAssertEqual(m.paneAreaChanges, changes + 2, "one change again (\(tag))")
                     XCTAssertEqual(m.paneArea.width, column, accuracy: pixel, "shown again (\(tag))")
                     let sb = try XCTUnwrap(shown["band"], tag), hb = try XCTUnwrap(hidden["band"], tag)
-                    XCTAssertEqual(hb.width - sb.width, sz(290) + 1, accuracy: pixel, "the band widens by the sidebar (\(tag))")
+                    XCTAssertEqual(hb.width - sb.width, AgentWindowModel.fullSidebarWidth + 1, accuracy: pixel, "the band widens by the sidebar (\(tag))")
                     XCTAssertEqual(hb.height, sb.height, accuracy: pixel, "(\(tag))")
                     for s in [shown, hidden, again] {
                         let g = try XCTUnwrap(s["sidebar"], "the glyph's slot is always laid out (\(tag))")

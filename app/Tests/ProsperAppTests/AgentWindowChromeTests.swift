@@ -104,7 +104,7 @@ extension AgentWindowD1Tests {
                         // Padding spots of the detail column (the header's top-left, the input pane's
                         // bottom-left, the transcript's right edge) and the rail's empty bottom slot,
                         // next to Settings' SettingsBackground at the same spots.
-                        let side = 290 * scale + 1
+                        let side = AgentWindowModel.fullSidebarWidth + 1
                         let detail = CGSize(width: size.width - side, height: size.height)
                         let settings = try renderOver(SettingsBackground(), size: detail, canvas: canvas, dark: dark, backing: 2)
                         var line = tag
@@ -358,7 +358,8 @@ extension AgentWindowD1Tests {
                 // #881 (QA #735 INFO-5): literal sizes, not the helper under test (640 x 420 pt at 1.0).
                 let want = [1.0: NSSize(width: 640, height: 420), 0.85: NSSize(width: 544, height: 357),
                             0.7: NSSize(width: 448, height: 294)][scale]!
-                XCTAssertEqual(win.contentMinSize.width, want.width, accuracy: 0.001, tag)
+                // #1470 a2: plus the full sidebar's growth at that scale (its own row checks it against the chips).
+                XCTAssertEqual(win.contentMinSize.width, want.width + AgentWindowModel.digitColumnExtra(at: scale), accuracy: 0.001, tag)
                 XCTAssertEqual(win.contentMinSize.height, want.height, accuracy: 0.001, tag)
                 XCTAssertEqual(win.contentMinSize, AgentsWindow.contentMinSize(scale: scale), tag)
                 let content = win.contentRect(forFrameRect: win.frame).size
@@ -416,9 +417,9 @@ extension AgentWindowD1Tests {
                         ThemeRuntime.frost = frost
                         let tag = "\(dark ? "dark" : "light")-s\(scale)-o\(opacity)\(frost ? "-frost" : "")-x\(Int(backing))"
                         let size = CGSize(width: 1000 * scale, height: 680 * scale)
-                        let side = sz(290) + 1
+                        let side = AgentWindowModel.fullSidebarWidth + 1
                         let detail = CGSize(width: size.width - side, height: size.height)
-                        let rail = CGSize(width: sz(290), height: size.height)
+                        let rail = CGSize(width: AgentWindowModel.fullSidebarWidth, height: size.height)
                         let corner = CGPoint(x: 4 * scale, y: size.height - 4 * scale)
                         var seen: [NSColor?] = [], seenS: [NSColor?] = []
                         for canvas in [grey, magenta] {
@@ -474,7 +475,7 @@ extension AgentWindowD1Tests {
         defer { win.contentViewController = nil }
         let view = try XCTUnwrap(win.contentView)
         let size = view.bounds.size
-        let rail = CGRect(x: 0, y: 0, width: sz(290), height: size.height)
+        let rail = CGRect(x: 0, y: 0, width: AgentWindowModel.fullSidebarWidth, height: size.height)
 
         // Hue bands, not exact colours: the window's bitmap colour space shifts saturated sRGB a little.
         // (the default accent renders at about 0.38 0.79 0.98)
@@ -525,7 +526,7 @@ extension AgentWindowD1Tests {
         }
         var opaque: [CGFloat: NSColor] = [:]
         // The title row is 30 pt of top padding, a 13 pt line and 8 pt below it: rows and headers start under 54 pt.
-        let belowTitle = CGRect(x: 0, y: sz(54), width: sz(290), height: size.height - sz(54))
+        let belowTitle = CGRect(x: 0, y: sz(54), width: AgentWindowModel.fullSidebarWidth, height: size.height - sz(54))
         for backing in backings {
             let second = try snapshot(view, backing: backing)
             try saveTo860(second, "live-probe-selected-x\(Int(backing))")
@@ -538,7 +539,7 @@ extension AgentWindowD1Tests {
             let sidebarPixel = try XCTUnwrap(pixel(second, CGPoint(x: 4, y: size.height - 4), in: size))
             XCTAssertGreaterThan(sidebarPixel.redComponent, 0.8, "the light theme's rail, not the dark one (x\(Int(backing)))")
             // The header's top-left padding (the terminal below it stays opaque by design).
-            opaque[backing] = try XCTUnwrap(pixel(second, CGPoint(x: sz(290) + 5, y: 4), in: size))
+            opaque[backing] = try XCTUnwrap(pixel(second, CGPoint(x: AgentWindowModel.fullSidebarWidth + 5, y: 4), in: size))
         }
 
         // An opacity change (backdropTick, no rebuild) fades the open window's body in place.
@@ -548,7 +549,7 @@ extension AgentWindowD1Tests {
         for backing in backings {
             let third = try snapshot(view, backing: backing)
             try saveTo860(third, "live-probe-opacity-0.8-x\(Int(backing))")
-            let faded = try XCTUnwrap(pixel(third, CGPoint(x: sz(290) + 5, y: 4), in: size))
+            let faded = try XCTUnwrap(pixel(third, CGPoint(x: AgentWindowModel.fullSidebarWidth + 5, y: 4), in: size))
             XCTAssertEqual(try XCTUnwrap(opaque[backing]).alphaComponent, 1, accuracy: 0.01, "x\(Int(backing))")
             XCTAssertEqual(faded.alphaComponent, 0.8, accuracy: 0.03, "the body's backdrop is at the live opacity (x\(Int(backing)))")
         }
@@ -563,18 +564,18 @@ extension AgentWindowD1Tests {
         defer { ThemeRuntime.scale = savedScale }
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
-            let old = NSHostingView(rootView: Legacy860AgentHeader(title: "Sessions").frame(width: sz(274))).fittingSize.height
+            let old = NSHostingView(rootView: Legacy860AgentHeader(title: "Sessions").frame(width: (AgentWindowModel.fullSidebarWidth - sz(16)))).fittingSize.height
             for (title, toggle, folded) in [(AgentSidebar.needsYouTitle, false, false), ("Sessions", true, false), ("History", true, true)] {
                 let h = NSHostingView(rootView: AgentSectionHeader(title: title, count: 12, collapsed: folded,
-                                                                   toggle: toggle ? {} : nil).frame(width: sz(274)))
+                                                                   toggle: toggle ? {} : nil).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16))))
                 XCTAssertEqual(h.fittingSize.height, old, accuracy: 0.01, "\(title) header at \(scale)")
             }
             let m = windowModel(store([session("prosper", .working)]))
             m.setVisible(true)
             defer { m.close() }
             let row = try XCTUnwrap(m.sections.first?.rows.first)
-            let on = NSHostingView(rootView: AgentSidebarRowView(row: row, selected: true).frame(width: sz(274))).fittingSize
-            let off = NSHostingView(rootView: AgentSidebarRowView(row: row, selected: false).frame(width: sz(274))).fittingSize
+            let on = NSHostingView(rootView: AgentSidebarRowView(row: row, selected: true).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16)))).fittingSize
+            let off = NSHostingView(rootView: AgentSidebarRowView(row: row, selected: false).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16)))).fittingSize
             XCTAssertEqual(on, off, "row at \(scale)")
         }
     }
@@ -644,10 +645,10 @@ extension AgentWindowD1Tests {
         // #1268 (R6): the band leaves out the Command-digit chip's column only: the chip sits on line one, inside the
         // band, and is drawn `active` on the selected row by design (pinned in testDigitJumpChipKeepsTheRowHeightAnd
         // TheTitleInPlace). From the view's constants: the rail sz(290), the list's inset sz(8), the row's padding
-        // sz(10), the slot as wide as the nine chips together (titleLine). Never wider than that slot.
-        let chipSlot = NSHostingView(rootView: ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.fixedSize())
+        // sz(10), the slot as wide as the 18 chips together (titleLine; #1470). Never wider than that slot.
+        let chipSlot = NSHostingView(rootView: ZStack { ForEach(1...18, id: \.self) { AgentDigitChip(number: $0) } }.fixedSize())
             .fittingSize.width
-        let chipEnd = sz(290) - sz(8) - sz(10)
+        let chipEnd = AgentWindowModel.fullSidebarWidth - sz(8) - sz(10)
         let chipColumn = (chipEnd - chipSlot)..<chipEnd
         XCTAssertLessThanOrEqual(chipColumn.upperBound - chipColumn.lowerBound, chipSlot, "the band leaves out no more than the chip's slot")
 
@@ -673,7 +674,7 @@ extension AgentWindowD1Tests {
             var box = (x0: Int.max, x1: Int.min, y0: Int.max, y1: Int.min)
             let top = Int((mid - 4) * s)
             for y in top..<Int((mid + 4) * s) {
-                for x in Int(sz(145) * s)..<Int(sz(290) * s) where !chipColumn.contains(CGFloat(x) / s) {
+                for x in Int(sz(145) * s)..<Int(AgentWindowModel.fullSidebarWidth * s) where !chipColumn.contains(CGFloat(x) / s) {
                     guard let a = on.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
                           let b = off.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                     let d = a.blueComponent - b.blueComponent
@@ -729,7 +730,7 @@ extension AgentWindowD1Tests {
         let magenta = NSColor(srgbRed: 1, green: 0, blue: 1, alpha: 1)
         let size = CGSize(width: 1000, height: 680)
         // The divider is the 1 pt column right of the 290 pt rail (whole points at scale 1).
-        let column = CGRect(x: sz(290), y: 100, width: 1, height: 400)
+        let column = CGRect(x: AgentWindowModel.fullSidebarWidth, y: 100, width: 1, height: 400)
         for dark in [true, false] {
             ThemeRuntime.palette = dark ? saved.1 : Self.lightPalette
             for backing: CGFloat in [1, 2] {
@@ -788,7 +789,7 @@ extension AgentWindowD1Tests {
         // only full-strength accent there (the selected row's fill and edge are faint, and observe the store).
         let rows = CGRect(x: sz(40), y: sz(54), width: sz(250), height: sz(300))   // the header and both rows
         // The terminal pane's middle: its background (not revealed: the pane's own bgBottom overlay).
-        let terminal = CGPoint(x: sz(291) + (size.width - sz(291)) / 2, y: size.height * 0.75)
+        let terminal = CGPoint(x: AgentWindowModel.fullSidebarWidth + 1 + (size.width - AgentWindowModel.fullSidebarWidth - 1) / 2, y: size.height * 0.75)
 
         func check(dark: Bool, _ step: String) throws {
             // colorAt autoreleases NSColors per pixel: drained per snapshot.
@@ -871,7 +872,7 @@ extension AgentWindowD1Tests {
                     try saveTo860(rep, "881-terminal-o0.35-\(tag)")
                     // The lower half of the detail column (well under the header), one backing pixel in.
                     let px = 1 / backing
-                    let area = CGRect(x: sz(291) + px, y: size.height / 2, width: size.width - sz(291) - 2 * px,
+                    let area = CGRect(x: AgentWindowModel.fullSidebarWidth + 1 + px, y: size.height / 2, width: size.width - AgentWindowModel.fullSidebarWidth - 1 - 2 * px,
                                       height: size.height / 2 - px)
                     let d = try XCTUnwrap(rep.bitmapData)
                     var lowest = 255, seen = 0
@@ -885,7 +886,7 @@ extension AgentWindowD1Tests {
                     XCTAssertEqual(lowest, 255, "opacity 0.35: the terminal is opaque at every pixel (\(tag))")
                     // The header's top-left padding is the backdrop: see-through at the low opacity (r1: alpha
                     // 0.38 there, the header band's faint fill over the 0.35 backdrop).
-                    let backdrop = try XCTUnwrap(pixel(rep, CGPoint(x: sz(291) + 5, y: 4), in: size))
+                    let backdrop = try XCTUnwrap(pixel(rep, CGPoint(x: AgentWindowModel.fullSidebarWidth + 1 + 5, y: 4), in: size))
                     XCTAssertLessThan(backdrop.alphaComponent, 0.5, "the body's backdrop fades (\(tag))")
                 }
             }

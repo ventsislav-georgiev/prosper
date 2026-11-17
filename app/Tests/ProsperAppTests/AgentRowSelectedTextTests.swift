@@ -186,11 +186,11 @@ final class AgentRowSelectedTextTests: XCTestCase {
         try onEveryTheme { d, p in
             let sel = over(rgba(p.sidebar), p.blue, 0.14)
             for (state, detail, wrong) in [(AgentState.idle, "Idle", p.textSecondary), (.blocked, "Needs input", agentStateColor(.blocked))] {
-                let size = CGSize(width: sz(274), height: sz(60))
-                guard let (rep, k) = render(AgentSidebarRowView(row: row(state: state, detail: detail), selected: true).frame(width: sz(274)),
+                let size = CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: sz(60))
+                guard let (rep, k) = render(AgentSidebarRowView(row: row(state: state, detail: detail), selected: true).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16))),
                                             size: size, background: p.sidebar) else { return XCTFail("no bitmap") }
                 // Line two: below the title, clear of the row's edge, bar and corners.
-                let band = CGRect(x: sz(30), y: sz(27), width: sz(274) - sz(60), height: sz(14))
+                let band = CGRect(x: sz(30), y: sz(27), width: (AgentWindowModel.fullSidebarWidth - sz(16)) - sz(60), height: sz(14))
                 guard let px = ink(rep, k: k, rect: band, bg: sel) else { return XCTFail("\(d.title): no pixels") }
                 reads += 1
                 XCTAssertLessThan(miss(px, rgba(p.textPrimary), over: sel), miss(px, rgba(wrong), over: sel),

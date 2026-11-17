@@ -263,7 +263,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             let (win, host) = focusWindow(m)
             defer { win.close() }
-            let size = CGSize(width: sz(290), height: sz(80))
+            let size = CGSize(width: AgentWindowModel.fullSidebarWidth, height: sz(80))
             let open = try wiringRender(AgentSidebarTitleRow(model: m), size, backing: 2)
             st.controlDch = nil
             let why = try XCTUnwrap(st.resumeGate.refusal)
@@ -308,13 +308,13 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(pair.width, 2 * sz(18) + sz(4), accuracy: pixel, "two sz(18) slots at \(scale)")
                 // fittingSize comes back rounded to whole points (a hosting view outside a window lays out at backing 1).
                 XCTAssertEqual(pair.height, sz(18), accuracy: 1, "at \(scale)")
-                let heights = models.map { NSHostingView(rootView: AgentSidebarTitleRow(model: $0).frame(width: sz(290))).fittingSize.height }
+                let heights = models.map { NSHostingView(rootView: AgentSidebarTitleRow(model: $0).frame(width: AgentWindowModel.fullSidebarWidth)).fittingSize.height }
                 XCTAssertEqual(Set(heights).count, 1, "one row height for 0, 1 and 999 at \(scale): \(heights)")
                 for h in heights { XCTAssertEqual(h, AgentSidebarTitleRow.padTop + sz(18) + sz(8), accuracy: 1, "row height at \(scale): \(heights)") }
                 for backing: CGFloat in [1, 2] {
                     let tol = 1 / backing
                     let tag = "scale \(scale) backing \(backing)"
-                    let full = CGSize(width: sz(290), height: sz(70))
+                    let full = CGSize(width: AgentWindowModel.fullSidebarWidth, height: sz(70))
                     let reps = try models.map { try wiringRender(AgentSidebarTitleRow(model: $0), full, backing: backing) }
                     let slot = CGRect(x: full.width - sz(14) - sz(40), y: AgentSidebarTitleRow.padTop, width: sz(40), height: sz(18))
                     let wide = slot.insetBy(dx: -sz(3), dy: -sz(3))
@@ -416,7 +416,7 @@ extension AgentWindowD1Tests {
                 win.contentView = host
                 m.openNewSession()
                 settle(host)
-                let pane = CGRect(x: sz(290) + 1, y: 0, width: size.width - sz(290) - 1, height: size.height)
+                let pane = CGRect(x: AgentWindowModel.fullSidebarWidth + 1, y: 0, width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: size.height)
                 @MainActor func frames(_ tag: String) -> [CGRect] {
                     let f = formFields(host).map { host.convert($0.bounds, from: $0) }
                     XCTAssertEqual(f.count, 3, tag)

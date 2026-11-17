@@ -79,7 +79,7 @@ final class AgentSidebarGroupRowTests: XCTestCase {
             }
             let (m, _) = model([d1.session("api", .idle), d1.session("web", .idle), d1.session("docs", .idle)])
             defer { m.close() }
-            let width = sz(290), pixel = AXTreeSupport.devicePixel
+            let width = AgentWindowModel.fullSidebarWidth, pixel = AXTreeSupport.devicePixel
             let rows = m.sections.first { $0.title == "Sessions" }?.rows ?? []
             XCTAssertEqual(rows.count, 3)
             let all = rows.map { label(m, $0) }
@@ -159,7 +159,7 @@ final class AgentSidebarGroupRowTests: XCTestCase {
             let names = ["api", "api-2", "api-qa"].map { words(m, $0) }
             let group = AgentSidebarGroupRow<EmptyView>.words(stem: "api", count: 3)
             XCTAssertEqual(group, "Group api, 3 sessions")
-            let tree = AXTreeSupport.tree(AgentSidebarView(model: m).frame(width: sz(290), height: 900), CGSize(width: sz(290), height: 900)) { t in
+            let tree = AXTreeSupport.tree(AgentSidebarView(model: m).frame(width: AgentWindowModel.fullSidebarWidth, height: 900), CGSize(width: AgentWindowModel.fullSidebarWidth, height: 900)) { t in
                 t.contains { $0.label == group } && names.allSatisfy { w in t.contains { $0.label == w } }
             }
             let g = try XCTUnwrap(tree.first { $0.label == group && !$0.ignored }, "\(tree.map(\.label))")
@@ -181,7 +181,7 @@ final class AgentSidebarGroupRowTests: XCTestCase {
             defer { m.close() }
             let restore = AXTreeSupport.axOn()
             defer { restore() }
-            let width = sz(290)
+            let width = AgentWindowModel.fullSidebarWidth
             let (win, host) = AXTreeSupport.hosted(AgentSidebarView(model: m).frame(width: width, height: 900), CGSize(width: width, height: 900))
             defer { win.close() }
             let names = ["api", "api-2", "api-qa"].map { words(m, $0) }
@@ -216,7 +216,7 @@ final class AgentSidebarGroupRowTests: XCTestCase {
             let pixel = AXTreeSupport.devicePixel
             for scale in Self.scales {
                 ThemeRuntime.scale = scale
-                let width = sz(290), group = AgentSidebarGroupRow<EmptyView>.words(stem: "api", count: 3)
+                let width = AgentWindowModel.fullSidebarWidth, group = AgentSidebarGroupRow<EmptyView>.words(stem: "api", count: 3)
                 let names = ["api", "api-2", "api-qa"].map { words(m, $0) }
                 let tree = AXTreeSupport.tree(AgentSidebarView(model: m).frame(width: width, height: 900), CGSize(width: width, height: 900)) { t in
                     t.contains { $0.label == group } && names.allSatisfy { w in t.contains { $0.label == w } }

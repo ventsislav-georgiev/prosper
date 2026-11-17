@@ -291,7 +291,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             let (win, host) = focusWindow(m)
             defer { win.close() }
-            let size = CGSize(width: sz(290), height: AgentWindowControls.stripHeight)
+            let size = CGSize(width: AgentWindowModel.fullSidebarWidth, height: AgentWindowControls.stripHeight)
             XCTAssertNil(ink(try wiringRender(AgentDirStatusStrip(store: st), size, backing: 2), CGRect(origin: .zero, size: size)),
                          "nothing to say yet")
             st.controlDch = nil
@@ -334,8 +334,10 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(route(formKey(3, "f", .command)), terminal ? .swallow : .pass, "⌘F \(tag)")
                 XCTAssertEqual(route(formKey(5, "g", .command)), terminal ? .swallow : .pass, "⌘G \(tag)")
                 XCTAssertEqual(route(formKey(5, "G", [.command, .shift])), terminal ? .swallow : .pass, "⇧⌘G \(tag)")
-                for v in AgentVerbosity.allCases {
-                    XCTAssertEqual(route(formKey(v.keyCode, "", [.command, .option])), .swallow, "⌥⌘ \(v) \(tag)")
+                // #1470: Option-Command-1, 3 and 9 are rows 10, 12 and 18: swallowed under the form, as Command-1.
+                for (code, row) in [(UInt16(18), 10), (20, 12), (25, 18)] {
+                    XCTAssertEqual(route(formKey(code, "", [.command, .option])), .swallow, "Option-Command key \(code) \(tag)")
+                    XCTAssertEqual(route(formKey(code, "", [.command, .option]), form: false), .jump(row), "no form: row \(row) \(tag)")
                 }
                 XCTAssertEqual(route(up), r == .text ? .pass : .swallow, "⌘↑ \(tag)")
                 XCTAssertEqual(route(down), r == .text ? .pass : .swallow, "⌘↓ \(tag)")

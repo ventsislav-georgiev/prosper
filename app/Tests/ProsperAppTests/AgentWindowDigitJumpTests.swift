@@ -68,14 +68,22 @@ extension AgentWindowD1Tests {
             // ⌘0 stays free (the terminal's font reset), on the top row and the keypad.
             (29, "0", cmd, .terminal, true, false, false, .font(0), "Command-0 is the font reset, not a jump"),
             (82, "0", pad, .terminal, true, false, false, .font(0), "keypad Command-0 is the font reset, not a jump"),
-            // Shift, Option or Control added: not this chord. ⌥⌘1/2/3 stay the verbosity chord (swallowed in Terminal mode).
+            // Shift or Control added: not this chord. #1470: Option-Command-1...9 are rows 10...18, both modes, every responder.
             (18, "!", [.command, .shift], .other, true, false, false, .pass, "⇧⌘1"),
             (18, "1", [.command, .shift], .terminal, true, false, false, .pass, "AZERTY ⇧⌘1 (the shifted digit)"),
-            (18, "¡", [.command, .option], .other, false, false, false, .verbosity(.focused), "⌥⌘1 Transcript"),
-            (19, "™", [.command, .option], .terminal, false, false, false, .verbosity(.default), "⌥⌘2 Transcript"),
-            (20, "£", [.command, .option], .text, false, false, false, .verbosity(.verbose), "⌥⌘3 Transcript"),
-            (18, "¡", [.command, .option], .terminal, true, false, false, .swallow, "⌥⌘1 Terminal mode"),
-            (23, "∞", [.command, .option], .other, false, false, false, .pass, "⌥⌘5 is nothing"),
+            (18, "\u{A1}", [.command, .option], .other, false, false, false, .jump(10), "Option-Command-1 Transcript"),
+            (19, "\u{2122}", [.command, .option], .terminal, false, false, false, .jump(11), "Option-Command-2 Transcript"),
+            (20, "\u{A3}", [.command, .option], .text, false, false, false, .jump(12), "Option-Command-3 from a text view"),
+            (18, "\u{A1}", [.command, .option], .terminal, true, false, false, .jump(10), "Option-Command-1 Terminal mode"),
+            (23, "\u{221E}", [.command, .option], .other, true, false, false, .jump(14), "Option-Command-5"),
+            (25, "\u{AA}", [.command, .option], .terminal, true, false, false, .jump(18), "Option-Command-9"),
+            (25, "\u{E7}", [.command, .option], .text, false, false, false, .jump(18), "AZERTY Option-Command-9 (key code)"),
+            (92, "9", [.command, .option, .numericPad], .other, true, false, false, .jump(18), "keypad Option-Command-9"),
+            (29, "\u{BA}", [.command, .option], .other, true, false, false, .pass, "Option-Command-0 is nothing"),
+            (18, "1", [.command, .option, .shift], .other, true, false, false, .pass, "Shift-Option-Command-1"),
+            (18, "1", [.command, .option, .control], .other, false, false, false, .pass, "Control-Option-Command-1"),
+            (18, "\u{A1}", [.command, .option], .text, true, true, false, .pass, "rename field Option-Command-1"),
+            (25, "\u{AA}", [.command, .option], .other, false, false, true, .swallow, "form Option-Command-9"),
             (18, "1", [.command, .control], .other, true, false, false, .pass, "⌃⌘1"),
             (83, "1", [.command, .shift, .numericPad], .other, true, false, false, .pass, "⇧⌘ keypad 1"),
             // No Command: the digit is typed.
@@ -214,25 +222,27 @@ extension AgentWindowD1Tests {
         return (m, st)
     }
 
-    /// The numbers are the sidebar's order (Needs you, Sessions, Sidekicks), the first nine live rows, and follow the
-    /// rows when the order changes; a folded section is skipped.
+    /// The numbers are the sidebar's order (Needs you, Sessions, Sidekicks), the first 18 live rows (#1470: all 12 here),
+    /// and follow the rows when the order changes; a folded section is skipped.
     @MainActor
     func testDigitJumpNumbersFollowTheSidebarOrder() {
         withDigitPrefs {
             let (m, st) = digitModel()
             defer { m.close() }
             XCTAssertEqual(m.sections.map(\.title), ["Needs you", "Sessions", "Sidekicks", "History"])
-            XCTAssertEqual(m.numberedIDs, ["web-qa", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"].map(live))
+            XCTAssertEqual(m.numberedIDs,
+                           ["web-qa", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "api-qa"].map(live))
             XCTAssertEqual(m.number(live("web-qa")), 1)
             XCTAssertEqual(m.number(live("s8")), 9)
-            XCTAssertTrue(m.number(live("s9")) == nil, "the tenth live row has no number")
-            XCTAssertTrue(m.number(live("api-qa")) == nil)
+            XCTAssertEqual(m.number(live("s9")), 10, "#1470: the tenth live row is Option-Command-1")
+            XCTAssertEqual(m.number(live("api-qa")), 12)
             XCTAssertTrue(m.number(.history(AgentSessionKey(dir: "/tmp/dch-test", name: "old"))) == nil, "History: none")
             XCTAssertTrue(m.selectNumbered(9))
             XCTAssertEqual(m.selection, live("s8"))
             // s5 turns blocked (newest): it moves into Needs you, above web-qa, and is ⌘1; the rest move down one.
             st.sessions = st.sessions.map { $0.key.name == "s5" ? session("s5", .blocked, ago: 1) : $0 }
-            XCTAssertEqual(m.numberedIDs, ["s5", "web-qa", "s1", "s2", "s3", "s4", "s6", "s7", "s8"].map(live))
+            XCTAssertEqual(m.numberedIDs,
+                           ["s5", "web-qa", "s1", "s2", "s3", "s4", "s6", "s7", "s8", "s9", "s10", "api-qa"].map(live))
             XCTAssertTrue(m.selectNumbered(1))
             XCTAssertEqual(m.selection, live("s5"))
             // Sessions folded: its rows are not drawn, so the numbers run on into Sidekicks.
@@ -259,16 +269,16 @@ extension AgentWindowD1Tests {
     func digitRows(_ m: AgentWindowModel) -> some View {
         VStack(spacing: 0) {
             ForEach(m.rows) { r in
-                AgentSidebarRowView(row: r, selected: m.selection == r.id, number: m.number(r.id)).frame(width: sz(274))
+                AgentSidebarRowView(row: r, selected: m.selection == r.id, number: m.number(r.id)).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16)))
             }
         }
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// Rows 1 to 9 carry the chip, the tenth live row and History none; each chip has its name and help in the real
-    /// accessibility tree and sits whole inside its own row, at its trailing end; at 0.7, 0.85 and 1.0.
+    /// Every live row carries the chip (#1470: rows 10-12 an Option-Command one), History none; each chip has its name and
+    /// help in the real accessibility tree and sits whole inside its own row, at its trailing end; at 0.7, 0.85 and 1.0.
     @MainActor
-    func testDigitJumpChipOnRowsOneToNineOnlyInTheAccessibilityTree() {
+    func testDigitJumpChipOnEveryNumberedRowInTheAccessibilityTree() {
         _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
@@ -276,25 +286,28 @@ extension AgentWindowD1Tests {
             let (m, _) = digitModel()
             defer { m.close() }
             m.select(live("s2"))
-            let titles = ["web-qa", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"]
+            let titles = ["web-qa", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "api-qa"]
+            func isChip(_ e: DigitAX) -> Bool { e.label.hasPrefix("Command-") || e.label.hasPrefix("Option-Command-") }
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
-                let tree = digitTree(digitRows(m), CGSize(width: sz(274), height: 13 * 80 * scale)) { t in
-                    t.filter { $0.label.hasPrefix("Command-") }.count >= 9 && t.contains { $0.label.hasPrefix("old,") }
+                let tree = digitTree(digitRows(m), CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: 13 * 80 * scale)) { t in
+                    t.filter(isChip).count >= 12 && t.contains { $0.label.hasPrefix("old,") }
                 }
-                let chips = tree.filter { $0.label.hasPrefix("Command-") && !$0.ignored }
+                let chips = tree.filter { isChip($0) && !$0.ignored }
                 XCTAssertEqual(Set(chips.map(\.label)),
                                ["Command-1", "Command-2", "Command-3", "Command-4", "Command-5", "Command-6", "Command-7",
-                                "Command-8", "Command-9"], "\(scale)")
-                XCTAssertEqual(chips.count, 9, "one chip per numbered row (\(scale))")
+                                "Command-8", "Command-9", "Option-Command-1", "Option-Command-2", "Option-Command-3"], "\(scale)")
+                XCTAssertEqual(chips.count, 12, "one chip per numbered row (\(scale))")
                 var rows: [DigitAX] = []   // one per row: a wrapper repeating a row's name and frame is not a second row
-                for e in tree where !e.ignored && !e.label.hasPrefix("Command-") && e.frame.height > 0
-                    && (titles + ["s9", "s10", "api-qa", "old"]).contains(where: { e.label.hasPrefix("\($0),") })
+                for e in tree where !e.ignored && !isChip(e) && e.frame.height > 0
+                    && (titles + ["old"]).contains(where: { e.label.hasPrefix("\($0),") })
                     && !rows.contains(where: { $0.label == e.label && $0.frame == e.frame }) { rows.append(e) }
                 XCTAssertEqual(rows.count, 13, "every row is read (\(scale))")
                 for chip in chips {
-                    let n = Int(chip.label.dropFirst("Command-".count)) ?? 0
-                    XCTAssertEqual(chip.help, "Select this session (⌘\(n))", "\(scale)")
+                    let option = chip.label.hasPrefix("Option-")
+                    let digit = Int(chip.label.dropFirst(option ? "Option-Command-".count : "Command-".count)) ?? 0
+                    let n = option ? digit + 9 : digit
+                    XCTAssertEqual(chip.help, "Select this session (\(option ? "\u{2325}" : "")\u{2318}\(digit))", "\(scale)")
                     let center = CGPoint(x: chip.frame.midX, y: chip.frame.midY)
                     let owner = rows.filter { $0.frame.contains(center) }
                     XCTAssertEqual(owner.count, 1, "\(chip.label) sits on one row (\(scale))")
@@ -324,7 +337,7 @@ extension AgentWindowD1Tests {
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             for row in rows {
-                for width in [sz(274), sz(110)] {
+                for width in [(AgentWindowModel.fullSidebarWidth - sz(16)), sz(110)] {
                     let plain = NSHostingView(rootView: AgentSidebarRowView(row: row, selected: false).frame(width: width)).fittingSize
                     for selected in [false, true] {
                         let chip = NSHostingView(rootView: AgentSidebarRowView(row: row, selected: selected, number: 7)
@@ -334,8 +347,8 @@ extension AgentWindowD1Tests {
                 }
                 // Left of the chip, every pixel is the same with and without it (no PR chips: the line keeps its text).
                 guard row.prs.isEmpty else { continue }
-                let size = CGSize(width: sz(274), height: NSHostingView(rootView: AgentSidebarRowView(row: row, selected: false)
-                    .frame(width: sz(274))).fittingSize.height)
+                let size = CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: NSHostingView(rootView: AgentSidebarRowView(row: row, selected: false)
+                    .frame(width: (AgentWindowModel.fullSidebarWidth - sz(16)))).fittingSize.height)
                 let without = try render(AgentSidebarRowView(row: row, selected: false), size: size, dark: true)
                 let with = try render(AgentSidebarRowView(row: row, selected: false, number: 7), size: size, dark: true)
                 XCTAssertEqual(without.pixelsWide, with.pixelsWide)
@@ -361,8 +374,8 @@ extension AgentWindowD1Tests {
                 t.contains { $0.label.hasPrefix("web,") } && t.contains { $0.label == "Command-4" }
             }
             XCTAssertTrue(narrow.contains { $0.label.hasPrefix("web,") }, "the row is read (\(scale))")
-            let wide = digitTree(AgentSidebarRowView(row: rows[1], selected: false, number: 4).frame(width: sz(274)),
-                                 CGSize(width: sz(274), height: 80 * scale)) { t in t.contains { $0.label == "Command-4" } }
+            let wide = digitTree(AgentSidebarRowView(row: rows[1], selected: false, number: 4).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16))),
+                                 CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: 80 * scale)) { t in t.contains { $0.label == "Command-4" } }
             XCTAssertTrue(wide.contains { $0.label == "Command-4" && $0.help == "Select this session (⌘4)" },
                           "the PR chips gave way, the chip is drawn (\(scale))")
             if let nRow = narrow.first(where: { $0.label.hasPrefix("web,") }), let nChip = narrow.first(where: { $0.label == "Command-4" }),
@@ -393,8 +406,8 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(nDiff, 0, "the title cut at the same place with and without a number at sz(110) (\(scale))")
             // #1268 (R6): the selected row's chip is drawn `active` (a solid accent fill), an unselected row's is not:
             // accent pixels right of the title, at the sidebar's width (the selection bar is at the left).
-            let aSize = CGSize(width: sz(274), height: NSHostingView(rootView: AgentSidebarRowView(row: rows[0], selected: false)
-                .frame(width: sz(274))).fittingSize.height)
+            let aSize = CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: NSHostingView(rootView: AgentSidebarRowView(row: rows[0], selected: false)
+                .frame(width: (AgentWindowModel.fullSidebarWidth - sz(16)))).fittingSize.height)
             func accent(_ selected: Bool) throws -> Int {
                 let rep = try render(AgentSidebarRowView(row: rows[0], selected: selected, number: 7), size: aSize, dark: true)
                 let k = CGFloat(rep.pixelsWide) / (aSize.width + 24)
@@ -409,6 +422,84 @@ extension AgentWindowD1Tests {
             }
             let onChip = try accent(true), offChip = try accent(false)
             XCTAssertGreaterThan(onChip, 3 * offChip + 30, "the selected row's chip is active: \(onChip) vs \(offChip) accent px (\(scale))")
+        }
+    }
+
+    // MARK: #1470 rows 10 to 18
+
+    /// 20 live rows: Option-Command-1...9 pick rows 10...18 through a never-shown window's performKeyEquivalent (top
+    /// row and keypad, Terminal mode and Transcript); row 19 has no number; the detail level never changes.
+    @MainActor
+    func testOptionCommandDigitsJumpToRowsTenToEighteenAndRowNineteenHasNone() {
+        withDigitPrefs {
+            let sessions = (1...20).map { session("s\($0)", .idle, ago: Double($0) * 10) }
+            let m = windowModel(store(Array(sessions.reversed())))
+            _ = fakeTerminal(m)
+            m.setVisible(true)
+            defer { m.close() }
+            let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
+                                     backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            defer { win.close() }
+            win.model = m
+            XCTAssertEqual(m.numberedIDs, (1...18).map { live("s\($0)") }, "the first 18 live rows")
+            XCTAssertEqual(m.number(live("s10")), 10)
+            XCTAssertEqual(m.number(live("s18")), 18)
+            XCTAssertTrue(m.number(live("s19")) == nil && m.number(live("s20")) == nil, "row 19 and on: no number")
+            XCTAssertFalse(m.selectNumbered(19))
+            for mode in [AgentPaneMode.terminal, .transcript] {
+                for s in sessions { m.setMode(mode, for: s) }
+                let level = m.verbosity
+                let keys: [(UInt16, NSEvent.ModifierFlags, String)] = [
+                    (18, [.command, .option], "s10"), (25, [.command, .option], "s18"), (23, [.command, .option], "s14"),
+                    (87, [.command, .option, .numericPad], "s14"), (25, .command, "s9"), (83, [.command, .option, .numericPad], "s10"),
+                ]
+                for (code, flags, want) in keys {
+                    XCTAssertTrue(win.performKeyEquivalent(with: digitKey(code, "", flags)), "handled (\(code), \(mode))")
+                    XCTAssertEqual(m.selection, live(want), "\(code) \(flags.rawValue) picks \(want) (\(mode))")
+                    XCTAssertEqual(m.paneMode, mode)
+                    XCTAssertEqual(m.verbosity, level, "never the detail level (\(code), \(mode))")
+                }
+            }
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// Rows 10...18 draw an Option-Command chip, named and helped as such in the real accessibility tree, whole inside the
+    /// row; the chip column is as wide as the Option-Command-9 chip (Mini's rail: AgentSidebarModeTests); at 0.7, 0.85
+    /// and 1.0.
+    @MainActor
+    func testOptionCommandChipOnRowsTenToEighteenAndTheColumnFitsIt() {
+        XCTAssertEqual((1...18).map(AgentDigitChip.words),
+                       (1...9).map { "Command-\($0)" } + (1...9).map { "Option-Command-\($0)" })
+        XCTAssertEqual(AgentDigitChip.glyphs(9), "\u{2318}")
+        XCTAssertEqual(AgentDigitChip.glyphs(10), "\u{2325}\u{2318}")
+        _ = ThemeStore.shared
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let pixel = AXTreeSupport.devicePixel
+        let row = AgentSidebar.row(session("api", .idle, ago: 300), details: .all, now: Self.now)
+        for scale: CGFloat in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = scale
+            let column = NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width
+            let widest = NSHostingView(rootView: AgentDigitChip(number: 18).fixedSize()).fittingSize.width
+            let nine = NSHostingView(rootView: AgentDigitChip(number: 9).fixedSize()).fittingSize.width
+            XCTAssertGreaterThanOrEqual(column, widest - pixel, "the column fits Option-Command-9 (\(scale))")
+            XCTAssertGreaterThan(widest, nine, "the Option-Command chip is the wider one (\(scale))")
+            for (n, label) in [(10, "Option-Command-1"), (18, "Option-Command-9")] {
+                let tree = digitTree(AgentSidebarRowView(row: row, selected: false, number: n).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16))),
+                                     CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: 80 * scale)) { t in
+                    t.contains { $0.label.hasPrefix("api,") } && t.contains { $0.label == label }
+                }
+                let chip = tree.first { $0.label == label }
+                let owner = tree.first { $0.label.hasPrefix("api,") }
+                XCTAssertEqual(chip?.help, "Select this session (\u{2325}\u{2318}\(n - 9))", "\(label) (\(scale))")
+                if let chip, let owner {
+                    XCTAssertTrue(owner.frame.insetBy(dx: -pixel, dy: -pixel).contains(chip.frame), "\(label) inside its row (\(scale))")
+                } else {
+                    XCTFail("\(label) and its row read (\(scale)): \(tree.map(\.label).filter { !$0.isEmpty })")
+                }
+            }
         }
     }
 }

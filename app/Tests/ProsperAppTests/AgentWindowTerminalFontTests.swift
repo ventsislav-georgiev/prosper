@@ -118,11 +118,11 @@ extension AgentWindowD1Tests {
             (45, "n", cmd, .text, true, false, true, .newSession, "Command-N under the form"),
             (126, "\u{F700}", arrows, .other, true, false, false, .session(-1), "Command-Up"),
             (125, "\u{F701}", arrows, .text, true, false, false, .pass, "Command-Down in a text view"),
-            // Option-Command-1/2/3: the level in Transcript, swallowed in Terminal mode.
-            (18, "\u{A1}", opt, .other, false, false, false, .verbosity(.focused), "Option-Command-1"),
-            (19, "\u{2122}", opt, .terminal, false, false, false, .verbosity(.default), "Option-Command-2"),
-            (20, "\u{A3}", opt, .text, false, false, false, .verbosity(.verbose), "Option-Command-3"),
-            (18, "\u{A1}", opt, .terminal, true, false, false, .swallow, "Option-Command-1 in Terminal mode"),
+            // #1470: Option-Command-1...9 are rows 10...18 in both modes (the detail-level keys are gone).
+            (18, "\u{A1}", opt, .other, false, false, false, .jump(10), "Option-Command-1"),
+            (19, "\u{2122}", opt, .terminal, false, false, false, .jump(11), "Option-Command-2"),
+            (20, "\u{A3}", opt, .text, false, false, false, .jump(12), "Option-Command-3"),
+            (18, "\u{A1}", opt, .terminal, true, false, false, .jump(10), "Option-Command-1 in Terminal mode"),
             // The Edit menu's keys pass to the responder and the menu, as today.
             (8, "c", cmd, .terminal, true, false, false, .pass, "Command-C"),
             (9, "v", cmd, .terminal, true, false, false, .pass, "Command-V"),

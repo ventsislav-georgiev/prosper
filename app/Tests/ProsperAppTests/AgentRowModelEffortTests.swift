@@ -108,7 +108,7 @@ final class AgentRowModelEffortTests: XCTestCase {
                 XCTAssertEqual(slots[i].width, slots[0].width, accuracy: 0.01, "slot width, \(r.modelText) (\(scale))")
                 XCTAssertEqual(slots[i].height, slots[0].height, accuracy: 0.01, "slot height, \(r.modelText) (\(scale))")
                 XCTAssertEqual(lines[i].width, lines[0].width, accuracy: 0.01, "line width, \(r.modelText) (\(scale))")
-                for width in [sz(274), sz(110)] {
+                for width in [(AgentWindowModel.fullSidebarWidth - sz(16)), sz(110)] {
                     let h = NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false, number: 4).frame(width: width))
                         .fittingSize.height
                     let plain = NSHostingView(rootView: AgentSidebarRowView(row: none[0], selected: false, number: 4)
@@ -209,7 +209,7 @@ final class AgentRowModelEffortTests: XCTestCase {
         atScales { scale in
             var starts: [CGFloat] = [], ends: [CGFloat] = []
             for r in rows {
-                let width = column(sz(274))
+                let width = column((AgentWindowModel.fullSidebarWidth - sz(16)))
                 // #1268: the last badge (the effort's, else the model's) is the value's trailing text (was modelText).
                 let last = r.effort ?? r.model ?? ""
                 // #1345: both lines as the row stacks them (the badges are on line one, was detailVariants alone).
@@ -246,7 +246,7 @@ final class AgentRowModelEffortTests: XCTestCase {
             // sz(3) apart (2.1 pt at 0.7) fails the second at every scale.
             // #1345: the badges end line ONE (was: before the age slot on line two), so slotEnd is the line's end and the
             // scan is the title's band only (the age ends line two at the same x).
-            let lineWidth = column(sz(274))
+            let lineWidth = column((AgentWindowModel.fullSidebarWidth - sz(16)))
             let slotEnd = lineWidth
             let band = ideal(Text("api").font(Neon.font(12.5, weight: .medium))).height
             var badgeEnds: [CGFloat] = []
@@ -302,7 +302,7 @@ final class AgentRowModelEffortTests: XCTestCase {
             // carries the age slot too (the sidebar itself is a fixed sz(290)). #1345: sz(190): line two no longer runs
             // under the chip, so the same line is a row the chip's column and its gap (36.5 pt at 1.0) wider.
             let narrow = row(session("api", .blocked, model: "claude-fable-9-2", effort: "high"))
-            let width = column(sz(190))
+            let width = column(sz(190) + AgentWindowModel.digitColumnExtra)   // #1470 a2: the chip column's growth, as the sidebar's
             let t = tree(AgentSidebarRowView(row: narrow, selected: false, number: 4).detailVariants
                 .frame(width: width, alignment: .leading), CGSize(width: width, height: sz(30))) { t in
                 t.contains { $0.label == "Needs input" }
@@ -352,9 +352,9 @@ final class AgentRowModelEffortTests: XCTestCase {
             // two's real width (the block probe) and whether its accent ink (the open count or the chips; the state text
             // is amber, the counts and the age quiet) is drawn on line two.
             for px: CGFloat in [1, 2] {
-                let h = hosted1345(r, number: 4, width: sz(274), backing: px)
+                let h = hosted1345(r, number: 4, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px)
                 guard let block = h.frames["block"], let t = h.frames["title"], let rep = h.rep else { continue }
-                let k = CGFloat(rep.pixelsWide) / sz(274).rounded(.up)
+                let k = CGFloat(rep.pixelsWide) / (AgentWindowModel.fullSidebarWidth - sz(16)).rounded(.up)
                 var accent = 0
                 let y0 = Int((t.maxY + 1) * k), y1 = min(rep.pixelsHigh, Int(block.maxY * k))
                 let x0 = Int(block.minX * k), x1 = min(rep.pixelsWide, Int(block.maxX * k))
@@ -370,7 +370,7 @@ final class AgentRowModelEffortTests: XCTestCase {
                       + "accentPixelsOnLineTwo \(accent)")
             }
             XCTAssertLessThanOrEqual(ideal(AgentSidebarRowView(row: busy(false), selected: false, number: 4)
-                .titleLine(badges: true)).width, column(sz(274)),
+                .titleLine(badges: true)).width, column((AgentWindowModel.fullSidebarWidth - sz(16))),
                                      "a plain row keeps the badges at the sidebar's width (\(scale))")
         }
     }
@@ -463,10 +463,11 @@ extension AgentRowModelEffortTests {
         XCTAssertFalse(row(session("api", model: "claude-fable-9-2", effort: "high", path: nil)).modelSlot)
     }
 
-    /// The widest ⌘<digit> chip (proportional digits): the one a chipless row's hidden room is as wide as.
+    /// The widest Command-<digit> chip (proportional digits): the one a chipless row's hidden room is as wide as. #1470: of all 18
+    /// (rows 10-18 draw Option-Command chips).
     @MainActor
     func widestDigit() -> Int {
-        (1...9).max { ideal(AgentDigitChip(number: $0)).width < ideal(AgentDigitChip(number: $1)).width } ?? 1
+        (1...18).max { ideal(AgentDigitChip(number: $0)).width < ideal(AgentDigitChip(number: $1)).width } ?? 1
     }
 
     /// `tree` in a never-shown window whose backing scale is pinned (1x, 2x), so the frames snap to that grid.
@@ -510,7 +511,7 @@ extension AgentRowModelEffortTests {
                 var badges: [CGFloat] = [], ages: [CGFloat] = [], starts: [CGFloat] = [], columns: [CGFloat] = []
                 for number in [nil, wide, 1] as [Int?] {
                     let tag = "number \(number.map(String.init) ?? "none") (\(scale), \(Int(px))x)"
-                    let h = hosted1345(r, number: number, width: sz(274), backing: px)
+                    let h = hosted1345(r, number: number, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px)
                     let f = h.frames
                     guard let b = f["badges"], let a = f["age"], let t = f["title"], let c = f["chipColumn"] else {
                         XCTFail("badges, age, title and column probed: \(f.keys.sorted()) \(tag)"); continue
@@ -520,7 +521,7 @@ extension AgentRowModelEffortTests {
                     // (last + 1) / k), within one device pixel (was: >= a rounded fittingSize - 1, red at 0.7/0.85 2x).
                     if number == wide {
                         let ink = h.rep.flatMap { rep in
-                            ink1345(rep, k: CGFloat(rep.pixelsWide) / sz(274).rounded(.up),
+                            ink1345(rep, k: CGFloat(rep.pixelsWide) / (AgentWindowModel.fullSidebarWidth - sz(16)).rounded(.up),
                                     in: CGRect(x: c.minX - sz(2), y: 0, width: c.width + sz(4), height: h.height))
                         }
                         print("ROW1345-COLUMN \(tag) column \(c.width) chipInk \(String(describing: ink))")
@@ -556,10 +557,10 @@ extension AgentRowModelEffortTests {
                 // Was: the room on line one (title + sz(6) + sz(4) + the widest chip); now the row's column, as wide.
                 // Round 2: the column's frame against the widest chip as drawn in it at the same backing (2x), within one
                 // device pixel (was: >= a rounded fittingSize - 1). The column is the same with no number ((c)).
-                let h = hosted1345(r, number: wide, width: sz(274), backing: 2)
+                let h = hosted1345(r, number: wide, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: 2)
                 let col = h.frames["chipColumn"] ?? .zero
                 let ink = h.rep.flatMap { rep in
-                    ink1345(rep, k: CGFloat(rep.pixelsWide) / sz(274).rounded(.up),
+                    ink1345(rep, k: CGFloat(rep.pixelsWide) / (AgentWindowModel.fullSidebarWidth - sz(16)).rounded(.up),
                             in: CGRect(x: col.minX - sz(2), y: 0, width: col.width + sz(4), height: h.height))
                 }
                 XCTAssertGreaterThan(col.width, 0, "\(r.title): the column probed (\(scale))")
@@ -647,12 +648,12 @@ extension AgentRowModelEffortTests {
         atScales { scale in
             for px: CGFloat in [1, 2] {
                 let tag = "(\(scale), \(Int(px))x)"
-                let h = hosted1345(r, number: 4, width: sz(274), backing: px)
+                let h = hosted1345(r, number: 4, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px)
                 guard let b = h.frames["badges"], let a = h.frames["age"], let t = h.frames["title"],
                       let block = h.frames["block"], let col = h.frames["chipColumn"], let rep = h.rep else {
                     XCTFail("probed and drawn: \(h.frames.keys.sorted()) \(tag)"); continue
                 }
-                let k = CGFloat(rep.pixelsWide) / sz(274).rounded(.up)
+                let k = CGFloat(rep.pixelsWide) / (AgentWindowModel.fullSidebarWidth - sz(16)).rounded(.up)
                 XCTAssertEqual(k, px, accuracy: 0.001, "bitmap at the pinned backing \(tag)")
                 // (a)
                 XCTAssertTrue(b.midY >= t.minY && b.midY <= t.maxY, "badges on line one: \(b) in title \(t) \(tag)")
@@ -667,7 +668,7 @@ extension AgentRowModelEffortTests {
                 print("ROW1345-AB \(tag) title \(t) badges \(b) badgeInkEnd \(end) age \(a) block \(block) column \(col) chipInk \(c)")
                 XCTAssertEqual(c.midY, block.midY, accuracy: 1, "the chip centred on the two lines \(tag)")
                 XCTAssertGreaterThan(c.minX, max(b.maxX, a.maxX), "the chip right of the badges and the age \(tag)")
-                let empty = hosted1345(r, number: nil, width: sz(274), backing: px)
+                let empty = hosted1345(r, number: nil, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px)
                 if let e = empty.rep {
                     XCTAssertTrue(ink1345(e, k: k, in: CGRect(x: col.minX - sz(2), y: 0, width: col.width + sz(4), height: h.height)) == nil,
                                   "no number: the column is empty \(tag)")
@@ -709,7 +710,7 @@ extension AgentRowModelEffortTests {
             XCTAssertEqual(floor, titleWidth1345("abcdefgh\u{2026}"), accuracy: 1, "the floor is the literal in the title's font (\(scale))")
             for title in ["session-tokens", long] {
                 for px: CGFloat in [1, 2] {
-                    let f = hosted1345(named1345(title), number: 4, width: sz(274), backing: px).frames
+                    let f = hosted1345(named1345(title), number: 4, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px).frames
                     let tag = "\(title.count) chars, ideal \(titleWidth1345(title)), floor \(floor) (\(scale), \(Int(px))x)"
                     print("ROW1345-FLOOR \(tag) title \(String(describing: f["title"])) keys \(f.keys.sorted())")
                     XCTAssertTrue(f["badges"] != nil && f["effort"] == nil, "both badges at the sidebar's width: \(tag)")
@@ -722,8 +723,8 @@ extension AgentRowModelEffortTests {
             // Down to the floor: the row just wide enough for the floor, the gaps and both badges (line one's ideal with
             // the badges is exactly that for a long name; +1 pt for its fittingSize rounding).
             let v = AgentSidebarRowView(row: named1345(long), selected: false, number: 4)
-            let width = (ideal(v.titleLine(badges: true)).width + 1 + sz(274) - column(sz(274))).rounded(.up)
-            XCTAssertLessThan(width, sz(274), "premise: narrower than the sidebar (\(scale))")
+            let width = (ideal(v.titleLine(badges: true)).width + 1 + (AgentWindowModel.fullSidebarWidth - sz(16)) - column((AgentWindowModel.fullSidebarWidth - sz(16)))).rounded(.up)
+            XCTAssertLessThan(width, (AgentWindowModel.fullSidebarWidth - sz(16)), "premise: narrower than the sidebar (\(scale))")
             for px: CGFloat in [1, 2] {
                 let f = hosted1345(named1345(long), number: 4, width: width, backing: px).frames
                 let tag = "row \(width), floor \(floor) (\(scale), \(Int(px))x)"
@@ -747,20 +748,22 @@ extension AgentRowModelEffortTests {
         atScales { scale in
             let v = AgentSidebarRowView(row: r, selected: false, number: 4)
             let both = ideal(v.titleLine(badges: true)).width, effort = ideal(v.titleLine(badges: true, effortOnly: true)).width
-            let mid = column(sz(220)), narrow = column(sz(170))
+            // #1470 a2: each literal row is wider by the chip column's growth (the sidebar's), so the title keeps TIP's room.
+            let wide = sz(220) + AgentWindowModel.digitColumnExtra, slim = sz(170) + AgentWindowModel.digitColumnExtra
+            let mid = column(wide), narrow = column(slim)
             let premise = "both \(both), effort \(effort), lines \(mid) / \(narrow) (\(scale))"
             print("ROW1345-STEPS \(premise) floor \(AgentSidebarRowView.badgeTitleFloor)")
             XCTAssertGreaterThan(both, mid + 2, "premise: both badges do not fit at sz(220): \(premise)")
             XCTAssertLessThanOrEqual(effort + 1, mid, "premise: the effort's alone fits at sz(220): \(premise)")
             XCTAssertGreaterThan(effort, narrow + 2, "premise: not even the effort's at sz(170): \(premise)")
             for px: CGFloat in [1, 2] {
-                let m = hosted1345(r, number: 4, width: sz(220), backing: px).frames
+                let m = hosted1345(r, number: 4, width: wide, backing: px).frames
                 XCTAssertTrue(m["badges"] == nil && m["effort"] != nil, "sz(220): the effort's badge alone: \(m.keys.sorted()) \(premise)")
                 XCTAssertGreaterThanOrEqual(titleRoom1345(m, "effort") + 1, AgentSidebarRowView.badgeTitleFloor, "sz(220): the floor kept: \(premise)")
-                let n = hosted1345(r, number: 4, width: sz(170), backing: px).frames
+                let n = hosted1345(r, number: 4, width: slim, backing: px).frames
                 XCTAssertTrue(n["badges"] == nil && n["effort"] == nil && n["title"] != nil, "sz(170): the title alone: \(n.keys.sorted()) \(premise)")
             }
-            for width in [sz(274), sz(220), sz(170)] {
+            for width in [(AgentWindowModel.fullSidebarWidth - sz(16)), wide, slim] {
                 let t = AXTreeSupport.tree(AgentSidebarRowView(row: r, selected: false, number: 4).frame(width: width),
                                            CGSize(width: width, height: sz(60))) { t in t.contains { $0.label.hasPrefix("api-") } }
                 XCTAssertEqual(t.first(where: { $0.label.hasPrefix("api-") })?.label,"\(r.title), Idle, model Fable 9.2, effort high, 4m ago",
@@ -783,13 +786,42 @@ extension AgentRowModelEffortTests {
                   + " withHost \(ideal(v.titleLine(badges: true)).width) noHost \(ideal(v.titleLine(badges: true, hostSlot: false)).width)")
             for px: CGFloat in [1, 2] {
                 let tag = "(\(scale), \(Int(px))x)"
-                let f = hosted1345(r, number: 4, width: sz(274), backing: px).frames
+                let f = hosted1345(r, number: 4, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px).frames
                 print("ROW1365-A \(tag) \(f.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" })")
                 guard let b = f["badges"], let t = f["title"] else { XCTFail("both badges probed: \(f.keys.sorted()) \(tag)"); continue }
                 XCTAssertTrue(f["effort"] == nil, "not the effort's alone: \(tag)")
                 XCTAssertTrue(b.midY >= t.minY && b.midY <= t.maxY, "badges on line one: \(b) in title \(t) \(tag)")
                 XCTAssertGreaterThanOrEqual(titleRoom1345(f, "badges") + 1, AgentSidebarRowView.badgeTitleFloor, "the floor kept: \(tag)")
             }
+        }
+    }
+
+    /// #1470 a2 (operator 2026-11-17, "Widen the sidebar"): at 0.7 / 0.85 / 1.0 the full sidebar is TIP's sz(290) plus
+    /// exactly the chip column's growth (all 18 chips' column less the nine Command chips', both built and measured here,
+    /// exact ideals), Mini keeps sz(84), and a full row at the sidebar's width keeps TIP's text block (line one and two)
+    /// within one device pixel, by the probes: sz(274) less the padding, the mark, both gaps and the nine-chip column.
+    @MainActor
+    func testFullSidebarWidensByTheChipColumnSoTheTitleKeepsItsRoom() {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
+        @MainActor func exact<V: View>(_ v: V) -> CGFloat {
+            let box = ExactIdeal1345.Box()
+            _ = NSHostingView(rootView: ExactIdeal1345(box: box) { v }).fittingSize
+            return box.width
+        }
+        let r = named1345("api-" + String(repeating: "session-tokens-", count: 4))
+        atScales { scale in
+            let nine = exact(ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } })
+            let all = exact(ZStack { ForEach(1...18, id: \.self) { AgentDigitChip(number: $0) } })
+            let tag = "nine \(nine), all \(all), sidebar \(AgentWindowModel.fullSidebarWidth) (\(scale))"
+            print("SIDEBAR1470-A2 \(tag)")
+            XCTAssertGreaterThan(all, nine + pixel, "premise: the Option-Command-9 chip is wider than Command-9's: \(tag)")
+            XCTAssertEqual(AgentWindowModel.fullSidebarWidth - sz(290), all - nine, accuracy: pixel, "wider by the column's growth: \(tag)")
+            XCTAssertEqual(AgentWindowModel.miniSidebarWidth, sz(84), accuracy: pixel / 4, "Mini unchanged: \(tag)")
+            let tip = sz(274) - 2 * sz(10) - sz(14) - 2 * sz(8) - nine
+            // 1x: the layout's own points (a 2x backing snaps the zero-height chip column by up to 1 pt, as ROW1365-A prints).
+            let f = hosted1345(r, number: 18, width: AgentWindowModel.fullSidebarWidth - sz(16), backing: 1).frames
+            guard let block = f["block"] else { XCTFail("the text block probed: \(f.keys.sorted()) \(tag)"); return }
+            XCTAssertEqual(block.width, tip, accuracy: pixel, "the text block keeps TIP's room \(tip): \(block) \(tag)")
         }
     }
 
@@ -807,7 +839,7 @@ extension AgentRowModelEffortTests {
             for r in rows {
                 for number in [nil, 4] as [Int?] {
                     let h = NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false, number: number)
-                        .frame(width: sz(274))).fittingSize.height
+                        .frame(width: (AgentWindowModel.fullSidebarWidth - sz(16)))).fittingSize.height
                     print("ROW1345-E scale \(scale) \(r.title) number \(number.map(String.init) ?? "none") height \(h)")
                     XCTAssertEqual(h, tip[scale] ?? -1, accuracy: 0.01, "\(r.title) number \(String(describing: number)) (\(scale))")
                 }

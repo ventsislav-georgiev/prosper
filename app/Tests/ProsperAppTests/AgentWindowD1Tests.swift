@@ -811,13 +811,13 @@ final class AgentWindowD1Tests: XCTestCase {
                                    0, "nothing drawn past the window (\(label) \(tag))")
                 }
                 // The sidebar alone, at its fixed width.
-                let side = CGSize(width: sz(290), height: 620 * scale)
+                let side = CGSize(width: AgentWindowModel.fullSidebarWidth, height: 620 * scale)
                 let srep = try render(AgentSidebarView(model: m).background(Neon.sidebar), size: side, dark: dark)
                 try save(srep, "sidebar-\(tag)")
                 XCTAssertEqual(overflow(srep, content: side, canvas: CGSize(width: side.width + 24, height: side.height + 24)), 0,
                                "sidebar \(tag)")
                 // The header's fixed parts fit the narrowest detail pane.
-                let room = 640 * scale - sz(290) - 1
+                let room = 640 * scale - AgentWindowModel.fullSidebarWidth - 1
                 let header = AgentSessionHeader(row: try XCTUnwrap(m.selectedRow), session: try XCTUnwrap(m.selectedRow?.session),
                                                 cwd: "/Users/example/projects/prosper/app/Sources/ProsperApp/AgentWindow", open: {})
                 let hsize = CGSize(width: room, height: 90 * scale)

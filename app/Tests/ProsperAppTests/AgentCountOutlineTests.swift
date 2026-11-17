@@ -25,7 +25,7 @@ extension AgentRowModelEffortTests {
     func testAgentsCountOutlineOnTheLadderAtFiveAnd128() {
         let tip: [CGFloat: CGFloat] = [0.7: 31, 0.85: 39, 1.0: 45]
         func height(_ r: AgentSidebar.Row) -> CGFloat {
-            NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false, number: 1).frame(width: sz(274))).fittingSize.height
+            NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false, number: 1).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16)))).fittingSize.height
         }
         atScales { scale in
             for n in [5, 128] {
@@ -34,7 +34,7 @@ extension AgentRowModelEffortTests {
                 let alone = ideal(AgentCountGroups(counts: [(.agents, n)], size: 10.5, outline: .white)).width
                 for px: CGFloat in [1, 2] {
                     let tag = "\(n) agents (\(scale), \(Int(px))x)"
-                    let h = hosted1345(r, number: 1, width: sz(274), backing: px)
+                    let h = hosted1345(r, number: 1, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px)
                     let capsules = h.frames.keys.filter { $0.hasPrefix("capsule.") }.sorted()
                     print("ROW1360-LADDER \(tag) line \(column(sz(274))) count \(ideal(v.detailLine([], open: r.prCount)).width)"
                           + " none \(ideal(v.detailLine([])).width) capsuleAlone \(alone) shown \(h.frames["count.open"] == nil ? "none" : "count")"
@@ -53,7 +53,7 @@ extension AgentRowModelEffortTests {
                     XCTAssertEqual(c.width, alone, accuracy: 1, "the capsule whole, not cut: \(c) vs \(alone) \(tag)")
                     XCTAssertGreaterThan(c.minY, t.maxY - 1, "on line two: \(c) under \(t) \(tag)")
                     XCTAssertLessThanOrEqual(c.maxX, m.minX, "before the merged group: \(c) \(m) \(tag)")
-                    let k = CGFloat(rep.pixelsWide) / sz(274).rounded(.up)
+                    let k = CGFloat(rep.pixelsWide) / (AgentWindowModel.fullSidebarWidth - sz(16)).rounded(.up)
                     for (end, x) in [("left", c.minX), ("right", c.maxX - 1.5)] {
                         let strip = CGRect(x: x, y: c.midY - 1, width: 1.5, height: 2)
                         XCTAssertTrue(ink1345(rep, k: k, in: strip) != nil, "the stroke drawn at the \(end) end: \(strip) \(tag)")
@@ -66,8 +66,8 @@ extension AgentRowModelEffortTests {
                 claude.merged = 199
                 XCTAssertEqual(height(claude), tip[scale] ?? -1, accuracy: 0.01, "TIP's height with \(n) agents (\(scale))")
                 // VoiceOver: the row's one label, literally TIP's (the capsule adds no element and no word).
-                let tree = AXTreeSupport.tree(AgentSidebarRowView(row: r, selected: false).frame(width: sz(274)),
-                                              CGSize(width: sz(274), height: sz(60))) { t in t.contains { $0.label.hasPrefix("sec-1") } }
+                let tree = AXTreeSupport.tree(AgentSidebarRowView(row: r, selected: false).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16))),
+                                              CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: sz(60))) { t in t.contains { $0.label.hasPrefix("sec-1") } }
                 XCTAssertEqual(tree.first(where: { $0.label.hasPrefix("sec-1") })?.label,
                                "sec-1, Working, \(n) agents, 199 merged pull requests, 7 open pull requests", "the row's words (\(scale))")
             }

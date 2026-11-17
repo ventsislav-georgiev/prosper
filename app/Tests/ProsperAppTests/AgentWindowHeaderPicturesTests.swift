@@ -38,7 +38,7 @@ extension AgentWindowD1Tests {
             ThemeRuntime.palette = dark ? saved.1 : Self.lightPalette
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
-                let room = 1000 * scale - sz(290) - 1
+                let room = 1000 * scale - AgentWindowModel.fullSidebarWidth - 1
                 for mode in [AgentPaneMode.terminal, .transcript] {
                     let h = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, level: .constant(.default), todos: todos,
                                                store: st, mode: mode, setMode: { _ in })

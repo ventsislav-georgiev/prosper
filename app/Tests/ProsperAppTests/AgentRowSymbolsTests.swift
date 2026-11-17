@@ -189,7 +189,7 @@ extension AgentWindowD1Tests {
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             // The 290 pt sidebar less its 8 pt list inset each side; in a row: padding 10 each side, the glyph slot 14, its gap 8.
-            let width = sz(290) - sz(16), column = width - 2 * sz(10) - sz(14) - sz(8)
+            let width = AgentWindowModel.fullSidebarWidth - sz(16), column = width - 2 * sz(10) - sz(14) - sz(8)
             // #1345 round 2: the table is measured at the row's real line two, less the chip's column and its gap (was
             // `column`, TIP's, when line two ran under the chip); both print.
             let rowColumn = column - sz(8) - NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width
@@ -277,7 +277,7 @@ extension AgentWindowD1Tests {
         defer { ThemeRuntime.scale = saved }
         for scale: CGFloat in [0.7, 1.0] {
             ThemeRuntime.scale = scale
-            let width = sz(290) - sz(16), left = sz(10) + sz(14) + sz(8)
+            let width = AgentWindowModel.fullSidebarWidth - sz(16), left = sz(10) + sz(14) + sz(8)
             let long = String(repeating: "w", count: 40)
             // #1268: the text column (was width - left: the row's right padding was left out). #1345: less the chip's
             // column and its gap (line two no longer runs under the chip); the chips row drops its 3 agents and 192
@@ -346,7 +346,7 @@ extension AgentWindowD1Tests {
             for row in rows {
                 let v = AgentSidebarRowView(row: row, selected: false)
                 ideal.append(Int((NSHostingView(rootView: v.fixedSize()).fittingSize.width * 2).rounded()))
-                let size = CGSize(width: sz(290) - sz(16), height: sz(50))
+                let size = CGSize(width: AgentWindowModel.fullSidebarWidth - sz(16), height: sz(50))
                 let rep = try render(v, size: size, dark: true)
                 try save(rep, "1115-slot-\(row.detail)-\(scale)")
                 let k = CGFloat(rep.pixelsWide) / (size.width + 24)
@@ -429,7 +429,7 @@ extension AgentWindowD1Tests {
             ThemeRuntime.palette = dark ? saved.1 : Self.lightPalette
             for scale: CGFloat in [0.7, 1.0] {
                 ThemeRuntime.scale = scale
-                let width = sz(290) - sz(16)
+                let width = AgentWindowModel.fullSidebarWidth - sz(16)
                 let view = VStack(spacing: 0) {
                     ForEach(sessions.map { AgentSidebar.row($0, details: .all, now: Self.now) }) {
                         AgentSidebarRowView(row: $0, selected: false)

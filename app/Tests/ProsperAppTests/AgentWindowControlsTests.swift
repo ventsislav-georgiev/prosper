@@ -230,7 +230,7 @@ extension AgentWindowD1Tests {
             defer { ThemeRuntime.scale = saved }
             ThemeRuntime.scale = scale
             st.actions = [:]
-            let size = CGSize(width: sz(290), height: AgentWindowControls.stripHeight)
+            let size = CGSize(width: AgentWindowModel.fullSidebarWidth, height: AgentWindowControls.stripHeight)
             XCTAssertEqual(ink(try render(AgentDirStatusStrip(store: st), size: size, dark: true)), 0, "nothing to say: nothing drawn")
             st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")] = "Stop all: 2 stopped, 1 failed"
             st.actions[AgentSessionKey(dir: "/tmp/other", name: "")] = "End all: 1 ended"
@@ -433,7 +433,7 @@ extension AgentWindowD1Tests {
                 try save(locked, "829-window-locked-\(label)-\(scale)")
                 st.actions = [:]
                 // The detail pane's columns: the notice band and the locked input box change, nothing between.
-                let x0 = Int((sz(290) + 2) * k), inputTop = Int((size.height - 120 * scale) * k)
+                let x0 = Int((AgentWindowModel.fullSidebarWidth + 2) * k), inputTop = Int((size.height - 120 * scale) * k)
                 let moved = (0..<locked.pixelsHigh).filter { y in
                     (y < (band.min() ?? 0) - 1 || y > (band.max() ?? 0) + 1) && y < inputTop
                         && stride(from: x0, to: locked.pixelsWide - Int(24 * k), by: 2).contains { x in
@@ -443,7 +443,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(moved, [], "locked: the conversation did not move (\(label) \(scale))")
             }
             // The header at the narrowest pane: the "⋯" fits every variant without overflow.
-            let room = 640 * scale - sz(290) - 1
+            let room = 640 * scale - AgentWindowModel.fullSidebarWidth - 1
             let header = AgentSessionHeader(row: try XCTUnwrap(m.selectedRow), session: s, cwd: "/Users/example/projects/prosper",
                                             open: {}, store: st)
             let hsize = CGSize(width: room, height: 90 * scale)
@@ -975,7 +975,7 @@ extension AgentWindowD1Tests {
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
             // The sidebar at the window's minimum height: the list scrolls.
-            let size = CGSize(width: sz(290), height: 420 * scale)
+            let size = CGSize(width: AgentWindowModel.fullSidebarWidth, height: 420 * scale)
             m.select(m.rows.first?.id)
             let host = NSHostingView(rootView: AgentSidebarView(model: m).frame(width: size.width, height: size.height)
                 .background(Neon.sidebar).environment(\.colorScheme, .dark))
@@ -1085,7 +1085,7 @@ extension AgentWindowD1Tests {
                 let plain = try render(AgentWindowRootView(model: m), size: size, dark: true)
                 try save(plain, "829p2-history-\(tag)")
                 XCTAssertEqual(overflow(plain, content: size, canvas: canvas), 0, tag)
-                let k = CGFloat(plain.pixelsWide) / canvas.width, x0 = Int((sz(290) + 2) * k)
+                let k = CGFloat(plain.pixelsWide) / canvas.width, x0 = Int((AgentWindowModel.fullSidebarWidth + 2) * k)
                 st.history = [pinned(h), g]
                 let pin = try render(AgentWindowRootView(model: m), size: size, dark: true)
                 try save(pin, "829p2-history-pinned-\(tag)")

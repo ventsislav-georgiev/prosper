@@ -121,7 +121,7 @@ extension AgentWindowD1Tests {
         m.select(live("qa-1"))
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
-            let size = CGSize(width: sz(290), height: 420 * scale)
+            let size = CGSize(width: AgentWindowModel.fullSidebarWidth, height: 420 * scale)
             let open = try render(AgentSidebarView(model: m).background(Neon.sidebar), size: size, dark: true)
             try save(open, "828-sidebar-open-\(scale)")
             m.setCollapsed("Sidekicks", true)
@@ -142,7 +142,7 @@ extension AgentWindowD1Tests {
         let key = AgentSessionKey(dir: "/tmp/dch-test", name: "a")
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
-            let width = 640 * scale - sz(290) - 1
+            let width = 640 * scale - AgentWindowModel.fullSidebarWidth - 1
             var edges: [AgentState: Int] = [:]
             for state in AgentState.allCases {
                 let i = AgentWindowInteraction()
@@ -240,7 +240,7 @@ extension AgentWindowD1Tests {
                 ideal.insert(Int((NSHostingView(rootView: v.fixedSize()).fittingSize.width * 2).rounded()))
                 // Rendered at the sidebar's row width: the rightmost ink of the title line left of
                 // the age slot is where the truncated title ends.
-                let size = CGSize(width: sz(290) - sz(16), height: sz(50))
+                let size = CGSize(width: AgentWindowModel.fullSidebarWidth - sz(16), height: sz(50))
                 let rep = try render(v, size: size, dark: true)
                 try save(rep, "828-row-age-\(age)-\(scale)")
                 let k = CGFloat(rep.pixelsWide) / (size.width + 24)
@@ -266,7 +266,7 @@ extension AgentWindowD1Tests {
             // its frame, which only moves this bound left, off the age.
             guard let first = reps.first else { return XCTFail("no render (\(scale))") }
             let column = NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width
-            let left = Int((sz(290) - sz(16) - sz(10) - sz(8) - column - ageSlot - 1) * CGFloat(first.pixelsWide) / (sz(290) - sz(16) + 24))
+            let left = Int((AgentWindowModel.fullSidebarWidth - sz(16) - sz(10) - sz(8) - column - ageSlot - 1) * CGFloat(first.pixelsWide) / (AgentWindowModel.fullSidebarWidth - sz(16) + 24))
             for (age, rep) in zip(ages, reps).dropFirst() {
                 var diff = 0
                 for y in 0..<min(rep.pixelsHigh, first.pixelsHigh) {

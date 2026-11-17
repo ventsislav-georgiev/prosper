@@ -64,7 +64,7 @@ extension AgentWindowD1Tests {
         host.frame = CGRect(x: 0, y: 0, width: 1000, height: 680)
         win.contentView = host
         settle(host)
-        XCTAssertEqual(m.paneArea.width, 1000 - sz(290) - 1, accuracy: 0.5)
+        XCTAssertEqual(m.paneArea.width, 1000 - AgentWindowModel.fullSidebarWidth - 1, accuracy: 0.5)
         XCTAssertEqual(m.paneArea.height, 680, accuracy: 0.5)
         let changes = m.paneAreaChanges
         XCTAssertGreaterThanOrEqual(changes, 1)
@@ -78,7 +78,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(sends, 0, "the same size publishes nothing")
         host.frame = CGRect(x: 0, y: 0, width: 1200, height: 700)
         settle(host)
-        XCTAssertEqual(m.paneArea.width, 1200 - sz(290) - 1, accuracy: 0.5, "a new size reaches the model")
+        XCTAssertEqual(m.paneArea.width, 1200 - AgentWindowModel.fullSidebarWidth - 1, accuracy: 0.5, "a new size reaches the model")
         XCTAssertEqual(m.paneArea.height, 700, accuracy: 0.5)
         XCTAssertEqual(m.paneAreaChanges, changes + 1, "once")
         XCTAssertFalse(win.isVisible)
@@ -105,7 +105,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             m.select(.live(paneKey("api")))
             let size = CGSize(width: 1600, height: 900)
-            let area = CGRect(x: 0, y: 0, width: 1600 - sz(290) - 1, height: 900)
+            let area = CGRect(x: 0, y: 0, width: 1600 - AgentWindowModel.fullSidebarWidth - 1, height: 900)
 
             // One pane.
             let one = paneSnapshot(m, size)

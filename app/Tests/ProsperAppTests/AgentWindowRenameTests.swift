@@ -209,7 +209,7 @@ extension AgentWindowD1Tests {
                                                     renaming: true), .close, "⌘W still closes")
             }
             XCTAssertNotEqual(AgentsNSWindow.route(keys[0], responder: .text, sidebarFocused: false, terminalMode: terminal), .pass,
-                              "control: not renaming, the verbosity key is the window's")
+                              "control: not renaming, Option-Command-1 (#1470: row 10) is the window's")
         }
         XCTAssertEqual(AgentsNSWindow.route(keys[2], responder: .text, sidebarFocused: false, terminalMode: false), .toggleMode)
     }
@@ -280,7 +280,7 @@ extension AgentWindowD1Tests {
     }
 
     /// Through the header in the window's own NSWindow subclass (never shown): one field (not one per
-    /// ViewThatFits width), first responder; Return reaches the model's rename; the verbosity keys and ⌘T
+    /// ViewThatFits width), first responder; Return reaches the model's rename; Option-Command-1 and Command-T
     /// stand down and typing lands in the field, never in the composer.
     @MainActor
     func testAgentWindowRenameFieldHasTheKeysAndReturnRenames() throws {
@@ -315,9 +315,8 @@ extension AgentWindowD1Tests {
                 NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: win.windowNumber,
                                  context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!
             }
-            let other: AgentVerbosity = level == .verbose ? .focused : .verbose
-            _ = win.performKeyEquivalent(with: key(other.keyCode, "", [.command, .option]))
-            XCTAssertEqual(m.verbosity, level, "the verbosity keys stand down")
+            _ = win.performKeyEquivalent(with: key(18, "", [.command, .option]))
+            XCTAssertEqual(m.verbosity, level, "Option-Command-1 stands down (#1470: row 10's key)")
             _ = win.performKeyEquivalent(with: key(17, "t", .command))
             XCTAssertEqual(m.paneMode, .transcript, "⌘T stands down")
             win.sendEvent(key(7, "x"))
@@ -331,10 +330,8 @@ extension AgentWindowD1Tests {
             host.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             XCTAssertTrue(subviews(host, AgentRenameTextField.self).isEmpty, "the title is back")
-            XCTAssertNotNil(AgentsNSWindow.verbosity(for: key(other.keyCode, "", [.command, .option])))
-            XCTAssertTrue(win.performKeyEquivalent(with: key(other.keyCode, "", [.command, .option])))
-            XCTAssertEqual(m.verbosity, other, "the keys are the window's again")
-            m.verbosity = level
+            XCTAssertTrue(win.performKeyEquivalent(with: key(18, "", [.command, .option])), "the window's again (row 10: none here)")
+            XCTAssertEqual(m.verbosity, level, "#1470: never the level")
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }
@@ -747,7 +744,7 @@ extension AgentWindowD1Tests {
                                 XCTAssertEqual(overflow(editing, content: size, canvas: canvas), 0, tag)
                                 let px = CGFloat(plain.pixelsWide) / canvas.width
                                 let width = Int(size.width * px), height = Int(size.height * px)
-                                let side = Int((sz(290) * px).rounded(.down))
+                                let side = Int((AgentWindowModel.fullSidebarWidth * px).rounded(.down))
                                 let detail = side + Int(sz(4) * px)
                                 let hb = try XCTUnwrap(headerBottom(plain, x: side + Int(sz(8) * px)))
                                 XCTAssertEqual(headerBottom(editing, x: side + Int(sz(8) * px)), hb, "the header keeps its height (\(tag))")

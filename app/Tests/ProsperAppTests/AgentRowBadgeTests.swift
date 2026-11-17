@@ -216,7 +216,7 @@ final class AgentRowBadgeTests: XCTestCase {
                 XCTAssertEqual(s.width, first.first?.width ?? -1, accuracy: 0.01, "line one width, number \(i) (\(scale))")
                 XCTAssertEqual(s.height, title, accuracy: 0.01, "line one is the title's height, number \(i) (\(scale))")
             }
-            for width in [sz(274), sz(150)] {
+            for width in [(AgentWindowModel.fullSidebarWidth - sz(16)), sz(150)] {
                 let h = ([nil, 4] as [Int?]).map { NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false, number: $0)
                     .frame(width: width)).fittingSize.height }
                 XCTAssertEqual(h.first ?? -1, h.last ?? -2, accuracy: 0.01, "row height with and without Command-4 chip at \(width) (\(scale))")
@@ -256,8 +256,8 @@ final class AgentRowBadgeTests: XCTestCase {
                                        CGSize(width: narrow, height: sz(30))) { t in t.contains { $0.named("4m") } }
             XCTAssertTrue(t.contains { $0.named("Idle") } && t.contains { $0.named("4m") }, "the last step (\(scale))")
             // The sidebar's own width (fixed sz(290), rows sz(274)): which step it takes, for the report.
-            let side = AXTreeSupport.tree(v.detailVariants.frame(width: column(sz(274)), alignment: .leading),
-                                          CGSize(width: column(sz(274)), height: sz(30))) { t in t.contains { $0.named("4m") } }
+            let side = AXTreeSupport.tree(v.detailVariants.frame(width: column((AgentWindowModel.fullSidebarWidth - sz(16))), alignment: .leading),
+                                          CGSize(width: column((AgentWindowModel.fullSidebarWidth - sz(16))), height: sz(30))) { t in t.contains { $0.named("4m") } }
             print("ROW1345-LADDER scale \(scale) column \(column(sz(274))) steps \(widths.map { ($0 * 10).rounded() / 10 }) "
                   + "sidebar names \(Set(side.flatMap(\.names)).sorted())")
             XCTAssertTrue(side.contains { $0.named("4m") }, "the age at the sidebar's width (\(scale))")
@@ -270,8 +270,8 @@ final class AgentRowBadgeTests: XCTestCase {
     /// nothing named after the model or the effort.
     func testBadgesAddNoAccessibilityElement() {
         let r = row(prs: false)
-        let t = AXTreeSupport.tree(AgentSidebarRowView(row: r, selected: false, number: 4).frame(width: sz(274)),
-                                   CGSize(width: sz(274), height: sz(60))) { t in t.contains { $0.label == "Command-4" } }
+        let t = AXTreeSupport.tree(AgentSidebarRowView(row: r, selected: false, number: 4).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16))),
+                                   CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: sz(60))) { t in t.contains { $0.label == "Command-4" } }
         let named = t.flatMap(\.names)
         XCTAssertTrue(named.contains("api, Idle, model Fable 9.2, effort high, 4m ago"), "\(named)")
         XCTAssertTrue(named.contains("Command-4"), "\(named)")
@@ -288,8 +288,8 @@ final class AgentRowBadgeTests: XCTestCase {
             let v = AgentSidebarRowView(row: row(), selected: false)
             let today = ideal(Text("Sonnet 4.5 \u{00B7} medium").font(Neon.font(10))).width
             let slot = ideal(v.modelSlotView).width, age = ideal(v.ageSlot).width
-            let chip = ideal(ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }).width
-            let col = column(sz(274)), fixed = 2 * sz(6) + sz(4)
+            let chip = ideal(ZStack { ForEach(1...18, id: \.self) { AgentDigitChip(number: $0) } }).width   // #1470: all 18
+            let col = column((AgentWindowModel.fullSidebarWidth - sz(16))), fixed = 2 * sz(6) + sz(4)
             XCTAssertLessThanOrEqual(slot, today + 0.01, "the badges are no wider than today's text (\(scale))")
             XCTAssertGreaterThan(slot, sz(40), "the slot has room (\(scale))")
             func r1(_ x: CGFloat) -> CGFloat { (x * 10).rounded() / 10 }

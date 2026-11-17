@@ -1724,6 +1724,10 @@ tag from the now-released section and put it on the new top draft.
   Viewer; other files and apps never open. (#1480)
 - X-ray opens instantly for a session you already looked at, and its Prompts, Responses and Refs
   stay live without polling. (#1475)
+- Agent Sessions: rows 10 to 18 in the sidebar now show Option-Command-1 to 9 and jump on those keys
+  (after Command-1 to 9). The Option-Command-1/2/3 shortcuts for the transcript's
+  Focused/Default/Verbose view are gone. The sidebar is a little wider to fit the new chips, so
+  session names keep their room. (#1470)
 
 ## v2.174.0
 

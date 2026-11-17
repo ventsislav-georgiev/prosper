@@ -487,8 +487,23 @@ final class AgentWindowModel: ObservableObject {
     /// #1379 tests: the last slide's animation was on (nil: no slide yet).
     private(set) var lastSlideAnimated: Bool?
 
-    /// #1379: the full sidebar's width (TIP's literal) and Mini's rail.
-    static var fullSidebarWidth: CGFloat { sz(290) }
+    /// #1379: the full sidebar's width and Mini's rail. #1470 a2 (operator 2026-11-17, "Widen the sidebar"): TIP's sz(290)
+    /// plus how much wider the full row's chip column (all 18 chips) is than the nine Command chips' (Mini's column), so a
+    /// row's title and badges keep TIP's room; the panes are that much narrower.
+    static var fullSidebarWidth: CGFloat { sz(290) + digitColumnExtra }
+    /// #1470 a2: that difference at the current UI scale, from the chip views' exact ideal widths (once per scale).
+    static var digitColumnExtra: CGFloat { digitColumnExtra(at: ThemeRuntime.scale) }
+    static func digitColumnExtra(at scale: CGFloat) -> CGFloat {
+        if let w = digitColumnExtraByScale[scale] { return w }
+        let saved = ThemeRuntime.scale
+        ThemeRuntime.scale = scale   // the chips' fonts and paddings read it while they are measured
+        defer { ThemeRuntime.scale = saved }
+        let w = AgentSidebarRowView.idealWidths(AgentSidebarRowView.digitColumn, AgentSidebarRowView.miniDigitColumn)
+        guard w.count == 2 else { return 0 }   // not measured: TIP's width, and measured again on the next read
+        digitColumnExtraByScale[scale] = max(0, w[0] - w[1])
+        return max(0, w[0] - w[1])
+    }
+    private static var digitColumnExtraByScale: [CGFloat: CGFloat] = [:]
     static var miniSidebarWidth: CGFloat { sz(84) }
     /// #1379: the width the sidebar column takes from the panes: Full, Mini's rail, Slide none (its sidebar is an overlay).
     var sidebarColumnWidth: CGFloat {
@@ -639,7 +654,7 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// 7.2: the sidebar's frame in the root view's content of `size` (top-left origin; AgentWindowRootView.split: the
-    /// sidebar sz(290) wide, a 1 pt line, the pane area). nil while no sidebar is drawn (the island off: one message;
+    /// sidebar fullSidebarWidth wide, a 1 pt line, the pane area). nil while no sidebar is drawn (the island off: one message;
     /// #900 B2 step 4: hidden by ⌃⌘S, so a click where it was is the pane area's).
     func sidebarFrame(in size: CGSize) -> CGRect? {
         hasStore && sidebarShown ? CGRect(x: 0, y: 0, width: sidebarMode == .mini ? Self.miniSidebarWidth : Self.fullSidebarWidth,
@@ -1727,10 +1742,10 @@ final class AgentWindowModel: ObservableObject {
         select(ids[min(max(i + delta, 0), ids.count - 1)])
     }
 
-    /// #1110: the rows ⌘1…⌘9 select, from `sections` (the list the sidebar draws): the live rows it shows, top to bottom
-    /// across its sections, the first nine. A folded section's rows are not shown, so not numbered; History never is.
+    /// #1110: the rows Command-1...9 select (#1470: then Option-Command-1...9), from `sections` (the list the sidebar draws): the live rows it
+    /// shows, top to bottom across its sections, the first 18. A folded section's rows are not shown, so not numbered; History never is.
     var numberedIDs: [AgentSidebar.RowID] {
-        Array(sections.filter { !isCollapsed($0.title) }.flatMap(\.rows).filter { $0.session != nil }.map(\.id).prefix(9))
+        Array(sections.filter { !isCollapsed($0.title) }.flatMap(\.rows).filter { $0.session != nil }.map(\.id).prefix(18))
     }
 
     /// The sidebar row's chip: its 1-based number, nil for an unnumbered row.

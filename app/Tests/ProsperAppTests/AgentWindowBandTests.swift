@@ -73,7 +73,7 @@ extension AgentWindowD1Tests {
                 print("#1253 band \(tag): band.width \(band.width) picker \(f("picker")) all \(f("all")) layout \(f("layout"))"
                       + " chip \(f("chip")) chipText \(chipText) want picker.maxX \(band.width - sz(16)) all.maxX+sz(8) \((base["all"]?.maxX ?? 0) + sz(8))")
                 XCTAssertEqual(band.height, AgentWindowBand.height, accuracy: 1 / px, "one row of 30·s (\(tag))")
-                XCTAssertEqual(band.width, size.width - sz(290) - 1, accuracy: 1 / px, "over the whole pane column (\(tag))")
+                XCTAssertEqual(band.width, size.width - AgentWindowModel.fullSidebarWidth - 1, accuracy: 1 / px, "over the whole pane column (\(tag))")
                 XCTAssertEqual(m.paneArea.height, size.height - AgentWindowBand.height, accuracy: 1 / px, "the area under it (\(tag))")
                 let all = try XCTUnwrap(base["all"], tag), picker = try XCTUnwrap(base["picker"], tag)
                 XCTAssertEqual(all.width, AgentWindowBand.allWidth, accuracy: 1 / px, "the All slot keeps its room (\(tag))")
@@ -107,7 +107,7 @@ extension AgentWindowD1Tests {
                 same(bandSnapshot(empty, size, backing: px), "no session")
             }
             // 7.2: the band is in no pane: a click there leaves the keys; a click under it is the pane's.
-            let size = CGSize(width: 1600, height: 900), x = sz(290) + 1 + 50
+            let size = CGSize(width: 1600, height: 900), x = AgentWindowModel.fullSidebarWidth + 1 + 50
             m.keyFocus = .sidebar
             XCTAssertFalse(m.mouseDown(at: CGPoint(x: x, y: AgentWindowBand.height / 2), in: size))
             XCTAssertEqual(m.keyFocus, .sidebar, "a band click changes no key focus (\(scale))")
@@ -212,8 +212,8 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(bandCount(tree, n), 1, "\"\(n)\" read once, in the band")
         }
         // The band's row in screen coordinates (bottom-left origin): the window's top 30·s, right of the sidebar.
-        let row = CGRect(x: screen.minX + sz(290) + 1, y: screen.maxY - AgentWindowBand.height,
-                         width: size.width - sz(290) - 1, height: AgentWindowBand.height)
+        let row = CGRect(x: screen.minX + AgentWindowModel.fullSidebarWidth + 1, y: screen.maxY - AgentWindowBand.height,
+                         width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: AgentWindowBand.height)
         let inBand = tree.filter { !$0.names.isEmpty && $0.frame.width > 0 && row.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
         let picker = Set(names + ["Focused", "Default", "Verbose"])
         for n in names { XCTAssertTrue(inBand.contains { $0.names.contains(n) }, "\"\(n)\" is in the band's row") }

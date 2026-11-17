@@ -341,7 +341,7 @@ extension AgentWindowD1Tests {
             let m = windowModel(store([session("api", .idle), session("web", .idle)]))
             defer { m.close() }
             m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
-            m.paneArea = CGRect(origin: .zero, size: CGSize(width: size.width - sz(290) - 1, height: size.height))
+            m.paneArea = CGRect(origin: .zero, size: CGSize(width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: size.height))
             let snap = paneSnapshot(m, size)
             XCTAssertFalse(snap.keys.contains { $0.hasPrefix("vline") || $0.hasPrefix("hline") }, "gate off: \(snap.keys.sorted())")
         }

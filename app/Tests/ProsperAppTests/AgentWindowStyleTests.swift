@@ -249,7 +249,7 @@ final class AgentWindowStyleTests: XCTestCase {
                         }
                         XCTAssertFalse(hw.isVisible)
                         let header = try XCTUnwrap(dragFrames(try XCTUnwrap(hw.contentView)).first, "the header's \(at)")
-                        XCTAssertEqual(row.maxX, sz(290), accuracy: pixel, "the row spans the sidebar \(at)")
+                        XCTAssertEqual(row.maxX, AgentWindowModel.fullSidebarWidth, accuracy: pixel, "the row spans the sidebar \(at)")
                         @MainActor func drags(_ p: CGPoint, _ what: String, in w: NSWindow? = nil) {
                             let v = hit(w ?? win, p)
                             XCTAssertTrue(v is AgentWindowDragView, "\(what) \(at): \(v.map { "\(type(of: $0))" } ?? "nil")")

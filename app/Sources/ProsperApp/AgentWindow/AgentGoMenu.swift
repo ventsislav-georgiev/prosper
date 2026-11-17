@@ -34,14 +34,12 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
             Entry("Next Session", "\u{F701}", c, .key(.session(1))),
         ]
         e += (1...9).map { Entry("Jump to Session \($0)", "\($0)", c, .key(.jump($0))) }
+        e += (1...9).map { Entry("Jump to Session \($0 + 9)", "\($0)", oc, .key(.jump($0 + 9))) }   // #1470
         e += [
             nil,
             Entry("Terminal or Transcript", "t", c, .key(.toggleMode)),
             Entry("Jump to Chapter\u{2026}", "l", c, .key(.chapters)),
             Entry("X-Ray\u{2026}", "x", sc, .key(.xray)),
-            Entry("Focused Transcript", "1", oc, .key(.verbosity(.focused))),
-            Entry("Default Transcript", "2", oc, .key(.verbosity(.default))),
-            Entry("Verbose Transcript", "3", oc, .key(.verbosity(.verbose))),
             nil,
             Entry("Find\u{2026}", "f", c, .key(.find)),
             Entry("Find Next", "g", c, .key(.findNext(true))),

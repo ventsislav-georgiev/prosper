@@ -589,7 +589,7 @@ final class AgentPaneLayoutTests: XCTestCase {
     }
 
     /// Modifiers match exactly: the table's key under any of the 15 other Command/Option/Control/Shift sets is not its
-    /// action (⇧⌘D is a split, but rows), and ⌥⌘1 stays the verbosity key, never layout 1.
+    /// action (Shift-Command-D is a split, but rows), and Option-Command-1 stays the window's (#1470: row 10), never layout 1.
     @MainActor
     func testEveryOtherModifierSetIsNotTheKeysAction() {
         let bits: [NSEvent.ModifierFlags] = [.command, .option, .control, .shift]
@@ -606,7 +606,8 @@ final class AgentPaneLayoutTests: XCTestCase {
         }
         let optionOne = ev(18, [.command, .option], "1", "1")
         XCTAssertTrue(act(optionOne) == nil, "⌥⌘1 is not ⌘1")
-        XCTAssertTrue(optionOne.flatMap { AgentsNSWindow.verbosity(for: $0) } != nil, "it stays #821's verbosity key")
+        XCTAssertTrue(optionOne.map { AgentsNSWindow.route($0, responder: .other, sidebarFocused: false, terminalMode: true) } == .jump(10),
+                      "#1470: it is row 10's jump")
         XCTAssertTrue(act(ev(18, [.control, .capsLock, .numericPad], "1", "1")) == .layout(1), "other flags are ignored")
     }
 

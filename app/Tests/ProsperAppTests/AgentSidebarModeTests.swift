@@ -90,7 +90,7 @@ final class AgentSidebarModeTests: XCTestCase {
                 let size = CGSize(width: 1000 * scale, height: 680 * scale)
                 for mode in AgentSidebarMode.allCases {
                     try built(mode) { win, m in
-                        let want: CGFloat = mode == .full ? sz(290) : mode == .mini ? sz(84) : 0
+                        let want: CGFloat = mode == .full ? AgentWindowModel.fullSidebarWidth : mode == .mini ? sz(84) : 0
                         XCTAssertEqual(m.sidebarColumnWidth, want, accuracy: 0.01, "\(mode) at \(scale)")
                         XCTAssertEqual(m.paneAreaFrame(in: size)?.minX ?? -1, mode == .slide ? 0 : want + 1, accuracy: 0.01,
                                        "the panes start after the column, \(mode) at \(scale)")
@@ -100,7 +100,7 @@ final class AgentSidebarModeTests: XCTestCase {
                         XCTAssertGreaterThanOrEqual(drags.count, 1, "\(mode) at \(scale)")
                         if mode == .slide {
                             XCTAssertEqual(drags.first?.minX ?? -1, 0, accuracy: pixel, "Slide: the panes reach the left edge at \(scale)")
-                            XCTAssertFalse(drags.contains { abs($0.width - sz(290)) < 1 }, "no sidebar drawn at \(scale)")
+                            XCTAssertFalse(drags.contains { abs($0.width - AgentWindowModel.fullSidebarWidth) < 1 }, "no sidebar drawn at \(scale)")
                         } else {
                             XCTAssertEqual(drags.first?.minX ?? -1, 0, accuracy: pixel, "\(mode) at \(scale)")
                             XCTAssertEqual(drags.first?.width ?? 0, want, accuracy: 1, "the title row spans the column, \(mode) at \(scale)")
@@ -137,6 +137,12 @@ final class AgentSidebarModeTests: XCTestCase {
                 let off = rowParts(AgentSidebarRowView(row: idle, selected: false, mini: true), width: width)
                 XCTAssertTrue(off["miniChip"] == nil && off["miniNeeds"] == nil, "no number, no need at \(scale): \(off.keys.sorted())")
                 XCTAssertNotNil(off["miniSlot"], "the mark's slot is kept at \(scale)")
+                // #1470: the rail fits the nine Command chips only; rows 10-18 (Option-Command) draw none there.
+                for (n, chip) in [(9, true), (10, false), (18, false)] {
+                    let p = rowParts(AgentSidebarRowView(row: blocked, selected: false, number: n, mini: true), width: width)
+                    XCTAssertEqual(p["miniChip"] != nil, chip, "row \(n)'s chip at \(scale): \(p.keys.sorted())")
+                    XCTAssertLessThanOrEqual(p["miniNeeds"]?.maxX ?? .infinity, width + pixel, "row \(n) inside the rail at \(scale)")
+                }
             }
         }
     }
@@ -210,12 +216,12 @@ final class AgentSidebarModeTests: XCTestCase {
                     let size = content.size
                     XCTAssertEqual(m.paneAreaFrame(in: size)?.minX ?? -1, 0, "the overlay does not move the panes")
                     XCTAssertEqual(m.paneAreaFrame(in: size)?.width ?? 0, size.width, accuracy: 0.01, "nor shrink them")
-                    XCTAssertEqual(m.sidebarFrame(in: size)?.width ?? 0, sz(290), accuracy: 0.01, "the full sidebar over them")
+                    XCTAssertEqual(m.sidebarFrame(in: size)?.width ?? 0, AgentWindowModel.fullSidebarWidth, accuracy: 0.01, "the full sidebar over them")
                     let drags = dragFrames(win)
-                    XCTAssertTrue(drags.contains { abs($0.minX) < 0.5 && abs($0.width - sz(290)) < 1 }, "the overlay's title row at \(scale): \(drags)")
-                    XCTAssertTrue(drags.contains { abs($0.minX) < 0.5 && $0.width > sz(290) + 2 }, "the header still from x 0 at \(scale): \(drags)")
+                    XCTAssertTrue(drags.contains { abs($0.minX) < 0.5 && abs($0.width - AgentWindowModel.fullSidebarWidth) < 1 }, "the overlay's title row at \(scale): \(drags)")
+                    XCTAssertTrue(drags.contains { abs($0.minX) < 0.5 && $0.width > AgentWindowModel.fullSidebarWidth + 2 }, "the header still from x 0 at \(scale): \(drags)")
                     let over = try XCTUnwrap(trackers(win, edge: false).first, "the overlay's tracker at \(scale)")
-                    XCTAssertEqual(over.convert(over.bounds, to: nil).width, sz(290) + 1, accuracy: 1, "the sidebar and its line")
+                    XCTAssertEqual(over.convert(over.bounds, to: nil).width, AgentWindowModel.fullSidebarWidth + 1, accuracy: 1, "the sidebar and its line")
                     over.mouseEntered(with: try pointer(.mouseEntered))
                     XCTAssertTrue(m.slideRevealed, "the overlay's enter does nothing")
                     over.mouseExited(with: try pointer(.mouseExited))
@@ -478,7 +484,7 @@ final class AgentSidebarModeTests: XCTestCase {
             XCTAssertEqual(menu.items.filter { !$0.isSeparatorItem }.suffix(3).map(\.state), [.off, .off, .on])
             win.perform(mode: .full)
             XCTAssertTrue(m.sidebarMode == .full && m.sidebarShown, "back to Full")
-            XCTAssertEqual(m.sidebarColumnWidth, sz(290))
+            XCTAssertEqual(m.sidebarColumnWidth, AgentWindowModel.fullSidebarWidth)
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }

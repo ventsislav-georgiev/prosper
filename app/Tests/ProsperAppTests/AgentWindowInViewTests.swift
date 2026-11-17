@@ -176,7 +176,7 @@ extension AgentWindowD1Tests {
         let long = AgentSidebar.row(session("api-" + String(repeating: "w", count: 60), .idle), details: .all, now: Self.now)
         for scale in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
-            let width = sz(274)
+            let width = (AgentWindowModel.fullSidebarWidth - sz(16))
             var on: [String: CGRect] = [:], onGlyph: [String: CGRect] = [:], off: [String: CGRect] = [:]
             var offGlyph: [String: CGRect] = [:]
             var heights: [CGFloat] = []

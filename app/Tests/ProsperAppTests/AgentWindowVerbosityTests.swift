@@ -300,8 +300,9 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(SyncedKeys.isSynced(pref), "per Mac, not synced")
     }
 
+    /// #1470: Option-Command-1/2/3 are rows 10-12's keys now; they never change the level (handled: no row there).
     @MainActor
-    func testVerbosityKeysOptionCommandOneTwoThree() {
+    func testOptionCommandOneTwoThreeNeverChangeTheLevel() {
         let pref = "agentWindowVerbosity"
         let saved = Preferences.defaults.object(forKey: pref)
         defer { Preferences.defaults.set(saved, forKey: pref) }
@@ -315,15 +316,14 @@ extension AgentWindowD1Tests {
                              windowNumber: win.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
                              isARepeat: false, keyCode: code)!
         }
-        for (code, v) in [(UInt16(18), AgentVerbosity.focused), (20, .verbose), (19, .default)] {
-            XCTAssertTrue(win.performKeyEquivalent(with: key(code, [.command, .option])))
-            XCTAssertEqual(m.verbosity, v)
+        for v in AgentVerbosity.allCases {
+            m.verbosity = v
+            for code: UInt16 in [18, 19, 20] {
+                XCTAssertTrue(win.performKeyEquivalent(with: key(code, [.command, .option])), "\(code) is the window's")
+                XCTAssertEqual(m.verbosity, v, "\(code) leaves \(v)")
+            }
         }
-        for flags: NSEvent.ModifierFlags in [[.command], [.option], [.command, .option, .shift], [.command, .option, .control]] {
-            XCTAssertNil(AgentsNSWindow.verbosity(for: key(18, flags)), "\(flags)")
-        }
-        XCTAssertNil(AgentsNSWindow.verbosity(for: key(21, [.command, .option])), "⌥⌘4 is not a level")
-        XCTAssertEqual(AgentVerbosity.allCases.map(\.shortcut), ["⌥⌘1", "⌥⌘2", "⌥⌘3"])
+        XCTAssertFalse(win.isVisible, "never shown")
     }
 
     @MainActor
@@ -377,7 +377,7 @@ extension AgentWindowD1Tests {
             let toggleMenu = width(AgentPaneModeToggle(mode: .terminal, style: .menu, set: { _ in }))
             let chip = width(AgentStateChip(state: .working)), todo = width(AgentTodosChip(todos: todos, open: .constant(false)))
             for w: CGFloat in [640, 800, 1000] {
-                let room = w * scale - sz(290) - 1
+                let room = w * scale - AgentWindowModel.fullSidebarWidth - 1
                 // Padding, a readable title (60 pt), the state chip, the slot's Spacer, the picker, the mode switch and
                 // the "⋯", each after a sz(8) spacing: the menu variant fits at every width, the icon variant from
                 // 800 × scale up.

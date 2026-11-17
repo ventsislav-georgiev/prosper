@@ -168,7 +168,7 @@ extension AgentWindowD1Tests {
 
     @MainActor
     private func sidebarTree(_ m: AgentWindowModel, until done: @escaping ([AXTreeNode]) -> Bool = { _ in true }) -> [AXTreeNode] {
-        AXTreeSupport.tree(AgentSidebarView(model: m), CGSize(width: sz(274), height: 900)) { t in
+        AXTreeSupport.tree(AgentSidebarView(model: m), CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: 900)) { t in
             t.contains { $0.label.hasPrefix("docs,") && !$0.label.contains(", Control ") } && done(t)   // 4b: a session row
         }
     }

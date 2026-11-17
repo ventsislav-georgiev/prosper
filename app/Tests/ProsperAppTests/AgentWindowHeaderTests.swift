@@ -278,7 +278,7 @@ extension AgentWindowD1Tests {
                     let title = try XCTUnwrap(wm.selectedRow?.title)
                     let tag = "\(scale) \(mode)"
                     let size = CGSize(width: 1000 * scale, height: 680 * scale)
-                    let edge = sz(290)
+                    let edge = AgentWindowModel.fullSidebarWidth
                     let (win, tree) = headerAXTree(AgentWindowRootView(model: wm, scrolls: false), size) { e in
                         e.named(title) && e.frame.minX > edge
                     }
@@ -384,7 +384,7 @@ extension AgentWindowD1Tests {
             ThemeRuntime.scale = scale
             var heights: [AgentPaneMode: [CGFloat]] = [:]
             for w: CGFloat in [640, 1000] {
-                let room = w * scale - sz(290) - 1
+                let room = w * scale - AgentWindowModel.fullSidebarWidth - 1
                 for mode in [AgentPaneMode.terminal, .transcript] {
                     let h = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, level: .constant(.default),
                                                todos: todos, store: st, mode: mode, setMode: { _ in })
@@ -413,7 +413,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(hs.first ?? -1, hs.last ?? -2, accuracy: pixel, "one height per mode, whatever the width (\(mode) \(scale))")
             }
             // Rename: the field lies over the one-line slot at the narrowest pane, in its line, tall enough for its text.
-            let room = 640 * scale - sz(290) - 1
+            let room = 640 * scale - AgentWindowModel.fullSidebarWidth - 1
             let edit = AgentRenameEdit(key: a.key, text: Self.headerTitle)
             let h = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st, rename: edit,
                                        mode: .terminal, setMode: { _ in })

@@ -186,7 +186,7 @@ extension AgentWindowD1Tests {
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
                 let title = try XCTUnwrap(wm.selectedRow?.title)
-                let size = CGSize(width: 1000 * scale, height: 680 * scale), edge = sz(290)
+                let size = CGSize(width: 1000 * scale, height: 680 * scale), edge = AgentWindowModel.fullSidebarWidth
                 let host = NSHostingView(rootView: AgentWindowRootView(model: wm, scrolls: false)
                     .frame(width: size.width, height: size.height, alignment: .top))
                 host.frame = CGRect(origin: .zero, size: size)
