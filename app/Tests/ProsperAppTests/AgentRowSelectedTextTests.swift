@@ -84,7 +84,7 @@ final class AgentRowSelectedTextTests: XCTestCase {
         var pairs = 0
         try onEveryTheme { d, p in
             let sel = over(rgba(p.sidebar), p.blue, 0.14)
-            let chipFill = over(sel, p.blue, 0.12)
+            let chipFill = over(sel, agentStateColor(.blocked), 0.14)   // #1451: the Needs input badge's wash
             let texts: [(String, Color, RGBA)] = [
                 ("title (no state)", AgentSidebarRowView.ink(.quiet, selected: true), sel),
                 ("title (state)", Neon.textPrimary, sel),
@@ -92,7 +92,7 @@ final class AgentRowSelectedTextTests: XCTestCase {
                 ("blocked state text", AgentSidebarRowView.ink(.blocked, selected: true), sel),
                 ("count group", AgentSidebarRowView.ink(.quiet, selected: true), sel),
                 ("open count", AgentSidebarRowView.ink(.blue, selected: true), sel),
-                ("PR chip", AgentSidebarRowView.ink(.blue, selected: true), chipFill),
+                ("PR chip", AgentSidebarRowView.prChipInk(selected: true), chipFill),
                 ("age", AgentSidebarRowView.ink(.quiet, selected: true), sel),
                 ("host", AgentSidebarRowView.ink(.quiet, selected: true), sel),
                 ("digit chip", Neon.bgTop, rgba(p.blue)),

@@ -755,7 +755,7 @@ extension AgentWindowD1Tests {
 
     /// #881 (QA #735 INFO-2, mutant t2): a theme select reaches the window's CONTENT, not only the
     /// lifted pieces that observe the store themselves. In the live window (Themed root, never shown):
-    /// a rail row's PR chip (Neon.blue, AgentSidebarRowView) takes the new accent, and the terminal
+    /// a rail row's PR chip (#1451: the Needs input badge's amber, whatever the accent) stays amber and takes no accent, and the terminal
     /// pane's background (Neon.bgBottom) goes dark to light and back to dark. Areas in pt², backing 1 and 2.
     @MainActor
     func testChrome860ThemeChangeReachesTheContent() throws {
@@ -793,9 +793,10 @@ extension AgentWindowD1Tests {
                 let tag = "\(step) x\(Int(backing))"
                 try saveTo860(rep, "881-content-\(step)-x\(Int(backing))")
                 let old = pt2(band(rep, dark ? pink : cyan, in: rows, size: size), rep, size)
-                let new = pt2(band(rep, dark ? cyan : pink, in: rows, size: size), rep, size)
-                XCTAssertGreaterThan(new, 3, "the PR chip wears the theme's accent (\(tag))")
-                XCTAssertLessThan(old, 1.25, "no pixel of the other accent in the rows (\(tag), \(new) pt² of the new)")
+                let amber: (NSColor) -> Bool = { $0.redComponent > 0.9 && $0.greenComponent > 0.55 && $0.greenComponent < 0.85 && $0.blueComponent < 0.35 }
+                let chip = pt2(band(rep, amber, in: rows, size: size), rep, size)
+                XCTAssertGreaterThan(chip, 3, "the PR chip is the Needs input badge's amber on every theme (\(tag))")
+                XCTAssertLessThan(old, 1.25, "no pixel of the other accent in the rows (\(tag), \(chip) amber pt² of the new)")
                 let bg = try XCTUnwrap(pixel(rep, terminal, in: size))
                 if dark {
                     XCTAssertLessThan(bg.redComponent, 0.3, "the terminal pane is the dark theme's (\(tag), \(rgba(bg)))")

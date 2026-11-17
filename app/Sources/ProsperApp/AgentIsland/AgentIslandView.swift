@@ -1276,11 +1276,11 @@ struct AgentIslandRow: View {
             HStack(spacing: AgentIsland.chipSpacing) {
                 ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
                     if chip.url != nil {
-                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, AgentSidebarRowView.ink(.blue, selected: selected)) }
+                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, AgentSidebarRowView.prChipInk(selected: selected), AgentSidebarRowView.prChipFill) }
                             .buttonStyle(.plain)
                             .help(Text(verbatim: chip.help))
                     } else {
-                        chipText(chip.label, AgentSidebarRowView.ink(.quiet, selected: selected))
+                        chipText(chip.label, AgentSidebarRowView.prChipInk(selected: selected), AgentSidebarRowView.prChipFill)
                             .help(Text(verbatim: chip.help))
                     }
                 }
@@ -1291,13 +1291,13 @@ struct AgentIslandRow: View {
         }
     }
 
-    private func chipText(_ s: String, _ color: Color) -> some View {
+    private func chipText(_ s: String, _ color: Color, _ fill: Color? = nil) -> some View {
         Text(verbatim: s)
             .font(Font(AgentIslandGeometry.chipFont))
             .foregroundStyle(color)
             .lineLimit(1)
             .padding(.horizontal, AgentIsland.chipInset).padding(.vertical, 1)
-            .background(Capsule().fill(Neon.blue.opacity(0.12)))   // #1371: the sidebar chips' wash
+            .background(Capsule().fill(fill ?? Neon.blue.opacity(0.12)))   // #1451: a PR chip's fill is the Needs input badge's; "+N" keeps #1371's wash
             .contentShape(Capsule())
     }
 }

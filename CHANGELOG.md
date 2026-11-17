@@ -1695,6 +1695,9 @@ tag from the now-released section and put it on the new top draft.
 - Settings > Appearance > Theme rows now line up: the selected row's highlight leaves room around
   its colour swatch, every row's tint dots end at the same place on the right, and the checkmark has
   its own spot on every row, so nothing shifts when you pick a theme. (#1462)
+- Agent Sessions and Agent Island: PR chips are now amber on a dark amber wash, like the "Needs
+  input" badge, so they stand out; on a selected or hovered row their text stays the theme's main
+  text colour. (#1451)
 
 ## v2.174.0
 

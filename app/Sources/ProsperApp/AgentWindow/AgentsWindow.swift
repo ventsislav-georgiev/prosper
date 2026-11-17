@@ -1613,6 +1613,10 @@ extension AgentSidebarRowView {
         case .blocked: return agentStateColor(.blocked)
         }
     }
+    /// #1451: a PR chip wears the "Needs input" badge's amber (AgentStateChip: the state colour as text, at 0.14 as the fill; the
+    /// badge has no stroke), in Agent Sessions rows and the island's cards. Selected (or hovered), the text is `ink`'s textPrimary.
+    static func prChipInk(selected: Bool) -> Color { ink(.blocked, selected: selected) }
+    static var prChipFill: Color { agentStateColor(.blocked).opacity(0.14) }
     /// #1360: the subagents count's outline: textPrimary, selected or not (3:1 over the row on all 22 themes, and stronger
     /// than the quiet ink of the counts beside it on an unselected row; AgentCountOutlineTests).
     static func outlineInk(selected: Bool) -> Color { Neon.textPrimary }
@@ -1727,9 +1731,9 @@ extension AgentSidebarRowView {
                              outline: Self.outlineInk(selected: selected))
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
-                let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Self.ink(.blue, selected: selected))
+                let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Self.prChipInk(selected: selected))
                     .padding(.horizontal, sz(4)).padding(.vertical, sz(1))
-                    .background(RoundedRectangle(cornerRadius: sz(3)).fill(Neon.blue.opacity(0.12)))
+                    .background(RoundedRectangle(cornerRadius: sz(3)).fill(Self.prChipFill))
                     .fixedSize()
                 // #1289 (G5): a chip whose URL passed the allowlist is a button (the island's help); else text, as before.
                 if let link = entry.link {
