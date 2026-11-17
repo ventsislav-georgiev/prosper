@@ -33,49 +33,70 @@ struct XrayChapterCard: View {
         c.tools.map { OutsideText.shown($0, max: 160) }.flatMap { $0.isEmpty ? nil : $0 }
     }
 
+    /// #1487: a text as drawn: the head, a quiet note where dch cut (or after the text: the old rule, or no marker found),
+    /// the tail.
+    struct Parts: Equatable {
+        var head: String
+        var note: String?
+        var tail: String?
+    }
+
     /// #1472 b: the whole prompt (the read's user text, else the title), then "cut at 6000 characters" when dch cut it.
-    static func prompt(_ c: TranscriptOutline.Chapter, _ full: XrayChapterRead.Full?) -> String {
-        full?.prompt ?? prompt(c)
+    /// #1487: dch 1.93.0 cuts by its `cut` count (head, note, tail).
+    static func promptParts(_ c: TranscriptOutline.Chapter, _ full: XrayChapterRead.Full?) -> Parts {
+        guard let f = full, let p = f.prompt else { return Parts(head: prompt(c)) }
+        return Parts(head: p, note: f.promptCutChars.map(XrayChapters.cutLine) ?? (f.promptCut ? XrayChapterRead.cutNote : nil), tail: f.promptTail)
     }
 
     /// #1472 b: the whole final response (the read's last assistant text, else the capped one); nil: none yet.
-    static func response(_ c: TranscriptOutline.Chapter, _ full: XrayChapterRead.Full?) -> String? {
-        full?.response ?? response(c)
+    /// #1487: the chapter's own response with dch's `response_cut_chars` is split at its "\u{2026}" line.
+    static func responseParts(_ c: TranscriptOutline.Chapter, _ full: XrayChapterRead.Full?) -> Parts? {
+        if let f = full, let r = f.response {
+            return Parts(head: r, note: f.responseCutChars.map(XrayChapters.cutLine) ?? (f.responseCut ? XrayChapterRead.cutNote : nil), tail: f.responseTail)
+        }
+        guard let raw = c.response else { return nil }
+        func clean(_ s: String) -> String { OutsideText.capMarks(XrayMemory.cleanBody(s).text) }
+        guard let n = c.responseCutChars else { return Parts(head: clean(raw)) }
+        guard let s = XrayChapters.split(raw, line: "\u{2026}") else { return Parts(head: clean(raw), note: XrayChapters.cutLine(n)) }
+        return Parts(head: clean(s.head), note: XrayChapters.cutLine(n), tail: clean(s.tail))
     }
+
+    static func prompt(_ c: TranscriptOutline.Chapter, _ full: XrayChapterRead.Full?) -> String { promptParts(c, full).head }
+
+    /// The head of the final response (see responseParts); nil: none yet.
+    static func response(_ c: TranscriptOutline.Chapter, _ full: XrayChapterRead.Full?) -> String? { responseParts(c, full)?.head }
 
     /// Everything the card says, in order (VoiceOver and the rows); #1472 b: with the read's text and note when given.
     static func text(_ c: TranscriptOutline.Chapter, full: XrayChapterRead.Full? = nil, note: String? = nil) -> String {
-        [heading(c), prompt(c, full), full?.promptCut == true ? XrayChapterRead.cutNote : nil, tools(c).map { "Tools: " + $0 },
-         "Response", response(c, full) ?? noResponse, full?.responseCut == true ? XrayChapterRead.cutNote : nil, note]
+        let p = promptParts(c, full), r = responseParts(c, full)
+        return [heading(c), p.head, p.note, p.tail, tools(c).map { "Tools: " + $0 },
+                "Response", r?.head ?? noResponse, r?.note, r?.tail, note]
             .compactMap { $0 }.joined(separator: "\n")
     }
 
     var body: some View {
         let full = read.full
-        let answer = Self.response(chapter, full)
+        let pp = Self.promptParts(chapter, full), rp = Self.responseParts(chapter, full)
         VStack(alignment: .leading, spacing: sz(8)) {
             Text(verbatim: Self.heading(chapter)).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: sz(8)) {
-                    Text(verbatim: Self.prompt(chapter, full)).font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                    Text(verbatim: pp.head).font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                         .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                        .accessibilityLabel("Prompt: \(Self.prompt(chapter, full))")
-                    if full?.promptCut == true { faint(XrayChapterRead.cutNote) }
+                        .accessibilityLabel("Prompt: \(pp.head)")
+                    if let n = pp.note { faint(n) }
+                    if let t = pp.tail {
+                        Text(verbatim: t).font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    }
                     if let t = Self.tools(chapter) {
                         Text(verbatim: "Tools: " + t).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
                     }
                     Text(verbatim: "Response").font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
-                    Group {
-                        if let answer, let a = XrayRefSpans.attributed(answer, markdown: false, refs: refs, color: Neon.blue) {
-                            Text(a)
-                        } else {
-                            Text(verbatim: answer ?? Self.noResponse)
-                        }
-                    }
-                    .font(Neon.font(11)).foregroundStyle(answer == nil ? Neon.textSecondary : Neon.textPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                    .accessibilityLabel("Response: \(answer ?? Self.noResponse)")
-                    if full?.responseCut == true { faint(XrayChapterRead.cutNote) }
+                    answerText(rp?.head, empty: Self.noResponse)
+                        .accessibilityLabel("Response: \(rp?.head ?? Self.noResponse)")
+                    if let n = rp?.note { faint(n) }
+                    if let t = rp?.tail { answerText(t, empty: "") }
                     if let n = read.note { faint(n) }
                 }
             }
@@ -85,6 +106,18 @@ struct XrayChapterCard: View {
             let outcome = MainActor.assumeIsolated { link(url) }   // SwiftUI calls the action on main (as XrayRefScope)
             return switch outcome { case .handled: .handled; case .system: .systemAction; case .discarded: .discarded }
         })
+    }
+
+    private func answerText(_ answer: String?, empty: String) -> some View {
+        Group {
+            if let answer, let a = XrayRefSpans.attributed(answer, markdown: false, refs: refs, color: Neon.blue) {
+                Text(a)
+            } else {
+                Text(verbatim: answer ?? empty)
+            }
+        }
+        .font(Neon.font(11)).foregroundStyle(answer == nil ? Neon.textSecondary : Neon.textPrimary)
+        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
     }
 
     private func faint(_ s: String) -> some View {
@@ -100,8 +133,13 @@ final class XrayChapterRead: ObservableObject {
     struct Full: Equatable {
         var prompt: String?
         var promptCut = false
+        /// #1487 (dch 1.93.0 `cut`): the scalars left out between `prompt` (the head) and `promptTail`; nil: no count.
+        var promptTail: String?
+        var promptCutChars: Int?
         var response: String?
         var responseCut = false
+        var responseTail: String?
+        var responseCutChars: Int?
     }
 
     @Published var full: Full?
@@ -112,6 +150,8 @@ final class XrayChapterRead: ObservableObject {
     /// dch cuts each entry at 6000 Unicode scalars (dch.1 ~2020) and the object at 1 MiB (plus room here).
     static let entryCap = 6000
     static let maxBytes = 1024 * 1024 + 64 * 1024
+    /// dch #451 (1.93.0): an entry is cut as head + tail and carries `cut`; older dch cut a prefix at entryCap.
+    static let cutFieldsDch = [1, 93, 0]
     static let cutNote = "cut at 6000 characters"
     static let gone = "This chapter is gone or has no X-ray history"
     static let badAnchor = "dch did not take this chapter's anchor"
@@ -127,7 +167,7 @@ final class XrayChapterRead: ObservableObject {
     func take(_ r: (status: Int32, out: Data)) {
         switch r.status {
         case 0:
-            full = Self.parse(r.out)
+            full = Self.parse(r.out, cutFields: XrayPanels.probed.map { DchCommand.isAtLeast($0.version, Self.cutFieldsDch) } ?? false)
             note = full == nil ? Self.nothing : nil
         case 1: note = Self.gone
         case 2: note = Self.badAnchor
@@ -138,20 +178,31 @@ final class XrayChapterRead: ObservableObject {
     /// Outside data: schema 1 with an entries array whose user or last assistant entry has a string text; anything
     /// else is nil (nothing to read). Each text is cut at entryCap scalars before it is cleaned (lines kept, every
     /// unseen scalar dropped, marks capped, as OutsideText.shown); a text at the cap counts as dch's cut.
-    static func parse(_ data: Data) -> Full? {
+    /// #1487: `cutFields` (dch >= cutFieldsDch): an entry is cut when it has a `cut` count (1...10_000_000), by that count
+    /// and its marker line, never by its length; else the length rule above.
+    static func parse(_ data: Data, cutFields: Bool = false) -> Full? {
         guard data.count <= maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               o["schema"] as? Int == 1, let list = o["entries"] as? [Any] else { return nil }
         let entries = list.compactMap { $0 as? [String: Any] }
-        func text(_ role: String, last: Bool) -> (String, Bool)? {
+        func clean(_ s: String, _ cap: Int) -> String {
+            String(s.unicodeScalars.prefix(cap)).components(separatedBy: "\n").map { OutsideText.shown($0, max: Int.max) }.joined(separator: "\n")
+        }
+        func text(_ role: String, last: Bool) -> (head: String, old: Bool, tail: String?, chars: Int?)? {
             let e = last ? entries.last(where: { $0["role"] as? String == role }) : entries.first(where: { $0["role"] as? String == role })
             guard let raw = e?["text"] as? String else { return nil }
-            let scalars = raw.unicodeScalars
-            let clean = String(scalars.prefix(entryCap)).components(separatedBy: "\n")
-                .map { OutsideText.shown($0, max: Int.max) }.joined(separator: "\n")
-            return clean.isEmpty ? nil : (clean, scalars.count >= entryCap)
+            if cutFields {
+                let n = XrayChapters.count(e?["cut"])
+                let s = n.flatMap { XrayChapters.split(raw, line: XrayChapters.cutLine($0)) }
+                let head = clean(s?.head ?? raw, n == nil ? entryCap : s == nil ? 2 * entryCap : entryCap)
+                let tail = s.map { clean($0.tail, entryCap) }
+                return head.isEmpty ? nil : (head, false, tail.flatMap { $0.isEmpty ? nil : $0 }, n)
+            }
+            let c = clean(raw, entryCap)
+            return c.isEmpty ? nil : (c, raw.unicodeScalars.count >= entryCap, nil, nil)
         }
         let user = text("user", last: false), answer = text("assistant", last: true)
         guard user != nil || answer != nil else { return nil }
-        return Full(prompt: user?.0, promptCut: user?.1 ?? false, response: answer?.0, responseCut: answer?.1 ?? false)
+        return Full(prompt: user?.head, promptCut: user?.old ?? false, promptTail: user?.tail, promptCutChars: user?.chars,
+                    response: answer?.head, responseCut: answer?.old ?? false, responseTail: answer?.tail, responseCutChars: answer?.chars)
     }
 }

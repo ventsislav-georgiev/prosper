@@ -1748,6 +1748,8 @@ tag from the now-released section and put it on the new top draft.
   side, each in its own live terminal. (#1477)
 - Settings > Account pool shows usage charts: utilisation per account, tokens by kind, cache hit
   rate, top sessions and time to finish, over the last 24 hours, 7 days or 14 days. (#1484)
+- X-ray chapter cards show where dch cut the middle of a long prompt or answer, with dch 1.93.0 or
+  newer. (#1487)
 
 ## v2.174.0
 

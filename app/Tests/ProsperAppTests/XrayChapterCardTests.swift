@@ -359,4 +359,132 @@ final class XrayChapterCardTests: XCTestCase {
         XCTAssertTrue(XrayChapterCard.text(c, full: full).contains("Answer xyz"))
         XCTAssertTrue(XrayChapterCard.text(c, full: full).contains("Prompt xyz"))
     }
+
+    // MARK: #1487 dch #451 (1.93.0): head + tail, keyed on `cut` / `response_cut_chars`
+
+    static let ellipsis = "\u{2026}"
+    static func marker(_ n: Int) -> String { "\n\(ellipsis) \(n) characters cut \(ellipsis)\n" }
+    static func cutLine(_ n: Int) -> String { "\(ellipsis) \(n) characters cut \(ellipsis)" }
+
+    /// A --chapter object whose user entry is `user` with `cut` (any JSON value; nil: no key), a final answer likewise.
+    static func cutObject(user: String, cut: Any? = nil, answer: String = "All green", answerCut: Any? = nil) -> Data {
+        var u: [String: Any] = ["role": "user", "text": user], a: [String: Any] = ["role": "assistant", "text": answer]
+        if let cut { u["cut"] = cut }
+        if let answerCut { a["cut"] = answerCut }
+        let o: [String: Any] = ["schema": 1, "entries": [u, a] as [[String: Any]]]
+        return (try? JSONSerialization.data(withJSONObject: o)) ?? Data()
+    }
+
+    /// Red at base: no `cut` read; the 6000+ scalars say "cut at 6000 characters" and the marker line shows as text.
+    /// Red with marker-drawn-literally.
+    func testACutEntryDrawsHeadNoteTailAndNoLiteralMarker() throws {
+        let head = String(repeating: "h", count: 3000), tail = String(repeating: "t", count: 3000)
+        for who in ["user", "assistant"] {
+            let text = head + Self.marker(1234) + tail
+            let data = who == "user" ? Self.cutObject(user: text, cut: 1234) : Self.cutObject(user: "q", answer: text, answerCut: 1234)
+            let full = try XCTUnwrap(XrayChapterRead.parse(data, cutFields: true))
+            let lines = XrayChapterCard.text(Self.rerun, full: full).components(separatedBy: "\n")
+            let h = lines.firstIndex(of: head), n = lines.firstIndex(of: Self.cutLine(1234)), t = lines.firstIndex(of: tail)
+            XCTAssertTrue(h != nil && n != nil && t != nil, who)
+            XCTAssertTrue((h ?? 9) + 1 == (n ?? 0) && (n ?? 0) + 1 == (t ?? 0), "head, note, tail in a row: " + who)
+            XCTAssertFalse(lines.contains(XrayChapterRead.cutNote), "no 6000 note")
+            XCTAssertEqual(lines.filter { $0.contains("characters cut") }.count, 1, "the marker line is the note, not drawn twice")
+        }
+    }
+
+    /// Red with length-rule-on-new-dch: 7000 scalars and no `cut` on 1.93.0: no note, whatever the length.
+    func testAnUncutLongEntryOnNewDchHasNoNote() throws {
+        let long = String(repeating: "a", count: 7000)
+        let full = try XCTUnwrap(XrayChapterRead.parse(Self.cutObject(user: long), cutFields: true))
+        XCTAssertFalse(full.promptCut)
+        XCTAssertTrue(full.promptCutChars == nil && full.promptTail == nil)
+        let text = XrayChapterCard.text(Self.rerun, full: full)
+        XCTAssertFalse(text.contains("characters cut") || text.contains(XrayChapterRead.cutNote), "no note")
+    }
+
+    /// The same on 1.92.0 keeps today's note.
+    func testTheSameOnOldDchKeepsTheLengthRule() throws {
+        let long = String(repeating: "a", count: 7000)
+        let full = try XCTUnwrap(XrayChapterRead.parse(Self.cutObject(user: long), cutFields: false))
+        XCTAssertTrue(full.promptCut)
+        XCTAssertTrue(XrayChapterCard.text(Self.rerun, full: full).contains(XrayChapterRead.cutNote))
+        let withCut = try XCTUnwrap(XrayChapterRead.parse(Self.cutObject(user: "x", cut: 5), cutFields: false))
+        XCTAssertTrue(withCut.promptCutChars == nil, "the old host's rule ignores a `cut` key")
+    }
+
+    /// `cut` present, no marker line in the text: the text as is, the note at its end.
+    func testCutWithoutAMarkerShowsTheTextAndTheNoteAtItsEnd() throws {
+        let full = try XCTUnwrap(XrayChapterRead.parse(Self.cutObject(user: "a plain text", cut: 77), cutFields: true))
+        XCTAssertEqual(full.prompt, "a plain text")
+        XCTAssertTrue(full.promptTail == nil)
+        XCTAssertEqual(full.promptCutChars, 77)
+        let text = XrayChapterCard.text(Self.rerun, full: full)
+        XCTAssertTrue(text.contains("a plain text\n" + Self.cutLine(77) + "\n"), text)
+        // a marker for another count is not this entry's marker
+        let other = try XCTUnwrap(XrayChapterRead.parse(Self.cutObject(user: "a" + Self.marker(5) + "b", cut: 77), cutFields: true))
+        XCTAssertTrue(other.promptTail == nil)
+    }
+
+    static let chaptersJSON = #"{"schema":1,"chapters":[{"anchor":"f3a41c:200","i":3,"title":"Please rerun","kind":"prompt","response":"Head 999 part\n\#(ellipsis)\ntail part","response_cut":true__EXTRA__}]}"#
+
+    func chapter(_ extra: String) throws -> TranscriptOutline.Chapter {
+        let json = Self.chaptersJSON.replacingOccurrences(of: "__EXTRA__", with: extra)
+        return try XCTUnwrap(XrayChapters.parse(Data(json.utf8))?.first)
+    }
+
+    /// Red at base: nothing reads response_cut_chars; the "..." line is plain text. Red with count-from-text.
+    func testTheResponseCutLineShowsTheCountFromTheField() throws {
+        let c = try chapter(#","response_cut_chars":4096"#)
+        XCTAssertEqual(c.responseCutChars, 4096)
+        let lines = XrayChapterCard.text(c).components(separatedBy: "\n")
+        let i = lines.firstIndex(of: "Head 999 part")
+        XCTAssertTrue(i != nil && lines.count > (i ?? 0) + 2)
+        XCTAssertEqual(lines.dropFirst((i ?? 0) + 1).prefix(2).map { $0 }, [Self.cutLine(4096), "tail part"])
+        XCTAssertFalse(lines.contains(Self.ellipsis), "the bare joiner line is not drawn")
+        // a count in the text is never read
+        var t = c
+        t.responseCutChars = nil
+        t.response = "Head 999 characters cut\n\(Self.ellipsis)\ntail"
+        XCTAssertFalse(XrayChapterCard.text(t).contains("999 characters cut \(Self.ellipsis)"))
+    }
+
+    /// An older host: `response_cut` true without the count: today's text.
+    func testResponseCutWithoutTheCountIsTodaysText() throws {
+        let c = try chapter("")
+        XCTAssertTrue(c.responseCutChars == nil)
+        XCTAssertEqual(XrayChapterCard.response(c), "Head 999 part\n\(Self.ellipsis)\ntail part")
+        XCTAssertFalse(XrayChapterCard.text(c).contains("characters cut"))
+    }
+
+    /// Red with outside-count-unchecked: 0, -1, 1e12, "12", true (and 10_000_001, 1.5) are ignored: no note.
+    func testABadCountIsIgnored() throws {
+        let bads: [Any] = [0, -1, 1e12, "12", true, false, 10_000_001, 1.5, [1], ["n": 1]]
+        for bad in bads {
+            let full = try XCTUnwrap(XrayChapterRead.parse(Self.cutObject(user: "a" + Self.marker(12) + "b", cut: bad, answerCut: bad), cutFields: true))
+            XCTAssertTrue(full.promptCutChars == nil && full.responseCutChars == nil && full.promptTail == nil, "\(bad)")
+            XCTAssertEqual(XrayChapterCard.text(Self.rerun, full: full).components(separatedBy: "characters cut").count, 2, "only the text's own line, no note: \(bad)")
+            let raw = String(data: (try? JSONSerialization.data(withJSONObject: [bad])) ?? Data(), encoding: .utf8) ?? "[0]"
+            let json = Self.chaptersJSON.replacingOccurrences(of: "__EXTRA__", with: ",\"response_cut_chars\":" + raw.dropFirst().dropLast())
+            XCTAssertTrue(XrayChapters.parse(Data(json.utf8))?.first?.responseCutChars == nil, "response \(bad)")
+        }
+        let top = try XCTUnwrap(XrayChapterRead.parse(Self.cutObject(user: "a" + Self.marker(10_000_000) + "b", cut: 10_000_000), cutFields: true))
+        XCTAssertEqual(top.promptCutChars, 10_000_000, "the top of the range is taken")
+    }
+
+    /// The read's gate: the probed dch version picks the rule (take); unknown reads as old.
+    func testTheProbedVersionPicksTheRule() throws {
+        let saved = XrayPanels.probed
+        defer { XrayPanels.probed = saved }
+        let long = Self.cutObject(user: String(repeating: "a", count: 7000))
+        for (version, old) in [([1, 92, 0], true), ([1, 93, 0], false), ([2, 0, 0], false)] as [([Int], Bool)] {
+            XrayPanels.probed = DchCommand.Binary(path: "/Users/example/bin/dch", version: version)
+            let read = XrayChapterRead()
+            read.take((0, long))
+            XCTAssertEqual(read.full?.promptCut, old, "\(version)")
+        }
+        XrayPanels.probed = nil
+        let read = XrayChapterRead()
+        read.take((0, long))
+        XCTAssertEqual(read.full?.promptCut, true, "no probe: the old rule")
+    }
 }

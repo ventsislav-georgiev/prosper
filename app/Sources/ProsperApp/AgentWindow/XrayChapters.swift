@@ -11,6 +11,35 @@ enum XrayChapters {
     static let responseCap = 2048
     static let toolsCap = 240
 
+    /// #1487: an outside count is a JSON integer (not a boolean, not a string) in 1...10_000_000, else nil.
+    static func count(_ v: Any?) -> Int? {
+        guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), let i = n as? Int, (1...10_000_000).contains(i) else { return nil }
+        return i
+    }
+
+    /// #1487: exactly the JSON boolean true (a number 1 is not one).
+    static func isTrue(_ v: Any?) -> Bool {
+        guard let n = v as? NSNumber else { return false }
+        return CFGetTypeID(n) == CFBooleanGetTypeID() && n.boolValue
+    }
+
+    /// #1487: `s` cut at the line "\n<line>\n" (the occurrence nearest the middle: a head may hold the same line);
+    /// nil when it is not there. Scalar-exact.
+    static func split(_ s: String, line: String) -> (head: String, tail: String)? {
+        let a = Array(s.unicodeScalars), m = Array(("\n" + line + "\n").unicodeScalars)
+        guard a.count >= m.count else { return nil }
+        var best: Int?
+        for i in 0...(a.count - m.count) where a[i] == m[0] && Array(a[i..<(i + m.count)]) == m {
+            if best.map({ abs(2 * i - a.count) < abs(2 * $0 - a.count) }) ?? true { best = i }
+        }
+        guard let i = best else { return nil }
+        func str(_ r: ArraySlice<Unicode.Scalar>) -> String { var v = String.UnicodeScalarView(); v.append(contentsOf: r); return String(v) }
+        return (str(a[..<i]), str(a[(i + m.count)...]))
+    }
+
+    /// #1487: dch's note for a cut middle: "\u{2026} N characters cut \u{2026}".
+    static func cutLine(_ n: Int) -> String { "\u{2026} \(n) characters cut \u{2026}" }
+
     /// The parse: bytes in, never throws; nil (no tab) unless one object with schema 1 and a chapters array. A row that
     /// is not an object is skipped; a missing key reads as absent.
     static func parse(_ data: Data) -> [TranscriptOutline.Chapter]? {
@@ -36,6 +65,8 @@ enum XrayChapters {
             ch.peer = peer
             ch.response = text("response", responseCap)
             ch.tools = text("tools", toolsCap)
+            // dch 1.93.0: `response_cut` stays true; the count is its own field, never read from the text
+            if isTrue(c["response_cut"]) { ch.responseCutChars = count(c["response_cut_chars"]) }
             return ch
         }
     }

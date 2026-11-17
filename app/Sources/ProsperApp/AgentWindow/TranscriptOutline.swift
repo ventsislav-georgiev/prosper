@@ -24,6 +24,8 @@ enum TranscriptOutline {
         /// #1354: the turn's answer (its last reply) and its tools on one line ("Bash 2, Read 1"), for X-ray's Responses.
         var response: String? = nil
         var tools: String? = nil
+        /// #1487 (dch 1.93.0): scalars dch left out of the middle of `response` (its "\n\u{2026}\n" line); nil: not cut, or no count.
+        var responseCutChars: Int? = nil
 
         enum From: Equatable, Sendable { case own, auto, peer }
         /// dch's row kinds: auto (hidden until shown), peer (dch xv_xs: a peer that is not auto; shown, can be hidden), own.
