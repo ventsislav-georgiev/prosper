@@ -1610,13 +1610,18 @@ extension AgentSidebarRowView {
             } else {
                 title
             }
-            Spacer(minLength: sz(4))
-            if AgentPaneLayout.splitsEnabled {
+            // #1490: with badges the "in view" glyph is drawn over the Spacer (its least sz(4) and the two sz(6) gaps are
+            // sz(16), the glyph's sz(14) fits), so the slot takes no width the badges need; no badges: the slot as before.
+            let inViewSlot = Image(systemName: "eye").font(Neon.font(9, weight: .semibold)).foregroundStyle(ink(.quiet))
+                .frame(width: sz(14)).opacity(inView ? 1 : 0)
+                .modifier(AgentSidebarRowProbe(kind: inView ? "glyph" : "slot", title: row.title))
+            if AgentPaneLayout.splitsEnabled && withBadges {
+                Spacer(minLength: sz(4)).overlay { inViewSlot }
+            } else {
+                Spacer(minLength: sz(4))
                 // #900 B2 step 4b (7.2, #828 slot rule): the "in view" glyph's slot is always laid out with
                 // the gate on (hidden by opacity, never removed), so the title never moves; gate off: no slot.
-                Image(systemName: "eye").font(Neon.font(9, weight: .semibold)).foregroundStyle(ink(.quiet))
-                    .frame(width: sz(14)).opacity(inView ? 1 : 0)
-                    .modifier(AgentSidebarRowProbe(kind: inView ? "glyph" : "slot", title: row.title))
+                if AgentPaneLayout.splitsEnabled { inViewSlot }
             }
             if withBadges {
                 HStack(spacing: sz(5)) {   // line two's spacing between the age and the host

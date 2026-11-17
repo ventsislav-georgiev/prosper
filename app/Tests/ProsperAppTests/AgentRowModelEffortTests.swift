@@ -131,6 +131,11 @@ final class AgentRowModelEffortTests: XCTestCase {
                 XCTAssertEqual(ideal(v.titleLine(badges: true)).width, ideal(v.titleLine(badges: false)).width, accuracy: 0.01,
                                "\(r.title): no slot (\(scale))")
             }
+            // #1490: line one's ideals compare the model slot alone, so at gate off (with the gate on the "in view" slot is
+            // in the no-badges line only, drawn over the Spacer with badges).
+            let gate = AgentPaneLayout.splitsEnabled
+            AgentPaneLayout.splitsEnabled = false
+            defer { AgentPaneLayout.splitsEnabled = gate }
             let v = AgentSidebarRowView(row: claude[2], selected: false)
             XCTAssertGreaterThanOrEqual(ideal(v.titleLine(badges: true)).width,
                                         ideal(v.titleLine(badges: false)).width + slots[0].width, "a Claude row has the slot (\(scale))")
@@ -584,13 +589,13 @@ extension AgentRowModelEffortTests {
     /// the row is at the host's origin) and the row drawn over black into an in-memory bitmap of `backing` pixels per
     /// point (no file). The probe is put back after.
     @MainActor
-    func hosted1345(_ r: AgentSidebar.Row, number: Int?, width: CGFloat, backing: CGFloat)
+    func hosted1345(_ r: AgentSidebar.Row, number: Int?, width: CGFloat, backing: CGFloat, inView: Bool = false)
         -> (frames: [String: CGRect], rep: NSBitmapImageRep?, height: CGFloat) {
         final class Box { var seen: [String: CGRect] = [:] }
         let box = Box()
         AgentSidebarRowView.probe = { kind, _, rect in box.seen[kind] = rect }
         defer { AgentSidebarRowView.probe = nil }
-        let view = AgentSidebarRowView(row: r, selected: false, number: number).frame(width: width)
+        let view = AgentSidebarRowView(row: r, selected: false, number: number, inView: inView).frame(width: width)
         let height = NSHostingView(rootView: view).fittingSize.height
         // Whole points, so the bitmap's pixels per point is exactly `backing` (sz(274) at 0.7 is 191.8).
         let size = CGSize(width: width.rounded(.up), height: height.rounded(.up))
@@ -688,12 +693,12 @@ extension AgentRowModelEffortTests {
     func titleWidth1345(_ s: String) -> CGFloat { ideal(Text(s).font(Neon.font(12.5, weight: .medium))).width }
 
     /// The room line one gives the title (probes): from the title's start to the badges' (`kind`), less line one's gaps
-    /// (sz(6) either side of the Spacer's least sz(4), and the "in view" slot with its gap when the gate is on). A cut
+    /// (sz(6) either side of the Spacer's least sz(4); #1490: the "in view" slot is drawn over that Spacer, so it adds none). A cut
     /// Text's own frame is its visible glyphs' width, up to a glyph short of that room, so the room is what is read.
     @MainActor
     func titleRoom1345(_ f: [String: CGRect], _ kind: String) -> CGFloat {
         guard let t = f["title"], let b = f[kind] else { return 0 }
-        return b.minX - t.minX - 2 * sz(6) - sz(4) - (AgentPaneLayout.splitsEnabled ? sz(6) + sz(14) : 0)
+        return b.minX - t.minX - 2 * sz(6) - sz(4)
     }
 
     /// (d) Operator 2026-11-16, "Cut the name first": at the sidebar's width (sz(274)), every scale, 1x and 2x, by the
@@ -702,10 +707,19 @@ extension AgentRowModelEffortTests {
     /// (`badgeTitleFloor`, the literal "abcdefgh…" in the title's font) and no further. Was (round 1): a name over about
     /// 11 characters dropped the badges whole.
     @MainActor
-    func testLongTitleIsCutToItsFloorBeforeTheBadgesGo() {
+    func testLongTitleIsCutToItsFloorBeforeTheBadgesGo() { bodytestLongTitleIsCutToItsFloorBeforeTheBadgesGo() }
+
+    /// #1490: the same row at gate off (the splits' slot absent), kept beside the product-gate one.
+    @MainActor
+    func testLongTitleIsCutToItsFloorBeforeTheBadgesGoGateOff() {
         let gate = AgentPaneLayout.splitsEnabled
-        AgentPaneLayout.splitsEnabled = false   // #1477: the gate-off row's widths (gate on, the row's menu slot takes room)
+        AgentPaneLayout.splitsEnabled = false
         defer { AgentPaneLayout.splitsEnabled = gate }
+        bodytestLongTitleIsCutToItsFloorBeforeTheBadgesGo()
+    }
+
+    @MainActor
+    func bodytestLongTitleIsCutToItsFloorBeforeTheBadgesGo() {
         let long = "api-" + String(repeating: "session-tokens-", count: 4)
         atScales { scale in
             let floor = AgentSidebarRowView.badgeTitleFloor
@@ -746,10 +760,19 @@ extension AgentRowModelEffortTests {
     /// line one's own ideals (1 pt over or under for the fittingSize rounding, 2 pt for the column's). The row's
     /// VoiceOver words are the same at all three widths.
     @MainActor
-    func testBelowTheTitleFloorTheEffortBadgeAloneThenNone() {
+    func testBelowTheTitleFloorTheEffortBadgeAloneThenNone() { bodytestBelowTheTitleFloorTheEffortBadgeAloneThenNone() }
+
+    /// #1490: the same row at gate off (the splits' slot absent), kept beside the product-gate one.
+    @MainActor
+    func testBelowTheTitleFloorTheEffortBadgeAloneThenNoneGateOff() {
         let gate = AgentPaneLayout.splitsEnabled
-        AgentPaneLayout.splitsEnabled = false   // #1477: the gate-off row's widths (gate on, the row's menu slot takes room)
+        AgentPaneLayout.splitsEnabled = false
         defer { AgentPaneLayout.splitsEnabled = gate }
+        bodytestBelowTheTitleFloorTheEffortBadgeAloneThenNone()
+    }
+
+    @MainActor
+    func bodytestBelowTheTitleFloorTheEffortBadgeAloneThenNone() {
         let r = named1345("api-" + String(repeating: "session-tokens-", count: 4))
         atScales { scale in
             let v = AgentSidebarRowView(row: r, selected: false, number: 4)
@@ -782,10 +805,19 @@ extension AgentRowModelEffortTests {
     /// 2x, by the probes: both badges on line one (no "effort" alone), the title keeps its floor. The hidden host slot
     /// gives way first (was: the badges plus it did not fit, so no badge at all). Prints the widths behind it.
     @MainActor
-    func testRemoteRowKeepsBothBadgesAtTheSidebarWidth() {
+    func testRemoteRowKeepsBothBadgesAtTheSidebarWidth() { bodytestRemoteRowKeepsBothBadgesAtTheSidebarWidth() }
+
+    /// #1490: the same row at gate off (the splits' slot absent), kept beside the product-gate one.
+    @MainActor
+    func testRemoteRowKeepsBothBadgesAtTheSidebarWidthGateOff() {
         let gate = AgentPaneLayout.splitsEnabled
-        AgentPaneLayout.splitsEnabled = false   // #1477: the gate-off row's widths (gate on, the row's menu slot takes room)
+        AgentPaneLayout.splitsEnabled = false
         defer { AgentPaneLayout.splitsEnabled = gate }
+        bodytestRemoteRowKeepsBothBadgesAtTheSidebarWidth()
+    }
+
+    @MainActor
+    func bodytestRemoteRowKeepsBothBadgesAtTheSidebarWidth() {
         var r = named1345("session-tokens")
         r.remote = AgentSidebar.Remote(host: "host-a", name: "api", alias: "", stale: false, cwd: nil)
         atScales { scale in
@@ -801,6 +833,80 @@ extension AgentRowModelEffortTests {
                 XCTAssertTrue(f["effort"] == nil, "not the effort's alone: \(tag)")
                 XCTAssertTrue(b.midY >= t.minY && b.midY <= t.maxY, "badges on line one: \(b) in title \(t) \(tag)")
                 XCTAssertGreaterThanOrEqual(titleRoom1345(f, "badges") + 1, AgentSidebarRowView.badgeTitleFloor, "the floor kept: \(tag)")
+            }
+        }
+    }
+
+    /// #1490: the splits' "in view" slot takes no width line one's badges need: at 0.7 / 0.85 / 1.0 and 1x / 2x, a Claude
+    /// row at the sidebar's width (the #1345 name, a long one, a remote one) has the same title, badges and no "effort"
+    /// alone at gate on as at gate off, to a device pixel, and the slot sits between the title and the badges (never
+    /// over either). Old line that makes it red: a slot of sz(14) plus its sz(6) gap in line one's HStack.
+    @MainActor
+    func testSplitsSlotCostsTheBadgesNoWidth() {
+        let pixel = AXTreeSupport.devicePixel
+        let gate = AgentPaneLayout.splitsEnabled
+        defer { AgentPaneLayout.splitsEnabled = gate }
+        var remote = named1345("session-tokens")
+        remote.remote = AgentSidebar.Remote(host: "host-a", name: "api", alias: "", stale: false, cwd: nil)
+        let rows = [named1345("session-tokens"), named1345("api-" + String(repeating: "session-tokens-", count: 4)), remote]
+        atScales { scale in
+            for r in rows {
+                for px: CGFloat in [1, 2] {
+                    let tag = "\(r.title.count) chars, \(r.remote == nil ? "local" : "remote") (\(scale), \(Int(px))x)"
+                    AgentPaneLayout.splitsEnabled = false
+                    let off = hosted1345(r, number: 4, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px).frames
+                    AgentPaneLayout.splitsEnabled = true
+                    let on = hosted1345(r, number: 4, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px).frames
+                    print("ROW1490 \(tag) off title \(String(describing: off["title"])) badges \(String(describing: off["badges"])) | on title \(String(describing: on["title"])) badges \(String(describing: on["badges"])) slot \(String(describing: on["slot"]))")
+                    XCTAssertTrue(off["slot"] == nil && on["effort"] == nil && off["effort"] == nil, "gate off has no slot, neither has the effort alone: \(tag)")
+                    guard let t = on["title"], let b = on["badges"], let s = on["slot"], let ot = off["title"], let ob = off["badges"] else {
+                        XCTFail("probed: on \(on.keys.sorted()) off \(off.keys.sorted()) \(tag)"); continue
+                    }
+                    XCTAssertEqual(t.width, ot.width, accuracy: pixel, "the title's width is the gate-off one: \(tag)")
+                    XCTAssertEqual(b.minX, ob.minX, accuracy: pixel, "the badges keep their place: \(tag)")
+                    XCTAssertEqual(s.width, sz(14), accuracy: pixel, "the slot keeps its sz(14): \(tag)")
+                    XCTAssertGreaterThanOrEqual(s.minX + pixel, t.maxX, "the slot is right of the title: \(tag)")
+                    XCTAssertLessThanOrEqual(s.maxX, b.minX + pixel, "the slot is left of the badges: \(tag)")
+                }
+            }
+        }
+    }
+
+    /// #1490: the eye drawn over the Spacer fits only because the Spacer's least sz(4) and the two sz(6) gaps are sz(16), the
+    /// glyph's sz(14) and no more. Splits on, inView, a row with badges (a short name, the long one cut to its floor, a remote row),
+    /// 0.7 / 0.85 / 1.0, 1x / 2x: the "glyph" probe is sz(14) wide, lies between the title's maxX and the badges' minX (never
+    /// over either, to a device pixel) and is lit in the 2x bitmap (opacity 1: a "glyph" probe, not the "slot" one).
+    /// Old line that makes it red: the HStack spacing sz(6) of titleLine cut to sz(2) (mutant eye-overlaps).
+    @MainActor
+    func testInViewGlyphOverTheSpacerTouchesNeitherTitleNorBadges() {
+        let pixel = AXTreeSupport.devicePixel
+        let gate = AgentPaneLayout.splitsEnabled
+        AgentPaneLayout.splitsEnabled = true
+        defer { AgentPaneLayout.splitsEnabled = gate }
+        var remote = named1345("session-tokens")
+        remote.remote = AgentSidebar.Remote(host: "host-a", name: "api", alias: "", stale: false, cwd: nil)
+        let rows = [named1345("session-tokens"), named1345("api-" + String(repeating: "session-tokens-", count: 4)), remote]
+        atScales { scale in
+            let width = AgentWindowModel.fullSidebarWidth - sz(16)
+            for r in rows {
+                for px: CGFloat in [1, 2] {
+                    let tag = "\(r.title.count) chars, \(r.remote == nil ? "local" : "remote") (\(scale), \(Int(px))x)"
+                    let h = hosted1345(r, number: 4, width: width, backing: px, inView: true)
+                    let f = h.frames
+                    guard let g = f["glyph"], let t = f["title"], let b = f["badges"] else {
+                        XCTFail("glyph, title and badges probed: \(f.keys.sorted()) \(tag)"); continue
+                    }
+                    XCTAssertTrue(f["slot"] == nil, "the glyph, not the empty slot: \(tag)")
+                    XCTAssertEqual(g.width, sz(14), accuracy: pixel, "the glyph's width: \(tag)")
+                    XCTAssertGreaterThanOrEqual(g.minX + pixel, t.maxX, "the glyph is right of the title: \(g) \(t) \(tag)")
+                    XCTAssertLessThanOrEqual(g.maxX, b.minX + pixel, "the glyph is left of the badges: \(g) \(b) \(tag)")
+                    XCTAssertTrue(!g.insetBy(dx: pixel, dy: 0).intersects(t) && !g.insetBy(dx: pixel, dy: 0).intersects(b),
+                                  "no overlap with the title or the badges: \(tag)")
+                    if px == 2, let rep = h.rep {
+                        let k = CGFloat(rep.pixelsWide) / width.rounded(.up)
+                        XCTAssertTrue(ink1345(rep, k: k, in: g) != nil, "the glyph is lit (opacity 1): \(tag)")
+                    }
+                }
             }
         }
     }
