@@ -348,7 +348,7 @@ final class ManagedConfig: Sendable {
                         // path, normalised the way the resolve did it (it drops the /private of /var and /tmp). Never a
                         // realpath of dirURL: that follows a link still in place now.
                         guard let heldPath = pinnedDirPath?(dir) ?? Self.path(of: dir),
-                              URL(fileURLWithPath: heldPath).resolvingSymlinksInPath().path == dirURL.path else {
+                              Self.samePath(Self.dropPrivatePrefix(heldPath), dirURL.path, caseSensitive: fpathconf(dir, _PC_CASE_SENSITIVE) == 1) else {
                             if let backup { _ = unlink(backup.path) }
                             throw ManagedConfigPOSIXWriter.WriteError(step: "check directory", code: EEXIST, reason: "the directory is not the one held")
                         }
@@ -453,6 +453,21 @@ final class ManagedConfig: Sendable {
         var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         guard fcntl(fd, F_GETPATH, &buf) == 0 else { return nil }
         return buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+    }
+
+    /// #1431: F_GETPATH spells /private/var, /private/tmp and /private/etc; the resolve of the folder drops the prefix.
+    /// Only that prefix is mapped, a link is never followed.
+    static func dropPrivatePrefix(_ path: String) -> String {
+        for d in ["/private/var", "/private/tmp", "/private/etc"] where path == d || path.hasPrefix(d + "/") {
+            return String(path.dropFirst("/private".count))
+        }
+        return path
+    }
+
+    /// #1431: F_GETPATH gives the on-disk spelling, the configured path keeps its own. The dev/ino compare already holds,
+    /// so on a case-insensitive volume (or when fpathconf fails) case and canonically equivalent forms (NFC/NFD) match.
+    static func samePath(_ held: String, _ configured: String, caseSensitive: Bool) -> Bool {
+        caseSensitive ? held == configured : held.compare(configured, options: .caseInsensitive) == .orderedSame
     }
 
     /// Every name in `dir` by readdir: FileManager hides AppleDouble `._*` names.

@@ -55,8 +55,52 @@ final class ManagedConfigPinTests: XCTestCase {
         XCTAssertEqual(seen.values.count, 1)
         let held = try XCTUnwrap(seen.values.last ?? nil)
         XCTAssertTrue(held.hasPrefix("/private/"), "the premise: the held path spells the /private the resolved one drops: \(held)")
-        XCTAssertEqual(URL(fileURLWithPath: held).resolvingSymlinksInPath().path, env.claude.resolvingSymlinksInPath().path)
+        XCTAssertEqual(ManagedConfig.dropPrivatePrefix(held), env.claude.resolvingSymlinksInPath().path)
         XCTAssertTrue(env.read(env.claudeMD)?.contains("Follow the kit rules.") ?? false)
+    }
+
+    // MARK: R1431-s1, spelling; R1431-i2, no link followed
+
+    private func isCaseSensitive(_ dir: URL) -> Bool { pathconf(dir.path, _PC_CASE_SENSITIVE) == 1 }
+
+    /// A commit in a folder made as `made` while the roots spell it `spelled`: the commit lands on a case-insensitive volume.
+    private func commitSpelled(made: String, spelled: String, label: String) async throws {
+        let root = tempDir(label)
+        if isCaseSensitive(root) { throw XCTSkip("the tempDir volume is case-sensitive") }
+        let dir = root.appendingPathComponent(made, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let ext = root.appendingPathComponent("extensions/kit-a", isDirectory: true)
+        try FileManager.default.createDirectory(at: ext, withIntermediateDirectories: true)
+        let claude = root.appendingPathComponent(spelled, isDirectory: true)
+        let md = dir.appendingPathComponent("CLAUDE.md")
+        try Data(Self.original).write(to: md)
+        let roots = ManagedConfigRoots(claude: claude, configHome: root.appendingPathComponent("config", isDirectory: true),
+                                       stateDir: root.appendingPathComponent("state", isDirectory: true))
+        let mc = ManagedConfig(roots: roots, consent: MCRecordingConsent(true), writer: ManagedConfigPOSIXWriter())
+        let r = await mc.apply([MCPieces.block()], owner: ManagedConfigOwner(id: "kit-a", version: "1.0.0", kitSlug: "kit-a", extensionDir: ext))
+        XCTAssertEqual(r.status, .done, r.message)
+        XCTAssertTrue((try? String(contentsOf: md, encoding: .utf8))?.contains("Follow the kit rules.") ?? false, "the file is rewritten")
+    }
+
+    func testARootSpelledInAnotherCaseCommits() async throws {
+        try await commitSpelled(made: "cfg", spelled: "CFG", label: "case")
+    }
+
+    func testARootSpelledInAnotherNormalizationCommits() async throws {
+        try await commitSpelled(made: "caf\u{E9}", spelled: "cafe\u{301}", label: "nfd")
+    }
+
+    /// The seam hands back a link to the real folder: the held path is mapped, never resolved, so it is refused.
+    func testAHeldPathThatIsALinkIsRefused() async throws {
+        let env = makeMCEnv()
+        try Data(Self.original).write(to: env.claudeMD)
+        let link = env.root.appendingPathComponent("link-to-claude")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: env.claude)
+        let mc = ManagedConfig(roots: env.mc.roots, consent: env.consent, writer: ManagedConfigPOSIXWriter(), pinnedDirPath: { _ in link.path })
+        let r = await mc.apply([MCPieces.block()], owner: env.owner)
+        XCTAssertEqual(r.status, .failed, r.message)
+        XCTAssertTrue(r.message.contains("the directory is not the one held"), r.message)
+        XCTAssertEqual(env.bytes(env.claudeMD), Self.original)
     }
 
     // MARK: R1243-i3, O_SEARCH
