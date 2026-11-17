@@ -302,6 +302,7 @@ final class XrayRefOpenTests: XCTestCase {
     func testGateOffMakesNoLink() throws {
         let refs = try F.parsed().entries.filter(\.underline)
         XCTAssertFalse(XrayRefLink.ships, "gate B ships off until the click check")
+        XCTAssertFalse(XrayRefLink.decorate(), "the product default follows ships")
         let old = XrayRefLink.decorate
         XrayRefLink.decorate = { false }
         defer { XrayRefLink.decorate = old }
