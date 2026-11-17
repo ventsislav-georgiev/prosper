@@ -65,7 +65,7 @@ final class KitRuntimes {
         return Set(kitRecords().filter { $0.id != id }.compactMap { try? KitStore(configHome: configHome, extID: $0.id).recordedSlug() })
     }
 
-    /// #917 S7 (#1426): the bin dirs KitSessionEnv appends to a spawned session's PATH: each trusted kit with a live
+    /// #917 S7 (#1426): the bin dirs KitSessionEnv appends to a spawned session's PATH: each enabled, trusted kit with a live
     /// version and at least one tools piece switched on, in the registry's order. An untrusted or never-applied kit, or
     /// one whose tools pieces are all off, adds nothing.
     /// shortcut: the registry's order stands for install order and the record's manifest for the live one's pieces; read
@@ -74,7 +74,7 @@ final class KitRuntimes {
     /// validated again, or restoreKits refused, adds nothing until the pane's refresh validates it.
     func liveBins() -> [String] {
         kitRecords().compactMap { rec -> String? in
-            guard rec.trusted, let raw = rec.manifest.contributes?.kit, let rt = runtime(for: rec.id),
+            guard rec.isLive, let raw = rec.manifest.contributes?.kit, let rt = runtime(for: rec.id),
                   let live = rt.current?.live.version, !live.isEmpty, rt.liveValidated else { return nil }
             let off = rt.off()
             let tools = KitManifest.parse(raw).kit.pieces.filter { $0.kind == .tools && !off.contains($0.id) }

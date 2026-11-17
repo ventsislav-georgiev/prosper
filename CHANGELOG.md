@@ -1641,6 +1641,9 @@ tag from the now-released section and put it on the new top draft.
 - An extension no longer disappears if Prosper quits in the middle of installing or updating it: the
   previous copy is put back on the next start, leftover install folders are cleaned up after a day,
   and built-in extensions now update the same safe way. (#1435)
+- A kit turned off in Extensions no longer keeps its tools on the PATH of new sessions, and a kit's
+  Settings tab and search entry now show its title cleaned and capped like the kit pane does.
+  (#1438)
 
 ## v2.174.0
 

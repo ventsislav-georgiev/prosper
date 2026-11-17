@@ -3692,6 +3692,13 @@ private struct MenuBarPane: View {
 /// #918 S5: a kit's Settings tab id ("kit" is the pane's own section id, not a settings_sections lookup).
 func settingsKitTabID(_ extID: String) -> String { "ext:\(extID)|kit" }
 
+/// #1438: a kit's tab and search title: the pane's own rule (OutsideText.shown, KitManifest.maxTitle); nothing visible
+/// left falls back to the extension id as the Extensions list does.
+func settingsKitTitle(_ title: String, id: String) -> String {
+    let s = OutsideText.shown(title, max: KitManifest.maxTitle)
+    return s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ExtensionRowText.title("", id: id) : s
+}
+
 /// #918 S5: the enabled kit record a selection names, or nil (not a kit tab, or the kit is gone or disabled).
 @MainActor
 func settingsKitRecord(registry: ExtensionRegistry, selection: String) -> ExtensionRecord? {
@@ -3776,7 +3783,7 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
         }
         for record in registry.kitRecords { // #918 S5: one tab per enabled kit, trusted or not
             let meta = record.manifest.extension
-            extensionSections.append(SettingsTab(id: settingsKitTabID(record.id), title: meta.title,
+            extensionSections.append(SettingsTab(id: settingsKitTabID(record.id), title: settingsKitTitle(meta.title, id: record.id),
                                                  icon: meta.icon ?? "shippingbox.fill"))
         }
     }

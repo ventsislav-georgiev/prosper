@@ -20,8 +20,8 @@ final class KitPaneMountTests: XCTestCase {
 
     /// The fake kit and a plain extension (no kit table) in a temp user dir, discovered. `trusted` false: the trust
     /// list is seeded empty first, so the kit lands untrusted.
-    private func registry(_ e: KitRuntimeTests.Env, trusted: Bool = true) throws -> ExtensionRegistry {
-        _ = try kitPaneSource(e, id: Self.ext)
+    private func registry(_ e: KitRuntimeTests.Env, trusted: Bool = true, title: String = "Calm Agent Kit") throws -> ExtensionRegistry {
+        _ = try kitPaneSource(e, id: Self.ext, title: title)
         let plain = e.root.appendingPathComponent("sources/plain", isDirectory: true)
         try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
         let toml = "[extension]\nid = \"\(Self.plain)\"\nname = \"plain\"\ntitle = \"Plain Example\"\n"
@@ -219,5 +219,51 @@ final class KitPaneMountTests: XCTestCase {
         XCTAssertEqual(update?.label, "Update Calm Agent Kit to version " + shown)
         XCTAssertFalse((update?.title ?? "\u{202E}").unicodeScalars.contains("\u{202E}"), "no bidi control")
         XCTAssertFalse((update?.label ?? "\u{202E}").unicodeScalars.contains("\u{202E}"), "no bidi control")
+    }
+
+    // MARK: #1438
+
+    /// R1425-s1: an applied, validated kit whose extension is then disabled adds no bin to liveBins or to a spawn's
+    /// PATH; enabled again, the bin is back.
+    func testDisabledKitAddsNoBin() async throws {
+        final class Box { var rec: ExtensionRecord? }
+        let e = try kitPaneEnv()
+        let box = Box()
+        box.rec = ExtensionRecord(loaded: try kitPaneSource(e, id: Self.ext), enabled: true, trusted: true)
+        let o = kitPaneOwner(e) { box.rec.map { [$0] } ?? [] }
+        let rt = try XCTUnwrap(o.runtime(for: Self.ext))
+        let res = await rt.apply(try XCTUnwrap(box.rec).loaded, source: .local, otherKitSlugs: [])
+        XCTAssertTrue(res.refused == nil && res.failures.isEmpty, "\(String(describing: res.refused)) \(res.failures)")
+        let bin = try KitStore.layout(configHome: e.roots.configHome, extID: Self.ext).bin
+        KitRuntimes.shared = o
+        func path() -> String? {
+            AgentIslandController.spawnEnv(Self.base, argv: ["claude"], AgentIslandController().sessionEnvContributors())["PATH"]
+        }
+        XCTAssertEqual(o.liveBins(), [bin], "enabled: listed")
+        XCTAssertEqual(path(), "/Users/example/bin:/usr/bin:" + bin)
+        box.rec = ExtensionRecord(loaded: try kitPaneSource(e, id: Self.ext), enabled: false, trusted: true)
+        XCTAssertEqual(o.liveBins(), [], "disabled: no bin")
+        XCTAssertEqual(path(), "/Users/example/bin:/usr/bin", "disabled: no kit bin in the spawn PATH")
+        box.rec = ExtensionRecord(loaded: try kitPaneSource(e, id: Self.ext), enabled: true, trusted: true)
+        XCTAssertEqual(o.liveBins(), [bin], "enabled again: the bin is back")
+        XCTAssertEqual(path(), "/Users/example/bin:/usr/bin:" + bin)
+    }
+
+    /// R1425-s2: the sidebar tab and the search entry show the pane's own title (cleaned, capped), not the raw manifest
+    /// one; a title with nothing visible falls back to the extension id.
+    func testKitTabAndSearchTitleAreCleanedAndCapped() throws {
+        let e = try kitPaneEnv()
+        let raw = "Calm\u{202E}" + String(repeating: "x", count: KitManifest.maxTitle + 40)
+        let r = try registry(e, title: raw)
+        let shown = OutsideText.shown(raw, max: KitManifest.maxTitle)
+        XCTAssertLessThanOrEqual(shown.count, KitManifest.maxTitle)
+        XCTAssertTrue(shown != raw && !shown.unicodeScalars.contains("\u{202E}"))
+        let tab = tabs(r).first { $0.id == Self.tab }
+        XCTAssertEqual(tab?.title, shown)
+        let entry = settingsSearchIndex(registry: r, groups: settingsSidebarGroups(registry: r)).first { $0.paneID == Self.tab }
+        XCTAssertEqual(entry?.paneTitle, shown)
+        XCTAssertFalse((tab?.title ?? "\u{202E}").unicodeScalars.contains("\u{202E}"))
+        XCTAssertFalse((entry?.paneTitle ?? "\u{202E}").unicodeScalars.contains("\u{202E}"))
+        XCTAssertEqual(settingsKitTitle("\u{202E}", id: Self.ext), Self.ext, "nothing visible: the id")
     }
 }
