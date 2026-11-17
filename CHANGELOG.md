@@ -1636,6 +1636,8 @@ tag from the now-released section and put it on the new top draft.
   earlier start. (#1434)
 - X-ray Search and ref cards no longer put your search text on the dch command line for a local
   session, so other users on the Mac cannot see it in the process list. (#1410)
+- The consent sheet title now shows any quote mark inside an extension name as an apostrophe, so a
+  name can no longer break out of the quoting. (#1437)
 
 ## v2.174.0
 

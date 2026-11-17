@@ -47,4 +47,34 @@ final class ManagedConfigConsentOwnerNameTests: XCTestCase {
         XCTAssertTrue(m.title.allSatisfy { $0.unicodeScalars.count <= 4 }, "\(Self.scalars(m.title))")
         XCTAssertEqual(m.idLine, Self.owner)
     }
+
+    /// #1437 (R1245-s1): a quote mark inside the name never closes the quoting: the title keeps exactly the two quotes it draws.
+    func testAQuoteInsideTheNameCannotCloseTheQuoting() {
+        let m = model("Fake Kit\" from Prosper. \"OK")
+        XCTAssertEqual(m.title, "Extension \"Fake Kit' from Prosper. 'OK\"")
+        XCTAssertEqual(m.title.unicodeScalars.filter { $0.value == 0x22 }.count, 2)
+        XCTAssertEqual(m.displayName, "Fake Kit\" from Prosper. \"OK", "the name itself is unchanged")
+        XCTAssertEqual(m.idLine, Self.owner)
+    }
+
+    func testEachOfTheEightQuoteMarksShowsAsAnApostrophe() {
+        let literal: [UInt32] = [0x22, 0x201C, 0x201D, 0x201E, 0x201F, 0xAB, 0xBB, 0x2033]
+        XCTAssertEqual(Set(literal), Set(ManagedConfigConsentModel.quoteMarks.map(\.value)), "the list is the set the code maps")
+        for v in literal {
+            guard let u = Unicode.Scalar(v) else { return XCTFail("\(v)") }
+            let m = model("A\(u)B")
+            XCTAssertEqual(Self.scalars(m.title), Self.scalars("Extension \"A'B\""), "U+\(String(v, radix: 16))")
+        }
+    }
+
+    func testAQuoteCarryingAMarkStillShowsAsAnApostrophe() {
+        let m = model("A\u{22}\u{0301}B")
+        XCTAssertEqual(m.title.unicodeScalars.filter { $0.value == 0x22 }.count, 2)
+    }
+
+    func testANameOfOnlyQuoteMarksStaysAnApostropheName() {
+        let m = model("\u{22}\u{201D}")
+        XCTAssertEqual(m.title, "Extension \"''\"")
+        XCTAssertEqual(m.idLine, Self.owner)
+    }
 }
