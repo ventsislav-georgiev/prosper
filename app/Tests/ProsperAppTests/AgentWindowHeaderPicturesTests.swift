@@ -39,11 +39,10 @@ extension AgentWindowD1Tests {
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
                 let room = 1000 * scale - AgentWindowModel.fullSidebarWidth - 1
-                for mode in [AgentPaneMode.terminal, .transcript] {
-                    let h = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, level: .constant(.default), todos: todos,
-                                               store: st, mode: mode)
+                do {   // #1471: one header (Terminal)
+                    let h = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, todos: todos, store: st)
                     let fit = NSHostingView(rootView: h.frame(width: room)).fittingSize.height
-                    let name = "\(mode == .terminal ? "terminal" : "transcript")-\(dark ? "dark" : "light")-\(scale)"
+                    let name = "terminal-\(dark ? "dark" : "light")-\(scale)"
                     if dark { log.append(String(format: "HEIGHT %@ %@ scale %.2f width %.0f h=%.1f", phase, name, scale, room, fit)) }
                     try autoreleasepool { try write(try render(h, size: CGSize(width: room, height: fit), dark: dark, margin: 0), name) }
                 }
@@ -59,11 +58,11 @@ extension AgentWindowD1Tests {
             let s = try XCTUnwrap(wst.sessions.first { $0.name == "prosper" })
             for dark in [true, false] {
                 ThemeRuntime.palette = dark ? saved.1 : Self.lightPalette
-                for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
+                do {   // #1471: Terminal is the only pane mode
                     try autoreleasepool {
                         try write(try render(AgentWindowRootView(model: wm, scrolls: false), size: CGSize(width: 1000, height: 680),
                                              dark: dark, margin: 0),
-                                  "window-\(mode == .terminal ? "terminal" : "transcript")-\(dark ? "dark" : "light")-1.0")
+                                  "window-terminal-\(dark ? "dark" : "light")-1.0")
                     }
                 }
             }

@@ -575,7 +575,6 @@ final class AgentPaneLayoutTests: XCTestCase {
         (25, [.control], "9", "9", .layout(9)),
         (83, [.control], "1", "1", .layout(1)),
         (48, [.control], "\t", "\t", .previousLayout),
-        (17, [.command, .shift], "T", "t", .allModes),
         (38, [.command], "j", "j", .nextNeedsYou),
         (1, [.control, .command], "\u{13}", "s", .toggleSidebar),
     ]

@@ -209,14 +209,6 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(win.isVisible)
     }
 
-    /// 5.1: an unfocused pane's slot text: the draft's first line, else "Message <title>…"; Ended: the ended text.
-    func testAgentWindowInertComposerShowsTheDraftsFirstLine() {
-        XCTAssertEqual(AgentInertComposer.text(draft: "fix the build\nthen ship", title: "api", ended: false), "fix the build")
-        XCTAssertEqual(AgentInertComposer.text(draft: "", title: "api", ended: false), "Message api…")
-        XCTAssertEqual(AgentInertComposer.text(draft: "  \nsecond", title: "api", ended: false), "Message api…")
-        XCTAssertEqual(AgentInertComposer.text(draft: "x", title: "api", ended: true), AgentInteractionPane.endedPlaceholder)
-    }
-
     /// 4.2 Pick Another focuses the pane and gives the sidebar the keys, starting nothing; Close Pane closes a pane of
     /// several and is refused for the last one.
     @MainActor

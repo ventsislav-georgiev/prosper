@@ -7,8 +7,8 @@ enum TextViewerMode: Int, CaseIterable {
     var title: String { self == .read ? "Read" : "Edit" }
 }
 
-/// A Read | Edit style segmented switch, drawn as AgentPaneModeToggle's `.labels` style is (values copied, not shared:
-/// that view is not touched). The selection is an index (the smallest form); no state of its own. No fixed frame:
+/// A Read | Edit style segmented switch, drawn as the Agent Sessions pane-mode toggle's `.labels` style was (values copied,
+/// never shared; that toggle is gone, #1471). The selection is an index (the smallest form); no state of its own. No fixed frame:
 /// every label is fixedSize, so the natural width is the same at every UI scale and never depends on the selection.
 struct CapsuleSwitch: View {
     let titles: [String]
@@ -19,7 +19,7 @@ struct CapsuleSwitch: View {
     /// Why the switch is off; the caller adds .disabled(off != nil). It replaces the help text.
     var off: String?
 
-    /// The glyph is written in the source, as AgentPaneModeToggle's help has it.
+    /// The glyph is written in the source, as the old pane-mode toggle's help had it.
     static let textViewerHelp = "Switch between Read and Edit (⌘T)"
 
     static func choose(_ index: Int, selected: Int, set: (Int) -> Void) { if index != selected { set(index) } }

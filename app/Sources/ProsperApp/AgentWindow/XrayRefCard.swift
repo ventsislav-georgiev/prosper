@@ -298,11 +298,12 @@ extension XrayPanelModel {
         runSearch()
     }
 
-    /// A mention's Return: this session's mention jumps (go); another session's never does, whatever its chapter says.
+    /// A mention's Return: this session's mention opens its chapter's card (#1471: no transcript to jump in); another
+    /// session's never does, whatever its chapter says. An anchor dch's chapters read does not hold opens nothing.
     @discardableResult
     func jumpRef(_ m: XrayRefStream.Mention, in c: XrayRefContext) -> Bool {
         guard let anchor = m.chapter, c.session != nil, m.session == c.session else { return false }
-        go(anchor) { _ in }
+        if let i = chapterAnchors[anchor], let ch = chapters.first(where: { $0.ordinal == i }) { openChapterCard(ch) }
         return true
     }
 }

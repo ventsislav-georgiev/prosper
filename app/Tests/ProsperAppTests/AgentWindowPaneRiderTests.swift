@@ -259,8 +259,8 @@ extension AgentWindowD1Tests {
             let detail = try XCTUnwrap(paneRiderFind(view, AgentDetailView.self))
             // One pane: the full header, whose "⋯" is built in its own body (menuButton).
             let header = try XCTUnwrap(paneRiderFind(detail.body, AgentSessionHeader.self))
-            // #1319: Jump to Chapter is in the "\u{22EF}" menu with the gate off too (disabled here: a terminal pane); no pane split item.
-            XCTAssertEqual(header.menuButton.panes, [.divider, .chapters(enabled: false, pane: m.layout.focused)])
+            // #1471: no Jump to Chapter item (the transcript is gone) and no pane split item with the gate off.
+            XCTAssertEqual(header.menuButton.panes, [.divider])
             XCTAssertEqual(header.menuButton.help, "Open in terminal, rename, restart, stop or end this session")
         }
     }

@@ -145,7 +145,7 @@ extension AgentWindowD1Tests {
             let before = m.layout
             XCTAssertEqual(before.panes.count, 2, file: file, line: line)
             let e = treeKey(c.code, c.mods, c.chars, c.ign)
-            let today = AgentsNSWindow.route(e, responder: win.responderKind, sidebarFocused: true, terminalMode: m.paneMode == .terminal)
+            let today = AgentsNSWindow.route(e, responder: win.responderKind, sidebarFocused: true, terminalMode: m.paneHasTerminal)
             let closes = name == "⌘W"
             XCTAssertEqual(today, closes ? .close : .pass, "\(name): today's route", file: file, line: line)
             XCTAssertEqual(win.performKeyEquivalent(with: e), closes, "\(name): handled only where it was", file: file, line: line)

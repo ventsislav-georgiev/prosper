@@ -181,9 +181,6 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(m.blocks.count, 12, "TIP's twelve: no peer block")
         XCTAssertEqual(m.hiddenCount, tip.hiddenCount + 2, "each counted hidden, as TIP's user/meta")
         XCTAssertFalse(m.blocks.contains { if case .user(let c) = $0.body { c.text.contains("rerun") || c.origin?.peer != nil } else { false } })
-        XCTAssertFalse(TranscriptVerbosity.project(m.blocks, level: .verbose).contains { r in
-            if case .block(let b) = r.kind, case .user(let c) = b.body { c.text.contains("rerun") } else { false }
-        })
         let c = try XCTUnwrap(m.chapters.first { $0.from == .peer })
         XCTAssertEqual(c.title, "Please rerun the api suite")
         XCTAssertEqual(XrayPromptRow(c).mark, "\u{1F916} api-qa")

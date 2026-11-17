@@ -7,30 +7,6 @@ import Foundation
 // tool is a generic card upstream and one line here; an unknown entry is one line, not a raw
 // card. Default and Focused get quieter when Claude Code drifts; Verbose keeps the raw folds.
 
-/// One level for the whole window, per Mac (`Preferences.agentWindowVerbosity`).
-enum AgentVerbosity: String, CaseIterable, Sendable {
-    case focused, `default`, verbose
-
-    /// Tolerant: unset or an unknown raw value reads as Default.
-    init(raw: String?) { self = raw.flatMap(Self.init(rawValue:)) ?? .default }
-
-    var title: String {
-        switch self {
-        case .focused: "Focused"
-        case .default: "Default"
-        case .verbose: "Verbose"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .focused: "scope"
-        case .default: "text.alignleft"
-        case .verbose: "list.bullet.rectangle"
-        }
-    }
-}
-
 /// Default's "Todos 3/7" chip: the session's main-thread todo list. Claude Code 2.1.223+ keeps
 /// it with TaskCreate / TaskUpdate (TodoWrite only under CLAUDE_CODE_ENABLE_TASKS=false); both
 /// feed this one list.
@@ -254,17 +230,6 @@ enum TranscriptVerbosity {
     /// Claude Code's default keeps a subagent's last 3 progress messages (`bP=3`).
     static let threadTail = 3
 
-    static func project(_ blocks: [TranscriptBlock], level: AgentVerbosity, working: Bool = false) -> [TranscriptRow] {
-        if level == .verbose { return blocks.map(full) }
-        let turns = turns(blocks)
-        return turns.indices.flatMap { i -> [TranscriptRow] in
-            let t = turns[i]
-            let rows = level == .focused ? focused(t, working: working && i == turns.count - 1) : t.flatMap(defaultRows)
-            // A turn never renders empty: its last block as one line (a thinking-only page, drift).
-            return rows.isEmpty ? [line(t[t.count - 1])] : rows
-        }
-    }
-
     /// A turn starts at a prompt (the user, a slash command, a compaction) after a step.
     static func turns(_ blocks: [TranscriptBlock]) -> [[TranscriptBlock]] {
         var out: [[TranscriptBlock]] = [], cur: [TranscriptBlock] = [], lead = true
@@ -277,18 +242,6 @@ enum TranscriptVerbosity {
         return out
     }
 
-    /// #904 (spec 8.4): the row that shows `block` at `level`: its own row, its one-line row, the thread row it is a
-    /// step of, or the Focused summary row that folds it (folded or open, the summary is the row). Built on `project`,
-    /// so it is the row the window draws; nil when no row shows it (hidden at this level, or not loaded).
-    static func rowID(containing block: Int, in blocks: [TranscriptBlock], level: AgentVerbosity) -> String? {
-        func shows(_ r: TranscriptRow) -> Bool {
-            switch r.kind {
-            case .block(let b), .line(let b), .thread(let b, _, _): TranscriptOutline.holds(b, block)
-            case .summary(_, let children, let errors): (children + errors).contains(where: shows)
-            }
-        }
-        return project(blocks, level: level).first(where: shows)?.id
-    }
 
     // MARK: Default
 

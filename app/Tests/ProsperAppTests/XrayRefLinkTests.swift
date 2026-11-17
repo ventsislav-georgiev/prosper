@@ -101,31 +101,6 @@ final class XrayRefSpansTests: XCTestCase {
         XCTAssertTrue(code?.link == nil, "the code run keeps no link")
     }
 
-    /// Red if a tool output, bash or thinking clip is decorated (M4d), or a prose clip is not.
-    func testToolOutputGivesNoneProseDoes() throws {
-        let refs = try F.parsed().entries.filter(\.underline)
-        var drawn: [String] = []
-        XrayRefLink.drawn = { drawn.append($0) }
-        defer { XrayRefLink.drawn = nil }
-        func lay(_ body: BlockBody) {
-            let b = TranscriptBlock(id: 1, body: body, tier: .specific, version: "2.1.300", source: nil)
-            let h = NSHostingView(rootView: TranscriptBlockView(block: b, expanded: true)
-                .environment(\.xrayRefEntries, refs).frame(width: 420))
-            _ = h.fittingSize
-        }
-        F.gateOn {
-            lay(.bash(command: "git log #12", description: nil, output: Clip("#12 fixed in bash", cap: 400), isError: false))
-            lay(.thinking(Clip("#12 thinking", cap: 400)))
-            lay(.compaction(trigger: nil, preTokens: nil, summary: Clip("#12 summary", cap: 400)))
-        }
-        XCTAssertEqual(drawn, [], "tool output, bash, thinking and summaries are never decorated")
-        F.gateOn {
-            lay(.user(Clip("#12 user", cap: 400)))
-            lay(.assistant(Clip("#12 assistant", cap: 400)))
-        }
-        XCTAssertEqual(Set(drawn), ["#12 user", "#12 assistant"], "positive control: prose clips are")
-    }
-
     /// Red if a second occurrence is lost.
     func testTwoOccurrencesGiveTwoSpans() throws {
         let refs = try F.parsed().entries
@@ -307,11 +282,5 @@ final class XrayRefOpenTests: XCTestCase {
         XrayRefLink.decorate = { false }
         defer { XrayRefLink.decorate = old }
         XCTAssertTrue(XrayRefSpans.attributed("#12 here", markdown: true, refs: refs, color: .white) == nil)
-        var drawn = 0
-        XrayRefLink.drawn = { _ in drawn += 1 }
-        defer { XrayRefLink.drawn = nil }
-        let b = TranscriptBlock(id: 1, body: .user(Clip("#12 here", cap: 400)), tier: .specific, version: "2.1.300", source: nil)
-        _ = NSHostingView(rootView: TranscriptBlockView(block: b).environment(\.xrayRefEntries, refs).frame(width: 420)).fittingSize
-        XCTAssertEqual(drawn, 0)
     }
 }

@@ -893,15 +893,6 @@ final class AgentWindowInteraction: ObservableObject {
     /// #831 B1 (3.5): a session's draft, read-only, for a pane that does not hold the input.
     func draft(for key: AgentSessionKey) -> String { drafts[key] ?? "" }
 
-    /// #847 D2.3: a first message the controller could not send becomes the session's draft, only into an empty
-    /// one (a typed draft is never overwritten). True when it was taken.
-    @discardableResult
-    func seedDraft(key: AgentSessionKey, text: String) -> Bool {
-        guard drafts[key] == nil, !text.isEmpty else { return false }
-        drafts[key] = text
-        return true
-    }
-
     var draft: String {
         get { session.flatMap { drafts[$0.key] } ?? "" }
         set { if let k = session?.key { drafts[k] = newValue.isEmpty ? nil : newValue } }

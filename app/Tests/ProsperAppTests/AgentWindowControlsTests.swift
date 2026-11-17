@@ -253,18 +253,13 @@ extension AgentWindowD1Tests {
         let working = AgentSession(key: ctlKey("a"), alias: "", activity: 1, state: .working, agents: 0)
         i.follow(idle)
         i.draft = "hello"
-        XCTAssertTrue(AgentInteractionPane(model: i, session: idle, open: {}).canSend)
-        XCTAssertTrue(AgentInteractionPane(model: i, session: working, open: {}).canInterrupt)
+        // #1471: the input box is gone; the lock and its words stay (the model refuses writes under it, 3.5 below).
         for t in AgentIsland.runningTexts {
             let lock = AgentWindowControls.lock(t)
             XCTAssertEqual(lock, t)
-            let p = AgentInteractionPane(model: i, session: idle, open: {}, lock: lock)
-            XCTAssertFalse(p.canSend, t)
-            XCTAssertFalse(AgentInteractionPane(model: i, session: working, open: {}, lock: lock).canInterrupt, t)
-            XCTAssertEqual(p.placeholder, "\(t.dropLast()): wait for it to finish")
+            XCTAssertEqual(AgentWindowControls.lockPlaceholder(t), "\(t.dropLast()): wait for it to finish")
         }
-        XCTAssertEqual(AgentInteractionPane(model: i, session: idle, open: {}, lock: "Restarting…").placeholder,
-                       "Restarting: wait for it to finish")
+        XCTAssertEqual(AgentWindowControls.lockPlaceholder("Restarting\u{2026}"), "Restarting: wait for it to finish")
         for t in [nil, "Restarted", "Stopped", AgentIsland.killingText, "Ended", AgentIsland.restartBusyText,
                   "NOT stopped — claude did not go idle; resume message typed"] {
             XCTAssertNil(AgentWindowControls.lock(t), "\(t ?? "nil") locks nothing")
@@ -455,34 +450,6 @@ extension AgentWindowD1Tests {
 }
 
 extension AgentWindowInteractionTests {
-    /// QA #660 note 6: Interrupt is on while Claude works and no answer is in flight, only.
-    @MainActor
-    func testAgentWindowCanInterruptOnlyWhileWorkingAndNotBusy() {
-        let i = interaction(nil)
-        for state in AgentState.allCases {
-            let s = session(state)
-            i.follow(s)
-            XCTAssertEqual(AgentInteractionPane(model: i, session: s, open: {}).canInterrupt, state == .working, "\(state)")
-        }
-        let f = MessageFake(statuses: ["working", "idle"])
-        let gate = DispatchSemaphore(value: 0)
-        final class Once: @unchecked Sendable {
-            let lock = NSLock()
-            var first = true
-            func take() -> Bool { lock.withLock { defer { first = false }; return first } }
-        }
-        let once = Once()
-        let io = AgentPromptIO(read: { k in if once.take() { gate.wait() }; return f.io.read(k) }, status: f.io.status,
-                               send: f.io.send, keys: f.io.keys, say: f.io.say)
-        let j = interaction(controller(io, autoAllow: false))
-        j.follow(session(.working))
-        j.interrupt()
-        XCTAssertTrue(j.busy)
-        XCTAssertFalse(AgentInteractionPane(model: j, session: session(.working), open: {}).canInterrupt, "busy: off")
-        gate.signal()
-        until("interrupted") { !j.busy }
-        XCTAssertTrue(AgentInteractionPane(model: j, session: session(.working), open: {}).canInterrupt, "free again: on")
-    }
 }
 
 // MARK: 3.5 in the model (review round 1): the lock holds without the UI too
@@ -1154,7 +1121,6 @@ extension AgentWindowD1Tests {
         c.after = { _, _ in }
         c.onSessions = { _ in }
         let m = windowModel(st, opened: { opened.append($0.key) })
-        showTranscript(m)   // #822: the input box is Transcript mode's
         m.interaction.controller = c
         m.interaction.pause = { _ in }
         m.interaction.readQueue = { $0() }
@@ -1191,19 +1157,6 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(m.interaction.busy, "nothing started")
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))
         XCTAssertEqual(f.lock.withLock { f.says.count + f.keys.count }, 0, "nothing reaches the pty")
-        for s in [a, AgentSession(key: a.key, alias: "", activity: 1, state: .working, agents: 0)] {
-            m.interaction.follow(nil)
-            let pane = AgentInteractionPane(model: m.interaction, session: s, open: {}, ended: true)
-            XCTAssertFalse(pane.canSend, "\(s.state)")
-            XCTAssertFalse(pane.canInterrupt, "\(s.state)")
-            XCTAssertEqual(pane.placeholder, AgentInteractionPane.endedPlaceholder)
-        }
-        // A typed draft on the idle session (drafts are per followed session): only `ended` keeps Send off.
-        let typed = AgentWindowInteraction()
-        typed.follow(a)
-        typed.draft = "hello"
-        XCTAssertFalse(AgentInteractionPane(model: typed, session: a, open: {}, ended: true).canSend)
-        XCTAssertTrue(AgentInteractionPane(model: typed, session: a, open: {}, ended: false).canSend, "control")
         // The detail pane builds the plain, ended input (no lock store), never the live locked one.
         XCTAssertNil(detail.inputStore, "Ended: the plain pane with ended")
         // The "⋯" (and any ask for it): no question, nothing to confirm, the follow stays.
@@ -1325,35 +1278,5 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(AgentStateChip(state: s, ended: true).label, "Ended", "\(s)")
             XCTAssertEqual(width(AgentStateChip(state: s, ended: true)), slot, accuracy: 0.5, "\(s): the slot stays")
         }
-        // INFO-2: the terminal-first state's Open in terminal: off for an ended session, on for a live one.
-        XCTAssertFalse(TerminalFirstView(reason: "r", openTerminal: {}, ended: true).openEnabled, "ended: off")
-        XCTAssertTrue(TerminalFirstView(reason: "r", openTerminal: {}).openEnabled, "live: on")
-        // Through the transcript view (a fresh model is terminal-first, "No session selected"): only the
-        // button dims, so the ended render differs from the live one, and two live renders match.
-        func render(_ ended: Bool) throws -> Data {
-            let r = ImageRenderer(content: AgentTranscriptView(model: AgentTranscriptModel(), scrolls: false, openTerminal: {},
-                                                               ownsLifecycle: false, ended: ended)
-                .frame(width: 520).background(Neon.bgBottom).environment(\.colorScheme, .dark))
-            r.scale = 1
-            let cg = try XCTUnwrap(r.cgImage)
-            return try XCTUnwrap(NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]))
-        }
-        XCTAssertEqual(try render(false), try render(false), "control: a render is stable")
-        XCTAssertNotEqual(try render(true), try render(false), "ended: the button draws dimmed")
-        // INFO-3: the input field: not editable (nor selectable) when ended, in the same slot.
-        func field(_ ended: Bool) throws -> (AgentComposerTextView, CGFloat) {
-            let i = AgentWindowInteraction()
-            let (win, host) = hosted(AgentInteractionPane(model: i, session: a, open: {}, ended: ended).frame(width: 600),
-                                     CGSize(width: 600, height: 200))
-            defer { win.close() }
-            let tv = try XCTUnwrap(views(host, AgentComposerTextView.self).first)
-            return (tv, host.fittingSize.height)
-        }
-        let (dead, deadHeight) = try field(true)
-        let (live, liveHeight) = try field(false)
-        XCTAssertFalse(dead.isEditable, "ended: typing is dropped, so the field takes none")
-        XCTAssertFalse(dead.isSelectable)
-        XCTAssertTrue(live.isEditable, "live: it edits")
-        XCTAssertEqual(deadHeight, liveHeight, accuracy: 0.5, "the pane keeps its size")
     }
 }

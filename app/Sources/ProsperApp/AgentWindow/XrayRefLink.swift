@@ -190,9 +190,10 @@ final class XrayRefCache: ObservableObject {
         return c
     }
 
-    /// The product's focus: the window's focused pane in Transcript mode on a local session.
+    /// The product's focus: the window's focused pane on a local session that has no terminal to attach (#1471: was
+    /// Transcript mode; that is a History row or an ended session's held row now).
     static func focused(in w: AgentsNSWindow) -> Focus? {
-        guard let m = w.model, m.paneMode == .transcript,
+        guard let m = w.model, !m.paneHasTerminal,
               let t = XrayTarget.of(m.selectedRow), let dir = t.dir, let tr = m.focusedRuntime?.transcript,
               let id = tr.source?.sessionId, tr.source?.key == AgentSessionKey(dir: dir, name: t.name) else { return nil }
         return Focus(active: w.isKeyWindow && m.visible, target: t, key: AgentSessionKey(dir: dir, name: t.name), sessionID: id, mark: tr.blocks.last?.id ?? -1)

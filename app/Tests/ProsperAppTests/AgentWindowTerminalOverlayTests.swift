@@ -64,7 +64,7 @@ extension AgentWindowD1Tests {
         _ = fakeTerminal(m)
         m.setVisible(true)
         m.select(.live(s.key))
-        XCTAssertEqual(m.paneMode, .terminal, "a live session opens in Terminal")
+        XCTAssertTrue(m.paneHasTerminal, "a live session opens in Terminal")
         XCTAssertTrue(m.transcript.todos != nil, "the fixture's list is read")
         return (m, st, s.key)
     }
@@ -113,14 +113,10 @@ extension AgentWindowD1Tests {
     @MainActor
     func testTerminalFrameIsTheSameWithTheTodosListOpen() throws {
         try withModePref {
-            let saved = Preferences.agentWindowVerbosity
-            defer { Preferences.agentWindowVerbosity = saved }
-            Preferences.agentWindowVerbosity = .default
             try overlayRows { backing, size in
                 let (m, _, _) = try overlayModel()
                 defer { m.close() }
                 let tag = "backing \(backing) size \(size)"
-                XCTAssertEqual(m.verbosity, .default, "the list shows at the Default level only")
                 XCTAssertFalse(m.transcript.todosOpen)
                 let rig = OverlayRig(m, size: size, backing: backing)
                 defer { rig.close() }

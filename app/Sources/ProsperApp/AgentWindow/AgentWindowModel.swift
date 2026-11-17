@@ -914,11 +914,10 @@ final class AgentWindowModel: ObservableObject {
     private var filled = false
     /// #798: the input box, interrupt and prompt answers for the selected live session.
     let interaction = AgentWindowInteraction()
-    /// #821: how much of the conversation shows: one level for the window, per Mac. A switch
-    /// only re-projects the blocks already in memory (no read, no new file IO).
-    @Published var verbosity = Preferences.agentWindowVerbosity {
-        didSet { if verbosity != oldValue { Preferences.agentWindowVerbosity = verbosity } }
-    }
+    /// #847 D2.3, #1471 b: a first message the island could not send, shown over its pane's terminal until
+    /// Send or Dismiss (both drop the island's record) or the session ends. Never typed into the terminal by itself.
+    struct UnsentFirst: Equatable { let key: AgentSessionKey; let text: String }
+    @Published private(set) var unsentFirst: UnsentFirst?
     /// #828: the folded sidebar sections (titles), per Mac across window close and relaunch.
     /// Folding hides rows only: the selection, its transcript and Return stay as they were.
     @Published private(set) var collapsed = Preferences.agentWindowCollapsedSections {
@@ -1920,13 +1919,9 @@ final class AgentWindowModel: ObservableObject {
 
     nonisolated static func terminalKey(_ k: AgentSessionKey) -> String { "\(k.dir)\t\(k.name)" }
 
-    /// #1471: Terminal is the only mode (no toggle, no per-session choice; a stored one is never read). `.terminal`:
-    /// a live local or remote row; `.transcript` now only means nothing can attach (History, an ended session's held
-    /// row, none), so no terminal card shows where no terminal can be.
-    var paneMode: AgentPaneMode {
-        guard !focusedEnded, selectedRow?.session != nil || selectedRow?.remote != nil else { return .transcript }
-        return .terminal
-    }
+    /// #1471: Terminal is the only mode. True: a live local or remote row; false: nothing can attach (History, an ended
+    /// session's held row, none), so no terminal card shows where no terminal can be.
+    var paneHasTerminal: Bool { !focusedEnded && (selectedRow?.session != nil || selectedRow?.remote != nil) }
 
     // MARK: #847 New session
 
@@ -1993,7 +1988,7 @@ final class AgentWindowModel: ObservableObject {
     lazy var sayFirst: (_ key: AgentSessionKey, _ text: String, _ then: (@MainActor () -> Void)?) -> Void = {
         [weak self] key, text, then in
         self?.island().sayFirst(key, text) { @MainActor [weak self] in
-            self?.seedUnsentFirst(key, selectedOnly: true)
+            self?.showUnsentFirst(key, selectedOnly: true)
             then?()
         }
     }
@@ -2780,15 +2775,41 @@ final class AgentWindowModel: ObservableObject {
     /// catch-up poll when shown again. A pane that left the layout was already stopped by syncRuntimes.
     /// #822: the terminal attaches to a visible, focused, live session in Terminal mode and detaches on anything else.
     /// The transcript runs in both modes: the header's cwd and todos come from it, so a toggle never changes the header.
-    /// #847 D2.3: a first message the island could not send becomes the empty draft once (never over a typed one).
-    /// selectedOnly: only while `key` is the focused pane's live session of a visible window (follow()'s condition).
-    private func seedUnsentFirst(_ key: AgentSessionKey, selectedOnly: Bool) {
+    /// #847 D2.3, #1471 b: a first message the island could not send shows as the pane's notice (Terminal has no input
+    /// box to seed). selectedOnly: only while `key` is the focused pane's live session of a visible window (follow()'s).
+    private func showUnsentFirst(_ key: AgentSessionKey, selectedOnly: Bool) {
         if selectedOnly {
             guard visible, !closed, let f = focusedRuntime, f.ended == nil, case .live(let s)? = f.content, s.key == key else { return }
         }
-        if let c = interaction.controller, let t = c.unsentFirst[key], interaction.seedDraft(key: key, text: t) {
-            c.dropUnsentFirst(key)
+        if let t = interaction.controller?.unsentFirst[key], unsentFirst != UnsentFirst(key: key, text: t) {
+            unsentFirst = UnsentFirst(key: key, text: t)
         }
+    }
+
+    /// The notice's Dismiss: the notice goes and the island forgets the message.
+    func dismissUnsentFirst() {
+        guard let u = unsentFirst else { return }
+        interaction.controller?.dropUnsentFirst(u.key)
+        unsentFirst = nil
+    }
+
+    /// The notice's Copy: the whole raw text (newlines kept), to the app's pasteboard (tests hand in `put`).
+    func copyUnsentFirst(_ put: ((String) -> Void)? = nil) {
+        guard let t = unsentFirst?.text else { return }
+        if let put { put(t) } else { Pasteboard.general.clearContents(); Pasteboard.general.setString(t, forType: .string) }
+    }
+
+    /// The notice's Send: the whole text as one bracketed paste, sanitized as the terminal's own paste, no Return (the
+    /// person reads it in the prompt and sends it). Then as Dismiss. `write` is the focused terminal's input (tests: a recorder).
+    func sendUnsentFirst(_ write: (([UInt8]) -> Void)? = nil) {
+        guard let t = unsentFirst?.text else { return }
+        let bytes = Self.bracketedPaste(t)
+        if let write { write(bytes) } else { terminal.input(bytes) }
+        dismissUnsentFirst()
+    }
+
+    nonisolated static func bracketedPaste(_ text: String) -> [UInt8] {
+        Array(("\u{1B}[200~" + AgentTerminalController.pasteText(text) + "\u{1B}[201~").utf8)
     }
 
     private func follow() {
@@ -2824,12 +2845,17 @@ final class AgentWindowModel: ObservableObject {
             // #1477: gate on, an Ended pane's terminal keeps its last frame (its client already gone)
             // (its pending focus dropped: the session it was asked for is gone)
             if AgentPaneLayout.splitsEnabled && focusedRuntime?.ended != nil { terminal.dropPendingFocus() } else { terminal.attach(nil) }
+            // #1471 b: the session ended: its unsent-first notice goes with it (the record too: nothing can send it now).
+            // An Ended pane holds `.notRunning` content; its session is the kept target's (settle(_:target:)).
+            if let u = unsentFirst, let e = focusedRuntime?.ended, Self.rowID(e.target) == .live(u.key) {
+                dismissUnsentFirst()
+            }
             return
         }
         let transcript = f.transcript
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
         interaction.plan = withConfigDir(transcript.pendingPlan)
-        seedUnsentFirst(s.key, selectedOnly: false)
+        showUnsentFirst(s.key, selectedOnly: false)
         // #822: no input box (the terminal is the input); #1471: Terminal is the only mode.
         interaction.follow(nil)
         // #847: the New session form covers the pane, so no terminal under it.
@@ -2896,5 +2922,3 @@ final class AgentWindowModel: ObservableObject {
     }
 }
 
-/// #822, #1471: whether the focused pane can show a terminal (`.transcript`: nothing to attach; no longer a mode).
-enum AgentPaneMode: Equatable { case transcript, terminal }

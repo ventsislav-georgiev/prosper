@@ -1772,6 +1772,10 @@ tag from the now-released section and put it on the new top draft.
 - The small Command number in the Mini sidebar is readable on every theme. (#1505)
 - A session row's detail line (state, counts, age) now follows the UI size: at a smaller size the
   row is no longer held 14 pt tall by an empty age slot. (#1500)
+- Agent Sessions: Transcript mode is gone; every pane is a terminal, X-ray reads its tabs from dch,
+  Command-T and Command-L do nothing in a terminal pane, and a first message that could not be sent
+  now shows over the session's terminal with Copy, Send (pastes it without pressing Return) and
+  Dismiss. (#1471)
 
 ## v2.174.0
 

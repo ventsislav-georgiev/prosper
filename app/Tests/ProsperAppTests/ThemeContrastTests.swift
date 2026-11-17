@@ -214,7 +214,7 @@ final class ThemeContrastTests: XCTestCase {
     /// NeonSection's neonCard, the added line in ManagedConfigConsentSheet) and cardAddedRow (the "+"
     /// mark in DiffRow: card under a 12 percent wash of the token itself).
     /// Not in this rule: OpenInTerminalButton and AgentPillButton text (#1206 has its own row, testTerminalButtonTextClearsItsWashOverEachHost); the terminal icons
-    /// (AgentTranscriptView empty state, AgentsWindow todo icon, SyncPane checkmark) and the mixer's
+    /// (AgentsWindow todo icon, SyncPane checkmark) and the mixer's
     /// "playing" fill are glyphs, not text.
     func testTerminalTextClearsTheSurfacesItIsPaintedOn() throws {
         let themes = try themes()
@@ -239,8 +239,7 @@ final class ThemeContrastTests: XCTestCase {
     /// #1206: the terminal token as the TEXT of OpenInTerminalButton and AgentPillButton(tint: terminal):
     /// painted on Neon.terminal.opacity(0.12) over the host's surface, which SwiftUI composites per
     /// channel as host * 0.88 + terminal * 0.12 (the cardAddedRow formula). The hosts, by the view code:
-    /// bgTop/bgBottom (the window backdrop: TerminalFirstView in AgentTranscriptView:108, AgentActionNotice
-    /// in the composer and prompt panel AgentsWindow:1324/1423/1454, the new-session form AgentNewSession:181;
+    /// bgTop/bgBottom (the window backdrop: the new-session form AgentNewSession:181;
     /// the backdrop is the bgTop to bgBottom gradient) and card (AgentTerminalCard AgentTerminal:811 on
     /// its :830 fill, AgentNoticeLine AgentWindowControls:364 on its :369 fill). Written out, so the walk
     /// cannot quietly shrink; the theme list is literal and must be every bundled theme.

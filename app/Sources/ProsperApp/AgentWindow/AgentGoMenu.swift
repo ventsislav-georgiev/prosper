@@ -37,7 +37,6 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         e += (1...9).map { Entry("Jump to Session \($0 + 9)", "\($0)", oc, .key(.jump($0 + 9))) }   // #1470
         e += [
             nil,
-            Entry("Jump to Chapter\u{2026}", "l", c, .key(.chapters)),
             Entry("X-Ray\u{2026}", "x", sc, .key(.xray)),
             nil,
             Entry("Find\u{2026}", "f", c, .key(.find)),
@@ -151,7 +150,7 @@ extension AgentsNSWindow {
             guard let c = Self.keyTable.first(where: { $0.route == r }), let e = Self.keyEvent(c.key, c.mods, c.keyCode) else {
                 return false
             }
-            return Self.route(e, responder: .other, sidebarFocused: sidebarFocused, terminalMode: model.paneMode == .terminal,
+            return Self.route(e, responder: .other, sidebarFocused: sidebarFocused, terminalMode: model.paneHasTerminal,
                               renaming: renaming, form: form) == r
         }
     }

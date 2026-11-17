@@ -148,7 +148,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(win.performKeyEquivalent(with: digitKey(20, "3", window: win.windowNumber)))
             settle(host)
             XCTAssertEqual(m.selection, live("c"))
-            XCTAssertEqual(m.paneMode, .terminal, "#1471: Terminal is the only pane mode")
+            XCTAssertTrue(m.paneHasTerminal, "#1471: Terminal is the only pane mode")
             let tc = try XCTUnwrap(m.terminal.view, "c's terminal")
             XCTAssertTrue(win.firstResponder === tc, "c's terminal took the keys")
             // From c's terminal: Command-2 is still the window's; a's terminal takes the keys.
@@ -446,17 +446,15 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.number(live("s18")), 18)
             XCTAssertTrue(m.number(live("s19")) == nil && m.number(live("s20")) == nil, "row 19 and on: no number")
             XCTAssertFalse(m.selectNumbered(19))
-            for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
-                let level = m.verbosity
+            do {   // #1471: Terminal is the only pane mode
                 let keys: [(UInt16, NSEvent.ModifierFlags, String)] = [
                     (18, [.command, .option], "s10"), (25, [.command, .option], "s18"), (23, [.command, .option], "s14"),
                     (87, [.command, .option, .numericPad], "s14"), (25, .command, "s9"), (83, [.command, .option, .numericPad], "s10"),
                 ]
                 for (code, flags, want) in keys {
-                    XCTAssertTrue(win.performKeyEquivalent(with: digitKey(code, "", flags)), "handled (\(code), \(mode))")
-                    XCTAssertEqual(m.selection, live(want), "\(code) \(flags.rawValue) picks \(want) (\(mode))")
-                    XCTAssertEqual(m.paneMode, mode)
-                    XCTAssertEqual(m.verbosity, level, "never the detail level (\(code), \(mode))")
+                    XCTAssertTrue(win.performKeyEquivalent(with: digitKey(code, "", flags)), "handled (\(code))")
+                    XCTAssertEqual(m.selection, live(want), "\(code) \(flags.rawValue) picks \(want)")
+                    XCTAssertTrue(m.paneHasTerminal, "still a terminal pane (\(code))")
                 }
             }
             XCTAssertFalse(win.isVisible, "never shown")

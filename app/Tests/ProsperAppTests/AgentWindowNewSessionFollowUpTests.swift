@@ -195,7 +195,7 @@ extension AgentWindowD1Tests {
             m.setVisible(true)
             XCTAssertEqual(m.selection, live("web"), "shown again: the listed row lands")
             XCTAssertNil(m.newSession, "the form closed by the landing")
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             XCTAssertTrue(m.pendingSpawn == nil)
         }
     }
@@ -254,7 +254,7 @@ extension AgentWindowD1Tests {
             st.sessions = [other, mapped("web")]
             XCTAssertEqual(m.selection, live("web"), "the late row lands")
             XCTAssertNil(m.newSession, "the form closed by the landing")
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             XCTAssertTrue(m.terminal.focusPending, "the keys asked into its terminal")
             XCTAssertTrue(m.lateSpawn == nil)
         }
@@ -364,7 +364,7 @@ extension AgentWindowD1Tests {
             sidebarKeys(win)
             XCTAssertEqual(win.responderKind, .other)
             XCTAssertFalse(win.performKeyEquivalent(with: wiringKey(win, 17, "t", .command)), "#1471: Command-T is not the window's")
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             XCTAssertTrue(win.performKeyEquivalent(with: wiringKey(win, 125, "\u{F701}", .command)), "⌘↓ handled")
             XCTAssertEqual(m.selection, .live(a.key), "no pick")
             XCTAssertNotNil(m.newSession, "the form stays")

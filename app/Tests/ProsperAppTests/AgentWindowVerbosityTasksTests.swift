@@ -49,19 +49,10 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(a.todos?.items, [.init(text: "Add the toggle", status: "completed", id: "1"),
                                         .init(text: "Write the toggle tests", status: "in_progress", id: "2")])
         XCTAssertEqual(a.todos?.label, "Todos 1/2")
-        let blocks = a.blocks
-        // Default: no Task card but the two refused updates (success false, is_error); Verbose keeps every card.
-        let def = tags(TranscriptVerbosity.project(blocks, level: .default))
-        XCTAssertEqual(def.filter { $0.contains("(Task") }, ["line:card(TaskUpdate)", "line:card(TaskUpdate)"])
-        XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .verbose)).filter { $0.contains("(Task") }.count, 11)
-        // Focused: four tool steps (Bash, the two refused updates, the Agent call), one error.
-        XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .focused)),
-                       ["block:user", "summary:4/0/1:1", "block:assistant"])
+        // #1471: the Default/Verbose/Focused projections went with the transcript view.
         let w = assemble(try fixtureLines("2.1.318/d-todowrite.jsonl")[...])
         XCTAssertEqual(w.todos?.label, "Todos 1/3", "the refused rewrite in between changed nothing")
         XCTAssertEqual(w.todos?.items.map(\.text), ["Add the toggle", "Write the tests", "Update the docs"])
-        XCTAssertEqual(tags(TranscriptVerbosity.project(w.blocks, level: .default)).filter { $0.contains("TodoWrite") },
-                       ["line:card(TodoWrite)"], "only the refused call shows")
     }
 
     func testVerbosityTodosAfterPagingMatchTheWholeFileAtEverySplit() throws {
@@ -212,12 +203,12 @@ extension AgentWindowD1Tests {
             entry("system", ["subtype": "informational", "level": "notice", "content": "A notice"]),
             say("Done."),
         ]).blocks
-        let rows = TranscriptVerbosity.project(blocks, level: .focused)
+        let rows = TranscriptVerbosity.focused(blocks, working: false)
         guard rows.count == 3, case .summary(let s, _, _) = rows[1].kind else { return XCTFail("shape \(tags(rows))") }
         XCTAssertEqual(s.steps, 4, "Bash, Read, Grep and the Agent call; not thinking, text, the image, the todo card, the thread or the notice")
         XCTAssertEqual(s.label, "4 steps")
         let talk = asm([entry("user", ["message": ["role": "user", "content": "go"]]), say("Hmm."), say("Done.")]).blocks
-        XCTAssertEqual(tags(TranscriptVerbosity.project(talk, level: .focused)), ["block:user", "summary:0/0/0:0", "block:assistant"])
+        XCTAssertEqual(tags(TranscriptVerbosity.focused(talk, working: false)), ["block:user", "summary:0/0/0:0", "block:assistant"])
         XCTAssertEqual(TurnSummary(steps: 0, edits: 0, errors: 0, working: false).label, "No tool steps")
     }
 
@@ -234,7 +225,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(blocks.map(TranscriptVerbosity.isError), [false, false, false, true, false])
         XCTAssertFalse(TranscriptVerbosity.lineSummary(blocks[1]).error)
         XCTAssertTrue(TranscriptVerbosity.lineSummary(blocks[3]).error)
-        let rows = TranscriptVerbosity.project(blocks, level: .focused)
+        let rows = TranscriptVerbosity.focused(blocks, working: false)
         guard rows.count == 3, case .summary(let s, _, let errors) = rows[1].kind else { return XCTFail("shape \(tags(rows))") }
         XCTAssertEqual(tags(errors), ["line:bash"], "the failed tool only")
         XCTAssertEqual(s.errors, 1)
@@ -254,36 +245,11 @@ extension AgentWindowD1Tests {
         // The prompt's images keep it the lead: a second prompt right after them is the same turn.
         XCTAssertEqual(TranscriptVerbosity.turns(blocks).map(\.count), [6])
         // Focused draws them with the prompt, not inside the summary.
-        XCTAssertEqual(tags(TranscriptVerbosity.project(blocks, level: .focused)),
+        XCTAssertEqual(tags(TranscriptVerbosity.focused(blocks, working: false)),
                        ["block:user", "block:image", "block:image", "block:user", "summary:1/0/0:0", "block:assistant"])
     }
 
     // MARK: INFO-8: the hidden-entries footer is Verbose only
-
-    @MainActor
-    func testVerbosityHiddenEntriesFooterShowsInVerboseOnly() throws {
-        let pref = "agentWindowVerbosity"
-        let saved = Preferences.defaults.object(forKey: pref)
-        defer { Preferences.defaults.set(saved, forKey: pref) }
-        let convo = [entry("user", ["message": ["role": "user", "content": "go"]]), say("ok")]
-        let plain = tempDir().appendingPathComponent("plain.jsonl"), noisy = tempDir().appendingPathComponent("noisy.jsonl")
-        try write(plain, convo)
-        try write(noisy, convo + [entry("file-history-snapshot", ["snapshot": [:]])])
-        var heights: [String: CGFloat] = [:]
-        for (name, url) in [("plain", plain), ("noisy", noisy)] {
-            let m = windowModel(store([session(name, .idle, ago: 1, path: url.path)]))
-            m.setVisible(true)
-            defer { m.close() }
-            XCTAssertEqual(m.transcript.hiddenCount, name == "noisy" ? 1 : 0)
-            for level in AgentVerbosity.allCases {
-                let v = AgentTranscriptView(model: m.transcript, scrolls: false, ownsLifecycle: false, level: level)
-                heights["\(name) \(level)"] = NSHostingView(rootView: v.frame(width: 560)).fittingSize.height
-            }
-        }
-        XCTAssertEqual(heights["noisy focused"], heights["plain focused"])
-        XCTAssertEqual(heights["noisy default"], heights["plain default"])
-        XCTAssertGreaterThan(heights["noisy verbose"]!, heights["plain verbose"]!, "the footer line")
-    }
 
     // MARK: INFO-1: the open list is capped and closes on a session switch
 
@@ -384,14 +350,11 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(a.todos?.label, "Todos", "a list it cannot count shows no count")
         XCTAssertEqual(a.todos?.items.map(\.text), ["four"])
         XCTAssertTrue(a.todos?.partial == true)
-        XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") },
-                       ["line:card(TaskUpdate)", "line:card(TaskUpdate)"], "the updates it could not place stay visible")
         // Paged back to the start: the whole list, counted, and the cards fold into the chip.
         a.prepend(asm(early))
         a.fromStart = true
         XCTAssertEqual(a.todos?.label, "Todos 1/4")
         XCTAssertFalse(a.todos?.partial == true)
-        XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") }, [])
         // QA #657 r3 F1: every LOADED task completed is not Claude Code's clear (it resets only
         // when every task in its list is): the page after it still shows no count. Here #9 and
         // #10 are open further back; Claude Code's list is 9/12.
@@ -428,7 +391,6 @@ extension AgentWindowD1Tests {
             + [say("Done.")]
         var a = asm(events)
         XCTAssertEqual(a.todos?.label, "Todos 0/2")
-        XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") }, ["line:card(TaskUpdate)"])
         // The store disagrees with the transcript (a task made elsewhere, a status the file never saw): the store wins.
         try writeStore(dir, [("10", "ten", "pending"), ("2", "two", "completed"), ("9", "nine", "in_progress"), ("3", "hidden", "pending")],
                        hidden: ["3"])
@@ -436,8 +398,6 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(a.todos?.items, [.init(text: "two", status: "completed", id: "2"), .init(text: "nine", status: "in_progress", id: "9"),
                                         .init(text: "ten", status: "pending", id: "10")], "by id, internal tasks left out")
         XCTAssertEqual(a.todos?.label, "Todos 1/3")
-        XCTAssertEqual(tags(TranscriptVerbosity.project(a.blocks, level: .default)).filter { $0.contains("(Task") }, [],
-                       "the store stands for the update the transcript could not place")
         // A bad file is skipped.
         try Data("{not json".utf8).write(to: dir.appendingPathComponent("11.json"))
         try JSONSerialization.data(withJSONObject: ["id": "12", "subject": "x", "status": "deleted"]).write(to: dir.appendingPathComponent("12.json"))

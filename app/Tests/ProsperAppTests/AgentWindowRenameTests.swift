@@ -296,7 +296,6 @@ extension AgentWindowD1Tests {
             m.setVisible(true)
             defer { m.close() }
             m.select(.live(a.key))
-            let level = m.verbosity
             m.ask(.rename, a)
             let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 900, height: 600), styleMask: [.titled],
                                      backing: .buffered, defer: true)
@@ -316,9 +315,8 @@ extension AgentWindowD1Tests {
                                  context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!
             }
             _ = win.performKeyEquivalent(with: key(18, "", [.command, .option]))
-            XCTAssertEqual(m.verbosity, level, "Option-Command-1 stands down (#1470: row 10's key)")
             _ = win.performKeyEquivalent(with: key(17, "t", .command))
-            XCTAssertEqual(m.paneMode, .terminal, "Command-T stands down (#1471: no mode to switch)")
+            XCTAssertTrue(m.paneHasTerminal, "Command-T stands down (#1471: no mode to switch)")
             win.sendEvent(key(7, "x"))
             XCTAssertTrue(editor.string.hasSuffix("x"), "typing lands in the field: \(editor.string)")
             XCTAssertEqual(m.interaction.draft, "", "never in the composer")
@@ -331,7 +329,6 @@ extension AgentWindowD1Tests {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             XCTAssertTrue(subviews(host, AgentRenameTextField.self).isEmpty, "the title is back")
             XCTAssertTrue(win.performKeyEquivalent(with: key(18, "", [.command, .option])), "the window's again (row 10: none here)")
-            XCTAssertEqual(m.verbosity, level, "#1470: never the level")
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }
@@ -695,7 +692,7 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(header(false).menuButton.ended)
         XCTAssertEqual(header(false).menuButton.entries.first, .open(enabled: true), "live: Open in terminal, on, first")
         XCTAssertEqual(header(false).menuButton.help, "Open in terminal, rename, restart, stop or end this session")
-        XCTAssertEqual(header(true).menuButton.help, AgentPaneModeToggle.endedReason, "ended: the \"⋯\" says why, as the button did")
+        XCTAssertEqual(header(true).menuButton.help, AgentWindowControls.endedReason, "ended: the \"\u{22EF}\" says why, as the button did")
     }
 
     // MARK: Offscreen renders: the field takes the title's slot and moves nothing
@@ -725,13 +722,13 @@ extension AgentWindowD1Tests {
                     // controls' walk read one more ink run than the box holds.
                     for (label, size) in [("min", AgentsWindow.contentMinSize(scale: scale)),
                                           ("default", CGSize(width: 1000 * scale, height: 680 * scale))] {
-                        for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
+                        for mode in ["terminal"] {   // #1471: Terminal is the only pane mode
                             guard heavy || (scale == 1.0 && label == "default") else { continue }
                             ran += 1
                             // One pool per case: its three renders (bitmap + hosting view) go before the next.
                             try autoreleasepool {
                                 m.select(.live(s.key))
-                                let tag = "\(name)-\(mode == .terminal ? "terminal" : "transcript")-\(label)-\(scale)"
+                                let tag = "\(name)-\(mode)-\(label)-\(scale)"
                                 let plain = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
                                 m.ask(.rename, s)
                                 XCTAssertEqual(m.renaming, s.key)
@@ -770,7 +767,7 @@ extension AgentWindowD1Tests {
                                 // the "⋯" glyph stand 15 apart at 1.0, so it stopped at the "⋯" itself, right of menuLeft.
                                 let left = try XCTUnwrap(controlsLeft(plain, line: line, from: menuLeft, to: detail, gap: Int(sz(16) * px)), tag)
                                 if let controls = span(left, menuLeft, "the controls' box (\(tag))") {
-                                    XCTAssertEqual(controlCount(plain, x: controls, line: line, gap: Int(sz(4) * px)), mode == .transcript ? 2 : 1,
+                                    XCTAssertEqual(controlCount(plain, x: controls, line: line, gap: Int(sz(4) * px)), 1,
                                                    "the box holds the picker and the toggle, Terminal mode the toggle (\(tag))")
                                     XCTAssertEqual(differing(plain, editing, x: controls, y: 0..<hb), 0, "picker and toggle unmoved (\(tag))")
                                 }
@@ -918,26 +915,14 @@ extension AgentWindowD1Tests {
 
     // MARK: QA #672 carry
 
-    /// #2-#4: the ended composer's VoiceOver label, Ended's own glyph, and the off Open buttons' help.
+    /// #2-#4: the ended composer field's VoiceOver label, Ended's own glyph, and the off Open button's help.
     @MainActor
     func testAgentWindowEndedPaneSaysWhy() throws {
         XCTAssertEqual(AgentComposerField.label(editable: true), "Message Claude")
         XCTAssertEqual(AgentComposerField.label(editable: false), "Message Claude, session ended")
-        let a = session("a", .idle)
-        func composer(_ ended: Bool) throws -> AgentComposerTextView {
-            let (win, host) = hostedWindow(AgentInteractionPane(model: AgentWindowInteraction(), session: a, open: {}, ended: ended)
-                .frame(width: 600), CGSize(width: 600, height: 200))
-            defer { win.close() }
-            return try XCTUnwrap(subviews(host, AgentComposerTextView.self).first)
-        }
-        XCTAssertEqual(try composer(true).accessibilityLabel(), "Message Claude, session ended")
-        XCTAssertEqual(try composer(false).accessibilityLabel(), "Message Claude")
         XCTAssertEqual(AgentStateChip.endedGlyph, "○")
         XCTAssertFalse(AgentState.allCases.map(\.glyph).contains(AgentStateChip.endedGlyph), "Ended is no live state's glyph")
         XCTAssertEqual(OpenInTerminalButton(action: {}).help, "Open this session in the terminal app")
         XCTAssertEqual(OpenInTerminalButton(action: {}, ended: true).help, "This session ended: there is no terminal to attach to")
-        // Its two ended call sites: the terminal-first state and the header.
-        let first = TerminalFirstView(reason: "r", openTerminal: {}, ended: true)
-        XCTAssertFalse(first.openEnabled)
     }
 }

@@ -130,7 +130,6 @@ extension AgentWindowD1Tests {
         defer { ThemeRuntime.scale = saved }
         let restoreModes = transcriptMode(["api", "docs", "web"])
         defer { restoreModes() }
-        XCTAssertEqual(AgentInertComposer.needsInput, "Needs input · ⌘J")
         XCTAssertEqual(AgentStateChip(state: .blocked).label, "Needs input")
         XCTAssertEqual(AgentStateChip(state: .done).label, "Done")
         let size = CGSize(width: 1600, height: 700)

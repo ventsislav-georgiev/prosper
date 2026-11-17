@@ -980,8 +980,6 @@ enum PaneAction: Equatable {
     case layout(Int)
     /// ⌃Tab: the MRU pair.
     case previousLayout
-    /// ⇧⌘T: every pane Transcript or Terminal (Phase C).
-    case allModes
     /// ⌘J: the next session that needs you.
     case nextNeedsYou
     /// ⌃⌘S.
@@ -1028,7 +1026,6 @@ enum PaneKeys {
             if event.keyCode == 36 || event.keyCode == 76 { return many ? .zoom : nil }
             switch key {
             case "d": return c.splitsEnabled ? .split(.rows) : nil
-            case "t": return .allModes
             default: return nil
             }
         case [.command, .option]:

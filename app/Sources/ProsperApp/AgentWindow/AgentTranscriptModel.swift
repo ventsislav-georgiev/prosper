@@ -4,7 +4,7 @@ import os
 // #786 Agent window, spike A: one session's conversation model. Rules 4 (version
 // banner), 5 (health → terminal-first), 6 (session ↔ transcript mapping), 9
 // (bounded cost) and 11 (canary). No app wiring yet: a caller supplies
-// `AgentTranscriptSource` from dch's --ls-json row and shows `AgentTranscriptView`.
+// `AgentTranscriptSource` from dch's --ls-json row (#1471: the pane is a terminal; this model feeds the header and X-ray).
 
 /// The Claude Code versions the decoder was tested on (fixtures under
 /// Tests/Fixtures/claude-code/). Above `upper`, the window shows a quiet banner.

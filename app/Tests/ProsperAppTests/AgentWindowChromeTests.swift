@@ -94,28 +94,11 @@ extension AgentWindowD1Tests {
                 for (opacity, frost) in [(1.0, false), (0.8, false), (1.0, true), (0.8, true)] as [(CGFloat, Bool)] {
                     ThemeRuntime.opacity = opacity
                     ThemeRuntime.frost = frost
-                    for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
-                        let tag = "\(phase)-\(mode == .terminal ? "term" : "tx")-\(dark ? "dark" : "light")-s\(scale)-o\(opacity)\(frost ? "-frost" : "")"
-                        let size = CGSize(width: 1000 * scale, height: 680 * scale)
-                        let rep = try renderOver(AgentWindowRootView(model: m, scrolls: false), size: size, canvas: canvas, dark: dark, backing: 2)
-                        try saveTo860(rep, "window-\(tag)")
-                        guard mode == .transcript else { continue }
-                        // Padding spots of the detail column (the header's top-left, the input pane's
-                        // bottom-left, the transcript's right edge) and the rail's empty bottom slot,
-                        // next to Settings' SettingsBackground at the same spots.
-                        let side = AgentWindowModel.fullSidebarWidth + 1
-                        let detail = CGSize(width: size.width - side, height: size.height)
-                        let settings = try renderOver(SettingsBackground(), size: detail, canvas: canvas, dark: dark, backing: 2)
-                        var line = tag
-                        for (name, p) in [("header", CGPoint(x: 4 * scale, y: 4 * scale)),
-                                          ("input", CGPoint(x: 4 * scale, y: size.height - 3 * scale)),
-                                          ("transcript", CGPoint(x: detail.width - 4 * scale, y: size.height * 0.5))] {
-                            line += " \(name)=\(rgba(pixel(rep, CGPoint(x: side + p.x, y: p.y), in: size)))"
-                                + " settings=\(rgba(pixel(settings, p, in: detail)))"
-                        }
-                        line += " rail=\(rgba(pixel(rep, CGPoint(x: 4 * scale, y: size.height - 3 * scale), in: size)))"
-                        log.append(line)
-                    }
+                    let tag = "\(phase)-term-\(dark ? "dark" : "light")-s\(scale)-o\(opacity)\(frost ? "-frost" : "")"
+                    let size = CGSize(width: 1000 * scale, height: 680 * scale)
+                    let rep = try renderOver(AgentWindowRootView(model: m, scrolls: false), size: size, canvas: canvas, dark: dark, backing: 2)
+                    try saveTo860(rep, "window-\(tag)")
+                    log.append(tag)
                 }
             }
         }
@@ -388,7 +371,7 @@ extension AgentWindowD1Tests {
         // there is no terminal form of them.
         let (demo, _) = demoModel(Self.corpus.appendingPathComponent("2.1.318/b-compaction-agents-more-tools.jsonl"))
         defer { demo.close() }
-        XCTAssertEqual(demo.paneMode, .terminal, "#1471: Terminal is the only pane mode")
+        XCTAssertTrue(demo.paneHasTerminal, "#1471: Terminal is the only pane mode")
         let grey = NSColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1)
         let magenta = NSColor(srgbRed: 1, green: 0, blue: 1, alpha: 1)
         // Warm-up: the process's first offscreen gradient snapshot can come back part-drawn (seen at opacity

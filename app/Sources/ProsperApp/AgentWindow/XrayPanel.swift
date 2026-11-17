@@ -491,8 +491,6 @@ final class XrayPanelModel: ObservableObject {
         presentCard(t)
     }
 
-    /// #1352, design 3.3: "older than the loaded part", shown with the card when the prompt is above what can load.
-    static let olderNote = "The prompt is older than the loaded part."
     /// #1472: Read the prompt with no transcript, for a prompt dch's chapters read does not hold (not read, newer, gone).
     static let notReadNote = "The prompt is not among the chapters read."
 
@@ -519,9 +517,6 @@ final class XrayPanelModel: ObservableObject {
 
     /// The pane's chapters: dch's (#1389, #1471); a new poll or page redraws the panel.
     var chapters: [TranscriptOutline.Chapter] { dchChapters ?? [] }
-
-    /// #1471: no transcript to jump in, so a jump never lands: `card(false)` at once (XrayRefCard.jumpRef still calls it).
-    func go(_ anchor: String?, card: @escaping @MainActor (Bool) -> Void) { card(false) }
 
     /// dch xv_vis1 (xview.c:2283-2297): the filter (title, and the answer on Responses), then auto rows unless shown,
     /// then peer rows when hidden; newest first. Responses lists the chapters with an answer. `auto` / `peer`: true shows

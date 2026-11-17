@@ -61,7 +61,7 @@ extension AgentWindowD1Tests {
         let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         for width: CGFloat in [300, 360, 420, 480, 560, 700, 900] {
-            let header = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st, mode: .terminal)
+            let header = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st)
             let size = CGSize(width: width, height: 80)
             let (win, host) = headerHosted(header.frame(width: width, height: 80, alignment: .top), size)
             defer { win.close() }
@@ -128,10 +128,10 @@ extension AgentWindowD1Tests {
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             var heights: [CGFloat] = []
-            for mode in [AgentPaneMode.terminal, .transcript] {
+            for mode in ["terminal"] {   // #1471: Terminal is the only pane mode
                 var slots: [[CGRect]] = []
                 for (cwd, text) in cases {
-                    let header = AgentSessionHeader(row: row, session: a, cwd: cwd, open: {}, store: st, mode: mode)
+                    let header = AgentSessionHeader(row: row, session: a, cwd: cwd, open: {}, store: st)
                     XCTAssertEqual(header.project, text, "the text (\(cwd ?? "nil"))")
                     let width = 900 * scale
                     heights.append(NSHostingView(rootView: header.frame(width: width)).fittingSize.height)
@@ -167,10 +167,10 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// #1191: a fixed slot: Transcript mode's header is as high with no counts and no age as with them, at 0.7, 0.85
-    /// and 1.0, and as high as the row with counts measured before the slot existed (the slot did not grow).
+    /// #1191: a fixed slot: the header is as high with no counts and no age as with them, at 0.7, 0.85 and 1.0.
+    /// #1471 b: Terminal is the only mode, so it is one line (Transcript mode's two-line header is gone).
     @MainActor
-    func testTranscriptHeaderHeightIsTheSameWithAndWithoutCountsAndAge() throws {
+    func testHeaderHeightIsTheSameWithAndWithoutCountsAndAge() throws {
         let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
@@ -191,47 +191,13 @@ extension AgentWindowD1Tests {
             ThemeRuntime.scale = scale
             var h: [String: CGFloat] = [:]
             for (name, r) in rows {
-                let header = AgentSessionHeader(row: r, session: a, cwd: "/Users/example/project", open: {}, store: st,
-                                                mode: .transcript)
+                let header = AgentSessionHeader(row: r, session: a, cwd: "/Users/example/project", open: {}, store: st)
                 h[name] = NSHostingView(rootView: header.frame(width: 900 * scale)).fittingSize.height
             }
             let full = h["counts and age"] ?? -1
-            XCTAssertGreaterThan(full, AgentSessionHeader.height + sz(10), "two lines (\(scale))")
+            XCTAssertLessThan(full, AgentSessionHeader.height + sz(10), "one line (\(scale))")
             for (name, v) in h { XCTAssertEqual(v, full, accuracy: pixel, "\(name) is as high as counts and age (\(scale))") }
-            print("#1191 transcript heights \(scale): \(h)")
-        }
-    }
-
-    /// #1191 round 3: Transcript mode's counts start under the title's leading edge (the slot's placeholder takes no
-    /// part in the line's spacing), at 0.7, 0.85 and 1.0. Real accessibility frames of a never-shown window.
-    @MainActor
-    func testTranscriptCountsAlignWithTheTitleLeadingEdge() throws {
-        let saved = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = saved }
-        let a = session("api", .working, ago: 40, agents: 3)
-        let st = store([a])
-        st.controlDch = bin([1, 38, 0])
-        let m = windowModel(st)
-        m.setVisible(true)
-        defer { m.close() }
-        m.select(.live(a.key))
-        let row = try XCTUnwrap(m.selectedRow)
-        let restoreAX = AXTreeSupport.axOn()
-        defer { restoreAX() }
-        for scale: CGFloat in [0.7, 0.85, 1.0] {
-            ThemeRuntime.scale = scale
-            let header = AgentSessionHeader(row: row, session: a, cwd: "/Users/example/project", open: {}, store: st,
-                                            mode: .transcript)
-            let (win, tree) = headerAXTree(header, CGSize(width: 900 * scale, height: 90 * scale)) { $0.named("Session actions") }
-            defer { win.close() }
-            let title = try XCTUnwrap(tree.first { !$0.ignored && $0.label == "api" }, "the title (\(scale))").frame
-            let count = try XCTUnwrap(tree.first { $0.reads("3 agents") }, "the first count group (\(scale))").frame
-            print("#1191 r3 \(scale): title minX \(title.minX) count minX \(count.minX)")
-            XCTAssertGreaterThan(abs(count.midY - title.midY), sz(10), "the counts are on the second line (\(scale))")
-            // Ticket 4 read the group's frame 1 pt (at 1.0) right of the title's: the group's own inset, not spacing. The
-            // indent this guards against is the line's spacing, sz(6): over sz(4).
-            XCTAssertEqual(count.minX, title.minX, accuracy: sz(2), "the counts start under the title (\(scale))")
-            XCTAssertFalse(win.isVisible, "never on screen")
+            print("#1191 header heights \(scale): \(h)")
         }
     }
 
@@ -254,7 +220,7 @@ extension AgentWindowD1Tests {
             var checked = 0
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
-                for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
+                for mode in ["terminal"] {   // #1471: Terminal is the only pane mode
                     let title = try XCTUnwrap(wm.selectedRow?.title)
                     let tag = "\(scale) \(mode)"
                     let size = CGSize(width: 1000 * scale, height: 680 * scale)
@@ -342,22 +308,16 @@ extension AgentWindowD1Tests {
         var log: [String] = []
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
-            var heights: [AgentPaneMode: [CGFloat]] = [:]
+            var heights: [String: [CGFloat]] = [:]
             for w: CGFloat in [640, 1000] {
                 let room = w * scale - AgentWindowModel.fullSidebarWidth - 1
-                for mode in [AgentPaneMode.terminal, .transcript] {
-                    let h = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, level: .constant(.default),
-                                               todos: todos, store: st, mode: mode)
+                for mode in ["terminal"] {   // #1471: Terminal is the only pane mode
+                    let h = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, todos: todos, store: st)
                     let fit = NSHostingView(rootView: h.frame(width: room)).fittingSize.height
                     heights[mode, default: []].append(fit)
-                    log.append(String(format: "%@ %.2f w%.0f h=%.1f", mode == .terminal ? "terminal" : "transcript", scale, w, fit))
-                    if mode == .terminal {
-                        // One line: the padding and the line's own height, no more.
-                        XCTAssertEqual(fit, AgentSessionHeader.height, accuracy: 1, "one line (fittingSize rounds up) (\(scale) \(w))")
-                    } else {
-                        // The title line and the folder line.
-                        XCTAssertGreaterThan(fit, AgentSessionHeader.height + sz(10), "Transcript: two lines (\(scale) \(w))")
-                    }
+                    log.append(String(format: "%@ %.2f w%.0f h=%.1f", mode, scale, w, fit))
+                    // One line: the padding and the line's own height, no more.
+                    XCTAssertEqual(fit, AgentSessionHeader.height, accuracy: 1, "one line (fittingSize rounds up) (\(scale) \(w))")
                     XCTAssertLessThan(fit, sz(80), "lower than before (base: 86 pt at 1.0) (\(mode) \(scale) \(w))")
                     guard w == 640 else { continue }   // the narrowest pane: where a cut line would spill
                     let size = CGSize(width: room, height: fit)
@@ -375,8 +335,7 @@ extension AgentWindowD1Tests {
             // Rename: the field lies over the one-line slot at the narrowest pane, in its line, tall enough for its text.
             let room = 640 * scale - AgentWindowModel.fullSidebarWidth - 1
             let edit = AgentRenameEdit(key: a.key, text: Self.headerTitle)
-            let h = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st, rename: edit,
-                                       mode: .terminal)
+            let h = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st, rename: edit)
             let height = NSHostingView(rootView: h.frame(width: room)).fittingSize.height
             let (win, host) = headerHosted(h.frame(width: room, height: height), CGSize(width: room, height: height))
             defer { win.close() }
@@ -394,7 +353,7 @@ extension AgentWindowD1Tests {
     }
 
     /// The refusal texts that tell the user to "Open in terminal": the window's own show beside a button
-    /// (AgentActionNotice); the island's Message refusals reach the pane's notice line, which draws the button now
+    /// (the notice line); the island's Message refusals reach the pane's notice line, which draws the button now
     /// that the header has none. Every one carries the menu item's words.
     @MainActor
     func testNoticeLineDrawsOpenInTerminalBesideATextThatNamesIt() throws {
@@ -447,10 +406,10 @@ extension AgentWindowD1Tests {
         let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         let path = "/srv/api"
-        for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
+        for mode in ["terminal"] {   // #1471: Terminal is the only pane mode
             for renaming in [false, true] {
                 let edit = renaming ? AgentRenameEdit(key: a.key, text: "api-qa") : nil
-                let header = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, store: st, rename: edit, mode: mode)
+                let header = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, store: st, rename: edit)
                 let (win, tree) = headerAXTree(header, CGSize(width: 900, height: 80)) { e in
                     renaming ? e.role == "AXTextField" : e.named("Session actions")
                 }
@@ -493,7 +452,7 @@ extension AgentWindowD1Tests {
         let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         for ended in [false, true] {
-            let header = AgentSessionHeader(row: row, session: a, cwd: "/srv/api", open: {}, store: st, ended: ended, mode: .terminal)
+            let header = AgentSessionHeader(row: row, session: a, cwd: "/srv/api", open: {}, store: st, ended: ended)
             let (win, tree) = headerAXTree(header, CGSize(width: 700, height: 80)) { $0.named("Session actions") }
             defer { win.close() }
             let menu = tree.filter { $0.named("Session actions") }

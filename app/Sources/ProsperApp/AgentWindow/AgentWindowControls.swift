@@ -44,8 +44,6 @@ enum AgentWindowMenuEntry: Equatable {
     case pane(String, enabled: Bool, verb: AgentPaneVerb)
     /// #900 B2 step 6b1 (7.1): a live row's "Open to the Side" (only with the split gate on): runs at once, asks nothing.
     case side(String, enabled: Bool)
-    /// #1319 (spec 8.3): "Jump to Chapter... Command-L" for `pane`'s header; off in a terminal pane.
-    case chapters(enabled: Bool, pane: UUID)
     /// #1351: "X-Ray... Shift-Command-X" for `pane`'s header; only at or above XrayTabs.gate.
     case xray(pane: UUID)
 }
@@ -124,11 +122,10 @@ extension AgentWindowMenuEntry {
             case .action(.zoom): AgentMenuSymbol.zoom
             case .action(.closePane): AgentMenuSymbol.closePane
             // R1358-n1: the menu draws only the cases above; every other PaneAction is named, so a new one fails to compile.
-            case .action(.focus), .action(.cycle), .action(.layout), .action(.previousLayout), .action(.allModes),
+            case .action(.focus), .action(.cycle), .action(.layout), .action(.previousLayout),
                  .action(.nextNeedsYou), .action(.toggleSidebar), .action(.sidebar): nil
             }
         case .side: AgentMenuSymbol.side
-        case .chapters: AgentMenuSymbol.chapters
         case .xray: AgentMenuSymbol.xray
         }
     }
@@ -251,6 +248,8 @@ enum AgentWindowControls {
 
     /// #1103: Open in terminal's title, the words of the button it replaced (and of every text that names it).
     static let openLabel = "Open in terminal"
+    /// QA #672 #4: why Open in terminal is off for an ended session (#1471: moved here from the old mode toggle).
+    static let endedReason = "This session ended: there is no terminal to attach to"
 
     /// #1103: the header "⋯" and a live row's context menu: Open in terminal first, then `menu`. An ended session's
     /// (a held row; the header passes no store) offers Open in terminal, off, and nothing else.
@@ -289,8 +288,6 @@ enum AgentWindowControls {
     }
 
     static let closePaneLabel = "Close Pane (the session keeps running)"
-    /// #1319: the "..." item of the Command-L list.
-    static let chaptersLabel = "Jump to Chapter\u{2026} \u{2318}L"
     /// #1351: the "..." item of the X-ray panel.
     static let xrayLabel = "X-Ray\u{2026} \u{21E7}\u{2318}X"
 
@@ -688,10 +685,6 @@ struct AgentMenuEntries: View {
                 Button { pane(verb) } label: { Label(title, systemImage: e.symbol ?? "") }.disabled(!enabled)
             case .side(let title, let enabled):
                 Button(action: side) { Label(title, systemImage: e.symbol ?? "") }.disabled(!enabled)
-            case .chapters(let enabled, let pane):
-                Button { AgentsNSWindow.chaptersChosen(pane: pane) } label: {
-                    Label(AgentWindowControls.chaptersLabel, systemImage: e.symbol ?? "")
-                }.disabled(!enabled)
             case .xray(let pane):
                 Button { AgentsNSWindow.xrayChosen(pane: pane) } label: {
                     Label(AgentWindowControls.xrayLabel, systemImage: e.symbol ?? "")
@@ -748,7 +741,7 @@ struct AgentSessionMenuButton: View {
     /// session's too, whose menu then opens for them). Gate off or no pane items: today's three texts exactly.
     static func help(_ s: AgentSession, ended: Bool, panes: [AgentWindowMenuEntry],
                      splits: Bool = AgentPaneLayout.splitsEnabled) -> String {
-        let today = ended ? AgentPaneModeToggle.endedReason : help(s)
+        let today = ended ? AgentWindowControls.endedReason : help(s)
         let verbs = panes.compactMap { (e: AgentWindowMenuEntry) -> AgentPaneVerb? in
             if case let .pane(_, _, v) = e { v } else { nil }
         }
@@ -1018,17 +1011,48 @@ struct AgentNoticeLine: View {
     static func offersOpen(_ text: String) -> Bool { text.contains(AgentWindowControls.openLabel) }
 }
 
-/// Spec 3.5: the input box under the store's eye: while a Restart or Stop's running text shows
-/// on the session, Send, Interrupt and the prompt's answers are off and the box says why.
-struct AgentLockedInteraction: View {
-    @ObservedObject var store: AgentIslandStore
-    let model: AgentWindowInteraction
-    let session: AgentSession
-    let open: () -> Void
+/// #847 D2.3, #1471 b (R1471a-m1): a first message the island could not send, over the focused pane's terminal in the
+/// notice line's look: the text cut for display only (Copy and Send take the raw text), Copy, Send (one bracketed
+/// paste, no Return) and Dismiss. Nothing reaches the terminal before Send.
+struct AgentUnsentFirstLine: View {
+    let text: String
+    let copy: () -> Void
+    let send: () -> Void
+    let dismiss: () -> Void
+
+    static let title = "Your first message was not sent"
+    static let maxShown = 80
+
+    /// One line: newlines folded to spaces, cut by Characters (a grapheme stays whole) to `maxShown` with an ellipsis, then
+    /// OutsideText's rule for what may be drawn (controls, bidi and invisibles dropped) with no second cut: it may split
+    /// a ZWJ emoji into its parts, and a cut after that could keep only some of them.
+    static func shown(_ raw: String) -> String {
+        let one = raw.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).joined(separator: " ")
+        let cut = one.count <= maxShown ? one : String(one.prefix(maxShown - 1)) + "\u{2026}"
+        return OutsideText.shown(cut, max: Int.max)
+    }
 
     var body: some View {
-        AgentInteractionPane(model: model, session: session, open: open,
-                             lock: AgentWindowControls.lock(store.actions[session.key]))
+        let line = Self.shown(text)
+        HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
+            HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
+                Image(systemName: "info.circle").foregroundStyle(Neon.blue)
+                Text(verbatim: Self.title + ": ").foregroundStyle(Neon.textPrimary)
+                Text(verbatim: line).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail)
+            }
+            .accessibilityElement(children: .ignore).accessibilityLabel(Self.title).accessibilityValue(line)
+            Spacer(minLength: 0)
+            Button("Copy", action: copy).accessibilityLabel("Copy first message")
+            Button("Send", action: send).accessibilityLabel("Send first message to the terminal")
+            Button("Dismiss", action: dismiss).accessibilityLabel("Dismiss")
+        }
+        .buttonStyle(.link)
+        .font(Neon.font(11))
+        .padding(.horizontal, sz(16)).padding(.vertical, sz(6))
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .background(Neon.card)
+        .overlay(alignment: .bottom) { Rectangle().fill(Neon.stroke).frame(height: 1) }
+        .modifier(AgentPaneProbe(kind: "unsentFirst"))
     }
 }
 
@@ -1138,3 +1162,57 @@ final class AgentRenameTextField: NSTextField {
         window?.makeFirstResponder(self)
     }
 }
+// MARK: - Pieces
+
+/// #797: the one "Open in terminal" look (the terminal-first state, the failed-attach card, a notice that names it;
+/// #1103: the header's moved into its "..." menu, AgentWindowControls.sessionMenu).
+struct OpenInTerminalButton: View {
+    let action: () -> Void
+    /// Icon only (beside a notice or a card's other button).
+    var compact = false
+    /// QA #668 F1: the session ended: off and dimmed in its slot; QA #672 #4: its help says why.
+    var ended = false
+    static let help = "Open this session in the terminal app"
+    var help: String { ended ? AgentWindowControls.endedReason : Self.help }
+    var body: some View {
+        Button(action: action) {
+            Label(AgentWindowControls.openLabel, systemImage: "terminal")
+                .labelStyle(OpenInTerminalLabelStyle(compact: compact))
+                .font(Neon.font(11, weight: .semibold))
+                .foregroundStyle(Neon.terminal)
+                .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
+                .background(Capsule().fill(Neon.terminal.opacity(0.12)))
+                .overlay(Capsule().stroke(Neon.terminal.opacity(0.45), lineWidth: 1))
+                .contentShape(Capsule())
+                .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .disabled(ended).opacity(ended ? 0.45 : 1)
+        .help(help)
+        .accessibilityLabel(AgentWindowControls.openLabel)
+    }
+}
+
+private struct OpenInTerminalLabelStyle: LabelStyle {
+    let compact: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        if compact { configuration.icon } else { Label(configuration) }
+    }
+}
+
+/// Inline Markdown for model text, with links only for http/https. Model output is
+/// untrusted: any other scheme (prosper://sleep, file://, javascript:, mailto:, other
+/// apps' schemes) is reduced to plain text, so it is neither drawn as a link nor clickable.
+func transcriptMarkdown(_ s: String) -> AttributedString? {
+    guard var a = try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+    else { return nil }
+    let unsafe = a.runs.filter { r in
+        r.imageURL != nil || r.link.map { !["http", "https"].contains($0.scheme?.lowercased() ?? "") } == true
+    }.map(\.range)
+    for r in unsafe {
+        a[r].link = nil
+        a[r].imageURL = nil
+    }
+    return a
+}
+

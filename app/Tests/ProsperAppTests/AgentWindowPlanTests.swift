@@ -803,12 +803,6 @@ final class AgentWindowPlanTests: XCTestCase {
         XCTAssertEqual(both.pendingPlan?.file, b, "the later page's is the newer")
     }
 
-    /// Round 2: the plan box shows the transcript's text with every hidden character escaped.
-    func testAgentWindowPlanBoxEscapesHiddenCharacters() {
-        XCTAssertEqual(AgentPromptPanel.planDisplay("Run a\u{202E}txt.exe\nthen b\u{200B}c"), "Run a⟨U+202E⟩txt.exe\nthen b⟨U+200B⟩c")
-        XCTAssertEqual(AgentPromptPanel.planDisplay("# Plan\n\n1. Step"), "# Plan\n\n1. Step", "newlines stay lines")
-    }
-
     /// #1092: the window gives a plan kept in a file the focused session's config_dir from dch's live record (the
     /// controller's seam), and only that session's; no record: "" (the home's plans).
     @MainActor

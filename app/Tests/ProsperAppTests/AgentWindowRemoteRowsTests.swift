@@ -137,12 +137,11 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
         m.select(.live(Self.localKey))
         let watchesBefore = log.watches
         // A Transcript choice remembered for "api" by another row would leave it unattached; Terminal attaches as before.
-        if m.paneMode == .terminal { XCTAssertEqual(log.spawns.last?.args, ["-E", "-a", "api", "--scrollback", "2000"], "a local row attaches as before") }
+        if m.paneHasTerminal { XCTAssertEqual(log.spawns.last?.args, ["-E", "-a", "api", "--scrollback", "2000"], "a local row attaches as before") }
         let id = AgentSidebar.RowID.remote(host: "host-a", name: "api")
         m.click(id)
         XCTAssertEqual(m.selection, id)
-        XCTAssertEqual(m.paneMode, .terminal)
-        XCTAssertEqual(m.paneMode, .terminal)
+        XCTAssertTrue(m.paneHasTerminal)
         XCTAssertEqual(log.spawns.last?.args, ["-E", "--host", "host-a", "-a", "api", "--scrollback", "2000"],
                        "the remote attach, --host form, with the scrollback every 1.40+ client asks for")
         XCTAssertTrue(log.spawns.last?.env["DCH_SOCKET_DIR"] == nil, "no local socket dir for a remote attach")
@@ -152,7 +151,7 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
         XCTAssertTrue(m.focusedLive == nil, "no island session behind it: no answers, no hooks")
         XCTAssertFalse(m.openSelected(), "no local Open in terminal")
         // The header's disabled controls each say why.
-        for reason in [AgentRemoteHeader.levelReason, AgentRemoteHeader.todosReason] {
+        for reason in [AgentRemoteHeader.todosReason] {
             XCTAssertFalse(reason.isEmpty)
         }
     }

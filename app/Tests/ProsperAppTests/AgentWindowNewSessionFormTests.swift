@@ -271,11 +271,11 @@ extension AgentWindowD1Tests {
 
     // MARK: Rider (R1369): the unsent first message seeded at the failure
 
-    /// The failure lands while the session is selected: its empty draft holds the text with no reselect, once; a
-    /// filled draft is never overwritten; a session not selected keeps the text for its selection (follow()).
-    /// #1471: no input box to type in: the seeded draft is the filled one (was: "typed by hand").
+    /// The failure lands while the session is selected: the notice shows it with no reselect (#1471 b: a notice over
+    /// the terminal, no draft); a session not selected keeps the text for its selection (follow()); a newer failure for
+    /// the shown session replaces the text. The record stays until Send or Dismiss.
     @MainActor
-    func testAgentWindowNewSessionUnsentFirstSeedsTheSelectedSessionAtTheFailure() {
+    func testAgentWindowNewSessionUnsentFirstShowsForTheSelectedSessionAtTheFailure() {
         withNewSessionPrefs {
             let a = session("api", .idle), b = session("web", .idle)
             let spawns = SpawnCalls(), m = newSessionModel(store([a, b]), spawns)
@@ -289,14 +289,15 @@ extension AgentWindowD1Tests {
                 wait(for: [done], timeout: 10)
             }
             say(a.key, "Example task for api")
-            XCTAssertEqual(m.interaction.draft(for: a.key), "Example task for api", "seeded at the failure, no reselect")
-            XCTAssertTrue(island.unsentFirst[a.key] == nil, "taken once")
+            XCTAssertEqual(m.unsentFirst, AgentWindowModel.UnsentFirst(key: a.key, text: "Example task for api"), "shown at the failure, no reselect")
+            XCTAssertEqual(m.interaction.draft(for: a.key), "", "no draft is seeded")
+            XCTAssertEqual(island.unsentFirst[a.key], "Example task for api", "kept until Send or Dismiss")
             say(b.key, "Example task for web")
-            XCTAssertEqual(m.interaction.draft(for: b.key), "", "web is not selected: not yet")
+            XCTAssertEqual(m.unsentFirst?.key, a.key, "web is not selected: not yet")
             XCTAssertEqual(island.unsentFirst[b.key], "Example task for web", "kept for its selection")
             say(a.key, "Example task again")
-            XCTAssertEqual(m.interaction.draft(for: a.key), "Example task for api", "a filled draft is never overwritten")
-            XCTAssertEqual(island.unsentFirst[a.key], "Example task again", "kept until the draft is gone")
+            XCTAssertEqual(m.unsentFirst, AgentWindowModel.UnsentFirst(key: a.key, text: "Example task again"), "the newer failure shows")
+            XCTAssertEqual(island.unsentFirst[a.key], "Example task again")
             XCTAssertTrue(spawns.calls.isEmpty)
         }
     }

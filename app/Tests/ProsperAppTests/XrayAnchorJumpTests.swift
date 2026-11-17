@@ -48,40 +48,17 @@ final class XrayAnchorJumpTests: XCTestCase {
         return c.text
     }
 
-    func jump(_ s: Scene, _ anchor: String) -> TranscriptJumper.AnchorJump? {
-        var out: TranscriptJumper.AnchorJump?
-        TranscriptJumper.of(s.model).jump(anchor: anchor, in: s.model) { out = $0 }
-        return out
-    }
-
     /// JumpFixture: turn i's prompt is line 4i (prompt, tool call, result, reply).
     static func promptLine(_ turn: Int) -> Int { 4 * turn }
 
-    /// Red at TIP: no jump(anchor:). The anchor's offset is the start of turn 6's prompt line: that block.
-    func testAnchorMapsToItsBlock() throws {
-        let s = try scene()
-        defer { s.model.stop() }
-        let r = jump(s, s.anchor(line: Self.promptLine(6)))
-        guard case .jumped(let id)? = r else { return XCTFail("jumped: \(String(describing: r))") }
-        XCTAssertEqual(prompt(s.model, id), "Prompt 6")
-        XCTAssertEqual(TranscriptJumper.of(s.model).request?.block, id, "through the #1319 seam")
-        XCTAssertEqual(jump(s, "f\(s.inode):\(s.starts[Self.promptLine(6)] + 1)"), .refused, "not a line start")
-        XCTAssertEqual(jump(s, "f\(s.inode &+ 1):\(s.starts[Self.promptLine(6)])"), .refused, "another file (inode)")
-    }
-
-    /// Red with no-anchorOK: a 130-digit offset of zeros parses to 0 (turn 0's prompt) and would jump.
+    /// Red with no-anchorOK: a 130-digit offset of zeros parses to 0 and would pass. #1471: the transcript jump is gone;
+    /// the anchor check stays (X-ray's card opens from it).
     func testBadAnchorIsRefused() throws {
         let s = try scene()
         defer { s.model.stop() }
         let padded = "f\(s.inode):" + String(repeating: "0", count: 130)
         XCTAssertFalse(DchCtl.anchorOK(padded), "over 128 bytes")
-        XCTAssertEqual(jump(s, padded), .refused)
-        for bad in ["", "f\(s.inode)", "f\(s.inode):1:2", "c3", "f\(s.inode):-1", "f\(s.inode):+0", "f\(s.inode):0;x",
-                    "f:0", "g\(s.inode):0", "f\(s.inode):99999999999999999999999"] {
-            XCTAssertEqual(jump(s, bad), .refused, bad)
-        }
-        XCTAssertTrue(TranscriptJumper.of(s.model).request == nil, "no jump asked for")
-        guard case .jumped? = jump(s, "f\(s.inode):0") else { return XCTFail("control: the same anchor unpadded jumps") }
+        XCTAssertTrue(DchCtl.anchorOK("f\(s.inode):0"), "control: the same anchor unpadded")
     }
 
     /// A command row (no chapter) and a "?<n>" row open the card; so does a refused anchor.
@@ -99,7 +76,6 @@ final class XrayAnchorJumpTests: XCTestCase {
         p.presentCard = { cards.append($0.id) }
         for t in tasks { p.activate(t) }
         XCTAssertEqual(cards, ["OQ-7", "?3", "4"])
-        XCTAssertTrue(TranscriptJumper.of(s.model).request == nil, "no jump")
     }
 
     /// Terminal mode, and a remote row: no transcript, so the card (through the window's presenter for a task).
@@ -144,7 +120,7 @@ final class XrayAnchorJumpTests: XCTestCase {
         XrayPanels.model = { [weak m] _ in m }
         XrayPanels.window = { [weak win] _ in win }
         let pane = m.layout.focused
-        XCTAssertEqual(m.paneMode, .terminal)
+        XCTAssertTrue(m.paneHasTerminal)
         XCTAssertTrue(win.toggleXray())
         let p = try XCTUnwrap(XrayPanels.shared.open[pane])
         await p.reading?.value
@@ -156,7 +132,7 @@ final class XrayAnchorJumpTests: XCTestCase {
         p.openMemoryCard(mem)
         XCTAssertEqual(cards.presents, 2, "the memory card through the same presenter (XrayPanels.window)")
         XCTAssertEqual(cards.size, XrayMemoryCard.size)
-        XCTAssertEqual(m.paneMode, .terminal, "#1471: still a terminal (no mode to switch to)")
+        XCTAssertTrue(m.paneHasTerminal, "#1471: still a terminal (no mode to switch to)")
         XCTAssertTrue(XrayPanels.fromDch(pane, p.target) && XrayPanels.fromDch(pane, XrayTarget(name: "host:api", dir: nil)),
                       "#1471: a local and a remote row both read dch")
         XCTAssertEqual(spawns.count, 0, "no terminal spawned")

@@ -710,12 +710,10 @@ final class AgentWindowTests: XCTestCase {
     // MARK: - Rule 11: corpus and canary
 
     @MainActor
-    func testEveryFixtureDecodesAndRendersWithNoBlankBlock() throws {
+    func testEveryFixtureDecodesWithNoFailedBlock() throws {
         let files = Self.fixtures()
         XCTAssertGreaterThanOrEqual(files.count, 7)
         var perVersion: [String: Int] = [:]
-        let saved = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = saved }
         for f in files {
             let v = f.deletingLastPathComponent().lastPathComponent
             perVersion[v, default: 0] += 1
@@ -740,15 +738,6 @@ final class AgentWindowTests: XCTestCase {
             } else {
                 XCTAssertEqual(m.banner, ClaudeCodeCompat.newerBanner)
                 XCTAssertGreaterThan(m.counts[v]?.degraded ?? 0, 0)
-            }
-            for scale: CGFloat in [0.85, 1.0] {
-                ThemeRuntime.scale = scale
-                for b in all {
-                    for expanded in [false, true] {
-                        let ink = try inkPixels(TranscriptBlockView(block: b, expanded: expanded))
-                        XCTAssertGreaterThan(ink, 30, "\(f.lastPathComponent) block \(b.id) \(b.body) at \(scale) renders blank")
-                    }
-                }
             }
         }
         for (v, n) in perVersion where !ClaudeCodeCompat.isNewer(v) {
@@ -824,83 +813,4 @@ final class AgentWindowTests: XCTestCase {
 
     lazy var renderDir: URL = tempDir("agent-window-renders")
 
-    @MainActor
-    func testRendersEveryBlockKindTheBannerAndTheTerminalFirstStateOffscreen() throws {
-        let saved = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = saved }
-        let longOut = (0..<8).map { "test \($0) passed" }.joined(separator: "\n")
-        let kinds: [(String, BlockBody, TranscriptTier)] = [
-            ("user", .user(Clip("Please tidy the parser and run the checks.", cap: 999)), .specific),
-            ("assistant", .assistant(Clip("Done. The parser now uses **`let b = 3`** and the tests pass.", cap: 999)), .specific),
-            ("thinking", .thinking(Clip("Read the file first, then edit, then run the tests.", cap: 999)), .specific),
-            ("bash", .bash(command: "swift test --filter ParserTests", description: "Run the parser tests",
-                           output: Clip(longOut, cap: 999), isError: false), .specific),
-            ("bash-error", .bash(command: "make lint", description: nil, output: Clip("Exit code 2", cap: 999), isError: true), .specific),
-            ("diff", .diff(tool: "Edit", path: "/Users/example/project/Sources/Parser.swift",
-                           lines: [DiffLine(kind: .context, text: "let a = 1"), DiffLine(kind: .removed, text: "let b = 2"),
-                                   DiffLine(kind: .added, text: "let b = 3")], more: 0, isError: false), .specific),
-            ("read", .read(path: "/Users/example/project/Sources/Parser.swift", detail: "lines 1–40 of 120"), .specific),
-            ("search", .search(tool: "Grep", pattern: "func parse", scope: "Sources",
-                               results: ["Sources/Parser.swift", "Sources/Lexer.swift"], more: 3), .specific),
-            ("compaction", .compaction(trigger: "auto", preTokens: 167000, summary: Clip("The parser was tidied.", cap: 999)), .specific),
-            ("notice", .notice("Auto-update available."), .specific),
-            ("image", .image, .specific),
-            ("generic-tool", .card(title: "WebFetch", fields: [CardField(key: "url", value: "https://example.com/docs")],
-                                   body: Clip("The page describes an example API.", cap: 999), raw: nil, isError: false), .generic),
-            ("unrecognized", .card(title: "Unrecognized entry (checkpoint)", fields: [], body: nil,
-                                   raw: Clip("{\n  \"label\" : \"before refactor\"\n}", cap: 999), isError: false), .generic),
-            ("failed", .failed(reason: "Unreadable entry", raw: Clip("{\"type\":\"assistant\",\"mess", cap: 999)), .generic),
-            ("capped", .assistant(Clip(String(repeating: "A long answer. ", count: 40), cap: 120)), .specific),
-        ]
-        var thread = TranscriptBlock(id: 99, body: .thread(agentId: "ag", title: "Audit the lexer"), tier: .specific,
-                                     version: "2.1.318", source: nil)
-        thread.children = [TranscriptBlock(id: 100, body: kinds[1].1, tier: .specific, version: "2.1.318", source: nil),
-                           TranscriptBlock(id: 101, body: kinds[6].1, tier: .specific, version: "2.1.318", source: nil)]
-        let blocks = kinds.enumerated().map { i, k in
-            (k.0, TranscriptBlock(id: i, body: k.1, tier: k.2, version: "2.1.318", source: nil))
-        } + [("subagent-thread", thread)]
-        for scale: CGFloat in [0.85, 1.0] {
-            ThemeRuntime.scale = scale
-            for (name, b) in blocks {
-                for expanded in [false, true] {
-                    let ink = try inkPixels(TranscriptBlockView(block: b, expanded: expanded),
-                                            write: "block-\(name)-\(expanded ? "open" : "folded")-\(scale)")
-                    XCTAssertGreaterThan(ink, 30, "\(name) at \(scale)")
-                }
-            }
-            XCTAssertGreaterThan(try inkPixels(TranscriptBanner(text: ClaudeCodeCompat.newerBanner), write: "banner-\(scale)"), 30)
-            XCTAssertGreaterThan(try inkPixels(TranscriptHint(text: "Waiting for the next turn"), write: "waiting-\(scale)"), 30)
-            XCTAssertGreaterThan(try inkPixels(TerminalFirstView(reason: "dch 1.29.2 cannot name the transcript (needs 1.30.0)"),
-                                               write: "terminal-first-\(scale)"), 30)
-        }
-    }
-
-    /// Whole-view evidence: a corpus conversation, a future-version one with the
-    /// banner, and the terminal-first state, through `AgentTranscriptView` itself.
-    @MainActor
-    func testRendersTheWholeViewForAFixtureConversationOffscreen() throws {
-        let saved = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = saved }
-        // A newer version whose shapes are still known: banner over a live conversation.
-        let newer = tempDir().appendingPathComponent("newer.jsonl")
-        try write(newer, [entry("user", version: "2.1.400", ["message": ["role": "user", "content": "Run the checks again."]]),
-                          assistant([["type": "text", "text": "Running them now."]], version: "2.1.400"),
-                          toolUse("t1", "Bash", ["command": "swift test", "description": "Run the tests"]),
-                          toolResult("t1", "Executed 12 tests", extra: ["stdout": "Executed 12 tests", "stderr": ""]),
-                          entry("checkpoint", version: "2.1.400", ["label": "x"])])
-        for (name, file, dch) in [("conversation-2.1.318", "2.1.318/b-compaction-agents-more-tools.jsonl", "1.30.0"),
-                                  ("conversation-2.1.223", "2.1.223/a-tools-and-noise.jsonl", "1.30.0"),
-                                  ("conversation-future", "2.4.0/future-renamed-and-unknown.jsonl", "1.30.0"),
-                                  ("conversation-newer-known-shapes", newer.path, "1.30.0"),
-                                  ("conversation-old-dch", "2.1.318/a-tools-and-noise.jsonl", "1.29.2")] {
-            let m = model(file.hasPrefix("/") ? file : Self.corpus.appendingPathComponent(file).path, dch: dch)
-            m.start()
-            defer { m.stop() }
-            for scale: CGFloat in [0.85, 1.0] {
-                ThemeRuntime.scale = scale
-                let ink = try inkPixels(AgentTranscriptView(model: m, scrolls: false), width: 560, write: "\(name)-\(scale)")
-                XCTAssertGreaterThan(ink, 200, name)
-            }
-        }
-    }
 }

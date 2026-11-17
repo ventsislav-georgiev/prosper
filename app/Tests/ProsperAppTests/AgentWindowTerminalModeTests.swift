@@ -76,12 +76,12 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(t.spawned().count, 1, "shown: the first row is selected, in Terminal")
             m.select(nil)
             XCTAssertEqual(t.children().map(\.terminated), [1], "nothing selected: detached")
-            XCTAssertEqual(m.paneMode, .transcript, "nothing selected")
+            XCTAssertFalse(m.paneHasTerminal, "nothing selected")
             m.select(.history(AgentSessionKey(dir: "/tmp/dch-test", name: "h")))
-            XCTAssertEqual(m.paneMode, .transcript, "a History row")
+            XCTAssertFalse(m.paneHasTerminal, "a History row")
             XCTAssertEqual(t.spawned().count, 1, "a History row: nothing attached")
             m.select(.live(a.key))
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             XCTAssertEqual(t.spawned().count, 2)
             // Stopped from the window: the row goes before its record, the pane is Ended (#831 B1, rewrite 10).
             m.ask(.stop, a)
@@ -89,13 +89,13 @@ extension AgentWindowD1Tests {
             st.sessions = [b]
             XCTAssertTrue(m.focusedEnded)
             XCTAssertNil(m.selection)
-            XCTAssertEqual(m.paneMode, .transcript, "ended: Transcript, no terminal card")
+            XCTAssertFalse(m.paneHasTerminal, "ended: Transcript, no terminal card")
             XCTAssertEqual(t.children().last?.terminated, 1, "Ended: the client goes")
-            XCTAssertEqual(m.paneMode, .transcript)
+            XCTAssertFalse(m.paneHasTerminal)
             XCTAssertEqual(t.spawned().count, 2, "and nothing attaches to an ended session")
             XCTAssertNil(m.interaction.session, "nor takes input")
             // The held row's reason (the notice's "..." help reads it; offscreen render for review).
-            XCTAssertEqual(AgentPaneModeToggle.endedReason, "This session ended: there is no terminal to attach to")
+            XCTAssertEqual(AgentWindowControls.endedReason, "This session ended: there is no terminal to attach to")
             try save(render(AgentWindowRootView(model: m, scrolls: false), size: CGSize(width: 1000, height: 680), dark: true),
                      "822-ended-1.0")
             XCTAssertFalse(m.terminal.isSelected(a.key), "OQ-66: a held (ended) row is no selection a write can use")
@@ -104,7 +104,7 @@ extension AgentWindowD1Tests {
             st.sessions = []
             XCTAssertNil(m.selection)
             XCTAssertTrue(m.focusedEnded)
-            XCTAssertEqual(m.paneMode, .transcript, "nothing to attach (#1471: the answer XrayRefLink reads)")
+            XCTAssertFalse(m.paneHasTerminal, "nothing to attach (#1471: the answer XrayRefLink reads)")
         }
     }
 
@@ -249,9 +249,9 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.selection, live("a"))
             // #1471: Command-T is no window key (no Transcript mode); focusing the pane sends the keys to the terminal once its
             // view is in the window.
-            XCTAssertEqual(m.paneMode, .terminal, "the only mode")
+            XCTAssertTrue(m.paneHasTerminal, "the only mode")
             XCTAssertFalse(win.performKeyEquivalent(with: key(17, "t", .command)), "#1471: Command-T is not the window's")
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             XCTAssertTrue(m.focusSelection())
             XCTAssertTrue(m.terminal.focusPending)
             // The app's turn before SwiftUI builds the view: the screen's report lands and the client goes live (#845: only
@@ -272,14 +272,12 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(win.sidebarFocused, "Tab is the program's (mode cycle): the focus did not move on")
             XCTAssertTrue(win.performKeyEquivalent(with: cmdDown))
             XCTAssertEqual(m.selection, live("b"), "⌘↓ from the terminal")
-            XCTAssertEqual(m.paneMode, .terminal, "#1471: b is a terminal too")
+            XCTAssertTrue(m.paneHasTerminal, "#1471: b is a terminal too")
             XCTAssertTrue(win.performKeyEquivalent(with: cmdUp))
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             Self.drainMain()   // the app's turn before the next key: a's fresh client is live
             // Option-Command-1 in Terminal mode (#1470: row 10, none here): taken, the level unchanged.
-            let level = m.verbosity
             XCTAssertTrue(win.performKeyEquivalent(with: key(18, "1", [.command, .option])))
-            XCTAssertEqual(m.verbosity, level)
             // Return on the sidebar row in Terminal mode: into the terminal, Ghostty not opened.
             XCTAssertTrue(win.makeFirstResponder(nil))
             win.sidebarFocused = true

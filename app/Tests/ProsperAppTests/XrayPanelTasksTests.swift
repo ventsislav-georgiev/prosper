@@ -347,7 +347,7 @@ final class XrayPanelTasksTests: XCTestCase {
         let fake = FakeRun()
         try await withSeams([1, 78, 0], fake) {
             try await window { win, m, _ in
-                XCTAssertEqual(m.paneMode, .terminal)
+                XCTAssertTrue(m.paneHasTerminal)
                 m.transcript.todosOpen = true
                 let view = AgentDetailView(model: m, transcript: m.transcript)
                 let chip = view.todosChip(view.floatingTodos, in: win)

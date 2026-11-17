@@ -187,14 +187,14 @@ final class XrayChaptersTests: XCTestCase {
         try await window { win, m in
             XrayPanels.model = { [weak m] _ in m }
             let pane = m.layout.focused
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             XCTAssertTrue(win.toggleXray())
             await XrayPanels.shared.open[pane]?.reading?.value
             XCTAssertEqual(fake.calls.filter { $0 == chaptersArgv }.count, 1, "Terminal mode: the chapters read")
             XCTAssertTrue(win.toggleXray(), "closes")
 
             // #1471: no Transcript mode: the local pane and a remote row both read dch.
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             XCTAssertTrue(XrayPanels.fromDch(pane, Self.local), "a local row reads dch")
             XCTAssertTrue(XrayPanels.fromDch(pane, XrayTarget(name: "example-host:api", dir: nil)), "a remote row reads dch")
             XCTAssertTrue(win.toggleXray(), "opens again")

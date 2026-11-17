@@ -130,14 +130,6 @@ enum TranscriptOutline {
         return out.isEmpty ? blank : out
     }
 
-    /// Where a jump to `block` lands at `level`: the turn holding it (the LazyVStack's own child, found even undrawn)
-    /// and the row that shows it. nil when no row shows it (not loaded, or hidden at this level).
-    static func target(_ block: Int, in blocks: [TranscriptBlock], level: AgentVerbosity) -> (turn: Int, row: String)? {
-        guard let row = TranscriptVerbosity.rowID(containing: block, in: blocks, level: level),
-              let turn = TranscriptVerbosity.turns(blocks).first(where: { $0.contains { holds($0, block) } }) else { return nil }
-        return (turn[0].id, row)
-    }
-
     /// `b` is the block or one of its subagent steps.
     static func holds(_ b: TranscriptBlock, _ id: Int) -> Bool {
         b.id == id || b.children.contains { holds($0, id) }

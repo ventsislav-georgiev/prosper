@@ -30,8 +30,8 @@ final class AgentWindowHeaderRenameTreeTests: XCTestCase {
     }
 
     @MainActor
-    func header(_ s: AgentSession, rename: AgentRenameEdit?, mode: AgentPaneMode = .terminal) -> AgentSessionHeader {
-        AgentSessionHeader(row: row(s), session: s, cwd: Self.path, open: {}, rename: rename, mode: mode)
+    func header(_ s: AgentSession, rename: AgentRenameEdit?) -> AgentSessionHeader {
+        AgentSessionHeader(row: row(s), session: s, cwd: Self.path, open: {}, rename: rename)
     }
 
     /// Every word a part of the slot is read by when not renaming (Terminal mode).
@@ -148,7 +148,7 @@ final class AgentWindowHeaderRenameTreeTests: XCTestCase {
         let s = session()
         let size = CGSize(width: 900, height: 80)
         let prior = AXTreeSupport.flags()
-        let (win, host) = AXTreeSupport.hosted(header(s, rename: nil, mode: .transcript), size)
+        let (win, host) = AXTreeSupport.hosted(header(s, rename: nil), size)
         defer { win.close() }
         host.layoutSubtreeIfNeeded()   // built and laid out before any flag is turned on
         let restore = AXTreeSupport.axOn()

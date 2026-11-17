@@ -28,7 +28,7 @@ final class AgentWindowLayoutChordTests: XCTestCase {
     /// letter, what Dvorak types on the ANSI key, and the route in Terminal mode.
     static var chords: [(String, UInt16, String, String, String, UInt16, String, R)] { [
         ("w", 13, "ц", "в", "ς", 43, ",", .close),
-        ("t", 17, "\u{435}", "\u{442}", "\u{3C4}", 40, "y", .pass),   // #1471: no mode toggle
+        ("t", 17, "\u{435}", "\u{442}", "\u{3C4}", 40, "y", .swallow),   // #1471 b (R1471a-s1): no mode toggle, swallowed
         ("f", 3, "а", "ф", "φ", 16, "u", .find),
         ("g", 5, "п", "г", "γ", 32, "i", .findNext(true)),
         ("n", 45, "т", "н", "ν", 37, "b", .newSession),
@@ -54,6 +54,7 @@ final class AgentWindowLayoutChordTests: XCTestCase {
         // #829 G4: renaming, ⌘W still closes on Cyrillic and every other chord stands down.
         XCTAssertEqual(route(ev(13, "w", "ц", .command), .text, renaming: true), .close)
         XCTAssertEqual(route(ev(45, "n", "т", .command), .text, renaming: true), .pass)
+        XCTAssertEqual(route(ev(17, "t", "\u{435}", .command), .text, renaming: true), .pass, "R1471a-s1: renaming, Command-T is the field's")
     }
 
     @MainActor
@@ -81,7 +82,7 @@ final class AgentWindowLayoutChordTests: XCTestCase {
     /// No layout installed on macOS 27 has one; built anyway so the rule is pinned.
     @MainActor
     func testAgentWindowCommandCharacterWinsWhenBothAreChordLetters() {
-        XCTAssertEqual(route(ev(17, "t", "n", .command)), .pass, "#1471: the T key code passes, not Command-N's newSession")
+        XCTAssertEqual(route(ev(17, "t", "n", .command)), .swallow, "#1471 b (R1471a-s1): the T key is swallowed, not Command-N's newSession")
         XCTAssertEqual(route(ev(45, "n", "w", .command)), .newSession, "not ⌘W's close")
         XCTAssertEqual(route(ev(13, "w", "n", .command)), .close)
         XCTAssertEqual(route(ev(5, "g", "f", .command)), .findNext(true))
@@ -122,7 +123,7 @@ final class AgentWindowLayoutChordTests: XCTestCase {
     func testAgentWindowDvorakQwertyCommandFiresEachChordFromOneKey() {
         // Letter, QWERTY key, what Dvorak types there, the Dvorak-letter key, what Command gives there, the route.
         let rows: [(String, UInt16, String, UInt16, String, R)] = [
-            ("w", 13, ",", 43, ",", .close), ("t", 17, "y", 40, "k", .pass), ("f", 3, "u", 16, "y", .find),
+            ("w", 13, ",", 43, ",", .close), ("t", 17, "y", 40, "k", .swallow), ("f", 3, "u", 16, "y", .find),
             ("g", 5, "i", 32, "u", .findNext(true)), ("n", 45, "b", 37, "l", .newSession),
         ]
         for (l, qwerty, typed, dvorak, cmd, want) in rows {
@@ -132,7 +133,7 @@ final class AgentWindowLayoutChordTests: XCTestCase {
                 XCTAssertEqual(route(ev(dvorak, cmd, l, .command), r), dvorak == 37 ? .swallow : .pass, "\u{2318}\(cmd) on the Dvorak \(l) key is no chord")
             }
         }
-        XCTAssertEqual(route(ev(37, "l", "n", .command), .text, terminal: false), .chapters, "#1319: Command-L by key code in Transcript")
+        XCTAssertEqual(route(ev(37, "l", "n", .command), .text, terminal: false), .pass, "#1471 b: no chapter list: Command-L passes without a terminal")
         XCTAssertEqual(route(ev(45, "n", "B", [.command, .shift])), .newShell, "⇧⌘ on the QWERTY N key")
         XCTAssertEqual(route(ev(37, "l", "N", [.command, .shift])), .pass, "⇧⌘ on the Dvorak N key")
         XCTAssertEqual(route(ev(5, "g", "I", [.command, .shift])), .findNext(false))

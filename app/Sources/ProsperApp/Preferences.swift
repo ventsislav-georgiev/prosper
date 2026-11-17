@@ -454,11 +454,8 @@ enum Preferences {
         static let agentIslandSidekickPrompt = "agentIslandSidekickPrompt"   // #847 P1d, per Mac
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         static let agentIslandFollowsTheme = "agentIslandFollowsTheme"   // #1452, per Mac
-        // #821: the Agent Sessions window's verbosity (AgentVerbosity); per Mac, so not in SyncedKeys.
-        static let agentWindowVerbosity = "agentWindowVerbosity"
         // #828: the Agent Sessions window's collapsed sidebar sections (titles); per Mac, not in SyncedKeys.
         static let agentWindowCollapsedSections = "agentWindowCollapsedSections"
-        // #822: sessions the Agent Sessions window shows as Transcript, not the default Terminal ("<dir>\t<name>"); per Mac, not in SyncedKeys.
         // OQ-66: a session's terminal may set the clipboard (OSC 52) while you view it; per Mac, not in SyncedKeys.
         static let agentWindowClipboardWrites = "agentWindowClipboardWrites"
         // #895: the Agent Sessions terminal's text size in points (Command-plus, Command-minus, Command-0); per Mac, not in SyncedKeys.
@@ -1184,18 +1181,11 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.agentIslandClick) }
     }
 
-    /// #821: the Agent Sessions window's one verbosity level; unset or unknown reads as Default.
-    static var agentWindowVerbosity: AgentVerbosity {
-        get { AgentVerbosity(raw: defaults.string(forKey: Keys.agentWindowVerbosity)) }
-        set { defaults.set(newValue.rawValue, forKey: Keys.agentWindowVerbosity) }
-    }
-
     /// #828: the sidebar sections collapsed in the Agent Sessions window; unset reads as none.
     static var agentWindowCollapsedSections: Set<String> {
         get { Set(defaults.stringArray(forKey: Keys.agentWindowCollapsedSections) ?? []) }
         set { defaults.set(newValue.sorted(), forKey: Keys.agentWindowCollapsedSections) }
     }
-
 
     /// #847: the folder the window's last new session or shell started in; unset reads as nil.
     static var agentWindowNewSessionFolder: String? {

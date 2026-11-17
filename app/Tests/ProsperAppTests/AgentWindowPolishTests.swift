@@ -135,44 +135,6 @@ extension AgentWindowD1Tests {
 
     // MARK: Fixed sizes
 
-    @MainActor
-    func testAgentWindowInputColumnAndFieldKeepTheirWidthAcrossStates() throws {
-        let savedScale = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = savedScale }
-        let key = AgentSessionKey(dir: "/tmp/dch-test", name: "a")
-        for scale: CGFloat in [1.0, 0.85, 0.7] {
-            ThemeRuntime.scale = scale
-            let width = 640 * scale - AgentWindowModel.fullSidebarWidth - 1
-            var edges: [AgentState: Int] = [:]
-            for state in AgentState.allCases {
-                let i = AgentWindowInteraction()
-                let s = AgentSession(key: key, alias: "", activity: 1, state: state, agents: 0)
-                i.follow(s)
-                i.draft = "Run the suite"   // same text in every state: the placeholder never differs
-                let pane = AgentInteractionPane(model: i, session: s, open: {})
-                let h = NSHostingView(rootView: pane.frame(width: width)).fittingSize.height
-                let rep = try render(pane, size: CGSize(width: width, height: h), dark: true)
-                try save(rep, "828-input-\(state)-\(scale)")
-                // The field's right edge: scanning a row inside the field below its text.
-                let sx = CGFloat(rep.pixelsWide) / (width + 24), y = Int((h - sz(10) - sz(8)) * sx)
-                let x0 = Int((sz(16) + sz(12)) * sx)
-                let inside = try XCTUnwrap(rep.colorAt(x: x0, y: y)?.usingColorSpace(.sRGB))
-                var x = x0
-                while x < rep.pixelsWide, let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                      abs(c.redComponent - inside.redComponent) + abs(c.greenComponent - inside.greenComponent)
-                          + abs(c.blueComponent - inside.blueComponent) < 0.05 { x += 1 }
-                XCTAssertLessThan(x, rep.pixelsWide, "found the field's edge (\(state) \(scale))")
-                edges[state] = x
-                // And the column takes only its own width: the field ends one spacing before it.
-                let column = NSHostingView(rootView: AgentSendColumn(canInterrupt: true, canSend: true, interrupt: {}, send: {})
-                    .fixedSize()).fittingSize.width
-                XCTAssertEqual(CGFloat(x) / sx, width - sz(16) - column - sz(8), accuracy: 2,
-                               "the field fills all but the button column (\(state) \(scale))")
-            }
-            XCTAssertEqual(Set(edges.values).count, 1, "the field's width is the same working and idle at \(scale): \(edges)")
-        }
-    }
-
     /// The leftmost and rightmost drawn pixel of row `y` (points) of `rep`, on a black canvas.
     func extent(_ rep: NSBitmapImageRep, y: CGFloat, canvasWidth: CGFloat) -> ClosedRange<Int>? {
         let k = CGFloat(rep.pixelsWide) / canvasWidth, row = Int(y * k)
@@ -182,38 +144,6 @@ extension AgentWindowD1Tests {
         }
         guard let a = xs.first, let b = xs.last else { return nil }
         return a...b
-    }
-
-    @MainActor
-    func testAgentWindowSendAndInterruptAreOneFixedEqualColumn() throws {
-        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
-        let savedScale = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = savedScale }
-        for scale: CGFloat in [1.0, 0.85, 0.7] {
-            ThemeRuntime.scale = scale
-            func size<V: View>(_ v: V) -> CGSize { NSHostingView(rootView: v.fixedSize()).fittingSize }
-            let send = AgentPillButton(title: "Send", icon: "arrow.up", tint: Neon.blue) {}
-            let stop = AgentPillButton(title: "Interrupt", icon: "stop.fill", tint: Neon.magenta) {}
-            XCTAssertLessThan(size(send).width, size(stop).width, "the labels differ, so equal slots are a layout choice")
-            var widths: Set<Int> = []
-            for (i, on) in [(true, false), (false, true), (false, false), (true, true)].enumerated() {
-                let col = AgentSendColumn(canInterrupt: on.0, canSend: on.1, interrupt: {}, send: {})
-                let c = size(col)
-                widths.insert(Int((c.width * 2).rounded()))
-                XCTAssertEqual(c.width, size(stop).width, accuracy: pixel, "the column is the wider button's width at \(scale)")
-                let rep = try render(col, size: c, dark: true)
-                try save(rep, "828-send-column-\(i)-\(scale)")
-                // Both capsules span the same pixels: one quarter down is Interrupt, three quarters Send.
-                let top = try XCTUnwrap(extent(rep, y: c.height / 4, canvasWidth: c.width + 24))
-                let bottom = try XCTUnwrap(extent(rep, y: c.height * 3 / 4, canvasWidth: c.width + 24))
-                XCTAssertLessThanOrEqual(abs(top.lowerBound - bottom.lowerBound) + abs(top.upperBound - bottom.upperBound), 1,
-                                         "Interrupt and Send are the same width (\(on) at \(scale)): \(top) \(bottom)")
-            }
-            XCTAssertEqual(widths.count, 1, "no state changes the column at \(scale)")
-            // The state chip's slot is the widest state's, whichever state it shows.
-            let chips = AgentState.allCases.map { size(AgentStateChip(state: $0)).width }
-            XCTAssertEqual(Set(chips.map { Int(($0 * 2).rounded()) }).count, 1, "state chip slot fixed at \(scale): \(chips)")
-        }
     }
 
     /// Review round (s7): the age sits in a fixed slot, so its ticking never changes what the

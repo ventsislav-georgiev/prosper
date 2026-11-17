@@ -498,7 +498,7 @@ struct TextViewerScreenshotButton: View {
     }
 }
 
-/// Read | Edit, drawn like AgentVerbosityPicker's labels style. Read is first (left) and is the
+/// Read | Edit, drawn like the old Agent Sessions detail picker's labels style (gone, #1471). Read is first (left) and is the
 /// only mode; Edit is drawn disabled until the built-in editor lands (P3).
 struct TextViewerModeSwitch: View {
     struct Segment: Hashable { let title: String; let enabled: Bool }

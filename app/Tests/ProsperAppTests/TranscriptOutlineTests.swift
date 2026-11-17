@@ -52,10 +52,6 @@ final class TranscriptOutlineTests: XCTestCase {
         XCTAssertEqual(c.map(\.title), ["start", "Conversation compacted", "carry on", "Conversation compacted", "see this"])
         XCTAssertEqual(c.map(\.ordinal), [1, 2, 3, 4, 5])
         XCTAssertEqual(c.map(\.hasError), [false, false, true, false, false], "the steps' error is the prompt's chapter's")
-        // The prompt's chapter is a jump target: its own row, in the compaction's turn.
-        let t = TranscriptOutline.target(3, in: blocks, level: .focused)
-        XCTAssertEqual(t?.turn, 2)
-        XCTAssertEqual(t?.row, "b3")
     }
 
     /// Ruling on #904 r1 (decision 2): chapters run on main in publish(). Their cost on a 2000-block transcript (the
@@ -126,44 +122,5 @@ final class TranscriptOutlineTests: XCTestCase {
         XCTAssertEqual(m.chapters.map(\.id), [0, 3, 6])
         XCTAssertEqual(m.chapters, TranscriptOutline.chapters(m.blocks))
         XCTAssertEqual(m.chapters.map(\.title), ["Prompt 0", "Prompt 1", "Prompt 2"])
-    }
-
-    /// Red before: rowID did not exist. The row a block shows in at each level; a level switch keeps the chapter ids
-    /// (chapters never read the level) and a prompt chapter's row is its own "b<id>" at every level.
-    func testRowIDAtEveryLevel() {
-        let thread = b(3, .thread(agentId: "a1", title: "Explore"),
-                       children: [bash(4, "a"), bash(5, "b"), bash(6, "c"), bash(7, "d")])
-        let blocks = [user(0, "go"), b(1, .thinking(Clip("hmm", cap: 100))), bash(2, "make"), thread, say(8, "done"),
-                      user(9, "again"), say(10, "ok")]
-        func row(_ id: Int, _ l: AgentVerbosity) -> String? { TranscriptVerbosity.rowID(containing: id, in: blocks, level: l) }
-        // Verbose: every block is its own card; a subagent step is inside its thread's card.
-        XCTAssertEqual(row(2, .verbose), "b2")
-        XCTAssertEqual(row(1, .verbose), "b1")
-        XCTAssertEqual(row(4, .verbose), "b3")
-        // Default: one-line rows; a step past the thread's tail is still the thread's row; thinking shows nowhere.
-        XCTAssertEqual(row(2, .default), "b2")
-        XCTAssertEqual(row(4, .default), "b3", "dropped from the tail of 3, still in the thread")
-        XCTAssertEqual(row(7, .default), "b3")
-        XCTAssertTrue(row(1, .default) == nil, "hidden at Default")
-        // Focused: the steps fold into the turn's summary row, the subagent's steps too; prompt and reply are their own.
-        XCTAssertEqual(row(2, .focused), "s0")
-        XCTAssertEqual(row(5, .focused), "s0")
-        XCTAssertEqual(row(8, .focused), "b8")
-        XCTAssertTrue(row(99, .focused) == nil, "not loaded")
-        let ids = TranscriptOutline.chapters(blocks).map(\.id)
-        XCTAssertEqual(ids, [0, 9])
-        for l in AgentVerbosity.allCases {
-            XCTAssertEqual(ids.map { row($0, l) }, ids.map { "b\($0)" }, "\(l)")
-        }
-    }
-
-    /// Where a jump lands: the turn (the LazyVStack's child) and the row inside it.
-    func testJumpTargetIsTheTurnAndTheRow() {
-        let blocks = [user(0, "go"), bash(1, "make"), say(2, "done"), user(3, "next"), bash(4, "ls"), say(5, "ok")]
-        let t = TranscriptOutline.target(4, in: blocks, level: .focused)
-        XCTAssertEqual(t?.turn, 3)
-        XCTAssertEqual(t?.row, "s3")
-        XCTAssertEqual(TranscriptOutline.target(4, in: blocks, level: .default)?.row, "b4")
-        XCTAssertTrue(TranscriptOutline.target(42, in: blocks, level: .default) == nil)
     }
 }

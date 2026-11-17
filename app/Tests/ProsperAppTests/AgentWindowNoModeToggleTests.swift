@@ -76,7 +76,7 @@ final class AgentWindowNoModeToggleTests: XCTestCase {
             for terminal in [true, false] {
                 for form in [false, true] {
                     XCTAssertEqual(AgentsNSWindow.route(cmdT, responder: r, sidebarFocused: !terminal, terminalMode: terminal, form: form),
-                                   .pass, "Command-T is no window key (\(r), terminal \(terminal), form \(form))")
+                                   terminal ? .swallow : .pass, "R1471a-s1: Command-T is swallowed in a terminal pane, else passes (\(r), terminal \(terminal), form \(form))")
                 }
             }
         }
@@ -92,12 +92,12 @@ final class AgentWindowNoModeToggleTests: XCTestCase {
     /// there (AgentWindowModel.swift:1835 mode(_:) read Preferences.agentWindowTranscriptSessions).
     func testStoredTranscriptChoiceIsIgnoredNewAndRestoredPanesAreTerminal() async throws {
         try await withPane(stored: ["/tmp/dch-test\tapi", "/tmp/dch-test\tweb"]) { m, win, _ in
-            XCTAssertEqual(m.paneMode, .terminal, "api: the stored Transcript choice is ignored")
+            XCTAssertTrue(m.paneHasTerminal, "api: the stored Transcript choice is ignored")
             XCTAssertNil(m.interaction.session, "no input box")
             m.select(.live(AgentSessionKey(dir: "/tmp/dch-test", name: "web")))
-            XCTAssertEqual(m.paneMode, .terminal, "a newly shown pane: Terminal too")
-            XCTAssertFalse(win.performKeyEquivalent(with: key(17, "t", .command)), "Command-T is not the window's")
-            XCTAssertEqual(m.paneMode, .terminal, "Command-T changes nothing")
+            XCTAssertTrue(m.paneHasTerminal, "a newly shown pane: Terminal too")
+            XCTAssertTrue(win.performKeyEquivalent(with: key(17, "t", .command)), "R1471a-s1: Command-T is the window's in a terminal pane (swallowed)")
+            XCTAssertTrue(m.paneHasTerminal, "Command-T changes nothing")
             XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.oldKey), ["/tmp/dch-test\tapi", "/tmp/dch-test\tweb"],
                            "the old value is left alone (ignored, never rewritten)")
         }

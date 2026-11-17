@@ -37,7 +37,7 @@ extension AgentWindowD1Tests {
         m.adopt(paneLayout([paneTarget("a"), paneTarget("b")]))
         m.setVisible(true)
         Self.drainMain()
-        XCTAssertEqual(m.paneMode, .terminal, "the restored focused pane: Terminal")
+        XCTAssertTrue(m.paneHasTerminal, "the restored focused pane: Terminal")
         XCTAssertEqual(log.spawned, ["a"], "the focused pane attaches at once")
         endRests(log)
         XCTAssertEqual(Set(log.spawned), ["a", "b"], "every restored pane attaches its own session")
@@ -46,7 +46,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(try runtime(m, n).terminal?.phase, .live, n)
         }
         try focus(m, "b")
-        XCTAssertEqual(m.paneMode, .terminal, "the other restored pane: Terminal too")
+        XCTAssertTrue(m.paneHasTerminal, "the other restored pane: Terminal too")
         XCTAssertNil(m.interaction.session, "no input box")
     }
 

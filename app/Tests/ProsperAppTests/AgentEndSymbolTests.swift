@@ -42,7 +42,6 @@ final class AgentEndSymbolTests: XCTestCase {
         switch e {
         case .item(let t, _, _), .pane(let t, _, _), .side(let t, _): title = t
         case .open: title = AgentWindowControls.openLabel
-        case .chapters: title = AgentWindowControls.chaptersLabel
         case .xray: title = AgentWindowControls.xrayLabel
         case .divider, .note: return nil
         }

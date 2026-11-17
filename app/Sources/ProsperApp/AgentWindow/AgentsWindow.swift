@@ -322,8 +322,6 @@ final class AgentsNSWindow: NSWindow {
         case font(Int)
         /// Up, down, left, right, Return for the sidebar (sendEvent).
         case sidebar
-        /// #1319 (spec 8.3): Command-L, the focused Transcript pane's Jump to Chapter list (opens it, or closes it when open).
-        case chapters
         /// #1351 (#1346 3.1): Shift-Command-X (key code 7, any layout), the focused pane's X-ray panel (opens or closes it).
         case xray
         /// The window's, doing nothing here (a chord under the New session form, a held Command-N).
@@ -355,7 +353,7 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .session, .jump, .find, .findNext, .font, .stopOrRemove, .chapters, .xray:
+        case .session, .jump, .find, .findNext, .font, .stopOrRemove, .xray:
             return form ? .swallow : r
         default: return r
         }
@@ -379,9 +377,11 @@ final class AgentsNSWindow: NSWindow {
             if let n = digit(event.keyCode) { return .jump(n) }
             // #1289: Cmd-Backspace with the sidebar focused only; a text field, the composer and the terminal keep it.
             if event.keyCode == 51 { return sidebarFocused && responder == .other ? .stopOrRemove : .pass }
-            // #1319 (v3.2.6 :2590): Command-L by key code from every responder; a terminal pane consumes it with no action (10.1).
-            if isChapterKey(event) { return terminalMode ? .swallow : .chapters }
+            // #1471 b (R1471a-s1, R1): Command-T (the old mode toggle) and Command-L (by key code, as the old chapter list)
+            // are swallowed in a terminal pane: no bytes, no menu.
+            if event.keyCode == 37, terminalMode { return .swallow }
             switch key {
+            case "t": if terminalMode { return .swallow }
             case "f": return terminalMode ? .find : .pass
             case "g": return terminalMode ? .findNext(true) : .pass
             // #895: the terminal's text size; Transcript keeps these keys. The 0 key by code too (AZERTY types a letter there).
@@ -426,7 +426,7 @@ final class AgentsNSWindow: NSWindow {
         if AgentPaneLayout.splitsEnabled, model.renaming == nil, model.layoutRenaming == nil, model.newSession == nil,
            PaneKeys.action(for: event, context: pane) == .nextNeedsYou, perform(pane: .nextNeedsYou) { return true }
         let r = Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                           terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
+                           terminalMode: model.paneHasTerminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
                            form: model.newSession != nil)
         return perform(r) || super.performKeyEquivalent(with: event)
     }
@@ -460,7 +460,6 @@ final class AgentsNSWindow: NSWindow {
         case .newSession: model.openNewSession()
         case .newShell: model.startShell()
         case .stopOrRemove: model.askStopOrRemove()
-        case .chapters: toggleChapters()
         case .xray: return toggleXray()   // below the gate: false, so the key goes on (passes through)
         case .swallow: break
         case .sidebar, .pass: return false
@@ -481,7 +480,7 @@ final class AgentsNSWindow: NSWindow {
         ("5", [.command, .option], 23, .jump(14)), ("6", [.command, .option], 22, .jump(15)),
         ("7", [.command, .option], 26, .jump(16)), ("8", [.command, .option], 28, .jump(17)),
         ("9", [.command, .option], 25, .jump(18)),
-        ("\u{8}", .command, 51, .stopOrRemove), ("l", .command, 37, .chapters),
+        ("\u{8}", .command, 51, .stopOrRemove),
         ("f", .command, 3, .find), ("g", .command, 5, .findNext(true)), ("g", [.command, .shift], 5, .findNext(false)),
         ("=", .command, 24, .font(1)), ("-", .command, 27, .font(-1)), ("0", .command, 29, .font(0)),
         ("\u{F700}", .command, 126, .session(-1)), ("\u{F701}", .command, 125, .session(1)),
@@ -517,56 +516,8 @@ final class AgentsNSWindow: NSWindow {
 
     static let chordLetters: Set<String> = ["w", "t", "f", "g", "n"]
 
-    /// #1319 (spec 8.3, v2.1 QA4 INFO-20): Command-L is the L key's position (kVK_ANSI_L, 37) with exactly Command, on every
-    /// layout (a Cyrillic one types U+0434 there); Shift-Command-L, Option-Command-L and Control-Command-L pass through.
-    static func isChapterKey(_ event: NSEvent) -> Bool {
-        event.type == .keyDown && event.keyCode == 37
-            && event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command]
-    }
-
-    // MARK: #1319 the Jump to Chapter list
-
-    /// The list's surface (spec 8.3: a popover from the pane header's "..."). Rows put a fake here before the first key.
+    /// The X-ray card's surface (a popover from the pane header's "..."). Rows put a fake here before the first key.
     var cards: XrayCardPresenter = XrayPopoverPresenter()
-    /// The open list, nil while closed.
-    private(set) var chapterList: TranscriptChapterListModel?
-
-    /// Command-L and the "..." item: closes an open list; else opens one on the focused pane while it shows a session's
-    /// transcript (a terminal pane, the New session form, a History row or an empty pane: nothing). On close the keys go
-    /// back where they were: the composer (first responder, its draft and selection untouched) or the sidebar.
-    func toggleChapters() {
-        if chapterList != nil || cards.isShown {
-            cards.close()   // its `closed` puts the keys back
-            chapterList = nil
-            return
-        }
-        guard let model, Self.transcriptChapters, model.newSession == nil, model.selectedRow?.session != nil,
-              let rt = model.focusedRuntime, let anchor = XrayCardAnchor.view(for: rt.pane, in: self) ?? contentView else { return }
-        let list = TranscriptChapterListModel(transcript: rt.transcript, jumper: .of(rt.transcript))
-        list.close = { [weak self] in self?.cards.close() }
-        let focus = model.keyFocus, back = firstResponder
-        chapterList = list
-        cards.present(AnyView(TranscriptChapterList(list: list)), size: TranscriptChapterList.size, anchor: anchor) { [weak self] in
-            guard let self else { return }
-            self.chapterList = nil
-            self.model?.keyFocus = focus
-            if self.firstResponder !== back { self.makeFirstResponder(back) }
-        }
-    }
-
-    /// #1471: the chapter list opened over a transcript, and no pane shows one now (part b deletes the list).
-    static let transcriptChapters = false
-
-    /// The "..." item "Jump to Chapter... Command-L": off, as in a terminal pane (10.1; #1471: every pane is one).
-    @MainActor static func chaptersItem(_ m: AgentWindowModel) -> AgentWindowMenuEntry {
-        .chapters(enabled: transcriptChapters, pane: m.layout.focused)
-    }
-
-    /// The item's run: the window that draws `pane`'s header opens its list (runs on main, a menu Button's action).
-    @MainActor static func chaptersChosen(pane: UUID) {
-        (XrayCardAnchor.views[pane]?.view ?? XrayCardAnchor.views[nil]?.view).flatMap { $0.window as? AgentsNSWindow }?
-            .toggleChapters()
-    }
 
     // MARK: #1351 the X-ray panel (#1346 P3a)
 
@@ -604,7 +555,7 @@ final class AgentsNSWindow: NSWindow {
         XrayPanels.dch() != nil && XrayTarget.of(m.selectedRow) != nil ? .xray(pane: m.layout.focused) : nil
     }
 
-    /// The window that draws `pane`'s header (as chaptersChosen).
+    /// The window that draws `pane`'s header.
     @MainActor static func window(of pane: UUID) -> AgentsNSWindow? {
         (XrayCardAnchor.views[pane]?.view ?? XrayCardAnchor.views[nil]?.view).flatMap { $0.window as? AgentsNSWindow }
     }
@@ -663,7 +614,7 @@ final class AgentsNSWindow: NSWindow {
         if AgentPaneLayout.splitsEnabled, let model, Self.layoutKey(event, model, responder: responderKind) { return }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                                 terminalMode: model.paneMode == .terminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
+                                 terminalMode: model.paneHasTerminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
                                  form: model.newSession != nil) == .sidebar,
            Self.handle(event, model) { return }
         super.sendEvent(event)
@@ -1983,12 +1934,11 @@ extension AgentSidebarRowView {
 }
 
 /// #836 (b): a remote session's header: its title and host, then the transcript controls drawn disabled with their
-/// reason (a remote session has no transcript, todo list or view level here) and the mode toggle fixed on Terminal.
+/// reason (a remote session has no transcript or todo list here).
 struct AgentRemoteHeader: View {
     let row: AgentSidebar.Row
     let remote: AgentSidebar.Remote
 
-    static let levelReason = "No transcript for a session on another machine"
     static let todosReason = "No task list on that host"
     static let todosOpens = "Open the task list in X-ray"
     let pane: UUID
@@ -2017,11 +1967,6 @@ struct AgentRemoteHeader: View {
             .buttonStyle(.plain).help(Self.todosHelp(noList: noList)).accessibilityLabel(Self.todosOpens)
             .accessibilityValue(noList ? Self.todosReason : "")
             .background(XrayCardAnchor())   // #1401: window(of: pane) finds this window, and the X-ray card hangs from the chip
-            if !AgentWindowBand.shown {
-                // The picker's own buttons carry their own help, which would win over a reason set around them.
-                Image(systemName: AgentVerbosity.default.icon).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
-                    .opacity(0.45).help(Self.levelReason).accessibilityLabel("View").accessibilityValue(Self.levelReason)
-            }
         }
         .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
     }
@@ -2132,7 +2077,7 @@ struct AgentDetailView: View {
             VStack(spacing: 0) {
                 // #900 B2 step 6a: the "⋯" pane items act on this pane (the focused one); empty with the gate off.
                 let id = model.layout.focused
-                let panes = [.divider, AgentsNSWindow.chaptersItem(model)] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 }
+                let panes = [.divider] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 }
                     + AgentWindowControls.paneMenu(model, pane: id)
                 Group {
                     if compact {
@@ -2141,7 +2086,7 @@ struct AgentDetailView: View {
                                               pane: { AgentWindowControls.runPane($0, pane: id, in: model) })
                     } else {
                         AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
-                                           level: $model.verbosity, todos: transcript.todos,
+                                           todos: transcript.todos,
                                            todosOpen: todosChip(floatingTodos),
                                            store: model.store, ask: { model.ask($0, s) }, ended: ended,
                                            rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
@@ -2223,21 +2168,6 @@ struct AgentDetailView: View {
             }
     }
 
-    @ViewBuilder func transcriptPane(_ row: AgentSidebar.Row, _ s: AgentSession, ended: Bool) -> some View {
-        AgentTranscriptView(model: transcript, scrolls: scrolls, openTerminal: { model.openSelected() },
-                            ownsLifecycle: false, level: model.verbosity, ended: ended, jumper: .of(transcript))
-            .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
-            .clipped()
-            .overlay(alignment: .top) { overTop(row, s) }   // #829 R5, QA #665 INFO-1: over the conversation, so nothing moves
-        Rectangle().fill(Neon.stroke).frame(height: 1)
-        // #798: the prompt pinned at the bottom, the input box under it. #829: locked while a Restart or Stop types.
-        if let store = inputStore {
-            AgentLockedInteraction(store: store, model: model.interaction, session: s, open: { model.openSelected() })
-        } else {
-            AgentInteractionPane(model: model.interaction, session: s, open: { model.openSelected() }, ended: ended)
-        }
-    }
-
     /// #822 (spec 5.4): the terminal to the window's bottom, no prompt panel or input box (the terminal
     /// is both). The notice, the question and the todo list float over its top, so nothing that
     /// changes with state ever resizes it.
@@ -2248,7 +2178,11 @@ struct AgentDetailView: View {
             .overlay(alignment: .top) {
                 VStack(spacing: 0) {
                     overTop(row, s)
-                    if transcript.todosOpen, model.verbosity == .default, let todos = transcript.todos {
+                    if let u = model.unsentFirst, u.key == s.key, !model.focusedEnded {
+                        AgentUnsentFirstLine(text: u.text, copy: { model.copyUnsentFirst() }, send: { model.sendUnsentFirst() },
+                                             dismiss: { model.dismissUnsentFirst() })
+                    }
+                    if transcript.todosOpen, let todos = transcript.todos {
                         AgentTodosList(todos: todos)
                             .padding(.horizontal, sz(16)).padding(.bottom, sz(8))
                             .background(Neon.card)
@@ -2320,10 +2254,9 @@ let agentBandSpace = "agentWindowBand"
 /// #831 9.1: the window-level band over the pane area, one row of 30·s whatever the number of panes, shown only while
 /// the split gate is on (`shown`; #1224: off, the window is the parent's and the header draws the picker). Slots, left to
 /// right: the layout slot (empty before the Layouts section) and the chip slot (zoom and too small: `chip`), the
-/// All slot (its room kept, empty until phase C: no control, no text, no accessibility element), the verbosity picker
-/// (moved in from the session header). Fixed slots: each slot's size comes from the UI scale alone. A narrow band gives
-/// way in `Tier` order: the chip slot first, then the layout slot, then the picker's icons, then its menu; the All slot
-/// and the picker never go.
+/// All slot (its room kept, empty until phase C: no control, no text, no accessibility element). #1471 b: the detail
+/// level picker is gone with the transcript. Fixed slots: each slot's size comes from the UI scale alone. A narrow band
+/// gives way in `Tier` order: the chip slot first, then the layout slot; the All slot never goes.
 struct AgentWindowBand: View {
     @ObservedObject var model: AgentWindowModel
     /// #900 B2 step 3: the pane area under the band (the root's geometry); nil: the model's paneArea.
@@ -2349,7 +2282,7 @@ struct AgentWindowBand: View {
     static let chipWidest = "5 panes hidden, window too small"
 
     /// Widest first, so ViewThatFits takes the first that fits: the order in which the slots give way.
-    enum Tier: CaseIterable { case full, noChip, noLayout, icons, menu }
+    enum Tier: CaseIterable { case full, noChip, noLayout }
 
     /// 7.4 / 3.4 (#900 B2 step 3): the chip slot's words for the pane area `area`. Zoomed (the view draws one pane over a
     /// tiling of more): "Zoomed · i of n", i the zoomed pane's place in tree order. Else too small: "k panes hidden,
@@ -2366,14 +2299,11 @@ struct AgentWindowBand: View {
     }
 
     var body: some View {
-        let on = Self.transcriptShown(model)
         let chip = Self.chip(model, in: area ?? model.paneArea)
         ViewThatFits(in: .horizontal) {
-            line(.full, on: on, chip: chip)
-            line(.noChip, on: on, chip: chip)
-            line(.noLayout, on: on, chip: chip)
-            line(.icons, on: on, chip: chip)
-            line(.menu, on: on, chip: chip)
+            line(.full, chip: chip)
+            line(.noChip, chip: chip)
+            line(.noLayout, chip: chip)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Self.height)
@@ -2381,7 +2311,7 @@ struct AgentWindowBand: View {
         .coordinateSpace(.named(agentBandSpace))
     }
 
-    func line(_ t: Tier, on: Bool, chip: String?) -> some View {
+    func line(_ t: Tier, chip: String?) -> some View {
         HStack(spacing: sz(8)) {
             // Slots that give way are left out of the stack, never zero-width (a zero-width child still takes a spacing).
             if t == .full || t == .noChip {
@@ -2424,25 +2354,9 @@ struct AgentWindowBand: View {
             .opacity(model.sidebarShown ? 0 : 1).disabled(model.sidebarShown).accessibilityHidden(model.sidebarShown)
             .modifier(AgentBandProbe(kind: "sidebar"))
             Color.clear.frame(width: Self.allWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "all"))
-            AgentVerbosityPicker(level: $model.verbosity, style: t == .menu ? .menu : t == .icons ? .icons : .labels)
-                .disabled(!on).opacity(on ? 1 : 0.45)
-                .modifier(AgentBandProbe(kind: "picker"))
         }
         .padding(.horizontal, sz(16))
         .frame(maxWidth: .infinity)   // the ideal width still decides the tier; the taken line spans the band
-    }
-
-    /// 9.1 (#822 5.1, window-wide): some shown pane draws a transcript. The focused pane as AgentDetailView draws it (a
-    /// session row, no New session form, Transcript mode); any other shown pane as AgentUnfocusedPane does.
-    /// shortcut: the band observes the window model only, so an unfocused pane's own change (gate on) shows at the
-    /// model's next publish; upgrade when B2 lets a person see two panes.
-    static func transcriptShown(_ m: AgentWindowModel) -> Bool {
-        m.shownPanes.contains { id in   // #900 B2 step 3: a zoomed-away pane is not drawn
-            if id == m.layout.focused {
-                return false   // #1471: Terminal is the only mode
-            }
-            return false   // #1471: an unfocused pane draws a terminal, its kept frame or the ended card
-        }
     }
 }
 
@@ -2850,52 +2764,6 @@ struct AgentProjectTitle<T: View>: View {
     }
 }
 
-/// #831 5.1: the composer slot of a pane that does not hold the input: the row only, at the focused row's height,
-/// dimmed and inert, hidden from accessibility (13, QA INFO-7). The session's draft (first line), else "Message <title>…";
-/// a blocked session: "Needs input · ⌘J"; Ended: the ended placeholder.
-struct AgentInertComposer: View {
-    let text: String
-    var blocked = false
-    @Environment(\.agentComposerTwoLines) private var twoLines
-
-    static let needsInput = "Needs input · ⌘J"
-
-    static func text(draft: String, title: String, ended: Bool) -> String {
-        if ended { return AgentInteractionPane.endedPlaceholder }
-        let line = draft.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
-        return line.trimmingCharacters(in: .whitespaces).isEmpty ? "Message \(title)…" : line
-    }
-
-    var body: some View {
-        let h = AgentInteractionPane.rowHeight(twoLines: twoLines)
-        HStack(alignment: .bottom, spacing: sz(8)) {
-            ZStack(alignment: .topLeading) {
-                Color.clear
-                if blocked {
-                    Text(Self.needsInput).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                        .padding(.horizontal, sz(7)).padding(.vertical, sz(2))
-                        .background(Capsule().fill(Neon.blue.opacity(0.2)))
-                        .padding(.horizontal, sz(6)).padding(.vertical, sz(6))
-                } else {
-                    Text(text).font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
-                        .lineLimit(1).truncationMode(.tail).padding(.horizontal, sz(9)).padding(.vertical, sz(7))
-                }
-            }
-            .frame(height: h)
-            .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.bgBottom))
-            .overlay(RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke, lineWidth: 1))
-            AgentSendColumn(canInterrupt: false, canSend: false, interrupt: {}, send: {}, side: twoLines)
-        }
-        .frame(height: h)
-        .modifier(AgentPaneProbe(kind: "composer"))
-        .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .opacity(0.5)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
 /// #1239: the belt under the Rename field: a title-slot part (one with no accessibilityHidden of its own) leaves the
 /// accessibility tree while renaming by the flag itself, whatever the slot's opacity 0 does on a given macOS. Always
 /// applied, only its value changes: nothing is rebuilt, nothing moves. Per part, never on the slot (#1120).
@@ -2909,9 +2777,8 @@ struct AgentSessionHeader: View {
     let session: AgentSession
     let cwd: String?
     let open: () -> Void
-    /// #821: the window's verbosity, the session's todo list (Default's chip) and whether
-    /// its list is open (the transcript model's, reset on a session switch).
-    var level: Binding<AgentVerbosity> = .constant(.default)
+    /// #821: the session's todo list (its chip) and whether its list is open (the transcript model's, reset on a
+    /// session switch).
     var todos: AgentTodos?
     var todosOpen: Binding<Bool> = .constant(false)
     /// #829: the "⋯" menu's store (its gates) and its ask.
@@ -2928,8 +2795,6 @@ struct AgentSessionHeader: View {
     var rename: AgentRenameEdit?
     var renaming: Bool { rename != nil }
     var endRename: (AgentRenameEdit, String?) -> Bool = { _, _ in false }
-    /// #822: the header's layout; #1471: Terminal is the only pane mode (no toggle; part b drops the other layout).
-    var mode = AgentPaneMode.terminal
     /// #900 B2 step 6a: the "⋯" pane items (empty with the gate off) and their run.
     var panes: [AgentWindowMenuEntry] = []
     var pane: (AgentPaneVerb) -> Void = { _ in }
@@ -2960,20 +2825,6 @@ struct AgentSessionHeader: View {
         VStack(alignment: .leading, spacing: sz(4)) {
             // The whole title and the labelled controls when they fit, else smaller ones.
             titleLines.frame(height: Self.lineHeight)
-            // #1103: Transcript mode keeps its second line (the picker takes the first line's room the extras need).
-            // #1191: a fixed slot: the hidden 11 pt text line gives it its height with no counts, no age and no todo chip,
-            // as the age's own text would (a placeholder, not a minHeight: it reads the font's metrics at every scale).
-            if mode == .transcript {
-                // A ZStack, not a stack child: a zero-width first child still takes one spacing (the line would start 6 pt in).
-                ZStack(alignment: .leading) {
-                    Text(" ").font(Neon.font(11)).hidden().accessibilityHidden(true)
-                    HStack(spacing: sz(6)) {
-                        folder
-                        Spacer(minLength: 0)
-                        if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
-                    }
-                }
-            }
             if todosOpen.wrappedValue, let todos = shownTodos { AgentTodosList(todos: todos) }
         }
         .padding(.horizontal, sz(16)).padding(.top, Self.padTop).padding(.bottom, Self.padBottom)
@@ -2994,13 +2845,13 @@ struct AgentSessionHeader: View {
                 AgentWidthFloor(floor: 0) {   // #1103 F1: an extra, never part of what the line must hold
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: sz(6)) {
-                            if mode == .terminal { Text("·").accessibilityHidden(true) }   // after the chip; nothing leads Transcript's line
-                            // #1239: under the field only in Terminal mode (Transcript's second line is not in the slot).
+                            Text("\u{00B7}").accessibilityHidden(true)   // after the chip
+                            // #1239: under the Rename field.
                             AgentCountGroups(counts: row.counts, size: 11)
-                                .modifier(AgentHeaderRenameHidden(renaming: renaming && mode == .terminal))
+                                .modifier(AgentHeaderRenameHidden(renaming: renaming))
                             if let ago {
                                 if !row.counts.isEmpty { Text("·").accessibilityHidden(true) }   // a count never runs into "4m ago"
-                                Text(ago).modifier(AgentHeaderRenameHidden(renaming: renaming && mode == .terminal))
+                                Text(ago).modifier(AgentHeaderRenameHidden(renaming: renaming))
                             }
                         }
                         .font(Neon.font(11)).foregroundStyle(Neon.textSecondary).lineLimit(1)
@@ -3033,12 +2884,8 @@ struct AgentSessionHeader: View {
 
     /// #1103 F1: the counts and age only with a readable title and the chip.
     @ViewBuilder var slotParts: some View {
-        if mode == .terminal {
-            ViewThatFits(in: .horizontal) {
-                slotLine(folder: true)
-                slotLine(folder: false)
-            }
-        } else {
+        ViewThatFits(in: .horizontal) {   // #1471 b: one layout (Terminal's)
+            slotLine(folder: true)
             slotLine(folder: false)
         }
     }
@@ -3064,46 +2911,34 @@ struct AgentSessionHeader: View {
         }
     }
 
-    /// Focused hides todos; Verbose draws the todo/task cards in the conversation instead.
-    var shownTodos: AgentTodos? { level.wrappedValue == .default ? todos : nil }
+    var shownTodos: AgentTodos? { todos }
 
-    /// Widest first: the labelled picker and toggle, the icons, menus.
-    @ViewBuilder var titleLines: some View {
-        ViewThatFits(in: .horizontal) {
-            titleLine(picker: .labels)
-            titleLine(picker: .icons)
-            titleLine(picker: .menu)
-        }
-    }
+    /// #1471 b: one tier (the picker's labels, icons and menu tiers went with it).
+    var titleLines: some View { titleLine() }
 
     /// #1103: the title line. Its size (and so the tier ViewThatFits picks) is the same in both modes: the whole
     /// title, the chips, the picker, the toggle and the "⋯", measured hidden. The line drawn over it puts the toggle
     /// and the "⋯" at the right edge, so a mode change never moves them; Terminal mode draws no picker, and its
     /// folder takes that room.
-    func titleLine(picker: AgentVerbosityPicker.Style) -> some View {
+    func titleLine() -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
             Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1)
             stateChip
             if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
-            // #831 9.1: the picker's room counts here whether the header or the band (AgentWindowBand.shown) draws it,
-            // so the header picks its tier at the same widths and the toggle and the "⋯" stay where they were.
-            AgentVerbosityPicker(level: level, style: picker)
             Color.clear.frame(width: sz(18), height: sz(18))   // the "⋯"
         }
         .hidden()
         .accessibilityHidden(true)
         .frame(maxWidth: .infinity)
-        .overlay { shownLine(picker: picker) }
+        .overlay { shownLine() }
     }
 
-    func shownLine(picker: AgentVerbosityPicker.Style) -> some View {
+    func shownLine() -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
             // The slot takes what the controls leave and nothing more (its parts cut, then clip): the controls never
             // push the line past the header, so they sit at the right edge, where the mode does not move them.
             titleSlot.frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
-            if mode == .terminal, let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
-            // #1103: none in Terminal mode. #831 9.1: with the band shown the picker is the band's, not drawn here.
-            if mode == .transcript && !AgentWindowBand.shown { AgentVerbosityPicker(level: level, style: picker) }
+            if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
             menuButton.background(XrayCardAnchor())   // #829: always last, fixed size; #1319: the list hangs from it
         }
     }
@@ -3131,59 +2966,6 @@ struct AgentWidthFloor: Layout {
         subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
                               proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
-}
-
-/// #821: Focused | Default | Verbose. Plain buttons in a capsule, not a segmented Picker:
-/// segmented controls ignore ThemeRuntime.scale (they clip below 1.0).
-struct AgentVerbosityPicker: View {
-    enum Style { case labels, icons, menu }
-    @Binding var level: AgentVerbosity
-    var style = Style.labels
-
-    var body: some View {
-        if style == .menu {
-            Menu {
-                ForEach(AgentVerbosity.allCases, id: \.self) { v in
-                    Button(v.title) { level = v }
-                }
-            } label: {
-                Image(systemName: level.icon).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden)
-            .fixedSize()
-            .help("\(level.title) view")
-            .accessibilityLabel("View: \(level.title)")
-        } else {
-            HStack(spacing: 0) {
-                ForEach(AgentVerbosity.allCases, id: \.self) { v in
-                    Button { level = v } label: {
-                        Group {
-                            if style == .icons { Image(systemName: v.icon) } else { Text(v.title) }
-                        }
-                        .font(Neon.font(10.5, weight: .medium))
-                        .foregroundStyle(v == level ? Neon.textPrimary : Neon.textSecondary)
-                        .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
-                        .background(Capsule().fill(v == level ? Neon.blue.opacity(0.2) : .clear))
-                        .contentShape(Capsule())
-                        .fixedSize()
-                    }
-                    .buttonStyle(.plain)
-                    .help("\(v.title) view")
-                    .accessibilityLabel("\(v.title) view")
-                    .accessibilityAddTraits(v == level ? .isSelected : [])
-                }
-            }
-            .padding(sz(2))
-            .overlay(Capsule().stroke(Neon.stroke, lineWidth: 1))
-            .fixedSize()
-        }
-    }
-}
-
-/// #1471: the Terminal | Transcript toggle is gone (Terminal is the only mode); the ended reason stays for the
-/// session menu's Open in terminal help.
-enum AgentPaneModeToggle {
-    static let endedReason = "This session ended: there is no terminal to attach to"
 }
 
 /// #821 (Q4): Default's one-line todo chip; a click opens the list under the header.
@@ -3392,95 +3174,7 @@ struct AgentHistoryButtons: View {
     }
 }
 
-// MARK: - #798: the input box, interrupt and prompt answers
-
-/// Under the conversation: the prompt panel (pinned), the last action's notice, the input box.
-struct AgentInteractionPane: View {
-    @ObservedObject var model: AgentWindowInteraction
-    let session: AgentSession
-    let open: () -> Void
-    /// #829 (spec 3.5): a Restart or Stop's running text on this session; nil: none.
-    var lock: String?
-    /// QA #668 F1: the session ended (a held row): nothing is sent, interrupted or answered.
-    var ended = false
-    /// #831 B1 step 4 (5.1): the pane area's: more than one row of panes shown.
-    @Environment(\.agentComposerTwoLines) private var twoLines
-
-    /// 5.1: the composer row's fixed height, from the UI scale and the layout alone (never focus or state): 60·s, or 44·s
-    /// (two lines) when more than one row of panes is shown.
-    static func rowHeight(twoLines: Bool) -> CGFloat { twoLines ? sz(44) : sz(60) }
-
-    var canSend: Bool {
-        (session.state == .idle || session.state == .done) && !model.busy && lock == nil && !ended
-            && AgentWindowDriver.message(model.draft) != nil
-    }
-
-    var canInterrupt: Bool { session.state == .working && !model.busy && lock == nil && !ended }
-
-    static let endedPlaceholder = "This session ended"
-
-    var placeholder: String {
-        if ended { return Self.endedPlaceholder }
-        if let lock { return AgentWindowControls.lockPlaceholder(lock) }
-        return switch session.state {
-        case .blocked: "Answer the prompt above first"
-        case .working: "Claude is working. Type now, send when it's done"
-        case .idle, .done: "Message Claude. Return sends, Shift-Return adds a line"
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: sz(8)) {
-            AgentPromptPanel(model: model, open: open).disabled(lock != nil || ended)
-            if let n = model.notice { AgentActionNotice(text: n, open: open) }
-            HStack(alignment: .bottom, spacing: sz(8)) {
-                ZStack(alignment: .topLeading) {
-                    // QA #668 INFO-3: an ended session's field neither edits nor reads as editable; same slot.
-                    // QA #672 #2: no .disabled here: it never reached the NSTextView; `editable` is what turns it off.
-                    AgentComposerField(text: $model.draft, onSubmit: { if canSend { model.send() } }, editable: !ended,
-                                       owner: model)
-                    if model.draft.isEmpty {
-                        Text(placeholder).font(Neon.font(12)).foregroundStyle(Neon.textSecondary)
-                            .lineLimit(1).padding(.horizontal, sz(9)).padding(.vertical, sz(7))
-                            .allowsHitTesting(false)
-                    }
-                }
-                .frame(height: Self.rowHeight(twoLines: twoLines))
-                .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.bgBottom))
-                .overlay(RoundedRectangle(cornerRadius: sz(8)).stroke(Neon.stroke, lineWidth: 1))
-                AgentSendColumn(canInterrupt: canInterrupt, canSend: canSend,
-                                interrupt: { model.interrupt() }, send: { model.send() }, side: twoLines)
-            }
-            .frame(height: Self.rowHeight(twoLines: twoLines))
-            .modifier(AgentPaneProbe(kind: "composer"))
-        }
-        .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // #860: on the window's backdrop (its input box keeps its own field fill).
-    }
-}
-
-/// #828: Interrupt over Send in one fixed column. Both are always there and stretch to the
-/// wider one's width; Interrupt only dims when Claude is not working, so the input box
-/// beside the column never changes width.
-struct AgentSendColumn: View {
-    let canInterrupt: Bool
-    let canSend: Bool
-    let interrupt: () -> Void
-    let send: () -> Void
-    /// #831 5.1: the 44·s row has no room for two pills one above the other: side by side there.
-    var side = false
-    var body: some View {
-        let stack = side ? AnyLayout(HStackLayout(spacing: sz(6))) : AnyLayout(VStackLayout(spacing: sz(6)))
-        stack {
-            AgentPillButton(title: "Interrupt", icon: "stop.fill", tint: Neon.magenta, enabled: canInterrupt, fill: true,
-                            action: interrupt)
-                .help("Press Esc in the session")
-            AgentPillButton(title: "Send", icon: "arrow.up", tint: Neon.blue, enabled: canSend, fill: true, action: send)
-        }
-        .fixedSize(horizontal: true, vertical: false)
-    }
-}
+// MARK: - #798: the pill button and the composer field (#1471 b: the Send column and the prompt panel went with the transcript)
 
 struct AgentPillButton: View {
     let title: String
@@ -3504,173 +3198,6 @@ struct AgentPillButton: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.45)
-    }
-}
-
-/// Why the window did not (or could not confirm it did) act, with the way out.
-struct AgentActionNotice: View {
-    let text: String
-    let open: () -> Void
-    var body: some View {
-        HStack(alignment: .center, spacing: sz(8)) {
-            Image(systemName: "exclamationmark.triangle.fill").font(Neon.font(11)).foregroundStyle(AgentState.blocked.color)
-            Text(text).font(Neon.font(11.5)).foregroundStyle(Neon.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: sz(4))
-            OpenInTerminalButton(action: open, compact: true)
-        }
-    }
-}
-
-struct AgentPromptPanel: View {
-    @ObservedObject var model: AgentWindowInteraction
-    let open: () -> Void
-
-    var body: some View {
-        switch model.panel {
-        case .none:
-            EmptyView()
-        case .reading:
-            status("ellipsis.circle", "Reading the prompt…")
-        case .held:
-            status("checkmark.shield", AgentWindowText.held)
-        case .terminal(let why, let tail):
-            VStack(alignment: .leading, spacing: sz(6)) {
-                AgentActionNotice(text: why, open: open)
-                screenLines(Array(tail.suffix(4)))
-            }
-        case .prompt(let w):
-            prompt(w)
-        }
-    }
-
-    func status(_ icon: String, _ text: String) -> some View {
-        HStack(spacing: sz(6)) {
-            Image(systemName: icon).foregroundStyle(Neon.textSecondary)
-            Text(text).foregroundStyle(Neon.textSecondary)
-            Spacer(minLength: 0)
-        }
-        .font(Neon.font(11.5))
-    }
-
-    func screenLines(_ lines: [String]) -> some View {
-        Text(lines.map(AgentPrompt.visible).joined(separator: "\n"))
-            .font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textSecondary)
-            .lineLimit(Self.contextLines).fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    static let contextLines = 8
-
-    func prompt(_ w: AgentWindowPrompt) -> some View {
-        let p = w.screen.prompt
-        let context = p.context.filter { !AgentPrompt.isChipLine($0) }
-        return VStack(alignment: .leading, spacing: sz(6)) {
-            // #802: why a plan approval's approve rows are off, with the way out.
-            if let why = w.why { AgentActionNotice(text: why, open: open) }
-            // #802: an approvable plan shows the transcript's plan (checked against the screen), whole.
-            if let plan = w.plan { planText(plan) } else if !context.isEmpty { screenLines(context) }
-            Text(AgentPrompt.visible(p.question)).font(Neon.font(12.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-            if w.kind == .preview, !p.preview.isEmpty { screenLines(p.preview) }
-            ForEach(w.buttons, id: \.digit) { o in option(w, o) }
-            if let other = w.other {
-                HStack(spacing: sz(8)) {
-                    Text("\(other.digit).").font(Neon.font(11.5, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(Neon.textSecondary)
-                    // #802: on a multi-select the text goes with Submit (and ticks its box there).
-                    TextField(w.kind == .multi ? "Your own answer (optional)" : "Your own answer", text: $model.otherText)
-                        .textFieldStyle(.roundedBorder).font(Neon.font(12))
-                        .onSubmit { if w.kind == .multi { model.submitPicks() } else { model.sendOther() } }
-                    if w.kind != .multi {
-                        AgentPillButton(title: "Answer", icon: "arrow.up", tint: Neon.blue,
-                                        enabled: !model.busy && AgentWindowDriver.otherText(model.otherText) != nil) {
-                            model.sendOther()
-                        }
-                    }
-                }
-            }
-            if let chat = w.chat { option(w, chat) }
-            if w.kind == .multi {
-                HStack {
-                    Spacer(minLength: 0)
-                    AgentPillButton(title: "Submit", icon: "checkmark", tint: Neon.blue,
-                                    enabled: !model.busy && !w.enabled.isEmpty) {
-                        model.submitPicks()
-                    }
-                }
-            }
-            if !w.caption.isEmpty {
-                Text(w.caption.joined(separator: " ")).font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    /// #802: the transcript's plan, scrolled in a box (a plan is often longer than the pane).
-    func planText(_ plan: String) -> some View {
-        ScrollView {
-            Text(Self.planDisplay(plan))
-                .font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textPrimary)
-                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(sz(8))
-        }
-        .frame(height: sz(Self.planHeight))
-        .background(RoundedRectangle(cornerRadius: sz(7)).fill(Neon.bgBottom))
-        .overlay(RoundedRectangle(cornerRadius: sz(7)).stroke(Neon.stroke, lineWidth: 1))
-    }
-
-    static let planHeight: CGFloat = 150
-
-    /// The plan as shown: the transcript's text, which the screen check cannot vouch for character by
-    /// character (the renderer may drop what it can't draw), so every hidden character is escaped
-    /// (⟨U+202E⟩). Line by line: a newline is no hidden character here.
-    static func planDisplay(_ plan: String) -> String {
-        plan.components(separatedBy: "\n").map(AgentPrompt.visible).joined(separator: "\n")
-    }
-
-    func option(_ w: AgentWindowPrompt, _ o: AgentPromptOption) -> some View {
-        let isChat = o.digit == w.chat?.digit
-        let on = (w.enabled.contains(o.digit) || isChat) && !model.busy
-        let ticked = model.picks.contains(o.digit)
-        return Button {
-            if isChat { return model.chat() }
-            switch w.kind {
-            case .choose: model.answer(o)
-            case .preview: model.choosePreview(o)
-            case .multi: if ticked { model.picks.remove(o.digit) } else { model.picks.insert(o.digit) }
-            }
-        } label: {
-            HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
-                if w.kind == .multi, !isChat {
-                    Image(systemName: ticked ? "checkmark.square.fill" : "square")
-                        .font(Neon.font(12)).foregroundStyle(ticked ? Neon.blue : Neon.textSecondary)
-                } else {
-                    Text("\(o.digit).").font(Neon.font(11.5, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(Neon.textSecondary)
-                }
-                VStack(alignment: .leading, spacing: sz(2)) {
-                    Text(AgentPrompt.visible(o.label)).font(Neon.font(12, weight: .medium))
-                        .foregroundStyle(o.style(first: o.digit == 1) == .deny ? Neon.magenta : Neon.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !o.detail.isEmpty {
-                        Text(o.detail.map(AgentPrompt.visible).joined(separator: " ")).font(Neon.font(10.5))
-                            .foregroundStyle(Neon.textSecondary).lineLimit(2)
-                    }
-                }
-                Spacer(minLength: 0)
-                if w.kind == .preview, w.screen.caret == o.digit {
-                    Text("previewed").font(Neon.font(9.5)).foregroundStyle(Neon.textSecondary)
-                }
-            }
-            .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: sz(7)).fill(Neon.cardHi))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!on)
-        .opacity(on ? 1 : 0.45)
     }
 }
 

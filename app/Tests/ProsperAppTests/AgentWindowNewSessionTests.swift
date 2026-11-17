@@ -52,11 +52,11 @@ extension AgentWindowD1Tests {
 
     // MARK: First message not sent (#1369)
 
-    /// T28 (#847 D2.3): a first message the island could not send fills that session's EMPTY draft once, when the
-    /// session is selected. The island's io is dch-lite (an empty read with no mirror), so its sayFirst fails at once
+    /// T28 (#847 D2.3): a first message the island could not send shows as that session's notice when the session is
+    /// selected (#1471 b: a notice over the terminal, no draft seed). The island's io is dch-lite (an empty read with no mirror), so its sayFirst fails at once
     /// and no dch runs. #1471: the typed-draft and cleared-draft halves were the Transcript input box's (gone).
     @MainActor
-    func testAgentWindowNewSessionUnsentFirstSeedsAnEmptyDraftOnceNeverATypedOne() {
+    func testAgentWindowNewSessionUnsentFirstShowsOnSelection() {
         withNewSessionPrefs {
             let a = session("api", .idle), b = session("web", .idle)
             let spawns = SpawnCalls(), m = newSessionModel(store([a, b]), spawns)
@@ -73,8 +73,9 @@ extension AgentWindowD1Tests {
             }
             XCTAssertEqual(island.unsentFirst[a.key], "Example task for api")
             m.select(.live(a.key))
-            XCTAssertEqual(m.interaction.draft(for: a.key), "Example task for api", "the empty draft is filled")
-            XCTAssertTrue(island.unsentFirst[a.key] == nil, "taken once")
+            XCTAssertEqual(m.unsentFirst, AgentWindowModel.UnsentFirst(key: a.key, text: "Example task for api"), "the notice shows on selection")
+            XCTAssertEqual(m.interaction.draft(for: a.key), "", "no draft is seeded")
+            XCTAssertEqual(island.unsentFirst[a.key], "Example task for api", "kept until Send or Dismiss")
         }
     }
 
@@ -310,7 +311,7 @@ extension AgentWindowD1Tests {
             let api = mapped("api")
             st.sessions = [other, api]
             XCTAssertEqual(m.selection, .live(api.key))
-            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.paneHasTerminal)
             XCTAssertTrue(m.terminal.focusPending, "the keys go to the terminal once its client is live")
             XCTAssertNil(m.pendingSpawn, "one-shot")
         }

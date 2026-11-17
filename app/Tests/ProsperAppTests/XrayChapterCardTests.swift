@@ -58,7 +58,7 @@ final class XrayChapterCardTests: XCTestCase {
         XrayPanels.run = XrayPanelTasksTests.FakeRun().run
         XrayPanels.model = { [weak m] _ in m }
         XrayPanels.window = { [weak win] _ in win }
-        XCTAssertEqual(m.paneMode, .terminal)
+        XCTAssertTrue(m.paneHasTerminal)
         XCTAssertTrue(win.toggleXray())
         let p = try XCTUnwrap(XrayPanels.shared.open[m.layout.focused])
         await p.reading?.value
