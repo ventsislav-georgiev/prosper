@@ -1975,7 +1975,8 @@ struct AgentDetailView: View {
                 .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 VStack(spacing: 0) {
-                    if mode == .terminal {
+                    // #1477: gate on, an Ended pane's terminal keeps its last frame under the Ended chip and card
+                    if mode == .terminal || model.keptFrame(id) != nil {
                         terminalPane(row, s)
                     } else {
                         transcriptPane(row, s, ended: ended)
@@ -2531,22 +2532,31 @@ struct AgentUnfocusedPane: View {
         VStack(spacing: 0) {
             if let p = shown {
                 let ended = runtime.ended != nil
+                // #1477 (spec 15 C): B1's Terminal-to-transcript fallback is gone: a Terminal-mode pane draws its own terminal
+                let kept = model.keptFrame(runtime.pane)
+                let mode = ended ? AgentPaneMode.transcript : model.mode(p.session)
                 AgentCompactHeader.of(p.row, p.session, cwd: transcript.cwd, ended: ended, store: model.store,
                                       ask: { model.ask($0, p.session) }, open: { model.openSession(p.session) },
-                                      mode: .transcript, setMode: { model.switchMode($0, for: p.session) },
+                                      mode: mode, setMode: { model.switchMode($0, for: p.session) },
                                       // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.
                                       panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),
                                       pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) })
                     .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
-                AgentTranscriptView(model: transcript, scrolls: scrolls, ownsLifecycle: false, level: model.verbosity,
-                                    ended: ended, jumper: .of(transcript))
-                    .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
-                    .clipped()
-                Rectangle().fill(Neon.stroke).frame(height: 1)
-                AgentInertComposer(text: AgentInertComposer.text(draft: interaction.draft(for: p.session.key),
-                                                                 title: p.row.title, ended: ended),
-                                   blocked: !ended && p.session.state == .blocked)
+                if mode == .terminal || kept != nil {
+                    AgentTerminalPane(controller: kept ?? model.paneTerminal(runtime), open: { model.openSession(p.session) })
+                        .frame(minHeight: 0, maxHeight: .infinity)
+                        .modifier(AgentPaneProbe(kind: "terminal"))
+                } else {
+                    AgentTranscriptView(model: transcript, scrolls: scrolls, ownsLifecycle: false, level: model.verbosity,
+                                        ended: ended, jumper: .of(transcript))
+                        .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                        .clipped()
+                    Rectangle().fill(Neon.stroke).frame(height: 1)
+                    AgentInertComposer(text: AgentInertComposer.text(draft: interaction.draft(for: p.session.key),
+                                                                     title: p.row.title, ended: ended),
+                                       blocked: !ended && p.session.state == .blocked)
+                }
             } else {
                 let title = AgentPanePlaceholder.title(runtime.content)
                 AgentCompactHeader(title: historyTitle ?? title ?? "").modifier(AgentPaneProbe(kind: "header"))

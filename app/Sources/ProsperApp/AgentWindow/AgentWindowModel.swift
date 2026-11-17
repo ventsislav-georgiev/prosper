@@ -343,6 +343,8 @@ final class AgentPaneRuntime: ObservableObject {
     @Published fileprivate(set) var content: PaneContent?
     /// The pane's live row as of the last resolve: what `ended` keeps when the session goes.
     fileprivate var liveRow: AgentSidebar.Row?
+    /// #1477 (spec 15 C): this pane's own terminal, split gate on only; made by the model on first need (`paneTerminal`).
+    fileprivate(set) var terminal: AgentTerminalController?
 
     init(pane: UUID) { self.pane = pane }
 }
@@ -758,7 +760,7 @@ final class AgentWindowModel: ObservableObject {
         if clicks >= 2, case let .success(l) = layout.equalize(path: d.path, deep: false), l != layout { adopt(l) }
         guard case let .split(_, ratio, _, _)? = layout.tree.locate(d.path[...], in: .zero)?.node else { return false }
         dividerDrag = (d, d.axis == .columns ? p.x : p.y, ratio, size)
-        terminal.liveResizeStarted()   // 7.5: the terminal re-grids at the drag's end only (one setSize)
+        for t in allTerminals { t.liveResizeStarted() }   // 7.5: each terminal re-grids at the drag's end only (one setSize)
         return true
     }
 
@@ -782,7 +784,7 @@ final class AgentWindowModel: ObservableObject {
     func dragEnded() {
         guard dividerDrag != nil else { return }
         dividerDrag = nil
-        terminal.liveResizeEnded()
+        for t in allTerminals { t.liveResizeEnded() }
         autosave()
     }
 
@@ -828,9 +830,43 @@ final class AgentWindowModel: ObservableObject {
     @Published private(set) var collapsed = Preferences.agentWindowCollapsedSections {
         didSet { if collapsed != oldValue { Preferences.agentWindowCollapsedSections = collapsed } }
     }
-    /// #822: the selected session's live terminal. One per window model, like `transcript`
-    /// (a split pane brings its own model); attached only by `follow`.
-    let terminal = AgentTerminalController()
+    /// #822: the window's terminal with the split gate off (one pane); attached only by `follow`.
+    let windowTerminal = AgentTerminalController()
+    /// #822: the focused pane's terminal. #1477 (spec 15 C, no singleton): with the split gate on every pane runtime has its
+    /// own, and this is the focused pane's, so keys, find, font and focus act on that pane only. Gate off: the window's.
+    var terminal: AgentTerminalController {
+        guard AgentPaneLayout.splitsEnabled, let r = focusedRuntime else { return windowTerminal }
+        return paneTerminal(r)
+    }
+    /// #1477: makes a pane's terminal (rows hand in a fake spawn and screen).
+    var makeTerminal: () -> AgentTerminalController = { AgentTerminalController() }
+    /// #1477 (11.2): the delay of an unfocused pane's attach rest (rows run it by hand).
+    var paneAfter: (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) }
+    }
+    /// 11.2: "visible, shown, unfocused: attached after the 250 ms rest".
+    static let attachRest: TimeInterval = 0.25
+    /// #1477: the session each unfocused pane waits out its rest for (a pending rest is never restarted).
+    private var restPending: [UUID: AgentSessionKey] = [:]
+
+    /// #1477: pane `r`'s own terminal, wired like the window's on first need.
+    func paneTerminal(_ r: AgentPaneRuntime) -> AgentTerminalController {
+        if let t = r.terminal { return t }
+        let t = makeTerminal()
+        wire(t)
+        r.terminal = t
+        return t
+    }
+
+    /// Every terminal of this window: the window's and each pane's made so far.
+    private var allTerminals: [AgentTerminalController] { [windowTerminal] + runtimes.values.compactMap(\.terminal) }
+
+    /// #1477 (spec 15 C, 4.4): an Ended pane's terminal that still holds its last frame (gate on), drawn under "Ended".
+    func keptFrame(_ pane: UUID) -> AgentTerminalController? {
+        guard AgentPaneLayout.splitsEnabled, let r = runtimes[pane], r.ended != nil, let t = r.terminal, t.screen != nil
+        else { return nil }
+        return t
+    }
     /// #822: a live session opens in Terminal (operator, 2026-11-10). These are the ones the human
     /// switched to Transcript ("<dir>\t<name>"), newest first, per Mac; a later session that reuses
     /// a name inherits the choice.
@@ -1000,11 +1036,7 @@ final class AgentWindowModel: ObservableObject {
         }
         for p in layout.panes { runtimes[p.id] = AgentPaneRuntime(pane: p.id) }
         if !sidebarShown { keyFocus = .pane }   // #900 B2 step 4: made hidden (the saved choice), the panes take the keys
-        terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
-        // OQ-66: an OSC 52 write needs the session to be the focused pane's, live now (4.3: resolved at the write).
-        terminal.isSelected = { [weak self] key in self?.focusedLive?.key == key }
-        // #1480: a relative file link resolves against the live session's folder (a remote key is in no store row).
-        terminal.cwd = { [weak self] key in self?.store?.sessions.first { $0.key == key }?.cwd }
+        wire(windowTerminal)
         // #831 B1 (4.3): every interaction action re-resolves the focused pane (main actor: called from its actions).
         interaction.resolveFocused = { [weak self] in self?.focusedLive }
         rebind()
@@ -1047,6 +1079,8 @@ final class AgentWindowModel: ObservableObject {
         let ids = Set(layout.order)
         for (id, r) in runtimes where switched || !ids.contains(id) {
             r.transcript.stop()
+            r.terminal?.attach(nil)   // 11.2: closing a pane terminates its client; the dch session is untouched
+            restPending[id] = nil
             runtimes[id] = nil
         }
         for id in layout.order where runtimes[id] == nil {
@@ -1054,6 +1088,15 @@ final class AgentWindowModel: ObservableObject {
             runtimes[id] = r
             onNewRuntime(r)
         }
+    }
+
+    /// The window model's answers a terminal asks for (the window's and, #1477, each pane's).
+    private func wire(_ terminal: AgentTerminalController) {
+        terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
+        // OQ-66: an OSC 52 write needs the session to be the focused pane's, live now (4.3: resolved at the write).
+        terminal.isSelected = { [weak self] key in self?.focusedLive?.key == key }
+        // #1480: a relative file link resolves against the live session's folder (a remote key is in no store row).
+        terminal.cwd = { [weak self] key in self?.store?.sessions.first { $0.key == key }?.cwd }
     }
 
     /// The window's active layout replaced: a layout switch, or a focus or tree change (saved, 8.1). Only tests call it
@@ -2650,8 +2693,9 @@ final class AgentWindowModel: ObservableObject {
         pendingSpawn = nil   // its deadline timer goes with it
         subscription = nil
         // 11.2 "window closed: runtime freed": every pane's model stopped, then released (no pane model outlives this).
-        for r in runtimes.values { r.transcript.stop() }
+        for r in runtimes.values { r.transcript.stop(); r.terminal?.attach(nil) }
         runtimes = [:]
+        restPending = [:]
         rebind()   // closed: the sinks go
         interaction.follow(nil)
         terminal.attach(nil)
@@ -2695,6 +2739,7 @@ final class AgentWindowModel: ObservableObject {
             r.transcript.start()
         }
         rebind()
+        if AgentPaneLayout.splitsEnabled { followUnfocusedTerminals(shown) }
         // #836 (b): a listed remote row attaches its terminal; no transcript, input box, hook or plan lookup for it.
         // #1330 (R836-q1): only when armed; a show, a restore, a re-list or the form closing shows the Attach card.
         if visible, newSession == nil, let r = focusedRemote {
@@ -2705,7 +2750,8 @@ final class AgentWindowModel: ObservableObject {
         }
         guard visible, let f = focusedRuntime, f.ended == nil, case .live(let s)? = f.content else {
             interaction.follow(nil)   // 4.4 (d): nothing on an ended pane takes input; hidden or not live: nothing
-            terminal.attach(nil)
+            // #1477: gate on, an Ended pane's terminal keeps its last frame (its client already gone)
+            if !(AgentPaneLayout.splitsEnabled && focusedRuntime?.ended != nil) { terminal.attach(nil) }
             return
         }
         let transcript = f.transcript
@@ -2717,6 +2763,36 @@ final class AgentWindowModel: ObservableObject {
         interaction.follow(terminalMode ? nil : s)
         // #847: the New session form covers the pane, so no terminal under it.
         terminal.attach(terminalMode && newSession == nil ? s.key : nil)
+    }
+
+    /// #1477 (11.2, spec 15 C): gate on, each unfocused pane's own terminal. A shown, live local session in Terminal mode
+    /// attaches after the 250 ms rest (a rest under way for the same session is not restarted; at its end the pane is
+    /// checked again); an Ended pane's terminal is left as it is (its last frame, no client); anything else (hidden
+    /// window, not shown, Transcript, not live) detaches now. The focused pane's terminal is follow()'s, attached at once.
+    private func followUnfocusedTerminals(_ shown: Set<UUID>) {
+        for r in runtimes.values where r.pane != layout.focused && r.ended == nil {
+            guard let k = unfocusedTerminalKey(r, shown) else {
+                restPending[r.pane] = nil
+                if r.terminal?.key != nil { r.terminal?.attach(nil) }
+                continue
+            }
+            if r.terminal?.key == k || restPending[r.pane] == k { continue }
+            if r.terminal?.key != nil { r.terminal?.attach(nil) }   // another session: the old client goes now
+            restPending[r.pane] = k
+            let id = r.pane
+            paneAfter(Self.attachRest) { [weak self] in
+                guard let self, self.restPending[id] == k else { return }
+                self.restPending[id] = nil
+                guard !self.closed, id != self.layout.focused, let r = self.runtimes[id], r.ended == nil,
+                      self.unfocusedTerminalKey(r, self.visible ? self.shownPanes : []) == k else { return }
+                self.paneTerminal(r).attach(k)
+            }
+        }
+    }
+
+    private func unfocusedTerminalKey(_ r: AgentPaneRuntime, _ shown: Set<UUID>) -> AgentSessionKey? {
+        guard shown.contains(r.pane), case .live(let s)? = r.content, mode(s) == .terminal else { return nil }
+        return s.key
     }
 
     /// 11.2: the start order, the focused pane first, then the others in tree order.
