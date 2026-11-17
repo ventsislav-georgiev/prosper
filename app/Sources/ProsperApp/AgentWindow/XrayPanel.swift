@@ -114,6 +114,9 @@ final class XrayPanels: ObservableObject {
         m.cwd = { Self.cwd(pane, target) }
     }
 
+    /// #1475: the follows (XrayFollow.swift): one per target, shared by the panels showing it, kept in an LRU.
+    let follows = XrayFollows()
+
     /// The transcript model's cwd; #1472: without one (Terminal mode, a remote row) dch's, from the row that shows
     /// `target` (AgentSession.cwd from dch's list, a remote row's cwd); "" (dch did not say) is none.
     static func cwd(_ pane: UUID, _ target: XrayTarget) -> String? {
@@ -220,10 +223,15 @@ final class XrayPanelModel: ObservableObject {
     @Published private(set) var memoryCard: XrayMemory.Item?
     /// #1472: the chapter whose card was asked for last (no transcript: a Prompts or Responses row, Read the prompt).
     @Published private(set) var chapterCard: TranscriptOutline.Chapter?
-    /// #1472: dch's chapter anchors to their `i` (ordinal), from the open read's chapters.
-    /// shortcut: the open read only (a poll's takeChapters keeps no anchors), so a prompt newer than the open gets the
-    /// memory card's note; upgrade by carrying `anchor` in XrayChapters.parse.
+    /// #1472: dch's chapter anchors to their `i` (ordinal); #1475: from every chapters read and the follow's state.
     var chapterAnchors: [String: Int] = [:]
+    /// #1475: the follow this panel's chapters and refs come from (XrayFollow.swift); nil: today's reads and polls.
+    var follow: XrayFollow?
+    var followSinks: Set<AnyCancellable> = []
+    /// #1475: when this panel attached its follow (now()); the first snapshot is bounded from here (XrayPoller tick).
+    var followSince: Date?
+    /// #1475: the open's Tasks and Memory reads answered; with a follow the open ends at its first snapshot too.
+    var answered = false
     var reading: Task<Void, Never>?   // the open read or a poll (XrayPoller.swift)
     /// #1368: the poller's state (XrayPoller.swift): the read's dch and runner, when the last read started, the dch
     /// path's mtime after a failed read (no retry until it moves), exit 4/7's "host unreachable", the ticker's stop.
@@ -279,6 +287,7 @@ final class XrayPanelModel: ObservableObject {
     func read(dch: String, run: @escaping XrayPanels.Run) {
         (self.dch, self.run) = (dch, run)
         if stopTicker == nil { stopTicker = XrayPanels.ticker { [weak self] in self?.tick() } }
+        attachFollow(dch)   // #1475: before readBoth, so the open's chapters come from the stream (cached: at once)
         readBoth()
     }
 
@@ -288,7 +297,8 @@ final class XrayPanelModel: ObservableObject {
         lastRead = now()
         let env = target.env, a = target.args("tasks"), b = target.args("memory")
         // #1389: the third read only for a dch-chapters pane; #1415: or, gate A on, for a Transcript pane's refs alone
-        let refsOnly = !fromDch(), c = !refsOnly || XrayPanels.refsTab() ? target.chaptersArgs : nil
+        // #1475: a follow carries the chapters and refs: no chapters read beside it
+        let refsOnly = !fromDch(), c = follow == nil && (!refsOnly || XrayPanels.refsTab()) ? target.chaptersArgs : nil
         let chapters: @Sendable () async -> (status: Int32, out: Data)? = {
             guard let c else { return nil }
             return await run(dch, c, env)
@@ -309,13 +319,64 @@ final class XrayPanelModel: ObservableObject {
         take(tr)
         takeMemory(mr)
         if let kr { if refsOnly { takeRefs(kr) } else { takeChapters(kr) } }
-        if let kr, !refsOnly, kr.status == 0 { chapterAnchors = Self.anchors(kr.out) }   // #1472: Read the prompt's card
+        answered = true
+        if follow == nil || follow?.state != nil { finishOpen() }   // #1475: else the first snapshot finishes it
+    }
+
+    /// The open is done: the strip draws; the Todos chip's fallback when there is no Tasks tab.
+    func finishOpen() {
         loaded = true
         if let fallback, tasks == nil {
             if isCurrent() { close(); fallback() }   // another session now shown: the list never opens over it
             return
         }
         if !tabs.contains(tab), let first = tabs.first { tab = first }
+    }
+
+    /// #1475: this panel reads its chapters and refs from the target's follow (XrayFollows.attach): a Terminal-mode or
+    /// remote pane, or a Transcript pane's refs with the Refs tab on, as readBoth's chapters read; nil from attach (gate
+    /// closed, no room) keeps today's reads. A state already there (a session read before) shows on this frame.
+    func attachFollow(_ dch: String) {
+        guard follow == nil, fromDch() || XrayPanels.refsTab(), let panels,
+              let f = panels.follows.attach(target, dch: dch) else { return }
+        follow = f
+        followSince = now()
+        f.$state.sink { [weak self] s in self?.takeFollow(s) }.store(in: &followSinks)
+        f.$failed.sink { [weak self] gone in if gone { self?.followFailed() } }.store(in: &followSinks)
+    }
+
+    /// #1475: the follow's state: dch's chapters (a dch-chapters pane) and refs (the Refs tab on). The first one ends
+    /// the open when Tasks and Memory answered; before them it draws the cached rows at once (no "Reading").
+    func takeFollow(_ s: XrayFollow.State?) {
+        guard let s, !stopped else { return }
+        if fromDch() { (dchChapters, chapterAnchors) = (s.chapters, s.anchors) }
+        if XrayPanels.refsTab() { refs = s.refs }
+        guard !loaded else { return }
+        if answered { finishOpen() } else if fallback == nil { loaded = true }   // the chip's list waits for its Tasks
+    }
+
+    /// #1475: the follow ended before any snapshot (an older host's exit 2, no such session, unreachable): today's reads.
+    func followFailed() {
+        followSinks = []
+        follow = nil
+        guard !stopped else { return }
+        cancel()
+        answered = false
+        readBoth()
+    }
+
+    /// #1475: no first snapshot within DchCommand.remoteTimeout of the attach (a hung ssh, a stalled dch), as today's
+    /// chapters read is bounded by runBounded: that follow ends, leaves the LRU, and today's reads run (followFailed).
+    func giveUpFollow() {
+        if let follow { panels?.follows.drop(follow) }
+        followFailed()
+    }
+
+    /// #1475: the panel leaves: the follow keeps running for the next open (the LRU ends it).
+    func detachFollow() {
+        followSinks = []
+        if let follow { panels?.follows.detach(follow) }
+        follow = nil
     }
 
     func takeMemory(_ mr: (status: Int32, out: Data)) {
@@ -329,7 +390,7 @@ final class XrayPanelModel: ObservableObject {
         tab = t
         if XrayPanels.rememberTab() { Preferences.xrayLastTab = t }   // #1463: only the person's choice, never a jump
         // #1415: a Transcript pane reads its refs again on a switch to Refs: at once, or at the next tick after the read
-        if t == .refs, loaded, !fromDch() {
+        if t == .refs, loaded, !fromDch(), follow == nil {   // #1475: a follow keeps the refs live
             if reading == nil, let dch, let run { readChapters(dch, run) } else { lastRead = .distantPast }
         }
         guard t == .memory, loaded else { return }
@@ -558,8 +619,13 @@ final class XrayPanelModel: ObservableObject {
     /// #1472: dch's `anchor` -> `i` for each chapter, by XrayChapters.parse's rules (schema 1, the newest maxRows, `i`
     /// else the place in the list); empty for anything else.
     static func anchors(_ data: Data) -> [String: Int] {
-        guard data.count <= XrayChapters.maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              o["schema"] as? Int == 1, let list = o["chapters"] as? [Any] else { return [:] }
+        guard data.count <= XrayChapters.maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return anchors(o)
+    }
+
+    /// #1475: the same of an object in hand (a follow's state, XrayFollow.swift).
+    static func anchors(_ o: [String: Any]) -> [String: Int] {
+        guard o["schema"] as? Int == 1, let list = o["chapters"] as? [Any] else { return [:] }
         var out: [String: Int] = [:]
         for (k, c) in list.suffix(XrayChapters.maxRows).compactMap({ $0 as? [String: Any] }).enumerated() {
             guard let a = c["anchor"] as? String else { continue }

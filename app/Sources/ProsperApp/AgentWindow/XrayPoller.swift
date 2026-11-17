@@ -17,19 +17,23 @@ extension XrayPanelModel {
     /// One tick (the product's ticker fires each second; rows call it with an injected clock).
     func tick() {
         guard !stopped else { return }
+        // #1475: a follow goes on (hidden keeps it)
         guard isCurrent() else { return cancel() }   // hidden by a selection change: SIGTERM; read again on return
+        // #1475: a follow with no snapshot past the bound: today's reads instead
+        if let f = follow, f.state == nil, let t = followSince, now().timeIntervalSince(t) >= DchCommand.remoteTimeout { return giveUpFollow() }
         let s = paneState()
         guard s.visible, reading == nil, let dch, let run else { return }
         // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again
         // #1389: Prompts/Responses poll dch only on a dch-chapters pane whose read answered (a Transcript pane never)
-        let prose = (tab == .prompts || tab == .responses) && dchChapters != nil && fromDch()
-        let refsShown = tab == .refs && refs != nil   // #1415: only while Refs is the shown tab (gate A keeps it nil)
+        // #1475: a follow keeps both live: no chapters or Refs poll beside it
+        let prose = (tab == .prompts || tab == .responses) && dchChapters != nil && fromDch() && follow == nil
+        let refsShown = tab == .refs && refs != nil && follow == nil   // #1415: only while Refs is the shown tab (gate A keeps it nil)
         guard !loaded || s.live && (tab == .tasks || tab == .memory && memory != nil || prose || refsShown) else { return }
         guard now().timeIntervalSince(lastRead) >= interval else { return }
         // design 3.9: no Tasks retry until the dch path's mtime moves
         if failed, tab == .tasks, mtime(dch) == failedMtime { return }
         if tab == .tasks, tasksRefused { return }
-        if !loaded { readBoth() } else if tab == .memory { readMemory() } else if prose || refsShown { readChapters(dch, run) }
+        if !loaded { if !answered { readBoth() } } else if tab == .memory { readMemory() } else if prose || refsShown { readChapters(dch, run) }
         else { readTasks(dch, run) }
     }
 
@@ -67,6 +71,7 @@ extension XrayPanelModel {
         if unreached(r.status) { unreachable = true; return }
         unreachable = false
         dchChapters = r.status == 0 ? XrayChapters.parse(r.out) : nil
+        chapterAnchors = r.status == 0 ? Self.anchors(r.out) : [:]   // #1472, #1475: every read's, not the open's alone
         if XrayPanels.refsTab() { refs = r.status == 0 ? XrayRefs.parse(r.out) : nil }   // #1415: the same bytes
     }
 
@@ -128,6 +133,7 @@ extension XrayPanelModel {
     /// The panel left XrayPanels.open: no tick reads again.
     func stop() {
         stopped = true
+        detachFollow()   // #1475
         stopTicker?()
         stopTicker = nil
         cancel()

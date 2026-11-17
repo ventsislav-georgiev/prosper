@@ -14,8 +14,13 @@ enum XrayChapters {
     /// The parse: bytes in, never throws; nil (no tab) unless one object with schema 1 and a chapters array. A row that
     /// is not an object is skipped; a missing key reads as absent.
     static func parse(_ data: Data) -> [TranscriptOutline.Chapter]? {
-        guard data.count <= maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              o["schema"] as? Int == 1, let list = o["chapters"] as? [Any] else { return nil }
+        guard data.count <= maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return parse(o)
+    }
+
+    /// #1475: the same parse of an object in hand (a follow's snapshot with its deltas applied, XrayFollow.swift).
+    static func parse(_ o: [String: Any]) -> [TranscriptOutline.Chapter]? {
+        guard o["schema"] as? Int == 1, let list = o["chapters"] as? [Any] else { return nil }
         let cap = TranscriptOutline.titleCap
         return list.suffix(maxRows).compactMap { $0 as? [String: Any] }.enumerated().map { (k, c) -> TranscriptOutline.Chapter in
             func text(_ key: String, _ max: Int) -> String? { (c[key] as? String).map { String($0.unicodeScalars.prefix(max)) } }

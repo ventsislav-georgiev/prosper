@@ -38,8 +38,13 @@ struct XrayRefs: Equatable {
     /// The parse: bytes in, never throws; nil (no refs) unless one object with schema 1 and a refs array. A row that is
     /// not an object, has no text, or whose key or text is over 256 bytes is skipped and counted in droppedKeys (R1415-i1 a).
     static func parse(_ data: Data) -> XrayRefs? {
-        guard data.count <= XrayChapters.maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              o["schema"] as? Int == 1, let list = o["refs"] as? [Any] else { return nil }
+        guard data.count <= XrayChapters.maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return parse(o)
+    }
+
+    /// #1475: the same parse of an object in hand (a follow's snapshot with its deltas applied, XrayFollow.swift).
+    static func parse(_ o: [String: Any]) -> XrayRefs? {
+        guard o["schema"] as? Int == 1, let list = o["refs"] as? [Any] else { return nil }
         func int(_ v: Any?) -> Int? { (v as? Int).map { min(max(0, $0), Int(Int32.max)) } }   // bounded: no overflow below
         let entries = list.prefix(maxRows).enumerated().compactMap { (k, v) -> Entry? in
             guard let c = v as? [String: Any], let rawText = c["text"] as? String, !rawText.isEmpty,

@@ -1722,6 +1722,8 @@ tag from the now-released section and put it on the new top draft.
   the window is short). (#1479)
 - Cmd-click a file path (absolute, ~/ or file://) in an agent session opens it in Prosper's Text
   Viewer; other files and apps never open. (#1480)
+- X-ray opens instantly for a session you already looked at, and its Prompts, Responses and Refs
+  stay live without polling. (#1475)
 
 ## v2.174.0
 
