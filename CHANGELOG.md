@@ -1744,6 +1744,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: with Follow theme off (the default), the live session rows are dark as well, white
   text on the black notch like the History rows, on every theme; the Agent Sessions window is
   unchanged. (#1452)
+- Agent Sessions can split: Go > Split Right (⌘D) and Split Down (⇧⌘D) show local sessions side by
+  side, each in its own live terminal. (#1477)
 
 ## v2.174.0
 

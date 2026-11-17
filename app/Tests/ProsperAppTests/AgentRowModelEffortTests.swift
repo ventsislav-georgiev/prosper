@@ -703,6 +703,9 @@ extension AgentRowModelEffortTests {
     /// 11 characters dropped the badges whole.
     @MainActor
     func testLongTitleIsCutToItsFloorBeforeTheBadgesGo() {
+        let gate = AgentPaneLayout.splitsEnabled
+        AgentPaneLayout.splitsEnabled = false   // #1477: the gate-off row's widths (gate on, the row's menu slot takes room)
+        defer { AgentPaneLayout.splitsEnabled = gate }
         let long = "api-" + String(repeating: "session-tokens-", count: 4)
         atScales { scale in
             let floor = AgentSidebarRowView.badgeTitleFloor
@@ -744,6 +747,9 @@ extension AgentRowModelEffortTests {
     /// VoiceOver words are the same at all three widths.
     @MainActor
     func testBelowTheTitleFloorTheEffortBadgeAloneThenNone() {
+        let gate = AgentPaneLayout.splitsEnabled
+        AgentPaneLayout.splitsEnabled = false   // #1477: the gate-off row's widths (gate on, the row's menu slot takes room)
+        defer { AgentPaneLayout.splitsEnabled = gate }
         let r = named1345("api-" + String(repeating: "session-tokens-", count: 4))
         atScales { scale in
             let v = AgentSidebarRowView(row: r, selected: false, number: 4)
@@ -777,6 +783,9 @@ extension AgentRowModelEffortTests {
     /// gives way first (was: the badges plus it did not fit, so no badge at all). Prints the widths behind it.
     @MainActor
     func testRemoteRowKeepsBothBadgesAtTheSidebarWidth() {
+        let gate = AgentPaneLayout.splitsEnabled
+        AgentPaneLayout.splitsEnabled = false   // #1477: the gate-off row's widths (gate on, the row's menu slot takes room)
+        defer { AgentPaneLayout.splitsEnabled = gate }
         var r = named1345("session-tokens")
         r.remote = AgentSidebar.Remote(host: "host-a", name: "api", alias: "", stale: false, cwd: nil)
         atScales { scale in

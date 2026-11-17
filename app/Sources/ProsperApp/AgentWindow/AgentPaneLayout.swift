@@ -602,8 +602,9 @@ struct LastLive: Hashable {
 }
 
 enum AgentPaneLayout {
-    /// 15.0: split creation stays unreachable until Phase C flips this. Not user facing: no defaults key, no menu.
-    @MainActor static var splitsEnabled = false
+    /// 15.0: split creation (Go > Split Right / Split Down). #1477 (Phase C): on for everyone, now that terminal panes
+    /// work in splits. Not user facing: no defaults key; rows set it and restore it.
+    @MainActor static var splitsEnabled = true
 
     /// AgentWindowModel.recordSlack (65 s): that one is @MainActor-isolated, so a nonisolated default
     /// argument cannot read it. A test pins the two equal.

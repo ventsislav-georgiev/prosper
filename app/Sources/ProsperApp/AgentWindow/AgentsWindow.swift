@@ -2559,6 +2559,16 @@ struct AgentUnfocusedPane: View {
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if mode == .terminal || kept != nil {
                     AgentTerminalPane(controller: kept ?? model.paneTerminal(runtime), open: { model.openSession(p.session) })
+                        .overlay {
+                            // #1477 (11.3): over the cap or the session's second pane: the last frame, and Connect focuses
+                            if !ended, model.connectPanes.contains(runtime.pane) {
+                                AgentTerminalCard(icon: "pause.circle", text: "Not connected") {
+                                    AgentPillButton(title: "Connect", icon: "arrow.right.circle", tint: Neon.blue) {
+                                        model.focusPane(runtime.pane)
+                                    }
+                                }
+                            }
+                        }
                         .frame(minHeight: 0, maxHeight: .infinity)
                         .modifier(AgentPaneProbe(kind: "terminal"))
                 } else {

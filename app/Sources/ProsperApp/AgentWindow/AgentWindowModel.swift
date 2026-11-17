@@ -848,12 +848,22 @@ final class AgentWindowModel: ObservableObject {
     static let attachRest: TimeInterval = 0.25
     /// #1477: the session each unfocused pane waits out its rest for (a pending rest is never restarted).
     private var restPending: [UUID: AgentSessionKey] = [:]
+    /// #1477 (11.3): the conservative branch of the budget gate (the 6-surface harness needs a real dch, not run): at most
+    /// 4 ATTACHED local terminal clients per window, the focused pane's always one of them.
+    static let attachCap = 4
+    /// #1477 (11.3, QA r1449 i2): shown unfocused Terminal panes left detached (over the cap, or the same session as a
+    /// pane before them): their last frame and Connect, which focuses the pane (and so attaches it).
+    @Published private(set) var connectPanes: Set<UUID> = []
+    /// #1477 (11.3): when each pane was last focused (a counter): the least recently focused go over the cap first.
+    private var focusedAt: [UUID: Int] = [:]
+    private var focusTick = 0
 
     /// #1477: pane `r`'s own terminal, wired like the window's on first need.
     func paneTerminal(_ r: AgentPaneRuntime) -> AgentTerminalController {
         if let t = r.terminal { return t }
         let t = makeTerminal()
         wire(t)
+        t.paneFocused = { [weak self, weak r] in r.map { self?.layout.focused == $0.pane } ?? false }
         r.terminal = t
         return t
     }
@@ -1081,6 +1091,7 @@ final class AgentWindowModel: ObservableObject {
             r.transcript.stop()
             r.terminal?.attach(nil)   // 11.2: closing a pane terminates its client; the dch session is untouched
             restPending[id] = nil
+            focusedAt[id] = nil
             runtimes[id] = nil
         }
         for id in layout.order where runtimes[id] == nil {
@@ -2751,7 +2762,8 @@ final class AgentWindowModel: ObservableObject {
         guard visible, let f = focusedRuntime, f.ended == nil, case .live(let s)? = f.content else {
             interaction.follow(nil)   // 4.4 (d): nothing on an ended pane takes input; hidden or not live: nothing
             // #1477: gate on, an Ended pane's terminal keeps its last frame (its client already gone)
-            if !(AgentPaneLayout.splitsEnabled && focusedRuntime?.ended != nil) { terminal.attach(nil) }
+            // (its pending focus dropped: the session it was asked for is gone)
+            if AgentPaneLayout.splitsEnabled && focusedRuntime?.ended != nil { terminal.dropPendingFocus() } else { terminal.attach(nil) }
             return
         }
         let transcript = f.transcript
@@ -2769,13 +2781,33 @@ final class AgentWindowModel: ObservableObject {
     /// attaches after the 250 ms rest (a rest under way for the same session is not restarted; at its end the pane is
     /// checked again); an Ended pane's terminal is left as it is (its last frame, no client); anything else (hidden
     /// window, not shown, Transcript, not live) detaches now. The focused pane's terminal is follow()'s, attached at once.
+    /// #1477 part b: the most recently focused panes first, each session to one pane only (the focused pane's session is
+    /// taken first: two clients of one session would WINCH it each to its own size and land an OSC 52 write twice), and
+    /// at most attachCap - 1 beside the focused pane's (11.3). A pane refused for either is in connectPanes. A pane that
+    /// is merely not shown (zoomed away, too small) in a visible window is parked: detached, its last frame kept (11.2).
     private func followUnfocusedTerminals(_ shown: Set<UUID>) {
-        for r in runtimes.values where r.pane != layout.focused && r.ended == nil {
-            guard let k = unfocusedTerminalKey(r, shown) else {
+        if focusedAt[layout.focused] != focusTick {
+            focusTick += 1
+            focusedAt[layout.focused] = focusTick
+        }
+        var taken = Set(focusedLive.map { [$0.key] } ?? [])
+        var room = Self.attachCap - 1, refused: Set<UUID> = []
+        let index = Dictionary(uniqueKeysWithValues: layout.order.enumerated().map { ($1, $0) })
+        let ranked = runtimes.values.sorted {
+            (focusedAt[$0.pane] ?? 0, -(index[$0.pane] ?? 0)) > (focusedAt[$1.pane] ?? 0, -(index[$1.pane] ?? 0))
+        }
+        for r in ranked where r.pane != layout.focused && r.ended == nil {
+            let want = unfocusedTerminalKey(r, shown)
+            if let k = want, taken.contains(k) || room == 0 { refused.insert(r.pane) }
+            guard let k = want, !refused.contains(r.pane) else {
                 restPending[r.pane] = nil
-                if r.terminal?.key != nil { r.terminal?.attach(nil) }
+                if r.terminal?.key != nil {
+                    if visible, unfocusedTerminalKey(r, Set(layout.order)) != nil { r.terminal?.park() } else { r.terminal?.attach(nil) }
+                }
                 continue
             }
+            taken.insert(k)
+            room -= 1
             if r.terminal?.key == k || restPending[r.pane] == k { continue }
             if r.terminal?.key != nil { r.terminal?.attach(nil) }   // another session: the old client goes now
             restPending[r.pane] = k
@@ -2788,6 +2820,7 @@ final class AgentWindowModel: ObservableObject {
                 self.paneTerminal(r).attach(k)
             }
         }
+        if connectPanes != refused { connectPanes = refused }
     }
 
     private func unfocusedTerminalKey(_ r: AgentPaneRuntime, _ shown: Set<UUID>) -> AgentSessionKey? {

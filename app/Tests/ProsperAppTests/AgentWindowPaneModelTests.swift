@@ -27,6 +27,7 @@ extension AgentWindowD1Tests {
 
     @MainActor
     func testAgentWindowPaneSelectionIsTheFocusedPanesResolvedTarget() throws {
+        splitsOff()   // #1477: this row pins the gate-off (one pane) behaviour
         let old = record("old", ago: 7200)
         let st = store([session("api", .idle), session("web", .idle)], history: [old])
         let shared = Preferences.defaults.data(forKey: "agentWindowLayouts")
@@ -59,7 +60,7 @@ extension AgentWindowD1Tests {
         assertSelectionIsTheFocusedPane(m, "the island off")
         XCTAssertTrue(m.selection == nil)
         XCTAssertEqual(m.layout.id, layoutID, "one layout for the window's life")
-        XCTAssertFalse(AgentPaneLayout.splitsEnabled, "15.0: the gate stays off")
+        XCTAssertFalse(AgentPaneLayout.splitsEnabled, "15.0: the gate stays off (set off by this row)")
         // #1217: AgentsWindow.show() loads and saves the shared key now (its rows remove it in setUp); a model built
         // with no suite, as here, neither reads nor writes it, whatever an earlier row left there.
         XCTAssertEqual(Preferences.defaults.data(forKey: "agentWindowLayouts"), shared, "no suite: the shared key as it was")

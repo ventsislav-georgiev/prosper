@@ -370,6 +370,6 @@ extension AgentWindowD1Tests {
                 hits.append("\(url.lastPathComponent): \(line.trimmingCharacters(in: .whitespaces))")
             }
         }
-        XCTAssertEqual(hits, ["AgentPaneLayout.swift: @MainActor static var splitsEnabled = false"], "the only writer")
+        XCTAssertEqual(hits, ["AgentPaneLayout.swift: @MainActor static var splitsEnabled = true"], "the only writer")
     }
 }

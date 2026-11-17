@@ -48,6 +48,7 @@ extension AgentWindowD1Tests {
     /// a new size reaches it once; the same size again changes nothing and publishes nothing.
     @MainActor
     func testAgentWindowPaneAreaSizeReachesTheModelOncePerSize() throws {
+        splitsOff()   // #1477: this row pins the gate-off (one pane) behaviour
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         ThemeRuntime.scale = 1.0

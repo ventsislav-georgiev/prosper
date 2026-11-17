@@ -292,6 +292,11 @@ final class AgentTerminalController: ObservableObject {
     var clipboardWrites: () -> Bool = { Preferences.agentWindowClipboardWrites }
     /// #895: a font binding action for the surface, the call find makes (rows record it). Runs on main.
     var fontAction: @MainActor (AgentTerminalHostView?, String) -> Void = { _ = $0?.surface?.performBindingAction($1) }
+    /// #1477 (7.6): the scrollback action an unfocused pane's wheel becomes (rows record it). Runs on main.
+    var scrollAction: @MainActor (AgentTerminalHostView?, String) -> Void = { _ = $0?.surface?.performBindingAction($1) }
+    /// #1477 (7.6): this terminal is its window's focused pane (the window model answers for a pane's; the window's is).
+    var paneFocused: () -> Bool = { true }
+    private var wheelRemainder = 0.0
 
     enum SpawnError: Error, CustomStringConvertible {
         case underTests
@@ -568,6 +573,30 @@ final class AgentTerminalController: ObservableObject {
         if phase != .idle { phase = .idle }
     }
 
+    /// #1477 (11.2 "detached, last frame kept"): zoomed away, too small, over the cap of attached clients or the same
+    /// session's second pane: the client goes as in a detach, the screen (its last frame) stays; the next attach
+    /// replaces it with a fresh one.
+    func park() {
+        guard key != nil else { return }
+        let kept = screen
+        attach(nil)
+        screen = kept
+    }
+
+    /// #1477 (7.6): a wheel over an UNFOCUSED pane moves its local scrollback only, never libghostty's mouse path (that
+    /// writes a mouse report, or arrow keys on the alternate screen, to the program). `dy` is the event's scrollingDeltaY
+    /// (up positive): a notch is Ghostty's 3 lines; precise (trackpad) points are a line per 1.2 x the font size.
+    /// shortcut: the line height is estimated from the font size, not read from the surface; read the cell size if
+    /// trackpad scrolling in a neighbour feels off.
+    func scrollUnfocused(_ dy: Double, precise: Bool) {
+        guard dy.isFinite else { return }
+        wheelRemainder = min(max(wheelRemainder + (precise ? dy / (Self.fontSize * 1.2) : dy * 3), -1000), 1000)
+        let n = wheelRemainder.rounded(.towardZero)
+        guard n != 0 else { return }
+        wheelRemainder -= n
+        scrollAction(view, "scroll_page_lines:\(Int(-n))")
+    }
+
     /// OQ-66 (operator, 2026-11-10): a program sets the clipboard (OSC 52) only while someone is looking
     /// at this session: the pane attached, the session selected, and its window on screen, not minimized
     /// and not fully covered (occlusionState has .visible). Off in Settings: never.
@@ -760,6 +789,18 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         owner?.liveResizeEnded()
+    }
+
+    /// #1477: the mouse path a focused pane's wheel takes (libghostty's `sendMouseScroll`); rows record it.
+    var mouseWheel: ((NSEvent) -> Void)?
+
+    /// #1477 (7.6): an unfocused pane's wheel scrolls its scrollback (scroll_page_lines) and never reaches the mouse path;
+    /// the pane does not take focus. The focused pane's goes to libghostty as before.
+    override func scrollWheel(with event: NSEvent) {
+        if let owner, !owner.paneFocused() {
+            return owner.scrollUnfocused(Double(event.scrollingDeltaY), precise: event.hasPreciseScrollingDeltas)
+        }
+        if let mouseWheel { mouseWheel(event) } else { super.scrollWheel(with: event) }
     }
 
     // MARK: Pasteboard (⌘C/⌘V/⌘A arrive through the Edit menu)

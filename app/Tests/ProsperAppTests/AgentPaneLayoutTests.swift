@@ -487,8 +487,8 @@ final class AgentPaneLayoutTests: XCTestCase {
 
     @MainActor
     func testTheSplitGateTurnsSideIntoAClickAndShowsAMultiPaneLayoutsFocusedPaneAlone() throws {
-        XCTAssertFalse(AgentPaneLayout.splitsEnabled, "15.0: off until Phase C")
-        let gate = AgentPaneLayout.splitsEnabled
+        XCTAssertTrue(AgentPaneLayout.splitsEnabled, "#1477: on for everyone since Phase C")
+        let gate = false   // the gate-off behaviour, passed in as the product had it before Phase C
         let one = PaneLayout.single(F.s("api"))
         let out = try one.show(F.s("docs"), placement: .side, minimum: F.minimum, in: area, splitsEnabled: gate).get()
         XCTAssertEqual(out.panes.map(\.target), [F.s("docs")], "⌥-click acts as a plain click")

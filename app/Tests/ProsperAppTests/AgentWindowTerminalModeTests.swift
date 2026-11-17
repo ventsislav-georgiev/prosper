@@ -129,6 +129,7 @@ extension AgentWindowD1Tests {
     /// no client, and the toggle off (⌘T passes).
     @MainActor
     func testAgentWindowTerminalModeNeverShowsWhereNothingCanAttach() throws {
+        splitsOff()   // #1477: this row pins the gate-off (one pane) behaviour
         try withModePref {
             let a = mapped("a"), b = mapped("b")
             let st = store([a, b], history: [record("h")])
@@ -198,6 +199,7 @@ extension AgentWindowD1Tests {
 
     @MainActor
     func testAgentWindowTerminalAttachesOnlyToAVisibleSelectedLiveSessionInTerminalMode() throws {
+        splitsOff()   // #1477: this row pins the gate-off (one pane) behaviour
         try withModePref {
             let one = mapped("one"), two = mapped("two")
             let st = store([one, two], history: [record("h")])
@@ -417,6 +419,7 @@ extension AgentWindowD1Tests {
 
     @MainActor
     func testAgentWindowToggleMovesNeitherHeaderNorSidebar() throws {
+        splitsOff()   // #1477: this row pins the gate-off (one pane) behaviour
         let savedScale = ThemeRuntime.scale
         defer { ThemeRuntime.scale = savedScale }
         try withModePref {

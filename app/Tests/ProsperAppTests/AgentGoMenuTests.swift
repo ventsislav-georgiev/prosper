@@ -62,7 +62,7 @@ final class AgentGoMenuTests: XCTestCase {
         go.menuNeedsUpdate(menu)
         let items = menu.items.filter { !$0.isSeparatorItem }
         XCTAssertEqual(items.count, go.shown.count)
-        XCTAssertEqual(items.count, 36, "#1379: the 33 keyed items and the three sidebar modes")
+        XCTAssertEqual(items.count, 43, "#1379: the 33 keyed items and the three sidebar modes; #1477: the 7 pane items, splits on")
         for (item, entry) in zip(items, go.shown) {
             XCTAssertTrue(item.target === go, item.title)
             XCTAssertEqual(item.action, #selector(AgentGoMenu.pick(_:)), item.title)
