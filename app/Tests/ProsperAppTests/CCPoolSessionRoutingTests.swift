@@ -429,4 +429,87 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertTrue(watch.hint(claude) == nil)
         XCTAssertEqual(rt.model.routeDisabledReason, "The proxy is not running.")
     }
+
+    // MARK: - Resume (#1219 step 2, OQ-135 A)
+
+    /// An ended record of `argv` in `dir` (Example paths only; nothing on disk: the runner is the recorder).
+    private func record(_ name: String, dir: String = "/d", argv: [String]) -> DchHistoryRecord {
+        var r = DchHistoryRecord(key: AgentSessionKey(dir: dir, name: name), started: 1_000, updated: 2_000, ended: 2_000, end: "signal 9")
+        r.argv = argv
+        return r
+    }
+
+    /// One job through `start` on `key`; the env the runner was handed for it.
+    private func launchedEnv(_ c: AgentIslandController, _ rec: Recorder, key: AgentSessionKey,
+                             file: StaticString = #filePath, line: UInt = #line, _ start: () -> Void) -> [String: String]? {
+        let before = rec.envs.count
+        start()
+        XCTAssertEqual(rec.launched.wait(timeout: .now() + 5), .success, file: file, line: line)
+        settle { !c.runner.isBusy(key) }
+        let envs = rec.envs
+        XCTAssertEqual(envs.count, before + 1, "one launch", file: file, line: line)
+        return envs.last
+    }
+
+    /// The keys an env changed or dropped against the control env of /d: what a spawn's strip and routing touch.
+    private static func touched(_ env: [String: String]?) -> Set<String> {
+        let control = controlEnv("/d"), e = env ?? [:]
+        return Set(control.keys.filter { e[$0] != control[$0] }).union(e.keys.filter { control[$0] == nil })
+    }
+
+    /// A single Resume of a local claude record, routing on: --revive gets exactly the env a new session of the
+    /// record's command gets at the spawn recorder (dch hands the client's env to the revived command).
+    func testCCPoolSingleResumeIsRoutedAsANewSessionOfItsCommand() {
+        let rec = Recorder(), pool = Pool()
+        let c = controller(rec, routing: pool.routing)
+        let command = ["/opt/homebrew/bin/claude", "--chrome"]
+        let spawned = spawnedEnv(c, rec, command, name: "api-2")
+        let r = record("api", argv: command)
+        c.store?.history = [r]
+        let resumed = launchedEnv(c, rec, key: r.id) { XCTAssertTrue(c.resume(r), "the Resume started") }
+        XCTAssertEqual(rec.args.last?.first, "--revive", "the job is the record's --revive, not a spawn")
+        XCTAssertEqual(rec.args.last?.contains("--spawn"), false)
+        XCTAssertEqual(resumed, spawned, "the same env as the spawn recorder's for that command")
+        XCTAssertEqual(resumed, routedClaude, "literally: the pool's base URL, the credentials gone")
+        XCTAssertEqual(Self.touched(resumed), Self.touched(spawned), "the same set of variables as the spawn")
+        XCTAssertEqual(Self.touched(resumed), ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                                               "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"])
+        XCTAssertEqual(pool.mainReads, 0, "the Resume reads the pool on the runner's queue, never main")
+    }
+
+    /// Routing off: the Resume carries no routing variable (a spawn's unrouted env, the person's own base URL and keys).
+    func testCCPoolSingleResumeWithRoutingOffIsNotRouted() {
+        let rec = Recorder(), pool = Pool()
+        pool.set(on: false)
+        let c = controller(rec, routing: pool.routing)
+        let r = record("api", argv: ["claude"])
+        c.store?.history = [r]
+        let resumed = launchedEnv(c, rec, key: r.id) { XCTAssertTrue(c.resume(r), "the Resume started") }
+        XCTAssertEqual(rec.args.last?.first, "--revive")
+        XCTAssertEqual(resumed, today, "no routing variable: the person's base URL and credentials stay")
+        XCTAssertEqual(resumed?["ANTHROPIC_BASE_URL"], "http://example.invalid")
+    }
+
+    /// Resume interrupted (one --revive --all per folder) stays unrouted with routing on: the control env, untouched.
+    func testCCPoolResumeInterruptedIsNotRouted() {
+        let rec = Recorder(), pool = Pool()
+        let c = controller(rec, routing: pool.routing)
+        c.store?.history = [record("api", argv: ["claude"])]
+        let resumed = launchedEnv(c, rec, key: AgentSessionKey(dir: "/d", name: "")) { c.resumeCrashed() }
+        XCTAssertEqual(rec.args.last.map { Array($0.prefix(2)) }, ["--revive", "--all"])
+        XCTAssertEqual(resumed, Self.controlEnv("/d"), "the control env as before #1219: no strip, no routing")
+        XCTAssertEqual(Self.touched(resumed), [])
+    }
+
+    /// Another machine's record ("@" + host) stays unrouted with routing on: the control env, untouched.
+    func testCCPoolRemoteRecordResumeIsNotRouted() {
+        let rec = Recorder(), pool = Pool()
+        let c = controller(rec, routing: pool.routing)
+        let r = record("api", dir: "@example-host", argv: ["claude"])
+        XCTAssertTrue(AgentWindowModel.isRemote(r))
+        c.store?.history = [r]
+        let resumed = launchedEnv(c, rec, key: r.id) { XCTAssertTrue(c.resume(r), "the Resume started") }
+        XCTAssertEqual(rec.args.last?.first, "--revive")
+        XCTAssertEqual(resumed, Self.controlEnv("@example-host"), "the control env as before #1219: no strip, no routing")
+    }
 }

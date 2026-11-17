@@ -484,8 +484,11 @@ final class AgentIslandController {
         let exact = store.reviveFileGate.isOK, arg = r.recordArg(exact: exact, taken: live.union(records))
         // #1311: the --as name's row is busy too while the job runs.
         let alias = AgentIsland.reviveAs(r, live: live, records: records).map { AgentSessionKey(dir: r.key.dir, name: $0) }
+        // #1219 step 2 (OQ-135 A): dch hands --revive's env to the revived command, so a local record resumes with a
+        // new session's env for its command (the pool's routing among the contributors); another machine's record does not.
+        let command = AgentWindowModel.isRemote(r) ? nil : r.argv
         return run(key, alias: alias, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact),
-                   running: AgentIsland.resumingText,
+                   running: AgentIsland.resumingText, spawn: command,
                    history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) }) { [weak self] res in
             // #716 L-3: dch names a no_history line after the argument (an aside file; #719 `<file>.json`).
             let named = DchControlOps.renamed(res, arg, to: name)
@@ -623,7 +626,7 @@ final class AgentIslandController {
 
     /// One long verb on the runner with the control env (QA #445 M1), plus
     /// spawnEnv's strip and the session env contributors for --spawn (`spawn`: the
-    /// person's command; nil: any other verb). `running` shows in the row meanwhile (a
+    /// person's command; #1219: a local single Resume's record command too; nil: any other verb). `running` shows in the row meanwhile (a
     /// History row's with `history`); `onLine` and `done` run on main. A busy
     /// key refuses: false, nothing shown; so does nil args (#627: a name dch would read as a flag).
     /// #744: `yields` (a Stop or Restart) lets a `kill` run beside it; any other job
