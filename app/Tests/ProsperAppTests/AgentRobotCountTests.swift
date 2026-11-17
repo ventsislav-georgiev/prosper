@@ -3,6 +3,13 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
+private final class Box1453 { var seen: [String: CGRect] = [:] }
+/// A window whose backing scale is pinned (SwiftUI snaps to it); never shown.
+private final class Window1453: NSWindow {
+    var fixedBacking: CGFloat?
+    override var backingScaleFactor: CGFloat { fixedBacking ?? super.backingScaleFactor }
+}
+
 /// #1453 (operator 2026-11-17, "use robot emoji here for subagents"): the sub-agent count on a sidebar row and an island
 /// card draws the robot emoji (U+1F916) in the same capsule outline, not the people symbol; VoiceOver keeps the words.
 /// Offscreen only: ImageRenderer, or views hosted in windows that are never shown; no event, no file. Fakes only.
@@ -101,5 +108,75 @@ extension AgentRowModelEffortTests {
             return Int(hi) - Int(lo) > 40
         }.count
         XCTAssertTrue(w > 0 && h > 0 && lit > 0, "the card's agents group is drawn with the colour emoji: \(lit) chromatic pixels")
+    }
+
+    /// A view hosted in a never-shown window of `size` whose backing is pinned: its fitting height and the row probes' frames.
+    @MainActor
+    func probed1453<V: View>(_ v: V, size: CGSize, backing: CGFloat, waitFor: String? = nil) -> (fit: CGFloat, frames: [String: CGRect]) {
+        let box = Box1453()
+        AgentSidebarRowView.probe = { kind, _, rect in box.seen[kind] = rect }
+        defer { AgentSidebarRowView.probe = nil }
+        let win = Window1453(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        win.fixedBacking = backing
+        win.isReleasedWhenClosed = false
+        defer { win.contentView = nil; win.close() }
+        let host = NSHostingView(rootView: v.frame(width: size.width, alignment: .topLeading).environment(\.colorScheme, .dark))
+        host.frame = CGRect(origin: .zero, size: size)
+        win.contentView = host
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        } while (waitFor.map { box.seen[$0] == nil } ?? false) && Date() < deadline
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertFalse(win.isVisible, "never shown")
+        return (host.fittingSize.height, box.seen)
+    }
+
+    /// QA R1453-s1: the colour emoji's line is taller than SF's, so the detail line (state word, counts) must keep its
+    /// height with 3 agents as without, within a device pixel, at every scale, 1x and 2x. Prints the facts as ROBOT1453-FACT.
+    @MainActor
+    func testRobot1453TheDetailLineKeepsItsHeightWithAgents() {
+        let pixel = AXTreeSupport.devicePixel
+        atScales { scale in
+            for backing: CGFloat in [1, 2] {
+                var h: [Int: CGFloat] = [:]
+                for n in [0, 3] {
+                    let row = AgentSidebarRowView(row: outlined1360(agents: n), selected: false)
+                    h[n] = probed1453(row.detailLine([]), size: CGSize(width: sz(274), height: 60), backing: backing).fit
+                }
+                print("ROBOT1453-FACT detailLine scale \(scale) backing \(backing): agents0 \(h[0] ?? -1) agents3 \(h[3] ?? -1)")
+                XCTAssertTrue((h[0] ?? 0) > 0, "measured: \(h) (\(scale) @\(backing)x)")
+                XCTAssertEqual(h[3] ?? -1, h[0] ?? -2, accuracy: pixel, "the detail line with agents vs without: \(h) (\(scale) @\(backing)x)")
+            }
+        }
+    }
+
+    /// The island card is a fixed-height row: with agents its card keeps the fixed height and the count group's frame lies
+    /// inside the card (no clipping), at every scale, 1x and 2x.
+    @MainActor
+    func testRobot1453TheCardKeepsItsFixedHeightAndHoldsTheCount() {
+        let pixel = AXTreeSupport.devicePixel
+        atScales { scale in
+            for backing: CGFloat in [1, 2] {
+                var cards: [Int: CGRect] = [:]
+                for n in [0, 3] {
+                    var s = AgentSession(key: AgentSessionKey(dir: "/Users/example/work", name: "api"), alias: "", activity: Self.now - 240, state: .idle, agents: n)
+                    s.model = "claude-opus-4-5"
+                    let size = CGSize(width: AgentIslandGeometry.expandedWidth - 2 * AgentIslandGeometry.listInset, height: AgentIslandGeometry.rowHeight)
+                    let f = probed1453(AgentIslandRow(session: s, now: Self.now, notice: nil, show: .all) {}, size: size, backing: backing, waitFor: "card").frames
+                    guard let card = f["card"] else { XCTFail("probed: \(f.keys.sorted()) (\(scale) @\(backing)x)"); continue }
+                    cards[n] = card
+                    XCTAssertEqual(card.height, AgentIslandGeometry.rowHeight - AgentIslandGeometry.rowGap, accuracy: pixel, "the fixed height: \(card) (\(scale) @\(backing)x)")
+                    if n > 0 {
+                        guard let g = f["count.agents"] else { XCTFail("no agents group: \(f.keys.sorted()) (\(scale) @\(backing)x)"); continue }
+                        print("ROBOT1453-FACT card scale \(scale) backing \(backing): card \(card) group \(g)")
+                        XCTAssertTrue(g.minY >= card.minY - pixel && g.maxY <= card.maxY + pixel && g.minX >= card.minX - pixel && g.maxX <= card.maxX + pixel,
+                                      "the count group lies inside the card: \(g) in \(card) (\(scale) @\(backing)x)")
+                    }
+                }
+            }
+        }
     }
 }
