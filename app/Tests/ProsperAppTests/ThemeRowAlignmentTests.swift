@@ -96,23 +96,27 @@ final class ThemeRowAlignmentTests: XCTestCase {
         }
     }
 
-    /// QA r1419 a1: the plain row's checkmark (opacity 0 when unselected) is hidden from VoiceOver in both states; the
-    /// row button's selected trait alone carries the state.
+    /// QA r1419 a1, r1429: the plain row's checkmark adds no name and no element (the combined Button label takes only the
+    /// Text children). In both states the row's unignored named nodes are exactly one, named title + ", " + subtitle; the
+    /// selected trait is on the selected row only.
     func testPlainRowCheckmarkIsHiddenFromVoiceOverInBothStates() throws {
         ThemeRuntime.scale = 1
         let s = try store()
         let plain = try XCTUnwrap(s.available.first { $0.id == "t.plain" })
         let other = try XCTUnwrap(s.available.first { $0.id != plain.id })
         XCTAssertTrue(s.tints[plain.id] == nil, "the fixture row is a plain row")
+        XCTAssertFalse(plain.isBuiltIn, "the subtitle is the id one")
+        let subtitle = "\(plain.id) \u{B7} \(plain.appearance.rawValue)"
+        let want = "\(plain.title), \(subtitle)"
         for selected in [true, false] {
             s.select(id: selected ? plain.id : other.id)
             ThemeRuntime.scale = 1
             let tree = AXTreeSupport.tree(ThemeList(theme: s, paneID: "appearance").row(plain).frame(width: 400), CGSize(width: 400, height: 200)) { t in
                 t.contains { $0.names.contains { $0.contains(plain.title) } }
             }
-            XCTAssertTrue(tree.contains { $0.names.contains { $0.contains(plain.title) } }, "selected \(selected): the row is in the tree")
-            let spoken = tree.filter { !$0.ignored && $0.names.contains { $0.localizedCaseInsensitiveContains("checkmark") } }
-            XCTAssertTrue(spoken.isEmpty, "selected \(selected): nothing in the row says checkmark: \(spoken.map { $0.names })")
+            let named = tree.filter { !$0.ignored && !$0.names.isEmpty }
+            XCTAssertEqual(named.count, 1, "selected \(selected): one named node: \(named.map { $0.names })")
+            XCTAssertTrue(named.last?.names == [want], "selected \(selected): the name is exactly title, subtitle: \(named.map { $0.names }) vs \(want)")
             XCTAssertEqual(tree.contains { $0.selected && !$0.ignored }, selected, "selected \(selected): the selected trait only on the selected row")
         }
     }
