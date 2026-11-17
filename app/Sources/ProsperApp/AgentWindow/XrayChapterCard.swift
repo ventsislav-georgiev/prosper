@@ -149,6 +149,9 @@ final class XrayChapterRead: ObservableObject {
 
     /// dch cuts each entry at 6000 Unicode scalars (dch.1 ~2020) and the object at 1 MiB (plus room here).
     static let entryCap = 6000
+    /// dch #451 (1.93.0): a cut entry keeps its first 6000 (entryCap) and last 3000 scalars; an entry is cut only past 9000.
+    static let tailCap = 3000
+    static let uncutCap = entryCap + tailCap
     static let maxBytes = 1024 * 1024 + 64 * 1024
     /// dch #451 (1.93.0): an entry is cut as head + tail and carries `cut`; older dch cut a prefix at entryCap.
     static let cutFieldsDch = [1, 93, 0]
@@ -193,8 +196,8 @@ final class XrayChapterRead: ObservableObject {
             if cutFields {
                 let n = XrayChapters.count(e?["cut"])
                 let s = n.flatMap { XrayChapters.split(raw, line: XrayChapters.cutLine($0)) }
-                let head = clean(s?.head ?? raw, n == nil ? entryCap : s == nil ? 2 * entryCap : entryCap)
-                let tail = s.map { clean($0.tail, entryCap) }
+                let head = clean(s?.head ?? raw, s == nil ? uncutCap : entryCap)
+                let tail = s.map { clean($0.tail, tailCap) }
                 return head.isEmpty ? nil : (head, false, tail.flatMap { $0.isEmpty ? nil : $0 }, n)
             }
             let c = clean(raw, entryCap)

@@ -63,7 +63,8 @@ enum XrayChapters {
                                                hasError: c["error"] as? Bool == true)
             ch.auto = auto || kind == "compact"   // dch xview.c xv_hid: a compaction is automatic too
             ch.peer = peer
-            ch.response = text("response", responseCap)
+            // dch keeps 1024 B + "\n\u{2026}\n" + 1024 B when it cut: 3 scalars past the cap, so the tail stays whole
+            ch.response = text("response", isTrue(c["response_cut"]) ? responseCap + 3 : responseCap)
             ch.tools = text("tools", toolsCap)
             // dch 1.93.0: `response_cut` stays true; the count is its own field, never read from the text
             if isTrue(c["response_cut"]) { ch.responseCutChars = count(c["response_cut_chars"]) }

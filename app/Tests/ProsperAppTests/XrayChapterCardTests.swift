@@ -378,7 +378,7 @@ final class XrayChapterCardTests: XCTestCase {
     /// Red at base: no `cut` read; the 6000+ scalars say "cut at 6000 characters" and the marker line shows as text.
     /// Red with marker-drawn-literally.
     func testACutEntryDrawsHeadNoteTailAndNoLiteralMarker() throws {
-        let head = String(repeating: "h", count: 3000), tail = String(repeating: "t", count: 3000)
+        let head = String(repeating: "h", count: 6000), tail = String(repeating: "t", count: 3000)
         for who in ["user", "assistant"] {
             let text = head + Self.marker(1234) + tail
             let data = who == "user" ? Self.cutObject(user: text, cut: 1234) : Self.cutObject(user: "q", answer: text, answerCut: 1234)
@@ -392,10 +392,11 @@ final class XrayChapterCardTests: XCTestCase {
         }
     }
 
-    /// Red with length-rule-on-new-dch: 7000 scalars and no `cut` on 1.93.0: no note, whatever the length.
+    /// Red with length-rule-on-new-dch and uncut-capped-at-6000: 8500 scalars and no `cut` on 1.93.0: all kept, no note.
     func testAnUncutLongEntryOnNewDchHasNoNote() throws {
-        let long = String(repeating: "a", count: 7000)
+        let long = String(repeating: "a", count: 8500)
         let full = try XCTUnwrap(XrayChapterRead.parse(Self.cutObject(user: long), cutFields: true))
+        XCTAssertEqual(full.prompt?.unicodeScalars.count, 8500)
         XCTAssertFalse(full.promptCut)
         XCTAssertTrue(full.promptCutChars == nil && full.promptTail == nil)
         let text = XrayChapterCard.text(Self.rerun, full: full)
@@ -446,6 +447,18 @@ final class XrayChapterCardTests: XCTestCase {
         t.responseCutChars = nil
         t.response = "Head 999 characters cut\n\(Self.ellipsis)\ntail"
         XCTAssertFalse(XrayChapterCard.text(t).contains("999 characters cut \(Self.ellipsis)"))
+    }
+
+    /// Red at base: the 2048 cap ran before the split and cut the last 3 scalars of dch's 1024 + "\n\u{2026}\n" + 1024.
+    func testACutResponseKeepsItsWholeTail() throws {
+        let head = String(repeating: "h", count: 1024), tail = String(repeating: "t", count: 1023) + "Z"
+        let json = "{\"schema\":1,\"chapters\":[{\"i\":1,\"title\":\"x\",\"response\":\"\(head)\\n\u{2026}\\n\(tail)\",\"response_cut\":true,\"response_cut_chars\":500}]}"
+        let c = try XCTUnwrap(XrayChapters.parse(Data(json.utf8))?.first)
+        XCTAssertEqual(c.response?.unicodeScalars.count, 2051)
+        XCTAssertTrue(XrayChapterCard.text(c).hasSuffix(tail), "the tail ends whole")
+        // no cut: today's 2048 cap
+        let plain = "{\"schema\":1,\"chapters\":[{\"i\":1,\"title\":\"x\",\"response\":\"\(String(repeating: "a", count: 3000))\"}]}"
+        XCTAssertEqual(XrayChapters.parse(Data(plain.utf8))?.first?.response?.unicodeScalars.count, 2048)
     }
 
     /// An older host: `response_cut` true without the count: today's text.
