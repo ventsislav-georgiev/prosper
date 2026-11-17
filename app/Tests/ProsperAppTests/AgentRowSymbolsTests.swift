@@ -163,13 +163,14 @@ extension AgentWindowD1Tests {
         let cut = Set(cuts.flatMap { digits, byScale in byScale.flatMap { scale, s in s.map { "\($0) \(digits) \(scale)" } } })
         let named = (drops.values.flatMap { $0.values } + cuts.values.flatMap { $0.values }).reduce(Set<String>()) { $0.union($1) }
         XCTAssertTrue(named.isSubset(of: Set(states)), "the table names the app's state texts: \(named.subtracting(states))")
-        func differ(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Int {
-            guard a.pixelsWide == b.pixelsWide, a.pixelsHigh == b.pixelsHigh else { return -1 }
+        // #1448: two w x h pixel regions of one sheet (was two whole renders of one size); a region past the sheet is -1.
+        func differ(_ rep: NSBitmapImageRep, _ a: (x: Int, y: Int), _ b: (x: Int, y: Int), _ w: Int, _ h: Int) -> Int {
+            guard max(a.x, b.x) + w <= rep.pixelsWide, max(a.y, b.y) + h <= rep.pixelsHigh else { return -1 }
             var n = 0
-            for y in 0..<a.pixelsHigh {
-                for x in 0..<a.pixelsWide {
-                    guard let p = a.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                          let q = b.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+            for y in 0..<h {
+                for x in 0..<w {
+                    guard let p = rep.colorAt(x: a.x + x, y: a.y + y)?.usingColorSpace(.sRGB),
+                          let q = rep.colorAt(x: b.x + x, y: b.y + y)?.usingColorSpace(.sRGB) else { continue }
                     if abs(p.redComponent - q.redComponent) + abs(p.greenComponent - q.greenComponent)
                         + abs(p.blueComponent - q.blueComponent) > 0.02 { n += 1 }
                 }
@@ -193,11 +194,17 @@ extension AgentWindowD1Tests {
             // `column`, TIP's, when line two ran under the chip); both print.
             let rowColumn = column - sz(8) - NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width
             let long = String(repeating: "w", count: 40)
+            // #1448: one render per (state, scale) holds its four cells' three pictures (shown, wanted, other), each in its
+            // own slot at whole-point offsets on render's own black canvas and margin (was one render, with its 0.15 s
+            // settle, per picture); every picture is compared over its own slot's pixels as before.
+            let margin: CGFloat = 24, slotWidth = (rowColumn + margin).rounded(.up)
+            var slots: [(tag: String, keeps: Bool, capped: Bool, size: CGSize, pictures: [AnyView])] = []
             for state in states {
                 func height(_ r: AgentSidebar.Row) -> CGFloat {
                     NSHostingView(rootView: AgentSidebarRowView(row: r, selected: false).frame(width: width)).fittingSize.height
                 }
                 let plainHeight = height(AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: state, age: "", prs: []))
+                slots = []
                 for digits in [999, 9_999, 99_999, 100_000] {
                     let capped = digits > 99_999
                     let r = AgentSidebar.Row(id: live("x"), title: "api", state: .working, detail: state, age: "",
@@ -208,24 +215,53 @@ extension AgentWindowD1Tests {
                     let keeps = !capped && !(drops[digits]?[scale]?.contains(state) ?? false)
                     let v = AgentSidebarRowView(row: r, selected: false)
                     let count = v.detailLine([], open: r.prCount), none = v.detailLine([])
-                    let shownIdeal = keeps ? exact(count) : exact(none)
-                    XCTAssertEqual(shownIdeal, keeps ? ideal(count) : ideal(none), accuracy: 1, "\(tag): the unrounded ideal read")
-                    print("BADGE1268C-FIT \(tag) column \(column) rowColumn \(rowColumn) count \(ideal(count)) none \(ideal(none)) exact \(exact(count)) \(exact(none)) shows \(keeps ? "count" : "none")")
+                    // #1448: each ideal measured once (was twice or three times per cell, the same value each time).
+                    let idealCount = ideal(count), idealNone = ideal(none), exactCount = exact(count), exactNone = exact(none)
+                    let shownIdeal = keeps ? exactCount : exactNone
+                    XCTAssertEqual(shownIdeal, keeps ? idealCount : idealNone, accuracy: 1, "\(tag): the unrounded ideal read")
+                    print("BADGE1268C-FIT \(tag) column \(column) rowColumn \(rowColumn) count \(idealCount) none \(idealNone) exact \(exactCount) \(exactNone) shows \(keeps ? "count" : "none")")
                     if cut.contains(tag) {
                         XCTAssertGreaterThan(shownIdeal, rowColumn, "\(tag): the last step, drawn in less than it needs")
                     } else {
                         XCTAssertLessThanOrEqual(shownIdeal, rowColumn, "\(tag): \(keeps ? "count" : "none") fits uncut")
                     }
                     let size = CGSize(width: rowColumn, height: NSHostingView(rootView: v.detailVariants.frame(width: rowColumn)).fittingSize.height)
-                    let shown = try render(v.detailVariants.frame(width: rowColumn), size: size, dark: true)
-                    let want = try render((keeps ? count : none).frame(width: rowColumn), size: size, dark: true)
-                    XCTAssertEqual(differ(shown, want), 0, "\(tag): \(keeps ? "the open count" : "the line without it") shows")
-                    if !capped {
-                        let other = try render((keeps ? none : count).frame(width: rowColumn), size: size, dark: true)
-                        XCTAssertGreaterThan(differ(shown, other), 0, "\(tag): and not the other step")
-                    }
+                    slots.append((tag, keeps, capped, size, [AnyView(v.detailVariants.frame(width: rowColumn)),
+                                                             AnyView((keeps ? count : none).frame(width: rowColumn)),
+                                                             AnyView((keeps ? none : count).frame(width: rowColumn))]))
                     XCTAssertEqual(height(r), plainHeight, accuracy: pixel, "\(tag): the row's height")
                     cells += 1
+                }
+                // Each slot is render's root for one picture (black canvas, picture at the top left, the margin past it),
+                // in a box of whole points so every slot starts on a whole pixel at 1x and 2x.
+                let drawn = slots, heights = slots.map { ($0.size.height + margin).rounded(.up) }
+                let canvas = CGSize(width: 3 * slotWidth, height: heights.reduce(0, +))
+                let sheet = VStack(alignment: .leading, spacing: 0) {
+                    ForEach(drawn.indices, id: \.self) { i in
+                        HStack(alignment: .top, spacing: 0) {
+                            ForEach(0..<3, id: \.self) { j in
+                                ZStack(alignment: .topLeading) {
+                                    Color.black
+                                    drawn[i].pictures[j].frame(width: drawn[i].size.width, height: drawn[i].size.height, alignment: .topLeading)
+                                }
+                                .frame(width: drawn[i].size.width + margin, height: drawn[i].size.height + margin, alignment: .topLeading)
+                                .frame(width: slotWidth, height: heights[i], alignment: .topLeading)
+                            }
+                        }
+                    }
+                }
+                let rep = try render(sheet, size: canvas, dark: true, margin: 0)
+                let k = CGFloat(rep.pixelsWide) / canvas.width
+                var top: CGFloat = 0
+                for (i, s) in slots.enumerated() {
+                    // A picture's pixels as render drew them alone: its canvas, size plus margin, rounded up to whole pixels.
+                    let w = Int(((s.size.width + margin) * k).rounded(.up)), h = Int(((s.size.height + margin) * k).rounded(.up))
+                    let y = Int((top * k).rounded()), x = { (j: Int) in Int((CGFloat(j) * slotWidth * k).rounded()) }
+                    XCTAssertEqual(differ(rep, (x(0), y), (x(1), y), w, h), 0, "\(s.tag): \(s.keeps ? "the open count" : "the line without it") shows")
+                    if !s.capped {
+                        XCTAssertGreaterThan(differ(rep, (x(0), y), (x(2), y), w, h), 0, "\(s.tag): and not the other step")
+                    }
+                    top += heights[i]
                 }
             }
         }
