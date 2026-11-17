@@ -253,7 +253,8 @@ struct KitPaneView: View {
         }
         let live = m.live != nil
         if m.trusted, live, m.facts?.updateAvailable == true, m.facts?.sourceRefusal == nil {
-            add("update", .button, "Update to \(m.version)", "Update \(name) to version \(m.version)", act)
+            let v = OutsideText.shown(m.version, max: 64) // R1424-s1: the header's cleaned, capped version
+            add("update", .button, "Update to \(v)", "Update \(name) to version \(v)", act)
         }
         if m.trusted, let p = previous(m) { add("rollback", .button, "Roll back to \(p)", "Roll back \(name) to version \(p)", act) }
         add("reveal", .button, "Reveal kit folder", "Reveal the folder of \(name) in Finder", kitDir(m) != nil)

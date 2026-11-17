@@ -161,6 +161,9 @@ final class KitRuntime: @unchecked Sendable {
 
     var current: KitUpdateState? { lock.withLock { state } }
 
+    /// R1423-i2: the live version is validated in this run (by an apply or restoreKits). Lock only: no file read.
+    var liveValidated: Bool { lock.withLock { state.map { !$0.live.version.isEmpty && kits[$0.live.version] != nil } ?? false } }
+
     /// #918 S1 single-flight: false when another op holds the runtime. Every caller releases with `defer { end() }`
     /// right after a true answer, so a refused or early return releases too.
     private func begin() -> Bool {

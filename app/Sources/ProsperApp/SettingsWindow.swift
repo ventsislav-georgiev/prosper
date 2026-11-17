@@ -951,9 +951,7 @@ private struct SettingsRootView: View {
     /// Reset the selection to General when it points at a tab that's no longer
     /// in the sidebar (a vanished ext section, or a hidden feature category).
     private func healSelection() {
-        if !groups.contains(where: { $0.1.contains { $0.id == selection } }) {
-            selection = "general"
-        }
+        selection = settingsHealedSelection(selection, groups: groups)
     }
 
     @ViewBuilder
@@ -983,7 +981,9 @@ private struct SettingsRootView: View {
         case "extensions":
             if let registry { ExtensionsPane(registry: registry) } else { GeneralPane(model: model) }
         default:
-            if selection.hasPrefix("ext:"), let registry,
+            if let registry, let kit = settingsKitRecord(registry: registry, selection: selection), let owner = KitRuntimes.shared {
+                KitPaneMount(owner: owner, extID: kit.id).id(selection)
+            } else if selection.hasPrefix("ext:"), let registry,
                let pane = extensionSettingsPane(registry: registry, selection: selection) {
                 // .id(selection) gives each ext section its own view identity, so
                 // switching sections rebuilds the pane's @State (loaded UI) instead
@@ -3689,6 +3689,37 @@ private struct MenuBarPane: View {
     }
 }
 
+/// #918 S5: a kit's Settings tab id ("kit" is the pane's own section id, not a settings_sections lookup).
+func settingsKitTabID(_ extID: String) -> String { "ext:\(extID)|kit" }
+
+/// #918 S5: the enabled kit record a selection names, or nil (not a kit tab, or the kit is gone or disabled).
+@MainActor
+func settingsKitRecord(registry: ExtensionRegistry, selection: String) -> ExtensionRecord? {
+    registry.kitRecords.first { settingsKitTabID($0.id) == selection }
+}
+
+/// The selection, or General when the sidebar no longer shows it (a vanished ext section or kit, a hidden category).
+func settingsHealedSelection(_ selection: String, groups: [(String, [SettingsTab])]) -> String {
+    groups.contains(where: { $0.1.contains { $0.id == selection } }) ? selection : "general"
+}
+
+/// #918 S5: the kit pane in its Settings tab; one model per shown tab, over the app's KitRuntimes.
+struct KitPaneMount: View {
+    @StateObject private var model: KitPaneModel
+
+    init(owner: KitRuntimes, extID: String) {
+        _model = StateObject(wrappedValue: KitPaneModel(extID: extID, owner: owner))
+    }
+
+    var body: some View {
+        NeonScroll {
+            KitPaneView(model: model, opener: KitPaneOpener(reveal: { NSWorkspace.shared.activateFileViewerSelecting([$0]) },
+                                                            open: { NSWorkspace.shared.open($0) }))
+        }
+        .onAppear { model.load() }
+    }
+}
+
 /// The Settings sidebar's grouped navigation, derived from the live registry.
 /// Extracted from the view so launch-time verification can assert ordering
 /// without opening a window. "Extension Settings" sits above "More" so user
@@ -3742,6 +3773,11 @@ func settingsSidebarGroups(registry: ExtensionRegistry?) -> [(String, [SettingsT
                 title: section.title,
                 icon: section.icon ?? record.manifest.extension.icon ?? "puzzlepiece.extension.fill",
                 accent: section.accent))
+        }
+        for record in registry.kitRecords { // #918 S5: one tab per enabled kit, trusted or not
+            let meta = record.manifest.extension
+            extensionSections.append(SettingsTab(id: settingsKitTabID(record.id), title: meta.title,
+                                                 icon: meta.icon ?? "shippingbox.fill"))
         }
     }
     var result: [(String, [SettingsTab])] = [("General", general)]

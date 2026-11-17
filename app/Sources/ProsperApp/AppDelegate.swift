@@ -297,6 +297,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         LiveExtensionHostServices.shared.managedConfig = .live
         extensions.managedConfig = .live
+        // #918 S5: the kit runtimes' owner (nil config home under XCTest: no runtime is built, no real home is reached)
+        KitRuntimes.shared = KitRuntimes(configHome: ManagedConfigProvider.live.stateOnly()?.roots.configHome,
+                                         records: { [weak self] in self?.extensions.records ?? [] }, loginPath: { LoginPath.read() },
+                                         make: { KitRuntime(provider: .live, store: $0, isTrusted: $1) })
         Task.detached { _ = ManagedConfigProvider.live.get() }
         // An `.invoke` key rule (hammerspoon-compat hotkeys) re-invokes its named Lua
         // handler off-main on the owning extension's lane, exactly like a timer/event.

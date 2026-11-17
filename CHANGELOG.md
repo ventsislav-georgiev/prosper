@@ -1628,6 +1628,8 @@ tag from the now-released section and put it on the new top draft.
 - The config-change consent sheet now names the asking extension as Extension "<its name>" with its
   id underneath, so an extension titled "Prosper" or "macOS" can no longer look like Prosper or the
   system asking. (#1245)
+- Settings has a page for each installed Agent Kit: its status, requirements, pieces, settings and
+  overrides, and you choose which pieces and tools to take. (#1425)
 
 ## v2.174.0
 

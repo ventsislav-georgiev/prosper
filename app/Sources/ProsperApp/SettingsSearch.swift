@@ -111,5 +111,8 @@ func extensionSettingsIndex(registry: ExtensionRegistry) -> [SettingsIndexEntry]
         }
         flush()
     }
+    for record in registry.kitRecords { // #918 S5: each kit's tab, by its title
+        out.append(SettingsIndexEntry(paneID: settingsKitTabID(record.id), paneTitle: record.manifest.extension.title, section: ""))
+    }
     return out
 }

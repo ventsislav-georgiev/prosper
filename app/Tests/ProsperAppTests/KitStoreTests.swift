@@ -939,6 +939,17 @@ final class KitStoreTests: XCTestCase {
         XCTAssertTrue(store.readRuntimeState() == s)
     }
 
+    /// R1424-i1: a runtime.json written before KitRef.rendered (no "rendered" key) still reads, with rendered nil.
+    func testRuntimeStateWithoutRenderedKeyReadsAsNil() throws {
+        let (_, _, store) = try scene()
+        try store.ensureLayout()
+        let old = "{\"schema\":1,\"state\":{\"live\":{\"version\":\"1.0.0\",\"treeHash\":\"\(Self.tree0)\",\"slug\":\"example-kit\"},\"phase\":{\"idle\":{}}}}"
+        try Data(old.utf8).write(to: URL(fileURLWithPath: store.runtimeStatePath))
+        let s = store.readRuntimeState()
+        XCTAssertEqual(s?.live.version, "1.0.0", "the old file still reads")
+        XCTAssertTrue(s != nil && s?.live.rendered == nil, "no rendered key: nil")
+    }
+
     /// #1396: recordSlug writes through replace(in:). The existence check is made to see "missing" (a link that appears
     /// after it), so the write itself must refuse the link.
     func testRecordSlugRefusesALinkInPlaceOfKitEnv() throws {

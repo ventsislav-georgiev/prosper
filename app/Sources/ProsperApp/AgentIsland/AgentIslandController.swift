@@ -207,10 +207,10 @@ final class AgentIslandController {
     }
     /// spec 6.1: the contributors of the next --spawn's env, asked on main at each spawn (the ccpool runtime is
     /// built by its extension's first live push). The pool's routing comes first (no runtime: none), then the
-    /// kit PATH contributor, which leaves the env alone while it has no bins (always so until #1423).
+    /// kit PATH contributor: the validated live kits' bins (KitRuntimes.shared; none while it is unset, as under XCTest).
     var sessionEnvContributors: @MainActor () -> [SessionEnvContributor] = {
         (CCPoolRuntime.shared.map { [$0.routing.contributor] } ?? [])
-            + [KitSessionEnv.contributor { [] }]   // after the pool; #1423 (#918 S3) supplies the live kit bins
+            + [KitSessionEnv.contributor { [bins = KitRuntimes.shared?.liveBins() ?? []] in bins }]   // after the pool; #1423: read on main here, used off main
     }
     /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
     /// only); `done` gets the path, nil when cancelled. Tests never show a real one.

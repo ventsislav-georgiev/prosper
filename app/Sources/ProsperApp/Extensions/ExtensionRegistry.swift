@@ -870,6 +870,9 @@ final class ExtensionRegistry: ObservableObject {
         return out
     }
 
+    /// #918 S5: the enabled kits (a `[contributes.kit]` table), trusted or not, in the registry's order: one Settings tab each.
+    var kitRecords: [ExtensionRecord] { records.filter { $0.enabled && $0.manifest.contributes?.kit != nil } }
+
     /// Locate a specific (record, section) by ids.
     func settingsSection(extensionID: String, sectionID: String) -> (ExtensionRecord, SettingsSection)? {
         guard let record = record(id: extensionID), record.isLive else { return nil }

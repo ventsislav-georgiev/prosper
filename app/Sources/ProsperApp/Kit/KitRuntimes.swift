@@ -70,10 +70,12 @@ final class KitRuntimes {
     /// one whose tools pieces are all off, adds nothing.
     /// shortcut: the registry's order stands for install order and the record's manifest for the live one's pieces; read
     /// the live copy's manifest if an update may add or drop a tools piece before it is applied.
+    /// R1423-i2: only a live version validated in this run (a lock-only read, no managed config): one a relaunch has not
+    /// validated again, or restoreKits refused, adds nothing until the pane's refresh validates it.
     func liveBins() -> [String] {
         kitRecords().compactMap { rec -> String? in
             guard rec.trusted, let raw = rec.manifest.contributes?.kit, let rt = runtime(for: rec.id),
-                  let live = rt.current?.live.version, !live.isEmpty else { return nil }
+                  let live = rt.current?.live.version, !live.isEmpty, rt.liveValidated else { return nil }
             let off = rt.off()
             let tools = KitManifest.parse(raw).kit.pieces.filter { $0.kind == .tools && !off.contains($0.id) }
             return tools.isEmpty ? nil : rt.store.layout.bin
