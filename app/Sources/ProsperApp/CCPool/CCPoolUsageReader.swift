@@ -311,11 +311,11 @@ enum CCPoolUsageStats {
         var moved: Bool
     }
 
-    /// 3. Per session, oldest first. A row with no usage or an empty denominator is not a point and does not set the
+    /// 3. Per session, oldest first; quota checks left out (a one-token probe with no cache would plot a 0 % dip and could set `moved`). A row with no usage or an empty denominator is not a point and does not set the
     /// session's previous account.
     static func cacheHitRate(_ rows: [CCPoolUsageEntry]) -> [(sess: String, points: [CachePoint])] {
         var out: [String: [CachePoint]] = [:]
-        for row in rows {
+        for row in rows where !row.qc {
             guard let s = row.sess, let k = row.tokens else { continue }
             let denom = k.input + k.cacheRead + k.cacheWrite5m + k.cacheWrite1h
             guard denom > 0 else { continue }

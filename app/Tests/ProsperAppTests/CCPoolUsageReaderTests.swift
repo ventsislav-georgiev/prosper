@@ -36,6 +36,9 @@ private func rdTok(_ i: Int, _ o: Int, _ cr: Int, _ cw5: Int, _ cw1: Int = 0) ->
 
 private func rdClaim(_ u: Double, _ r: Double) -> [String: CCPoolUsageEntry.Claim] { ["five_hour": .init(u: u, r: r, s: "a")] }
 
+/// Written once by the background read, read after the semaphore: no overlap.
+private final class RdBox: @unchecked Sendable { var v: CCPoolUsageReadResult? }
+
 final class CCPoolUsageReaderTests: XCTestCase {
     private func dir(_ files: [String: String] = [:]) throws -> URL {
         let d = tempDir().appendingPathComponent("usage")
@@ -168,6 +171,26 @@ final class CCPoolUsageReaderTests: XCTestCase {
         XCTAssertEqual(got.filesNotRead, 1)
     }
 
+    func testAPipeWithAnOwnNameDoesNotBlockTheRead() throws {
+        let d = try dir()
+        let path = d.appendingPathComponent(rdDay).path
+        XCTAssertEqual(mkfifo(path, 0o600), 0)
+        let box = RdBox()
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            box.v = CCPoolUsageReader.readNow(directory: d, range: .day, now: rdNow)
+            done.signal()
+        }
+        let finished = done.wait(timeout: .now() + 2) == .success
+        // A writer at the end, so a reader stuck in open() is released and nothing stays blocked.
+        let w = open(path, O_WRONLY | O_NONBLOCK)
+        if w >= 0 { close(w) }
+        if !finished { _ = done.wait(timeout: .now() + 5) }
+        XCTAssertTrue(finished, "readNow returns within 2 s")
+        XCTAssertEqual(box.v?.filesNotRead, 1)
+        XCTAssertTrue(box.v?.rows.isEmpty ?? false)
+    }
+
     func testOnlyOwnFileNamesAreRead() throws {
         let row = rdLine() + "\n"
         let d = try dir([rdDay + ".bak": row, "usage-2027-01-15.json": row, "._usage-2027-01-15.jsonl": row, "other.jsonl": row,
@@ -277,6 +300,7 @@ final class CCPoolUsageReaderTests: XCTestCase {
         let rows = [
             rdEntry(1, acct: "acct-a", sess: "s-0001", tokens: rdTok(100, 5, 700, 200)),   // 700 / 1000
             rdEntry(2, acct: "acct-a", sess: "s-0001", tokens: rdTok(0, 5, 900, 100)),     // 900 / 1000
+            rdEntry(2.5, acct: "acct-b", sess: "s-0001", qc: true, tokens: rdTok(1, 0, 0, 0)),  // quota check on another account: left out
             rdEntry(3, acct: "acct-b", sess: "s-0001", tokens: rdTok(100, 5, 0, 300)),     // moved: 0 / 400
             rdEntry(4, acct: "acct-b", sess: "s-0001", tokens: rdTok(0, 0, 0, 0)),         // empty denominator: no point
             rdEntry(5, acct: "acct-b", sess: "s-0001", tokens: rdTok(50, 5, 150, 0, 0)),   // 150 / 200, same account as before
