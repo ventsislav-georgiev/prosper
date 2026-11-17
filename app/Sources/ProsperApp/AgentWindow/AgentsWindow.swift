@@ -1032,8 +1032,9 @@ enum AgentWindowStyle: String, CaseIterable {
 /// #1378: behind the sidebar title row and the session header, so their empty parts drag the window in every style (the
 /// controls drawn over it keep their clicks: SwiftUI hit-tests them first). Adds no accessibility element.
 struct AgentWindowDragArea: NSViewRepresentable {
+    var toolTip: String? = nil
     func makeNSView(context: Context) -> AgentWindowDragView { AgentWindowDragView() }
-    func updateNSView(_ nsView: AgentWindowDragView, context: Context) {}
+    func updateNSView(_ nsView: AgentWindowDragView, context: Context) { nsView.toolTip = toolTip }
 }
 
 final class AgentWindowDragView: NSView {
@@ -1086,16 +1087,19 @@ struct AgentSidebarTitleRow: View {
             Spacer(minLength: 0)
             let rows = model.sections.filter { $0.title != "History" }.flatMap(\.rows)
             if !rows.isEmpty {
-                // #1467: "6/17 active · \u{1F916} 9"; a header too narrow for it drops the word "active" first.
+                // #1467: "6/17 active \u{B7} \u{1F916} 9"; a header too narrow for it drops the word "active" first.
                 let t = Self.countText(rows.map { (state: $0.state, agents: max(0, $0.session?.agents ?? 0)) })
                 ViewThatFits(in: .horizontal) {
                     Text(t.short)
                     Text(t.narrow)
                 }
                 .font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
-                .lineLimit(1).layoutPriority(-1)
-                .help(t.long).accessibilityElement(children: .ignore).accessibilityLabel(t.long)
+                .lineLimit(1)
+                .accessibilityElement(children: .ignore).accessibilityLabel(t.long)
                 .allowsHitTesting(false)   // #1378: drags too
+                // #1467 s1: .help on a view that takes no hits never shows; the count's own drag view carries the tooltip.
+                .background(AgentWindowDragArea(toolTip: t.long))
+                .layoutPriority(-1)   // after the background, so the HStack reads it on its direct child
             }
         }
         // The buttons sit over a reserved trailing strip, inside the row's height: a cut count can never move them.
@@ -1138,7 +1142,8 @@ struct AgentSidebarTitleRow: View {
     static func countText(_ rows: [(state: AgentState?, agents: Int)]) -> (short: String, narrow: String, long: String) {
         func n(_ s: AgentState) -> Int { rows.filter { ($0.state ?? .idle) == s }.count }
         let (blocked, working, done, idle) = (n(.blocked), n(.working), n(.done), n(.idle))
-        let subs = rows.reduce(0) { $0 + max(0, $1.agents) }
+        // #1467 m1: each term and the running total kept to 0...maxAgents, so no + can overflow whatever a caller passes.
+        let subs = rows.reduce(0) { min($0 + min(max(0, $1.agents), DchListRow.maxAgents), DchListRow.maxAgents) }
         let robot = subs > 0 ? " \u{B7} \u{1F916} \(subs)" : ""
         let ratio = "\(working + blocked)/\(rows.count)"
         let parts = [working > 0 ? "\(working) working" : nil, blocked > 0 ? "\(blocked) need\(blocked == 1 ? "s" : "") input" : nil,

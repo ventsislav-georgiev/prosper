@@ -1941,6 +1941,8 @@ struct DchListRow: Equatable, Sendable {
     /// dch reads a title from a record under 8192 bytes, and json_quote may turn each byte into U+FFFD
     /// (3 bytes): a longer one is not dch's, so it is dropped, never matched.
     static let maxHarnessBytes = 3 * 8191
+    /// #1467 m1: the sub-agent count kept from dch's unbounded `agents`, so a sum over every session cannot overflow.
+    static let maxAgents = 9_999
 
     /// #877: listResp's "cwd" as dch serve writes it (serve.c:340, :358-359, :374-378@v1.54.0): the
     /// string as dch gave it, unchecked (no absolute or trailing-slash rule), nil when empty or when its
@@ -2330,7 +2332,7 @@ enum DchCommand {
             if alias.isEmpty { alias = harness }
             return DchListRow(name: name, alias: alias,
                               activityEpoch: o["activity_epoch"] as? Int ?? 0, state: o["state"] as? String ?? "",
-                              agents: o["agents"] as? Int ?? 0,
+                              agents: min(DchSessionMeta.count(o["agents"]) ?? 0, DchListRow.maxAgents),
                               meta: DchSessionMeta(json: o["meta"]),
                               metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0,
                               version: o["version"] as? String ?? "",

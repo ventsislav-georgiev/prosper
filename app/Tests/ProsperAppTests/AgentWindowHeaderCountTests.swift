@@ -32,6 +32,61 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1467 m1: a sub-agent count from outside (dch JSON, a remote, a fake) can be any Int: the sum keeps each term and
+    /// the total to 0...DchListRow.maxAgents and never traps.
+    @MainActor
+    func testAgentWindowHeaderCountSumIsCappedAndNeverTraps() {
+        let cap = DchListRow.maxAgents
+        XCTAssertEqual(cap, 9_999)
+        let t = AgentSidebarTitleRow.countText([(.working, Int.max), (.idle, Int.max)])
+        XCTAssertEqual(t.short, "1/2 active \u{B7} \u{1F916} \(cap)")
+        XCTAssertEqual(t.narrow, "1/2 \u{B7} \u{1F916} \(cap)")
+        XCTAssertEqual(t.long, "1 working, 1 idle \u{B7} \(cap) sub-agents")
+        XCTAssertEqual(AgentSidebarTitleRow.countText([(.working, cap), (.idle, 1)]).narrow, "1/2 \u{B7} \u{1F916} \(cap)", "the total too")
+        XCTAssertEqual(AgentSidebarTitleRow.countText([(.working, Int.min), (.idle, 4)]).narrow, "1/2 \u{B7} \u{1F916} 4", "a negative term is 0")
+    }
+
+    /// #1467 s1: hosted offscreen (a never-shown window, nothing ordered in or made key, no event), a hit at the
+    /// count's centre lands on the count's own drag view: it still drags the window (#1378) and carries the full split
+    /// as its AppKit tooltip; the row's own drag view behind the name carries none.
+    @MainActor
+    func testAgentWindowHeaderCountHitIsADragViewWithTheTooltip() throws {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1.0
+        try withNewSessionPrefs {
+            let m = wiringModel(store([session("api", .working, agents: 2), session("web", .idle)]), SpawnCalls())
+            defer { m.close() }
+            let long = AgentSidebarTitleRow.countText([(.working, 2), (.idle, 0)]).long
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: sz(60)), styleMask: [.borderless],
+                             backing: .buffered, defer: true)
+            w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: AgentSidebarTitleRow(model: m).frame(width: 400))
+            defer { w.contentView = NSView() }
+            for _ in 0..<3 {
+                w.contentView?.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            XCTAssertFalse(w.isVisible, "built, never shown")
+            let cv = try XCTUnwrap(w.contentView)
+            @MainActor func drags(_ v: NSView) -> [AgentWindowDragView] {
+                ((v as? AgentWindowDragView).map { [$0] } ?? []) + v.subviews.flatMap { drags($0) }
+            }
+            let all = drags(cv)
+            XCTAssertEqual(all.count, 2, "the row's drag view and the count's")
+            XCTAssertEqual(all.filter { $0.toolTip == nil }.count, 1, "the row's own drag view has no tooltip")
+            let count = try XCTUnwrap(all.first { $0.toolTip != nil }, "the count's drag view")
+            XCTAssertEqual(count.toolTip, long)
+            XCTAssertGreaterThan(count.bounds.width, 10, "sized to the count")
+            let centre = count.convert(CGPoint(x: count.bounds.midX, y: count.bounds.midY), to: nil)
+            let hit = cv.hitTest(try XCTUnwrap(cv.superview).convert(centre, from: nil))
+            XCTAssertTrue(hit === count, "the count's centre hits \(hit.map { "\(type(of: $0)) \($0.toolTip ?? "no tooltip")" } ?? "nil")")
+            XCTAssertEqual(hit?.mouseDownCanMoveWindow, true, "#1378: a press on the count still drags")
+            XCTAssertFalse(count.isAccessibilityElement(), "VoiceOver keeps the count's own label")
+            XCTAssertFalse(w.isVisible, "never shown")
+        }
+    }
+
     /// The header draws the short form when it fits and the "active"-less form when it does not (the numbers are never
     /// cut), says the long form to VoiceOver, and draws nothing with no sessions.
     @MainActor

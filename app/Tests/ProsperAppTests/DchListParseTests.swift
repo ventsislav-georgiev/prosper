@@ -49,6 +49,18 @@ final class DchListParseTests: XCTestCase {
         XCTAssertEqual(rows[1].agents, 0)
     }
 
+    /// #1467 m1: `agents` is dch's unbounded Int: kept to 0...DchListRow.maxAgents at parse, so no sum over the
+    /// sessions can overflow; a bool or a non-integer reads as none.
+    func testAgentCountIsClampedAtParse() {
+        let json = """
+        [{"name":"a","agents":9223372036854775807},{"name":"b","agents":-5},{"name":"c","agents":true},
+         {"name":"d","agents":1e300},{"name":"e","agents":9999},{"name":"f","agents":10000}]
+        """
+        let rows = DchCommand.parseListJSON(Data(json.utf8))
+        XCTAssertEqual(rows.map(\.name), ["a", "b", "c", "d", "e", "f"])
+        XCTAssertEqual(rows.map(\.agents), [9_999, 0, 0, 0, 9_999, 9_999])
+    }
+
     /// An older dch prints nothing for `--ls-json` — the caller must see "no rows"
     /// and fall back to the TSV list, not a half-built row.
     func testEmptyAndGarbageJsonYieldNoRows() {
