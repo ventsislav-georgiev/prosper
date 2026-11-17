@@ -15,13 +15,19 @@ protocol XrayCardPresenter: AnyObject {
 /// The product's presenter: an NSPopover, transient (a click outside closes it), below the anchor.
 @MainActor
 final class XrayPopoverPresenter: NSObject, XrayCardPresenter, NSPopoverDelegate {
-    private var popover: NSPopover?
-    private var closed: (@MainActor () -> Void)?
+    // Internal, not private: a row sets a stale-popover state and calls popoverDidClose without showing one (#1432).
+    var popover: NSPopover?
+    var closed: (@MainActor () -> Void)?
 
     var isShown: Bool { popover?.isShown == true }
 
     func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
-        close()
+        // Retire the old card here: its did-close may arrive after the new popover is installed (#1432).
+        let (old, oldClosed) = (popover, self.closed)
+        (popover, self.closed) = (nil, nil)
+        old?.delegate = nil
+        old?.performClose(nil)
+        oldClosed?()
         let p = NSPopover()
         p.behavior = .transient
         p.animates = false
@@ -36,6 +42,7 @@ final class XrayPopoverPresenter: NSObject, XrayCardPresenter, NSPopoverDelegate
     func close() { popover?.performClose(nil) }
 
     func popoverDidClose(_ notification: Notification) {
+        guard (notification.object as? NSPopover) === popover else { return }
         let f = closed
         (popover, closed) = (nil, nil)
         f?()
