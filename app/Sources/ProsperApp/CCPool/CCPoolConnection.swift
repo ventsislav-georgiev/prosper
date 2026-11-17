@@ -68,9 +68,12 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     /// The upstream Retry-After of a pass-through 429, handed on to the client (P2a follow-up a).
     var retryAfter: String?
     var suspended = false
-    /// #1260: reads the usage off a 200 reply that is not a quota check; with the reply's five-hour limit.
+    /// #1260, #1482: reads the usage off every relayed reply (the record); `fiveHour` is set only where learn runs
+    /// (a 200 that is not a quota check). The status and the rate-limit rows go to the usage record.
     var tap: CCPoolUsageTap?
     var fiveHour: CCPoolLimit?
+    var status = 0
+    var limits: [String: CCPoolLimit] = [:]
 
     init(connection: CCPoolConnection, label: String, accountID: String, retried: Bool, followedPin: Bool) {
         self.connection = connection
@@ -154,6 +157,7 @@ final class CCPoolConnection: @unchecked Sendable {
     /// The port the listener is bound to, for the Host check.
     private let boundPort: UInt16
     private let onClose: @Sendable (ObjectIdentifier) -> Void
+    private let record: CCPoolUsageRecord?
     private var closed = false
 
     private var buffer = Data()
@@ -190,9 +194,13 @@ final class CCPoolConnection: @unchecked Sendable {
     private var followedPin = false
     /// #1262: the first account's last throughput 429 once the conversation made its ONE move (Python `moved`, `back`).
     private var movedFrom: CCPoolExchange?
+    /// #1482: when the relay started, and how the last account was chosen ("pin", "place" or "pick").
+    private var startedAt = 0.0
+    private var routed = "pick"
 
     init(conn: NWConnection, config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger,
-         upstream: CCPoolUpstream, boundPort: UInt16, onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
+         upstream: CCPoolUpstream, boundPort: UInt16, record: CCPoolUsageRecord? = nil,
+         onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
         self.conn = conn
         self.config = config
         self.store = store
@@ -200,6 +208,7 @@ final class CCPoolConnection: @unchecked Sendable {
         self.log = logger
         self.upstream = upstream
         self.boundPort = boundPort
+        self.record = record
         self.onClose = onClose
     }
 
@@ -235,7 +244,12 @@ final class CCPoolConnection: @unchecked Sendable {
         guard !closed else { return }
         closed = true
         if retryingThrottle != nil, exchange == nil { log.note(nil, "client left during a throttle wait; no retry") }
-        if let ex = exchange { exchange = nil; ex.task?.cancel() }
+        if let ex = exchange {
+            exchange = nil
+            ex.task?.cancel()
+            // The client left while the reply streamed: still a relayed reply, not a clean end.
+            if ex.mode == .streaming { recordRow(ex, done: false) }
+        }
         abortPump()
         conn.cancel()
         onClose(ObjectIdentifier(self))
@@ -374,6 +388,7 @@ final class CCPoolConnection: @unchecked Sendable {
 
     private func startRelay() {
         relayStarted = true
+        startedAt = store.now
         // #1256: accounts + the throttle retries (Python's bound), so the retries never cut the walk short.
         maxAttempts = max(1, store.read { $0.order.count }) + CCPoolCore.throttleBackoff.count
         attempt()
@@ -404,6 +419,7 @@ final class CCPoolConnection: @unchecked Sendable {
                 return CCPoolCore.pick(st, model: model, exclude: tried, now: now)
             }
             followedPin = false
+            routed = "pick"
         } else {
             var followed = false
             picked = store.mutate { st -> String? in
@@ -419,6 +435,7 @@ final class CCPoolConnection: @unchecked Sendable {
             }
             // #1262: the move does not move `current` (Python's move calls place(), not choose()'s remember_last).
             followedPin = followed || last != nil
+            routed = followed ? "pin" : "place"
         }
         guard let label = picked else { return last.map { pinBack($0, answer: $0) } ?? noAccounts() }
         if anyway { log.note(label, "no other account is routable; trying a rejected token") }
@@ -565,9 +582,12 @@ final class CCPoolConnection: @unchecked Sendable {
             }
         }
         writeHead(response.statusCode, headers)
-        // #1260: Python learns from every streamed reply; this step learns only from a 200 that is real work.
+        // #1482: the tap reads every relayed reply for the usage record.
+        ex.tap = CCPoolUsageTap(contentType: headers["content-type"])
+        ex.status = response.statusCode
+        ex.limits = limits
+        // #1260 (D5): learn keeps its gate: only a 200 that is real work.
         if response.statusCode == 200, !quotaCheck {
-            ex.tap = CCPoolUsageTap(contentType: headers["content-type"])
             ex.fiveHour = limits[CCPoolCore.fiveHour]
         }
         ex.mode = .streaming
@@ -625,6 +645,7 @@ final class CCPoolConnection: @unchecked Sendable {
             finishSnippet(ex)
         case .streaming:
             exchange = nil
+            recordRow(ex, done: error == nil)
             guard error == nil else { return close() }
             conn.send(content: Data("0\r\n\r\n".utf8), completion: .contentProcessed { [weak self] _ in self?.close() })
             learn(ex)
@@ -646,6 +667,22 @@ final class CCPoolConnection: @unchecked Sendable {
             let ids = Set(st.accounts.values.map(\.id))
             st.capacity = st.capacity.filter { ids.contains($0.key) }
         }
+    }
+
+    /// #1482: the one usage row of this request, handed to the writer's own queue. Ids from the pin key's headers
+    /// only when the whole key is valid; the account by its Keychain id, never its label.
+    private func recordRow(_ ex: CCPoolExchange, done: Bool) {
+        guard let record else { return }
+        let end = store.now
+        let keyed = head.flatMap(Self.pinKey) != nil
+        let ms = (end - startedAt) * 1000
+        record.add(CCPoolUsageRow(t: end, acct: ex.accountID, model: CCPoolUsageRow.modelWord(model),
+                                  sess: keyed ? head?.header("x-claude-code-session-id") : nil,
+                                  agent: keyed ? head?.header("x-claude-code-agent-id") ?? "" : nil,
+                                  path: CCPoolUsageRow.pathWord(head?.path ?? ""), st: ex.status,
+                                  ms: ms.isFinite && ms >= 0 && ms < 1e12 ? Int(ms) : 0, done: done, qc: quotaCheck,
+                                  att: attempts, thr: throttleRetries, mv: movedFrom != nil, routed: routed,
+                                  usage: ex.tap?.result(), lim: ex.limits))
     }
 
     /// Log the pass-through 429 with at most 200 bytes of the upstream body, then answer it.

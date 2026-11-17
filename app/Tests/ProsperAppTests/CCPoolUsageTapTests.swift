@@ -41,6 +41,8 @@ struct UsageTapReply {
     var cut = false
     /// Send the body whole as one chunk of a chunked reply, then hang up inside the next chunk: a transport error after the usage.
     var dropMidChunk = false
+    /// #1482: raw extra response header lines ("name: value\r\n"), for the record's never-stored rows.
+    var extra = ""
 }
 
 /// Stands in for the upstream on an ephemeral loopback port; answers each request with the next scripted reply.
@@ -92,7 +94,7 @@ final class UsageTapStub: @unchecked Sendable {
                 var head = "HTTP/1.1 \(r.status) X\r\ncontent-type: \(r.contentType)\r\n"
                 head += "anthropic-ratelimit-unified-5h-status: allowed\r\n"
                 head += "anthropic-ratelimit-unified-5h-utilization: \(r.util)\r\n"
-                head += "anthropic-ratelimit-unified-5h-reset: \(tapReset)\r\n"
+                head += "anthropic-ratelimit-unified-5h-reset: \(tapReset)\r\n" + r.extra
                 // One reply per connection, so no attempt rides a pooled connection this stub no longer reads.
                 if r.dropMidChunk {
                     head += "Connection: close\r\nTransfer-Encoding: chunked\r\n\r\n" + String(r.body.count, radix: 16) + "\r\n"

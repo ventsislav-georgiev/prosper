@@ -96,6 +96,8 @@ final class CCPoolStore: @unchecked Sendable {
     }
 
     var stateURL: URL { directory.appendingPathComponent("state.json") }
+    /// #1482: the usage record's own folder beside state.json (tests: under their tempDir()).
+    var usageDirectory: URL { directory.appendingPathComponent("usage", isDirectory: true) }
 
     init(directory: URL, clock: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 },
          logger: CCPoolLogger = CCPoolOSLog(), writer: @escaping Writer = CCPoolStore.atomicWrite) {

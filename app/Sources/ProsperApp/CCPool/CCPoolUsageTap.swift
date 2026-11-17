@@ -1,6 +1,7 @@
 import Foundation
 
-/// #1260: reads the token usage off a relayed 200 reply (Python UsageTap, ccpool_proxy.py 306-351). Strictly
+/// #1260: reads the token usage off a relayed reply (Python UsageTap, ccpool_proxy.py 306-351); #1482: every relayed
+/// reply, for the usage record, while learn reads it only for a 200 that is not a quota check. Strictly
 /// passive: handed a copy of each decoded chunk after it was sent to the client, it never alters, holds or fails
 /// the relay. The body is outside data: at most `maxBuffer` bytes are held (a JSON body whole, or one event-stream
 /// line); past that the tap gives up for good. Nothing of the body is kept but the five token counts.
