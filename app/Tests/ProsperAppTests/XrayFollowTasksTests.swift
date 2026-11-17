@@ -215,4 +215,75 @@ final class XrayFollowTasksTests: XCTestCase {
         XCTAssertEqual(a, XrayPanels.followTasksRefused)
         XCTAssertEqual(b, 2)
     }
+
+    /// QA r1451 r1: the blocks' bytes count toward maxKept. A test-sized cap holds the snapshot and two task rows; a
+    /// third row (a delta) passes it: the follow gets its SIGTERM and today's Tasks read runs.
+    /// Red with blocks-not-counted (block bytes left out of pastCap): the snapshot alone is under the cap, nothing stops.
+    func testBlocksPastTheByteCapFallBackToTheReads() async throws {
+        let cap = XrayFollow.maxKept
+        defer { XrayFollow.maxKept = cap }
+        try await withFollow { fake, panels in
+            let run = XrayPollTests.PollRun()
+            let p = panel(panels)
+            await open(p, run.run)
+            let snap = XrayFollowTests.snapshot()
+            let used = [snap, Self.tasksHeader, Self.task("1"), Self.task("2"), Self.done].reduce(0) { $0 + $1.utf8.count }
+            XrayFollow.maxKept = used
+            send(fake, [snap, Self.tasksHeader, Self.task("1"), Self.task("2"), Self.done])
+            XCTAssertEqual(p.tasks?.tasks.map(\.id), ["1", "2"])
+            XCTAssertTrue(p.follow != nil && fake.stopped.isEmpty, "at the cap: kept")
+            XCTAssertEqual(run.tasksReads, 1)
+            fake.send(1, Self.task("3"))
+            XCTAssertEqual(fake.stopped, [1], "past the cap: SIGTERM")
+            XCTAssertTrue(p.follow == nil)
+            await p.reading?.value
+            XCTAssertEqual(run.tasksReads, 2, "today's Tasks read runs")
+            p.stop()
+        }
+    }
+
+    /// QA r1451 s1: a block's row COUNT is capped (maxBlockRows, a test-sized 3 here; XrayTasks.maxRows in production).
+    /// A new id past it ends the follow and today's reads run; a replaced id and a gone do not count.
+    /// Red with block-rows-uncapped: the fourth task is kept and the follow runs on.
+    func testBlockRowsPastTheRowCapFallBackToTheReads() async throws {
+        let cap = XrayFollow.maxBlockRows
+        defer { XrayFollow.maxBlockRows = cap }
+        try await withFollow { fake, panels in
+            let run = XrayPollTests.PollRun()
+            let p = panel(panels)
+            await open(p, run.run)
+            XrayFollow.maxBlockRows = 3
+            send(fake, [XrayFollowTests.snapshot()] + Self.blocks(tasks: ["1", "2", "3"], memories: ["m1"]))
+            fake.send(1, Self.task("2", "done"))
+            fake.send(1, #"{"task":{"id":"1","gone":true}}"#)
+            fake.send(1, Self.task("4"))
+            XCTAssertEqual(p.tasks?.tasks.map(\.id), ["2", "3", "4"], "at the cap: kept")
+            XCTAssertTrue(p.follow != nil && fake.stopped.isEmpty)
+            fake.send(1, Self.task("5"))
+            XCTAssertEqual(fake.stopped, [1], "past the cap: SIGTERM")
+            XCTAssertTrue(p.follow == nil)
+            await p.reading?.value
+            XCTAssertEqual(run.tasksReads, 2, "today's Tasks read runs")
+            p.stop()
+        }
+    }
+
+    /// The same cap on a memory block's own rows (the snapshot's blocks, before any delta).
+    /// Red with block-rows-uncapped: four memory rows are kept.
+    func testMemoryBlockPastTheRowCapFallsBack() async throws {
+        let cap = XrayFollow.maxBlockRows
+        defer { XrayFollow.maxBlockRows = cap }
+        try await withFollow { fake, panels in
+            let run = XrayPollTests.PollRun()
+            let p = panel(panels)
+            await open(p, run.run)
+            XrayFollow.maxBlockRows = 3
+            send(fake, [XrayFollowTests.snapshot()] + Self.blocks(tasks: ["1"], memories: ["m1", "m2", "m3", "m4"]))
+            XCTAssertEqual(fake.stopped, [1])
+            XCTAssertTrue(p.follow == nil)
+            await p.reading?.value
+            XCTAssertEqual(run.tasksReads, 2)
+            p.stop()
+        }
+    }
 }

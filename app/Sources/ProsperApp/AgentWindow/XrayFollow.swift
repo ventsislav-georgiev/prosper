@@ -54,6 +54,9 @@ final class XrayFollow: ObservableObject {
     /// replaced or dropped), bounded as XrayChapters.parse bounds one read; rows set it and restore it.
     static var maxKept = XrayChapters.maxBytes
     private var kept = 0
+    /// #1475 c2 (QA r1451 s1): the most rows one block keeps, as the one-shot parsers (XrayTasks.maxRows, memory's too);
+    /// past it the follow ends like pastCap. Rows set it and restore it.
+    static var maxBlockRows = XrayTasks.maxRows
     /// #1475 c: the kept blocks by row key ("task", "memory"), the one whose done line has not come, the ones changed.
     private var blocks: [String: Block] = [:]
     private var openBlock: String?
@@ -169,8 +172,12 @@ final class XrayFollow: ObservableObject {
 
     /// #1475 a2 (QA r1436 s1): past the whole-object cap the follow ends and the panels read as today (giveUpFollow);
     /// #1475 c: the blocks' bytes count too (each sum at most maxKept plus one line after the check per line: no overflow).
+    /// #1475 c2: so does a block's row count (about 20-byte rows fit 800k in 16 MiB; parse keeps 50,000 and every delta
+    /// scans the rows). shortcut: the per-delta firstIndex over the rows stays linear, now bounded by maxBlockRows; an
+    /// id index would need re-numbering on every removal.
     private func pastCap() -> Bool {
-        guard kept + blocks.values.reduce(0, { $0 + $1.bytes }) > Self.maxKept else { return false }
+        guard kept + blocks.values.reduce(0, { $0 + $1.bytes }) > Self.maxKept
+                || blocks.values.contains(where: { $0.rows.count > Self.maxBlockRows }) else { return false }
         object = nil; failed = true; onEnd(self)
         return true
     }
