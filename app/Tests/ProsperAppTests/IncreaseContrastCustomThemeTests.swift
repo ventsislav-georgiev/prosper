@@ -230,7 +230,9 @@ final class IncreaseContrastCustomThemeTests: XCTestCase {
         let palette: Set<String> = ["ClipboardPanel.swift|Neon.blue", "SettingsTheme.swift|accent", "SettingsTheme.swift|Neon.blue",
                                     "AgentsWindow.swift|Neon.blue", "AgentsWindow.swift|tint", "RunnerPanel.swift|Neon.blue"]
         let fixed: Set<String> = ["StatsPopupView.swift|Neon.textSecondary", "SettingsTheme.swift|Neon.textSecondary",
-                                  "AgentsWindow.swift|Neon.textSecondary", "AgentIslandView.swift|.white"]  // #1375: the island chip text sites (Neon.faded(text, ...)) are gone
+                                  "AgentsWindow.swift|Neon.textSecondary", "AgentIslandView.swift|.white",
+                                  // #1452: the island's own-look path (follows off): fixed white / ownDeny inks
+                                  "AgentIslandView.swift|text", "AgentIslandView.swift|look(style).text"]  // #1375: the island chip text sites (Neon.faded(text, ...)) are gone
         XCTAssertEqual(try Self.fadedSites(), palette.union(fixed))
     }
 
