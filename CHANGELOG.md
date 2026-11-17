@@ -1680,6 +1680,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions controls only use a dch that you or the system own and that other users cannot
   change, so a dch dropped into a shared folder on your PATH can never drive Restart, Stop or End.
   (#1460)
+- Agent Sessions terminal: trackpad scrolling moves twice as far per swipe, as in Ghostty (mouse
+  wheels unchanged). (#1465)
 
 ## v2.174.0
 

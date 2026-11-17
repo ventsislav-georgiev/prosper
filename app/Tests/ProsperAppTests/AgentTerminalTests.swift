@@ -1044,6 +1044,16 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertEqual(AgentSessionsSection.clipboardLabel, "Let sessions set the clipboard while you're viewing them")
     }
 
+    /// #1465: trackpad (precise) deltas scroll twice as far, as in Ghostty.app; wheels keep libghostty's default.
+    @MainActor
+    func testTheLookScrollsPreciseDeltasAtTwiceTheirPoints() {
+        XCTAssertTrue(AgentTerminalLook.configuration.rendered.contains("mouse-scroll-multiplier = precision:2"))
+        XCTAssertFalse(AgentTerminalLook.configuration.rendered.contains("mouse-scroll-multiplier = 2"), "a bare 2 would double wheels too")
+        let c = AgentTerminalLook.make()
+        XCTAssertTrue(c.lastConfigurationIssue == nil, "libghostty accepted the prefixed value")
+        XCTAssertTrue(c.renderedConfig.contains("mouse-scroll-multiplier = precision:2"))
+    }
+
     /// QA #681 INFO-2 and INFO-10: libghostty takes Prosper's config as is (no diagnostics), a middle click
     /// does nothing (its primary-paste read the system pasteboard past the seam), and the config file it was
     /// loaded from is gone at once, after a theme switch too.

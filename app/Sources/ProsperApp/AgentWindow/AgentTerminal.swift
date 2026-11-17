@@ -849,6 +849,8 @@ enum AgentTerminalLook {
             $0.withCustom("middle-click-action", "ignore")
             $0.withCustom("copy-on-select", "false")
             $0.withCustom("macos-option-as-alt", "false")
+            // Ghostty.app doubles precise (trackpad) deltas in its own view; the package passes them at 1x. Discrete wheels keep the default 3.
+            $0.withCustom("mouse-scroll-multiplier", "precision:2")
             $0.withWindowPaddingX(4)
             $0.withWindowPaddingY(2)
         }
