@@ -123,7 +123,9 @@ struct KitPaneView: View {
         let off = m.facts?.status?.off ?? []
         return v.kit.pieces.map { p in
             let st = m.facts?.status?.pieces.first { $0.id == p.id }
-            let state = off.contains(p.id) ? "off" : (st?.state.rawValue ?? (m.live == nil ? "not applied" : "on"))
+            // #920: an agents piece has no managed-config record; its state is the runtime's agents line (a refusal included)
+            let agents = p.kind == .agents ? m.facts?.status?.agents[p.id] : nil
+            let state = off.contains(p.id) ? "off" : (agents ?? st?.state.rawValue ?? (m.live == nil ? "not applied" : "on"))
             let hook = p.kind == .hook ? [p.event, p.matcher].compactMap { $0 }.joined(separator: " ") : nil
             return PieceRow(id: p.id, kind: p.kind.rawValue, state: state,
                             target: st.map { OutsideText.shown($0.target, max: 120) }, hook: hook.map { OutsideText.shown($0, max: 120) },

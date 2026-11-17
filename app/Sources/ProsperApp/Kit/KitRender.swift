@@ -26,6 +26,9 @@ struct KitRenderContext: Equatable, Sendable {
             runner: prosper.appendingPathComponent("kit-runtime/prosper-kit-run").path)
     }
 
+    /// #920: the agents validator refuses a file holding one of these (an agent file is never rendered)
+    static let placeholderKeys = ["{{kit_dir}}", "{{kit_bin}}", "{{kit_config}}", "{{home}}"]
+
     var placeholders: [(key: String, value: String)] {
         [("{{kit_dir}}", kitDir), ("{{kit_bin}}", kitBin), ("{{kit_config}}", kitConfig), ("{{home}}", home)]
     }
@@ -39,9 +42,17 @@ struct KitShimPlan: Equatable, Sendable {
     var text: String
 }
 
+/// #920: an agent file the runtime installs as <claude>/agents/<name>.md, byte for byte from the live copy's `path`.
+struct KitAgentPlan: Equatable, Sendable {
+    var pieceID: String
+    var name: String
+    var path: String // kit-relative
+}
+
 struct KitPlan: Equatable, Sendable {
     var pieces: [ManagedConfigPiece] = []
     var shims: [KitShimPlan] = []
+    var agents: [KitAgentPlan] = []
     var refusals: [KitRefusal] = []
 }
 
@@ -174,6 +185,8 @@ enum KitRender {
                 for f in v.seeds[p.id] ?? [] {
                     seeds.append(ManagedConfigPiece(id: seedPieceID(p.id, f.name), kind: .seed, target: "kitconfig:" + f.name, source: "ext:" + f.path))
                 }
+            case .agents:
+                plan.agents += (v.agents[p.id] ?? []).map { KitAgentPlan(pieceID: p.id, name: $0.name, path: $0.path) }
             }
         }
         if needsLocalSeed(v, off: off) {
@@ -226,6 +239,9 @@ enum KitRender {
             case .seed:
                 let names = (v.seeds[p.id] ?? []).map(\.name).joined(separator: ", ")
                 lines.append("\(p.id): copies \(names.isEmpty ? "(none)" : names) into \(c.kitConfig) when missing; never overwritten")
+            case .agents:
+                let names = (v.agents[p.id] ?? []).map { $0.name + ".md" }.joined(separator: ", ")
+                lines.append("\(p.id): installs agents \(names.isEmpty ? "(none)" : names) into \(c.home)/.claude/agents; a file you already have is never overwritten")
             }
         }
         if needsLocalSeed(v, off: off) {

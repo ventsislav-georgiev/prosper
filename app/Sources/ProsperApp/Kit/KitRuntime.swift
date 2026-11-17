@@ -31,6 +31,8 @@ struct KitRuntimeStatus: Sendable {
     var pieces: [ManagedConfigPieceStatus]
     var off: Set<String>
     var live: String?
+    /// #920: agents piece id -> its install state (KitStore.agentStates), for the live version's planned agents
+    var agents: [String: String] = [:]
     /// #918 S1: refresh's notes (a kit not validated again, a refused state file, busy)
     var notes: [String] = []
 }
@@ -466,6 +468,8 @@ final class KitRuntime: @unchecked Sendable {
             let r = await mc.apply(p.pieces, owner: who)
             out.configRefusals += r.refusals
             lock.withLock { wiring = r.ok ? nil : "\(r.status.rawValue) \(r.message)" }
+            // #920: after the wiring landed; a refused agent is a note, never a failed apply (the other pieces stay)
+            if r.ok { out.notes += store.syncAgents(p.agents, from: store.layout.live, claude: config.roots.claude) }
         default:
             return
         }
@@ -491,6 +495,7 @@ final class KitRuntime: @unchecked Sendable {
         guard r.ok else { return out }
         let keep = ids.map { ids in plan(v).shims.filter { !ids.contains($0.pieceID) } } ?? []
         do { try store.writeShims(keep) } catch { out.failures.append("writeShims: \(error)") }
+        out.notes += store.removeAgents(pieces: ids, claude: config.roots.claude)
         return out
     }
 
@@ -513,6 +518,7 @@ final class KitRuntime: @unchecked Sendable {
         out.config = r
         guard r.ok else { return out }
         do { try store.writeShims(p.shims) } catch { out.failures.append("writeShims: \(error)") }
+        out.notes += store.syncAgents(p.agents, from: store.layout.live, claude: config.roots.claude)
         return out
     }
 
@@ -538,6 +544,8 @@ final class KitRuntime: @unchecked Sendable {
             let who = ManagedConfigOwner(id: ext.id, version: "", kitSlug: store.recordedSlug())
             return KitRuntimeStatus(pieces: mc.status(owner: who), off: off(), live: nil)
         }
-        return KitRuntimeStatus(pieces: mc.status(owner: owner(ext, v, dir: store.layout.live), declared: plan(v).pieces), off: off(), live: live)
+        let p = plan(v)
+        return KitRuntimeStatus(pieces: mc.status(owner: owner(ext, v, dir: store.layout.live), declared: p.pieces), off: off(), live: live,
+                                agents: store.agentStates(p.agents, claude: mc.roots.claude))
     }
 }

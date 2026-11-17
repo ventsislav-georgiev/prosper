@@ -1736,6 +1736,9 @@ tag from the now-released section and put it on the new top draft.
   session's folder; a remote session's paths never open. (#1480)
 - Agent Sessions now opens borderless with square corners by default; Settings > Agent Sessions
   changes it back. (#1478)
+- Agent Kits can ship agent files (named workers): Prosper installs them byte for byte into
+  ~/.claude/agents, never overwrites an agent file you already have, and on Remove deletes only the
+  ones it wrote and you did not edit. (#920)
 
 ## v2.174.0
 

@@ -71,6 +71,8 @@ struct KitValidated: Equatable, Sendable {
     var tools: [String: [KitFileRef]] = [:]
     /// seed piece id -> its files, by path under `from`
     var seeds: [String: [KitFileRef]] = [:]
+    /// #920: agents piece id -> its agent files, `name` the agent name (the file name without .md)
+    var agents: [String: [KitFileRef]] = [:]
     var warnings: [KitRefusal] = []
     /// #917 E-13: the claude-md piece that imports local.md (nil when the kit has no claude-md piece)
     var localPiece: String? = nil
@@ -90,6 +92,9 @@ enum KitValidator {
     static let maxImportDepth = 2
     /// distinct in-kit files one file may import; the walk reads each file once, so work is bounded
     static let maxImportTargets = 64
+    /// #920: an agent file's size cap, and the agent files a kit ships across its agents pieces
+    static let maxAgentBytes = 256 << 10
+    static let maxAgents = 32
     /// {{kit_config}} is <configHome>/<slug>; <configHome>/prosper holds the runtime and every kit's shims
     static let reservedSlugs: Set<String> = ["prosper"]
     static let readmeHeadings = ["What it changes", "Requirements", "Customise", "Remove"]
@@ -177,6 +182,19 @@ enum KitValidator {
         return out
     }
 
+    /// #920: the agent file's frontmatter `name:` value. frontmatter false: the text does not start with a `---` line or no
+    /// `---` line closes it. name nil: no `name:` line in it. One pair of matching quotes around the value is dropped.
+    /// Read only: the file is installed as the kit ships it, never rewritten from this.
+    static func agentName(_ text: String) -> (frontmatter: Bool, name: String?) {
+        // "\r\n" is one Character in Swift: split on it too, or a CRLF file reads as one line
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
+        guard lines.first == "---", let close = lines.dropFirst().firstIndex(of: "---") else { return (false, nil) }
+        guard let line = lines[1..<close].first(where: { $0.hasPrefix("name:") }) else { return (true, nil) }
+        var v = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+        if v.count >= 2, let q = v.first, q == "\"" || q == "'", v.last == q { v = String(v.dropFirst().dropLast()) }
+        return (true, v)
+    }
+
     /// Level-2 heading texts, lowercased, outside fences; a closing `#` run is dropped.
     static func headings(in text: String) -> Set<String> {
         var out: Set<String> = []
@@ -210,6 +228,7 @@ enum KitValidator {
         var importCache: [String: (files: [String], outside: Bool)] = [:]
         /// symlink entries an import ran through: each is decided (one realPath) and refused once
         var importSymlinks: Set<String> = []
+        var agentNames: Set<String> = [] // #920: agent names across every agents piece
         var seedTargets: Set<String> = [] // kitconfig: names across every seed piece, case-folded (A-INFO-5)
         /// claude-md pieces whose source was read, and those importing local.md with how often
         var claudeMDPieces = 0
@@ -389,6 +408,38 @@ enum KitValidator {
                     refs.append(.init(name: under, path: r))
                 }
                 out.seeds[p.id] = refs
+
+            case .agents:
+                // #920: <name>.md files directly in the dir, each installed byte for byte as <claude>/agents/<name>.md
+                guard let rel = resolve(p.dir ?? "agents", "\(p.id).dir", .dir) else { return }
+                guard let names = reader.names(path(rel)) else { return refuse(rel, .unreadableDir) }
+                // counted before any read, so a flooded dir costs no reads
+                guard names.filter({ !$0.hasPrefix(".") }).count <= KitValidator.maxAgents else { return refuse(rel, .tooManyAgents) }
+                var refs: [KitFileRef] = []
+                for name in names {
+                    let r = rel + "/" + name
+                    if name.hasPrefix(".") { warn(r, .dotfileSkipped); continue }
+                    switch reader.kind(path(r)) {
+                    case .symlink: refuse(r, .pathSymlink); continue
+                    case .file(_, let size): if size > Int64(KitValidator.maxAgentBytes) { refuse(r, .agentTooLarge); continue }
+                    default: refuse(r, .needsFile); continue
+                    }
+                    let agent = String(name.dropLast(3))
+                    guard name.hasSuffix(".md"), KitManifest.isValidPieceID(agent) else { refuse(r, .badAgentName); continue }
+                    guard let data = reader.contents(path(r)), data.count <= KitValidator.maxAgentBytes, KitValidator.isText(data) else {
+                        refuse(r, .notText); continue
+                    }
+                    let text = String(decoding: data, as: UTF8.self)
+                    let fm = KitValidator.agentName(text)
+                    guard fm.frontmatter else { refuse(r, .agentNoFrontmatter); continue }
+                    guard fm.name == agent else { refuse(r, .agentNameMismatch); continue }
+                    // the staged copy renders every *.md: a file with no placeholder renders to its own bytes
+                    if KitRenderContext.placeholderKeys.contains(where: { text.contains($0) }) { refuse(r, .agentPlaceholder); continue }
+                    if !agentNames.insert(agent).inserted { refuse(r, .duplicateAgent); continue }
+                    if agentNames.count > KitValidator.maxAgents { refuse("kit", .tooManyAgents); continue }
+                    refs.append(.init(name: agent, path: r))
+                }
+                out.agents[p.id] = refs
             }
         }
 

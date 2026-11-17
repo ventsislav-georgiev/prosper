@@ -162,7 +162,8 @@ final class KitRenderTests: XCTestCase {
         [[contributes.kit.settings]]
         """
         let v = try validatedFixture(KitFixture.kit(replacing: "\n[[contributes.kit.settings]]", with: extra))
-        XCTAssertEqual(Set(v.kit.pieces.map(\.kind)), Set(KitManifest.Piece.Kind.allCases), "the walk covers every kind")
+        // #920: KitAgentsTests walks the agents kind (it plans no managed-config piece, so no settings.json path)
+        XCTAssertEqual(Set(v.kit.pieces.map(\.kind)), Set(KitManifest.Piece.Kind.allCases).subtracting([.agents]), "the walk covers every kind")
         let plan = KitRender.plan(v, ctx)
         XCTAssertEqual(plan.refusals, [])
         var json = 0

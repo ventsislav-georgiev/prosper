@@ -81,7 +81,7 @@ enum KitReason: String, Sendable, CaseIterable {
     case unknownKey = "unknown key: the kit schema does not list it"
     case wrongType = "wrong value type for this key"
     case missingKey = "a required key is missing"
-    case unknownKind = "unknown piece kind: use claude-md, tools, hook, statusline, permissions or seed"
+    case unknownKind = "unknown piece kind: use claude-md, tools, hook, statusline, permissions, seed or agents"
     case badID = "piece id must be [a-z0-9-]+, at most 64 characters, not starting with '-'"
     case duplicateID = "piece id is used twice"
     case tooManyPieces = "a kit has at most 64 pieces"
@@ -143,6 +143,14 @@ enum KitReason: String, Sendable, CaseIterable {
     case tooLargeToCheck = "executable is over 1 MiB, too large to check as text"
     case tooManyFiles = "the kit has more than 4096 entries or a dir 16 levels deep (15 is the most)"
     case dotfileSkipped = "dotfile skipped"
+    // agents (#920)
+    case badAgentName = "an agent file is <name>.md with name [a-z0-9-]+, at most 64 characters, not starting with '-'"
+    case agentNoFrontmatter = "an agent file starts with a --- frontmatter block that a --- line closes"
+    case agentNameMismatch = "the agent frontmatter name: must equal the file name without .md"
+    case agentTooLarge = "an agent file is at most 256 KiB"
+    case tooManyAgents = "a kit ships at most 32 agent files"
+    case duplicateAgent = "two agents pieces ship the same agent name"
+    case agentPlaceholder = "an agent file is installed byte for byte: it may not hold a {{kit_dir}}, {{kit_bin}}, {{kit_config}} or {{home}} placeholder"
     // render (KitRender)
     case notImportable = "the path holds a newline, carriage return or NUL and cannot be imported"
 }
@@ -158,13 +166,13 @@ struct KitRefusal: Hashable, Sendable, CustomStringConvertible {
 struct KitManifest: Sendable, Equatable {
     struct Piece: Sendable, Equatable {
         enum Kind: String, Sendable, CaseIterable {
-            case claudeMD = "claude-md", tools, hook, statusline, permissions, seed
+            case claudeMD = "claude-md", tools, hook, statusline, permissions, seed, agents
         }
         var id: String
         var kind: Kind
         var source: String? = nil // claude-md
         var position: ManagedConfigPiece.Position = .bottom // claude-md
-        var dir: String? = nil // tools
+        var dir: String? = nil // tools; agents (default "agents")
         var event: String? = nil // hook
         var matcher: String? = nil // hook
         var run: String? = nil // hook, statusline
@@ -237,6 +245,7 @@ struct KitManifest: Sendable, Equatable {
         .statusline: ["run", "interpreter"],
         .permissions: ["allow", "deny", "ask"],
         .seed: ["from"],
+        .agents: ["dir"],
     ]
     static let settingKeys: Set<String> = ["key", "title", "kind", "default", "values"]
 
@@ -459,6 +468,8 @@ struct KitManifest: Sendable, Equatable {
                 }
             case .seed:
                 p.from = string(t, "from", at, required: true)
+            case .agents:
+                p.dir = string(t, "dir", at) ?? "agents"
             }
             return refusals.count == before ? p : nil
         }
