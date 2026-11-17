@@ -1732,6 +1732,8 @@ tag from the now-released section and put it on the new top draft.
   (#1485)
 - X-ray: a prompt's card now shows the whole prompt and the whole final answer, read from dch; long
   text says where it was cut, and the card says why when the chapter can no longer be read. (#1472)
+- Cmd-click on a relative file path in a local agent session now opens it too, resolved against the
+  session's folder; a remote session's paths never open. (#1480)
 
 ## v2.174.0
 

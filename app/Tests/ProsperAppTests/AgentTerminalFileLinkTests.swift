@@ -84,6 +84,18 @@ final class AgentTerminalFileLinkTests: XCTestCase {
         XCTAssertEqual(shown(f), [f.dir.path + "/link.txt"])
     }
 
+    /// QA s1: the link's name never decides the type, its resolved target does.
+    func testTheTargetOfASymlinkDecidesTheType() throws {
+        let f = try fixture()
+        let fm = FileManager.default
+        try "fake\n".write(to: f.dir.appendingPathComponent("key"), atomically: true, encoding: .utf8)
+        for (link, target) in [("to-html.md", "page.html"), ("to-key.md", "key"), ("ok.txt", "docs/draft.txt")] {
+            try fm.createSymbolicLink(at: f.dir.appendingPathComponent(link), withDestinationURL: f.dir.appendingPathComponent(target))
+        }
+        for t in ["to-html.md", "to-key.md", "ok.txt"] { f.rig.c.open(t) }
+        XCTAssertEqual(shown(f), [f.dir.path + "/ok.txt"])
+    }
+
     func testNothingElseOpensOrRuns() throws {
         let f = try fixture()
         for t in ["docs", "docs/", "missing.txt", "page.html", "Example.app", "Example.app/Contents", "run.sh", "", ".", ":12", "~",

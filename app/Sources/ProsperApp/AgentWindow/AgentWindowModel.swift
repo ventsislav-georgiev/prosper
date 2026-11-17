@@ -1003,6 +1003,8 @@ final class AgentWindowModel: ObservableObject {
         terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
         // OQ-66: an OSC 52 write needs the session to be the focused pane's, live now (4.3: resolved at the write).
         terminal.isSelected = { [weak self] key in self?.focusedLive?.key == key }
+        // #1480: a relative file link resolves against the live session's folder (a remote key is in no store row).
+        terminal.cwd = { [weak self] key in self?.store?.sessions.first { $0.key == key }?.cwd }
         // #831 B1 (4.3): every interaction action re-resolves the focused pane (main actor: called from its actions).
         interaction.resolveFocused = { [weak self] in self?.focusedLive }
         rebind()

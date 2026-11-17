@@ -586,7 +586,9 @@ final class AgentTerminalController: ObservableObject {
             openURL(url)
             return
         }
-        guard let file = AgentTerminalFileLink.resolve(link, cwd: key.flatMap(cwd), home: homeDirectory()),
+        // A remote row's paths are another machine's: never open one here, not even an absolute one (same-named local file).
+        guard remoteHost == nil,
+              let file = AgentTerminalFileLink.resolve(link, cwd: key.flatMap(cwd), home: homeDirectory()),
               AgentTerminalFileLink.isViewable(file) else { return }
         showFile(file)
     }

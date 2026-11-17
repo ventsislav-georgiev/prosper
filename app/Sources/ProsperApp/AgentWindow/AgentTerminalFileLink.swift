@@ -40,6 +40,6 @@ enum AgentTerminalFileLink {
         let real = url.resolvingSymlinksInPath()
         guard let v = try? real.resourceValues(forKeys: [.isRegularFileKey]), v.isRegularFile == true,
               !FileManager.default.isExecutableFile(atPath: real.path) else { return false }
-        return TextViewerRouting.isDocument(url)
+        return TextViewerRouting.isDocument(real)   // the target decides, never the link name (QA s1)
     }
 }
